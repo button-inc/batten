@@ -113,15 +113,13 @@ violation contains {
 # --- the third spelling (CLOUD-2311) -----------------------------------------
 #
 # `mise.toml`'s `[tasks.pkl-package]` fetches the very package `hk.pkl` amends,
-# so its URL names the hk version a third time. It exists because `pkl eval`
-# cannot tell a bad module from an unfetchable one — both exit 1 — so the fetch
-# moved ahead of the validator, where a network failure fails under its own name
-# instead of being recorded as a verdict on `hk.pkl`'s bytes.
+# so its URL names the hk version a third time. Why that task exists at all is
+# argued where it is declared, in `mise.toml`.
 #
-# A third spelling is a third thing to forget on a bump, which is the defect arms
-# A–C exist for, one file over. Here it is worse than the mismatch it hides: the
-# fetch of a package the pinned binary did not ship against SUCCEEDS, so nothing
-# downstream reports anything at all.
+# What matters HERE is that a third spelling is a third thing to forget on a
+# bump — the defect arms A–C exist for, one file over. Here it is worse than the
+# mismatch it hides: the fetch of a package the pinned binary did not ship
+# against SUCCEEDS, so nothing downstream reports anything at all.
 
 # The `pkl-package` task's `run`, bound only when the manifest carried the task,
 # so arm D is UNDEFINED rather than vacuously clean without it — the same
@@ -155,6 +153,18 @@ packages contains {"version": match[1]} if {
 	some match in regex.find_all_string_submatch_n(data.batten.patterns["hk-amends-version"], step, -1)
 }
 
+# AND THE TAG SEGMENT, BECAUSE ONE URL NAMES THE VERSION TWICE. The rule above
+# reads the `hk@<X>` fragment; this reads the `…/download/v<X>/` path. So
+# `v1.57.0/hk@1.56.1` satisfies the fragment alone while naming two versions,
+# and the `v` segment is the half that looks like the release tag — the
+# plausible half-bump. Reading one spelling would govern part of the string the
+# arm claims to govern, which is worse than no arm: its existence implies the
+# URL is covered. Both rules feed ONE set, so one comparison still decides.
+packages contains {"version": match[1]} if {
+	some step in package_steps
+	some match in regex.find_all_string_submatch_n(data.batten.patterns["hk-download-tag"], step, -1)
+}
+
 # D: the fetch URL names a different hk than the binary pin. One subject, and
 # `mise.toml`: the task and the pin table are two rows of the same file, so there
 # is no second path to point at.
@@ -172,7 +182,10 @@ violation contains {
 # The predicate over a fabricated input; `crates/batten/tests/it/tracked_absent.rs`
 # shows the engine fills `documents` and `lines` for the committed row.
 
-pattern := {"hk-amends-version": `hk@([0-9]+\.[0-9]+\.[0-9]+)`}
+pattern := {
+	"hk-amends-version": `hk@([0-9]+\.[0-9]+\.[0-9]+)`,
+	"hk-download-tag": `/v([0-9]+\.[0-9]+\.[0-9]+)/hk@`,
+}
 
 amends_line(version) := sprintf("amends \"package://github.com/jdx/hk/releases/download/v%s/hk@%s#/Config.pkl\"", [version, version])
 
@@ -257,6 +270,19 @@ test_a_package_task_run_array_is_read_too if {
 	found := violation with input as tree_with_tasks(
 		{"hk": "1.56.1"},
 		{"pkl-package": {"run": [package_line("1.57.0")]}},
+		[amends_line("1.56.1")],
+	)
+		with data.batten.patterns as pattern
+	count(found) == 1
+}
+
+# The half-bump the `hk@` fragment alone cannot see: the tag segment drifts and
+# the fragment still names the pin. One violation, because the two generators
+# feed one set and only the drifting spelling disagrees.
+test_a_package_task_whose_tag_segment_drifts_is_refused if {
+	found := violation with input as tree_with_tasks(
+		{"hk": "1.56.1"},
+		{"pkl-package": {"run": "pkl download-package package://github.com/jdx/hk/releases/download/v1.57.0/hk@1.56.1"}},
 		[amends_line("1.56.1")],
 	)
 		with data.batten.patterns as pattern

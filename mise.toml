@@ -2579,10 +2579,8 @@ run = ["{{vars.batten}} engine pin"]
 # the could-not-look-as-verdict this whole task exists to prevent. With neither
 # naming a file this stays the bare invocation, which is CI's case.
 #
-# It is the bare `pkl eval` in `batten.toml`'s `config-validator` row that
-# cannot carry this flag — the validator's argv is the consumer's declaration,
-# not a template — and it no longer needs to: once this task has run, that
-# evaluation reads a warm cache and makes no network call.
+# Once this task has run, `batten.toml`'s `config-validator` reads a warm cache
+# and makes no network call, which is why its bare argv needs no bundle.
 [tasks.pkl-package]
 description = "Effect: fetch the hk config package `hk.pkl` amends, so the validator's own run reaches no network (CLOUD-2311)"
 run = "mise exec pkl -- pkl download-package {% if env.BATTEN_CA_BUNDLE and env.BATTEN_CA_BUNDLE is file %}--ca-certificates {{env.BATTEN_CA_BUNDLE}} {% elif env.SSL_CERT_FILE and env.SSL_CERT_FILE is file %}--ca-certificates {{env.SSL_CERT_FILE}} {% endif %}package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1"

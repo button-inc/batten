@@ -122,6 +122,16 @@ fn amends(version: &str) -> String {
     )
 }
 
+/// The `pkl-package` task as `mise.toml` really spells it, version substituted
+/// into BOTH halves of the URL — the release tag and the `hk@` fragment. A
+/// builder rather than a literal for `amends`'s reason one function up: the
+/// version under test is then the only thing a case states.
+fn package_task(version: &str) -> String {
+    format!(
+        "[tasks.pkl-package]\nrun = \"pkl download-package package://github.com/jdx/hk/releases/download/v{version}/hk@{version}\"\n"
+    )
+}
+
 /// A committed fixture repository carrying the three committed modules, the
 /// authority above, agreeing hk pins, and whatever else the case adds.
 ///
@@ -223,14 +233,8 @@ fn a_version_the_amends_url_names_differently_is_refused() {
 /// the only arm that can see it, and a pass means the fetch is ungoverned.
 #[test]
 fn a_package_task_naming_another_version_is_refused() {
-    let root = fixture(
-        "hk-package-drift",
-        &[(
-            "mise.toml",
-            "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = \"pkl download-package package://github.com/jdx/hk/releases/download/v1.57.0/hk@1.57.0\"\n",
-        )],
-        &[],
-    );
+    let manifest = format!("[tools]\nhk = \"1.56.1\"\n\n{}", package_task("1.57.0"));
+    let root = fixture("hk-package-drift", &[("mise.toml", &manifest)], &[]);
     denied(&root, "tool pin other", "mise.toml");
 }
 
@@ -238,14 +242,8 @@ fn a_package_task_naming_another_version_is_refused() {
 /// and not the task's presence, so declaring it cannot itself be a violation.
 #[test]
 fn a_package_task_naming_the_pin_is_clean() {
-    let root = fixture(
-        "hk-package-agreed",
-        &[(
-            "mise.toml",
-            "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = \"pkl download-package package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1\"\n",
-        )],
-        &[],
-    );
+    let manifest = format!("[tools]\nhk = \"1.56.1\"\n\n{}", package_task("1.56.1"));
+    let root = fixture("hk-package-agreed", &[("mise.toml", &manifest)], &[]);
     clean(&root);
 }
 

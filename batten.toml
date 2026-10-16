@@ -8617,10 +8617,9 @@ input = "hk.pkl"
 # for the retired flag will find no place to put it: this is a declared argv, not
 # a template, so a bundle's path cannot be selected per machine. An earlier
 # version of this comment answered that with "pkl reads `~/.pkl/cacerts`
-# itself" — measured false on a sandbox container (CLOUD-2311): the directory is
-# never created, and of `SSL_CERT_FILE`, `--http-no-proxy` and an unset
-# `HTTPS_PROXY`, none makes pkl resolve a package cold. Only `--ca-certificates`
-# does, and its one home is the fetch task that now runs ahead of this.
+# itself" — measured false on a sandbox container (CLOUD-2311). The flag's one
+# home is `mise.toml`'s `[tasks.pkl-package]`, which runs ahead of this and
+# argues the selection beside it.
 #
 # WHO WARMS IT IS SPLIT, AND THE OLD POINTER HERE NAMED ONLY HALF (CLOUD-2311).
 # It read "CLOUD-406 owns the cache", which is true of CI alone: that mechanism
@@ -10084,6 +10083,15 @@ reason = "the break-glass sentinel admits the repair floor over a config that lo
 [[pattern]]
 id = "hk-amends-version"
 regex = 'hk@([0-9]+\.[0-9]+\.[0-9]+)'
+# The SAME URL names the version twice, and the pattern above sees one of them
+# (CLOUD-2311). A `package://…/releases/download/v<X>/hk@<Y>` carries the release
+# TAG in the path and the PACKAGE version in the fragment, so `v1.57.0/hk@1.56.1`
+# reads as agreeing to `hk-amends-version` alone while naming two versions — and
+# the `v` segment is the half that looks like the release tag, which makes it the
+# plausible half-bump. `hk-pin-agreement`'s arm D reads both.
+[[pattern]]
+id = "hk-download-tag"
+regex = '/v([0-9]+\.[0-9]+\.[0-9]+)/hk@'
 [[verdict]]
 id = "tool pin other"
 gloss = "mise.toml's hk pin, hk.pkl's `amends` URL and the pkl-package fetch do not all name one hk, or one of them names none"
