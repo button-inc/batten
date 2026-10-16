@@ -900,6 +900,9 @@ struct Record {
 /// refreshed, at most once in it.
 const NOTICE_TTL: u64 = 24 * 60 * 60;
 
+/// How soon a lookup that did not answer is asked again.
+const NOTICE_RETRY: u64 = 60 * 60;
+
 /// How long the notice waits for its lookup before it fails open.
 const NOTICE_LOOKUP: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -1026,7 +1029,12 @@ fn outdated_notice(
         return Ok(ExitCode::Success);
     };
     let stamp = state.join("engine").join("update-notice");
-    if !notice_due(&stamp, now, tag) {
+    // THE STAMP IS THE CHECKOUT'S, THE RECORD THE BRANCH'S: a branch cut inside
+    // the day has no reading of its own yet, so its absence is due too.
+    let unrecorded = ask.record.as_ref().is_some_and(|record| {
+        record::load_named("engine outdated", &record.family).is_ok_and(|body| body.is_none())
+    });
+    if !notice_due(&stamp, now, tag) && !unrecorded {
         return Ok(ExitCode::Success);
     }
     let speak = notice_enabled(root, text);
@@ -1034,10 +1042,18 @@ fn outdated_notice(
         return Ok(ExitCode::Success);
     }
     let found = distance_bounded(&releases_repository(), tag);
+    // A LOOKUP THAT DID NOT ANSWER IS ASKED AGAIN WITHIN THE HOUR, never a day
+    // later: one transient failure must not silence a stale pin until tomorrow,
+    // and an offline session still pays the bound at most once an hour.
+    let stamped = if found.is_some() {
+        now
+    } else {
+        now.saturating_sub(NOTICE_TTL - NOTICE_RETRY)
+    };
     if let Some(parent) = stamp.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    durable::replace(&stamp, format!("{now}\t{tag}\n"))?;
+    durable::replace(&stamp, format!("{stamped}\t{tag}\n"))?;
     let Some(found) = found else {
         if let Some(record) = &ask.record {
             record::clear_named("engine outdated", &record.family)?;
@@ -1088,15 +1104,19 @@ fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
         source: None,
     }) = engine::declared(&text)
     else {
-        clear()?;
+        // `--notice` IS BEST-EFFORT AND ALWAYS EXITS 0: a store it cannot write
+        // is not a session start's failure.
         if ask.notice {
+            let _ = clear();
             return Ok(ExitCode::Success);
         }
+        clear()?;
         writeln!(out, "{} no engine pin", path.display())?;
         return Ok(ExitCode::Violation);
     };
     if ask.notice {
-        return outdated_notice(ask, &root, &text, &tag, out);
+        let _ = outdated_notice(ask, &root, &text, &tag, out);
+        return Ok(ExitCode::Success);
     }
     let found = match distance(&releases_repository(), &tag) {
         Ok(found) => found,
@@ -1141,13 +1161,18 @@ fn sync_artifact(
     new: &str,
     sums: &dyn Fn() -> Result<String>,
 ) -> Result<()> {
-    let Some(url) = artifact
-        .get("url")
-        .and_then(toml_edit::Item::as_str)
-        .map(|url| url.replace(old, new))
-    else {
+    let Some(was) = artifact.get("url").and_then(toml_edit::Item::as_str) else {
         return Ok(());
     };
+    // A URL THAT DOES NOT NAME THE VERSION IT MOVES FROM cannot be moved, and a
+    // new digest beside an unmoved URL would pin bytes nobody fetches.
+    if !was.contains(old) {
+        return Err(UsageError::raise(format!(
+            "engine update: a batten provision URL ({was}) does not name {old}, so it cannot be \
+             moved to {new}; nothing was written"
+        )));
+    }
+    let url = was.replace(old, new);
     let asset = url.rsplit('/').next().unwrap_or_default().to_owned();
     let digest = engine::published_digest(&sums()?, &asset).ok_or_else(|| {
         UsageError::raise(format!(

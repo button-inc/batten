@@ -509,15 +509,22 @@ pub fn release_url(repository: &str, tag: &str, file: &str) -> String {
     )
 }
 
-/// The digest `sums` (a `SHA256SUMS` body) publishes for `asset`.
-#[must_use]
-pub fn published_digest(sums: &str, asset: &str) -> Option<String> {
-    sums.lines().find_map(|line| {
+/// Every `(digest, asset)` entry of a `SHA256SUMS` body: the one reading of the
+/// manifest's line grammar, the digest lowercased and the asset less its `*`
+/// binary-mode marker.
+fn sums_entries(sums: &str) -> impl Iterator<Item = (String, &str)> {
+    sums.lines().filter_map(|line| {
         let mut fields = line.split_whitespace();
         let digest = fields.next()?;
         let name = fields.next()?.trim_start_matches('*');
-        (name == asset).then(|| digest.to_ascii_lowercase())
+        Some((digest.to_ascii_lowercase(), name))
     })
+}
+
+/// The digest `sums` (a `SHA256SUMS` body) publishes for `asset`.
+#[must_use]
+pub fn published_digest(sums: &str, asset: &str) -> Option<String> {
+    sums_entries(sums).find_map(|(digest, name)| (name == asset).then_some(digest))
 }
 
 //MUTANT-SUITE crates/batten/src/engine.rs
@@ -705,14 +712,7 @@ pub fn days_since(date: &str, now: u64) -> Option<u64> {
 /// [`published_digest`] looks one name up in.
 #[must_use]
 pub fn published_digests(sums: &str) -> std::collections::BTreeSet<String> {
-    sums.lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let digest = fields.next()?;
-            fields.next()?;
-            Some(digest.to_ascii_lowercase())
-        })
-        .collect()
+    sums_entries(sums).map(|(digest, _)| digest).collect()
 }
 
 /// Whether a `[[provision]]` row provisions batten itself (CLOUD-2279): the one
@@ -913,14 +913,17 @@ pub fn ahead_of(declared: &semver::Version, pin: &semver::Version) -> bool {
 }
 
 /// `line` less a YAML comment: from the first `#` that opens the line or
-/// follows whitespace, outside a quoted string.
+/// follows whitespace, outside a quoted string. A quote opens a string only
+/// where a value can start — after whitespace, `:`, `=`, `[`, `,` or at the
+/// line's start — so the apostrophe in `don't` is prose, not a string.
 fn yaml_code(line: &str) -> &str {
     let mut quote = None;
     let mut previous = ' ';
     for (at, c) in line.char_indices() {
+        let opens = previous.is_whitespace() || matches!(previous, ':' | '=' | '[' | ',');
         match quote {
             Some(open) if c == open => quote = None,
-            None if c == '"' || c == '\'' => quote = Some(c),
+            None if (c == '"' || c == '\'') && opens => quote = Some(c),
             None if c == '#' && previous.is_whitespace() => return &line[..at],
             Some(_) | None => {}
         }
@@ -960,7 +963,7 @@ pub fn workflow_literals(
                     .trim_start()
                     .trim_start_matches(['"', '\''])
                     .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '.')
+                    .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
                     .collect();
                 let differs = if key == "BATTEN_VERSION" {
                     let bare = literal.trim_start_matches('v');
@@ -1148,11 +1151,19 @@ mod tests {
     fn a_workflow_comment_is_not_a_copy_and_a_spaced_key_is() {
         let published = std::collections::BTreeSet::new();
         let found = workflow_literals(
-            "# BATTEN_VERSION: 0.0.1\n  BATTEN_VERSION : \"0.0.210\"\n  run: make # BATTEN_VERSION: 0.0.2\n",
+            "# BATTEN_VERSION: 0.0.1\n  BATTEN_VERSION : \"0.0.210\"\n  run: make # BATTEN_VERSION: 0.0.2\n  run: echo don't # BATTEN_VERSION: 0.0.3\n  BATTEN_VERSION: 0.0.216\n",
             "v0.0.216",
             &published,
         );
         assert_eq!(found, [(2, "BATTEN_VERSION")]);
+    }
+
+    /// A pre-release literal is read whole, so a copy equal to the pin agrees.
+    #[test]
+    fn a_pre_release_literal_equal_to_the_pin_agrees() {
+        let published = std::collections::BTreeSet::new();
+        let found = workflow_literals("  BATTEN_VERSION: 0.1.0-rc.1\n", "v0.1.0-rc.1", &published);
+        assert!(found.is_empty(), "{found:?}");
     }
 
     /// A floor or a provision row above the pin names the moves that clear it,
