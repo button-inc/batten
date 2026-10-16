@@ -4419,14 +4419,13 @@ fn an_event_a_host_does_not_declare_degrades_cleanly() {
         "the host that has the capability says nothing about lacking it"
     );
 
-    // Undeclared: still an allow, still nothing on the answer channel.
-    for harness in [
-        "cursor",
-        "copilot-cli",
-        "gemini-cli",
-        "codex-cli",
-        "factory",
-    ] {
+    // Undeclared: still an allow, still nothing on the answer channel. Every
+    // named host but the one that declares it, read off the matrix so a new
+    // host is covered the moment it joins.
+    for &harness in ATTRIBUTION_HOSTS
+        .iter()
+        .filter(|harness| !["claude-code", "exit-code"].contains(harness))
+    {
         let output = run_hook_in(&dir, harness, &payload);
         assert_eq!(
             output.status.code(),
@@ -4455,20 +4454,6 @@ fn an_event_a_host_does_not_declare_degrades_cleanly() {
             "{harness}: and names what stands in for it, got: {stderr}"
         );
     }
-
-    // OpenCode's plugin delivers pre-tool alone, so there is no Stop family to
-    // stand in: the degradation still allows, and says nothing fires.
-    let opencode = run_hook_in(&dir, "opencode", &payload);
-    assert_eq!(opencode.status.code(), Some(0), "never an error or a deny");
-    assert!(
-        opencode.stdout.is_empty(),
-        "nothing keyed on the event fired"
-    );
-    let stderr = common::stderr(&run_hook_verbose(&dir, "opencode", &payload));
-    assert!(
-        stderr.contains("does not emit task-completed") && stderr.contains("nothing keyed on it"),
-        "opencode: the degradation names no stand-in, got: {stderr}"
-    );
 }
 
 #[test]
@@ -4476,16 +4461,7 @@ fn a_payload_that_fits_no_host_fails_open_on_every_host() {
     // §7(c): a payload no adapter can read is an allow, never an error and never
     // a deny — a guard must not be the reason a session cannot proceed.
     let dir = repo_with_gh_policy("host-junk");
-    for harness in [
-        "claude-code",
-        "cursor",
-        "copilot-cli",
-        "gemini-cli",
-        "codex-cli",
-        "factory",
-        "opencode",
-        "exit-code",
-    ] {
+    for &harness in ATTRIBUTION_HOSTS {
         let output = run_hook_in(&dir, harness, "not json at all");
         assert_eq!(output.status.code(), Some(0), "{harness} must fail open");
         assert!(output.stdout.is_empty(), "{harness} emits no verdict");
