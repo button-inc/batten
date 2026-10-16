@@ -1070,7 +1070,8 @@ fn job_missing(steps: &[yaml_rust2::Yaml], required: &BTreeSet<String>) -> Vec<S
         .filter(|step| {
             step["uses"]
                 .as_str()
-                .is_some_and(|uses| uses.starts_with("jdx/mise-action@"))
+                .and_then(|action| action.split('@').next())
+                .is_some_and(|action| action.ends_with("/mise-action"))
                 && step["with"]["install"].as_bool() != Some(false)
         })
         .collect();
