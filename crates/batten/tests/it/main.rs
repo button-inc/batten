@@ -400,6 +400,7 @@ mod scratch_hygiene;
 mod scratch_names;
 mod secret_redaction;
 mod secrets_kind;
+mod secrets_operands;
 mod semver_gate;
 mod session_drain;
 mod session_provisioning;

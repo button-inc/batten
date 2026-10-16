@@ -1167,6 +1167,43 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
         std::process::Command::new(program)
             .args(leading)
             .args(SCANNER_FLAGS)
+            // END-OF-OPTIONS (CLOUD-1496). The claim is about THIS spawn and is not
+            // a survey of the crate: `rules.rs`'s `command_rule` expands
+            // `{{files}}` into a consumer-written argv whose terminator position
+            // only the consumer can choose. That is CLOUD-1492's, with the
+            // `[[spawn]] operands` column.
+            // `batch` is paths the `ignore` walk found in the judged tree —
+            // untracked files included, not only tracked ones — and that tree is
+            // the untrusted input here: a file named `-h` or `--strict-ignore` is
+            // writable in any repository this gate runs over. Without the
+            // terminator the scanner parses such a path as an option, and BOTH
+            // directions are wrong — an option the pin does not know exits 2, which
+            // CLOUD-59's fail-closed clause turns into a refusal of the whole batch,
+            // and one it DOES know is consumed as a flag, so the file is never read
+            // while the exit stays clean. The second is the dangerous one: a green
+            // tree over a file nobody opened.
+            //
+            // Measured against the pinned ripsecrets 0.1.11, whose flag table is
+            // `--install-pre-commit`, `--strict-ignore`, `--only-matching`,
+            // `--additional-pattern`, `-h`, `-V`. So `--strict-ignore` is the known
+            // arm and `--no-ignore` — a `ripgrep` flag, not one of these — is the
+            // unknown arm; `secrets_operands.rs` has a case for each. It honours
+            // `--`, and bare operands after it are accepted unprefixed. This is the
+            // `--end-of-options` class CLOUD-718 fixed for git, where `rev-parse`
+            // echoed the terminator instead of consuming it; the measurement above
+            // is why that does not recur here.
+            //
+            // WHAT THE TERMINATOR DOES NOT CLOSE, measured rather than assumed: a
+            // file named exactly `-`. That is the STDIN convention, not option
+            // parsing, so `--` has no bearing on it — `-- -` exits 0 having read
+            // nothing, and `-- - plain.conf` returns only `plain.conf`, so the
+            // unread file is a silent false green of exactly the kind this
+            // terminator closes for flag-named paths. `-- ./-` does report it, so
+            // the remedy is rendering that one operand, which this row's §1
+            // decided against on a measurement that had not covered it. Recorded
+            // on CLOUD-1492 with the numbers; `-h`, `-V`, `-x`, `--` and both long
+            // flags are all fine after the terminator.
+            .arg("--")
             .args(batch)
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
@@ -1196,6 +1233,12 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
         )]
         None => std::process::Command::new(binary)
             .args(SCANNER_FLAGS)
+            // The same terminator, for the same reason as the arm above. This arm
+            // is unreachable in practice, so it is covered by review rather than by
+            // a case — which is exactly why it has to be written here: the two arms
+            // differ only in how the program is named, never in what the tree may
+            // call a file.
+            .arg("--")
             .args(batch)
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
@@ -1230,6 +1273,9 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
     cross_check(rule, output.status.code(), parsed.len())?;
     Ok(parsed)
 }
+
+//MUTANT-SUITE crates/batten/tests/it/secrets_operands.rs
+//MUTANT drop-the-operand-terminator|s@^            .arg("--")$@@|a_dash_leading_tracked_path_is_scanned_as_a_path
 
 /// The exit-status/parse-count cross-check, both directions.
 ///
