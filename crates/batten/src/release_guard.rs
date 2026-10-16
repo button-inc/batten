@@ -4,15 +4,18 @@
 //! `batten release settings [--probe]` reads the repository's rulesets and
 //! release settings and names every item still owed:
 //!
-//! * the trunk's ruleset requires the `release-path` status, pinned to one
-//!   source, and refuses non-fast-forward writes;
-//! * a separate probe ruleset on [`PROBE_BRANCH`] requires exactly the same
-//!   `release-path` entry, so the probe measures the rule that guards the trunk;
+//! * the trunk's ruleset refuses non-fast-forward writes;
 //! * a tag ruleset on `v*` restricts updates;
 //! * no ruleset among them has a bypass actor;
 //! * immutable releases are enabled.
 //!
-//! With `--probe` it then proves the rule is enforced rather than declared: it
+//! NO `release-path` RULESET IS OWED (CLOUD-2319). `final` is the trunk's one
+//! required check, and the seal in it ([`crate::release_path::seals`]) is what
+//! holds an unverified pin off the trunk. A second required status on the trunk
+//! and a probe ruleset beside it duplicated that, put a branch-protection change
+//! on the release path, and held every release while it was never made.
+//!
+//! With `--probe` it then proves a `release-path` rule is enforced rather than declared: it
 //! makes a commit on the probe branch's tip that carries no status and asks the
 //! server to fast-forward the branch to it. Only a ruleset refusal passes; an
 //! accepted write, or a refusal for any other reason, is "the server gate does
@@ -53,28 +56,14 @@ pub struct Facts {
 
 /// Every item still owed, each a pointer; empty when the server gate holds.
 //MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT probe-entry-unmatched|s@^    } else if facts.probe_requires != facts.trunk_requires {$@    } else if false {@|settings_name_every_owed_item
+//MUTANT trunk-ruleset-owed-again|s@^    let mut owed = Vec::new();$@    let mut owed: Vec<String> = facts.trunk_requires.is_none().then(\x7c\x7c String::from("the trunk's ruleset does not require the release-path status")).into_iter().collect();@|settings_name_every_owed_item
 //MUTANT bypass-actor-admitted|s@^            .map(\x7cname\x7c format!("the ruleset {name} has a bypass actor")),$@            .take(0).map(\x7cname\x7c format!("the ruleset {name} has a bypass actor")),@|settings_name_every_owed_item
 #[must_use]
 pub fn owed(facts: &Facts) -> Vec<String> {
     let mut owed = Vec::new();
-    if facts.trunk_requires.is_none() {
-        owed.push(String::from(
-            "the trunk's ruleset does not require the release-path status",
-        ));
-    }
     if !facts.trunk_non_fast_forward {
         owed.push(String::from(
             "the trunk's ruleset does not refuse a non-fast-forward write",
-        ));
-    }
-    if facts.probe_requires.is_none() {
-        owed.push(format!(
-            "no ruleset on {PROBE_BRANCH} requires the release-path status"
-        ));
-    } else if facts.probe_requires != facts.trunk_requires {
-        owed.push(format!(
-            "{PROBE_BRANCH}'s release-path entry differs from the trunk's, so the probe measures another rule"
         ));
     }
     if !facts.tags_restrict_updates {
