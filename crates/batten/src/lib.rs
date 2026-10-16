@@ -10860,9 +10860,10 @@ const LAND_TASK: &str = "land";
 /// [`collect::group_predates`] carries why a member that began before the
 /// registrant's last stamp can only be the orphan's. The caller's OWN group is
 /// never the orphan however old: a second run in the shell that ran the first
-/// shares its group, and signalling it would end the reaper.
+/// shares its group, and signalling it would end the reaper. Compared as the
+/// number the guard signals, so `+42` or `042` is the caller's `42`.
 fn reapable(entry: &task::Entry, own_group: &str) -> bool {
-    entry.pgid != own_group
+    entry.pgid.parse::<i32>().ok() != own_group.parse::<i32>().ok()
         && entry
             .last_alive()
             .is_some_and(|alive_at| collect::group_predates(&entry.pgid, alive_at))
@@ -27910,6 +27911,11 @@ mod tests {
             ..task::Entry::default()
         };
         assert!(!reapable(&entry, &own), "the caller's own group");
+        let spelled = task::Entry {
+            pgid: format!("+{own}"),
+            ..entry.clone()
+        };
+        assert!(!reapable(&spelled, &own), "however the record spells it");
         let linux = cfg!(any(target_os = "linux", target_os = "android"));
         assert_eq!(reapable(&entry, "0"), linux);
         let stampless = task::Entry {
