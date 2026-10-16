@@ -947,8 +947,29 @@ fn impersonates_host(stdout: &str) -> bool {
 /// `root` is the directory holding the `batten.toml` that declared `handlers`,
 /// and every handler runs there (CLOUD-2050): a row's relative paths are the
 /// repository's, whatever directory the host's shell stands in.
+///
+/// A call that writes no path, which is how [`dispatch_writing`]'s `path_except`
+/// arm reads every caller that has none to give.
 #[must_use]
 pub fn dispatch(
+    root: &Path,
+    handlers: &[Handler],
+    event: Event,
+    raw_tool: &str,
+    command: Option<&str>,
+    payload: &Payload,
+) -> Dispatched {
+    dispatch_writing(root, handlers, event, raw_tool, command, None, payload)
+}
+
+/// [`dispatch`], for a call that writes `writes` (CLOUD-2390): a row's
+/// `path_except` is judged against it.
+///
+/// A sibling rather than a seventh parameter on [`dispatch`], so a caller with no
+/// path to give, and every case written against the six-argument form, is
+/// unchanged.
+#[must_use]
+pub fn dispatch_writing(
     root: &Path,
     handlers: &[Handler],
     event: Event,
@@ -1821,7 +1842,6 @@ mod tests {
             Event::PreTool,
             "mcp__x__y",
             None,
-            None,
             &Payload::from(payload),
         );
         assert_eq!(
@@ -1841,7 +1861,6 @@ mod tests {
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
-            None,
             None,
             &Payload::from(payload),
         );
@@ -1874,7 +1893,6 @@ mod tests {
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
-            None,
             None,
             &Payload::from("{}"),
         );
@@ -1952,7 +1970,6 @@ mod tests {
             Event::PreTool,
             "mcp__x__y",
             None,
-            None,
             &Payload::from("{}"),
         );
         assert_eq!(dispatched.preapproval(), Some(("a", "one")));
@@ -1968,7 +1985,6 @@ mod tests {
             &rows,
             Event::PreTool,
             "mcp__x__y",
-            None,
             None,
             &Payload::from("{}"),
         );
@@ -2002,7 +2018,6 @@ mod tests {
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
-            None,
             None,
             &Payload::from("{}"),
         );
@@ -2049,7 +2064,6 @@ mod tests {
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
-            None,
             None,
             &Payload::from("{}"),
         );

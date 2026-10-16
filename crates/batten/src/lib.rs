@@ -20580,7 +20580,7 @@ fn dispatch_handlers(
     // command from one whose command is empty — and an expression like `^$` would
     // otherwise match every `Read` in the session.
     let command = Some(envelope.command.as_str()).filter(|text| !text.is_empty());
-    let dispatched = handler::dispatch(
+    let dispatched = handler::dispatch_writing(
         hook_authority_root(),
         &hook_config.handlers,
         envelope.event,
@@ -22541,7 +22541,6 @@ fn stop_handler_advice(overrides: &Overrides, raw: &str) -> Vec<refusal::Refusal
         &table.handlers,
         hook::Event::Stop,
         "",
-        None,
         None,
         &handler::Payload::from(raw),
     );
