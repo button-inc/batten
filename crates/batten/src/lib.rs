@@ -12583,8 +12583,11 @@ fn run_the_step(
         // A STALLED GATE SAYS SO BESIDE ITS CODE (CLOUD-2369): exit 3 alone is a
         // reclaimed gate, which laps.
         land::Step::Verify => {
+            // THE LAP'S OWN REGISTRATION: `run_land_singleton` registered this
+            // process, so the gate announces into the record this landing owns.
+            let registered = Some(std::process::id());
             let (code, stalled) =
-                run_land_verify_seen(root, bet, branch, Some(reference), out, err)?;
+                run_land_verify_seen(root, bet, branch, Some(reference), registered, out, err)?;
             return Ok((code, None, None, stalled));
         }
         land::Step::Lease => run_land_lease(root, branch, out, err)?,
@@ -13837,16 +13840,22 @@ fn run_land_verify(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    run_land_verify_seen(root, bet, branch, reference, out, err).map(|(code, _)| code)
+    // NOTHING REGISTERED: a standalone `land verify` arms the stall only under a
+    // supervising task's own `$BATTEN_TASK_PID`.
+    run_land_verify_seen(root, bet, branch, reference, None, out, err).map(|(code, _)| code)
 }
 
 /// The self-stall terms for this verify (CLOUD-2369), or `None` where the bound
-/// is switched off.
+/// is switched off or there is no task to watch.
 ///
 /// The task whose stamps are read is the one the gate's steps announce under:
-/// `$BATTEN_TASK_PID` where a supervising task already exported it, otherwise
-/// this process, which is the pid `land` registered. The beat is the lease's.
-fn verify_stall(root: &Path) -> Option<land::Stall> {
+/// the one this run `registered` (the lap's own), else the one a supervising
+/// task exported in `$BATTEN_TASK_PID`. NEVER this process's pid unregistered:
+/// with crashed records kept until the next reap (CLOUD-2372), an unregistered
+/// pid can be a recycled one whose dead record the gate's steps would refresh,
+/// which both arms this stall on another task and moves that record's
+/// `last_alive` past the reap's age proof. The beat is the lease's.
+fn verify_stall(root: &Path, registered: Option<u32>) -> Option<land::Stall> {
     let beats = std::env::var("LAND_SELF_STALL_BEATS")
         .ok()
         .and_then(|raw| raw.trim().parse::<u32>().ok())
@@ -13854,10 +13863,11 @@ fn verify_stall(root: &Path) -> Option<land::Stall> {
     if beats == 0 {
         return None;
     }
-    let pid = std::env::var(step::TASK_PID)
-        .ok()
-        .and_then(|raw| raw.trim().parse::<u32>().ok())
-        .unwrap_or_else(std::process::id);
+    let pid = registered.or_else(|| {
+        std::env::var(step::TASK_PID)
+            .ok()
+            .and_then(|raw| raw.trim().parse::<u32>().ok())
+    })?;
     let beat = lease::terms(root)
         .ok()
         .map(|terms| terms.beat)
@@ -13891,6 +13901,7 @@ fn run_land_verify_seen(
     bet: &speculation::Bet,
     branch: &str,
     reference: Option<&str>,
+    registered: Option<u32>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<(ExitCode, bool)> {
@@ -13929,7 +13940,7 @@ fn run_land_verify_seen(
     // THE GATE'S STEPS ANNOUNCE UNDER THIS TASK (CLOUD-2369): `step::announce`
     // reads `$BATTEN_TASK_PID`, which nothing set, so a verify's steps never
     // moved the registry the stall arm reads.
-    let stall = verify_stall(root);
+    let stall = verify_stall(root, registered);
     if let Some(stall) = &stall {
         published.push((step::TASK_PID.to_owned(), stall.pid.to_string()));
     }
