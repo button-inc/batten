@@ -69,8 +69,8 @@
 //! work is enumerated beside the flag, in `mise.toml`. CLOUD-406 still owns the
 //! CI cache these cases are withdrawn to; it never owned the local one.
 
-// withdrawn: "the coupling is real: a cold cache with egress denied cannot evaluate hk.pkl" CLOUD-406 owns pkl's package cache and the CA pkl is provisioned with; the case measures pkl and the network rather than this repository's verdict
-// withdrawn: "a warm cache breaks it: the same command with egress denied evaluates cleanly" CLOUD-406 owns pkl's package cache and the CA pkl is provisioned with; the case skips outright on any host with no warm cache to copy
+// withdrawn: "the coupling is real: a cold cache with egress denied cannot evaluate hk.pkl" CLOUD-406 owns the CI cache and CLOUD-2311's `pkl-package` the local one, and the CA is `vars.pkl_ca`'s; the case measures pkl and the network rather than this repository's verdict
+// withdrawn: "a warm cache breaks it: the same command with egress denied evaluates cleanly" CLOUD-406 owns the CI cache and CLOUD-2311's `pkl-package` the local one, and the CA is `vars.pkl_ca`'s; the case skips outright on any host with no warm cache to copy
 
 //! # RETIREMENT LEDGER, PER PATH — `renovate-config-validator` (CLOUD-1262)
 //!

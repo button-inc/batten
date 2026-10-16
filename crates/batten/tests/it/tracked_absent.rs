@@ -234,7 +234,14 @@ fn agreeing_pins_no_docs_and_no_sentinel_are_clean() {
 // hk-version.
 // ---------------------------------------------------------------------------
 
-/// `#MUTANT hk-pin-disagreement-passes` reddens here.
+/// Both halves of the URL drift, so arms A and A2 both fire on one line and
+/// collapse to one finding.
+///
+/// It does NOT carry `#MUTANT hk-pin-disagreement-passes` any more, and that is
+/// the point: `amends()` writes one version into both halves, so A2 masks A
+/// here and neutering arm A changes nothing this case can see. The mutant names
+/// `an_amends_fragment_naming_another_version_is_refused` instead, where only
+/// the fragment drifts.
 #[test]
 fn a_version_the_amends_url_names_differently_is_refused() {
     let root = fixture(

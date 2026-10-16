@@ -1086,6 +1086,15 @@ description = "hk's `fix` hook selects exactly the gate's fixer-bearing steps â€
 # it resolves the `amends` package. `{{vars.pkl_ca}}` is the fix, argued where it
 # is declared; it was spelled out here and at `pkl-package` until CLOUD-2409
 # folded both into the var.
+#
+# THE FETCH COMES FIRST HERE TOO, and this is the THIRD caller (CLOUD-2311).
+# `hk-fix-selection.pkl` imports `hk.pkl`, so evaluating it resolves the same
+# `package://` package the validator does â€” and `gate fix missing` reads this
+# command's non-zero as a verdict about the bytes, exactly as
+# `validator-verdict-clean` read `record validate`'s. A cold cache would be
+# recorded as drift in the fix selection. The CA selection alone does not close
+# that: it fixes the handshake, not the fetch happening at verdict time.
+depends = ["pkl-package"]
 run = "mise exec pkl -- pkl eval {{vars.pkl_ca}}hk-fix-selection.pkl"
 
 [tasks."lint:actions"]
