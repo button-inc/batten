@@ -23,6 +23,13 @@
 //! the owning module's predicate — does not compile in this engine. So the
 //! predicate is restated, and restatement without a gate is how two authorities
 //! drift while both keep passing their own suites.
+//!
+//! # The link cases
+//!
+//! The cases that walk a link return early off unix with `if !cfg!(unix)`:
+//! Windows creates a link only with privilege (`session_drain.rs:257-259`), and
+//! `policy/cfg-gated-test.rego` refuses the attribute on a case whose subject
+//! compiles everywhere.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -180,7 +187,6 @@ fn a_dot_dot_spelling_through_a_missing_directory_signals_too() {
 /// climb out of the bench and read the write as outside the tree.
 #[test]
 fn a_dot_dot_after_a_symlink_climbs_the_target() {
-    // Windows creates a link only with privilege, as `session_drain.rs` states.
     if !cfg!(unix) {
         return;
     }
@@ -200,7 +206,6 @@ fn a_dot_dot_after_a_symlink_climbs_the_target() {
 /// the tail spells it `door/ready-lint.sh` and reads it as ungoverned.
 #[test]
 fn a_link_after_a_dot_dot_through_a_missing_directory_resolves() {
-    // Windows creates a link only with privilege, as `session_drain.rs` states.
     if !cfg!(unix) {
         return;
     }
@@ -220,7 +225,6 @@ fn a_link_after_a_dot_dot_through_a_missing_directory_resolves() {
 /// ungoverned.
 #[test]
 fn a_write_through_a_dangling_link_lands_at_its_target() {
-    // Windows creates a link only with privilege, as `session_drain.rs` states.
     if !cfg!(unix) {
         return;
     }
@@ -233,7 +237,6 @@ fn a_write_through_a_dangling_link_lands_at_its_target() {
 /// reading replaces the whole walked path rather than joining onto it.
 #[test]
 fn an_absolute_dangling_link_lands_at_its_target() {
-    // Windows creates a link only with privilege, as `session_drain.rs` states.
     if !cfg!(unix) {
         return;
     }
@@ -253,7 +256,6 @@ fn an_absolute_dangling_link_lands_at_its_target() {
 /// fails unless the walk follows links before the bound stops it.
 #[test]
 fn a_dangling_link_loop_ends_at_the_hop_bound() {
-    // Windows creates a link only with privilege, as `session_drain.rs` states.
     if !cfg!(unix) {
         return;
     }
