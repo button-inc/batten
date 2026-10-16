@@ -82,9 +82,14 @@ fn fixture(name: &str, body: &str) -> PathBuf {
 
 /// A Claude Code `PreToolUse` envelope carrying a command, so the boundary
 /// treats it as adjudicable and reaches the config load at all.
+///
+/// A command that MUTATES (CLOUD-2398): the floor admits what
+/// `hook::non_mutating` admits, read-only command lines among them, so an
+/// `echo` would now pass and every case here asking whether the floor still
+/// refuses would be asking about a call it rightly lets through.
 fn payload() -> String {
     "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
-     \"tool_input\":{\"command\":\"echo hello\"}}"
+     \"tool_input\":{\"command\":\"touch notes.md\"}}"
         .to_owned()
 }
 
@@ -321,6 +326,40 @@ fn a_read_still_answers_over_a_config_that_will_not_load() {
         code_for(&dir, &envelope("Read", r#"{"file_path":"notes.md"}"#)),
         Some(0),
         "a classified read mutates nothing, so no rule could have refused it"
+    );
+}
+
+#[test]
+fn session_start_is_admitted_over_a_config_that_will_not_load_and_names_the_repair() {
+    // CLOUD-2398: the deny used to land on SessionStart itself, before any
+    // repair could run, so a cold container whose release could not load a
+    // source-pinned config deadlocked on its own hook. SessionStart is not a
+    // call; it passes, and carries the repair as advice to run in the
+    // background. The mutation that follows it is still refused.
+    let dir = fixture("adjudicate-floor-session-start", WILL_NOT_PARSE);
+    let output = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        r#"{"hook_event_name":"SessionStart","source":"startup"}"#,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "SessionStart is never refused"
+    );
+    let said = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !said.contains("\"deny\""),
+        "SessionStart carries no refusal: {said}"
+    );
+    assert!(
+        said.contains("batten engine install") && said.contains("run_in_background"),
+        "the repair is named, to run in the background: {said}"
+    );
+    assert_eq!(
+        code_for(&dir, &payload()),
+        Some(2),
+        "the call after it is still judged by the floor"
     );
 }
 
@@ -770,8 +809,19 @@ fn a_search_still_answers_over_a_config_that_will_not_load() {
     // them and a binary/config mismatch left the session unable to search for
     // the line it had to repair. They cannot mutate anything, so they pass
     // exactly as a classified `Read` does.
+    //
+    // CLOUD-2398: the floor now reads `hook::non_mutating`, the definition plan
+    // mode reads, so a question to the operator and the todo list pass here too
+    // — the floor used to refuse what plan mode admitted.
     let dir = fixture("adjudicate-floor-grep", WILL_NOT_PARSE);
-    for tool in ["Grep", "Glob", "ToolSearch", "ExitPlanMode"] {
+    for tool in [
+        "Grep",
+        "Glob",
+        "ToolSearch",
+        "ExitPlanMode",
+        "AskUserQuestion",
+        "TaskCreate",
+    ] {
         assert_eq!(
             code_for(&dir, &envelope(tool, r#"{"pattern":"x"}"#)),
             Some(0),

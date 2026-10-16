@@ -605,6 +605,29 @@ fn a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not() {
     ));
 }
 
+/// CLOUD-2398: the host's session tools pass plan mode — it is the one
+/// admitted-call definition the unloadable floor reads too — and none is ever
+/// pre-approved, because `ExitPlanMode`'s prompt IS the operator approving a
+/// plan. The reads beside them are both admitted and granted.
+#[test]
+fn exit_plan_mode_is_admitted_in_plan_mode_and_never_preapproved() {
+    for tool in ["ExitPlanMode", "AskUserQuestion", "TaskCreate", "TodoWrite"] {
+        let call = envelope("plan", tool, &serde_json::json!({}));
+        assert_not_plan_refused(&call);
+        assert_not_granted(&call);
+    }
+    assert_granted_by(
+        &envelope("plan", "Read", &serde_json::json!({ "file_path": "/x" })),
+        "call read now",
+    );
+    assert_granted_by(&shell("plan", "git status"), "call read now");
+    assert_plan_refused(&envelope(
+        "plan",
+        "Edit",
+        &serde_json::json!({ "file_path": "/x", "old_string": "a", "new_string": "b" }),
+    ));
+}
+
 /// CLOUD-2289: reading the session's own notification queue is a read.
 #[test]
 fn a_plan_mode_read_notifications_is_allowed() {

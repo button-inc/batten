@@ -7768,6 +7768,11 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // `bypassPermissions`. `null` when the host sent none, which Rego
             // reads as undefined, so no module acts on a mode it was not told.
             "permission-mode": envelope.mode,
+            // WHAT THE CALL CAN DO TO THE TREE (CLOUD-2398): `"read"`,
+            // `"session"`, or `null` where it is not proven harmless. The one
+            // definition is [`admission`]; a module granting or refusing on
+            // "is this harmless" reads this key and keeps no list of its own.
+            "admission": admission(envelope).map(Admission::as_str),
         },
         "facts": projected_facts,
     }))
@@ -10930,21 +10935,241 @@ pub const ASK_GAPS: &[(Harness, &str)] = &[
     ),
 ];
 
-/// The host tools that can mutate nothing: search, tool-schema lookup and the
-/// plan-mode switches (CLOUD-2084).
+/// What a call can do to the tree, as far as the boundary can say without
+/// running it — the ONE definition every "only harmless calls pass" gate reads
+/// (CLOUD-2398).
 ///
-/// Read by the unloadable-config floor ONLY, which admits a call no rule could
-/// have decided. Not a reclassification: [`Harness::operation_of`] still
-/// answers `Other` for these, so tool-keyed rows see exactly what they saw.
+/// There were two, and they disagreed: plan mode decided in Rego
+/// (`read_only` + `plan_tools`) while the unloadable-config floor decided on
+/// `Operation::Read` plus a five-name `INERT_TOOLS`, so the floor refused
+/// `AskUserQuestion` and `TaskCreate` that plan mode admitted. Plan mode, the
+/// floor, the setup gate and pre-approval now all read [`admission`]; Rego
+/// sees it as `input.call.admission`.
+///
+/// TWO ANSWERS, NOT ONE, because they differ on exactly one consumer. Both
+/// mutate nothing in the tree, so both pass every gate. Only [`Admission::Reads`]
+/// is pre-approved: [`Admission::Session`] carries `ExitPlanMode`, whose prompt
+/// IS the operator approving a plan, and granting it would skip that approval.
+///
+/// Not a reclassification: [`Harness::operation_of`] still answers `Other` for
+/// the host tools named here, so tool-keyed rows see exactly what they saw.
 /// Claude Code's spelling; no surveyed host uses one of these names for a tool
-/// that writes, so a match on another host is the same inert call.
-pub const INERT_TOOLS: [&str; 5] = [
+/// that writes, so a match on another host is the same harmless call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admission {
+    /// The call only reads, so asking about it buys nothing.
+    Reads,
+    /// The host's own session state: plan-mode switches, a question to the
+    /// operator, the todo list. Never the tree, never pre-approved.
+    Session,
+}
+
+impl Admission {
+    /// The spelling `input.call.admission` carries.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reads => "read",
+            Self::Session => "session",
+        }
+    }
+}
+
+/// The host's read tools. Named, because a host tool's effect is the host's
+/// declaration and there is no argv to read.
+const READ_TOOLS: [&str; 14] = [
+    "Read",
     "Grep",
     "Glob",
+    "LS",
+    "NotebookRead",
     "ToolSearch",
-    "EnterPlanMode",
-    "ExitPlanMode",
+    "TaskGet",
+    "TaskList",
+    "TaskOutput",
+    "WebSearch",
+    "WebFetch",
+    "ListMcpResourcesTool",
+    "ReadMcpResourceTool",
+    // The session's own notification queue (CLOUD-2289). Marking an entry
+    // delivered is session state, never the tree.
+    "ReadNotifications",
 ];
+
+/// The host's session-state tools: leaving or entering plan mode, asking the
+/// operator, and the todo list.
+const SESSION_TOOLS: [&str; 6] = [
+    "ExitPlanMode",
+    "EnterPlanMode",
+    "AskUserQuestion",
+    "TodoWrite",
+    "TaskCreate",
+    "TaskUpdate",
+];
+
+/// Programs that leave their operands alone beyond [`READ_ONLY_PROGRAMS`], the
+/// protected-read floor. Each is admissible for that floor's reason. NOT here,
+/// deliberately: `sort` (`-o`), `uniq` (an output operand), `sed` (`-i`), `awk`
+/// (`system`), `find` (`-delete`, `-exec`), `xargs`, and every interpreter.
+const READ_PROGRAMS: [&str; 23] = [
+    "cd",
+    "pwd",
+    "true",
+    "false",
+    "test",
+    "[",
+    "which",
+    "type",
+    "date",
+    "jq",
+    "cut",
+    "tr",
+    "nl",
+    "tac",
+    "sha256sum",
+    "md5sum",
+    "du",
+    "df",
+    "uname",
+    "id",
+    "whoami",
+    "hostname",
+    "tree",
+];
+
+/// Git subcommands that report and write nothing a reader depends on.
+const GIT_READS: [&str; 15] = [
+    "status",
+    "log",
+    "diff",
+    "show",
+    "rev-parse",
+    "ls-files",
+    "ls-tree",
+    "blame",
+    "describe",
+    "cat-file",
+    "merge-base",
+    "rev-list",
+    "shortlog",
+    "grep",
+    "count-objects",
+];
+
+/// An MCP method whose verb only reads, by the naming every server this host
+/// reaches follows: `get_`/`list_`/`search_`/`read_`/`query_`/`fetch_`/`find_`,
+/// or a trailing `_read`.
+fn mcp_read_verb(tool: &str) -> bool {
+    static VERB: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        #[expect(clippy::expect_used, reason = "a literal pattern, compiled once")]
+        regex::Regex::new(
+            r"^mcp__[^_].*__((get|list|search|read|query|fetch|find)(_[a-z0-9_]+)?|[a-z0-9_]+_read)$",
+        )
+        .expect("the MCP read-verb pattern compiles")
+    });
+    VERB.is_match(tool)
+}
+
+/// What this call can do to the tree, or `None` where it is not proven harmless.
+///
+/// The ERROR DIRECTION is "not proven": a command that will not parse, a
+/// program no table names, a redirect into a file — each answers `None`.
+//MUTANT-SUITE crates/batten/tests/it/preapprove.rs
+//MUTANT admission-session-is-a-read|s@        return Some(Admission::Session);@        return Some(Admission::Reads);@|exit_plan_mode_is_admitted_in_plan_mode_and_never_preapproved
+//MUTANT redirect-unread|s@^        if redirects_to_a_file(\&words) {$@        if false {@|a_reader_redirected_into_a_file_is_not_preapproved
+//MUTANT mcp-verb-unread|s@^    if READ_TOOLS.contains(\&tool) \x7c\x7c mcp_read_verb(tool) {$@    if READ_TOOLS.contains(\&tool) \x7c\x7c tool.starts_with("mcp__") {@|an_mcp_write_is_not_preapproved
+//MUTANT mcp-call-unread|s@^    if name.strip_suffix(".exe").unwrap_or(name) == "batten" {$@    if false {@|a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not
+#[must_use]
+pub fn admission(envelope: &Envelope) -> Option<Admission> {
+    let tool = envelope.raw_tool.as_str();
+    if SESSION_TOOLS.contains(&tool) {
+        return Some(Admission::Session);
+    }
+    if READ_TOOLS.contains(&tool) || mcp_read_verb(tool) {
+        return Some(Admission::Reads);
+    }
+    // A subagent the host itself declares read-only.
+    if matches!(tool, "Agent" | "Task")
+        && matches!(
+            envelope.input.get("subagent_type").and_then(Value::as_str),
+            Some("Explore" | "Plan")
+        )
+    {
+        return Some(Admission::Reads);
+    }
+    // A classified read on a host whose tool names this table does not carry.
+    if envelope.operation == Operation::Read && envelope.writes.is_none() {
+        return Some(Admission::Reads);
+    }
+    if envelope.operation == Operation::Execute && command_only_reads(&envelope.command) {
+        return Some(Admission::Reads);
+    }
+    None
+}
+
+/// Does [`admission`] admit this call at all?
+#[must_use]
+pub fn non_mutating(envelope: &Envelope) -> bool {
+    admission(envelope).is_some()
+}
+
+/// Every program the line runs reads, and nothing is redirected into a file.
+fn command_only_reads(command: &str) -> bool {
+    let crate::facts::Look::Is(parsed) = segments(command) else {
+        return false;
+    };
+    let mut programs = 0_usize;
+    for segment in &parsed {
+        let words: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+        if redirects_to_a_file(&words) {
+            return false;
+        }
+        for line in &segment.lines {
+            let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+            let Some(index) = effective_program(&tokens) else {
+                continue;
+            };
+            let name = program_name(program_token(tokens[index]));
+            let arguments: Vec<&str> = tokens[index + 1..]
+                .iter()
+                .map(|token| program_token(token))
+                .collect();
+            if !program_reads(name, &arguments) {
+                return false;
+            }
+            programs += 1;
+        }
+    }
+    programs > 0
+}
+
+/// Does this one program, with these arguments, only read?
+fn program_reads(name: &str, arguments: &[&str]) -> bool {
+    if reads_its_operands(name) || READ_PROGRAMS.contains(&name) {
+        return true;
+    }
+    if batten_effect(name, arguments) == Some("read") {
+        return true;
+    }
+    // `batten mcp call <server> <method>` is the Bash form of
+    // `mcp__<server>__<method>`, and reads exactly when the tool form does
+    // (CLOUD-2289): one pattern decides both, so they cannot drift.
+    if name.strip_suffix(".exe").unwrap_or(name) == "batten" {
+        if let ["mcp", "call", server, method, ..] = arguments {
+            return mcp_read_verb(&format!("mcp__{server}__{method}"));
+        }
+    }
+    if name == "git" {
+        return arguments
+            .first()
+            .is_some_and(|verb| GIT_READS.contains(verb))
+            && !arguments.iter().any(|argument| {
+                argument.starts_with("--output")
+                    || matches!(*argument, "-O" | "--open-files-in-pager" | "--ext-diff")
+            });
+    }
+    false
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

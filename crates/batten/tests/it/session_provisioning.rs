@@ -194,14 +194,30 @@ impl Bench {
     /// the host through Batten's own reply, and a contract violation is reported
     /// on stderr. Merging them is how a dropped verdict reads as a delivered one.
     fn session_start(&self) -> Door {
-        use std::io::Write as _;
-
-        let payload = serde_json::json!({
+        self.send(&serde_json::json!({
             "hook_event_name": "SessionStart",
             "session_id": "session-provisioning-fixture",
             "source": "startup",
-        })
-        .to_string();
+        }))
+    }
+
+    /// Hand one `PreToolUse` envelope for `tool` to the engine, in the same
+    /// session `session_start` opened (CLOUD-2398).
+    fn pre_tool(&self, tool: &str, input: &serde_json::Value) -> Door {
+        self.send(&serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "session-provisioning-fixture",
+            "permission_mode": "default",
+            "tool_name": tool,
+            "tool_input": input,
+        }))
+    }
+
+    /// Hand any envelope to the engine.
+    fn send(&self, envelope: &serde_json::Value) -> Door {
+        use std::io::Write as _;
+
+        let payload = envelope.to_string();
 
         let mut child = common::batten()
             .current_dir(&self.repo)
@@ -467,10 +483,15 @@ fn a_step_that_hangs_is_killed_at_its_declared_bound() {
     // weaker in both directions: the script could have been synchronous and
     // hung forever, which is what the absence of any bound made possible.
     //
-    // Behind the door synchrony is structural — `run_one` waits for the child
-    // before `dispatch` returns and `batten hook` replies — so what is worth
-    // asserting is the thing that makes synchrony affordable: the bound. A step
-    // declaring 300ms and sleeping 30s must not hold the session for 30s.
+    // Behind the door an INLINE row is synchronous by structure — `run_one`
+    // waits for the child before `dispatch` returns and `batten hook` replies —
+    // so what is worth asserting is the thing that makes that affordable: the
+    // bound. A step declaring 300ms and sleeping 30s must not hold the session
+    // for 30s. The slow rows are no longer inline at all (CLOUD-2398): a
+    // `background` row is named to the agent and never spawned here, which
+    // `a_background_row_is_named_and_never_run_by_session_start` asserts. The
+    // retired race — the MCP handshake losing to a cold install — is closed by
+    // the `server probe failed` gate, not by holding the session.
     //
     // THE KILL IS RECORDED, SO THE CASE READS THE RECORD (CLOUD-2059). This
     // asserted a wall-clock ceiling on the reasoning that "a counter cannot
@@ -548,6 +569,160 @@ fn a_steps_stdout_is_interpreted_never_forwarded() {
         !door.out.contains("{\"async\": true}"),
         "a handler's stdout is never forwarded to the host verbatim: {}",
         door.out
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The hand-off (CLOUD-2398): slow rows are the agent's, launched in the
+// background, and mutation waits until each is launched.
+// ---------------------------------------------------------------------------
+
+/// A fixture with one inline row and one `background` row, each a stub that
+/// writes its own marker when it runs.
+fn handoff_bench(name: &str) -> Bench {
+    let bench = bench(name, &[]);
+    write(
+        &bench.repo,
+        "batten.toml",
+        "version = 1\n\
+         \n\
+         [[hook.handler]]\n\
+         id = \"wire\"\n\
+         on = \"session-start\"\n\
+         run = [\"steps/wire\"]\n\
+         timeout_ms = 5000\n\
+         owner = \"CLOUD-312\"\n\
+         expires = \"2027-02-28\"\n\
+         \n\
+         [[hook.handler]]\n\
+         id = \"slow\"\n\
+         on = \"session-start\"\n\
+         run = [\"steps/slow\"]\n\
+         background = true\n\
+         owner = \"CLOUD-312\"\n\
+         expires = \"2027-02-28\"\n",
+    );
+    bench.step("wire", "touch ran-wire");
+    bench.step("slow", "touch ran-slow");
+    bench
+}
+
+#[test]
+fn a_background_row_is_named_and_never_run_by_session_start() {
+    // THE INLINE WAIT THIS REMOVES, measured: a cold SessionStart held three
+    // operator prompts for 5m50s while a release build ran inside the hook. A
+    // `background` row is named in the reply, to be launched by the agent, and
+    // the hook spawns only the inline rows.
+    let bench = handoff_bench("session-handoff-named");
+
+    let door = bench.session_start();
+
+    assert_eq!(
+        door.code,
+        Some(0),
+        "session start never refuses: {}",
+        door.err
+    );
+    assert!(
+        bench.repo.join("ran-wire").exists(),
+        "an inline row still runs at session start"
+    );
+    assert!(
+        !bench.repo.join("ran-slow").exists(),
+        "a background row is never spawned by the hook"
+    );
+    assert!(
+        door.out.contains("steps/slow") && door.out.contains("run_in_background"),
+        "the background row is named to the agent, to launch in the background: {}",
+        door.out
+    );
+}
+
+#[test]
+fn an_edit_waits_until_every_background_row_is_launched() {
+    let bench = handoff_bench("session-handoff-gate");
+    let edit = serde_json::json!({
+        "file_path": bench.repo.join("notes.md"),
+        "old_string": "a",
+        "new_string": "b",
+    });
+
+    let refused = bench.pre_tool("Edit", &edit);
+    assert!(
+        refused.out.contains("\"deny\"") && refused.out.contains("setup launch missing"),
+        "a mutation before the launch is refused by the setup gate: {}",
+        refused.out
+    );
+    assert!(
+        refused.out.contains("steps/slow"),
+        "the refusal names the command still owed: {}",
+        refused.out
+    );
+
+    let read = bench.pre_tool("Read", &serde_json::json!({ "file_path": "notes.md" }));
+    assert!(
+        !read.out.contains("\"deny\""),
+        "a read passes while setup is owed: {}",
+        read.out
+    );
+
+    let foreground = bench.pre_tool("Bash", &serde_json::json!({ "command": "steps/slow" }));
+    assert!(
+        foreground.out.contains("setup launch missing"),
+        "a FOREGROUND run of the row is not the launch, and still mutates: {}",
+        foreground.out
+    );
+
+    let launch = bench.pre_tool(
+        "Bash",
+        &serde_json::json!({ "command": "steps/slow", "run_in_background": true }),
+    );
+    assert!(
+        !launch.out.contains("\"deny\""),
+        "launching the owed row in the background is admitted: {}",
+        launch.out
+    );
+
+    let after = bench.pre_tool("Edit", &edit);
+    assert!(
+        !after.out.contains("setup launch missing"),
+        "once every row is launched the gate lifts: {}",
+        after.out
+    );
+}
+
+#[test]
+fn the_slow_session_rows_are_background_and_the_wiring_rows_are_not() {
+    // THE DECLARATION'S HALF. The rows that install, build or reach the
+    // network are the agent's; the ones that wire batten in stay inline, so a
+    // session is mediated from its first call.
+    let background: Vec<String> = std::fs::read_to_string(at_root("batten.toml"))
+        .expect("the committed authority is readable")
+        .split("\n[[hook.handler]]\n")
+        .skip(1)
+        .filter(|block| {
+            let body = block.split("\n[").next().unwrap_or(block);
+            body.lines()
+                .any(|line| line.trim() == "on = \"session-start\"")
+                && body.lines().any(|line| line.trim() == "background = true")
+        })
+        .filter_map(|block| {
+            block
+                .lines()
+                .find_map(|line| line.strip_prefix("id = "))
+                .map(|id| id.trim().trim_matches('"').to_owned())
+        })
+        .collect();
+    assert_eq!(
+        background,
+        [
+            "session-install",
+            "session-doctor",
+            "session-container-preflight",
+            "session-credential",
+            "session-census",
+        ],
+        "exactly the slow rows are handed to the agent"
     );
 }
 

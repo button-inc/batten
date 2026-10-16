@@ -5201,6 +5201,21 @@ continue_on_error = false
 [mcp]
 permission_aliases = ["Claude_Code_Remote"]
 
+# SERENA IS A LOCAL SERVER LIKE ANY OTHER, AND IS GATED UNTIL IT ANSWERS
+# (CLOUD-2398). It used to justify holding every session start behind the whole
+# toolchain install, because its `mise exec` launch lost the host's one
+# handshake to a cold install. Now batten probes it with `initialize` before any
+# call reaches it — its tools, or a memory path — and refuses those calls, naming
+# the install, until it answers. `batten provision apply` first: it is what puts
+# `mise` on PATH, and nothing before it may assume one.
+[[mcp.local]]
+server = "serena"
+install = [
+  ["batten", "provision", "apply"],
+  ["mise", "install", "uv", "pipx:serena-agent@1.7.0"],
+]
+routes = [".serena/memories/**"]
+
 # Claude Code's own local wiring.
 [[mcp.source]]
 id = "claude-code-local"
@@ -12498,6 +12513,11 @@ expires = "2027-02-28"
 id = "session-install"
 on = "session-start"
 run = ["mise", "run", "session:install"]
+# THE AGENT'S, IN THE BACKGROUND (CLOUD-2398). The hook names this row and the
+# `setup launch missing` gate holds mutation until it is launched; run inline it
+# held the operator for the whole install. `timeout_ms` below bounds nothing
+# while this is set, and stays as the measured figure for the inline fallback.
+background = true
 # Ten minutes. The measured cold figure for ONE tool was 24s (`pipx:serena-agent`,
 # CLOUD-196); this installs the whole `[tools]` table on a container with no
 # cache, and it is the step every other one depends on.
@@ -12508,6 +12528,9 @@ expires = "2027-02-28"
 id = "session-doctor"
 on = "session-start"
 run = ["mise", "run", "session:doctor"]
+# Background for `session-install`'s reason (CLOUD-2398): its `startup --repair`
+# is where the 2026-10-16 cold session's six-minute release build ran inline.
+background = true
 # Fifteen minutes, the longest bound here and the one with the least measurement
 # behind it: doctor's rustup half installs cross targets over the network, and
 # the failure this step exists to prevent (CLOUD-218's `detected conflict`) is
@@ -12541,9 +12564,9 @@ on = "session-start"
 run = ["mise", "run", "session:identity"]
 # AFTER `session-batten`, because this is the ENGINE answering: the policy is
 # `[attribution]` in this file and `batten attribution identity` is what reads
-# it. The task spells `cargo run`, so a cold container pays a debug build here
-# that the release build above does not cover — which is what the ten minutes is
-# for, not the identity write itself.
+# it. The task runs the installed engine (`mise.toml`'s `session:identity`), so
+# no build happens here; the ten minutes is a bound left from when it spelled
+# `cargo run`, and the write itself takes milliseconds.
 #
 # It belongs in the provisioning window at all because the vendor identity is
 # injected at the environment level: a fresh clone carries it before any work
@@ -12622,6 +12645,9 @@ expires = "2027-02-28"
 [[hook.handler]]
 id = "session-container-preflight"
 on = "session-start"
+# Background (CLOUD-2398): network probes are slow to fail, and a failure is
+# read from the task's own output rather than held behind the hook.
+background = true
 # THROUGH `mise`, NOT `batten` BY NAME, for `doctor:mediator`'s reason
 # (bc420eb1): `doctor`'s `hook-handlers` check resolves every handler program,
 # and a CI runner builds `batten` rather than installing it, so naming it here
@@ -12676,6 +12702,8 @@ expires = "2027-02-28"
 id = "session-credential"
 on = "session-start"
 run = ["mise", "run", "gh-preflight"]
+# Background for `session-container-preflight`'s reason (CLOUD-2398).
+background = true
 # THE SECOND ROW. `gh-preflight` walks the read endpoints the lifecycle tasks call
 # and reports the claim GitHub itself names in each 403; it is the diagnosis and
 # it already exits non-zero. Since CLOUD-843 its body is `batten doctor forge`
@@ -12722,6 +12750,9 @@ expires = "2027-02-28"
 id = "session-census"
 on = "session-start"
 run = ["batten", "record", "census", "report", "--once"]
+# Background (CLOUD-2398): its report reaches the agent as the task's output,
+# the channel a backgrounded row speaks on.
+background = true
 # LAST, AND ONE OF THE TWO ROWS THAT MAY SPEAK ON THE NORMAL PATH. Its report is
 # something this hook has to say to a reader with an action to take — what was
 # running when the container we replaced went down (CLOUD-451) — so its stdout is

@@ -35,6 +35,19 @@ preapprove contains "call grant now" if {
 	not some_output_redirect(input.call)
 }
 
+# GUARDED: `segments` is `null` on a non-shell call, and iterating null faults
+# the whole query, which reads as could-not-look for every module here.
+some_output_redirect(call) if {
+	is_array(call.segments)
+	some segment in call.segments
+	segment["output-redirect"]
+}
+
+# A command the boundary could not segment is not proven anything.
+some_output_redirect(call) if {
+	not is_array(call.segments)
+}
+
 granted_effects(effect) if {
 	effect in {"read", "write"}
 }

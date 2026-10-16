@@ -2783,6 +2783,10 @@
       "description": "One declared handler.",
       "type": "object",
       "properties": {
+        "background": {
+          "description": "Whether the AGENT runs this row in the background rather than the hook\nrunning it inline (CLOUD-2398).\n\n**The hook never spawns a background row.** It names it: at\n`session-start` the reply lists every background row's command, in\ndeclared order, to launch with the host's background flag, and the\n`session setup pending` gate refuses every mutating call until each has\nbeen launched. The slow half of provisioning — installs, a toolchain, a\nbuild — then runs where the agent sees its output and its failure, and\nthe operator is not held behind a hook for its whole duration. Measured\nbefore this column: a cold SessionStart held three operator prompts for\n5m50s and then denied.\n\n`timeout_ms` still bounds a row the hook does run; a background row's\nbound is the host's own background limit.",
+          "type": "boolean"
+        },
         "command_matcher": {
           "description": "Which COMMANDS this handler runs for, as a regular expression over the\nmediated call's command string (CLOUD-1650).\n\n**Absent means every call [`Handler::matcher`] already selected**, so no\nlanded row changes behaviour by this column's arrival — the same promise\n`matcher` itself made when it was added.\n\n# Why the sibling column cannot express this\n\n[`Handler::matcher`] is a regex over the TOOL NAME. That is the whole of\nwhat it can say, and for a shell tool the tool name is `Bash` on every\ncall the agent makes — so a handler that wants *some* shell commands and\nnot others has, without this, exactly two options: fire on all of them, or\non none. Firing on all of them is not a neutral default. Measured\n2026-08-25 on the sibling column's own row, an unnarrowed `pre-tool`\nhandler cost 19.6ms p50 on a `Bash` call against a `wired` path whose\nwhole p50 is 21ms — so \"narrow by tool name only\" prices a handler about a\ndozen commands as if it were about every one.\n\n# It names a SHAPE, never a program's own vocabulary\n\nThe engine holds the matcher and the consumer's `batten.toml` holds the\nexpression, which is `protected`'s split and non-negotiable rule 1's: a\nlist of git subcommands in `crates/batten` would be one consumer's\nvocabulary shipped to every adopter. What is generic here is \"select on\nwhat the call is going to RUN, not on what the host called the tool\".\n\n# A command that cannot be read does NOT select\n\nThe opposite reading from [`Handler::selects_tool`]'s unparseable-matcher\narm, and the asymmetry is deliberate. There, running is the safe direction\nbecause the row was validated at load and reaching the fallback means a\ncaller skipped validation. Here, could-not-look means the ENVELOPE carried\nno command — every non-command tool call in the session — and selecting on\nthose would fire the handler on every `Read` and every `Edit`, which is the\nunnarrowed cost this column exists to avoid. A row declaring this column\nhas said its subject is a command; an envelope with no command is not its\nsubject.",
           "type": [
@@ -3083,6 +3087,41 @@
         }
       ]
     },
+    "Local": {
+      "description": "One `[[mcp.local]]` row: a local server, how it is installed, and what is\nrouted to it.",
+      "type": "object",
+      "properties": {
+        "install": {
+          "description": "The commands that install the server, as argvs, in order. Each is named\nto the agent to launch in the background while the probe fails.",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 1536
+            }
+          }
+        },
+        "routes": {
+          "description": "Repository-relative globs whose reads and writes are routed to this\nserver, so a call naming one reaches nothing while it is down.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
+        "server": {
+          "description": "The server's key in `.mcp.json`'s `mcpServers`, which is also the\n`mcp__<server>__*` prefix its tools are exposed under.",
+          "type": "string",
+          "maxLength": 1536
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "server",
+        "install"
+      ]
+    },
     "Manifest": {
       "description": "One manifest whose command strings are counted.",
       "type": "object",
@@ -3148,6 +3187,13 @@
       "description": "The `[mcp]` table: where the wiring lives, and what to return instead of a\npayload.",
       "type": "object",
       "properties": {
+        "local": {
+          "description": "The LOCAL servers the host launches from `.mcp.json`, each with what\ninstalls it and which paths are routed to it (CLOUD-2398).\n\nA host connects a local server once, at session start, and does not\nretry: a server whose tools were still installing lost its handshake\nfor the whole session. Batten probes each row as an MCP client and\ngates the calls that would reach it until it answers, naming the\ninstall commands to launch in the background.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Local"
+          }
+        },
         "permission_aliases": {
           "description": "Server names whose committed permission rules apply under WHATEVER key the\nhost exposes the server as this session (CLOUD-191, CLOUD-843).\n\nEach is a name some `[[mcp.source]]` row's `endpoint_contains` declares,\nbecause the endpoint is the only thing that identifies a renamed server:\n`mcp grant` finds the exposed key's endpoint, matches it to one of these\nnames, and applies the committed `permissions` rules written for that name.\n`mcp posture` reads the same list for the grants a connector would still\nprompt for.\n\n**A LIST, and deliberately not every `endpoint_contains` name.** A name here\nturns a committed allow rule into a pre-approval under a key nobody\ncommitted. A server the host authorises at its own connector layer must not\nbe translated, or the translation grants what the host did not — so the\nconsumer states which servers its permission file governs, rather than the\nengine inferring it from a selector written for dispatch.",
           "type": "array",

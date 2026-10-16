@@ -314,9 +314,33 @@ pub struct Handler {
     /// never having run.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub preapproves: bool,
+    /// Whether the AGENT runs this row in the background rather than the hook
+    /// running it inline (CLOUD-2398).
+    ///
+    /// **The hook never spawns a background row.** It names it: at
+    /// `session-start` the reply lists every background row's command, in
+    /// declared order, to launch with the host's background flag, and the
+    /// `session setup pending` gate refuses every mutating call until each has
+    /// been launched. The slow half of provisioning — installs, a toolchain, a
+    /// build — then runs where the agent sees its output and its failure, and
+    /// the operator is not held behind a hook for its whole duration. Measured
+    /// before this column: a cold SessionStart held three operator prompts for
+    /// 5m50s and then denied.
+    ///
+    /// `timeout_ms` still bounds a row the hook does run; a background row's
+    /// bound is the host's own background limit.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub background: bool,
 }
 
 impl Handler {
+    /// The command line the agent launches for a [`Handler::background`] row:
+    /// its argv joined by single spaces, exactly the string the
+    /// `session setup pending` gate compares a launch against.
+    #[must_use]
+    pub fn launch_line(&self) -> String {
+        self.run.join(" ")
+    }
     /// The event this handler names, or `None` when `on` names none.
     #[must_use]
     pub fn event(&self) -> Option<Event> {
@@ -581,6 +605,18 @@ impl Handler {
                 self.id, self.on
             )));
         }
+        // A background row is NAMED at session start and gated until launched
+        // (CLOUD-2398). On any other moment nothing names it and nothing
+        // launches it, so the row would never run anywhere — refused here
+        // rather than discovered as a step that silently stopped happening.
+        if self.background && event != Event::SessionStart {
+            return Err(UsageError::raise(format!(
+                "hook.handler {}: `background` hands a row to the agent at session start, \
+                 and {:?} is not session start — so the row would run nowhere. Drop the \
+                 column, or move the row to the session-start event.",
+                self.id, self.on
+            )));
+        }
         // A zero bound is not "no bound", it is a handler that can never
         // succeed. Refusing it at load is the difference between an author
         // learning this now and a turn losing every handler to a timeout later.
@@ -665,6 +701,56 @@ pub fn selects(handlers: &[Handler], event: Event, raw_tool: &str) -> bool {
         .iter()
         .any(|handler| handler.event() == Some(event) && handler.selects_tool(raw_tool))
 }
+
+/// Run `argv` once through the door, hand it `stdin`, and return what it wrote
+/// on stdout when it exited `0` within `bound` (CLOUD-2398).
+///
+/// THE DOOR'S OWN SPAWN, NOT A SECOND ONE. `[[mcp.local]]`'s health probe is a
+/// declared program fed a line and read back, which is a handler's whole shape:
+/// the same root, the same resolution ladder, the same group kill at the bound.
+/// A stdio MCP server handed `initialize` and then end-of-input answers and
+/// exits; one that cannot start, crashes, or outlives the bound answers `None`.
+#[must_use]
+pub fn probe(root: &Path, argv: &[String], stdin: &str, bound: Duration) -> Option<String> {
+    let handler = Handler {
+        id: String::from("mcp-probe"),
+        on: String::from("pre-tool"),
+        run: argv.to_vec(),
+        timeout_ms: u64::try_from(bound.as_millis()).ok(),
+        matcher: None,
+        command_matcher: None,
+        owner: None,
+        expires: None,
+        preapproves: false,
+        background: false,
+    };
+    match run_one(root, &handler, &Payload::from(stdin)) {
+        Outcome::Advise(said) => Some(said),
+        _ => None,
+    }
+}
+
+/// The [`Handler::background`] rows declared for `event`, as launch lines, in
+/// declaration order (CLOUD-2398).
+///
+/// The one reader both halves use: the session-start reply that names them and
+/// the gate that holds mutation until each is launched. Two readers spelling the
+/// line separately is the drift that would let the gate wait on a command the
+/// reply never named.
+//MUTANT-SUITE crates/batten/tests/it/session_provisioning.rs
+//MUTANT setup-gate-admits-unlaunched|s@^        .filter(\x7chandler\x7c handler.background \&\& handler.event() == Some(event))$@        .filter(\x7c_\x7c false)@|an_edit_waits_until_every_background_row_is_launched
+#[must_use]
+pub fn background_lines(handlers: &[Handler], event: Event) -> Vec<String> {
+    handlers
+        .iter()
+        .filter(|handler| handler.background && handler.event() == Some(event))
+        .map(Handler::launch_line)
+        .collect()
+}
+
+// The rows below are judged by the dispatch suite again; the declaration above
+// scopes only `background_lines`' row.
+//MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
 
 /// Why a handler's answer could not be taken at face value.
 ///
@@ -888,6 +974,8 @@ fn impersonates_host(stdout: &str) -> bool {
 /// `root` is the directory holding the `batten.toml` that declared `handlers`,
 /// and every handler runs there (CLOUD-2050): a row's relative paths are the
 /// repository's, whatever directory the host's shell stands in.
+//MUTANT-SUITE crates/batten/tests/it/session_provisioning.rs
+//MUTANT background-row-runs-inline|s@^        if handler.background {$@        if false {@|a_background_row_is_named_and_never_run_by_session_start
 #[must_use]
 pub fn dispatch(
     root: &Path,
@@ -900,6 +988,12 @@ pub fn dispatch(
     let mut ran = Vec::new();
     for handler in handlers {
         if handler.event() != Some(event) {
+            continue;
+        }
+        // THE AGENT RUNS IT, NEVER THE HOOK (CLOUD-2398): `background_lines`
+        // names it in the reply and the setup gate holds mutation until it is
+        // launched. Spawning it here is the inline wait this column removes.
+        if handler.background {
             continue;
         }
         // THE HALF THAT ACTUALLY SAVES THE SPAWN. `selects` above answers whether
@@ -940,6 +1034,9 @@ pub fn dispatch(
     }
     Dispatched { ran }
 }
+
+// Back to the dispatch suite for the rows below (see `background_lines`).
+//MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
 
 /// What a handler reads on stdin: the host's own bytes, held as text or spooled
 /// to a file by the hook's streamed read (CLOUD-2224), so a large payload is
@@ -1364,6 +1461,7 @@ mod tests {
             // what keeps the conversion in `dispatch` visible as a decision the
             // ROW makes rather than a default this helper hides.
             preapproves: false,
+            background: false,
         }
     }
 

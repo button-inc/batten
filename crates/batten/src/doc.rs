@@ -188,6 +188,22 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["edit the committed projection by hand to match"],
     },
     VendoredDoc {
+        id: "setup launch missing",
+        why: Some("A background session-start row this session has not launched yet"),
+        act: &[
+            "launch each named command with the host's background flag, exactly as named, and act on its exit",
+        ],
+        dont: &["run it in the foreground or redirect its output"],
+    },
+    VendoredDoc {
+        id: "server probe failed",
+        why: Some("A declared local MCP server did not answer `initialize`"),
+        act: &[
+            "launch the named install commands with the host's background flag, exactly as named, and wait for their exit",
+        ],
+        dont: &["read the routed path another way while the server is down"],
+    },
+    VendoredDoc {
         id: "handler answer denied",
         why: Some("A program the config registers as a hook handler answered deny for this call"),
         act: &["read that `[hook.handler]` row in `batten.toml` for what it guards, and meet it"],

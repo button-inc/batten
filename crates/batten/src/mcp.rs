@@ -118,6 +118,153 @@ pub struct McpConfig {
     /// engine inferring it from a selector written for dispatch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permission_aliases: Vec<String>,
+    /// The LOCAL servers the host launches from `.mcp.json`, each with what
+    /// installs it and which paths are routed to it (CLOUD-2398).
+    ///
+    /// A host connects a local server once, at session start, and does not
+    /// retry: a server whose tools were still installing lost its handshake
+    /// for the whole session. Batten probes each row as an MCP client and
+    /// gates the calls that would reach it until it answers, naming the
+    /// install commands to launch in the background.
+    #[serde(default, rename = "local", skip_serializing_if = "Vec::is_empty")]
+    pub locals: Vec<Local>,
+}
+
+/// One `[[mcp.local]]` row: a local server, how it is installed, and what is
+/// routed to it.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct Local {
+    /// The server's key in `.mcp.json`'s `mcpServers`, which is also the
+    /// `mcp__<server>__*` prefix its tools are exposed under.
+    pub server: String,
+    /// The commands that install the server, as argvs, in order. Each is named
+    /// to the agent to launch in the background while the probe fails.
+    pub install: Vec<Vec<String>>,
+    /// Repository-relative globs whose reads and writes are routed to this
+    /// server, so a call naming one reaches nothing while it is down.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<String>,
+}
+
+/// The file a host reads local servers from, at the repository root.
+pub const LOCAL_WIRING: &str = ".mcp.json";
+
+/// How long a probe may take: spawn, `initialize`, answer, exit.
+///
+/// Thirty seconds, against a host hook bound of sixty: a cold server that loads
+/// a language toolchain answers in seconds, and one still installing does not
+/// answer at all, so the bound only has to separate "slow" from "never".
+pub const PROBE_BOUND: std::time::Duration = std::time::Duration::from_secs(30);
+
+impl Local {
+    /// The launch line `.mcp.json` declares for this server, `command` then
+    /// `args`, or `None` where the file or the entry is absent or malformed.
+    #[must_use]
+    pub fn launch(&self, root: &Path) -> Option<Vec<String>> {
+        let text = std::fs::read_to_string(root.join(LOCAL_WIRING)).ok()?;
+        let wiring: serde_json::Value = serde_json::from_str(&text).ok()?;
+        let entry = wiring.get("mcpServers")?.get(&self.server)?;
+        let mut argv = vec![entry.get("command")?.as_str()?.to_owned()];
+        if let Some(args) = entry.get("args") {
+            for arg in args.as_array()? {
+                argv.push(arg.as_str()?.to_owned());
+            }
+        }
+        Some(argv)
+    }
+
+    /// Whether `tool` is one of this server's exposed tools.
+    #[must_use]
+    pub fn owns_tool(&self, tool: &str) -> bool {
+        tool.strip_prefix("mcp__")
+            .and_then(|rest| rest.strip_prefix(self.server.as_str()))
+            .is_some_and(|rest| rest.starts_with("__"))
+    }
+
+    /// Whether a repository-relative `path` is routed to this server.
+    #[must_use]
+    pub fn routes_path(&self, path: &str) -> bool {
+        self.routes.iter().any(|glob| {
+            globset::Glob::new(glob)
+                .map(|compiled| compiled.compile_matcher().is_match(path))
+                .unwrap_or(false)
+        })
+    }
+
+    /// The install commands as launch lines, in order.
+    #[must_use]
+    pub fn install_lines(&self) -> Vec<String> {
+        self.install.iter().map(|argv| argv.join(" ")).collect()
+    }
+}
+
+/// The launch line with a leading `batten mcp spawn <server> --` removed.
+///
+/// That wrapper records a spawn in [`SPAWN_LEDGER`], which `mcp posture`
+/// compares line for line against the HOST's connection log. A probe is not a
+/// host connection, so recording it would put a spawn in the ledger no host log
+/// can account for; the probe runs what the wrapper would have exec'd.
+fn unrecorded(argv: &[String]) -> &[String] {
+    match argv {
+        [program, mcp, spawn, _, separator, rest @ ..]
+            if Path::new(program)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                == Some(crate::surface::BINARY)
+                && mcp == "mcp"
+                && spawn == "spawn"
+                && separator == "--"
+                && !rest.is_empty() =>
+        {
+            rest
+        }
+        _ => argv,
+    }
+}
+
+/// The one request a probe sends: MCP's `initialize`, newline-delimited as the
+/// stdio transport frames it.
+#[must_use]
+pub fn initialize_request() -> String {
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "batten", "version": env!("CARGO_PKG_VERSION")},
+        },
+    });
+    format!("{request}\n")
+}
+
+/// Whether a server's stdout carries a successful answer to [`initialize_request`].
+///
+/// A line that is a JSON-RPC response with `id` 1 and a `result`; an `error`
+/// answer, a log line, or nothing at all is not health.
+#[must_use]
+pub fn answers_initialize(stdout: &str) -> bool {
+    stdout.lines().any(|line| {
+        serde_json::from_str::<serde_json::Value>(line).is_ok_and(|message| {
+            message.get("id") == Some(&serde_json::json!(1)) && message.get("result").is_some()
+        })
+    })
+}
+
+/// Probe `local` as an MCP client: spawn its `.mcp.json` launch line, send
+/// `initialize`, read the answer. `false` where the line cannot be found, the
+/// server cannot start, or it does not answer within [`PROBE_BOUND`].
+#[must_use]
+pub fn healthy(root: &Path, local: &Local) -> bool {
+    let Some(argv) = local.launch(root) else {
+        return false;
+    };
+    crate::handler::probe(root, unrecorded(&argv), &initialize_request(), PROBE_BOUND)
+        .is_some_and(|said| answers_initialize(&said))
 }
 
 /// One `[[mcp.source]]` row: a file that carries a server's transport, endpoint
