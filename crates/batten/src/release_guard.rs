@@ -292,7 +292,7 @@ fn probe(slug: &str, trunk: &str, get: Get<'_>) -> Result<Option<String>, String
 
 /// `batten release settings [--probe] [--last-run <workflow>]`: exit 0 when
 /// nothing is owed (and, with `--probe`, the server refused the probe for
-/// `release-path`), 1 naming every owed item, 3 when it could not look. With
+/// `release-path`), 2 naming every owed item, 3 when it could not look. With
 /// `--last-run`, the answer is instead whether the `settings` job of that
 /// guard workflow's last completed run on the trunk succeeded — the read the
 /// cut and the release PR gate on, which needs no administration credential.

@@ -399,7 +399,7 @@ jobs:
         id: settings
         env:
           BATTEN_GITHUB_TOKEN: ${{ github.token }}
-        run: mise run batten -- ci step --verdict green --on 0=true --on 1=false -- mise run batten -- release settings --last-run release-guard.yml
+        run: mise run batten -- ci step --verdict green --on 0=true --on 2=false -- mise run batten -- release settings --last-run release-guard.yml
       - name: Ready the release PR so CI runs on the SHA that will land
         if: steps.debounce.outputs.due == 'true' && steps.settings.outputs.green == 'true' && steps.target.outputs.draft == 'true'
         env:
