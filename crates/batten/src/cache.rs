@@ -81,11 +81,12 @@ const USE_MARK: &str = "used";
 /// existing proves the partition does. A new partition is the rare path: it
 /// tags the directory for backup tools ([`CACHEDIR_TAG`]), marks the partition
 /// and [`prune`]s, so the directory holds at most [`KEPT_PARTITIONS`] binaries,
-/// least recently used evicted first. A partition without a mark — its marking
-/// failed, or the mark was lost — takes that path too, and gains one.
+/// least recently used evicted first. A partition without a mark — the mark was
+/// lost — takes that path too, and gains one where one can be made; where none
+/// can, it is served from the cold path and neither marked nor pruned.
 //MUTANT partitions-never-pruned|s@^    prune(\&root, name);$@@|a_new_partition_keeps_its_neighbours_up_to_the_bound
-//MUTANT partition-mark-never-made|s@^    if std::fs::File::create_new(\&mark).is_err() {$@    if true {@|a_partition_without_a_mark_gains_one
-//MUTANT unmarkable-partition-prunes|s@^    if std::fs::File::create_new(\&mark).is_err() {$@    if std::fs::File::create_new(\&mark).is_err() \&\& false {@|a_partition_that_cannot_be_marked_does_not_prune
+//MUTANT partition-mark-never-made|s@^    if !matches!(crate::durable::create_empty(\&mark), Ok(true)) {$@    if true {@|a_partition_without_a_mark_gains_one
+//MUTANT unmarkable-partition-prunes|s@^    if !matches!(crate::durable::create_empty(\&mark), Ok(true)) {$@    if false {@|a_partition_that_cannot_be_marked_does_not_prune
 #[must_use]
 pub fn root_under(parent: &Path) -> Option<PathBuf> {
     // A binary that cannot name itself has no partition, so it caches nothing
@@ -105,12 +106,10 @@ pub fn root_under(parent: &Path) -> Option<PathBuf> {
     if !tag.exists() {
         let _ = crate::durable::replace_as(&tag, CACHEDIR_TAG, crate::durable::Persist::Atomic);
     }
-    // `create_new`, not `durable`'s temp-and-link: the mark is zero bytes, so
-    // there is no content to tear, and a link would make marking depend on a
-    // filesystem that has hard links. A partition that cannot be marked is
-    // still served but does not prune: without a mark every call lands here,
+    // A partition that cannot be marked — or that another process just marked —
+    // is still served but does not prune: without a mark every call lands here,
     // and a directory scan per call is the cost the warm path exists to avoid.
-    if std::fs::File::create_new(&mark).is_err() {
+    if !matches!(crate::durable::create_empty(&mark), Ok(true)) {
         return Some(own);
     }
     prune(&root, name);

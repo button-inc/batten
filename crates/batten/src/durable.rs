@@ -309,6 +309,23 @@ pub fn create_exclusive_as(
     }
 }
 
+/// Create `path` empty if nothing has the name, `false` when something does.
+///
+/// For a zero-byte MARK whose time carries its meaning: with no contents there
+/// is nothing to tear, so it needs neither [`create_exclusive`]'s temp nor its
+/// hard link, and works on a filesystem without links.
+///
+/// # Errors
+///
+/// Any I/O error other than the name being taken.
+pub(crate) fn create_empty(path: &Path) -> std::io::Result<bool> {
+    match std::fs::File::create_new(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
 /// `path`, file or directory, opened for its lock or its times.
 ///
 /// WINDOWS OPENS A DIRECTORY ONLY WITH BACKUP SEMANTICS and writes times only

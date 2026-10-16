@@ -130,7 +130,7 @@ row here, so a new module lands with its line.
 - `pattern.rs` — the `[[pattern]]` table (CLOUD-885): named regular expressions a policy module references by id, never writes inline.
 - `pinned.rs` — the programs the project's pin puts on `PATH` (CLOUD-1028), and the record that lets a mediated call read them.
 - `signer_posture.rs` — whether a git signing configuration names a key anyone can verify (CLOUD-669, CLOUD-1717).
-- `durable.rs` — the ONE place this crate mutates a file (CLOUD-1919): `append` is one `write(2)` plus `fsync`, and `replace` is temp, `fsync`, `rename`, then a directory `fsync`.
+- `durable.rs` — the ONE place this crate mutates a file (CLOUD-1919): `append` is one `write(2)` plus `fsync`, and `replace` is temp, `fsync`, `rename`, then a directory `fsync`; `create_empty` makes a zero-byte mark, and `open_handle` opens a file or directory for its lock or its times on every platform (CLOUD-2361).
 - `cache.rs` — the ONE cross-process cache mechanism (CLOUD-2315): content keys through `identity::cache_key`, the running binary named by its linker build ID, self-validating entries written unsynced, and a `cache/` directory tagged `CACHEDIR.TAG` and partitioned per binary so two binaries never evict each other. The policy bytecode, the config parse, the transcript tally and the epoch all store through it.
 - `cargo_graph.rs` — the ACTIVATED dependency graph, read from a `cargo metadata` document (CLOUD-1717).
 - `probe_verdict.rs` — which of three things a probe build did, from its exit status and its log (CLOUD-418, CLOUD-1717).
