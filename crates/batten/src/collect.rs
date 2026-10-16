@@ -247,7 +247,7 @@ fn proc_table() -> Option<(u64, u64, impl Iterator<Item = PathBuf>)> {
 /// functions so every platform's suite checks them.
 //MUTANT-SUITE crates/batten/src/collect.rs
 //MUTANT stat-start-misread|s@^        rest.split_whitespace().nth(19)?.parse().ok()$@        rest.split_whitespace().nth(18)?.parse().ok()@|a_stat_line_yields_its_start_ticks
-//MUTANT member-predates-tie|s@ 1 < alive_at@ 1 <= alive_at@|a_group_member_predates_only_strictly_before
+//MUTANT began-before-tie|s@ 1 < alive_at@ 1 <= alive_at@|a_stat_line_began_before_only_strictly_before
 //MUTANT orphan-leader-ignored|s@if pid == Some(group) \x7c\x7c pid == Some(registrant) {@if pid == Some(registrant) {@|an_orphan_needs_its_leader_and_registrant_gone
 //MUTANT orphan-registrant-ignored|s@if pid == Some(group) \x7c\x7c pid == Some(registrant) {@if pid == Some(group) {@|an_orphan_needs_its_leader_and_registrant_gone
 #[cfg(any(target_os = "linux", target_os = "android", test))]
@@ -272,24 +272,14 @@ mod proc_stat {
         rest.split_whitespace().nth(2)?.parse().ok()
     }
 
-    /// Whether a `/proc/<pid>/stat` line is a member of `group` that began
-    /// strictly before second `alive_at`, against the boot instant and the
-    /// (non-zero) clock rate. One second of slack absorbs `btime`'s own
-    /// rounding, so a tie is no.
-    pub(super) fn member_predates(
-        stat: &str,
-        group: i64,
-        boot: u64,
-        ticks: u64,
-        alive_at: u64,
-    ) -> bool {
-        process_group(stat) == Some(group)
-            && start_ticks(stat).is_some_and(|since| boot + since / ticks + 1 < alive_at)
+    /// Whether a `/proc/<pid>/stat` line's process began strictly before second
+    /// `alive_at`, against the boot instant and the (non-zero) clock rate. One
+    /// second of slack absorbs `btime`'s own rounding, so a tie is no.
+    pub(super) fn began_before(stat: &str, boot: u64, ticks: u64, alive_at: u64) -> bool {
+        start_ticks(stat).is_some_and(|since| boot + since / ticks + 1 < alive_at)
     }
 
-    /// Whether the members of `group` among `stats` are an orphan's: neither the
-    /// group's leader nor its `registrant` is still one of them, and some member
-    /// began before second `alive_at` ([`member_predates`]).
+    /// The pure core of [`super::group_orphaned`], over `stats` lines.
     pub(super) fn orphaned<S: AsRef<str>>(
         stats: impl IntoIterator<Item = S>,
         group: i64,
@@ -308,7 +298,7 @@ mod proc_stat {
             if pid == Some(group) || pid == Some(registrant) {
                 return false;
             }
-            predates |= member_predates(stat, group, boot, ticks, alive_at);
+            predates |= began_before(stat, boot, ticks, alive_at);
         }
         predates
     }
@@ -337,10 +327,10 @@ mod proc_stat {
 ///
 /// **ABSENCE PROVES NOBODY STILL OWNS IT.** The same group can hold a live
 /// launching shell (its leader) or a registrant whose cmdline merely failed to
-/// corroborate; signalling either would end work somebody is running. A leader
-/// test alone cannot stand in for the age test — a reused group loses its
-/// leader as easily as an orphan does (`setsid sh -c 'server &'`) — so it takes
-/// both. A zombie leader still has its `/proc` entry and reads as present.
+/// corroborate; signalling either would end work somebody is running. Absence
+/// alone is not enough either — a reused group loses its leader as easily as an
+/// orphan does (`setsid sh -c 'server &'`) — so it takes both. A zombie leader
+/// still has its `/proc` entry and reads as present.
 ///
 /// It does not know who is asking: excluding the caller's own group is the
 /// reaper's half (`reapable`). What it misses is safe: an orphan whose every
@@ -1443,17 +1433,17 @@ mod tests {
         );
     }
 
-    /// CLOUD-2366: started at `1_700_009_876` (9876 s after boot at 100 Hz), in
-    /// group 4242; a member predates only a second it began strictly before.
+    /// CLOUD-2366: started at `1_700_009_876` (9876 s after boot at 100 Hz); a
+    /// process began before only a second it began strictly before.
     #[test]
-    fn a_group_member_predates_only_strictly_before() {
+    fn a_stat_line_began_before_only_strictly_before() {
         let stat =
             "4243 (a) b) S 1 4242 4242 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 1 0 987654 1000 100";
+        assert_eq!(proc_stat::process_id(stat), Some(4243));
         assert_eq!(proc_stat::process_group(stat), Some(4242));
-        let predates = |group, at| proc_stat::member_predates(stat, group, 1_700_000_000, 100, at);
-        assert!(predates(4242, 1_700_009_878));
-        assert!(!predates(4242, 1_700_009_877));
-        assert!(!predates(4243, 1_700_009_999));
+        let began_before = |at| proc_stat::began_before(stat, 1_700_000_000, 100, at);
+        assert!(began_before(1_700_009_878));
+        assert!(!began_before(1_700_009_877));
     }
 
     /// CLOUD-2366: a group its registrant still runs in is never the orphan,

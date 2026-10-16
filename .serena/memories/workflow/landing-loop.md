@@ -153,8 +153,8 @@ the command given:
   the registrant's last stamp (`collect::group_orphaned` — a pgid number stays
   reserved while any member lives, so a reused group's members all began later),
   neither its leader nor its registrant is still a member, and the group is not
-  the reaper's own. A leader test cannot decide this: a
-  reused group loses its leader as easily as an orphan does.
+  the reaper's own. A leader test alone cannot decide
+  this: a reused group loses its leader as easily as an orphan does.
 
 - **A container restart is a reboot.** Measured 2026-10-16: `btime` changed,
   every process died (a detached ticker included), and the disk survived,

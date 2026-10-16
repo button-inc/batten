@@ -619,7 +619,9 @@ pub fn alive(git_dir: &Path, options: Alive<'_>) -> Reading {
 /// cmdline that still names the task, because this clone measurably wrapped its
 /// pid space inside 20 minutes (CLOUD-432). An unevaluable corroboration reads as
 /// ALIVE there, so this under-reports rather than over-reports, which is the
-/// direction that cannot kill a working lap.
+/// direction that cannot kill a working lap. The one caller that signals adds a
+/// stricter gate of its own (`collect::group_orphaned`: a registrant still in
+/// its group is never signalled), so a corroboration miss here is not a kill.
 #[must_use]
 pub fn abandoned(git_dir: &Path, program_root: &str) -> Vec<Entry> {
     let dir = state_dir(git_dir);

@@ -10855,11 +10855,8 @@ const LAND_TASK: &str = "land";
 /// Whether an abandoned record's group is the orphan its registrant left, and
 /// so one the reaper may signal (CLOUD-2366).
 ///
-/// The record's pgid was taken when the task registered, and once that group
-/// emptied its number could be reused by an unrelated group, or the group can
-/// still hold its live launching shell; [`collect::group_orphaned`] carries why
-/// a member that began before the registrant's last stamp, with the leader and
-/// the registrant gone, can only be the orphan's. The caller's OWN group is
+/// [`collect::group_orphaned`] decides whether the recorded group is the orphan,
+/// and carries why. This adds the reaper's own half: the caller's OWN group is
 /// never the orphan however old: a second run in the shell that ran the first
 /// shares its group, and signalling it would end the reaper. Compared as the
 /// number the guard signals, so `+42` or `042` is the caller's `42`.
@@ -27927,6 +27924,10 @@ mod tests {
         assert!(!reapable(&stampless, "0"), "no stamp, no proof");
     }
 
+    /// CLOUD-2207: the line a reduced read leaves names every indexed field
+    /// with its view lines and size, then the routes to read one.
+    /// CLOUD-2215: the collapse rewrites what the engine printed, never a
+    /// document another program printed that happens to quote a finding.
     #[test]
     fn only_a_call_that_runs_the_engine_has_its_output_collapsed() {
         for command in [
