@@ -251,6 +251,26 @@ fn a_package_task_naming_the_pin_is_clean() {
     clean(&root);
 }
 
+/// `#MUTANT hk-amends-tag-disagreement-passes` reddens here.
+///
+/// The other half of `hk.pkl`'s own URL (CLOUD-2311): it names the version in
+/// the release tag as well as the `hk@` fragment. Here the fragment agrees with
+/// the pin and only the tag drifts, so arm A sees nothing and only arm A2 can
+/// refuse it — a pass means half the string the module claims to govern is
+/// ungoverned.
+#[test]
+fn an_amends_tag_segment_naming_another_version_is_refused() {
+    let root = fixture(
+        "hk-tag-drift",
+        &[(
+            "hk.pkl",
+            "amends \"package://github.com/jdx/hk/releases/download/v1.57.0/hk@1.56.1#/Config.pkl\"\n",
+        )],
+        &[],
+    );
+    denied(&root, "tool pin other", "hk.pkl");
+}
+
 /// `#MUTANT hk-amends-unnamed-passes` reddens here: the shell's `:?` on an
 /// `hk.pkl` whose `amends` names no version.
 #[test]
