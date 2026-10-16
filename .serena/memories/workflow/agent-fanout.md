@@ -575,3 +575,37 @@ is false for a task-runner or backgrounded call whether or not anything was
 piped — so a bare invocation falls through to `cat` and blocks on a stdin nobody
 closes. Measured 2026-08-22: hung ~15 minutes before it was killed. `</dev/null`
 is what selects the refs-only form.
+
+## Children report back by `send_message`; the parent sleeps on the notification (measured 2026-10-16)
+
+A fan-out's results used to reach the parent only if the parent went and read
+each child's transcript (`list_events`), which is polling by another name and
+the token cost this memory's caps exist to bound. The pattern that replaced it,
+measured on the Stage 2 grooming wave: **six of six groomer sessions reported
+back unprompted**, and wave 2 was bundled straight from what they sent, with no
+transcript read.
+
+- **The parent names itself in the dispatch.** Every child prompt ends with:
+  report back with ONE `send_message` (Claude Code Remote MCP) to
+  `session_id <the parent's own id>`. A child cannot discover its parent's id;
+  if the prompt omits it, the report has nowhere to go.
+- **The report is a fixed shape, so the parent can bundle without reading
+  rows:** the outcome counts (promoted / held / cancelled), each promoted row
+  with **the files its build edits** (the bundling key — two rows sharing a file
+  never ride parallel sessions), each blocker with the row that owns it, and any
+  correction to the brief. Ask for corrections explicitly: three of the six
+  reports corrected a false claim in the brief (an owner that was not pulled, a
+  stale census, a dead path).
+- **The parent ends its turn and waits.** A child's `send_message` arrives as a
+  queued notification that wakes the parent; read it with `ReadNotifications`
+  until it reports 0 remaining. No `send_later`, no Routine, no `list_events`
+  loop — silence is a child still working, not a lost one.
+- **Long reports spill.** A body over the inline budget arrives as a
+  `batten-spilled` pointer; read it with `batten capture show <handle>
+--lines 1:N` (the body is text, so `--field` refuses it). Read it promptly:
+  the capture view under `captures/views/` does not survive a worker restart.
+- **Bundle from the reports, then dispatch.** Rows with disjoint file lists go
+  in one session ("one branch many rows"); a row touching a file an in-flight
+  PR edits waits for that PR's merge rather than racing it. Measured: of the 7
+  promotable rows across the six reports, 2 dispatched at once (one session), 3
+  queued behind the in-flight #1193, 2 held on named blockers.
