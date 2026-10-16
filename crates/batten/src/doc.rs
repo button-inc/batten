@@ -1004,7 +1004,10 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         why: Some(
             "An engine pin left behind still runs, without the fixes and gates of the releases since",
         ),
-        act: &["run `batten engine update`"],
+        act: &[
+            "run `batten engine update`",
+            "run the record's declared writer again",
+        ],
         dont: &[],
     },
     VendoredDoc {

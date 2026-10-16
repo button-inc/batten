@@ -823,7 +823,7 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let synced = sync_declarations(&text, &target, &sums)?;
     let mut published = std::collections::BTreeSet::new();
     let mut stale = Vec::new();
-    for workflow in workflow_files(&root) {
+    for workflow in workflow_files(&root)? {
         let body = std::fs::read_to_string(root.join(&workflow))?;
         if !body.contains("BATTEN_") {
             continue;
@@ -846,6 +846,11 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     if synced != text {
         durable::replace(&path, &synced)?;
         writeln!(out, "{}", path.display())?;
+        // THE LAST LOOKUP ANSWERED FOR THE OLD PIN, so the next session start
+        // looks again rather than standing on it for the rest of the day.
+        if let Some(stamp) = notice_stamp(&root) {
+            let _ = std::fs::remove_file(stamp);
+        }
     }
     engine_install(out)
 }
@@ -854,17 +859,27 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
 ///
 /// EVERY ONE, never a directory the engine names: which files carry CI is the
 /// consumer's fact (non-negotiable rule 1), and a literal pin in any of them is
-/// a copy the update leaves behind. An untracked tree reads as none.
-fn workflow_files(root: &Path) -> Vec<String> {
-    git::tracked_paths(root)
-        .unwrap_or_default()
+/// a copy the update leaves behind.
+///
+/// # Errors
+///
+/// A tree whose tracked files cannot be listed: an update that cannot look for
+/// a stale copy does not get to report none.
+fn workflow_files(root: &Path) -> Result<Vec<String>> {
+    let tracked = git::tracked_paths(root).map_err(|why| {
+        UsageError::raise(format!(
+            "engine update: cannot list the tracked files to look for a stale copy ({why:#}); \
+             nothing was written"
+        ))
+    })?;
+    Ok(tracked
         .into_iter()
         .filter(|path| {
             Path::new(path)
                 .extension()
                 .is_some_and(|ext| ext == "yml" || ext == "yaml")
         })
-        .collect()
+        .collect())
 }
 
 /// What `engine outdated` was asked (CLOUD-2279).
@@ -987,12 +1002,31 @@ fn record_freshness(record: &Record, tag: &str, found: &Distance, now: u64) -> R
     )
 }
 
+/// Where the notice stamps its last lookup: the repository's state directory,
+/// beside the cached releases.
+fn notice_stamp(root: &Path) -> Option<std::path::PathBuf> {
+    state::repo_state_dir(root)
+        .ok()
+        .map(|dir| dir.join("engine").join("update-notice"))
+}
+
+/// Whether the record `record` names answers for another pin than `tag`: a
+/// reading taken before the pin moved, which no TTL may keep standing.
+fn record_moved(record: &Record, tag: &str) -> bool {
+    record::load_named("engine outdated", &record.family)
+        .ok()
+        .flatten()
+        .is_some_and(|body| body.split('\t').nth(2) != Some(tag))
+}
+
 /// `engine outdated --notice`: the session's half, which ALWAYS exits 0.
 ///
 /// ONE LOOKUP PER [`NOTICE_TTL`], stamped in the repository's state directory
-/// however it came out, so a session start inside the day spends no network:
-/// the record it last wrote stands, and the notice it last spoke is not
-/// repeated. A suppressed notice with no record to write looks at nothing.
+/// however it came out — answered, failed or timed out — so a session start
+/// inside the day spends no network: the record it last wrote stands, and the
+/// notice it last spoke is not repeated. A record written for another pin is
+/// due whatever the stamp says. A suppressed notice with no record to write
+/// looks at nothing.
 fn outdated_notice(
     ask: &Outdated,
     root: &Path,
@@ -1001,20 +1035,26 @@ fn outdated_notice(
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
     let now = now_unix();
-    let Some(stamp) = state::repo_state_dir(root)
-        .ok()
-        .map(|dir| dir.join("engine").join("update-notice"))
-    else {
+    let Some(stamp) = notice_stamp(root) else {
         return Ok(ExitCode::Success);
     };
-    if !notice_due(&stamp, now) {
+    let moved = ask
+        .record
+        .as_ref()
+        .is_some_and(|record| record_moved(record, tag));
+    if !notice_due(&stamp, now) && !moved {
         return Ok(ExitCode::Success);
     }
     let speak = notice_enabled(root, text);
     if !speak && ask.record.is_none() {
         return Ok(ExitCode::Success);
     }
-    let Some(found) = distance_bounded(&releases_repository(), tag) else {
+    let found = distance_bounded(&releases_repository(), tag);
+    if let Some(parent) = stamp.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    durable::replace(&stamp, format!("{now}\n"))?;
+    let Some(found) = found else {
         if let Some(record) = &ask.record {
             record::clear_named("engine outdated", &record.family)?;
         }
@@ -1031,10 +1071,6 @@ fn outdated_notice(
             found.latest
         )?;
     }
-    if let Some(parent) = stamp.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    durable::replace(&stamp, format!("{now}\n"))?;
     Ok(ExitCode::Success)
 }
 
@@ -1181,6 +1217,11 @@ fn sync_declarations(text: &str, tag: &str, sums: &dyn Fn() -> Result<String>) -
             else {
                 continue;
             };
+            // FORWARD ONLY, AS THE PIN IS: a row already past the target is
+            // left for `engine gate` to name, never moved back.
+            if engine::release_version(&old).is_ok_and(|row| row > version) {
+                continue;
+            }
             let old_bare = old.trim_start_matches('v').to_owned();
             if old_bare != bare {
                 sync_artifact(row, &old_bare, &bare, sums)?;
@@ -1718,13 +1759,13 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
     };
     // EVERY COPY AGREES WITH THE PIN (CLOUD-2279), decided before anything is
     // fetched: a batten provision row on another release, or a floor above the
-    // pin, is a config that names two engines, and `engine update` is the one
-    // verb that brings them together.
+    // pin, is a config that names two engines. Each finding names the move that
+    // clears it, since `engine update` moves rows but never lowers a floor.
     let disagreeing = engine::disagreements(&text, tag);
-    for (line, what) in &disagreeing {
+    for (line, what, remedy) in &disagreeing {
         writeln!(
             out,
-            "{}:{line} {what} disagrees with engine pin {tag}; run `batten engine update`",
+            "{}:{line} {what} disagrees with engine pin {tag}; {remedy}",
             config_path.display()
         )?;
     }

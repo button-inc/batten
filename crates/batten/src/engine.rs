@@ -683,7 +683,7 @@ pub fn releases_between(headings: &[Heading], pin: &str, latest: &str) -> Result
         .collect();
     newer.sort_by(|left, right| left.version.cmp(&right.version));
     newer.dedup_by(|left, right| left.version == right.version);
-    if newer.is_empty() && latest > pin {
+    if latest > pin && newer.last().map(|heading| &heading.version) != Some(&latest) {
         newer.push(Heading {
             version: latest,
             date: None,
@@ -844,14 +844,16 @@ pub fn rewrite(text: &str, pin: &Pin) -> String {
 
 /// The batten declarations in `text` that disagree with release pin `tag`
 /// (CLOUD-2279): a `[[provision]] name = "batten"` row whose `version` is not
-/// the pin, and a `min_batten_version` above it. Each is its 1-based line and
-/// what it says.
+/// the pin, and a `min_batten_version` above it. Each is its 1-based line, what
+/// it says, and the remedy that clears it: `engine update` moves a provision row
+/// to the pin, but never lowers a floor, so a floor above the pin names the two
+/// moves that can.
 ///
 /// The document is parsed once, so a row is found however it is spelled, by
 /// the same [`is_batten_row`] `engine update` rewrites by; a config that will
 /// not parse is the load's to refuse, and has no findings here.
 #[must_use]
-pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String)> {
+pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String, &'static str)> {
     let (Ok(pin), Ok(doc)) = (release_version(tag), toml_edit::Document::parse(text)) else {
         return Vec::new();
     };
@@ -869,7 +871,11 @@ pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String)> {
         && let Some(floor) = item.as_str()
         && semver::Version::parse(floor).is_ok_and(|floor| floor > pin)
     {
-        found.push((line(item), format!("min_batten_version {floor}")));
+        found.push((
+            line(item),
+            format!("min_batten_version {floor}"),
+            "pin a release at or above the floor, or lower the floor",
+        ));
     }
     let rows = doc
         .get("provision")
@@ -881,7 +887,11 @@ pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String)> {
             && let Some(version) = item.as_str()
             && release_version(version).ok().as_ref() != Some(&pin)
         {
-            found.push((line(item), format!("provision batten {version}")));
+            found.push((
+                line(item),
+                format!("provision batten {version}"),
+                "run `batten engine update`",
+            ));
         }
     }
     found.sort();
@@ -894,7 +904,8 @@ pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String)> {
 /// A value is a literal only when it is a version (`v?X.Y.Z`) or a 64-hex
 /// digest; an expression (`${{ … }}`) is not one, and a longer key such as
 /// `BATTEN_VERSION_FROM_REF` is another key. A digest agrees when it is one of
-/// `published`, the release's [`published_digests`].
+/// `published`, the release's [`published_digests`]. A YAML comment is prose,
+/// never a copy, and `KEY : value` is the same key as `KEY: value`.
 #[must_use]
 pub fn workflow_literals(
     text: &str,
@@ -904,13 +915,16 @@ pub fn workflow_literals(
     let want = tag.trim_start_matches('v');
     let mut found = Vec::new();
     for (index, line) in text.lines().enumerate() {
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
         for key in ["BATTEN_VERSION", "BATTEN_SHA256"] {
             for (at, _) in line.match_indices(key) {
                 let before = line[..at].chars().next_back();
                 if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
                     continue;
                 }
-                let rest = &line[at + key.len()..];
+                let rest = line[at + key.len()..].trim_start();
                 let Some(rest) = rest.strip_prefix(':').or_else(|| rest.strip_prefix('=')) else {
                     continue;
                 };
@@ -1086,6 +1100,40 @@ mod tests {
             release_url("https://github.com/o/r/", "v0.0.200", &asset),
             "https://github.com/o/r/releases/download/v0.0.200/batten-v0.0.200-x86_64-unknown-linux-musl.tar.gz"
         );
+    }
+
+    /// A changelog that lags only its newest release still counts it
+    /// (CLOUD-2279): three behind is never read as two.
+    #[test]
+    fn a_changelog_missing_its_newest_heading_still_counts_it() -> Result<()> {
+        let headings = changelog_headings(
+            "## [1.2.0](x) - 2026-02-01\n\n## [1.1.0](x) - 2026-01-01\n\n## [1.0.0](x) - 2025-12-01\n",
+        );
+        let newer = releases_between(&headings, "v1.0.0", "v1.3.0")?;
+        let versions: Vec<String> = newer.iter().map(|h| h.version.to_string()).collect();
+        assert_eq!(versions, ["1.1.0", "1.2.0", "1.3.0"]);
+        Ok(())
+    }
+
+    /// A YAML comment is prose, and `KEY : value` is still the key.
+    #[test]
+    fn a_workflow_comment_is_not_a_copy_and_a_spaced_key_is() {
+        let published = std::collections::BTreeSet::new();
+        let found = workflow_literals(
+            "# BATTEN_VERSION: 0.0.1\n  BATTEN_VERSION : \"0.0.210\"\n",
+            "v0.0.216",
+            &published,
+        );
+        assert_eq!(found, [(2, "BATTEN_VERSION")]);
+    }
+
+    /// A floor above the pin names the moves that clear it, never the update
+    /// that cannot lower it.
+    #[test]
+    fn a_floor_above_the_pin_names_its_own_remedy() {
+        let found = disagreements("min_batten_version = \"0.0.220\"\n", "v0.0.216");
+        assert_eq!(found.len(), 1);
+        assert!(!found[0].2.contains("engine update"), "{found:?}");
     }
 
     #[test]
