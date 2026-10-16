@@ -996,18 +996,16 @@ fn notice_due(stamp: &Path, now: u64, tag: &str) -> bool {
 /// Where the notice stamps its lookup for `branch`: one file per branch under
 /// the repository's state directory, keyed as the record is, so a branch cut
 /// inside the day has no stamp of its own and is due, and a branch switched
-/// back to keeps the window it had. Every detached HEAD shares one stamp, so a
-/// bisect leaves one file rather than one per step.
-fn notice_stamp(root: &Path, branch: &str) -> Result<std::path::PathBuf> {
-    let key = if branch.starts_with("detached-") {
-        "detached"
-    } else {
-        branch
-    };
+/// back to keeps the window it had. Every detached HEAD shares the key `HEAD`,
+/// which git refuses as a branch name, so a bisect leaves one file rather than
+/// one per step. The file name is the branch's injective slug, the one
+/// `land`'s red-head records use, shared on purpose so the encoding has one
+/// spelling.
+fn notice_stamp(root: &Path, branch: Option<&str>) -> Result<std::path::PathBuf> {
     Ok(state::repo_state_dir(root)?
         .join("engine")
         .join("update-notice.d")
-        .join(land::red_head_slug(key)))
+        .join(land::red_head_slug(branch.unwrap_or("HEAD"))))
 }
 
 /// Write the `engine-fresh` line into the record's family: stale when the pin
@@ -1062,8 +1060,8 @@ fn notice_once(ask: &Outdated, out: &mut dyn Write) -> Result<()> {
         return clear_outdated(ask);
     };
     let now = now_unix();
-    let branch = git::record_key(&root).unwrap_or_else(|_| String::from("-"));
-    let stamp = notice_stamp(&root, &branch)?;
+    let branch = git::current_branch(&root)?;
+    let stamp = notice_stamp(&root, branch.as_deref())?;
     if !notice_due(&stamp, now, &tag) {
         return Ok(());
     }
