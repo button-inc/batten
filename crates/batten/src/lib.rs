@@ -10924,8 +10924,8 @@ fn run_land_singleton(
         .unwrap_or_default();
     // ONLY A GROUP `reapable` PROVES THE ORPHAN IS SIGNALLED (CLOUD-2366), and
     // it is ASKED AGAIN BEFORE EACH PASS: a group the TERM emptied may be reused
-    // before the KILL. A record that fails it is not signalled; when it is
-    // forgotten is the unregister below.
+    // before the KILL. A record that fails it is still unregistered below; it is
+    // only not signalled.
     let own_group = task::process_group(&pid);
     // TWO PASSES OVER THE WHOLE SET, NEVER A GRACE PERIOD PER GROUP. Signalling
     // every group before re-observing any of it is what gives each one its
@@ -10947,12 +10947,15 @@ fn run_land_singleton(
         if reapable(entry, &own_group) && exec::escalate_group(&entry.pgid) {
             escalated += 1;
         }
-        // FORGOTTEN ONLY ONCE NOTHING HOLDS ITS GROUP, so a group declined today
-        // is looked at again by the next landing rather than lost after one look;
-        // and only after both passes, so a record survives long enough for both.
-        if exec::recorded_group_gone(&entry.pgid) {
-            task::unregister(&git_dir, &entry.pid);
-        }
+        // Unregistered only now, so a record survives long enough for both
+        // passes to read its group. ONE LOOK, BY DESIGN: keeping a declined
+        // record until its group empties was tried and costs more than it buys —
+        // a group just KILLed still reads live (zombies count), a pgid reused by
+        // an unrelated long-lived group never empties, and `alive` deletes the
+        // record anyway. What one look misses is an orphan whose leader or
+        // registrant was still present at it: not signalled, which is the safe
+        // direction.
+        task::unregister(&git_dir, &entry.pid);
     }
     if reaped > 0 {
         // COUNTS AND NOTHING ELSE (rule 4). What was reaped is somebody's command
