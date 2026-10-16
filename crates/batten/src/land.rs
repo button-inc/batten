@@ -1984,6 +1984,15 @@ pub fn verify_log(root: &Path, branch: &str, sha: &str) -> Vec<String> {
 /// the unbounded loop CLOUD-1338 refuses; here the sibling's completion sets
 /// `stop`, which is a real terminal state rather than a guess at one.
 ///
+/// # THE STALL ARM (CLOUD-2369)
+///
+/// `stall`, where given, races a third arm: the registered task's progress,
+/// read once a beat, cancels the gate after [`Stall::beats`] still beats and
+/// answers [`Verified::Stalled`] — never a verdict about the tree. The beats
+/// count only once the progress has moved while watched ([`stalled`]), so a
+/// gate that reports no step is never cancelled. `None` is no such bound, and
+/// with neither a trunk nor a stall the gate runs un-raced.
+///
 /// # Errors
 ///
 /// The gate's own errors, unchanged — a boundary that could not start the program
