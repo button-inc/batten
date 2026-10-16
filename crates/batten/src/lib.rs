@@ -327,21 +327,22 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // surface, and the guard bounds a session to one hop per invocation.
     let hook_path = matches!(command, Some(Command::Hook { .. }));
     let own_surface = matches!(command, Some(Command::Engine { .. }));
-    let may_build = !hook_path;
     let may_follow = !own_surface && std::env::var_os(ENGINE_UPDATED).is_none();
     let followed = if may_follow {
-        follow_pin(may_build, hook_path, out, err)?
+        follow_pin(hook_path, out, err)?
     } else {
         Followed::Nothing
     };
-    if let Followed::Answered(code) = followed {
-        return Ok(code);
-    }
     // A CRASHED FOLLOW IS NOT HANDED THE SAME BUILD AGAIN (CLOUD-2376). The
     // hook's second handoff finds the same checkout build from the envelope's
     // authority, so without this it would spawn the crashing child a second
-    // time to learn what this one already did.
-    let already_handed = followed == Followed::Crashed;
+    // time to learn what this one already did. Exhaustive, so a fourth
+    // outcome cannot quietly read as "nothing was handed".
+    let already_handed = match followed {
+        Followed::Answered(code) => return Ok(code),
+        Followed::Crashed => true,
+        Followed::Nothing => false,
+    };
     match command {
         // Unreachable in practice: `arg_required_else_help` has clap offer the
         // subcommand listing (a usage error, exit 1) before parse returns. Kept
@@ -685,12 +686,12 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 //MUTANT follow-pin-source-unfollowed|s@^            Some(build) => build,$@            Some(_) => return Ok(Followed::Nothing),@|a_verb_is_followed_to_the_checkouts_build
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT follow-pin-passes-a-crash-through|s@^    if hook_path {$@    if false {@|a_crashing_checkout_build_never_fails_the_hook_open
-fn follow_pin(
-    may_build: bool,
-    hook_path: bool,
-    out: &mut dyn Write,
-    err: &mut dyn Write,
-) -> Result<Followed> {
+fn follow_pin(hook_path: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<Followed> {
+    // THE HOOK NEVER BUILDS, and that is the same bit rather than a second one
+    // (CLOUD-2061). Two parameters that are provably each other's negation can
+    // be passed inconsistently, and `(hook_path: true, may_build: true)` is
+    // exactly the state this guard exists to forbid.
+    let may_build = !hook_path;
     let Ok(root) = git::worktree_root(Path::new(".")) else {
         return Ok(Followed::Nothing);
     };
@@ -759,11 +760,7 @@ fn follow_pin(
     // as before — it is where the envelope arrives.
     if hook_path {
         let (code, stdout, stderr) = exec::captured_in_env(&root, &argv, &published)?;
-        // `Usage` is dropped with the codes outside the table, and for the
-        // same reason: `1` is non-blocking, so passing it on would let a
-        // followed engine's own usage error permit a call nothing judged.
-        let Some(decided) = ExitCode::from_code(code).filter(|code| *code != ExitCode::Usage)
-        else {
+        let Some(decided) = ExitCode::decided(code) else {
             return Ok(Followed::Crashed);
         };
         out.write_all(&stdout)?;
@@ -797,7 +794,7 @@ fn follow_pin(
 /// [`hand_to_checkout_build`] would spawn it twice to learn the same thing.
 /// Carried as a value rather than published into the environment, so no child
 /// of this process can inherit a mark about a run that is not its own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 enum Followed {
     /// Nothing was stale, or there was nothing to follow to: run the verb.
     Nothing,
@@ -19828,7 +19825,7 @@ struct Handoff<'a> {
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT hook-handoff-skipped|s@^    let Some(build) = engine::checkout_build(root) else {$@    let Some(build) = None::<PathBuf> else {@|a_hook_outside_the_checkout_hands_off_to_the_authoritys_build
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT handoff-writes-before-deciding|s@^    let Some(decided) = ExitCode::from_code(code).filter(\x7ccode\x7c \*code != ExitCode::Usage) else {$@    let Some(decided) = Some(ExitCode::from_code(code).unwrap_or(ExitCode::Usage)) else {@|a_crashing_checkout_build_never_fails_the_hook_open
+//MUTANT handoff-writes-before-deciding|s@^    let Some(decided) = ExitCode::decided(code) else {$@    let Some(decided) = Some(ExitCode::from_code(code).unwrap_or(ExitCode::Usage)) else {@|a_crashing_checkout_build_never_fails_the_hook_open
 //MUTANT handoff-reruns-a-crashed-follow|s@^    if handoff.already_handed \x7c\x7c std::env::var_os(ENGINE_UPDATED).is_some() {$@    if std::env::var_os(ENGINE_UPDATED).is_some() {@|a_crashing_checkout_build_never_fails_the_hook_open
 fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<Option<ExitCode>> {
     if handoff.already_handed || std::env::var_os(ENGINE_UPDATED).is_some() {
@@ -19861,7 +19858,7 @@ fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<O
     };
     // DECIDE, THEN WRITE. Nothing of the child's has reached `out` yet, so a
     // code the table does not name costs nothing to drop whole.
-    let Some(decided) = ExitCode::from_code(code).filter(|code| *code != ExitCode::Usage) else {
+    let Some(decided) = ExitCode::decided(code) else {
         return Ok(None);
     };
     out.write_all(stdout.as_bytes())?;

@@ -1885,8 +1885,8 @@ pub fn run_in_with_env(
 /// inherits it, which is what the hook's own envelope arrives on.
 ///
 /// A signal **Batten** was sent is still re-raised here rather than returned,
-/// for [`report_bundle`]'s reason: Batten dies of the signal Batten was sent,
-/// after every capture is sealed.
+/// through the same [`reraise`] the classify path uses, so the three entry
+/// points cannot drift about when a signal is honoured.
 ///
 /// The raw code, not an [`ExitCode`]: deciding which codes this table names is
 /// the caller's, and collapsing the rest here would be the fold this issue
@@ -1911,15 +1911,20 @@ pub(crate) fn captured_in_env(
         next_run(),
     )?;
     let code = bundle_code(&outcomes);
-    #[cfg(unix)]
-    if let Some(signal) = outcomes.iter().find_map(|outcome| outcome.received) {
-        terminate(signal)?;
-    }
-    let mut out_bytes = Vec::new();
-    let mut err_bytes = Vec::new();
+    reraise(&outcomes)?;
+    // THE FIRST OUTCOME'S BUFFERS ARE MOVED, NEVER COPIED. `Vec::extend` over an
+    // owned `Vec<u8>` is a byte-wise copy into a fresh allocation, and this
+    // caller's bundle is always one command — `ExecConfig::DEFAULT` runs one job
+    // and a followed argv carries no `:::` — so copying would be the whole cost
+    // of the call, paid again for stderr, and thrown away unread whenever the
+    // child crashed. A surplus command's bytes append by `memcpy`.
+    let mut outcomes = outcomes.into_iter();
+    let (mut out_bytes, mut err_bytes) = outcomes
+        .next()
+        .map_or_else(Default::default, |first| (first.out_bytes, first.err_bytes));
     for outcome in outcomes {
-        out_bytes.extend(outcome.out_bytes);
-        err_bytes.extend(outcome.err_bytes);
+        out_bytes.extend_from_slice(&outcome.out_bytes);
+        err_bytes.extend_from_slice(&outcome.err_bytes);
     }
     Ok((code, out_bytes, err_bytes))
 }
