@@ -457,6 +457,9 @@ fn a_find_expression_operand_is_never_a_target() {
     // point after them is still the one judged: outside the repository here.
     allow_in(&dir, "find -D tree /tmp -name x.md");
     allow_in(&dir, "find -O3 /tmp -name x.md");
+    // An informational run reads no tree, so it has no implicit start point.
+    allow_in(&dir, "find --version");
+    allow_in(&dir, "find --help");
 }
 
 #[test]

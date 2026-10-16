@@ -6342,6 +6342,9 @@ const IMPLICIT_FIND_START: &[&str] = &["./"];
 /// [`IMPLICIT_FIND_START`] rather than nothing.
 //MUTANT find-expression-read-as-target|s@^    &rest\[\.\.end\]$@    rest@|a_find_expression_operand_is_never_a_target
 //MUTANT find-implicit-start-unread|s@^        return IMPLICIT_FIND_START;$@        return \&rest[..0];@|a_find_expression_operand_is_never_a_target
+//MUTANT find-informational-run-searched|s@^    if end == 0 && searches_cwd .$@    if end == 0 {@|a_find_expression_operand_is_never_a_target
+//MUTANT find-debug-option-unskipped|s@^            \["-D", _, tail . \.\.\] => tail,$@@|a_find_expression_operand_is_never_a_target
+//MUTANT find-optimisation-option-unskipped|s@ [[:punct:]][[:punct:]] option.starts_with."-O".@@|a_find_expression_operand_is_never_a_target
 fn find_start_points<'a>(operands: &'a [&'a str]) -> &'a [&'a str] {
     let mut rest = operands;
     loop {
@@ -6359,7 +6362,15 @@ fn find_start_points<'a>(operands: &'a [&'a str]) -> &'a [&'a str] {
         .iter()
         .position(|token| token.starts_with(['-', '(', '!']))
         .unwrap_or(rest.len());
-    if end == 0 {
+    // An informational run reads no tree, and `-files0-from` takes its start
+    // points from a file, so neither searches `.` for want of a start point.
+    let searches_cwd = !rest.iter().any(|token| {
+        matches!(
+            *token,
+            "--help" | "--version" | "-help" | "-version" | "-files0-from"
+        )
+    });
+    if end == 0 && searches_cwd {
         return IMPLICIT_FIND_START;
     }
     &rest[..end]
