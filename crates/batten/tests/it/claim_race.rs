@@ -334,17 +334,22 @@ struct Seen {
 /// **Nothing here asserts on the clock.** The ten-second deadline is an input:
 /// it turns a serial implementation's hang into a failure instead of a hung
 /// suite, and it is paid once, because whoever gives up opens the barrier.
-#[test]
-fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_order() {
-    // Sized FROM the width rather than beside it, so a retune cannot leave this
-    // asserting a bound the code no longer has. Two more than the width is
-    // enough to need a second round of index-taking.
+/// The listing the concurrency case drives, and the numbers it expects fetched.
+///
+/// `"1"` is passed as `mine`, `FETCH_WIDTH + 2` competitors name no key, and two
+/// name one in their titles. **Every count is derived from the width rather than
+/// written beside it**, so a retune cannot leave the case asserting a bound the
+/// code no longer has: the eligible set stays wider than the width, and the
+/// keyed pulls stay numbered past the eligible range, where a literal would
+/// collide and put one number in the listing twice.
+///
+/// Branch names carry no digit after a dash, so `claimed` resolves no key from
+/// them however it folds the case — the eligibility this varies has to come
+/// from the title alone.
+fn listing() -> (Vec<Pull>, Vec<String>) {
     let eligible: Vec<String> = (2..=(race::FETCH_WIDTH + 3))
         .map(|number| number.to_string())
         .collect();
-    // Branch names carry no digit after a dash, so `claimed` resolves no key
-    // from them however it folds the case — the eligibility this case varies
-    // has to come from the title alone.
     let mut pulls = vec![pull("1", "user/branch-one", "sha1")];
     for number in &eligible {
         pulls.push(pull(
@@ -353,14 +358,10 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
             &format!("sha{number}"),
         ));
     }
-    // Numbered past the eligible range for the same reason it is derived: at a
-    // wider `FETCH_WIDTH` a literal here would collide with an eligible pull and
-    // the listing would carry one number twice.
-    let keyed = [
+    for (number, title) in [
         (race::FETCH_WIDTH + 4, "feat: somebody else's work (PROJ-7)"),
         (race::FETCH_WIDTH + 5, "fix: and more of it (PROJ-8)"),
-    ];
-    for (number, title) in keyed {
+    ] {
         pulls.push(Pull {
             title: title.to_owned(),
             ..pull(
@@ -370,7 +371,12 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
             )
         });
     }
+    (pulls, eligible)
+}
 
+#[test]
+fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_order() {
+    let (pulls, eligible) = listing();
     let seen = std::sync::Mutex::new(Seen::default());
     let bell = std::sync::Condvar::new();
     let deadline = std::time::Duration::from_secs(10);
