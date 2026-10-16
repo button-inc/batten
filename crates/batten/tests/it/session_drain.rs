@@ -227,6 +227,7 @@ fn a_pointer_whose_parent_is_absent_too_stays_could_not_look() {
 
 /// Session `session`'s transcript in the host's surveyed grammar, carrying
 /// `tool` calls.
+#[cfg(unix)]
 fn transcript_of(session: &str, tools: &[&str]) -> String {
     let mut lines = vec![format!(
         r#"{{"type":"user","sessionId":"{session}","message":{{"role":"user","content":"land the bundle"}}}}"#
@@ -240,6 +241,7 @@ fn transcript_of(session: &str, tools: &[&str]) -> String {
 }
 
 /// Session `s-1`'s transcript, the session the fixture's link is parked for.
+#[cfg(unix)]
 fn transcript(tools: &[&str]) -> String {
     transcript_of("s-1", tools)
 }
