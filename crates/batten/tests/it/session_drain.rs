@@ -41,6 +41,12 @@
 //! every session on this host. Those two are `#[cfg(unix)]` for exactly the
 //! reason the paragraph gives: the boundary's own write is too, so on a platform
 //! that spells linking differently there is no pointer to have this property.
+//!
+//! **The transcript cases (CLOUD-1820) dangle the pointer too**, through
+//! `rootless` and `park`. They compile on every target, so `cross-check`
+//! type-checks them, and each returns early off unix with `if !cfg!(unix)`
+//! rather than taking the attribute: the ratchet in `policy/cfg-gated-test.rego`
+//! refuses new platform-gated tests whose subject compiles everywhere.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
