@@ -80,9 +80,17 @@ amends contains {"line": i + 1, "version": match[1]} if {
 # bytes — the failure this module's whole neighbourhood exists to prevent.
 #
 # `hk.pkl`'s is also the spelling that can never be templated away (pkl `amends`
-# needs a literal URI), so it is the one most worth reading whole. Both rules
-# feed the one `amends` set: an agreeing line yields two entries of equal
-# version, and a disagreeing one yields violations that collapse in the set.
+# needs a literal URI), so it is the one most worth reading whole.
+#
+# WHY A SECOND GENERATOR CHANGES NO EXISTING COUNT, which is the property to
+# keep: arms A and C put `line` in their subjects and never `version`, so two
+# `amends` members on ONE line produce byte-identical violation objects and
+# collapse in the `violation` set, whether their versions agree or not. An
+# agreeing line yields one member, since both rules capture the same string; a
+# drifting one yields two members and still one finding. AN ARM THAT EVER PUTS
+# `version` INTO A SUBJECT DOUBLES EVERY COUNT IN THIS FILE. Arm B is safe for a
+# different reason: a second generator can only ADD members, so
+# `count(amends) == 0` can only get harder to satisfy, never easier.
 amends contains {"line": i + 1, "version": match[1]} if {
 	some i, line in lines
 	some match in regex.find_all_string_submatch_n(data.batten.patterns["hk-download-tag"], line, -1)
@@ -293,12 +301,10 @@ test_a_package_task_run_array_is_read_too if {
 	count(found) == 1
 }
 
-# The half-bump the `hk@` fragment alone cannot see: the tag segment drifts and
-# the fragment still names the pin. One violation, because the two generators
-# feed one set and only the drifting spelling disagrees.
-# The same half-bump on `hk.pkl`'s own URL, which arm A reads now. One finding:
-# the two generators both point at line 1, and the fragment agrees with the pin,
-# so only the tag spelling disagrees.
+# The half-bump on `hk.pkl`'s own URL, which arm A reads now: the tag segment
+# drifts while the fragment still names the pin. One finding at line 1 — both
+# generators match there, and the two members collapse because arm A's subject
+# carries the line and never the version.
 test_an_amends_url_whose_tag_segment_drifts_is_refused if {
 	found := violation with input as tree(
 		{"hk": "1.56.1"},
@@ -310,6 +316,28 @@ test_an_amends_url_whose_tag_segment_drifts_is_refused if {
 	finding.subjects[0] == {"path": "hk.pkl", "line": 1}
 }
 
+# A URL whose FRAGMENT names no version is still read, through its tag — and
+# this is a reach the second generator added, so it is pinned here rather than
+# left to be rediscovered. `hk@latest` matches neither `hk-amends-version` nor
+# anything else, so before the tag was read this line was arm B's ("`hk.pkl`
+# names no version at all"); now the tag names one and arm A compares it.
+#
+# The disagreeing case is the one asserted, deliberately. Whether a floating
+# `hk@latest` should be refused for its SHAPE is a different question from
+# whether the spellings AGREE, and only the second is this module's — so a
+# `latest` fragment over an agreeing tag is clean here, and a row that wants
+# floating refs refused owns that separately.
+test_a_tag_segment_is_read_when_the_fragment_names_nothing if {
+	found := violation with input as tree(
+		{"hk": "1.56.1"},
+		["amends \"package://github.com/jdx/hk/releases/download/v1.57.0/hk@latest#/Config.pkl\""],
+	)
+		with data.batten.patterns as pattern
+	count(found) == 1
+}
+
+# The same half-bump on the fetch URL, which only arm D can see: the task's tag
+# segment drifts while its fragment still names the pin.
 test_a_package_task_whose_tag_segment_drifts_is_refused if {
 	found := violation with input as tree_with_tasks(
 		{"hk": "1.56.1"},
