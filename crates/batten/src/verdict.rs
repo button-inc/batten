@@ -1577,6 +1577,10 @@ pub enum Native {
     /// Free space fell below `[prune] min_free_mb`, so the disk collector
     /// removed cargo units before the call ran (CLOUD-2197).
     CargoRetireNow,
+    /// A background session-start row has not been launched yet (CLOUD-2398).
+    SetupLaunchMissing,
+    /// A declared local MCP server failed its `initialize` probe (CLOUD-2398).
+    ServerProbeFailed,
 }
 
 impl Native {
@@ -1671,6 +1675,8 @@ impl Native {
         Native::ClaimMintRefused,
         Native::OutputPointNow,
         Native::CargoRetireNow,
+        Native::SetupLaunchMissing,
+        Native::ServerProbeFailed,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1720,6 +1726,8 @@ impl Native {
             Native::PlanReadStale => "plan read stale",
             Native::OutcomeTableRefused => "outcome table refused",
             Native::HandlerDenied => "handler answer denied",
+            Native::SetupLaunchMissing => "setup launch missing",
+            Native::ServerProbeFailed => "server probe failed",
             Native::ScannerUnpinned => "scanner pin missing",
             Native::ScannerUnprovisioned => "scanner install missing",
             Native::SpawningRuleOnReadVerb => "spawn run refused",
@@ -2125,6 +2133,30 @@ decision, and absorbing it silently is what this refuses.",
 names a program, the program answered deny, and this carries that answer through. The \
 handler's own reason is free text the consumer configured, so no remedy is invented here \
 — the handler is where a remedy would have to be declared.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "setup launch missing",
+        gloss: "a background session-start row has not been launched",
+        class: "Session start runs only what wires batten in; the slow provisioning a \
+`[hook.handler]` row marks `background` is the agent's to launch, with the host's \
+background flag, so its output and its failure are seen rather than held behind the hook. \
+Until every such row has been launched in this session, a call that could mutate the tree \
+is refused, because the toolchain it would run under is not yet there. The refusal names \
+each command still owed; launching one exactly as named is admitted and recorded.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "server probe failed",
+        gloss: "a declared local MCP server does not answer `initialize`",
+        class: "A `[[mcp.local]]` row declares a local server, the commands that install it, \
+and the paths routed to it. Batten probes it as an MCP client — spawn, `initialize`, end — \
+and while that fails, a call to the server's tools or to a routed path is refused, because \
+it would reach nothing. A reclaimed container fails the probe again, so the refusal \
+re-arms. It names the install commands to launch in the background; launching one exactly \
+as named is admitted.",
         routes: &[read("config read first", "batten.toml")],
         applicability: Applicability::Advice,
     },
@@ -3562,93 +3594,7 @@ mod tests {
     #[test]
     fn every_native_class_is_listed() {
         for native in Native::ALL {
-            let named = match native {
-                Native::ProtectedMutation
-                | Native::InitWouldOverwrite
-                | Native::HandlerDenied
-                | Native::ScannerUnpinned
-                | Native::ScannerUnprovisioned
-                | Native::SpawningRuleOnReadVerb
-                | Native::StopConditionUnmet
-                | Native::HistoryDropUnpushed
-                | Native::SingletonHeld
-                | Native::ReceiptUnusable
-                | Native::ReceiptExpired
-                | Native::ReceiptRefuted
-                | Native::ReceiptSuperseded
-                | Native::ReceiptOffTrunk
-                | Native::ToolSubstituted
-                | Native::ReadRedirected
-                | Native::VerdictPiped
-                | Native::VerdictTrailing
-                | Native::RunOrphaned
-                | Native::CeilingExceeded
-                | Native::ConfigUnreadable
-                | Native::ShapeRefused
-                | Native::CallRetryNow
-                | Native::CallFixSilent
-                | Native::ContentRefused
-                | Native::PlanReadStale
-                | Native::OutcomeTableRefused
-                | Native::KeyMissing
-                | Native::VerbTableRefused
-                | Native::PatternTableRefused
-                | Native::TraversalTableRefused
-                | Native::RegisterTableRefused
-                | Native::RuleReadMissing
-                | Native::UsageRefused
-                | Native::RunBroken
-                | Native::IssueFileRefused
-                | Native::LayerCarryRefused
-                | Native::ProvisionPinOther
-                | Native::CommitShipMissing
-                | Native::IssueListUnclear
-                | Native::HookReportNow
-                | Native::HookAnswerBroken
-                | Native::OutputWriteMissing
-                | Native::WorkspaceStateBroken
-                | Native::CallGrantNow
-                | Native::CommitPortBlocked
-                | Native::CheckRunRed
-                | Native::JobRunRed
-                | Native::LaneCountSpent
-                | Native::ContractReadStale
-                | Native::HookRunMissing
-                | Native::DrainFitBroken
-                | Native::IssueGradeRefused
-                | Native::IssueGradePartial
-                | Native::ClaimMintRefused
-                | Native::OutputPointNow
-                | Native::CargoRetireNow
-                | Native::VerdictTableRefused
-                | Native::RedirectTableRefused
-                | Native::DeferralTableRefused
-                | Native::RemedyUnresolved
-                | Native::MarkerTableRefused
-                | Native::RuleTableRefused
-                | Native::OutputTableRefused
-                | Native::VerifyEnvironmentTableRefused
-                | Native::WaiverTableRefused
-                | Native::FactTableRefused
-                | Native::MintTableRefused
-                | Native::RecorderTableRefused
-                | Native::RecordTableRefused
-                | Native::ProvisionTableRefused
-                | Native::StartupTableRefused
-                | Native::StepTableRefused
-                | Native::ProgramUnknown
-                | Native::SubjectUnconventional
-                | Native::CommitUnclaimed
-                | Native::ArticulationMissing
-                | Native::ArticulationTampered
-                | Native::ArmSelfAuthorized
-                | Native::IdentityDenied
-                | Native::TrailerDenied
-                | Native::BodyDenied
-                | Native::TaggerUnaccountable
-                | Native::TaggerUnannotated
-                | Native::ProseColumnRefused => native.id(),
-            };
+            let named = listed(*native);
             // The prefix is gone (CLOUD-1284), so what makes this a token is the
             // ARITY: exactly three words. Asserting that here rather than a
             // prefix keeps the native half held to the same shape the consumer
@@ -3660,11 +3606,107 @@ mod tests {
                 "{named} is not a three-word verdict name"
             );
         }
+        // Two native classes sharing a token make a refusal under it unattributable.
         assert_eq!(
             native_tokens().len(),
             Native::ALL.len(),
-            "two native classes share a token, so a refusal under it is unattributable"
+            "two classes share a token"
         );
+    }
+
+    /// [`every_native_class_is_listed`]'s match, apart so the case stays
+    /// readable as the class list grows. NO WILDCARD: a new variant fails to
+    /// compile here.
+    fn listed(native: Native) -> &'static str {
+        match native {
+            Native::ProtectedMutation
+            | Native::InitWouldOverwrite
+            | Native::HandlerDenied
+            | Native::SetupLaunchMissing
+            | Native::ServerProbeFailed
+            | Native::ScannerUnpinned
+            | Native::ScannerUnprovisioned
+            | Native::SpawningRuleOnReadVerb
+            | Native::StopConditionUnmet
+            | Native::HistoryDropUnpushed
+            | Native::SingletonHeld
+            | Native::ReceiptUnusable
+            | Native::ReceiptExpired
+            | Native::ReceiptRefuted
+            | Native::ReceiptSuperseded
+            | Native::ReceiptOffTrunk
+            | Native::ToolSubstituted
+            | Native::ReadRedirected
+            | Native::VerdictPiped
+            | Native::VerdictTrailing
+            | Native::RunOrphaned
+            | Native::CeilingExceeded
+            | Native::ConfigUnreadable
+            | Native::ShapeRefused
+            | Native::CallRetryNow
+            | Native::CallFixSilent
+            | Native::ContentRefused
+            | Native::PlanReadStale
+            | Native::OutcomeTableRefused
+            | Native::KeyMissing
+            | Native::VerbTableRefused
+            | Native::PatternTableRefused
+            | Native::TraversalTableRefused
+            | Native::RegisterTableRefused
+            | Native::RuleReadMissing
+            | Native::UsageRefused
+            | Native::RunBroken
+            | Native::IssueFileRefused
+            | Native::LayerCarryRefused
+            | Native::ProvisionPinOther
+            | Native::CommitShipMissing
+            | Native::IssueListUnclear
+            | Native::HookReportNow
+            | Native::HookAnswerBroken
+            | Native::OutputWriteMissing
+            | Native::WorkspaceStateBroken
+            | Native::CallGrantNow
+            | Native::CommitPortBlocked
+            | Native::CheckRunRed
+            | Native::JobRunRed
+            | Native::LaneCountSpent
+            | Native::ContractReadStale
+            | Native::HookRunMissing
+            | Native::DrainFitBroken
+            | Native::IssueGradeRefused
+            | Native::IssueGradePartial
+            | Native::ClaimMintRefused
+            | Native::OutputPointNow
+            | Native::CargoRetireNow
+            | Native::VerdictTableRefused
+            | Native::RedirectTableRefused
+            | Native::DeferralTableRefused
+            | Native::RemedyUnresolved
+            | Native::MarkerTableRefused
+            | Native::RuleTableRefused
+            | Native::OutputTableRefused
+            | Native::VerifyEnvironmentTableRefused
+            | Native::WaiverTableRefused
+            | Native::FactTableRefused
+            | Native::MintTableRefused
+            | Native::RecorderTableRefused
+            | Native::RecordTableRefused
+            | Native::ProvisionTableRefused
+            | Native::StartupTableRefused
+            | Native::StepTableRefused
+            | Native::ProgramUnknown
+            | Native::SubjectUnconventional
+            | Native::CommitUnclaimed
+            | Native::ArticulationMissing
+            | Native::ArticulationTampered
+            | Native::ArmSelfAuthorized
+            | Native::IdentityDenied
+            | Native::TrailerDenied
+            | Native::BodyDenied
+            | Native::TaggerUnaccountable
+            | Native::TaggerUnannotated
+            | Native::ProseColumnRefused => native.id(),
+        }
     }
 
     /// The vendored table is held to its own validator.

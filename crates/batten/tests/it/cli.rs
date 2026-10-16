@@ -10145,8 +10145,10 @@ fn an_action_on_the_adjudicated_event_is_a_config_error() {
     // config this build cannot load refuses the mediated call rather than
     // exiting 1 (a harness's non-blocking error, which ran it): the decision
     // document denies and the number says nothing was judged.
+    // A MUTATING command (CLOUD-2398): the floor admits what plan mode admits,
+    // and a read-only line like `echo hi` is one of them.
     let dir = action_repo("action-pre-tool", "pre-tool", r#"["true"]"#);
-    let output = run_hook_in(&dir, "claude-code", &claude_payload("echo hi"));
+    let output = run_hook_in(&dir, "claude-code", &claude_payload("touch hi"));
     assert_eq!(output.status.code(), Some(3));
     let both = format!("{}{}", common::stdout(&output), common::stderr(&output));
     assert!(

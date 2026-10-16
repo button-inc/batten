@@ -3959,6 +3959,9 @@ pub fn call_input_schema() -> Result<String> {
                     // CLOUD-1949. The host's permission mode as it spelled it;
                     // `null` when it sent none.
                     "permission-mode": {"type": ["string", "null"]},
+                    // CLOUD-2398. `hook::admission`: what the call can do to
+                    // the tree, `null` where it is not proven harmless.
+                    "admission": {"enum": ["read", "session", null]},
                 },
             },
             "facts": {

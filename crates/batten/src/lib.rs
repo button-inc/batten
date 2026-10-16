@@ -17744,7 +17744,10 @@ fn run_hook(
     // pass and why every other one still refuses.
     let (policy, waivers, pruning) = if adjudicable {
         match hook_config_or_floor(overrides, harness, &envelope, &raw, mode, out, err)? {
-            Ok(loaded) => loaded,
+            Ok((loaded, floored)) => {
+                floor_session_advice(&envelope, floored, &mut advice);
+                loaded
+            }
             Err(code) => return Ok(code),
         }
     } else {
@@ -17903,7 +17906,11 @@ fn run_hook(
     // handler can — running the ones that cannot first keeps the ordering a
     // reader would guess. Before, because `decide` owns stdout and a handler's
     // refusal has to reach the same rendering the engine's own does.
-    let handled = dispatch_handlers(&envelope, &raw, overrides, &mut advice);
+    // THE SETUP GATE FIRST (CLOUD-2398): at session start it names the
+    // background rows; on a mutating call before they are all launched it
+    // refuses, and the handlers that would run under the missing toolchain
+    // are not reached.
+    let handled = gate_then_dispatch(&envelope, &raw, overrides, &mut advice);
     // THE END-OF-TURN NUDGE (CLOUD-1051), and it is a SEPARATE call from
     // `adjudicate` rather than a widening of it. `adjudicate` returns `Allow` at
     // `Stop` before any rule is read — CLOUD-889's runaway removed by
@@ -18234,7 +18241,9 @@ impl Drop for Spool {
 ///
 /// **Two exemptions, each an absence rather than a permission.**
 ///
-/// * **A classified READ.** [`hook::Operation::Read`] with nothing written. Such
+/// * **A call [`hook::non_mutating`] admits** (CLOUD-2398): the one definition
+///   plan mode also reads — a read tool, a read-only command line, an MCP read
+///   verb, a plan-mode switch, a question to the operator, the todo list. Such
 ///   an envelope reaches [`is_adjudicable`] only through its
 ///   `PreTool`-with-a-tool-name clause, whose own doc says it exists so
 ///   *tool-keyed rows* can match. Under an unreadable config the row count is
@@ -18248,22 +18257,22 @@ impl Drop for Spool {
 ///
 /// # What is NOT exempt
 ///
-/// Any command but the engine's own repair verb spelled whole (CLOUD-2116), any
-/// MCP call, any subagent spawn, any unclassified tool, and any write naming
-/// anything else. A shell command that happens to target the config
-/// is refused too — its argv is not decidable from the envelope, the same
-/// undecidability `batten.toml`'s `protected_readers` comment records for an
-/// interpreter, and the direction that must refuse rather than pass.
+/// Any command that is not proven read-only nor the engine's own repair verb
+/// spelled whole (CLOUD-2116), any MCP call that is not a read verb, any
+/// subagent spawn that is not a declared read-only one, any unclassified tool,
+/// and any write naming anything else. A shell command that happens to target
+/// the config is refused too — its argv is not decidable from the envelope, the
+/// same undecidability `batten.toml`'s `protected_readers` comment records for
+/// an interpreter, and the direction that must refuse rather than pass.
 ///
-/// # Two bounds on the read half, stated rather than discovered
+/// # One bound on the read half, stated rather than discovered
 ///
-/// `Grep` and `Glob` are `Other` on every host, so they refuse here too. And
 /// `operation_of`'s `GeminiCli | CopilotCli` arm returns `Other` for every
-/// non-writer tool, so **no call on those two hosts ever yields `Read`** and
-/// this exemption is inert there — the repair-write half still works, because
-/// `write_tools` is consulted before the per-host arm. Both are inherited from
-/// CLOUD-209's unsurveyed hosts rather than introduced here, and CLOUD-1855
-/// carries the fix.
+/// non-writer tool, and the host tool names [`hook::admission`] carries are
+/// Claude Code's, so on those two hosts only a read-only command line is
+/// admitted — the repair-write half still works, because `write_tools` is
+/// consulted before the per-host arm. Inherited from CLOUD-209's unsurveyed
+/// hosts rather than introduced here; CLOUD-1855 carries the fix.
 ///
 /// # The path test is equality, never a glob
 ///
@@ -18272,8 +18281,9 @@ impl Drop for Spool {
 /// crate owns — never a consumer string, which would be non-negotiable rule 1.
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 //MUTANT floor-admits-everything|s@        _ => false,@        _ => true,@|a_command_is_still_refused_over_a_config_that_will_not_load
-//MUTANT floor-admits-an-unclassified-call|s@        (hook::Operation::Read, None) => true,@        (_, None) => true,@|a_mutating_mcp_call_is_still_refused_over_a_config_that_will_not_load
-//MUTANT floor-refuses-inert-tools|s@        (hook::Operation::Other(name), None) if hook::INERT_TOOLS.contains(\&name.as_str()) => true,@@|a_search_still_answers_over_a_config_that_will_not_load
+//MUTANT floor-refuses-session-start|s@^        _ if envelope.event == hook::Event::SessionStart => true,$@@|session_start_is_admitted_over_a_config_that_will_not_load_and_names_the_repair
+//MUTANT floor-admits-an-unclassified-call|s@        _ if hook::non_mutating(envelope) => true,@        (_, None) => true,@|a_mutating_mcp_call_is_still_refused_over_a_config_that_will_not_load
+//MUTANT floor-refuses-inert-tools|s@        _ if hook::non_mutating(envelope) => true,@@|a_search_still_answers_over_a_config_that_will_not_load
 //MUTANT floor-admits-any-write|s@        (hook::Operation::Write, Some(path)) => names_the_config_authority(path),@        (hook::Operation::Write, Some(_)) => true,@|a_write_to_another_path_is_still_refused_over_a_config_that_will_not_load
 //MUTANT floor-refuses-engine-repair|s@^        (hook::Operation::Execute, None) => engine::is_repair_at($@        (hook::Operation::Execute, None) => false \&\& engine::is_repair_at(@|the_engine_repair_verb_reaches_a_skewed_pin
 fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
@@ -18285,14 +18295,20 @@ fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
     // direction, so its declared mutation could never die: a dead gate in a
     // module the census enforces, which is what CLOUD-418 refuses.
     match (&envelope.operation, envelope.writes.as_deref()) {
-        // A classified read with nothing written: no mutation for a rule to
-        // have refused.
-        (hook::Operation::Read, None) => true,
-        // A search, a tool-schema lookup or a plan-mode switch (CLOUD-2084):
-        // unclassified, but on a closed list of tools that mutate nothing.
-        // Refusing them left a session over a binary/config mismatch unable to
-        // find the line to repair or to leave plan mode at all.
-        (hook::Operation::Other(name), None) if hook::INERT_TOOLS.contains(&name.as_str()) => true,
+        // SESSION START IS NOT A CALL (CLOUD-2398). It carries no tool and
+        // mutates nothing, and refusing it is what deadlocked a cold container:
+        // the release `install.sh` placed could not load a source-pinned config,
+        // the deny landed before any repair could run, and the operator waited
+        // on a hook that had decided nothing. Admitted, it carries the repair as
+        // advice (`floor_session_advice`) and every later call is still judged
+        // by this floor.
+        _ if envelope.event == hook::Event::SessionStart => true,
+        // A call the ONE admitted-call definition proves harmless (CLOUD-2398):
+        // a read, a search, a tool-schema lookup, a plan-mode switch, a question
+        // to the operator. The same set plan mode admits, so a session over a
+        // binary/config mismatch can find the line to repair, ask, and leave
+        // plan mode (CLOUD-2084 measured the floor refusing the last).
+        _ if hook::non_mutating(envelope) => true,
         // The repair, and only onto the file that is faulting.
         (hook::Operation::Write, Some(path)) => names_the_config_authority(path),
         // THE OTHER REPAIR, for the fault no edit can end (CLOUD-2116). A pin
@@ -18421,6 +18437,40 @@ fn unadjudicable_remedy() -> Fix {
     ))
 }
 
+/// What a session that started over an unloadable config is told (CLOUD-2398):
+/// the repair, to launch in the background, and that every mutating call waits
+/// on it.
+///
+/// THE HOOK NEVER RUNS IT. A source pin is repaired by a build, and a build in
+/// the `SessionStart` hook is the six minutes the operator waited behind before
+/// this; backgrounded, the agent sees the build and its failure. Rooted at the
+/// authority for [`unadjudicable_remedy`]'s reason, and the bare verb, never
+/// the `mise exec` spelling: on a cold container batten is the only program
+/// `install.sh` placed. A `setup launch missing` finding, because that is what
+/// it is: a background setup step this session has not launched.
+fn floor_session_advice(
+    envelope: &hook::Envelope,
+    floored: bool,
+    advice: &mut Vec<advisory::Advice>,
+) {
+    if !floored || envelope.event != hook::Event::SessionStart {
+        return;
+    }
+    let root = git::canonical(hook_authority_root());
+    push_finding(
+        advice,
+        severity::AdvisoryTier::Warning,
+        refusal::Refusal::engine(
+            verdict::Native::SetupLaunchMissing,
+            &[verdict::artifact(&engine::repair_at(&root, engine::REPAIR))],
+            refusal::Fix::Run(String::from(
+                "launch it with run_in_background; only reads and the host's session tools \
+                 pass until it exits 0",
+            )),
+        ),
+    );
+}
+
 /// What a hook call judges with: its policy, its waivers and its disk collector.
 type HookConfig = (hook::Policy, Vec<waiver::Waiver>, Option<prune::Prune>);
 
@@ -18438,9 +18488,9 @@ fn hook_config_or_floor(
     mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> Result<Result<HookConfig, ExitCode>> {
+) -> Result<Result<(HookConfig, bool), ExitCode>> {
     match load_hook_config(overrides, harness) {
-        Ok(loaded) => Ok(Ok(loaded)),
+        Ok(loaded) => Ok(Ok((loaded, false))),
         // EVERY LOAD FAULT, NOT ONLY A PARSE FAILURE (CLOUD-1917). This arm
         // was guarded to a parse failure alone, and every other fault — a
         // validator refusing a row, a skewed version — fell to
@@ -18461,10 +18511,11 @@ fn hook_config_or_floor(
                 // `protected: PathSet::empty()`, which is what lets the
                 // repair write reach the file that is faulting — the
                 // protected gate is not SUPPRESSED here, it has no table.
+                // `true`: floored, which is what makes a session start carry the
+                // repair as advice (`floor_session_advice`).
                 Ok(Ok((
-                    hook::Policy::declaring_nothing(harness),
-                    Vec::new(),
-                    None,
+                    (hook::Policy::declaring_nothing(harness), Vec::new(), None),
+                    true,
                 )))
             } else {
                 deny_unadjudicable(harness, envelope, &unreadable, mode, out, err).map(Err)
@@ -18752,6 +18803,8 @@ fn settle_repair(
 /// Propagates only a store-resolution failure. An unreadable store, an
 /// unparseable record and an absent directory are all "no admission" inside
 /// [`admission::admitted`] — the fail-closed direction for a suppression.
+//MUTANT-SUITE crates/batten/tests/it/mediated_admission.rs
+//MUTANT admission-silent-allow|s@^            verdict::Native::CallGrantNow,$@            verdict::Native::CallFixSilent,@|a_spent_admission_is_an_explicit_allow_to_the_host
 fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook::Decision> {
     let hook::Decision::Deny(refusal) = &decision else {
         return Ok(decision);
@@ -18783,7 +18836,17 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
         // wrote it. Saying WHICH record admitted the call is what stops this being
         // the silent bypass again, wearing a record's clothes.
         writeln!(out, "batten: {class} admitted by {address} — {subject}")?;
-        return Ok(hook::Decision::Allow);
+        // AN EXPLICIT GRANT, NEVER A BARE ALLOW (CLOUD-2398). `Allow` renders as
+        // no decision at all, which hands the call back to the host's own
+        // permission layer — and Claude Code's auto-mode classifier then refused
+        // a history rewrite this admission had just authorised, measured
+        // 2026-10-16. An admission is an audited decision batten has made, so
+        // the host is told `allow`, and nothing downstream re-litigates it.
+        return Ok(hook::Decision::Preapproved(refusal::Refusal::engine(
+            verdict::Native::CallGrantNow,
+            &[verdict::artifact(&address), verdict::artifact(class)],
+            refusal::Fix::None,
+        )));
     }
     Ok(decision)
 }
@@ -19867,6 +19930,243 @@ fn forget_drain_result(envelope: &hook::Envelope) {
 /// [`hook::Decision::Deny`] rendered by `decide`, so a handler's refusal and the
 /// engine's own travel the identical per-host channel — the point of the door
 /// being that a dispatched program cannot invent a second one.
+/// The per-clone record of which background session-start rows each session has
+/// launched (CLOUD-2398), `session<TAB>command` per line.
+///
+/// In `$GIT_DIR` beside `batten-mcp-spawns`, and for the same reason: per clone,
+/// never tracked, and gone with the container. A reclaimed container is a fresh
+/// clone with none of the background work running, and a fresh ledger is what
+/// makes the gate ask again rather than trust a launch that died with the host.
+const SETUP_LEDGER: &str = "batten-session-launches";
+
+/// The session setup gate (CLOUD-2398): session start names the background
+/// rows, and a mutating call waits until every one of them has been launched.
+///
+/// * At `session-start`, each owed row is pushed as advice, rooted at the
+///   authority so it runs from wherever the shell stands. Nothing is spawned.
+/// * At `pre-tool`, a backgrounded `Bash` call whose command is exactly an owed
+///   row is ADMITTED and recorded. The launch is the record, so the gate can
+///   never refuse its own remedy.
+/// * Any other call is admitted when [`hook::non_mutating`] admits it — the one
+///   definition plan mode reads — and refused while a row is owed otherwise.
+///
+/// No session id, no git dir, no handler table: could-not-look, which allows,
+/// for the rest of the hook path's reason.
+//MUTANT-SUITE crates/batten/tests/it/session_provisioning.rs
+//MUTANT setup-launch-unrecorded|s@^                \&format!("{session}\\t{line}"),$@                \&String::new(),@|an_edit_waits_until_every_background_row_is_launched
+fn session_setup_gate(
+    envelope: &hook::Envelope,
+    overrides: &Overrides,
+    advice: &mut Vec<advisory::Advice>,
+) -> Option<hook::Decision> {
+    let table = hook_table(overrides)?;
+    let owed = handler::background_lines(&table.handlers, hook::Event::SessionStart);
+    if owed.is_empty() {
+        return None;
+    }
+    let root = git::canonical(hook_authority_root());
+    let session = envelope.session.as_deref()?;
+    let ledger = git::git_dir(&root).ok()?.join(SETUP_LEDGER);
+    if envelope.event == hook::Event::SessionStart {
+        // ARMED BY THE SESSION START THAT NAMED THE ROWS, and only by it. A
+        // session never told what to launch — a host that sent no session
+        // start, a fixture replaying one envelope — cannot be asked to launch
+        // it, so it is not gated; the arming line is the gate's precondition.
+        drop(crate::durable::append(
+            &ledger,
+            &format!("{session}\t{SETUP_ARMED}"),
+        ));
+        push_finding(
+            advice,
+            severity::AdvisoryTier::Warning,
+            setup_refusal(&root, &owed.iter().collect::<Vec<_>>()),
+        );
+        return None;
+    }
+    if envelope.event != hook::Event::PreTool {
+        return None;
+    }
+    let recorded = std::fs::read_to_string(&ledger).unwrap_or_default();
+    let launched: std::collections::BTreeSet<&str> = recorded
+        .lines()
+        .filter_map(|record| record.split_once('\t'))
+        .filter(|(owner, _)| *owner == session)
+        .map(|(_, line)| line)
+        .collect();
+    if !launched.contains(SETUP_ARMED) {
+        return None;
+    }
+    let outstanding: Vec<&String> = owed
+        .iter()
+        .filter(|line| !launched.contains(line.as_str()))
+        .collect();
+    if outstanding.is_empty() {
+        return None;
+    }
+    let backgrounded = envelope
+        .input
+        .get("run_in_background")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true);
+    if backgrounded {
+        let command = envelope.command.trim();
+        if let Some(line) = outstanding
+            .iter()
+            .find(|line| command == line.as_str() || command == engine::repair_at(&root, line))
+        {
+            drop(crate::durable::append(
+                &ledger,
+                &format!("{session}\t{line}"),
+            ));
+            return None;
+        }
+    }
+    if hook::non_mutating(envelope) {
+        return None;
+    }
+    Some(hook::Decision::Deny(setup_refusal(&root, &outstanding)))
+}
+
+/// The ledger line a session start writes to arm the setup gate for its
+/// session. Never a launch line: a launch line is an argv joined by spaces,
+/// and this carries none.
+const SETUP_ARMED: &str = "#armed";
+
+/// `setup launch missing` over `lines`, each rooted at the authority.
+fn setup_refusal(root: &Path, lines: &[&String]) -> refusal::Refusal {
+    let subjects: Vec<verdict::Subject> = lines
+        .iter()
+        .map(|line| verdict::artifact(&engine::repair_at(root, line)))
+        .collect();
+    refusal::Refusal::engine(
+        verdict::Native::SetupLaunchMissing,
+        &subjects,
+        refusal::Fix::Run(String::from(
+            "launch each named command with run_in_background, exactly as named, never \
+             redirected; only reads and the host's session tools pass until every one has \
+             been launched",
+        )),
+    )
+}
+
+/// The gates that may refuse a call before any declared handler runs, in order
+/// (CLOUD-2398), then the handlers themselves.
+fn gate_then_dispatch(
+    envelope: &hook::Envelope,
+    raw: &str,
+    overrides: &Overrides,
+    advice: &mut Vec<advisory::Advice>,
+) -> Option<hook::Decision> {
+    session_setup_gate(envelope, overrides, advice)
+        .or_else(|| mcp_health_gate(envelope, overrides))
+        .or_else(|| dispatch_handlers(envelope, raw, overrides, advice))
+}
+
+/// The per-clone record of which `[[mcp.local]]` servers answered `initialize`
+/// in each session's current turn (CLOUD-2398), `session<TAB>server` per line.
+///
+/// Per TURN, because a server can die mid-session: a user prompt clears the
+/// session's lines, so the first routed call of each turn probes again. Per
+/// CLONE, in `$GIT_DIR`, so a reclaimed container — a fresh clone where nothing
+/// is installed yet — probes from nothing.
+const HEALTH_LEDGER: &str = "batten-mcp-health";
+
+/// The MCP health gate (CLOUD-2398): a call reaching a declared local server —
+/// one of its tools, or a path routed to it — waits until the server answers
+/// `initialize`.
+///
+/// Probed by batten as an MCP client ([`mcp::healthy`]), never inferred from an
+/// install: a server whose tools are present and which still cannot start is
+/// the same dead end as one never installed. The refusal names the row's
+/// install commands, to launch in the background; nothing else is held, so the
+/// install itself is never refused by this gate.
+//MUTANT-SUITE crates/batten/tests/it/mcp_health.rs
+//MUTANT health-gate-admits-unhealthy|s@^    if mcp::healthy(\&root, local) {$@    if true {@|an_unhealthy_server_refuses_its_tools_and_routed_paths
+fn mcp_health_gate(envelope: &hook::Envelope, overrides: &Overrides) -> Option<hook::Decision> {
+    if !matches!(
+        envelope.event,
+        hook::Event::PreTool | hook::Event::UserPromptSubmit
+    ) {
+        return None;
+    }
+    let root = git::canonical(hook_authority_root());
+    if !root.join(config::CONFIG_FILE).exists() {
+        return None;
+    }
+    let resolved = HookLoads::resolve(&root, overrides).ok()?;
+    let locals = &resolved.mcp.as_ref()?.locals;
+    if locals.is_empty() {
+        return None;
+    }
+    let session = envelope.session.as_deref()?;
+    let ledger = git::git_dir(&root).ok()?.join(HEALTH_LEDGER);
+    let recorded = std::fs::read_to_string(&ledger).unwrap_or_default();
+    if envelope.event == hook::Event::UserPromptSubmit {
+        let kept = recorded
+            .lines()
+            .filter(|line| {
+                line.split_once('\t')
+                    .is_none_or(|(owner, _)| owner != session)
+            })
+            .fold(String::new(), |mut kept, line| {
+                kept.push_str(line);
+                kept.push('\n');
+                kept
+            });
+        if kept != recorded {
+            drop(crate::durable::replace(&ledger, kept));
+        }
+        return None;
+    }
+    let relative = |path: &str| -> String {
+        let root_text = root.to_string_lossy();
+        path.strip_prefix(root_text.as_ref())
+            .map_or(path, |rest| rest.trim_start_matches('/'))
+            .to_owned()
+    };
+    let paths: Vec<String> = [envelope.reads.as_deref(), envelope.writes.as_deref()]
+        .into_iter()
+        .flatten()
+        .map(relative)
+        .collect();
+    let local = locals.iter().find(|local| {
+        local.owns_tool(&envelope.raw_tool) || paths.iter().any(|path| local.routes_path(path))
+    })?;
+    let healthy_now = recorded
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .any(|(owner, server)| owner == session && server == local.server);
+    if healthy_now {
+        return None;
+    }
+    if mcp::healthy(&root, local) {
+        drop(crate::durable::append(
+            &ledger,
+            &format!("{session}\t{}", local.server),
+        ));
+        return None;
+    }
+    let mut subjects = vec![verdict::artifact(&format!("mcp.local.{}", local.server))];
+    subjects.extend(
+        local
+            .install_lines()
+            .iter()
+            .map(|line| verdict::artifact(&engine::repair_at(&root, line))),
+    );
+    Some(hook::Decision::Deny(refusal::Refusal::engine(
+        verdict::Native::ServerProbeFailed,
+        &subjects,
+        refusal::Fix::Run(String::from(
+            "launch each named install command with run_in_background, exactly as named, and \
+             wait for its exit",
+        )),
+    )))
+}
+
+// The rows below keep the suite they resolved to before `session_setup_gate`'s
+// declaration above was added.
+//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
+
 fn dispatch_handlers(
     envelope: &hook::Envelope,
     raw: &str,

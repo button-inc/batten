@@ -14,8 +14,13 @@ the shell suite under CLOUD-843.
 
 **The provisioning order and its bounds are `batten.toml`'s, not a script's.**
 The `on = "session-start"` handler rows ARE the sequence: declaration order is running
-order, each row declares its own `timeout_ms`, and `batten hook` dispatches them
-inline at session start. `.claude/hooks/session-start.sh` used to hold all of
+order, each row declares its own `timeout_ms`, and `batten hook` dispatches the
+inline ones at session start. A row marked `background = true` is the AGENT's: the
+hook names it, never runs it, and the `setup launch missing` gate refuses every
+mutating call until it has been launched with the host's background flag — so the
+slow half (installs, a toolchain, a build) runs where its output and failure are
+seen, and nobody waits behind the hook (CLOUD-2398). Only wiring stays inline.
+`.claude/hooks/session-start.sh` used to hold all of
 that and was the last by-path hook registration this repository owned; it is
 retired, and `crates/batten/tests/session_provisioning.rs` carries both its
 ledger and the tier that proves the door does what the rows say. Add a
