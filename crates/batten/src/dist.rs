@@ -557,7 +557,7 @@ fn stage(
 /// Both forms put the binary at the archive ROOT, never under
 /// `target/<triple>/dist/`, so extracting yields the binary beside the user.
 ///
-/// `system_root` is `%SystemRoot%`, read only when `windows_host`. A WINDOWS
+/// `system_root` is `%SystemRoot%`, used only when `windows_host`. A WINDOWS
 /// HOST HAS NO `zip` (measured on windows-latest: "could not start `zip`"), and
 /// every cargo-dist Windows leg builds on one. It does ship bsdtar as
 /// `System32\tar.exe`, which writes the same zip, named by its full path
