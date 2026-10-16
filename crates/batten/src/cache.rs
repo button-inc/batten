@@ -690,11 +690,14 @@ mod tests {
     /// FILE's time, which every platform sets (CLOUD-2361).
     fn marked(partition: &Path, step: u64) {
         std::fs::create_dir_all(partition).expect("partition");
-        let made =
-            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000 * step);
         std::fs::File::create(partition.join(USE_MARK))
-            .and_then(|file| file.set_modified(made))
+            .and_then(|file| file.set_modified(at(step)))
             .expect("age the mark");
+    }
+
+    /// `step` million seconds past the epoch: a higher step is more recent.
+    fn at(step: u64) -> std::time::SystemTime {
+        std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000 * step)
     }
 
     /// A partition a binary keeps hitting is marked used, so a later binary's
@@ -780,17 +783,12 @@ mod tests {
         let root = dir.join("cache");
         let others = partition_names(KEPT_PARTITIONS);
         // Made first to last; marked newest to oldest.
-        for (step, name) in (1..=KEPT_PARTITIONS as u64).rev().zip(&others) {
+        let order = (1..=KEPT_PARTITIONS as u64).rev().zip(1..);
+        for ((step, made), name) in order.zip(&others) {
             let partition = root.join(name);
             marked(&partition, step);
             if cfg!(unix) {
-                let made = std::time::SystemTime::UNIX_EPOCH
-                    + std::time::Duration::from_secs(
-                        1_000_000 * (KEPT_PARTITIONS as u64 + 1 - step),
-                    );
-                std::fs::File::open(&partition)
-                    .and_then(|file| file.set_modified(made))
-                    .expect("age the directory");
+                touch(&partition, at(made)).expect("age the directory");
             }
         }
         std::fs::create_dir_all(root.join("policy")).expect("flat layout");
