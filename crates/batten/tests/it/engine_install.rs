@@ -936,14 +936,12 @@ fn a_stale_engine_fresh_record_fails_check() {
     // A SOURCE PIN CLEARS THE READING: there is no release distance to measure,
     // so the stale line written under the release pin must not outlive it.
     let config = std::fs::read_to_string(home.join("batten.toml")).unwrap();
-    common::write(
-        &home,
-        "batten.toml",
-        &config.replace(
-            &format!("engine = {{ release = \"{running}\" }}"),
-            &format!("engine = {{ source = \"{}\" }}", "a".repeat(64)),
-        ),
+    let sourced = config.replace(
+        &format!("engine = {{ release = \"{running}\" }}"),
+        &format!("engine = {{ source = \"{}\" }}", "a".repeat(64)),
     );
+    assert_ne!(sourced, config, "the fixture's release pin was swapped");
+    common::write(&home, "batten.toml", &sourced);
     let cleared = batten_in(&home, &recorded_args(), &env);
     assert_eq!(
         cleared.status.code(),

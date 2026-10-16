@@ -1124,7 +1124,8 @@ fn notice_once(ask: &Outdated, out: &mut dyn Write) -> Result<()> {
 ///
 /// `--notice` is [`notice_once`], and ALWAYS exits 0. `--record` writes the
 /// `engine-fresh` line the `engine-hygiene` preset reads, with the consumer's
-/// thresholds, and clears it on a run that could not look.
+/// thresholds, and clears it on every run that has no distance to give: a
+/// source pin, no pin, or a lookup that could not answer.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT outdated-silent-without-pin|s@^            writeln!(out, "{} no engine pin", path.display())?;$@            return Ok(ExitCode::Success);@|outdated_exits_by_the_pins_distance_from_main
 fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
