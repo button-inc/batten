@@ -1441,9 +1441,8 @@ fn the_credential_table_carries_the_names_the_engine_dropped() {
     assert!(bare.names.is_empty());
 }
 
-/// EXPIRY DOES NOT CHANGE THE ANSWER (CLOUD-1488). The organisation match asks
-/// one question — is this bundle the proxy's CA — and validity is rustls's at
-/// connection time, so `organisation_of` reads no clock and no `not_after`.
+/// EXPIRY DOES NOT CHANGE THE ANSWER (CLOUD-1488); `provision.rs`'s module doc
+/// says why.
 ///
 /// DST Root CA X3, a REAL, public root that expired on 2021-09-30, committed for
 /// `one_certificate_bundle`'s reasons. Its `notAfter` is asserted off the
