@@ -2798,10 +2798,16 @@ fn read_target(operation: &Operation, input: &Value) -> Option<String> {
 /// second special case.
 fn relative_to(root: &Path, path: &str) -> Option<String> {
     const MAX_HOPS: usize = 40;
-    let candidate = Path::new(path);
-    if candidate.is_relative() {
+    // ROOTED, NOT ABSOLUTE, is what the host means by "not relative" (CLOUD-2390):
+    // on Windows `\repo\src\a.rs` has a root but no drive, so `is_relative` is
+    // true, and returning here left an in-tree write rooted, which a `tree_only`
+    // handler reads as outside. Such a path names the current drive, so it is
+    // resolved there; on unix a rooted path is already absolute.
+    if !Path::new(path).has_root() {
         return None;
     }
+    let candidate = std::path::absolute(path).ok()?;
+    let candidate = candidate.as_path();
     let root = root.canonicalize().ok()?;
     // The DEEPEST ancestor that canonicalizes, the path itself first, resolves
     // the most symlinks, which is the reading the prefix test below needs; the

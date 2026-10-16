@@ -166,6 +166,25 @@ fn the_absolute_spelling_the_host_sends_signals_too() {
     assert!(signals(&dir, &payload), "{}", reported(&dir, &payload));
 }
 
+/// And rooted without a drive, as `\repo\x` names the current drive on Windows
+/// (CLOUD-2390): the boundary resolves it there rather than leaving it rooted,
+/// which a `tree_only` handler reads as outside the tree. On unix the spelling
+/// is the absolute one, so the case holds everywhere and asserts on each host.
+#[test]
+fn a_rooted_spelling_without_a_drive_signals_too() {
+    let dir = bench("swa-a_rooted_spelling_without_a_drive_");
+    let plain = batten::git::canonical(&dir)
+        .join("mise-tasks/ready-lint.sh")
+        .display()
+        .to_string();
+    let rooted = plain
+        .split_once(':')
+        .map_or(plain.as_str(), |(_, rest)| rest)
+        .to_owned();
+    let payload = write_payload("Write", &rooted);
+    assert!(signals(&dir, &payload), "{}", reported(&dir, &payload));
+}
+
 /// Assert a `Write` of `spelled`, joined onto the bench's canonical root, is
 /// told as the governed write it is.
 fn assert_signals_at(dir: &Path, spelled: &str) {
