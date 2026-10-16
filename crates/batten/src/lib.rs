@@ -15320,14 +15320,17 @@ fn asks_before_the_step(
         // and the Ready after it reads that run as in flight and asks nothing.
         // `land_push_owes` says which pushes buy a run.
         //
-        // AN ERROR STOPS THROUGH THE UNWIND rather than out past it with `?`,
-        // because the lease is held by now and only the unwind hands it back.
+        // A RECEIPT ERROR STOPS THROUGH THE UNWIND rather than out past it with
+        // `?`, because the lease is held by now and only the unwind hands it back.
         Some(pipeline::Precheck::BetLive) => {
             let local = git::head_commit(root).ok();
             let forge = || {
                 let repo = repo_or_placeholder(root);
-                fast_forward::open_pull_request(&repo, branch)
-                    .and_then(|pr| land::draft_state(&repo, &pr))
+                match fast_forward::look_up_pull_request(&repo, branch) {
+                    fast_forward::Lookup::Found(pr) => land::draft_state(&repo, &pr).map(Some),
+                    fast_forward::Lookup::None => Some(None),
+                    fast_forward::Lookup::Unreadable(_) => None,
+                }
             };
             match land_push_owes(root, std::time::SystemTime::now(), local.as_deref(), forge) {
                 Ok(None) => Ok(Answered::Go),
@@ -28418,12 +28421,15 @@ pub fn land_spent_refusal(laps: u32, ledger: &land::Ledger) -> crate::refusal::R
 /// * A ready pull request already AT this head owes nothing. The push publishes
 ///   nothing new and buys nothing, so a receipt that aged out since the run was
 ///   graded must not stop a landing over a head the forge has answered.
+/// * A branch with NO open pull request owes nothing: there is no run to buy.
 /// * Anything else owes what `gh pr ready` would, and that includes a forge
 ///   that could not say: an unreadable draft state asks, rather than letting an
 ///   unreviewed push through to a pull request that may be ready.
 ///
 /// `forge` is called only when something is owed, because it is a network read
-/// and the common lap owes nothing.
+/// and the common lap owes nothing. It answers `None` when the forge could not
+/// say, `Some(None)` when the branch has no open pull request, and the
+/// pull request's [`land::Readiness`] otherwise.
 ///
 /// # Errors
 ///
@@ -28432,13 +28438,15 @@ pub fn land_push_owes(
     root: &Path,
     now: std::time::SystemTime,
     local_head: Option<&str>,
-    forge: impl FnOnce() -> Option<land::Readiness>,
+    forge: impl FnOnce() -> Option<Option<land::Readiness>>,
 ) -> Result<Option<refusal::Refusal>> {
     let Some(owed) = land_ready_owes(root, now)? else {
         return Ok(None);
     };
-    let buys_nothing = forge().is_some_and(|readiness| {
-        readiness.draft || local_head.is_some_and(|local| local == readiness.head)
+    let buys_nothing = forge().is_some_and(|read| {
+        read.is_none_or(|readiness| {
+            readiness.draft || local_head.is_some_and(|local| local == readiness.head)
+        })
     });
     Ok((!buys_nothing).then_some(owed))
 }
