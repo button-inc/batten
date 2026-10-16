@@ -82,6 +82,7 @@ pub mod forge_query;
 pub mod git;
 pub mod gitwrite;
 pub mod graph;
+mod handle;
 pub mod handler;
 pub mod history;
 pub mod hk;

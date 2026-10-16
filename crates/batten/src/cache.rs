@@ -148,9 +148,9 @@ fn refresh_use(own: &Path, meta: &std::fs::Metadata) {
 }
 
 /// Set `path`'s modification time, file or directory, through the handle
-/// [`crate::collect::open_handle`] opens for exactly that on every platform.
+/// [`crate::handle::open`] opens for exactly that on every platform.
 fn touch(path: &Path, at: std::time::SystemTime) -> std::io::Result<()> {
-    crate::collect::open_handle(path).and_then(|file| file.set_modified(at))
+    crate::handle::open(path).and_then(|file| file.set_modified(at))
 }
 
 /// The running binary's partition name: a short digest of its identity, which

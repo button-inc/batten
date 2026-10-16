@@ -899,7 +899,7 @@ fn is_kept(path: &Path, kept: &[Kept]) -> bool {
 /// [`remove_counted`] tolerates, rather than reading every tree as held and
 /// freeing nothing.
 fn lock_tree(tree: &Path, wait: bool) -> Option<std::fs::File> {
-    let dir = open_handle(tree).ok()?;
+    let dir = crate::handle::open(tree).ok()?;
     let taken = if wait {
         dir.lock().map_err(std::fs::TryLockError::Error)
     } else {
@@ -908,30 +908,6 @@ fn lock_tree(tree: &Path, wait: bool) -> Option<std::fs::File> {
     match taken {
         Ok(()) | Err(std::fs::TryLockError::Error(_)) => Some(dir),
         Err(std::fs::TryLockError::WouldBlock) => None,
-    }
-}
-
-/// `path`, file or directory, opened for its lock or its times.
-///
-/// WINDOWS OPENS A DIRECTORY ONLY WITH BACKUP SEMANTICS and writes times only
-/// through a handle opened for writing; measured on #1132's `windows` job, a
-/// plain `File::open` read every tree as held and re-armed no survivor (the
-/// rule `perf.rs`'s sibling stamp records). Elsewhere a read-only handle does
-/// both, and is the only handle a directory takes.
-pub(crate) fn open_handle(path: &Path) -> std::io::Result<std::fs::File> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-        std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-            .open(path)
-    }
-    #[cfg(not(windows))]
-    {
-        std::fs::File::open(path)
     }
 }
 
@@ -957,7 +933,7 @@ pub fn rearm(tree: &Path) {
 
 fn rearm_file(path: &Path) -> std::io::Result<()> {
     let modified = std::fs::metadata(path)?.modified()?;
-    open_handle(path)?.set_times(std::fs::FileTimes::new().set_accessed(modified))
+    crate::handle::open(path)?.set_times(std::fs::FileTimes::new().set_accessed(modified))
 }
 
 /// How a collection is asked for.
