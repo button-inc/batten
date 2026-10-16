@@ -908,8 +908,8 @@ fn installer_target() -> String {
 
 /// The installer's triple for a suite `built` for one triple on a host whose
 /// libc is musl or not: the libc is the HOST's, never the build's (CLOUD-2381).
+//MUTANT installer-target-ignores-host|s@^    let libc = if musl_host {$@    let libc = if built.ends_with("-musl") {@|the_installer_target_follows_the_host_libc_not_the_build
 fn installer_target_for(built: &str, musl_host: bool) -> String {
-    //MUTANT installer-target-ignores-host|s@^    let libc = if musl_host {$@    let libc = if built.ends_with("-musl") {@|the_installer_target_follows_the_host_libc_not_the_build
     let libc = if musl_host {
         "-linux-musl"
     } else {

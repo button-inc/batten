@@ -529,7 +529,8 @@ fn stage(
     }
     let argv = archiver_argv(
         target,
-        cfg!(windows).then(|| std::env::var_os("SystemRoot")),
+        cfg!(windows),
+        std::env::var_os("SystemRoot"),
         archive.to_string_lossy().into_owned(),
         &built_dir,
         file,
@@ -556,16 +557,18 @@ fn stage(
 /// Both forms put the binary at the archive ROOT, never under
 /// `target/<triple>/dist/`, so extracting yields the binary beside the user.
 ///
-/// `windows_host` is `Some(%SystemRoot%)` on a Windows host and `None`
-/// elsewhere. A WINDOWS HOST HAS NO `zip` (measured on windows-latest: "could
-/// not start `zip`"), and every cargo-dist Windows leg builds on one. It does
-/// ship bsdtar as `System32\tar.exe`, which writes the same zip, named by its
-/// full path because a bash step puts Git for Windows' GNU tar, which writes no
-/// zip, first on PATH. A non-Windows host cross-building the target keeps
-/// Info-ZIP (CLOUD-2381).
+/// `system_root` is `%SystemRoot%`, read only when `windows_host`. A WINDOWS
+/// HOST HAS NO `zip` (measured on windows-latest: "could not start `zip`"), and
+/// every cargo-dist Windows leg builds on one. It does ship bsdtar as
+/// `System32\tar.exe`, which writes the same zip, named by its full path
+/// because a bash step puts Git for Windows' GNU tar, which writes no zip, first
+/// on PATH. A non-Windows host cross-building the target keeps Info-ZIP
+/// (CLOUD-2381).
+//MUTANT archiver-ignores-host|s@^    if !windows_host {$@    if true {@|a_windows_host_never_archives_with_zip
 fn archiver_argv(
     target: &str,
-    windows_host: Option<Option<std::ffi::OsString>>,
+    windows_host: bool,
+    system_root: Option<std::ffi::OsString>,
     archive: String,
     built_dir: &Path,
     file: String,
@@ -580,10 +583,9 @@ fn archiver_argv(
             file,
         ];
     }
-    //MUTANT archiver-ignores-host|s@^    let Some(system_root) = windows_host else {$@    let Some(system_root) = None::<Option<std::ffi::OsString>> else {@|a_windows_host_never_archives_with_zip
-    let Some(system_root) = windows_host else {
+    if !windows_host {
         return vec!["zip".to_owned(), "-q".to_owned(), archive, file];
-    };
+    }
     let bsdtar = system_root
         .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
         .join("System32")
@@ -857,7 +859,8 @@ mod tests {
         let dir = Path::new("target/x86_64-pc-windows-gnu/dist");
         let on_windows = archiver_argv(
             windows,
-            Some(Some(std::ffi::OsString::from(r"D:\Windows"))),
+            true,
+            Some(std::ffi::OsString::from(r"D:\Windows")),
             "a.zip".to_owned(),
             dir,
             "batten.exe".to_owned(),
@@ -871,7 +874,8 @@ mod tests {
         assert_eq!(on_windows[1..4], ["--format", "zip", "-cf"]);
         let unset_root = archiver_argv(
             windows,
-            Some(None),
+            true,
+            None,
             "a.zip".to_owned(),
             dir,
             "batten.exe".to_owned(),
@@ -880,6 +884,7 @@ mod tests {
 
         let cross = archiver_argv(
             windows,
+            false,
             None,
             "a.zip".to_owned(),
             dir,
@@ -889,7 +894,8 @@ mod tests {
 
         let linux = archiver_argv(
             "x86_64-unknown-linux-gnu",
-            Some(None),
+            true,
+            None,
             "a.tar.gz".to_owned(),
             dir,
             "batten".to_owned(),

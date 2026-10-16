@@ -445,8 +445,8 @@ fn the_committed_workflows_and_manifest_agree() {
 /// `test:cargo` or `test:musl` as a whole word (so `ci-slow-needed` and
 /// `ci:quick`, which skips the slow tier the suite is in, do not count), or
 /// `nextest run` that is not `--no-run`.
+//MUTANT suite-step-never-matches|s@^    run.split(@    false \&\& run.split(@|every_suite_job_installs_the_pinned_tools_its_cases_require
 fn runs_suite(run: &str) -> bool {
-    //MUTANT suite-step-never-matches|s@^    run.split(@    false \&\& run.split(@|every_suite_job_installs_the_pinned_tools_its_cases_require
     run.split('\n').any(|line| {
         ["ci", "test:cargo", "test:musl"].iter().any(|task| {
             line.split("mise run ").skip(1).any(|rest| {
