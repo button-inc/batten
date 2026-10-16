@@ -456,7 +456,7 @@ fn the_committed_workflows_and_manifest_agree() {
 /// a script in the tree runs; and text the parse cannot read.
 fn suite_facts(run: &str) -> (bool, Vec<String>) {
     // A text that is only comments parses to nothing, which is not unreadable.
-    let code: String = run
+    let code: String = rendered(run)
         .lines()
         .filter(|line| !line.trim_start().starts_with('#'))
         .collect::<Vec<_>>()
@@ -469,88 +469,191 @@ fn suite_facts(run: &str) -> (bool, Vec<String>) {
     };
     let mut direct = false;
     let mut tasks = Vec::new();
-    for words in commands {
-        let (inner, more) = command_facts(&words);
+    for (words, stdin) in commands {
+        let (inner, more) = command_facts(&words, &stdin);
         direct |= inner;
         tasks.extend(more);
     }
     (direct, tasks)
 }
 
-/// The words after `at` that are not flags: a subcommand and its operands.
-fn operands(words: &[String], at: usize) -> impl Iterator<Item = &str> {
-    words[at + 1..]
-        .iter()
-        .map(String::as_str)
-        .filter(|word| !word.starts_with('-') && !word.starts_with('+'))
+/// A word that stands for a value only a renderer knows: a GitHub `${{ … }}`
+/// or a mise `{{ … }}` expression. A task named by one is held as a suite task.
+const UNRENDERED: &str = "__unrendered__";
+
+/// `run` with its templates resolved as far as a reader can: each Tera
+/// `{% … %}` tag ends a line, so every branch of an `if` is read; `{{vars.X}}`
+/// is `X` (`{{vars.batten}}` is the batten program); any other `{{ … }}` or
+/// `${{ … }}` is [`UNRENDERED`].
+fn rendered(run: &str) -> String {
+    let mut out = String::with_capacity(run.len());
+    let mut rest = run;
+    while let Some(open) = rest.find(['{', '$']) {
+        let (head, tail) = rest.split_at(open);
+        out.push_str(head);
+        let (close, replacement) = if let Some(body) = tail.strip_prefix("{%") {
+            (body.find("%}").map(|end| end + 4), "\n".to_owned())
+        } else if let Some(body) = tail.strip_prefix("${{").or_else(|| tail.strip_prefix("{{")) {
+            let skip = tail.len() - body.len();
+            body.find("}}").map_or((None, String::new()), |end| {
+                let inner = body[..end].trim();
+                let word = inner
+                    .strip_prefix("vars.")
+                    .filter(|name| name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+                    .map_or_else(|| UNRENDERED.to_owned(), str::to_owned);
+                (Some(skip + end + 2), word)
+            })
+        } else {
+            (None, String::new())
+        };
+        if let Some(close) = close {
+            out.push_str(&replacement);
+            rest = &tail[close..];
+        } else {
+            out.push_str(&tail[..1]);
+            rest = &tail[1..];
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
+/// The words after `at` that are not flags, a value-taking flag's value
+/// skipped with it: a subcommand and its operands.
+fn operands<'a>(
+    words: &'a [String],
+    at: usize,
+    valued: &'a [&'a str],
+) -> impl Iterator<Item = &'a str> {
+    operand_at(words, at, valued).map(|(_, word)| word)
+}
+
+/// [`operands`], each with its index in `words`.
+fn operand_at<'a>(
+    words: &'a [String],
+    at: usize,
+    valued: &'a [&'a str],
+) -> impl Iterator<Item = (usize, &'a str)> {
+    let mut skip_next = false;
+    words
+        .iter()
+        .enumerate()
+        .skip(at + 1)
+        .map(|(index, word)| (index, word.as_str()))
+        .filter(move |(_, word)| {
+            if std::mem::take(&mut skip_next) {
+                return false;
+            }
+            if word.starts_with('-') || word.starts_with('+') {
+                skip_next = valued.contains(word);
+                return false;
+            }
+            // A redirection (`<<'EOF'`, `>log`) is no operand.
+            !word.starts_with(['<', '>'])
+        })
+}
+
+/// The tasks `mise run` names after `words[at]`: the first word that is not a
+/// flag, and the first after each `:::`. The rest are those tasks' arguments.
+fn tasks_after(words: &[String], at: usize) -> Vec<String> {
+    let mut tasks = Vec::new();
+    let mut expecting = true;
+    let mut skip_next = false;
+    for word in &words[at + 1..] {
+        if std::mem::take(&mut skip_next) {
+            continue;
+        }
+        if word == ":::" {
+            expecting = true;
+        } else if word.starts_with('-') {
+            skip_next = expecting && MISE_VALUED.contains(&word.as_str());
+        } else if expecting {
+            tasks.push(word.clone());
+            expecting = false;
+        }
+    }
+    tasks
+}
+
+/// Flags that take the next word as their value, before the subcommand.
+const MISE_VALUED: &[&str] = &["-C", "--cd", "-E", "--env", "-j", "--jobs"];
+const CARGO_VALUED: &[&str] = &["-C", "--config", "--manifest-path", "-Z", "--color"];
+const SHELL_VALUED: &[&str] = &["-o", "-O", "+o", "+O", "--rcfile", "--init-file"];
+
 /// One command's facts: whether it runs the suite, and the mise tasks it runs.
+/// Every word is tried as a program, so a suite run that is another program's
+/// operand (`ci step -- mise run coverage`) is read too: over-reading only
+/// over-requires.
 //MUTANT suite-via-hk-unseen|s@^            "hk" => @            "hk-unread" => @|every_suite_job_installs_the_pinned_tools_its_cases_require
-fn command_facts(words: &[String]) -> (bool, Vec<String>) {
+fn command_facts(words: &[String], stdin: &[String]) -> (bool, Vec<String>) {
     let mut direct = false;
     let mut tasks = Vec::new();
+    let mut take = |(inner, more): (bool, Vec<String>)| {
+        direct |= inner;
+        tasks.extend(more);
+    };
     for (at, word) in words.iter().enumerate() {
         let program = word.rsplit('/').next().unwrap_or(word);
-        let mut next = operands(words, at);
         match program {
             "cargo" => {
+                let mut next = operands(words, at, CARGO_VALUED);
                 let runner = match next.next() {
                     Some("test" | "t") => true,
                     Some("nextest") => matches!(next.next(), Some("run" | "r")),
                     Some("llvm-cov") => next.next() != Some("report"),
                     _ => false,
                 };
-                direct |= runner && !words.iter().any(|w| w == "--no-run");
+                take((runner && !words.iter().any(|w| w == "--no-run"), Vec::new()));
             }
-            "hk" => {
-                direct |= matches!(next.next(), Some("check" | "run"))
-                    && !words.iter().any(|w| w.contains("!slow"));
-            }
+            "hk" => take((
+                matches!(operands(words, at, &[]).next(), Some("check" | "run"))
+                    && !words.iter().any(|w| w.contains("!slow")),
+                Vec::new(),
+            )),
             "batten" => {
-                direct |= matches!((next.next(), next.next()), (Some("mutate"), Some("sweep")));
+                let mut next = operands(words, at, &[]);
+                take((
+                    matches!((next.next(), next.next()), (Some("mutate"), Some("sweep"))),
+                    Vec::new(),
+                ));
             }
             "bash" | "sh" => {
-                if let Some(script) = words.iter().skip(at + 1).skip_while(|w| *w != "-c").nth(1) {
-                    let (inner, more) = suite_facts(script);
-                    direct |= inner;
-                    tasks.extend(more);
-                } else if let Some(script) = next.next() {
-                    let (inner, more) = script_facts(script);
-                    direct |= inner;
-                    tasks.extend(more);
+                // `-c`, alone or in a cluster (`-ec`), takes the next word as
+                // the script; with neither a script nor a file, stdin is it.
+                let inline = words[at + 1..]
+                    .iter()
+                    .position(|w| w.starts_with('-') && !w.starts_with("--") && w.contains('c'))
+                    .and_then(|flag| words.get(at + 2 + flag));
+                if let Some(script) = inline {
+                    take(suite_facts(script));
+                } else if let Some(file) = operands(words, at, SHELL_VALUED).next() {
+                    take(script_facts(file));
+                } else {
+                    for text in stdin {
+                        take(suite_facts(text));
+                    }
                 }
             }
-            _ if at == 0
-                && Path::new(word)
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("sh")) =>
+            _ if Path::new(word)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("sh")) =>
             {
-                let (inner, more) = script_facts(word);
-                direct |= inner;
-                tasks.extend(more);
+                take(script_facts(word));
             }
-            "mise" => match next.next() {
-                Some("run" | "r") => tasks.extend(
-                    words[at + 1..]
-                        .iter()
-                        .skip_while(|w| *w != "run" && *w != "r")
-                        .skip(1)
-                        .take_while(|w| *w != "--")
-                        .cloned(),
-                ),
-                Some("tasks") => tasks.extend(
-                    words[at + 1..]
-                        .iter()
-                        .skip_while(|w| *w != "run")
-                        .skip(1)
-                        .take_while(|w| *w != "--")
-                        .cloned(),
-                ),
-                // `mise <task>` is mise's own shorthand for `mise run <task>`.
-                Some(task) => tasks.push(task.to_owned()),
-                None => {}
-            },
+            "mise" => {
+                let mut next = operand_at(words, at, MISE_VALUED);
+                let named: Vec<String> = match next.next() {
+                    Some((sub, "run" | "r")) => tasks_after(words, sub),
+                    Some((_, "tasks")) => match next.next() {
+                        Some((sub, "run" | "r")) => tasks_after(words, sub),
+                        _ => Vec::new(),
+                    },
+                    // `mise <task>` is mise's own shorthand for `mise run <task>`.
+                    Some((_, task)) => vec![task.to_owned()],
+                    None => Vec::new(),
+                };
+                take((named.iter().any(|task| task == UNRENDERED), named));
+            }
             _ => {}
         }
     }
@@ -581,20 +684,33 @@ fn task_refs(value: Option<&toml::Value>, tasks: &[&String]) -> Vec<String> {
     };
     let mut refs = Vec::new();
     for entry in entries {
-        let reference = match entry {
-            toml::Value::String(text) => text.split_whitespace().next(),
-            toml::Value::Table(table) => table.get("task").and_then(toml::Value::as_str),
-            _ => None,
+        let references: Vec<&str> = match entry {
+            toml::Value::String(text) => text.split_whitespace().next().into_iter().collect(),
+            // `{ task = "x" }`, or the parallel `{ tasks = ["x", "y"] }`.
+            toml::Value::Table(table) => table
+                .get("task")
+                .into_iter()
+                .chain(
+                    table
+                        .get("tasks")
+                        .and_then(toml::Value::as_array)
+                        .into_iter()
+                        .flatten(),
+                )
+                .filter_map(toml::Value::as_str)
+                .collect(),
+            _ => Vec::new(),
         };
-        let Some(reference) = reference else { continue };
-        match reference.split_once('*') {
-            Some((head, tail)) => refs.extend(
-                tasks
-                    .iter()
-                    .filter(|name| name.starts_with(head) && name.ends_with(tail))
-                    .map(|name| (*name).clone()),
-            ),
-            None => refs.push(reference.to_owned()),
+        for reference in references {
+            match reference.split_once('*') {
+                Some((head, tail)) => refs.extend(
+                    tasks
+                        .iter()
+                        .filter(|name| name.starts_with(head) && name.ends_with(tail))
+                        .map(|name| (*name).clone()),
+                ),
+                None => refs.push(reference.to_owned()),
+            }
         }
     }
     refs
@@ -619,16 +735,30 @@ fn executable(_: &Path) -> bool {
 /// once; the closure runs over the graph that leaves. A file task would be a
 /// body this reads none of, so one is refused.
 fn suite_tasks(manifest: &toml::Value) -> BTreeSet<String> {
-    for dir in ["mise-tasks", ".mise-tasks", ".mise/tasks", "mise/tasks"] {
-        let Ok(entries) = std::fs::read_dir(common::at_root(dir)) else {
+    let mut pending: Vec<PathBuf> = [
+        "mise-tasks",
+        ".mise-tasks",
+        ".mise/tasks",
+        "mise/tasks",
+        ".config/mise/tasks",
+    ]
+    .map(common::at_root)
+    .into();
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
-            assert!(
-                !executable(&entry.path()),
-                "{}: a file task, whose body the suite census does not read",
-                entry.path().display()
-            );
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                assert!(
+                    !executable(&path),
+                    "{}: a file task, whose body the suite census does not read",
+                    path.display()
+                );
+            }
         }
     }
     let tasks = manifest["tasks"].as_table().expect("[tasks]");
@@ -649,13 +779,15 @@ fn suite_tasks(manifest: &toml::Value) -> BTreeSet<String> {
         for key in ["depends", "depends_post", "wait_for"] {
             targets.extend(task_refs(task.get(key), &names));
         }
-        if let Some(toml::Value::Array(entries)) = task.get("run") {
-            targets.extend(task_refs(
+        match task.get("run") {
+            Some(toml::Value::Array(entries)) => targets.extend(task_refs(
                 Some(&toml::Value::Array(
                     entries.iter().filter(|e| e.is_table()).cloned().collect(),
                 )),
                 &names,
-            ));
+            )),
+            Some(table @ toml::Value::Table(_)) => targets.extend(task_refs(Some(table), &names)),
+            _ => {}
         }
         if direct {
             suite.insert(name.clone());
@@ -690,25 +822,22 @@ fn tool_name(key: &str) -> String {
 /// either is a requirement this census cannot read.
 //MUTANT require-call-unread|s@^        required.extend(found.tools);$@@|every_suite_job_installs_the_pinned_tools_its_cases_require
 fn required_tools() -> BTreeSet<String> {
-    let resolver = common::at_root("crates/batten/tests/it/common/mod.rs");
     let mut required = BTreeSet::new();
     for path in common::rust_sources() {
         let source = std::fs::read_to_string(&path).unwrap();
         let found = batten::testing::require_census(
             &syn::parse_file(&source).expect("every crate source parses"),
         );
-        if path != resolver {
-            assert!(
-                found.unnamed == 0,
-                "{}: a require_tool/require_bin call names no tool as a string literal",
-                path.display()
-            );
-            assert!(
-                found.which_literals == 0,
-                "{}: resolves a pinned tool with its own `mise which`; call `common::require_tool`",
-                path.display()
-            );
-        }
+        assert!(
+            found.unnamed == 0,
+            "{}: a require_tool/require_bin call names no tool as a string literal",
+            path.display()
+        );
+        assert!(
+            found.which_literals == 0,
+            "{}: resolves a pinned tool with its own `mise which`; call `common::require_tool`",
+            path.display()
+        );
         for tool in &found.tools {
             assert!(
                 !tool.is_empty() && tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
@@ -927,6 +1056,14 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "mise exec -- hk check -a",
         "hk run pre-push",
         "mise exec -- bash -c \"cargo nextest run --workspace\"",
+        "bash -ec \"cargo nextest run --workspace\"",
+        "bash <<'EOF'\ncargo nextest run --workspace\nEOF",
+        "mise -C crates run ci",
+        "cargo --manifest-path Cargo.toml test",
+        "cargo --config net.retry=5 nextest run",
+        "{% if usage.f %}cargo fuzz run x{% else %}mise run test:cargo{% endif %}",
+        "{{vars.batten}} mutate sweep",
+        "mise run ${{ matrix.task }}",
     ] {
         assert!(runs_suite(run, &suite), "{run}");
     }

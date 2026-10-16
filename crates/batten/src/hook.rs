@@ -8228,10 +8228,11 @@ fn program_name(token: &str) -> &str {
 }
 
 /// Every command a shell text runs, each as its words with quotes resolved and
-/// comments dropped, through the parse every hook judges by (CLOUD-2388); `None`
-/// when that parse could not read all of it.
+/// comments dropped, with the here-doc and here-string text fed to its stdin,
+/// through the parse every hook judges by (CLOUD-2388); `None` when that parse
+/// could not read all of it.
 #[must_use]
-pub(crate) fn shell_commands(command: &str) -> Option<Vec<Vec<String>>> {
+pub(crate) fn shell_commands(command: &str) -> Option<Vec<(Vec<String>, Vec<String>)>> {
     let crate::facts::Look::Is(parsed) = segments(command) else {
         return None;
     };
@@ -8239,11 +8240,20 @@ pub(crate) fn shell_commands(command: &str) -> Option<Vec<Vec<String>>> {
         parsed
             .into_iter()
             .flat_map(|segment| {
-                if segment.lines.is_empty() {
-                    vec![segment.words]
+                let mut lines: Vec<(Vec<String>, Vec<String>)> = if segment.lines.is_empty() {
+                    vec![(segment.words, Vec::new())]
                 } else {
-                    segment.lines.into_iter().map(|line| line.words).collect()
+                    segment
+                        .lines
+                        .into_iter()
+                        .map(|line| (line.words, Vec::new()))
+                        .collect()
+                };
+                // A redirection belongs to the segment, so its last line takes it.
+                if let Some(last) = lines.last_mut() {
+                    last.1 = segment.stdin_text;
                 }
+                lines
             })
             .collect(),
     )

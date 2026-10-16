@@ -399,11 +399,12 @@ impl<'ast> Visit<'ast> for Exits {
     fn visit_item(&mut self, _: &'ast syn::Item) {}
 }
 
-/// Every shell command a `run:` text runs, each as its words, through the
-/// hooks' own parse (CLOUD-2388); `None` when that parse could not read it.
+/// Every shell command a `run:` text runs, each as its words and the text its
+/// stdin is fed, through the hooks' own parse (CLOUD-2388); `None` when that
+/// parse could not read it.
 #[doc(hidden)]
 #[must_use]
-pub fn shell_commands(text: &str) -> Option<Vec<Vec<String>>> {
+pub fn shell_commands(text: &str) -> Option<Vec<(Vec<String>, Vec<String>)>> {
     crate::hook::shell_commands(text)
 }
 
@@ -434,8 +435,16 @@ fn names_resolver(path: &syn::Path) -> bool {
 #[doc(hidden)]
 #[must_use]
 pub fn require_census(file: &syn::File) -> RequireCensus {
-    struct Walk(RequireCensus);
+    /// The census, and whether the walk is inside the resolver's own body,
+    /// where `require_bin(name, name)` and its `mise which` are the mechanism.
+    struct Walk(RequireCensus, bool);
     impl<'a> Visit<'a> for Walk {
+        fn visit_item_fn(&mut self, item: &'a syn::ItemFn) {
+            let resolver = item.sig.ident == "require_tool" || item.sig.ident == "require_bin";
+            let outer = std::mem::replace(&mut self.1, resolver);
+            syn::visit::visit_item_fn(self, item);
+            self.1 = outer;
+        }
         fn visit_expr_call(&mut self, call: &'a syn::ExprCall) {
             if let syn::Expr::Path(path) = &*call.func
                 && names_resolver(&path.path)
@@ -445,6 +454,7 @@ pub fn require_census(file: &syn::File) -> RequireCensus {
                         lit: syn::Lit::Str(tool),
                         ..
                     })) => self.0.tools.push(tool.value()),
+                    _ if self.1 => {}
                     _ => self.0.unnamed += 1,
                 }
                 // The callee is this call's, not a bare path's: walk the
@@ -457,7 +467,7 @@ pub fn require_census(file: &syn::File) -> RequireCensus {
             syn::visit::visit_expr_call(self, call);
         }
         fn visit_expr_path(&mut self, path: &'a syn::ExprPath) {
-            if names_resolver(&path.path) {
+            if names_resolver(&path.path) && !self.1 {
                 self.0.unnamed += 1;
             }
         }
@@ -472,12 +482,12 @@ pub fn require_census(file: &syn::File) -> RequireCensus {
         }
         fn visit_lit_str(&mut self, lit: &'a syn::LitStr) {
             // Split, so the census does not count its own needle.
-            if lit.value() == concat!("whi", "ch") {
+            if lit.value() == concat!("whi", "ch") && !self.1 {
                 self.0.which_literals += 1;
             }
         }
     }
-    let mut walk = Walk(RequireCensus::default());
+    let mut walk = Walk(RequireCensus::default(), false);
     walk.visit_file(file);
     walk.0
 }
