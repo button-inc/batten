@@ -683,7 +683,7 @@ pub fn releases_between(headings: &[Heading], pin: &str, latest: &str) -> Result
         .collect();
     newer.sort_by(|left, right| left.version.cmp(&right.version));
     newer.dedup_by(|left, right| left.version == right.version);
-    if latest > pin && newer.last().map(|heading| &heading.version) != Some(&latest) {
+    if latest > pin && newer.last().is_none_or(|heading| heading.version < latest) {
         newer.push(Heading {
             version: latest,
             date: None,
@@ -869,13 +869,9 @@ pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String, &'static str)
     let mut found = Vec::new();
     if let Some(item) = doc.get("min_batten_version")
         && let Some(floor) = item.as_str()
-        && semver::Version::parse(floor).is_ok_and(|floor| floor > pin)
+        && semver::Version::parse(floor).is_ok_and(|floor| ahead_of(&floor, &pin))
     {
-        found.push((
-            line(item),
-            format!("min_batten_version {floor}"),
-            "pin a release at or above the floor, or lower the floor",
-        ));
+        found.push((line(item), format!("min_batten_version {floor}"), PIN_UP));
     }
     let rows = doc
         .get("provision")
@@ -883,19 +879,54 @@ pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String, &'static str)
         .into_iter()
         .flat_map(toml_edit::ArrayOfTables::iter);
     for row in rows.filter(|row| is_batten_row(*row)) {
-        if let Some(item) = row.get("version")
-            && let Some(version) = item.as_str()
-            && release_version(version).ok().as_ref() != Some(&pin)
-        {
-            found.push((
-                line(item),
-                format!("provision batten {version}"),
-                "run `batten engine update`",
-            ));
+        let Some(item) = row.get("version") else {
+            continue;
+        };
+        let Some(version) = item.as_str() else {
+            continue;
+        };
+        let parsed = release_version(version).ok();
+        if parsed.as_ref() == Some(&pin) {
+            continue;
         }
+        let remedy = if parsed.is_some_and(|have| ahead_of(&have, &pin)) {
+            PIN_UP
+        } else {
+            "run `batten engine update`"
+        };
+        found.push((line(item), format!("provision batten {version}"), remedy));
     }
     found.sort();
     found
+}
+
+/// The remedy for a declaration [`ahead_of`] the pin, which `engine update`
+/// never moves back.
+const PIN_UP: &str = "pin a release at or above it, or lower it";
+
+/// Whether a declared version is past the pin (CLOUD-2279): the one test of
+/// what `engine update` leaves alone, because it moves forward only, and so of
+/// which remedy `engine gate` names for it.
+#[must_use]
+pub fn ahead_of(declared: &semver::Version, pin: &semver::Version) -> bool {
+    declared > pin
+}
+
+/// `line` less a YAML comment: from the first `#` that opens the line or
+/// follows whitespace, outside a quoted string.
+fn yaml_code(line: &str) -> &str {
+    let mut quote = None;
+    let mut previous = ' ';
+    for (at, c) in line.char_indices() {
+        match quote {
+            Some(open) if c == open => quote = None,
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if c == '#' && previous.is_whitespace() => return &line[..at],
+            Some(_) | None => {}
+        }
+        previous = c;
+    }
+    line
 }
 
 /// The literal `BATTEN_VERSION` / `BATTEN_SHA256` values in a workflow that
@@ -914,10 +945,7 @@ pub fn workflow_literals(
 ) -> Vec<(usize, &'static str)> {
     let want = tag.trim_start_matches('v');
     let mut found = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        if line.trim_start().starts_with('#') {
-            continue;
-        }
+    for (index, line) in text.lines().map(yaml_code).enumerate() {
         for key in ["BATTEN_VERSION", "BATTEN_SHA256"] {
             for (at, _) in line.match_indices(key) {
                 let before = line[..at].chars().next_back();
@@ -1120,20 +1148,23 @@ mod tests {
     fn a_workflow_comment_is_not_a_copy_and_a_spaced_key_is() {
         let published = std::collections::BTreeSet::new();
         let found = workflow_literals(
-            "# BATTEN_VERSION: 0.0.1\n  BATTEN_VERSION : \"0.0.210\"\n",
+            "# BATTEN_VERSION: 0.0.1\n  BATTEN_VERSION : \"0.0.210\"\n  run: make # BATTEN_VERSION: 0.0.2\n",
             "v0.0.216",
             &published,
         );
         assert_eq!(found, [(2, "BATTEN_VERSION")]);
     }
 
-    /// A floor above the pin names the moves that clear it, never the update
-    /// that cannot lower it.
+    /// A floor or a provision row above the pin names the moves that clear it,
+    /// never the update that cannot move it back; a row below names the update.
     #[test]
-    fn a_floor_above_the_pin_names_its_own_remedy() {
-        let found = disagreements("min_batten_version = \"0.0.220\"\n", "v0.0.216");
-        assert_eq!(found.len(), 1);
-        assert!(!found[0].2.contains("engine update"), "{found:?}");
+    fn a_declaration_ahead_of_the_pin_names_its_own_remedy() {
+        let found = disagreements(
+            "min_batten_version = \"0.0.220\"\n\n[[provision]]\nname = \"batten\"\nversion = \"0.0.218\"\n\n[[provision]]\nname = \"batten\"\nversion = \"0.0.210\"\n",
+            "v0.0.216",
+        );
+        let remedies: Vec<&str> = found.iter().map(|(_, _, remedy)| *remedy).collect();
+        assert_eq!(remedies, [PIN_UP, PIN_UP, "run `batten engine update`"]);
     }
 
     #[test]

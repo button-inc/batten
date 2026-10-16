@@ -846,11 +846,6 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     if synced != text {
         durable::replace(&path, &synced)?;
         writeln!(out, "{}", path.display())?;
-        // THE LAST LOOKUP ANSWERED FOR THE OLD PIN, so the next session start
-        // looks again rather than standing on it for the rest of the day.
-        if let Some(stamp) = notice_stamp(&root) {
-            let _ = std::fs::remove_file(stamp);
-        }
     }
     engine_install(out)
 }
@@ -969,12 +964,22 @@ fn notice_enabled(root: &Path, text: &str) -> bool {
         .unwrap_or(true)
 }
 
-/// Whether the stamp at `stamp` is older than [`NOTICE_TTL`], or absent.
+/// Whether the stamp at `stamp` is due another lookup: absent, older than
+/// [`NOTICE_TTL`], or written for another pin than `tag`.
+///
+/// THE STAMP CARRIES THE PIN IT LOOKED UP (`<seconds>\t<tag>`), so a pin moved
+/// by any route — `engine update`, a hand edit, a checkout — is due at once,
+/// with no record read and no writer reaching into this file.
 //MUTANT notice-ignores-ttl|s@^    last.is_none_or(\x7clast\x7c now.saturating_sub(last) >= NOTICE_TTL)$@    true@|the_notice_speaks_once_per_ttl_and_never_in_ci
-fn notice_due(stamp: &Path, now: u64) -> bool {
-    let last = std::fs::read_to_string(stamp)
-        .ok()
-        .and_then(|text| text.trim().parse::<u64>().ok());
+fn notice_due(stamp: &Path, now: u64, tag: &str) -> bool {
+    let text = std::fs::read_to_string(stamp).unwrap_or_default();
+    let mut fields = text.split_whitespace();
+    let last = fields
+        .next()
+        .and_then(|seconds| seconds.parse::<u64>().ok());
+    if fields.next() != Some(tag) {
+        return true;
+    }
     last.is_none_or(|last| now.saturating_sub(last) >= NOTICE_TTL)
 }
 
@@ -1002,31 +1007,13 @@ fn record_freshness(record: &Record, tag: &str, found: &Distance, now: u64) -> R
     )
 }
 
-/// Where the notice stamps its last lookup: the repository's state directory,
-/// beside the cached releases.
-fn notice_stamp(root: &Path) -> Option<std::path::PathBuf> {
-    state::repo_state_dir(root)
-        .ok()
-        .map(|dir| dir.join("engine").join("update-notice"))
-}
-
-/// Whether the record `record` names answers for another pin than `tag`: a
-/// reading taken before the pin moved, which no TTL may keep standing.
-fn record_moved(record: &Record, tag: &str) -> bool {
-    record::load_named("engine outdated", &record.family)
-        .ok()
-        .flatten()
-        .is_some_and(|body| body.split('\t').nth(2) != Some(tag))
-}
-
 /// `engine outdated --notice`: the session's half, which ALWAYS exits 0.
 ///
-/// ONE LOOKUP PER [`NOTICE_TTL`], stamped in the repository's state directory
-/// however it came out — answered, failed or timed out — so a session start
-/// inside the day spends no network: the record it last wrote stands, and the
-/// notice it last spoke is not repeated. A record written for another pin is
-/// due whatever the stamp says. A suppressed notice with no record to write
-/// looks at nothing.
+/// ONE LOOKUP PER [`NOTICE_TTL`] AND PIN, stamped in the repository's state
+/// directory however it came out — answered, failed or timed out — so a session
+/// start inside the day spends no network: the record it last wrote stands, and
+/// the notice it last spoke is not repeated. A suppressed notice with no record
+/// to write looks at nothing.
 fn outdated_notice(
     ask: &Outdated,
     root: &Path,
@@ -1035,14 +1022,11 @@ fn outdated_notice(
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
     let now = now_unix();
-    let Some(stamp) = notice_stamp(root) else {
+    let Ok(state) = state::repo_state_dir(root) else {
         return Ok(ExitCode::Success);
     };
-    let moved = ask
-        .record
-        .as_ref()
-        .is_some_and(|record| record_moved(record, tag));
-    if !notice_due(&stamp, now) && !moved {
+    let stamp = state.join("engine").join("update-notice");
+    if !notice_due(&stamp, now, tag) {
         return Ok(ExitCode::Success);
     }
     let speak = notice_enabled(root, text);
@@ -1053,7 +1037,7 @@ fn outdated_notice(
     if let Some(parent) = stamp.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    durable::replace(&stamp, format!("{now}\n"))?;
+    durable::replace(&stamp, format!("{now}\t{tag}\n"))?;
     let Some(found) = found else {
         if let Some(record) = &ask.record {
             record::clear_named("engine outdated", &record.family)?;
@@ -1219,7 +1203,7 @@ fn sync_declarations(text: &str, tag: &str, sums: &dyn Fn() -> Result<String>) -
             };
             // FORWARD ONLY, AS THE PIN IS: a row already past the target is
             // left for `engine gate` to name, never moved back.
-            if engine::release_version(&old).is_ok_and(|row| row > version) {
+            if engine::release_version(&old).is_ok_and(|have| engine::ahead_of(&have, &version)) {
                 continue;
             }
             let old_bare = old.trim_start_matches('v').to_owned();
