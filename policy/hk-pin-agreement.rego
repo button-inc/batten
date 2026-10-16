@@ -1,12 +1,14 @@
-# hk's version is pinned identically in `mise.toml` and in `hk.pkl`'s `amends`
-# URL, retired off the `hk-version` task body under CLOUD-1991.
+# hk's version is pinned identically in `mise.toml`'s `[tools]` table, in
+# `hk.pkl`'s `amends` URL, and in the `pkl-package` task that fetches it,
+# retired off the `hk-version` task body under CLOUD-1991.
 #
-# `mise.toml` pins the hk BINARY; `hk.pkl` amends the hk CONFIG PACKAGE by URL.
-# The two move independently, and a bump to one without the other is the moment
-# the hook config silently runs against a schema its binary did not ship — so
-# both must name one version, and the refusal is also the reminder to revisit
-# `hk.pkl` for what the new version offers. The predecessor was two `grep -oE`
-# pipelines and a string comparison in shell.
+# `mise.toml` pins the hk BINARY; `hk.pkl` amends the hk CONFIG PACKAGE by URL;
+# `[tasks.pkl-package]` DOWNLOADS that package by the same URL (CLOUD-2311).
+# All three move independently, and a bump to one without the others is the
+# moment the hook config silently runs against a schema its binary did not ship
+# — so all three must name one version, and the refusal is also the reminder to
+# revisit `hk.pkl` for what the new version offers. The predecessor was two
+# `grep -oE` pipelines and a string comparison in shell.
 #
 # ─── WHY A MODULE AND NOT A PRESET ───────────────────────────────────────────
 #
@@ -25,6 +27,7 @@
 #
 #MUTANT hk-pin-disagreement-passes|s@^\tamended.version != pin$@\tfalse@|a_version_the_amends_url_names_differently_is_refused
 #MUTANT hk-amends-unnamed-passes|s@^\tcount(amends) == 0$@\tfalse@|an_hk_pkl_naming_no_version_is_refused
+#MUTANT hk-package-disagreement-passes|s@^\tpackaged.version != pin$@\tfalse@|a_package_task_naming_another_version_is_refused
 #
 #MUTANT-SUITE crates/batten/tests/it/tracked_absent.rs
 
@@ -107,6 +110,63 @@ violation contains {
 	some amended in amends
 }
 
+# --- the third spelling (CLOUD-2311) -----------------------------------------
+#
+# `mise.toml`'s `[tasks.pkl-package]` fetches the very package `hk.pkl` amends,
+# so its URL names the hk version a third time. It exists because `pkl eval`
+# cannot tell a bad module from an unfetchable one — both exit 1 — so the fetch
+# moved ahead of the validator, where a network failure fails under its own name
+# instead of being recorded as a verdict on `hk.pkl`'s bytes.
+#
+# A third spelling is a third thing to forget on a bump, which is the defect arms
+# A–C exist for, one file over. Here it is worse than the mismatch it hides: the
+# fetch of a package the pinned binary did not ship against SUCCEEDS, so nothing
+# downstream reports anything at all.
+
+# The `pkl-package` task's `run`, bound only when the manifest carried the task,
+# so arm D is UNDEFINED rather than vacuously clean without it — the same
+# discipline `tools` and `lines` keep above. An absent task is the structural
+# suite's to refuse (`verify_chain.rs` asserts the task and both `depends`), not
+# this module's: the question here is agreement, never presence, and a module
+# refusing on absence would refuse every consumer that declares no such task.
+package_run := r if {
+	r := input.tree.documents["mise.toml"].tasks["pkl-package"].run
+}
+
+# `run` is one argv as a string, or an array of them — mise accepts both, so both
+# are read. Reading one spelling only would leave the arm escapable by rewriting
+# the task's shape instead of fixing the version it names.
+package_steps contains step if {
+	is_string(package_run)
+	step := package_run
+}
+
+package_steps contains step if {
+	is_array(package_run)
+	some step in package_run
+	is_string(step)
+}
+
+# Every version the fetch names, by the pattern the amends lines are read with.
+# EVERY one, not the first: a second step naming another version is refused
+# rather than shadowed, which is arm A's reason restated for this surface.
+packages contains {"version": match[1]} if {
+	some step in package_steps
+	some match in regex.find_all_string_submatch_n(data.batten.patterns["hk-amends-version"], step, -1)
+}
+
+# D: the fetch URL names a different hk than the binary pin. One subject, and
+# `mise.toml`: the task and the pin table are two rows of the same file, so there
+# is no second path to point at.
+violation contains {
+	"rule": "tool pin other",
+	"verdict": "tool pin other",
+	"subjects": [{"path": "mise.toml"}],
+} if {
+	some packaged in packages
+	packaged.version != pin
+}
+
 # --- the load-time tier ------------------------------------------------------
 #
 # The predicate over a fabricated input; `crates/batten/tests/it/tracked_absent.rs`
@@ -118,6 +178,17 @@ amends_line(version) := sprintf("amends \"package://github.com/jdx/hk/releases/d
 
 tree(pinned, pkl) := {"tree": {
 	"documents": {"mise.toml": {"tools": pinned}},
+	"lines": {"hk.pkl": pkl},
+}}
+
+package_line(version) := sprintf("pkl download-package package://github.com/jdx/hk/releases/download/v%s/hk@%s", [version, version])
+
+# A manifest that also carries tasks. A SECOND constructor rather than a third
+# parameter on `tree`: six cases call `tree` and none of them is about tasks, so
+# widening it would make every one of them state a fact it does not depend on.
+# Arm D is undefined over `tree`'s shape, which is what those six assert.
+tree_with_tasks(pinned, tasks, pkl) := {"tree": {
+	"documents": {"mise.toml": {"tasks": tasks, "tools": pinned}},
 	"lines": {"hk.pkl": pkl},
 }}
 
@@ -156,5 +227,49 @@ test_a_second_amends_line_is_read_rather_than_shadowed if {
 
 test_an_unread_manifest_decides_nothing if {
 	count(violation) == 0 with input as {"tree": {"documents": {}, "lines": {"hk.pkl": [amends_line("1.56.1")]}}}
+		with data.batten.patterns as pattern
+}
+
+test_a_package_task_naming_another_version_is_refused if {
+	found := violation with input as tree_with_tasks(
+		{"hk": "1.56.1"},
+		{"pkl-package": {"run": package_line("1.57.0")}},
+		[amends_line("1.56.1")],
+	)
+		with data.batten.patterns as pattern
+	count(found) == 1
+	some finding in found
+	finding.subjects[0] == {"path": "mise.toml"}
+}
+
+test_a_package_task_naming_the_pin_is_clean if {
+	count(violation) == 0 with input as tree_with_tasks(
+		{"hk": "1.56.1"},
+		{"pkl-package": {"run": package_line("1.56.1")}},
+		[amends_line("1.56.1")],
+	)
+		with data.batten.patterns as pattern
+}
+
+# `run` as an array is the same claim, and the arm reads it: a task rewritten
+# from a string to one-element argv must not stop being judged.
+test_a_package_task_run_array_is_read_too if {
+	found := violation with input as tree_with_tasks(
+		{"hk": "1.56.1"},
+		{"pkl-package": {"run": [package_line("1.57.0")]}},
+		[amends_line("1.56.1")],
+	)
+		with data.batten.patterns as pattern
+	count(found) == 1
+}
+
+# A manifest with tasks but no `pkl-package` leaves arm D undefined. Presence is
+# `verify_chain.rs`'s question; this module answers agreement only.
+test_a_manifest_without_the_package_task_decides_nothing_here if {
+	count(violation) == 0 with input as tree_with_tasks(
+		{"hk": "1.56.1"},
+		{"hooks": {"run": "hk check --all"}},
+		[amends_line("1.56.1")],
+	)
 		with data.batten.patterns as pattern
 }

@@ -2545,8 +2545,39 @@ run = ["{{vars.batten}} engine pin --check"]
 description = "Effect: move a declared source pin to this tree's digest (CLOUD-2063)"
 run = ["{{vars.batten}} engine pin"]
 
+# The pkl package fetch, moved out of the validator's own run (CLOUD-2311).
+#
+# WHY A STEP AND NOT A FLAG. `hk.pkl` amends a `package://` URL, so `pkl eval
+# hk.pkl` fetches that package on a cold `~/.pkl/cache`. `pkl eval` exits 1 for a
+# module with a syntax error AND for a module whose `amends` package cannot be
+# fetched — measured on pkl 0.32.1 — so no predicate over the exit code can tell
+# a verdict about the bytes from a verdict about the machine. `record validate
+# config-validator` stores that 1 under a key naming `hk.pkl`'s digest, and
+# `policy/validator-verdict-clean.rego` then reads it as a finding about the
+# file: an unchanged `main` refused at `batten-check` because a fetch did not
+# finish. The record cannot be repaired after the fact, so the network comes out
+# of the run instead.
+#
+# IT IS A NO-OP WHEN WARM, which is what makes it free to put in front of every
+# caller: `pkl download-package` over a warm cache exits 0 with the proxy pointed
+# at a dead port. On a cold machine this is where the network failure surfaces,
+# under its own name, before anything is recorded.
+#
+# ONE ARGV, NO SHELL LOGIC. The URL is a third spelling of the hk pin, and
+# `policy/hk-pin-agreement.rego`'s arm D holds it equal to `[tools] hk` — so
+# bumping one without the others is refused as `tool pin other` rather than
+# silently fetching a package the binary did not ship against.
+[tasks.pkl-package]
+description = "Effect: fetch the hk config package `hk.pkl` amends, so the validator's own run reaches no network (CLOUD-2311)"
+run = "pkl download-package package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1"
+
 [tasks.record-verdicts]
 description = "Effect: run each declared validator and record its exit code, then record the forge's answered verdicts for HEAD (CLOUD-1265)"
+# THE FETCH COMES FIRST (CLOUD-2311). A failed `pkl-package` fails this task
+# before any arm runs, so no record is written and the operator sees the cause
+# named. It also puts the renovate and forge arms behind the fetch, which costs
+# nothing: a cold, offline machine cannot answer `record forge --fetch` either.
+depends = ["pkl-package"]
 # THE THREE ARMS ARE VERBS NOW (CLOUD-843). Each validator is a `[[rule.tools]]`
 # row whose `run` argv `batten record validate` runs, recording the exit code
 # under the row's key; `policy/validator-verdict-clean.rego` decides what a code
@@ -4124,6 +4155,11 @@ run = "cargo run --quiet -p batten -- check --rule 'path ship refused'"
 
 [tasks.hooks]
 description = "Run the git-hook gate (fmt, lint, test) through hk — the same hk.pkl the pre-commit hook uses, in check-only mode"
+# THE FETCH IS A TASK `depends`, NOT AN hk STEP (CLOUD-2311). hk loads `hk.pkl`
+# before any step runs, so a step-level `depends` would order nothing against
+# hk's own load — and it is hk's `pkl` step, running `record validate
+# config-validator`, that this has to precede.
+depends = ["pkl-package"]
 run = "hk check --all"
 
 # The green verdict and the poll around it, both decided by the engine now

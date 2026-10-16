@@ -8611,7 +8611,17 @@ input = "hk.pkl"
 # `batten record validate config-validator` runs this and records its exit code
 # (CLOUD-843). The retired body also chose a `--ca-certificates` bundle for a
 # TLS-intercepting sandbox; pkl reads `~/.pkl/cacerts` itself, and a warm package
-# cache needs no fetch at all (CLOUD-406 owns the cache).
+# cache needs no fetch at all.
+#
+# WHO WARMS IT IS SPLIT, AND THE OLD POINTER HERE NAMED ONLY HALF (CLOUD-2311).
+# It read "CLOUD-406 owns the cache", which is true of CI alone: that mechanism
+# is an `actions/cache` of `~/.pkl/cache` in `.github/workflows/ci.yml` and warms
+# nothing for a local `verify`. The local half is `mise.toml`'s
+# `[tasks.pkl-package]`, which both callers of this row — `hooks` and
+# `record-verdicts` — declare in `depends`. That ordering is what keeps a
+# cold-cache fetch failure from being recorded here as a verdict on `hk.pkl`:
+# `pkl eval` exits 1 for a syntax error and for an unfetchable `amends` alike, so
+# no predicate over the exit code can tell the two apart after the fact.
 run = ["pkl", "eval", "hk.pkl"]
 
 # The second validator on this row, and the reason it is a SIBLING rather than a
@@ -10043,7 +10053,7 @@ documents = ["mise.toml"]
 line_sources = ["hk.pkl"]
 module = "policy/hk-pin-agreement.rego"
 severity = "deny"
-reason = "mise.toml pins the hk binary and hk.pkl's `amends` URL names the hk config package; bump both to one version together, then revisit hk.pkl for what the new version offers."
+reason = "mise.toml's [tools] pins the hk binary, hk.pkl's `amends` URL names the hk config package, and [tasks.pkl-package] downloads that same package; bump all three to one version together, then revisit hk.pkl for what the new version offers."
 [[rule]]
 id = "prose place refused"
 no_fix_reason = "class 3 (a tracker attachment): a tracked docs/ path moves to the tracker row it backs, and which row is the judgement no command makes"
@@ -10067,12 +10077,14 @@ id = "hk-amends-version"
 regex = 'hk@([0-9]+\.[0-9]+\.[0-9]+)'
 [[verdict]]
 id = "tool pin other"
-gloss = "hk.pkl's `amends` URL names a different hk than mise.toml pins, or one of them names none"
+gloss = "mise.toml's hk pin, hk.pkl's `amends` URL and the pkl-package fetch do not all name one hk, or one of them names none"
 class = """
-mise.toml pins the hk binary and hk.pkl amends the hk config package by URL, and \
-the two move independently: a bump to one without the other runs the hook config \
-against a schema its binary did not ship. Set both to one version, then revisit \
-hk.pkl for what that version offers (CLOUD-1991).
+mise.toml pins the hk binary, hk.pkl amends the hk config package by URL, and \
+[tasks.pkl-package] downloads that package so the validator's own run reaches no \
+network (CLOUD-2311). The three move independently: a bump to one without the \
+others runs the hook config against a schema its binary did not ship, and the \
+fetch of a mismatched package SUCCEEDS, so nothing downstream reports it. Set all \
+three to one version, then revisit hk.pkl for what that version offers (CLOUD-1991).
 """
 [[verdict.route]]
 id = "module read first"
