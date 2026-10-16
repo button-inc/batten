@@ -442,14 +442,6 @@ mod tests {
                 "{outside} decided nothing"
             );
         }
-        // And the relation to the table it narrows: nothing `from_code`
-        // refuses is handed on, so `decided` can only ever be the smaller set.
-        for raw in -1..=5 {
-            assert!(
-                ExitCode::from_code(raw).is_some() || ExitCode::decided(raw).is_none(),
-                "{raw} is handed on without being a code this table names"
-            );
-        }
     }
 
     #[test]

@@ -1902,30 +1902,25 @@ pub(crate) fn captured_in_env(
     command: &[String],
     published: &[(String, String)],
 ) -> Result<(i32, Vec<u8>, Vec<u8>)> {
-    let bundle = split_bundle(command)?;
+    // ONE COMMAND, NEVER A BUNDLE, and that is a property rather than an
+    // assumption: `command` is the followed engine's own argv, built from this
+    // process's `args()`. Running it through [`split_bundle`] would make a
+    // `:::` a caller typed into a hook argument split the engine's invocation
+    // in two, which is not a bundle, it is a mis-read — so the one command
+    // reaches [`dispatch`] whole and its one outcome comes back by move.
     let outcomes = dispatch(
         repo_root,
-        &bundle,
+        &[command],
         &ExecConfig::DEFAULT,
         published,
         next_run(),
     )?;
     let code = bundle_code(&outcomes);
     reraise(&outcomes)?;
-    // THE FIRST OUTCOME'S BUFFERS ARE MOVED, NEVER COPIED. `Vec::extend` over an
-    // owned `Vec<u8>` is a byte-wise copy into a fresh allocation, and this
-    // caller's bundle is always one command — `ExecConfig::DEFAULT` runs one job
-    // and a followed argv carries no `:::` — so copying would be the whole cost
-    // of the call, paid again for stderr, and thrown away unread whenever the
-    // child crashed. A surplus command's bytes append by `memcpy`.
-    let mut outcomes = outcomes.into_iter();
-    let (mut out_bytes, mut err_bytes) = outcomes
+    let (out_bytes, err_bytes) = outcomes
+        .into_iter()
         .next()
         .map_or_else(Default::default, |first| (first.out_bytes, first.err_bytes));
-    for outcome in outcomes {
-        out_bytes.extend_from_slice(&outcome.out_bytes);
-        err_bytes.extend_from_slice(&outcome.err_bytes);
-    }
     Ok((code, out_bytes, err_bytes))
 }
 
