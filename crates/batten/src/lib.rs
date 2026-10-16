@@ -11442,6 +11442,59 @@ fn reapable(entry: &task::Entry, own_group: &str) -> bool {
             .is_some_and(|alive_at| collect::group_orphaned(&entry.pgid, &entry.pid, alive_at))
 }
 
+/// What [`reap_abandoned`] did, in counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Reaped {
+    /// Groups a TERM was delivered to.
+    terminated: usize,
+    /// Groups that ignored it and took the KILL.
+    escalated: usize,
+    /// Records forgotten.
+    unregistered: usize,
+}
+
+/// Reap every abandoned registry entry: signal the groups `reapable` proves the
+/// orphan's, then forget every record (CLOUD-2366, CLOUD-2372).
+///
+/// The registry's ONE tidy-up, at the next run's entry where crash-only puts it:
+/// `task::alive` reads and deletes nothing, so a crash stays visible until a
+/// landing starts and does this.
+///
+/// ONLY A GROUP `reapable` PROVES THE ORPHAN IS SIGNALLED, and it is ASKED AGAIN
+/// BEFORE EACH PASS: a group the TERM emptied may be reused before the KILL. A
+/// record that fails it is still forgotten; it is only not signalled.
+///
+/// TWO PASSES OVER THE WHOLE SET, NEVER A GRACE PERIOD PER GROUP. Signalling
+/// every group before re-observing any of it is what gives each one its chance
+/// to act on the TERM — the walk itself, rather than a delay standing in for an
+/// exit condition (CLOUD-1177). `exec::terminate_group`'s header carries why a
+/// group here gets no grace at all: its leader is already dead, so a survivor is
+/// not a leaf mid-exit. A GROUP TERM IS A REQUEST, NOT A FACT (CLOUD-434): the
+/// second pass is the observation that tells the two apart.
+//MUTANT-SUITE crates/batten/src/lib.rs
+//MUTANT reap-leaves-the-headstone|s@^        task::unregister(git_dir, &entry.pid);$@@|reap_abandoned_unregisters_a_dead_registrant
+fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
+    let abandoned = task::abandoned(git_dir, program_root);
+    let own_group = task::process_group(&std::process::id().to_string());
+    let mut reaped = Reaped::default();
+    for entry in &abandoned {
+        if reapable(entry, &own_group) && exec::terminate_group(&entry.pgid) {
+            reaped.terminated += 1;
+        }
+    }
+    for entry in &abandoned {
+        if reapable(entry, &own_group) && exec::escalate_group(&entry.pgid) {
+            reaped.escalated += 1;
+        }
+        // Forgotten only now, so both passes read its group. ONE LOOK: waiting
+        // for the group to empty never ends for a group just KILLed (zombies
+        // count) or a reused pgid.
+        task::unregister(git_dir, &entry.pid);
+        reaped.unregistered += 1;
+    }
+    reaped
+}
+
 /// Reap what a dead lap left running, then take the lock, then register.
 ///
 /// **In that order, and the order is the design.** Reaping first is what makes
@@ -11494,46 +11547,17 @@ fn run_land_singleton(
     // root at all, and skipping them here would trade a reaper for the
     // concurrent-lands defect the lock exists to stop — a strictly worse bargain
     // than reaping nothing.
-    let abandoned = std::env::var("BATTEN_TASK_PROGRAM_ROOT")
-        .map(|root| task::abandoned(&git_dir, &root))
+    let reaped = std::env::var("BATTEN_TASK_PROGRAM_ROOT")
+        .map(|root| reap_abandoned(&git_dir, &root))
         .unwrap_or_default();
-    // ONLY A GROUP `reapable` PROVES THE ORPHAN IS SIGNALLED (CLOUD-2366), and
-    // it is ASKED AGAIN BEFORE EACH PASS: a group the TERM emptied may be reused
-    // before the KILL. A record that fails it is still unregistered below; it is
-    // only not signalled.
-    let own_group = task::process_group(&pid);
-    // TWO PASSES OVER THE WHOLE SET, NEVER A GRACE PERIOD PER GROUP. Signalling
-    // every group before re-observing any of it is what gives each one its
-    // chance to act on the TERM — the walk itself, rather than a delay standing
-    // in for an exit condition (CLOUD-1177). `exec::terminate_group`'s header
-    // carries why a group here gets no grace at all: its leader is already dead,
-    // so a survivor is not a leaf mid-exit.
-    let mut reaped = 0_usize;
-    for entry in &abandoned {
-        if reapable(entry, &own_group) && exec::terminate_group(&entry.pgid) {
-            reaped += 1;
-        }
-    }
-    // A GROUP TERM IS A REQUEST, NOT A FACT (CLOUD-434). This is the observation
-    // that tells the two apart, and it is the half `land.sh` had that the port
-    // dropped.
-    let mut escalated = 0_usize;
-    for entry in &abandoned {
-        if reapable(entry, &own_group) && exec::escalate_group(&entry.pgid) {
-            escalated += 1;
-        }
-        // Unregistered only now, so both passes read its group. ONE LOOK: waiting
-        // for the group to empty never ends for a group just KILLed (zombies
-        // count) or a reused pgid. A record outliving that look is CLOUD-2372's.
-        task::unregister(&git_dir, &entry.pid);
-    }
-    if reaped > 0 {
+    if reaped.terminated > 0 {
         // COUNTS AND NOTHING ELSE (rule 4). What was reaped is somebody's command
         // line; this reports how many groups went and how many had to be forced,
         // never what they were running.
         writeln!(
             out,
-            "land: reaped {reaped} abandoned task group(s) left by a lap that did not exit; {escalated} ignored the term"
+            "land: reaped {} abandoned task group(s) left by a lap that did not exit; {} ignored the term",
+            reaped.terminated, reaped.escalated
         )?;
     }
 
@@ -28723,6 +28747,32 @@ pub fn land_ready_owes(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// CLOUD-2372: the next landing's reap, not a reader, forgets a dead
+    /// registrant. A pid past every platform's `pid_max` is dead wherever a
+    /// corpse can be found; off unix nothing is found dead and nothing is reaped.
+    #[test]
+    fn reap_abandoned_unregisters_a_dead_registrant() {
+        let git_dir =
+            std::env::temp_dir().join(format!("batten-reap-abandoned-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&git_dir);
+        std::fs::create_dir_all(&git_dir).unwrap();
+        task::register(&git_dir, "land", "4194305", "verify", 100);
+        let reaped = reap_abandoned(&git_dir, "programs");
+        let left = task::abandoned(&git_dir, "programs").len();
+        let _ = std::fs::remove_dir_all(&git_dir);
+        let found_dead = usize::from(cfg!(unix));
+        assert_eq!(
+            reaped,
+            Reaped {
+                terminated: 0,
+                escalated: 0,
+                unregistered: found_dead,
+            },
+            "a dead, empty group is forgotten and never signalled"
+        );
+        assert_eq!(left, 0, "nothing abandoned is left behind");
+    }
 
     /// CLOUD-2366: the caller's own group is never reapable however its record
     /// spells the number, a group its registrant still runs in is not either,

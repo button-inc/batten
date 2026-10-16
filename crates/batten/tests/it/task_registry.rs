@@ -244,44 +244,41 @@ fn the_same_instant_over_one_registry_state_yields_byte_identical_output() {
 }
 
 #[test]
-fn a_record_whose_process_is_gone_reports_crashed_and_is_reaped() {
+fn a_record_whose_process_is_gone_reports_crashed_on_every_read() {
     // THE ACCEPTANCE CASE. `crashed` is a STATE, not an absence: an absent entry
     // means "never registered", and a registered entry whose process is gone
     // means "started and died" — which is the state a human actually needs, and
     // the one that cost seventeen minutes of guessing on 2026-08-12.
     //
-    // Reporting it also reaps it, so the registry is self-healing rather than an
-    // ever-growing pile of headstones.
+    // And it STAYS that state for every reader (CLOUD-2372). The reader used to
+    // reap the entry as it reported it, so the first read consumed the evidence
+    // every later one needed; the tidy-up is now the next `land`'s reap.
     let repo = registry_repo("task-alive-crashed");
     let (root, _) = this_process();
     let pid = unassignable_pid();
     seed(&repo, "land", &pid, "verify", 1000);
 
-    let output = alive(&repo, &["--program-root", &root, "--instant", "1060"]);
-    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
-    if CORPSE_IS_DETECTABLE {
-        assert_eq!(
-            stdout(&output),
-            format!("land crashed(verify) {pid} 60s in-phase 60s\n")
-        );
-        assert!(
-            !entries(&repo).join(&pid).exists(),
-            "a genuine corpse is reaped"
-        );
+    let args = ["--program-root", root.as_str(), "--instant", "1060"];
+    let first = alive(&repo, &args);
+    let second = alive(&repo, &args);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let line = if CORPSE_IS_DETECTABLE {
+        format!("land crashed(verify) {pid} 60s in-phase 60s\n")
     } else {
-        // The same registry state, read where nothing can be reported dead: the
-        // record renders as the running task it claims to be, and — the half that
-        // still matters — it is NOT reaped. A reap off unix would be the read verb
-        // destroying evidence on a verdict it could not reach.
-        assert_eq!(
-            stdout(&output),
-            format!("land verify {pid} 60s in-phase 60s\n")
-        );
-        assert!(
-            entries(&repo).join(&pid).exists(),
-            "nothing is reaped where nothing can be found dead"
-        );
-    }
+        // Read where nothing can be reported dead, the record renders as the
+        // running task it claims to be.
+        format!("land verify {pid} 60s in-phase 60s\n")
+    };
+    assert_eq!(stdout(&first), line);
+    assert_eq!(
+        stdout(&second),
+        line,
+        "the second reader sees the same crash"
+    );
+    assert!(
+        entries(&repo).join(&pid).exists(),
+        "no read deletes the record"
+    );
 }
 
 #[test]
@@ -879,7 +876,7 @@ fn outside_a_repository_a_write_is_could_not_look_rather_than_a_silent_success()
 // carried: "a line says how long the task has been in its phase, not only how long it has run" crates/batten/tests/it/task_registry.rs
 // carried: "an entry written before the phase stamp existed still renders" crates/batten/src/task.rs kind:mechanism
 // carried: "N running tasks report one line each" crates/batten/tests/it/task_registry.rs
-// carried: "THE ACCEPTANCE CASE: an entry whose pid is gone reports crashed, and is reaped" crates/batten/tests/it/task_registry.rs
+// changed: "THE ACCEPTANCE CASE: an entry whose pid is gone reports crashed, and is reaped" crates/batten/tests/it/task_registry.rs the reader no longer reaps; the next land's reap_abandoned does (CLOUD-2372)
 // carried: "a live pid that is no longer the task that registered it reports crashed" crates/batten/tests/it/task_registry.rs
 // carried: "a task that never registered is invisible, never assumed dead" crates/batten/tests/it/task_registry.rs
 // carried: "a registry that is not a directory is exit 2 — could not look is not 'nothing runs'" crates/batten/tests/it/task_registry.rs

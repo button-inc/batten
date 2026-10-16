@@ -521,17 +521,23 @@ fn second(stamp: &str) -> Option<u64> {
     stamp.parse().ok()
 }
 
-/// Read the registry, reaping the entries whose process is genuinely gone.
+/// Read the registry, and delete nothing.
 ///
-/// **Reaping is licensed by `kill -0` alone, never by a failed corroboration**
-/// (CLOUD-901). Reaping a corpse is right — a headstone read once is a
-/// diagnosis, read forever it is a registry that fills up and stops being read.
-/// Reaping on an unmatched corroboration is not, because [`task_alive`]
-/// collapses "the process is gone" and "the process is not this task" into one
-/// `false`: measured, one call reported a live `land` as crashed AND erased its
-/// entry, so the follow-up call reported nothing registered — a different lie,
-/// caused by the first. A future corroboration bug then costs a wrong word,
-/// never the evidence.
+/// **A READER THAT DELETES CONSUMES THE EVIDENCE** (CLOUD-2372). This used to
+/// remove a corpse's file as it rendered `crashed(...)`, on CLOUD-901's reasoning
+/// that a headstone read once is a diagnosis and one read forever is a registry
+/// that fills up. The first reader then took the crash with it: the next `alive`
+/// answered "nothing registered", and every later reader that needed it — the
+/// Stop watchdog (CLOUD-2370), the session-start notice, a human — saw nothing.
+/// Crash-only puts the tidy-up at the NEXT RUN'S ENTRY instead: `land` reaps
+/// every [`abandoned`] entry, then forgets it. Growth is bounded by distinct
+/// tasks that crashed and were never re-run, which is exactly the set worth
+/// showing; `batten task unregister --pid` stays the explicit escape.
+///
+/// CLOUD-901's other half still holds, and now for every entry: a corroboration
+/// miss costs a wrong word here, never the evidence.
+//MUTANT-SUITE crates/batten/tests/it/task_registry.rs
+//MUTANT alive-deletes-a-corpse|s@^        lines.push(render_line(&entry, running, options.now));$@        lines.push(render_line(\&entry, running, options.now)); if !running { let _ = std::fs::remove_file(\&file); }@|a_record_whose_process_is_gone_reports_crashed_on_every_read
 #[must_use]
 pub fn alive(git_dir: &Path, options: Alive<'_>) -> Reading {
     let dir = state_dir(git_dir);
@@ -562,9 +568,9 @@ pub fn alive(git_dir: &Path, options: Alive<'_>) -> Reading {
         // direction: a successor reads it as a clear field and starts a second
         // landing.
         //
-        // **AND `NotFound` IS NOT ONE OF THOSE CAUSES** (review of #848). This
-        // module deregisters an entry by DELETING it — three lines down, and from
-        // every exiting task — so a file listed by `read_dir` and gone by the time
+        // **AND `NotFound` IS NOT ONE OF THOSE CAUSES** (review of #848). An entry
+        // is deregistered by DELETING it — by every exiting task, and by the next
+        // `land`'s reap — so a file listed by `read_dir` and gone by the time
         // it is read is the ordinary race, not a registry nobody can see. Reading
         // it as could-not-look turned a healthy answer into `Unreadable` and hid
         // every entry later in sort order, which is the same conflation running
@@ -581,9 +587,6 @@ pub fn alive(git_dir: &Path, options: Alive<'_>) -> Reading {
         }
         let running = task_alive(options.program_root, &entry.pid, &entry.task);
         lines.push(render_line(&entry, running, options.now));
-        if !running && !pid_exists(&entry.pid) {
-            let _ = std::fs::remove_file(&file);
-        }
     }
     if lines.is_empty() {
         Reading::Nothing
@@ -595,8 +598,8 @@ pub fn alive(git_dir: &Path, options: Alive<'_>) -> Reading {
 /// Every registered task whose registrant is GONE, with the group it led.
 ///
 /// **The crash-only half of the registry, and the half that was missing**
-/// (CLOUD-1148). [`alive`] already deletes a dead entry's file, which tidies the
-/// STORE — and the store was never the thing that outlived the crash. A task is
+/// (CLOUD-1148). Forgetting a dead entry tidies the STORE — and the store was
+/// never the thing that outlived the crash. A task is
 /// registered by the process that leads a group; when the container reaps that
 /// process, or a supervisor TERMs it, the group's other members are reparented
 /// to init and keep running. Deleting the record makes them invisible instead of
