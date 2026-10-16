@@ -133,13 +133,18 @@ fn amends(version: &str) -> String {
     amends_halves(version, version)
 }
 
-/// The `pkl-package` task as `mise.toml` really spells it, version substituted
-/// into BOTH halves of the URL — the release tag and the `hk@` fragment. A
-/// builder rather than a literal for `amends`'s reason one function up: the
-/// version under test is then the only thing a case states.
+/// A fetch URL with each half named separately — the release tag and the `hk@`
+/// fragment — `amends_halves`'s twin for the other surface.
+fn package_halves(tag: &str, fragment: &str) -> String {
+    format!("package://github.com/jdx/hk/releases/download/v{tag}/hk@{fragment}")
+}
+
+/// The `pkl-package` task as `mise.toml` really spells it, with both halves of
+/// the URL naming one version.
 fn package_task(version: &str) -> String {
     format!(
-        "[tasks.pkl-package]\nrun = \"pkl download-package package://github.com/jdx/hk/releases/download/v{version}/hk@{version}\"\n"
+        "[tasks.pkl-package]\nrun = \"pkl download-package {}\"\n",
+        package_halves(version, version)
     )
 }
 
@@ -274,6 +279,36 @@ fn an_amends_fragment_naming_another_version_is_refused() {
         &[],
     );
     denied(&root, "tool pin other", "hk.pkl");
+}
+
+/// `#MUTANT hk-amends-merge-narrows-arm-b` reddens here.
+///
+/// A floating FRAGMENT over an agreeing tag. Arm A is silent (nothing to bind),
+/// arm A2 is silent (the tag equals the pin), and only arm B's
+/// `count(amends) == 0` can refuse it — which is true only while `amends` holds
+/// fragment matches alone. Merge the two sets and this goes clean, which is the
+/// defect this branch made on both surfaces before the mutation was declared.
+#[test]
+fn an_amends_fragment_floating_over_an_agreeing_tag_is_refused() {
+    let root = fixture(
+        "hk-fragment-floats",
+        &[("hk.pkl", &amends_halves("1.56.1", "latest"))],
+        &[],
+    );
+    denied(&root, "tool pin other", "hk.pkl");
+}
+
+/// `#MUTANT hk-package-merge-narrows-arm-e` reddens here — the same defect on
+/// the fetch URL, where it would let the fetch float to `latest` while `hk.pkl`
+/// amends a fixed version.
+#[test]
+fn a_package_fragment_floating_over_an_agreeing_tag_is_refused() {
+    let manifest = format!(
+        "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = \"pkl download-package {}\"\n",
+        package_halves("1.56.1", "latest")
+    );
+    let root = fixture("hk-package-floats", &[("mise.toml", &manifest)], &[]);
+    denied(&root, "tool pin other", "mise.toml");
 }
 
 /// `#MUTANT hk-package-unnamed-passes` reddens here: arm E, which is arm B's

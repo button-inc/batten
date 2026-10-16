@@ -28,13 +28,30 @@
 # ARM A'S MUTANT NAMES THE FRAGMENT-ONLY CASE, and must. Every case built with
 # `amends_line`/`amends()` writes one version into BOTH halves of the URL, so
 # arm A2 emits a byte-identical finding and neutering arm A changes no count —
-# measured, by applying this mutant: before the case below existed, `opa test`
-# passed every case with the arm `false`. A2 masks A on every such input. Only a
+# measured, by applying this mutant: before the case below existed, `policy
+# test` passed every case with the arm `false`. A2 masks A on every such input.
+# (`policy test`, not `opa test` — regorus is the shipped evaluator and opa only
+# type-checks here, which `opa-tracks-regorus-compliance` exists to keep apart.)
+# Only a
 # URL whose FRAGMENT alone drifts leaves A the one arm that can fire.
 #MUTANT hk-pin-disagreement-passes|s@^\tamended.version != pin$@\tfalse@|an_amends_fragment_naming_another_version_is_refused
 #MUTANT hk-amends-unnamed-passes|s@^\tcount(amends) == 0$@\tfalse@|an_hk_pkl_naming_no_version_is_refused
 #MUTANT hk-package-disagreement-passes|s@^\tpackaged.version != pin$@\tfalse@|a_package_task_naming_another_version_is_refused
 #MUTANT hk-package-unnamed-passes|s@^\tcount(packages) == 0$@\tfalse@|a_package_task_naming_no_version_is_refused
+#
+# THE DEFECT THIS BRANCH MADE TWICE, DECLARED SO A MACHINE CATCHES THE THIRD.
+# Folding a half-reading set into its sibling narrows the count arm above it:
+# the count stops meaning "the fragment names nothing" and starts meaning
+# "neither spelling does", and a URL whose fragment floats over an agreeing tag
+# goes clean. It happened on the amends surface, was fixed, then happened
+# identically on the packages surface. Both were caught by reading, not by the
+# suite. These two mutate each count to the merged form; their cases are the
+# floating-fragment pair, which is exactly what the merge lets through.
+# The merged form is spelled `union({a, b})` and NOT `a | b`, because a `|` in a
+# replacement is this directive's own field separator — the pipe spelling parsed
+# as a fourth field and the row was reported `malformed-row (4 fields, want 3)`.
+#MUTANT hk-amends-merge-narrows-arm-b|s@^\tcount(amends) == 0$@\tcount(union({amends, amend_tags})) == 0@|an_amends_fragment_floating_over_an_agreeing_tag_is_refused
+#MUTANT hk-package-merge-narrows-arm-e|s@^\tcount(packages) == 0$@\tcount(union({packages, package_tags})) == 0@|a_package_fragment_floating_over_an_agreeing_tag_is_refused
 #MUTANT hk-amends-tag-disagreement-passes|s@^\ttagged.version != pin$@\tfalse@|an_amends_tag_segment_naming_another_version_is_refused
 #
 #MUTANT-SUITE crates/batten/tests/it/tracked_absent.rs
@@ -99,13 +116,15 @@ amends contains {"line": i + 1, "version": match[1]} if {
 #
 # The fetch URL below is read the same way and for the same reason: `packages`
 # and `package_tags` are separate because arm E counts the fragment one, exactly
-# as arm B counts `amends`. Both surfaces take the union at the ARM that
-# compares, never in a set, so neither count is widened.
+# as arm B counts `amends`. What is shared is the NEGATIVE: neither surface
+# merges the halves into a counted set, so neither count is widened.
 #
-# Reading both halves through one arm over a union variable was weighed and
-# declined here: the tag reading's mutant would then have to anchor on a
-# ~97-character `regex.find_all_string_submatch_n` line rather than on a short
-# comparison. Both forms are correct; this one is cheaper to keep honest.
+# HOW THEY COMPARE DIFFERS, and the asymmetry is deliberate. `hk.pkl`'s two
+# halves are read by two arms (A and A2); the fetch URL's by one arm over their
+# union. Two arms here because the tag reading's mutant can then anchor on a
+# short comparison rather than on a ~97-character
+# `regex.find_all_string_submatch_n` line; one arm there because arm D's
+# subjects carry no line, so two arms would emit the same object anyway.
 amend_tags contains {"line": i + 1, "version": match[1]} if {
 	some i, line in lines
 	some match in regex.find_all_string_submatch_n(data.batten.patterns["hk-download-tag"], line, -1)
@@ -137,6 +156,18 @@ violation contains {
 
 # B: the binary is pinned and `hk.pkl`'s `amends` FRAGMENT names no version — so
 # a floating `hk@latest` is refused here even when its tag segment agrees.
+#
+# THE MIRROR IS NOT GOVERNED, and that is a decision rather than an oversight.
+# Nothing counts `amend_tags`, so a floating or templated TAG over an agreeing
+# fragment (`…/download/latest/hk@1.56.1`) is refused by no arm, here or on the
+# fetch URL. A `count(amend_tags) == 0` arm would close it and would also refuse
+# every URL that has no `/v<semver>/` segment at all — a package on a non-GitHub
+# mirror, say — because this module cannot tell a missing tag from a floating
+# one. The fragment is the spelling every `package://` URI must carry; the tag
+# is a property of one host's release layout. So the mandatory half is required
+# to name a version and the optional half is only required to agree when it
+# names one. A consumer that wants the GitHub shape itself required owns that
+# separately.
 violation contains {
 	"rule": "tool pin other",
 	"verdict": "tool pin other",
@@ -183,9 +214,13 @@ violation contains {
 # this module's: the question here is agreement, never presence, and a module
 # refusing on absence would refuse every consumer that declares no such task.
 # TYPE-GUARDED like `tools`, `pin` and `lines`, and for their reason: a bare
-# binding makes arm E vacuously clean over a `run` that is neither spelling
-# (`run = false` binds, then fails the truthiness check arm E does on it). mise
-# accepts a string or an array, so those are the two shapes read.
+# binding let a `run` of any shape reach arm E, where the result depended on
+# truthiness rather than on anything this module decides — `false` fell through
+# silently while a number or a table fired the arm. Neither is this module's
+# question; a `run` mise cannot execute fails the manifest parse long before a
+# gate sees it. mise accepts a string or an array of them, so those are the two
+# shapes read, and every other leaves D and E undefined together, exactly as an
+# absent task does.
 package_run := r if {
 	r := input.tree.documents["mise.toml"].tasks["pkl-package"].run
 	is_string(r)
@@ -293,7 +328,9 @@ tree(pinned, pkl) := {"tree": {
 	"lines": {"hk.pkl": pkl},
 }}
 
-package_line(version) := sprintf("pkl download-package package://github.com/jdx/hk/releases/download/v%s/hk@%s", [version, version])
+package_halves(tag, fragment) := sprintf("pkl download-package package://github.com/jdx/hk/releases/download/v%s/hk@%s", [tag, fragment])
+
+package_line(version) := package_halves(version, version)
 
 # A manifest that also carries tasks. A SECOND constructor rather than a third
 # parameter on `tree`: six cases call `tree` and none of them is about tasks, so
@@ -455,7 +492,7 @@ test_an_amends_fragment_naming_no_version_is_still_refused if {
 test_a_package_task_whose_tag_segment_drifts_is_refused if {
 	found := violation with input as tree_with_tasks(
 		{"hk": "1.56.1"},
-		{"pkl-package": {"run": "pkl download-package package://github.com/jdx/hk/releases/download/v1.57.0/hk@1.56.1"}},
+		{"pkl-package": {"run": package_halves("1.57.0", "1.56.1")}},
 		[amends_line("1.56.1")],
 	)
 		with data.batten.patterns as pattern
@@ -479,11 +516,12 @@ test_a_package_task_naming_no_version_is_refused if {
 # fragment. Arm D is silent (the tag equals the pin) and arm E fires only
 # because it counts the fragment set alone — merge the two and `packages` is
 # non-zero, both arms go quiet, and the fetch floats to `latest` while `hk.pkl`
-# amends a fixed version. This is the case that reddens if they are ever merged.
+# amends a fixed version. `#MUTANT hk-package-merge-narrows-arm-e` is this
+# defect declared, and its Rust twin is what reddens.
 test_a_package_task_whose_fragment_floats_is_refused if {
 	found := violation with input as tree_with_tasks(
 		{"hk": "1.56.1"},
-		{"pkl-package": {"run": "pkl download-package package://github.com/jdx/hk/releases/download/v1.56.1/hk@latest"}},
+		{"pkl-package": {"run": package_halves("1.56.1", "latest")}},
 		[amends_line("1.56.1")],
 	)
 		with data.batten.patterns as pattern
