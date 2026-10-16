@@ -2778,7 +2778,7 @@ fn read_target(operation: &Operation, input: &Value) -> Option<String> {
 }
 
 /// `path` as `root` would name it, or `None` where that is not a question this
-/// can answer: a relative path, a root that will not canonicalize, a target
+/// can answer: an unrooted path, a root that will not canonicalize, a target
 /// outside the tree.
 ///
 /// **Canonicalized on both sides**, because the two strings are produced by
@@ -2802,12 +2802,19 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
     // on Windows `\repo\src\a.rs` has a root but no drive, so `is_relative` is
     // true, and returning here left an in-tree write rooted, which a `tree_only`
     // handler reads as outside. Such a path names the current drive, so it is
-    // resolved there; on unix a rooted path is already absolute.
-    if !Path::new(path).has_root() {
+    // resolved there; an absolute path, every rooted one on unix, is used as
+    // sent.
+    let sent = Path::new(path);
+    if !sent.has_root() {
         return None;
     }
-    let candidate = std::path::absolute(path).ok()?;
-    let candidate = candidate.as_path();
+    let drived;
+    let candidate = if sent.is_absolute() {
+        sent
+    } else {
+        drived = std::path::absolute(sent).ok()?;
+        drived.as_path()
+    };
     let root = root.canonicalize().ok()?;
     // The DEEPEST ancestor that canonicalizes, the path itself first, resolves
     // the most symlinks, which is the reading the prefix test below needs; the
@@ -9312,7 +9319,7 @@ fn normalise(path: &str) -> &str {
 ///
 /// # What it must not do, and does not by construction
 ///
-/// [`relative_to`] answers `None` for a path that is already relative and for one
+/// [`relative_to`] answers `None` for a path with no root and for one
 /// that resolves outside `root` — so a relative operand is judged exactly as it
 /// was, and a path outside the repository is neither relativized into an
 /// accidental match nor turned into a refusal. Those are CLOUD-1133's own two

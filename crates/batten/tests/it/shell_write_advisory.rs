@@ -173,15 +173,12 @@ fn the_absolute_spelling_the_host_sends_signals_too() {
 #[test]
 fn a_rooted_spelling_without_a_drive_signals_too() {
     let dir = bench("swa-a_rooted_spelling_without_a_drive_");
-    let plain = batten::git::canonical(&dir)
-        .join("mise-tasks/ready-lint.sh")
-        .display()
-        .to_string();
-    let rooted = plain
-        .split_once(':')
-        .map_or(plain.as_str(), |(_, rest)| rest)
-        .to_owned();
-    let payload = write_payload("Write", &rooted);
+    let plain = batten::git::canonical(&dir).join("mise-tasks/ready-lint.sh");
+    let rooted: PathBuf = plain
+        .components()
+        .filter(|part| !matches!(part, std::path::Component::Prefix(_)))
+        .collect();
+    let payload = write_payload("Write", &rooted.display().to_string());
     assert!(signals(&dir, &payload), "{}", reported(&dir, &payload));
 }
 
