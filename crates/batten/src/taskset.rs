@@ -97,6 +97,11 @@ struct Record {
     configs: Vec<PathBuf>,
     /// The answer.
     tasks: BTreeMap<String, Option<Vec<String>>>,
+    /// The keyed files' stat identity when `key` was derived
+    /// ([`crate::pinned::stamped`]); absent from a record written before
+    /// CLOUD-2440, which is then believed only by its key.
+    #[serde(default)]
+    stamps: crate::pinned::Stamps,
 }
 
 /// Where the record lives for `root`'s checkout.
@@ -143,8 +148,9 @@ pub fn cached(root: &Path) -> TaskFacts {
         return Look::CouldNotLook;
     }
     // Recomputed from the RECORDED configs, which is what keeps this function
-    // free of the parse its own doc says it may not make.
-    if crate::pinned::key(&record.configs).as_ref() != Some(&record.key) {
+    // free of the parse its own doc says it may not make — and believed by their
+    // stat identity where it is recorded and unchanged (CLOUD-2440).
+    if !crate::pinned::still_keyed(&record.configs, &record.key, &record.stamps) {
         return Look::CouldNotLook;
     }
     Look::Is(record.tasks)
@@ -210,6 +216,7 @@ pub fn record(
     configs: &[PathBuf],
     tasks: &BTreeMap<String, Option<Vec<String>>>,
 ) -> bool {
+    let stamps = crate::pinned::stamped(configs, crate::cache::now());
     let (Some(key), Some(path)) = (crate::pinned::key(configs), record_path(root)) else {
         return false;
     };
@@ -219,6 +226,7 @@ pub fn record(
         key,
         configs: configs.to_vec(),
         tasks: tasks.clone(),
+        stamps,
     };
     let Ok(body) = serde_json::to_string(&record) else {
         return false;
