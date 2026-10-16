@@ -320,9 +320,11 @@ impl Harness {
             // is not a Factory tool, which is why this host is not folded into
             // Claude's row despite sharing its wire shape.
             Harness::Factory => &["Create", "Edit", "ApplyPatch"],
-            // The plugin reference's own names: `write` (or `edit`) carry a
-            // `filePath`, which the envelope reader takes beside `file_path`.
-            Harness::OpenCode => &["write", "edit"],
+            // The tools reference's own names, the three its `edit` permission
+            // covers: `write` and `edit` carry a `filePath`, which the envelope
+            // reader takes beside `file_path`; `apply_patch` names its files
+            // inside `patchText`, which [`patch_targets`] reads.
+            Harness::OpenCode => &["write", "edit", "apply_patch"],
             // The neutral contract: a caller composing the envelope by hand is
             // stating the normalized shape, so it gets the normalized spellings.
             Harness::ExitCode => &["Write", "Edit", "MultiEdit", "NotebookEdit"],
@@ -9052,18 +9054,24 @@ fn redirected_read(policy: &Policy, envelope: &Envelope) -> Decision {
 /// fact the old `verbs::classify(raw_tool)` was failing to reconstruct from a
 /// consumer's config. The `[[verb]]` row is consulted only for its remedy text,
 /// and its absence costs a more specific sentence rather than the whole gate.
+//MUTANT patch-targets-unread|s@^        .chain(patch_targets(&envelope.input))$@        .chain(Vec::<String>::new())@|a_patch_naming_a_protected_file_is_refused_on_every_patch_tool
 fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
-    let Some(path) = envelope.writes.as_deref() else {
-        return Decision::Allow;
-    };
     // Through `protects` like every other reader (CLOUD-1236). The envelope's
     // target is already relativised upstream by `relativise_writes`, so this
     // changes no verdict here — which is the point: the two readers can no longer
     // drift apart, and a future call site that forgets the upstream step is
-    // covered rather than silently open.
-    if !protects(policy, path) {
+    // covered rather than silently open. A patch's targets take the same lookup,
+    // which is why they need no relativising of their own.
+    let Some(path) = envelope
+        .writes
+        .iter()
+        .cloned()
+        .chain(patch_targets(&envelope.input))
+        .find(|target| protects(policy, target))
+    else {
         return Decision::Allow;
-    }
+    };
+    let path = path.as_str();
     // Looked up by program alone, and since CLOUD-442 that is a decision rather
     // than an omission: `verbs::classify` is `qualify` over no arguments, so a row
     // whose mutation is qualified by a flag or a subcommand cannot match here. A
@@ -9081,6 +9089,40 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
             redirect,
         },
     ))
+}
+
+/// The files a patch-shaped tool input names, from its own file headers.
+///
+/// A patch tool — `OpenCode`'s `apply_patch`, Factory's `ApplyPatch`, Codex's
+/// `apply_patch` — carries no path key: its targets are lines inside the patch
+/// text, so [`target_path`] finds nothing and a protected-path write would pass
+/// unjudged under the one tool whose whole job is writing. Every top-level
+/// string that opens a patch is read, whatever the host keys it, because the
+/// key is per host and the format is not.
+fn patch_targets(input: &Value) -> Vec<String> {
+    const HEADERS: &[&str] = &[
+        "*** Add File: ",
+        "*** Update File: ",
+        "*** Delete File: ",
+        "*** Move to: ",
+    ];
+    let Some(fields) = input.as_object() else {
+        return Vec::new();
+    };
+    fields
+        .values()
+        .filter_map(Value::as_str)
+        .filter(|text| text.contains("*** Begin Patch"))
+        .flat_map(str::lines)
+        .filter_map(|line| {
+            HEADERS
+                .iter()
+                .find_map(|header| line.trim_start().strip_prefix(header))
+        })
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn protected_mutation(policy: &Policy, command: &str) -> Decision {
@@ -17679,6 +17721,75 @@ deny contains "refused by themodule" if {
                 harness.as_str()
             );
         }
+    }
+
+    /// A PATCH TOOL NAMES ITS FILES IN ITS BODY, AND THEY ARE JUDGED THERE.
+    ///
+    /// `OpenCode`'s `apply_patch`, Factory's `ApplyPatch` and Codex's
+    /// `apply_patch` carry no path key, so a protected file reached through one
+    /// passed unjudged while the same change through `write` was refused. Driven
+    /// through each host's own decoder, with the protected file second so the
+    /// gate must read past the first header.
+    #[test]
+    fn a_patch_naming_a_protected_file_is_refused_on_every_patch_tool() {
+        let policy = protected_policy(vec![verb(
+            "Write",
+            Some("use the surface that owns the file"),
+        )]);
+        let patch = |second: &str| {
+            format!(
+                "*** Begin Patch\n*** Update File: src/ok.rs\n@@\n-a\n+b\n\
+                 *** Update File: {second}\n@@\n-c\n+d\n*** End Patch"
+            )
+        };
+        let judge = |harness: Harness, tool: &str, key: &str, body: String| {
+            let envelope = decode_value(
+                harness,
+                &serde_json::json!({
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": tool,
+                    "tool_input": { key: body },
+                }),
+            )
+            .expect("a Claude-shaped pre-tool payload decodes");
+            adjudicate(
+                &policy,
+                &envelope,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
+                &crate::stop::StopFacts::default(),
+            )
+        };
+        for (harness, tool, key) in [
+            (Harness::OpenCode, "apply_patch", "patchText"),
+            (Harness::Factory, "ApplyPatch", "patch"),
+            (Harness::CodexCli, "apply_patch", "input"),
+        ] {
+            assert!(
+                matches!(
+                    judge(harness, tool, key, patch("batten.toml")),
+                    Decision::Deny(_)
+                ),
+                "{}: `{tool}` patched a protected file and was not refused",
+                harness.as_str()
+            );
+            assert_eq!(
+                judge(harness, tool, key, patch("src/also_ok.rs")),
+                Decision::Allow,
+                "{}: a patch of unprotected files is not refused",
+                harness.as_str()
+            );
+        }
+        // Header-shaped text that opens no patch is content, not a target.
+        assert_eq!(
+            judge(
+                Harness::OpenCode,
+                "write",
+                "content",
+                "*** Update File: batten.toml".to_owned()
+            ),
+            Decision::Allow,
+        );
     }
 
     #[test]
