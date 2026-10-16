@@ -967,20 +967,29 @@ fn notice_enabled(root: &Path, text: &str) -> bool {
         .unwrap_or(true)
 }
 
-/// Whether the stamp at `stamp` is due another lookup: absent, older than
-/// [`NOTICE_TTL`], or written for another pin than `tag`.
+/// Whether the stamp at `stamp` is due another lookup — the one predicate the
+/// notice's timing answers to.
 ///
-/// THE STAMP CARRIES THE PIN IT LOOKED UP (`<seconds>\t<tag>`), so a pin moved
-/// by any route — `engine update`, a hand edit, a checkout — is due at once,
-/// with no record read and no writer reaching into this file.
+/// THE STAMP SAYS WHAT IT LOOKED AT AND HOW IT WENT:
+/// `<seconds>\t<tag>\t<branch>\t<ok|failed>`. It is due when it is absent, when
+/// the pin or the branch has moved since (the record is the branch's, so a
+/// branch cut inside the day has no reading yet), when a failed lookup is
+/// older than [`NOTICE_RETRY`], or when any lookup is older than
+/// [`NOTICE_TTL`]. A pin moved by any route — `engine update`, a hand edit, a
+/// checkout — is due at once, and an offline session pays the lookup at most
+/// once an hour.
 //MUTANT notice-ignores-ttl|s@^    last.is_none_or(\x7clast\x7c now.saturating_sub(last) >= NOTICE_TTL)$@    true@|the_notice_speaks_once_per_ttl_and_never_in_ci
-fn notice_due(stamp: &Path, now: u64, tag: &str) -> bool {
+fn notice_due(stamp: &Path, now: u64, tag: &str, branch: &str) -> bool {
     let text = std::fs::read_to_string(stamp).unwrap_or_default();
-    let mut fields = text.split_whitespace();
+    let mut fields = text.split('\t').map(str::trim);
     let last = fields
         .next()
         .and_then(|seconds| seconds.parse::<u64>().ok());
-    if fields.next() != Some(tag) {
+    if fields.next() != Some(tag) || fields.next() != Some(branch) {
+        return true;
+    }
+    let failed = fields.next() == Some("failed");
+    if failed && last.is_none_or(|last| now.saturating_sub(last) >= NOTICE_RETRY) {
         return true;
     }
     last.is_none_or(|last| now.saturating_sub(last) >= NOTICE_TTL)
@@ -1010,58 +1019,57 @@ fn record_freshness(record: &Record, tag: &str, found: &Distance, now: u64) -> R
     )
 }
 
-/// `engine outdated --notice`: the session's half, which ALWAYS exits 0.
-///
-/// ONE LOOKUP PER [`NOTICE_TTL`] AND PIN, stamped in the repository's state
-/// directory however it came out — answered, failed or timed out — so a session
-/// start inside the day spends no network: the record it last wrote stands, and
+/// `engine outdated --notice`: the session's half. Best-effort by its type: it
+/// returns nothing, so a store it cannot read or write, a worktree it cannot
+/// find or a lookup that does not answer is never a session start's failure.
+fn outdated_notice(ask: &Outdated, out: &mut dyn Write) {
+    let _ = notice_once(ask, out);
+}
+
+/// [`outdated_notice`]'s fallible body: ONE LOOKUP PER [`notice_due`], stamped
+/// in the repository's state directory however it came out, so a session start
+/// inside the window spends no network — the record it last wrote stands, and
 /// the notice it last spoke is not repeated. A suppressed notice with no record
 /// to write looks at nothing.
-fn outdated_notice(
-    ask: &Outdated,
-    root: &Path,
-    text: &str,
-    tag: &str,
-    out: &mut dyn Write,
-) -> Result<ExitCode> {
+fn notice_once(ask: &Outdated, out: &mut dyn Write) -> Result<()> {
+    let root = git::worktree_root(Path::new("."))?;
+    let text = std::fs::read_to_string(root.join(config::CONFIG_FILE)).unwrap_or_default();
+    let Some(engine::Pin {
+        release: Some(tag),
+        source: None,
+    }) = engine::declared(&text)
+    else {
+        if let Some(record) = &ask.record {
+            record::clear_named("engine outdated", &record.family)?;
+        }
+        return Ok(());
+    };
     let now = now_unix();
-    let Ok(state) = state::repo_state_dir(root) else {
-        return Ok(ExitCode::Success);
-    };
-    let stamp = state.join("engine").join("update-notice");
-    // THE STAMP IS THE CHECKOUT'S, THE RECORD THE BRANCH'S: a branch cut inside
-    // the day has no reading of its own yet, so its absence is due too.
-    let unrecorded = ask.record.as_ref().is_some_and(|record| {
-        record::load_named("engine outdated", &record.family).is_ok_and(|body| body.is_none())
-    });
-    if !notice_due(&stamp, now, tag) && !unrecorded {
-        return Ok(ExitCode::Success);
+    let stamp = state::repo_state_dir(&root)?
+        .join("engine")
+        .join("update-notice");
+    let branch = git::record_key(&root).unwrap_or_default();
+    if !notice_due(&stamp, now, &tag, &branch) {
+        return Ok(());
     }
-    let speak = notice_enabled(root, text);
+    let speak = notice_enabled(&root, &text);
     if !speak && ask.record.is_none() {
-        return Ok(ExitCode::Success);
+        return Ok(());
     }
-    let found = distance_bounded(&releases_repository(), tag);
-    // A LOOKUP THAT DID NOT ANSWER IS ASKED AGAIN WITHIN THE HOUR, never a day
-    // later: one transient failure must not silence a stale pin until tomorrow,
-    // and an offline session still pays the bound at most once an hour.
-    let stamped = if found.is_some() {
-        now
-    } else {
-        now.saturating_sub(NOTICE_TTL - NOTICE_RETRY)
-    };
+    let found = distance_bounded(&releases_repository(), &tag);
+    let outcome = if found.is_some() { "ok" } else { "failed" };
     if let Some(parent) = stamp.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    durable::replace(&stamp, format!("{stamped}\t{tag}\n"))?;
+    durable::replace(&stamp, format!("{now}\t{tag}\t{branch}\t{outcome}\n"))?;
     let Some(found) = found else {
         if let Some(record) = &ask.record {
             record::clear_named("engine outdated", &record.family)?;
         }
-        return Ok(ExitCode::Success);
+        return Ok(());
     };
     if let Some(record) = &ask.record {
-        record_freshness(record, tag, &found, now)?;
+        record_freshness(record, &tag, &found, now)?;
     }
     if speak && !found.newer.is_empty() {
         writeln!(
@@ -1071,7 +1079,7 @@ fn outdated_notice(
             found.latest
         )?;
     }
-    Ok(ExitCode::Success)
+    Ok(())
 }
 
 /// `batten engine outdated` (CLOUD-2279): the pin against the latest published
@@ -1082,21 +1090,21 @@ fn outdated_notice(
 /// - No release pin: exit 2, `no engine pin` — a finding about the config.
 /// - Could not look: exit 3.
 ///
-/// `--notice` is [`outdated_notice`]. `--record` writes the `engine-fresh` line
-/// the `engine-hygiene` preset reads, with the consumer's thresholds, and
-/// clears it on a run that could not look.
+/// `--notice` is [`outdated_notice`], which always exits 0. `--record` writes
+/// the `engine-fresh` line the `engine-hygiene` preset reads, with the
+/// consumer's thresholds, and clears it on a run that could not look.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT outdated-silent-without-pin|s@^        writeln!(out, "{} no engine pin", path.display())?;$@        return Ok(ExitCode::Success);@|outdated_exits_by_the_pins_distance_from_main
 fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
+    if ask.notice {
+        outdated_notice(ask, out);
+        return Ok(ExitCode::Success);
+    }
     let clear = || match &ask.record {
         Some(record) => record::clear_named("engine outdated", &record.family),
         None => Ok(()),
     };
-    let root = match git::worktree_root(Path::new(".")) {
-        Ok(root) => root,
-        Err(_) if ask.notice => return Ok(ExitCode::Success),
-        Err(why) => return Err(why),
-    };
+    let root = git::worktree_root(Path::new("."))?;
     let path = root.join(config::CONFIG_FILE);
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let Some(engine::Pin {
@@ -1104,20 +1112,10 @@ fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
         source: None,
     }) = engine::declared(&text)
     else {
-        // `--notice` IS BEST-EFFORT AND ALWAYS EXITS 0: a store it cannot write
-        // is not a session start's failure.
-        if ask.notice {
-            let _ = clear();
-            return Ok(ExitCode::Success);
-        }
         clear()?;
         writeln!(out, "{} no engine pin", path.display())?;
         return Ok(ExitCode::Violation);
     };
-    if ask.notice {
-        let _ = outdated_notice(ask, &root, &text, &tag, out);
-        return Ok(ExitCode::Success);
-    }
     let found = match distance(&releases_repository(), &tag) {
         Ok(found) => found,
         Err(why) => {

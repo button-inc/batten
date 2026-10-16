@@ -920,11 +920,12 @@ fn yaml_code(line: &str) -> &str {
     let mut quote = None;
     let mut previous = ' ';
     for (at, c) in line.char_indices() {
-        let opens = previous.is_whitespace() || matches!(previous, ':' | '=' | '[' | ',');
+        let gap = previous.is_whitespace();
+        let opens = gap || matches!(previous, ':' | '=' | '[' | ',');
         match quote {
             Some(open) if c == open => quote = None,
-            None if (c == '"' || c == '\'') && opens => quote = Some(c),
-            None if c == '#' && previous.is_whitespace() => return &line[..at],
+            None if matches!(c, '"' | '\'') && opens => quote = Some(c),
+            None if c == '#' && gap => return &line[..at],
             Some(_) | None => {}
         }
         previous = c;
