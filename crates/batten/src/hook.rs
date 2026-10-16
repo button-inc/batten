@@ -6342,8 +6342,8 @@ impl Grammar {
 /// The grammar `program` is read through: its family's, or a conservative one
 /// for an interpreter a consumer declared that no family describes.
 fn grammar(program: &str) -> Grammar {
-    match program {
-        python if python.starts_with("python") => Grammar {
+    match family(program) {
+        "python" => Grammar {
             inline: "cm",
             inline_long: &[],
             valued: "WX",
@@ -6463,14 +6463,21 @@ fn long_option(word: &str) -> (&str, Option<&str>) {
 /// spelling of it (`python3` declares `python3.12`), since a row lists the
 /// interpreter and not every minor version the host installs.
 fn declares(entry: &str, program: &str) -> bool {
-    program.strip_prefix(entry).is_some_and(|version| {
-        version.is_empty()
-            || (version.starts_with(['.', '-'])
-                || version.starts_with(|c: char| c.is_ascii_digit()))
-                && version
-                    .chars()
-                    .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
-    })
+    program
+        .strip_prefix(entry)
+        .is_some_and(|version| version.chars().all(is_version_char))
+}
+
+/// A character of a version suffix: `3.12`, `5.36`, `-22`.
+fn is_version_char(c: char) -> bool {
+    c.is_ascii_digit() || matches!(c, '.' | '-')
+}
+
+/// The family `program` belongs to: its name with any version suffix removed,
+/// so `perl5.36` and `node22` read through `perl`'s and `node`'s grammar just
+/// as [`declares`] admits them.
+fn family(program: &str) -> &str {
+    program.trim_end_matches(is_version_char)
 }
 
 /// The values of every INLINE option in an interpreter's argv: the program
@@ -14741,9 +14748,11 @@ deny contains "refused by themodule" if {
             // A value attached after punctuation holds no flags.
             "ruby -W:no-deprecated /tmp/x.rb",
             "perl -d:Trace /tmp/x.pl",
-            // A versioned spelling of a declared interpreter.
+            // A versioned spelling of a declared interpreter, read through its
+            // own family's grammar.
             "python3.12 /tmp/x.py",
             "/usr/bin/python3.11 /tmp/x.py",
+            "perl5.36 -I lib /tmp/x.pl",
             "ruby -W /tmp/x.rb",
             "node /tmp/x.js",
             "node --require ./hook.js /tmp/x.js",
