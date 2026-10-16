@@ -768,9 +768,18 @@ fn ceiling_dirs() -> Vec<PathBuf> {
 /// **THE OPEN IS REMEMBERED, the discovery is not** (CLOUD-2433). One hook call
 /// read the same repository ten times, and each open re-parsed its config — 92%
 /// of a discovery's cost. Discovery still runs per call, so `dir` and the
-/// ceilings decide every answer; what it found is then opened once per thread
-/// while the files the open read are unchanged ([`Opens`]).
+/// ceilings decide every answer; within a hook call's [`open_scope`], what it
+/// found is then opened once while the files the open read are unchanged
+/// ([`Opens`]). Outside a scope every open is fresh.
 fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
+    open_isolated(dir, ceilings, true)
+}
+
+/// [`open_upwards`], remembering the open only when `remember` asks and a scope
+/// is alive. A WRITE never does ([`open_for_write`]): a remembered handle is a
+/// clone that shares its index and packed-refs snapshots, and a write through
+/// one would leave every later read in the call answered from the shared copy.
+fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<gix::Repository> {
     let ceilings: Vec<PathBuf> = ceilings
         .into_iter()
         .map(|ceiling| ceiling.canonicalize().unwrap_or(ceiling))
@@ -784,6 +793,10 @@ fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
     let start = dir.canonicalize();
     let start = start.as_deref().unwrap_or(dir);
     let refused = || UsageError::raise(format!("{} is not a git repository", dir.display()));
+    if !remember {
+        return gix::discover_opts(start, discovery(&ceilings), gix::open::Options::isolated())
+            .map_err(|_| refused());
+    }
     let (found, trust) =
         gix::discover::upwards_opts(start, discovery(&ceilings)).map_err(|_| refused())?;
     let (git_dir, worktree) = found.into_repository_and_work_tree_directories();
@@ -862,35 +875,52 @@ thread_local! {
     static OPENS: std::cell::RefCell<Option<Opens>> = const { std::cell::RefCell::new(None) };
 }
 
-/// The guard [`open_scope`] returns: the memo dies with it.
-pub(crate) struct OpenScope;
+/// The guard [`open_scope`] returns: the memo dies with the guard that opened it.
+pub(crate) struct OpenScope {
+    /// Whether this guard opened the memo. A scope opened inside another one
+    /// shares the outer memo and leaves it standing when it drops.
+    owner: bool,
+}
 
 impl Drop for OpenScope {
     fn drop(&mut self) {
-        let _ = OPENS.try_with(|cell| cell.replace(None));
+        if self.owner {
+            let _ = with_cell(|opens| *opens = None);
+        }
     }
 }
 
 /// Remember this thread's repository opens for the life of the returned guard
-/// (CLOUD-2433). `run_hook` holds the only one, beside its other per-call memos.
-//MUTANT open-scope-never-opens|s@^    let _ = OPENS.try_with(.cell. cell.replace(Some(Opens::default())));$@@|a_repository_read_twice_in_one_scope_is_opened_once
+/// (CLOUD-2433). `run_hook` holds it, beside its other per-call memos.
+//MUTANT open-scope-never-opens|s@^        \*opens = Some(Opens::default());$@@|a_repository_read_twice_in_one_scope_is_opened_once
 //MUTANT open-never-remembered|s@^        let _ = with_opens(.opens. opens.remember(key, \&repo, read));$@@|a_repository_read_twice_in_one_scope_is_opened_once
+//MUTANT open-memo-never-consulted|s@^    if let Some(repo) = with_opens(.opens. opens.get(\&key)).flatten() {$@    if let Some(repo) = None::<gix::Repository> {@|a_repository_read_twice_in_one_scope_is_opened_once
 pub(crate) fn open_scope() -> OpenScope {
-    let _ = OPENS.try_with(|cell| cell.replace(Some(Opens::default())));
-    OpenScope
+    let owner = with_cell(|opens| {
+        if opens.is_some() {
+            return false;
+        }
+        *opens = Some(Opens::default());
+        true
+    });
+    OpenScope {
+        owner: owner.unwrap_or(false),
+    }
+}
+
+/// `with` over the memo's cell, or `None` during thread teardown or while it is
+/// borrowed — never a panic, since a guard can drop during an unwind.
+fn with_cell<R>(with: impl FnOnce(&mut Option<Opens>) -> R) -> Option<R> {
+    OPENS
+        .try_with(|cell| cell.try_borrow_mut().ok().map(|mut opens| with(&mut opens)))
+        .ok()
+        .flatten()
 }
 
 /// `with` over this scope's [`Opens`], or `None` outside a scope, during thread
 /// teardown, or re-entered — each a miss.
 fn with_opens<R>(with: impl FnOnce(&mut Opens) -> R) -> Option<R> {
-    OPENS
-        .try_with(|cell| {
-            cell.try_borrow_mut()
-                .ok()
-                .and_then(|mut opens| opens.as_mut().map(with))
-        })
-        .ok()
-        .flatten()
+    with_cell(|opens| opens.as_mut().map(with)).flatten()
 }
 
 /// The bytes of every file an isolated open of `git_dir` reads — no includes,
@@ -2086,17 +2116,18 @@ fn unreachable_from_remotes(
 /// the environment names a different repository and honouring one is the
 /// mis-rooting bug that isolation exists to kill.
 ///
-/// A write needs the same isolation for the same reason, so this is `open` under
-/// another name today. It exists as its own function so that `gitwrite`'s callers
-/// name their intent at the call site, and so a future divergence — a write that
-/// needs a config a read does not — has somewhere to land other than inside
-/// `open`.
+/// A write needs the same isolation for the same reason. It exists as its own
+/// function so that `gitwrite`'s callers name their intent at the call site, and
+/// it is where the two have diverged: a write is always opened FRESH, never from
+/// a hook call's memo (CLOUD-2433), because a remembered handle is a clone that
+/// shares its index and packed-refs snapshots with every later read.
 ///
 /// # Errors
 ///
 /// A directory that is not a repository, or one discovery cannot reach.
+//MUTANT write-from-the-memo|s@^    open_isolated(dir, ceiling_dirs(), false)$@    open(dir)@|a_write_is_never_served_from_the_memo
 pub fn open_for_write(dir: &Path) -> Result<gix::Repository> {
-    open(dir)
+    open_isolated(dir, ceiling_dirs(), false)
 }
 
 /// The one UTC stamp both committer signatures take (CLOUD-1486).
@@ -6074,18 +6105,105 @@ mod tests {
         assert!(opens.get(&key).is_none(), "an edited config is a miss");
     }
 
+    /// Swap the one remembered handle for `other`'s, so a read served from the
+    /// memo answers about `other` and a fresh open about the directory read.
+    fn plant(other: &Path) {
+        let planted = gix::discover_opts(other, discovery(&[]), gix::open::Options::isolated())
+            .expect("open");
+        with_opens(|opens| {
+            let (_, opened) = opens.0.iter_mut().next().expect("one remembered open");
+            opened.repo = planted;
+        })
+        .expect("a scope is open");
+    }
+
+    /// The working tree a handle is about, canonical.
+    fn tree(repo: &gix::Repository) -> PathBuf {
+        canonical(repo.workdir().expect("a working tree"))
+    }
+
     /// The real path: within a hook call's scope, `open_upwards` remembers what
-    /// it opened, so the next read of the repository is served from the memo.
+    /// it opened, and the NEXT read of the repository is served from the memo —
+    /// shown by planting another repository's handle in it.
     #[test]
     fn a_repository_read_twice_in_one_scope_is_opened_once() {
         let dir = crate::scratch::scratch("git-memo-scoped");
         crate::gitwrite::init_on_main(&dir).expect("init");
+        let other = crate::scratch::scratch("git-memo-scoped-other");
+        crate::gitwrite::init_on_main(&other).expect("init other");
         let _scope = open_scope();
         open_upwards(&dir, Vec::new()).expect("first read");
+        plant(&other);
+        let second = open_upwards(&dir, Vec::new()).expect("second read");
+        assert_eq!(
+            tree(&second),
+            canonical(&other),
+            "the second read came from the memo, not a fresh open"
+        );
+    }
+
+    /// A write is opened fresh even inside a scope: a remembered handle shares
+    /// its index and packed-refs snapshots with every later read.
+    #[test]
+    fn a_write_is_never_served_from_the_memo() {
+        let dir = crate::scratch::scratch("git-memo-write");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let other = crate::scratch::scratch("git-memo-write-other");
+        crate::gitwrite::init_on_main(&other).expect("init other");
+        let _scope = open_scope();
+        open_upwards(&dir, Vec::new()).expect("read");
+        plant(&other);
+        let written = open_for_write(&dir).expect("write open");
+        assert_eq!(
+            tree(&written),
+            canonical(&dir),
+            "a write opens the repository itself"
+        );
+    }
+
+    /// A scope opened inside another shares the outer memo and leaves it
+    /// standing when it drops.
+    #[test]
+    fn a_nested_scope_does_not_end_the_outer_one() {
+        let dir = crate::scratch::scratch("git-memo-nested");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let _outer = open_scope();
+        open_upwards(&dir, Vec::new()).expect("read");
+        {
+            let _inner = open_scope();
+        }
         assert_eq!(
             with_opens(|opens| opens.0.len()),
             Some(1),
-            "the first read is remembered for the rest of the call"
+            "the outer call's memo survives an inner scope"
+        );
+    }
+
+    /// A linked worktree is remembered too: its discovered git dir and the one
+    /// the open reports must agree, or the memo would silently never fill.
+    #[test]
+    fn a_linked_worktree_is_remembered() {
+        let dir = crate::scratch::scratch("git-memo-linked");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        git(&dir, &["commit", "-q", "--allow-empty", "-m", "root"]);
+        let linked = dir.join("linked");
+        git(
+            &dir,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                linked.to_str().expect("utf-8"),
+                "-b",
+                "side",
+            ],
+        );
+        let _scope = open_scope();
+        open_upwards(&linked, Vec::new()).expect("read");
+        assert_eq!(
+            with_opens(|opens| opens.0.len()),
+            Some(1),
+            "the linked worktree's open is remembered"
         );
     }
 
