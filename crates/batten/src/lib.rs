@@ -130,6 +130,7 @@ pub mod preflight;
 pub mod preset;
 pub mod probe;
 pub mod probe_verdict;
+pub mod proc_stat;
 pub mod propose;
 pub mod provision;
 pub mod prune;
@@ -10910,7 +10911,7 @@ fn run_land_singleton(
     // ONLY A GROUP THAT PREDATES THE RECORD'S LAST STAMP IS SIGNALLED
     // (CLOUD-2366). The record's pgid was taken when the task registered, and
     // once that group emptied its number could be reused by an unrelated group —
-    // the reaper's own task shell included. `exec::group_predates` carries why a
+    // the reaper's own task shell included. `proc_stat::group_predates` carries why a
     // member that began before the registrant's last stamp can only be the
     // orphan's. ASKED AGAIN BEFORE EACH PASS: a group the TERM emptied may be
     // reused before the KILL. A record that fails it is still unregistered
@@ -10918,7 +10919,7 @@ fn run_land_singleton(
     let orphan = |entry: &task::Entry| {
         entry
             .last_alive()
-            .is_some_and(|alive_at| exec::group_predates(&entry.pgid, alive_at))
+            .is_some_and(|alive_at| proc_stat::group_predates(&entry.pgid, alive_at))
     };
     // TWO PASSES OVER THE WHOLE SET, NEVER A GRACE PERIOD PER GROUP. Signalling
     // every group before re-observing any of it is what gives each one its

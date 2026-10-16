@@ -666,58 +666,6 @@ fn resolve_group(pgid: &str) -> Option<rustix::process::Pid> {
     rustix::process::Pid::from_raw(raw)
 }
 
-/// Whether a recorded group still holds a process that began before second
-/// `alive_at`, which is what makes it the orphan rather than somebody's live
-/// group under a reused number.
-///
-/// **AGE IS THE DISCRIMINATOR** (CLOUD-2366). Linux keeps a pid number reserved
-/// while any live process still uses it as a process-group id, so the number is
-/// reusable only once the group is EMPTY. The registrant was a member and was
-/// alive at `alive_at`, its latest stamp, so the original group was not empty
-/// then: every member of a reused group began after that second. A member that
-/// began before it can only be the original's. A leader test cannot say this —
-/// a reused group loses its leader as easily as an orphan does
-/// (`setsid sh -c 'server &'`), and a zombie leader still answers a probe.
-///
-/// The caller's own group is never the orphan, however old: a second run in
-/// the shell that ran the first shares its group. What it misses is safe: an
-/// orphan whose every survivor was spawned after the last stamp is not
-/// signalled. Across a reboot every process began after
-/// `btime`, so a stale record never qualifies. `false` for an unparseable or
-/// non-positive pgid and wherever `/proc` cannot be read: a reap may only
-/// proceed on proof.
-#[cfg(any(target_os = "linux", target_os = "android"))]
-pub(crate) fn group_predates(pgid: &str, alive_at: u64) -> bool {
-    use crate::collect::proc_stat;
-    let Some(group) = resolve_group(pgid).map(|pid| i64::from(pid.as_raw_nonzero().get())) else {
-        return false;
-    };
-    if group == i64::from(rustix::process::getpgrp().as_raw_nonzero().get()) {
-        return false;
-    }
-    let Some(boot) = std::fs::read_to_string("/proc/stat")
-        .ok()
-        .and_then(|stat| proc_stat::boot_seconds(&stat))
-    else {
-        return false;
-    };
-    let ticks = rustix::param::clock_ticks_per_second();
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return false;
-    };
-    entries.filter_map(Result::ok).any(|entry| {
-        std::fs::read_to_string(entry.path().join("stat"))
-            .is_ok_and(|stat| proc_stat::member_predates(&stat, group, boot, ticks, alive_at))
-    })
-}
-
-/// No `/proc` to date a member by, so none is ever proven the orphan's and
-/// nothing is reaped.
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-pub(crate) fn group_predates(_pgid: &str, _alive_at: u64) -> bool {
-    false
-}
-
 /// Windows has no process groups, so there is nothing to reap and nothing to
 /// report — the same stance every other `#[cfg(unix)]` half of this module takes.
 #[cfg(not(unix))]
@@ -3450,41 +3398,6 @@ mod tests {
             !escalate_group("4194305"),
             "an empty group did not ignore a term; it is simply gone"
         );
-    }
-
-    /// CLOUD-2366: a child leading its own group began before now and not
-    /// before the epoch; the caller's own group is never the orphan.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    #[test]
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: the case needs a real group led by a live process, which only a spawn makes"
-    )]
-    fn a_group_predates_only_a_second_after_its_member_began() {
-        use std::os::unix::process::CommandExt as _;
-        let mut child = Command::new("cat")
-            .stdin(Stdio::piped())
-            .process_group(0)
-            .spawn()
-            .expect("spawn a group leader");
-        let group = child.id().to_string();
-        let later = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| since.as_secs())
-            + 10;
-        let (began, epoch) = (group_predates(&group, later), group_predates(&group, 0));
-        let own = rustix::process::getpgrp()
-            .as_raw_nonzero()
-            .get()
-            .to_string();
-        let own_group = group_predates(&own, later);
-        let _ = child.kill();
-        let _ = child.wait();
-        assert!(began, "the child began before now");
-        assert!(!epoch, "nothing began before the epoch");
-        assert!(!own_group, "the caller's own group is never the orphan");
-        assert!(!group_predates("0", later));
-        assert!(!group_predates("not-a-number", later));
     }
 
     #[cfg(unix)]
