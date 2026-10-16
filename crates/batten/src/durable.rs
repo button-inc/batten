@@ -28,6 +28,10 @@
 //! Both are synced before returning: persist-before-emit, so a caller that reports
 //! a record as written has it on disk rather than in a page cache a reboot drops.
 //!
+//! `open_handle` is the third, smaller mutation: a file or directory opened for
+//! its lock or its times, which Windows takes only through a handle `std`'s plain
+//! open does not make.
+//!
 //! # Enforced, not remembered
 //!
 //! `path write unsafe` (`policy/durable-write.rego`) refuses `fs::write(`,
