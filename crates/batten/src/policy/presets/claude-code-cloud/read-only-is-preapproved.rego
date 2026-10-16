@@ -1,5 +1,5 @@
 #MUTANT-SUITE crates/batten/tests/it/preapprove.rs
-#MUTANT admission-session-preapproved|s@^\tinput.call.admission == "read"$@\tinput.call.admission != "none"@|exit_plan_mode_is_admitted_in_plan_mode_and_never_preapproved
+#MUTANT admission-session-preapproved|s@^\tcall.admission == "read"$@\tcall.admission != "none"@|exit_plan_mode_is_admitted_in_plan_mode_and_never_preapproved
 # A call that only reads is never put to the operator (CLOUD-1949).
 #
 # The host halts on a permission prompt, and a halted session is the failure the

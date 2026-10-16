@@ -19941,7 +19941,7 @@ const SETUP_LEDGER: &str = "batten-session-launches";
 /// No session id, no git dir, no handler table: could-not-look, which allows,
 /// for the rest of the hook path's reason.
 //MUTANT-SUITE crates/batten/tests/it/session_provisioning.rs
-//MUTANT setup-launch-unrecorded|s@^            drop(crate::durable::append(\&ledger, \&format!("{session}\\t{line}")));$@@|an_edit_waits_until_every_background_row_is_launched
+//MUTANT setup-launch-unrecorded|s@^                \&format!("{session}\\t{line}"),$@                \&String::new(),@|an_edit_waits_until_every_background_row_is_launched
 fn session_setup_gate(
     envelope: &hook::Envelope,
     overrides: &Overrides,
