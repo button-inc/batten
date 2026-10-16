@@ -2765,37 +2765,17 @@ fn unminted_facts(dir: &Path, resolved: Option<&resolve::Resolved>) -> Vec<Unmin
     found
 }
 
-/// Whether an unreadable store is one the host has simply not written yet.
+/// Whether an ABSENT store `target` is one the host has simply not written yet,
+/// the fallback when the transcript cannot answer ([`absent_store_is_zero`]).
 ///
-/// The link is a pointer the mediated boundary parks on substitution, so it
-/// exists whenever the engine was told where to look. Following it answers the
-/// question the boundary deliberately did not: a target whose PARENT is present
-/// is a declaration that describes this machine with only the per-session leaf
-/// missing, which is what a session with no declared work looks like on a host
-/// that creates the store lazily.
-///
-/// **The link must be resolvable for this to mean anything.** `read_link` fails
-/// when nothing is parked at all, and that is could-not-look rather than zero —
-/// no pointer is not the same fact as a pointer at nothing.
-///
-/// Deliberately NOT a check that the target is absent-versus-unreadable: a
-/// present directory the process may not open is a real failure to look, and it
-/// takes the `read_dir` error arm above with the parent test then answering
-/// `false` only if the parent is unreadable too. Where both are readable and the
-/// leaf is a permission-denied directory this returns `true`, which is the one
-/// case worth naming as a bound; this sandbox runs as root, so it is not a
-/// condition the suite can create (`rules/rust.md`), and inventing an
-/// assertion over a premise nothing produced is what that rule forbids.
+/// A target whose PARENT is present is a declaration that describes this
+/// machine with only the per-session leaf missing, which is what a session with
+/// no declared work looks like on a host that creates the store lazily. The
+/// caller has already read the link and established the target is absent.
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
 //MUTANT store-absence-reads-unreadable|s@    target.parent().is_some_and(Path::is_dir)@    false@|a_pointer_at_an_unwritten_store_is_zero_and_never_could_not_look
 //MUTANT parent-conjunct-dropped|s@    target.parent().is_some_and(Path::is_dir)@    true@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
-fn store_is_merely_unwritten(link: &Path) -> bool {
-    let Ok(target) = std::fs::read_link(link) else {
-        return false;
-    };
-    if target.exists() {
-        return false;
-    }
+fn store_is_merely_unwritten(target: &Path) -> bool {
     target.parent().is_some_and(Path::is_dir)
 }
 
@@ -2829,15 +2809,20 @@ enum TaskEvidence {
 /// Dropping it would read a declared task as zero; it answers
 /// [`TaskEvidence::Unknown`] instead.
 ///
-/// **A CALL THE HOST REFUSED WROTE NOTHING.** A task call whose result is
-/// flagged an error (a hook denial, a bad argument) declared no task; a call
-/// with no result yet may have, so it counts.
+/// **A CALL A HOOK DENIED WROTE NOTHING.** A pre-call denial
+/// ([`crate::transcript::Event::Refused`]) stops the tool before it runs, so it
+/// declared no task. Any other error flag can follow a write, and a call with no
+/// result yet may have written, so both still count.
+///
+/// **A TEMPLATE WITHOUT `{session}` CANNOT BE MATCHED** to a session, so it
+/// answers [`TaskEvidence::Unknown`].
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
 //MUTANT transcript-zero-ignores-task-calls|s@^    if called {$@    if false {@|a_transcript_that_declared_a_task_never_reads_as_zero
 //MUTANT transcript-zero-on-empty-stream|s@^    if stream.records.is_empty() {$@    if false {@|an_empty_transcript_is_not_evidence
 //MUTANT transcript-zero-any-session|s@^    if expected != target.to_string_lossy() {$@    if false {@|another_sessions_transcript_is_not_evidence
 //MUTANT transcript-partial-line-dropped|s@^    if !partial.trim().is_empty() {$@    if false {@|a_half_written_task_call_is_not_zero
 //MUTANT transcript-refused-call-counts|s@^            && !refused.contains(id.as_str())$@            \&\& true@|a_refused_task_call_declared_nothing
+//MUTANT transcript-sessionless-template-matches|s@ || !template.contains("{session}") {$@ {@|a_sessionless_template_is_not_evidence
 fn transcript_evidence(
     dir: &Path,
     transcript: &crate::transcript::TranscriptConfig,
@@ -2856,7 +2841,9 @@ fn transcript_evidence(
     let crate::hook::TranscriptShape::Surveyed(shape) = harness.transcript_shape() else {
         return TaskEvidence::Unknown;
     };
-    if tools.is_empty() {
+    // A template with no `{session}` names the same store for every session, so
+    // the match below could never tell this session's transcript from another's.
+    if tools.is_empty() || !template.contains("{session}") {
         return TaskEvidence::Unknown;
     }
     let Ok(body) = std::fs::read_to_string(dir.join(path)) else {
@@ -2884,9 +2871,7 @@ fn transcript_evidence(
         .records
         .iter()
         .filter_map(|record| match &record.event {
-            crate::transcript::Event::ToolResult {
-                call, failed: true, ..
-            } => Some(call.as_str()),
+            crate::transcript::Event::Refused { call, .. } => Some(call.as_str()),
             _ => None,
         })
         .collect();
@@ -2914,10 +2899,12 @@ fn transcript_evidence(
 /// The transcript decides instead, and it gates BOTH arms: a task call writes
 /// the store, so a store absent after one means the pointer does not reach it,
 /// whatever its parent shows. Only a parked link whose target is ABSENT reaches
-/// either arm: a target that exists and still will not list is could-not-look.
+/// either arm: a target that exists and still will not list is could-not-look,
+/// and a link that will not read is no pointer at all, which is not the same
+/// fact as a pointer at nothing.
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
-//MUTANT transcript-arm-dropped|s@^        TaskEvidence::NoTaskCall => true,$@        TaskEvidence::NoTaskCall => store_is_merely_unwritten(link),@|a_transcript_with_no_task_call_is_zero_without_a_store_root
-//MUTANT transcript-zero-without-a-transcript|s@^        TaskEvidence::Unknown => store_is_merely_unwritten(link),$@        TaskEvidence::Unknown => true,@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
+//MUTANT transcript-arm-dropped|s@^        TaskEvidence::NoTaskCall => true,$@        TaskEvidence::NoTaskCall => store_is_merely_unwritten(\&target),@|a_transcript_with_no_task_call_is_zero_without_a_store_root
+//MUTANT transcript-zero-without-a-transcript|s@^        TaskEvidence::Unknown => store_is_merely_unwritten(&target),$@        TaskEvidence::Unknown => true,@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
 //MUTANT transcript-zero-over-a-present-store|s@^    if target.try_exists().unwrap_or(true) {$@    if false {@|an_unreadable_store_is_never_zero
 fn absent_store_is_zero(
     dir: &Path,
@@ -2935,7 +2922,7 @@ fn absent_store_is_zero(
     match transcript_evidence(dir, transcript, &target) {
         TaskEvidence::NoTaskCall => true,
         TaskEvidence::TaskCalled => false,
-        TaskEvidence::Unknown => store_is_merely_unwritten(link),
+        TaskEvidence::Unknown => store_is_merely_unwritten(&target),
     }
 }
 

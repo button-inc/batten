@@ -1489,6 +1489,8 @@ const CLAUDE_EVENTS: &[Event] = &[
     Event::UserPromptSubmit,
 ];
 
+//MUTANT-SUITE crates/batten/tests/it/session_drain.rs
+//MUTANT todowrite-unsurveyed|s@"TaskUpdate", "TodoWrite"\]),$@"TaskUpdate"]),@|a_todowrite_session_never_reads_as_zero
 impl Harness {
     /// This host's capability row.
     ///
@@ -1519,8 +1521,11 @@ impl Harness {
     pub const fn capabilities(self) -> Capabilities {
         match self {
             Harness::ClaudeCode => Capabilities {
-                // Fetched: this session's own tool surface.
-                plan_tools: PlanTools::Surveyed(&["TaskCreate", "TaskUpdate"]),
+                // Fetched: this session's own tool surface; and `TodoWrite` from
+                // the tools reference (code.claude.com/docs/en/tools-reference,
+                // 2026-10-16), the checklist tool a session gets in place of the
+                // Task tools under `CLAUDE_CODE_ENABLE_TASKS=0` (CLOUD-2400).
+                plan_tools: PlanTools::Surveyed(&["TaskCreate", "TaskUpdate", "TodoWrite"]),
                 events: CLAUDE_EVENTS,
                 // Documented, and merged most-restrictive-first by the host
                 // itself (`deny > defer > ask > allow`), so an ask cannot

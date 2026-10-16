@@ -355,19 +355,75 @@ fn a_half_written_task_call_is_not_zero() {
     assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
 }
 
-/// A task call the host refused wrote nothing, so it declared no task.
+/// A task call a hook denied never ran, so it declared no task.
 ///
 /// Fails by: counting a refused call (`transcript-refused-call-counts`).
 #[cfg(unix)]
 #[test]
 fn a_refused_task_call_declared_nothing() {
     let body = transcript(&["TaskCreate"])
-        + r#"{"type":"user","sessionId":"s-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t0","is_error":true,"content":"denied"}]}}"#
+        + r#"{"type":"user","sessionId":"s-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t0","is_error":true,"content":"PreToolUse:TaskCreate hook error: denied"}]}}"#
         + "\n";
     let dir = rootless("transcript-refused", &body, false);
 
     let output = session(&dir, &[]);
     assert_eq!(output.status.code(), Some(0), "got: {}", stdout(&output));
+}
+
+/// `TodoWrite` keeps its checklist outside the task store, so a session that
+/// called it declared work this store never shows (CLOUD-2400).
+///
+/// Fails by: leaving `TodoWrite` out of Claude Code's surveyed plan tools
+/// (`todowrite-unsurveyed`), which reads the session as zero.
+#[cfg(unix)]
+#[test]
+fn a_todowrite_session_never_reads_as_zero() {
+    let dir = rootless("transcript-todowrite", &transcript(&["TodoWrite"]), false);
+
+    let output = session(&dir, &[]);
+    assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
+}
+
+/// Any other error flag can follow a write, so the call still counts.
+#[cfg(unix)]
+#[test]
+fn a_failed_task_call_still_counts() {
+    let body = transcript(&["TaskCreate"])
+        + r#"{"type":"user","sessionId":"s-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t0","is_error":true,"content":"timed out"}]}}"#
+        + "\n";
+    let dir = rootless("transcript-failed", &body, false);
+
+    let output = session(&dir, &[]);
+    assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
+}
+
+/// A template with no `{session}` names one store for every session, so no
+/// transcript can be matched to it: another session's reads as could-not-look.
+///
+/// Fails by: dropping the placeholder test
+/// (`transcript-sessionless-template-matches`).
+#[cfg(unix)]
+#[test]
+fn a_sessionless_template_is_not_evidence() {
+    let dir = rootless(
+        "transcript-sessionless",
+        &transcript_of("s-2", &["Bash"]),
+        false,
+    );
+    let fixed = dir.join("store-root/fixed");
+    common::write(
+        &dir,
+        "batten.toml",
+        &format!(
+            "version = 1\n\n[transcript]\npath = \".claude/.transcript.jsonl\"\nharness = \"claude-code\"\ntasks = \"{}\"\n",
+            fixed.display()
+        ),
+    );
+    std::fs::remove_file(dir.join(".claude/.tasks")).unwrap();
+    std::os::unix::fs::symlink(&fixed, dir.join(".claude/.tasks")).unwrap();
+
+    let output = session(&dir, &[]);
+    assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
 }
 
 /// A transcript that names the session and observed nothing is not evidence of
