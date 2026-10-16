@@ -144,8 +144,14 @@ pub fn claimed(branch: &str, title: &str, log: &str, body: &str, keys: &dyn Keys
 /// `claimed_from`'s branch and title go in EMPTY under
 /// [`Source::ClosingOnly`], because that source returns before either is read
 /// (see below), so a caller passing the real ones adds two dead arguments to a
-/// question that is about one text. Four sites spelled that by hand and one of
+/// question that is about one text. Five sites spelled that by hand and one of
 /// them spent five lines of comment defending it.
+///
+/// **It is the spelling for new callers, not a completed migration.** The two
+/// this function was added for use it; `lib.rs`'s two other sites and
+/// `tracker_reading`'s are untouched, the last of those deliberately — it sits
+/// beside a `RefsFirstOnly` call that must keep the full arity, and the two
+/// read as a pair. Converting the rest belongs to whoever next edits them.
 ///
 /// The text may be a body or a log: `claimed_from` joins the two before the
 /// closing scan, so under this source the slot a caller uses does not change

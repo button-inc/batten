@@ -7380,9 +7380,6 @@ fn run_claim_race(
     Ok(ExitCode::Violation)
 }
 
-/// WHICH log went unread, for [`run_claim_race`]'s one arm that declines to call
-/// an incomplete reading clean.
-///
 /// What `claim race` says when a competitor it would REFUSE on went unread.
 ///
 /// Its own arm rather than a fourth sentence in [`unread_log`]: those three all
@@ -7392,6 +7389,9 @@ const UNCONFIRMED_RACE: &str = "claim race: a competitor whose claim this branch
                                 not be read, so the collision is unconfirmed — could not look, \
                                 which is not a verdict";
 
+/// WHICH log went unread, for [`run_claim_race`]'s one arm that declines to call
+/// an incomplete reading clean.
+///
 /// Called only where at least one side failed. Both causes share one arm
 /// because they share one remedy — look again — and the third sentence exists
 /// because one refused token refuses this branch's read AND every competitor's
