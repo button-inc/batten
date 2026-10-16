@@ -1221,7 +1221,10 @@ pub fn diagnose_mediator(dir: &Path) -> Mediator {
     let Some(resolved) = crate::rules::on_path_verbatim("batten") else {
         return Mediator::Unresolvable;
     };
-    let built = dir.join("target/release/batten");
+    // Where cargo was told to write, not where it writes by default
+    // (CLOUD-2376): with `CARGO_TARGET_DIR` set, a literal reads a file cargo
+    // never produced and this answers `Unbuilt` over a tree that is built.
+    let built = crate::engine::release_build(dir);
     let (Ok(left), Ok(right)) = (std::fs::read(&resolved), std::fs::read(&built)) else {
         return Mediator::Unbuilt;
     };
