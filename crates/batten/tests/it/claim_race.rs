@@ -317,14 +317,20 @@ struct Seen {
 /// * dropping the key predicate fetches the two pulls whose titles name one,
 ///   and dropping the `mine` arm fetches `"1"`;
 /// * an unbounded spawn — one thread per pull rather than a width — shows a
-///   peak of ten.
+///   peak of the whole eligible set, which is deliberately wider than
+///   `FETCH_WIDTH`.
 ///
 /// **Nothing here asserts on the clock.** The ten-second deadline is an input:
 /// it turns a serial implementation's hang into a failure instead of a hung
 /// suite, and the case asserts the peak the double recorded.
 #[test]
 fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_order() {
-    let eligible: Vec<String> = (2..=11).map(|number| number.to_string()).collect();
+    // Sized FROM the width rather than beside it, so a retune cannot leave this
+    // asserting a bound the code no longer has. Two more than the width is
+    // enough to need a second round of index-taking.
+    let eligible: Vec<String> = (2..=(race::FETCH_WIDTH + 3))
+        .map(|number| number.to_string())
+        .collect();
     // Branch names carry no digit after a dash, so `claimed` resolves no key
     // from them however it folds the case — the eligibility this case varies
     // has to come from the title alone.
@@ -336,14 +342,23 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
             &format!("sha{number}"),
         ));
     }
-    pulls.push(Pull {
-        title: "feat: somebody else's work (PROJ-7)".to_owned(),
-        ..pull("12", "user/branch-twelve", "sha12")
-    });
-    pulls.push(Pull {
-        title: "fix: and more of it (PROJ-8)".to_owned(),
-        ..pull("13", "user/branch-thirteen", "sha13")
-    });
+    // Numbered past the eligible range for the same reason it is derived: at a
+    // wider `FETCH_WIDTH` a literal here would collide with an eligible pull and
+    // the listing would carry one number twice.
+    let keyed = [
+        (race::FETCH_WIDTH + 4, "feat: somebody else's work (PROJ-7)"),
+        (race::FETCH_WIDTH + 5, "fix: and more of it (PROJ-8)"),
+    ];
+    for (number, title) in keyed {
+        pulls.push(Pull {
+            title: title.to_owned(),
+            ..pull(
+                &number.to_string(),
+                &format!("user/branch{number}"),
+                &format!("sha{number}"),
+            )
+        });
+    }
 
     let seen = std::sync::Mutex::new(Seen::default());
     let bell = std::sync::Condvar::new();
@@ -354,7 +369,10 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
             state.in_flight += 1;
             state.peak = state.peak.max(state.in_flight);
         }
-        bell.notify_all();
+        // NO SIGNAL ON ENTRY. The one waiter below is parked on `done`, which
+        // moves only in the exit block, so a start-edge notify could do nothing
+        // but wake it to re-read an unchanged predicate — and it would imply a
+        // rendezvous on entry that this double does not have.
         if number == "2" {
             let waiting = seen.lock().expect("the fixture lock");
             drop(
@@ -418,8 +436,9 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
         state.peak
     );
     assert!(
-        state.peak <= 8,
-        "at most eight in flight; a peak of {} is an unbounded spawn",
+        state.peak <= race::FETCH_WIDTH,
+        "at most {} in flight; a peak of {} is an unbounded spawn",
+        race::FETCH_WIDTH,
         state.peak
     );
 }

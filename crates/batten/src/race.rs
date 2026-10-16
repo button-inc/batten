@@ -333,7 +333,12 @@ pub fn identify<'a>(pulls: &'a [Pull], head_sha: &str) -> Option<&'a Pull> {
 /// and the bound exists to keep a burst away from the forge's rate limit rather
 /// than to saturate anything. Eight is the same order as a `--jobs` wave and
 /// well inside the forge's concurrent-request budget.
-const FETCH_WIDTH: usize = 8;
+///
+/// `pub` so the suite asserts the bound it is actually built with rather than a
+/// literal beside it: retuned upward a literal fails with a message blaming an
+/// unbounded spawn, and retuned downward it passes having stopped testing
+/// anything.
+pub const FETCH_WIDTH: usize = 8;
 
 /// Fill in each competitor's `log`, fetching the eligible ones concurrently.
 ///
@@ -444,15 +449,23 @@ pub fn with_logs(
     // EACH ANSWER IS PUBLISHED AS IT ARRIVES, never batched per worker. A
     // worker that panics then costs the one fetch it died in; returning a vector
     // per worker cost every answer that worker had ALREADY collected, which is a
-    // far wider silence than the failed fetch it is meant to read like. The lock
-    // is held only to push a value already computed — `fetch` runs outside it —
-    // so the closure cannot poison it, and one push per network round trip is
-    // not contention.
-    let fetched: std::sync::Mutex<Vec<(usize, String)>> = std::sync::Mutex::new(Vec::new());
+    // far wider silence than the failed fetch it is meant to read like.
+    //
+    // A CHANNEL RATHER THAN A `Mutex<Vec<_>>`, which is how this crate already
+    // spells "workers publish answers to the calling thread" — `land::wait`'s
+    // two arms, `collect`, `handler`, `exec`, `mutate`. The accumulators that
+    // are a mutex here are read WHILE their workers still run, which is a
+    // different need. The difference that matters is poison: a mutex adds a
+    // failure mode this function would then have to answer, and no answer to it
+    // is honest when nothing can produce it — dropping a log already fetched
+    // reads a competitor as claiming nothing after a successful round trip, and
+    // recovering pretends the arm was considered. A channel has no such axis.
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, String)>();
     std::thread::scope(|scope| {
         let handles: Vec<_> = (0..FETCH_WIDTH.min(eligible.len()))
             .map(|_| {
-                let (next, eligible, fetch, fetched) = (&next, &eligible, &fetch, &fetched);
+                let (next, eligible, fetch) = (&next, &eligible, &fetch);
+                let tx = tx.clone();
                 scope.spawn(move || {
                     loop {
                         let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -460,9 +473,7 @@ pub fn with_logs(
                             return;
                         };
                         let log = fetch(number);
-                        if let Ok(mut done) = fetched.lock() {
-                            done.push((slot, log));
-                        }
+                        drop(tx.send((slot, log)));
                     }
                 })
             })
@@ -479,10 +490,12 @@ pub fn with_logs(
             drop(handle.join());
         }
     });
-    for (slot, log) in fetched
-        .into_inner()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-    {
+    // THIS SENDER IS DROPPED BEFORE THE DRAIN, and the drain is what ends the
+    // iteration: every cloned sender died with its worker inside the scope, so
+    // `rx` runs dry exactly when the last answer has been taken. Holding `tx`
+    // across the loop would hang here forever.
+    drop(tx);
+    for (slot, log) in rx {
         if let Some(pull) = pulls.get_mut(slot) {
             pull.log = log;
         }
