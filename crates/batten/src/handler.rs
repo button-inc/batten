@@ -279,8 +279,10 @@ pub struct Handler {
     ///
     /// **A boolean, not a path expression**: the boundary already makes a
     /// written path repo-relative exactly when it lies inside the repository
-    /// (`hook::relativise_writes`), so an absolute path IS a path outside it, and
-    /// no row has to spell a host's directory layout. A call that writes no path
+    /// (`hook::relativise_writes`), so a ROOTED path IS a path outside it, and
+    /// no row has to spell a host's directory layout. Rooted, not absolute: on
+    /// Windows `/root/x.md` has a root but no drive, so `is_absolute` reads it
+    /// as inside, and only the Windows leg says so. A call that writes no path
     /// is selected — nothing was written outside. `false` is every landed row.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tree_only: bool,
@@ -331,8 +333,8 @@ pub struct Handler {
     pub preapproves: bool,
 }
 
-//MUTANT tree-only-inverted|s@^        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c !Path::new(writes).is_absolute())$@        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c Path::new(writes).is_absolute())@|a_write_inside_the_tree_is_selected
-//MUTANT tree-only-pathless|s@^        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c !Path::new(writes).is_absolute())$@        !self.tree_only \x7c\x7c writes.is_some_and(\x7cwrites\x7c !Path::new(writes).is_absolute())@|a_tree_only_row_selects_a_pathless_call
+//MUTANT tree-only-inverted|s@^        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c !Path::new(writes).has_root())$@        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c Path::new(writes).has_root())@|a_write_inside_the_tree_is_selected
+//MUTANT tree-only-pathless|s@^        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c !Path::new(writes).has_root())$@        !self.tree_only \x7c\x7c writes.is_some_and(\x7cwrites\x7c !Path::new(writes).has_root())@|a_tree_only_row_selects_a_pathless_call
 impl Handler {
     /// The event this handler names, or `None` when `on` names none.
     #[must_use]
@@ -392,7 +394,7 @@ impl Handler {
     /// [`Handler::tree_only`].
     #[must_use]
     pub fn selects_path(&self, writes: Option<&str>) -> bool {
-        !self.tree_only || writes.is_none_or(|writes| !Path::new(writes).is_absolute())
+        !self.tree_only || writes.is_none_or(|writes| !Path::new(writes).has_root())
     }
 
     /// The bound this handler runs under.
