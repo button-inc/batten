@@ -943,8 +943,7 @@ pub(crate) fn verdicts(
                             &facts.git_dir,
                         )
                     }
-                    // `None` above is could-not-look for THIS check alone, which
-                    // allows it, as a whole-call could-not-look always did.
+                    // `None` above is could-not-look for this check: allow it.
                     ReceiptKey::Branch => {
                         branch.as_ref().map_or(Validity::Valid, |(branch, own)| {
                             branch_validity(&facts.git_dir, check, branch, &facts.head, *own)
