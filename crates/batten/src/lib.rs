@@ -996,13 +996,18 @@ fn notice_due(stamp: &Path, now: u64, tag: &str) -> bool {
 /// Where the notice stamps its lookup for `branch`: one file per branch under
 /// the repository's state directory, keyed as the record is, so a branch cut
 /// inside the day has no stamp of its own and is due, and a branch switched
-/// back to keeps the window it had.
+/// back to keeps the window it had. Every detached HEAD shares one stamp, so a
+/// bisect leaves one file rather than one per step.
 fn notice_stamp(root: &Path, branch: &str) -> Result<std::path::PathBuf> {
-    let name = branch.replace('%', "%25").replace('/', "%2F");
+    let key = if branch.starts_with("detached-") {
+        "detached"
+    } else {
+        branch
+    };
     Ok(state::repo_state_dir(root)?
         .join("engine")
-        .join("update-notice")
-        .join(name))
+        .join("update-notice.d")
+        .join(land::red_head_slug(key)))
 }
 
 /// Write the `engine-fresh` line into the record's family: stale when the pin
@@ -1038,31 +1043,13 @@ fn clear_outdated(ask: &Outdated) -> Result<()> {
     }
 }
 
-/// The worktree's config and its release pin, for both halves of `engine
-/// outdated`. No release pin clears the record, since there is nothing to be
-/// fresh against, and answers `None` with the config's path.
-fn declared_release(
-    ask: &Outdated,
-) -> Result<(
-    std::path::PathBuf,
-    String,
-    std::path::PathBuf,
-    Option<String>,
-)> {
+/// The worktree's root, its config's text and its release pin, for both halves
+/// of `engine outdated`; it only reads.
+fn declared_release() -> Result<(std::path::PathBuf, String, Option<String>)> {
     let root = git::worktree_root(Path::new("."))?;
-    let path = root.join(config::CONFIG_FILE);
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let tag = if let Some(engine::Pin {
-        release: Some(tag),
-        source: None,
-    }) = engine::declared(&text)
-    {
-        Some(tag)
-    } else {
-        clear_outdated(ask)?;
-        None
-    };
-    Ok((root, text, path, tag))
+    let text = std::fs::read_to_string(root.join(config::CONFIG_FILE)).unwrap_or_default();
+    let tag = engine::declared(&text).and_then(|pin| pin.release.filter(|_| pin.source.is_none()));
+    Ok((root, text, tag))
 }
 
 /// `engine outdated --notice`, the session's half: ONE LOOKUP PER BRANCH AND
@@ -1071,8 +1058,8 @@ fn declared_release(
 /// it last spoke is not repeated. A suppressed notice with no record to write
 /// looks at nothing. Fallible here; its caller makes it best-effort.
 fn notice_once(ask: &Outdated, out: &mut dyn Write) -> Result<()> {
-    let (root, text, _, Some(tag)) = declared_release(ask)? else {
-        return Ok(());
+    let (root, text, Some(tag)) = declared_release()? else {
+        return clear_outdated(ask);
     };
     let now = now_unix();
     let branch = git::record_key(&root).unwrap_or_else(|_| String::from("-"));
@@ -1128,8 +1115,11 @@ fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
         let _ = notice_once(ask, out);
         return Ok(ExitCode::Success);
     }
-    let (_, _, path, tag) = declared_release(ask)?;
+    let (root, _, tag) = declared_release()?;
     let Some(tag) = tag else {
+        // No release pin is nothing to be fresh against.
+        clear_outdated(ask)?;
+        let path = root.join(config::CONFIG_FILE);
         writeln!(out, "{} no engine pin", path.display())?;
         return Ok(ExitCode::Violation);
     };
