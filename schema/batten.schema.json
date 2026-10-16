@@ -2579,6 +2579,11 @@
           "description": "Tool calls since the operator's last message with no assistant text\nbetween them (the ignored-operator shape). A count over typed events;\nno text is read beyond emptiness.",
           "type": "string",
           "const": "unanswered-human-calls"
+        },
+        {
+          "description": "Plan presentations this session, the in-flight one included\n(CLOUD-2383). A count over `Event::ToolCall` names, which the transcript\nalready types; no argument is read.",
+          "type": "string",
+          "const": "plan-exits"
         }
       ]
     },

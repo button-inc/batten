@@ -367,3 +367,143 @@ fn an_unreadable_transcript_is_could_not_look() {
         "and must never be a refusal\n{answer}{cause}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// `plan-exits` and the vendored first-plan refusal (CLOUD-2383)
+// ---------------------------------------------------------------------------
+
+/// The operator's correction, which the refusal must carry verbatim.
+const PLAN_SENTENCE: &str = "verify, pressure test, validate; present corrected plan";
+
+/// A repository enabling the vendored preset with the count it reads, as the
+/// committed authority enables it: one preset row, the extract on that row.
+fn plan_fixture(name: &str, transcript: Option<&str>) -> (PathBuf, PathBuf, Option<PathBuf>) {
+    let dir = scratch(&format!("plan-exits-{name}"));
+    let home = scratch(&format!("plan-exits-home-{name}"));
+    write(
+        &dir,
+        "batten.toml",
+        r#"version = 1
+
+[[rule]]
+id = "plan write refused"
+kind = "policy"
+scope = "mediated_call"
+preset = "claude-code-cloud"
+severity = "deny"
+
+[[rule.extract]]
+id = "plan-exits"
+count = "plan-exits"
+"#,
+    );
+    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    let path = transcript.map(|body| {
+        write(&dir, "session.jsonl", body);
+        dir.join("session.jsonl")
+    });
+    (dir, home, path)
+}
+
+/// A session whose assistant turns call `tools`, in order, in the host's shape.
+/// The last entry stands for the call in flight: the host has written it by the
+/// time the pre-tool hook reads the file.
+fn calls(tools: &[&str]) -> String {
+    tools
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            serde_json::json!({
+                "type": "assistant",
+                "sessionId": "s-1",
+                "message": {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": format!("t{index}"), "name": name, "input": {}}
+                ]},
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Drive one plan-mode presentation through `batten adjudicate`.
+fn present(dir: &Path, home: &Path, transcript: Option<&Path>) -> String {
+    let envelope = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "permission_mode": "plan",
+        "tool_name": "ExitPlanMode",
+        "tool_input": {},
+        "transcript_path": transcript.map(|path| path.display().to_string()),
+    })
+    .to_string();
+    let mut invocation = batten();
+    invocation
+        .current_dir(dir)
+        .state_home(home)
+        .args(["adjudicate", "--harness", "claude-code"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = invocation.spawn().expect("spawn batten adjudicate");
+    {
+        use std::io::Write as _;
+        let mut sink = child.stdin.take().expect("the child's stdin");
+        sink.write_all(envelope.as_bytes())
+            .expect("write the envelope");
+    }
+    let outcome = child.wait_with_output().expect("run batten adjudicate");
+    let (answer, cause) = channels(&outcome);
+    format!("{answer}{cause}")
+}
+
+#[test]
+fn the_first_plan_exit_of_a_session_is_refused_with_the_operator_sentence() {
+    let (dir, home, transcript) = plan_fixture("first", Some(&calls(&["ExitPlanMode"])));
+    let said = present(&dir, &home, transcript.as_deref());
+    assert!(
+        said.contains("plan check first") && said.contains("\"deny\""),
+        "a session's first presentation must be refused by the vendored class\n{said}"
+    );
+    assert!(
+        said.contains(PLAN_SENTENCE),
+        "and the refusal must carry the operator's sentence verbatim\n{said}"
+    );
+}
+
+#[test]
+fn a_second_plan_exit_is_admitted() {
+    // The first presentation was refused and stays recorded, so the retry reads 2.
+    let (dir, home, transcript) = plan_fixture(
+        "second",
+        Some(&calls(&["ExitPlanMode", "Read", "ExitPlanMode"])),
+    );
+    let said = present(&dir, &home, transcript.as_deref());
+    assert!(
+        !said.contains("plan check first"),
+        "a later presentation must not be refused again\n{said}"
+    );
+}
+
+#[test]
+fn a_plan_exit_with_no_transcript_is_admitted() {
+    // Could-not-look, the common case (CLOUD-388): an unread count asks nothing.
+    let (dir, home, transcript) = plan_fixture("unread", None);
+    let said = present(&dir, &home, transcript.as_deref());
+    assert!(
+        !said.contains("plan check first"),
+        "no transcript must never read as a first presentation\n{said}"
+    );
+}
+
+#[test]
+fn plan_exits_counts_only_exit_plan_mode_calls() {
+    // Two calls of other tools before the in-flight presentation: a count over
+    // every call would read 3 and admit it.
+    let (dir, home, transcript) =
+        plan_fixture("only", Some(&calls(&["Bash", "Read", "ExitPlanMode"])));
+    let said = present(&dir, &home, transcript.as_deref());
+    assert!(
+        said.contains("plan check first"),
+        "calls to other tools must not move the count\n{said}"
+    );
+}

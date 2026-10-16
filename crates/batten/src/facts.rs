@@ -3937,6 +3937,10 @@ pub enum Extraction {
     /// between them (the ignored-operator shape). A count over typed events;
     /// no text is read beyond emptiness.
     UnansweredHumanCalls,
+    /// Plan presentations this session, the in-flight one included
+    /// (CLOUD-2383). A count over `Event::ToolCall` names, which the transcript
+    /// already types; no argument is read.
+    PlanExits,
 }
 
 impl Extraction {
@@ -3985,6 +3989,9 @@ impl Extraction {
             Extraction::UnansweredHumanCalls => {
                 recorded(Kind::Turns).then(|| stream.repeats().unanswered_human_calls)
             }
+            // Gated on the kind it counts, as `ToolCalls` is: a host recording no
+            // tool calls cannot say a plan was never presented.
+            Extraction::PlanExits => recorded(Kind::ToolCalls).then(|| stream.repeats().plan_exits),
         }
     }
 }

@@ -640,7 +640,21 @@ pub struct Repeats {
     /// run, so a session that is thinking between actions is not a session that
     /// has stopped acting.
     pub agent_turn_run: usize,
+    /// Plan presentations: calls to the plan-mode exit tool, the in-flight one
+    /// included (CLOUD-2383).
+    ///
+    /// A total rather than a run, and here rather than on [`Counts`] for that
+    /// struct's reason: no reader of the `-J` capability document needs it. The
+    /// call being judged is already in the transcript when the pre-tool hook
+    /// reads it, so a session's first presentation reads `1`; a refused call
+    /// stays recorded, so the retry reads `2`.
+    pub plan_exits: usize,
 }
+
+/// The tool a plan-mode session calls to present its plan, as Claude Code's
+/// transcript spells it. A transcript naming no such call counts zero, which a
+/// module reading this member must treat as "not presented", never as "absent".
+const PLAN_EXIT_TOOL: &str = "ExitPlanMode";
 
 /// What [`Stream::counts`], [`Stream::records`] and [`Stream::repeats`] answer,
 /// carried as a FORWARD fold so a transcript can be read once and then only its
@@ -677,6 +691,7 @@ pub struct Tally {
     /// (`false`); `None` before either.
     operator_marker: Option<bool>,
     calls_since_marker: usize,
+    plan_exits: usize,
 }
 
 /// The transcript at `path`, tallied by reading only what was appended since the
@@ -777,7 +792,7 @@ fn tally_under(path: &Path, shape: RecordShape, cache: Option<&Path>) -> Option<
 const HEAD_PROBE: u64 = 64 * 1024;
 
 /// Bump on any change to [`Tally`] or [`Tallied`]; every older entry misses.
-const TALLY_FORMAT: &str = "batten-transcript-tally-2";
+const TALLY_FORMAT: &str = "batten-transcript-tally-3";
 
 /// What [`tally_appended`] persists between calls.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -859,11 +874,14 @@ impl Tally {
                 }
             }
             Event::TurnEnd(_) => self.seen |= Kind::Turns.bit(),
-            Event::ToolCall { .. } => {
+            Event::ToolCall { name, .. } => {
                 self.tool_calls += 1;
                 self.seen |= Kind::ToolCalls.bit();
                 self.agent_turn_run = 0;
                 self.calls_since_marker += 1;
+                if name == PLAN_EXIT_TOOL {
+                    self.plan_exits += 1;
+                }
             }
             Event::ToolResult { failed, .. } => {
                 self.seen |= Kind::ToolResults.bit();
@@ -925,6 +943,7 @@ impl Tally {
                 0
             },
             agent_turn_run: self.agent_turn_run,
+            plan_exits: self.plan_exits,
         }
     }
 }
@@ -1104,6 +1123,14 @@ impl Stream {
         if spoke {
             repeats.unanswered_human_calls = calls;
         }
+        // A TOTAL, not a run, so it reads the whole stream rather than a tail.
+        repeats.plan_exits = self
+            .records
+            .iter()
+            .filter(|record| {
+                matches!(&record.event, Event::ToolCall { name, .. } if name == PLAN_EXIT_TOOL)
+            })
+            .count();
         repeats
     }
 

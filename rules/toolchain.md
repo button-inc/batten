@@ -63,6 +63,15 @@ all. `batten record plan` is what landed instead, and `policy/plan-complete.rego
 refuses a branch that recorded no plan while its diff is non-empty — the arm that
 makes an empty store a finding rather than a pass.
 
+**The rule binds the neutral core, and a vendor preset is where the exception
+lives.** A gate over one harness's own tool belongs in THAT harness's preset,
+which only that harness's consumers enable: `plan write refused` mediates Claude
+Code's plan mode from `claude-code-cloud`, and `plan check first` (CLOUD-2383)
+refuses a session's first `ExitPlanMode` from the same preset. Neither claims to
+answer for the other harnesses, so neither is the silent pass this rule exists to
+prevent — the count it reads is could-not-look wherever no transcript names the
+tool.
+
 **DISABLEABILITY IS UNIVERSAL AND IS NOT THE ARGUMENT.** That reasoning was
 offered first and is wrong: this harness's own todo tools can be switched off,
 and Gemini CLI documents `useWriteTodos: false` for exactly that, so "the others
@@ -751,8 +760,10 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   whose cost is paid in CI minutes when it is skipped. Bypass:
   `BATTEN_READY_GUARD_BYPASS=1`.
 
-**`ExitPlanMode` and `AskUserQuestion` are ungated, and that is a decision rather
-than a gap** (CLOUD-515). `plan-hold` gated them for one day: a deny until a
+**`ExitPlanMode` and `AskUserQuestion` are not held for occupancy, and that is a
+decision rather than a gap** (CLOUD-515). The one gate on `ExitPlanMode` is
+`plan check first` (CLOUD-2383), which refuses a session's first plan once for a
+verified pass and is about the plan, not the reclaim. `plan-hold` gated them for one day: a deny until a
 backgrounded sleeper occupied the container, on the premise that occupancy defers
 the reclaim that destroys a human's typed approval. The premise was measured twice
 and failed twice (CLOUD-491), its own sensor never returned a single reading, and
