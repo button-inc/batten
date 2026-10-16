@@ -86,6 +86,19 @@ fn pin_source(dir: &Path, digest: &str) {
 /// child decided nothing, so nothing it said may reach the harness's stdout.
 const MARKER: &str = "the-crashing-build-spoke";
 
+/// What `batten.toml` asks for. Deliberately NOT [`built`] — the pin is stale
+/// by construction, and that is the whole reason a follow happens at all. Make
+/// the two equal and every case here passes over a tree nothing was followed
+/// in. Functions rather than consts because `str::repeat` is not `const`.
+fn pinned() -> String {
+    "1".repeat(64)
+}
+
+/// What a stub build stamps itself with.
+fn built() -> String {
+    "2".repeat(64)
+}
+
 /// A checkout build that records every run, says one line, and dies of a code
 /// the §7 table does not name.
 ///
@@ -109,16 +122,21 @@ fn speaking_build(at: &Path, stamp: &str) {
 }
 
 /// A stamped, executable stand-in for the checkout's release build.
-///
-/// The stamp is written through [`batten::engine::stamp_path`] rather than
-/// beside a `"batten.source"` literal, so a change to `STAMP_SUFFIX` cannot
-/// leave these fixtures writing a file the engine no longer reads.
-fn stub_build(at: &Path, stamp: &str, script: &str) {
-    std::fs::create_dir_all(at).unwrap();
+fn stub_build(at: &Path, digest: &str, script: &str) {
     let build = at.join("batten");
     common::write(at, "batten", script);
     make_executable(&build);
-    std::fs::write(batten::engine::stamp_path(&build), format!("{stamp}\n")).unwrap();
+    stamp(&build, digest);
+}
+
+/// Stamp `build` with `digest`, through the engine's own writer.
+///
+/// [`batten::engine::stamp`] rather than a hand-rolled `write`, so the
+/// fixtures produce whatever the engine produces — the path AND the contents.
+/// Spelling either here would let the two drift, which is the defect the
+/// production half of this change exists to close.
+fn stamp(build: &Path, digest: &str) {
+    batten::engine::stamp(build, digest).expect("stamp the stub build");
 }
 
 /// How many times a stub build was spawned, read from the file it appends to.
@@ -138,7 +156,7 @@ fn runs(dir: &Path) -> usize {
 /// one shared fixture module for both files; it would also end the second copy
 /// of the environment-scrub list, which is the half that silently rots when a
 /// new variable is added to one and not the other. Not done here because it
-/// edits a suite this change does not otherwise touch — CLOUD-2430.
+/// edits a suite this change does not otherwise touch — CLOUD-2431.
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: these cases run a private COPY of the compiled binary, which `common::batten` cannot target"
@@ -256,8 +274,8 @@ fn a_crashing_checkout_build_never_fails_the_hook_open() {
     let dir = repo("engine-2376-crash-follow");
     let installed = common::scratch_outside_tree("engine-2376", "crash-follow-installed");
     let binary = private_binary(&installed);
-    pin_source(&dir, &"1".repeat(64));
-    crashing_build(&dir, &"2".repeat(64));
+    pin_source(&dir, &pinned());
+    crashing_build(&dir, &built());
 
     let output = run(
         &binary,
@@ -283,8 +301,8 @@ fn a_crashing_checkout_build_never_fails_the_hook_open() {
         &ADJUDICATE,
         &bash_envelope("crash-handoff", "ls"),
     );
-    pin_source(&dir, &"1".repeat(64));
-    crashing_build(&dir, &"2".repeat(64));
+    pin_source(&dir, &pinned());
+    crashing_build(&dir, &built());
 
     let output = run_from(
         &binary,
@@ -340,13 +358,9 @@ fn a_followed_exec_still_passes_its_childs_code_and_bytes_through() {
     let dir = repo("engine-2376-exec-passthrough");
     let installed = common::scratch_outside_tree("engine-2376", "exec-passthrough-installed");
     let binary = private_binary(&installed);
-    pin_source(&dir, &"1".repeat(64));
+    pin_source(&dir, &pinned());
     let build = private_build(&dir.join("target").join("release").join("batten"));
-    std::fs::write(
-        batten::engine::stamp_path(&build),
-        format!("{}\n", "2".repeat(64)),
-    )
-    .unwrap();
+    stamp(&build, &built());
 
     // `--tee` because capturing is `exec`'s default since CLOUD-429; the claim
     // here is that a FOLLOWED engine's passthrough is byte-for-byte what an
@@ -382,9 +396,9 @@ fn a_source_pin_is_followed_into_a_redirected_target_dir() {
     let dir = repo("engine-2376-redirected-target");
     let installed = common::scratch_outside_tree("engine-2376", "redirected-target-installed");
     let binary = private_binary(&installed);
-    pin_source(&dir, &"1".repeat(64));
+    pin_source(&dir, &pinned());
     let elsewhere = dir.join("elsewhere");
-    speaking_build(&elsewhere.join("release"), &"2".repeat(64));
+    speaking_build(&elsewhere.join("release"), &built());
     assert!(
         !dir.join("target").join("release").join("batten").exists(),
         "the only build is the redirected one"
@@ -401,6 +415,55 @@ fn a_source_pin_is_followed_into_a_redirected_target_dir() {
     assert!(
         text(&output).contains("checkout build ran config show"),
         "the pin is followed to the build cargo was told to write: {}",
+        text(&output)
+    );
+}
+
+/// A BUILD OUTSIDE THE CHECKOUT IS NOT THE CHECKOUT'S OWN (CLOUD-2376).
+///
+/// The mirror of the case above, and the reason the redirect is contained
+/// rather than honoured whole. `CARGO_TARGET_DIR` is read from THIS process,
+/// so an absolute one — a shared target directory, which CI images commonly
+/// set — would otherwise answer `checkout_build` for every root alike. The
+/// hook's load-fault hand-off asks about the envelope's AUTHORITY, another
+/// checkout entirely, and would have followed a source pin into a stranger's
+/// engine; `collect` asks so the pruner spares the binary the hook execs, and
+/// would have spared that stranger while collecting the real one.
+///
+/// Here the only build sits outside the repository and the variable points
+/// straight at it. Following it would be the defect, so the verb must run
+/// under the engine it was invoked as, and the refusal must name the update.
+#[test]
+fn a_build_outside_the_checkout_is_not_the_checkouts_own() {
+    let dir = repo("engine-2376-foreign-target");
+    let installed = common::scratch_outside_tree("engine-2376", "foreign-target-installed");
+    let binary = private_binary(&installed);
+    pin_source(&dir, &pinned());
+    // OUTSIDE the repository, and absolute — `scratch_outside_tree` is where
+    // this suite puts a directory that is nobody's checkout.
+    let foreign = common::scratch_outside_tree("engine-2376", "foreign-target-dir");
+    speaking_build(&foreign.join("release"), &built());
+    assert!(
+        !dir.join("target").join("release").join("batten").exists(),
+        "the only build is the foreign one"
+    );
+
+    let output = run_from(
+        &binary,
+        &dir,
+        &dir,
+        &["config", "show"],
+        "",
+        &[("CARGO_TARGET_DIR", foreign.as_path())],
+    );
+    assert!(
+        !text(&output).contains("checkout build ran"),
+        "a build outside the checkout is never followed: {}",
+        text(&output)
+    );
+    assert!(
+        text(&output).contains("batten engine install"),
+        "and the refusal names the update: {}",
         text(&output)
     );
 }
