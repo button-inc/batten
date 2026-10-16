@@ -10949,8 +10949,7 @@ fn run_land_singleton(
         }
         // Unregistered only now, so both passes read its group. ONE LOOK: waiting
         // for the group to empty never ends for a group just KILLed (zombies
-        // count) or a reused pgid. A record outliving that look is CLOUD-2371 and
-        // CLOUD-2372's.
+        // count) or a reused pgid. A record outliving that look is CLOUD-2372's.
         task::unregister(&git_dir, &entry.pid);
     }
     if reaped > 0 {
