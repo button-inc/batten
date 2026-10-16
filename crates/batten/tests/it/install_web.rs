@@ -816,11 +816,11 @@ fn run_dist(ws: &std::path::Path, args: &[&str]) {
         clippy::disallowed_types,
         reason = "stays, and test-only: the subject is cargo-dist's own generator, so the case runs it rather than a restatement of it"
     )]
-    let ran = Command::new("dist")
+    let ran = Command::new(common::require_bin("cargo-dist", "dist"))
         .args(args)
         .current_dir(ws)
         .output()
-        .expect("cargo-dist must be installed: it is a pinned [tools] entry");
+        .expect("run the pinned dist");
     assert!(
         ran.status.success(),
         "dist {}: {}",

@@ -140,7 +140,7 @@ fn toy(case: &str) -> PathBuf {
 /// clippy waited on it until the suite's bound killed the run (CLOUD-2059). Set
 /// on the spawn, because the variable outranks `cargo --config build.target-dir`.
 fn toy_launcher(toy: &Path) -> symbols::Launcher {
-    let cargo = crate::common::require_tool("cargo");
+    let cargo = crate::common::require_bin("rust", "cargo");
     let target = toy.join("target");
     symbols::Launcher::new(cargo.to_str().expect("utf-8"), &[])
         .with_env("CARGO_TARGET_DIR", target.to_str().expect("utf-8"))

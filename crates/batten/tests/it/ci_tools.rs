@@ -442,22 +442,28 @@ fn the_committed_workflows_and_manifest_agree() {
     );
 }
 
-/// Whether a `run` text runs the suite (CLOUD-2381), given the mise tasks known
-/// to: a non-comment line that runs `nextest run` (not `--no-run`), `llvm-cov
-/// --workspace`, `hk check --all` with the slow tier (hk's `test` step is `mise
-/// run test:cargo`), or `mise run` of a task in `suite`, as a whole word.
+/// Whether a `run` text runs the suite (CLOUD-2381, CLOUD-2388), given the mise
+/// tasks known to. Per line, a leading-`#` line skipped and a trailing ` #`
+/// comment cut: `nextest run`, `cargo test` or `llvm-cov` over `--workspace`
+/// (not `--no-run`; a filtered run is not the suite), `hk check --all` with the
+/// slow tier (hk's `test` step is `mise run test:cargo`), `mutate sweep`, or
+/// `mise run` of a task in `suite`, its leading flags skipped.
 //MUTANT suite-via-hk-unseen|s@ (line.contains("hk check --all")@ (false@|every_suite_job_installs_the_pinned_tools_its_cases_require
 fn runs_suite(run: &str, suite: &BTreeSet<String>) -> bool {
     run.lines()
-        .map(str::trim)
+        .map(|line| line.split(" #").next().unwrap_or(line).trim())
         .filter(|line| !line.starts_with('#'))
         .any(|line| {
-            (line.contains("nextest run") && !line.contains("--no-run"))
-                || line.contains("llvm-cov --workspace")
+            (["nextest run", "cargo test", "llvm-cov"]
+                .iter()
+                .any(|runner| line.contains(runner))
+                && line.contains("--workspace")
+                && !line.contains("--no-run"))
                 || (line.contains("hk check --all") && !line.contains("!slow"))
+                || line.contains("mutate sweep")
                 || line.split("mise run ").skip(1).any(|rest| {
                     rest.split_whitespace()
-                        .next()
+                        .find(|word| !word.starts_with('-'))
                         .is_some_and(|task| suite.contains(task))
                 })
         })
@@ -466,11 +472,11 @@ fn runs_suite(run: &str, suite: &BTreeSet<String>) -> bool {
 /// The mise tasks that run the suite: closed over `mise run` and `depends`, so
 /// a wrapper task is found from what it runs, never from a list of names.
 fn suite_tasks(manifest: &toml::Value) -> BTreeSet<String> {
-    let tasks = manifest["tasks"].as_table().expect("[tasks]");
-    let mut suite = BTreeSet::new();
-    loop {
-        let before = suite.len();
-        for (name, task) in tasks {
+    let tasks: Vec<(&String, String, Vec<&str>)> = manifest["tasks"]
+        .as_table()
+        .expect("[tasks]")
+        .iter()
+        .map(|(name, task)| {
             let body = match task.get("run") {
                 Some(toml::Value::String(line)) => line.clone(),
                 Some(toml::Value::Array(lines)) => lines
@@ -480,15 +486,24 @@ fn suite_tasks(manifest: &toml::Value) -> BTreeSet<String> {
                     .join("\n"),
                 _ => String::new(),
             };
-            let depends = task.get("depends").and_then(toml::Value::as_array);
-            let via_depends = depends.is_some_and(|deps| {
-                deps.iter()
-                    .filter_map(toml::Value::as_str)
-                    .filter_map(|dep| dep.split_whitespace().next())
-                    .any(|dep| suite.contains(dep))
-            });
-            if via_depends || runs_suite(&body, &suite) {
-                suite.insert(name.clone());
+            let depends = task
+                .get("depends")
+                .and_then(toml::Value::as_array)
+                .map_or_else(Vec::new, |deps| {
+                    deps.iter()
+                        .filter_map(toml::Value::as_str)
+                        .filter_map(|dep| dep.split_whitespace().next())
+                        .collect()
+                });
+            (name, body, depends)
+        })
+        .collect();
+    let mut suite = BTreeSet::new();
+    loop {
+        let before = suite.len();
+        for (name, body, depends) in &tasks {
+            if depends.iter().any(|dep| suite.contains(*dep)) || runs_suite(body, &suite) {
+                suite.insert((*name).clone());
             }
         }
         if suite.len() == before {
@@ -497,53 +512,78 @@ fn suite_tasks(manifest: &toml::Value) -> BTreeSet<String> {
     }
 }
 
+/// A tool's name as `[tools]` and `install_args` both reduce to it: the last
+/// `/` or `:` segment, any `@version` dropped.
+fn tool_name(key: &str) -> String {
+    let key = key.split('@').next().unwrap_or(key);
+    key.rsplit(['/', ':']).next().unwrap_or(key).to_owned()
+}
+
+/// Every tool a `require_tool` or `require_bin` call names across the crate's
+/// sources: the call's first argument, which is the `[tools]` entry's last
+/// segment (CLOUD-2388).
+//MUTANT require-call-unread|s@^                required.insert(tool.to_owned());$@@|every_suite_job_installs_the_pinned_tools_its_cases_require
+fn required_tools() -> BTreeSet<String> {
+    // Split, so this file's own text is not read as a requirement.
+    let calls = [
+        concat!("require_", "tool(\""),
+        concat!("require_", "bin(\""),
+    ];
+    let mut required = BTreeSet::new();
+    for path in common::rust_sources() {
+        let text = std::fs::read_to_string(&path).unwrap();
+        for call in calls {
+            for (at, _) in text.match_indices(call) {
+                let tool = text[at + call.len()..]
+                    .split('"')
+                    .next()
+                    .unwrap_or_default();
+                assert!(
+                    !tool.is_empty() && tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+                    "{}: a requirement names no tool",
+                    path.display()
+                );
+                required.insert(tool.to_owned());
+            }
+        }
+    }
+    required
+}
+
 /// EVERY JOB THAT RUNS THE SUITE INSTALLS EVERY PINNED TOOL A CASE REQUIRES
 /// (CLOUD-2381). `tool pin wrong` is blind to this twice over: it reads what
 /// `batten.toml` rows spawn, never what a case spawns, and ANY install list in
 /// ANY workflow satisfies it. So the dist tamper case passed locally while the
 /// `ci` job, the `musl` leg and release-plz's musl cache warm all ran the suite
-/// without cargo-dist, and with auto-install off each failed only in CI. A case
-/// that requires a pinned tool says so in one spelling, the quoted tool name
-/// followed by `mark` below (as `install_web.rs`'s `run_dist` does), and every
-/// job whose steps run the suite is held to each tool so named in its OWN list.
+/// without cargo-dist, and with auto-install off each failed only in CI.
+///
+/// THE REQUIREMENT IS THE RESOLVING CALL (CLOUD-2388). A case reaches a pinned
+/// tool through `common::require_tool` or `require_bin`, whose first argument
+/// names the `[tools]` entry; the first version read a prose mark instead, and
+/// `cache-warm-musl` ran the three pkl cases without pkl on every `main` push.
 ///
 /// A case's `cfg!` gate is not read: a job on any OS that runs the suite
-/// installs every required tool, which `mise.lock` pins for every platform.
+/// installs every required tool, which `mise.lock` pins for every platform. A
+/// mise-action step with no `install_args` installs every `[tools]` entry.
 #[test]
 fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
     use yaml_rust2::YamlLoader;
-    // Split, so this file's own text is not read as a requirement.
-    let mark = concat!(" must be ", "installed: it is a pinned [tools] entry");
-    let mut required = BTreeSet::new();
-    for path in common::rust_sources() {
-        let text = std::fs::read_to_string(&path).unwrap();
-        for (at, _) in text.match_indices(mark) {
-            let tool = text[..at].rsplit('"').next().unwrap_or_default();
-            assert!(
-                !tool.is_empty() && tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
-                "{}: a requirement names no tool",
-                path.display()
-            );
-            required.insert(tool.to_owned());
-        }
+    let required = required_tools();
+    for floor in ["cargo-dist", "pkl"] {
+        assert!(
+            required.contains(floor),
+            "the {floor} requirement went unread: {required:?}"
+        );
     }
-    assert!(
-        required.contains("cargo-dist"),
-        "the dist tamper case's requirement went unread: {required:?}"
-    );
-    // The mark says "a pinned [tools] entry"; hold it to that.
     let manifest: toml::Value =
         toml::from_str(&std::fs::read_to_string(common::at_root("mise.toml")).unwrap()).unwrap();
-    let tool_name = |key: &str| {
-        let key = key.split('@').next().unwrap_or(key);
-        key.rsplit(['/', ':']).next().unwrap_or(key).to_owned()
-    };
-    let pinned: BTreeSet<String> = manifest["tools"]
-        .as_table()
-        .expect("[tools]")
-        .keys()
-        .map(|key| tool_name(key))
-        .collect();
+    let keys = manifest["tools"].as_table().expect("[tools]");
+    let pinned: BTreeSet<String> = keys.keys().map(|key| tool_name(key)).collect();
+    assert_eq!(
+        pinned.len(),
+        keys.len(),
+        "two [tools] entries share a last segment, so one could satisfy the other"
+    );
     let unpinned: Vec<&String> = required.difference(&pinned).collect();
     assert!(
         unpinned.is_empty(),
@@ -580,6 +620,15 @@ fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
                 continue;
             }
             suite_jobs.push(format!("{file}:{name}"));
+            let installs_all = steps.iter().any(|step| {
+                step["uses"]
+                    .as_str()
+                    .is_some_and(|uses| uses.starts_with("jdx/mise-action@"))
+                    && step["with"]["install_args"].is_badvalue()
+            });
+            if installs_all {
+                continue;
+            }
             let installed: BTreeSet<String> = steps
                 .iter()
                 .filter_map(|step| step["with"]["install_args"].as_str())
@@ -593,7 +642,12 @@ fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
             );
         }
     }
-    for expected in ["ci.yml:ci", "rust.yml:musl", "coverage.yml:coverage"] {
+    for expected in [
+        "ci.yml:ci",
+        "rust.yml:musl",
+        "coverage.yml:coverage",
+        "release-plz.yml:cache-warm-musl",
+    ] {
         assert!(
             suite_jobs.iter().any(|job| job == expected),
             "{expected} runs the suite but was not found: {suite_jobs:?}"
@@ -612,7 +666,14 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
     let manifest: toml::Value =
         toml::from_str(&std::fs::read_to_string(common::at_root("mise.toml")).unwrap()).unwrap();
     let suite = suite_tasks(&manifest);
-    for task in ["ci", "test:cargo", "test:musl", "coverage", "hooks"] {
+    for task in [
+        "ci",
+        "test:cargo",
+        "test:musl",
+        "coverage",
+        "hooks",
+        "mutant",
+    ] {
         assert!(suite.contains(task), "{task} runs the suite: {suite:?}");
     }
     // hk's own test step is what makes `hk check --all` a suite run.
@@ -620,10 +681,12 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
     assert!(hk.contains(r#"check = "mise run test:cargo""#));
     for run in [
         "mise run ci",
+        "mise run -q ci",
         "mise run test:musl",
         "mise run test:cargo --",
         "mise run batten -- ci step --summary x -- mise run coverage",
         "mise exec -- cargo nextest run --workspace",
+        "mise exec -- cargo test --workspace",
     ] {
         assert!(runs_suite(run, &suite), "{run}");
     }
@@ -632,7 +695,9 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "mise run ci-drift",
         "mise run batten -- ci step -- mise run ci-slow-needed --",
         "mise exec -- cargo nextest run --no-run --workspace",
+        "mise exec -- cargo nextest run -p batten --test it hook_profile::",
         "# then mise run ci",
+        "mise run tree-clean # runs after mise run ci",
     ] {
         assert!(!runs_suite(run, &suite), "{run}");
     }

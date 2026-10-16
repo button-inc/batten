@@ -573,9 +573,24 @@ fn archiver_argv(
     built_dir: &Path,
     file: String,
 ) -> Vec<String> {
+    // Git's GNU tar, first on a bash step's PATH, also reads an absolute
+    // `C:\…` archive as a remote host, so a Windows host tars with bsdtar too.
+    let bsdtar = || {
+        system_root
+            .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
+            .join("System32")
+            .join("tar.exe")
+            .to_string_lossy()
+            .into_owned()
+    };
     if !is_windows_target(target) {
+        let tar = if windows_host {
+            bsdtar()
+        } else {
+            "tar".to_owned()
+        };
         return vec![
-            "tar".to_owned(),
+            tar,
             "-czf".to_owned(),
             archive,
             "-C".to_owned(),
@@ -586,11 +601,7 @@ fn archiver_argv(
     if !windows_host {
         return vec!["zip".to_owned(), "-q".to_owned(), archive, file];
     }
-    let bsdtar = system_root
-        .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
-        .join("System32")
-        .join("tar.exe");
-    [bsdtar.to_string_lossy().into_owned()]
+    [bsdtar()]
         .into_iter()
         .chain(["--format", "zip", "-cf"].map(str::to_owned))
         .chain([archive, file])
@@ -892,9 +903,22 @@ mod tests {
         );
         assert_eq!(cross[0], "zip", "{cross:?}");
 
-        let linux = archiver_argv(
+        let linux_on_windows = archiver_argv(
             "x86_64-unknown-linux-gnu",
             true,
+            None,
+            "a.tar.gz".to_owned(),
+            dir,
+            "batten".to_owned(),
+        );
+        assert!(
+            linux_on_windows[0].starts_with(r"C:\Windows"),
+            "{linux_on_windows:?}"
+        );
+        assert_eq!(linux_on_windows[1], "-czf");
+        let linux = archiver_argv(
+            "x86_64-unknown-linux-gnu",
+            false,
             None,
             "a.tar.gz".to_owned(),
             dir,

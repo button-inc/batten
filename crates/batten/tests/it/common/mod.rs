@@ -1222,6 +1222,24 @@ pub(crate) fn committed_protected_declared() -> bool {
 /// When `mise` cannot run, or the tool does not resolve to a file.
 #[must_use]
 pub(crate) fn require_tool(name: &str) -> PathBuf {
+    require_bin(name, name)
+}
+
+/// [`require_tool`] for a pinned tool whose program has another name: `tool` is
+/// the `[tools]` entry's last segment, `bin` the program it provides.
+///
+/// THE CALL IS THE DECLARATION (CLOUD-2388). `ci_tools.rs` reads the first
+/// argument of every `require_tool`/`require_bin` call as a tool the suite needs
+/// and holds every workflow job that runs the suite to installing it, so a case
+/// that spawns a pinned tool any other way states a requirement no gate sees.
+/// `tool` is that declaration only; `bin` is what resolves.
+///
+/// # Panics
+///
+/// When `mise` cannot run, or `bin` does not resolve to a file.
+#[must_use]
+pub(crate) fn require_bin(tool: &str, bin: &str) -> PathBuf {
+    let name = bin;
     #[expect(
         clippy::disallowed_types,
         reason = "stays: resolving a pinned tool is what `mise exec` does in the task, and a fixture repo carries no mise config for `mise exec` to read (CLOUD-843, CLOUD-1268, CLOUD-1991)"
@@ -1234,7 +1252,7 @@ pub(crate) fn require_tool(name: &str) -> PathBuf {
     let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
     assert!(
         output.status.success() && path.is_file(),
-        "`{name}` is provisioned by mise.toml on every leg that runs this suite: {}",
+        "`{name}` (`{tool}`) is provisioned by mise.toml on every leg that runs this suite: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     path

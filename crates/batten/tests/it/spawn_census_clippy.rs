@@ -124,7 +124,7 @@ fn toy_clippy(cargo: &Path, dir: &Path) -> (bool, String) {
 
 #[test]
 fn a_new_spawn_with_no_annotation_is_refused() {
-    let cargo = common::require_tool("cargo");
+    let cargo = common::require_bin("rust", "cargo");
     let dir = toy("unannotated", BARE_SPAWN);
     let (passed, said) = toy_clippy(&cargo, &dir);
     assert!(!passed, "an unannotated spawn passed: {said}");
@@ -136,7 +136,7 @@ fn a_new_spawn_with_no_annotation_is_refused() {
 fn an_annotated_spawn_passes() {
     // The other side of (a): the annotation is what clears it, so the refusal
     // above is about the missing verdict rather than about the file.
-    let cargo = common::require_tool("cargo");
+    let cargo = common::require_bin("rust", "cargo");
     let dir = toy(
         "annotated",
         r#"#[expect(clippy::disallowed_types, reason = "stays: the toy case")]
@@ -154,7 +154,7 @@ fn a_stale_annotation_over_a_deleted_spawn_is_refused() {
     // WHY `expect` AND NOT `allow`. The spawn is gone and the annotation was left
     // behind; under `#[allow]` this is silent forever, and the census accumulates
     // rows describing code that is not there.
-    let cargo = common::require_tool("cargo");
+    let cargo = common::require_bin("rust", "cargo");
     let dir = toy(
         "stale",
         r#"#[expect(clippy::disallowed_types, reason = "stays: the spawn this described is gone")]
@@ -172,7 +172,7 @@ fn an_allow_in_place_of_an_expect_goes_quiet_which_is_why_expect_is_the_shape() 
     // that pass is the measurement behind the choice.
     // `spawn_census.rs::every_annotation_is_an_expect_carrying_a_verdict` is what
     // keeps the word from being changed in the real tree.
-    let cargo = common::require_tool("cargo");
+    let cargo = common::require_bin("rust", "cargo");
     let dir = toy(
         "allow",
         r#"#[allow(clippy::disallowed_types, reason = "stays: the spawn this described is gone")]
@@ -188,7 +188,7 @@ fn a_bare_command_import_that_is_not_std_s_needs_no_annotation() {
     // THE DISCRIMINATOR. `surface.rs` imports clap's `Command` bare, so the token
     // names two types in one crate. clippy matches the fully resolved path, so
     // this file is green with no annotation anywhere in it.
-    let cargo = common::require_tool("cargo");
+    let cargo = common::require_bin("rust", "cargo");
     let dir = toy(
         "other-command",
         r#"mod other {
@@ -219,7 +219,7 @@ fn at_warn_the_gate_reports_clean_and_at_deny_the_same_source_is_refused() {
     // CLOUD-822's measurement, reproduced as the argument for where the level
     // lives. Under `warn` a lint reports clean over an unannotated spawn, and the
     // agent then quotes the clean run as verification.
-    let cargo = common::require_tool("cargo");
+    let cargo = common::require_bin("rust", "cargo");
     let dir = toy("warn-then-deny", BARE_SPAWN);
     manifest(&dir, "warn");
     let (passed, said) = toy_clippy(&cargo, &dir);
