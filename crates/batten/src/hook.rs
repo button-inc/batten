@@ -7890,7 +7890,7 @@ pub fn history_read_ids(command: &str) -> Option<Vec<String>> {
 /// PURE, so it is tested without a process environment — a test cannot set one
 /// under `unsafe_code = "forbid"`.
 //MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT background-max-unclamped|s@\.min(2_147_483_647)@@|background_max_mirrors_the_host
+//MUTANT background-max-unclamped|s@\.clamp(7_200_000, 2_147_483_647)@.max(7_200_000)@|background_max_mirrors_the_host
 //MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
 pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
     let positive = |raw: Option<&str>| {
@@ -7899,7 +7899,7 @@ pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
     };
     let default = positive(default).unwrap_or(120_000);
     let maximum = positive(max).map_or(600_000.max(default), |value| value.max(default));
-    maximum.max(7_200_000).min(2_147_483_647)
+    maximum.clamp(7_200_000, 2_147_483_647)
 }
 
 fn program_reach(command: &str) -> Vec<serde_json::Value> {
