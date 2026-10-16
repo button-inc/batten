@@ -52,7 +52,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, run_with_stdin, stderr};
+use common::{Fixture, RETIRED_SUBSTITUTION_ROW, run_with_stdin, stderr};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -201,7 +201,7 @@ fn declared(key: &str) -> usize {
 
 /// The `reason` of one `[[rule]]` row a fixture here stages.
 fn rule_reason(id: &str) -> String {
-    let text = format!("{COMMITTED}\n{SUBSTITUTION_ROW}");
+    let text = format!("{COMMITTED}\n{RETIRED_SUBSTITUTION_ROW}");
     let config: toml::Value = toml::from_str(&text).expect("the staged config parses");
     config
         .get("rule")
@@ -399,27 +399,13 @@ fn session_provisioning(config: &str) -> (usize, usize) {
     (startup, handlers)
 }
 
-/// The substitution row this repository carried until CLOUD-2362 retired it,
-/// staged into every fixture here as a FIXTURE row.
+/// Stage `config`, the fixture [`common::RETIRED_SUBSTITUTION_ROW`] and the
+/// committed policy modules in a fixture named `name`.
 ///
 /// The fixture cases test the renderer over a `document`-route class, and
-/// `head -40 batten.toml` under this row was their canonical firing. The engine
-/// still offers the family to any consumer that declares it, so the row stands
-/// in for such a consumer rather than for this repository's policy.
-const SUBSTITUTION_ROW: &str = r#"
-[[rule]]
-id = "tool select other"
-kind = "pipeline"
-scope = "mediated_call"
-severity = "deny"
-substitutes = ["cat", "head", "tail", "sed:-n", "grep", "rg", "find", "ls", "wc"]
-reason = "Use the structured surface this session offers: a range of one file, a pattern across the tree, paths by glob, or what a name resolves to; `rules/scanning.md` picks between them. After a pipe these utilities are allowed."
-"#;
-
-/// Stage `config`, the fixture [`SUBSTITUTION_ROW`] and the committed policy
-/// modules in a fixture named `name`.
+/// `head -40 batten.toml` under that row is their canonical firing.
 fn stage(name: &str, config: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(&format!("{config}\n{SUBSTITUTION_ROW}"));
+    let staged = Fixture::new(name).config(&format!("{config}\n{RETIRED_SUBSTITUTION_ROW}"));
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR"))

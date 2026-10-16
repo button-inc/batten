@@ -30,7 +30,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, run, run_with_stdin, stderr};
+use common::{run, run_with_stdin, stderr, substitution_repo};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -44,22 +44,39 @@ fn payload(command: &str) -> String {
     )
 }
 
-fn verdict(command: &str) -> Option<i32> {
+/// One adjudication of `command` in `dir`, the single spawn every helper reads.
+fn run_in(dir: &Path, command: &str) -> std::process::Output {
     run_with_stdin(
-        &root(),
+        dir,
         &["adjudicate", "--harness", "exit-code"],
         &payload(command),
     )
-    .status
-    .code()
+}
+
+fn verdict_in(dir: &Path, command: &str) -> Option<i32> {
+    run_in(dir, command).status.code()
+}
+
+fn deny_in(dir: &Path, command: &str) {
+    assert_eq!(verdict_in(dir, command), Some(2), "must refuse: {command}");
+}
+
+fn allow_in(dir: &Path, command: &str) {
+    assert_eq!(verdict_in(dir, command), Some(0), "must allow: {command}");
+}
+
+/// The refusal text, for the cases where WHICH operand a deny names is the
+/// thing under test rather than the verdict.
+fn cause_in(dir: &Path, command: &str) -> String {
+    stderr(&run_in(dir, command))
 }
 
 fn assert_denied(command: &str) {
-    assert_eq!(verdict(command), Some(2), "must refuse: {command}");
+    deny_in(&root(), command);
 }
 
 fn assert_allowed(command: &str) {
-    assert_eq!(verdict(command), Some(0), "must allow: {command}");
+    allow_in(&root(), command);
 }
 
 /// [`assert_allowed`], with the call's backgrounding STATED.
@@ -401,55 +418,8 @@ fn each_shape_renders_its_own_cause() {
 // repository retired its own substitution row, `tool select other`, for want of
 // any evidence it improved an outcome, so the committed config no longer carries
 // one. The engine still offers the family to any consumer that declares it, and
-// these cases pin the engine's reading of such a row: the row below is the one
-// this repository carried, verbatim in everything the predicate reads.
-
-/// A repository whose only rule is a substitution row.
-///
-/// One per case, for the reason `shell_write_advisory.rs` measured: a shared
-/// fixture is wiped by the next `Fixture::new` while another thread uses it.
-fn substitution_repo(name: &str) -> PathBuf {
-    Fixture::new(&format!("substitution-{name}"))
-        .config(
-            "version = 1\n\n\
-             [[rule]]\n\
-             id = \"tool select other\"\n\
-             kind = \"pipeline\"\n\
-             scope = \"mediated_call\"\n\
-             severity = \"deny\"\n\
-             substitutes = [\"cat\", \"head\", \"tail\", \"sed:-n\", \"grep\", \"rg\", \"find\", \"ls\", \"wc\"]\n\
-             reason = \"Use the structured surface this session offers.\"\n",
-        )
-        .git()
-        .base_commit()
-        .build()
-}
-
-fn verdict_in(dir: &Path, command: &str) -> Option<i32> {
-    run_with_stdin(
-        dir,
-        &["adjudicate", "--harness", "exit-code"],
-        &payload(command),
-    )
-    .status
-    .code()
-}
-
-fn deny_in(dir: &Path, command: &str) {
-    assert_eq!(verdict_in(dir, command), Some(2), "must refuse: {command}");
-}
-
-fn allow_in(dir: &Path, command: &str) {
-    assert_eq!(verdict_in(dir, command), Some(0), "must allow: {command}");
-}
-
-fn cause_in(dir: &Path, command: &str) -> String {
-    stderr(&run_with_stdin(
-        dir,
-        &["adjudicate", "--harness", "exit-code"],
-        &payload(command),
-    ))
-}
+// these cases pin the engine's reading of such a row: `common::RETIRED_SUBSTITUTION_ROW`,
+// the one this repository carried, built per case by `common::substitution_repo`.
 
 /// `find`'s expression is never a target (CLOUD-2362).
 ///

@@ -852,11 +852,7 @@ fn bash_payload_in(cwd: &std::path::Path, command: &str) -> String {
     )
 }
 
-fn verdict_in(cwd: &std::path::Path, command: &str) -> Option<i32> {
-    verdict_in_repo(&substitution_repo(), cwd, command)
-}
-
-fn verdict_in_repo(repo: &Path, cwd: &Path, command: &str) -> Option<i32> {
+fn verdict_in(repo: &Path, cwd: &Path, command: &str) -> Option<i32> {
     run_with_stdin(
         repo,
         &["adjudicate", "--harness", "exit-code"],
@@ -866,27 +862,12 @@ fn verdict_in_repo(repo: &Path, cwd: &Path, command: &str) -> Option<i32> {
     .code()
 }
 
-/// A repository carrying a substitution row, since this one retired its own
-/// (CLOUD-2362). The containment cases below are about how such a row resolves
-/// a relative operand, so they need one to judge with. Built per call: a shared
-/// fixture is wiped by the next `Fixture::new` while another thread reads it.
-fn substitution_repo() -> PathBuf {
-    let name = format!(
-        "containment-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_nanos())
-    );
-    let repo = crate::common::Fixture::new(&name)
-        .config(
-            "version = 1\n\n\
-             [[rule]]\nid = \"tool select other\"\nkind = \"pipeline\"\n\
-             scope = \"mediated_call\"\nseverity = \"deny\"\nsubstitutes = [\"cat\"]\n\
-             reason = \"a fixture substitution row\"\n",
-        )
-        .git()
-        .base_commit()
-        .build();
+/// A repository carrying the retired substitution row (CLOUD-2362), with the
+/// subdirectory the containment cases reach a path from. This repository no
+/// longer declares the row, and these cases are about how such a row resolves
+/// a relative operand, so they need one to judge with.
+fn containment_repo(name: &str) -> PathBuf {
+    let repo = common::substitution_repo(&format!("containment-{name}"));
     std::fs::create_dir_all(repo.join("crates/batten")).expect("the fixture's subdirectory");
     repo
 }
@@ -901,14 +882,16 @@ fn one_file_outside_the_repository_gets_one_verdict_whichever_way_it_is_spelled(
     let dir = common::scratch_outside_tree("cloud-1109", "outside");
     std::fs::write(dir.join("err.txt"), "scratch\n").expect("the scratch file is writable");
     let absolute = dir.join("err.txt").display().to_string();
+    let repo = containment_repo("outside");
 
+    let relative = verdict_in(&repo, &dir, "cat err.txt");
     assert_eq!(
-        verdict_in(&dir, "cat err.txt"),
-        verdict_in(&dir, &format!("cat {absolute}")),
+        relative,
+        verdict_in(&repo, &dir, &format!("cat {absolute}")),
         "one file, two spellings, one verdict"
     );
     assert_eq!(
-        verdict_in(&dir, "cat err.txt"),
+        relative,
         Some(0),
         "and the verdict is allow: the repository does not contain it"
     );
@@ -919,10 +902,10 @@ fn a_relative_path_inside_the_repository_is_still_refused_from_a_subdirectory() 
     // THE DISCRIMINATOR. Without it the fix above is a blanket allow for every
     // relative operand, which would switch clause 3 off entirely — and a gate
     // that refuses nothing looks exactly like a gate that passed.
-    let repo = substitution_repo();
+    let repo = containment_repo("subdirectory");
     let inside = repo.join("crates");
     assert_eq!(
-        verdict_in_repo(&repo, &inside, "cat batten/Cargo.toml"),
+        verdict_in(&repo, &inside, "cat batten/Cargo.toml"),
         Some(2),
         "a path the repository contains, reached relatively from a subdirectory"
     );
@@ -1022,15 +1005,13 @@ fn a_backslash_continuation_is_one_command_and_is_still_refused() {
 /// A repository whose `[[redirect]]` table declares a `read` route for the
 /// memories and none for the authority or the workflows.
 ///
-/// It carries one unrelated `[[rule]]` because a config with no rule at all is
-/// never adjudicated past its first gate, so the read route would go unread.
+/// NOTHING ELSE, and that is the case `Policy::is_empty` once got wrong: a
+/// config whose only policy is a `read` route was read as empty, so the route
+/// was never adjudicated and the memory read below was allowed (CLOUD-2362).
 fn read_route_repo(name: &str) -> PathBuf {
     crate::common::Fixture::new(&format!("read-route-{name}"))
         .config(
             "version = 1\n\n\
-             [[rule]]\nid = \"fixture grep refused\"\nkind = \"pipeline\"\n\
-             scope = \"mediated_call\"\nseverity = \"deny\"\nsubstitutes = [\"grep\"]\n\
-             reason = \"a fixture row so the config is adjudicated\"\n\n\
              [[redirect]]\nglob = \".github/workflows/**\"\nmutation = \"change it in a pull request\"\n\n\
              [[redirect]]\nglob = \"batten.toml\"\nmutation = \"change it in a pull request\"\n\n\
              [[redirect]]\nglob = \".serena/memories/**\"\n\
