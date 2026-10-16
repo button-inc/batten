@@ -340,6 +340,28 @@ pub fn identify<'a>(pulls: &'a [Pull], head_sha: &str) -> Option<&'a Pull> {
 /// anything.
 pub const FETCH_WIDTH: usize = 8;
 
+/// A competitor fill, and whether it is one a verdict may be taken over.
+///
+/// **The two are separate because conflating them is the defect this whole
+/// module corrects.** [`races`]'s own header says an empty result means *looked
+/// and found none*, and that reading a *could not look* as one is the dead gate
+/// it exists to replace. A fill that lost a worker mid-flight has competitors
+/// carrying empty logs for no reason the forge gave, so judging it would report
+/// exactly that false green — the sequential fill this replaces could not
+/// produce the state at all, because a panic took the process with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Filled {
+    /// The listing in input order, each eligible competitor carrying its log.
+    pub pulls: Vec<Pull>,
+    /// Every eligible competitor answered, so this is a reading.
+    ///
+    /// A fetch that FAILED still answers — the caller collapses it to `""`, and
+    /// an empty log is the honest could-not-read for that one competitor, as it
+    /// was before. `false` means something stronger: a worker unwound and some
+    /// competitor was never asked at all.
+    pub complete: bool,
+}
+
 /// Fill in each competitor's `log`, fetching the eligible ones concurrently.
 ///
 /// # Why this is concurrent, and what the number was
@@ -415,7 +437,7 @@ pub fn with_logs(
     mine: &str,
     keys: &dyn Keys,
     fetch: impl Fn(&str) -> String + Sync,
-) -> Vec<Pull> {
+) -> Filled {
     let mut pulls = pulls;
     // ONLY WHERE THE CHEAP SOURCES FOUND NOTHING — the bound that keeps this
     // from being a round trip per open pull request however wide the fan-out is
@@ -446,6 +468,10 @@ pub fn with_logs(
         })
         .map(|(slot, pull)| (slot, pull.number.as_str()))
         .collect();
+    // Taken before the fan-out because `eligible` borrows `pulls`, and the
+    // write-back below needs it mutably: reading the length afterwards would
+    // hold the immutable borrow across the loop.
+    let wanted = eligible.len();
     // ONE SHARED INDEX TAKEN BY AT MOST `FETCH_WIDTH` WORKERS, never a thread
     // per pull: the width is the whole of the bound, and spawning per item
     // would make the peak the listing's length. An empty `eligible` spawns
@@ -455,18 +481,15 @@ pub fn with_logs(
     // worker that panics keeps the answers it had already sent — returning a
     // vector per worker lost every one of them.
     //
-    // THAT NARROWS THE LOSS; IT DOES NOT BOUND IT AT ONE FETCH. A worker that
-    // unwinds is gone and takes no further index, so the pool runs one narrower
-    // and the real cost is its in-flight fetch PLUS whatever no surviving worker
-    // reaches. With every worker dead the remaining competitors keep empty logs
-    // and this verb says "no open pull request races this branch's claim" at
-    // exit 0 — a false green on a completion gate, where the sequential fill
-    // would have propagated the panic instead. It is tolerated anyway because
-    // the alternative is a panic through `verify`'s whole pre-flight, and
-    // because `fetch` is already error-free by contract here: the caller
-    // collapses a failed read to `""`, so only a defect inside the forge path
-    // can unwind at all, and that defect is its own bug rather than this one's
-    // to carry.
+    // THAT NARROWS THE LOSS AND DOES NOT BOUND IT AT ONE FETCH, WHICH IS WHY
+    // THE COUNT IS RETURNED. A worker that unwinds is gone and takes no further
+    // index, so the pool runs one narrower and the loss is its in-flight fetch
+    // plus whatever no surviving worker reaches. Absorbing the panic is still
+    // right — the alternative is one through `verify`'s whole pre-flight — but
+    // absorbing it SILENTLY would leave competitors carrying empty logs for no
+    // reason the forge gave, and the caller would read that as "no races" at
+    // exit 0. So the answers are counted against the eligible set and
+    // [`Filled::complete`] carries the difference out.
     //
     // A CHANNEL RATHER THAN A `Mutex<Vec<_>>`, which is how this crate already
     // spells "workers publish answers to the calling thread" — `land::wait`'s
@@ -512,12 +535,21 @@ pub fn with_logs(
     // `rx` runs dry exactly when the last answer has been taken. Holding `tx`
     // across the loop would hang here forever.
     drop(tx);
+    let mut answered = 0_usize;
     for (slot, log) in rx {
+        answered += 1;
         if let Some(pull) = pulls.get_mut(slot) {
             pull.log = log;
         }
     }
-    pulls
+    // COUNTED AGAINST THE ELIGIBLE SET, never against the listing: `mine` and
+    // every competitor a cheap source already answered were deliberately not
+    // asked, so comparing against `pulls.len()` would report every ordinary
+    // fill incomplete.
+    Filled {
+        complete: answered == wanted,
+        pulls,
+    }
 }
 
 /// Every key this branch claims that a DIFFERENT open pull request claims too.

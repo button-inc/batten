@@ -7209,9 +7209,22 @@ fn run_claim_race(
     // passed in. The fetches run concurrently because this rule was the largest
     // in an `enforce` run at 15.8 s, scaling with the open-pull-request count
     // rather than with anything about this branch (CLOUD-2382).
-    let pulls = race::with_logs(pulls, &mine_number, &grammar, |number| {
-        bot::forge::commit_messages(&slug, number).unwrap_or_default()
-    });
+    let race::Filled { pulls, complete } =
+        race::with_logs(pulls, &mine_number, &grammar, |number| {
+            bot::forge::commit_messages(&slug, number).unwrap_or_default()
+        });
+    // AN INCOMPLETE FILL IS COULD-NOT-LOOK, like every other arm above. A failed
+    // read answers `""` and still counts, so this is only the case where a
+    // worker unwound and a competitor was never asked — judging it would print
+    // "no races" over a competitor nobody read, which is the dead gate this
+    // module replaced rather than a verdict.
+    if !complete {
+        return clean(
+            out,
+            "claim race: a competitor's commit log was never read — could not look, which is not \
+             a verdict",
+        );
+    }
     let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
     if races.is_empty() {
         return clean(

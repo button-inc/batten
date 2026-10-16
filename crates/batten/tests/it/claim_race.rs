@@ -299,6 +299,10 @@ struct Seen {
     peak: usize,
     /// Calls that have returned, which is the condition `"2"` waits on.
     done: usize,
+    /// Raised once `FETCH_WIDTH` calls were in flight together — or once the
+    /// first waiter gave up, so that only one call ever pays the deadline and a
+    /// sequential implementation fails rather than hanging once per pull.
+    opened: bool,
 }
 
 /// The competitor fill is concurrent, bounded at eight, once per eligible pull,
@@ -306,23 +310,30 @@ struct Seen {
 ///
 /// # How each clause discriminates
 ///
-/// The double makes `"2"` — the first eligible pull — refuse to return until
-/// some OTHER call has completed. That is the whole of the concurrency
-/// evidence, and it is a condition rather than a duration:
+/// The double imposes two conditions, neither of them a duration. Every call
+/// parks until `FETCH_WIDTH` of them are inside together, and `"2"` parks again
+/// until some other call has completed:
 ///
-/// * today's sequential `.map` reaches `"2"` first and nothing else can run, so
-///   it gives up at the deadline and the peak reads 1;
+/// * today's sequential `.map` never gets a second call in flight, so the first
+///   gives up at the deadline and the peak reads 1;
+/// * a pool narrower than the bound it claims never fills the barrier either,
+///   and the peak comes out below `FETCH_WIDTH`;
 /// * a collect in COMPLETION order puts `"2"` after the pulls that finished
 ///   while it waited, which breaks the returned order;
 /// * dropping the key predicate fetches the two pulls whose titles name one,
-///   and dropping the `mine` arm fetches `"1"`;
-/// * an unbounded spawn — one thread per pull rather than a width — shows a
-///   peak of the whole eligible set, which is deliberately wider than
-///   `FETCH_WIDTH`.
+///   and dropping the `mine` arm fetches `"1"`.
+///
+/// **What the peak equality does NOT discriminate is a spawn-per-item**, and
+/// saying so is the point: the implementation spawns `FETCH_WIDTH.min(len)`
+/// threads, so the upper bound is structural rather than behavioural, and a
+/// per-item spawn retires early threads before the late ones are created — the
+/// peak then reads a handful rather than the whole set. The equality is kept
+/// because it catches a future refactor that makes the width a soft target,
+/// but the bound itself is held by construction, not by this case.
 ///
 /// **Nothing here asserts on the clock.** The ten-second deadline is an input:
 /// it turns a serial implementation's hang into a failure instead of a hung
-/// suite, and the case asserts the peak the double recorded.
+/// suite, and it is paid once, because whoever gives up opens the barrier.
 #[test]
 fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_order() {
     // Sized FROM the width rather than beside it, so a retune cannot leave this
@@ -362,24 +373,37 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
 
     let seen = std::sync::Mutex::new(Seen::default());
     let bell = std::sync::Condvar::new();
+    let deadline = std::time::Duration::from_secs(10);
     let fetch = |number: &str| -> String {
         {
+            // THE WIDTH BARRIER. Every call parks until `FETCH_WIDTH` of them
+            // are inside at once, so the peak the case asserts is reached
+            // deliberately rather than observed by luck. With the width honoured
+            // exactly that many workers exist, all arrive, and the barrier
+            // opens; with a narrower pool nobody ever arrives and the first
+            // waiter gives up, leaving a peak below the width.
             let mut state = seen.lock().expect("the fixture lock");
             state.asked.push(number.to_owned());
             state.in_flight += 1;
             state.peak = state.peak.max(state.in_flight);
+            state.opened |= state.in_flight >= race::FETCH_WIDTH;
+            if !state.opened {
+                let (reopened, timeout) = bell
+                    .wait_timeout_while(state, deadline, |state| !state.opened)
+                    .expect("the fixture lock");
+                state = reopened;
+                state.opened |= timeout.timed_out();
+            }
         }
-        // NO SIGNAL ON ENTRY. The one waiter below is parked on `done`, which
-        // moves only in the exit block, so a start-edge notify could do nothing
-        // but wake it to re-read an unchanged predicate — and it would imply a
-        // rendezvous on entry that this double does not have.
+        bell.notify_all();
+        // AND THE ORDER HALF, which the barrier does not cover: `"2"` must not
+        // be among the first to finish, or a collect in COMPLETION order could
+        // still come out in listing order by luck.
         if number == "2" {
             let waiting = seen.lock().expect("the fixture lock");
             drop(
-                bell.wait_timeout_while(waiting, std::time::Duration::from_secs(10), |state| {
-                    state.done == 0
-                })
-                .expect("the fixture lock"),
+                bell.wait_timeout_while(waiting, deadline, |state| state.done == 0)
+                    .expect("the fixture lock"),
             );
         }
         {
@@ -391,8 +415,15 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
         format!("Refs: CLOUD-{number}")
     };
 
-    let filled = race::with_logs(pulls.clone(), "1", &Fake, fetch);
+    let race::Filled {
+        pulls: filled,
+        complete,
+    } = race::with_logs(pulls.clone(), "1", &Fake, fetch);
 
+    assert!(
+        complete,
+        "every eligible competitor answered, so this fill is a reading"
+    );
     assert_eq!(
         filled
             .iter()
@@ -430,15 +461,58 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
         asked, once_each,
         "exactly the eligible pulls, exactly once each — never `mine`, never a keyed one"
     );
-    assert!(
-        state.peak > 1,
-        "the fetches must overlap; a peak of {} is a sequential fill",
-        state.peak
-    );
-    assert!(
-        state.peak <= race::FETCH_WIDTH,
-        "at most {} in flight; a peak of {} is an unbounded spawn",
+    assert_eq!(
+        state.peak,
         race::FETCH_WIDTH,
-        state.peak
+        "the width is used and not exceeded: a lower peak is a narrower pool \
+         than the bound claims (1 being a sequential fill), a higher one is a \
+         spawn that ignores the bound"
+    );
+}
+
+/// A fill that lost a worker is `complete: false`, so the verb reads it as
+/// could-not-look instead of taking a verdict over it (CLOUD-2382).
+///
+/// # Why this case exists at all
+///
+/// The sequential fill could not produce this state: a panic in the fetch took
+/// the process with it. Absorbing the panic is right — the alternative is one
+/// through `verify`'s whole pre-flight — but absorbing it silently would leave a
+/// competitor carrying an empty log for no reason the forge gave, and `races`
+/// would then report "no races" over a pull request nobody read. That is the
+/// exact conflation `race.rs` exists to correct, so the flag that prevents it
+/// owes a case.
+///
+/// It discriminates by construction: a `complete` hardcoded to `true`, or
+/// counted against the listing rather than the eligible set, passes every other
+/// assertion in this file and fails only here.
+#[test]
+fn a_fill_that_lost_a_worker_is_not_complete_and_keeps_the_answers_it_got() {
+    let pulls = vec![
+        pull("1", "user/branch-one", "sha1"),
+        pull("2", "user/branch-two", "sha2"),
+        pull("3", "user/branch-three", "sha3"),
+    ];
+    // `"2"` is fetched by a worker that unwinds; `"3"` is fetched by another
+    // that does not, which is what pins "keeps the answers it got".
+    let race::Filled {
+        pulls: filled,
+        complete,
+    } = race::with_logs(pulls, "1", &Fake, |number| {
+        assert!(number != "2", "a deliberate panic inside one worker");
+        format!("Refs: CLOUD-{number}")
+    });
+
+    assert!(
+        !complete,
+        "a competitor that was never answered makes the fill a could-not-look"
+    );
+    assert_eq!(
+        filled
+            .iter()
+            .map(|pull| pull.log.as_str())
+            .collect::<Vec<_>>(),
+        ["", "", "Refs: CLOUD-3"],
+        "the lost worker costs its own fetch and nothing else, and the order holds"
     );
 }
