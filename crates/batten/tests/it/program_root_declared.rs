@@ -8,8 +8,8 @@
 //! landing. `alive` spelled the same fact as a literal beside it, which is the
 //! second authority this pins away.
 //!
-//! READ THROUGH `common::task_block`, the sweep's own boundary, so under
-//! `mutate sweep` the staged manifest is the one judged.
+//! READ THROUGH `common::at_root` and `common::task_block`, the sweep's own
+//! boundary, so under `mutate sweep` the staged manifest is the one judged.
 
 use crate::common;
 

@@ -106,6 +106,21 @@ impl Entry {
             .to_owned()
     }
 
+    /// The latest second the registrant stamped, so the latest it is known to
+    /// have been alive, or `None` where no stamp parses.
+    #[must_use]
+    pub fn last_alive(&self) -> Option<u64> {
+        [
+            &self.started_at,
+            &self.phase_since,
+            &self.tick_at,
+            &self.sig_at,
+        ]
+        .into_iter()
+        .filter_map(|stamp| stamp.parse::<u64>().ok())
+        .max()
+    }
+
     /// Read a record out of its own bytes.
     #[must_use]
     pub fn parse(body: &str) -> Self {
@@ -1235,6 +1250,16 @@ mod tests {
     fn an_entry_predating_the_phase_stamp_renders_without_the_suffix() {
         let entry = Entry::parse("task: land\npid: 42\nphase: verify\nstarted_at: 100\n");
         assert_eq!(render_line(&entry, true, 160), "land verify 42 60s");
+    }
+
+    /// CLOUD-2366: the reaper dates a group against the latest stamp, any of
+    /// the four, and an entry with none parsing has no such second.
+    #[test]
+    fn the_last_alive_second_is_the_latest_stamp() {
+        let entry =
+            Entry::parse("pid: 42\nstarted_at: 100\nphase_since: 140\ntick_at: 120\nsig_at: x\n");
+        assert_eq!(entry.last_alive(), Some(140));
+        assert_eq!(Entry::parse("pid: 42\n").last_alive(), None);
     }
 
     #[test]

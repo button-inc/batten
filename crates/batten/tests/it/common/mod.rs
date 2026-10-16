@@ -535,7 +535,14 @@ pub(crate) fn batten() -> Batten {
     // compute the ceiling it pins, so a developer whose environment raises one
     // would see every pinned value move. LAST, after the pins above, which carry
     // the developer's environment forward; a case that wants one sets it after.
-    for name in ["BASH_MAX_TIMEOUT_MS", "BASH_DEFAULT_TIMEOUT_MS"] {
+    // NOR THE PROGRAM ROOT `mise.toml`'s `[env]` exports to every task (CLOUD-2366):
+    // under it a `land` case reaps the developer's own abandoned landings, so a
+    // case that wants the reap sets it after.
+    for name in [
+        "BASH_MAX_TIMEOUT_MS",
+        "BASH_DEFAULT_TIMEOUT_MS",
+        "BATTEN_TASK_PROGRAM_ROOT",
+    ] {
         command.env_remove(name);
     }
     Batten(command)

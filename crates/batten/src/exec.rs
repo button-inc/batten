@@ -666,34 +666,55 @@ fn resolve_group(pgid: &str) -> Option<rustix::process::Pid> {
     rustix::process::Pid::from_raw(raw)
 }
 
-/// Whether a recorded group has lost its LEADER, which is what makes it an
-/// orphan rather than somebody's live group under a reused number.
+/// Whether a recorded group still holds a process that began before second
+/// `alive_at`, which is what makes it the orphan rather than somebody's live
+/// group under a reused number.
 ///
-/// **THE KERNEL'S OWN BOOKKEEPING IS THE DISCRIMINATOR** (CLOUD-2366). Linux
-/// keeps a pid number reserved while any live process still uses it as a
-/// process-group id, so an abandoned group whose members survive cannot have its
-/// number handed out again. The number is reusable only once the group is EMPTY,
-/// and a process that then takes it and leads a group of its own is, by
-/// construction, a live process whose pid equals the pgid. So "no process holds
-/// the pgid as its pid" is true of a genuine orphan group and false of every
-/// reused one, including the reaper's own group, whose leader is alive.
+/// **AGE IS THE DISCRIMINATOR** (CLOUD-2366). Linux keeps a pid number reserved
+/// while any live process still uses it as a process-group id, so the number is
+/// reusable only once the group is EMPTY. The registrant was a member and was
+/// alive at `alive_at`, its latest stamp, so the original group was not empty
+/// then: every member of a reused group began after that second. A member that
+/// began before it can only be the original's. A leader test cannot say this —
+/// a reused group loses its leader as easily as an orphan does
+/// (`setsid sh -c 'server &'`), and a zombie leader still answers a probe.
 ///
-/// `false` for an unparseable or non-positive pgid, and wherever the probe
-/// answers anything but "no such process": a reap may only proceed on proof.
-#[cfg(unix)]
-pub(crate) fn group_leaderless(pgid: &str) -> bool {
-    let Some(group) = resolve_group(pgid) else {
+/// The caller's own group is never the orphan, however old: a second run in
+/// the shell that ran the first shares its group. What it misses is safe: an
+/// orphan whose every survivor was spawned after the last stamp is not
+/// signalled. Across a reboot every process began after
+/// `btime`, so a stale record never qualifies. `false` for an unparseable or
+/// non-positive pgid and wherever `/proc` cannot be read: a reap may only
+/// proceed on proof.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(crate) fn group_predates(pgid: &str, alive_at: u64) -> bool {
+    use crate::collect::proc_stat;
+    let Some(group) = resolve_group(pgid).map(|pid| i64::from(pid.as_raw_nonzero().get())) else {
         return false;
     };
-    matches!(
-        rustix::process::test_kill_process(group),
-        Err(rustix::io::Errno::SRCH)
-    )
+    if group == i64::from(rustix::process::getpgrp().as_raw_nonzero().get()) {
+        return false;
+    }
+    let Some(boot) = std::fs::read_to_string("/proc/stat")
+        .ok()
+        .and_then(|stat| proc_stat::boot_seconds(&stat))
+    else {
+        return false;
+    };
+    let ticks = rustix::param::clock_ticks_per_second();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        std::fs::read_to_string(entry.path().join("stat"))
+            .is_ok_and(|stat| proc_stat::member_predates(&stat, group, boot, ticks, alive_at))
+    })
 }
 
-/// No process groups, so none is ever proven leaderless and nothing is reaped.
-#[cfg(not(unix))]
-pub(crate) fn group_leaderless(_pgid: &str) -> bool {
+/// No `/proc` to date a member by, so none is ever proven the orphan's and
+/// nothing is reaped.
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub(crate) fn group_predates(_pgid: &str, _alive_at: u64) -> bool {
     false
 }
 
@@ -3431,18 +3452,39 @@ mod tests {
         );
     }
 
-    /// CLOUD-2366: a group whose leader is a live process is never an orphan,
-    /// however its number was come by; one past `pid_max` has no leader at all.
-    #[cfg(unix)]
+    /// CLOUD-2366: a child leading its own group began before now and not
+    /// before the epoch; the caller's own group is never the orphan.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
-    fn a_group_whose_leader_lives_is_not_leaderless() {
-        assert!(
-            !group_leaderless(&std::process::id().to_string()),
-            "this process is alive, so a group numbered by it has a leader"
-        );
-        assert!(group_leaderless("4194305"), "no process can hold that pid");
-        assert!(!group_leaderless("0"));
-        assert!(!group_leaderless("not-a-number"));
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the case needs a real group led by a live process, which only a spawn makes"
+    )]
+    fn a_group_predates_only_a_second_after_its_member_began() {
+        use std::os::unix::process::CommandExt as _;
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .expect("spawn a group leader");
+        let group = child.id().to_string();
+        let later = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs())
+            + 10;
+        let (began, epoch) = (group_predates(&group, later), group_predates(&group, 0));
+        let own = rustix::process::getpgrp()
+            .as_raw_nonzero()
+            .get()
+            .to_string();
+        let own_group = group_predates(&own, later);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(began, "the child began before now");
+        assert!(!epoch, "nothing began before the epoch");
+        assert!(!own_group, "the caller's own group is never the orphan");
+        assert!(!group_predates("0", later));
+        assert!(!group_predates("not-a-number", later));
     }
 
     #[cfg(unix)]
