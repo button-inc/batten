@@ -769,8 +769,8 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
 //MUTANT failed-install-unwrites-the-pin|s@^        durable::replace(&path, &synced)?;$@@|a_failed_install_leaves_the_moved_pin
 //MUTANT update-moves-the-pin-backward|s@^    let target = if engine::is_newer(&latest, &current)? {$@    let target = if latest != current {@|an_update_never_moves_a_pin_backward
 //MUTANT update-ignores-workflow-literal|s@^    if !stale.is_empty() {$@    if false {@|a_workflow_literal_the_update_cannot_rewrite_refuses_and_writes_nothing
-//MUTANT update-installs-what-the-ref-pins|s@^    let installed = install_wanted(want, Some(root), &repository, out)?;$@    let installed = engine_install(out)?;@|an_update_installs_its_target_whatever_the_ref_pins
-//MUTANT update-keeps-the-fresh-record|s@^    record::clear_kind("engine update", "engine-fresh", families)?;$@@|an_update_clears_the_engine_fresh_record
+//MUTANT update-installs-what-the-ref-pins|s@^    install_wanted(want, Some(root), &repository, out)$@    engine_install(out)@|an_update_installs_its_target_whatever_the_ref_pins
+//MUTANT update-keeps-the-fresh-record|s@^        record::clear_kind("engine update", "engine-fresh", families)?;$@@|an_update_clears_the_engine_fresh_record
 fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let root = git::worktree_root(Path::new("."))?;
     let path = root.join(config::CONFIG_FILE);
@@ -863,19 +863,19 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
         // below answers; the refusal floor admits `engine install` to finish it.
         durable::replace(&path, &synced)?;
         writeln!(out, "{}", path.display())?;
+        // AN `engine-fresh` READING JUDGED THE PIN THIS JUST MOVED, so it stops
+        // standing for it with the write, whatever the install answers: absent
+        // until its writer reads the new pin (CLOUD-2418). Its family is the
+        // consumer's name, read off the config's `[[record]]` rows.
+        let declared = toml_edit::Document::parse(synced.as_str()).ok();
+        let families = declared
+            .iter()
+            .filter_map(|doc| doc.get("record")?.as_array_of_tables())
+            .flat_map(toml_edit::ArrayOfTables::iter)
+            .filter_map(|row| row.get("record")?.as_str());
+        record::clear_kind("engine update", "engine-fresh", families)?;
     }
-    let installed = install_wanted(want, Some(root), &repository, out)?;
-    // AN `engine-fresh` READING JUDGED THE PIN THIS JUST MOVED, so it stops
-    // standing for it: absent until its writer reads the new pin (CLOUD-2418).
-    // Its family is the consumer's name, read off the config's `[[record]]` rows.
-    let declared = toml_edit::Document::parse(synced.as_str()).ok();
-    let families = declared
-        .iter()
-        .filter_map(|doc| doc.get("record")?.as_array_of_tables())
-        .flat_map(toml_edit::ArrayOfTables::iter)
-        .filter_map(|row| row.get("record")?.as_str());
-    record::clear_kind("engine update", "engine-fresh", families)?;
-    Ok(installed)
+    install_wanted(want, Some(root), &repository, out)
 }
 
 /// Every tracked YAML file under `root`, repository-relative and sorted.
@@ -1236,14 +1236,19 @@ fn set_str(item: &mut toml_edit::Item, new: &str) {
 fn sync_artifact(
     artifact: &mut dyn toml_edit::TableLike,
     new: &str,
+    moving: bool,
     sums: &dyn Fn() -> Result<String>,
 ) -> Result<()> {
     let Some(was) = artifact.get("url").and_then(toml_edit::Item::as_str) else {
         return Ok(());
     };
     // A URL THAT NAMES NO RELEASE DOWNLOAD cannot be moved, and a new digest
-    // beside an unmoved URL would pin bytes nobody fetches.
+    // beside an unmoved URL would pin bytes nobody fetches. While its row stays
+    // put it is its author's layout, left as it is.
     let Some(url) = engine::moved_url(was, new) else {
+        if !moving {
+            return Ok(());
+        }
         return Err(UsageError::raise(format!(
             "engine update: a batten provision URL ({was}) names no release download, so it \
              cannot be moved to {new}; nothing was written"
@@ -1275,16 +1280,17 @@ fn sync_artifact(
 fn sync_artifacts(
     row: &mut toml_edit::Table,
     new: &str,
+    moving: bool,
     sums: &dyn Fn() -> Result<String>,
 ) -> Result<()> {
-    sync_artifact(row, new, sums)?;
+    sync_artifact(row, new, moving, sums)?;
     if let Some(platforms) = row
         .get_mut("platforms")
         .and_then(toml_edit::Item::as_table_like_mut)
     {
         for (_, artifact) in platforms.iter_mut() {
             if let Some(artifact) = artifact.as_table_like_mut() {
-                sync_artifact(artifact, new, sums)?;
+                sync_artifact(artifact, new, moving, sums)?;
             }
         }
     }
@@ -1306,7 +1312,7 @@ fn sync_artifacts(
 /// the caller writes only its whole answer.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT update-leaves-provision-stale|s@^                set_str(item, &fresh);$@@|an_update_brings_every_batten_declaration_to_the_release
-//MUTANT update-keys-on-version-alone|s@^            sync_artifacts(row, &bare, sums)?;$@            if old.trim_start_matches('v') != bare { sync_artifacts(row, \&bare, sums)?; }@|an_update_repairs_a_stale_digest_at_the_current_version
+//MUTANT update-keys-on-version-alone|s@^            sync_artifacts(row, &bare, moving, sums)?;$@            if moving { sync_artifacts(row, \&bare, moving, sums)?; }@|an_update_repairs_a_stale_digest_at_the_current_version
 //MUTANT update-lowers-min-version|s@^        .is_some_and(\x7cfloor\x7c floor < version);$@        .is_some_and(\x7cfloor\x7c floor != version);@|an_update_never_lowers_min_batten_version
 fn sync_declarations(text: &str, tag: &str, sums: &dyn Fn() -> Result<String>) -> Result<String> {
     let version = engine::release_version(tag)?;
@@ -1337,7 +1343,8 @@ fn sync_declarations(text: &str, tag: &str, sums: &dyn Fn() -> Result<String>) -
             // EVERY ARTIFACT IS JUDGED AGAINST THE RELEASE, not only a row whose
             // `version` moves (CLOUD-2418): a row can name the target and still
             // carry another release's url or bytes.
-            sync_artifacts(row, &bare, sums)?;
+            let moving = old.trim_start_matches('v') != bare;
+            sync_artifacts(row, &bare, moving, sums)?;
             let fresh = if old.starts_with('v') {
                 format!("v{bare}")
             } else {
@@ -1849,21 +1856,23 @@ fn engine_pin(
 fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<ExitCode> {
     let config_path = root.join(config::CONFIG_FILE);
     let text = std::fs::read_to_string(&config_path)?;
-    let Some(pin) = engine::declared(&text) else {
-        return Ok(ExitCode::Success);
+    let tag = match engine::declared(&text).map(engine::Pin::kind) {
+        None => return Ok(ExitCode::Success),
+        Some(engine::PinKind::Release(tag)) => tag,
+        Some(engine::PinKind::Source(_)) => {
+            writeln!(
+                out,
+                "{} engine pin source never lands: pin a release with `batten engine pin <tag>`",
+                config_path.display()
+            )?;
+            return Ok(ExitCode::Violation);
+        }
+        Some(engine::PinKind::Malformed) => {
+            writeln!(out, "{} {}", config_path.display(), engine::MALFORMED_PIN)?;
+            return Ok(ExitCode::Violation);
+        }
     };
-    if pin.source.is_some() {
-        writeln!(
-            out,
-            "{} engine pin source never lands: pin a release with `batten engine pin <tag>`",
-            config_path.display()
-        )?;
-        return Ok(ExitCode::Violation);
-    }
-    // A malformed pin is `engine::check`'s to name, on every load.
-    let Some(tag) = pin.release.as_deref() else {
-        return Ok(ExitCode::Success);
-    };
+    let tag = tag.as_str();
     // EVERY COPY AGREES WITH THE PIN (CLOUD-2279), decided before anything is
     // fetched: a batten provision row on another release, or a floor above the
     // pin, is a config that names two engines. Each finding names the move that

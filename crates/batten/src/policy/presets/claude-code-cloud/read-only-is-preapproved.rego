@@ -169,10 +169,9 @@ git_reads_as("remote", rest) if rest in {["-v"], ["--verbose"]}
 
 git_reads_as("remote", rest) if rest[0] in {"get-url", "show"}
 
-git_reads_as("config", rest) if {
-	some argument in rest
-	argument in {"--get", "--get-all", "--get-regexp", "--list", "-l"}
-}
+# The read flag comes FIRST: `git config` stops reading options at the key, so
+# `git config user.name --get` sets user.name to `--get`.
+git_reads_as("config", rest) if rest[0] in {"--get", "--get-all", "--get-regexp", "--list", "-l"}
 
 git_reads_as("branch", rest) if {
 	every argument in rest {
@@ -226,9 +225,17 @@ some_writing_flag(arguments) if {
 	startswith(argument, "--output")
 }
 
+# `-O<pager>` and `--open-files-in-pager=<pager>` are the attached spellings
+# of the same pager, so the prefix is the flag.
 some_writing_flag(arguments) if {
 	some argument in arguments
-	argument in {"-O", "--open-files-in-pager", "--ext-diff"}
+	some prefix in {"-O", "--open-files-in-pager"}
+	startswith(argument, prefix)
+}
+
+some_writing_flag(arguments) if {
+	some argument in arguments
+	argument == "--ext-diff"
 }
 
 test_a_host_read_is_preapproved if {
@@ -368,6 +375,9 @@ test_git_global_options_never_hide_a_writer if {
 		["stash", "show", "-p", "--output=x"],
 		["stash", "list", "--output=x"],
 		["config", "user.name", "x"],
+		["config", "alias.zz", "--list"],
+		["grep", "-Osh", "x"],
+		["grep", "--open-files-in-pager=./x", "y"],
 	] {
 		count(preapprove) == 0 with input as git_call(arguments)
 	}

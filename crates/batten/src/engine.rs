@@ -970,14 +970,20 @@ pub fn stale_artifacts(
     // THE MANIFEST IS READ ONCE, at the first artifact that needs it.
     let mut manifest: Option<String> = None;
     let mut found = Vec::new();
-    let mut judge = |artifact: &toml_edit::Table| -> Result<()> {
+    let mut judge = |artifact: &dyn toml_edit::TableLike| -> Result<()> {
         let Some(item) = artifact.get("url") else {
             return Ok(());
         };
         let Some(url) = item.as_str() else {
             return Ok(());
         };
-        if moved_url(url, &bare).as_deref() != Some(url) {
+        // A URL LAID OUT AS NO RELEASE DOWNLOAD is not one this can judge, so it
+        // is left to its author, as `engine update` leaves it while its row
+        // stays put.
+        let Some(moved) = moved_url(url, &bare) else {
+            return Ok(());
+        };
+        if moved != url {
             found.push((line(item), format!("provision batten url {url}")));
             return Ok(());
         }
@@ -1002,13 +1008,14 @@ pub fn stale_artifacts(
         .flat_map(toml_edit::ArrayOfTables::iter);
     for row in rows.filter(|row| is_batten_row(*row)) {
         judge(row)?;
+        // Inline tables too: `engine update` rewrites either spelling.
         let platforms = row
             .get("platforms")
-            .and_then(toml_edit::Item::as_table)
+            .and_then(toml_edit::Item::as_table_like)
             .into_iter()
-            .flat_map(toml_edit::Table::iter);
+            .flat_map(toml_edit::TableLike::iter);
         for (_, artifact) in platforms {
-            if let Some(artifact) = artifact.as_table() {
+            if let Some(artifact) = artifact.as_table_like() {
                 judge(artifact)?;
             }
         }
@@ -1233,11 +1240,14 @@ pub fn workflow_literals(
                     found.push((at, key));
                 }
                 // The mark is the scalar's first line of text, a block scalar's
-                // included (its `|` is on the line before).
+                // included (its `|` is on the line before), and past any blank
+                // lines the value still opens with. A folded or multi-line plain
+                // scalar joins its lines, so its copies point at its first line.
+                let lead = value.len() - value.trim_start_matches('\n').len();
                 for (offset, text_line) in value.lines().enumerate() {
                     for (key, literal) in line_literals(text_line) {
                         if differs(key, &literal) {
-                            found.push((line + offset, key));
+                            found.push((line + offset.saturating_sub(lead), key));
                         }
                     }
                 }
@@ -1456,6 +1466,19 @@ mod tests {
         );
     }
 
+    /// A block scalar that opens with a blank line still points at its copy's
+    /// own line.
+    #[test]
+    fn a_block_scalar_opening_blank_points_at_its_copy() {
+        let published = std::collections::BTreeSet::new();
+        let found = workflow_literals(
+            "steps:\n  - run: |\n\n      BATTEN_VERSION=v0.0.211 ./install.sh\n",
+            "v0.0.216",
+            &published,
+        );
+        assert_eq!(found, [(4, "BATTEN_VERSION")]);
+    }
+
     /// A pre-release literal is read whole, so a copy equal to the pin agrees.
     #[test]
     fn a_pre_release_literal_equal_to_the_pin_agrees() {
@@ -1517,6 +1540,20 @@ mod tests {
         assert_eq!(
             stale_artifacts(&config(stale, &"a".repeat(64)), "v9.9.9", &sums)?,
             [(6, format!("provision batten url {stale}"))]
+        );
+        let inline = format!(
+            "[[provision]]\nname = \"batten\"\nversion = \"9.9.9\"\nplatforms = {{ x = {{ url = \"{stale}\", sha256 = \"{}\" }} }}\n",
+            "a".repeat(64)
+        );
+        assert_eq!(
+            stale_artifacts(&inline, "v9.9.9", &sums)?.len(),
+            1,
+            "an inline table is judged too"
+        );
+        let mirror = "https://m/batten/linux/batten.tar.gz";
+        assert!(
+            stale_artifacts(&config(mirror, &"0".repeat(64)), "v9.9.9", &sums)?.is_empty(),
+            "a url laid out as no release download is its author's"
         );
         Ok(())
     }

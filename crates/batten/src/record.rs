@@ -2018,7 +2018,9 @@ pub(crate) fn clear_kind<'a>(
 ) -> Result<()> {
     let line = format!("{kind}\t");
     for family in families {
-        let path = named_path(verb, family)?;
+        // A FAMILY READ OFF THE RAW CONFIG is held to the grammar validation
+        // holds it to, so it can never name a path outside the store.
+        let path = named_path(verb, &safe_component("record family", family)?)?;
         if std::fs::read_to_string(&path).is_ok_and(|body| body.starts_with(&line)) {
             remove_stale(&path)?;
         }
