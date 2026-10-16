@@ -2282,8 +2282,8 @@ pub enum Reconcile {
 ///   diverged branch, and could-not-tell is never a cancel. `Leave`.
 /// - Ready on a strict ancestor: this branch's own superseded push, whose runs
 ///   grade a tree it will never land. `AbandonAndRedraft`.
-//MUTANT reconcile-ignores-a-stale-head|s@ \&\& superseded => {@ \&\& false => {@|entry_reconcile_cancels_only_a_superseded_ready_head
-//MUTANT reconcile-cancels-a-foreign-head|s@ \&\& superseded => {@ => {@|entry_reconcile_cancels_only_a_superseded_ready_head
+//MUTANT reconcile-ignores-a-stale-head|s@if head != local_head \&\& superseded@if head != local_head \&\& false@|entry_reconcile_cancels_only_a_superseded_ready_head
+//MUTANT reconcile-cancels-a-foreign-head|s@if head != local_head \&\& superseded@if head != local_head@|entry_reconcile_cancels_only_a_superseded_ready_head
 #[must_use]
 pub fn entry_reconcile(pr: Option<(bool, &str)>, local_head: &str, superseded: bool) -> Reconcile {
     match pr {
