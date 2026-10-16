@@ -2803,6 +2803,15 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
     }
     let root = root.canonicalize().ok()?;
     let resolved = candidate.canonicalize().ok().or_else(|| {
+        // `.` AND `..` RESOLVED LEXICALLY FIRST (CLOUD-2390's security pass). A
+        // path through a directory that does not exist yet cannot canonicalize,
+        // and a `..` component has no `file_name`, so `/repo/new/../src/x.rs`
+        // used to abandon the walk and keep its absolute spelling — read as
+        // outside the tree by `protected` and by a `tree_only` handler alike,
+        // though the host writes it inside. The lexical form is the path the
+        // host writes to.
+        let candidate = lexically_normal(candidate);
+        let candidate = candidate.as_path();
         // Peel components off the tail until something canonicalizes, then put
         // them back in the order they came off. `ancestors` walks parent-first,
         // so the first hit is the DEEPEST existing directory — the one whose
@@ -2836,6 +2845,22 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
     // asymmetry a path rendered with `MAIN_SEPARATOR` produces.
     let rendered = relative.to_str()?.replace('\\', "/");
     (!rendered.is_empty()).then_some(rendered)
+}
+
+/// `path` with `.` dropped and each `..` taking back the component before it,
+/// without touching the filesystem.
+fn lexically_normal(path: &Path) -> PathBuf {
+    let mut normal = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normal.pop();
+            }
+            other => normal.push(other),
+        }
+    }
+    normal
 }
 
 /// **Serialized in `clap`'s spelling, not serde's default** (CLOUD-925). A

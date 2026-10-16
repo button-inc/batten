@@ -159,6 +159,22 @@ fn the_absolute_spelling_the_host_sends_signals_too() {
     assert!(signals(&dir, &payload), "{}", reported(&dir, &payload));
 }
 
+/// And spelled with `..` through a directory that does not exist (CLOUD-2390's
+/// security pass): it cannot canonicalize, so before `lexically_normal` it kept
+/// its absolute spelling and read as outside the tree.
+#[test]
+fn a_dot_dot_spelling_through_a_missing_directory_signals_too() {
+    let dir = bench("swa-a_dot_dot_spelling_through_a_missi");
+    let absolute = dir
+        .canonicalize()
+        .expect("the bench root resolves")
+        .join("mise-tasks/not-yet/../ready-lint.sh")
+        .display()
+        .to_string();
+    let payload = write_payload("Write", &absolute);
+    assert!(signals(&dir, &payload), "{}", reported(&dir, &payload));
+}
+
 /// A bats suite is governed too.
 #[test]
 fn a_write_to_a_bats_suite_signals() {
