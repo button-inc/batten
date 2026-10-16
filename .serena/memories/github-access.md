@@ -303,7 +303,9 @@ Reading CI checks needs **Checks: read**. Whether the current token carries it
 is a live fact, so ask the probe rather than this file: session start's
 `batten doctor forge` reports `checks=read` as `ok` or not. If `check-runs`
 403s with `x-accepted-github-permissions: checks=read`, that is a token
-capability, not a network block.
+capability, not a network block. The routes then are a classic PAT scoped
+`repo` (it bundles checks-read) or the MCP `get_check_runs` tool, which carries
+the permission via App auth.
 
 **"Everything else works" is not quite true, and the second gap is `gh pr edit`.**
 Measured 2026-08-19 with a classic PAT scoped `repo,workflow`: `gh pr edit <n>
@@ -359,7 +361,7 @@ bounds that surface. Before reporting a capability as absent, try the other
 routes the environment already grants — here `gh`, `curl` through the proxy, and
 the repo's own tasks.
 
-## Provider outages — status page first, then poll for recovery
+## Provider outages — status page first, then check on demand
 
 When a hosted dependency misbehaves (jobs that never start, calls that hang/5xx,
 webhooks that don't arrive), read the provider's **public status page first**,
@@ -390,7 +392,10 @@ original events were dropped) and run `mise run land` again.
   helper. Interception applies on both routes, so fencing trades away nothing.
 - Confirming CI is **`mise run land`'s job** (AGENTS.md, "Workflow contract").
   To read CI between laps, fetch it on demand:
-  `mise exec -- gh run view <id> --log-failed` for a red job. A superseded run
+  `mise exec -- gh api repos/{o}/{r}/commits/<sha>/check-runs` for the head,
+  where the `final` aggregate is the authoritative all-green signal (a lone
+  `ci` job is not), and `mise exec -- gh run view <id> --log-failed` for a red
+  run, the id coming from the check run's `details_url`. A superseded run
   shows `ci`/`cross` `cancelled` and `final` `failure` from CI's concurrency
   `cancel-in-progress`. That is not a real failure, only the old SHA dropped
   when a new head was pushed.
