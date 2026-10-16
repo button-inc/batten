@@ -494,6 +494,24 @@ fn a_worktree_spawn_is_refused_in_auto() {
     assert!(reason.contains("spawn place wrong"), "{reason}");
 }
 
+/// CLOUD-2313: a Serena memory write is the only route a memory changes by, and
+/// the owner's ruling is that batten always approves it — in default mode too,
+/// which is where the measured prompt came from (auto already grants every call
+/// batten allows). The delete stays with the host.
+#[test]
+fn a_memory_write_is_preapproved_outside_plan_mode() {
+    let edit =
+        serde_json::json!({ "memory_name": "x", "needle": "a", "repl": "b", "mode": "literal" });
+    for tool in [
+        "mcp__serena__write_memory",
+        "mcp__serena__edit_memory",
+        "mcp__serena__rename_memory",
+    ] {
+        assert_granted_by(&envelope("default", tool, &edit), "call grant now");
+    }
+    assert_not_granted(&envelope("default", "mcp__serena__delete_memory", &edit));
+}
+
 #[test]
 fn an_mcp_write_is_not_preapproved() {
     let write = envelope(

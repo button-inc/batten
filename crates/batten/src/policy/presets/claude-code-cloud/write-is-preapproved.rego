@@ -1,6 +1,7 @@
 #MUTANT-SUITE crates/batten/tests/it/preapprove.rs
 #MUTANT write-mode-unchecked|s@^\tinput.call\["permission-mode"\] == "auto"$@\ttrue@|an_edit_is_not_preapproved_in_default_mode
 #MUTANT write-destructive-granted|s@^\t\tnot destructive_program(program)$@\t\ttrue@|a_destructive_shell_write_is_left_to_the_host_in_auto
+#MUTANT memory-write-ungranted|s@^\tmemory_write_tool(input.call.tool)$@\tfalse@|a_memory_write_is_preapproved_outside_plan_mode
 # In auto mode every write batten allows is put to no one (CLOUD-2002).
 #
 # The owner's rule, 2026-09-29: "Write operations are supposed to be allowed by
@@ -50,6 +51,32 @@ preapprove contains "call grant now" if {
 
 write_tool(tool) if tool in {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
+# A MEMORY WRITE IS A WRITE BATTEN ALREADY ALLOWS, and this arm was missing
+# (CLOUD-2313). `.serena/memories/**` is protected against every file tool and
+# its `[[redirect]]` row sends the writer to Serena's memory tools, so these are
+# the only route a memory changes by. An MCP call never matched `write_tool`, so
+# every memory edit batten had passed was put to the owner. Measured 2026-10-15:
+# `edit_memory` prompted on a module-map row.
+#
+# NAMED TOOLS, NOT A VERB SHAPE OVER EVERY SERVER: a connector's writes (a
+# tracker comment, a session dispatch) stay with the host and the dispatch
+# receipt. `delete_memory` is left to the host as destructive.
+#
+# EVERY MODE BUT PLAN, which is the one exception to this file's auto-only rule,
+# and it is the owner's (2026-10-16): memory edits are "supposed to be always
+# approved by batten". Auto already grants them through `auto-mode-is-preapproved`,
+# so an auto-only arm changed nothing; the session that measured the prompt ran
+# in default mode. Plan mode refuses writes before any grant is asked.
+preapprove contains "call grant now" if {
+	input.call.event == "pre-tool"
+	memory_write_tool(input.call.tool)
+	input.call["permission-mode"] != "plan"
+}
+
+memory_write_tool(tool) if tool in {
+	"mcp__serena__write_memory", "mcp__serena__edit_memory", "mcp__serena__rename_memory",
+}
+
 # What discards data or processes with no batten alternative, by program name.
 # git is excluded so its calls are judged by the git preset alone.
 destructive_program(program) if program.name in {
@@ -90,6 +117,29 @@ test_a_write_is_not_granted_in_plan if {
 	count(preapprove) == 0 with input as {"call": {
 		"event": "pre-tool", "tool": "Write", "permission-mode": "plan",
 		"arguments": {"file_path": "README.md"},
+	}}
+}
+
+test_a_memory_write_is_granted_in_default_and_auto if {
+	every mode in ["default", "auto", "acceptEdits"] {
+		"call grant now" in preapprove with input as {"call": {
+			"event": "pre-tool", "tool": "mcp__serena__edit_memory", "permission-mode": mode,
+		}}
+	}
+}
+
+test_a_memory_write_is_not_granted_in_plan if {
+	count(preapprove) == 0 with input as {"call": {
+		"event": "pre-tool", "tool": "mcp__serena__write_memory", "permission-mode": "plan",
+	}}
+}
+
+test_a_memory_delete_and_a_connector_write_are_left_to_the_host if {
+	count(preapprove) == 0 with input as {"call": {
+		"event": "pre-tool", "tool": "mcp__serena__delete_memory", "permission-mode": "default",
+	}}
+	count(preapprove) == 0 with input as {"call": {
+		"event": "pre-tool", "tool": "mcp__Linear__save_comment", "permission-mode": "default",
 	}}
 }
 

@@ -217,43 +217,12 @@ fn a_claude_ai_connector_resolves_to_silence_never_a_grant() {
     assert_eq!(f.verdict(&format!("{LINEAR}__save_issue")), "silence -");
     // A server carrying no wrapped upstream at all.
     assert_eq!(f.verdict("mcp__github__search_code"), "silence -");
-    assert_eq!(f.verdict("Bash"), "silence -");
-}
-
-/// THE LITERAL SPELLING IS APPLIED TOO. A cloud host prompts for an MCP tool
-/// `permissions.allow` names verbatim, so leaving the readable name to the host's
-/// own matching pre-approved nothing: every Serena memory write asked the owner.
-/// The verdict is still the committed file's, deny first, and an unnamed verb or
-/// server is still silence.
-#[test]
-fn a_committed_rule_applies_under_the_literal_name_as_well() {
-    let f = Fixture::new("literal");
+    // The readable spelling is left to the host's own matching.
     assert_eq!(
         f.verdict("mcp__Claude_Code_Remote__create_session"),
-        "allow Claude_Code_Remote"
-    );
-    assert_eq!(
-        f.verdict("mcp__Claude_Code_Remote__send_later"),
-        "deny Claude_Code_Remote"
-    );
-    assert_eq!(
-        f.verdict("mcp__Claude_Code_Remote__archive_session"),
         "silence Claude_Code_Remote"
     );
-    // A server no alias governs, named literally by a rule: the committed
-    // allow applies under its own name.
-    let f = Fixture::new("literal-ungoverned").settings(
-        r#"{"permissions":{"allow":["mcp__serena__edit_memory"],"deny":["mcp__serena__delete_memory"]}}"#,
-    );
-    assert_eq!(f.verdict("mcp__serena__edit_memory"), "allow serena");
-    assert_eq!(f.verdict("mcp__serena__delete_memory"), "deny serena");
-    assert_eq!(f.verdict("mcp__serena__write_memory"), "silence -");
-    let (code, out, err) = f.guard(&payload("mcp__serena__edit_memory"));
-    assert_eq!(code, Some(0), "{err}");
-    assert!(
-        out.contains("already allows edit_memory on serena"),
-        "{out}"
-    );
+    assert_eq!(f.verdict("Bash"), "silence -");
 }
 
 /// THE RETIRED EXACT COMPARISON, KEPT (CLOUD-843 review): the translation is a
