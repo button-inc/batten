@@ -299,14 +299,11 @@ probe error, not a fact.
 
 ## CI-checks scope gap (don't misdiagnose as a proxy problem)
 
-Reading CI checks needs **Checks: read**, and THE INJECTED PAT CARRIES IT NOW.
-Re-measured 2026-10-15: `mise exec -- gh api repos/button-inc/batten/commits/<sha>/check-runs`
-answered 200 (47 runs) with `BATTEN_GITHUB_TOKEN`, and session start's
-`batten doctor forge` probes `checks=read` as `ok`. An earlier revision said a
-fine-grained PAT cannot carry it and sent readers to the MCP tools first; that
-was true of an older token, not of this one. If `check-runs` 403s with
-`x-accepted-github-permissions: checks=read`, the token changed: that is a token
-capability, not a network block, and `batten doctor forge` names it.
+Reading CI checks needs **Checks: read**. Whether the current token carries it
+is a live fact, so ask the probe rather than this file: session start's
+`batten doctor forge` reports `checks=read` as `ok` or not. If `check-runs`
+403s with `x-accepted-github-permissions: checks=read`, that is a token
+capability, not a network block.
 
 **"Everything else works" is not quite true, and the second gap is `gh pr edit`.**
 Measured 2026-08-19 with a classic PAT scoped `repo,workflow`: `gh pr edit <n>
@@ -375,16 +372,13 @@ triggers were throttled, so `ready`/`synchronize` events were _dropped, not
 queued_ — they never replay, and CI only ran once a fresh push was made after
 recovery.)
 
-During a confirmed outage, an outage has no "recovered" webhook, so do not wait
-on one. **Do not poll with `sleep` either**: AGENTS.md refuses every sleep, in
-either posture, a loop included (CLOUD-1337), and an earlier revision of this
-paragraph that allowed a "bounded background loop" contradicted it. Check the
-two signals on demand instead, each time the session is woken for another
-reason: (1) the status-page component, and (2) the real endpoints
-(`actions/runs?branch=…`, `commits/<sha>/check-runs`) for your head SHA. A run or
-check appearing for your SHA is stronger proof than the advisory clearing. On
-recovery, re-trigger CI with a fresh push (the original events were dropped) and
-run `mise run land` again.
+An outage has no "recovered" webhook, so do not wait on one, and do not poll
+either (AGENTS.md, "Background the slow path"). Check the two signals on demand
+whenever the session wakes for another reason: (1) the status-page component,
+and (2) the real endpoints (`actions/runs?branch=…`, `commits/<sha>/check-runs`)
+for your head SHA. A run or check appearing for your SHA is stronger proof than
+the advisory clearing. On recovery, re-trigger CI with a fresh push (the
+original events were dropped) and run `mise run land` again.
 
 ## Hygiene
 
@@ -394,15 +388,12 @@ run `mise run land` again.
   token, which 403s any write it is not scoped for, including the landing lease's
   CAS. See §"Why the toolchain runs here" for the measurement and the credential
   helper. Interception applies on both routes, so fencing trades away nothing.
-- Confirming CI is **`mise run land`'s job, never a hand-rolled poll.** `land`
-  readies the PR, waits on the head's checks by counts (no wall clock, never the
-  webhook), and stops on red. An earlier revision of this bullet prescribed "one
-  continuous background `gh` poll" of `check-runs`. AGENTS.md now forbids that:
-  no heartbeats, no bespoke wait logic around the lifecycle tasks. To read CI
-  between laps, fetch it on demand: `mise exec -- gh run view <id> --log-failed`
-  for a red job. (A superseded run shows `ci`/`cross` `cancelled` and `final`
-  `failure` from CI's concurrency `cancel-in-progress`. That is not a real
-  failure, only the old SHA dropped when a new head was pushed.)
+- Confirming CI is **`mise run land`'s job** (AGENTS.md, "Workflow contract").
+  To read CI between laps, fetch it on demand:
+  `mise exec -- gh run view <id> --log-failed` for a red job. A superseded run
+  shows `ci`/`cross` `cancelled` and `final` `failure` from CI's concurrency
+  `cancel-in-progress`. That is not a real failure, only the old SHA dropped
+  when a new head was pushed.
 - Never echo a credential. Check presence with `${VAR:+SET}` — never a bare
   `$VAR` or a `${VAR:-…}` that expands the value into the transcript.
 - **`${VAR:+SET}${VAR:-UNSET}` LEAKS THE VALUE, and it reads as safe.** Measured
