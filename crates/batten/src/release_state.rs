@@ -811,7 +811,7 @@ pub fn run_discard(
 }
 
 /// `batten release in-flight --workflow <file>...`: exit 0 when nothing is in
-/// flight, 1 naming what is, 3 when it could not look. `workflow` is the build
+/// flight, 2 naming what is, 3 when it could not look. `workflow` is the build
 /// workflow's file, whose runs are titled by their tag.
 ///
 /// # Errors

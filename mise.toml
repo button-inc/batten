@@ -3816,7 +3816,13 @@ description = "Currency only: would regenerating mise.lock change it? Runs on a 
 # alone in the repo, is allowed to write the file that `[settings] lockfile =
 # false` denies to everything else (CLOUD-223). It also holds the currency job
 # upright if a later mise gates `lock` on the setting.
-env = { MISE_LOCKFILE = "true" }
+#
+# ATTESTATIONS OFF FOR THE WRITE (CLOUD-2395). A lock that records
+# `github-attestations` provenance makes every locked install verify it through
+# api.github.com, which a cloud session's proxy refuses for a third party, so the
+# toolchain repair cannot install. The writer records none; installs that can
+# reach the API still verify under mise's own default.
+env = { MISE_LOCKFILE = "true", MISE_AQUA_GITHUB_ATTESTATIONS = "false" }
 run = [
   "mise lock",
   "git --no-pager diff --stat --exit-code -- mise.lock",

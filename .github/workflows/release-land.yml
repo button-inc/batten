@@ -92,12 +92,13 @@ jobs:
       - name: (a) Nothing here can land - the release is absent, or burned
         if: steps.state.outputs.state == 'absent' || steps.state.outputs.state == 'burned'
         run: exit 1
-      # (b) A REFUSAL DISCARDS AND A COULD-NOT-LOOK DOES NOT: exit 1 is mapped
-      # to `refused`, and exit 3 stays the step's own failure.
+      # (b) A REFUSAL DISCARDS AND A COULD-NOT-LOOK DOES NOT: exit 2, the
+      # verb's `Violation`, is mapped to `refused`, and exit 3 stays the step's
+      # own failure (CLOUD-2392).
       - name: (b) Verify the draft
         if: steps.state.outputs.state == 'draft-ok'
         id: verify
-        run: mise run batten -- ci step --verdict verify --on 0=ok --on 1=refused --arg-env TAG -- mise run batten -- release verify --draft
+        run: mise run batten -- ci step --verdict verify --on 0=ok --on 2=refused --arg-env TAG -- mise run batten -- release verify --draft
       - name: (b) Discard the draft the verify refused
         if: steps.verify.outputs.verify == 'refused'
         run: mise run batten -- ci step --arg-env TAG -- mise run batten -- release discard

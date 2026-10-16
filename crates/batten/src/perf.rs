@@ -970,20 +970,18 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Re
     // `batten`'s own units first; the dependency closure CLOUD-1891 shares is
     // left alone.
     let marker = target_dir.map(|dir| dir.join(LAST_ARM));
-    let mut cleaned = false;
-    if let Some(marker) = &marker {
-        let last = std::fs::read_to_string(marker).ok();
-        if switches_arm(last.as_deref(), what) {
-            let clean: Vec<String> = ["clean", "-p", "batten", "--profile", profile]
-                .iter()
-                .map(|word| (*word).to_owned())
-                .collect();
-            if !run(dir, Tool::Cargo, &clean, &env)? {
-                bail!(
-                    "perf-pair: could not drop the other arm's `batten` units before the {what} build. No measurement."
-                );
-            }
-            cleaned = true;
+    let cleaned = marker
+        .as_ref()
+        .is_some_and(|marker| switches_arm(std::fs::read_to_string(marker).ok().as_deref(), what));
+    if cleaned {
+        let clean: Vec<String> = ["clean", "-p", "batten", "--profile", profile]
+            .iter()
+            .map(|word| (*word).to_owned())
+            .collect();
+        if !run(dir, Tool::Cargo, &clean, &env)? {
+            bail!(
+                "perf-pair: could not drop the other arm's `batten` units before the {what} build. No measurement."
+            );
         }
     }
     if !run(dir, Tool::Cargo, &args, &env)? {
@@ -1238,7 +1236,7 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
         }
         if !base_arm_is_built(&perf, &key) {
             base_built_now = true;
-            let _ = build(&base_tree, Some(&shared), "base", PAIR_PROFILE)?;
+            build(&base_tree, Some(&shared), "base", PAIR_PROFILE)?;
             // A cargo that exits 0 without leaving the binary is could-not-look,
             // never a measurement: hyperfine would report the missing path as a
             // failed command and `perf-compare` would read the gap as a verdict.
@@ -1364,8 +1362,7 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
     // install. A debug build's startup is dominated by unoptimised code and is
     // not the number being defended, so measuring one would publish a claim
     // about an artifact that ships nowhere.
-    // No target dir, so no arm switch and nothing to clean: the answer is moot.
-    let _ = build(repo, None, "head", "release")?;
+    build(repo, None, "head", "release")?;
     let head_bin = repo.join("target/release/batten");
     if !head_bin.is_file() {
         bail!(

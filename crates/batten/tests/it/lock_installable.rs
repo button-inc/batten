@@ -20,29 +20,16 @@
 
 use crate::common;
 
-/// The `toolchain-is-provisioned` row's repair argv.
+/// The `toolchain-is-provisioned` row's repair argv, as the engine loads it.
 fn repair() -> Vec<String> {
-    let text =
-        std::fs::read_to_string(common::at_root("batten.toml")).expect("batten.toml is readable");
-    let config: toml::Value = toml::from_str(&text).expect("batten.toml parses");
-    let rows = config
-        .get("startup")
-        .and_then(toml::Value::as_array)
-        .expect("batten.toml declares [[startup]] rows");
-    let row = rows
-        .iter()
-        .find(|row| row.get("id").and_then(toml::Value::as_str) == Some("toolchain-is-provisioned"))
-        .expect("the toolchain-is-provisioned row exists");
-    row.get("repair")
-        .and_then(toml::Value::as_array)
+    batten::config::load(&common::at_root("batten.toml"))
+        .expect("the committed config loads")
+        .startup
+        .into_iter()
+        .find(|row| row.id == "toolchain-is-provisioned")
+        .expect("the toolchain-is-provisioned row exists")
+        .repair
         .expect("the row carries a repair")
-        .iter()
-        .map(|arg| {
-            arg.as_str()
-                .expect("the repair is an argv of strings")
-                .to_owned()
-        })
-        .collect()
 }
 
 #[test]
