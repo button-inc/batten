@@ -527,46 +527,19 @@ fn stage(
     if archive.exists() {
         std::fs::remove_file(&archive)?;
     }
-    let absolute = archive.to_string_lossy().into_owned();
-    // Both forms put the binary at the archive ROOT, never under
-    // `target/<triple>/dist/`, so extracting yields the binary beside the user.
-    //
-    // A WINDOWS HOST HAS NO `zip` (measured on windows-latest: "could not start
-    // `zip`"), and every cargo-dist Windows leg builds on one. It does ship
-    // bsdtar as `System32\tar.exe`, which writes the same zip. By its full
-    // path, because a bash step puts Git for Windows' GNU tar first on PATH, and
-    // GNU tar writes no zip. A non-Windows host cross-building the target keeps
-    // Info-ZIP.
-    let (dir, argv): (&Path, Vec<String>) = if is_windows_target(target) && cfg!(windows) {
-        let bsdtar = std::env::var_os("SystemRoot")
-            .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
-            .join("System32")
-            .join("tar.exe");
-        (
-            built_dir.as_path(),
-            [bsdtar.to_string_lossy().into_owned()]
-                .into_iter()
-                .chain(["--format", "zip", "-cf"].map(str::to_owned))
-                .chain([absolute, file])
-                .collect(),
-        )
-    } else if is_windows_target(target) {
-        (
-            built_dir.as_path(),
-            vec!["zip".to_owned(), "-q".to_owned(), absolute, file],
-        )
+    let argv = archiver_argv(
+        target,
+        cfg!(windows).then(|| std::env::var_os("SystemRoot")),
+        archive.to_string_lossy().into_owned(),
+        &built_dir,
+        file,
+    );
+    // A zip is written from inside the binary's directory; a tarball names it
+    // with `-C`, so it runs from the workspace root.
+    let dir = if is_windows_target(target) {
+        built_dir.as_path()
     } else {
-        (
-            package.root.as_path(),
-            vec![
-                "tar".to_owned(),
-                "-czf".to_owned(),
-                absolute,
-                "-C".to_owned(),
-                built_dir.to_string_lossy().into_owned(),
-                file,
-            ],
-        )
+        package.root.as_path()
     };
     if !ran(dir, &argv, err)? || !archive.is_file() {
         writeln!(
@@ -577,6 +550,49 @@ fn stage(
         return Ok(None);
     }
     Ok(Some((archive, built)))
+}
+
+/// The argv that archives `file` (in `built_dir`) as `archive` for `target`.
+/// Both forms put the binary at the archive ROOT, never under
+/// `target/<triple>/dist/`, so extracting yields the binary beside the user.
+///
+/// `windows_host` is `Some(%SystemRoot%)` on a Windows host and `None`
+/// elsewhere. A WINDOWS HOST HAS NO `zip` (measured on windows-latest: "could
+/// not start `zip`"), and every cargo-dist Windows leg builds on one. It does
+/// ship bsdtar as `System32\tar.exe`, which writes the same zip, named by its
+/// full path because a bash step puts Git for Windows' GNU tar, which writes no
+/// zip, first on PATH. A non-Windows host cross-building the target keeps
+/// Info-ZIP (CLOUD-2381).
+fn archiver_argv(
+    target: &str,
+    windows_host: Option<Option<std::ffi::OsString>>,
+    archive: String,
+    built_dir: &Path,
+    file: String,
+) -> Vec<String> {
+    if !is_windows_target(target) {
+        return vec![
+            "tar".to_owned(),
+            "-czf".to_owned(),
+            archive,
+            "-C".to_owned(),
+            built_dir.to_string_lossy().into_owned(),
+            file,
+        ];
+    }
+    //MUTANT archiver-ignores-host|s@^    let Some(system_root) = windows_host else {$@    let Some(system_root) = None::<Option<std::ffi::OsString>> else {@|a_windows_host_never_archives_with_zip
+    let Some(system_root) = windows_host else {
+        return vec!["zip".to_owned(), "-q".to_owned(), archive, file];
+    };
+    let bsdtar = system_root
+        .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
+        .join("System32")
+        .join("tar.exe");
+    [bsdtar.to_string_lossy().into_owned()]
+        .into_iter()
+        .chain(["--format", "zip", "-cf"].map(str::to_owned))
+        .chain([archive, file])
+        .collect()
 }
 
 /// What a cargo-dist leg settles before `dist build`, in order:
@@ -830,6 +846,55 @@ mod tests {
         assert_eq!(wix["license"].as_bool(), Some(false));
         assert_eq!(wix["eula"].as_bool(), Some(false));
         assert_eq!(wix.as_table().map(toml::Table::len), Some(4));
+    }
+
+    /// A Windows host has no `zip`, so it writes the zip with its own bsdtar by
+    /// full path; a non-Windows host cross-building keeps Info-ZIP, and a
+    /// non-Windows target is a tarball wherever it is built (CLOUD-2381).
+    #[test]
+    fn a_windows_host_never_archives_with_zip() {
+        let windows = "x86_64-pc-windows-gnu";
+        let dir = Path::new("target/x86_64-pc-windows-gnu/dist");
+        let on_windows = archiver_argv(
+            windows,
+            Some(Some(std::ffi::OsString::from(r"D:\Windows"))),
+            "a.zip".to_owned(),
+            dir,
+            "batten.exe".to_owned(),
+        );
+        assert_ne!(on_windows[0], "zip", "{on_windows:?}");
+        assert!(
+            Path::new(&on_windows[0]).ends_with(Path::new("System32").join("tar.exe")),
+            "{on_windows:?}"
+        );
+        assert!(on_windows[0].starts_with(r"D:\Windows"), "{on_windows:?}");
+        assert_eq!(on_windows[1..4], ["--format", "zip", "-cf"]);
+        let unset_root = archiver_argv(
+            windows,
+            Some(None),
+            "a.zip".to_owned(),
+            dir,
+            "batten.exe".to_owned(),
+        );
+        assert!(unset_root[0].starts_with(r"C:\Windows"), "{unset_root:?}");
+
+        let cross = archiver_argv(
+            windows,
+            None,
+            "a.zip".to_owned(),
+            dir,
+            "batten.exe".to_owned(),
+        );
+        assert_eq!(cross[0], "zip", "{cross:?}");
+
+        let linux = archiver_argv(
+            "x86_64-unknown-linux-gnu",
+            Some(None),
+            "a.tar.gz".to_owned(),
+            dir,
+            "batten".to_owned(),
+        );
+        assert_eq!(linux[..2], ["tar", "-czf"]);
     }
 
     /// dist's name carries no version and keeps the per-target extension; the

@@ -440,3 +440,138 @@ fn the_committed_workflows_and_manifest_agree() {
         stdout(&output)
     );
 }
+
+/// Whether a step's `run` runs the suite (CLOUD-2381): `mise run ci`,
+/// `test:cargo` or `test:musl` as a whole word (so `ci-slow-needed` and
+/// `ci:quick`, which skips the slow tier the suite is in, do not count), or
+/// `nextest run` that is not `--no-run`.
+fn runs_suite(run: &str) -> bool {
+    //MUTANT suite-step-never-matches|s@^    run.split(@    false \&\& run.split(@|every_suite_job_installs_the_pinned_tools_its_cases_require
+    run.split('\n').any(|line| {
+        ["ci", "test:cargo", "test:musl"].iter().any(|task| {
+            line.split("mise run ").skip(1).any(|rest| {
+                rest.strip_prefix(task)
+                    .is_some_and(|after| after.is_empty() || after.starts_with(char::is_whitespace))
+            })
+        }) || (line.contains("nextest run") && !line.contains("--no-run"))
+    })
+}
+
+/// EVERY JOB THAT RUNS THE SUITE INSTALLS EVERY PINNED TOOL A CASE REQUIRES
+/// (CLOUD-2381). `tool pin wrong` is blind to this twice over: it reads what
+/// `batten.toml` rows spawn, never what a case spawns, and ANY install list in
+/// ANY workflow satisfies it. So the dist tamper case passed locally while the
+/// `ci` job, the `musl` leg and release-plz's musl cache warm all ran the suite
+/// without cargo-dist, and with auto-install off each failed only in CI. A case
+/// that requires a pinned tool says so in one spelling, the quoted tool name
+/// followed by `mark` below (as `install_web.rs`'s `run_dist` does), and every
+/// job whose steps run the suite is held to each tool so named in its OWN list.
+///
+/// A case's `cfg!` gate is not read: a job on any OS that runs the suite
+/// installs every required tool, which `mise.lock` pins for every platform.
+#[test]
+fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
+    use yaml_rust2::YamlLoader;
+    // Split, so this file's own text is not read as a requirement.
+    let mark = concat!(" must be ", "installed: it is a pinned [tools] entry");
+    let mut required = std::collections::BTreeSet::new();
+    let mut pending = vec![common::at_root("crates/batten/tests")];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                let text = std::fs::read_to_string(&path).unwrap();
+                for (at, _) in text.match_indices(mark) {
+                    let tool = text[..at].rsplit('"').next().unwrap_or_default();
+                    assert!(
+                        !tool.is_empty()
+                            && tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+                        "{}: a requirement names no tool",
+                        path.display()
+                    );
+                    required.insert(tool.to_owned());
+                }
+            }
+        }
+    }
+    assert!(
+        required.contains("cargo-dist"),
+        "the dist tamper case's requirement went unread: {required:?}"
+    );
+
+    let mut suite_jobs = Vec::new();
+    let mut missing = Vec::new();
+    for entry in std::fs::read_dir(common::at_root(".github/workflows"))
+        .unwrap()
+        .flatten()
+    {
+        let path = entry.path();
+        if !path
+            .extension()
+            .is_some_and(|ext| ext == "yml" || ext == "yaml")
+        {
+            continue;
+        }
+        let file = path.file_name().unwrap().to_string_lossy().into_owned();
+        let docs = YamlLoader::load_from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let Some(jobs) = docs[0]["jobs"].as_hash() else {
+            continue;
+        };
+        for (name, job) in jobs {
+            let name = name.as_str().unwrap_or_default();
+            let steps = job["steps"].as_vec().map_or(&[][..], Vec::as_slice);
+            if !steps
+                .iter()
+                .any(|step| step["run"].as_str().is_some_and(runs_suite))
+            {
+                continue;
+            }
+            suite_jobs.push(format!("{file}:{name}"));
+            let installed: std::collections::BTreeSet<&str> = steps
+                .iter()
+                .filter_map(|step| step["with"]["install_args"].as_str())
+                .flat_map(str::split_whitespace)
+                .map(|key| key.rsplit(['/', ':']).next().unwrap_or(key))
+                .collect();
+            for tool in &required {
+                if !installed.contains(tool.as_str()) {
+                    missing.push(format!("{file}:{name} {tool}"));
+                }
+            }
+        }
+    }
+    for expected in ["ci.yml:ci", "rust.yml:musl"] {
+        assert!(
+            suite_jobs.iter().any(|job| job == expected),
+            "{expected} runs the suite but was not found: {suite_jobs:?}"
+        );
+    }
+    assert!(
+        missing.is_empty(),
+        "a suite-running job omits a pinned tool a case requires: {missing:?}"
+    );
+}
+
+/// The suite-step predicate counts what runs the suite and nothing that only
+/// looks like it.
+#[test]
+fn a_suite_step_is_a_whole_task_name_or_a_nextest_run() {
+    for run in [
+        "mise run ci",
+        "mise run test:musl",
+        "mise run test:cargo --",
+        "mise exec -- cargo nextest run --workspace",
+    ] {
+        assert!(runs_suite(run), "{run}");
+    }
+    for run in [
+        "mise run ci:quick",
+        "mise run ci-drift",
+        "mise run batten -- ci step -- mise run ci-slow-needed --",
+        "mise exec -- cargo nextest run --no-run --workspace",
+    ] {
+        assert!(!runs_suite(run), "{run}");
+    }
+}

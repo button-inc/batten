@@ -898,12 +898,18 @@ fn run_dist_installer(
 /// musl-built suite on a glibc runner (the `musl` CI leg) fetches the `-gnu`
 /// archive. musl hosts carry a `/lib/ld-musl-*` loader; everything else is gnu.
 fn installer_target() -> String {
-    let built = batten::engine::running_target();
     let musl_host = std::fs::read_dir("/lib").is_ok_and(|entries| {
         entries
             .flatten()
             .any(|entry| entry.file_name().to_string_lossy().starts_with("ld-musl-"))
     });
+    installer_target_for(&batten::engine::running_target(), musl_host)
+}
+
+/// The installer's triple for a suite `built` for one triple on a host whose
+/// libc is musl or not: the libc is the HOST's, never the build's (CLOUD-2381).
+fn installer_target_for(built: &str, musl_host: bool) -> String {
+    //MUTANT installer-target-ignores-host|s@^    let libc = if musl_host {$@    let libc = if built.ends_with("-musl") {@|the_installer_target_follows_the_host_libc_not_the_build
     let libc = if musl_host {
         "-linux-musl"
     } else {
@@ -912,6 +918,29 @@ fn installer_target() -> String {
     built
         .replace("-linux-musl", libc)
         .replace("-linux-gnu", libc)
+}
+
+/// The failure the `musl` CI leg found: a musl-built suite on a glibc runner
+/// staged a musl archive and the installer fetched the gnu one. Both crossings,
+/// so a choice that follows the build in either direction fails here.
+#[test]
+fn the_installer_target_follows_the_host_libc_not_the_build() {
+    assert_eq!(
+        installer_target_for("x86_64-unknown-linux-musl", false),
+        "x86_64-unknown-linux-gnu"
+    );
+    assert_eq!(
+        installer_target_for("aarch64-unknown-linux-gnu", true),
+        "aarch64-unknown-linux-musl"
+    );
+    assert_eq!(
+        installer_target_for("x86_64-unknown-linux-gnu", false),
+        "x86_64-unknown-linux-gnu"
+    );
+    assert_eq!(
+        installer_target_for("aarch64-apple-darwin", false),
+        "aarch64-apple-darwin"
+    );
 }
 
 /// The installer cargo-dist generates installs only the bytes the release
