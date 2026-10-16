@@ -18286,7 +18286,23 @@ decided_by = "silent-exit"
 # release-download URL and checksum; locked mode fetches exactly those, needs no
 # API and no credential, and left `mise.lock` byte-identical. `env` because a
 # repair is an argv, the shape `host-dependencies-present` already uses.
-repair = ["env", "MISE_LOCKFILE=true", "MISE_LOCKED=1", "mise", "install", "--yes"]
+#
+# AND NO ATTESTATION READ, because that one is not a download (CLOUD-2395).
+# Verifying `github-attestations` provenance reads api.github.com for the
+# upstream repo, which a cloud session's proxy refuses for a third party: measured
+# on `aqua:taiki-e/cargo-llvm-cov`, which downloaded and then 403'd at "verify
+# GitHub artifact attestations". The bytes stay pinned by the lock's sha256; the
+# lock records no attestation provenance, so mise has no downgrade to refuse.
+#MUTANT repair-verifies-attestations|s@^  "MISE_AQUA_GITHUB_ATTESTATIONS=false",$@@|the_lock_installs_without_an_attestation_read
+repair = [
+  "env",
+  "MISE_LOCKFILE=true",
+  "MISE_LOCKED=1",
+  "MISE_AQUA_GITHUB_ATTESTATIONS=false",
+  "mise",
+  "install",
+  "--yes",
+]
 
 # AND THIS ROW ASKED THE RUNNER A QUESTION ABOUT BATTEN (CLOUD-1454, same report).
 #
