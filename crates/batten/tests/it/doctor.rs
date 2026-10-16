@@ -1295,3 +1295,97 @@ fn agents_md_does_not_promise_that_this_verb_answers_whether_the_work_works() {
         "the paragraph must still send the unsaved question to the verb that answers it"
     );
 }
+
+// --- what plan mode refused, counted (CLOUD-2292) ----------------------------
+
+/// A repository enabling the two presets whose refusals these cases tell apart:
+/// `claude-code-cloud` (plan mode) and `trunk-based` (a forced push).
+fn gaps_fixture(name: &str) -> PathBuf {
+    common::Fixture::new(name)
+        .config(
+            "version = 1\n\n\
+             [[rule]]\nid = \"cloud\"\nkind = \"policy\"\nscope = \"mediated_call\"\n\
+             preset = \"claude-code-cloud\"\nseverity = \"deny\"\n\n\
+             [[rule]]\nid = \"trunk\"\nkind = \"policy\"\nscope = \"mediated_call\"\n\
+             preset = \"trunk-based\"\nseverity = \"deny\"\n",
+        )
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// One `PreToolUse` shell call in `mode`, adjudicated; returns what the host saw.
+fn adjudicate_shell(dir: &Path, mode: &str, command: &str) -> String {
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "permission_mode": mode,
+        "tool_name": "Bash",
+        "tool_input": { "command": command },
+    })
+    .to_string();
+    let outcome =
+        common::run_with_stdin(dir, &["adjudicate", "--harness", "claude-code"], &payload);
+    format!("{}{}", stdout(&outcome), common::stderr(&outcome))
+}
+
+/// Every byte under `path`, whatever its layout inside.
+fn read_all(path: &Path, into: &mut String) {
+    if path.is_dir() {
+        for entry in fs::read_dir(path).expect("a store directory") {
+            read_all(&entry.expect("an entry").path(), into);
+        }
+    } else if let Ok(text) = fs::read_to_string(path) {
+        into.push_str(&text);
+    }
+}
+
+fn gaps(dir: &Path) -> String {
+    let outcome = batten()
+        .args(["doctor", "gaps"])
+        .current_dir(dir)
+        .output()
+        .expect("run");
+    assert!(outcome.status.success(), "{}", common::stderr(&outcome));
+    stdout(&outcome)
+}
+
+#[test]
+fn two_plan_mode_refusals_of_one_program_are_one_line_counted_twice() {
+    let dir = gaps_fixture("gaps-counted");
+    for _ in 0..2 {
+        let said = adjudicate_shell(&dir, "plan", "python3 tools/x.py");
+        assert!(said.contains("plan write refused"), "the premise: {said}");
+    }
+    let report = gaps(&dir);
+    let lines: Vec<&str> = report.lines().collect();
+    assert_eq!(lines.len(), 1, "{report}");
+    assert!(
+        lines[0].starts_with("plan write refused at python3 2 last "),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_refusal_by_another_rule_records_nothing() {
+    let dir = gaps_fixture("gaps-other-rule");
+    let said = adjudicate_shell(&dir, "default", "git push --force origin main");
+    assert!(said.contains("trunk push forced"), "the premise: {said}");
+    assert_eq!(gaps(&dir), "", "only plan mode's refusals are counted");
+}
+
+#[test]
+fn the_gap_record_holds_no_argument_text() {
+    let dir = gaps_fixture("gaps-pointer-only");
+    let secret = "s3cr3t-argument-text";
+    let said = adjudicate_shell(&dir, "plan", &format!("python3 tools/x.py {secret}"));
+    assert!(said.contains("plan write refused"), "the premise: {said}");
+    let mut stored = String::new();
+    read_all(&dir.join(".git/batten-journals/plan-refusal"), &mut stored);
+    assert!(
+        stored.contains("python3"),
+        "the program is recorded: {stored}"
+    );
+    assert!(!stored.contains(secret), "the argv is not: {stored}");
+    assert!(!stored.contains("tools/x.py"), "nor any operand: {stored}");
+    assert!(!gaps(&dir).contains(secret));
+}

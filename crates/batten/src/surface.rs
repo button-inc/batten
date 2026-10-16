@@ -4733,6 +4733,19 @@ pub const SURFACE: &[CommandDecl] = &[
     // a write claim is reported as declared and never called. `doctor *`'s exit
     // set, for its siblings' reason: a missing claim is a failed diagnosis, and a
     // diagnosis renders no policy verdict, so it cannot mint a `2`.
+    // CLOUD-2292. Folds one journal family and prints a count per pointer:
+    // `read` structurally, no spawn and no network.
+    // unreached: "doctor gaps" CLOUD-2292 a reader runs it to see which reads plan mode
+    // lacks; nothing in the tree should act on its list unasked.
+    CommandDecl {
+        path: "doctor gaps",
+        id: "doctor.gaps",
+        about: "Count what plan mode refused, by program, most-refused first",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[],
+    },
     CommandDecl {
         path: "doctor forge",
         id: "doctor.forge",

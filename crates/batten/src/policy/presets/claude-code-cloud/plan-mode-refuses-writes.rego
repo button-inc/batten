@@ -26,6 +26,10 @@ rules contains "plan write refused"
 violation contains {
 	"rule": "plan write refused",
 	"verdict": "plan write refused",
+	# THE PROGRAM THAT WAS NOT A READ, never its arguments (CLOUD-2292): the
+	# boundary counts refusals by this pointer, so a read this preset does not
+	# yet classify shows up as a program refused again and again.
+	"subjects": [{"artifact": refused_subject(input.call)}],
 } if {
 	input.call.event == "pre-tool"
 	input.call["permission-mode"] == "plan"
@@ -38,6 +42,27 @@ violation contains {
 	# `unwatch-is-preapproved.rego`, decides both this exemption and the grant.
 	not unwatch_method(input.call.tool)
 }
+
+# What a plan-mode refusal names: the first program of a shell call that is not a
+# read, or the tool itself for any other call. A function, for the reason
+# `read-only-is-preapproved.rego` records: a helper rule keeps a value between
+# inputs, and a function has none to keep.
+refused_subject(call) := name if {
+	call.tool == "Bash"
+	names := not_reads(call.programs)
+	count(names) > 0
+	name := names[0]
+}
+
+refused_subject(call) := call.tool if {
+	call.tool == "Bash"
+	count(not_reads(call.programs)) == 0
+}
+
+# The names of the programs that do not read, in order.
+not_reads(programs) := [programs[i].name | programs[i]; not reads(programs[i])]
+
+refused_subject(call) := call.tool if call.tool != "Bash"
 
 # The host's own plan-mode surface: leaving it, asking, and its task list, which
 # is session state rather than the tree.
@@ -75,6 +100,27 @@ test_a_writer_after_a_reader_is_refused if {
 		],
 	}}
 	v.rule == "plan write refused"
+}
+
+test_the_refusal_names_the_program_that_did_not_read if {
+	some v in violation with input as {"call": {
+		"event": "pre-tool", "permission-mode": "plan", "tool": "Bash",
+		"command": "git status && python3 x.py --secret",
+		"segments": [{"words": ["git", "status"], "terminator": "&&"}, {"words": ["python3", "x.py", "--secret"]}],
+		"programs": [
+			{"name": "git", "arguments": ["status"], "reads-only": false},
+			{"name": "python3", "arguments": ["x.py", "--secret"], "reads-only": false},
+		],
+	}}
+	v.subjects == [{"artifact": "python3"}]
+}
+
+test_a_refused_tool_names_itself if {
+	some v in violation with input as {"call": {
+		"event": "pre-tool", "permission-mode": "plan", "tool": "Edit",
+		"arguments": {"file_path": "/repo/src/lib.rs"},
+	}}
+	v.subjects == [{"artifact": "Edit"}]
 }
 
 test_a_plan_mode_read_is_not if {

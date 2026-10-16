@@ -1664,6 +1664,13 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-2292. A count per pointer the refusal already printed.
+    Verb {
+        path: "doctor gaps",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // CLOUD-1683. The manifest declares one tool the probe does not report, so
     // this exercises the REFUSING arm — where the verdict names its subject and
     // therefore has the most to leak. The probe's own canaries must not survive

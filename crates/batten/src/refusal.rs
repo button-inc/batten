@@ -1356,6 +1356,13 @@ impl Refusal {
         &self.rule
     }
 
+    /// The rendered pointers, as the ` at <subjects>` clause spells them; empty
+    /// for a refusal naming none (CLOUD-2292's gap record reads it).
+    #[must_use]
+    pub fn subjects(&self) -> &str {
+        &self.subjects
+    }
+
     /// Why it refused.
     #[must_use]
     pub fn reason(&self) -> &str {

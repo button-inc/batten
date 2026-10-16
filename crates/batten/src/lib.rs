@@ -23412,6 +23412,9 @@ fn render(
         // and the stderr line cannot disagree about what the refusal said or
         // whether it named a fix.
         hook::Decision::Deny(refusal) => {
+            // What plan mode refused, by program (CLOUD-2292). A write at the
+            // boundary like the one below, and it records only that one rule.
+            doctor::record_gap(hook_authority_root(), &refusal);
             // THE EFFECT IS HERE AND THE RENDERING IS NOT (CLOUD-1386).
             // `render_finding` projects and stays pure; consulting-and-marking
             // the context's store is a write, and a write belongs at the boundary
@@ -26879,6 +26882,7 @@ fn run_doctor(
 ) -> Result<ExitCode> {
     match *command {
         cli::DoctorCommand::Forge => run_doctor_forge(overrides, out),
+        cli::DoctorCommand::Gaps => doctor::run_gaps(Path::new("."), out),
         cli::DoctorCommand::Diagnose { json } => run_diagnose(json, out, err),
         cli::DoctorCommand::Hooks { json } => run_doctor_hooks(json, out),
         cli::DoctorCommand::Mediator { json } => run_doctor_mediator(json, out),

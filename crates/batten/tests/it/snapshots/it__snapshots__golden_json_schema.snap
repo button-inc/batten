@@ -1,6 +1,5 @@
 ---
 source: crates/batten/tests/it/snapshots.rs
-assertion_line: 139
 expression: stdout_of(&output)
 ---
 {
@@ -1386,6 +1385,15 @@ expression: stdout_of(&output)
           "path": "doctor forge",
           "id": "doctor.forge",
           "about": "Diagnose whether the forge credential carries the claims this repository's tasks declare",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "doctor gaps",
+          "id": "doctor.gaps",
+          "about": "Count what plan mode refused, by program, most-refused first",
           "effect": "read",
           "data_channel": false,
           "flags": [],
@@ -5406,6 +5414,10 @@ expression: stdout_of(&output)
     {
       "id": "doctor.forge",
       "path": "doctor forge"
+    },
+    {
+      "id": "doctor.gaps",
+      "path": "doctor gaps"
     },
     {
       "id": "doctor.gate",

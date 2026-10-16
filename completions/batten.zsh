@@ -1975,6 +1975,35 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(gaps)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (forge)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -2181,6 +2210,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (egress)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(gaps)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -9688,6 +9721,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(gaps)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (forge)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -11576,6 +11613,7 @@ _batten__subcmd__doctor_commands() {
 'target:Make one rustup target installed, purging a half-installed one first, behind the toolchain'\''s own lock' \
 'mediator:Diagnose whether the engine the registrations reach was built from this tree' \
 'egress:Diagnose whether the agent proxy would carry this container'\''s requests' \
+'gaps:Count what plan mode refused, by program, most-refused first' \
 'forge:Diagnose whether the forge credential carries the claims this repository'\''s tasks declare' \
 'config:Diagnose whether this build resolves every row of the config' \
 'gate:Diagnose whether this checkout'\''s commit path runs the gate' \
@@ -11601,6 +11639,11 @@ _batten__subcmd__doctor__subcmd__forge_commands() {
     local commands; commands=()
     _describe -t commands 'batten doctor forge commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__doctor__subcmd__gaps_commands] )) ||
+_batten__subcmd__doctor__subcmd__gaps_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten doctor gaps commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__doctor__subcmd__gate_commands] )) ||
 _batten__subcmd__doctor__subcmd__gate_commands() {
     local commands; commands=()
@@ -11612,6 +11655,7 @@ _batten__subcmd__doctor__subcmd__help_commands() {
 'target:Make one rustup target installed, purging a half-installed one first, behind the toolchain'\''s own lock' \
 'mediator:Diagnose whether the engine the registrations reach was built from this tree' \
 'egress:Diagnose whether the agent proxy would carry this container'\''s requests' \
+'gaps:Count what plan mode refused, by program, most-refused first' \
 'forge:Diagnose whether the forge credential carries the claims this repository'\''s tasks declare' \
 'config:Diagnose whether this build resolves every row of the config' \
 'gate:Diagnose whether this checkout'\''s commit path runs the gate' \
@@ -11636,6 +11680,11 @@ _batten__subcmd__doctor__subcmd__help__subcmd__egress_commands() {
 _batten__subcmd__doctor__subcmd__help__subcmd__forge_commands() {
     local commands; commands=()
     _describe -t commands 'batten doctor help forge commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__doctor__subcmd__help__subcmd__gaps_commands] )) ||
+_batten__subcmd__doctor__subcmd__help__subcmd__gaps_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten doctor help gaps commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__doctor__subcmd__help__subcmd__gate_commands] )) ||
 _batten__subcmd__doctor__subcmd__help__subcmd__gate_commands() {
@@ -12229,6 +12278,7 @@ _batten__subcmd__help__subcmd__doctor_commands() {
 'target:Make one rustup target installed, purging a half-installed one first, behind the toolchain'\''s own lock' \
 'mediator:Diagnose whether the engine the registrations reach was built from this tree' \
 'egress:Diagnose whether the agent proxy would carry this container'\''s requests' \
+'gaps:Count what plan mode refused, by program, most-refused first' \
 'forge:Diagnose whether the forge credential carries the claims this repository'\''s tasks declare' \
 'config:Diagnose whether this build resolves every row of the config' \
 'gate:Diagnose whether this checkout'\''s commit path runs the gate' \
@@ -12252,6 +12302,11 @@ _batten__subcmd__help__subcmd__doctor__subcmd__egress_commands() {
 _batten__subcmd__help__subcmd__doctor__subcmd__forge_commands() {
     local commands; commands=()
     _describe -t commands 'batten help doctor forge commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__doctor__subcmd__gaps_commands] )) ||
+_batten__subcmd__help__subcmd__doctor__subcmd__gaps_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help doctor gaps commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__doctor__subcmd__gate_commands] )) ||
 _batten__subcmd__help__subcmd__doctor__subcmd__gate_commands() {

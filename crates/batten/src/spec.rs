@@ -503,6 +503,9 @@ mod tests {
                 // `lease carries`' two forge reads. A row declaring a write claim is
                 // reported and never called, so nothing here performs one.
                 "doctor forge".to_owned(),
+                // What plan mode refused, counted (CLOUD-2292): one journal
+                // family folded and printed, nothing written or spawned.
+                "doctor gaps".to_owned(),
                 // Whether this checkout's commit path runs the gate (CLOUD-1398).
                 // `read`, and structurally so: it resolves a directory through
                 // git's own config and stats two files. Nothing is EXECUTED, and
@@ -926,6 +929,7 @@ mod tests {
             "doctor egress".to_owned(),
             // The forge-credential diagnosis (CLOUD-843), retiring `gh-preflight`.
             "doctor forge".to_owned(),
+            "doctor gaps".to_owned(),
             "doctor gate".to_owned(),
             "doctor hooks".to_owned(),
             "doctor mediator".to_owned(),

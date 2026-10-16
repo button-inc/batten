@@ -757,6 +757,90 @@ fn purge(rustlib: &Path, target: &str) {
 /// the other's half-written component tree, both report `detected conflict`, and
 /// both roll back — the target ends up NOT installed and a gate goes red on a
 /// clean tree (CLOUD-220). Serialising here, in the one effect every call site
+/// The journal family a plan-mode refusal is recorded under (CLOUD-2292).
+pub const GAP_FAMILY: &str = "plan-refusal";
+
+/// The rule whose refusals are recorded: the one that refuses whatever plan
+/// mode cannot prove a read, so a read nobody classified lands here too.
+pub const GAP_RULE: &str = "plan write refused";
+
+/// Record one plan-mode refusal: its rule, the subject it names and the day.
+///
+/// POINTER-ONLY (rule 4): the subject is the refusal's own rendered pointer —
+/// the program that did not read, or the tool — and never the call's argv,
+/// which the refusal does not carry. Any other rule records nothing. Silent on
+/// every failure, as every recorder on the hook boundary is: a record that
+/// cannot be written must not become the reason a call is decided differently.
+pub fn record_gap(root: &Path, refusal: &crate::refusal::Refusal) {
+    if refusal.rule() != GAP_RULE {
+        return;
+    }
+    let (Ok(git_dir), Ok(today)) = (git::git_dir(root), crate::waiver::today()) else {
+        return;
+    };
+    let line = serde_json::json!({
+        "rule": GAP_RULE,
+        "subject": refusal.subjects(),
+        "date": today.text(),
+    })
+    .to_string();
+    let store = crate::record::journal_store(&git_dir, GAP_FAMILY);
+    let _ = crate::journal::append_line(&store, &crate::journal::shard_id(root), &line);
+}
+
+/// `batten doctor gaps`: one line per (rule, subject) plan mode refused, with
+/// its count and the last day it happened, most-refused first (CLOUD-2292).
+///
+/// A program that is really a read and keeps appearing here is a reader the
+/// preset lacks, which `batten preset eject` lets a consumer add. The list
+/// cannot tell a gap from a real write — `read_only` proves reads and nothing
+/// else — so it counts what was refused and leaves that reading to its reader.
+///
+/// # Errors
+///
+/// When the git directory cannot be resolved, the store cannot be read (exit
+/// `3`, could-not-look, never an empty list), or a line cannot be written.
+pub fn run_gaps(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
+    let git_dir = git::git_dir(root)?;
+    let store = crate::record::journal_store(&git_dir, GAP_FAMILY);
+    let records = match crate::journal::fold_lines(&store) {
+        crate::journal::Fold::Nothing => Vec::new(),
+        crate::journal::Fold::Records(records) => records,
+        crate::journal::Fold::Unreadable(path) => {
+            anyhow::bail!("doctor gaps: the store {} cannot be read", path.display())
+        }
+    };
+    let mut tally: std::collections::BTreeMap<(String, String), (usize, String)> =
+        std::collections::BTreeMap::new();
+    for record in &records {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(record) else {
+            continue;
+        };
+        let field = |key: &str| value.get(key).and_then(serde_json::Value::as_str);
+        let (Some(rule), Some(subject), Some(date)) =
+            (field("rule"), field("subject"), field("date"))
+        else {
+            continue;
+        };
+        let entry = tally
+            .entry((rule.to_owned(), subject.to_owned()))
+            .or_insert((0, String::new()));
+        entry.0 += 1;
+        if date > entry.1.as_str() {
+            date.clone_into(&mut entry.1);
+        }
+    }
+    let mut lines: Vec<_> = tally.into_iter().collect();
+    // Most-refused first; the (rule, subject) key breaks a tie, byte-stably (§6).
+    lines.sort_by(|(a_key, (a_count, _)), (b_key, (b_count, _))| {
+        b_count.cmp(a_count).then_with(|| a_key.cmp(b_key))
+    });
+    for ((rule, subject), (count, last)) in lines {
+        writeln!(out, "{rule} at {subject} {count} last {last}")?;
+    }
+    Ok(ExitCode::Success)
+}
+
 /// routes through, is what makes target installation behave like the idempotent
 /// operation rustup documents.
 ///

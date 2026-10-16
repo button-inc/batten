@@ -2432,6 +2432,10 @@ pub enum DoctorCommand {
         /// Emit the diagnosis as byte-stable JSON.
         json: bool,
     },
+    /// What plan mode refused, by program, counted (CLOUD-2292).
+    ///
+    /// APPENDED LAST, for the reason [`DoctorCommand::Egress`] records.
+    Gaps,
 }
 
 /// Subcommands of `generate`.
@@ -2809,6 +2813,7 @@ fn doctor_of(matches: &ArgMatches) -> DoctorCommand {
             json: flag(matches, "json"),
         },
         Some(("forge", _)) => DoctorCommand::Forge,
+        Some(("gaps", _)) => DoctorCommand::Gaps,
         Some(("config", matches)) => DoctorCommand::Config {
             json: flag(matches, "json"),
         },

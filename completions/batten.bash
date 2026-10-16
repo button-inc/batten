@@ -457,6 +457,9 @@ _batten() {
             batten__subcmd__doctor,forge)
                 cmd="batten__subcmd__doctor__subcmd__forge"
                 ;;
+            batten__subcmd__doctor,gaps)
+                cmd="batten__subcmd__doctor__subcmd__gaps"
+                ;;
             batten__subcmd__doctor,gate)
                 cmd="batten__subcmd__doctor__subcmd__gate"
                 ;;
@@ -486,6 +489,9 @@ _batten() {
                 ;;
             batten__subcmd__doctor__subcmd__help,forge)
                 cmd="batten__subcmd__doctor__subcmd__help__subcmd__forge"
+                ;;
+            batten__subcmd__doctor__subcmd__help,gaps)
+                cmd="batten__subcmd__doctor__subcmd__help__subcmd__gaps"
                 ;;
             batten__subcmd__doctor__subcmd__help,gate)
                 cmd="batten__subcmd__doctor__subcmd__help__subcmd__gate"
@@ -855,6 +861,9 @@ _batten() {
                 ;;
             batten__subcmd__help__subcmd__doctor,forge)
                 cmd="batten__subcmd__help__subcmd__doctor__subcmd__forge"
+                ;;
+            batten__subcmd__help__subcmd__doctor,gaps)
+                cmd="batten__subcmd__help__subcmd__doctor__subcmd__gaps"
                 ;;
             batten__subcmd__help__subcmd__doctor,gate)
                 cmd="batten__subcmd__help__subcmd__doctor__subcmd__gate"
@@ -4681,7 +4690,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__doctor)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help target mediator egress forge config gate toolchain hooks session help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help target mediator egress gaps forge config gate toolchain hooks session help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4800,6 +4809,36 @@ _batten() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        batten__subcmd__doctor__subcmd__gaps)
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         batten__subcmd__doctor__subcmd__gate)
             opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -4831,7 +4870,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__doctor__subcmd__help)
-            opts="target mediator egress forge config gate toolchain hooks session help"
+            opts="target mediator egress gaps forge config gate toolchain hooks session help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4873,6 +4912,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__doctor__subcmd__help__subcmd__forge)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__doctor__subcmd__help__subcmd__gaps)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -6537,7 +6590,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__doctor)
-            opts="target mediator egress forge config gate toolchain hooks session"
+            opts="target mediator egress gaps forge config gate toolchain hooks session"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -6579,6 +6632,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__doctor__subcmd__forge)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__doctor__subcmd__gaps)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
