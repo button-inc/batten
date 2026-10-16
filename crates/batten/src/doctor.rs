@@ -2962,17 +2962,17 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
     // to look made `0` unreachable. Measured on one container: the verb answered
     // `3` for every session, including its own, which is a verb nobody can quote.
     //
-    // THE PARENT IS THE DISCRIMINATOR, and it is the consumer's own string rather
-    // than anything this crate knows about a host: the substituted template's
-    // parent existing says the declaration describes THIS machine, so only the
-    // per-session leaf is missing. `transcript::tasks_link` already takes exactly
-    // this much structure from the declared path (rule 1).
+    // THE SESSION'S OWN TRANSCRIPT DECIDES FIRST (CLOUD-1820,
+    // `absent_store_is_zero`), because every depth of the store is created lazily
+    // and no filesystem probe can tell "declared no work" from "the pointer does
+    // not reach the store": no task call is a measured zero, and a task call is
+    // could-not-look whatever the store's parent shows.
     //
-    // WHERE THE STORE ROOT HAS NEVER EXISTED the parent says nothing, and the
-    // session's own transcript decides instead (CLOUD-1820, `absent_store_is_zero`):
-    // no task call in it is a measured zero, and anything weaker stays
-    // could-not-look, so a template that does not describe the host never reads
-    // as the false clean CLOUD-1376 exists to refuse.
+    // THE PARENT DECIDES ONLY WHERE THE TRANSCRIPT CANNOT, and it is the
+    // consumer's own string rather than anything this crate knows about a host:
+    // the substituted template's parent existing says the declaration describes
+    // THIS machine. Anything weaker stays could-not-look, so a template that does
+    // not describe the host never reads as the false clean CLOUD-1376 refuses.
     let entries = match std::fs::read_dir(&link) {
         Ok(entries) => entries,
         Err(_) if absent_store_is_zero(dir, transcript, &link) => {

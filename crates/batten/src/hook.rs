@@ -515,6 +515,10 @@ pub struct Capabilities {
     /// keeping the human's native todo view in step with the store — and an
     /// honest report of hosts where that view does not exist.
     ///
+    /// **One verdict DOES read it:** `doctor session` treats a call to any tool
+    /// listed here as declared work (CLOUD-1820), so dropping a spelling turns
+    /// that session's absent store from could-not-look into a zero.
+    ///
     /// Every spelling here was FETCHED, per CLOUD-209's rule that anything
     /// re-derived without one should be assumed wrong.
     pub plan_tools: PlanTools,
@@ -1489,8 +1493,6 @@ const CLAUDE_EVENTS: &[Event] = &[
     Event::UserPromptSubmit,
 ];
 
-//MUTANT-SUITE crates/batten/tests/it/session_drain.rs
-//MUTANT todowrite-unsurveyed|s@"TaskUpdate", "TodoWrite"\]),$@"TaskUpdate"]),@|a_todowrite_session_never_reads_as_zero
 impl Harness {
     /// This host's capability row.
     ///
@@ -6233,6 +6235,12 @@ fn substitution_decision(
 ///
 /// A relative operand joins the directory already in effect; with none known it
 /// cannot be placed, and that is `None` too.
+//
+// `Harness::capabilities`'s Claude Code `plan_tools` row (CLOUD-2400). Declared
+// here, directly above the next suite, because a suite declared before this
+// file's first one would become the suite of every row above it.
+//MUTANT-SUITE crates/batten/tests/it/session_drain.rs
+//MUTANT todowrite-unsurveyed|s@"TaskUpdate", "TodoWrite"\]),$@"TaskUpdate"]),@|a_todowrite_session_never_reads_as_zero
 //MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
 //MUTANT cd-not-followed|s@^    if tokens.first().copied() != Some("cd") {$@    if true {@|a_leading_cd_out_of_the_repository_moves_the_containment_check
 // CLOUD-986's arm in `pipeline_rules`, declared here because this is where the
