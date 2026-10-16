@@ -309,7 +309,7 @@ pub fn create_exclusive_as(
     }
 }
 
-/// Create `path` empty if nothing has the name, `false` when something does.
+/// Create `path` empty, failing when anything already has the name.
 ///
 /// For a zero-byte MARK whose time carries its meaning: with no contents there
 /// is nothing to tear, so it needs neither [`create_exclusive`]'s temp nor its
@@ -317,13 +317,9 @@ pub fn create_exclusive_as(
 ///
 /// # Errors
 ///
-/// Any I/O error other than the name being taken.
-pub(crate) fn create_empty(path: &Path) -> std::io::Result<bool> {
-    match std::fs::File::create_new(path) {
-        Ok(_) => Ok(true),
-        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-        Err(err) => Err(err),
-    }
+/// `AlreadyExists` when the name is taken, else any I/O error.
+pub(crate) fn create_empty(path: &Path) -> std::io::Result<()> {
+    std::fs::File::create_new(path).map(drop)
 }
 
 /// `path`, file or directory, opened for its lock or its times.
