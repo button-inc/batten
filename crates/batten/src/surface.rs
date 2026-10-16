@@ -1292,7 +1292,8 @@ const VERDICT_TOKEN: FlagDecl = FlagDecl {
     id: "token",
     long: None,
     short: None,
-    help: "The names to resolve, as a finding line prints them: a rule, a class, an engine id",
+    help: "The names to resolve, as a finding line prints them: a rule, a class, an engine id, a \
+           smell",
     env: EnvDecl::None,
     global: false,
     positional: true,

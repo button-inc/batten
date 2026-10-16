@@ -2869,7 +2869,7 @@ expression: stdout_of(&output)
               "long": null,
               "takes_value": true,
               "positional": true,
-              "help": "The names to resolve, as a finding line prints them: a rule, a class, an engine id"
+              "help": "The names to resolve, as a finding line prints them: a rule, a class, an engine id, a smell"
             }
           ],
           "subcommands": []

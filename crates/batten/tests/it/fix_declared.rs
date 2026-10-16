@@ -22,7 +22,7 @@ fn smells(text: &str) -> Vec<&'static str> {
     batten::lint::smells(text, "test", None, today, &[])
         .unwrap()
         .into_iter()
-        .map(|smell| smell.id)
+        .map(|smell| smell.id.as_str())
         .collect()
 }
 

@@ -154,6 +154,67 @@ pub fn clock_census(file: &syn::File) -> ClockCensus {
     walk.census
 }
 
+/// How many variants `source` declares under `header`, split into unit and
+/// tuple, counted off the declaration rather than off a list somebody re-typed
+/// (CLOUD-2379).
+///
+/// **The predicate had three copies before this one, and they had already
+/// diverged by a clause.** `WeakeningKind`, `DriftId` and `SmellId` each hold
+/// their `ALL`/`UNITS` whole by counting the enum body, and a fourth such enum
+/// would have copied whichever copy it found first. One authority decides what
+/// a variant line is.
+///
+/// **BOTH COUNTS ARE RETURNED, and dropping the second was a hole in exactly
+/// the mechanism this helper serves.** A unit variant is enumerated by a
+/// hand-written list; a TUPLE variant delegates to another vocabulary and is
+/// enumerated by a `chain` into that vocabulary's own `ALL`. An exhaustive
+/// `definition()` forces an arm for either, but nothing forces the `chain` — so
+/// a delegated variant added without one compiles, leaves the unit count
+/// matching, and yields ids `all()` never reports. That is the
+/// emitted-but-unexplainable id the type exists to make impossible, returning
+/// through the type's own extension point. A caller asserts the tuple count it
+/// has wired, so adding a variant is what fails.
+///
+/// The caller passes the source, because `include_str!` resolves against the
+/// file it is written in and the point is to read the CALLER's declaration.
+#[doc(hidden)]
+#[must_use]
+pub fn declared_variants(source: &str, header: &str) -> Option<DeclaredVariants> {
+    let start = source.find(header)?;
+    let rest = &source[start..];
+    let body = &rest[..rest.find("\n}")?];
+    let mut counts = DeclaredVariants {
+        unit: 0,
+        delegated: 0,
+    };
+    for line in body.lines() {
+        let line = line.trim();
+        if !line.ends_with(',')
+            || line.starts_with("///")
+            || !line.starts_with(|c: char| c.is_ascii_uppercase())
+        {
+            continue;
+        }
+        if line.contains('(') {
+            counts.delegated += 1;
+        } else {
+            counts.unit += 1;
+        }
+    }
+    Some(counts)
+}
+
+/// What [`declared_variants`] counted: variants enumerated by a list, and
+/// variants enumerated by delegating to another vocabulary.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeclaredVariants {
+    /// Unit variants, each owing a row in the enum's own list.
+    pub unit: usize,
+    /// Tuple variants, each owing a `chain` into the vocabulary it wraps.
+    pub delegated: usize,
+}
+
 /// How many leading arguments of an assertion macro are its condition, or
 /// `None` for a macro that asserts nothing.
 fn conditions_of(path: &syn::Path) -> Option<usize> {
