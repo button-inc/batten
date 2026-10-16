@@ -632,9 +632,23 @@ fn take_arm(shared: &Path, dest: &Path, what: &str) -> Result<()> {
 /// — lent nothing to this run's head build, and a head that is byte-identical to
 /// it is a change that did not touch the binary: measured on CLOUD-2106's
 /// test-only lap, which this guard refused before any measurement.
-//MUTANT identical-arms-always-suspect|s@^    !null \&\& base_built_now \&\& identical$@    !null \&\& identical@|identical_arms_are_suspect_only_when_the_base_was_built_this_run
-fn arms_suspect(null: bool, base_built_now: bool, identical: bool) -> bool {
-    !null && base_built_now && identical
+///
+/// AND ONLY WHEN THE HEAD WAS NOT BUILT CLEAN (CLOUD-2399). [`build`] drops
+/// `batten`'s units whenever the shared directory switches arm, which is
+/// CLOUD-2060's own repair: a head built after that clean cannot have inherited
+/// the base's units, so identical bytes are a change that did not reach codegen.
+/// Measured on a doc-comment-only change, which this guard refused at `verify`.
+fn arms_suspect(null: bool, head_could_inherit: bool, identical: bool) -> bool {
+    !null && head_could_inherit && identical
+}
+
+/// Whether the head arm could hold the base arm's `batten` units: the base was
+/// built into the shared directory in this run, and the head build did not drop
+/// them first (CLOUD-2107, CLOUD-2399).
+//MUTANT identical-arms-always-suspect|s@^    base_built_now \&\& !head_cleaned$@    !head_cleaned@|identical_arms_are_suspect_only_when_the_base_was_built_this_run
+//MUTANT cleaned-head-still-suspect|s@^    base_built_now \&\& !head_cleaned$@    base_built_now@|identical_arms_are_suspect_only_when_the_base_was_built_this_run
+fn head_could_inherit(base_built_now: bool, head_cleaned: bool) -> bool {
+    base_built_now && !head_cleaned
 }
 
 /// Whether two files hold the same bytes; an unreadable side is never "same".
@@ -934,7 +948,10 @@ fn out_dir(repo: &Path) -> Result<PathBuf> {
 /// `0` again after the fix, which is a reading that cannot tell the two apart.
 /// Cargo's progress goes to stderr, so nothing changes for `perf-gate.sh`, which
 /// redirects this command's STDOUT to a file and greps `^arm=`.
-fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Result<()> {
+///
+/// Returns whether it dropped the other arm's `batten` units first, which is
+/// what lets [`arms_suspect`] tell a clean head from an inherited one.
+fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Result<bool> {
     let args = build_args(profile, dir);
     let env: Vec<(String, String)> = target_dir
         .map(|dir| {
@@ -953,18 +970,18 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Re
     // `batten`'s own units first; the dependency closure CLOUD-1891 shares is
     // left alone.
     let marker = target_dir.map(|dir| dir.join(LAST_ARM));
-    if let Some(marker) = &marker {
-        let last = std::fs::read_to_string(marker).ok();
-        if switches_arm(last.as_deref(), what) {
-            let clean: Vec<String> = ["clean", "-p", "batten", "--profile", profile]
-                .iter()
-                .map(|word| (*word).to_owned())
-                .collect();
-            if !run(dir, Tool::Cargo, &clean, &env)? {
-                bail!(
-                    "perf-pair: could not drop the other arm's `batten` units before the {what} build. No measurement."
-                );
-            }
+    let cleaned = marker
+        .as_ref()
+        .is_some_and(|marker| switches_arm(std::fs::read_to_string(marker).ok().as_deref(), what));
+    if cleaned {
+        let clean: Vec<String> = ["clean", "-p", "batten", "--profile", profile]
+            .iter()
+            .map(|word| (*word).to_owned())
+            .collect();
+        if !run(dir, Tool::Cargo, &clean, &env)? {
+            bail!(
+                "perf-pair: could not drop the other arm's `batten` units before the {what} build. No measurement."
+            );
         }
     }
     if !run(dir, Tool::Cargo, &args, &env)? {
@@ -976,7 +993,7 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Re
         crate::durable::replace(marker, what)
             .with_context(|| format!("perf-pair: could not record the {what} build"))?;
     }
-    Ok(())
+    Ok(cleaned)
 }
 
 //MUTANT-SUITE crates/batten/src/perf.rs
@@ -1237,7 +1254,7 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
     // lap rebuilt both cold. Sequential builds share one lock and one set of
     // dependency artifacts; each binary is copied out before the next build
     // overwrites it.
-    build(repo, Some(&shared), "head", PAIR_PROFILE)?;
+    let head_cleaned = build(repo, Some(&shared), "head", PAIR_PROFILE)?;
     let head_bin = out.join("batten-head");
     take_arm(&shared, &head_bin, "head")?;
     // THE HEAD IS THE NEXT LAP'S BASE once it lands (CLOUD-2097), so a clean
@@ -1264,7 +1281,7 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
         .flatten();
     if arms_suspect(
         options.null,
-        base_built_now,
+        head_could_inherit(base_built_now, head_cleaned),
         same_bytes(&base_bin, &head_bin)
             && sources_differ(base_sources.as_deref(), head_sources.as_deref()),
     ) {
@@ -3382,15 +3399,29 @@ mod tests {
     /// base into the shared directory; a cached base cannot have lent its units.
     #[test]
     fn identical_arms_are_suspect_only_when_the_base_was_built_this_run() {
-        assert!(arms_suspect(false, true, true), "CLOUD-2060's own case");
+        let suspect = |null, base_built_now, identical, head_cleaned| {
+            arms_suspect(
+                null,
+                head_could_inherit(base_built_now, head_cleaned),
+                identical,
+            )
+        };
         assert!(
-            !arms_suspect(false, false, true),
+            suspect(false, true, true, false),
+            "CLOUD-2060's own case: a head that inherited the base's units"
+        );
+        assert!(
+            !suspect(false, false, true, false),
             "a cached base equal to the head is an unchanged binary"
         );
-        assert!(!arms_suspect(false, true, false));
+        assert!(!suspect(false, true, false, false));
         assert!(
-            !arms_suspect(true, true, true),
+            !suspect(true, true, true, false),
             "the null experiment is exempt"
+        );
+        assert!(
+            !suspect(false, true, true, true),
+            "CLOUD-2399: a head built clean after the base is a change that did not reach codegen"
         );
     }
 

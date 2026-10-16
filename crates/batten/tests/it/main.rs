@@ -266,6 +266,7 @@ mod lint_deno;
 mod lint_rego;
 mod locator_index;
 mod lock_complete;
+mod lock_installable;
 mod macos_link;
 #[cfg(unix)]
 mod mcp_allow;
@@ -362,6 +363,7 @@ mod release_due;
 mod release_hygiene;
 mod release_install;
 mod release_provision_parity;
+mod release_settings_gate;
 mod release_token_precedence;
 mod release_tracking;
 mod release_verify;
