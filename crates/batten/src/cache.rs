@@ -80,8 +80,8 @@ const USE_MARK: &str = "used";
 /// existing proves the partition does. A new partition is the rare path: it
 /// tags the directory for backup tools ([`CACHEDIR_TAG`]), marks the partition
 /// and [`prune`]s, so the directory holds at most [`KEPT_PARTITIONS`] binaries,
-/// least recently used evicted first. A partition without a mark — written
-/// before marks existed — takes that path too, and gains one.
+/// least recently used evicted first. A partition without a mark — its marking
+/// failed, or the mark was lost — takes that path too, and gains one.
 //MUTANT partitions-never-pruned|s@^    prune(\&root, name);$@@|a_new_partition_keeps_its_neighbours_up_to_the_bound
 //MUTANT partition-mark-never-made|s@^    if std::fs::File::create_new(\&mark).is_err() {$@    if true {@|a_partition_without_a_mark_gains_one
 #[must_use]
@@ -118,7 +118,7 @@ pub fn root_under(parent: &Path) -> Option<PathBuf> {
 /// How stale a partition's use time may grow before a hit refreshes it: short,
 /// so a binary in use ranks among the most recently used to every prune (code
 /// review of CLOUD-2315 — a day let four rebuilds evict the installed hook). The
-/// cost is one timestamp write a minute.
+/// cost is two timestamp writes a minute, the mark's and its directory's.
 const USE_REFRESH: std::time::Duration = std::time::Duration::from_mins(1);
 
 /// Mark the partition used through its `mark`, at most once a minute, so
@@ -721,8 +721,8 @@ mod tests {
         );
     }
 
-    /// A partition this binary wrote before use marks existed has no mark: it is
-    /// answered through the cold path, which gives it one (CLOUD-2361).
+    /// A partition whose mark is missing — its marking failed, or the mark was
+    /// lost — is answered through the cold path, which gives it one (CLOUD-2361).
     #[test]
     fn a_partition_without_a_mark_gains_one() {
         let dir = scratch("partition-unmarked");
