@@ -41,13 +41,28 @@ fn repo(name: &str) -> PathBuf {
     dir
 }
 
-/// A private copy of the compiled binary, so this case's installed engine is
-/// its own and a stamp written on it is nobody else's.
+/// A private name for the compiled binary, so this case's installed engine is
+/// its own and a stamp written beside it is nobody else's.
 fn private_binary(dir: &Path) -> PathBuf {
-    let copy = dir.join("engine").join("batten");
-    std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
-    std::fs::copy(env!("CARGO_BIN_EXE_batten"), &copy).unwrap();
-    copy
+    private_build(&dir.join("engine").join("batten"))
+}
+
+/// Place the compiled binary at `at`, by LINK where the filesystem allows one.
+///
+/// The test binary is ~137 MiB and this file wants it in five places, so
+/// copying would write most of a gigabyte per run — and these cases carry
+/// `//MUTANT-SUITE` rows, so a sweep replays them. A link is enough because
+/// nothing here writes THROUGH the file: a stamp is a sibling
+/// (`engine::stamp_path`) and `durable::replace` renames over the directory
+/// entry, leaving the shared inode untouched. `scratch_outside_tree` can land
+/// on another filesystem, so a cross-device link falls back to the copy.
+fn private_build(at: &Path) -> PathBuf {
+    std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+    let built = Path::new(env!("CARGO_BIN_EXE_batten"));
+    std::fs::hard_link(built, at)
+        .or_else(|_| std::fs::copy(built, at).map(|_| ()))
+        .expect("place the compiled binary");
+    at.to_path_buf()
 }
 
 fn make_executable(path: &Path) {
@@ -77,27 +92,33 @@ const MARKER: &str = "the-crashing-build-spoke";
 /// `101` rather than an invented number because it is what a Rust panic
 /// actually exits with, which is the shape this defect was found in.
 fn crashing_build(dir: &Path, stamp: &str) {
-    let at = dir.join("target").join("release");
-    std::fs::create_dir_all(&at).unwrap();
-    common::write(
-        &at,
-        "batten",
+    stub_build(
+        &dir.join("target").join("release"),
+        stamp,
         &format!(
             "#!/bin/sh\necho ran >> \"{}\"\necho \"{MARKER}\"\nexit 101\n",
             dir.join("runs").display()
         ),
     );
-    make_executable(&at.join("batten"));
-    common::write(&at, "batten.source", &format!("{stamp}\n"));
 }
 
 /// A checkout build that ANSWERS, used where the case is about the path to it
 /// rather than about its exit.
 fn speaking_build(at: &Path, stamp: &str) {
+    stub_build(at, stamp, "#!/bin/sh\necho \"checkout build ran $*\"\n");
+}
+
+/// A stamped, executable stand-in for the checkout's release build.
+///
+/// The stamp is written through [`batten::engine::stamp_path`] rather than
+/// beside a `"batten.source"` literal, so a change to `STAMP_SUFFIX` cannot
+/// leave these fixtures writing a file the engine no longer reads.
+fn stub_build(at: &Path, stamp: &str, script: &str) {
     std::fs::create_dir_all(at).unwrap();
-    common::write(at, "batten", "#!/bin/sh\necho \"checkout build ran $*\"\n");
-    make_executable(&at.join("batten"));
-    common::write(at, "batten.source", &format!("{stamp}\n"));
+    let build = at.join("batten");
+    common::write(at, "batten", script);
+    make_executable(&build);
+    std::fs::write(batten::engine::stamp_path(&build), format!("{stamp}\n")).unwrap();
 }
 
 /// How many times a stub build was spawned, read from the file it appends to.
@@ -110,9 +131,14 @@ fn runs(dir: &Path) -> usize {
 
 /// Run `binary` from `cwd`, judging `dir`, with `env` layered on top.
 ///
-/// A sibling of `engine_install.rs`'s `run_from` rather than a reuse of it:
-/// that one pins `CARGO_TARGET_DIR` to `dir/target`, which is the very thing
-/// the redirection case has to move.
+/// A COPY of `engine_install.rs`'s `run_from`, and the only difference is the
+/// `env` tail the redirection case needs — that one pins `CARGO_TARGET_DIR` to
+/// `dir/target` and so does this, which is why the override has to layer over
+/// it rather than replace it. The honest fix is the tail on the original and
+/// one shared fixture module for both files; it would also end the second copy
+/// of the environment-scrub list, which is the half that silently rots when a
+/// new variable is added to one and not the other. Not done here because it
+/// edits a suite this change does not otherwise touch — CLOUD-2430.
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: these cases run a private COPY of the compiled binary, which `common::batten` cannot target"
@@ -315,10 +341,12 @@ fn a_followed_exec_still_passes_its_childs_code_and_bytes_through() {
     let installed = common::scratch_outside_tree("engine-2376", "exec-passthrough-installed");
     let binary = private_binary(&installed);
     pin_source(&dir, &"1".repeat(64));
-    let release = dir.join("target").join("release");
-    std::fs::create_dir_all(&release).unwrap();
-    std::fs::copy(env!("CARGO_BIN_EXE_batten"), release.join("batten")).unwrap();
-    common::write(&release, "batten.source", &format!("{}\n", "2".repeat(64)));
+    let build = private_build(&dir.join("target").join("release").join("batten"));
+    std::fs::write(
+        batten::engine::stamp_path(&build),
+        format!("{}\n", "2".repeat(64)),
+    )
+    .unwrap();
 
     // `--tee` because capturing is `exec`'s default since CLOUD-429; the claim
     // here is that a FOLLOWED engine's passthrough is byte-for-byte what an
