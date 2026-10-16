@@ -1094,6 +1094,13 @@ fn mint_receipts(declared: &Declared<'_>, ids: &[String], now: u64) {
 
 // --- the payloads' citations against the tree (`--cites`) ---------------------
 
+/// The preset's outcome word for a prospective path — the one note history can
+/// refute, so the shallow-clone notice counts only these.
+const PROSPECTIVE_PATH: &str = "prospective-cited-path";
+/// The preset's outcome word for a prospective test symbol, which history is
+/// never asked about (CLOUD-1110).
+const PROSPECTIVE_TEST: &str = "prospective-cited-test";
+
 /// What `--cites` reads, resolved.
 #[derive(Debug)]
 struct Cites {
@@ -1344,13 +1351,34 @@ fn render_cites(
     for note in &decided.notes {
         writeln!(err, "  {note}")?;
     }
-    if !decided.notes.is_empty() && !reading.history {
+    // Only a PATH marker is ever checked against history; a test symbol's never
+    // is, on any clone (the module's note on the test arm), so the two notices
+    // count their own notes.
+    let paths = decided
+        .notes
+        .iter()
+        .filter(|note| note.ends_with(PROSPECTIVE_PATH))
+        .count();
+    if paths > 0 && !reading.history {
         writeln!(
             err,
-            "::notice:: board check --cites: {prospective} prospective citation(s) above, and this clone is \
+            "::notice:: board check --cites: {paths} prospective path(s) above, and this clone is \
              SHALLOW — so a prospective marker could not be checked against history. A marker on \
              a path that was deleted rather than never written is not detectable here; a full \
              clone can check it."
+        )?;
+    }
+    let tests = decided
+        .notes
+        .iter()
+        .filter(|note| note.ends_with(PROSPECTIVE_TEST))
+        .count();
+    if tests > 0 {
+        writeln!(
+            err,
+            "::notice:: board check --cites: {tests} prospective test symbol(s) above. A test \
+             symbol's marker is never checked against history on any clone (CLOUD-1110), so one \
+             that was deleted rather than never written reads as prospective."
         )?;
     }
     if !findings.is_empty() {

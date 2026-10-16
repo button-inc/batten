@@ -11,10 +11,10 @@
 #   not the thing cited — OR be marked prospective beside its own token, which
 #   history never refutes for a symbol (CLOUD-1110). A cited path must exist,
 #   OR be marked prospective by the block, beside its own path, OR be refused
-#   (CLOUD-920). A marked path an
-#   ancestor DELETED is refused anyway: history may REFUTE a marker and is never
-#   asked to grant one, and a shallow clone that cannot answer leaves the marker
-#   believed. This checks EXISTENCE, never relevance.
+#   (CLOUD-920). A marked path an ancestor DELETED is refused anyway: history
+#   may REFUTE a marker and is never asked to grant one, and a shallow clone
+#   that cannot answer leaves the marker believed. This checks EXISTENCE, never
+#   relevance.
 #
 #   THE TREE'S CLAUSE CITATIONS AGAINST THE PAYLOADS (`board-refs`). Every
 #   `<key> §<n>` in the tracked tree must name a clause its issue's Ready block

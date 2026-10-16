@@ -1806,6 +1806,8 @@ mod ready_cites {
         assert_eq!(code(&output), 0, "{}", text(&output));
         assert!(text(&output).contains("a_case_planned_for_this_row prospective-cited-test"));
         assert!(text(&output).contains("1 prospective"));
+        assert!(text(&output).contains("never checked against history"));
+        assert!(!text(&output).contains("prospective path(s)"));
     }
 
     #[test]
