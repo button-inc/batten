@@ -584,6 +584,38 @@ sha256 = "21253f4d25be2626779c579c12e30aef1c67d7224cbed50eb7515a8cd45db56d"
 url = "https://github.com/sirwart/ripsecrets/releases/download/v0.1.11/ripsecrets-0.1.11-aarch64-apple-darwin.tar.gz"
 sha256 = "b2c822742e8cbf355ba0cb4cc690c3cd8fdc9ec1916c8148f27bd9098cb7aee4"
 
+# THE RUST MUTATION RUNNER (CLOUD-2345). `MUTANT_RUNNERS` hands every Rust source
+# to `cargo mutants`, and nothing put it on PATH: upstream sourcefrog/cargo-mutants
+# 27.1.0 publishes x86_64 assets only, so a `mise.toml` pin fails `lock-complete`
+# on linux-arm64 and macos-arm64, and a `cargo:` build is `no-source-built-tool`.
+# cargo-bins/cargo-quickinstall (the cargo-binstall project's prebuilt mirror)
+# publishes the same version for every platform here, each with a `.sig`. These
+# rows pin those bytes by sha256, measured on 2026-10-16 when the linux-x86_64
+# binary answered `cargo-mutants 27.1.0`; a changed artifact fails the checksum
+# rather than running. The link puts it where `cargo` finds `cargo-<sub>`.
+[[provision]]
+name = "cargo-mutants"
+version = "27.1.0"
+unpack = "tar_gz"
+binary = "cargo-mutants"
+link = "~/.local/bin"
+
+[provision.platforms.linux-x86_64]
+url = "https://github.com/cargo-bins/cargo-quickinstall/releases/download/cargo-mutants-27.1.0/cargo-mutants-27.1.0-x86_64-unknown-linux-gnu.tar.gz"
+sha256 = "0ce4de19c451cc03093405441e2be51ae88c5f18e78e75661489747d892b147a"
+
+[provision.platforms.linux-aarch64]
+url = "https://github.com/cargo-bins/cargo-quickinstall/releases/download/cargo-mutants-27.1.0/cargo-mutants-27.1.0-aarch64-unknown-linux-gnu.tar.gz"
+sha256 = "f1f2e2dd680ac281467b39d43a6cbc9d6a9d367362ca4450158120a811cb1994"
+
+[provision.platforms.macos-x86_64]
+url = "https://github.com/cargo-bins/cargo-quickinstall/releases/download/cargo-mutants-27.1.0/cargo-mutants-27.1.0-x86_64-apple-darwin.tar.gz"
+sha256 = "d9d374960060e16f1b130a87050b3c238bcb5554a7547e01963b253d1655dd35"
+
+[provision.platforms.macos-aarch64]
+url = "https://github.com/cargo-bins/cargo-quickinstall/releases/download/cargo-mutants-27.1.0/cargo-mutants-27.1.0-aarch64-apple-darwin.tar.gz"
+sha256 = "5a698a0852ccfebdd0218284a7cf51d87b02127964b609c8a13d1c00d4536032"
+
 # Batten gates this repository with its own engine — consumer #1 in practice,
 # not just in principle. Rules below whose `scope` is "tree" run under `batten
 # check`; rules whose `scope` is "mediated_call" are adjudicated by `batten hook`
