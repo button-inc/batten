@@ -396,6 +396,36 @@ fn a_key_in_the_latest_body_is_judged() {
     );
 }
 
+/// A NEWEST `closes -` IS COULD-NOT-LOOK (review of #1194): a fetch whose key
+/// reader could not run says nothing about the body, so the earlier reading
+/// still decides, and a transient failure never opens the gate.
+#[test]
+fn a_newest_unread_fetch_keeps_the_earlier_reading() {
+    let root = repo_closing(
+        "obligations-unread-newest",
+        &[&line("1:crates/batten/tests/it/missing.rs:slug-one")],
+        None,
+        &["closes 1:CLOUD-1", "closes -"],
+    );
+    assert!(
+        !verdicts(&root).is_empty(),
+        "the measured body still closes CLOUD-1, so its obligation is judged"
+    );
+}
+
+/// A NEWEST `closes 0` IS A MEASURED NOTHING: the body as it stands closes no
+/// row, so none is judged whatever an older body said.
+#[test]
+fn a_latest_body_closing_nothing_judges_no_row() {
+    let root = repo_closing(
+        "obligations-closes-nothing",
+        &[&line("1:crates/batten/tests/it/missing.rs:slug-one")],
+        None,
+        &["closes 1:CLOUD-1", "closes 0"],
+    );
+    assert!(verdicts(&root).is_empty(), "{:?}", verdicts(&root));
+}
+
 /// AND AN ABSENT `pr-closes` RECORD JUDGES NOTHING. The same reading, reached the
 /// other way: no pull request yet, or a key reader that could not run, is
 /// could-not-look about whether the row is landing — and this module is already

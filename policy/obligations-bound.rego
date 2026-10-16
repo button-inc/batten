@@ -67,6 +67,7 @@
 #MUTANT runner-ownership-unchecked|s@^\tregex.match(glob_pattern(trim_space(path_glob)), entry.file)$@\ttrue@|a_runner_token_on_a_file_it_does_not_own_is_refused
 #MUTANT unlanded-row-judged|s@^\tobligation_row\.id in closes$@\ttrue@|an_obligation_from_a_row_the_pr_does_not_close_is_not_judged
 #MUTANT newest-line-ignored|s@^\traw := closes_lines\[count(closes_lines) - 1\]$@\tsome raw in closes_lines@|a_key_dropped_from_the_latest_body_is_not_judged
+#MUTANT unread-fetch-counted|s@^\traw != "closes -"$@\ttrue@|a_newest_unread_fetch_keeps_the_earlier_reading
 
 # METADATA
 # description: |
@@ -109,7 +110,13 @@ closes contains key if {
 	some key in split(substring(columns[1], indexof(columns[1], ":") + 1, -1), ",")
 }
 
-closes_lines := [raw | some raw in input.tree.records["pr-closes"]; startswith(raw, "closes ")]
+# MEASURED LINES ONLY: a `closes -` is a fetch whose key reader could not run,
+# which says nothing about the body, so it never overrides an earlier reading.
+closes_lines := [raw |
+	some raw in input.tree.records["pr-closes"]
+	startswith(raw, "closes ")
+	raw != "closes -"
+]
 
 column(columns, at) := value if {
 	value := columns[at]
@@ -465,6 +472,18 @@ test_a_latest_body_closing_nothing_judges_no_row if {
 		"records": {
 			"board-writes": [bound],
 			"pr-closes": ["closes 1:CLOUD-1", "closes 0"],
+		},
+		"tracked": [],
+		"lines": {},
+	}}
+}
+
+# A NEWEST `closes -` IS COULD-NOT-LOOK and leaves the earlier reading standing.
+test_a_newest_unread_fetch_keeps_the_earlier_reading if {
+	count(violation) > 0 with input as {"tree": {
+		"records": {
+			"board-writes": [bound],
+			"pr-closes": ["closes 1:CLOUD-1", "closes -"],
 		},
 		"tracked": [],
 		"lines": {},
