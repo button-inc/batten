@@ -2819,14 +2819,16 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
     // on Windows, so the prefix test compares like with like.
     let resolved = candidate.ancestors().find_map(|ancestor| {
         let mut walked = ancestor.canonicalize().ok()?;
-        let mut pending: std::collections::VecDeque<std::ffi::OsString> = candidate
+        // A stack, so the NEXT component is the last: reversed going in.
+        let mut pending: Vec<std::ffi::OsString> = candidate
             .strip_prefix(ancestor)
             .ok()?
             .iter()
+            .rev()
             .map(std::ffi::OsStr::to_os_string)
             .collect();
         let mut hops = 0;
-        while let Some(component) = pending.pop_front() {
+        while let Some(component) = pending.pop() {
             if component == "." {
                 continue;
             }
@@ -2843,9 +2845,7 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
             {
                 hops += 1;
                 walked.pop();
-                for part in target.iter().rev() {
-                    pending.push_front(part.to_os_string());
-                }
+                pending.extend(target.iter().rev().map(std::ffi::OsStr::to_os_string));
             }
         }
         Some(walked)
