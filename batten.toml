@@ -11,7 +11,7 @@
 
 # The config schema version. This build supports version 1.
 version = 1
-engine = { release = "v0.0.216" }
+engine = { source = "8f29bfc5a7c07ede98b74032409ad5cf0872aaf3046de8475f9e315cd371e433" }
 
 # Minimum Batten version permitted to read this file (semver). Enforced: a binary
 # older than this refuses to run rather than reporting green over rules it does
@@ -10088,7 +10088,8 @@ regex = 'hk@([0-9]+\.[0-9]+\.[0-9]+)'
 # TAG in the path and the PACKAGE version in the fragment, so `v1.57.0/hk@1.56.1`
 # reads as agreeing to `hk-amends-version` alone while naming two versions — and
 # the `v` segment is the half that looks like the release tag, which makes it the
-# plausible half-bump. `hk-pin-agreement`'s arm D reads both.
+# plausible half-bump. `hk-pin-agreement`'s arms A and D each read both halves —
+# A over `hk.pkl`'s `amends` line, D over the `pkl-package` task's URL.
 [[pattern]]
 id = "hk-download-tag"
 regex = '/v([0-9]+\.[0-9]+\.[0-9]+)/hk@'

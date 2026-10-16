@@ -781,10 +781,23 @@ duplicate_close_window = "{{ get_env(name='DUPLICATE_CLOSE_WINDOW', default='19'
 # and the argument above it were written out at both `fix-selection-check` and
 # `pkl-package`, and the prose is the half that drifts silently. Measured before
 # relying on it — mise renders `[vars]` through the same tera instance that
-# provides `env` and `is file`, exactly once, per invocation against the live
-# environment, correct in all three arms. The trailing space is load-bearing: it
-# separates the flag from the argument that follows, and is absent when the
-# selection renders empty.
+# provides `env` and `is file`, once per mise process, correct in all three arms
+# (names a file, unset, set-but-missing).
+#
+# IT READS THE INHERITED ENVIRONMENT, NOT THE TASK'S, which is the one thing the
+# factoring changed. A `run` template renders at task-execution time with `[env]`
+# and the task's own `env` in scope; `[vars]` renders BEFORE `[env]` resolves,
+# because `[env]` may itself interpolate a var. Neither `BATTEN_CA_BUNDLE` nor
+# `SSL_CERT_FILE` is set in any `[env]` here, so every arm renders identically
+# either way today — which is exactly why the measurement could not see it. SO
+# BOTH NAMES MUST COME FROM THE SHELL AND NEITHER MAY MOVE INTO `[env]`: this var
+# would stop seeing it, the selection would render empty, and pkl would fall back
+# to its own roots and fail the handshake — the could-not-look-as-verdict the
+# `is file` guard exists to prevent, reintroduced through the factoring.
+#
+# The trailing space is load-bearing: it separates the flag from the argument
+# that follows and is absent when the selection renders empty, which is why both
+# consumers interpolate it with no space of their own.
 pkl_ca = "{% if env.BATTEN_CA_BUNDLE and env.BATTEN_CA_BUNDLE is file %}--ca-certificates {{env.BATTEN_CA_BUNDLE}} {% elif env.SSL_CERT_FILE and env.SSL_CERT_FILE is file %}--ca-certificates {{env.SSL_CERT_FILE}} {% endif %}"
 
 [tasks.fmt]
@@ -1066,11 +1079,10 @@ description = "hk's `fix` hook selects exactly the gate's fixer-bearing steps �
 # retired expression over the committed `hk.pkl`, a dropped fixer and an added
 # check-only step: the same verdict and the same names on all three.
 #
-# `pkl` SHIPS ITS OWN ROOT BUNDLE AND IGNORES THE SYSTEM TRUST STORE, so in a
-# TLS-intercepting sandbox it cannot resolve the `amends` package and fails as
-# could-not-look. `{{vars.pkl_ca}}` is the selection that fixes it, argued once
-# where it is declared; it was spelled out here and at `pkl-package` until
-# CLOUD-2409 folded both into the var.
+# A TLS-INTERCEPTING SANDBOX MAKES THIS EVALUATION FAIL AS COULD-NOT-LOOK, since
+# it resolves the `amends` package. `{{vars.pkl_ca}}` is the fix, argued where it
+# is declared; it was spelled out here and at `pkl-package` until CLOUD-2409
+# folded both into the var.
 run = "mise exec pkl -- pkl eval {{vars.pkl_ca}}hk-fix-selection.pkl"
 
 [tasks."lint:actions"]
