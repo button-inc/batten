@@ -266,6 +266,7 @@ mod lint_deno;
 mod lint_rego;
 mod locator_index;
 mod lock_complete;
+mod lock_installable;
 mod macos_link;
 #[cfg(unix)]
 mod mcp_allow;
