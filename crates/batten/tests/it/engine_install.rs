@@ -885,7 +885,8 @@ fn the_notice_speaks_once_per_ttl_and_never_in_ci() {
 
 /// THE `engine-hygiene` PRESET REFUSES A STALE RECORD AND IS SILENT WITH NONE:
 /// a consumer pinned at this build's release, `main` two releases on, the
-/// record written by `engine outdated` itself with thresholds of zero.
+/// record written by `engine outdated` itself with thresholds of zero — and
+/// cleared by it once the pin is a source build.
 #[test]
 fn a_stale_engine_fresh_record_fails_check() {
     if !cfg!(target_os = "linux") {
@@ -916,20 +917,7 @@ fn a_stale_engine_fresh_record_fails_check() {
     let silent = batten_in(&home, &check, &[]);
     assert_eq!(silent.status.code(), Some(0), "{}", common::stderr(&silent));
 
-    let recorded = batten_in(
-        &home,
-        &[
-            "engine",
-            "outdated",
-            "--record",
-            "engine-fresh",
-            "--max-releases",
-            "0",
-            "--max-days",
-            "0",
-        ],
-        &env,
-    );
+    let recorded = batten_in(&home, &recorded_args(), &env);
     assert_eq!(
         recorded.status.code(),
         Some(2),
@@ -944,6 +932,46 @@ fn a_stale_engine_fresh_record_fails_check() {
         "{}",
         common::stderr(&refused)
     );
+
+    // A SOURCE PIN CLEARS THE READING: there is no release distance to measure,
+    // so the stale line written under the release pin must not outlive it.
+    let config = std::fs::read_to_string(home.join("batten.toml")).unwrap();
+    common::write(
+        &home,
+        "batten.toml",
+        &config.replace(
+            &format!("engine = {{ release = \"{running}\" }}"),
+            &format!("engine = {{ source = \"{}\" }}", "a".repeat(64)),
+        ),
+    );
+    let cleared = batten_in(&home, &recorded_args(), &env);
+    assert_eq!(
+        cleared.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(&cleared)
+    );
+    let silent_again = batten_in(&home, &check, &[]);
+    assert_eq!(
+        silent_again.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(&silent_again)
+    );
+}
+
+/// `engine outdated --record engine-fresh` with thresholds of zero.
+fn recorded_args() -> [&'static str; 8] {
+    [
+        "engine",
+        "outdated",
+        "--record",
+        "engine-fresh",
+        "--max-releases",
+        "0",
+        "--max-days",
+        "0",
+    ]
 }
 
 /// The installed engine's repair (CLOUD-2062, CLOUD-2226, CLOUD-2232), which was

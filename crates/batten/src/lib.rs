@@ -765,7 +765,7 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
 /// install can fail after it has replaced a binary, and a restored pin would
 /// then disagree with the engine on disk.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT update-skips-the-bump|s@^        durable::replace(&path, &synced)?;$@@|an_update_moves_an_older_pin_forward_and_installs_it
+//MUTANT update-skips-the-bump|s@^    durable::replace(&path, &synced)?;$@@|an_update_moves_an_older_pin_forward_and_installs_it
 //MUTANT update-moves-the-pin-backward|s@^    let target = if engine::is_newer(&latest, &current)? {$@    let target = if latest != current {@|an_update_never_moves_a_pin_backward
 //MUTANT update-ignores-workflow-literal|s@^    if !stale.is_empty() {$@    if false {@|a_workflow_literal_the_update_cannot_rewrite_refuses_and_writes_nothing
 fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
@@ -845,11 +845,20 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
         }
         return Ok(ExitCode::Violation);
     }
-    if synced != text {
-        durable::replace(&path, &synced)?;
-        writeln!(out, "{}", path.display())?;
+    if synced == text {
+        return engine_install(out);
     }
-    engine_install(out)
+    durable::replace(&path, &synced)?;
+    writeln!(out, "{}", path.display())?;
+    // THE WRITE STANDS, AND THE FAILURE SAYS SO: the config, its floor included,
+    // now names `target`, and the refusal floor admits the install that repairs it.
+    engine_install(out).map_err(|why| {
+        why.context(format!(
+            "engine update: {} now names {target}, which is not installed; \
+             run `batten engine install`",
+            path.display()
+        ))
+    })
 }
 
 /// Every tracked YAML file under `root`, repository-relative and sorted.
@@ -1114,8 +1123,8 @@ fn notice_once(ask: &Outdated, out: &mut dyn Write) -> Result<()> {
 ///
 /// - Current: exit 0, silent.
 /// - Behind: exit 2, `pin → latest` and the changelog's releases between.
-/// - Source pin: exit 0, silent — this tree's own build, which no release is
-///   ahead of.
+/// - Source pin: exit 0, silent — it names a build, not a release, so there is
+///   no release distance to measure.
 /// - No pin, or a malformed one: exit 2, `no engine pin` — a finding about the
 ///   config.
 /// - Could not look: exit 3.
@@ -1139,8 +1148,8 @@ fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
             release: Some(tag),
             source: None,
         }) => tag,
-        // A SOURCE PIN names this tree's own build, which no release is ahead
-        // of: nothing to be fresh against, and nothing wrong with the config.
+        // A SOURCE PIN names a build, not a release: no release distance to
+        // measure, and nothing wrong with the config.
         Some(engine::Pin {
             release: None,
             source: Some(_),
