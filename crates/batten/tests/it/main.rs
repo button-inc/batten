@@ -175,6 +175,7 @@ mod enforce_journal;
 mod engine_gates;
 mod engine_install;
 mod engine_pin;
+mod engine_update;
 mod evaluator_closure;
 mod evaluator_io_probe;
 mod exec_lock;

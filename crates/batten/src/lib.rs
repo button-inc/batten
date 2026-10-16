@@ -329,9 +329,19 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     let own_surface = matches!(command, Some(Command::Engine { .. }));
     let may_build = !hook_path;
     let may_follow = !own_surface && std::env::var_os(ENGINE_UPDATED).is_none();
-    if may_follow && let Some(code) = follow_pin(may_build)? {
+    let followed = if may_follow {
+        follow_pin(may_build, hook_path, out, err)?
+    } else {
+        Followed::Nothing
+    };
+    if let Followed::Answered(code) = followed {
         return Ok(code);
     }
+    // A CRASHED FOLLOW IS NOT HANDED THE SAME BUILD AGAIN (CLOUD-2376). The
+    // hook's second handoff finds the same checkout build from the envelope's
+    // authority, so without this it would spawn the crashing child a second
+    // time to learn what this one already did.
+    let already_handed = followed == Followed::Crashed;
     match command {
         // Unreachable in practice: `arg_required_else_help` has clap offer the
         // subcommand listing (a usage error, exit 1) before parse returns. Kept
@@ -388,6 +398,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             supplied_instant(instant.as_deref())?,
             mode,
             &overrides,
+            already_handed,
             out,
             err,
         ),
@@ -671,16 +682,23 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 /// running anyway would decide under the very engine the pin refuses.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT checkout-build-replaced|s@^    if exe.starts_with(\&root) {$@    if false {@|a_build_inside_the_checkout_is_never_replaced
-//MUTANT follow-pin-source-unfollowed|s@^            Some(build) => build,$@            Some(_) => return Ok(None),@|a_verb_is_followed_to_the_checkouts_build
-fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
+//MUTANT follow-pin-source-unfollowed|s@^            Some(build) => build,$@            Some(_) => return Ok(Followed::Nothing),@|a_verb_is_followed_to_the_checkouts_build
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT follow-pin-passes-a-crash-through|s@^    if hook_path {$@    if false {@|a_crashing_checkout_build_never_fails_the_hook_open
+fn follow_pin(
+    may_build: bool,
+    hook_path: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Followed> {
     let Ok(root) = git::worktree_root(Path::new(".")) else {
-        return Ok(None);
+        return Ok(Followed::Nothing);
     };
     let Ok(text) = config::read_text(&root.join(config::CONFIG_FILE)) else {
-        return Ok(None);
+        return Ok(Followed::Nothing);
     };
     let Some(pin) = engine::stale(&text, engine::running_stamp) else {
-        return Ok(None);
+        return Ok(Followed::Nothing);
     };
     // READ BEFORE THE SWAP. After the rename Linux reports the running image as
     // `<path> (deleted)`, which is not a program — measured: the re-exec failed
@@ -691,7 +709,7 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
     // it overwrote `target/debug/batten` with the pinned release under `verify`'s
     // own `cargo run`. Its staleness is the pre-parse refusal's to name.
     if exe.starts_with(&root) {
-        return Ok(None);
+        return Ok(Followed::Nothing);
     }
     let engine = match (pin.release.as_deref(), pin.source.as_deref()) {
         (Some(tag), None) => {
@@ -703,8 +721,8 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
                 // one repair verb (CLOUD-2116). An error here would end the
                 // hook before that floor answered: measured, the admitted
                 // repair (`batten engine install`) was refused at exit 1.
-                Err(_) if !may_build => return Ok(None),
-                Err(err) => return Err(err),
+                Err(_) if !may_build => return Ok(Followed::Nothing),
+                Err(why) => return Err(why),
             }
         }
         // A SOURCE PIN IS FOLLOWED TO THE CHECKOUT'S OWN BUILD (CLOUD-2232),
@@ -720,18 +738,42 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
                 }
                 exe
             }
-            None => return Ok(None),
+            None => return Ok(Followed::Nothing),
         },
         // A source pin on the hook path, or a malformed pin: the pre-parse
         // refusal names it.
-        _ => return Ok(None),
+        _ => return Ok(Followed::Nothing),
     };
     let mut argv: Vec<String> = vec![engine.to_string_lossy().into_owned()];
     argv.extend(std::env::args().skip(1));
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
-    // TEED, because the pinned engine's output IS this invocation's output. The
-    // default captures it, which on the hook path drops the decision itself:
-    // measured, the followed engine ran and the caller read an empty stdout.
+    // ON THE HOOK VERB THE CHILD IS JUDGED BEFORE IT IS HEARD (CLOUD-2376).
+    // Teeing writes as the child writes, so a build that printed a line and
+    // then died put that line on the harness's stdout and its own raw code —
+    // a panic's `101`, a missing interpreter's `127` — on the hook's exit.
+    // Neither is a code `crate::exit` names, and every one of them is read as
+    // "the hook itself failed, run the call". So the bytes are held, the code
+    // is tested against the table, and only an answer the table names is
+    // passed on; anything else decided nothing and is dropped whole, leaving
+    // the refusal floor below to decide the call. Stdin is inherited exactly
+    // as before — it is where the envelope arrives.
+    if hook_path {
+        let (code, stdout, stderr) = exec::captured_in_env(&root, &argv, &published)?;
+        // `Usage` is dropped with the codes outside the table, and for the
+        // same reason: `1` is non-blocking, so passing it on would let a
+        // followed engine's own usage error permit a call nothing judged.
+        let Some(decided) = ExitCode::from_code(code).filter(|code| *code != ExitCode::Usage)
+        else {
+            return Ok(Followed::Crashed);
+        };
+        out.write_all(&stdout)?;
+        err.write_all(&stderr)?;
+        return Ok(Followed::Answered(decided));
+    }
+    // TEED EVERYWHERE ELSE, because the pinned engine's output IS this
+    // invocation's output, live. `batten exec -- cmd` keeps its child's bytes
+    // as they arrive and its child's own code, `101` included: that verb is a
+    // transparent passthrough and the code is not Batten's to re-table.
     let passthrough = exec::ExecConfig {
         tee: true,
         ..exec::ExecConfig::DEFAULT
@@ -744,7 +786,26 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
         &published,
         &mut std::io::sink(),
     )
-    .map(Some)
+    .map(Followed::Answered)
+}
+
+/// What [`follow_pin`] did with this invocation (CLOUD-2376).
+///
+/// A third answer beside "ran it" and "nothing to do", because the hook's
+/// second handoff needs to tell them apart: a follow that crashed falls
+/// through to the refusal floor, and re-running the same crashing build from
+/// [`hand_to_checkout_build`] would spawn it twice to learn the same thing.
+/// Carried as a value rather than published into the environment, so no child
+/// of this process can inherit a mark about a run that is not its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Followed {
+    /// Nothing was stale, or there was nothing to follow to: run the verb.
+    Nothing,
+    /// The pinned engine ran and answered; its code is this invocation's.
+    Answered(ExitCode),
+    /// The pinned engine ran and exited outside the §7 table, so it decided
+    /// nothing. Its output was dropped and the verb falls through.
+    Crashed,
 }
 
 /// `batten engine update` (CLOUD-2287, CLOUD-2279): bring every batten
@@ -1695,14 +1756,13 @@ fn install_source(root: &Path, want: &str, out: &mut dyn Write) -> Result<ExitCo
                 engine::REPAIR_PINNED,
             ))
         })?;
-        let target_dir = std::env::var_os("CARGO_TARGET_DIR")
-            .map_or_else(|| root.join("target"), std::path::PathBuf::from);
         // The digest is read first, so a tree naming no source installs nothing.
         let digest = engine::digest(root)?;
-        (
-            std::fs::read(target_dir.join("release").join("batten"))?,
-            digest,
-        )
+        // ONE PLACE NAMES THE ARTIFACT (CLOUD-2376). This read and
+        // `engine::checkout_build`'s lookup are the two ends of the same file,
+        // and they disagreed about `CARGO_TARGET_DIR`: the build landed where
+        // cargo was told to put it and the follow looked under `target/`.
+        (std::fs::read(engine::release_build(root))?, digest)
     };
     for target in behind {
         durable::replace(&target, &bytes)?;
@@ -18814,6 +18874,9 @@ fn run_hook(
     instant: std::time::SystemTime,
     mode: Mode,
     overrides: &Overrides,
+    // Whether `follow_pin` already ran this checkout's build and it crashed
+    // (CLOUD-2376), so the load-fault handoff below does not run it again.
+    already_handed: bool,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -18981,7 +19044,16 @@ fn run_hook(
     // [`recoverable_without_rules`] carries the argument for which two shapes
     // pass and why every other one still refuses.
     let (policy, waivers, pruning) = if adjudicable {
-        match hook_config_or_floor(overrides, harness, &envelope, &raw, mode, out, err)? {
+        match hook_config_or_floor(
+            overrides,
+            harness,
+            &envelope,
+            &raw,
+            mode,
+            already_handed,
+            out,
+            err,
+        )? {
             Ok(loaded) => loaded,
             Err(code) => return Ok(code),
         }
@@ -19678,6 +19750,7 @@ fn hook_config_or_floor(
     envelope: &hook::Envelope,
     raw: &str,
     mode: Mode,
+    already_handed: bool,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<Result<HookConfig, ExitCode>> {
@@ -19693,7 +19766,7 @@ fn hook_config_or_floor(
         // is registered to enforce did not load, so nothing judged the call;
         // the floor below still passes a read and the repair write.
         Err(unreadable) => {
-            if let Some(code) = hand_to_checkout_build(raw, out)? {
+            if let Some(code) = hand_to_checkout_build(raw, already_handed, out)? {
                 return Ok(Err(code));
             }
             if recoverable_without_rules(envelope) {
@@ -19727,10 +19800,29 @@ fn hook_config_or_floor(
 ///
 /// `None` when there is nothing to hand to: no source pin, no checkout build,
 /// this IS that build, or this call was already handed once.
+///
+/// # The child is judged before it is heard (CLOUD-2376)
+///
+/// Its stdout is written only for a code [`crate::exit`] names an answer —
+/// `0`, `2`, `3`. Writing first and mapping afterwards put a crashing build's
+/// half-written line on the harness's stdout and then reported [`Usage`],
+/// which every harness reads as "the hook itself failed, run the call": the
+/// fail-open this whole boundary exists to close. `1` is dropped with the
+/// codes outside the table for exactly that reason. What is left is the
+/// refusal floor below, which still admits a read and the config repair.
+///
+/// [`Usage`]: exit::ExitCode::Usage
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT hook-handoff-skipped|s@^    let Some(build) = engine::checkout_build(root) else {$@    let Some(build) = None::<PathBuf> else {@|a_hook_outside_the_checkout_hands_off_to_the_authoritys_build
-fn hand_to_checkout_build(raw: &str, out: &mut dyn Write) -> Result<Option<ExitCode>> {
-    if std::env::var_os(ENGINE_UPDATED).is_some() {
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT handoff-writes-before-deciding|s@^    let Some(decided) = ExitCode::from_code(code).filter(\x7ccode\x7c \*code != ExitCode::Usage) else {$@    let Some(decided) = Some(ExitCode::from_code(code).unwrap_or(ExitCode::Usage)) else {@|a_crashing_checkout_build_never_fails_the_hook_open
+//MUTANT handoff-reruns-a-crashed-follow|s@^    if already_handed \x7c\x7c std::env::var_os(ENGINE_UPDATED).is_some() {$@    if std::env::var_os(ENGINE_UPDATED).is_some() {@|a_crashing_checkout_build_never_fails_the_hook_open
+fn hand_to_checkout_build(
+    raw: &str,
+    already_handed: bool,
+    out: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    if already_handed || std::env::var_os(ENGINE_UPDATED).is_some() {
         return Ok(None);
     }
     let root = hook_authority_root();
@@ -19754,13 +19846,13 @@ fn hand_to_checkout_build(raw: &str, out: &mut dyn Write) -> Result<Option<ExitC
     else {
         return Ok(None);
     };
+    // DECIDE, THEN WRITE. Nothing of the child's has reached `out` yet, so a
+    // code the table does not name costs nothing to drop whole.
+    let Some(decided) = ExitCode::from_code(code).filter(|code| *code != ExitCode::Usage) else {
+        return Ok(None);
+    };
     out.write_all(stdout.as_bytes())?;
-    Ok(Some(match code {
-        0 => ExitCode::Success,
-        2 => ExitCode::Violation,
-        3 => ExitCode::Internal,
-        _ => ExitCode::Usage,
-    }))
+    Ok(Some(decided))
 }
 
 /// Refuse a call whose rules this build could not load (CLOUD-1677).

@@ -375,11 +375,30 @@ pub(crate) fn runs_local() -> bool {
 //MUTANT source-pin-unfollowed|s@^    build.is_file().then_some(build)$@    None::<PathBuf>.filter(\x7c_\x7c build.is_file())@|a_source_pin_is_followed_to_the_checkouts_build
 #[must_use]
 pub fn checkout_build(root: &Path) -> Option<PathBuf> {
-    let build = root
-        .join("target")
-        .join("release")
-        .join(crate::surface::BINARY);
+    let build = release_build(root);
     build.is_file().then_some(build)
+}
+
+/// Where this checkout's release build LIVES — the one place that names it
+/// (CLOUD-2376).
+///
+/// Two call sites spelled it: the lookup above and the install that produces
+/// it. The install honoured `CARGO_TARGET_DIR` and the lookup did not, so with
+/// that variable set a source pin was followed to a stale build at
+/// `target/release`, or to nothing at all, while the build `engine install`
+/// had just written sat somewhere else. A path two functions agree on only by
+/// coincidence is the drift this repository refuses everywhere else.
+///
+/// `CARGO_TARGET_DIR` is resolved AGAINST `root`, because that is how cargo
+/// resolves it: the build runs with `root` as its working directory, so a
+/// relative value names a directory inside the checkout. An absolute value is
+/// taken as it is, which is what [`Path::join`] already does.
+#[must_use]
+pub fn release_build(root: &Path) -> PathBuf {
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map_or_else(|| root.join("target"), |dir| root.join(dir));
+    target.join("release").join(crate::surface::BINARY)
 }
 
 /// Refuse a config whose pin this engine does not satisfy.

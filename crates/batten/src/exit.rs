@@ -81,6 +81,35 @@ impl ExitCode {
         self as i32
     }
 
+    /// The inverse of [`code`]: the variant a raw exit names, or `None` where
+    /// the table has no row for it (CLOUD-2376).
+    ///
+    /// A child Batten hands a call to answers in integers, and the table is
+    /// total over four of them. Every other integer — a panic's `101`, a
+    /// missing binary's `127`, a signal's `128 + N` — is a code Batten did not
+    /// choose, so there is no variant to return and `None` is the honest
+    /// answer. Mapping the remainder onto [`Usage`] is what this function
+    /// exists to stop: `1` is non-blocking, so a crashing child read as
+    /// `Usage` makes the hook permit the call it could not judge.
+    ///
+    /// [`crate::judge::Verdict::of`] keeps its own match over the same
+    /// integers and is deliberately not folded in: it maps into a different
+    /// vocabulary (`Clean`/`Raised`/`Unresolved`), not into this table, so one
+    /// function answering both would be two meanings on one name.
+    ///
+    /// [`code`]: ExitCode::code
+    /// [`Usage`]: ExitCode::Usage
+    #[must_use]
+    pub const fn from_code(raw: i32) -> Option<Self> {
+        match raw {
+            0 => Some(ExitCode::Success),
+            1 => Some(ExitCode::Usage),
+            2 => Some(ExitCode::Violation),
+            3 => Some(ExitCode::Internal),
+            _ => None,
+        }
+    }
+
     /// The code the checks/advisory pipeline returns for a run that did or did
     /// not find something blocking.
     ///
@@ -336,6 +365,31 @@ mod tests {
         // And the collision that makes the inversion dangerous rather than
         // merely different: the shell's could-not-look IS this table's violation.
         assert_eq!(ExitCode::Violation.code(), shell_could_not_look);
+    }
+
+    #[test]
+    fn an_exit_code_round_trips_and_nothing_else_is_one() {
+        // THE RANGE IS THE POINT (CLOUD-2376). `from_code` exists so a caller
+        // standing in front of a child's raw exit can ask "is this a code from
+        // this table" and be told no. A fold that answered `Usage` for the
+        // remainder would be structurally fail-open at the hook boundary: `1`
+        // is the code every harness reads as "the hook broke, run the call".
+        for code in ExitCode::ALL {
+            assert_eq!(
+                ExitCode::from_code(code.code()),
+                Some(code),
+                "{code:?} must round-trip through its own number"
+            );
+        }
+        // A negative code (no child), the first integer past the table, a
+        // panic's code, and a missing program's.
+        for outside in [-1, 4, 101, 127] {
+            assert_eq!(
+                ExitCode::from_code(outside),
+                None,
+                "{outside} is not a code this table names"
+            );
+        }
     }
 
     #[test]
