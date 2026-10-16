@@ -762,16 +762,26 @@ fn ceiling_dirs() -> Vec<PathBuf> {
 /// Each ceiling is canonicalized as `start` is below: gix compares them without
 /// resolving symlinks, so a ceiling spelled through one (or, on Windows, without
 /// the `\\?\` prefix `canonicalize` adds to `start`) would never contain it.
-//MUTANT unrelated-ceiling-refuses|s@match_ceiling_dir_or_error: false@match_ceiling_dir_or_error: true@|an_unrelated_ceiling_does_not_refuse_a_valid_repository
+///
+/// **THE OPEN IS REMEMBERED, the discovery is not** (CLOUD-2433). One hook call
+/// read the same repository ten times, and each open re-parsed its config — 92%
+/// of a discovery's cost. Discovery still runs per call, so `dir` and the
+/// ceilings decide every answer; within a hook call's [`open_scope`], what it
+/// found is then opened once while the files the open read are unchanged
+/// ([`Opens`]). Outside a scope every open is fresh.
 fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
-    let discovery = gix::discover::upwards::Options {
-        ceiling_dirs: ceilings
-            .into_iter()
-            .map(|ceiling| ceiling.canonicalize().unwrap_or(ceiling))
-            .collect(),
-        match_ceiling_dir_or_error: false,
-        ..Default::default()
-    };
+    open_isolated(dir, ceilings, true)
+}
+
+/// [`open_upwards`], remembering the open only when `remember` asks and a scope
+/// is alive. A WRITE never does ([`open_for_write`]): a remembered handle is a
+/// clone that shares its index and packed-refs snapshots, and a write through
+/// one would leave every later read in the call answered from the shared copy.
+fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<gix::Repository> {
+    let ceilings: Vec<PathBuf> = ceilings
+        .into_iter()
+        .map(|ceiling| ceiling.canonicalize().unwrap_or(ceiling))
+        .collect();
     // ABSOLUTE before discovery, because callers pass a relative `"."`
     // (`receipt.rs` does, for every read) and a ceiling is an absolute path. An
     // upward walk over relative components can never match one, so a fence a
@@ -780,8 +790,181 @@ fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
     // directory before comparing; this is that step, made explicit.
     let start = dir.canonicalize();
     let start = start.as_deref().unwrap_or(dir);
-    gix::discover_opts(start, discovery, gix::open::Options::isolated())
-        .map_err(|_| UsageError::raise(format!("{} is not a git repository", dir.display())))
+    let refused = || UsageError::raise(format!("{} is not a git repository", dir.display()));
+    // NO SCOPE, NO MEMO WORK: outside a hook call this is the plain open, without
+    // a second walk or the config reads a remembered entry would need.
+    if !remember || with_opens(|_| ()).is_none() {
+        return gix::discover_opts(start, discovery(&ceilings), gix::open::Options::isolated())
+            .map_err(|_| refused());
+    }
+    let (found, trust) =
+        gix::discover::upwards_opts(start, discovery(&ceilings)).map_err(|_| refused())?;
+    let (git_dir, worktree) = found.into_repository_and_work_tree_directories();
+    let key = OpenKey {
+        git_dir,
+        worktree,
+        trust,
+        cwd: std::env::current_dir().ok(),
+    };
+    if let Some(repo) = with_opens(|opens| opens.get(&key)).flatten() {
+        return Ok(repo);
+    }
+    // READ BEFORE THE OPEN, so a file changed while gix parses it is remembered
+    // as what it was before — and the next call, reading the change, misses.
+    let read = read_by_open(&key.git_dir);
+    let repo = gix::discover_opts(start, discovery(&ceilings), gix::open::Options::isolated())
+        .map_err(|_| refused())?;
+    // Only the repository the key names: a `.git` made or removed between the
+    // two walks would otherwise file another repository's handle under it.
+    if repo.git_dir() == key.git_dir {
+        let _ = with_opens(|opens| opens.remember(key, &repo, read));
+    }
+    Ok(repo)
+}
+
+/// The discovery options [`open_upwards`] walks with: the ceilings, ignored
+/// where they fence nothing.
+//MUTANT unrelated-ceiling-refuses|s@match_ceiling_dir_or_error: false@match_ceiling_dir_or_error: true@|an_unrelated_ceiling_does_not_refuse_a_valid_repository
+fn discovery(ceilings: &[PathBuf]) -> gix::discover::upwards::Options<'static> {
+    gix::discover::upwards::Options {
+        ceiling_dirs: ceilings.to_vec(),
+        match_ceiling_dir_or_error: false,
+        ..Default::default()
+    }
+}
+
+/// What a discovery found, and so what an open of it depends on besides files:
+/// the process working directory, which gix resolves relative paths against.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct OpenKey {
+    git_dir: PathBuf,
+    worktree: Option<PathBuf>,
+    trust: gix::sec::Trust,
+    cwd: Option<PathBuf>,
+}
+
+/// The repositories one hook call opened, one per [`OpenKey`] (CLOUD-2433).
+///
+/// **SCOPED TO ONE HOOK CALL, never the thread** ([`open_scope`]), as the
+/// crate's other hook memos are. A remembered handle is handed out as a clone,
+/// and a clone SHARES gix's index, packed-refs and shallow snapshots, which
+/// reload only when a file's mtime moves forward — so a long-lived process that
+/// writes refs or the index and reads them back in the same tick would be
+/// answered from the old snapshot (code review of CLOUD-2433). Within one hook
+/// call, which only reads, a shared handle is what a single open used
+/// throughout would be; outside one, every open is fresh, as before.
+///
+/// An entry is believed only while every file the isolated open reads holds the
+/// bytes it held before the open — absence included. BYTES, not a stat stamp:
+/// the files are a few hundred bytes, so a read costs about what a `stat` does,
+/// and a byte comparison has no racy window — a stamp-checked entry could not
+/// be made for two seconds after a write, so whether a call hit depended on the
+/// clock (CLOUD-2433's verify, `shell_retirement_cost`).
+#[derive(Default)]
+struct Opens(BTreeMap<OpenKey, Opened>);
+
+/// One remembered open: the repository, and the bytes its open read.
+struct Opened {
+    repo: gix::Repository,
+    read: Vec<Option<Vec<u8>>>,
+}
+
+thread_local! {
+    /// Thread-local because this build's gix handle is not `Send` (no
+    /// `parallel` feature); `Some` only while an [`OpenScope`] is alive.
+    static OPENS: std::cell::RefCell<Option<Opens>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The guard [`open_scope`] returns: the memo dies with the guard that opened it.
+pub(crate) struct OpenScope {
+    /// Whether this guard opened the memo. A scope opened inside another one
+    /// shares the outer memo and leaves it standing when it drops.
+    owner: bool,
+}
+
+impl Drop for OpenScope {
+    fn drop(&mut self) {
+        if self.owner {
+            let _ = with_cell(|opens| *opens = None);
+        }
+    }
+}
+
+/// Remember this thread's repository opens for the life of the returned guard
+/// (CLOUD-2433). `run_hook` holds it, beside its other per-call memos.
+//MUTANT open-scope-never-opens|s@^        \*opens = Some(Opens::default());$@@|a_repository_read_twice_in_one_scope_is_opened_once
+//MUTANT open-never-remembered|s@^        let _ = with_opens(.opens. opens.remember(key, \&repo, read));$@@|a_repository_read_twice_in_one_scope_is_opened_once
+//MUTANT open-memo-never-consulted|s@^    if let Some(repo) = with_opens(.opens. opens.get(\&key)).flatten() {$@    if let Some(repo) = None::<gix::Repository> {@|a_repository_read_twice_in_one_scope_is_opened_once
+pub(crate) fn open_scope() -> OpenScope {
+    let owner = with_cell(|opens| {
+        if opens.is_some() {
+            return false;
+        }
+        *opens = Some(Opens::default());
+        true
+    });
+    OpenScope {
+        owner: owner.unwrap_or(false),
+    }
+}
+
+/// `with` over the memo's cell, or `None` during thread teardown or while it is
+/// borrowed — never a panic, since a guard can drop during an unwind.
+fn with_cell<R>(with: impl FnOnce(&mut Option<Opens>) -> R) -> Option<R> {
+    OPENS
+        .try_with(|cell| cell.try_borrow_mut().ok().map(|mut opens| with(&mut opens)))
+        .ok()
+        .flatten()
+}
+
+/// `with` over this scope's [`Opens`], or `None` outside a scope, during thread
+/// teardown, or re-entered — each a miss.
+fn with_opens<R>(with: impl FnOnce(&mut Opens) -> R) -> Option<R> {
+    with_cell(|opens| opens.as_mut().map(with)).flatten()
+}
+
+/// The bytes of every file an isolated open of `git_dir` reads — no includes,
+/// no system, global or environment configuration
+/// (`gix::open::Options::isolated`) — with an absent file as `None`. The common
+/// directory is resolved through `commondir` exactly as gix resolves it, and
+/// `commondir`'s own bytes are among those compared.
+fn read_by_open(git_dir: &Path) -> Vec<Option<Vec<u8>>> {
+    let common = gix::discover::path::from_plain_file(&git_dir.join("commondir"))
+        .and_then(Result::ok)
+        .map_or_else(|| git_dir.to_path_buf(), |common| git_dir.join(common));
+    let mut read = vec![
+        git_dir.join("commondir"),
+        git_dir.join("config"),
+        git_dir.join("config.worktree"),
+    ];
+    // Without a `commondir` the common config IS `<git_dir>/config`, already read.
+    if common != git_dir {
+        read.push(common.join("config"));
+    }
+    read.iter().map(|path| std::fs::read(path).ok()).collect()
+}
+
+//MUTANT common-config-unread|s@^        read.push(common.join("config"));$@@|a_linked_worktree_is_remembered
+//MUTANT nested-scope-resets|s@^        if opens.is_some() {$@        if false {@|a_nested_scope_does_not_end_the_outer_one
+//MUTANT repository-memo-never-hits|s@^        (opened.read == now).then@        false.then@|a_repository_opened_twice_is_opened_once
+//MUTANT repository-memo-ignores-config|s@^        (opened.read == now).then@        true.then@|a_config_edited_after_open_is_read_again
+impl Opens {
+    /// The repository remembered for `key`, if every file its open read is
+    /// unchanged.
+    fn get(&self, key: &OpenKey) -> Option<gix::Repository> {
+        let opened = self.0.get(key)?;
+        let now = read_by_open(&key.git_dir);
+        (opened.read == now).then(|| opened.repo.clone())
+    }
+
+    /// Remember `repo` as `key`'s open, made from the files as `read` before it.
+    fn remember(&mut self, key: OpenKey, repo: &gix::Repository, read: Vec<Option<Vec<u8>>>) {
+        let opened = Opened {
+            repo: repo.clone(),
+            read,
+        };
+        self.0.insert(key, opened);
+    }
 }
 
 /// Open the repository containing `dir` with git's **resolved** configuration —
@@ -1910,17 +2093,18 @@ fn unreachable_from_remotes(
 /// the environment names a different repository and honouring one is the
 /// mis-rooting bug that isolation exists to kill.
 ///
-/// A write needs the same isolation for the same reason, so this is `open` under
-/// another name today. It exists as its own function so that `gitwrite`'s callers
-/// name their intent at the call site, and so a future divergence — a write that
-/// needs a config a read does not — has somewhere to land other than inside
-/// `open`.
+/// A write needs the same isolation for the same reason. It exists as its own
+/// function so that `gitwrite`'s callers name their intent at the call site, and
+/// it is where the two have diverged: a write is always opened FRESH, never from
+/// a hook call's memo (CLOUD-2433), because a remembered handle is a clone that
+/// shares its index and packed-refs snapshots with every later read.
 ///
 /// # Errors
 ///
 /// A directory that is not a repository, or one discovery cannot reach.
+//MUTANT write-from-the-memo|s@^    open_isolated(dir, ceiling_dirs(), false)$@    open(dir)@|a_write_is_never_served_from_the_memo
 pub fn open_for_write(dir: &Path) -> Result<gix::Repository> {
-    open(dir)
+    open_isolated(dir, ceiling_dirs(), false)
 }
 
 /// The one UTC stamp both committer signatures take (CLOUD-1486).
@@ -2513,7 +2697,8 @@ pub fn check_ignore(dir: &Path, path: &str) -> Result<bool> {
 /// backend will not move. A note that did not land is one a later read will not
 /// find, so every failure is an error rather than a skip.
 pub fn append_note(dir: &Path, name: &str, commit: &str, body: &str) -> Result<()> {
-    let repo = open(dir)?;
+    // A write: never a hook call's remembered handle (CLOUD-2433).
+    let repo = open_for_write(dir)?;
     let reference = format!("refs/notes/{name}");
     // Parsed for its REFUSAL rather than its value: a caller handing this a
     // branch name or a short sha would otherwise write a note under a tree entry
@@ -5836,6 +6021,181 @@ mod tests {
         assert!(
             open_upwards(&repo, vec![elsewhere]).is_ok(),
             "a ceiling that does not contain the search directory fences nothing"
+        );
+    }
+
+    /// A fresh repository at `name`, opened as [`open_upwards`] opens one, and the
+    /// key it would be remembered under.
+    fn opened(name: &str) -> (PathBuf, OpenKey, gix::Repository) {
+        let dir = crate::scratch::scratch(name);
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let repo =
+            gix::discover_opts(&dir, discovery(&[]), gix::open::Options::isolated()).expect("open");
+        let key = OpenKey {
+            git_dir: repo.git_dir().to_path_buf(),
+            worktree: repo.workdir().map(Path::to_path_buf),
+            trust: gix::sec::Trust::Full,
+            cwd: None,
+        };
+        (dir, key, repo)
+    }
+
+    /// An open whose files are unchanged is served again (CLOUD-2433) — at once,
+    /// with no window after the repository was written.
+    #[test]
+    fn a_repository_opened_twice_is_opened_once() {
+        let (_, key, repo) = opened("git-memo-hit");
+        let mut opens = Opens::default();
+        opens.remember(key.clone(), &repo, read_by_open(&key.git_dir));
+        assert!(opens.get(&key).is_some(), "an unchanged open is remembered");
+    }
+
+    /// A config written after the open is read again, not served stale — even
+    /// one the same length, written in the same timestamp tick.
+    #[test]
+    fn a_config_edited_after_open_is_read_again() {
+        let (dir, key, repo) = opened("git-memo-edited");
+        let mut opens = Opens::default();
+        opens.remember(key.clone(), &repo, read_by_open(&key.git_dir));
+        assert!(opens.get(&key).is_some(), "the premise: it was remembered");
+        let config = dir.join(".git/config");
+        let text = fs::read_to_string(&config).expect("config");
+        let edited = text.replacen("bare = false", "bare = fals0", 1);
+        assert_ne!(text, edited, "the premise: the edit changes a byte");
+        fs::write(&config, edited).expect("edit");
+        assert!(opens.get(&key).is_none(), "an edited config is a miss");
+    }
+
+    /// Swap the one remembered handle for `other`'s, so a read served from the
+    /// memo answers about `other` and a fresh open about the directory read.
+    fn plant(other: &Path) {
+        let planted = gix::discover_opts(other, discovery(&[]), gix::open::Options::isolated())
+            .expect("open");
+        with_opens(|opens| {
+            let (_, opened) = opens.0.iter_mut().next().expect("one remembered open");
+            opened.repo = planted;
+        })
+        .expect("a scope is open");
+    }
+
+    /// The working tree a handle is about, canonical.
+    fn tree(repo: &gix::Repository) -> PathBuf {
+        canonical(repo.workdir().expect("a working tree"))
+    }
+
+    /// The real path: within a hook call's scope, `open_upwards` remembers what
+    /// it opened, and the NEXT read of the repository is served from the memo —
+    /// shown by planting another repository's handle in it.
+    #[test]
+    fn a_repository_read_twice_in_one_scope_is_opened_once() {
+        let dir = crate::scratch::scratch("git-memo-scoped");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let other = crate::scratch::scratch("git-memo-scoped-other");
+        crate::gitwrite::init_on_main(&other).expect("init other");
+        let _scope = open_scope();
+        open_upwards(&dir, Vec::new()).expect("first read");
+        plant(&other);
+        let second = open_upwards(&dir, Vec::new()).expect("second read");
+        assert_eq!(
+            tree(&second),
+            canonical(&other),
+            "the second read came from the memo, not a fresh open"
+        );
+    }
+
+    /// A write is opened fresh even inside a scope: a remembered handle shares
+    /// its index and packed-refs snapshots with every later read.
+    #[test]
+    fn a_write_is_never_served_from_the_memo() {
+        let dir = crate::scratch::scratch("git-memo-write");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let other = crate::scratch::scratch("git-memo-write-other");
+        crate::gitwrite::init_on_main(&other).expect("init other");
+        let _scope = open_scope();
+        open_upwards(&dir, Vec::new()).expect("read");
+        plant(&other);
+        let written = open_for_write(&dir).expect("write open");
+        assert_eq!(
+            tree(&written),
+            canonical(&dir),
+            "a write opens the repository itself"
+        );
+    }
+
+    /// A scope opened inside another shares the outer memo and leaves it
+    /// standing when it drops.
+    #[test]
+    fn a_nested_scope_does_not_end_the_outer_one() {
+        let dir = crate::scratch::scratch("git-memo-nested");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let _outer = open_scope();
+        open_upwards(&dir, Vec::new()).expect("read");
+        {
+            let _inner = open_scope();
+        }
+        assert_eq!(
+            with_opens(|opens| opens.0.len()),
+            Some(1),
+            "the outer call's memo survives an inner scope"
+        );
+    }
+
+    /// A linked worktree is remembered too: its discovered git dir and the one
+    /// the open reports must agree, or the memo would silently never fill.
+    #[test]
+    fn a_linked_worktree_is_remembered() {
+        let dir = crate::scratch::scratch("git-memo-linked");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        git(&dir, &["commit", "-q", "--allow-empty", "-m", "root"]);
+        let linked = dir.join("linked");
+        git(
+            &dir,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                linked.to_str().expect("utf-8"),
+                "-b",
+                "side",
+            ],
+        );
+        let _scope = open_scope();
+        open_upwards(&linked, Vec::new()).expect("read");
+        assert_eq!(
+            with_opens(|opens| opens.0.len()),
+            Some(1),
+            "the linked worktree's open is remembered"
+        );
+        // The COMMON config is the one a linked worktree's open parses, and an
+        // edit to it — not to the worktree's own git dir — must be a miss.
+        let key = with_opens(|opens| opens.0.keys().next().cloned())
+            .flatten()
+            .expect("one key");
+        let config = dir.join(".git/config");
+        let text = fs::read_to_string(&config).expect("config");
+        let edited = text.replacen("bare = false", "bare = fals0", 1);
+        assert_ne!(text, edited, "the premise: the edit changes a byte");
+        fs::write(&config, edited).expect("edit");
+        assert!(
+            with_opens(|opens| opens.get(&key)).flatten().is_none(),
+            "an edited common config is a miss for the linked worktree"
+        );
+    }
+
+    /// Outside a scope nothing is remembered, so a long-lived process never
+    /// reads an index or packed-refs snapshot a shared handle held stale.
+    #[test]
+    fn outside_a_scope_no_open_is_remembered() {
+        let dir = crate::scratch::scratch("git-memo-unscoped");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        {
+            let _scope = open_scope();
+        }
+        open_upwards(&dir, Vec::new()).expect("read");
+        assert_eq!(
+            with_opens(|opens| opens.0.len()),
+            None,
+            "a dropped scope leaves no memo behind"
         );
     }
 
