@@ -359,6 +359,13 @@ pub struct Filled {
     /// an empty log is the honest could-not-read for that one competitor, as it
     /// was before. `false` means something stronger: a worker unwound and some
     /// competitor was never asked at all.
+    ///
+    /// So `false` is a defect in the caller's own fill rather than a reading of
+    /// the forge, and a caller should not answer it the way it answers an
+    /// unreachable forge. `run_claim_race` exits `Internal` on it: the
+    /// sequential fill let such a panic kill the run, and converting that into a
+    /// clean exit would make a crash indistinguishable from "no races" to
+    /// anything reading the code.
     pub complete: bool,
 }
 

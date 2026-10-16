@@ -7213,17 +7213,30 @@ fn run_claim_race(
         race::with_logs(pulls, &mine_number, &grammar, |number| {
             bot::forge::commit_messages(&slug, number).unwrap_or_default()
         });
-    // AN INCOMPLETE FILL IS COULD-NOT-LOOK, like every other arm above. A failed
-    // read answers `""` and still counts, so this is only the case where a
-    // worker unwound and a competitor was never asked — judging it would print
-    // "no races" over a competitor nobody read, which is the dead gate this
-    // module replaced rather than a verdict.
+    // AN INCOMPLETE FILL IS THIS VERB'S OWN DEFECT, AND EXITS AS ONE — not
+    // `clean`, which the arms above use. Every could-not-look they report is a
+    // statement about the FORGE: no remote, no slug, no answer, a listing that
+    // may be truncated. Each allows because a forge this cannot reach must never
+    // be the reason a branch fails `verify`. An unanswered competitor is a
+    // different animal: a failed read answers `""` and still counts, so this
+    // arm means a fetch worker unwound, which is a bug in Batten rather than
+    // anything about the forge or the branch.
+    //
+    // `Internal` keeps that loud WITHOUT claiming a race. The sequential fill
+    // this replaced let the panic kill the run, so a non-zero exit is what the
+    // behaviour already was; answering `clean` here would quietly convert a
+    // crash into a pass that is byte-indistinguishable from "no races" to
+    // anything reading the exit code — a false green on a completion gate, which
+    // is the one direction `race.rs` exists to refuse. `1`/`3` are the codes a
+    // Batten failure produces and `2` alone is the policy verdict
+    // (`rules/rust.md`), so this blocks nothing it should not.
     if !complete {
-        return clean(
-            out,
-            "claim race: a competitor's commit log was never read — could not look, which is not \
-             a verdict",
-        );
+        writeln!(
+            err,
+            "claim race: a competitor's commit log was never read — a fetch worker did not \
+             return, which is a defect in this verb rather than a verdict about this branch"
+        )?;
+        return Ok(ExitCode::Internal);
     }
     let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
     if races.is_empty() {
