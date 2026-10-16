@@ -691,6 +691,26 @@ fn a_plan_mode_ps_is_allowed() {
     assert_granted_by(&read, "call read now");
 }
 
+/// CLOUD-2418: the exact line plan mode refused, measured 2026-10-16. Git's
+/// global options come before the subcommand, so `-C` is never the verb, and a
+/// writer behind them is still a writer.
+#[test]
+fn a_plan_mode_git_with_global_options_is_allowed() {
+    for line in [
+        "git -C /home/user/batten status --short --branch",
+        "git --no-pager -c core.pager=cat log --oneline -1",
+        "git stash list",
+        "git branch --show-current",
+        "echo landed",
+    ] {
+        let read = shell("plan", line);
+        assert_not_plan_refused(&read);
+        assert_granted_by(&read, "call read now");
+    }
+    assert_plan_refused(&shell("plan", "git -C /home/user/batten commit -m x"));
+    assert_plan_refused(&shell("plan", "git branch new-branch"));
+}
+
 #[test]
 fn a_batten_mcp_read_is_preapproved_outside_plan_mode() {
     assert_granted_by(

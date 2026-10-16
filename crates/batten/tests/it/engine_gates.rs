@@ -203,6 +203,46 @@ fn a_provision_row_disagreeing_with_the_pin_is_refused() {
     );
 }
 
+/// A ROW NAMING THE PIN CAN STILL CARRY ANOTHER RELEASE'S BYTES (CLOUD-2418): its
+/// `sha256` is judged against the pinned release's `SHA256SUMS`, cached beside
+/// the release, so the gate refuses it by `path:line` without the network.
+#[test]
+fn a_stale_digest_at_the_pinned_version_is_refused() {
+    let asset = "batten-9.9.9-x86_64-unknown-linux-musl.tar.gz";
+    let dir = repo(
+        "engine-gate-stale-digest",
+        &format!(
+            "version = 1\nengine = {{ release = \"v9.9.9\" }}\n\n\
+             [[provision]]\nname = \"batten\"\nversion = \"9.9.9\"\n\n\
+             [provision.platforms.x86_64-unknown-linux-musl]\n\
+             url = \"https://example.invalid/releases/download/v9.9.9/{asset}\"\n\
+             sha256 = \"{}\"\n",
+            "0".repeat(64)
+        ),
+    );
+    seed_release(&dir, "v9.9.9", 0, &[]);
+    let root = dir.canonicalize().unwrap();
+    let cache = data_dir(&dir)
+        .join("batten")
+        .join(batten::state::derive_repo_name(&root).unwrap())
+        .join("engine")
+        .join("v9.9.9");
+    common::write(
+        &cache,
+        "SHA256SUMS",
+        &format!("{}  {asset}\n", "a".repeat(64)),
+    );
+    let output = run(&dir, &["engine", "gate"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        text(&output).contains(&format!(
+            "batten.toml:10 provision batten sha256 for {asset} is not engine pin v9.9.9's"
+        )),
+        "{}",
+        text(&output)
+    );
+}
+
 #[test]
 fn no_pin_is_nothing_to_judge() {
     let dir = repo("engine-gate-unpinned", "version = 1\n");

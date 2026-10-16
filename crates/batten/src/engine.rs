@@ -53,6 +53,34 @@ pub struct Pin {
     pub source: Option<String>,
 }
 
+/// What a [`Pin`] names, decided once (CLOUD-2418): every verb reading a pin
+/// matches this rather than the two fields, so a malformed pin reads the same
+/// everywhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PinKind {
+    /// A published release, by tag.
+    Release(String),
+    /// A source build, by digest.
+    Source(String),
+    /// Both fields, or neither.
+    Malformed,
+}
+
+/// What every verb says of a [`PinKind::Malformed`] pin.
+pub const MALFORMED_PIN: &str = "`engine` names exactly one of `release` or `source`";
+
+impl Pin {
+    /// What this pin names.
+    #[must_use]
+    pub fn kind(self) -> PinKind {
+        match (self.release, self.source) {
+            (Some(tag), None) => PinKind::Release(tag),
+            (None, Some(digest)) => PinKind::Source(digest),
+            _ => PinKind::Malformed,
+        }
+    }
+}
+
 /// The suffix of the stamp written beside an installed binary.
 pub const STAMP_SUFFIX: &str = "source";
 
@@ -425,9 +453,7 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
             }
             Ok(())
         }
-        _ => Err(UsageError::raise(format!(
-            "{source}: `engine` names exactly one of `release` or `source`"
-        ))),
+        _ => Err(UsageError::raise(format!("{source}: {MALFORMED_PIN}"))),
     }
 }
 
@@ -900,6 +926,121 @@ pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String, &'static str)
     found
 }
 
+/// `url` moved to release `new` (bare, `9.9.9`), or `None` when it names no
+/// release download (CLOUD-2418).
+///
+/// **ONLY THE TWO PLACES A RELEASE URL CARRIES ITS VERSION MOVE:** the download
+/// segment (`…/download/v8.8.8/`), whose `v` is kept as written, and the asset
+/// name after it. A host, an org or a mirror path that happens to contain the
+/// old version is left as it is, which a substring replace was not.
+//MUTANT-SUITE crates/batten/src/engine.rs
+//MUTANT url-swap-unanchored|s@^    Some(format!("{base}/{prefix}{new}/{asset}"))$@    Some(url.replace(old, new))@|a_moved_url_rewrites_only_its_release
+#[must_use]
+pub fn moved_url(url: &str, new: &str) -> Option<String> {
+    let (head, asset) = url.rsplit_once('/')?;
+    let (base, segment) = head.rsplit_once('/')?;
+    let old = segment.strip_prefix('v').unwrap_or(segment);
+    semver::Version::parse(old).ok()?;
+    let prefix = if segment.starts_with('v') { "v" } else { "" };
+    let asset = asset.replacen(old, new, 1);
+    Some(format!("{base}/{prefix}{new}/{asset}"))
+}
+
+/// The batten provision artifacts in `text` that are not release `tag`'s own
+/// (CLOUD-2418): a `url` that is not [`moved_url`] to the pin, or a `sha256`
+/// that is not the digest `sums` publishes for the asset the `url` names. Each
+/// is its 1-based line and what it says. Checked whatever the row's `version`
+/// says, since a row can name the pin and still carry another release's bytes.
+///
+/// `sums` is asked for only once an artifact is found, so a config with none
+/// reaches nothing.
+///
+/// # Errors
+///
+/// Whatever `sums` answers when it cannot give the manifest.
+pub fn stale_artifacts(
+    text: &str,
+    tag: &str,
+    sums: &dyn Fn() -> Result<String>,
+) -> Result<Vec<(usize, String)>> {
+    let (Ok(pin), Ok(doc)) = (release_version(tag), toml_edit::Document::parse(text)) else {
+        return Ok(Vec::new());
+    };
+    let bare = pin.to_string();
+    let line = |item: &toml_edit::Item| {
+        item.span().map_or(0, |span| {
+            text.get(..span.start)
+                .unwrap_or_default()
+                .matches('\n')
+                .count()
+                + 1
+        })
+    };
+    let mut found = Vec::new();
+    let mut judge = |artifact: &toml_edit::Table| -> Result<()> {
+        let Some(item) = artifact.get("url") else {
+            return Ok(());
+        };
+        let Some(url) = item.as_str() else {
+            return Ok(());
+        };
+        if moved_url(url, &bare).as_deref() != Some(url) {
+            found.push((line(item), format!("provision batten url {url}")));
+            return Ok(());
+        }
+        let asset = url.rsplit('/').next().unwrap_or_default();
+        let digest = artifact.get("sha256");
+        if digest.and_then(toml_edit::Item::as_str) != published_digest(&sums()?, asset).as_deref()
+        {
+            found.push((
+                digest.map_or_else(|| line(item), line),
+                format!("provision batten sha256 for {asset}"),
+            ));
+        }
+        Ok(())
+    };
+    let rows = doc
+        .get("provision")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .into_iter()
+        .flat_map(toml_edit::ArrayOfTables::iter);
+    for row in rows.filter(|row| is_batten_row(*row)) {
+        judge(row)?;
+        let platforms = row
+            .get("platforms")
+            .and_then(toml_edit::Item::as_table)
+            .into_iter()
+            .flat_map(toml_edit::Table::iter);
+        for (_, artifact) in platforms {
+            if let Some(artifact) = artifact.as_table() {
+                judge(artifact)?;
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// The `SHA256SUMS` release `tag` publishes, read once from `repository` and
+/// cached beside its binary after (CLOUD-2418), so `engine gate` judges
+/// provision digests without the network once the release is cached.
+///
+/// # Errors
+///
+/// As [`release_sums`], and an internal error when the cache cannot be written.
+pub fn pinned_sums(state_dir: &Path, repository: &str, tag: &str) -> Result<String> {
+    let path = state_dir.join("engine").join(tag).join("SHA256SUMS");
+    if let Ok(body) = std::fs::read_to_string(&path) {
+        return Ok(body);
+    }
+    let body = release_sums(repository, tag)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    crate::durable::replace(&path, &body)?;
+    Ok(body)
+}
+
 /// The remedy for a declaration [`ahead_of`] the pin, which `engine update`
 /// never moves back.
 const PIN_UP: &str = "pin a release at or above it, or lower it";
@@ -933,53 +1074,189 @@ fn yaml_code(line: &str) -> &str {
     line
 }
 
+/// The keys a workflow can carry a copy of the engine's version or digest under.
+const LITERAL_KEYS: [&str; 2] = ["BATTEN_VERSION", "BATTEN_SHA256"];
+
+/// Whether `literal`, the value of `key`, is a copy that disagrees with release
+/// `want` (bare): a version (`v?X.Y.Z`) other than it, or a 64-hex digest not
+/// among `published`. Anything else — an expression, a word — is no copy.
+fn literal_differs(
+    key: &str,
+    literal: &str,
+    want: &str,
+    published: &std::collections::BTreeSet<String>,
+) -> bool {
+    let literal = literal.trim();
+    if key == "BATTEN_VERSION" {
+        let bare = literal.trim_start_matches('v');
+        semver::Version::parse(bare).is_ok() && bare != want
+    } else {
+        literal.len() == 64
+            && literal.chars().all(|c| c.is_ascii_hexdigit())
+            && !published.contains(&literal.to_ascii_lowercase())
+    }
+}
+
+/// The `KEY: value` and `KEY=value` copies on one line of text, less a
+/// comment: how a shell assignment inside a `run:` scalar carries one.
+fn line_literals(line: &str) -> Vec<(&'static str, String)> {
+    let line = yaml_code(line);
+    let mut found = Vec::new();
+    for key in LITERAL_KEYS {
+        for (at, _) in line.match_indices(key) {
+            let before = line[..at].chars().next_back();
+            if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
+                continue;
+            }
+            let rest = line[at + key.len()..].trim_start();
+            let Some(rest) = rest.strip_prefix(':').or_else(|| rest.strip_prefix('=')) else {
+                continue;
+            };
+            let literal: String = rest
+                .trim_start()
+                .trim_start_matches(['"', '\''])
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
+                .collect();
+            found.push((key, literal));
+        }
+    }
+    found
+}
+
+/// Every event of `text` with the line it starts on, or `None` when it is not
+/// YAML.
+fn yaml_events(text: &str) -> Option<Vec<(yaml_rust2::Event, usize)>> {
+    struct Events(Vec<(yaml_rust2::Event, usize)>);
+    impl yaml_rust2::parser::MarkedEventReceiver for Events {
+        fn on_event(&mut self, event: yaml_rust2::Event, mark: yaml_rust2::scanner::Marker) {
+            self.0.push((event, mark.line()));
+        }
+    }
+    let mut events = Events(Vec::new());
+    yaml_rust2::parser::Parser::new_from_str(text)
+        .load(&mut events, true)
+        .ok()?;
+    Some(events.0)
+}
+
 /// The literal `BATTEN_VERSION` / `BATTEN_SHA256` values in a workflow that
 /// disagree with release `tag` (CLOUD-2279), as 1-based line and key.
 ///
-/// A value is a literal only when it is a version (`v?X.Y.Z`) or a 64-hex
-/// digest; an expression (`${{ … }}`) is not one, and a longer key such as
+/// **THE PARSER READS THE YAML (CLOUD-2418).** A mapping key is a copy's key
+/// however it is quoted (`"BATTEN_VERSION": …`), its value is the scalar the
+/// parser unquoted and unescaped, and a comment never reaches an event. A
+/// scalar's own text is then read line by line for shell assignments
+/// (`BATTEN_VERSION=v1.2.3` in a `run:` block), which no parser sees as keys.
+/// A workflow that is not YAML is read line by line throughout, so it is never
+/// passed as copy-free.
+///
+/// A value is a literal only when it is a version or a 64-hex digest; an
+/// expression (`${{ … }}`) is not one, and a longer key such as
 /// `BATTEN_VERSION_FROM_REF` is another key. A digest agrees when it is one of
-/// `published`, the release's [`published_digests`]. A YAML comment is prose,
-/// never a copy, and `KEY : value` is the same key as `KEY: value`.
+/// `published`, the release's [`published_digests`].
+//MUTANT-SUITE crates/batten/src/engine.rs
+//MUTANT workflow-quoted-key-missed|s@^                        .find(\x7ckey\x7c \*key == value)$@                        .find(\x7c_\x7c false)@|a_quoted_workflow_key_is_a_copy
 #[must_use]
 pub fn workflow_literals(
     text: &str,
     tag: &str,
     published: &std::collections::BTreeSet<String>,
 ) -> Vec<(usize, &'static str)> {
+    /// Where the walk stands inside each open collection.
+    #[derive(PartialEq)]
+    enum Frame {
+        /// A mapping whose next scalar is a key.
+        Key,
+        /// A mapping whose next node is a value.
+        Value,
+        /// A sequence.
+        Item,
+    }
     let want = tag.trim_start_matches('v');
+    let differs = |key: &str, literal: &str| literal_differs(key, literal, want, published);
     let mut found = Vec::new();
-    for (index, line) in text.lines().map(yaml_code).enumerate() {
-        for key in ["BATTEN_VERSION", "BATTEN_SHA256"] {
-            for (at, _) in line.match_indices(key) {
-                let before = line[..at].chars().next_back();
-                if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
-                    continue;
-                }
-                let rest = line[at + key.len()..].trim_start();
-                let Some(rest) = rest.strip_prefix(':').or_else(|| rest.strip_prefix('=')) else {
-                    continue;
-                };
-                let literal: String = rest
-                    .trim_start()
-                    .trim_start_matches(['"', '\''])
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
-                    .collect();
-                let differs = if key == "BATTEN_VERSION" {
-                    let bare = literal.trim_start_matches('v');
-                    semver::Version::parse(bare).is_ok() && bare != want
-                } else {
-                    literal.len() == 64
-                        && literal.chars().all(|c| c.is_ascii_hexdigit())
-                        && !published.contains(&literal.to_ascii_lowercase())
-                };
-                if differs {
+    let Some(events) = yaml_events(text) else {
+        for (index, line) in text.lines().enumerate() {
+            for (key, literal) in line_literals(line) {
+                if differs(key, &literal) {
                     found.push((index + 1, key));
                 }
             }
         }
+        return found;
+    };
+    let mut stack: Vec<Frame> = Vec::new();
+    // The copy key whose value comes next, with the key's line.
+    let mut pending: Option<(&'static str, usize)> = None;
+    // A node that completes a mapping's value turns it back to expecting a key.
+    let settle = |stack: &mut Vec<Frame>| {
+        if let Some(top) = stack.last_mut()
+            && *top == Frame::Value
+        {
+            *top = Frame::Key;
+        }
+    };
+    for (event, line) in events {
+        match event {
+            yaml_rust2::Event::MappingStart(..) => {
+                if let Some(top) = stack.last_mut()
+                    && *top == Frame::Key
+                {
+                    *top = Frame::Value;
+                }
+                pending = None;
+                stack.push(Frame::Key);
+            }
+            yaml_rust2::Event::SequenceStart(..) => {
+                if let Some(top) = stack.last_mut()
+                    && *top == Frame::Key
+                {
+                    *top = Frame::Value;
+                }
+                pending = None;
+                stack.push(Frame::Item);
+            }
+            yaml_rust2::Event::MappingEnd | yaml_rust2::Event::SequenceEnd => {
+                stack.pop();
+                settle(&mut stack);
+            }
+            yaml_rust2::Event::Scalar(value, ..) => {
+                if stack.last() == Some(&Frame::Key) {
+                    if let Some(top) = stack.last_mut() {
+                        *top = Frame::Value;
+                    }
+                    pending = LITERAL_KEYS
+                        .into_iter()
+                        .find(|key| *key == value)
+                        .zip(Some(line));
+                    continue;
+                }
+                if let Some((key, at)) = pending.take()
+                    && differs(key, &value)
+                {
+                    found.push((at, key));
+                }
+                // The mark is the scalar's first line of text, a block scalar's
+                // included (its `|` is on the line before).
+                for (offset, text_line) in value.lines().enumerate() {
+                    for (key, literal) in line_literals(text_line) {
+                        if differs(key, &literal) {
+                            found.push((line + offset, key));
+                        }
+                    }
+                }
+                settle(&mut stack);
+            }
+            yaml_rust2::Event::Alias(_) => {
+                pending = None;
+                settle(&mut stack);
+            }
+            _ => {}
+        }
     }
+    found.sort_unstable();
+    found.dedup();
     found
 }
 
@@ -1159,6 +1436,28 @@ mod tests {
         assert_eq!(found, [(2, "BATTEN_VERSION")]);
     }
 
+    /// A quoted key is the same key, a quoted value is read unescaped, and a
+    /// copy inside any string — a shell assignment in a `run:` block, or text
+    /// that only looks like prose — is refused on its own line: a scalar cannot
+    /// say which of its lines a shell will run.
+    #[test]
+    fn a_quoted_workflow_key_is_a_copy() {
+        let published = std::collections::BTreeSet::new();
+        let found = workflow_literals(
+            "env:\n  \"BATTEN_VERSION\": \"v0.0.210\"\n  'BATTEN_SHA256': '{}'\n  NOTE: \"say \\\"BATTEN_VERSION: 0.0.1\\\" here\"\njobs:\n  x:\n    steps:\n      - run: |\n          echo ok\n          BATTEN_VERSION=v0.0.211 ./install.sh\n",
+            "v0.0.216",
+            &published,
+        );
+        assert_eq!(
+            found,
+            [
+                (2, "BATTEN_VERSION"),
+                (4, "BATTEN_VERSION"),
+                (10, "BATTEN_VERSION")
+            ]
+        );
+    }
+
     /// A pre-release literal is read whole, so a copy equal to the pin agrees.
     #[test]
     fn a_pre_release_literal_equal_to_the_pin_agrees() {
@@ -1177,6 +1476,51 @@ mod tests {
         );
         let remedies: Vec<&str> = found.iter().map(|(_, _, remedy)| *remedy).collect();
         assert_eq!(remedies, [PIN_UP, PIN_UP, "run `batten engine update`"]);
+    }
+
+    /// Only the download segment and the asset name move; a mirror path that
+    /// carries the old version is left alone, and the segment's `v` is kept.
+    #[test]
+    fn a_moved_url_rewrites_only_its_release() {
+        assert_eq!(
+            moved_url(
+                "https://example.invalid/8.8.8-mirror/releases/download/v8.8.8/batten-8.8.8-x.tar.gz",
+                "9.9.9"
+            )
+            .as_deref(),
+            Some("https://example.invalid/8.8.8-mirror/releases/download/v9.9.9/batten-9.9.9-x.tar.gz")
+        );
+        assert_eq!(
+            moved_url("https://h/download/8.8.8/a.zip", "9.9.9").as_deref(),
+            Some("https://h/download/9.9.9/a.zip")
+        );
+        assert_eq!(moved_url("https://h/latest/a.zip", "9.9.9"), None);
+    }
+
+    /// A row naming the pin can still carry another release's url or bytes.
+    #[test]
+    fn an_artifact_at_the_pinned_version_is_judged_by_its_url_and_digest() -> Result<()> {
+        let sums = || Ok(format!("{}  batten-9.9.9-x.tar.gz\n", "a".repeat(64)));
+        let config = |url: &str, sha: &str| {
+            format!(
+                "[[provision]]\nname = \"batten\"\nversion = \"9.9.9\"\n\n[provision.platforms.x]\nurl = \"{url}\"\nsha256 = \"{sha}\"\n"
+            )
+        };
+        let url = "https://h/download/v9.9.9/batten-9.9.9-x.tar.gz";
+        assert!(stale_artifacts(&config(url, &"a".repeat(64)), "v9.9.9", &sums)?.is_empty());
+        assert_eq!(
+            stale_artifacts(&config(url, &"0".repeat(64)), "v9.9.9", &sums)?,
+            [(
+                7,
+                String::from("provision batten sha256 for batten-9.9.9-x.tar.gz")
+            )]
+        );
+        let stale = "https://h/download/v8.8.8/batten-8.8.8-x.tar.gz";
+        assert_eq!(
+            stale_artifacts(&config(stale, &"a".repeat(64)), "v9.9.9", &sums)?,
+            [(6, format!("provision batten url {stale}"))]
+        );
+        Ok(())
     }
 
     #[test]

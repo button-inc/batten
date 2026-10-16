@@ -5,6 +5,7 @@
 #MUTANT guide-not-read|s@"Explore", "Plan", "claude-code-guide"@"Explore", "Plan"@|a_plan_mode_guide_subagent_is_allowed
 #MUTANT printenv-not-read|s@"tree", "printenv", "ps",@"tree", "ps",@|a_plan_mode_printenv_is_allowed
 #MUTANT ps-not-read|s@"tree", "printenv", "ps",@"tree", "printenv",@|a_plan_mode_ps_is_allowed
+#MUTANT git-global-option-unread|s@^\tnot git_option_value(arguments, i)$@\ti == 0@|a_plan_mode_git_with_global_options_is_allowed
 # A call that only reads is never put to the operator (CLOUD-1949).
 #
 # The host halts on a permission prompt, and a halted session is the failure the
@@ -65,7 +66,7 @@ read_programs(name) if {
 	name in {
 		"cd", "pwd", "true", "false", "test", "[", "which", "type", "date", "jq", "cut",
 		"tr", "nl", "tac", "sha256sum", "md5sum", "du", "df", "uname", "id", "whoami",
-		"hostname", "tree", "printenv", "ps",
+		"hostname", "tree", "printenv", "ps", "echo", "printf",
 	}
 }
 
@@ -143,8 +144,62 @@ reads(program) if {
 
 reads(program) if {
 	program.name == "git"
-	git_reads(program.arguments[0])
-	not some_writing_flag(program.arguments)
+	verb := git_verb(program.arguments)
+	git_reads(verb.name)
+	not some_writing_flag(verb.rest)
+}
+
+# Subcommands that read only in some forms: the form is the first argument after
+# the subcommand, or, for `branch`, the absence of anything but listing flags.
+reads(program) if {
+	program.name == "git"
+	verb := git_verb(program.arguments)
+	git_reads_as(verb.name, verb.rest)
+}
+
+git_reads_as("stash", rest) if rest[0] in {"list", "show"}
+
+git_reads_as("remote", rest) if count(rest) == 0
+
+git_reads_as("remote", rest) if rest[0] in {"-v", "--verbose", "get-url", "show"}
+
+git_reads_as("config", rest) if {
+	some argument in rest
+	argument in {"--get", "--get-all", "--get-regexp", "--list", "-l"}
+}
+
+git_reads_as("branch", rest) if {
+	every argument in rest {
+		argument in {"--show-current", "-a", "--all", "-r", "--remotes", "--list", "-l", "-v", "-vv", "--verbose"}
+	}
+}
+
+# GIT'S GLOBAL OPTIONS COME BEFORE THE SUBCOMMAND, so the subcommand is the first
+# word after them, never `arguments[0]` (CLOUD-2418): `git -C /x status` read
+# `-C` as its verb and was refused in plan mode. `-C` and `-c` take their value
+# as the next word; every other word before the subcommand starts with `-`.
+git_verb(arguments) := {"name": word, "rest": array.slice(arguments, i + 1, count(arguments))} if {
+	some i, word in arguments
+	not startswith(word, "-")
+	not git_option_value(arguments, i)
+	not some_word_before_is_not_global(arguments, i)
+}
+
+some_word_before_is_not_global(arguments, i) if {
+	some j, _ in arguments
+	j < i
+	not git_global_word(arguments, j)
+}
+
+# Word `j` is a global option, or the value of the one before it.
+git_global_word(arguments, j) if startswith(arguments[j], "-")
+
+git_global_word(arguments, j) if git_option_value(arguments, j)
+
+# Word `i` is the separate value of `-C` or `-c`.
+git_option_value(arguments, i) if {
+	i > 0
+	arguments[i - 1] in {"-C", "-c"}
 }
 
 # `--output` writes a file; `-O` hands matches to a pager program.
@@ -252,6 +307,44 @@ test_printenv_and_ps_are_reads if {
 			"segments": [{"words": [name]}],
 			"programs": [{"name": name, "arguments": [], "reads-only": false}],
 		}}
+	}
+}
+
+git_call(arguments) := {"call": {
+	"event": "pre-tool",
+	"tool": "Bash",
+	"command": concat(" ", array.concat(["git"], arguments)),
+	"segments": [{"words": array.concat(["git"], arguments)}],
+	"programs": [{"name": "git", "arguments": arguments, "reads-only": false}],
+}}
+
+test_git_global_options_come_before_the_verb if {
+	every arguments in [
+		["-C", "/x", "status", "--short"],
+		["-c", "core.pager=cat", "log", "-1"],
+		["--no-pager", "-C", "/x", "diff"],
+		["stash", "list"],
+		["branch", "--show-current"],
+		["branch"],
+		["remote", "-v"],
+		["config", "--get", "user.name"],
+	] {
+		"call read now" in preapprove with input as git_call(arguments)
+	}
+}
+
+test_git_global_options_never_hide_a_writer if {
+	every arguments in [
+		["-C", "/x", "commit", "-m", "x"],
+		["-C", "status", "commit"],
+		["stash"],
+		["stash", "pop"],
+		["branch", "new-branch"],
+		["branch", "-D", "old"],
+		["remote", "add", "o", "u"],
+		["config", "user.name", "x"],
+	] {
+		count(preapprove) == 0 with input as git_call(arguments)
 	}
 }
 

@@ -133,30 +133,35 @@ const SHIPPED: &[u8] = b"#!/bin/sh\necho the fixture release\n";
 /// The date `main`'s changelog gives `main`'s own release.
 const MAIN_DATE: &str = "2020-02-01";
 
-/// The platforms a fixture provision row may name, beside this build's own.
-/// Read through [`provision_targets`], never directly.
+/// Every platform a fixture provision row names. One of them may be this
+/// build's own, whose archive [`release_host`] publishes under its real digest;
+/// [`published`] reads any of them back.
 const PROVISION_TARGETS: &[&str] = &[
     "x86_64-unknown-linux-musl",
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
 ];
 
-/// [`PROVISION_TARGETS`] less this build's own target: [`release_host`]
-/// publishes this build's archive under its real digest, so a provision
-/// platform equal to it would list that asset twice in `SHA256SUMS` under two
-/// digests. The fixture, the config and the assertions all read this one list.
-fn provision_targets() -> Vec<&'static str> {
-    let running = batten::engine::running_target();
-    PROVISION_TARGETS
-        .iter()
-        .copied()
-        .filter(|target| *target != running)
-        .collect()
-}
-
-/// The digest the fixture release publishes for `target`'s archive.
+/// The stand-in digest the fixture release publishes for another platform's
+/// archive, which no case downloads.
 fn platform_digest(target: &str) -> String {
     batten::provision::digest(target.as_bytes())
+}
+
+/// The digest the fixture release `tag` served from `home` publishes for
+/// `target`'s archive, read off its `SHA256SUMS`: this build's own is the real
+/// archive's, which a case cannot spell ahead of the build.
+fn published(home: &Path, tag: &str, target: &str) -> String {
+    let sums = std::fs::read_to_string(
+        home.join("www")
+            .join(REPO)
+            .join("releases")
+            .join("download")
+            .join(tag)
+            .join("SHA256SUMS"),
+    )
+    .unwrap();
+    batten::engine::published_digest(&sums, &batten::engine::release_asset(tag, target)).unwrap()
 }
 
 /// Serve, over loopback TLS, a ref `main` whose `batten.toml` pins [`WANTED`], and
@@ -233,8 +238,14 @@ fn release_host(
     // EVERY PROVISION PLATFORM'S ASSET, not only this build's (CLOUD-2279): a
     // provision row names an archive per platform, and `engine update` pins each
     // one's digest from this manifest.
+    // THIS BUILD'S OWN PLATFORM IS SERVED ONCE, as the real archive: a second
+    // line under a stand-in digest is a manifest naming one asset two ways.
     let mut sums = format!("{}  {asset}\n", batten::provision::digest(&bytes));
-    for target in provision_targets() {
+    let running = batten::engine::running_target();
+    for &target in PROVISION_TARGETS
+        .iter()
+        .filter(|target| **target != running)
+    {
         use std::fmt::Write as _;
         writeln!(
             sums,
@@ -244,6 +255,16 @@ fn release_host(
         )
         .unwrap();
     }
+    let names: Vec<&str> = sums
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(1))
+        .collect();
+    let once: std::collections::BTreeSet<&&str> = names.iter().collect();
+    assert_eq!(
+        once.len(),
+        names.len(),
+        "each asset is published once: {sums}"
+    );
     std::fs::write(download.join("SHA256SUMS"), sums).unwrap();
 
     let tls = home.join("tls");
@@ -603,6 +624,61 @@ fn an_update_never_moves_a_pin_backward() {
     assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
 }
 
+/// THE UPDATE INSTALLS ITS OWN TARGET (CLOUD-2418), whatever
+/// `BATTEN_VERSION_FROM_REF` would pick: `engine install` re-derives its
+/// release from the ref, so handing off to it installed `main`'s v8.8.8 under a
+/// config naming v9.9.9. Only v9.9.9 is served, so the ref's choice fails.
+#[test]
+fn an_update_installs_its_target_whatever_the_ref_pins() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-update-ref");
+    pin_worktree(&home, WANTED);
+    let named = home.join("bin");
+    let named_str = named.display().to_string();
+    let (_host, served) = release_host(&home, "v8.8.8", WANTED);
+    let mut env = with_named(&served, &named_str);
+    env.push(("BATTEN_VERSION_FROM_REF", "main"));
+    let output = engine_verb("update", &home, std::slice::from_ref(&named), &env);
+    assert!(
+        output.status.success(),
+        "{}{}",
+        stdout(&output),
+        common::stderr(&output)
+    );
+    assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
+}
+
+/// A FAILED INSTALL LEAVES THE MOVED PIN (CLOUD-2418): the write stands, so a
+/// re-run `engine install` finishes the update. Here `main` pins v9.9.9 and the
+/// host publishes only v7.7.7, so the install after the write fails.
+#[test]
+fn a_failed_install_leaves_the_moved_pin() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-update-failed-install");
+    pin_worktree(&home, "v8.8.8");
+    let named = home.join("bin");
+    let named_str = named.display().to_string();
+    let (_host, served) = release_host(&home, WANTED, "v7.7.7");
+    let output = engine_verb(
+        "update",
+        &home,
+        std::slice::from_ref(&named),
+        &with_named(&served, &named_str),
+    );
+    assert!(!output.status.success(), "{}", stdout(&output));
+    assert!(
+        std::fs::read_to_string(home.join("batten.toml"))
+            .unwrap()
+            .contains(&format!("engine = {{ release = \"{WANTED}\" }}")),
+        "the moved pin stands"
+    );
+    assert!(!named.join(binary()).exists(), "nothing was installed");
+}
+
 /// A source pin is not `engine update`'s to move, and it says so.
 #[test]
 fn an_update_refuses_a_source_pin() {
@@ -625,14 +701,14 @@ fn an_update_refuses_a_source_pin() {
 }
 
 /// A worktree pinned at v8.8.8 with every other batten declaration on v8.8.8
-/// too: a provision row across [`provision_targets`] and the floor, plus
+/// too: a provision row across [`PROVISION_TARGETS`] and the floor, plus
 /// `extra` appended.
 fn pin_every_copy(home: &Path, floor: &str, extra: &str) {
     use std::fmt::Write as _;
     let mut config = format!(
         "version = 1\nmin_batten_version = \"{floor}\"\nengine = {{ release = \"v8.8.8\" }}\n\n[[provision]]\nname = \"batten\"\nversion = \"8.8.8\"\nbinary = \"batten\"\n"
     );
-    for target in provision_targets() {
+    for &target in PROVISION_TARGETS {
         writeln!(
             config,
             "\n[provision.platforms.{target}]\n# the platform's archive\nurl = \"https://example.invalid/releases/download/v8.8.8/{}\"\nsha256 = \"{}\"",
@@ -700,7 +776,7 @@ fn an_update_brings_every_batten_declaration_to_the_release() {
         "{config}"
     );
     assert!(config.contains("version = \"9.9.9\"\nbinary"), "{config}");
-    for target in provision_targets() {
+    for &target in PROVISION_TARGETS {
         assert!(
             config.contains(&format!(
                 "url = \"https://example.invalid/releases/download/v9.9.9/{}\"",
@@ -709,7 +785,10 @@ fn an_update_brings_every_batten_declaration_to_the_release() {
             "{config}"
         );
         assert!(
-            config.contains(&format!("sha256 = \"{}\"", platform_digest(target))),
+            config.contains(&format!(
+                "sha256 = \"{}\"",
+                published(&home, "v9.9.9", target)
+            )),
             "{config}"
         );
     }
@@ -722,6 +801,68 @@ fn an_update_brings_every_batten_declaration_to_the_release() {
         "every other byte is kept"
     );
     assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
+}
+
+/// A ROW AT THE TARGET VERSION IS STILL REPAIRED (CLOUD-2418): its `version`
+/// already names v9.9.9, but one platform carries a zero digest and another a
+/// v8.8.8 url, and both are brought to the release.
+#[test]
+fn an_update_repairs_a_stale_digest_at_the_current_version() {
+    use std::fmt::Write as _;
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-update-stale-digest");
+    let mut config = String::from(
+        "version = 1\nengine = { release = \"v9.9.9\" }\n\n[[provision]]\nname = \"batten\"\nversion = \"9.9.9\"\nbinary = \"batten\"\n",
+    );
+    for (n, &target) in PROVISION_TARGETS.iter().enumerate() {
+        let tag = if n == 0 { "v9.9.9" } else { "v8.8.8" };
+        writeln!(
+            config,
+            "\n[provision.platforms.{target}]\nurl = \"https://example.invalid/releases/download/{tag}/{}\"\nsha256 = \"{}\"",
+            batten::engine::release_asset(tag, target),
+            "0".repeat(64)
+        )
+        .unwrap();
+    }
+    common::write(&home, "batten.toml", &config);
+    let named = home.join("bin");
+    let named_str = named.display().to_string();
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    let output = engine_verb(
+        "update",
+        &home,
+        std::slice::from_ref(&named),
+        &with_named(&served, &named_str),
+    );
+    assert!(
+        output.status.success(),
+        "{}{}",
+        stdout(&output),
+        common::stderr(&output)
+    );
+    let config = std::fs::read_to_string(home.join("batten.toml")).unwrap();
+    for &target in PROVISION_TARGETS {
+        assert!(
+            config.contains(&format!(
+                "url = \"https://example.invalid/releases/download/v9.9.9/{}\"",
+                batten::engine::release_asset("v9.9.9", target)
+            )),
+            "{config}"
+        );
+        assert!(
+            config.contains(&format!(
+                "sha256 = \"{}\"",
+                published(&home, "v9.9.9", target)
+            )),
+            "{config}"
+        );
+    }
+    assert!(
+        !config.contains("8.8.8"),
+        "no copy is left behind: {config}"
+    );
 }
 
 /// The floor is RAISED, never lowered: a `min_batten_version` already past the
@@ -864,6 +1005,138 @@ fn outdated_exits_by_the_pins_distance_from_main() {
     assert_eq!(blind.status.code(), Some(3), "{}", common::stderr(&blind));
 }
 
+/// How many `engine-fresh` records `home`'s store holds, whatever their branch.
+fn fresh_records(home: &Path) -> usize {
+    std::fs::read_dir(home.join(".git").join("batten-receipts")).map_or(0, |entries| {
+        entries
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("engine-fresh.")
+            })
+            .count()
+    })
+}
+
+/// `--record` CLEARS ITS READING ON EVERY RUN THAT HAS NO DISTANCE TO GIVE
+/// (CLOUD-2418), read off the store rather than inferred from `check`: a stale
+/// line is written, then cleared by a run with no pin, then written again and
+/// cleared by a run that could not look.
+#[test]
+fn outdated_clears_its_record_without_a_pin_and_when_blind() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch("engine-outdated-clears");
+    common::init_repo(&home);
+    pin_worktree(&home, "v8.8.8");
+    common::git_in(&home, &["add", "batten.toml"]);
+    common::git_in(&home, &["commit", "-qm", "pin"]);
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    let env: Vec<(&str, &str)> = served
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let mut blind = env.clone();
+    blind.retain(|(name, _)| *name != "BATTEN_RELEASES");
+    blind.push(("BATTEN_RELEASES", "https://localhost:1/example/pkg"));
+
+    let stale = batten_in(&home, &recorded_args(), &env);
+    assert_eq!(stale.status.code(), Some(2), "{}", common::stderr(&stale));
+    assert_eq!(fresh_records(&home), 1, "the stale reading is recorded");
+    common::write(&home, "batten.toml", "version = 1\n");
+    let unpinned = batten_in(&home, &recorded_args(), &env);
+    assert_eq!(
+        unpinned.status.code(),
+        Some(2),
+        "{}",
+        common::stderr(&unpinned)
+    );
+    assert_eq!(fresh_records(&home), 0, "no pin clears it");
+
+    pin_worktree(&home, "v8.8.8");
+    let again = batten_in(&home, &recorded_args(), &env);
+    assert_eq!(again.status.code(), Some(2), "{}", common::stderr(&again));
+    assert_eq!(
+        fresh_records(&home),
+        1,
+        "the stale reading is recorded again"
+    );
+    let unanswered = batten_in(&home, &recorded_args(), &blind);
+    assert_eq!(
+        unanswered.status.code(),
+        Some(3),
+        "{}",
+        common::stderr(&unanswered)
+    );
+    assert_eq!(
+        fresh_records(&home),
+        0,
+        "a run that could not look clears it"
+    );
+}
+
+/// A CHANGELOG THAT LAGS ITS OWN PIN STILL DATES IT (CLOUD-2418): `main`'s
+/// changelog lacks v9.9.9's heading, so the release is read off its own tag's
+/// changelog, and its date is printed rather than `-`.
+#[test]
+fn a_lagging_changelog_dates_main_from_its_own_tag() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-outdated-lagging");
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    let repo = home.join("www").join(REPO);
+    let changelog = |reference: &str, body: &str| {
+        let dir = repo.join(reference).join("crates").join("batten");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("CHANGELOG.md"), body).unwrap();
+    };
+    changelog(
+        "main",
+        "# Changelog\n\n## [8.8.8](https://example.invalid) - 2020-01-01\n",
+    );
+    changelog(
+        WANTED,
+        &format!("# Changelog\n\n## [9.9.9](https://example.invalid) - {MAIN_DATE}\n"),
+    );
+    let env: Vec<(&str, &str)> = served
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    pin_worktree(&home, "v8.8.8");
+    let behind = batten_in(&home, &["engine", "outdated"], &env);
+    assert_eq!(behind.status.code(), Some(2), "{}", common::stderr(&behind));
+    assert_eq!(
+        stdout(&behind),
+        format!("v8.8.8 → {WANTED}\nv9.9.9 {MAIN_DATE}\n")
+    );
+}
+
+/// A MALFORMED PIN IS NAMED AS ONE (CLOUD-2418), with the words every other
+/// verb uses, never as an absent pin.
+#[test]
+fn outdated_names_a_malformed_pin() {
+    let home = common::scratch_repo("engine-outdated-malformed");
+    common::write(
+        &home,
+        "batten.toml",
+        &format!(
+            "version = 1\nengine = {{ release = \"{WANTED}\", source = \"{}\" }}\n",
+            "a".repeat(64)
+        ),
+    );
+    let output = batten_in(&home, &["engine", "outdated"], &[]);
+    assert_eq!(output.status.code(), Some(2), "{}", common::stderr(&output));
+    assert!(
+        stdout(&output).ends_with(&format!("batten.toml {}\n", batten::engine::MALFORMED_PIN)),
+        "{}",
+        stdout(&output)
+    );
+}
+
 /// THE NOTICE SPEAKS ONCE PER TTL AND NEVER IN CI: silent under `CI`, one line
 /// naming `batten engine update` the first time outside it, silent the second
 /// time inside the day. Every run exits 0.
@@ -973,6 +1246,55 @@ fn a_stale_engine_fresh_record_fails_check() {
         Some(0),
         "{}",
         common::stderr(&silent_again)
+    );
+}
+
+/// AN UPDATE CLEARS THE READING IT MADE FALSE (CLOUD-2418): a stale
+/// `engine-fresh` line judged the running release's pin, and once `engine
+/// update` moves the pin the line no longer describes it, so it is removed —
+/// read off the store, since `check` cannot load a pin this build is not.
+#[test]
+fn an_update_clears_the_engine_fresh_record() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch("engine-fresh-update");
+    common::init_repo(&home);
+    pin_worktree(&home, &format!("v{}", env!("CARGO_PKG_VERSION")));
+    common::git_in(&home, &["add", "batten.toml"]);
+    common::git_in(&home, &["commit", "-qm", "pin"]);
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    let env: Vec<(&str, &str)> = served
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let recorded = batten_in(&home, &recorded_args(), &env);
+    assert_eq!(
+        recorded.status.code(),
+        Some(2),
+        "{}",
+        common::stderr(&recorded)
+    );
+    assert_eq!(fresh_records(&home), 1, "the stale reading is recorded");
+
+    let named = home.join("bin");
+    let named_str = named.display().to_string();
+    let updated = engine_verb(
+        "update",
+        &home,
+        std::slice::from_ref(&named),
+        &with_named(&served, &named_str),
+    );
+    assert!(
+        updated.status.success(),
+        "{}{}",
+        stdout(&updated),
+        common::stderr(&updated)
+    );
+    assert_eq!(
+        fresh_records(&home),
+        0,
+        "the update cleared the reading it moved past"
     );
 }
 
