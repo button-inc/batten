@@ -207,17 +207,11 @@ fn write_entry(git_dir: &Path, entry: &Entry) {
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    // ONE TEMP PER WRITER: the gate's steps announce under one pid from many
-    // processes at once, and a shared temp is one writer renaming another's
+    // `durable::replace` IS the temp plus rename, with a temp unique per writer:
+    // the gate's steps announce under one pid from many processes at once, and
+    // a shared temp of this module's own was one writer renaming another's
     // half-written record into place.
-    let temp = dir.join(format!(".{}.{}.tmp", entry.pid, std::process::id()));
-    if crate::durable::replace(&temp, entry.render()).is_err() {
-        let _ = std::fs::remove_file(&temp);
-        return;
-    }
-    if std::fs::rename(&temp, entry_path(git_dir, &entry.pid)).is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
+    let _ = crate::durable::replace(entry_path(git_dir, &entry.pid), entry.render());
 }
 
 /// A pid's process group, or the pid itself where there is none to read.
