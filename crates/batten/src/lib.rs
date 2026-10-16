@@ -7203,23 +7203,15 @@ fn run_claim_race(
     // reported "no races" at exit 0 on precisely the collision it exists to
     // refuse.
     //
-    // ONLY WHERE THE CHEAP SOURCES FOUND NOTHING, which is what keeps this from
-    // becoming a round trip per open pull request: a competitor whose branch,
-    // title or body already names a key has been answered, and the trailer can
-    // only agree. A fetch that fails leaves the log empty, which is the reading
-    // this had before — worse than the truth, and never better than it.
-    let pulls: Vec<race::Pull> = pulls
-        .into_iter()
-        .map(|pull| {
-            if pull.number == mine_number
-                || !race::claimed(&pull.head_ref, &pull.title, "", &pull.body, &grammar).is_empty()
-            {
-                return pull;
-            }
-            let log = bot::forge::commit_messages(&slug, &pull.number).unwrap_or_default();
-            race::Pull { log, ..pull }
-        })
-        .collect();
+    // WHICH competitors are fetched, and WITH WHAT CONCURRENCY, are both
+    // [`race::with_logs`]'s — including the bound that keeps this from becoming
+    // a round trip per open pull request, which is why only the read itself is
+    // passed in. The fetches run concurrently because this rule was the largest
+    // in an `enforce` run at 15.8 s, scaling with the open-pull-request count
+    // rather than with anything about this branch (CLOUD-2382).
+    let pulls = race::with_logs(pulls, &mine_number, &grammar, |number| {
+        bot::forge::commit_messages(&slug, number).unwrap_or_default()
+    });
     let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
     if races.is_empty() {
         return clean(

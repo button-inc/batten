@@ -326,6 +326,121 @@ pub fn identify<'a>(pulls: &'a [Pull], head_sha: &str) -> Option<&'a Pull> {
     pulls.iter().find(|pull| pull.head_sha == head_sha)
 }
 
+/// How many competitor log fetches may be in flight at once.
+///
+/// A width rather than a pool size: the listing is one page by construction —
+/// `open_pulls_are_complete` refuses a full one — so the work is tens of items,
+/// and the bound exists to keep a burst away from the forge's rate limit rather
+/// than to saturate anything. Eight is the same order as a `--jobs` wave and
+/// well inside the forge's concurrent-request budget.
+const FETCH_WIDTH: usize = 8;
+
+/// Fill in each competitor's `log`, fetching the eligible ones concurrently.
+///
+/// # Why this is concurrent, and what the number was
+///
+/// The fill is the largest single cost `enforce` pays. Measured 2026-10-15 on a
+/// head carrying an open pull request, the rule running `claim race` read
+/// **15.8 s** — the largest in the run; on a head with no open pull request the
+/// same rule reads 1.1 s, because [`identify`] finds nothing and the verb never
+/// reaches here. The difference is one `GET pulls/<n>/commits` per eligible
+/// competitor, each waiting on the last, so the cost scaled with the number of
+/// OPEN PULL REQUESTS rather than with anything about this branch.
+///
+/// Every request builds its own current-thread runtime inside `rest::get`, and
+/// `fetch` holds no statics, so concurrent live calls are sound. The
+/// one-runtime-per-invocation bound in `rules/rust.md` is about `batten hook`'s
+/// mediated path and does not reach this verb.
+///
+/// **The fixture seam is not concurrency-safe on its call-order path.**
+/// `rest::from_fixture` read-modify-writes a `calls` counter to answer by call
+/// ORDER; its `routes` path answers by endpoint and is safe. No suite drives
+/// `claim race` through the fixture today, and one with several competitors
+/// must route by URL rather than by order.
+///
+/// # What is decided where
+///
+/// Eligibility is decided on the CALLING thread, and that is a requirement
+/// rather than a convenience: `keys` is a `&dyn Keys`, which is not `Sync`, so
+/// the predicate cannot cross a thread boundary. Only `fetch` runs on a worker.
+///
+/// `mine` is this branch's own pull request number. It is never fetched — the
+/// caller has already read its log, and a branch cannot race itself.
+///
+/// # Order is the input's, whatever the scheduler does
+///
+/// Each answer is written back into the slot it was taken from, so the returned
+/// `Vec` is in listing order however the fetches interleave — the property a
+/// collect over completion order would quietly lose, and the one
+/// [`races`]'s output depends on being stable (§6). A fetch answering `""`,
+/// which is what the caller makes of a failed read, leaves an empty log exactly
+/// as the sequential map did: worse than the truth, and never better than it.
+#[must_use]
+pub fn with_logs(
+    pulls: Vec<Pull>,
+    mine: &str,
+    keys: &dyn Keys,
+    fetch: impl Fn(&str) -> String + Sync,
+) -> Vec<Pull> {
+    let mut pulls = pulls;
+    // ONLY WHERE THE CHEAP SOURCES FOUND NOTHING. A competitor whose branch,
+    // title or body already names a key has been answered, and the trailer can
+    // only agree — the bound that keeps this from being a round trip per open
+    // pull request however wide the fan-out is allowed to be.
+    let eligible: Vec<usize> = pulls
+        .iter()
+        .enumerate()
+        .filter(|(_, pull)| {
+            pull.number != mine
+                && claimed(&pull.head_ref, &pull.title, "", &pull.body, keys).is_empty()
+        })
+        .map(|(slot, _)| slot)
+        .collect();
+    let numbers: Vec<String> = eligible
+        .iter()
+        .filter_map(|&slot| pulls.get(slot).map(|pull| pull.number.clone()))
+        .collect();
+    if numbers.is_empty() {
+        return pulls;
+    }
+    // ONE SHARED INDEX TAKEN BY AT MOST `FETCH_WIDTH` WORKERS, never a thread
+    // per pull: the width is the whole of the bound, and spawning per item
+    // would make the peak the listing's length.
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let fetched: Vec<(usize, String)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..FETCH_WIDTH.min(numbers.len()))
+            .map(|_| {
+                let (next, numbers, fetch) = (&next, &numbers, &fetch);
+                scope.spawn(move || {
+                    let mut answers = Vec::new();
+                    loop {
+                        let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(number) = numbers.get(at) else {
+                            return answers;
+                        };
+                        answers.push((at, fetch(number)));
+                    }
+                })
+            })
+            .collect();
+        // A worker that panicked contributes nothing, which leaves its pulls
+        // the empty log a failed fetch leaves — the same degradation, not a
+        // lost verdict. Never `unwrap`: this runs inside `verify`, where a
+        // panic here would cost the whole pre-flight.
+        handles
+            .into_iter()
+            .filter_map(|handle| handle.join().ok())
+            .flatten()
+            .collect()
+    });
+    for (at, log) in fetched {
+        if let Some(pull) = eligible.get(at).and_then(|&slot| pulls.get_mut(slot)) {
+            pull.log = log;
+        }
+    }
+    pulls
+}
+
 /// Every key this branch claims that a DIFFERENT open pull request claims too.
 ///
 /// `mine` is the claimed set for this branch, computed by the caller through

@@ -287,3 +287,139 @@ fn the_retired_variable_no_longer_decides_anything() {
         stderr(&spent)
     );
 }
+
+/// What the `fetch` double records, behind one lock (CLOUD-2382).
+#[derive(Default)]
+struct Seen {
+    /// Every number asked for, in arrival order — so a SECOND ask for one pull
+    /// shows up as a duplicate rather than being absorbed by a set.
+    asked: Vec<String>,
+    /// Calls inside `fetch` right now, and the most there ever were.
+    in_flight: usize,
+    peak: usize,
+    /// Calls that have returned, which is the condition `"2"` waits on.
+    done: usize,
+}
+
+/// The competitor fill is concurrent, bounded at eight, once per eligible pull,
+/// and in listing order (CLOUD-2382).
+///
+/// # How each clause discriminates
+///
+/// The double makes `"2"` — the first eligible pull — refuse to return until
+/// some OTHER call has completed. That is the whole of the concurrency
+/// evidence, and it is a condition rather than a duration:
+///
+/// * today's sequential `.map` reaches `"2"` first and nothing else can run, so
+///   it gives up at the deadline and the peak reads 1;
+/// * a collect in COMPLETION order puts `"2"` after the pulls that finished
+///   while it waited, which breaks the returned order;
+/// * dropping the key predicate fetches the two pulls whose titles name one,
+///   and dropping the `mine` arm fetches `"1"`;
+/// * an unbounded spawn — one thread per pull rather than a width — shows a
+///   peak of ten.
+///
+/// **Nothing here asserts on the clock.** The ten-second deadline is an input:
+/// it turns a serial implementation's hang into a failure instead of a hung
+/// suite, and the case asserts the peak the double recorded.
+#[test]
+fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_order() {
+    let eligible: Vec<String> = (2..=11).map(|number| number.to_string()).collect();
+    // Branch names carry no digit after a dash, so `claimed` resolves no key
+    // from them however it folds the case — the eligibility this case varies
+    // has to come from the title alone.
+    let mut pulls = vec![pull("1", "user/branch-one", "sha1")];
+    for number in &eligible {
+        pulls.push(pull(
+            number,
+            &format!("user/branch{number}"),
+            &format!("sha{number}"),
+        ));
+    }
+    pulls.push(Pull {
+        title: "feat: somebody else's work (PROJ-7)".to_owned(),
+        ..pull("12", "user/branch-twelve", "sha12")
+    });
+    pulls.push(Pull {
+        title: "fix: and more of it (PROJ-8)".to_owned(),
+        ..pull("13", "user/branch-thirteen", "sha13")
+    });
+
+    let seen = std::sync::Mutex::new(Seen::default());
+    let bell = std::sync::Condvar::new();
+    let fetch = |number: &str| -> String {
+        {
+            let mut state = seen.lock().expect("the fixture lock");
+            state.asked.push(number.to_owned());
+            state.in_flight += 1;
+            state.peak = state.peak.max(state.in_flight);
+        }
+        bell.notify_all();
+        if number == "2" {
+            let waiting = seen.lock().expect("the fixture lock");
+            let (state, _) = bell
+                .wait_timeout_while(waiting, std::time::Duration::from_secs(10), |state| {
+                    state.done == 0
+                })
+                .expect("the fixture lock");
+            drop(state);
+        }
+        {
+            let mut state = seen.lock().expect("the fixture lock");
+            state.in_flight -= 1;
+            state.done += 1;
+        }
+        bell.notify_all();
+        format!("Refs: CLOUD-{number}")
+    };
+
+    let filled = race::with_logs(pulls.clone(), "1", &Fake, fetch);
+
+    assert_eq!(
+        filled
+            .iter()
+            .map(|pull| pull.number.clone())
+            .collect::<Vec<_>>(),
+        pulls
+            .iter()
+            .map(|pull| pull.number.clone())
+            .collect::<Vec<_>>(),
+        "the returned listing is the input's, whatever order the fetches finished in"
+    );
+    for pull in &filled {
+        if eligible.contains(&pull.number) {
+            assert_eq!(
+                pull.log,
+                format!("Refs: CLOUD-{}", pull.number),
+                "each fetched pull carries its own answer"
+            );
+        } else {
+            assert!(
+                pull.log.is_empty(),
+                "#{} was not eligible and must keep its empty log, not {:?}",
+                pull.number,
+                pull.log
+            );
+        }
+    }
+
+    let state = seen.lock().expect("the fixture lock");
+    let mut asked = state.asked.clone();
+    asked.sort();
+    let mut once_each = eligible.clone();
+    once_each.sort();
+    assert_eq!(
+        asked, once_each,
+        "exactly the eligible pulls, exactly once each — never `mine`, never a keyed one"
+    );
+    assert!(
+        state.peak > 1,
+        "the fetches must overlap; a peak of {} is a sequential fill",
+        state.peak
+    );
+    assert!(
+        state.peak <= 8,
+        "at most eight in flight; a peak of {} is an unbounded spawn",
+        state.peak
+    );
+}
