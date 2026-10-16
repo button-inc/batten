@@ -442,99 +442,99 @@ fn the_committed_workflows_and_manifest_agree() {
     );
 }
 
-/// The shell commands in a `run` text: each line's code up to a `#` that opens a
-/// comment (at a word start, outside quotes), split on `&&`, `||`, `;` and `|`.
-fn commands(run: &str) -> Vec<&str> {
-    let mut found = Vec::new();
-    for line in run.lines() {
-        let mut quote = None;
-        let mut end = line.len();
-        let mut previous = ' ';
-        for (at, c) in line.char_indices() {
-            match (quote, c) {
-                (None, '"' | '\'') => quote = Some(c),
-                (Some(open), _) if c == open => quote = None,
-                (None, '#') if previous.is_whitespace() => {
-                    end = at;
-                    break;
-                }
-                _ => {}
-            }
-            previous = c;
-        }
-        found.extend(
-            line[..end]
-                .split(['&', '|', ';'])
-                .map(str::trim)
-                .filter(|command| !command.is_empty()),
-        );
+/// What a `run` text does toward the suite (CLOUD-2381, CLOUD-2388): whether a
+/// command in it runs the suite itself, and every mise task it runs. Commands
+/// come from the hooks' own bash parse, so quotes, escapes, comments and `&&`,
+/// `||`, `;`, `|` are bash's, not a guess's. A command runs the suite when it
+/// runs a test runner at all (`nextest run`, `cargo test`, `llvm-cov` other than
+/// `llvm-cov report`, not `--no-run`): a filtered run is held as the suite, since
+/// a filter can reach a case that requires a tool, and over-requiring an install
+/// is visible where under-requiring one is what CI discovers. So does `hk check
+/// --all` with the slow tier (hk's `test` step is `mise run test:cargo`) and
+/// `mutate sweep`. Text the parse cannot read is held as the suite too.
+//MUTANT suite-via-hk-unseen|s@^            pair("hk", "check") && has@            false \&\& has@|every_suite_job_installs_the_pinned_tools_its_cases_require
+fn suite_facts(run: &str) -> (bool, Vec<String>) {
+    // A text that is only comments parses to nothing, which is not unreadable.
+    let code: String = run
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if code.trim().is_empty() {
+        return (false, Vec::new());
     }
-    found
+    let Some(commands) = batten::testing::shell_commands(&code) else {
+        return (true, Vec::new());
+    };
+    let mut direct = false;
+    let mut tasks = Vec::new();
+    for words in commands {
+        let pair = |a: &str, b: &str| words.windows(2).any(|w| w[0] == a && w[1] == b);
+        let has = |word: &str| words.iter().any(|w| w == word);
+        let runner = (pair("nextest", "run")
+            || pair("cargo", "test")
+            || (has("llvm-cov") && !pair("llvm-cov", "report")))
+            && !has("--no-run");
+        let hk_slow =
+            pair("hk", "check") && has("--all") && !words.iter().any(|w| w.contains("!slow"));
+        direct |= runner || hk_slow || pair("mutate", "sweep");
+        for (at, _) in words
+            .windows(2)
+            .enumerate()
+            .filter(|(_, w)| w[0] == "mise" && w[1] == "run")
+        {
+            tasks.extend(
+                words[at + 2..]
+                    .iter()
+                    .take_while(|word| *word != "--")
+                    .cloned(),
+            );
+        }
+    }
+    (direct, tasks)
 }
 
-/// Whether a `run` text runs the suite (CLOUD-2381, CLOUD-2388), given the mise
-/// tasks known to. A command does when it runs `nextest run`, `cargo test` or
-/// `llvm-cov` unfiltered (no `--no-run`, no `-E`, no `path::` filter, not
-/// `llvm-cov report`), `hk check --all` with the slow tier (hk's `test` step is
-/// `mise run test:cargo`), `mutate sweep`, or `mise run` naming a task in `suite`
-/// before its first `--`, whatever flags and values come before it.
-//MUTANT suite-via-hk-unseen|s@ (command.contains("hk check --all")@ (false@|every_suite_job_installs_the_pinned_tools_its_cases_require
+/// Whether a `run` text runs the suite, given the mise tasks known to.
 fn runs_suite(run: &str, suite: &BTreeSet<String>) -> bool {
-    commands(run).into_iter().any(|command| {
-        let words: Vec<&str> = command.split_whitespace().collect();
-        let filtered = command.contains("--no-run")
-            || command.contains("llvm-cov report")
-            || words
-                .iter()
-                .any(|word| *word == "-E" || word.contains("::"));
-        (["nextest run", "cargo test", "llvm-cov"]
-            .iter()
-            .any(|runner| command.contains(runner))
-            && !filtered)
-            || (command.contains("hk check --all") && !command.contains("!slow"))
-            || command.contains("mutate sweep")
-            || command.split("mise run ").skip(1).any(|rest| {
-                rest.split_whitespace()
-                    .take_while(|word| *word != "--")
-                    .any(|word| suite.contains(word))
-            })
-    })
+    let (direct, tasks) = suite_facts(run);
+    direct || tasks.iter().any(|task| suite.contains(task))
 }
 
 /// The mise tasks that run the suite: closed over `mise run` and `depends`, so
-/// a wrapper task is found from what it runs, never from a list of names.
+/// a wrapper task is found from what it runs, never from a list of names. Each
+/// body is parsed once; the closure runs over the graph that leaves.
 fn suite_tasks(manifest: &toml::Value) -> BTreeSet<String> {
-    let tasks: Vec<(&String, String, Vec<&str>)> = manifest["tasks"]
-        .as_table()
-        .expect("[tasks]")
-        .iter()
-        .map(|(name, task)| {
-            let body = match task.get("run") {
-                Some(toml::Value::String(line)) => line.clone(),
-                Some(toml::Value::Array(lines)) => lines
-                    .iter()
-                    .filter_map(toml::Value::as_str)
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                _ => String::new(),
-            };
-            let depends = task
-                .get("depends")
-                .and_then(toml::Value::as_array)
-                .map_or_else(Vec::new, |deps| {
-                    deps.iter()
-                        .filter_map(toml::Value::as_str)
-                        .filter_map(|dep| dep.split_whitespace().next())
-                        .collect()
-                });
-            (name, body, depends)
-        })
-        .collect();
     let mut suite = BTreeSet::new();
+    let mut edges: Vec<(&String, Vec<String>)> = Vec::new();
+    for (name, task) in manifest["tasks"].as_table().expect("[tasks]") {
+        let body = match task.get("run") {
+            Some(toml::Value::String(line)) => line.clone(),
+            Some(toml::Value::Array(lines)) => lines
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
+        };
+        let (direct, mut targets) = suite_facts(&body);
+        targets.extend(
+            task.get("depends")
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(toml::Value::as_str)
+                .filter_map(|dep| dep.split_whitespace().next())
+                .map(str::to_owned),
+        );
+        if direct {
+            suite.insert(name.clone());
+        }
+        edges.push((name, targets));
+    }
     loop {
         let before = suite.len();
-        for (name, body, depends) in &tasks {
-            if depends.iter().any(|dep| suite.contains(*dep)) || runs_suite(body, &suite) {
+        for (name, targets) in &edges {
+            if targets.iter().any(|target| suite.contains(target)) {
                 suite.insert((*name).clone());
             }
         }
@@ -551,46 +551,95 @@ fn tool_name(key: &str) -> String {
     key.rsplit(['/', ':']).next().unwrap_or(key).to_owned()
 }
 
-/// Every tool a `common::require_tool` or `common::require_bin` call names
-/// across the crate's sources: the call's first argument, a string literal
-/// naming the `[tools]` entry's last segment (CLOUD-2388). A call whose first
-/// argument is not a literal, and a `mise which` spawned anywhere but `common`,
-/// are refused: either would be a requirement this scan cannot read.
-//MUTANT require-call-unread|s@^            required.insert(tool.to_owned());$@@|every_suite_job_installs_the_pinned_tools_its_cases_require
+/// Every tool a `require_tool` or `require_bin` call names across the crate's
+/// sources, read by `syn` whatever path reaches the call (CLOUD-2388): the
+/// call's first argument, a string literal naming the `[tools]` entry's last
+/// segment. Outside the resolver itself, a call whose first argument is not a
+/// literal, or a `"which"` literal (a `mise which` of a case's own), is refused:
+/// either is a requirement this census cannot read.
+//MUTANT require-call-unread|s@^        required.extend(found.tools);$@@|every_suite_job_installs_the_pinned_tools_its_cases_require
 fn required_tools() -> BTreeSet<String> {
-    // Split, so this file's own text is not read as a call.
-    let calls = [
-        concat!("common::require_", "tool("),
-        concat!("common::require_", "bin("),
-    ];
-    let private_lookup = concat!(".args([\"", "which\"");
     let resolver = common::at_root("crates/batten/tests/it/common/mod.rs");
     let mut required = BTreeSet::new();
     for path in common::rust_sources() {
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert!(
-            path == resolver || !text.contains(private_lookup),
-            "{}: resolves a pinned tool with its own `mise which`; call `common::require_tool`",
-            path.display()
+        let source = std::fs::read_to_string(&path).unwrap();
+        let found = batten::testing::require_census(
+            &syn::parse_file(&source).expect("every crate source parses"),
         );
-        for (at, call) in calls
-            .iter()
-            .flat_map(|call| text.match_indices(call).map(move |(at, _)| (at, *call)))
-        {
-            let tool = text[at + call.len()..]
-                .trim_start()
-                .strip_prefix('"')
-                .and_then(|rest| rest.split('"').next())
-                .unwrap_or_default();
+        if path != resolver {
             assert!(
-                !tool.is_empty() && tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
-                "{}: a `{call}` call names no tool as a string literal",
+                found.unnamed == 0,
+                "{}: a require_tool/require_bin call names no tool as a string literal",
                 path.display()
             );
-            required.insert(tool.to_owned());
+            assert!(
+                found.which_literals == 0,
+                "{}: resolves a pinned tool with its own `mise which`; call `common::require_tool`",
+                path.display()
+            );
         }
+        for tool in &found.tools {
+            assert!(
+                !tool.is_empty() && tool.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+                "{}: `{tool}` is not a [tools] name",
+                path.display()
+            );
+        }
+        required.extend(found.tools);
     }
     required
+}
+
+/// The required tools a job's steps do not install. A mise-action step with no
+/// `install_args` installs every `[tools]` entry, unless it says `install: false`.
+//MUTANT install-all-unread|s@^            && step\["with"\]\["install"\]\.as_bool() != Some(false)$@            \&\& true@|a_job_installs_what_its_mise_steps_say
+fn job_missing(steps: &[yaml_rust2::Yaml], required: &BTreeSet<String>) -> Vec<String> {
+    let installs_all = steps.iter().any(|step| {
+        step["uses"]
+            .as_str()
+            .is_some_and(|uses| uses.starts_with("jdx/mise-action@"))
+            && step["with"]["install_args"].is_badvalue()
+            && step["with"]["install"].as_bool() != Some(false)
+    });
+    if installs_all {
+        return Vec::new();
+    }
+    let installed: BTreeSet<String> = steps
+        .iter()
+        .filter_map(|step| step["with"]["install_args"].as_str())
+        .flat_map(str::split_whitespace)
+        .map(tool_name)
+        .collect();
+    required.difference(&installed).cloned().collect()
+}
+
+/// A narrowed list installs what it names, an unnarrowed mise-action step
+/// everything, and `install: false` nothing (CLOUD-2388).
+#[test]
+fn a_job_installs_what_its_mise_steps_say() {
+    let required: BTreeSet<String> = ["cargo-dist", "pkl"].map(str::to_owned).into();
+    let steps = |with: &str| {
+        let text = format!("- uses: jdx/mise-action@abc\n  with:\n{with}\n- run: mise run ci\n");
+        yaml_rust2::YamlLoader::load_from_str(&text).unwrap()[0]
+            .as_vec()
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        job_missing(&steps("    version: 1"), &required),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        job_missing(&steps("    install: false"), &required),
+        ["cargo-dist", "pkl"]
+    );
+    assert_eq!(
+        job_missing(
+            &steps("    install_args: rust aqua:axodotdev/cargo-dist@0.33.0"),
+            &required
+        ),
+        ["pkl"]
+    );
 }
 
 /// EVERY JOB THAT RUNS THE SUITE INSTALLS EVERY PINNED TOOL A CASE REQUIRES
@@ -663,25 +712,9 @@ fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
                 continue;
             }
             suite_jobs.push(format!("{file}:{name}"));
-            let installs_all = steps.iter().any(|step| {
-                step["uses"]
-                    .as_str()
-                    .is_some_and(|uses| uses.starts_with("jdx/mise-action@"))
-                    && step["with"]["install_args"].is_badvalue()
-                    && step["with"]["install"].as_bool() != Some(false)
-            });
-            if installs_all {
-                continue;
-            }
-            let installed: BTreeSet<String> = steps
-                .iter()
-                .filter_map(|step| step["with"]["install_args"].as_str())
-                .flat_map(str::split_whitespace)
-                .map(tool_name)
-                .collect();
             missing.extend(
-                required
-                    .difference(&installed)
+                job_missing(steps, &required)
+                    .into_iter()
                     .map(|tool| format!("{file}:{name} {tool}")),
             );
         }
@@ -734,6 +767,11 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "mise exec -- cargo nextest run -p batten --no-fail-fast",
         "mise run -j 4 ci",
         "mise run batten -- ci step --summary \"Suite, see #2388\" -- mise run ci",
+        // A filtered run is held as the suite: its filter can reach a case
+        // that requires a tool.
+        "mise exec -- cargo nextest run -p batten --test it hook_profile::",
+        "mise exec -- cargo test --workspace -- --skip flaky::case",
+        "mise -E ci exec -- cargo nextest run --workspace",
     ] {
         assert!(runs_suite(run, &suite), "{run}");
     }
@@ -742,10 +780,11 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "mise run ci-drift",
         "mise run batten -- ci step -- mise run ci-slow-needed --",
         "mise exec -- cargo nextest run --no-run --workspace",
-        "mise exec -- cargo nextest run -p batten --test it hook_profile::",
         "# then mise run ci",
         "mise run tree-clean # runs after mise run ci",
-        "cargo nextest run -p batten --test it hook_profile:: && cargo clippy --workspace",
+        "mise run tree-clean;# mise run ci",
+        "echo it\\'s # then mise run ci",
+        "mise run batten -- ci step --summary \"x; cargo test\" -- mise run lint",
         "mise exec -- cargo llvm-cov report --summary-only",
     ] {
         assert!(!runs_suite(run, &suite), "{run}");

@@ -8238,6 +8238,28 @@ fn program_name(token: &str) -> &str {
 /// The day a second mediator exists this becomes a set and the key becomes a
 /// name rather than a boolean; spelling it now would be a vocabulary with one
 /// member and no consumer.
+/// Every command a shell text runs, each as its words with quotes resolved and
+/// comments dropped, through the parse every hook judges by (CLOUD-2388); `None`
+/// when that parse could not read all of it.
+#[must_use]
+pub(crate) fn shell_commands(command: &str) -> Option<Vec<Vec<String>>> {
+    let crate::facts::Look::Is(parsed) = segments(command) else {
+        return None;
+    };
+    Some(
+        parsed
+            .into_iter()
+            .flat_map(|segment| {
+                if segment.lines.is_empty() {
+                    vec![segment.words]
+                } else {
+                    segment.lines.into_iter().map(|line| line.words).collect()
+                }
+            })
+            .collect(),
+    )
+}
+
 /// The row ids a `batten policy explain … --history` call names, when the call
 /// is exactly that and nothing else (CLOUD-2144).
 ///

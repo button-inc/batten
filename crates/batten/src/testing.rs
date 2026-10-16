@@ -455,3 +455,62 @@ mod tests {
         assert!(!falls_through(&dir, &dir.join("tmp")));
     }
 }
+
+/// Every shell command a `run:` text runs, each as its words, through the
+/// hooks' own parse (CLOUD-2388); `None` when that parse could not read it.
+#[doc(hidden)]
+#[must_use]
+pub fn shell_commands(text: &str) -> Option<Vec<Vec<String>>> {
+    crate::hook::shell_commands(text)
+}
+
+/// What a source's `require_tool`/`require_bin` calls declare (CLOUD-2388).
+#[doc(hidden)]
+#[derive(Debug, Default)]
+pub struct RequireCensus {
+    /// Each call's first argument, when it is a string literal.
+    pub tools: Vec<String>,
+    /// Calls whose first argument is not a string literal: a requirement no
+    /// reader of the source can name.
+    pub unnamed: usize,
+    /// String literals spelling `which`: a `mise which` the call does not make.
+    pub which_literals: usize,
+}
+
+/// The `require_tool`/`require_bin` calls in `file`, by any path that ends in
+/// one (`common::`, `crate::common::`, an import), outside macros.
+#[doc(hidden)]
+#[must_use]
+pub fn require_census(file: &syn::File) -> RequireCensus {
+    struct Walk(RequireCensus);
+    impl<'a> Visit<'a> for Walk {
+        fn visit_expr_call(&mut self, call: &'a syn::ExprCall) {
+            if let syn::Expr::Path(path) = &*call.func
+                && path
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|last| last.ident == "require_tool" || last.ident == "require_bin")
+            {
+                match call.args.first() {
+                    Some(syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(tool),
+                        ..
+                    })) => self.0.tools.push(tool.value()),
+                    _ => self.0.unnamed += 1,
+                }
+            }
+            syn::visit::visit_expr_call(self, call);
+        }
+        fn visit_lit_str(&mut self, lit: &'a syn::LitStr) {
+            // Spelled inside a macro, which this walk does not enter, so the
+            // census does not count its own needle.
+            if lit.value() == concat!("whi", "ch") {
+                self.0.which_literals += 1;
+            }
+        }
+    }
+    let mut walk = Walk(RequireCensus::default());
+    walk.visit_file(file);
+    walk.0
+}
