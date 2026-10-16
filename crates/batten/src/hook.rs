@@ -1318,6 +1318,26 @@ pub enum WiringFile {
     },
 }
 
+/// A host's plugin adapter: where its host loads it, and the code that renders
+/// it (CLOUD-1942).
+#[derive(Debug, Clone, Copy)]
+pub struct Plugin {
+    /// The path, repo-root-relative, the host loads project plugins from.
+    pub path: &'static str,
+    /// Renders the plugin's source, byte-stable (§6).
+    pub render: fn() -> String,
+}
+
+impl WiringFile {
+    /// The file, repo-root-relative, whatever the layout inside it.
+    #[must_use]
+    pub const fn path(self) -> &'static str {
+        match self {
+            Self::Whole(path) | Self::Root(path) | Self::Key { path, .. } => path,
+        }
+    }
+}
+
 /// One host's hook wiring: where it lives, and what it calls each event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Wiring {
@@ -1428,11 +1448,17 @@ const CLAUDE_SPELLINGS: &[(Event, &str)] = &[
 /// literal fallback here: emitting `"hook"` when the declaration is gone would
 /// be the fourth spelling this removes, and it would report healthy.
 pub(crate) fn wiring_command(harness: Harness) -> String {
-    let argv = crate::surface::mediation_argv().unwrap_or_default();
+    wiring_argv(harness).join(" ")
+}
+
+/// [`wiring_command`] as argv: the binary, the mediation verb's argv, and the
+/// harness token — for an adapter that spawns the engine rather than naming a
+/// shell command (the `OpenCode` plugin), so both carry one derivation.
+pub(crate) fn wiring_argv(harness: Harness) -> Vec<String> {
     let mut parts = vec![crate::surface::BINARY.to_owned()];
-    parts.extend(argv);
+    parts.extend(crate::surface::mediation_argv().unwrap_or_default());
     parts.push(harness.as_str().to_owned());
-    parts.join(" ")
+    parts
 }
 
 /// Render one harness's registrations as the JSON its host reads.
@@ -2125,17 +2151,20 @@ impl Harness {
         }
     }
 
-    /// Where the plugin adapter for this host goes, for a host whose adapter is
-    /// CODE rather than a hook registration (CLOUD-1942).
+    /// The plugin adapter for this host, for a host whose adapter is CODE rather
+    /// than a hook registration (CLOUD-1942).
     ///
-    /// The path the reference loads project plugins from. `batten generate
-    /// hooks` renders the plugin to stdout, and the caller writes it here: the
-    /// plugin is a generated artifact, never a committed copy, so the engine and
-    /// the plugin cannot drift.
+    /// `batten generate hooks` renders it to stdout and the caller writes it to
+    /// its path: the plugin is a generated artifact, never a committed copy, so
+    /// the engine and the plugin cannot drift. The renderer rides in the row so
+    /// a second plugin host is rendered by its own code, never by `OpenCode`'s.
     #[must_use]
-    pub const fn plugin(self) -> Option<&'static str> {
+    pub const fn plugin(self) -> Option<Plugin> {
         match self {
-            Harness::OpenCode => Some(".opencode/plugins/batten.js"),
+            Harness::OpenCode => Some(Plugin {
+                path: ".opencode/plugins/batten.js",
+                render: render_opencode_plugin,
+            }),
             Harness::ClaudeCode
             | Harness::Cursor
             | Harness::CopilotCli
@@ -2952,6 +2981,16 @@ fn read_target(operation: &Operation, input: &Value) -> Option<String> {
     if !matches!(operation, Operation::Read) {
         return None;
     }
+    target_path(input)
+}
+
+/// The file a tool's input names, under every spelling a host uses for it.
+///
+/// One lookup for reads and writes alike, so a new spelling cannot reach one
+/// and miss the other. `filePath` is `OpenCode`'s: its `read`, `write` and `edit`
+/// name their target that way (its plugin reference), and the generated plugin
+/// passes the args through unchanged.
+fn target_path(input: &Value) -> Option<String> {
     input
         .pointer("/file_path")
         .or_else(|| input.pointer("/notebook_path"))
@@ -3520,18 +3559,7 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
     let writes = harness
         .write_tools()
         .contains(&tool.as_str())
-        .then(|| {
-            input
-                .pointer("/file_path")
-                .or_else(|| input.pointer("/notebook_path"))
-                // OpenCode's `write`/`edit` and `read` name their target
-                // `filePath` (its plugin reference), passed through unchanged by
-                // the generated plugin.
-                .or_else(|| input.pointer("/filePath"))
-                .and_then(Value::as_str)
-                .filter(|path| !path.is_empty())
-                .map(ToOwned::to_owned)
-        })
+        .then(|| target_path(&input))
         .flatten();
 
     // The neutral vocabulary, resolved here beside `writes` for the same reason
@@ -11611,58 +11639,73 @@ pub fn encode_preapproval(
 /// Byte-stable (§6), and generated rather than committed so the plugin and the
 /// engine it spawns are one release: `node:child_process` runs under the Bun the
 /// host executes plugins with, and under Node for the test that drives it.
-//MUTANT opencode-exit2-not-thrown|s@^        "      throw new Error(run.stderr.trim());".to_owned(),$@        "      return;".to_owned(),@|a_generated_opencode_plugin_throws_the_engine_s_refusal
-#[must_use]
-pub fn render_opencode_plugin() -> String {
-    let mut flags = crate::surface::mediation_argv().unwrap_or_default();
-    flags.push(Harness::OpenCode.as_str().to_owned());
-    let program = json_string(crate::surface::BINARY);
-    let args: Vec<String> = flags.iter().map(|flag| json_string(flag)).collect();
-    let spawn = format!("spawnSync({program}, [{}], {{", args.join(", "));
-    [
-        "// Generated by `batten generate hooks --harness opencode`. Do not edit: regenerate it."
-            .to_owned(),
-        format!(
-            "// OpenCode loads it from {}.",
-            Harness::OpenCode.plugin().unwrap_or_default()
-        ),
-        "import { spawnSync } from \"node:child_process\";".to_owned(),
-        String::new(),
-        "export const Batten = async ({ directory }) => ({".to_owned(),
-        "  \"tool.execute.before\": async (input, output) => {".to_owned(),
-        "    const envelope = JSON.stringify({".to_owned(),
-        "      hook_event_name: \"PreToolUse\",".to_owned(),
-        "      cwd: directory,".to_owned(),
-        "      tool_name: input.tool,".to_owned(),
-        "      tool_input: output.args,".to_owned(),
-        "    });".to_owned(),
-        format!("    const run = {spawn}"),
-        "      cwd: directory,".to_owned(),
-        "      input: envelope,".to_owned(),
-        "      encoding: \"utf8\",".to_owned(),
-        "    });".to_owned(),
-        "    if (run.status === 2) {".to_owned(),
-        // The line that makes the plugin a guard: a thrown error is the only
-        // thing OpenCode's hook reads as "do not run this tool".
-        "      throw new Error(run.stderr.trim());".to_owned(),
-        "    }".to_owned(),
-        "  },".to_owned(),
-        "  event: async ({ event }) => {".to_owned(),
-        "    if (event.type !== \"session.idle\") {".to_owned(),
-        "      return;".to_owned(),
-        "    }".to_owned(),
-        "    const envelope = JSON.stringify({ hook_event_name: \"Stop\", cwd: directory });"
-            .to_owned(),
-        format!("    {spawn}"),
-        "      cwd: directory,".to_owned(),
-        "      input: envelope,".to_owned(),
-        "      encoding: \"utf8\",".to_owned(),
-        "    });".to_owned(),
-        "  },".to_owned(),
-        "});".to_owned(),
-    ]
-    .join("\n")
+//MUTANT opencode-exit2-not-thrown|s@^      throw new Error(run.stderr.trim());$@      return;@|a_generated_opencode_plugin_throws_the_engine_s_refusal
+fn render_opencode_plugin() -> String {
+    let quoted: Vec<String> = wiring_argv(Harness::OpenCode)
+        .iter()
+        .map(|part| json_string(part))
+        .collect();
+    let (program, args) = quoted
+        .split_first()
+        .map_or(("\"\"", &[][..]), |(program, args)| {
+            (program.as_str(), args)
+        });
+    OPENCODE_PLUGIN
+        .replace(
+            "@PATH@",
+            Harness::OpenCode.plugin().map_or("", |plugin| plugin.path),
+        )
+        .replace("@PROGRAM@", program)
+        .replace("@ARGS@", &args.join(", "))
 }
+
+/// The plugin [`render_opencode_plugin`] fills in: the program and its args
+/// from [`wiring_argv`], so the plugin spawns exactly the command every hook
+/// registration runs, and the path it is loaded from.
+///
+/// The engine is spawned ASYNCHRONOUSLY. `spawnSync` would hold the host's
+/// event loop for the whole engine run on every tool call — no UI, no other
+/// plugin, no parallel call — where an awaited child process blocks only the
+/// call it judges. A spawn that fails resolves with a `null` status, which is
+/// an allow like every other exit but `2`.
+const OPENCODE_PLUGIN: &str = r#"// Generated by `batten generate hooks --harness opencode`. Do not edit: regenerate it.
+// OpenCode loads it from @PATH@.
+import { spawn } from "node:child_process";
+
+const adjudicate = (directory, envelope) =>
+  new Promise((resolve) => {
+    const child = spawn(@PROGRAM@, [@ARGS@], {
+      cwd: directory,
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", () => resolve({ status: null, stderr }));
+    child.on("close", (status) => resolve({ status, stderr }));
+    child.stdin.on("error", () => {});
+    child.stdin.end(JSON.stringify({ cwd: directory, ...envelope }));
+  });
+
+export const Batten = async ({ directory }) => ({
+  "tool.execute.before": async (input, output) => {
+    const run = await adjudicate(directory, {
+      hook_event_name: "PreToolUse",
+      tool_name: input.tool,
+      tool_input: output.args,
+    });
+    if (run.status === 2) {
+      throw new Error(run.stderr.trim());
+    }
+  },
+  event: async ({ event }) => {
+    if (event.type === "session.idle") {
+      await adjudicate(directory, { hook_event_name: "Stop" });
+    }
+  },
+});"#;
 
 /// Surfaces where an advisory is documented and Batten does not use it,
 /// **stated** (CLOUD-461).

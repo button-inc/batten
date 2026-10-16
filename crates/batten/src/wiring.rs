@@ -547,12 +547,7 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
     let (true, Some(wiring)) = (out.above, harness.wiring()) else {
         return Ok(out);
     };
-    let surface = match wiring.file {
-        hook::WiringFile::Key { path, .. }
-        | hook::WiringFile::Whole(path)
-        | hook::WiringFile::Root(path) => path,
-    };
-    let path = root.join(surface);
+    let path = root.join(wiring.file.path());
     let mut document = match std::fs::read_to_string(&path) {
         Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
             Ok(document) if document.is_object() => document,

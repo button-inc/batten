@@ -11009,7 +11009,8 @@ try {
 /// `OpenCode`'s `tool.execute.before` blocks a tool by throwing and by nothing
 /// else, so a plugin that returned on a refusal would read as installed and
 /// allow every call. Run under the pinned Node against THIS build of the engine,
-/// copied onto `PATH` under the name the plugin spawns, so the case runs on every
+/// its own directory first on a `PATH` masked of any installed release (the way
+/// `common::scrub` puts the engine under test there), so the case runs on every
 /// platform the suite does: a refusal is thrown with the engine's reason, an
 /// allow passes, and an engine that cannot load its rules is thrown too, because
 /// `adjudicate` fails closed there and the plugin must carry that refusal as well.
@@ -11033,16 +11034,14 @@ fn a_generated_opencode_plugin_throws_the_engine_s_refusal() {
     fs::write(&plugin, common::stdout(&generated)).expect("write the plugin");
     let driver = tools.join("drive.mjs");
     fs::write(&driver, OPENCODE_DRIVER).expect("write the driver");
-    let bin = tools.join("bin");
-    fs::create_dir_all(&bin).expect("bin dir");
-    fs::copy(
-        env!("CARGO_BIN_EXE_batten"),
-        bin.join(format!("batten{}", std::env::consts::EXE_SUFFIX)),
+    let engine = Path::new(env!("CARGO_BIN_EXE_batten"))
+        .parent()
+        .map(Path::to_path_buf);
+    let path = std::env::join_paths(
+        engine
+            .into_iter()
+            .chain(std::env::split_paths(&common::ambient_path())),
     )
-    .expect("put this build on PATH as `batten`");
-    let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    )))
     .expect("join PATH");
     let guarded = Fixture::new("opencode-plugin-guarded")
         .config(PROTECTED_POLICY)
@@ -11054,25 +11053,26 @@ fn a_generated_opencode_plugin_throws_the_engine_s_refusal() {
         .git()
         .base_commit()
         .build();
-    for (project, tool, args, expected) in [
+    // `None` is an allow; `Some` is a throw carrying that fragment of the reason.
+    for (project, tool, args, thrown) in [
         (
             &guarded,
             "bash",
             r#"{"command":"rm guarded/thing"}"#,
-            "path write refused",
+            Some("path write refused"),
         ),
-        (&guarded, "read", r#"{"filePath":"notes.txt"}"#, "allowed"),
+        (&guarded, "read", r#"{"filePath":"notes.txt"}"#, None),
         (
             &unloadable,
             "bash",
             r#"{"command":"ls"}"#,
-            "engine-cannot-adjudicate",
+            Some("engine-cannot-adjudicate"),
         ),
-        (&unloadable, "session.idle", "{}", "allowed"),
+        (&unloadable, "session.idle", "{}", None),
     ] {
         #[expect(
             clippy::disallowed_types,
-            reason = "stays, and test-only — CLOUD-1942: the subject is the generated plugin running under the pinned Node, a program the batten door does not spawn; the engine it reaches is this build, copied onto PATH"
+            reason = "stays, and test-only — CLOUD-1942: the subject is the generated plugin running under the pinned Node, a program the batten door does not spawn; the engine it reaches is this build, first on PATH"
         )]
         let output = std::process::Command::new("node")
             .arg(&driver)
@@ -11085,14 +11085,14 @@ fn a_generated_opencode_plugin_throws_the_engine_s_refusal() {
             .expect("run the pinned node");
         let answer = common::stdout(&output);
         let answer = answer.trim();
-        let matched = if expected == "allowed" {
-            answer == expected
-        } else {
-            answer.starts_with("thrown: ") && answer.contains(expected)
+        let matched = match thrown {
+            None => answer == "allowed",
+            Some(reason) => answer.starts_with("thrown: ") && answer.contains(reason),
         };
         assert!(
             matched,
-            "{tool}: expected {expected:?}, got {answer:?}; stderr: {}",
+            "{tool}: expected a throw of {thrown:?} (None is an allow), got {answer:?}; \
+             stderr: {}",
             common::stderr(&output)
         );
     }
