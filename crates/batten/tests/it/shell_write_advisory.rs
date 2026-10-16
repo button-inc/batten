@@ -159,21 +159,19 @@ fn the_absolute_spelling_the_host_sends_signals_too() {
     assert!(signals(&dir, &payload), "{}", reported(&dir, &payload));
 }
 
-/// And spelled with `..` through a directory that does not exist (CLOUD-2390's
-/// security pass): it cannot canonicalize, and a `..` has no file name, so the
-/// ancestor walk used to give up and it kept its absolute spelling, read as
-/// outside the tree.
+/// Assert a `Write` of `spelled`, joined onto the bench's canonical root, is
+/// told as the governed write it is.
+fn assert_signals_at(dir: &Path, spelled: &str) {
+    let root = dir.canonicalize().expect("the bench root resolves");
+    let payload = write_payload("Write", &root.join(spelled).display().to_string());
+    assert!(signals(dir, &payload), "{}", reported(dir, &payload));
+}
+
+/// And spelled with `..` through a directory that does not exist (CLOUD-2390).
 #[test]
 fn a_dot_dot_spelling_through_a_missing_directory_signals_too() {
     let dir = bench("swa-a_dot_dot_spelling_through_a_missi");
-    let absolute = dir
-        .canonicalize()
-        .expect("the bench root resolves")
-        .join("mise-tasks/not-yet/../ready-lint.sh")
-        .display()
-        .to_string();
-    let payload = write_payload("Write", &absolute);
-    assert!(signals(&dir, &payload), "{}", reported(&dir, &payload));
+    assert_signals_at(&dir, "mise-tasks/not-yet/../ready-lint.sh");
 }
 
 /// And a `..` AFTER a symlink climbs the link's target, not its spelling. `hop`
@@ -184,15 +182,13 @@ fn a_dot_dot_spelling_through_a_missing_directory_signals_too() {
 #[test]
 fn a_dot_dot_after_a_symlink_climbs_the_target() {
     let dir = bench("swa-a_dot_dot_after_a_symlink_climbs_t");
-    let root = dir.canonicalize().expect("the bench root resolves");
-    std::fs::create_dir_all(root.join("a/b")).expect("the link target is made");
-    std::os::unix::fs::symlink(root.join("a/b"), root.join("hop")).expect("the link is made");
-    let absolute = root
-        .join("hop/../../mise-tasks/ready-lint.sh")
-        .display()
-        .to_string();
-    let payload = write_payload("Write", &absolute);
-    assert!(signals(&dir, &payload), "{}", reported(&dir, &payload));
+    let target = dir
+        .canonicalize()
+        .expect("the bench root resolves")
+        .join("a/b");
+    std::fs::create_dir_all(&target).expect("the link target is made");
+    std::os::unix::fs::symlink(&target, dir.join("hop")).expect("the link is made");
+    assert_signals_at(&dir, "hop/../../mise-tasks/ready-lint.sh");
 }
 
 /// A bats suite is governed too.

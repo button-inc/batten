@@ -2786,7 +2786,7 @@ fn read_target(operation: &Operation, input: &Value) -> Option<String> {
 /// and a prefix test over uncanonicalized strings answers "outside" for a target
 /// that is plainly inside. A target that does not exist yet — the ordinary case
 /// for a `Write` creating a file — has no canonical form of its own, so its
-/// PARENT is canonicalized and the file name re-attached.
+/// deepest existing ancestor is canonicalized and the rest replayed onto it.
 ///
 /// **The walk is up to the nearest EXISTING ancestor, not one level.** A single
 /// `parent()` hop answers only where the write creates a file in a directory that
@@ -2803,35 +2803,16 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
     }
     let root = root.canonicalize().ok()?;
     let resolved = candidate.canonicalize().ok().or_else(|| {
-        // Find the DEEPEST prefix that canonicalizes — the one whose canonical
-        // form resolves the most symlinks, which is the reading the prefix test
-        // below needs — then replay the remaining components onto it.
-        //
-        // `.` AND `..` IN THE TAIL ARE REPLAYED, NOT ABANDONED (CLOUD-2390's
-        // security pass). A `..` has no `file_name`, so `/repo/new/../src/x.rs`
-        // used to abandon the walk and keep its absolute spelling — read as
-        // outside the tree by `protected` and by a `tree_only` handler alike,
-        // though the host writes it inside. The `..` is resolved only AFTER the
-        // canonical base, never lexically over the whole path: a `..` after a
-        // symlink climbs the link's TARGET, so `/tmp/link/../mise-tasks/x.sh`
-        // with `link` pointing into the repository is a write inside it, which a
-        // lexical pass would spell `/tmp/mise-tasks/x.sh` and wave through. The
-        // component right past the base does not exist, so it is no symlink and
-        // a `..` popping it lexically is the reading the host gets.
-        let components: Vec<std::path::Component<'_>> = candidate.components().collect();
-        (1..components.len()).rev().find_map(|split| {
-            let prefix: PathBuf = components[..split].iter().collect();
-            let mut resolved = prefix.canonicalize().ok()?;
-            for component in &components[split..] {
-                match component {
-                    std::path::Component::CurDir => {}
-                    std::path::Component::ParentDir => {
-                        resolved.pop();
-                    }
-                    other => resolved.push(other),
-                }
-            }
-            Some(resolved)
+        // The DEEPEST ancestor that canonicalizes resolves the most symlinks,
+        // which is the reading the prefix test below needs; the tail, `.` and
+        // `..` included (CLOUD-2390), is replayed onto it. Only AFTER the
+        // canonical base, never over the whole path: a `..` past a symlink
+        // climbs the link's target, while the component just past the base does
+        // not exist, so it is no symlink and popping it lexically is right.
+        candidate.ancestors().skip(1).find_map(|ancestor| {
+            let base = ancestor.canonicalize().ok()?;
+            let tail = candidate.strip_prefix(ancestor).ok()?;
+            Some(crate::receipt::lexically_normal(&base.join(tail)))
         })
     })?;
     let relative = resolved.strip_prefix(&root).ok()?;
