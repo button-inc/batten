@@ -208,6 +208,19 @@ fn a_link_after_a_dot_dot_through_a_missing_directory_resolves() {
     assert_signals_at(&dir, "not-yet/../door/ready-lint.sh");
 }
 
+/// And a `Write` through a DANGLING link lands at the link's target, which
+/// `open` creates (CLOUD-2445): `dangling` reads `mise-tasks/new.sh`, a governed
+/// script that does not exist yet, so the link's own spelling would read as
+/// ungoverned.
+#[cfg(unix)]
+#[test]
+fn a_write_through_a_dangling_link_lands_at_its_target() {
+    let dir = bench("swa-a_write_through_a_dangling_link_la");
+    std::os::unix::fs::symlink("mise-tasks/new.sh", dir.join("dangling"))
+        .expect("the link is made");
+    assert_signals_at(&dir, "dangling");
+}
+
 /// A bats suite is governed too.
 #[test]
 fn a_write_to_a_bats_suite_signals() {

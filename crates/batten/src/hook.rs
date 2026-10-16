@@ -2797,6 +2797,7 @@ fn read_target(operation: &Operation, input: &Value) -> Option<String> {
 /// than the case that closed it, which is why the loop is the fix rather than a
 /// second special case.
 fn relative_to(root: &Path, path: &str) -> Option<String> {
+    const MAX_HOPS: usize = 40;
     let candidate = Path::new(path);
     if candidate.is_relative() {
         return None;
@@ -2811,21 +2812,39 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
     // AFTER that `..` can exist and be a link (`missing/../link/x`, which a
     // `Write` that creates its parent directories really writes through), so
     // each pushed component that now resolves is canonicalized before the next
-    // `..` climbs it. Every call here answers in one spelling, the verbatim one
+    // `..` climbs it. A DANGLING link does not canonicalize either, yet a
+    // `Write` through it creates its target, so a component that is a link is
+    // replaced by what it reads, as `realpath -m` does, within `MAX_HOPS`
+    // (CLOUD-2445). Every call here answers in one spelling, the verbatim one
     // on Windows, so the prefix test compares like with like.
     let resolved = candidate.ancestors().find_map(|ancestor| {
         let mut walked = ancestor.canonicalize().ok()?;
-        for component in candidate.strip_prefix(ancestor).ok()?.components() {
-            match component {
-                std::path::Component::CurDir => {}
-                std::path::Component::ParentDir => {
-                    walked.pop();
-                }
-                other => {
-                    walked.push(other);
-                    if let Ok(real) = walked.canonicalize() {
-                        walked = real;
-                    }
+        let mut pending: std::collections::VecDeque<std::ffi::OsString> = candidate
+            .strip_prefix(ancestor)
+            .ok()?
+            .iter()
+            .map(std::ffi::OsStr::to_os_string)
+            .collect();
+        let mut hops = 0;
+        while let Some(component) = pending.pop_front() {
+            if component == "." {
+                continue;
+            }
+            if component == ".." {
+                walked.pop();
+                continue;
+            }
+            walked.push(&component);
+            if let Ok(real) = walked.canonicalize() {
+                walked = real;
+            } else if let Some(target) = (hops < MAX_HOPS)
+                .then(|| std::fs::read_link(&walked).ok())
+                .flatten()
+            {
+                hops += 1;
+                walked.pop();
+                for part in target.iter().rev() {
+                    pending.push_front(part.to_os_string());
                 }
             }
         }
