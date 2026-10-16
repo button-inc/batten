@@ -393,12 +393,20 @@ pub fn checkout_build(root: &Path) -> Option<PathBuf> {
 /// resolves it: the build runs with `root` as its working directory, so a
 /// relative value names a directory inside the checkout. An absolute value is
 /// taken as it is, which is what [`Path::join`] already does.
+///
+/// It reads THIS PROCESS's environment, which the signature does not show. That
+/// is right only while the install inherits it, as `install_source`'s cargo
+/// child does; a caller that publishes a target directory to a child instead —
+/// as `replay`, `perf` and `mutate` each do for their own spawns — would get an
+/// answer about the wrong tree, and would have to pass it in.
 #[must_use]
 pub fn release_build(root: &Path) -> PathBuf {
     let target = std::env::var_os("CARGO_TARGET_DIR")
         .filter(|dir| !dir.is_empty())
-        .map_or_else(|| root.join("target"), |dir| root.join(dir));
-    target.join("release").join(crate::surface::BINARY)
+        .unwrap_or_else(|| "target".into());
+    root.join(target)
+        .join("release")
+        .join(crate::surface::BINARY)
 }
 
 /// Refuse a config whose pin this engine does not satisfy.

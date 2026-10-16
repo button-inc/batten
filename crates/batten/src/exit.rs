@@ -110,6 +110,32 @@ impl ExitCode {
         }
     }
 
+    /// The code a child DECIDED with: [`from_code`] minus [`Usage`]
+    /// (CLOUD-2376).
+    ///
+    /// The rule a hand-off applies when it stands in front of a child whose
+    /// answer it is about to pass on as its own. `0`, `2` and `3` are answers
+    /// ABOUT THE REPOSITORY and travel; every other integer is a statement
+    /// about the invocation or about nothing at all, and a caller standing in
+    /// for a gate must not report one as the gate's verdict.
+    ///
+    /// `Usage` is excluded for the reason the module header gives it: `1` is
+    /// one of the two codes a failure of Batten's own produces, so every
+    /// harness reads it as "the hook itself failed, run the call". Passing a
+    /// child's `1` on is therefore indistinguishable from permitting the call
+    /// — which is why the exclusion lives here, beside the table that makes
+    /// `1` non-blocking, rather than being re-derived at each hand-off.
+    ///
+    /// [`from_code`]: ExitCode::from_code
+    /// [`Usage`]: ExitCode::Usage
+    #[must_use]
+    pub const fn decided(raw: i32) -> Option<Self> {
+        match Self::from_code(raw) {
+            Some(ExitCode::Usage) | None => None,
+            decided => decided,
+        }
+    }
+
     /// The code the checks/advisory pipeline returns for a run that did or did
     /// not find something blocking.
     ///
@@ -388,6 +414,40 @@ mod tests {
                 ExitCode::from_code(outside),
                 None,
                 "{outside} is not a code this table names"
+            );
+        }
+    }
+
+    #[test]
+    fn only_an_answer_about_the_repository_is_handed_on() {
+        // THE BOUNDARY RULE, ASSERTED DIRECTLY (CLOUD-2376). Both of the hook's
+        // hand-offs stand in front of a child and pass its code on as their
+        // own, and each used to spell this predicate itself. `Usage` is the
+        // one the end-to-end cases cannot make obvious: `1` is a code the
+        // table NAMES, so a reader checking only `from_code` would pass it
+        // through — and `1` is what every harness reads as "the hook itself
+        // failed, run the call".
+        assert_eq!(ExitCode::decided(1), None, "`1` is never handed on");
+        for code in [ExitCode::Success, ExitCode::Violation, ExitCode::Internal] {
+            assert_eq!(
+                ExitCode::decided(code.code()),
+                Some(code),
+                "{code:?} is an answer about the repository and travels"
+            );
+        }
+        for outside in [-1, 4, 101, 127] {
+            assert_eq!(
+                ExitCode::decided(outside),
+                None,
+                "{outside} decided nothing"
+            );
+        }
+        // And the relation to the table it narrows: nothing `from_code`
+        // refuses is handed on, so `decided` can only ever be the smaller set.
+        for raw in -1..=5 {
+            assert!(
+                ExitCode::from_code(raw).is_some() || ExitCode::decided(raw).is_none(),
+                "{raw} is handed on without being a code this table names"
             );
         }
     }
