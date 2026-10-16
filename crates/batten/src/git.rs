@@ -796,10 +796,12 @@ fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
     if let Some(repo) = with_opens(|opens| opens.get(&key)).flatten() {
         return Ok(repo);
     }
-    let at = crate::cache::now();
+    // READ BEFORE THE OPEN, so a file changed while gix parses it is remembered
+    // as what it was before — and the next call, reading the change, misses.
+    let read = read_by_open(&key.git_dir);
     let repo = gix::discover_opts(start, discovery(&ceilings), gix::open::Options::isolated())
         .map_err(|_| refused())?;
-    let _ = with_opens(|opens| opens.remember(key, &repo, at));
+    let _ = with_opens(|opens| opens.remember(key, &repo, read));
     Ok(repo)
 }
 
@@ -826,19 +828,21 @@ struct OpenKey {
 
 /// This thread's opened repositories, one per [`OpenKey`] (CLOUD-2433).
 ///
-/// An entry is believed only while every file the isolated open reads keeps the
-/// stat identity it had — absence included — and is made only when none of them
-/// is racily clean against the open (`crate::cache::Stamp`, git's rule), as
-/// `config::read_text` holds the authority's text. The config snapshot is the
-/// one thing an open freezes: refs, `HEAD`, the index and the object database
-/// are read per lookup or refreshed on a miss, remembered or not.
+/// An entry is believed only while every file the isolated open reads holds the
+/// bytes it held before the open — absence included. BYTES, not a stat stamp:
+/// the files are a few hundred bytes, so a read costs about what a `stat` does,
+/// and a byte comparison has no racy window — a stamp-checked entry could not
+/// be made for two seconds after a write, so whether a call hit depended on the
+/// clock (CLOUD-2433's verify, `shell_retirement_cost`). The config snapshot is
+/// the one thing an open freezes: refs, `HEAD`, the index and the object
+/// database are read per lookup or refreshed on a miss, remembered or not.
 #[derive(Default)]
 struct Opens(BTreeMap<OpenKey, Opened>);
 
-/// One remembered open: the repository, and the stamps of what the open read.
+/// One remembered open: the repository, and the bytes its open read.
 struct Opened {
     repo: gix::Repository,
-    stamps: Vec<Option<crate::cache::Stamp>>,
+    read: Vec<Option<Vec<u8>>>,
 }
 
 thread_local! {
@@ -862,45 +866,42 @@ fn with_opens<R>(with: impl FnOnce(&mut Opens) -> R) -> Option<R> {
         .flatten()
 }
 
-/// The stamps of the files an isolated open of `repo` reads — no includes, no
-/// system, global or environment configuration
-/// (`gix::open::Options::isolated`) — with an absent file as `None`.
-fn read_by_open(repo: &gix::Repository) -> Vec<Option<crate::cache::Stamp>> {
-    let git_dir = repo.git_dir();
+/// The bytes of every file an isolated open of `git_dir` reads — no includes,
+/// no system, global or environment configuration
+/// (`gix::open::Options::isolated`) — with an absent file as `None`. The common
+/// directory is resolved through `commondir` exactly as gix resolves it, and
+/// `commondir`'s own bytes are among those compared.
+fn read_by_open(git_dir: &Path) -> Vec<Option<Vec<u8>>> {
+    let common = gix::discover::path::from_plain_file(&git_dir.join("commondir"))
+        .and_then(Result::ok)
+        .map_or_else(|| git_dir.to_path_buf(), |common| git_dir.join(common));
     [
         git_dir.join("commondir"),
         git_dir.join("config"),
         git_dir.join("config.worktree"),
-        repo.common_dir().join("config"),
+        common.join("config"),
     ]
     .iter()
-    .map(|path| crate::cache::stamp(path))
+    .map(|path| std::fs::read(path).ok())
     .collect()
 }
 
-//MUTANT repository-memo-never-hits|s@^        (opened.stamps == now).then@        false.then@|a_repository_opened_twice_is_opened_once
-//MUTANT repository-memo-ignores-config|s@^        (opened.stamps == now).then@        true.then@|a_config_edited_after_open_is_read_again
-//MUTANT repository-memo-believes-racy|s@^        if stamps.iter().flatten().any(.*racily_clean(at)) {$@        if false {@|an_open_in_its_racy_window_is_not_remembered
+//MUTANT repository-memo-never-hits|s@^        (opened.read == now).then@        false.then@|a_repository_opened_twice_is_opened_once
+//MUTANT repository-memo-ignores-config|s@^        (opened.read == now).then@        true.then@|a_config_edited_after_open_is_read_again
 impl Opens {
     /// The repository remembered for `key`, if every file its open read is
     /// unchanged.
     fn get(&self, key: &OpenKey) -> Option<gix::Repository> {
         let opened = self.0.get(key)?;
-        let now = read_by_open(&opened.repo);
-        (opened.stamps == now).then(|| opened.repo.clone())
+        let now = read_by_open(&key.git_dir);
+        (opened.read == now).then(|| opened.repo.clone())
     }
 
-    /// Remember `repo` as `key`'s open, begun at `at` — unless a file it read
-    /// changed too close to `at` to tell a later change from this one.
-    fn remember(&mut self, key: OpenKey, repo: &gix::Repository, at: std::time::Duration) {
-        let stamps = read_by_open(repo);
-        if stamps.iter().flatten().any(|stamp| stamp.racily_clean(at)) {
-            self.0.remove(&key);
-            return;
-        }
+    /// Remember `repo` as `key`'s open, made from the files as `read` before it.
+    fn remember(&mut self, key: OpenKey, repo: &gix::Repository, read: Vec<Option<Vec<u8>>>) {
         let opened = Opened {
             repo: repo.clone(),
-            stamps,
+            read,
         };
         self.0.insert(key, opened);
     }
@@ -6019,42 +6020,30 @@ mod tests {
         (dir, key, repo)
     }
 
-    /// Well past the racy window of anything a case just wrote.
-    fn later() -> std::time::Duration {
-        crate::cache::now() + std::time::Duration::from_hours(1)
-    }
-
-    /// An open whose files are unchanged is served again (CLOUD-2433).
+    /// An open whose files are unchanged is served again (CLOUD-2433) — at once,
+    /// with no window after the repository was written.
     #[test]
     fn a_repository_opened_twice_is_opened_once() {
         let (_, key, repo) = opened("git-memo-hit");
         let mut opens = Opens::default();
-        opens.remember(key.clone(), &repo, later());
+        opens.remember(key.clone(), &repo, read_by_open(&key.git_dir));
         assert!(opens.get(&key).is_some(), "an unchanged open is remembered");
     }
 
-    /// A config written after the open is read again, not served stale.
+    /// A config written after the open is read again, not served stale — even
+    /// one the same length, written in the same timestamp tick.
     #[test]
     fn a_config_edited_after_open_is_read_again() {
         let (dir, key, repo) = opened("git-memo-edited");
         let mut opens = Opens::default();
-        opens.remember(key.clone(), &repo, later());
+        opens.remember(key.clone(), &repo, read_by_open(&key.git_dir));
         assert!(opens.get(&key).is_some(), "the premise: it was remembered");
         let config = dir.join(".git/config");
-        let mut text = fs::read_to_string(&config).expect("config");
-        text.push_str("[batten]\n\tedited = true\n");
-        fs::write(&config, text).expect("edit");
+        let text = fs::read_to_string(&config).expect("config");
+        let edited = text.replacen("bare = false", "bare = fals0", 1);
+        assert_ne!(text, edited, "the premise: the edit changes a byte");
+        fs::write(&config, edited).expect("edit");
         assert!(opens.get(&key).is_none(), "an edited config is a miss");
-    }
-
-    /// An open whose files changed within a timestamp tick of it is not
-    /// remembered: a second change in that tick would be invisible to a stamp.
-    #[test]
-    fn an_open_in_its_racy_window_is_not_remembered() {
-        let (_, key, repo) = opened("git-memo-racy");
-        let mut opens = Opens::default();
-        opens.remember(key.clone(), &repo, crate::cache::now());
-        assert!(opens.get(&key).is_none(), "a racily clean open is not kept");
     }
 
     /// The fence still holds where it applies: a directory below a ceiling, with no
