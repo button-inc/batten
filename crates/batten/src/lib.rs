@@ -12844,7 +12844,6 @@ fn run_land_fast_forward(
     }
 }
 
-/// `batten land push`: the branch to its own ref, under receive-pack's CAS.
 /// THE ENGINE'S OWN RED-HEAD GATE (CLOUD-2270): a red head whose failed checks
 /// were never read is not pushed over by `land` either, which is the push the
 /// mediated `red-head` gate cannot see. Asked at the lap's entry and by the
@@ -12869,6 +12868,7 @@ fn refuse_unread_red_head(
     Ok(Some(ExitCode::Violation))
 }
 
+/// `batten land push`: the branch to its own ref, under receive-pack's CAS.
 fn run_land_push(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> Result<ExitCode> {
     match land::push(root, url, branch)? {
         land::Pushed::Landed(head) => {
