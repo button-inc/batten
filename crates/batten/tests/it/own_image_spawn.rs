@@ -22,6 +22,14 @@
 //!
 //! `enforce` rather than `check`, because `check` is a read verb by contract
 //! and refuses a rule kind that spawns at all (`extension_surfaces.rs`).
+//!
+//! # Unix only, and registered that way
+//!
+//! The decoy is a `#!/bin/sh` script whose permission bits are the mechanism,
+//! so `PermissionsExt` does not compile off Unix at all. That is `rules/rust.md`'s
+//! stated exception to the `cfg!`-inside-a-case rule — the case reaches a symbol
+//! the other target does not have — so `main.rs` gates the whole module, as it
+//! already does for `ntia`.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -61,13 +69,6 @@ fn decoy_dir(root: &Path) -> PathBuf {
 /// assertion green and fails here.
 #[test]
 fn a_command_row_naming_batten_runs_the_image_and_not_the_one_on_path() {
-    // The decoy is a `#!/bin/sh` script and its permission bits are the whole
-    // mechanism, so the subject does not exist off Unix. `cfg!` rather than
-    // `#[cfg]`, so the case still type-checks on every target (`rules/rust.md`).
-    if !cfg!(unix) {
-        return;
-    }
-
     let root = scratch("own-image-spawn");
     let decoy = decoy_dir(&root);
     let repo = Fixture::at(root.join("repo"))
