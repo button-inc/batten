@@ -733,7 +733,12 @@ fn follow_pin(hook_path: bool, out: &mut dyn Write, err: &mut dyn Write) -> Resu
         // the checkout's release build — on the hook path too, since nothing is
         // built. One `batten` on PATH dispatches; no second engine is
         // installed beside the one the branch built.
-        (None, Some(_)) => match engine::checkout_build(&root) {
+        // `own_build`, not `checkout_build`: `root` here is this process's own
+        // worktree, the one tree a `CARGO_TARGET_DIR` in this environment
+        // speaks for — and the one `install_source` builds in, inheriting the
+        // same value. The hook's load-fault hand-off asks about somebody
+        // else's checkout and so asks the other question.
+        (None, Some(_)) => match engine::own_build(&root) {
             Some(build) => build,
             None if may_build => {
                 if let Some(digest) = pin.source.as_deref() {
