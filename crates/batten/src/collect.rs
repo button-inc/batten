@@ -899,7 +899,7 @@ fn is_kept(path: &Path, kept: &[Kept]) -> bool {
 /// [`remove_counted`] tolerates, rather than reading every tree as held and
 /// freeing nothing.
 fn lock_tree(tree: &Path, wait: bool) -> Option<std::fs::File> {
-    let dir = crate::handle::open(tree).ok()?;
+    let dir = crate::durable::open_handle(tree).ok()?;
     let taken = if wait {
         dir.lock().map_err(std::fs::TryLockError::Error)
     } else {
@@ -933,7 +933,7 @@ pub fn rearm(tree: &Path) {
 
 fn rearm_file(path: &Path) -> std::io::Result<()> {
     let modified = std::fs::metadata(path)?.modified()?;
-    crate::handle::open(path)?.set_times(std::fs::FileTimes::new().set_accessed(modified))
+    crate::durable::open_handle(path)?.set_times(std::fs::FileTimes::new().set_accessed(modified))
 }
 
 /// How a collection is asked for.

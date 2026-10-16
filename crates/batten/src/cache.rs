@@ -55,12 +55,12 @@ const KEPT_PARTITIONS: usize = 8;
 
 /// The zero-byte file whose time records a partition's last use (CLOUD-2361).
 ///
-/// A FILE, not the partition directory's own time: a directory's time moves
-/// only when an entry is made or removed straight inside it, and on Windows a
-/// plain open of a directory — what the refresh used — is refused, so a binary
-/// that only reads, the installed hook warm, was never marked used there and
-/// ranked by its partition's creation. A file's time is set by any handle that
-/// may write it, on every platform.
+/// A FILE, not the partition directory's own time: a directory's time also
+/// moves whenever an entry is made or removed straight inside it, so it records
+/// the last WRITE, not the last use. The mark moves only when a use refreshes
+/// it. (The refresh this replaced also opened the directory plainly, which
+/// Windows refuses, so a binary that only read — the installed hook, warm —
+/// was never marked used there at all.)
 const USE_MARK: &str = "used";
 
 /// The running binary's cache directory under `parent`, or `None` when it
@@ -148,9 +148,9 @@ fn refresh_use(own: &Path, meta: &std::fs::Metadata) {
 }
 
 /// Set `path`'s modification time, file or directory, through the handle
-/// [`crate::handle::open`] opens for exactly that on every platform.
+/// [`crate::durable::open_handle`] opens for exactly that on every platform.
 fn touch(path: &Path, at: std::time::SystemTime) -> std::io::Result<()> {
-    crate::handle::open(path).and_then(|file| file.set_modified(at))
+    crate::durable::open_handle(path).and_then(|file| file.set_modified(at))
 }
 
 /// The running binary's partition name: a short digest of its identity, which
@@ -678,7 +678,7 @@ mod tests {
     }
 
     /// Make `partition` with its use mark, the mark's time at [`stepped`]
-    /// `step`. A FILE's time, which every platform sets (CLOUD-2361).
+    /// `step` (CLOUD-2361).
     fn marked(partition: &Path, step: u64) {
         std::fs::create_dir_all(partition).expect("partition");
         std::fs::File::create(partition.join(USE_MARK))
