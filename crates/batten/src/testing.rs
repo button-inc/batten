@@ -155,6 +155,189 @@ pub fn clock_census(file: &syn::File) -> ClockCensus {
     walk.census
 }
 
+/// How many variants `source` declares for the enum `name`, split by whether
+/// each carries a payload, counted off the declaration rather than off a list
+/// somebody re-typed (CLOUD-2379).
+///
+/// **IT ASKS THE PARSER, because a text scan kept being wrong in a way that
+/// read as right.** Three line-shape heuristics stood here in turn and review
+/// found a hole in each: a `starts_with("///")` clause its neighbour already
+/// subsumed, a `contains('(')` split that read a struct variant as a unit, and
+/// — the one that settles it — a per-LINE scan, under which a declaration
+/// `rustfmt` wraps counts as neither. Every one of those failures is silent:
+/// the totals still match, so a caller's assertions stay green while the
+/// vocabulary goes unchained. The grammar has no such holes, and
+/// [`crate::source::rust`] is the crate's one parse (CLOUD-1008).
+///
+/// **The predicate had three copies before this one, and they had already
+/// diverged by a clause.** `WeakeningKind`, `DriftId` and `SmellId` each hold
+/// their `ALL`/`UNITS` whole by counting the enum body, and a fourth such enum
+/// would have copied whichever copy it found first. One authority decides what
+/// a variant line is.
+///
+/// **BOTH COUNTS ARE RETURNED, and dropping the second was a hole in exactly
+/// the mechanism this helper serves.** A unit variant is enumerated by a
+/// hand-written list; a TUPLE variant delegates to another vocabulary and is
+/// enumerated by a `chain` into that vocabulary's own `ALL`. An exhaustive
+/// `definition()` forces an arm for either, but nothing forces the `chain` — so
+/// a delegated variant added without one compiles, leaves the unit count
+/// matching, and yields ids `all()` never reports. That is the
+/// emitted-but-unexplainable id the type exists to make impossible, returning
+/// through the type's own extension point. A caller asserts the tuple count it
+/// has wired, so adding a variant is what fails.
+///
+/// The caller passes the source, because `include_str!` resolves against the
+/// file it is written in and the point is to read the CALLER's declaration.
+#[doc(hidden)]
+#[must_use]
+pub fn declared_variants(source: &str, name: &str) -> Option<DeclaredVariants> {
+    let file = crate::source::rust(source).ok()?;
+    let declared = file.items.iter().find_map(|item| match item {
+        syn::Item::Enum(declared) if declared.ident == name => Some(declared),
+        _ => None,
+    })?;
+    let mut counts = DeclaredVariants {
+        unit: 0,
+        delegated: 0,
+    };
+    for variant in &declared.variants {
+        if matches!(variant.fields, syn::Fields::Unit) {
+            counts.unit += 1;
+        } else {
+            counts.delegated += 1;
+        }
+    }
+    Some(counts)
+}
+
+/// The cases holding [`declared_variants`] itself (CLOUD-2379).
+///
+/// **It is the one authority on what a declared variant is, and it had none.**
+/// `mutate` showed every clause of the text scan that stood here surviving,
+/// because its three callers only ever hand it source that already agrees with
+/// their own lists — so a filter that decided nothing still produced the right
+/// totals. A census nothing discriminates is the vacuous pass this repository
+/// prices (non-negotiable rule 2), one level under the vocabularies it holds.
+///
+/// **And a surviving mutant was not the only way that scan could be wrong.**
+/// Review found two more holes no mutation could reach: a clause its neighbour
+/// already subsumed, and a per-line reading under which a wrapped declaration
+/// counted as neither kind. Each failed silently. Asking the grammar retires
+/// the whole class, so these cases are about VARIANTS now rather than about
+/// line shapes — the distinctions the scan needed (a doc line, a lowercase
+/// name, a missing comma) were artefacts of reading text and are gone with it.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod declared_variants_tests {
+    use super::{DeclaredVariants, declared_variants};
+
+    /// Both payload shapes, a wrapped declaration, and a doc comment.
+    const SOURCE: &str = "\
+pub enum Sample {
+    /// A doc comment, which declares no variant.
+    First,
+    Second,
+    Delegated(Other),
+    Shaped { kind: Other },
+    Wrapped(
+        Other,
+    ),
+}
+";
+
+    fn counted() -> DeclaredVariants {
+        declared_variants(SOURCE, "Sample").expect("the sample enum parses")
+    }
+
+    #[test]
+    fn a_variant_carrying_a_payload_counts_apart_from_a_unit_variant() {
+        // Pins both arms: `Delegated`, `Shaped` and `Wrapped` each carry a
+        // vocabulary, and the doc comment declares nothing.
+        assert_eq!(
+            counted(),
+            DeclaredVariants {
+                unit: 2,
+                delegated: 3
+            }
+        );
+    }
+
+    /// A struct variant delegates exactly as a tuple variant does.
+    ///
+    /// Its own case because the retired scan split the two on `(` alone, so a
+    /// struct-shaped delegate read as a unit — the delegate count a caller
+    /// asserts stayed right while the vocabulary it names went unchained.
+    #[test]
+    fn a_struct_variant_is_a_delegate_rather_than_a_unit() {
+        let without_struct = SOURCE.replace("    Shaped { kind: Other },\n", "");
+        assert_eq!(
+            declared_variants(&without_struct, "Sample").expect("it still parses"),
+            DeclaredVariants {
+                unit: 2,
+                delegated: 2
+            },
+            "removing the struct variant removes a DELEGATE, never a unit"
+        );
+    }
+
+    /// A declaration spread over several lines is still one variant.
+    ///
+    /// The case the retired per-line scan could not pass: `Wrapped` matched no
+    /// line shape, so it incremented neither count and every caller's totals
+    /// stayed green over a delegate nothing had chained. `rustfmt` wraps a
+    /// declaration whenever its payload pushes past the width, so this is the
+    /// ordinary shape rather than a contrived one.
+    #[test]
+    fn a_declaration_wrapped_over_lines_is_counted_once_as_a_delegate() {
+        let flat = SOURCE.replace("    Wrapped(\n        Other,\n    ),\n", "");
+        assert_eq!(
+            declared_variants(&flat, "Sample").expect("it still parses"),
+            DeclaredVariants {
+                unit: 2,
+                delegated: 2
+            },
+            "the wrapped declaration was worth exactly one delegate"
+        );
+    }
+
+    #[test]
+    fn an_enum_the_source_does_not_declare_is_could_not_look() {
+        assert!(declared_variants(SOURCE, "Absent").is_none());
+    }
+
+    #[test]
+    fn source_the_grammar_refuses_is_could_not_look() {
+        assert!(declared_variants("pub enum Open {\n    First,\n", "Sample").is_none());
+    }
+
+    #[test]
+    fn the_count_is_of_the_named_enum_rather_than_its_neighbours() {
+        let two = format!("{SOURCE}\npub enum Later {{\n    Third,\n    Fourth,\n}}\n");
+        assert_eq!(
+            declared_variants(&two, "Sample").expect("both enums parse"),
+            counted()
+        );
+        assert_eq!(
+            declared_variants(&two, "Later").expect("both enums parse"),
+            DeclaredVariants {
+                unit: 2,
+                delegated: 0
+            }
+        );
+    }
+}
+
+/// What [`declared_variants`] counted: variants enumerated by a list, and
+/// variants enumerated by delegating to another vocabulary.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeclaredVariants {
+    /// Unit variants, each owing a row in the enum's own list.
+    pub unit: usize,
+    /// Tuple variants, each owing a `chain` into the vocabulary it wraps.
+    pub delegated: usize,
+}
+
 /// How many leading arguments of an assertion macro are its condition, or
 /// `None` for a macro that asserts nothing.
 fn conditions_of(path: &syn::Path) -> Option<usize> {

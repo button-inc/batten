@@ -1263,6 +1263,249 @@ impl WeakeningKind {
             WeakeningKind::OfflineFallbackEnabled => "offline-fallback-enabled",
         }
     }
+
+    // THE SENTENCES ARE ASSOCIATED CONSTS RATHER THAN ARM BODIES, and that is
+    // not a style choice. A wrapped sentence makes its arm three lines, so the
+    // table below crossed `clippy::too_many_lines` at 244 — and the escape that
+    // would have silenced it is exactly what `spawn add other` refuses under
+    // `crates/batten/src`, with no override route and deliberately so: a lint
+    // annotation an agent writes about its own work is not an answer.
+    //
+    // Lifting the values out leaves one line per kind, which fits, and costs a
+    // reader nothing: a const no arm names is `dead_code` and an arm naming no
+    // const does not compile, so the two halves are held to each other in BOTH
+    // directions by the compiler. That is the self-cleaning property
+    // `rules/rust.md` asks of an `#[expect]`, bought here without one.
+    const STRICTNESS_LOWERED: &'static str = "The effective `strictness` floor dropped.";
+    const PROMOTION_DISABLED: &'static str = "A committed `fail_on_warning = true` was turned off.";
+    const PROTECTED_REMOVED: &'static str = "A `protected` entry is gone.";
+    const PROTECTED_READER_ADDED: &'static str = "A `protected_readers` entry the base ref did not carry, so a refusal over that path \
+         becomes a pass.";
+    const UNLANDED_REMOVED: &'static str = "An `unlanded` entry is gone.";
+    const RULE_REMOVED: &'static str = "A whole rule is gone.";
+    const SEVERITY_LOWERED: &'static str = "A rule survives at a lower severity rank.";
+    const WAIVER_ADDED: &'static str =
+        "A waiver the base ref did not carry, suppressing findings that ref would report.";
+    const WAIVER_EXPIRY_EXTENDED: &'static str =
+        "A waiver's expiry moved later, extending a suppression the base ref had bounded.";
+    const RULE_PREDICATE_CHANGED: &'static str =
+        "A rule's predicate changed while its id and severity stayed put.";
+    const MIN_VERSION_LOWERED: &'static str =
+        "The `min_batten_version` floor dropped, or stopped being declared.";
+    const EPOCH_PATH_REMOVED: &'static str =
+        "A path is gone from `epoch.tracked`, so the config epoch attributes less than it did.";
+    const RECORD_REMOVED: &'static str =
+        "A `[[record]]` family is gone, so every module reading it goes quiet rather than red.";
+    const VERIFIED_CHECK_REMOVED: &'static str = "A check is gone from `receipt.verified_by`, so `verified` demands a smaller body of \
+         evidence than it did.";
+    const LANDING_PATH_REMOVED: &'static str = "A path is gone from `lease.landing_paths`, so the staleness read asks about less of the \
+         landing mechanism than it did.";
+    const FAST_FORWARD_LANE_ADDED: &'static str = "A prefix is new in `lease.fast_forward_branches`, so the runner-side landing precondition \
+         stops judging every branch under it.";
+    const WIRING_DISARM_REMOVED: &'static str = "A `[[wiring.disarm]]` row is gone, so a launcher script this repository had neutralised \
+         goes back to running.";
+    const SBOM_ACTIONS_REMOVED: &'static str = "`[sbom] actions` is gone, so the actions pass is skipped and the pinned actions' licence \
+         and copyright go back to `NOASSERTION`.";
+    const SBOM_CHECKER_CHANGED: &'static str =
+        "`[sbom.conformance] checker` names a different program, or the table is gone.";
+    const SBOM_STANDARD_REMOVED: &'static str =
+        "A standard the base ref asked `[sbom.conformance]` to check is no longer asked.";
+    const SBOM_INVENTORY_CHANGED: &'static str =
+        "`[sbom] inventory` names a different `[[rule.tools]]` row, or none.";
+    const SBOM_RECORD_CHANGED: &'static str =
+        "`[sbom.conformance] record` names a different family, or the table is gone.";
+    const MCP_PERMISSION_ALIAS_REMOVED: &'static str = "A server the base ref's permission file governed under an exposed name is no longer \
+         governed under it.";
+    const BOARD_SWEEP_GATE_REMOVED: &'static str =
+        "A `[[board.sweep]]` gate the base ref ran and the working tree does not.";
+    const BOARD_SWEEP_ABSTENTION_ADDED: &'static str = "A `[[board.sweep]]` gate's `abstains` gained an exit the base ref's row did not carry \
+         there, so a sweep that answered louder now abstains.";
+    const BOARD_SWEEP_REFUSAL_WIDENED: &'static str = "A `[[board.sweep]]` gate's `refuses` gained an exit the base ref's row classified in \
+         neither lane, so a could-not-look is reported as a refusal.";
+    const SHELL_CENSUS_NARROWED: &'static str =
+        "`[census.shell]` stopped reaching somewhere it reached, or set apart a file it did not.";
+    const READY_CUTOVER_RELAXED: &'static str = "The prose-dialect cutover moved later, or stopped being declared, so Ready blocks that \
+         owed the claims object no longer do.";
+    const PERF_EXEMPTION_ADDED: &'static str = "A `[[perf.exempt]]` row was added, or an existing one raised its ratio or pushed its \
+         expiry out.";
+    const VERB_REMOVED: &'static str = "A `[[verb]]` row is gone, so a mutating tool call is no longer mediated at the \
+         `PreToolUse` boundary.";
+    const PATTERN_REMOVED: &'static str =
+        "A `[[pattern]]` row is gone, so every module referencing it resolves to undefined.";
+    const VERDICT_OVERRIDE_ADDED: &'static str =
+        "A `[[verdict]]` class gained an `override` route the base ref did not carry.";
+    const VOCABULARY_ABANDONED: &'static str =
+        "A declared `[vocabulary]` is gone, so the naming grammar stopped applying.";
+    const FACT_COMMAND_CHANGED: &'static str = "An agent-sourced fact's declared command changed.";
+    const FACT_RETURNS_LOOSENED: &'static str =
+        "An agent-sourced fact's declared `returns` moved to a looser contract.";
+    const FACT_COUNTING_CHANGED: &'static str = "An agent-sourced fact's counting predicate moved.";
+    const FACT_REMOVED: &'static str = "An agent-sourced fact was removed.";
+    const MINT_ADDED: &'static str = "A `[[mint]]` row the base ref did not carry, so a receipt a `receipt` rule demands is now \
+         written by the mere fact of a call.";
+    const MINT_CHANGED: &'static str =
+        "A `[[mint]]` row survives under its name with a different definition.";
+    const RECORDER_ADDED: &'static str = "A `[[recorder]]` row the base ref did not carry, so a record a gate reads is written \
+         automatically.";
+    const RECORDER_CHANGED: &'static str =
+        "A `[[recorder]]` row survives under its name with a different definition.";
+    const PROGRAM_CHANGED: &'static str =
+        "A `[program]` entry a `[[recorder]]` runs was added or repointed.";
+    const MARKER_REMOVED: &'static str =
+        "A `[[marker]]` row is gone, so its suppressions stop being counted.";
+    const EXEC_PATTERN_REMOVED: &'static str =
+        "An `[[exec_pattern]]` row is gone, so a lying exit `0` carrying it stops being promoted.";
+    const TRAVERSAL_REMOVED: &'static str =
+        "A `[[traversal]]` row is gone, so every module reading its answer goes quiet.";
+    const REGISTER_REMOVED: &'static str = "A `[[register]]` row is gone, so every `reference` rule resolving against it is refused \
+         at load.";
+    const PROVISION_REMOVED: &'static str =
+        "A `[[provision]]` row is gone, so a pinned tool stops being verified.";
+    const HOST_SETTING_UNPROJECTED: &'static str =
+        "A `[host]` key the authority projected and this tree no longer does.";
+    const DEFERRAL_UNWATCHED: &'static str =
+        "A `[[deferral]]` row the authority declared and this tree no longer does.";
+    const CI_MERGE_CHECK_REMOVED: &'static str =
+        "A required check is gone from the `[ci]` projection.";
+    const CI_MERGE_METHOD_ADDED: &'static str = "The merge-method constraint admits a method it did not, or stopped constraining methods \
+         at all.";
+    const CI_LINEAR_HISTORY_DROPPED: &'static str = "`ci.required_linear_history` was turned off, so `land linear` stops counting the merge \
+         commits a branch carries.";
+    const ATTRIBUTION_DENY_REMOVED: &'static str = "A pattern is gone from one of `[attribution]`'s deny lists, so a spelling it refused is \
+         admitted again.";
+    const ATTRIBUTION_ALLOW_ADDED: &'static str = "A pattern arrived in `attribution.trailer_allow`, widening the carve-out from the trailer \
+         deny list.";
+    const DEFECTS_LEDGER_REMOVED: &'static str =
+        "The `[defects]` table is gone, so the append-only ledger gate is no longer active.";
+    const DEFECTS_CLASS_ADDED: &'static str =
+        "A class arrived in `defects.classes`, so a record the ledger refused is admitted.";
+    const TRANSCRIPT_PATH_REMOVED: &'static str = "The transcript path is gone, so `check` stops reading the completed session it judged \
+         against.";
+    const TRANSCRIPT_HARNESS_REMOVED: &'static str = "The transcript's declared harness is gone, so no record grammar can be chosen and every \
+         rule reading the session abstains.";
+    const FORGE_CREDENTIALS_REMOVED: &'static str = "The forge's declared credential variables are gone, so every REST read goes out \
+         unauthenticated and the gates over it stop deciding.";
+    const FORGE_NOTHING_GRADED_WIDENED: &'static str = "A check-runs status was added to the effective `[forge] nothing_graded`, so a read that \
+         reported could-not-look now records nothing graded and exits clean.";
+    const MUTATE_GATE_REMOVED: &'static str = "An entry the base ref's `[mutate].gates` declared is gone, so `batten mutate` stops \
+         holding that gate to a mutation its suite catches.";
+    const ADVISORY_CEILING_RAISED: &'static str =
+        "The `[advisory]` channel ceiling rose, or stopped being declared.";
+    const HOOK_OUTPUT_CEILING_RAISED: &'static str =
+        "The `[hook_output]` session ceiling rose, or stopped being declared.";
+    const HOOK_REPEATS_RAISED: &'static str =
+        "The `[hook_output]` repeat allowance rose, or stopped being declared.";
+    const REFUSAL_CEILING_RAISED: &'static str =
+        "The `[refusal]` ceiling rose, or stopped being declared.";
+    const BUDGET_SET_REMOVED: &'static str =
+        "A `[budget.<name>]` table is gone, so nothing is counted for it.";
+    const BUDGET_FILE_REMOVED: &'static str = "A counted file glob is gone from a budget set.";
+    const BUDGET_EMBEDDED_REMOVED: &'static str = "An `[[budget.<name>.embedded]]` declaration is gone, so a string a host always loads \
+         stops being counted.";
+    const BUDGET_LIMIT_RAISED: &'static str = "A budget ceiling rose, or stopped being declared.";
+    const MUST_LAND_ON_REMOVED: &'static str =
+        "`must_land_on` is gone, so `worktree status` has no target to judge work against.";
+    const JUDGE_RAW_CLASS_ADDED: &'static str = "A content class arrived in `judge.raw`, so bytes that could not cross into a model call \
+         now can.";
+    const JUDGE_PAYLOAD_LIMIT_RAISED: &'static str =
+        "The assembled-payload ceiling rose, so more bytes may cross.";
+    const DESIGN_CAPTURE_LIMIT_RAISED: &'static str =
+        "The per-capture byte ceiling rose, so a larger capture stops being worth a second look.";
+    const HANDLER_REMOVED: &'static str = "A `[[hook.handler]]` the base ref declared is gone.";
+    const STARTUP_ROW_REMOVED: &'static str =
+        "A `[[startup]]` row the base ref carried and the working tree does not.";
+    const OFFLINE_FALLBACK_ENABLED: &'static str = "`[trust] offline_fallback` went on, so an unreachable base ref may now be answered from a \
+         pinned config instead of refusing.";
+
+    /// The one-sentence meaning `policy explain` prints for this kind
+    /// (CLOUD-2379).
+    ///
+    /// **Exhaustive, so a kind added without a definition fails to compile** —
+    /// which is the whole mechanism: [`crate::lint::SmellId`] wraps this, and an
+    /// id that cannot be explained can therefore not be emitted. Each sentence
+    /// is the one already stated in the variant's own `///` doc above, so this
+    /// is a projection of that prose rather than a second authority over it.
+    #[must_use]
+    pub const fn definition(self) -> &'static str {
+        match self {
+            WeakeningKind::StrictnessLowered => Self::STRICTNESS_LOWERED,
+            WeakeningKind::PromotionDisabled => Self::PROMOTION_DISABLED,
+            WeakeningKind::ProtectedRemoved => Self::PROTECTED_REMOVED,
+            WeakeningKind::ProtectedReaderAdded => Self::PROTECTED_READER_ADDED,
+            WeakeningKind::UnlandedRemoved => Self::UNLANDED_REMOVED,
+            WeakeningKind::RuleRemoved => Self::RULE_REMOVED,
+            WeakeningKind::SeverityLowered => Self::SEVERITY_LOWERED,
+            WeakeningKind::WaiverAdded => Self::WAIVER_ADDED,
+            WeakeningKind::WaiverExpiryExtended => Self::WAIVER_EXPIRY_EXTENDED,
+            WeakeningKind::RulePredicateChanged => Self::RULE_PREDICATE_CHANGED,
+            WeakeningKind::MinVersionLowered => Self::MIN_VERSION_LOWERED,
+            WeakeningKind::EpochPathRemoved => Self::EPOCH_PATH_REMOVED,
+            WeakeningKind::RecordRemoved => Self::RECORD_REMOVED,
+            WeakeningKind::VerifiedCheckRemoved => Self::VERIFIED_CHECK_REMOVED,
+            WeakeningKind::LandingPathRemoved => Self::LANDING_PATH_REMOVED,
+            WeakeningKind::FastForwardLaneAdded => Self::FAST_FORWARD_LANE_ADDED,
+            WeakeningKind::WiringDisarmRemoved => Self::WIRING_DISARM_REMOVED,
+            WeakeningKind::SbomActionsRemoved => Self::SBOM_ACTIONS_REMOVED,
+            WeakeningKind::SbomCheckerChanged => Self::SBOM_CHECKER_CHANGED,
+            WeakeningKind::SbomStandardRemoved => Self::SBOM_STANDARD_REMOVED,
+            WeakeningKind::SbomInventoryChanged => Self::SBOM_INVENTORY_CHANGED,
+            WeakeningKind::SbomRecordChanged => Self::SBOM_RECORD_CHANGED,
+            WeakeningKind::McpPermissionAliasRemoved => Self::MCP_PERMISSION_ALIAS_REMOVED,
+            WeakeningKind::BoardSweepGateRemoved => Self::BOARD_SWEEP_GATE_REMOVED,
+            WeakeningKind::BoardSweepAbstentionAdded => Self::BOARD_SWEEP_ABSTENTION_ADDED,
+            WeakeningKind::BoardSweepRefusalWidened => Self::BOARD_SWEEP_REFUSAL_WIDENED,
+            WeakeningKind::ShellCensusNarrowed => Self::SHELL_CENSUS_NARROWED,
+            WeakeningKind::ReadyCutoverRelaxed => Self::READY_CUTOVER_RELAXED,
+            WeakeningKind::PerfExemptionAdded => Self::PERF_EXEMPTION_ADDED,
+            WeakeningKind::VerbRemoved => Self::VERB_REMOVED,
+            WeakeningKind::PatternRemoved => Self::PATTERN_REMOVED,
+            WeakeningKind::VerdictOverrideAdded => Self::VERDICT_OVERRIDE_ADDED,
+            WeakeningKind::VocabularyAbandoned => Self::VOCABULARY_ABANDONED,
+            WeakeningKind::FactCommandChanged => Self::FACT_COMMAND_CHANGED,
+            WeakeningKind::FactReturnsLoosened => Self::FACT_RETURNS_LOOSENED,
+            WeakeningKind::FactCountingChanged => Self::FACT_COUNTING_CHANGED,
+            WeakeningKind::FactRemoved => Self::FACT_REMOVED,
+            WeakeningKind::MintAdded => Self::MINT_ADDED,
+            WeakeningKind::MintChanged => Self::MINT_CHANGED,
+            WeakeningKind::RecorderAdded => Self::RECORDER_ADDED,
+            WeakeningKind::RecorderChanged => Self::RECORDER_CHANGED,
+            WeakeningKind::ProgramChanged => Self::PROGRAM_CHANGED,
+            WeakeningKind::MarkerRemoved => Self::MARKER_REMOVED,
+            WeakeningKind::ExecPatternRemoved => Self::EXEC_PATTERN_REMOVED,
+            WeakeningKind::TraversalRemoved => Self::TRAVERSAL_REMOVED,
+            WeakeningKind::RegisterRemoved => Self::REGISTER_REMOVED,
+            WeakeningKind::ProvisionRemoved => Self::PROVISION_REMOVED,
+            WeakeningKind::HostSettingUnprojected => Self::HOST_SETTING_UNPROJECTED,
+            WeakeningKind::DeferralUnwatched => Self::DEFERRAL_UNWATCHED,
+            WeakeningKind::CiMergeCheckRemoved => Self::CI_MERGE_CHECK_REMOVED,
+            WeakeningKind::CiMergeMethodAdded => Self::CI_MERGE_METHOD_ADDED,
+            WeakeningKind::CiLinearHistoryDropped => Self::CI_LINEAR_HISTORY_DROPPED,
+            WeakeningKind::AttributionDenyRemoved => Self::ATTRIBUTION_DENY_REMOVED,
+            WeakeningKind::AttributionAllowAdded => Self::ATTRIBUTION_ALLOW_ADDED,
+            WeakeningKind::DefectsLedgerRemoved => Self::DEFECTS_LEDGER_REMOVED,
+            WeakeningKind::DefectsClassAdded => Self::DEFECTS_CLASS_ADDED,
+            WeakeningKind::TranscriptPathRemoved => Self::TRANSCRIPT_PATH_REMOVED,
+            WeakeningKind::TranscriptHarnessRemoved => Self::TRANSCRIPT_HARNESS_REMOVED,
+            WeakeningKind::ForgeCredentialsRemoved => Self::FORGE_CREDENTIALS_REMOVED,
+            WeakeningKind::ForgeNothingGradedWidened => Self::FORGE_NOTHING_GRADED_WIDENED,
+            WeakeningKind::MutateGateRemoved => Self::MUTATE_GATE_REMOVED,
+            WeakeningKind::AdvisoryCeilingRaised => Self::ADVISORY_CEILING_RAISED,
+            WeakeningKind::HookOutputCeilingRaised => Self::HOOK_OUTPUT_CEILING_RAISED,
+            WeakeningKind::HookRepeatsRaised => Self::HOOK_REPEATS_RAISED,
+            WeakeningKind::RefusalCeilingRaised => Self::REFUSAL_CEILING_RAISED,
+            WeakeningKind::BudgetSetRemoved => Self::BUDGET_SET_REMOVED,
+            WeakeningKind::BudgetFileRemoved => Self::BUDGET_FILE_REMOVED,
+            WeakeningKind::BudgetEmbeddedRemoved => Self::BUDGET_EMBEDDED_REMOVED,
+            WeakeningKind::BudgetLimitRaised => Self::BUDGET_LIMIT_RAISED,
+            WeakeningKind::MustLandOnRemoved => Self::MUST_LAND_ON_REMOVED,
+            WeakeningKind::JudgeRawClassAdded => Self::JUDGE_RAW_CLASS_ADDED,
+            WeakeningKind::JudgePayloadLimitRaised => Self::JUDGE_PAYLOAD_LIMIT_RAISED,
+            WeakeningKind::DesignCaptureLimitRaised => Self::DESIGN_CAPTURE_LIMIT_RAISED,
+            WeakeningKind::HandlerRemoved => Self::HANDLER_REMOVED,
+            WeakeningKind::StartupRowRemoved => Self::STARTUP_ROW_REMOVED,
+            WeakeningKind::OfflineFallbackEnabled => Self::OFFLINE_FALLBACK_ENABLED,
+        }
+    }
 }
 
 /// What [`weakenings`] does about one [`Config`] field.
@@ -4587,23 +4830,11 @@ mod tests {
     fn the_kind_vocabulary_is_derived_rather_than_re_typed() {
         // `ALL` is what the census ranges over, so a variant missing from it
         // would be a kind the census cannot see — the same hole one level down.
-        let source = include_str!("trust.rs");
-        let start = source
-            .find("pub enum WeakeningKind {")
-            .expect("the kind enum is declared here");
-        let rest = &source[start..];
-        let body = &rest[..rest.find("\n}").expect("the enum closes")];
-        let declared = body
-            .lines()
-            .filter(|line| {
-                let line = line.trim();
-                line.ends_with(',')
-                    && !line.starts_with("///")
-                    && line.starts_with(|c: char| c.is_ascii_uppercase())
-            })
-            .count();
+        let declared = crate::testing::declared_variants(include_str!("trust.rs"), "WeakeningKind")
+            .expect("the kind enum is declared here and closes");
+        assert_eq!(declared.delegated, 0, "every kind is a unit variant");
         assert_eq!(
-            declared,
+            declared.unit,
             WeakeningKind::ALL.len(),
             "every variant must be in `ALL`"
         );
@@ -4613,6 +4844,30 @@ mod tests {
         let count = tokens.len();
         tokens.dedup();
         assert_eq!(tokens.len(), count, "two kinds share one token");
+    }
+
+    /// Every kind answers `policy explain` with its own sentence (CLOUD-2379).
+    ///
+    /// **Held HERE rather than through `lint::SmellId`, which reaches every
+    /// kind through `SmellId::Weakening`.** That looked like coverage and is
+    /// not: `mutate` carried `WeakeningKind::definition` replaced wholesale
+    /// with `""` and with `"xyzzy"`, both surviving, because a mutant is only
+    /// killed by a case the runner selects for the file it mutated. An empty
+    /// definition is the defect CLOUD-2379 exists to close wearing a different
+    /// coat — the id resolves, and explains nothing.
+    #[test]
+    fn every_kind_has_its_own_definition() {
+        let definitions: Vec<&str> = WeakeningKind::ALL.iter().map(|k| k.definition()).collect();
+        for (kind, definition) in WeakeningKind::ALL.iter().zip(&definitions) {
+            assert!(!definition.is_empty(), "{} has a definition", kind.as_str());
+        }
+        // Distinct, which the `""` check alone does not buy: one constant
+        // sentence for all 76 kinds is non-empty and says nothing.
+        let mut sorted = definitions.clone();
+        let count = sorted.len();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), count, "two kinds share one definition");
     }
 
     // --- CLOUD-721: one both-directions case per newly compared key ----------

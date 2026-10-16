@@ -3132,7 +3132,7 @@ trace\:"Add everything"))' \
 '--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':token -- The names to resolve, as a finding line prints them\: a rule, a class, an engine id:_default' \
+':token -- The names to resolve, as a finding line prints them\: a rule, a class, an engine id, a smell:_default' \
 && ret=0
 ;;
 (rule)

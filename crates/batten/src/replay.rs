@@ -35,12 +35,12 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use crate::exit::ExitCode;
-
-/// A base test that HEAD's code no longer satisfies, or that will not build there.
-pub const TEST_EXPECTATION_CHANGED: &str = "test-expectation-changed";
-
-/// A base test that HEAD deleted.
-pub const TEST_REMOVED: &str = "test-removed";
+// THE IDS ARE THE ENGINE'S ONE SMELL VOCABULARY, never literals here
+// (CLOUD-2379). Two `&'static str` constants used to live in this module, and
+// `policy explain` could resolve neither — so a refused lap named a finding
+// nothing explained. `SmellId::definition` is exhaustive, which is what makes
+// that unreachable rather than merely fixed.
+use crate::lint::SmellId;
 
 /// One `#[test]` fn: where it is, and its body.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,7 +262,7 @@ struct Finding {
     key: String,
     path: String,
     line: usize,
-    id: &'static str,
+    id: SmellId,
 }
 
 /// One rendered finding: the finding and how the `asked` ledger answered it.
@@ -304,7 +304,7 @@ pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<E
                 key: format!("{path}::{inner}"),
                 path: path.clone(),
                 line,
-                id: TEST_REMOVED,
+                id: SmellId::TestRemoved,
             });
         }
         if !changed.modified.is_empty() {
@@ -470,7 +470,7 @@ fn judge(
                             key: format!("{path}::{}", test.inner),
                             path: path.clone(),
                             line: test.line,
-                            id: TEST_EXPECTATION_CHANGED,
+                            id: SmellId::TestExpectationChanged,
                         });
                     }
                 }
@@ -484,7 +484,7 @@ fn judge(
                         key: format!("{path}::{}", test.inner),
                         path: path.clone(),
                         line: test.line,
-                        id: TEST_EXPECTATION_CHANGED,
+                        id: SmellId::TestExpectationChanged,
                     });
                 }
             }

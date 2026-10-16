@@ -9618,12 +9618,40 @@ fn explain_name(
     // THE ENGINE'S OWN IDS resolve with no config at all, which is the case
     // `engine-cannot-adjudicate` fires in.
     if let Some(definition) = verdict::native_definition(name) {
-        sections.push(Explained {
-            text: format!("{name} engine\n\n{definition}\n"),
-            json: serde_json::json!({ "name": name, "native": definition }),
-        });
+        sections.push(flat_section(name, "engine", "native", definition));
+    }
+    // THE SMELL VOCABULARY, which no arm above reaches (CLOUD-2379). A smell is
+    // not a `[[rule]]` row, not a `[[verdict]]` class and not a `Refusal`, so
+    // every id `config lint` and `test replay` print used to resolve to nothing
+    // — a finding line hopping to an `explain` that exits 1.
+    //
+    // AFTER THE NATIVE ARM, and the order costs nothing: no smell id starts
+    // with a `NATIVE_RULE_PREFIXES` prefix, so no name can print two
+    // engine-style sections.
+    if let Some(smell) = lint::SmellId::parse(name) {
+        sections.push(flat_section(name, "smell", "smell", smell.definition()));
     }
     Ok(sections)
+}
+
+/// A vocabulary that answers a name with one sentence, rendered (CLOUD-2379).
+///
+/// The two arms above it are the only ones of `explain_name`'s five that share
+/// a shape — a `fn(&str) -> Option<&'static str>` and six lines of formatting.
+/// The other three take different inputs and render structurally different
+/// sections, so this is the duplication worth removing and a registry over all
+/// five is not: it would make the print order a property of a slice rather than
+/// of code a reader meets top to bottom, and three of those arms carry comments
+/// saying why their order is load-bearing.
+///
+/// `heading` and `key` are separate because the human line and the `-J` key are
+/// not the same word for the engine's own ids: `<name> engine` prints over a
+/// `"native"` key.
+fn flat_section(name: &str, heading: &str, key: &'static str, definition: &str) -> Explained {
+    Explained {
+        text: format!("{name} {heading}\n\n{definition}\n"),
+        json: serde_json::json!({ "name": name, key: definition }),
+    }
 }
 
 /// A class, as `policy explain` prints it (CLOUD-1053).
@@ -28684,7 +28712,7 @@ fn run_config(
                         .iter()
                         .map(|smell| SmellView {
                             at: smell.at.to_string(),
-                            id: smell.id,
+                            id: smell.id.as_str(),
                         })
                         .collect(),
                 };
