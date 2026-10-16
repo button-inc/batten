@@ -1637,7 +1637,7 @@ fn provided_by_pin(dir: &Path, program: &str) -> bool {
 /// failed a row the dispatch would have run, and pushed rows into a one-line task
 /// wrapper purely to satisfy this probe. The doctor asking is itself that image.
 fn handler_program_resolves(dir: &Path, program: &str) -> bool {
-    if program == crate::surface::BINARY {
+    if crate::rules::is_own_image(program) {
         return true;
     }
     if program.contains([std::path::MAIN_SEPARATOR, '/']) {
@@ -1683,17 +1683,14 @@ pub fn diagnose(dir: &Path) -> Report {
     // without the pin arm every pinned program reads as missing and the whole
     // check is noise.
     //
-    // AND A ROW NAMING `batten` RESOLVES, BECAUSE THE SPAWN NEVER LOOKS IT UP.
-    // `spawn_resolving`'s rung -1 runs the running image for that name, so a
-    // `PATH` probe here would ask a question the spawn does not and fail a row
-    // the dispatch would have run — exactly what `handler_program_resolves`
-    // already refuses to do for the handler surface, and for the same reason:
-    // the doctor asking is itself that image.
+    // AND A ROW NAMING `batten` RESOLVES, BECAUSE THE SPAWN NEVER LOOKS IT UP —
+    // `spawn_resolving`'s rung -1 runs the running image (CLOUD-2386), the same
+    // reason `handler_program_resolves` gives below.
     let unreachable: Vec<String> = rules
         .iter()
         .filter_map(Rule::program)
         .filter(|program| {
-            *program != crate::surface::BINARY
+            !crate::rules::is_own_image(program)
                 && !on_path(program)
                 && !provided_by_pin(dir, program)
         })

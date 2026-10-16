@@ -1048,15 +1048,11 @@ fn run_one(root: &Path, handler: &Handler, payload: &Payload) -> Outcome {
     let Some((program, args)) = handler.run.split_first() else {
         return Outcome::Broke(Violation::NotSpawnable);
     };
-    // A ROW NAMING `batten` GETS THE RUNNING IMAGE, NEVER A `PATH` LOOKUP
-    // (CLOUD-1326) — and that mapping lives in `rules::spawn_resolving`'s rung
-    // -1 now, not here (CLOUD-2386). It was this site's special case while this
-    // was the only spawn that needed it; every other declared argv reaches the
-    // same resolver, so one predicate there covers them all, this one included.
-    // `handler.rs`'s own header is right that there is no in-process form of a
-    // handler to prefer (CLOUD-320): a handler IS a program the operator
-    // declared, and running it is this module's purpose. The defect was never
-    // whether to spawn — it was WHICH program the spawn resolves to.
+    // A ROW NAMING `batten` GETS THE RUNNING IMAGE, NEVER A `PATH` LOOKUP — in
+    // `rules::spawn_resolving`'s rung -1 now, not here (CLOUD-1326, CLOUD-2386).
+    // It was this site's special case while this was the only spawn that needed
+    // it; every declared argv reaches that resolver, so one predicate covers
+    // them all, this one included.
     //
     // A RELATIVE PATH IN A ROW IS THE REPOSITORY'S (CLOUD-2050). The host's
     // shell can stand anywhere — a sibling checkout, `$HOME` — and a row's
