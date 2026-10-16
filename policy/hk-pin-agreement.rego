@@ -123,8 +123,9 @@ amends contains {"line": i + 1, "version": match[1]} if {
 # union. Two arms here because the tag reading's mutant can then anchor on a
 # short comparison rather than on a ~97-character
 # `regex.find_all_string_submatch_n` line; one arm there because arm D's
-# subjects carry no line, so two arms could never emit distinct objects on a
-# single task — as they can here, where two amends lines can drift separately.
+# subjects carry no line, so two arms could never emit distinct objects there —
+# not even across the steps of an array `run`, every one of which is read — as
+# they can here, where two amends lines can drift separately.
 amend_tags contains {"line": i + 1, "version": match[1]} if {
 	some i, line in lines
 	some match in regex.find_all_string_submatch_n(data.batten.patterns["hk-download-tag"], line, -1)
@@ -160,8 +161,10 @@ violation contains {
 # THE MIRROR IS NOT GOVERNED, and that is a decision rather than an oversight.
 # Nothing counts `amend_tags` — nor `package_tags` on the fetch URL — so a
 # floating or templated TAG over an agreeing fragment
-# (`…/download/latest/hk@1.56.1`) is refused by no arm on either surface. A `count(amend_tags) == 0` arm would close it and would also refuse
-# every URL that has no `/v<semver>/` segment at all — a package on a non-GitHub
+# (`…/download/latest/hk@1.56.1`) is refused by no arm on either surface.
+#
+# A `count(amend_tags) == 0` arm would close it, and would also refuse every
+# URL that has no `/v<semver>/` segment at all — a package on a non-GitHub
 # mirror, say — because this module cannot tell a missing tag from a floating
 # one. The fragment is the spelling every `package://` URI must carry; the tag
 # is a property of one host's release layout. So the mandatory half is required
@@ -219,9 +222,8 @@ violation contains {
 # silently while a number or a table fired the arm. Neither is this module's
 # question: a `run` mise cannot execute is a manifest defect, and reporting it
 # is not this module's job. mise accepts a string or an array of them, so those
-# are the two
-# shapes read, and every other leaves D and E undefined together, exactly as an
-# absent task does.
+# are the two shapes read, and every other leaves D and E undefined together,
+# exactly as an absent task does.
 package_run := r if {
 	r := input.tree.documents["mise.toml"].tasks["pkl-package"].run
 	is_string(r)
