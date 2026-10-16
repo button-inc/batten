@@ -269,6 +269,34 @@ pub struct Handler {
     /// subject.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_matcher: Option<String>,
+    /// Which WRITTEN PATHS this handler does not run for, as a regular
+    /// expression over the path the mediated call writes (CLOUD-2390).
+    ///
+    /// **Absent means every call the other selectors admitted**, so no landed
+    /// row changes behaviour by this column's arrival — the promise `matcher`
+    /// and `command_matcher` each made.
+    ///
+    /// # An exception, where its siblings are selections
+    ///
+    /// Measured: `filed-row-settled` refuses every Edit and Write while a filed
+    /// row is unsettled, and its remedy is a board write. In plan mode the board
+    /// write is refused, so the one file plan mode exists to write — the host's
+    /// plan file — could not be written either, and the plan was presented
+    /// stale. The handler's subject is the TREE; a path outside it is not its
+    /// subject, and naming the exception is narrower than naming every tree path.
+    ///
+    /// # A call that writes no path is SELECTED
+    ///
+    /// The opposite of [`Handler::command_matcher`]'s could-not-look arm, for the
+    /// opposite shape of column: that one names what a row IS about, so a call
+    /// with no command is not its subject; this one names what a row is NOT
+    /// about, so a call with no path was excepted by nothing.
+    ///
+    /// The path is the one the host sent, made repo-relative only when it lies
+    /// inside the repository (`hook::relativise_writes`), so an expression over a
+    /// host path outside the tree anchors on its leading `/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_except: Option<String>,
     /// The issue that owns retiring this handler (CLOUD-984).
     ///
     /// **A handler is an antipattern with a ratchet, never a destination.** The
@@ -369,6 +397,26 @@ impl Handler {
             Ok(regex) => regex.is_match(command),
             Err(_) => true,
         }
+    }
+
+    /// Whether this handler runs for a call writing `writes` (CLOUD-2390).
+    ///
+    /// `true` for a row carrying no `path_except`, and for a call that writes no
+    /// path: an exception excepts only what it names. A match does NOT select.
+    /// An UNPARSEABLE expression selects, matching both siblings: it is refused
+    /// at load, and a participant in a fail-open contract runs rather than goes
+    /// silent.
+    //MUTANT path-except-inverted|s@^        writes.is_none_or(\x7cwrites\x7c !regex.is_match(writes))$@        writes.is_none_or(\x7cwrites\x7c regex.is_match(writes))@|a_write_outside_the_excepted_path_is_selected
+    //MUTANT path-except-pathless|s@^        writes.is_none_or(\x7cwrites\x7c !regex.is_match(writes))$@        writes.is_some_and(\x7cwrites\x7c !regex.is_match(writes))@|the_path_exception_selects_when_absent_or_pathless
+    #[must_use]
+    pub fn selects_path(&self, writes: Option<&str>) -> bool {
+        let Some(except) = self.path_except.as_deref() else {
+            return true;
+        };
+        let Ok(regex) = Regex::new(except) else {
+            return true;
+        };
+        writes.is_none_or(|writes| !regex.is_match(writes))
     }
 
     /// The bound this handler runs under.
@@ -551,6 +599,17 @@ impl Handler {
             Regex::new(matcher).map_err(|err| {
                 UsageError::raise(format!(
                     "hook.handler {}: `command_matcher` is not valid: {err}",
+                    self.id
+                ))
+            })?;
+        }
+        // THE PATH EXCEPTION COMPILES (CLOUD-2390), for the sibling's reason: an
+        // uncompilable expression falls through to `selects_path`'s fail-open
+        // arm, and the exception it was written to make silently never applies.
+        if let Some(except) = self.path_except.as_deref() {
+            Regex::new(except).map_err(|err| {
+                UsageError::raise(format!(
+                    "hook.handler {}: `path_except` is not valid: {err}",
                     self.id
                 ))
             })?;
@@ -895,6 +954,7 @@ pub fn dispatch(
     event: Event,
     raw_tool: &str,
     command: Option<&str>,
+    writes: Option<&str>,
     payload: &Payload,
 ) -> Dispatched {
     let mut ran = Vec::new();
@@ -915,6 +975,10 @@ pub fn dispatch(
         // a regex rather than a process. Ordered after it because a tool-name
         // mismatch is the cheaper rejection and the commoner one.
         if !handler.selects_command(command) {
+            continue;
+        }
+        // AND THE EXCEPTION (CLOUD-2390): a path the row names as not its subject.
+        if !handler.selects_path(writes) {
             continue;
         }
         let started = Instant::now();
@@ -1341,6 +1405,44 @@ mod tests {
         );
     }
 
+    /// The path exception, all four arms (CLOUD-2390).
+    #[test]
+    fn the_path_exception_selects_when_absent_or_pathless() {
+        let mut row = handler("h", Event::PreTool.as_str(), &["true"]);
+
+        // No column: every call the other selectors admitted.
+        assert!(row.selects_path(Some("/root/.claude/plans/x.md")));
+
+        row.path_except = Some(r"/\.claude/plans/[^/]+\.md$".to_owned());
+        assert!(
+            !row.selects_path(Some("/root/.claude/plans/x.md")),
+            "a path the row names as not its subject is not selected"
+        );
+        assert!(row.selects_path(Some("crates/batten/src/lib.rs")));
+        // THE ASYMMETRY WITH `command_matcher`: an exception excepts only what
+        // it names, so a call that writes no path was excepted by nothing.
+        assert!(
+            row.selects_path(None),
+            "a pathless call is selected, unlike the command selector's arm"
+        );
+
+        // Unparseable selects, matching both siblings: refused at load, and a
+        // fail-open participant runs rather than goes silent.
+        row.path_except = Some("(".to_owned());
+        assert!(row.selects_path(Some("/root/.claude/plans/x.md")));
+    }
+
+    #[test]
+    fn an_uncompilable_path_exception_is_refused_at_load() {
+        let mut row = handler("h", Event::PreTool.as_str(), &["true"]);
+        row.path_except = Some("(".to_owned());
+        let err = row.validate().expect_err("an invalid regex is refused");
+        assert!(
+            err.to_string().contains("path_except"),
+            "the refusal must name the column a reader has to fix: {err}"
+        );
+    }
+
     fn handler(id: &str, on: &str, run: &[&str]) -> Handler {
         Handler {
             id: id.to_owned(),
@@ -1353,6 +1455,7 @@ mod tests {
             // which is the promise the column made on arrival. The cases about
             // the selector set it explicitly.
             command_matcher: None,
+            path_except: None,
             // Absent, so the existing cases keep exercising what they were
             // written for: `validate` deliberately does NOT read these, and a
             // helper that populated them would hide that separation rather than
@@ -1718,6 +1821,7 @@ mod tests {
             Event::PreTool,
             "mcp__x__y",
             None,
+            None,
             &Payload::from(payload),
         );
         assert_eq!(
@@ -1737,6 +1841,7 @@ mod tests {
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
+            None,
             None,
             &Payload::from(payload),
         );
@@ -1769,6 +1874,7 @@ mod tests {
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
+            None,
             None,
             &Payload::from("{}"),
         );
@@ -1846,6 +1952,7 @@ mod tests {
             Event::PreTool,
             "mcp__x__y",
             None,
+            None,
             &Payload::from("{}"),
         );
         assert_eq!(dispatched.preapproval(), Some(("a", "one")));
@@ -1861,6 +1968,7 @@ mod tests {
             &rows,
             Event::PreTool,
             "mcp__x__y",
+            None,
             None,
             &Payload::from("{}"),
         );
@@ -1894,6 +2002,7 @@ mod tests {
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
+            None,
             None,
             &Payload::from("{}"),
         );
@@ -1940,6 +2049,7 @@ mod tests {
             std::slice::from_ref(&row),
             Event::PreTool,
             "mcp__x__y",
+            None,
             None,
             &Payload::from("{}"),
         );

@@ -312,3 +312,106 @@ expires = "2027-03-31"
     });
     assert_eq!(received, payload, "the handler read the host's bytes");
 }
+
+// ---------------------------------------------------------------------------
+// `path_except`: a written path the row names as not its subject (CLOUD-2390)
+// ---------------------------------------------------------------------------
+
+/// A pre-tool row over every write, excepting the host's plan file — the shape
+/// `filed-row-settled` declares, with a stub in place of its gate.
+const PATH_CONFIG: &str = r#"version = 1
+
+[[hook.handler]]
+id = "tree-write-check"
+on = "pre-tool"
+run = ["./tree-write.sh"]
+matcher = "^(Edit|Write|MultiEdit|NotebookEdit)$"
+path_except = "/\\.claude/plans/[^/]+\\.md$"
+timeout_ms = 5000
+owner = "CLOUD-2390"
+expires = "2027-03-31"
+"#;
+
+/// A repository whose pre-tool write handler records that it ran and passes.
+fn path_bench(name: &str) -> Bench {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = scratch(name);
+    let repo = dir.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    write(&repo, "batten.toml", PATH_CONFIG);
+    write(&repo, "a.txt", "x\n");
+    common::init_repo(&repo);
+
+    let ran = repo.join("handler-ran");
+    let script = repo.join("tree-write.sh");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\ntouch {:?}\nexit 0\n", ran.to_str().unwrap()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    Bench { repo, ran }
+}
+
+/// Hand one pre-tool `Write` of `file_path` to the engine.
+fn write_door(bench: &Bench, file_path: &str) -> Door {
+    use std::io::Write as _;
+
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": { "file_path": file_path, "content": "x" },
+    })
+    .to_string();
+    let mut child = common::batten()
+        .current_dir(&bench.repo)
+        .args(["adjudicate", "--harness", "claude-code"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the binary runs");
+    child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(payload.as_bytes())
+        .expect("write stdin");
+    let outcome = child.wait_with_output().expect("wait for batten");
+    Door {
+        out: stdout(&outcome),
+        err: String::from_utf8_lossy(&outcome.stderr).into_owned(),
+    }
+}
+
+/// The host's plan file lies outside the repository, so it reaches the selector
+/// as the absolute path the host sent and the exception's leading `/` anchors.
+#[test]
+fn a_write_to_an_excepted_path_is_not_selected() {
+    let bench = path_bench("handler-path-excepted");
+    let door = write_door(&bench, "/root/.claude/plans/x.md");
+
+    assert!(
+        !bench.spawned(),
+        "a path the row excepts must not spawn it: {} / {}",
+        door.out,
+        door.err
+    );
+}
+
+/// The mutation's target: an inverted exception would spare the tree instead.
+#[test]
+fn a_write_outside_the_excepted_path_is_selected() {
+    let bench = path_bench("handler-path-selected");
+    let target = bench.repo.join("a.txt");
+    let door = write_door(&bench, target.to_str().unwrap());
+
+    assert!(
+        bench.spawned(),
+        "a tree write is still this row's subject: {} / {}",
+        door.out,
+        door.err
+    );
+}

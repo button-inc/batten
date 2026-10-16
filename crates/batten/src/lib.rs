@@ -20586,6 +20586,7 @@ fn dispatch_handlers(
         envelope.event,
         &envelope.raw_tool,
         command,
+        envelope.writes.as_deref(),
         &handler::Payload::from(raw),
     );
     // TIERED AT THE PUSH SITE (CLOUD-896), because "how soon must this be
@@ -22540,6 +22541,7 @@ fn stop_handler_advice(overrides: &Overrides, raw: &str) -> Vec<refusal::Refusal
         &table.handlers,
         hook::Event::Stop,
         "",
+        None,
         None,
         &handler::Payload::from(raw),
     );
