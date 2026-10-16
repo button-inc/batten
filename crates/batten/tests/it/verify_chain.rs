@@ -170,6 +170,7 @@ fn every_step_is_argv() {
         "verify:config-lint",
         "target-prune",
         "ci-wait",
+        "pkl-package",
         "test:cargo",
         "test:musl",
         "test:filter",
@@ -180,6 +181,39 @@ fn every_step_is_argv() {
                 "[tasks.{name}] runs a step that needs a shell: {step}"
             );
         }
+    }
+}
+
+/// CLOUD-2311: the pkl package is fetched before anything runs the validator.
+///
+/// `pkl eval hk.pkl` fetches the package `hk.pkl` amends, and exits 1 whether
+/// the module is bad or the fetch failed — so a cold cache gets recorded as a
+/// verdict on `hk.pkl`'s bytes and refuses an unchanged tree. The fetch is a
+/// task of its own, and both callers of `record validate config-validator`
+/// depend on it: hk's `pkl` step, reached through `hooks`, and `record-verdicts`.
+///
+/// It is a task `depends` on `hooks` rather than an hk step, because hk loads
+/// `hk.pkl` before any step runs — a step-level ordering would order nothing
+/// against hk's own load.
+///
+/// Removing any of the three fails this. It carries `mutation: none`: it asserts
+/// committed config, which no source mutant reaches.
+#[test]
+fn the_pkl_validator_runs_only_after_its_package_is_fetched() {
+    // Panics unless the task is declared: presence is half the claim.
+    let fetch = steps("pkl-package");
+    assert!(
+        fetch
+            .iter()
+            .any(|step| step.contains("pkl download-package")),
+        "[tasks.pkl-package] fetches the package: {fetch:?}"
+    );
+    for caller in ["hooks", "record-verdicts"] {
+        let depends = depends_of(caller);
+        assert!(
+            depends.iter().any(|entry| entry == "pkl-package"),
+            "[tasks.{caller}] runs the validator, so it depends on pkl-package: {depends:?}"
+        );
     }
 }
 

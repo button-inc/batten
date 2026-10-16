@@ -215,6 +215,40 @@ fn a_version_the_amends_url_names_differently_is_refused() {
     denied(&root, "tool pin other", "hk.pkl");
 }
 
+/// `#MUTANT hk-package-disagreement-passes` reddens here.
+///
+/// The third spelling of the pin (CLOUD-2311): `[tasks.pkl-package]` fetches the
+/// package `hk.pkl` amends, so its URL names a version too. Here the amends line
+/// and the `[tools]` pin agree at 1.56.1 and only the fetch drifts — so arm D is
+/// the only arm that can see it, and a pass means the fetch is ungoverned.
+#[test]
+fn a_package_task_naming_another_version_is_refused() {
+    let root = fixture(
+        "hk-package-drift",
+        &[(
+            "mise.toml",
+            "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = \"pkl download-package package://github.com/jdx/hk/releases/download/v1.57.0/hk@1.57.0\"\n",
+        )],
+        &[],
+    );
+    denied(&root, "tool pin other", "mise.toml");
+}
+
+/// The same fixture with the fetch agreeing: the arm refuses the disagreement
+/// and not the task's presence, so declaring it cannot itself be a violation.
+#[test]
+fn a_package_task_naming_the_pin_is_clean() {
+    let root = fixture(
+        "hk-package-agreed",
+        &[(
+            "mise.toml",
+            "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = \"pkl download-package package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1\"\n",
+        )],
+        &[],
+    );
+    clean(&root);
+}
+
 /// `#MUTANT hk-amends-unnamed-passes` reddens here: the shell's `:?` on an
 /// `hk.pkl` whose `amends` names no version.
 #[test]
