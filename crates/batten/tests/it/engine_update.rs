@@ -15,6 +15,15 @@
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+// THE ATTRIBUTE IS REQUIRED HERE RATHER THAN CHOSEN, which is the one bar
+// `rules/rust.md` holds this route to. Every case stands a `#!/bin/sh` build
+// where a source pin points and marks it executable through
+// `std::os::unix::fs::PermissionsExt` — a symbol the Windows target does not
+// have, so the `cfg!` arm that rule prefers would not type-check. The subject
+// is the same: a program with no extension, which Windows can neither execute
+// nor make executable. `engine_install.rs`'s `repair` module is gated for this
+// reason and these cases are its siblings.
+#![cfg(unix)]
 
 use crate::common;
 
