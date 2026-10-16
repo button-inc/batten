@@ -82,13 +82,20 @@ amends contains {"line": i + 1, "version": match[1]} if {
 # neighbourhood exists to prevent. `hk.pkl`'s is also the one spelling that can
 # never be templated away, since pkl `amends` needs a literal URI.
 #
-# WHY NOT FOLD IT INTO `amends`: that was tried on this branch and it narrowed
-# ARM B. Arm B's test is `count(amends) == 0` — "`hk.pkl` names no version at
-# all" — and a tag member satisfies that count, so `v1.56.1/hk@latest` went from
-# refused to clean. Merging the sets would quietly reduce arm B's claim to "names
-# none in EITHER spelling", which is weaker than its name, its comment and its
-# mutant all assert. A separate set keeps arm B's reach exactly as it was and
-# makes the tag reading purely additive.
+# WHY NOT FOLD IT INTO `amends`: because arm B counts that set. Arm B's test is
+# `count(amends) == 0`, and what it means is "the FRAGMENT spelling names
+# nothing" — so it refuses a floating `hk@latest` even when the tag segment
+# agrees. A tag member DEFEATS that count, which would reduce arm B's claim to
+# "neither spelling names anything": strictly weaker, and weaker than its mutant
+# and its case both assert. Keeping the sets apart leaves arm B's reach exactly
+# as it was and makes the tag reading purely additive.
+#
+# A union (`amends | amend_tags`, read by one arm) was weighed and declined. It
+# would restore the symmetry with `packages` below, which does take two
+# generators into one set — but `packages` is counted by nothing, and `amends`
+# is. The cost of the union is that the tag reading's mutant must then anchor on
+# a 90-character `regex.find_all_string_submatch_n` line rather than on a short
+# comparison; both forms are correct, and this one is cheaper to keep honest.
 amend_tags contains {"line": i + 1, "version": match[1]} if {
 	some i, line in lines
 	some match in regex.find_all_string_submatch_n(data.batten.patterns["hk-download-tag"], line, -1)
@@ -118,7 +125,8 @@ violation contains {
 	tagged.version != pin
 }
 
-# B: the binary is pinned and `hk.pkl` names no version at all.
+# B: the binary is pinned and `hk.pkl`'s `amends` FRAGMENT names no version — so
+# a floating `hk@latest` is refused here even when its tag segment agrees.
 violation contains {
 	"rule": "tool pin other",
 	"verdict": "tool pin other",
@@ -247,6 +255,11 @@ test_agreeing_versions_are_clean if {
 		with data.batten.patterns as pattern
 }
 
+# THIS IS WHERE THE COLLAPSE IS MEASURED. `amends_line` writes the version into
+# both halves, so at pin 1.57.0 both halves drift: arms A and A2 each fire on
+# line 2 with byte-identical subjects, and `count == 1` is what pins that they
+# collapse into one finding. An arm that put `version` into a subject would make
+# this 2, which is why no arm does.
 test_a_version_the_amends_url_names_differently_is_refused if {
 	found := violation with input as tree({"hk": "1.57.0"}, ["// header", amends_line("1.56.1")])
 		with data.batten.patterns as pattern
@@ -313,10 +326,9 @@ test_a_package_task_run_array_is_read_too if {
 	count(found) == 1
 }
 
-# The half-bump on `hk.pkl`'s own URL, which arm A2 catches: the tag segment
-# drifts while the fragment still names the pin, so arm A sees nothing. One
-# finding at line 1 — A2's subject matches A's shape, so a line where BOTH halves
-# drift still collapses to one.
+# The half-bump on `hk.pkl`'s own URL, which only arm A2 catches: the tag segment
+# drifts while the fragment still names the pin, so arm A is silent. One finding
+# because exactly one arm fires.
 #
 # `#MUTANT hk-amends-tag-disagreement-passes` reddens on the Rust twin of this.
 test_an_amends_url_whose_tag_segment_drifts_is_refused if {
@@ -330,11 +342,9 @@ test_an_amends_url_whose_tag_segment_drifts_is_refused if {
 	finding.subjects[0] == {"path": "hk.pkl", "line": 1}
 }
 
-# ARM B KEEPS ITS REACH, and this is the case that says so. A `latest` fragment
-# over an AGREEING tag names no version where arm B looks, so arm B still
-# refuses it. Folding the tag matches into `amends` made this clean, which is the
-# regression the separate `amend_tags` set exists to prevent — if the sets are
-# ever merged again, this case is what reddens.
+# ARM B KEEPS ITS REACH, and this is the case that says so: a `latest` fragment
+# over an AGREEING tag names nothing where arm B looks, so arm B still refuses
+# it. If the two sets are ever merged, this is what reddens — see `amend_tags`.
 test_an_amends_fragment_naming_no_version_is_still_refused if {
 	found := violation with input as tree(
 		{"hk": "1.56.1"},
