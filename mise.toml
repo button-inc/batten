@@ -797,8 +797,11 @@ duplicate_close_window = "{{ get_env(name='DUPLICATE_CLOSE_WINDOW', default='19'
 #
 # The trailing space is load-bearing: it separates the flag from the argument
 # that follows and is absent when the selection renders empty, which is why both
-# consumers interpolate it with no space of their own.
-pkl_ca = "{% if env.BATTEN_CA_BUNDLE and env.BATTEN_CA_BUNDLE is file %}--ca-certificates {{env.BATTEN_CA_BUNDLE}} {% elif env.SSL_CERT_FILE and env.SSL_CERT_FILE is file %}--ca-certificates {{env.SSL_CERT_FILE}} {% endif %}"
+# consumers interpolate it with no space of their own. The path is QUOTED for
+# the same class of reason — these render into a string `run`, so an unquoted
+# bundle path containing a space would word-split and fail the fetch, taking
+# `hooks` and `record-verdicts` with it through their `depends`.
+pkl_ca = "{% if env.BATTEN_CA_BUNDLE and env.BATTEN_CA_BUNDLE is file %}--ca-certificates '{{env.BATTEN_CA_BUNDLE}}' {% elif env.SSL_CERT_FILE and env.SSL_CERT_FILE is file %}--ca-certificates '{{env.SSL_CERT_FILE}}' {% endif %}"
 
 [tasks.fmt]
 description = "Run every fixer over the tree (rustfmt, shfmt, taplo, deno fmt) — hk owns the step list"
