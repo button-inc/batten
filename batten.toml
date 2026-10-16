@@ -2087,6 +2087,16 @@ id = "fixture-git-init"
 regex = '\["init", "--?q'
 
 [[pattern]]
+id = "memory-write-tool"
+# The tools this repository's memories change by, granted by the
+# `claude-code-cloud` preset's `call grant now` outside plan mode (CLOUD-2313).
+# The `.serena/memories/**` redirect above sends every writer here, so a memory
+# edit batten allows is never put to the owner. The suffix, never the server
+# key, because the host mints a new key on reconnect; `delete_memory` is absent
+# and stays with the host.
+regex = '^mcp__[^_][^ ]*__(write|edit|rename)_memory$'
+
+[[pattern]]
 id = "preapproved-task"
 # The lifecycle tasks the gates themselves prescribe, granted by the
 # `claude-code-cloud` preset's `call grant now` (CLOUD-1949). A gate that names

@@ -494,10 +494,8 @@ fn a_worktree_spawn_is_refused_in_auto() {
     assert!(reason.contains("spawn place wrong"), "{reason}");
 }
 
-/// CLOUD-2313: a Serena memory write is the only route a memory changes by, and
-/// the owner's ruling is that batten always approves it — in default mode too,
-/// which is where the measured prompt came from (auto already grants every call
-/// batten allows). The delete stays with the host.
+/// CLOUD-2313: this repository's `memory-write-tool` row is granted in default
+/// mode, where the measured prompt came from; the delete stays with the host.
 #[test]
 fn a_memory_write_is_preapproved_outside_plan_mode() {
     let edit =
