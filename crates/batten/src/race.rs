@@ -453,11 +453,11 @@ pub struct Filled {
 /// but it also appends every request to one shared `args` file and replaces one
 /// `<file>.request` per route, so what a suite READS BACK afterwards is in
 /// scheduler order, and a last writer wins where two requests route to one
-/// file. `claim_race.rs`'s verb-tier cases now DO drive this seam, and they
-/// stay safe by staying narrow: one competitor is ever eligible in them, so no
-/// two requests race for `args` and none asserts over it. A case with several
-/// eligible competitors must route by URL *and* assert over `args` as a set
-/// rather than a sequence.
+/// file. `claim_race.rs`'s verb-tier cases DO drive this seam, including one
+/// with two eligible competitors, and what keeps them safe is a rule rather
+/// than a count: route every endpoint by URL, and assert over the exit code
+/// and the streams, never over `args`. A case that needs `args` must read it
+/// as a set rather than a sequence.
 ///
 /// # What is decided where
 ///
