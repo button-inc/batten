@@ -2579,6 +2579,11 @@
           "description": "Tool calls since the operator's last message with no assistant text\nbetween them (the ignored-operator shape). A count over typed events;\nno text is read beyond emptiness.",
           "type": "string",
           "const": "unanswered-human-calls"
+        },
+        {
+          "description": "Plan presentations this session, the in-flight one included\n(CLOUD-2383). A count over `Event::ToolCall` names, which the transcript\nalready types; no argument is read.",
+          "type": "string",
+          "const": "plan-exits"
         }
       ]
     },
@@ -2826,6 +2831,14 @@
         },
         "owner": {
           "description": "The issue that owns retiring this handler (CLOUD-984).\n\n**A handler is an antipattern with a ratchet, never a destination.** The\ndoor makes a dispatched program safe — a bound, central fail-open, a\nstated output shape — and none of that makes it *policy*. A predicate\nliving behind a spawn is one the committed authority cannot be read to\ndiscover, so every handler is a debt somebody owes, and this column is\nwhere the creditor is named.\n\nAbsent is not refused at load, deliberately — see\n[`Handler::transitional_defect`] for why the enforcement is tree-scoped.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "path_except": {
+          "description": "Which WRITTEN PATHS this handler does not run for, as a regular\nexpression over the path the mediated call writes (CLOUD-2390).\n\n**Absent means every call the other selectors admitted**, so no landed\nrow changes behaviour by this column's arrival — the promise `matcher`\nand `command_matcher` each made.\n\n# An exception, where its siblings are selections\n\nMeasured: `filed-row-settled` refuses every Edit and Write while a filed\nrow is unsettled, and its remedy is a board write. In plan mode the board\nwrite is refused, so the one file plan mode exists to write — the host's\nplan file — could not be written either, and the plan was presented\nstale. The handler's subject is the TREE; a path outside it is not its\nsubject, and naming the exception is narrower than naming every tree path.\n\n# A call that writes no path is SELECTED\n\nThe opposite of [`Handler::command_matcher`]'s could-not-look arm, for the\nopposite shape of column: that one names what a row IS about, so a call\nwith no command is not its subject; this one names what a row is NOT\nabout, so a call with no path was excepted by nothing.\n\nThe path is the one the host sent, made repo-relative only when it lies\ninside the repository (`hook::relativise_writes`), so an expression over a\nhost path outside the tree anchors on its leading `/`.",
           "type": [
             "string",
             "null"
