@@ -71,6 +71,23 @@ amends contains {"line": i + 1, "version": match[1]} if {
 	some match in regex.find_all_string_submatch_n(data.batten.patterns["hk-amends-version"], line, -1)
 }
 
+# AND ITS TAG SEGMENT, for arm D's reason on the other file. `hk.pkl`'s URL names
+# the version twice as well — `…/download/v<X>/hk@<Y>#/Config.pkl` — so reading
+# only the fragment lets `v1.57.0/hk@1.56.1` pass every arm while naming two.
+# That one is not cosmetic here: `pkl-package` would warm the cache entry for one
+# version while `pkl eval hk.pkl` resolves the other, so the eval reaches the
+# network on a warm machine and records a could-not-fetch as a verdict about the
+# bytes — the failure this module's whole neighbourhood exists to prevent.
+#
+# `hk.pkl`'s is also the spelling that can never be templated away (pkl `amends`
+# needs a literal URI), so it is the one most worth reading whole. Both rules
+# feed the one `amends` set: an agreeing line yields two entries of equal
+# version, and a disagreeing one yields violations that collapse in the set.
+amends contains {"line": i + 1, "version": match[1]} if {
+	some i, line in lines
+	some match in regex.find_all_string_submatch_n(data.batten.patterns["hk-download-tag"], line, -1)
+}
+
 # A: the config package names a different hk than the binary pin.
 violation contains {
 	"rule": "tool pin other",
@@ -279,6 +296,20 @@ test_a_package_task_run_array_is_read_too if {
 # The half-bump the `hk@` fragment alone cannot see: the tag segment drifts and
 # the fragment still names the pin. One violation, because the two generators
 # feed one set and only the drifting spelling disagrees.
+# The same half-bump on `hk.pkl`'s own URL, which arm A reads now. One finding:
+# the two generators both point at line 1, and the fragment agrees with the pin,
+# so only the tag spelling disagrees.
+test_an_amends_url_whose_tag_segment_drifts_is_refused if {
+	found := violation with input as tree(
+		{"hk": "1.56.1"},
+		["amends \"package://github.com/jdx/hk/releases/download/v1.57.0/hk@1.56.1#/Config.pkl\""],
+	)
+		with data.batten.patterns as pattern
+	count(found) == 1
+	some finding in found
+	finding.subjects[0] == {"path": "hk.pkl", "line": 1}
+}
+
 test_a_package_task_whose_tag_segment_drifts_is_refused if {
 	found := violation with input as tree_with_tasks(
 		{"hk": "1.56.1"},

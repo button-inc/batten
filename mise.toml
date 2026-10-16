@@ -765,6 +765,27 @@ batten = "{{ get_env(name='BATTEN_BIN', default='cargo run --quiet -p batten --'
 # The duplicate-close window, in characters of an ISO-8601 stamp: 19 is the
 # second, and `DUPLICATE_CLOSE_WINDOW` widens it, as the retired body let it.
 duplicate_close_window = "{{ get_env(name='DUPLICATE_CLOSE_WINDOW', default='19') }}"
+# The CA bundle every `pkl` invocation needs in a TLS-intercepting sandbox, and
+# the ONE place it is spelled (CLOUD-2409). `pkl` ships its own root bundle and
+# ignores the system trust store, so cold it cannot resolve a `package://` URL at
+# all: of `SSL_CERT_FILE`, `--http-no-proxy` and an unset `HTTPS_PROXY`, none
+# works and only `--ca-certificates` does (`mem:github-access`).
+#
+# THE FLAG REPLACES pkl's ROOTS, so it is passed only when a bundle NAMES A FILE
+# (tera's `is file`): a set-but-missing bundle handed to pkl fails the run, and
+# that non-zero is the could-not-look-as-verdict `pkl-package` exists to prevent.
+# With neither naming a file this renders empty — the bare invocation against
+# pkl's own roots, which is CI's case and the stronger of the two states.
+#
+# A VAR AND NOT TWO COPIES, because it was two before CLOUD-2409: this fragment
+# and the argument above it were written out at both `fix-selection-check` and
+# `pkl-package`, and the prose is the half that drifts silently. Measured before
+# relying on it — mise renders `[vars]` through the same tera instance that
+# provides `env` and `is file`, exactly once, per invocation against the live
+# environment, correct in all three arms. The trailing space is load-bearing: it
+# separates the flag from the argument that follows, and is absent when the
+# selection renders empty.
+pkl_ca = "{% if env.BATTEN_CA_BUNDLE and env.BATTEN_CA_BUNDLE is file %}--ca-certificates {{env.BATTEN_CA_BUNDLE}} {% elif env.SSL_CERT_FILE and env.SSL_CERT_FILE is file %}--ca-certificates {{env.SSL_CERT_FILE}} {% endif %}"
 
 [tasks.fmt]
 description = "Run every fixer over the tree (rustfmt, shfmt, taplo, deno fmt) — hk owns the step list"
@@ -1047,16 +1068,10 @@ description = "hk's `fix` hook selects exactly the gate's fixer-bearing steps �
 #
 # `pkl` SHIPS ITS OWN ROOT BUNDLE AND IGNORES THE SYSTEM TRUST STORE, so in a
 # TLS-intercepting sandbox it cannot resolve the `amends` package and fails as
-# could-not-look. `mem:github-access` records that only `--ca-certificates`
-# works, and the flag REPLACES pkl's roots — so it is passed only when a bundle
-# is named: `BATTEN_CA_BUNDLE`, else `SSL_CERT_FILE`, which is how the sandbox
-# names the interception bundle the body's `/root/.ccr` fallback probed for.
-# EACH IS PASSED ONLY WHEN IT NAMES A FILE (tera's `is file`), the body's `-f`
-# guard: a set-but-missing bundle handed to pkl fails the evaluation, and that
-# non-zero would read as a drift refusal — the could-not-look-as-verdict this
-# guard exists to prevent. With neither naming a file this stays the bare
-# invocation.
-run = "mise exec pkl -- pkl eval {% if env.BATTEN_CA_BUNDLE and env.BATTEN_CA_BUNDLE is file %}--ca-certificates {{env.BATTEN_CA_BUNDLE}} {% elif env.SSL_CERT_FILE and env.SSL_CERT_FILE is file %}--ca-certificates {{env.SSL_CERT_FILE}} {% endif %}hk-fix-selection.pkl"
+# could-not-look. `{{vars.pkl_ca}}` is the selection that fixes it, argued once
+# where it is declared; it was spelled out here and at `pkl-package` until
+# CLOUD-2409 folded both into the var.
+run = "mise exec pkl -- pkl eval {{vars.pkl_ca}}hk-fix-selection.pkl"
 
 [tasks."lint:actions"]
 description = "actionlint: workflow mistakes (bad `on:` keys, undefined matrix refs, shellcheck over `run:` blocks)"
@@ -2568,22 +2583,16 @@ run = ["{{vars.batten}} engine pin"]
 # bumping one without the others is refused as `tool pin other` rather than
 # silently fetching a package the binary did not ship against.
 #
-# THE CA SELECTION IS `hk-fix-selection`'s, VERBATIM, AND IS NOT OPTIONAL HERE.
-# `pkl` ships its own root bundle and ignores the system trust store, so in a
-# TLS-intercepting sandbox it cannot resolve the package at all — measured cold
-# on this container: a bare `download-package` fails the SSL handshake, and
-# `SSL_CERT_FILE`, `--http-no-proxy` and unsetting `HTTPS_PROXY` each leave it
-# failing. Only `--ca-certificates` works (`mem:github-access`). The flag
-# REPLACES pkl's roots, so it is passed only when a bundle NAMES A FILE (tera's
-# `is file`): a set-but-missing bundle handed to pkl fails the fetch, which is
-# the could-not-look-as-verdict this whole task exists to prevent. With neither
-# naming a file this stays the bare invocation, which is CI's case.
+# THE CA SELECTION IS NOT OPTIONAL HERE, and it is `{{vars.pkl_ca}}` — argued
+# once beside the var, shared with `fix-selection-check`. Measured cold on this
+# container: a bare `download-package` fails the SSL handshake with github.com,
+# so without it this task fails for the very reason it exists to surface.
 #
 # Once this task has run, `batten.toml`'s `config-validator` reads a warm cache
 # and makes no network call, which is why its bare argv needs no bundle.
 [tasks.pkl-package]
 description = "Effect: fetch the hk config package `hk.pkl` amends, so the validator's own run reaches no network (CLOUD-2311)"
-run = "mise exec pkl -- pkl download-package {% if env.BATTEN_CA_BUNDLE and env.BATTEN_CA_BUNDLE is file %}--ca-certificates {{env.BATTEN_CA_BUNDLE}} {% elif env.SSL_CERT_FILE and env.SSL_CERT_FILE is file %}--ca-certificates {{env.SSL_CERT_FILE}} {% endif %}package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1"
+run = "mise exec pkl -- pkl download-package {{vars.pkl_ca}}package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1"
 
 [tasks.record-verdicts]
 description = "Effect: run each declared validator and record its exit code, then record the forge's answered verdicts for HEAD (CLOUD-1265)"
