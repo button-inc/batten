@@ -25,9 +25,16 @@
 # the mirror. A `mise.toml` this could not read decides nothing, since the
 # document binding below is undefined then.
 #
-#MUTANT hk-pin-disagreement-passes|s@^\tamended.version != pin$@\tfalse@|a_version_the_amends_url_names_differently_is_refused
+# ARM A'S MUTANT NAMES THE FRAGMENT-ONLY CASE, and must. Every case built with
+# `amends_line`/`amends()` writes one version into BOTH halves of the URL, so
+# arm A2 emits a byte-identical finding and neutering arm A changes no count —
+# measured, by applying this mutant: `opa test` passed 14 of 14 while the arm
+# was `false`. A2 masks A on every such input. Only a URL whose FRAGMENT alone
+# drifts leaves A the one arm that can fire.
+#MUTANT hk-pin-disagreement-passes|s@^\tamended.version != pin$@\tfalse@|an_amends_fragment_naming_another_version_is_refused
 #MUTANT hk-amends-unnamed-passes|s@^\tcount(amends) == 0$@\tfalse@|an_hk_pkl_naming_no_version_is_refused
 #MUTANT hk-package-disagreement-passes|s@^\tpackaged.version != pin$@\tfalse@|a_package_task_naming_another_version_is_refused
+#MUTANT hk-package-unnamed-passes|s@^\tcount(packages) == 0$@\tfalse@|a_package_task_naming_no_version_is_refused
 #MUTANT hk-amends-tag-disagreement-passes|s@^\ttagged.version != pin$@\tfalse@|an_amends_tag_segment_naming_another_version_is_refused
 #
 #MUTANT-SUITE crates/batten/tests/it/tracked_absent.rs
@@ -222,6 +229,26 @@ violation contains {
 	packaged.version != pin
 }
 
+# E: the task is DECLARED and its URL names no version at all — arm B's claim
+# for this surface, and the gloss on `tool pin other` promises it ("or one of
+# them names none"). Arm D alone would be vacuously clean on `hk@latest`, or on
+# a version templated through a `[vars]` entry the way the CA selection is: the
+# fetch then warms a package `hk.pkl` does not amend, which is the
+# warm-cache-that-isn't this whole row exists to prevent.
+#
+# `package_run` FIRST, positively: absence of the task is the structural suite's
+# to refuse, never this module's, so the arm stays undefined without it and
+# fires only over a task that was read.
+violation contains {
+	"rule": "tool pin other",
+	"verdict": "tool pin other",
+	"subjects": [{"path": "mise.toml"}],
+} if {
+	pin
+	package_run
+	count(packages) == 0
+}
+
 # --- the load-time tier ------------------------------------------------------
 #
 # The predicate over a fabricated input; `crates/batten/tests/it/tracked_absent.rs`
@@ -288,6 +315,21 @@ test_two_drifting_halves_on_one_line_are_one_finding if {
 	found := violation with input as tree(
 		{"hk": "1.56.1"},
 		["amends \"package://github.com/jdx/hk/releases/download/v1.57.0/hk@1.58.0#/Config.pkl\""],
+	)
+		with data.batten.patterns as pattern
+	count(found) == 1
+	some finding in found
+	finding.subjects[0] == {"path": "hk.pkl", "line": 1}
+}
+
+# FRAGMENT-ONLY DRIFT — the one input where arm A is the only arm that can
+# fire, which is why `#MUTANT hk-pin-disagreement-passes` names its Rust twin.
+# The tag segment equals the pin so A2 is silent; `amends` is non-empty so arm B
+# is silent. Neuter arm A and this goes clean.
+test_an_amends_fragment_naming_another_version_is_refused if {
+	found := violation with input as tree(
+		{"hk": "1.56.1"},
+		["amends \"package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.57.0#/Config.pkl\""],
 	)
 		with data.batten.patterns as pattern
 	count(found) == 1
@@ -393,8 +435,21 @@ test_a_package_task_whose_tag_segment_drifts_is_refused if {
 	count(found) == 1
 }
 
-# A manifest with tasks but no `pkl-package` leaves arm D undefined. Presence is
-# `verify_chain.rs`'s question; this module answers agreement only.
+# ARM E: the task is declared and its URL names no version. `hk@latest` with no
+# `/v<semver>/` segment matches neither pattern, so `packages` is empty — arm D
+# has nothing to compare and would be vacuously clean without this arm.
+test_a_package_task_naming_no_version_is_refused if {
+	found := violation with input as tree_with_tasks(
+		{"hk": "1.56.1"},
+		{"pkl-package": {"run": "pkl download-package package://github.com/jdx/hk/releases/download/latest/hk@latest"}},
+		[amends_line("1.56.1")],
+	)
+		with data.batten.patterns as pattern
+	count(found) == 1
+}
+
+# A manifest with tasks but no `pkl-package` leaves arms D and E undefined.
+# Presence is `verify_chain.rs`'s question; this module answers agreement only.
 test_a_manifest_without_the_package_task_decides_nothing_here if {
 	count(violation) == 0 with input as tree_with_tasks(
 		{"hk": "1.56.1"},

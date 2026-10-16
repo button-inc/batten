@@ -10088,8 +10088,15 @@ regex = 'hk@([0-9]+\.[0-9]+\.[0-9]+)'
 # TAG in the path and the PACKAGE version in the fragment, so `v1.57.0/hk@1.56.1`
 # reads as agreeing to `hk-amends-version` alone while naming two versions — and
 # the `v` segment is the half that looks like the release tag, which makes it the
-# plausible half-bump. `hk-pin-agreement`'s arms A and D each read both halves —
-# A over `hk.pkl`'s `amends` line, D over the `pkl-package` task's URL.
+# plausible half-bump.
+#
+# WHICH ARM READS WHICH HALF, because the obvious summary is wrong and acting on
+# it breaks a gate. Over `hk.pkl`'s `amends` line the two halves are read by two
+# arms over two SETS: arm A over `amends` (the `hk@` fragment) and arm A2 over
+# `amend_tags` (this pattern). They are deliberately separate because arm B
+# counts `amends` — merging them defeats `count(amends) == 0` and silently
+# narrows arm B to "neither spelling names anything". Over the `pkl-package`
+# task's URL both halves feed ONE set, `packages`, since nothing counts it.
 [[pattern]]
 id = "hk-download-tag"
 regex = '/v([0-9]+\.[0-9]+\.[0-9]+)/hk@'
