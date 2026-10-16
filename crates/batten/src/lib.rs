@@ -878,6 +878,17 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     install_wanted(want, Some(root), &repository, out)
 }
 
+/// `engine gate`'s finding for a source pin, which builds this tree and so never
+/// lands: a release is what `main` may pin.
+fn source_never_lands(config_path: &Path, out: &mut dyn Write) -> Result<ExitCode> {
+    writeln!(
+        out,
+        "{} engine pin source never lands: pin a release with `batten engine pin <tag>`",
+        config_path.display()
+    )?;
+    Ok(ExitCode::Violation)
+}
+
 /// Every tracked YAML file under `root`, repository-relative and sorted.
 ///
 /// EVERY ONE, never a directory the engine names: which files carry CI is the
@@ -1849,7 +1860,7 @@ fn engine_pin(
 ///
 /// Every finding is a pointer: the file, the token, the pin.
 //MUTANT-SUITE crates/batten/tests/it/engine_gates.rs
-//MUTANT source-pin-admitted|s@^    if pin.source.is_some() {$@    if false {@|a_source_pin_is_refused_on_the_landing_path
+//MUTANT source-pin-admitted|s@^        Some(engine::PinKind::Source(_)) => return source_never_lands(&config_path, out),$@        Some(engine::PinKind::Source(_)) => return Ok(ExitCode::Success),@|a_source_pin_is_refused_on_the_landing_path
 //MUTANT gate-admits-disagreeing-provision|s@^    if !disagreeing.is_empty() {$@    if false {@|a_provision_row_disagreeing_with_the_pin_is_refused
 //MUTANT gate-ignores-stale-digest|s@^    if !foreign.is_empty() {$@    if false {@|a_stale_digest_at_the_pinned_version_is_refused
 //MUTANT dropped-row-unchecked|s@^    if !runs(\&\["config", "lint"\])? {$@    if !runs(\&["config", "show"])? {@|a_config_the_pinned_release_drops_a_row_of_is_drift
@@ -1859,14 +1870,7 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
     let tag = match engine::declared(&text).map(engine::Pin::kind) {
         None => return Ok(ExitCode::Success),
         Some(engine::PinKind::Release(tag)) => tag,
-        Some(engine::PinKind::Source(_)) => {
-            writeln!(
-                out,
-                "{} engine pin source never lands: pin a release with `batten engine pin <tag>`",
-                config_path.display()
-            )?;
-            return Ok(ExitCode::Violation);
-        }
+        Some(engine::PinKind::Source(_)) => return source_never_lands(&config_path, out),
         Some(engine::PinKind::Malformed) => {
             writeln!(out, "{} {}", config_path.display(), engine::MALFORMED_PIN)?;
             return Ok(ExitCode::Violation);
