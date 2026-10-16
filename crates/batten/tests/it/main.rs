@@ -363,6 +363,7 @@ mod release_due;
 mod release_hygiene;
 mod release_install;
 mod release_provision_parity;
+mod release_settings_gate;
 mod release_token_precedence;
 mod release_tracking;
 mod release_verify;

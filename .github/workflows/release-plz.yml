@@ -1,4 +1,6 @@
 name: release-plz
+#MUTANT-SUITE crates/batten/tests/it/release_settings_gate.rs
+#MUTANT settings-gate-maps-usage|s@--on 2=false -- mise run batten -- release settings@--on 1=false -- mise run batten -- release settings@|the_release_settings_gate_maps_its_violation_exit
 
 # workflow-shell: CLOUD-2063 the step count rises by the seven single-command
 # steps that move the engine pin onto the release PR; each is plain argv, and
@@ -644,7 +646,7 @@ jobs:
         id: settings
         env:
           BATTEN_GITHUB_TOKEN: ${{ github.token }}
-        run: mise run batten -- ci step --verdict green --on 0=true --on 1=false -- mise run batten -- release settings --last-run release-guard.yml
+        run: mise run batten -- ci step --verdict green --on 0=true --on 2=false -- mise run batten -- release settings --last-run release-guard.yml
       - run: mise run release-pr
         if: steps.settings.outputs.green == 'true'
         env:
