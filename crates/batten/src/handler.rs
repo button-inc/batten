@@ -344,6 +344,8 @@ pub struct Handler {
     pub preapproves: bool,
 }
 
+//MUTANT path-except-inverted|s@^        writes.is_none_or(\x7cwrites\x7c !regex.is_match(writes))$@        writes.is_none_or(\x7cwrites\x7c regex.is_match(writes))@|a_write_outside_the_excepted_path_is_selected
+//MUTANT path-except-pathless|s@^        writes.is_none_or(\x7cwrites\x7c !regex.is_match(writes))$@        writes.is_some_and(\x7cwrites\x7c !regex.is_match(writes))@|the_path_exception_selects_when_absent_or_pathless
 impl Handler {
     /// The event this handler names, or `None` when `on` names none.
     #[must_use]
@@ -406,8 +408,6 @@ impl Handler {
     /// An UNPARSEABLE expression selects, matching both siblings: it is refused
     /// at load, and a participant in a fail-open contract runs rather than goes
     /// silent.
-    //MUTANT path-except-inverted|s@^        writes.is_none_or(\x7cwrites\x7c !regex.is_match(writes))$@        writes.is_none_or(\x7cwrites\x7c regex.is_match(writes))@|a_write_outside_the_excepted_path_is_selected
-    //MUTANT path-except-pathless|s@^        writes.is_none_or(\x7cwrites\x7c !regex.is_match(writes))$@        writes.is_some_and(\x7cwrites\x7c !regex.is_match(writes))@|the_path_exception_selects_when_absent_or_pathless
     #[must_use]
     pub fn selects_path(&self, writes: Option<&str>) -> bool {
         let Some(except) = self.path_except.as_deref() else {

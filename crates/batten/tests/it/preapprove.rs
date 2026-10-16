@@ -768,7 +768,7 @@ test_a_listing_is_nudged if {
 const NUDGE_CONFIG: &str = r#"version = 1
 
 [[rule]]
-id = "plan write refused"
+id = "plan guard now"
 kind = "policy"
 scope = "mediated_call"
 preset = "claude-code-cloud"

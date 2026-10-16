@@ -858,6 +858,17 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["retry the write inside plan mode"],
     },
     VendoredDoc {
+        id: "plan check first",
+        why: Some(
+            "A first plan is built from reports nobody re-read, and only a pass that re-reads with tools corrects it",
+        ),
+        act: &[
+            "re-read every path, symbol and line the plan cites, reproduce its numbers",
+            "have an isolated reader check it, then present the corrected plan",
+        ],
+        dont: &["present the same plan again unchanged"],
+    },
+    VendoredDoc {
         id: "grant spelling wrong",
         why: Some(
             "The host skips an MCP rule whose server segment is a glob, so every call prompts",

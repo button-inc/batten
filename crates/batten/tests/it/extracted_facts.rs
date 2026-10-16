@@ -386,7 +386,7 @@ fn plan_fixture(name: &str, transcript: Option<&str>) -> (PathBuf, PathBuf, Opti
         r#"version = 1
 
 [[rule]]
-id = "plan write refused"
+id = "plan guard now"
 kind = "policy"
 scope = "mediated_call"
 preset = "claude-code-cloud"
