@@ -1873,6 +1873,57 @@ pub fn run_in_with_env(
     report_bundle(&bundle, &outcomes, patterns, settings, report)
 }
 
+/// [`run_in_with_env`] with the child's streams HANDED BACK rather than
+/// written anywhere: its raw code, its stdout and its stderr (CLOUD-2376).
+///
+/// For the one caller that has to decide on a child's exit BEFORE any of its
+/// bytes reach the stream it is standing in for. Teeing writes as the child
+/// writes, which is correct everywhere a wrapper is transparent and wrong at
+/// the hook boundary, where a crashing child's half-written decision would
+/// reach a harness ahead of the refusal that replaces it. Nothing about the
+/// spawn changes: stdin is inherited exactly as every other dispatch's child
+/// inherits it, which is what the hook's own envelope arrives on.
+///
+/// A signal **Batten** was sent is still re-raised here rather than returned,
+/// for [`report_bundle`]'s reason: Batten dies of the signal Batten was sent,
+/// after every capture is sealed.
+///
+/// The raw code, not an [`ExitCode`]: deciding which codes this table names is
+/// the caller's, and collapsing the rest here would be the fold this issue
+/// exists to delete.
+///
+/// # Errors
+///
+/// As [`run`], for a command that could not be dispatched at all. A child that
+/// ran and failed is an answer, not an error, so its code comes back in the
+/// tuple rather than as a [`Passthrough`].
+pub(crate) fn captured_in_env(
+    repo_root: &Path,
+    command: &[String],
+    published: &[(String, String)],
+) -> Result<(i32, Vec<u8>, Vec<u8>)> {
+    let bundle = split_bundle(command)?;
+    let outcomes = dispatch(
+        repo_root,
+        &bundle,
+        &ExecConfig::DEFAULT,
+        published,
+        next_run(),
+    )?;
+    let code = bundle_code(&outcomes);
+    #[cfg(unix)]
+    if let Some(signal) = outcomes.iter().find_map(|outcome| outcome.received) {
+        terminate(signal)?;
+    }
+    let mut out_bytes = Vec::new();
+    let mut err_bytes = Vec::new();
+    for outcome in outcomes {
+        out_bytes.extend(outcome.out_bytes);
+        err_bytes.extend(outcome.err_bytes);
+    }
+    Ok((code, out_bytes, err_bytes))
+}
+
 // -- The named lock a child may be held under (CLOUD-1710) -------------------
 //
 // `mise-tasks/with-lock.sh` is retired onto this. Everything about WHAT a lock
