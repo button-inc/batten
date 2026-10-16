@@ -407,10 +407,22 @@ pub fn with_logs(
     fetch: impl Fn(&str) -> String + Sync,
 ) -> Vec<Pull> {
     let mut pulls = pulls;
-    // ONLY WHERE THE CHEAP SOURCES FOUND NOTHING. A competitor whose branch,
-    // title or body already names a key has been answered, and the trailer can
-    // only agree — the bound that keeps this from being a round trip per open
-    // pull request however wide the fan-out is allowed to be.
+    // ONLY WHERE THE CHEAP SOURCES FOUND NOTHING — the bound that keeps this
+    // from being a round trip per open pull request however wide the fan-out is
+    // allowed to be.
+    //
+    // **IT IS SOUND FOR SOURCE 3 AND NOT FOR SOURCE 1, AND THAT IS A KNOWN
+    // MISS.** A `Refs:` trailer can only agree with a branch or title that
+    // already named a key, which is what makes skipping the fetch safe for it.
+    // A CLOSING KEYWORD IN A LOG OUTRANKS BOTH, though — [`claimed_from`]
+    // returns the closing set before it looks at the branch — so a competitor
+    // whose commits close a different key than its branch names is judged under
+    // its branch's, and a real race on the closed key reads as no race. The
+    // skip is carried from the sequential fill this replaces, byte for byte in
+    // both directions, so this changes nothing about it; the fix is to fetch
+    // every competitor rather than the eligible subset, and this fan-out is
+    // what would make that affordable.
+    //
     // EACH ENTRY CARRIES ITS DESTINATION, not its queue position. Two parallel
     // vectors — slots here, numbers there — would have to stay in step for the
     // write-back below to put an answer on the pull it was fetched for, and
@@ -429,33 +441,48 @@ pub fn with_logs(
     // would make the peak the listing's length. An empty `eligible` spawns
     // nothing and falls through both loops, so it needs no arm of its own.
     let next = std::sync::atomic::AtomicUsize::new(0);
-    let fetched: Vec<(usize, String)> = std::thread::scope(|scope| {
+    // EACH ANSWER IS PUBLISHED AS IT ARRIVES, never batched per worker. A
+    // worker that panics then costs the one fetch it died in; returning a vector
+    // per worker cost every answer that worker had ALREADY collected, which is a
+    // far wider silence than the failed fetch it is meant to read like. The lock
+    // is held only to push a value already computed — `fetch` runs outside it —
+    // so the closure cannot poison it, and one push per network round trip is
+    // not contention.
+    let fetched: std::sync::Mutex<Vec<(usize, String)>> = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
         let handles: Vec<_> = (0..FETCH_WIDTH.min(eligible.len()))
             .map(|_| {
-                let (next, eligible, fetch) = (&next, &eligible, &fetch);
+                let (next, eligible, fetch, fetched) = (&next, &eligible, &fetch, &fetched);
                 scope.spawn(move || {
-                    let mut answers = Vec::new();
                     loop {
                         let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(&(slot, number)) = eligible.get(at) else {
-                            return answers;
+                            return;
                         };
-                        answers.push((slot, fetch(number)));
+                        let log = fetch(number);
+                        if let Ok(mut done) = fetched.lock() {
+                            done.push((slot, log));
+                        }
                     }
                 })
             })
             .collect();
-        // A worker that panicked contributes nothing, which leaves its pulls
-        // the empty log a failed fetch leaves — the same degradation, not a
-        // lost verdict. Never `unwrap`: this runs inside `verify`, where a
-        // panic here would cost the whole pre-flight.
-        handles
-            .into_iter()
-            .filter_map(|handle| handle.join().ok())
-            .flatten()
-            .collect()
+        // JOINED, AND THE RESULT CONSUMED. A scope re-panics for a panicked
+        // thread nobody joined, and this runs inside `verify`, where that would
+        // cost the whole pre-flight — so a worker's panic is absorbed into the
+        // reading a competitor with no log already gets, which is the
+        // could-not-look direction this verb allows everywhere else. Never
+        // `unwrap`. The tolerance is live in the dev and test profiles, which
+        // unwind; `[profile.dist]` aborts, so there it is the abort that
+        // decides and this only has to not make things worse.
+        for handle in handles {
+            drop(handle.join());
+        }
     });
-    for (slot, log) in fetched {
+    for (slot, log) in fetched
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    {
         if let Some(pull) = pulls.get_mut(slot) {
             pull.log = log;
         }
