@@ -7296,24 +7296,35 @@ fn run_claim_race(
     // competitor is fetched only when its cheap sources resolve to NOTHING, or
     // when they resolve to a key THIS BRANCH CLAIMS — so an unanswered one
     // contributes no key it was not already contributing, which is what the
-    // paragraph above needs. The `claims` half is why it reads that way rather
-    // than "no key at all": a collider that goes unanswered keeps the cheap key
-    // it had, and the race it produces today it still produces.
+    // paragraph above needs. **That covers the cheap-EMPTY half only**, which
+    // is the half this arm rests on: an unanswered collider keeps a cheap key
+    // it was already contributing, so it can still enter the list below — and
+    // the partition, not this ordering, is what stops it deciding anything.
     //
-    // Fetch EVERY competitor and that stops holding: `user/cloud-100-x` whose
-    // commits close CLOUD-200 would read as claiming CLOUD-100 on a failed
-    // read, over a key it was contributing to nothing before. Whoever widens
-    // the fetch set that far moves this arm above `races` in the same change.
+    // Fetch EVERY competitor and even that stops holding: `user/cloud-100-x`
+    // whose commits close CLOUD-200 would read as claiming CLOUD-100 on a
+    // failed read, over a key it was contributing to nothing before. Whoever
+    // widens the fetch set that far moves this arm above `races` in the same
+    // change.
     let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
     // **AND A RACE RESTING ON A COMPETITOR NOBODY READ IS NOT ONE EITHER.** A
     // collider is fetched precisely because its cheap key might be wrong — the
     // branch names one key while the commits close another — so reporting it
     // on that same cheap key when the confirming read FAILED is refusing on the
-    // evidence this run went out of its way to distrust. It would also be the
-    // one false refusal the widening cannot remove: `races` is non-empty, so
-    // the arm below never runs. Could-not-look, like every other arm here, and
-    // the branch is not blocked by a forge nobody could reach.
-    if races.iter().any(|race| unanswered.contains(&race.number)) {
+    // evidence this run went out of its way to distrust, and it is the one
+    // false refusal the widening cannot otherwise remove, because a non-empty
+    // `races` means the arm below never runs.
+    //
+    // PARTITIONED RATHER THAN TESTED, because `any` would make this arm wider
+    // than the rule it sits inside. A listing can hold both a confirmed
+    // collision and an unreadable collider — one 502 mid-fan-out is enough —
+    // and discarding the confirmed one over an unrelated third party is
+    // precisely the "throw away refusing information the run already holds"
+    // the paragraph above refuses. Only an ALL-unconfirmed list declines.
+    let (races, unconfirmed): (Vec<_>, Vec<_>) = races
+        .into_iter()
+        .partition(|race| !unanswered.contains(&race.number));
+    if races.is_empty() && !unconfirmed.is_empty() {
         return clean(out, UNCONFIRMED_RACE);
     }
     // AND AN INCOMPLETE FILL ALLOWS, exactly like the four arms above it. Once
@@ -7379,7 +7390,7 @@ fn run_claim_race(
 ///
 /// What `claim race` says when a competitor it would REFUSE on went unread.
 ///
-/// Its own arm rather than a fifth sentence in [`unread_log`]: the others all
+/// Its own arm rather than a fourth sentence in [`unread_log`]: those three all
 /// answer "no race found over a partial reading", and this one is a race found
 /// over a competitor the run deliberately distrusted and then could not check.
 const UNCONFIRMED_RACE: &str = "claim race: a competitor whose claim this branch would race could \

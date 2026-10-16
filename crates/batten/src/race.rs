@@ -501,20 +501,24 @@ pub fn with_logs(
     // the branch, so a competitor whose commits close a different key than its
     // branch names is judged under its branch's — which hides a real race AND
     // refuses a branch claiming the branch-named key at `Violation` inside
-    // `verify`, over a collision that does not exist. `complete` stays `true`
-    // through both, because an unfetched competitor is not an unanswered one, so
-    // `run_claim_race`'s judge-first arm never sees it. A false refusal needs the
-    // cheap key to collide with the set this branch claims, so `claims` is
-    // exactly the pulls that can produce one — and a run that answers clean has
-    // none of them. The widening therefore costs ZERO round trips whenever this
-    // verb prints "no open pull request races this branch's claim".
+    // `verify`, over a collision that does not exist. `unanswered` stays EMPTY
+    // through both, because an unfetched competitor is not an unanswered one,
+    // so neither of `run_claim_race`'s could-not-look arms ever sees it. A
+    // false refusal needs the cheap key to collide with the set this branch
+    // claims, so `claims` is exactly the pulls that can produce one — and a run
+    // that answers clean has none of them. The widening therefore costs ZERO
+    // round trips whenever this verb prints "no open pull request races this
+    // branch's claim".
     //
-    // IT CANNOT LOSE A REFUSAL, in either of the two ways that would matter. A
-    // fetch that FAILS on a collider leaves its log empty and its cheap key
-    // standing, so [`races`] reports it exactly as before. And the `complete`
-    // this newly turns `false` cannot downgrade anything, because the arm that
-    // reads it is guarded by an EMPTY race list, which that same standing key
-    // makes impossible.
+    // A COLLIDER WHOSE FETCH FAILS IS THE CASE THE CALLER MUST HANDLE, and it
+    // is why [`Filled::unanswered`] carries numbers rather than a count. Such a
+    // pull keeps the empty log the listing was built with, so its cheap key
+    // stands and [`races`] still reports it — on exactly the evidence this
+    // widening exists to distrust. `run_claim_race` reads the two apart: a race
+    // whose number is in `unanswered` is unconfirmed and declines, while a
+    // confirmed one beside it still refuses. The widening therefore loses no
+    // refusal it would otherwise have made, but only because the caller
+    // partitions; it is not a property of this function.
     //
     // **THE CASE THE PREDICATE DOES NOT REACH** is the remaining load-bearing
     // one: a competitor whose branch names a key nobody here claims, while its
@@ -607,29 +611,29 @@ pub fn with_logs(
     // `rx` runs dry exactly when the last answer has been taken. Holding `tx`
     // across the loop would hang here forever.
     drop(tx);
-    let answers: Vec<(usize, String)> = rx.into_iter().collect();
     // TAKEN AGAINST THE ELIGIBLE SET, never against the listing: `mine_number`
     // and every competitor a cheap source already answered were deliberately
     // not asked, so reading this off `pulls` would report every ordinary fill
     // incomplete.
     //
-    // Drained into `answers` first because `eligible` borrows `pulls` and the
-    // write-back below needs it mutably — the difference has to be taken while
-    // the immutable borrow is still alive.
-    let answered: std::collections::BTreeSet<usize> =
-        answers.iter().map(|(slot, _)| *slot).collect();
-    let unanswered: Vec<String> = eligible
+    // EVERY ELIGIBLE PULL STARTS OWED AND IS STRUCK AS IT ANSWERS, which keeps
+    // the drain one pass and leaves `unanswered` in listing order by
+    // construction — the map is keyed by slot, so `into_values` is already the
+    // order the rest of this function promises.
+    let mut unanswered: std::collections::BTreeMap<usize, String> = eligible
         .iter()
-        .filter(|(slot, _)| !answered.contains(slot))
-        .map(|(_, number)| (*number).to_owned())
+        .map(|(slot, number)| (*slot, (*number).to_owned()))
         .collect();
-    drop(eligible);
-    for (slot, log) in answers {
+    for (slot, log) in rx {
+        unanswered.remove(&slot);
         if let Some(pull) = pulls.get_mut(slot) {
             pull.log = log;
         }
     }
-    Filled { pulls, unanswered }
+    Filled {
+        pulls,
+        unanswered: unanswered.into_values().collect(),
+    }
 }
 
 /// Every key this branch claims that a DIFFERENT open pull request claims too.

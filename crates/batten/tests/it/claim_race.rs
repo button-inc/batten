@@ -637,14 +637,21 @@ fn a_competitor_whose_cheap_key_collides_is_fetched_and_one_that_collides_with_n
 /// a passing case.
 const REPO: &str = "acme/widgets";
 
+/// The two statuses the fixtures below choose between, named at the call site
+/// for the reason `unread_log` takes an `Option` rather than a second `bool`:
+/// `self_log`'s two are the same type and a swap would compile, turning the
+/// unconfirmed-race case into the already-covered refused-self-log one.
+const OK: u16 = 200;
+const REFUSED: u16 = 403;
+
 /// One `-i`-style response, in the shape `rest`'s fixture seam reads.
 fn answer(status: u16, body: &str) -> String {
     format!("HTTP/2 {status}\ncontent-type: application/json\n\n{body}\n")
 }
 
 /// A checkout that IS pull request #7, and a forge answering the two endpoints
-/// `batten claim race` asks: the open listing, and #7's own commit log — whose
-/// status the caller chooses.
+/// `batten claim race` asks: the open listing, #7's own commit log, and #8's —
+/// the latter two with statuses the caller chooses.
 ///
 /// **The listing is the collision in miniature.** #7's body closes CLOUD-1 while
 /// its COMMITS close CLOUD-2, and #8 names CLOUD-2 in its title. So whether this
@@ -662,12 +669,12 @@ fn answer(status: u16, body: &str) -> String {
 /// The REAL grammar rather than [`Fake`], because the subject here is the verb:
 /// the compiled binary resolves `[[pattern]]` rows out of the config it finds,
 /// and a fixture spelling its own would assert about a grammar nothing uses.
-fn self_log(
-    name: &str,
-    commits: u16,
-    body: &str,
-    rival: u16,
-) -> (std::path::PathBuf, std::path::PathBuf) {
+/// A checkout the verb can resolve itself in: the real grammar, an `origin` the
+/// slug derives from, one commit, and the forge directory beside it.
+///
+/// Returns the repository, its HEAD — which a listing must carry as some pull
+/// request's head SHA or [`race::identify`] finds no subject — and the forge.
+fn checkout(name: &str) -> (std::path::PathBuf, String, std::path::PathBuf) {
     let root = scratch(name);
     let repo = Fixture::at(root.join("repo"))
         .config("version = 1\n")
@@ -686,6 +693,16 @@ fn self_log(
     );
     let head = git_in(&repo, &["rev-parse", "HEAD"]);
     let forge = root.join("forge");
+    (repo, head, forge)
+}
+
+fn self_log(
+    name: &str,
+    commits: u16,
+    body: &str,
+    rival: u16,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (repo, head, forge) = checkout(name);
     write(
         &forge,
         "routes",
@@ -723,6 +740,71 @@ fn self_log(
     (repo, forge)
 }
 
+/// A listing with TWO colliding competitors, one of which answers.
+///
+/// Its own fixture rather than a fourth axis on [`self_log`]: #9 claims CLOUD-1,
+/// which that listing's branch also claims, so adding it there would turn the
+/// could-not-look cases into refusals — they allow precisely because nobody
+/// else holds CLOUD-1.
+///
+/// #7 is this branch: body closes CLOUD-1, commits close CLOUD-2, both read. So
+/// `mine` is both keys, and both competitors collide and are fetched. #8's
+/// confirming read is REFUSED; #9's answers and agrees with its title.
+///
+/// Two eligible competitors is the shape `race.rs` warns about for this seam —
+/// `rest::from_fixture` appends every request to one shared `args` file — so
+/// this asserts over exit code and stderr only, never over `args`. Which
+/// ANSWER each request gets is routed by URL and is safe concurrently.
+fn two_rivals(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (repo, head, forge) = checkout(name);
+    write(
+        &forge,
+        "routes",
+        "pulls/7/commits\tmine.json\npulls/8/commits\tunread.json\n\
+         pulls/9/commits\tanswered.json\npulls?\tpulls.json\n",
+    );
+    write(
+        &forge,
+        "pulls.json",
+        &answer(
+            200,
+            &format!(
+                r#"[{{"number":7,"title":"fix: the work","body":"Closes CLOUD-1.",
+                   "head":{{"ref":"user/topic","sha":"{head}"}}}},
+                  {{"number":8,"title":"feat: somebody else on CLOUD-2","body":"",
+                   "head":{{"ref":"user/rival","sha":"beef"}}}},
+                  {{"number":9,"title":"fix: a third party on CLOUD-1","body":"",
+                   "head":{{"ref":"user/third","sha":"cafe"}}}}]"#
+            ),
+        ),
+    );
+    write(
+        &forge,
+        "mine.json",
+        &answer(
+            OK,
+            r#"[{"commit":{"message":"fix: more of it\n\nCloses CLOUD-2"}}]"#,
+        ),
+    );
+    write(
+        &forge,
+        "unread.json",
+        &answer(
+            REFUSED,
+            r#"[{"commit":{"message":"feat: the rival's work\n\nCloses CLOUD-2"}}]"#,
+        ),
+    );
+    write(
+        &forge,
+        "answered.json",
+        &answer(
+            OK,
+            r#"[{"commit":{"message":"fix: the third party's work\n\nCloses CLOUD-1"}}]"#,
+        ),
+    );
+    (repo, forge)
+}
+
 /// Run `batten claim race` in `repo` against `forge`.
 fn raced(repo: &std::path::Path, forge: &std::path::Path) -> std::process::Output {
     batten()
@@ -737,7 +819,7 @@ fn raced(repo: &std::path::Path, forge: &std::path::Path) -> std::process::Outpu
 /// gives the next case something to lose.
 #[test]
 fn a_key_closed_by_this_branch_s_commits_alone_still_races() {
-    let (repo, forge) = self_log("claim-race-self-log-read", 200, "Closes CLOUD-1.", 200);
+    let (repo, forge) = self_log("claim-race-self-log-read", OK, "Closes CLOUD-1.", OK);
     let output = raced(&repo, &forge);
 
     assert_eq!(
@@ -772,7 +854,12 @@ fn a_key_closed_by_this_branch_s_commits_alone_still_races() {
 /// allowed while saying nothing would pass the first two.
 #[test]
 fn a_self_log_that_could_not_be_read_is_not_a_clean_board() {
-    let (repo, forge) = self_log("claim-race-self-log-refused", 403, "Closes CLOUD-1.", 200);
+    let (repo, forge) = self_log(
+        "claim-race-self-log-refused",
+        REFUSED,
+        "Closes CLOUD-1.",
+        OK,
+    );
     let output = raced(&repo, &forge);
 
     assert!(
@@ -811,7 +898,12 @@ fn a_self_log_that_could_not_be_read_is_not_a_clean_board() {
 /// either, which is what makes the arm reachable rather than hypothetical.
 #[test]
 fn a_silent_body_behind_an_unreadable_self_log_judges_nothing() {
-    let (repo, forge) = self_log("claim-race-self-log-silent", 403, "no key here at all", 200);
+    let (repo, forge) = self_log(
+        "claim-race-self-log-silent",
+        REFUSED,
+        "no key here at all",
+        OK,
+    );
     let output = raced(&repo, &forge);
 
     assert!(
@@ -844,7 +936,7 @@ fn a_silent_body_behind_an_unreadable_self_log_judges_nothing() {
 /// saying why would pass the first assertion alone.
 #[test]
 fn a_race_resting_on_a_competitor_nobody_could_read_is_not_a_refusal() {
-    let (repo, forge) = self_log("claim-race-rival-unread", 200, "Closes CLOUD-1.", 403);
+    let (repo, forge) = self_log("claim-race-rival-unread", OK, "Closes CLOUD-1.", REFUSED);
     let output = raced(&repo, &forge);
 
     assert!(
@@ -861,6 +953,47 @@ fn a_race_resting_on_a_competitor_nobody_could_read_is_not_a_refusal() {
         !stderr(&output).contains("already claimed"),
         "the refusal the cheap key alone would have produced is exactly what this arm \
          withholds: {}",
+        stderr(&output)
+    );
+}
+
+/// One unreadable competitor does not suppress a CONFIRMED collision beside it
+/// (CLOUD-2382).
+///
+/// # Why the arm partitions instead of testing
+///
+/// Declining on an unconfirmed race is right for that race and wrong for every
+/// other one in the listing. A single 502 mid-fan-out, or the worker unwind
+/// `with_logs` absorbs, leaves one competitor unread while the rest answered —
+/// and `races.iter().any(..)` would throw the whole list away, discarding a
+/// collision this run fully read and confirmed. That is the same "refusing
+/// information the run already holds" that the judge-first ordering sixteen
+/// lines above exists to keep.
+///
+/// So this listing is deliberately mixed: #8 collides on CLOUD-2 and its
+/// confirming read is refused, #9 collides on CLOUD-1 and its read agrees. The
+/// verb must refuse over #9 and say nothing about #8. Under `any` it exits 0
+/// instead, which is the mutant this case kills.
+#[test]
+fn an_unread_competitor_does_not_suppress_a_confirmed_race_beside_it() {
+    let (repo, forge) = two_rivals("claim-race-mixed-confirmation");
+    let output = raced(&repo, &forge);
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the confirmed collision still refuses: {} {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("CLOUD-1") && stderr(&output).contains("#9"),
+        "and it is the one that was read that gets named: {}",
+        stderr(&output)
+    );
+    assert!(
+        !stderr(&output).contains("#8"),
+        "while the unconfirmed one is withheld rather than reported: {}",
         stderr(&output)
     );
 }
