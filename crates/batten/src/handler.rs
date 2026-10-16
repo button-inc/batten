@@ -269,34 +269,21 @@ pub struct Handler {
     /// subject.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_matcher: Option<String>,
-    /// Which WRITTEN PATHS this handler does not run for, as a regular
-    /// expression over the path the mediated call writes (CLOUD-2390).
-    ///
-    /// **Absent means every call the other selectors admitted**, so no landed
-    /// row changes behaviour by this column's arrival — the promise `matcher`
-    /// and `command_matcher` each made.
-    ///
-    /// # An exception, where its siblings are selections
+    /// Whether this handler's subject is the TREE, so a call writing outside the
+    /// repository does not select it (CLOUD-2390).
     ///
     /// Measured: `filed-row-settled` refuses every Edit and Write while a filed
     /// row is unsettled, and its remedy is a board write. In plan mode the board
-    /// write is refused, so the one file plan mode exists to write — the host's
-    /// plan file — could not be written either, and the plan was presented
-    /// stale. The handler's subject is the TREE; a path outside it is not its
-    /// subject, and naming the exception is narrower than naming every tree path.
+    /// write is refused, so the host's plan file — outside the repository, and
+    /// the one file plan mode exists to write — could not be written either.
     ///
-    /// # A call that writes no path is SELECTED
-    ///
-    /// The opposite of [`Handler::command_matcher`]'s could-not-look arm, for the
-    /// opposite shape of column: that one names what a row IS about, so a call
-    /// with no command is not its subject; this one names what a row is NOT
-    /// about, so a call with no path was excepted by nothing.
-    ///
-    /// The path is the one the host sent, made repo-relative only when it lies
-    /// inside the repository (`hook::relativise_writes`), so an expression over a
-    /// host path outside the tree anchors on its leading `/`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path_except: Option<String>,
+    /// **A boolean, not a path expression**: the boundary already makes a
+    /// written path repo-relative exactly when it lies inside the repository
+    /// (`hook::relativise_writes`), so an absolute path IS a path outside it, and
+    /// no row has to spell a host's directory layout. A call that writes no path
+    /// is selected — nothing was written outside. `false` is every landed row.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tree_only: bool,
     /// The issue that owns retiring this handler (CLOUD-984).
     ///
     /// **A handler is an antipattern with a ratchet, never a destination.** The
@@ -344,8 +331,8 @@ pub struct Handler {
     pub preapproves: bool,
 }
 
-//MUTANT path-except-inverted|s@^        writes.is_none_or(\x7cwrites\x7c !regex.is_match(writes))$@        writes.is_none_or(\x7cwrites\x7c regex.is_match(writes))@|a_write_outside_the_excepted_path_is_selected
-//MUTANT path-except-pathless|s@^        writes.is_none_or(\x7cwrites\x7c !regex.is_match(writes))$@        writes.is_some_and(\x7cwrites\x7c !regex.is_match(writes))@|the_path_exception_selects_when_absent_or_pathless
+//MUTANT tree-only-inverted|s@^        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c !Path::new(writes).is_absolute())$@        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c Path::new(writes).is_absolute())@|a_write_inside_the_tree_is_selected
+//MUTANT tree-only-pathless|s@^        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c !Path::new(writes).is_absolute())$@        !self.tree_only \x7c\x7c writes.is_some_and(\x7cwrites\x7c !Path::new(writes).is_absolute())@|a_tree_only_row_selects_a_pathless_call
 impl Handler {
     /// The event this handler names, or `None` when `on` names none.
     #[must_use]
@@ -401,22 +388,11 @@ impl Handler {
         }
     }
 
-    /// Whether this handler runs for a call writing `writes` (CLOUD-2390).
-    ///
-    /// `true` for a row carrying no `path_except`, and for a call that writes no
-    /// path: an exception excepts only what it names. A match does NOT select.
-    /// An UNPARSEABLE expression selects, matching both siblings: it is refused
-    /// at load, and a participant in a fail-open contract runs rather than goes
-    /// silent.
+    /// Whether this handler runs for a call writing `writes` (CLOUD-2390): see
+    /// [`Handler::tree_only`].
     #[must_use]
     pub fn selects_path(&self, writes: Option<&str>) -> bool {
-        let Some(except) = self.path_except.as_deref() else {
-            return true;
-        };
-        let Ok(regex) = Regex::new(except) else {
-            return true;
-        };
-        writes.is_none_or(|writes| !regex.is_match(writes))
+        !self.tree_only || writes.is_none_or(|writes| !Path::new(writes).is_absolute())
     }
 
     /// The bound this handler runs under.
@@ -599,17 +575,6 @@ impl Handler {
             Regex::new(matcher).map_err(|err| {
                 UsageError::raise(format!(
                     "hook.handler {}: `command_matcher` is not valid: {err}",
-                    self.id
-                ))
-            })?;
-        }
-        // THE PATH EXCEPTION COMPILES (CLOUD-2390), for the sibling's reason: an
-        // uncompilable expression falls through to `selects_path`'s fail-open
-        // arm, and the exception it was written to make silently never applies.
-        if let Some(except) = self.path_except.as_deref() {
-            Regex::new(except).map_err(|err| {
-                UsageError::raise(format!(
-                    "hook.handler {}: `path_except` is not valid: {err}",
                     self.id
                 ))
             })?;
@@ -948,8 +913,7 @@ fn impersonates_host(stdout: &str) -> bool {
 /// and every handler runs there (CLOUD-2050): a row's relative paths are the
 /// repository's, whatever directory the host's shell stands in.
 ///
-/// A call that writes no path, which is how [`dispatch_writing`]'s `path_except`
-/// arm reads every caller that has none to give.
+/// For a call that writes no path; [`dispatch_writing`] takes one.
 #[must_use]
 pub fn dispatch(
     root: &Path,
@@ -962,12 +926,9 @@ pub fn dispatch(
     dispatch_writing(root, handlers, event, raw_tool, command, None, payload)
 }
 
-/// [`dispatch`], for a call that writes `writes` (CLOUD-2390): a row's
-/// `path_except` is judged against it.
-///
-/// A sibling rather than a seventh parameter on [`dispatch`], so a caller with no
-/// path to give, and every case written against the six-argument form, is
-/// unchanged.
+/// [`dispatch`], for a call that writes `writes`, which a row's
+/// [`Handler::tree_only`] is judged against (CLOUD-2390). A sibling rather than
+/// a seventh parameter, so every caller with no path to give is unchanged.
 #[must_use]
 pub fn dispatch_writing(
     root: &Path,
@@ -998,7 +959,6 @@ pub fn dispatch_writing(
         if !handler.selects_command(command) {
             continue;
         }
-        // AND THE EXCEPTION (CLOUD-2390): a path the row names as not its subject.
         if !handler.selects_path(writes) {
             continue;
         }
@@ -1426,42 +1386,16 @@ mod tests {
         );
     }
 
-    /// The path exception, all four arms (CLOUD-2390).
+    /// A pathless call is selected, unlike the command selector's could-not-look
+    /// arm: nothing was written outside the tree (CLOUD-2390).
     #[test]
-    fn the_path_exception_selects_when_absent_or_pathless() {
+    fn a_tree_only_row_selects_a_pathless_call() {
         let mut row = handler("h", Event::PreTool.as_str(), &["true"]);
-
-        // No column: every call the other selectors admitted.
         assert!(row.selects_path(Some("/root/.claude/plans/x.md")));
-
-        row.path_except = Some(r"/\.claude/plans/[^/]+\.md$".to_owned());
-        assert!(
-            !row.selects_path(Some("/root/.claude/plans/x.md")),
-            "a path the row names as not its subject is not selected"
-        );
+        row.tree_only = true;
+        assert!(row.selects_path(None));
         assert!(row.selects_path(Some("crates/batten/src/lib.rs")));
-        // THE ASYMMETRY WITH `command_matcher`: an exception excepts only what
-        // it names, so a call that writes no path was excepted by nothing.
-        assert!(
-            row.selects_path(None),
-            "a pathless call is selected, unlike the command selector's arm"
-        );
-
-        // Unparseable selects, matching both siblings: refused at load, and a
-        // fail-open participant runs rather than goes silent.
-        row.path_except = Some("(".to_owned());
-        assert!(row.selects_path(Some("/root/.claude/plans/x.md")));
-    }
-
-    #[test]
-    fn an_uncompilable_path_exception_is_refused_at_load() {
-        let mut row = handler("h", Event::PreTool.as_str(), &["true"]);
-        row.path_except = Some("(".to_owned());
-        let err = row.validate().expect_err("an invalid regex is refused");
-        assert!(
-            err.to_string().contains("path_except"),
-            "the refusal must name the column a reader has to fix: {err}"
-        );
+        assert!(!row.selects_path(Some("/root/.claude/plans/x.md")));
     }
 
     fn handler(id: &str, on: &str, run: &[&str]) -> Handler {
@@ -1476,7 +1410,7 @@ mod tests {
             // which is the promise the column made on arrival. The cases about
             // the selector set it explicitly.
             command_matcher: None,
-            path_except: None,
+            tree_only: false,
             // Absent, so the existing cases keep exercising what they were
             // written for: `validate` deliberately does NOT read these, and a
             // helper that populated them would hide that separation rather than

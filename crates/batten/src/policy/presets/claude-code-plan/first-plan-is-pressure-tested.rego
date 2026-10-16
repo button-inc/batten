@@ -33,42 +33,40 @@ violation contains {
 	input.facts.extracted["plan-exits"] <= 1
 }
 
-test_the_first_presentation_is_refused if {
-	some v in violation with input as {
-		"call": {"event": "pre-tool", "permission-mode": "plan", "tool": "ExitPlanMode"},
-		"facts": {"extracted": {"plan-exits": 1}},
-	}
+# Whether this module refuses `call` over the extracted counts `extracted`.
+fires(call, extracted) if {
+	some v in violation with input as {"call": call, "facts": {"extracted": extracted}}
 	v.rule == "plan check first"
 }
 
+exit_call := {"event": "pre-tool", "permission-mode": "plan", "tool": "ExitPlanMode"}
+
+test_the_first_presentation_is_refused if {
+	fires(exit_call, {"plan-exits": 1})
+}
+
 test_a_second_presentation_is_not if {
-	not "plan check first" in {v.rule | some v in violation} with input as {
-		"call": {"event": "pre-tool", "permission-mode": "plan", "tool": "ExitPlanMode"},
-		"facts": {"extracted": {"plan-exits": 2}},
-	}
+	not fires(exit_call, {"plan-exits": 2})
 }
 
 test_an_unread_count_is_not if {
-	not "plan check first" in {v.rule | some v in violation} with input as {"call": {"event": "pre-tool", "permission-mode": "plan", "tool": "ExitPlanMode"}}
+	not fires(exit_call, {})
 }
 
 # A compound shell line in plan mode, with the count at its refusing value, is
-# still not a presentation: only the plan-exit tool is this module's subject,
-# whatever the command carries (CLOUD-857's compound shape).
+# still not a presentation: only the plan-exit tool is this module's subject
+# (CLOUD-857's compound shape).
 test_a_compound_shell_line_is_not if {
-	not "plan check first" in {v.rule | some v in violation} with input as {
-		"call": {
+	not fires(
+		{
 			"event": "pre-tool", "permission-mode": "plan", "tool": "Bash",
 			"command": "git status && git log -1",
 			"segments": [{"words": ["git", "status"], "terminator": "&&"}, {"words": ["git", "log", "-1"]}],
 		},
-		"facts": {"extracted": {"plan-exits": 1}},
-	}
+		{"plan-exits": 1},
+	)
 }
 
 test_another_tool_is_not if {
-	not "plan check first" in {v.rule | some v in violation} with input as {
-		"call": {"event": "pre-tool", "permission-mode": "plan", "tool": "Read"},
-		"facts": {"extracted": {"plan-exits": 1}},
-	}
+	not fires({"event": "pre-tool", "permission-mode": "plan", "tool": "Read"}, {"plan-exits": 1})
 }

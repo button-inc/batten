@@ -651,10 +651,11 @@ pub struct Repeats {
     pub plan_exits: usize,
 }
 
-/// The tool a plan-mode session calls to present its plan, as Claude Code's
-/// transcript spells it. A transcript naming no such call counts zero, which a
-/// module reading this member must treat as "not presented", never as "absent".
-const PLAN_EXIT_TOOL: &str = "ExitPlanMode";
+/// Whether `event` is a plan presentation, the one predicate [`Tally::fold`] and
+/// [`Stream::repeats`] both count (CLOUD-2383).
+fn is_plan_exit(event: &Event) -> bool {
+    matches!(event, Event::ToolCall { name, .. } if name == crate::hook::PLAN_EXIT_TOOL)
+}
 
 /// What [`Stream::counts`], [`Stream::records`] and [`Stream::repeats`] answer,
 /// carried as a FORWARD fold so a transcript can be read once and then only its
@@ -874,14 +875,12 @@ impl Tally {
                 }
             }
             Event::TurnEnd(_) => self.seen |= Kind::Turns.bit(),
-            Event::ToolCall { name, .. } => {
+            Event::ToolCall { .. } => {
                 self.tool_calls += 1;
                 self.seen |= Kind::ToolCalls.bit();
                 self.agent_turn_run = 0;
                 self.calls_since_marker += 1;
-                if name == PLAN_EXIT_TOOL {
-                    self.plan_exits += 1;
-                }
+                self.plan_exits += usize::from(is_plan_exit(event));
             }
             Event::ToolResult { failed, .. } => {
                 self.seen |= Kind::ToolResults.bit();
@@ -1127,9 +1126,7 @@ impl Stream {
         repeats.plan_exits = self
             .records
             .iter()
-            .filter(|record| {
-                matches!(&record.event, Event::ToolCall { name, .. } if name == PLAN_EXIT_TOOL)
-            })
+            .filter(|record| is_plan_exit(&record.event))
             .count();
         repeats
     }

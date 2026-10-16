@@ -27,7 +27,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{StateHome as _, batten, git_in, scratch, write};
+use common::{StateHome as _, batten, scratch, write};
 
 /// Prose distinctive enough that finding it anywhere is unambiguous — standing in
 /// for everything a real transcript carries.
@@ -200,11 +200,22 @@ fn session_with(tool_calls: usize, denied: bool) -> String {
 /// `transcript` is `None` for the host that hands over no path — the common case
 /// (CLOUD-388), and the one that must not read as a clean session.
 fn fixture(name: &str, transcript: Option<&str>) -> (PathBuf, PathBuf, Option<PathBuf>) {
-    let dir = scratch(&format!("extracted-{name}"));
-    let home = scratch(&format!("extracted-home-{name}"));
-    write(&dir, "batten.toml", &config());
-    write(&dir, "probe.rego", PROBE);
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    let fixture = fixture_with(&format!("extracted-{name}"), &config(), transcript);
+    write(&fixture.0, "probe.rego", PROBE);
+    fixture
+}
+
+/// A repository under `name` carrying `config`, a scrubbed state home, and the
+/// session record `transcript`, if any.
+fn fixture_with(
+    name: &str,
+    config: &str,
+    transcript: Option<&str>,
+) -> (PathBuf, PathBuf, Option<PathBuf>) {
+    let dir = scratch(name);
+    let home = scratch(&format!("{name}-home"));
+    write(&dir, "batten.toml", config);
+    common::init_repo(&dir);
     let path = transcript.map(|body| {
         write(&dir, "session.jsonl", body);
         dir.join("session.jsonl")
@@ -214,13 +225,21 @@ fn fixture(name: &str, transcript: Option<&str>) -> (PathBuf, PathBuf, Option<Pa
 
 /// Drive `batten hook` for one call, with the state root contained.
 fn hook(dir: &Path, home: &Path, transcript: Option<&Path>) -> std::process::Output {
-    let envelope = serde_json::json!({
-        "hook_event_name": "PreToolUse",
-        "tool_name": "Bash",
-        "tool_input": {"command": "probe-command"},
-        "transcript_path": transcript.map(|path| path.display().to_string()),
-    })
-    .to_string();
+    adjudicate(
+        dir,
+        home,
+        &serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "probe-command"},
+            "transcript_path": transcript.map(|path| path.display().to_string()),
+        }),
+    )
+}
+
+/// Hand `envelope` to `batten adjudicate`, with the state root contained.
+fn adjudicate(dir: &Path, home: &Path, envelope: &serde_json::Value) -> std::process::Output {
+    let envelope = envelope.to_string();
     let mut invocation = batten();
     invocation
         .current_dir(dir)
@@ -378,11 +397,8 @@ const PLAN_SENTENCE: &str = "verify, pressure test, validate; present corrected 
 /// A repository enabling the vendored preset with the count it reads, as the
 /// committed authority enables it: one preset row, the extract on that row.
 fn plan_fixture(name: &str, transcript: Option<&str>) -> (PathBuf, PathBuf, Option<PathBuf>) {
-    let dir = scratch(&format!("plan-exits-{name}"));
-    let home = scratch(&format!("plan-exits-home-{name}"));
-    write(
-        &dir,
-        "batten.toml",
+    fixture_with(
+        &format!("plan-exits-{name}"),
         r#"version = 1
 
 [[rule]]
@@ -396,13 +412,8 @@ severity = "deny"
 id = "plan-exits"
 count = "plan-exits"
 "#,
-    );
-    common::init_repo(&dir);
-    let path = transcript.map(|body| {
-        write(&dir, "session.jsonl", body);
-        dir.join("session.jsonl")
-    });
-    (dir, home, path)
+        transcript,
+    )
 }
 
 /// A session whose assistant turns call `tools`, in order, in the host's shape.
@@ -428,30 +439,17 @@ fn calls(tools: &[&str]) -> String {
 
 /// Drive one plan-mode presentation through `batten adjudicate`.
 fn present(dir: &Path, home: &Path, transcript: Option<&Path>) -> String {
-    let envelope = serde_json::json!({
-        "hook_event_name": "PreToolUse",
-        "permission_mode": "plan",
-        "tool_name": "ExitPlanMode",
-        "tool_input": {},
-        "transcript_path": transcript.map(|path| path.display().to_string()),
-    })
-    .to_string();
-    let mut invocation = batten();
-    invocation
-        .current_dir(dir)
-        .state_home(home)
-        .args(["adjudicate", "--harness", "claude-code"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let mut child = invocation.spawn().expect("spawn batten adjudicate");
-    {
-        use std::io::Write as _;
-        let mut sink = child.stdin.take().expect("the child's stdin");
-        sink.write_all(envelope.as_bytes())
-            .expect("write the envelope");
-    }
-    let outcome = child.wait_with_output().expect("run batten adjudicate");
+    let outcome = adjudicate(
+        dir,
+        home,
+        &serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "permission_mode": "plan",
+            "tool_name": "ExitPlanMode",
+            "tool_input": {},
+            "transcript_path": transcript.map(|path| path.display().to_string()),
+        }),
+    );
     let (answer, cause) = channels(&outcome);
     format!("{answer}{cause}")
 }

@@ -11390,8 +11390,13 @@ pub const INERT_TOOLS: [&str; 5] = [
     "Glob",
     "ToolSearch",
     "EnterPlanMode",
-    "ExitPlanMode",
+    PLAN_EXIT_TOOL,
 ];
+
+/// The tool a plan-mode session calls to present its plan, in Claude Code's
+/// spelling: one name for [`INERT_TOOLS`] and the transcript's `plan-exits`
+/// count (CLOUD-2383), rather than one per reader.
+pub const PLAN_EXIT_TOOL: &str = "ExitPlanMode";
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
