@@ -83,7 +83,7 @@ const USE_MARK: &str = "used";
 /// least recently used evicted first. A partition without a mark — written
 /// before marks existed — takes that path too, and gains one.
 //MUTANT partitions-never-pruned|s@^    prune(\&root, name);$@@|a_new_partition_keeps_its_neighbours_up_to_the_bound
-//MUTANT partition-mark-never-made|s@^    let _ = std::fs::File::create(\&mark);$@@|a_partition_without_a_mark_gains_one
+//MUTANT partition-mark-never-made|s@^    if crate::durable::create_exclusive_as(\&mark, b"", crate::durable::Persist::Atomic).is_err() {$@    if false {@|a_partition_without_a_mark_gains_one
 #[must_use]
 pub fn root_under(parent: &Path) -> Option<PathBuf> {
     // A binary that cannot name itself has no partition, so it caches nothing
@@ -103,9 +103,12 @@ pub fn root_under(parent: &Path) -> Option<PathBuf> {
     if !tag.exists() {
         let _ = crate::durable::replace_as(&tag, CACHEDIR_TAG, crate::durable::Persist::Atomic);
     }
-    // Best-effort like the tag: an unmarked partition ranks by its directory
-    // and is marked on its next visit here.
-    let _ = std::fs::File::create(&mark);
+    // A partition that cannot be marked is still served, but does not prune:
+    // without a mark every call lands here, and a directory scan per call is
+    // the cost the warm path exists to avoid. It ranks by its directory.
+    if crate::durable::create_exclusive_as(&mark, b"", crate::durable::Persist::Atomic).is_err() {
+        return Some(own);
+    }
     prune(&root, name);
     Some(own)
 }
