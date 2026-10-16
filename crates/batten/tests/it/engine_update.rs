@@ -41,6 +41,16 @@ fn repo(name: &str) -> PathBuf {
     dir
 }
 
+/// A case's repository, its outside-the-tree install directory, and the
+/// private binary in it — the three names derived from one stem, so they agree
+/// by construction rather than by five string literals staying in step.
+fn case_tree(case: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let dir = repo(&format!("engine-2376-{case}"));
+    let installed = common::scratch_outside_tree("engine-2376", &format!("{case}-installed"));
+    let binary = private_binary(&installed);
+    (dir, installed, binary)
+}
+
 /// A private name for the compiled binary, so this case's installed engine is
 /// its own and a stamp written beside it is nobody else's.
 fn private_binary(dir: &Path) -> PathBuf {
@@ -268,12 +278,16 @@ fn bash_envelope(session: &str, command: &str) -> String {
 /// line is not on stdout, and the build ran ONCE per call — the two handoffs
 /// find the same file, so a fall-through that forgot the first would spawn the
 /// crash twice to learn the same thing.
+///
+/// The two arms are separate cases, and the split is about the mutation sweep
+/// rather than taste: `mutate` replays a Rust suite as `cargo test -- <case>`,
+/// so three `//MUTANT` rows naming ONE function each paid for the other arm's
+/// spawns and both floor invocations, none of which can redden the mutant
+/// under test.
 #[test]
-fn a_crashing_checkout_build_never_fails_the_hook_open() {
-    // -- Through `follow_pin`: the installed engine stands IN the checkout. --
-    let dir = repo("engine-2376-crash-follow");
-    let installed = common::scratch_outside_tree("engine-2376", "crash-follow-installed");
-    let binary = private_binary(&installed);
+fn a_crashing_followed_build_never_fails_the_hook_open() {
+    // Through `follow_pin`: the installed engine stands IN the checkout.
+    let (dir, _installed, binary) = case_tree("crash-follow");
     pin_source(&dir, &pinned());
     crashing_build(&dir, &built());
 
@@ -284,13 +298,15 @@ fn a_crashing_checkout_build_never_fails_the_hook_open() {
         &bash_envelope("crash-follow", "ls"),
     );
     a_crash_decided_nothing(&output, &dir, "follow");
+}
 
-    // -- Through the load-fault handoff: the shell stands OUTSIDE the
-    // checkout, so `follow_pin` finds no repository and the hook reaches the
-    // authority the envelope named (CLOUD-2204). --
-    let dir = repo("engine-2376-crash-handoff");
-    let installed = common::scratch_outside_tree("engine-2376", "crash-handoff-installed");
-    let binary = private_binary(&installed);
+/// The load-fault hand-off's half of
+/// [`a_crashing_followed_build_never_fails_the_hook_open`], where the shell
+/// stands OUTSIDE the checkout: `follow_pin` finds no repository, and the hook
+/// reaches the authority the envelope named (CLOUD-2204).
+#[test]
+fn a_crashing_handed_off_build_never_fails_the_hook_open() {
+    let (dir, installed, binary) = case_tree("crash-handoff");
     // The session records its authority from inside the repository first,
     // unpinned, exactly as `a_hook_outside_the_checkout_hands_off_to_the_authoritys_build`
     // does. Nothing is asserted of it: no crashing build exists yet, so an
@@ -313,12 +329,25 @@ fn a_crashing_checkout_build_never_fails_the_hook_open() {
         &[],
     );
     a_crash_decided_nothing(&output, &dir, "handoff");
+}
 
-    // THE FLOOR STILL DECIDES, which is what makes dropping the crash safe
-    // rather than merely quiet: a write to a path that is not the config is
-    // refused, and a read proceeds.
+/// THE FLOOR STILL DECIDES, which is what makes dropping a crashed child's
+/// answer safe rather than merely quiet: over rules that will not load, a
+/// write to a path that is not the config is refused and a read proceeds.
+#[test]
+fn the_floor_still_decides_over_rules_that_will_not_load() {
+    let (dir, installed, binary) = case_tree("crash-floor");
+    run(
+        &binary,
+        &dir,
+        &ADJUDICATE,
+        &bash_envelope("crash-floor", "ls"),
+    );
+    pin_source(&dir, &pinned());
+    crashing_build(&dir, &built());
+
     let write = envelope(
-        "crash-handoff",
+        "crash-floor",
         "Write",
         &format!(
             r#"{{"file_path":"{}","content":"x"}}"#,
@@ -332,7 +361,7 @@ fn a_crashing_checkout_build_never_fails_the_hook_open() {
         text(&refused)
     );
     let read = envelope(
-        "crash-handoff",
+        "crash-floor",
         "Read",
         &format!(r#"{{"file_path":"{}"}}"#, dir.join("src.txt").display()),
     );
@@ -355,9 +384,7 @@ fn a_crashing_checkout_build_never_fails_the_hook_open() {
 /// command.
 #[test]
 fn a_followed_exec_still_passes_its_childs_code_and_bytes_through() {
-    let dir = repo("engine-2376-exec-passthrough");
-    let installed = common::scratch_outside_tree("engine-2376", "exec-passthrough-installed");
-    let binary = private_binary(&installed);
+    let (dir, _installed, binary) = case_tree("exec-passthrough");
     pin_source(&dir, &pinned());
     let build = private_build(&dir.join("target").join("release").join("batten"));
     stamp(&build, &built());
@@ -391,13 +418,16 @@ fn a_followed_exec_still_passes_its_childs_code_and_bytes_through() {
 /// source pin was followed to a stale build or to nothing at all while the
 /// engine the install had just produced sat elsewhere. Here there IS no
 /// `target/release`, so the case can only pass by reading the variable.
+///
+/// The redirect points OUTSIDE the repository, which is the shape a shared
+/// target directory takes and the one a containment rule got wrong: `root` here
+/// is the tree this process would run cargo in, so wherever its own cargo was
+/// told to write IS its own build, inside the checkout or not.
 #[test]
 fn a_source_pin_is_followed_into_a_redirected_target_dir() {
-    let dir = repo("engine-2376-redirected-target");
-    let installed = common::scratch_outside_tree("engine-2376", "redirected-target-installed");
-    let binary = private_binary(&installed);
+    let (dir, _installed, binary) = case_tree("redirected-target");
     pin_source(&dir, &pinned());
-    let elsewhere = dir.join("elsewhere");
+    let elsewhere = common::scratch_outside_tree("engine-2376", "redirected-target-dir");
     speaking_build(&elsewhere.join("release"), &built());
     assert!(
         !dir.join("target").join("release").join("batten").exists(),
@@ -419,51 +449,51 @@ fn a_source_pin_is_followed_into_a_redirected_target_dir() {
     );
 }
 
-/// A BUILD OUTSIDE THE CHECKOUT IS NOT THE CHECKOUT'S OWN (CLOUD-2376).
+/// THE HAND-OFF READS NO `CARGO_TARGET_DIR` OF THIS PROCESS (CLOUD-2376).
 ///
-/// The mirror of the case above, and the reason the redirect is contained
-/// rather than honoured whole. `CARGO_TARGET_DIR` is read from THIS process,
-/// so an absolute one — a shared target directory, which CI images commonly
-/// set — would otherwise answer `checkout_build` for every root alike. The
-/// hook's load-fault hand-off asks about the envelope's AUTHORITY, another
-/// checkout entirely, and would have followed a source pin into a stranger's
-/// engine; `collect` asks so the pruner spares the binary the hook execs, and
-/// would have spared that stranger while collecting the real one.
+/// The mirror of the case above, and the reason the distinction is drawn by
+/// CALLER rather than by where the path lands. `CARGO_TARGET_DIR` says where
+/// THIS process's cargo writes, so it speaks for the tree this process would
+/// build and for no other. The load-fault hand-off asks about the envelope's
+/// AUTHORITY — a different checkout, in exactly the case it exists for — so
+/// applying the variable there would follow a source pin into the build of a
+/// tree nobody asked about.
 ///
-/// Here the only build sits outside the repository and the variable points
-/// straight at it. Following it would be the defect, so the verb must run
-/// under the engine it was invoked as, and the refusal must name the update.
+/// The redirect here is RELATIVE, which is the shape a containment rule let
+/// through: it resolves under the authority's own root, so "is the path inside
+/// `root`" answers yes about a build this process never made. The hand-off
+/// must look under the authority's plain `target/release` and find nothing.
 #[test]
-fn a_build_outside_the_checkout_is_not_the_checkouts_own() {
-    let dir = repo("engine-2376-foreign-target");
-    let installed = common::scratch_outside_tree("engine-2376", "foreign-target-installed");
-    let binary = private_binary(&installed);
+fn the_handoff_reads_no_target_dir_of_this_process() {
+    let (dir, installed, binary) = case_tree("foreign-target");
+    // The session records its authority from inside the repository first,
+    // unpinned, as the other hand-off case does.
+    run(
+        &binary,
+        &dir,
+        &ADJUDICATE,
+        &bash_envelope("foreign-target", "ls"),
+    );
     pin_source(&dir, &pinned());
-    // OUTSIDE the repository, and absolute — `scratch_outside_tree` is where
-    // this suite puts a directory that is nobody's checkout.
-    let foreign = common::scratch_outside_tree("engine-2376", "foreign-target-dir");
-    speaking_build(&foreign.join("release"), &built());
+    // Under the authority's root, so a containment test would admit it, and
+    // reachable only by reading this process's variable.
+    speaking_build(&dir.join("elsewhere").join("release"), &built());
     assert!(
         !dir.join("target").join("release").join("batten").exists(),
-        "the only build is the foreign one"
+        "the only build is the redirected one"
     );
 
     let output = run_from(
         &binary,
         &dir,
-        &dir,
-        &["config", "show"],
-        "",
-        &[("CARGO_TARGET_DIR", foreign.as_path())],
+        &installed,
+        &ADJUDICATE,
+        &bash_envelope("foreign-target", "ls"),
+        &[("CARGO_TARGET_DIR", Path::new("elsewhere"))],
     );
     assert!(
         !text(&output).contains("checkout build ran"),
-        "a build outside the checkout is never followed: {}",
-        text(&output)
-    );
-    assert!(
-        text(&output).contains("batten engine install"),
-        "and the refusal names the update: {}",
+        "another tree's build is never handed to: {}",
         text(&output)
     );
 }

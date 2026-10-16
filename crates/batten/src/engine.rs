@@ -372,32 +372,52 @@ pub(crate) fn runs_local() -> bool {
 /// refresh until a release build finished. Whether the pin is current is
 /// `engine-pin:check`'s question. One `stat`, so the hook path can take it.
 ///
-/// # OWN is the load-bearing word, so a build outside `root` is not one
+/// # IT READS NO `CARGO_TARGET_DIR`, BECAUSE `root` MAY NOT BE THIS TREE
 ///
-/// [`release_build`] reads this process's `CARGO_TARGET_DIR`, which is right
-/// for the tree this process would run cargo in and wrong for any other. Two
-/// callers ask about another tree: the hook's load-fault hand-off asks about
-/// the envelope's authority, a DIFFERENT checkout in exactly the case it
-/// exists for (CLOUD-2204), and `collect` asks so the pruner spares the binary
-/// the hook execs. With an ABSOLUTE `CARGO_TARGET_DIR` — a shared target
-/// directory, which CI images commonly set — both would otherwise resolve to a
-/// build belonging to no checkout in particular: the hook would follow a
-/// source pin to another tree's engine, and the pruner would spare that file
-/// while collecting the one it exists to protect.
+/// `CARGO_TARGET_DIR` is a fact about where THIS process's cargo writes, so it
+/// speaks only for the tree this process would build. Both of this function's
+/// callers ask about another one: the hook's load-fault hand-off asks about the
+/// envelope's authority, a DIFFERENT checkout in exactly the case it exists for
+/// (CLOUD-2204), and `collect` asks so the pruner spares the binary the hook
+/// execs. Applying the variable to them would answer about a tree nobody asked
+/// about — the hook following a source pin into a stranger's engine.
 ///
-/// So the redirect is honoured only while it stays INSIDE `root`. That is the
-/// whole of what "the checkout's own build" claims; it holds for every caller
-/// without any of them having to know which tree they are asking about; and it
-/// answers the case the redirect was added for — a RELATIVE value, which cargo
-/// resolves against the build's own working directory — exactly as before.
+/// So this is the conventional path and nothing else. A caller asking about the
+/// tree this process would run cargo in wants [`own_build`], which honours the
+/// redirect because for that caller it is true.
+///
+/// Containment was tried first — honour the redirect while it lands inside
+/// `root` — and it was wrong in BOTH directions, which is why the distinction
+/// is drawn by caller rather than by path shape: an absolute redirect out of
+/// the tree stopped `follow_pin` finding its own build, reinstating the drift
+/// CLOUD-2376 closed, while a RELATIVE one resolved under the authority and was
+/// honoured for a tree this process never built.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT source-pin-unfollowed|s@^    build.is_file().then_some(build)$@    None::<PathBuf>.filter(\x7c_\x7c build.is_file())@|a_source_pin_is_followed_to_the_checkouts_build
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT foreign-target-dir-followed|s@^    let build = build.starts_with(root).then_some(build)?;$@    let build = build;@|a_build_outside_the_checkout_is_not_the_checkouts_own
+//MUTANT foreign-target-dir-read|s@^        .join("target")$@        .join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(\x7c\x7c "target".into()))@|the_handoff_reads_no_target_dir_of_this_process
 #[must_use]
 pub fn checkout_build(root: &Path) -> Option<PathBuf> {
+    let build = root
+        .join("target")
+        .join("release")
+        .join(crate::surface::BINARY);
+    build.is_file().then_some(build)
+}
+
+/// [`checkout_build`] for the tree THIS PROCESS would run cargo in, which is
+/// the one `CARGO_TARGET_DIR` speaks for (CLOUD-2376).
+///
+/// `follow_pin`'s source arm is the caller: it resolves its root from the
+/// working directory and is the sibling of `install_source`, which builds in
+/// that same root with this process's environment inherited. The two ends of
+/// one file therefore agree for every value of the variable, absolute or
+/// relative — which is the agreement this issue exists to restore.
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT own-build-ignores-the-target-dir|s@^    let build = release_build(root);$@    let build = root.join("target").join("release").join(crate::surface::BINARY);@|a_source_pin_is_followed_into_a_redirected_target_dir
+#[must_use]
+pub fn own_build(root: &Path) -> Option<PathBuf> {
     let build = release_build(root);
-    let build = build.starts_with(root).then_some(build)?;
     build.is_file().then_some(build)
 }
 

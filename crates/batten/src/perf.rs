@@ -1367,7 +1367,12 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
     // not the number being defended, so measuring one would publish a claim
     // about an artifact that ships nowhere.
     build(repo, None, "head", "release")?;
-    let head_bin = repo.join("target/release/batten");
+    // THE SAME NAMER THE BUILD OBEYED (CLOUD-2376). `build(repo, None, …)`
+    // publishes no target directory, so the cargo child inherits this
+    // process's `CARGO_TARGET_DIR` — and a literal here would read where cargo
+    // was not told to write, which is the pairing that issue closed between
+    // the engine's own install and lookup.
+    let head_bin = crate::engine::release_build(repo);
     if !head_bin.is_file() {
         bail!(
             "perf: {} is missing after a successful build — refusing to measure something else.",
