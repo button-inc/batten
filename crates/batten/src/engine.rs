@@ -371,11 +371,33 @@ pub(crate) fn runs_local() -> bool {
 /// `crates/`, and following only an exact stamp stranded the hook on every
 /// refresh until a release build finished. Whether the pin is current is
 /// `engine-pin:check`'s question. One `stat`, so the hook path can take it.
+///
+/// # OWN is the load-bearing word, so a build outside `root` is not one
+///
+/// [`release_build`] reads this process's `CARGO_TARGET_DIR`, which is right
+/// for the tree this process would run cargo in and wrong for any other. Two
+/// callers ask about another tree: the hook's load-fault hand-off asks about
+/// the envelope's authority, a DIFFERENT checkout in exactly the case it
+/// exists for (CLOUD-2204), and `collect` asks so the pruner spares the binary
+/// the hook execs. With an ABSOLUTE `CARGO_TARGET_DIR` — a shared target
+/// directory, which CI images commonly set — both would otherwise resolve to a
+/// build belonging to no checkout in particular: the hook would follow a
+/// source pin to another tree's engine, and the pruner would spare that file
+/// while collecting the one it exists to protect.
+///
+/// So the redirect is honoured only while it stays INSIDE `root`. That is the
+/// whole of what "the checkout's own build" claims; it holds for every caller
+/// without any of them having to know which tree they are asking about; and it
+/// answers the case the redirect was added for — a RELATIVE value, which cargo
+/// resolves against the build's own working directory — exactly as before.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT source-pin-unfollowed|s@^    build.is_file().then_some(build)$@    None::<PathBuf>.filter(\x7c_\x7c build.is_file())@|a_source_pin_is_followed_to_the_checkouts_build
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT foreign-target-dir-followed|s@^    let build = build.starts_with(root).then_some(build)?;$@    let build = build;@|a_build_outside_the_checkout_is_not_the_checkouts_own
 #[must_use]
 pub fn checkout_build(root: &Path) -> Option<PathBuf> {
     let build = release_build(root);
+    let build = build.starts_with(root).then_some(build)?;
     build.is_file().then_some(build)
 }
 
@@ -394,11 +416,13 @@ pub fn checkout_build(root: &Path) -> Option<PathBuf> {
 /// relative value names a directory inside the checkout. An absolute value is
 /// taken as it is, which is what [`Path::join`] already does.
 ///
-/// It reads THIS PROCESS's environment, which the signature does not show. That
-/// is right only while the install inherits it, as `install_source`'s cargo
-/// child does; a caller that publishes a target directory to a child instead —
-/// as `replay`, `perf` and `mutate` each do for their own spawns — would get an
-/// answer about the wrong tree, and would have to pass it in.
+/// It reads THIS PROCESS's environment, which the signature does not show, and
+/// that is right only for the tree this process would run cargo in — which is
+/// what `install_source` asks about, its cargo child inheriting the same
+/// value. Asking about ANOTHER tree is [`checkout_build`]'s question, and its
+/// containment rule is where that difference is answered; a caller that
+/// publishes a target directory to a child instead, as `replay`, `perf` and
+/// `mutate` each do for their own spawns, would have to pass it in.
 #[must_use]
 pub fn release_build(root: &Path) -> PathBuf {
     let target = std::env::var_os("CARGO_TARGET_DIR")
