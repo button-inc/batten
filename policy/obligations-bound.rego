@@ -67,7 +67,8 @@
 #MUTANT runner-ownership-unchecked|s@^\tregex.match(glob_pattern(trim_space(path_glob)), entry.file)$@\ttrue@|a_runner_token_on_a_file_it_does_not_own_is_refused
 #MUTANT unlanded-row-judged|s@^\tobligation_row\.id in closes$@\ttrue@|an_obligation_from_a_row_the_pr_does_not_close_is_not_judged
 #MUTANT newest-line-ignored|s@^\traw := closes_lines\[count(closes_lines) - 1\]$@\tsome raw in closes_lines@|a_key_dropped_from_the_latest_body_is_not_judged
-#MUTANT unread-fetch-counted|s@^\traw != "closes -"$@\ttrue@|a_newest_unread_fetch_keeps_the_earlier_reading
+#MUTANT unread-fetch-counted|s@^\tcolumns\[1\] != "-"$@\ttrue@|a_newest_unread_fetch_keeps_the_earlier_reading
+#MUTANT nothing-read-as-zero|s@^\tcontains(columns\[1\], ":")$@\ttrue@|a_measured_nothing_closes_no_row_named_zero
 
 # METADATA
 # description: |
@@ -104,9 +105,17 @@ lines := input.tree.records["board-writes"]
 # body fetch, in fetch order, so the last line is the body as it stands; a key
 # only an older body named is a row this PR no longer lands. The union judged
 # such a row anyway (#1132: CLOUD-2258, dropped from the body, still refused).
+#
+# THE SAME READING AS `filed-here.rego` (CLOUD-2444): one record, so one parse.
+# The two modules cannot import each other, so the rule is spelled the same in
+# both and each carries the same mutant rows; a change to one is a change to both.
 closes contains key if {
 	raw := closes_lines[count(closes_lines) - 1]
-	columns := split(raw, " ")
+	columns := split(trim_space(raw), " ")
+
+	# A MEASURED NOTHING (`closes 0`) carries no `:` and so no keys; without
+	# this the whole column `0` would be read as one key.
+	contains(columns[1], ":")
 	some key in split(substring(columns[1], indexof(columns[1], ":") + 1, -1), ",")
 }
 
@@ -114,8 +123,9 @@ closes contains key if {
 # which says nothing about the body, so it never overrides an earlier reading.
 closes_lines := [raw |
 	some raw in input.tree.records["pr-closes"]
-	startswith(raw, "closes ")
-	raw != "closes -"
+	columns := split(trim_space(raw), " ")
+	columns[0] == "closes"
+	columns[1] != "-"
 ]
 
 column(columns, at) := value if {

@@ -426,6 +426,32 @@ fn a_latest_body_closing_nothing_judges_no_row() {
     assert!(verdicts(&root).is_empty(), "{:?}", verdicts(&root));
 }
 
+/// A MEASURED NOTHING CARRIES NO KEY (CLOUD-2444): without the `:` guard,
+/// `closes 0` reads as the key `0`, so a row whose id is literally `0` would be
+/// judged as landing. Not judged is the only reading of "the body closes nothing".
+#[test]
+fn a_measured_nothing_closes_no_row_named_zero() {
+    let root = repo_closing(
+        "obligations-nothing-is-not-zero",
+        &[&line("1:crates/batten/tests/it/missing.rs:slug-one").replace("CLOUD-1", "0")],
+        None,
+        &["closes 0"],
+    );
+    assert!(verdicts(&root).is_empty(), "{:?}", verdicts(&root));
+
+    // ANTI-VACUITY: a body that really closes `0` lands it, so it is judged.
+    let closing = repo_closing(
+        "obligations-zero-really-closed",
+        &[&line("1:crates/batten/tests/it/missing.rs:slug-one").replace("CLOUD-1", "0")],
+        None,
+        &["closes 1:0"],
+    );
+    assert!(
+        !verdicts(&closing).is_empty(),
+        "a row the body closes is judged"
+    );
+}
+
 /// AND AN ABSENT `pr-closes` RECORD JUDGES NOTHING. The same reading, reached the
 /// other way: no pull request yet, or a key reader that could not run, is
 /// could-not-look about whether the row is landing — and this module is already

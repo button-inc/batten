@@ -3564,6 +3564,38 @@ value = { authority = { ask = "closing-keys", read = "stdout", stdin = { result 
 counted-with = ":"
 zero-is-a-count = true
 
+# AN EDIT IS A NEW BODY TOO (CLOUD-2444). The row above records only a FETCH, so a
+# body changed through the forge connector left the newest `pr-closes` line the
+# last body read rather than the body as it stands, and since CLOUD-2282 the
+# newest line decides the closing set outright. This row records the body the
+# edit SET, read from the call's own input, once the forge answers with the PR's
+# `url`; an edit that leaves the body alone (a state change, a title) carries no
+# `body` and is not selected. The keys column is the same grammar over that text.
+#MUTANT-SUITE crates/batten/tests/it/record_closes.rs
+#MUTANT pr-body-edit-unrecorded|s@^requires-input-matching = { body = "pr-body-text" }$@requires-input-matching = { body = "never-matches" }@|an_edited_body_is_the_newest_closing_set
+[[recorder]]
+name = "pr-body-edit-closes"
+record = "pr-closes"
+tool = "update_pull_request"
+key = "branch"
+requires = ["url"]
+requires-input-matching = { body = "pr-body-text" }
+
+[[recorder.columns]]
+name = "kind"
+value = { literal = "closes" }
+
+[[recorder.columns]]
+name = "keys"
+value = { authority = { ask = "closing-keys", read = "stdout", stdin = { input = "body" } } }
+counted-with = ":"
+zero-is-a-count = true
+
+# A body that says anything at all: the edit set one, as opposed to leaving it.
+[[pattern]]
+id = "pr-body-text"
+regex = '[^[:space:]]'
+
 # `issue-search-guard`'s decision, as config (CLOUD-312 row 1, CLOUD-505).
 #
 # A row is not filed until somebody has looked for the one that already exists.

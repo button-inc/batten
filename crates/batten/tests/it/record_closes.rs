@@ -91,6 +91,70 @@ fn a_body_that_closes_rows_records_them_in_the_readers_own_shape() {
     );
 }
 
+/// The COMMITTED connector-edit recorder, with every committed `[[pattern]]` its
+/// key reader's grammar resolves, and nothing else.
+///
+/// Cut from the committed table rather than retyped, so this case exercises the
+/// row as it ships: the whole table names `policy/` modules a scratch repository
+/// does not carry, the hook cannot load it there, and it records nothing.
+fn edit_config() -> String {
+    let committed: toml::Table = std::fs::read_to_string(common::at_root("batten.toml"))
+        .expect("read the committed authority")
+        .parse()
+        .expect("the committed authority parses");
+    let row = committed["recorder"]
+        .as_array()
+        .expect("the authority declares recorders")
+        .iter()
+        .find(|row| row["name"].as_str() == Some("pr-body-edit-closes"))
+        .expect("the committed authority declares the connector-edit recorder")
+        .clone();
+    let mut fixture = toml::Table::new();
+    fixture.insert("version".to_owned(), toml::Value::Integer(1));
+    fixture.insert("pattern".to_owned(), committed["pattern"].clone());
+    fixture.insert("recorder".to_owned(), toml::Value::Array(vec![row]));
+    toml::to_string(&fixture).expect("the fixture serializes")
+}
+
+/// A repository carrying [`edit_config`].
+fn edit_repo(name: &str) -> PathBuf {
+    let root = repo(name);
+    std::fs::write(root.join("batten.toml"), edit_config()).expect("install the fixture config");
+    root
+}
+
+/// A completed `update_pull_request`, handed to the engine as the host would.
+fn edit_pull_request(root: &Path, input: &str) {
+    let payload = format!(
+        "{{\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"mcp__github__update_pull_request\",\
+         \"tool_input\":{input},\
+         \"tool_response\":{{\"id\":\"4870062878\",\"url\":\"https://github.com/o/r/pull/7\"}}}}"
+    );
+    // A post-tool event carries no verdict; what the case reads is the record.
+    let _ = common::run_with_stdin(root, &["adjudicate", "--harness", "exit-code"], &payload);
+}
+
+/// AN EDIT IS A NEW BODY TOO (CLOUD-2444): the body an `update_pull_request`
+/// SET is recorded as the newest closing set, so the gates judge the body as it
+/// stands rather than the last one fetched.
+#[test]
+fn an_edited_body_is_the_newest_closing_set() {
+    let root = edit_repo("record-closes-edited");
+    edit_pull_request(
+        &root,
+        r#"{"owner":"o","repo":"r","pullNumber":7,"body":"Reworked.\n\nCloses CLOUD-7\n"}"#,
+    );
+    assert_eq!(recorded(&root).as_deref(), Some("closes 1:CLOUD-7\n"));
+
+    // ANTI-VACUITY: an edit that sets no body (a state change) records nothing.
+    let untouched = edit_repo("record-closes-state-only");
+    edit_pull_request(
+        &untouched,
+        r#"{"owner":"o","repo":"r","pullNumber":7,"state":"closed"}"#,
+    );
+    assert_eq!(recorded(&untouched), None);
+}
+
 #[test]
 fn naming_a_row_is_not_closing_it() {
     // CLOUD-674's distinction, which `claimed-keys` learned expensively: a body
