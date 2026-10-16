@@ -355,14 +355,17 @@ pub struct Filled {
     pub pulls: Vec<Pull>,
     /// Every eligible competitor answered, so this is a reading.
     ///
-    /// A fetch that FAILED still answers — the caller collapses it to `""`, and
-    /// an empty log is the honest could-not-read for that one competitor, as it
-    /// was before. `false` means something stronger: a worker unwound and some
-    /// competitor was never asked at all.
+    /// `false` has two causes and they are the same fact: some eligible
+    /// competitor was never read. Either its `fetch` answered `None`, or the
+    /// worker carrying it unwound before it could send.
     ///
-    /// So `false` is a defect in the FILL rather than a reading of the forge,
-    /// which is why a caller should not answer it the way it answers a forge it
-    /// cannot reach. What to exit on it is the caller's, and stated there.
+    /// **An empty log is NOT one of them.** `Some("")` is an answer — a
+    /// competitor whose commits genuinely name no key reads exactly that way,
+    /// and conflating it with a read that failed is what let a 403 or a 502
+    /// present as "claims nothing". That conflation is why `fetch` answers an
+    /// `Option` at all.
+    ///
+    /// What to exit on `false` is the caller's, and stated there.
     pub complete: bool,
 }
 
@@ -377,14 +380,18 @@ pub struct Filled {
 /// difference is one `GET pulls/<n>/commits` per eligible competitor, each
 /// waiting on the last.
 ///
-/// **IT SCALES WITH THE ELIGIBLE COUNT, WHICH IS NARROWER THAN THE LISTING, and
-/// that distinction is worth a number rather than an adjective.** Counted on
-/// this repository 2026-10-16: 25 open pull requests, 17 of them naming a key in
-/// a branch or title and therefore skipped by the cheap sources below, leaving
-/// **8** to fetch. So the saving here is eight round trips collapsing into one
-/// wave rather than twenty-five — the skip is doing most of the work, and this
-/// fan-out covers what it leaves. A consumer whose branches carry no key in
-/// their names has the whole listing eligible and gains proportionally more.
+/// **IT SCALES WITH THE ELIGIBLE COUNT, WHICH IS NARROWER THAN THE LISTING.**
+/// The skip below answers most competitors without a round trip, in
+/// [`claimed_from`]'s order — a body's closing keyword first, then a branch or
+/// title naming a key — so this fan-out covers only what that leaves, and on
+/// this repository (25 open pull requests on 2026-10-16) that remainder is a
+/// fraction of the listing. **No split is quoted here on purpose**: two
+/// attempts to state one, by emulating the predicate with a bare key pattern,
+/// both disagreed with it and with each other, because the operative source is
+/// the body rather than the name. A reader who wants the number should take it
+/// from the predicate rather than from a regex that resembles it. A consumer
+/// whose bodies close nothing and whose branch names carry no key has the whole
+/// listing eligible and gains proportionally more.
 ///
 /// Every request builds its own current-thread runtime inside `rest::get`, and
 /// `fetch` holds no statics, so concurrent live calls are sound. The
@@ -440,15 +447,27 @@ pub struct Filled {
 /// Each answer is written back into the slot it was taken from, so the returned
 /// `Vec` is in listing order however the fetches interleave — the property a
 /// collect over completion order would quietly lose, and the one
-/// [`races`]'s output depends on being stable (§6). A fetch answering `""`,
-/// which is what the caller makes of a failed read, leaves an empty log exactly
-/// as the sequential map did: worse than the truth, and never better than it.
+/// [`races`]'s output depends on being stable (§6).
+///
+/// # A read that failed is not a competitor that claims nothing
+///
+/// `fetch` answers an `Option` so those two can be told apart. The sequential
+/// fill this replaces collapsed every failure to `""` with `unwrap_or_default`,
+/// which made a 403 on a scopeless token, a 502 and a timeout read exactly like
+/// a competitor whose commits name no key. `commit-lint` requires a `Refs:`
+/// trailer on every commit here and a closing keyword on almost none, so the
+/// trailer is the source that actually resolves a claim — and it lives in the
+/// log a failed read did not return. The gate then prints "no open pull request
+/// races this branch's claim" over a real collision, which is the defect
+/// CLOUD-1422 retired the shell for and the same one arriving by a different
+/// door. `None` keeps that out of the verdict; `Some("")` is still a real
+/// answer and still judged.
 #[must_use]
 pub fn with_logs(
     pulls: Vec<Pull>,
     mine: &str,
     keys: &dyn Keys,
-    fetch: impl Fn(&str) -> String + Sync,
+    fetch: impl Fn(&str) -> Option<String> + Sync,
 ) -> Filled {
     let mut pulls = pulls;
     // ONLY WHERE THE CHEAP SOURCES FOUND NOTHING — the bound that keeps this
@@ -524,8 +543,15 @@ pub fn with_logs(
                         let Some(&(slot, number)) = eligible.get(at) else {
                             return;
                         };
-                        let log = fetch(number);
-                        drop(tx.send((slot, log)));
+                        // A `None` IS NOT SENT, so it never counts as an
+                        // answer and the fill comes back incomplete. That is
+                        // the whole of how a failed read reaches the caller.
+                        // A `None` IS NOT SENT, so it never counts as an
+                        // answer and the fill comes back incomplete. That is
+                        // the whole of how a failed read reaches the caller.
+                        if let Some(log) = fetch(number) {
+                            drop(tx.send((slot, log)));
+                        }
                     }
                 })
             })

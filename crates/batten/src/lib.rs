@@ -7209,45 +7209,42 @@ fn run_claim_race(
     // passed in. The fetches run concurrently because this rule was the largest
     // in an `enforce` run at 15.8 s, scaling with the open-pull-request count
     // rather than with anything about this branch (CLOUD-2382).
+    // `.ok()` RATHER THAN `.unwrap_or_default()`, which is the whole of
+    // CLOUD-2421: collapsing a failed read to `""` made a 403 or a 502
+    // indistinguishable from a competitor whose commits name no key, and the
+    // `Refs:` trailer that actually resolves a claim lives in the log that read
+    // did not return. `None` is carried out as an incomplete fill instead.
     let race::Filled { pulls, complete } =
         race::with_logs(pulls, &mine_number, &grammar, |number| {
-            bot::forge::commit_messages(&slug, number).unwrap_or_default()
+            bot::forge::commit_messages(&slug, number).ok()
         });
-    // AN INCOMPLETE FILL IS THIS VERB'S OWN DEFECT, AND EXITS AS ONE — not
-    // `clean`, which the arms above use. Every could-not-look they report is a
-    // statement about the FORGE, and each allows because a forge this cannot
-    // reach must never be the reason a branch fails `verify`. This arm is not
-    // that; [`race::Filled::complete`] says what it is instead.
-    //
-    // THE LOAD-BEARING HALF IS NON-ZERO RATHER THAN CLEAN. The sequential fill
-    // let such a panic kill the run, so a non-zero exit is what the behaviour
-    // already was; answering `clean` would quietly convert a crash into a pass
-    // byte-indistinguishable from "no races" to anything reading the code — a
-    // false green on a completion gate, the one direction `race.rs` exists to
-    // refuse.
-    //
-    // WHAT IT DOES NOT BUY IS A DISTINCT READING AT THE GATE, and an earlier
-    // version of this comment claimed it did. Through `claim mint twice` — the
-    // `command` row that is this verb's only wired caller — `rules::run_once`
-    // spawns the check with both streams `Stdio::null()` and turns ANY non-zero
-    // status into one deny, with no exit-code branch. So the line below is
-    // discarded unread there, `3` is indistinguishable from `2`, and the agent
-    // is handed that row's board-resolution remedy for a collision that did not
-    // happen. The defect is legible only on a direct `batten claim race`. Fixing
-    // the undiscriminated surface belongs to `rules::run_once`, not here.
     // JUDGED FIRST, AND THE INCOMPLETE ARM ONLY REPLACES THE CLEAN ONE. An
-    // unanswered competitor can only make this list too SHORT, never too long,
-    // so a race found among the ones that did answer is a true refusal and
-    // returning before `races` would throw away refusing information the run
-    // already holds.
+    // unanswered competitor can only make this list too SHORT, never too long —
+    // its slot keeps the empty log the listing was built with — so a race found
+    // among the ones that DID answer is a true refusal, and returning before
+    // `races` would throw away refusing information the run already holds.
     let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
+    // AND AN INCOMPLETE FILL ALLOWS, exactly like the four arms above it. Once
+    // `fetch` answers an `Option`, this arm's common cause is a forge that
+    // refused one read — a 403, a 502, a timeout — and "a forge this cannot
+    // reach must never be the reason a branch fails `verify`" is this verb's
+    // own rule for precisely that. A rarer cause is a worker that unwound,
+    // which is Batten's own defect; an earlier revision exited `Internal` to
+    // keep that loud, and widening the seam is what made the code wrong, because
+    // it put a routine forge hiccup behind the same return and would fail every
+    // pre-flight one happened to touch.
+    //
+    // THE FALSE GREEN THAT WORRIED THAT REVISION IS CLOSED BY THE LINE ABOVE,
+    // not by the exit code: a collision this run could actually see still
+    // refuses at `Violation`, because `races` is computed before this. What
+    // allows is only "no race found over a reading that was incomplete", which
+    // is a could-not-look and says so on stdout.
     if races.is_empty() && !complete {
-        writeln!(
-            err,
-            "claim race: a competitor's commit log was never read — a fetch worker did not \
-             return, which is a defect in this verb rather than a verdict about this branch"
-        )?;
-        return Ok(ExitCode::Internal);
+        return clean(
+            out,
+            "claim race: a competitor's commit log could not be read, so not every open pull \
+             request was judged — could not look, which is not a verdict",
+        );
     }
     if races.is_empty() {
         return clean(

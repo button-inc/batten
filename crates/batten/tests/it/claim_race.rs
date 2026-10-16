@@ -380,7 +380,7 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
     let seen = std::sync::Mutex::new(Seen::default());
     let bell = std::sync::Condvar::new();
     let deadline = std::time::Duration::from_secs(10);
-    let fetch = |number: &str| -> String {
+    let fetch = |number: &str| -> Option<String> {
         {
             // THE WIDTH BARRIER. Every call parks until `FETCH_WIDTH` of them
             // are inside at once, so the peak the case asserts is reached
@@ -418,7 +418,7 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
             state.done += 1;
         }
         bell.notify_all();
-        format!("Refs: CLOUD-{number}")
+        Some(format!("Refs: CLOUD-{number}"))
     };
 
     let race::Filled {
@@ -506,7 +506,7 @@ fn a_fill_that_lost_a_worker_is_not_complete_and_keeps_the_answers_it_got() {
         complete,
     } = race::with_logs(pulls, "1", &Fake, |number| {
         assert!(number != "2", "a deliberate panic inside one worker");
-        format!("Refs: CLOUD-{number}")
+        Some(format!("Refs: CLOUD-{number}"))
     });
 
     assert!(
@@ -520,5 +520,48 @@ fn a_fill_that_lost_a_worker_is_not_complete_and_keeps_the_answers_it_got() {
             .collect::<Vec<_>>(),
         ["", "", "Refs: CLOUD-3"],
         "the lost worker costs its own fetch and nothing else, and the order holds"
+    );
+}
+
+/// A competitor whose read FAILED is not read as claiming nothing, and one whose
+/// log is genuinely empty still is (CLOUD-2421).
+///
+/// # The pair is the case
+///
+/// The sequential fill collapsed every failure to `""` with
+/// `unwrap_or_default`, so a 403 on a scopeless token, a 502 and a timeout all
+/// presented as "this competitor names no key". `commit-lint` requires a
+/// `Refs:` trailer on every commit here and a closing keyword on almost none,
+/// so the trailer is the source that actually resolves a claim — and it lives
+/// in the log the failed read did not return. The gate then printed "no open
+/// pull request races this branch's claim" over a real collision.
+///
+/// So BOTH halves are asserted, and the second is what stops the fix from
+/// over-reaching: `None` must make the fill incomplete, and `Some("")` must
+/// not, because an empty log is a real answer that a competitor with no key
+/// genuinely produces. A seam that treated them alike would pass the first
+/// assertion and fail the second.
+#[test]
+fn a_read_that_failed_is_not_a_competitor_that_claims_nothing() {
+    let pulls = vec![
+        pull("1", "user/branch-one", "sha1"),
+        pull("2", "user/branch-two", "sha2"),
+    ];
+
+    let refused = race::with_logs(pulls.clone(), "1", &Fake, |_| None);
+    assert!(
+        !refused.complete,
+        "a read that failed leaves the fill a could-not-look, never a verdict"
+    );
+    assert!(
+        refused.pulls.iter().all(|pull| pull.log.is_empty()),
+        "and nothing is invented for the competitor that was not read"
+    );
+
+    let answered = race::with_logs(pulls, "1", &Fake, |_| Some(String::new()));
+    assert!(
+        answered.complete,
+        "an empty log is an ANSWER — a competitor whose commits name no key reads \
+         exactly that way, and conflating the two is the defect this fixes"
     );
 }
