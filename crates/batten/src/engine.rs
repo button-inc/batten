@@ -968,7 +968,7 @@ pub fn stale_artifacts(
     let bare = pin.to_string();
     let line = |item: &toml_edit::Item| item_line(text, item);
     // THE MANIFEST IS READ ONCE, at the first artifact that needs it.
-    let manifest = std::cell::OnceCell::new();
+    let mut manifest: Option<String> = None;
     let mut found = Vec::new();
     let mut judge = |artifact: &toml_edit::Table| -> Result<()> {
         let Some(item) = artifact.get("url") else {
@@ -983,12 +983,10 @@ pub fn stale_artifacts(
         }
         let asset = url.rsplit('/').next().unwrap_or_default();
         let digest = artifact.get("sha256");
-        let body = if let Some(body) = manifest.get() {
-            body
-        } else {
-            let fetched = sums()?;
-            manifest.get_or_init(|| fetched)
-        };
+        if manifest.is_none() {
+            manifest = Some(sums()?);
+        }
+        let body = manifest.as_deref().unwrap_or_default();
         if digest.and_then(toml_edit::Item::as_str) != published_digest(body, asset).as_deref() {
             found.push((
                 digest.map_or_else(|| line(item), line),
@@ -1198,22 +1196,24 @@ pub fn workflow_literals(
     // A node where a mapping expects its key IS that key: the mapping now
     // expects the value. Answers whether the node was a key.
     let enter = |stack: &mut Vec<Frame>| {
-        let keyed = stack.last() == Some(&Frame::Key);
-        if keyed && let Some(top) = stack.last_mut() {
+        if let Some(top @ Frame::Key) = stack.last_mut() {
             *top = Frame::Value;
+            true
+        } else {
+            false
         }
-        keyed
     };
     for (event, line) in events {
         match event {
-            yaml_rust2::Event::MappingStart(..) | yaml_rust2::Event::SequenceStart(..) => {
+            yaml_rust2::Event::MappingStart(..) => {
                 enter(&mut stack);
                 pending = None;
-                stack.push(if matches!(event, yaml_rust2::Event::MappingStart(..)) {
-                    Frame::Key
-                } else {
-                    Frame::Item
-                });
+                stack.push(Frame::Key);
+            }
+            yaml_rust2::Event::SequenceStart(..) => {
+                enter(&mut stack);
+                pending = None;
+                stack.push(Frame::Item);
             }
             yaml_rust2::Event::MappingEnd | yaml_rust2::Event::SequenceEnd => {
                 stack.pop();

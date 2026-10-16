@@ -2009,7 +2009,8 @@ pub(crate) fn clear_named(verb: &str, family: &str) -> Result<()> {
 ///
 /// # Errors
 ///
-/// As [`load_named`] and [`clear_named`].
+/// As [`named_path`], and an internal error when a matching record cannot be
+/// removed.
 pub(crate) fn clear_kind<'a>(
     verb: &str,
     kind: &str,
@@ -2017,8 +2018,9 @@ pub(crate) fn clear_kind<'a>(
 ) -> Result<()> {
     let line = format!("{kind}\t");
     for family in families {
-        if load_named(verb, family)?.is_some_and(|body| body.starts_with(&line)) {
-            clear_named(verb, family)?;
+        let path = named_path(verb, family)?;
+        if std::fs::read_to_string(&path).is_ok_and(|body| body.starts_with(&line)) {
+            remove_stale(&path)?;
         }
     }
     Ok(())
