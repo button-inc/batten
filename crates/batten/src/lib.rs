@@ -18123,7 +18123,7 @@ fn preapproval_context(
     let taken = std::mem::take(advice);
     let mut sighter = HookSighter::new(harness, envelope);
     let emission = advisory::admit(taken, ceiling, &mut sighter);
-    let text = closed_emission(harness, envelope, emission, ceiling);
+    let text = closed_emission(emission, ceiling);
     Some(if sighter.sighted {
         legend_for(envelope, text)
     } else {
@@ -19147,35 +19147,24 @@ impl advisory::Sighter for HookSighter<'_> {
 /// An emission's text, closed with where its overflow went when the ceiling
 /// cut it (CLOUD-2175): the overflow is stored whole in the capture store and
 /// the closing line names the handle that returns exactly it.
-fn closed_emission(
-    harness: hook::Harness,
-    envelope: &hook::Envelope,
-    emission: advisory::Emission,
-    ceiling: Option<&advisory::Channel>,
-) -> String {
+fn closed_emission(emission: advisory::Emission, ceiling: Option<&advisory::Channel>) -> String {
     let Some(ceiling) = ceiling.filter(|_| emission.suppressed > 0) else {
         return emission.text;
     };
-    let handle = git::repo_root(hook_authority_root()).ok().and_then(|root| {
-        let stored = capture::store(
-            &root,
-            capture::Stream::Advisory,
-            emission.overflow.as_bytes(),
-        )
-        .ok()?;
-        record_stored(
-            &root,
-            envelope,
-            harness,
-            capture::ADVISORY_OVERFLOW,
-            &stored,
-        );
-        Some(format!(
-            "{}:{}",
-            capture::Stream::Advisory.as_str(),
-            stored.digest
-        ))
-    });
+    // NO CALL ROW (CLOUD-2397): an overflow is the hook's own words, read now or
+    // not at all, so it is left row-less — kept through the eviction grace for
+    // the read the closing line invites, and taken first after it.
+    let handle = git::repo_root(hook_authority_root())
+        .ok()
+        .and_then(|root| {
+            capture::store(
+                &root,
+                capture::Stream::Advisory,
+                emission.overflow.as_bytes(),
+            )
+            .ok()
+        })
+        .map(|stored| format!("{}:{}", capture::Stream::Advisory.as_str(), stored.digest));
     format!(
         "{}\n\n{}",
         emission.text,
@@ -20304,7 +20293,7 @@ fn emit_channel(
     // beside a verdict is never recorded as seen (CLOUD-2075).
     let mut sighter = HookSighter::new(harness, envelope);
     let emission = advisory::admit(advice, ceiling, &mut sighter);
-    let text = closed_emission(harness, envelope, emission, ceiling);
+    let text = closed_emission(emission, ceiling);
     let text = if sighter.sighted {
         legend_for(envelope, text)
     } else {
@@ -22683,12 +22672,12 @@ fn stored_row(
 }
 
 /// Record [`stored_row`] for a capture stored BESIDE the result — a spilled
-/// leaf, the bound's JSON, an advisory overflow — best-effort: the capture is
-/// already published, and a missing row costs only its rank.
+/// leaf, the bound's JSON — best-effort: the capture is already published, and
+/// a missing row costs only its rank.
 ///
-/// **Ranked, never selected.** None of these is the whole of what the host
-/// handed over — a leaf is a part, the bound's JSON may be the collapsed
-/// rewrite, an overflow is the hook's own words — so the row says
+/// **Ranked, never selected.** Neither is the whole of what the host handed
+/// over — a leaf is a part, the bound's JSON may be the collapsed rewrite — so
+/// the row says
 /// [`capture::Fidelity::Prefix`], and [`capture::find`], which selects only
 /// complete rows, never answers a lookup with one.
 fn record_stored(

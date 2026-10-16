@@ -2216,12 +2216,13 @@ pub const DEFAULT_RESPONSE_MAX_RECORDS: u64 = 1024;
 /// is what keeps today's behaviour byte-identical for that consumer.
 ///
 /// **A record no call row names goes FIRST once it is older than
-/// [`UNRECORDED_GRACE`]** (CLOUD-2397). Every store the hook makes records its
-/// row, so such a record predates that or lost its row, and [`find`], which
-/// selects through rows, can never return it. Evicted last, as it once was, a
-/// few large spills held the whole budget and every tracker read stored after
-/// them was evicted the moment it landed. A younger one may be mid-write, and
-/// still goes last.
+/// [`UNRECORDED_GRACE`]** (CLOUD-2397). Such a record lost its row, or was
+/// never given one (an advisory overflow), and [`find`], which selects through
+/// rows, can never return it. Evicted last, as it once was, a few large spills
+/// held the whole budget and every tracker read stored after them was evicted
+/// the moment it landed. A younger one may be mid-write, and still goes last.
+/// This is the one place a file's time enters: it decides whether a row-less
+/// record is in flight, never the order among recorded ones.
 ///
 /// # Errors
 ///
@@ -2353,9 +2354,11 @@ fn is_builtin_result(row: &CallRow) -> bool {
 
 /// How old a record no call row names must be before eviction treats it as an
 /// orphan (CLOUD-2397). Younger, it may be another call's capture between its
-/// store and its row; ten minutes is far past any write and far short of the
-/// orphans that measured as filling the budget.
-pub const UNRECORDED_GRACE: std::time::Duration = std::time::Duration::from_mins(10);
+/// store and its row — a gap whose row lock gives up after 100 ms — or an
+/// advisory overflow the model was just pointed at. A minute covers both;
+/// longer, a capture whose row was trimmed would outlive the tracker reads a
+/// gate resolves for that long.
+pub const UNRECORDED_GRACE: std::time::Duration = std::time::Duration::from_mins(1);
 
 /// Whether `path` was last modified more than `age` ago. A file whose time
 /// cannot be read is not old: the caller's default is to keep it.
@@ -2369,12 +2372,6 @@ fn older_than(path: &Path, age: std::time::Duration) -> bool {
 
 /// The `source` a result taken from the `PostToolUse` envelope is filed under.
 pub const POST_TOOL_MEMBER: &str = "post-tool-member";
-
-/// The `source` the hook files an advisory channel's overflow under (CLOUD-2397).
-///
-/// Not [`POST_TOOL_MEMBER`]: an overflow is the hook's own words, not a built-in
-/// tool's result, so it ranks by recency with tracker reads rather than first.
-pub const ADVISORY_OVERFLOW: &str = "advisory-overflow";
 
 /// The `source` a recorded `--raw` retrieval is filed under.
 ///
