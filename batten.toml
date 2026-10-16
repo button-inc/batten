@@ -10095,8 +10095,10 @@ regex = 'hk@([0-9]+\.[0-9]+\.[0-9]+)'
 # arms over two SETS: arm A over `amends` (the `hk@` fragment) and arm A2 over
 # `amend_tags` (this pattern). They are deliberately separate because arm B
 # counts `amends` — merging them defeats `count(amends) == 0` and silently
-# narrows arm B to "neither spelling names anything". Over the `pkl-package`
-# task's URL both halves feed ONE set, `packages`, since nothing counts it.
+# narrows arm B to "neither spelling names anything". The `pkl-package` task's
+# URL is read the same way, for the same reason — `packages` and `package_tags`,
+# because arm E counts the fragment set — and each surface takes the union at
+# the arm that compares rather than in a set.
 [[pattern]]
 id = "hk-download-tag"
 regex = '/v([0-9]+\.[0-9]+\.[0-9]+)/hk@'

@@ -119,11 +119,18 @@ const MODULES: [&str; 3] = [
     "policy/ripcord-untracked.rego",
 ];
 
-/// An `amends` line in the shape `hk.pkl` really spells it.
-fn amends(version: &str) -> String {
+/// An `amends` line with each half of the URL named separately — the release
+/// tag and the `hk@` fragment. Which half drifts is then the only thing a case
+/// states, instead of a reader spotting it inside a 90-character literal.
+fn amends_halves(tag: &str, fragment: &str) -> String {
     format!(
-        "amends \"package://github.com/jdx/hk/releases/download/v{version}/hk@{version}#/Config.pkl\"\n"
+        "amends \"package://github.com/jdx/hk/releases/download/v{tag}/hk@{fragment}#/Config.pkl\"\n"
     )
+}
+
+/// An `amends` line in the shape `hk.pkl` really spells it: both halves agree.
+fn amends(version: &str) -> String {
+    amends_halves(version, version)
 }
 
 /// The `pkl-package` task as `mise.toml` really spells it, version substituted
@@ -255,8 +262,7 @@ fn a_package_task_naming_the_pin_is_clean() {
 /// `a_version_the_amends_url_names_differently_is_refused`, which it used to
 /// name. `amends()` writes one version into both halves of the URL, so arm A2
 /// also fires there and emits a byte-identical finding: neutering arm A changes
-/// nothing a case can see. Measured by applying the mutant — `opa test` passed
-/// 14 of 14 with the arm `false`.
+/// nothing a case can see. The module header carries the measurement.
 ///
 /// Here only the FRAGMENT drifts. The tag segment equals the pin, so A2 is
 /// silent and arm A is the one arm that can refuse this.
@@ -264,10 +270,7 @@ fn a_package_task_naming_the_pin_is_clean() {
 fn an_amends_fragment_naming_another_version_is_refused() {
     let root = fixture(
         "hk-fragment-drift",
-        &[(
-            "hk.pkl",
-            "amends \"package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.57.0#/Config.pkl\"\n",
-        )],
+        &[("hk.pkl", &amends_halves("1.56.1", "1.57.0"))],
         &[],
     );
     denied(&root, "tool pin other", "hk.pkl");
@@ -295,10 +298,7 @@ fn a_package_task_naming_no_version_is_refused() {
 fn an_amends_tag_segment_naming_another_version_is_refused() {
     let root = fixture(
         "hk-tag-drift",
-        &[(
-            "hk.pkl",
-            "amends \"package://github.com/jdx/hk/releases/download/v1.57.0/hk@1.56.1#/Config.pkl\"\n",
-        )],
+        &[("hk.pkl", &amends_halves("1.57.0", "1.56.1"))],
         &[],
     );
     denied(&root, "tool pin other", "hk.pkl");
