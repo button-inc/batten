@@ -595,14 +595,14 @@ reason = "dispatch the code-review skill"
     let read = |draft: bool, head: &str| {
         let head = head.to_owned();
         move || {
-            Some(batten::land::Readiness {
+            Some(Some(batten::land::Readiness {
                 draft,
                 node: "PR_node".to_owned(),
                 head: head.clone(),
-            })
+            }))
         }
     };
-    let owes = |forge: &dyn Fn() -> Option<batten::land::Readiness>| {
+    let owes = |forge: &dyn Fn() -> Option<Option<batten::land::Readiness>>| {
         batten::land_push_owes(&dir, now, Some(local), forge).expect("the authority resolves")
     };
 
@@ -611,11 +611,15 @@ reason = "dispatch the code-review skill"
     assert_eq!(refusal.rule(), "review ask missing");
     assert!(
         owes(&|| None).is_some(),
-        "no readable pull request, a fork's included, still asks"
+        "a forge that cannot say still asks"
     );
     assert!(
         owes(&read(true, "an-older-head")).is_none(),
         "a draft push buys no run"
+    );
+    assert!(
+        owes(&|| Some(None)).is_none(),
+        "a branch with no pull request buys no run"
     );
     assert!(
         owes(&read(false, local)).is_none(),
