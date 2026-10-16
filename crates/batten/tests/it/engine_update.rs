@@ -178,6 +178,29 @@ fn text(output: &Output) -> String {
 /// The adjudication verb, as a harness spells it.
 const ADJUDICATE: [&str; 3] = ["adjudicate", "--harness", "claude-code"];
 
+/// The three things that must hold of a hand-off to a build that crashed: the
+/// code is not one a harness runs past, the build's line is not on stdout, and
+/// it was spawned exactly once.
+fn a_crash_decided_nothing(output: &Output, dir: &Path, arm: &str) {
+    assert!(
+        !matches!(output.status.code(), Some(1 | 101)),
+        "{arm}: a crashed child is not the hook's exit: {:?}\n{}",
+        output.status.code(),
+        text(output)
+    );
+    assert!(
+        !out(output).contains(MARKER),
+        "{arm}: a crashed child said nothing the harness reads: {}",
+        text(output)
+    );
+    assert_eq!(
+        runs(dir),
+        1,
+        "{arm}: the crashing build ran once: {}",
+        text(output)
+    );
+}
+
 fn bash_envelope(session: &str, command: &str) -> String {
     format!(
         r#"{{"hook_event_name":"PreToolUse","session_id":"{session}","permission_mode":"default","tool_name":"Bash","tool_input":{{"command":"{command}"}}}}"#
@@ -213,23 +236,7 @@ fn a_crashing_checkout_build_never_fails_the_hook_open() {
         &ADJUDICATE,
         &bash_envelope("crash-follow", "ls"),
     );
-    assert!(
-        !matches!(output.status.code(), Some(1) | Some(101)),
-        "a crashed follow is not the hook's exit: {:?}\n{}",
-        output.status.code(),
-        text(&output)
-    );
-    assert!(
-        !out(&output).contains(MARKER),
-        "a crashed follow said nothing the harness reads: {}",
-        text(&output)
-    );
-    assert_eq!(
-        runs(&dir),
-        1,
-        "the crashing build ran once: {}",
-        text(&output)
-    );
+    a_crash_decided_nothing(&output, &dir, "follow");
 
     // -- Through the load-fault handoff: the shell stands OUTSIDE the
     // checkout, so `follow_pin` finds no repository and the hook reaches the
@@ -257,23 +264,7 @@ fn a_crashing_checkout_build_never_fails_the_hook_open() {
         &bash_envelope("crash-handoff", "ls"),
         &[],
     );
-    assert!(
-        !matches!(output.status.code(), Some(1) | Some(101)),
-        "a crashed handoff is not the hook's exit: {:?}\n{}",
-        output.status.code(),
-        text(&output)
-    );
-    assert!(
-        !out(&output).contains(MARKER),
-        "a crashed handoff said nothing the harness reads: {}",
-        text(&output)
-    );
-    assert_eq!(
-        runs(&dir),
-        1,
-        "the crashing build ran once: {}",
-        text(&output)
-    );
+    a_crash_decided_nothing(&output, &dir, "handoff");
 
     // THE FLOOR STILL DECIDES, which is what makes dropping the crash safe
     // rather than merely quiet: a write to a path that is not the config is
@@ -298,12 +289,19 @@ fn a_crashing_checkout_build_never_fails_the_hook_open() {
         "a read still answers over rules that will not load: {}",
         text(&admitted)
     );
+}
 
-    // -- THE MIRROR: every other verb is a transparent passthrough still. --
-    // `exec` carries the child's own code, `101` included, and its bytes as
-    // they arrive. The checkout build here is a working engine rather than a
-    // stub, because the claim is about what a FOLLOWED batten does with a
-    // wrapped command.
+/// THE MIRROR: every other verb is a transparent passthrough still
+/// (CLOUD-2376).
+///
+/// The case above drops a child's code and its bytes, and that narrowing has
+/// to stop at the hook verb. `exec` carries the child's own code, `101`
+/// included, and its bytes as they arrive — the code is not Batten's to
+/// re-table there. The checkout build is a working engine rather than a stub,
+/// because the claim is about what a FOLLOWED batten does with a wrapped
+/// command.
+#[test]
+fn a_followed_exec_still_passes_its_childs_code_and_bytes_through() {
     let dir = repo("engine-2376-exec-passthrough");
     let installed = common::scratch_outside_tree("engine-2376", "exec-passthrough-installed");
     let binary = private_binary(&installed);
