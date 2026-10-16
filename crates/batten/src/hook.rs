@@ -6041,6 +6041,18 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
         {
             return Decision::Deny(refusal);
         }
+        // Its mirror (CLOUD-2304): an interpreter's script FILE outside the tree.
+        if let Some(interprets) = rule.interprets.as_deref()
+            && let Some(refusal) = interpreter_decision(
+                rule,
+                interprets,
+                &parsed,
+                policy.root.as_deref(),
+                envelope.cwd.as_deref(),
+            )
+        {
+            return Decision::Deny(refusal);
+        }
         let verdicts = rule.verdict.as_deref().unwrap_or_default();
         let filters = rule.filters.as_deref().unwrap_or_default();
         // PER LINE, because a verdict-carrying program on line two is not the
@@ -6159,52 +6171,10 @@ fn substitution_decision(
     root: Option<&Path>,
     cwd: Option<&Path>,
 ) -> Option<Refusal> {
-    // PER LINE (CLOUD-1287), through the same reading every other mediated walk
-    // takes. `words` concatenates across a newline, because segment identity
-    // deliberately spans it; program identity does not, so a segment-wide read
-    // here resolves the FIRST line's program and judges every later line's
-    // operands as that program's. Hand-rolling the split beside [`per_line`]
-    // would be a second reading of one fact, and the two can drift.
-    // THE DIRECTORY A LATER STAGE RUNS IN, followed across a leading `cd`
-    // (CLOUD-1690). The envelope's `cwd` is where the CALL started, and a compound
-    // `cd /tmp/scratch && wc phase1/x.tsv` runs `wc` somewhere else — so resolving
-    // its operand against the call's cwd judged a scratch file as if it sat in the
-    // repository, the one case the containment rule (CLOUD-1109) exists to leave
-    // alone. Only the unambiguous form moves it: a TOP-LEVEL `cd <dir>` that the
-    // next stage runs after (`&&` or `;`). Every other form — `cd -`, a bare `cd`,
-    // `cd "$x"`, `pushd`, a `cd` inside `( … )` — leaves it where it was, which is
-    // today's reading and can only ever refuse what it refused before.
-    let mut effective: Option<std::path::PathBuf> = cwd.map(Path::to_path_buf);
-    for (index, segment, line) in per_line(parsed) {
-        if let Some(moved) = followed_cd(segment, line, effective.as_deref()) {
-            effective = Some(moved);
-            continue;
-        }
-        let cwd = effective.as_deref();
-        // Clause 2, and it is the SEGMENT's rather than the line's: the PRECEDING
-        // segment's terminator is what says whether this stage was fed by a pipe
-        // — the existing discard predicate reads the FOLLOWING one, which is why
-        // both live here rather than one deriving the other. Every line of a
-        // piped segment takes this arm, which is the same answer a check hoisted
-        // above the lines would give.
-        if index > 0 && parsed[index - 1].terminator == Some(Separator::Pipe) {
-            continue;
-        }
-        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
-        // `continue`, NEVER `?`. A `?` here returns from the whole function, so
-        // the first element with no resolvable program ends the scan and every
-        // LATER element goes unjudged — which is the permissive direction and the
-        // one nothing reports. Measured:
-        // `grep needle crates/batten/src/lib.rs` refused, and
-        // `FOO=1 && grep needle crates/batten/src/lib.rs` ALLOWED, because a bare
-        // assignment resolves no program. It matches every other skip in this
-        // loop now.
-        let Some(program_index) = effective_program(&tokens) else {
-            continue;
-        };
-        // NORMALISED, the same way every other walk resolves a program: a grouped
-        // command carries its opening paren on the token, so `(grep …` is not
-        // `grep` until `program_token` has read it.
+    for stage in first_stages(parsed, cwd) {
+        let cwd = stage.cwd.as_deref();
+        let tokens = &stage.tokens;
+        let program_index = stage.program;
         let program = program_token(tokens[program_index]);
         let operands = &tokens[program_index + 1..];
         if !substitutes
@@ -6237,6 +6207,164 @@ fn substitution_decision(
         return Some(substitution_refusal(rule, program, target));
     }
     None
+}
+
+/// One stage a first-stage gate judges: its words, where its program sits
+/// among them, and the directory it runs in.
+struct FirstStage<'a> {
+    tokens: Vec<&'a str>,
+    program: usize,
+    cwd: Option<std::path::PathBuf>,
+}
+
+/// Every stage of `parsed` that is NOT fed by a pipe and resolves a program,
+/// with the directory it runs in — the one walk both substitution-family
+/// predicates take (`substitutes`, CLOUD-864; `interprets`, CLOUD-2304), so the
+/// two cannot read one parse two ways.
+///
+/// PER LINE (CLOUD-1287), through the same reading every other mediated walk
+/// takes. `words` concatenates across a newline, because segment identity
+/// deliberately spans it; program identity does not, so a segment-wide read
+/// here resolves the FIRST line's program and judges every later line's
+/// operands as that program's.
+///
+/// THE DIRECTORY A LATER STAGE RUNS IN, followed across a leading `cd`
+/// (CLOUD-1690). The envelope's `cwd` is where the CALL started, and a compound
+/// `cd /tmp/scratch && wc phase1/x.tsv` runs `wc` somewhere else — so resolving
+/// its operand against the call's cwd judged a scratch file as if it sat in the
+/// repository, the one case the containment rule (CLOUD-1109) exists to leave
+/// alone. Only the unambiguous form moves it ([`followed_cd`]); every other form
+/// leaves it where it was.
+///
+/// THE PIPE BOUND is the SEGMENT's rather than the line's: the PRECEDING
+/// segment's terminator is what says whether this stage was fed by a pipe — the
+/// discard predicate reads the FOLLOWING one, which is why both live apart.
+///
+/// A stage with no resolvable program is SKIPPED, never the end of the walk.
+/// Measured: `FOO=1 && grep needle crates/batten/src/lib.rs` was ALLOWED while
+/// the bare `grep` was refused, because an early return on the assignment left
+/// every later element unjudged — the permissive direction, which nothing
+/// reports. The program index is NORMALISED by the caller through
+/// [`program_token`]: a grouped command carries its opening paren on the token.
+//MUTANT-SUITE crates/batten/src/hook.rs
+//MUTANT script-pipe-refused|s@^            continue; // fed by a pipe$@            {}@|a_tracked_script_or_a_downstream_interpreter_is_allowed
+fn first_stages<'a>(parsed: &'a [Segment], cwd: Option<&Path>) -> Vec<FirstStage<'a>> {
+    let mut stages = Vec::new();
+    let mut effective: Option<std::path::PathBuf> = cwd.map(Path::to_path_buf);
+    for (index, segment, line) in per_line(parsed) {
+        if let Some(moved) = followed_cd(segment, line, effective.as_deref()) {
+            effective = Some(moved);
+            continue;
+        }
+        if index > 0 && parsed[index - 1].terminator == Some(Separator::Pipe) {
+            continue; // fed by a pipe
+        }
+        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+        let Some(program) = effective_program(&tokens) else {
+            continue;
+        };
+        stages.push(FirstStage {
+            tokens,
+            program,
+            cwd: effective.clone(),
+        });
+    }
+    stages
+}
+
+/// The argv words that hand an interpreter its program INLINE, or point it at a
+/// module or stdin — no script file follows (CLOUD-2304). One table for both
+/// readers: [`script_texts`] reads the program text after one, and
+/// [`script_operand`] stops at one, so the two cannot disagree about which form
+/// is inline.
+const INLINE_PROGRAM_FLAGS: &[&str] = &["-c", "-e", "-E", "-p", "--command", "--eval", "--print"];
+
+/// Does any first stage run a declared interpreter on a script FILE outside the
+/// repository? (CLOUD-2304)
+///
+/// The edit guards are bound to the host's edit tools and to the command line,
+/// and a script file carries its writes in its own body, where neither looks.
+/// `substitution_decision`'s mirror over the same walk ([`first_stages`]): a
+/// stage downstream of a pipe is untouched, and the containment test points the
+/// other way — a script the tree holds is reviewed code and runs. An inline
+/// program, a module or stdin is not this predicate's: CLOUD-2231's scan reads
+/// that text. An operand naming a variable or `~`, or a relative one with no
+/// known directory, cannot be placed and is left alone, as is every operand
+/// when the root is unknown or does not resolve.
+//MUTANT script-outside-admitted|s@^        if outside_repository(&resolved, root) {$@        if false {@|an_interpreter_running_an_inline_or_untracked_script_is_refused
+fn interpreter_decision(
+    rule: &Rule,
+    interprets: &[String],
+    parsed: &[Segment],
+    root: Option<&Path>,
+    cwd: Option<&Path>,
+) -> Option<Refusal> {
+    // A root that is not a directory cannot answer containment, and
+    // `relative_to`'s `None` would then read as "outside" for every operand.
+    let root = root.filter(|root| root.is_dir())?;
+    for stage in first_stages(parsed, cwd) {
+        let program = program_name(program_token(stage.tokens[stage.program]));
+        if !interprets.iter().any(|entry| entry == program) {
+            continue;
+        }
+        let Some(operand) = script_operand(&stage.tokens[stage.program + 1..]) else {
+            continue;
+        };
+        let Some(resolved) = shell_resolved(operand, stage.cwd.as_deref()) else {
+            continue;
+        };
+        if outside_repository(&resolved, root) {
+            return Some(Refusal::declared(
+                &rule.id,
+                crate::verdict::Native::ScriptRunLoose,
+                &[
+                    crate::verdict::Subject::Path {
+                        path: operand.to_owned(),
+                    },
+                    crate::verdict::Subject::Artifact {
+                        artifact: program.to_owned(),
+                    },
+                ],
+                Fix::declared(rule.reason.as_deref()),
+            ));
+        }
+    }
+    None
+}
+
+/// The script file an interpreter's argv names, or `None` when it runs an
+/// inline program, a module or stdin, or names nothing this can place.
+fn script_operand<'a>(arguments: &[&'a str]) -> Option<&'a str> {
+    let mut words = arguments.iter().copied();
+    while let Some(word) = words.next() {
+        match word {
+            inline if INLINE_PROGRAM_FLAGS.contains(&inline) => return None,
+            // A module or stdin: no script file either.
+            "-m" | "-" => return None,
+            // Flags whose value is the next word.
+            "-W" | "-X" | "-r" | "-I" | "--require" | "--import" | "--loader" => {
+                words.next();
+            }
+            "--" => return words.next().filter(|word| placeable(word)),
+            flag if flag.starts_with('-') => {}
+            operand => return placeable(operand).then_some(operand),
+        }
+    }
+    None
+}
+
+/// A word a static reading can resolve: no expansion, no home, no redirection.
+fn placeable(word: &str) -> bool {
+    !word.is_empty()
+        && !word.contains('$')
+        && !word.starts_with('~')
+        && !word.contains('>')
+        && !word.contains('<')
+}
+
+/// Whether `path` lies outside `root`, an existing directory.
+fn outside_repository(path: &Path, root: &Path) -> bool {
+    relative_to(root, &path.display().to_string()).is_none()
 }
 
 /// The directory a top-level `cd <dir>` moves the NEXT stage into, or `None`
@@ -6289,16 +6417,22 @@ fn followed_cd(
     {
         return None;
     }
-    // A LEADING `/` IS ABSOLUTE BECAUSE THE LINE IS SHELL, not because the host
-    // says so: on Windows `Path::is_absolute("/tmp/x")` is false (no drive), so the
-    // operand was joined UNDER the call's directory and `cd /tmp/x && wc a/b` read
-    // as a repository path on the one CI leg that runs there.
-    let absolute = target.starts_with('/');
-    let target = Path::new(target);
-    if absolute || target.is_absolute() {
-        return Some(target.to_path_buf());
+    shell_resolved(target, current)
+}
+
+/// A shell word naming a path, resolved against the directory in effect, or
+/// `None` when it is relative and no directory is known.
+///
+/// A LEADING `/` IS ABSOLUTE BECAUSE THE LINE IS SHELL, not because the host
+/// says so: on Windows `Path::is_absolute("/tmp/x")` is false (no drive), so the
+/// operand was joined UNDER the call's directory and `cd /tmp/x && wc a/b` read
+/// as a repository path on the one CI leg that runs there.
+fn shell_resolved(word: &str, current: Option<&Path>) -> Option<std::path::PathBuf> {
+    let path = Path::new(word);
+    if word.starts_with('/') || path.is_absolute() {
+        return Some(path.to_path_buf());
     }
-    current.map(|here| here.join(target))
+    current.map(|here| here.join(path))
 }
 
 /// Does this `substitutes` entry select this invocation?
@@ -8670,11 +8804,11 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
 }
 
 /// The script an interpreter runs from its argv or its stdin: the value after
-/// `-c`, `-e`, `--command` or `--eval`, and every stdin text its segment binds.
+/// any [`INLINE_PROGRAM_FLAGS`] word, and every stdin text its segment binds.
 fn script_texts(arguments: &[&str], stdin: &[String]) -> Vec<String> {
     let mut texts: Vec<String> = arguments
         .windows(2)
-        .filter(|pair| matches!(pair[0], "-c" | "-e" | "-E" | "--command" | "--eval"))
+        .filter(|pair| INLINE_PROGRAM_FLAGS.contains(&pair[0]))
         .map(|pair| pair[1].to_owned())
         .collect();
     texts.extend(stdin.iter().cloned());
@@ -11357,6 +11491,7 @@ mod tests {
             verdict: None,
             filters: None,
             substitutes: None,
+            interprets: None,
             no_retry_reason: None,
         }
     }
@@ -14338,6 +14473,90 @@ deny contains "refused by themodule" if {
             assert!(
                 matches!(guarded(command), Decision::Allow),
                 "{command} only mentions the path"
+            );
+        }
+    }
+
+    /// The `interprets` row's id in the cases below (CLOUD-2304).
+    const SCRIPT_ROW: &str = "script-outside-repo";
+
+    /// A policy carrying one `interprets` row, rooted at a real directory, and a
+    /// Bash call standing in it: the predicate resolves operands against both
+    /// (CLOUD-2304).
+    fn rooted(command: &str) -> Decision {
+        let root = std::env::temp_dir().join("batten-interprets-root");
+        std::fs::create_dir_all(root.join("tools")).expect("the fixture root is writable");
+        let row = Rule {
+            kind: RuleKind::Pipeline,
+            pattern: None,
+            interprets: Some(
+                ["python", "python3", "node", "perl", "ruby"]
+                    .map(str::to_owned)
+                    .to_vec(),
+            ),
+            ..shape(SCRIPT_ROW, "unused", None)
+        };
+        let mut policy = ceiling_policy(vec![row]);
+        policy.verdicts = crate::verdict::vendored();
+        policy.root = Some(root.clone());
+        let mut envelope = envelope(command);
+        envelope.cwd = Some(root);
+        adjudicate(
+            &policy,
+            &envelope,
+            &crate::facts::Look::CouldNotLook,
+            &crate::facts::Look::CouldNotLook,
+            &crate::stop::StopFacts::default(),
+        )
+    }
+
+    /// CLOUD-2304: a script file outside the repository carries its writes past
+    /// every edit guard, so the interpreter running it is refused, whichever way
+    /// the operand is spelled.
+    #[test]
+    fn an_interpreter_running_an_inline_or_untracked_script_is_refused() {
+        for command in [
+            "python3 /tmp/x.py",
+            "python3 -u /tmp/x.py --flag",
+            "node /tmp/x.js",
+            "perl ../outside.pl",
+            "cd /tmp && ruby x.rb",
+            "git status && python /tmp/x.py",
+        ] {
+            let decision = rooted(command);
+            assert!(
+                matches!(decision, Decision::Deny(_)),
+                "{command} was admitted"
+            );
+            let refused = denial(decision);
+            assert_eq!(
+                refused.verdict(),
+                Some(crate::verdict::Native::ScriptRunLoose.id()),
+                "{command}"
+            );
+            assert_eq!(refused.rule(), SCRIPT_ROW, "{command}");
+        }
+    }
+
+    /// CLOUD-2304's other half: a script the repository holds is reviewed code,
+    /// an interpreter fed by a pipe filters output, and an inline program or a
+    /// module is the protected-path scan's (CLOUD-2231) — none is this gate's.
+    #[test]
+    fn a_tracked_script_or_a_downstream_interpreter_is_allowed() {
+        for command in [
+            "python3 tools/x.py",
+            "python3 ./tools/x.py",
+            "git log | python3 -c 'import sys; print(len(sys.stdin.read()))'",
+            "git log | python3 /tmp/x.py",
+            "python3 -c 'print(1)'",
+            "python3 -m json.tool",
+            "node -e 'console.log(1)'",
+            "python3 \"$SCRIPT\"",
+            "cat /tmp/x.py",
+        ] {
+            assert!(
+                matches!(rooted(command), Decision::Allow),
+                "{command} was refused"
             );
         }
     }

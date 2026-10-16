@@ -1326,6 +1326,17 @@
             "maxLength": 1536
           }
         },
+        "interprets": {
+          "description": "The script interpreters whose script FILE operand must resolve inside the\nrepository, for a [`RuleKind::Pipeline`] row (CLOUD-2304).\n\nThe third family, and `substitutes`' mirror: the same first-stage walk,\nthe same pipe bound, the containment test pointed the other way. A\nscript file carries its writes in its own body, where no edit guard\nreads them, so one outside the tree is refused and one the tree holds —\nreviewed code — runs. A plain name list, the consumer's fact: which\nprograms run a file operand varies by repository.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
         "invocation_sources": {
           "description": "The same, glob-selected (CLOUD-914).\n\nShips WITH its literal column rather than arriving a row later, which is\nthe asymmetry `line_sources` records having to fix: a gate over call\nsites is a gate over many files by construction, so the enumerated\nspelling would go stale the first time a module was added.",
           "type": "array",

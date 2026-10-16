@@ -5144,6 +5144,7 @@ fn default_rules() -> Vec<Rule> {
         verdict: None,
         filters: None,
         substitutes: None,
+        interprets: None,
         criteria: None,
         tier: None,
     }]

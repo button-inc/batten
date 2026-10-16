@@ -71,6 +71,7 @@ const PIPELINE_PERMITS: &[&str] = &[
     "verdict",
     "filters",
     "substitutes",
+    "interprets",
     "reason",
     "policy_url",
     "bypass_env",
@@ -2927,6 +2928,17 @@ pub struct Rule {
     /// identity is the program.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub substitutes: Option<Vec<String>>,
+    /// The script interpreters whose script FILE operand must resolve inside the
+    /// repository, for a [`RuleKind::Pipeline`] row (CLOUD-2304).
+    ///
+    /// The third family, and `substitutes`' mirror: the same first-stage walk,
+    /// the same pipe bound, the containment test pointed the other way. A
+    /// script file carries its writes in its own body, where no edit guard
+    /// reads them, so one outside the tree is refused and one the tree holds —
+    /// reviewed code — runs. A plain name list, the consumer's fact: which
+    /// programs run a file operand varies by repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interprets: Option<Vec<String>>,
     /// What a [`RuleKind::Judge`] row asks the model — the committed evaluation
     /// instruction handed to the judge command (CLOUD-56).
     ///
@@ -4038,6 +4050,10 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         declares: Declares::NotFactBearing("the utilities a pipeline row redirects"),
     },
     ColumnCensus {
+        field: "interprets",
+        declares: Declares::NotFactBearing("the interpreters a pipeline row contains"),
+    },
+    ColumnCensus {
         field: "criteria",
         declares: Declares::NotFactBearing("what a judge row asks a model"),
     },
@@ -5008,7 +5024,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 58] {
+    fn columns(&self) -> [(&'static str, bool); 59] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -5065,6 +5081,7 @@ impl Rule {
             ("verdict", self.verdict.is_some()),
             ("filters", self.filters.is_some()),
             ("substitutes", self.substitutes.is_some()),
+            ("interprets", self.interprets.is_some()),
             // CLOUD-2291: a `native` row's whole predicate is which gate.
             ("gate", self.gate.is_some()),
             // `landing` is NOT here, and neither are `git`, `refs` or `ranges`
@@ -5277,11 +5294,17 @@ impl Rule {
         // verdict-bearing command and nothing that could discard it, which
         // matches and decides nothing. Half a family is the inert row, not a
         // narrower gate.
+        if self.interprets.as_ref().is_some_and(Vec::is_empty) {
+            return Err(UsageError::raise(format!(
+                "rule {}: kind \"pipeline\" requires at least one `interprets` entry; with none it recognises no interpreter",
+                self.id
+            )));
+        }
         let discard_family = self.verdict.is_some() && self.filters.is_some();
-        let substitution_family = self.substitutes.is_some();
+        let substitution_family = self.substitutes.is_some() || self.interprets.is_some();
         if !discard_family && !substitution_family {
             return Err(UsageError::raise(format!(
-                "rule {}: kind \"pipeline\" needs either `verdict` AND `filters` (the discard family) or `substitutes` (the substitution family); with neither it matches nothing",
+                "rule {}: kind \"pipeline\" needs either `verdict` AND `filters` (the discard family) or `substitutes` or `interprets` (the substitution family); with neither it matches nothing",
                 self.id
             )));
         }
@@ -15338,6 +15361,7 @@ mod tests {
             verdict: None,
             filters: None,
             substitutes: None,
+            interprets: None,
             no_retry_reason: None,
         })
     }

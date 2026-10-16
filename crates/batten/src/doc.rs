@@ -1448,6 +1448,17 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["delete `target/` by hand, which drops the units the next build needs"],
     },
     VendoredDoc {
+        id: "script run loose",
+        why: Some(
+            "A script file carries its writes in its own body, where no edit guard looks, so it walks around all of them",
+        ),
+        act: &[
+            "make the edit with the host's Edit/Write tools",
+            "commit a program you mean to reuse, so it runs as reviewed code",
+        ],
+        dont: &["move the same code inline or into another untracked file"],
+    },
+    VendoredDoc {
         id: "output point now",
         why: Some(
             "A pointer the reader cannot slice sends them around it, paying the window twice",

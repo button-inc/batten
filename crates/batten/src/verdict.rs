@@ -1577,6 +1577,10 @@ pub enum Native {
     /// Free space fell below `[prune] min_free_mb`, so the disk collector
     /// removed cargo units before the call ran (CLOUD-2197).
     CargoRetireNow,
+    /// A script interpreter ran a script file outside the repository (CLOUD-2304).
+    ///
+    /// **APPENDED LAST**, for [`Native::ProseColumnRefused`]'s reason.
+    ScriptRunLoose,
 }
 
 impl Native {
@@ -1671,6 +1675,7 @@ impl Native {
         Native::ClaimMintRefused,
         Native::OutputPointNow,
         Native::CargoRetireNow,
+        Native::ScriptRunLoose,
     ];
 
     /// The classes the CONFIG LOADER raises, in `parse_ungated` order.
@@ -1799,6 +1804,7 @@ impl Native {
             Native::ClaimMintRefused => "claim mint refused",
             Native::OutputPointNow => "output point now",
             Native::CargoRetireNow => "cargo retire now",
+            Native::ScriptRunLoose => "script run loose",
         }
     }
 }
@@ -3032,6 +3038,24 @@ rebuilds it.",
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
+        id: "script run loose",
+        gloss: "a script interpreter ran a script file that lives outside the repository",
+        class: "A `python`, `python3`, `node`, `perl` or `ruby` call whose script operand resolves \
+OUTSIDE the repository (CLOUD-2304). The edit guards are bound to the host's edit tools and to \
+the command line, and a script file carries its writes in its own body, where neither looks: \
+a protected path, an unrefined filed row, every Edit/Write handler is walked around by moving \
+the edit into a scratch script. A script the repository holds is reviewed code and runs; so \
+does the same interpreter downstream of a pipe, and an inline `-c`/`-e` program, whose text \
+the protected-path scan already reads. CONTAINMENT, never the INDEX, for `tool run loose`'s \
+reason: the operand is resolved against the call's own working directory and the repository \
+asked whether it holds the result.",
+        routes: &[run(
+            "edit run first",
+            "make the edit with the host's Edit/Write tools; a reusable program is a tracked file under review",
+        )],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
         id: "issue grade refused",
         gloss: "the issue fails a checkable Ready clause, named in the subject beside its line",
         class: "`ready lint` holds an issue's description to the checkable half of the Definition \
@@ -3620,6 +3644,7 @@ mod tests {
                 | Native::ClaimMintRefused
                 | Native::OutputPointNow
                 | Native::CargoRetireNow
+                | Native::ScriptRunLoose
                 | Native::VerdictTableRefused
                 | Native::RedirectTableRefused
                 | Native::DeferralTableRefused
