@@ -340,11 +340,49 @@ fn an_unreadable_store_is_never_zero() {
     assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
 }
 
-/// An empty transcript observed nothing, so it is not evidence of no work.
+/// A half-written last line can be the very `TaskCreate` the answer turns on, so
+/// it is could-not-look, never dropped into a zero.
+///
+/// Fails by: dropping the partial-line test (`transcript-partial-line-dropped`).
+#[cfg(unix)]
+#[test]
+fn a_half_written_task_call_is_not_zero() {
+    let body = transcript(&["Bash"])
+        + r#"{"type":"assistant","sessionId":"s-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"TaskCre"#;
+    let dir = rootless("transcript-partial", &body, false);
+
+    let output = session(&dir, &[]);
+    assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
+}
+
+/// A task call the host refused wrote nothing, so it declared no task.
+///
+/// Fails by: counting a refused call (`transcript-refused-call-counts`).
+#[cfg(unix)]
+#[test]
+fn a_refused_task_call_declared_nothing() {
+    let body = transcript(&["TaskCreate"])
+        + r#"{"type":"user","sessionId":"s-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t0","is_error":true,"content":"denied"}]}}"#
+        + "\n";
+    let dir = rootless("transcript-refused", &body, false);
+
+    let output = session(&dir, &[]);
+    assert_eq!(output.status.code(), Some(0), "got: {}", stdout(&output));
+}
+
+/// A transcript that names the session and observed nothing is not evidence of
+/// no work.
+///
+/// Fails by: dropping the empty-stream test (`transcript-zero-on-empty-stream`):
+/// the session matches, so nothing else stands between it and a zero.
 #[cfg(unix)]
 #[test]
 fn an_empty_transcript_is_not_evidence() {
-    let dir = rootless("transcript-empty", "", false);
+    let dir = rootless(
+        "transcript-empty",
+        "{\"type\":\"queue-operation\",\"sessionId\":\"s-1\",\"content\":\"x\"}\n",
+        false,
+    );
 
     let output = session(&dir, &[]);
     assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));

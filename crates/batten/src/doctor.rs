@@ -2711,8 +2711,8 @@ pub fn has_session_start_reader(fact: crate::facts::Fact) -> bool {
 /// unreadable config would bury that.
 //MUTANT factless-rule-demands-a-fact|s@        for token in bundle.session_start_facts() {@        for token in ["pinned-programs", "tasks"] {@|a_rule_reading_no_session_start_fact_is_not_judged
 //MUTANT every-session-is-could-not-look|s@            if reads.and_then(\x7cfact\x7c minted(fact, dir)) != Some(true) {@            if true {@|a_session_with_every_fact_minted_is_clean
-fn unminted_facts(dir: &Path) -> Vec<Unminted> {
-    let Ok(resolved) = resolve::resolve(dir, &crate::Overrides::default()) else {
+fn unminted_facts(dir: &Path, resolved: Option<&resolve::Resolved>) -> Vec<Unminted> {
+    let Some(resolved) = resolved else {
         return Vec::new();
     };
     // THE FILTER IS THE LOAD'S, not a pass over its output: handing `load` only
@@ -2823,13 +2823,21 @@ enum TaskEvidence {
 /// `sessionId` and must reproduce `target`; a transcript of another session is
 /// evidence about that session, not this store.
 ///
-/// **COMPLETE LINES ONLY.** `doctor session` runs while the host is appending,
-/// and a half-written last line would fail a strict parse; it is dropped, as the
-/// incremental reader drops it.
+/// **COMPLETE LINES ONLY, AND A PARTIAL ONE IS COULD-NOT-LOOK.** `doctor
+/// session` runs while the host is appending, so the last line can be half
+/// written — and that line can be the very `TaskCreate` the answer turns on.
+/// Dropping it would read a declared task as zero; it answers
+/// [`TaskEvidence::Unknown`] instead.
+///
+/// **A CALL THE HOST REFUSED WROTE NOTHING.** A task call whose result is
+/// flagged an error (a hook denial, a bad argument) declared no task; a call
+/// with no result yet may have, so it counts.
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
 //MUTANT transcript-zero-ignores-task-calls|s@^    if called {$@    if false {@|a_transcript_that_declared_a_task_never_reads_as_zero
 //MUTANT transcript-zero-on-empty-stream|s@^    if stream.records.is_empty() {$@    if false {@|an_empty_transcript_is_not_evidence
 //MUTANT transcript-zero-any-session|s@^    if expected != target.to_string_lossy() {$@    if false {@|another_sessions_transcript_is_not_evidence
+//MUTANT transcript-partial-line-dropped|s@^    if !partial.trim().is_empty() {$@    if false {@|a_half_written_task_call_is_not_zero
+//MUTANT transcript-refused-call-counts|s@^            && !refused.contains(id.as_str())$@            \&\& true@|a_refused_task_call_declared_nothing
 fn transcript_evidence(
     dir: &Path,
     transcript: &crate::transcript::TranscriptConfig,
@@ -2854,7 +2862,10 @@ fn transcript_evidence(
     let Ok(body) = std::fs::read_to_string(dir.join(path)) else {
         return TaskEvidence::Unknown;
     };
-    let complete = &body[..body.rfind('\n').map_or(0, |at| at + 1)];
+    let (complete, partial) = body.split_at(body.rfind('\n').map_or(0, |at| at + 1));
+    if !partial.trim().is_empty() {
+        return TaskEvidence::Unknown;
+    }
     let Ok(stream) = crate::transcript::parse(complete, path, shape) else {
         return TaskEvidence::Unknown;
     };
@@ -2869,9 +2880,21 @@ fn transcript_evidence(
     if expected != target.to_string_lossy() {
         return TaskEvidence::Unknown;
     }
+    let refused: std::collections::HashSet<&str> = stream
+        .records
+        .iter()
+        .filter_map(|record| match &record.event {
+            crate::transcript::Event::ToolResult {
+                call, failed: true, ..
+            } => Some(call.as_str()),
+            _ => None,
+        })
+        .collect();
     let called = stream.records.iter().any(|record| {
-        matches!(&record.event, crate::transcript::Event::ToolCall { name, .. }
-            if tools.contains(&name.as_str()))
+        matches!(&record.event, crate::transcript::Event::ToolCall { id, name, .. }
+            if tools.contains(&name.as_str())
+            && !refused.contains(id.as_str())
+        )
     });
     if called {
         return TaskEvidence::TaskCalled;
@@ -2895,7 +2918,7 @@ fn transcript_evidence(
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
 //MUTANT transcript-arm-dropped|s@^        TaskEvidence::NoTaskCall => true,$@        TaskEvidence::NoTaskCall => store_is_merely_unwritten(link),@|a_transcript_with_no_task_call_is_zero_without_a_store_root
 //MUTANT transcript-zero-without-a-transcript|s@^        TaskEvidence::Unknown => store_is_merely_unwritten(link),$@        TaskEvidence::Unknown => true,@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
-//MUTANT transcript-zero-over-a-present-store|s@^    if target.exists() {$@    if false {@|an_unreadable_store_is_never_zero
+//MUTANT transcript-zero-over-a-present-store|s@^    if target.try_exists().unwrap_or(true) {$@    if false {@|an_unreadable_store_is_never_zero
 fn absent_store_is_zero(
     dir: &Path,
     transcript: &crate::transcript::TranscriptConfig,
@@ -2904,7 +2927,9 @@ fn absent_store_is_zero(
     let Ok(target) = std::fs::read_link(link) else {
         return false;
     };
-    if target.exists() {
+    // `try_exists`, not `exists`: a target whose existence cannot be checked is
+    // not known to be absent.
+    if target.try_exists().unwrap_or(true) {
         return false;
     }
     match transcript_evidence(dir, transcript, &target) {
@@ -2930,7 +2955,8 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
     // whose start chain never ran typically has no readable store EITHER, so
     // computing this only on the readable path would hide it in exactly the
     // container it exists to report.
-    let unminted = unminted_facts(dir);
+    let resolved = resolve::resolve(dir, &crate::Overrides::default()).ok();
+    let unminted = unminted_facts(dir, resolved.as_ref());
     let unreadable = SessionReport {
         version: config::VERSION,
         open: None,
@@ -2939,7 +2965,6 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
         ok: false,
         unminted: unminted.clone(),
     };
-    let resolved = resolve::resolve(dir, &crate::Overrides::default()).ok();
     let Some((transcript, link)) = resolved.as_ref().and_then(|resolved| {
         let transcript = resolved.transcript.as_ref()?;
         // The template's ABSENCE is could-not-look rather than clean: a
@@ -2951,8 +2976,8 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
     }) else {
         return unreadable;
     };
-    // AN ABSENT STORE WITH A PRESENT PARENT IS ZERO, NOT COULD-NOT-LOOK
-    // (CLOUD-1435). Every host that keeps a per-session store creates it LAZILY,
+    // AN ABSENT STORE IS ZERO ON EVIDENCE, NOT COULD-NOT-LOOK (CLOUD-1435,
+    // CLOUD-1820). Every host that keeps a per-session store creates it LAZILY,
     // on the first task write — so "the directory is not there" is the ordinary
     // state of a session that has declared no work, and reporting it as a failure
     // to look made `0` unreachable. Measured on one container: the verb answered
