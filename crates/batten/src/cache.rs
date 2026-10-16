@@ -770,6 +770,10 @@ mod tests {
     /// The marks are aged in the REVERSE of the order the partitions are made
     /// (CLOUD-2361), so ranking by directory and ranking by mark would evict
     /// different partitions: the one that goes is the oldest MARK, the last made.
+    /// On unix the directories' times are SET in creation order too: made
+    /// microseconds apart they would tie on a coarse clock, and a tie leaves
+    /// ranking by directory to `read_dir`'s order, which could evict the same
+    /// partition as ranking by mark.
     #[test]
     fn a_new_partition_keeps_its_neighbours_up_to_the_bound() {
         let dir = scratch("partitions");
@@ -777,7 +781,17 @@ mod tests {
         let others = partition_names(KEPT_PARTITIONS);
         // Made first to last; marked newest to oldest.
         for (step, name) in (1..=KEPT_PARTITIONS as u64).rev().zip(&others) {
-            marked(&root.join(name), step);
+            let partition = root.join(name);
+            marked(&partition, step);
+            if cfg!(unix) {
+                let made = std::time::SystemTime::UNIX_EPOCH
+                    + std::time::Duration::from_secs(
+                        1_000_000 * (KEPT_PARTITIONS as u64 + 1 - step),
+                    );
+                std::fs::File::open(&partition)
+                    .and_then(|file| file.set_modified(made))
+                    .expect("age the directory");
+            }
         }
         std::fs::create_dir_all(root.join("policy")).expect("flat layout");
         std::fs::write(root.join("epoch"), "flat").expect("flat layout");
