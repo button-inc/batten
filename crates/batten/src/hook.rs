@@ -509,7 +509,7 @@ pub struct Capabilities {
     /// the one authority on host facts and a second table would be a second place
     /// for the same answer to drift.
     ///
-    /// Batten does not gate on it. The plan record is written by
+    /// The plan gate does not read it. The plan record is written by
     /// [`crate::record::run_plan`], a verb, so the gate fails closed on every
     /// host regardless of what this says. What the column buys is the MIRROR —
     /// keeping the human's native todo view in step with the store — and an

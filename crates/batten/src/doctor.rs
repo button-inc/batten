@@ -2825,7 +2825,7 @@ enum TaskEvidence {
 //MUTANT transcript-zero-on-empty-stream|s@^    if stream.records.is_empty() {$@    if false {@|an_empty_transcript_is_not_evidence
 //MUTANT transcript-zero-any-session|s@^    if expected != target.to_string_lossy() {$@    if false {@|another_sessions_transcript_is_not_evidence
 //MUTANT transcript-partial-line-dropped|s@^    if !partial.trim_ascii().is_empty() {$@    if false {@|a_half_written_task_call_is_not_zero
-//MUTANT transcript-sessionless-template-matches|s@ || !template.contains("{session}") {$@ {@|a_sessionless_template_is_not_evidence
+//MUTANT transcript-sessionless-template-matches|s@ \x7c\x7c !template.contains("{session}") {$@ {@|a_sessionless_template_is_not_evidence
 fn transcript_evidence(
     dir: &Path,
     transcript: &crate::transcript::TranscriptConfig,
