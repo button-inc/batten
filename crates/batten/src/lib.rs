@@ -7204,15 +7204,10 @@ fn run_claim_race(
     //
     // Hoisted out of the guard below rather than asked inside it: the call is a
     // regex over one string this scope already holds, so paying it on the
-    // read-succeeded path costs nothing a reader has to weigh.
-    //
-    // The branch and title go in EMPTY, as they do at every other
-    // `ClosingOnly` call site: that source returns before `claimed_from` reads
-    // them, so passing the real ones would put two dead arguments in a
-    // predicate whose neighbours argue at length about branch-versus-body
-    // precedence. This question is about the body alone, and says so.
-    let closes_nothing =
-        race::claimed_from("", "", "", &me.body, &grammar, race::Source::ClosingOnly).is_empty();
+    // read-succeeded path costs nothing a reader has to weigh. [`race::closes`]
+    // rather than `claimed_from`, because this question is about the body alone
+    // and that is the spelling which says so.
+    let closes_nothing = race::closes(&me.body, &grammar).is_empty();
     // `Option` RATHER THAN A PARALLEL FLAG, for the vocabulary `with_logs`
     // already argues forty lines down: a read that failed is not a log that is
     // empty, and `Some("")` is an answer. Two values could disagree — nothing

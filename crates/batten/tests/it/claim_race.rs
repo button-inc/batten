@@ -635,19 +635,13 @@ fn a_competitor_whose_cheap_key_collides_is_fetched_and_one_that_collides_with_n
 /// A collider whose BODY closes the key is settled, so it is not fetched even
 /// though it collides (CLOUD-2382).
 ///
-/// # Why the widening stops at the branch and title
-///
-/// Source 1 outranks both, and more text can only add matches, so
-/// `closed(body)` is a subset of `closed(body + log)` — a key the body closes
-/// stands whatever the commits say. Fetching such a competitor buys no
-/// information and costs real behaviour: a 502 would put it in `unanswered`,
-/// and the caller declines on an unconfirmed race, downgrading a collision
-/// proven from the listing it already holds into could-not-look. Since
-/// `commit-lint` makes a closing body the common shape here, that would be the
-/// common path, not a corner.
+/// Why the widening stops at the branch and title is `with_logs`'s own
+/// comment, and is not re-derived here.
 ///
 /// The pair is the case: `"2"` and `"3"` both collide on PROJ-7, and they
-/// differ only in WHERE the key came from — `"2"`'s title, `"3"`'s body.
+/// differ only in WHERE the key came from — `"2"`'s title, `"3"`'s body. So
+/// the asked set discriminates on that difference alone, and `"2"` earns its
+/// place by keeping `asked == ["2"]` from passing vacuously.
 #[test]
 fn a_collider_whose_body_closes_the_key_is_settled_and_not_fetched() {
     let pulls = vec![
@@ -676,8 +670,13 @@ fn a_collider_whose_body_closes_the_key_is_settled_and_not_fetched() {
         vec!["2".to_owned()],
         "the title-named collider is distrusted and asked; the body-closed one is settled"
     );
+    // NAMED, not merely non-empty: `"2"` races PROJ-7 from its title whatever
+    // happens to `"3"`, so `!is_empty()` would pass without `"3"` in the list
+    // at all — an assertion that cannot fail for the reason its message gives.
     assert!(
-        !race::races(&["PROJ-7".to_owned()], &filled.pulls, Some("1"), &Fake).is_empty(),
+        race::races(&["PROJ-7".to_owned()], &filled.pulls, Some("1"), &Fake)
+            .iter()
+            .any(|race| race.number == "3"),
         "and the settled one still races, on evidence no round trip could improve"
     );
 }

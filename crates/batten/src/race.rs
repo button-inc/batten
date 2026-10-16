@@ -137,6 +137,24 @@ pub fn claimed(branch: &str, title: &str, log: &str, body: &str, keys: &dyn Keys
     claimed_from(branch, title, log, body, keys, Source::All)
 }
 
+/// Source 1 alone, over one text: which keys does this CLOSE?
+///
+/// [`claimed`]'s twin for the narrowed source, and it exists for the same
+/// reason — to own an argument list rather than make each caller re-derive it.
+/// `claimed_from`'s branch and title go in EMPTY under
+/// [`Source::ClosingOnly`], because that source returns before either is read
+/// (see below), so a caller passing the real ones adds two dead arguments to a
+/// question that is about one text. Four sites spelled that by hand and one of
+/// them spent five lines of comment defending it.
+///
+/// The text may be a body or a log: `claimed_from` joins the two before the
+/// closing scan, so under this source the slot a caller uses does not change
+/// the answer.
+#[must_use]
+pub fn closes(text: &str, keys: &dyn Keys) -> Vec<String> {
+    claimed_from("", "", "", text, keys, Source::ClosingOnly)
+}
+
 /// Which of the three sources may answer.
 ///
 /// **The shell's two narrowing flags as a type** (CLOUD-1711). `claimed-keys.sh`
@@ -489,36 +507,40 @@ pub fn with_logs(
 ) -> Filled {
     let mut pulls = pulls;
     // FETCH A COMPETITOR WHOSE CHEAP READING IS LOAD-BEARING FOR THIS VERDICT,
-    // and no others. That one sentence is the predicate; the two disjuncts below
-    // are its two cases, and the known miss is the case it does not reach.
+    // and whose cheap reading could be WRONG. The predicate below is those two
+    // factors in that order; the known miss is the case they do not reach.
     //
-    // **CHEAP-EMPTY: the log could ADD a key.** Nothing else can speak for such a
-    // competitor, which is the bound that keeps this from being a round trip per
-    // open pull request however wide the fan-out is allowed to be.
+    // **COULD BE WRONG** is the outer one, and a body that CLOSES a key settles
+    // it: source 1 outranks branch and title, and more text can only add
+    // matches, so `closed(body) ⊆ closed(body + log)` and that key stands
+    // whatever the commits say. Fetching such a competitor buys nothing the
+    // VERDICT rests on — the log can still ADD a second key, so the reported
+    // set may be a row short, but never on the key that refuses, which is the
+    // body's by construction. And it costs something real: the pull would land
+    // in `unanswered` on a 502, which the paragraph below turns into a decline,
+    // converting a collision PROVEN from data already in hand into
+    // could-not-look. `closing-key-check` requires the body to close its key
+    // here, so that is the common shape rather than a corner — distinct from
+    // `commit-lint` above, which is why a COMMIT rarely closes one.
     //
-    // **CHEAP-COLLIDES: the log could REMOVE one, and only here can that refuse
-    // anybody.** [`claimed_from`] returns a log's closing set before it looks at
-    // the branch, so a competitor whose commits close a different key than its
-    // branch names is judged under its branch's — which hides a real race AND
-    // refuses a branch claiming the branch-named key at `Violation` inside
-    // `verify`, over a collision that does not exist. `unanswered` stays EMPTY
-    // through both, because an unfetched competitor is not an unanswered one,
-    // so neither of `run_claim_race`'s could-not-look arms ever sees it. A
-    // false refusal needs the cheap key to collide with the set this branch
-    // claims, so `claims` is what narrows the widening to the pulls that can
-    // produce one. It costs a round trip only where such a collision exists —
-    // nothing on a listing that cheaply collides with nothing, and where one
-    // DOES collide, the fetch is what decides between refusing and not.
+    // **LOAD-BEARING** is the inner one, and it has two cases:
     //
-    // **AND ONLY WHERE THE CHEAP KEY COULD BE WRONG.** A body that CLOSES a key
-    // settles it: source 1 outranks branch and title, and more text can only
-    // add matches, so `closed(body) ⊆ closed(body + log)` and that key stands
-    // whatever the commits say. Fetching such a competitor buys nothing and
-    // costs something real — it would land in `unanswered` on a 502, and the
-    // caller declines on an unconfirmed race, turning a collision PROVEN from
-    // data already in hand into could-not-look. `commit-lint` makes a closing
-    // body the common shape here, so that is the common case, not a corner.
-    // Only a cheap key resolved from the branch or title is distrusted.
+    // * CHEAP-EMPTY — the log could ADD a key, and nothing else can speak for
+    //   such a competitor. This is the bound that keeps the fill from being a
+    //   round trip per open pull request however wide the fan-out is allowed
+    //   to be.
+    // * CHEAP-COLLIDES — the log could REMOVE one, and only here can that
+    //   refuse anybody. [`claimed_from`] returns a log's closing set before it
+    //   looks at the branch, so a competitor whose commits close a different
+    //   key than its branch names is judged under its branch's: that hides a
+    //   real race AND refuses a branch claiming the branch-named key at
+    //   `Violation` inside `verify`, over a collision that does not exist.
+    //   `claims` narrows the widening to the pulls that can produce one, so a
+    //   listing that cheaply collides with nothing pays nothing.
+    //
+    // `unanswered` stays EMPTY through every pull this skips, because an
+    // unfetched competitor is not an unanswered one, so no could-not-look arm
+    // in `run_claim_race` sees one.
     //
     // A COLLIDER WHOSE FETCH FAILS IS THE CASE THE CALLER MUST HANDLE, and it
     // is why [`Filled::unanswered`] carries numbers rather than a count. Such a
@@ -533,11 +555,11 @@ pub fn with_logs(
     // **THE CASE THE PREDICATE DOES NOT REACH** is the remaining load-bearing
     // one: a competitor whose branch names a key nobody here claims, while its
     // commits close one this branch does. Its cheap reading collides with
-    // nothing, so nothing above asks for its log. Reaching it means dropping to
-    // `closed(body)` alone, which spares only the pulls whose BODY closes a key —
-    // a latency decision for the row that owns latency, since what it costs
-    // depends on how many open pull requests are spared by their branch rather
-    // than their body.
+    // nothing, so nothing above asks for its log. Reaching it means dropping
+    // the `claims` term and keeping only the outer factor — fetch every
+    // competitor whose body closes nothing — which is a latency decision for
+    // the row that owns latency, since what it costs depends on how many open
+    // pull requests carry a body that closes no key.
     //
     // EACH ENTRY CARRIES ITS DESTINATION, not its queue position. Two parallel
     // vectors — slots here, numbers there — would have to stay in step for the
@@ -547,11 +569,9 @@ pub fn with_logs(
         .iter()
         .enumerate()
         .filter(|(_, pull)| {
-            pull.number != mine_number && {
+            pull.number != mine_number && closes(&pull.body, keys).is_empty() && {
                 let cheap = claimed(&pull.head_ref, &pull.title, "", &pull.body, keys);
-                let settled = claimed_from("", "", "", &pull.body, keys, Source::ClosingOnly);
-                cheap.is_empty()
-                    || (settled.is_empty() && cheap.iter().any(|key| claims.contains(key)))
+                cheap.is_empty() || cheap.iter().any(|key| claims.contains(key))
             }
         })
         .map(|(slot, pull)| (slot, pull.number.as_str()))
