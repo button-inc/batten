@@ -227,7 +227,6 @@ fn a_pointer_whose_parent_is_absent_too_stays_could_not_look() {
 
 /// Session `session`'s transcript in the host's surveyed grammar, carrying
 /// `tool` calls.
-#[cfg(unix)]
 fn transcript_of(session: &str, tools: &[&str]) -> String {
     let mut lines = vec![format!(
         r#"{{"type":"user","sessionId":"{session}","message":{{"role":"user","content":"land the bundle"}}}}"#
@@ -241,7 +240,6 @@ fn transcript_of(session: &str, tools: &[&str]) -> String {
 }
 
 /// Session `s-1`'s transcript, the session the fixture's link is parked for.
-#[cfg(unix)]
 fn transcript(tools: &[&str]) -> String {
     transcript_of("s-1", tools)
 }
@@ -249,7 +247,10 @@ fn transcript(tools: &[&str]) -> String {
 /// A repository with `body` as its session transcript and the tasks link parked,
 /// as the hook parks it, at the template substituted with session `s-1`: a store
 /// whose ROOT has never existed, the fresh web container (CLOUD-1820).
-#[cfg(unix)]
+///
+/// Compiled on every target so `cross-check` type-checks the cases that use it;
+/// each case states its own platform contract with `cfg!(unix)`, since the
+/// symlink it parks is the subject and Windows creates one only with privilege.
 fn rootless(name: &str, body: &str, parent_present: bool) -> PathBuf {
     let dir = scratch(name, DECLARED);
     let root = dir.join("store-root");
@@ -265,8 +266,16 @@ fn rootless(name: &str, body: &str, parent_present: bool) -> PathBuf {
     if parent_present {
         std::fs::create_dir_all(&root).unwrap();
     }
-    std::os::unix::fs::symlink(root.join("s-1"), dir.join(".claude/.tasks")).unwrap();
+    park(&root.join("s-1"), &dir.join(".claude/.tasks"));
     dir
+}
+
+/// Park the tasks link at `target`, as the hook does.
+fn park(target: &Path, link: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(target, link).unwrap();
 }
 
 /// **A SESSION THAT CALLED NO TASK TOOL READS ZERO, WITH NO STORE ROOT AT ALL.**
@@ -278,9 +287,11 @@ fn rootless(name: &str, body: &str, parent_present: bool) -> PathBuf {
 ///
 /// Fails by: dropping the transcript arm (`transcript-arm-dropped`), which
 /// falls back to the parent test and answers `3`.
-#[cfg(unix)]
 #[test]
 fn a_transcript_with_no_task_call_is_zero_without_a_store_root() {
+    if !cfg!(unix) {
+        return;
+    }
     let dir = rootless("transcript-zero", &transcript(&["Bash", "Read"]), false);
 
     let output = session(&dir, &[]);
@@ -298,9 +309,11 @@ fn a_transcript_with_no_task_call_is_zero_without_a_store_root() {
 /// present, which on its own reads as zero. A task call writes the store, so a
 /// store absent after one means the pointer does not reach it, and `0` there
 /// would be CLOUD-1376's false clean.
-#[cfg(unix)]
 #[test]
 fn a_transcript_that_declared_a_task_never_reads_as_zero() {
+    if !cfg!(unix) {
+        return;
+    }
     let dir = rootless(
         "transcript-task",
         &transcript(&["Bash", "TaskCreate"]),
@@ -315,9 +328,11 @@ fn a_transcript_that_declared_a_task_never_reads_as_zero() {
 ///
 /// The two links are refreshed separately, so the transcript can lag the
 /// pointer. Fails by: dropping the session match (`transcript-zero-any-session`).
-#[cfg(unix)]
 #[test]
 fn another_sessions_transcript_is_not_evidence() {
+    if !cfg!(unix) {
+        return;
+    }
     let dir = rootless("transcript-other", &transcript_of("s-2", &["Bash"]), false);
 
     let output = session(&dir, &[]);
@@ -331,9 +346,11 @@ fn another_sessions_transcript_is_not_evidence() {
 /// present parent alone would read the file-shaped store as zero.
 ///
 /// Fails by: dropping the target test (`transcript-zero-over-a-present-store`).
-#[cfg(unix)]
 #[test]
 fn an_unreadable_store_is_never_zero() {
+    if !cfg!(unix) {
+        return;
+    }
     let dir = rootless(
         "transcript-unreadable",
         &transcript_of("s-2", &["Bash"]),
@@ -355,9 +372,11 @@ fn an_unreadable_store_is_never_zero() {
 ///
 /// Fails by: dropping the partial-line test (`transcript-partial-line-dropped`),
 /// or letting a torn tail fall back to the parent test (`torn-falls-back`).
-#[cfg(unix)]
 #[test]
 fn a_half_written_task_call_is_not_zero() {
+    if !cfg!(unix) {
+        return;
+    }
     let body = transcript(&["Bash"])
         + r#"{"type":"assistant","sessionId":"s-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"TaskCre"#;
     let dir = rootless("transcript-partial", &body, true);
@@ -370,9 +389,11 @@ fn a_half_written_task_call_is_not_zero() {
 /// unreadable transcript that falls back to the parent test.
 ///
 /// Fails by: decoding the whole file before splitting off the tail.
-#[cfg(unix)]
 #[test]
 fn a_tail_torn_inside_a_character_is_not_zero() {
+    if !cfg!(unix) {
+        return;
+    }
     let mut body = transcript(&["Bash"]).into_bytes();
     body.extend_from_slice(
         br#"{"type":"assistant","sessionId":"s-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"TaskCreate","input":{"subject":"a "#,
@@ -388,9 +409,11 @@ fn a_tail_torn_inside_a_character_is_not_zero() {
 
 /// A hook's refusal does not prove the call wrote nothing: a post-call block
 /// records the same refusal after the tool ran, so the call still counts.
-#[cfg(unix)]
 #[test]
 fn a_refused_task_call_still_counts() {
+    if !cfg!(unix) {
+        return;
+    }
     let body = transcript(&["TaskCreate"])
         + r#"{"type":"user","sessionId":"s-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t0","is_error":true,"content":"PostToolUse:TaskCreate hook error: blocked"}]}}"#
         + "\n";
@@ -405,9 +428,11 @@ fn a_refused_task_call_still_counts() {
 ///
 /// Fails by: leaving `TodoWrite` out of Claude Code's surveyed plan tools
 /// (`todowrite-unsurveyed`), which reads the session as zero.
-#[cfg(unix)]
 #[test]
 fn a_todowrite_session_never_reads_as_zero() {
+    if !cfg!(unix) {
+        return;
+    }
     let dir = rootless("transcript-todowrite", &transcript(&["TodoWrite"]), false);
 
     let output = session(&dir, &[]);
@@ -415,9 +440,11 @@ fn a_todowrite_session_never_reads_as_zero() {
 }
 
 /// Any other error flag can follow a write, so the call still counts.
-#[cfg(unix)]
 #[test]
 fn a_failed_task_call_still_counts() {
+    if !cfg!(unix) {
+        return;
+    }
     let body = transcript(&["TaskCreate"])
         + r#"{"type":"user","sessionId":"s-1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t0","is_error":true,"content":"timed out"}]}}"#
         + "\n";
@@ -432,9 +459,11 @@ fn a_failed_task_call_still_counts() {
 ///
 /// Fails by: dropping the placeholder test
 /// (`transcript-sessionless-template-matches`).
-#[cfg(unix)]
 #[test]
 fn a_sessionless_template_is_not_evidence() {
+    if !cfg!(unix) {
+        return;
+    }
     let dir = rootless(
         "transcript-sessionless",
         &transcript_of("s-2", &["Bash"]),
@@ -450,7 +479,7 @@ fn a_sessionless_template_is_not_evidence() {
         ),
     );
     std::fs::remove_file(dir.join(".claude/.tasks")).unwrap();
-    std::os::unix::fs::symlink(&fixed, dir.join(".claude/.tasks")).unwrap();
+    park(&fixed, &dir.join(".claude/.tasks"));
 
     let output = session(&dir, &[]);
     assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
@@ -461,9 +490,11 @@ fn a_sessionless_template_is_not_evidence() {
 ///
 /// Fails by: dropping the empty-stream test (`transcript-zero-on-empty-stream`):
 /// the session matches, so nothing else stands between it and a zero.
-#[cfg(unix)]
 #[test]
 fn an_empty_transcript_is_not_evidence() {
+    if !cfg!(unix) {
+        return;
+    }
     let dir = rootless(
         "transcript-empty",
         "{\"type\":\"queue-operation\",\"sessionId\":\"s-1\",\"content\":\"x\"}\n",
