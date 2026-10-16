@@ -214,6 +214,20 @@ fn write_entry(git_dir: &Path, entry: &Entry) {
     let _ = crate::durable::replace(entry_path(git_dir, &entry.pid), entry.render());
 }
 
+/// Whether a registry path is a record rather than a write in flight.
+///
+/// A record is named by its pid; `durable::replace`'s temp is dot-prefixed, and
+/// one a kill stranded between its sync and its rename is complete enough to
+/// parse. Nothing deletes it now that `alive` reads without deleting (CLOUD-2372),
+/// so a reader that took it for a record would report its crash forever.
+fn is_record(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|name| !name.starts_with('.'))
+}
+
 /// A pid's process group, or the pid itself where there is none to read.
 ///
 /// A group of one is the truth for a task that was not started under job
@@ -548,7 +562,7 @@ pub fn alive(git_dir: &Path, options: Alive<'_>) -> Reading {
     };
     let mut files: Vec<PathBuf> = listing
         .filter_map(|found| found.ok().map(|found| found.path()))
-        .filter(|path| path.is_file())
+        .filter(|path| is_record(path))
         .collect();
     // Sorted, so the output is byte-stable across runs for one registry state
     // (non-negotiable rule 5) rather than dependent on readdir order.
@@ -633,7 +647,7 @@ pub fn abandoned(git_dir: &Path, program_root: &str) -> Vec<Entry> {
     };
     let mut files: Vec<PathBuf> = listing
         .filter_map(|found| found.ok().map(|found| found.path()))
-        .filter(|path| path.is_file())
+        .filter(|path| is_record(path))
         .collect();
     // Sorted for the byte-stability obligation every reader here carries.
     files.sort();
@@ -1033,6 +1047,22 @@ pub fn report_claim(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A temp a kill stranded between its sync and its rename parses as a whole
+    /// record, so the readers must not take it for one (CLOUD-2372).
+    #[test]
+    fn a_write_in_flight_is_not_a_record() {
+        let dir = registry("write-in-flight");
+        let record = dir.join("4242");
+        let temp = dir.join(".4242.99.1.0.tmp");
+        assert!(crate::durable::replace(&record, "pid: 4242\n").is_ok());
+        assert!(crate::durable::replace(&temp, "pid: 4242\n").is_ok());
+        assert!(is_record(&record));
+        assert!(
+            !is_record(&temp),
+            "a dot-prefixed temp is a write in flight"
+        );
+    }
 
     /// A scratch registry. `CARGO_TARGET_TMPDIR` is only defined for integration
     /// crates, so this derives one the way `rules`'s own unit tests do.

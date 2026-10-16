@@ -5005,7 +5005,7 @@ expression: stdout_of(&output)
           "path": "task alive",
           "id": "task.alive",
           "about": "What tasks are running right now and what phase each is in — one call, no log reading",
-          "effect": "write",
+          "effect": "read",
           "data_channel": false,
           "flags": [
             {
@@ -5668,6 +5668,10 @@ expression: stdout_of(&output)
     {
       "id": "state.list",
       "path": "state list"
+    },
+    {
+      "id": "task.alive",
+      "path": "task alive"
     },
     {
       "id": "task.read",

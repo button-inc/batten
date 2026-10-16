@@ -5996,18 +5996,16 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[TASK_PID, TASK_FIELD],
     },
-    // `write`, and the classification is the interesting one: `alive` READS the
-    // registry and is nonetheless a write, because reporting a corpse also REAPS
-    // it — a headstone read once is a diagnosis, read forever it is a registry
-    // that fills up and stops being read. A row claiming `read` here would be
-    // false in the one direction the derived allowlist exists to prevent.
+    // `read` since CLOUD-2372: `alive` reports a corpse and deletes nothing, so a
+    // crash stays visible on every read until the next `land`'s reap forgets it.
+    // It used to reap what it reported, which made it a write.
     CommandDecl {
         path: "task alive",
         id: "task.alive",
         about: "What tasks are running right now and what phase each is in — one call, no log reading",
         data_channel: false,
         exits: EXITS_VERDICT,
-        effect: Effect::Write,
+        effect: Effect::Read,
         flags: &[TASK_PROGRAM_ROOT, HOOK_INSTANT],
     },
     // The `singleton` noun (CLOUD-428), ported off `mise-tasks/singleton.sh`

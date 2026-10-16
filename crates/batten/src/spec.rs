@@ -712,10 +712,10 @@ mod tests {
                 "state list".to_owned(),
                 // The verb, never the `worktree` noun: the noun stays
                 // `Unclassified`, so it is off this list (CLOUD-51, CLOUD-780).
-                // One field of one record, and the one `task` leaf that reads.
-                // The noun's other five WRITE, and `alive` writes too — it reaps
-                // the corpse it reports, so a `read` row there would be false in
-                // the one direction this allowlist exists to prevent.
+                // The two `task` leaves that read: the registry's report, which
+                // deletes nothing since CLOUD-2372, and one field of one record.
+                // The noun's other four WRITE.
+                "task alive".to_owned(),
                 "task read".to_owned(),
                 // CLOUD-1718's fold, and `read` in §5's strong sense rather than
                 // its polite one: its whole input is two integers on argv, it
@@ -1358,9 +1358,8 @@ mod tests {
             // The task registry (CLOUD-425), ported off
             // `mise-tasks/task-registry.sh` and `mise-tasks/alive.sh` under
             // CLOUD-843 — both halves, because the registry is one mechanism
-            // read from both ends. Only `task read` is on the read allowlist
-            // above: the five writers edit a record under the git dir, and
-            // `alive` REAPS the corpse it reports, so it writes too.
+            // read from both ends. `task alive` and `task read` are on the read
+            // allowlist above; the writers edit a record under the git dir.
             "task".to_owned(),
             "task alive".to_owned(),
             "task phase".to_owned(),

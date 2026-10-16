@@ -11831,9 +11831,14 @@ fn abandon_runs(repo: &str, sha: &str, what: &str, out: &mut dyn Write) -> Resul
 ///
 /// NOT `unwind_lap`'s tap, whose ownership proof is the lease this run does not
 /// hold yet (`Step::Lease` takes it later). The proof here is narrower and its
-/// own: the pull request is this branch's, and the stale head is a strict
-/// ancestor of this clone's HEAD, so it is this branch's own superseded push.
+/// own: the pull request is this branch's, the stale head is a strict ancestor
+/// of this clone's HEAD, so it is this branch's own superseded push, AND no
+/// other clone holds the lease ([`no_rival_holds_lease`]), so no live lander is
+/// waiting on those runs.
 fn reconcile_at_entry(root: &Path, branch: &str, out: &mut dyn Write) -> Result<()> {
+    if !no_rival_holds_lease(root) {
+        return Ok(());
+    }
     let Some(repo) = repo_slug(root) else {
         return Ok(());
     };
@@ -15557,6 +15562,28 @@ fn still_holds_lease(root: &Path) -> bool {
     };
     let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
     lease::holds_now(&observed, &holder, now)
+}
+
+/// Is the lease free of every clone but this one — absent, released, expired,
+/// or this clone's own ([`lease::authorises_this_clone`])?
+///
+/// The entry reconcile's question, and the complement of [`still_holds_lease`]'s:
+/// it may undo a superseded push only where no live lander is waiting on it.
+/// **Could-not-look is `false`**, so an unreadable lease leaves the forge as it
+/// is: the cost of acting wrongly is another lander's matrix, of not acting a
+/// matrix this landing's own push makes moot.
+fn no_rival_holds_lease(root: &Path) -> bool {
+    let Ok(terms) = lease::terms(root) else {
+        return false;
+    };
+    let Ok((_, holder)) = lease_identity(root) else {
+        return false;
+    };
+    let Ok(observed) = lease::observe(&terms) else {
+        return false;
+    };
+    let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+    lease::authorises_this_clone(&observed, &holder, now)
 }
 
 /// How many beats a holder may stop progressing before its lease is disbelieved.

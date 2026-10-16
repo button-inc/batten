@@ -2038,10 +2038,12 @@ pub fn verify_raced(
         let gate = tx.clone();
         drop(scope.spawn(move || {
             let answer = verify(root, branch, command, published, environment);
-            // SET BEFORE THE SEND, so the watcher's next flag read ends it even
-            // if the receive below has already taken this arm's answer.
-            stop.store(true, std::sync::atomic::Ordering::Relaxed);
-            drop(gate.send(Raced::Gate(answer)));
+            // CLAIMED BY THE SAME SWAP AS AN ARM'S `win`, so a gate that finished
+            // as an arm fired answers only if it got there first. Set before the
+            // send, so the arms' next flag read ends them.
+            if !stop.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                drop(gate.send(Raced::Gate(answer)));
+            }
         }));
 
         let arms = Arms {
@@ -2213,11 +2215,14 @@ pub struct Still {
 
 /// One beat's reading of a task's progress folded into its run.
 ///
-/// A missing record is no evidence of a stall ([`crate::lease::progress_of`]'s
-/// own reading), so it clears the run rather than extending it.
+/// A missing reading is no evidence either way ([`crate::lease::progress_of`]'s
+/// own reading), so it leaves the run as it was: it counts no beat, and it does
+/// not erase that the gate has reported.
 #[must_use]
 pub fn still(run: Option<Still>, seen: Option<String>) -> Option<Still> {
-    let seen = seen?;
+    let Some(seen) = seen else {
+        return run;
+    };
     Some(match run {
         Some(run) if run.token == seen => Still {
             beats: run.beats.saturating_add(1),
@@ -4069,8 +4074,15 @@ mod lap_tests {
             "a zero bound never fires"
         );
         assert!(
-            !stalled(still(run(&[t, s, s, s]), None).as_ref(), 2),
-            "a missing record clears the run"
+            !stalled(still(run(&[t, s, s]), None).as_ref(), 2),
+            "a missing reading counts no beat"
+        );
+        assert!(
+            stalled(
+                still(still(run(&[t, s, s]), None), Some(s.to_owned())).as_ref(),
+                2
+            ),
+            "and does not erase that the gate reported"
         );
         assert!(
             !stalled(run(&[t, t, t, t, t]).as_ref(), 2),
