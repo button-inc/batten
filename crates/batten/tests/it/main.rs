@@ -299,6 +299,7 @@ mod ntia;
 mod obligations_bound;
 mod one_pr;
 mod outcome_advice;
+mod own_image_spawn;
 mod perf_assert;
 mod perf_compare;
 mod perf_latency;

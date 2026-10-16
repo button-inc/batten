@@ -12315,7 +12315,7 @@ pub(crate) fn spawn_resolving<T>(
     // judge stub, a sweep row — never `batten` — and a readlink of
     // `/proc/self/exe` plus its allocation on every one of them buys a branch
     // that rarely runs.
-    let running = (program == crate::surface::BINARY)
+    let running = is_own_image(program)
         .then(std::env::current_exe)
         .and_then(Result::ok);
     let mut spawn = spawn;
