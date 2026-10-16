@@ -2517,6 +2517,27 @@ writer = "mise run branch-age-record"
 record = "attestation"
 writer = "batten record attestation --binary batten"
 
+# CLOUD-2279: how far this repository's engine pin is behind the release `main`
+# pins, judged by the thresholds the producer is given — three releases or
+# fourteen days. The session-start handler `session-engine-notice` writes it on
+# the same lookup that feeds the notice; CI keeps none, so the
+# `engine-hygiene` row below is silent there.
+[[record]]
+record = "engine-fresh"
+writer = "mise run session:engine-notice"
+
+# CLOUD-2279's gate half, beside the record it reads: the engine pin is no
+# further behind the latest release than the `engine-fresh` record's thresholds
+# allow. The decision is generic and ships vendored in the `engine-hygiene`
+# preset; with no record it is silent.
+[[rule]]
+id = "release pin stale"
+no_fix_reason = "class 3 (a board, forge or history action): the subject is the published release line, which no file edit here moves; the refusal's remedy names `batten engine update`"
+kind = "policy"
+scope = "tree"
+preset = "engine-hygiene"
+severity = "deny"
+
 # CLOUD-266's three forge reads (CLOUD-843, retiring the body of
 # `[tasks.timeout-drift-record]`): every workflow, each one's last successful
 # runs, and each run's jobs with their durations measured by the producer. The
@@ -12526,6 +12547,18 @@ run = ["mise", "run", "session:batten"]
 timeout_ms = 600000
 owner = "CLOUD-312"
 expires = "2027-02-28"
+# CLOUD-2279: tell the session when the engine pin is behind `main`'s, once a
+# day, and write the `engine-fresh` record on the same lookup. Its own row
+# because `session:batten` silences stdout, and a handler's stdout is the advice
+# a session reads. It never installs, never blocks, and always exits 0.
+[[hook.handler]]
+id = "session-engine-notice"
+on = "session-start"
+run = ["mise", "run", "session:engine-notice"]
+# The lookup bounds itself at three seconds; this is the backstop.
+timeout_ms = 10000
+owner = "CLOUD-2279"
+expires = "2027-04-30"
 [[hook.handler]]
 id = "session-git-hooks"
 on = "session-start"

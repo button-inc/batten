@@ -552,6 +552,13 @@
         "maxLength": 1536
       }
     },
+    "update_notice": {
+      "description": "Whether `batten engine outdated --notice` may tell a session the pin is\nbehind (CLOUD-2279). Absent is on; `false` silences it, as `CI` and\n`BATTEN_NO_UPDATE_NOTICE` do. Read raw by the notice, never through a\nload, so a config this engine cannot load still hears it.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "verb": {
       "description": "The mutating-verb table (CLOUD-36): which programs change the world, in\nthe one §5 effect vocabulary. Consumer-specific by nature, so it lives\nhere and never in the crate (non-negotiable rule 1); the type and its\nlookup are [`crate::verbs`].",
       "type": "array",
@@ -5126,6 +5133,7 @@
             "mise",
             "pinned-toolchain",
             "release-hygiene",
+            "engine-hygiene",
             "shell-hygiene",
             "tracker-hygiene",
             "supply-chain",

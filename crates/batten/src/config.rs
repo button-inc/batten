@@ -161,6 +161,12 @@ pub struct Config {
     /// (§8): `false` over a committed `true` is refused, never applied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fail_on_warning: Option<bool>,
+    /// Whether `batten engine outdated --notice` may tell a session the pin is
+    /// behind (CLOUD-2279). Absent is on; `false` silences it, as `CI` and
+    /// `BATTEN_NO_UPDATE_NOTICE` do. Read raw by the notice, never through a
+    /// load, so a config this engine cannot load still hears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_notice: Option<bool>,
     /// The declarative rules run against the repository. Absent or empty means
     /// "no rules configured" and nothing is reported. Which of these a given
     /// verb admits is the §5 effect split: `check` runs only non-spawning kinds
@@ -1758,6 +1764,10 @@ pub struct OverrideConfig {
     /// Raised, never lowered: a committed `true` cannot be turned off here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fail_on_warning: Option<bool>,
+    /// A clone's own word on the session notice (CLOUD-2279), read before the
+    /// committed one. Not policy-bearing: the notice gates nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_notice: Option<bool>,
     /// Rules this file **adds**. Redefining a committed id is refused.
     #[serde(default, rename = "rule", skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<Rule>,
@@ -4830,6 +4840,7 @@ impl Config {
             receipt: None,
             strictness: None,
             fail_on_warning: None,
+            update_notice: None,
             rules: Vec::new(),
             patterns: Vec::new(),
             traversals: Vec::new(),

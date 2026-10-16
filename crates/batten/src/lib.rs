@@ -742,19 +742,30 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
     .map(Some)
 }
 
-/// `batten engine update` (CLOUD-2287): move this worktree's release pin to the
-/// latest published release, then install it as [`engine_install`] does.
+/// `batten engine update` (CLOUD-2287, CLOUD-2279): bring every batten
+/// declaration in this worktree's config to the latest published release, then
+/// install it as [`engine_install`] does.
 ///
 /// "Latest" is `main`'s pin, read off the raw-file host by
 /// [`engine::ref_release`] — never the API — because `main` only ever pins a
 /// release that is published, immutable, complete and verified (CLOUD-2033).
-/// The pin only moves FORWARD: a pin at or past `main`'s is left as it is and
-/// only the install runs, so the verb can never be the downgrade its old body
-/// was. The pin is written before the install, so an install that fails leaves
+/// The target is the LATER of the pin and `main`'s: the pin only moves forward,
+/// so the verb can never be the downgrade its old body was, and a current pin
+/// still brings its stale copies up to date.
+///
+/// **FOUR COPIES, ONE VERB (CLOUD-2279).** The `engine` line, each
+/// `[[provision]] name = "batten"` row and `min_batten_version` are rewritten
+/// in one pass ([`sync_declarations`]). A workflow's literal `BATTEN_VERSION` or
+/// `BATTEN_SHA256` cannot be: the config editor has no YAML backend. Each one
+/// that disagrees is named by `path:line` and NOTHING is written, because a
+/// stale copy left silently is the defect this verb exists to close.
+///
+/// The config is written before the install, so an install that fails leaves
 /// the right pin and a re-runnable `engine install`.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT update-skips-the-bump|s@^        durable::replace(&path, engine::rewrite(&text, &latest_pin))?;$@@|an_update_moves_an_older_pin_forward_and_installs_it
-//MUTANT update-moves-the-pin-backward|s@^    if engine::is_newer(&latest, &current)? {$@    if latest != current {@|an_update_never_moves_a_pin_backward
+//MUTANT update-skips-the-bump|s@^        durable::replace(&path, &synced)?;$@@|an_update_moves_an_older_pin_forward_and_installs_it
+//MUTANT update-moves-the-pin-backward|s@^    let target = if engine::is_newer(&latest, &current)? {$@    let target = if latest != current {@|an_update_never_moves_a_pin_backward
+//MUTANT update-ignores-workflow-literal|s@^    if !stale.is_empty() {$@    if false {@|a_workflow_literal_the_update_cannot_rewrite_refuses_and_writes_nothing
 fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let root = git::worktree_root(Path::new("."))?;
     let path = root.join(config::CONFIG_FILE);
@@ -793,16 +804,468 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
             )));
         }
     };
-    let latest = engine::ref_release(&releases_repository(), "main")?;
-    if engine::is_newer(&latest, &current)? {
-        let latest_pin = engine::Pin {
-            release: Some(latest.clone()),
-            source: None,
+    let repository = releases_repository();
+    let latest = engine::ref_release(&repository, "main")?;
+    let target = if engine::is_newer(&latest, &current)? {
+        latest
+    } else {
+        current
+    };
+    // ONE FETCH OF THE MANIFEST, AND ONLY WHEN A COPY NEEDS A DIGEST.
+    let fetched = std::cell::OnceCell::new();
+    let sums = || -> Result<String> {
+        if let Some(body) = fetched.get() {
+            return Ok(String::clone(body));
+        }
+        let body = engine::release_sums(&repository, &target)?;
+        Ok(fetched.get_or_init(|| body).clone())
+    };
+    let synced = sync_declarations(&text, &target, sums)?;
+    let mut stale = Vec::new();
+    for workflow in workflow_files(&root) {
+        let body = std::fs::read_to_string(root.join(&workflow))?;
+        let digests = if body.contains("BATTEN_SHA256") {
+            sums()?
+        } else {
+            String::new()
         };
-        durable::replace(&path, engine::rewrite(&text, &latest_pin))?;
+        for (line, key) in engine::workflow_literals(&body, &target, &digests) {
+            stale.push(format!(
+                "{workflow}:{line} {key} disagrees with {target}, and the update cannot rewrite it"
+            ));
+        }
+    }
+    if !stale.is_empty() {
+        for pointer in &stale {
+            writeln!(out, "{pointer}")?;
+        }
+        return Ok(ExitCode::Violation);
+    }
+    if synced != text {
+        durable::replace(&path, &synced)?;
         writeln!(out, "{}", path.display())?;
     }
     engine_install(out)
+}
+
+/// Every tracked YAML file under `root`, repository-relative and sorted.
+///
+/// EVERY ONE, never a directory the engine names: which files carry CI is the
+/// consumer's fact (non-negotiable rule 1), and a literal pin in any of them is
+/// a copy the update leaves behind. An untracked tree reads as none.
+fn workflow_files(root: &Path) -> Vec<String> {
+    git::tracked_paths(root)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|path| {
+            Path::new(path)
+                .extension()
+                .is_some_and(|ext| ext == "yml" || ext == "yaml")
+        })
+        .collect()
+}
+
+/// What `engine outdated` was asked (CLOUD-2279).
+struct Outdated {
+    /// Speak at most once per TTL, always exit 0, fail open.
+    notice: bool,
+    /// The record family to write the freshness line into.
+    record: Option<String>,
+    /// More releases behind than this is stale.
+    max_releases: Option<u64>,
+    /// More days behind than this is stale.
+    max_days: Option<u64>,
+}
+
+/// How long a spoken notice stays spoken.
+const NOTICE_TTL: u64 = 24 * 60 * 60;
+
+/// How long the notice waits for its lookup before it fails open.
+const NOTICE_LOOKUP: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The variable that silences the session notice.
+const NO_UPDATE_NOTICE: &str = "BATTEN_NO_UPDATE_NOTICE";
+
+/// What the lookup found: `main`'s pin, and the releases between the pin and it.
+struct Distance {
+    latest: String,
+    newer: Vec<engine::Heading>,
+}
+
+/// The releases between `tag` and `main`'s pin.
+///
+/// A changelog that lags `main`'s pin still counts the pin: being behind is
+/// never answered as current because a heading is missing.
+fn distance(repository: &str, tag: &str) -> Result<Distance> {
+    let latest = engine::ref_release(repository, "main")?;
+    if !engine::is_newer(&latest, tag)? {
+        return Ok(Distance {
+            latest,
+            newer: Vec::new(),
+        });
+    }
+    let headings = engine::ref_changelog(repository, "main")?;
+    let mut newer = engine::releases_between(&headings, tag, &latest)?;
+    if newer.is_empty() {
+        newer.push(engine::Heading {
+            version: ::semver::Version::parse(latest.trim_start_matches('v'))?,
+            date: None,
+        });
+    }
+    Ok(Distance { latest, newer })
+}
+
+/// [`distance`] bounded by [`NOTICE_LOOKUP`]: `None` for a lookup that failed
+/// or did not answer in time. The thread left behind ends with the process.
+fn distance_bounded(repository: &str, tag: &str) -> Option<Distance> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (repository, tag) = (repository.to_owned(), tag.to_owned());
+    std::thread::spawn(move || {
+        let _ = tx.send(distance(&repository, &tag));
+    });
+    rx.recv_timeout(NOTICE_LOOKUP).ok()?.ok()
+}
+
+/// Seconds since the epoch, or zero for a clock before it.
+fn now_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
+/// Whether the notice may speak in this run: never in CI, never when
+/// [`NO_UPDATE_NOTICE`] is set, never when the config's `update_notice` is
+/// `false` — the local override's word before the committed one's.
+///
+/// THE CONFIG IS READ RAW, never loaded: a notice exists for a pin that is
+/// behind, and a config this engine cannot load must not silence it.
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT notice-speaks-in-ci|s@^    if var("CI").is_some() {$@    if false {@|the_notice_speaks_once_per_ttl_and_never_in_ci
+fn notice_enabled(root: &Path, text: &str) -> bool {
+    let var = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+    if var("CI").is_some() {
+        return false;
+    }
+    if var(NO_UPDATE_NOTICE).is_some() {
+        return false;
+    }
+    let key = |text: &str| {
+        toml::from_str::<toml::Table>(text)
+            .ok()?
+            .get("update_notice")?
+            .as_bool()
+    };
+    let local = std::fs::read_to_string(root.join(resolve::LOCAL_CONFIG_FILE)).ok();
+    local
+        .as_deref()
+        .and_then(key)
+        .or_else(|| key(text))
+        .unwrap_or(true)
+}
+
+/// Whether the stamp at `stamp` is older than [`NOTICE_TTL`], or absent.
+//MUTANT notice-ignores-ttl|s@^    last.is_none_or(\x7clast\x7c now.saturating_sub(last) >= NOTICE_TTL)$@    true@|the_notice_speaks_once_per_ttl_and_never_in_ci
+fn notice_due(stamp: &Path, now: u64) -> bool {
+    let last = std::fs::read_to_string(stamp)
+        .ok()
+        .and_then(|text| text.trim().parse::<u64>().ok());
+    last.is_none_or(|last| now.saturating_sub(last) >= NOTICE_TTL)
+}
+
+/// Write the `engine-fresh` line into `family`: stale when the pin is more
+/// releases or more days behind than `ask` allows. Days count from the date of
+/// the first release newer than the pin.
+fn record_freshness(
+    ask: &Outdated,
+    family: &str,
+    tag: &str,
+    found: &Distance,
+    now: u64,
+) -> Result<()> {
+    let behind = found.newer.len();
+    let days = found
+        .newer
+        .first()
+        .and_then(|first| first.date.as_deref())
+        .and_then(|date| engine::days_since(date, i64::try_from(now).unwrap_or(i64::MAX)))
+        .unwrap_or(0);
+    let stale = u64::try_from(behind).unwrap_or(u64::MAX) > ask.max_releases.unwrap_or(0)
+        || days > ask.max_days.unwrap_or(0);
+    let verdict = if stale { "stale" } else { "fresh" };
+    record::store_named(
+        "engine outdated",
+        family,
+        &format!(
+            "engine-fresh\t{verdict}\t{tag}\t{}\t{behind}\t{days}\n",
+            found.latest
+        ),
+    )
+}
+
+/// The session notice's one line, then its stamp, so the next day speaks again.
+fn speak_notice(
+    out: &mut dyn Write,
+    tag: &str,
+    found: &Distance,
+    stamp: Option<&Path>,
+    now: u64,
+) -> Result<()> {
+    writeln!(
+        out,
+        "batten: the engine pin {tag} is {} release(s) behind {}; run `batten engine update`",
+        found.newer.len(),
+        found.latest
+    )?;
+    if let Some(stamp) = stamp {
+        if let Some(parent) = stamp.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        durable::replace(stamp, format!("{now}\n"))?;
+    }
+    Ok(())
+}
+
+/// `batten engine outdated` (CLOUD-2279): the pin against the latest published
+/// release.
+///
+/// - Current: exit 0, silent.
+/// - Behind: exit 2, `pin → latest` and the changelog's releases between.
+/// - No release pin: exit 2, `no engine pin` — a finding about the config.
+/// - Could not look: exit 3.
+///
+/// `--notice` is the session's half: one line naming `batten engine update`, at
+/// most once per [`NOTICE_TTL`], the lookup bounded by [`NOTICE_LOOKUP`], and
+/// ALWAYS exit 0 — it never installs and never blocks. `--record` writes the
+/// `engine-fresh` line the `engine-hygiene` preset reads, with the consumer's
+/// thresholds, and clears it on a run that could not look.
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT outdated-silent-without-pin|s@^        writeln!(out, "{} no engine pin", path.display())?;$@        return Ok(ExitCode::Success);@|outdated_exits_by_the_pins_distance_from_main
+fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
+    if ask.record.is_some() && (ask.max_releases.is_none() || ask.max_days.is_none()) {
+        return Err(UsageError::raise(String::from(
+            "engine outdated: --record needs --max-releases and --max-days, the thresholds the \
+             record is judged by",
+        )));
+    }
+    let family = ask
+        .record
+        .as_deref()
+        .map(|family| record::safe_component("family", family))
+        .transpose()?;
+    let clear = |family: Option<&str>| -> Result<()> {
+        match family {
+            Some(family) => record::clear_named("engine outdated", family),
+            None => Ok(()),
+        }
+    };
+    let root = match git::worktree_root(Path::new(".")) {
+        Ok(root) => root,
+        Err(_) if ask.notice => return Ok(ExitCode::Success),
+        Err(why) => return Err(why),
+    };
+    let path = root.join(config::CONFIG_FILE);
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let tag = match engine::declared(&text) {
+        Some(engine::Pin {
+            release: Some(tag),
+            source: None,
+        }) => Some(tag),
+        _ => None,
+    };
+    let Some(tag) = tag else {
+        clear(family.as_deref())?;
+        if ask.notice {
+            return Ok(ExitCode::Success);
+        }
+        writeln!(out, "{} no engine pin", path.display())?;
+        return Ok(ExitCode::Violation);
+    };
+    let now = now_seconds();
+    let stamp = state::repo_state_dir(&root)
+        .ok()
+        .map(|dir| dir.join("engine").join("update-notice"));
+    let speak = ask.notice
+        && notice_enabled(&root, &text)
+        && stamp.as_deref().is_some_and(|stamp| notice_due(stamp, now));
+    if ask.notice && !speak && family.is_none() {
+        return Ok(ExitCode::Success);
+    }
+    let repository = releases_repository();
+    let found = if ask.notice {
+        distance_bounded(&repository, &tag).ok_or_else(|| anyhow::anyhow!("no answer"))
+    } else {
+        distance(&repository, &tag)
+    };
+    let found = match found {
+        Ok(found) => found,
+        Err(why) => {
+            clear(family.as_deref())?;
+            if ask.notice {
+                return Ok(ExitCode::Success);
+            }
+            return Err(anyhow::anyhow!(
+                "engine outdated: could not look up the latest release ({why:#})"
+            ));
+        }
+    };
+    let behind = found.newer.len();
+    if let Some(family) = family.as_deref() {
+        record_freshness(ask, family, &tag, &found, now)?;
+    }
+    if ask.notice {
+        if speak && behind > 0 {
+            speak_notice(out, &tag, &found, stamp.as_deref(), now)?;
+        }
+        return Ok(ExitCode::Success);
+    }
+    if behind == 0 {
+        return Ok(ExitCode::Success);
+    }
+    writeln!(out, "{tag} → {}", found.latest)?;
+    for heading in &found.newer {
+        writeln!(
+            out,
+            "v{} {}",
+            heading.version,
+            heading.date.as_deref().unwrap_or("-")
+        )?;
+    }
+    Ok(ExitCode::Violation)
+}
+
+/// Replace a string value in place, keeping the comment and spacing around it.
+fn set_str(item: &mut toml_edit::Item, new: &str) {
+    if let Some(value) = item.as_value_mut() {
+        let decor = value.decor().clone();
+        *value = toml_edit::Value::from(new);
+        *value.decor_mut() = decor;
+    }
+}
+
+/// One artifact table's `url` moved from `old` to `new` and its `sha256` read
+/// off the release's `SHA256SUMS` by the URL's asset name.
+fn sync_artifact(
+    artifact: &mut dyn toml_edit::TableLike,
+    old: &str,
+    new: &str,
+    sums: &mut dyn FnMut() -> Result<String>,
+) -> Result<()> {
+    let Some(url) = artifact
+        .get("url")
+        .and_then(toml_edit::Item::as_str)
+        .map(|url| url.replace(old, new))
+    else {
+        return Ok(());
+    };
+    let asset = url.rsplit('/').next().unwrap_or_default().to_owned();
+    let digest = engine::published_digest(&sums()?, &asset).ok_or_else(|| {
+        UsageError::raise(format!(
+            "engine update: the release publishes no digest for {asset}, which a batten \
+             provision row names; nothing was written"
+        ))
+    })?;
+    if let Some(item) = artifact.get_mut("url") {
+        set_str(item, &url);
+    }
+    if let Some(item) = artifact.get_mut("sha256") {
+        set_str(item, &digest);
+    }
+    Ok(())
+}
+
+/// `text` with every batten declaration brought to release `tag` (CLOUD-2279):
+/// the `engine` pin; each `[[provision]] name = "batten"` row's `version`, its
+/// URLs with the version substituted, and each `sha256` from the release's
+/// `SHA256SUMS`; and `min_batten_version`, raised and never lowered.
+///
+/// `sums` is asked for only when a provision row needs a digest, and once.
+///
+/// # Errors
+///
+/// A config `toml_edit` will not read, a tag that is not a version, or an asset
+/// the release publishes no digest for. Nothing is written by this function;
+/// the caller writes only its whole answer.
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT update-leaves-provision-stale|s@^                set_str(item, &fresh);$@@|an_update_brings_every_batten_declaration_to_the_release
+//MUTANT update-lowers-min-version|s@^        .is_some_and(\x7cfloor\x7c floor < version);$@        .is_some_and(\x7cfloor\x7c floor != version);@|an_update_never_lowers_min_batten_version
+fn sync_declarations(
+    text: &str,
+    tag: &str,
+    sums: impl FnOnce() -> Result<String>,
+) -> Result<String> {
+    let version = ::semver::Version::parse(tag.trim_start_matches('v')).map_err(|_| {
+        UsageError::raise(format!(
+            "engine update: {tag} is not a release tag (v0.0.201)"
+        ))
+    })?;
+    let bare = version.to_string();
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|why| UsageError::raise(format!("engine update: batten.toml: {why}")))?;
+    let mut fetch = Some(sums);
+    let mut fetched: Option<String> = None;
+    let mut sums = || -> Result<String> {
+        if let Some(body) = &fetched {
+            return Ok(body.clone());
+        }
+        let body = fetch
+            .take()
+            .map_or_else(|| Ok(String::new()), |fetch| fetch())?;
+        fetched = Some(body.clone());
+        Ok(body)
+    };
+    if let Some(rows) = doc
+        .get_mut("provision")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+    {
+        for row in rows.iter_mut() {
+            if row.get("name").and_then(toml_edit::Item::as_str) != Some("batten") {
+                continue;
+            }
+            let Some(old) = row
+                .get("version")
+                .and_then(toml_edit::Item::as_str)
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            let old_bare = old.trim_start_matches('v').to_owned();
+            if old_bare != bare {
+                sync_artifact(row, &old_bare, &bare, &mut sums)?;
+                if let Some(platforms) = row
+                    .get_mut("platforms")
+                    .and_then(toml_edit::Item::as_table_like_mut)
+                {
+                    for (_, artifact) in platforms.iter_mut() {
+                        if let Some(artifact) = artifact.as_table_like_mut() {
+                            sync_artifact(artifact, &old_bare, &bare, &mut sums)?;
+                        }
+                    }
+                }
+            }
+            let fresh = if old.starts_with('v') {
+                format!("v{bare}")
+            } else {
+                bare.clone()
+            };
+            if let Some(item) = row.get_mut("version") {
+                set_str(item, &fresh);
+            }
+        }
+    }
+    let raise = doc
+        .get("min_batten_version")
+        .and_then(toml_edit::Item::as_str)
+        .and_then(|floor| ::semver::Version::parse(floor).ok())
+        .is_some_and(|floor| floor < version);
+    if raise && let Some(item) = doc.get_mut("min_batten_version") {
+        set_str(item, &bare);
+    }
+    let pin = engine::Pin {
+        release: Some(format!("v{bare}")),
+        source: None,
+    };
+    Ok(engine::rewrite(&doc.to_string(), &pin))
 }
 
 /// The repository releases are fetched from: `BATTEN_RELEASES`, the
@@ -1139,6 +1602,7 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
     match command {
         cli::EngineCommand::Install => return engine_install(out),
         cli::EngineCommand::Update => return engine_update(out),
+        cli::EngineCommand::Outdated { .. } => return run_outdated(command, out),
         _ => {}
     }
     let root = git::worktree_root(Path::new("."))?;
@@ -1156,8 +1620,40 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
         }
         cli::EngineCommand::Gate { lanes } => return engine_gate(&root, &lanes, out),
         cli::EngineCommand::Install => return engine_install(out),
+        cli::EngineCommand::Outdated { .. } => return run_outdated(command, out),
     }
     Ok(ExitCode::Success)
+}
+
+/// `engine outdated`'s flags, read into an [`Outdated`] request.
+fn run_outdated(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCode> {
+    let cli::EngineCommand::Outdated {
+        notice,
+        record,
+        max_releases,
+        max_days,
+    } = command
+    else {
+        return Ok(ExitCode::Success);
+    };
+    let count = |flag: &str, value: Option<String>| -> Result<Option<u64>> {
+        value
+            .map(|value| {
+                value.parse::<u64>().map_err(|_| {
+                    UsageError::raise(format!(
+                        "engine outdated: --{flag} {value} is not a whole number"
+                    ))
+                })
+            })
+            .transpose()
+    };
+    let ask = Outdated {
+        notice,
+        record,
+        max_releases: count("max-releases", max_releases)?,
+        max_days: count("max-days", max_days)?,
+    };
+    engine_outdated(&ask, out)
 }
 
 /// `batten engine pin` (CLOUD-2063): write the config's one `engine` line.
@@ -1228,6 +1724,7 @@ fn engine_pin(
 /// Every finding is a pointer: the file, the token, the pin.
 //MUTANT-SUITE crates/batten/tests/it/engine_gates.rs
 //MUTANT source-pin-admitted|s@^    if pin.source.is_some() {$@    if false {@|a_source_pin_is_refused_on_the_landing_path
+//MUTANT gate-admits-disagreeing-provision|s@^    if !disagreeing.is_empty() {$@    if false {@|a_provision_row_disagreeing_with_the_pin_is_refused
 //MUTANT dropped-row-unchecked|s@^    if !runs(\&\["config", "lint"\])? {$@    if !runs(\&["config", "show"])? {@|a_config_the_pinned_release_drops_a_row_of_is_drift
 fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<ExitCode> {
     let config_path = root.join(config::CONFIG_FILE);
@@ -1247,6 +1744,21 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
     let Some(tag) = pin.release.as_deref() else {
         return Ok(ExitCode::Success);
     };
+    // EVERY COPY AGREES WITH THE PIN (CLOUD-2279), decided before anything is
+    // fetched: a batten provision row on another release, or a floor above the
+    // pin, is a config that names two engines, and `engine update` is the one
+    // verb that brings them together.
+    let disagreeing = engine::disagreements(&text, tag);
+    for (line, what) in &disagreeing {
+        writeln!(
+            out,
+            "{}:{line} {what} disagrees with engine pin {tag}; run `batten engine update`",
+            config_path.display()
+        )?;
+    }
+    if !disagreeing.is_empty() {
+        return Ok(ExitCode::Violation);
+    }
     // NO DRAFT WAIT (CLOUD-2033 retires CLOUD-2138's). `main` used to pin vX
     // from the moment the release PR landed, while vX was still a draft being
     // built, so this gate waited out the build. The release path closes that

@@ -496,6 +496,9 @@ fn the_override_schema_describes_only_keys_the_loader_honours() {
             "scope",
             "strictness",
             "unlanded",
+            // Read by `engine outdated --notice` off the raw file, before the
+            // committed one (CLOUD-2279), rather than through `resolve`.
+            "update_notice",
             "version",
             "waiver",
         ],

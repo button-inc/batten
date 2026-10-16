@@ -1588,6 +1588,48 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "engine outdated",
+          "id": "engine.outdated",
+          "about": "Compare the config's release pin with the latest published release",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "max_days",
+              "short": null,
+              "long": "max-days",
+              "takes_value": true,
+              "positional": false,
+              "help": "With --record: more days behind the first newer release than this is stale"
+            },
+            {
+              "name": "max_releases",
+              "short": null,
+              "long": "max-releases",
+              "takes_value": true,
+              "positional": false,
+              "help": "With --record: more releases behind than this is stale"
+            },
+            {
+              "name": "notice",
+              "short": null,
+              "long": "notice",
+              "takes_value": false,
+              "positional": false,
+              "help": "Print one line naming `batten engine update` at most once a day, never in CI, and always exit 0"
+            },
+            {
+              "name": "record",
+              "short": null,
+              "long": "record",
+              "takes_value": true,
+              "positional": false,
+              "help": "Write the `engine-fresh` line into this declared record family, judged by --max-releases and --max-days"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "engine pin",
           "id": "engine.pin",
           "about": "Set the config's engine pin, or refresh a declared source pin to this tree's digest",
@@ -1625,7 +1667,7 @@ expression: stdout_of(&output)
         {
           "path": "engine update",
           "id": "engine.update",
-          "about": "Move this config's release pin forward to the latest release, then install it",
+          "about": "Bring every batten declaration in this config forward to the latest release, then install it",
           "effect": "write",
           "data_channel": false,
           "flags": [],

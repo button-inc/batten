@@ -1000,6 +1000,14 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["hand-edit the manifest"],
     },
     VendoredDoc {
+        id: "release pin stale",
+        why: Some(
+            "An engine pin left behind still runs, without the fixes and gates of the releases since",
+        ),
+        act: &["run `batten engine update`"],
+        dont: &[],
+    },
+    VendoredDoc {
         id: "release record torn",
         why: Some("A record without a matching census would judge part of a release as all of it"),
         act: &["run `batten record release <tag> --manifest <name>` again"],

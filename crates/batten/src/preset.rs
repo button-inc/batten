@@ -1416,6 +1416,35 @@ the record rather than a verdict about the release. Record it again.",
         ],
         patterns: &[],
     },
+    // CLOUD-2279's `engine-hygiene`: a consumer's engine pin is no further
+    // behind the latest release than the consumer allows. The thresholds are
+    // the producer's (`batten engine outdated --record`), because a preset
+    // cannot read a consumer's numbers; the module reads the verdict line by
+    // KIND, the family being the consumer's to declare.
+    Manifest {
+        name: "engine-hygiene",
+        version: 1,
+        modules: &[PresetModule {
+            scope: RuleScope::Tree,
+            // Reads a record `batten engine outdated` writes; no CI provider's
+            // expression language is involved, so it applies anywhere.
+            provider: None,
+            pointer: "<preset:engine-hygiene>/engine-pin-fresh.rego",
+            source: include_str!("policy/presets/engine-hygiene/engine-pin-fresh.rego"),
+        }],
+        verdicts: &[VendoredVerdict {
+            id: "release pin stale",
+            gloss: "the engine pin is more releases or days behind the latest release than the consumer allows",
+            class: "A pin left behind still runs, so nothing else says it is stale: the consumer \
+judges its work with an engine whose fixes and gates it does not have, and the distance only grows. \
+`batten engine outdated --record` measured the pin against the release `main` pins, with the \
+consumer's own thresholds, and found it past them. Bring every batten declaration forward in one \
+step.",
+            routes: &[run("update run first", "batten engine update")],
+            applicability: crate::verdict::Applicability::Advice,
+        }],
+        patterns: &[],
+    },
     // Version 2 (CLOUD-1994) adds the line-unit ban, lifted out of the consumer
     // module it was written as. Its facts — which manifests, keys, unit headers,
     // workflow globs and exempt files — are the consumer's `[census.shell]`

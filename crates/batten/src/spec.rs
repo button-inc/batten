@@ -953,6 +953,7 @@ mod tests {
             "engine gate".to_owned(),
             // The generated bootstrap's last step (CLOUD-2203).
             "engine install".to_owned(),
+            "engine outdated".to_owned(),
             "engine pin".to_owned(),
             "engine stamp".to_owned(),
             "engine update".to_owned(),

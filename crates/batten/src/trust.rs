@@ -1341,6 +1341,15 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[WeakeningKind::PromotionDisabled]),
     },
     FieldCoverage {
+        field: "update_notice",
+        coverage: Coverage::NotPolicyBearing(
+            "whether `engine outdated --notice` may tell a session the pin is behind \
+             (CLOUD-2279). The notice is advice that always exits 0 and gates nothing; \
+             staleness is refused, where a consumer wants it refused, by the \
+             `engine-hygiene` preset's own row, which this key does not reach.",
+        ),
+    },
+    FieldCoverage {
         field: "rules",
         coverage: Coverage::Compared(&[
             WeakeningKind::RuleRemoved,

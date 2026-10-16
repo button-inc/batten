@@ -571,12 +571,7 @@ pub fn fetch_release(repository: &str, tag: &str) -> Result<Vec<u8>> {
 /// who named a ref asked for THAT release, so a ref that cannot be read is a
 /// refusal rather than a quiet install of whatever binary is running.
 pub fn ref_release(repository: &str, reference: &str) -> Result<String> {
-    let raw = repository.trim_end_matches('/').replacen(
-        "https://github.com/",
-        "https://raw.githubusercontent.com/",
-        1,
-    );
-    let url = format!("{raw}/{reference}/batten.toml");
+    let url = raw_url(repository, reference, "batten.toml");
     let answer = crate::fetch::get(&url, &[])?;
     if answer.status != 200 {
         return Err(UsageError::raise(format!(
@@ -592,6 +587,118 @@ pub fn ref_release(repository: &str, reference: &str) -> Result<String> {
                  latest one; set BATTEN_VERSION to install a named release"
             ))
         })
+}
+
+/// `repository`'s raw-file URL for `path` at `reference`: the host
+/// [`ref_release`] reads, never the API.
+fn raw_url(repository: &str, reference: &str, path: &str) -> String {
+    let raw = repository.trim_end_matches('/').replacen(
+        "https://github.com/",
+        "https://raw.githubusercontent.com/",
+        1,
+    );
+    format!("{raw}/{reference}/{path}")
+}
+
+/// Where the engine's own repository keeps its changelog (CLOUD-2279).
+pub const CHANGELOG: &str = "crates/batten/CHANGELOG.md";
+
+/// One release a changelog heading names: `## [x.y.z](…) - YYYY-MM-DD`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Heading {
+    /// The release's version, without the tag's `v`.
+    pub version: semver::Version,
+    /// The release's date, when the heading carries one.
+    pub date: Option<String>,
+}
+
+/// Every release heading in a changelog body, in the order it lists them.
+///
+/// A line that is not a version heading — `## [Unreleased]`, prose, a deeper
+/// heading — is not a release and is skipped.
+#[must_use]
+pub fn changelog_headings(text: &str) -> Vec<Heading> {
+    text.lines()
+        .filter_map(|line| {
+            let (version, tail) = line.strip_prefix("## [")?.split_once(']')?;
+            let version = semver::Version::parse(version).ok()?;
+            let date = tail
+                .rsplit_once(" - ")
+                .map(|(_, date)| date.trim())
+                .filter(|date| crate::waiver::Date::parse(date).is_ok())
+                .map(str::to_owned);
+            Some(Heading { version, date })
+        })
+        .collect()
+}
+
+/// The changelog headings `reference` carries, read off the raw-file host
+/// beside its pin (CLOUD-2279).
+///
+/// # Errors
+///
+/// A changelog that does not answer `200`: the distance from a pin to the
+/// latest release cannot be counted without it.
+pub fn ref_changelog(repository: &str, reference: &str) -> Result<Vec<Heading>> {
+    let url = raw_url(repository, reference, CHANGELOG);
+    let answer = crate::fetch::get(&url, &[])?;
+    if answer.status != 200 {
+        return Err(anyhow::anyhow!(
+            "engine outdated: {url} answered {}, so the releases since the pin are unknown",
+            answer.status
+        ));
+    }
+    Ok(changelog_headings(&String::from_utf8_lossy(&answer.body)))
+}
+
+/// The releases newer than `pin` and no newer than `latest`, oldest first.
+///
+/// # Errors
+///
+/// A [`UsageError`] naming a tag that is not a version.
+pub fn releases_between(headings: &[Heading], pin: &str, latest: &str) -> Result<Vec<Heading>> {
+    let parse = |tag: &str| {
+        semver::Version::parse(tag.trim_start_matches('v')).map_err(|_| {
+            UsageError::raise(format!(
+                "engine outdated: {tag} is not a release tag (v0.0.201)"
+            ))
+        })
+    };
+    let (pin, latest) = (parse(pin)?, parse(latest)?);
+    let mut newer: Vec<Heading> = headings
+        .iter()
+        .filter(|heading| heading.version > pin && heading.version <= latest)
+        .cloned()
+        .collect();
+    newer.sort_by(|left, right| left.version.cmp(&right.version));
+    newer.dedup_by(|left, right| left.version == right.version);
+    Ok(newer)
+}
+
+/// Whole days from `date` (`YYYY-MM-DD`, UTC midnight) to `now`, never below
+/// zero; `None` for a date that will not parse.
+#[must_use]
+pub fn days_since(date: &str, now: i64) -> Option<u64> {
+    let then = crate::ci_signal::epoch(&format!("{date}T00:00:00Z"))?;
+    Some(u64::try_from(now.saturating_sub(then) / 86_400).unwrap_or(0))
+}
+
+/// The `SHA256SUMS` body release `tag` publishes (CLOUD-2279).
+///
+/// # Errors
+///
+/// A manifest that does not answer `200`: nothing can be pinned to a digest
+/// the release does not publish.
+pub fn release_sums(repository: &str, tag: &str) -> Result<String> {
+    let url = release_url(repository, tag, "SHA256SUMS");
+    let answer = crate::fetch::get(&url, &[])?;
+    if answer.status != 200 {
+        return Err(UsageError::raise(format!(
+            "engine update: {url} answered {}, so {tag}'s digests are unknown; nothing was written",
+            answer.status
+        )));
+    }
+    Ok(String::from_utf8_lossy(&answer.body).into_owned())
 }
 
 /// A release asked for by tag: its verified binary, or the fact that the tag is
@@ -694,6 +801,113 @@ pub fn rewrite(text: &str, pin: &Pin) -> String {
         out.push('\n');
     }
     out
+}
+
+/// The batten declarations in `text` that disagree with release pin `tag`
+/// (CLOUD-2279): a `[[provision]] name = "batten"` row whose `version` is not
+/// the pin, and a `min_batten_version` above it. Each is its 1-based line and
+/// what it says.
+#[must_use]
+pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String)> {
+    let Ok(pin) = semver::Version::parse(tag.trim_start_matches('v')) else {
+        return Vec::new();
+    };
+    let value = |line: &str| -> Option<(String, String)> {
+        let table: toml::Table = toml::from_str(line.trim()).ok()?;
+        let (key, value) = table.into_iter().next()?;
+        Some((key, value.as_str()?.to_owned()))
+    };
+    let mut found = Vec::new();
+    let mut top = true;
+    let mut block: Option<(bool, Option<(usize, String)>)> = None;
+    let close = |block: &mut Option<(bool, Option<(usize, String)>)>,
+                 found: &mut Vec<(usize, String)>| {
+        if let Some((true, Some((at, version)))) = block.take()
+            && semver::Version::parse(version.trim_start_matches('v')).ok() != Some(pin.clone())
+        {
+            found.push((at, format!("provision batten {version}")));
+        }
+    };
+    for (index, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            top = false;
+            if trimmed == "[[provision]]" {
+                close(&mut block, &mut found);
+                block = Some((false, None));
+            } else if !trimmed.starts_with("[provision.") {
+                close(&mut block, &mut found);
+            }
+            continue;
+        }
+        let Some((key, text)) = value(trimmed) else {
+            continue;
+        };
+        if top && key == "min_batten_version" {
+            if semver::Version::parse(&text).is_ok_and(|floor| floor > pin) {
+                found.push((index + 1, format!("min_batten_version {text}")));
+            }
+        } else if let Some((batten, version)) = block.as_mut() {
+            match key.as_str() {
+                "name" => *batten = text == "batten",
+                "version" => *version = Some((index + 1, text)),
+                _ => {}
+            }
+        }
+    }
+    close(&mut block, &mut found);
+    found.sort();
+    found
+}
+
+/// The literal `BATTEN_VERSION` / `BATTEN_SHA256` values in a workflow that
+/// disagree with release `tag` (CLOUD-2279), as 1-based line and key.
+///
+/// A value is a literal only when it is a version (`v?X.Y.Z`) or a 64-hex
+/// digest; an expression (`${{ … }}`) is not one, and a longer key such as
+/// `BATTEN_VERSION_FROM_REF` is another key. A digest agrees when the release's
+/// `SHA256SUMS` publishes it for any asset.
+#[must_use]
+pub fn workflow_literals(text: &str, tag: &str, sums: &str) -> Vec<(usize, &'static str)> {
+    let want = tag.trim_start_matches('v');
+    let published: std::collections::BTreeSet<String> = sums
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let mut found = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        for key in ["BATTEN_VERSION", "BATTEN_SHA256"] {
+            for (at, _) in line.match_indices(key) {
+                let before = line[..at].chars().next_back();
+                if before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let rest = &line[at + key.len()..];
+                let Some(rest) = rest.strip_prefix(':').or_else(|| rest.strip_prefix('=')) else {
+                    continue;
+                };
+                let literal: String = rest
+                    .trim_start()
+                    .trim_start_matches(['"', '\''])
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '.')
+                    .collect();
+                let differs = if key == "BATTEN_VERSION" {
+                    let bare = literal.trim_start_matches('v');
+                    semver::Version::parse(bare).is_ok() && bare != want
+                } else {
+                    literal.len() == 64
+                        && literal.chars().all(|c| c.is_ascii_hexdigit())
+                        && !published.contains(&literal.to_ascii_lowercase())
+                };
+                if differs {
+                    found.push((index + 1, key));
+                }
+            }
+        }
+    }
+    found
 }
 
 /// The `batten` verbs a workflow's command lines invoke (CLOUD-2063).

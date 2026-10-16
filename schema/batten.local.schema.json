@@ -86,6 +86,13 @@
         "maxLength": 1536
       }
     },
+    "update_notice": {
+      "description": "A clone's own word on the session notice (CLOUD-2279), read before the\ncommitted one. Not policy-bearing: the notice gates nothing.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "version": {
       "description": "The schema version, required exactly as the authority requires it.",
       "type": "integer",
@@ -1518,6 +1525,7 @@
             "mise",
             "pinned-toolchain",
             "release-hygiene",
+            "engine-hygiene",
             "shell-hygiene",
             "tracker-hygiene",
             "supply-chain",

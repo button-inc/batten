@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-engine-outdated 1  batten 
+.SH NAME
+batten\-engine\-outdated \- Compare the config\*(Aqs release pin with the latest published release
+.SH SYNOPSIS
+\fBbatten engine outdated\fR [\fB\-\-notice\fR] [\fB\-\-record\fR] [\fB\-\-max\-releases\fR] [\fB\-\-max\-days\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Compare the config\*(Aqs release pin with the latest published release
+.SH OPTIONS
+.TP
+\fB\-\-notice\fR
+Print one line naming `batten engine update` at most once a day, never in CI, and always exit 0
+.TP
+\fB\-\-record\fR \fI<record>\fR
+Write the `engine\-fresh` line into this declared record family, judged by \-\-max\-releases and \-\-max\-days
+.TP
+\fB\-\-max\-releases\fR \fI<max_releases>\fR
+With \-\-record: more releases behind than this is stale
+.TP
+\fB\-\-max\-days\fR \fI<max_days>\fR
+With \-\-record: more days behind the first newer release than this is stale
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

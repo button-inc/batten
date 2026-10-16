@@ -20,13 +20,16 @@ batten\-engine\-stamp(1)
 Record this tree\*(Aqs source digest beside the running binary, so a source pin can be checked
 .TP
 batten\-engine\-update(1)
-Move this config\*(Aqs release pin forward to the latest release, then install it
+Bring every batten declaration in this config forward to the latest release, then install it
 .TP
 batten\-engine\-pin(1)
 Set the config\*(Aqs engine pin, or refresh a declared source pin to this tree\*(Aqs digest
 .TP
 batten\-engine\-install(1)
 Install the engine the batten.toml pin names, from its release or from this tree
+.TP
+batten\-engine\-outdated(1)
+Compare the config\*(Aqs release pin with the latest published release
 .TP
 batten\-engine\-gate(1)
 Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call

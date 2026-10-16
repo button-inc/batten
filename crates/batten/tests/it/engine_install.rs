@@ -130,6 +130,17 @@ const WANTED: &str = "v9.9.9";
 /// The bytes the fixture release ships as its binary.
 const SHIPPED: &[u8] = b"#!/bin/sh\necho the fixture release\n";
 
+/// The date `main`'s changelog gives `main`'s own release.
+const MAIN_DATE: &str = "2020-02-01";
+
+/// The platforms a fixture provision row names, beside this build's own.
+const PROVISION_TARGETS: &[&str] = &["x86_64-unknown-linux-musl", "aarch64-apple-darwin"];
+
+/// The digest the fixture release publishes for `target`'s archive.
+fn platform_digest(target: &str) -> String {
+    batten::provision::digest(target.as_bytes())
+}
+
 /// Serve, over loopback TLS, a ref `main` whose `batten.toml` pins [`WANTED`], and
 /// [`WANTED`]'s release for this build's target. Returns the host and the
 /// environment `engine install` needs to reach and trust it.
@@ -157,6 +168,18 @@ fn release_host(
     std::fs::write(
         repo.join("main").join("batten.toml"),
         format!("version = 1\nengine = {{ release = \"{main_pin}\" }}\n"),
+    )
+    .unwrap();
+    // `main`'s changelog (CLOUD-2279): `engine outdated` counts the releases
+    // between a pin and `main`'s from its headings.
+    let changelog = repo.join("main").join("crates").join("batten");
+    std::fs::create_dir_all(&changelog).unwrap();
+    std::fs::write(
+        changelog.join("CHANGELOG.md"),
+        format!(
+            "# Changelog\n\n## [Unreleased]\n\n## [{}](https://example.invalid) - {MAIN_DATE}\n\n### Added\n\n- a thing\n\n## [8.8.8](https://example.invalid) - 2020-01-01\n",
+            main_pin.trim_start_matches('v')
+        ),
     )
     .unwrap();
 
@@ -189,11 +212,21 @@ fn release_host(
     let download = repo.join("releases").join("download").join(served);
     std::fs::create_dir_all(&download).unwrap();
     std::fs::write(download.join(&asset), &bytes).unwrap();
-    std::fs::write(
-        download.join("SHA256SUMS"),
-        format!("{}  {asset}\n", batten::provision::digest(&bytes)),
-    )
-    .unwrap();
+    // EVERY PROVISION PLATFORM'S ASSET, not only this build's (CLOUD-2279): a
+    // provision row names an archive per platform, and `engine update` pins each
+    // one's digest from this manifest.
+    let mut sums = format!("{}  {asset}\n", batten::provision::digest(&bytes));
+    for target in PROVISION_TARGETS {
+        use std::fmt::Write as _;
+        writeln!(
+            sums,
+            "{}  {}",
+            platform_digest(target),
+            batten::engine::release_asset(served, target)
+        )
+        .unwrap();
+    }
+    std::fs::write(download.join("SHA256SUMS"), sums).unwrap();
 
     let tls = home.join("tls");
     std::fs::create_dir_all(&tls).unwrap();
@@ -570,6 +603,334 @@ fn an_update_refuses_a_source_pin() {
         common::stderr(&output).contains("engine pin source"),
         "{}",
         common::stderr(&output)
+    );
+}
+
+/// A worktree pinned at v8.8.8 with every other batten declaration on v8.8.8
+/// too: a provision row across [`PROVISION_TARGETS`] and the floor, plus
+/// `extra` appended.
+fn pin_every_copy(home: &Path, floor: &str, extra: &str) {
+    use std::fmt::Write as _;
+    let mut config = format!(
+        "version = 1\nmin_batten_version = \"{floor}\"\nengine = {{ release = \"v8.8.8\" }}\n\n[[provision]]\nname = \"batten\"\nversion = \"8.8.8\"\nbinary = \"batten\"\n"
+    );
+    for target in PROVISION_TARGETS {
+        writeln!(
+            config,
+            "\n[provision.platforms.{target}]\n# the platform's archive\nurl = \"https://example.invalid/releases/download/v8.8.8/{}\"\nsha256 = \"{}\"",
+            batten::engine::release_asset("v8.8.8", target),
+            "0".repeat(64)
+        )
+        .unwrap();
+    }
+    config.push_str(extra);
+    common::write(home, "batten.toml", &config);
+}
+
+/// Run `batten <args>` in `home` as [`engine_verb`] runs a verb, with the
+/// state directory inside the case and neither `CI` nor the opt-out ambient.
+fn batten_in(home: &Path, args: &[&str], env: &[(&str, &str)]) -> std::process::Output {
+    use common::StateHome as _;
+    let mut command = common::batten();
+    command
+        .state_dir(&home.join("data"))
+        .args(args)
+        .current_dir(home)
+        .env("HOME", home)
+        .env_remove("CI")
+        .env_remove("BATTEN_NO_UPDATE_NOTICE")
+        .env_remove("BATTEN_RELEASES")
+        .env_remove("BATTEN_VERSION_FROM_REF")
+        .env_remove("BATTEN_VERSION");
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    command.output().expect("run batten")
+}
+
+/// `engine update` BRINGS EVERY COPY TO THE RELEASE (CLOUD-2279): the pin, the
+/// batten provision row's version, URLs and digests, and the floor, in one call.
+#[test]
+fn an_update_brings_every_batten_declaration_to_the_release() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-update-every-copy");
+    pin_every_copy(&home, "8.8.8", "");
+    let named = home.join("bin");
+    let named_str = named.display().to_string();
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    let output = engine_verb(
+        "update",
+        &home,
+        std::slice::from_ref(&named),
+        &with_named(&served, &named_str),
+    );
+    assert!(
+        output.status.success(),
+        "{}{}",
+        stdout(&output),
+        common::stderr(&output)
+    );
+    let config = std::fs::read_to_string(home.join("batten.toml")).unwrap();
+    assert!(
+        config.contains(&format!("engine = {{ release = \"{WANTED}\" }}")),
+        "{config}"
+    );
+    assert!(
+        config.contains("min_batten_version = \"9.9.9\""),
+        "{config}"
+    );
+    assert!(config.contains("version = \"9.9.9\"\nbinary"), "{config}");
+    for target in PROVISION_TARGETS {
+        assert!(
+            config.contains(&format!(
+                "url = \"https://example.invalid/releases/download/v9.9.9/{}\"",
+                batten::engine::release_asset("v9.9.9", target)
+            )),
+            "{config}"
+        );
+        assert!(
+            config.contains(&format!("sha256 = \"{}\"", platform_digest(target))),
+            "{config}"
+        );
+    }
+    assert!(
+        !config.contains("8.8.8"),
+        "no copy is left behind: {config}"
+    );
+    assert!(
+        config.contains("# the platform's archive"),
+        "every other byte is kept"
+    );
+    assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
+}
+
+/// The floor is RAISED, never lowered: a `min_batten_version` already past the
+/// release is the consumer's own word and stays.
+#[test]
+fn an_update_never_lowers_min_batten_version() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-update-floor");
+    pin_every_copy(&home, "10.0.0", "");
+    let named = home.join("bin");
+    let named_str = named.display().to_string();
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    let output = engine_verb(
+        "update",
+        &home,
+        std::slice::from_ref(&named),
+        &with_named(&served, &named_str),
+    );
+    assert!(
+        output.status.success(),
+        "{}{}",
+        stdout(&output),
+        common::stderr(&output)
+    );
+    let config = std::fs::read_to_string(home.join("batten.toml")).unwrap();
+    assert!(
+        config.contains("min_batten_version = \"10.0.0\""),
+        "{config}"
+    );
+    assert!(
+        config.contains(&format!("engine = {{ release = \"{WANTED}\" }}")),
+        "{config}"
+    );
+}
+
+/// A WORKFLOW LITERAL THE UPDATE CANNOT REWRITE REFUSES IT, AND NOTHING IS
+/// WRITTEN: the config editor has no YAML backend, so the stale copy is named by
+/// `path:line` rather than left behind. An expression and a longer key are not
+/// copies.
+#[test]
+fn a_workflow_literal_the_update_cannot_rewrite_refuses_and_writes_nothing() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-update-workflow-literal");
+    pin_every_copy(&home, "8.8.8", "");
+    common::write(
+        &home,
+        ".github/workflows/ci.yml",
+        "jobs:\n  a:\n    env:\n      BATTEN_VERSION_FROM_REF: main\n      BATTEN_VERSION: ${{ steps.dist.outputs.version }}\n      BATTEN_VERSION: v8.8.8\n",
+    );
+    common::git_in(&home, &["add", ".github/workflows/ci.yml"]);
+    let before = std::fs::read(home.join("batten.toml")).unwrap();
+    let named = home.join("bin");
+    let named_str = named.display().to_string();
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    let output = engine_verb(
+        "update",
+        &home,
+        std::slice::from_ref(&named),
+        &with_named(&served, &named_str),
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", common::stderr(&output));
+    assert_eq!(
+        stdout(&output).lines().collect::<Vec<_>>(),
+        [
+            ".github/workflows/ci.yml:6 BATTEN_VERSION disagrees with v9.9.9, and the update cannot rewrite it"
+        ],
+    );
+    assert_eq!(
+        std::fs::read(home.join("batten.toml")).unwrap(),
+        before,
+        "batten.toml is byte-for-byte unchanged"
+    );
+    assert!(!named.join(binary()).exists(), "nothing was installed");
+}
+
+/// `engine outdated` EXITS BY THE PIN'S DISTANCE FROM `main`: 0 current, 2
+/// behind (naming each release between), 2 with no pin, 3 when it could not
+/// look.
+#[test]
+fn outdated_exits_by_the_pins_distance_from_main() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-outdated");
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    let env: Vec<(&str, &str)> = served
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    pin_worktree(&home, WANTED);
+    let current = batten_in(&home, &["engine", "outdated"], &env);
+    assert_eq!(
+        current.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(&current)
+    );
+    assert_eq!(stdout(&current), "");
+
+    pin_worktree(&home, "v8.8.8");
+    let behind = batten_in(&home, &["engine", "outdated"], &env);
+    assert_eq!(behind.status.code(), Some(2), "{}", common::stderr(&behind));
+    assert_eq!(
+        stdout(&behind),
+        format!("v8.8.8 → {WANTED}\nv9.9.9 {MAIN_DATE}\n")
+    );
+
+    common::write(&home, "batten.toml", "version = 1\n");
+    let unpinned = batten_in(&home, &["engine", "outdated"], &env);
+    assert_eq!(
+        unpinned.status.code(),
+        Some(2),
+        "{}",
+        common::stderr(&unpinned)
+    );
+    assert!(stdout(&unpinned).ends_with("batten.toml no engine pin\n"));
+
+    pin_worktree(&home, "v8.8.8");
+    let mut unreachable = env.clone();
+    unreachable.retain(|(name, _)| *name != "BATTEN_RELEASES");
+    unreachable.push(("BATTEN_RELEASES", "https://localhost:1/example/pkg"));
+    let blind = batten_in(&home, &["engine", "outdated"], &unreachable);
+    assert_eq!(blind.status.code(), Some(3), "{}", common::stderr(&blind));
+}
+
+/// THE NOTICE SPEAKS ONCE PER TTL AND NEVER IN CI: silent under `CI`, one line
+/// naming `batten engine update` the first time outside it, silent the second
+/// time inside the day. Every run exits 0.
+#[test]
+fn the_notice_speaks_once_per_ttl_and_never_in_ci() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-outdated-notice");
+    pin_worktree(&home, "v8.8.8");
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    let env: Vec<(&str, &str)> = served
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let notice = ["engine", "outdated", "--notice"];
+
+    let mut in_ci = env.clone();
+    in_ci.push(("CI", "true"));
+    let ci = batten_in(&home, &notice, &in_ci);
+    assert_eq!(ci.status.code(), Some(0), "{}", common::stderr(&ci));
+    assert_eq!(stdout(&ci), "", "never in CI");
+
+    let first = batten_in(&home, &notice, &env);
+    assert_eq!(first.status.code(), Some(0), "{}", common::stderr(&first));
+    assert!(
+        stdout(&first).contains("run `batten engine update`"),
+        "{}",
+        stdout(&first)
+    );
+    assert_eq!(stdout(&first).lines().count(), 1);
+
+    let second = batten_in(&home, &notice, &env);
+    assert_eq!(second.status.code(), Some(0), "{}", common::stderr(&second));
+    assert_eq!(stdout(&second), "", "once per TTL");
+}
+
+/// THE `engine-hygiene` PRESET REFUSES A STALE RECORD AND IS SILENT WITH NONE:
+/// a consumer pinned at this build's release, `main` two releases on, the
+/// record written by `engine outdated` itself with thresholds of zero.
+#[test]
+fn a_stale_engine_fresh_record_fails_check() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch("engine-fresh-consumer");
+    common::init_repo(&home);
+    let running = format!("v{}", env!("CARGO_PKG_VERSION"));
+    common::write(
+        &home,
+        "batten.toml",
+        &format!(
+            "version = 1\nengine = {{ release = \"{running}\" }}\n\n[[rule]]\nid = \"release pin stale\"\n\
+             kind = \"policy\"\nscope = \"tree\"\npreset = \"engine-hygiene\"\nseverity = \"deny\"\n\n\
+             [[record]]\nrecord = \"engine-fresh\"\n\
+             writer = \"batten engine outdated --record engine-fresh --max-releases 0 --max-days 0\"\n"
+        ),
+    );
+    common::git_in(&home, &["add", "batten.toml"]);
+    common::git_in(&home, &["commit", "-qm", "enable the preset"]);
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    let env: Vec<(&str, &str)> = served
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let check = ["check", "--rule", "release pin stale"];
+
+    let silent = batten_in(&home, &check, &[]);
+    assert_eq!(silent.status.code(), Some(0), "{}", common::stderr(&silent));
+
+    let recorded = batten_in(
+        &home,
+        &[
+            "engine",
+            "outdated",
+            "--record",
+            "engine-fresh",
+            "--max-releases",
+            "0",
+            "--max-days",
+            "0",
+        ],
+        &env,
+    );
+    assert_eq!(
+        recorded.status.code(),
+        Some(2),
+        "{}",
+        common::stderr(&recorded)
+    );
+
+    let refused = batten_in(&home, &check, &[]);
+    assert_eq!(
+        refused.status.code(),
+        Some(2),
+        "{}",
+        common::stderr(&refused)
     );
 }
 

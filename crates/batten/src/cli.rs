@@ -537,6 +537,17 @@ pub enum EngineCommand {
     /// Install the engine the pin names: the generated bootstrap's last step,
     /// and an installed engine's repair (CLOUD-2203, CLOUD-2287).
     Install,
+    /// The pin against the latest published release (CLOUD-2279).
+    Outdated {
+        /// The session's notice: once per TTL, always exit 0.
+        notice: bool,
+        /// The record family to write the freshness line into.
+        record: Option<String>,
+        /// More releases behind than this is stale.
+        max_releases: Option<String>,
+        /// More days behind than this is stale.
+        max_days: Option<String>,
+    },
 }
 
 /// Subcommands of `artifacts` (CLOUD-1991).
@@ -3671,6 +3682,12 @@ fn engine_of(matches: &ArgMatches) -> Option<EngineCommand> {
         ("stamp", _) => Some(EngineCommand::Stamp),
         ("update", _) => Some(EngineCommand::Update),
         ("install", _) => Some(EngineCommand::Install),
+        ("outdated", matches) => Some(EngineCommand::Outdated {
+            notice: flag(matches, "notice"),
+            record: matches.get_one::<String>("record").cloned(),
+            max_releases: matches.get_one::<String>("max_releases").cloned(),
+            max_days: matches.get_one::<String>("max_days").cloned(),
+        }),
         ("pin", matches) => Some(EngineCommand::Pin {
             value: matches.get_one::<String>("value").cloned(),
             check: flag(matches, "check"),

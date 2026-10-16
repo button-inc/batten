@@ -51,9 +51,15 @@ pin of a ref's `batten.toml`, `BATTEN_INSTALL_DIR` a different destination, and
 `BATTEN_VERSION` names a tag outright — an escape hatch honoured only where no
 pin is in scope, and refused by name against one it disagrees with.
 
-To move a repository to a newer Batten, `batten engine update` moves its
-`batten.toml` pin forward to the latest release — never backward — and then
-installs it.
+To move a repository to a newer Batten, `batten engine update` brings every
+batten declaration in its `batten.toml` forward to the latest release — never
+backward — and then installs it: the `engine` pin, each `[[provision]] name =
+"batten"` row's version, URLs and digests, and a `min_batten_version` below the
+release. A workflow that spells a literal `BATTEN_VERSION` or `BATTEN_SHA256`
+it cannot rewrite is named by `path:line`, and nothing is written.
+`batten engine outdated` says how far behind the pin is (exit 2 when behind);
+with `--notice` it tells a session start once a day, never in CI, and
+`update_notice = false` or `BATTEN_NO_UPDATE_NOTICE` silences it.
 
 Installing somewhere not on `PATH` is a **refusal**, not a warning: every hook
 registration names `batten` bare, so a binary the shell cannot resolve is

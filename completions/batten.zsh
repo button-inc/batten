@@ -9140,6 +9140,39 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(outdated)
+_arguments "${_arguments_options[@]}" : \
+'--record=[Write the \`engine-fresh\` line into this declared record family, judged by --max-releases and --max-days]:record:_default' \
+'--max-releases=[With --record\: more releases behind than this is stale]:max_releases:_default' \
+'--max-days=[With --record\: more days behind the first newer release than this is stale]:max_days:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--notice[Print one line naming \`batten engine update\` at most once a day, never in CI, and always exit 0]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (gate)
 _arguments "${_arguments_options[@]}" : \
 '*--lane=[A workflow that runs the released binary; every verb its command lines invoke must exist in the pinned release (repeatable)]:lane:_default' \
@@ -9199,6 +9232,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(outdated)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -10845,6 +10882,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(outdated)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (gate)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -11756,9 +11797,10 @@ _batten__subcmd__engine_commands() {
     local commands; commands=(
 'digest:Print the source digest of this tree'\''s tracked engine inputs, the value a source pin names' \
 'stamp:Record this tree'\''s source digest beside the running binary, so a source pin can be checked' \
-'update:Move this config'\''s release pin forward to the latest release, then install it' \
+'update:Bring every batten declaration in this config forward to the latest release, then install it' \
 'pin:Set the config'\''s engine pin, or refresh a declared source pin to this tree'\''s digest' \
 'install:Install the engine the batten.toml pin names, from its release or from this tree' \
+'outdated:Compare the config'\''s release pin with the latest published release' \
 'gate:Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -11779,9 +11821,10 @@ _batten__subcmd__engine__subcmd__help_commands() {
     local commands; commands=(
 'digest:Print the source digest of this tree'\''s tracked engine inputs, the value a source pin names' \
 'stamp:Record this tree'\''s source digest beside the running binary, so a source pin can be checked' \
-'update:Move this config'\''s release pin forward to the latest release, then install it' \
+'update:Bring every batten declaration in this config forward to the latest release, then install it' \
 'pin:Set the config'\''s engine pin, or refresh a declared source pin to this tree'\''s digest' \
 'install:Install the engine the batten.toml pin names, from its release or from this tree' \
+'outdated:Compare the config'\''s release pin with the latest published release' \
 'gate:Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -11807,6 +11850,11 @@ _batten__subcmd__engine__subcmd__help__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'batten engine help install commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__engine__subcmd__help__subcmd__outdated_commands] )) ||
+_batten__subcmd__engine__subcmd__help__subcmd__outdated_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten engine help outdated commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__engine__subcmd__help__subcmd__pin_commands] )) ||
 _batten__subcmd__engine__subcmd__help__subcmd__pin_commands() {
     local commands; commands=()
@@ -11826,6 +11874,11 @@ _batten__subcmd__engine__subcmd__help__subcmd__update_commands() {
 _batten__subcmd__engine__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'batten engine install commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__engine__subcmd__outdated_commands] )) ||
+_batten__subcmd__engine__subcmd__outdated_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten engine outdated commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__engine__subcmd__pin_commands] )) ||
 _batten__subcmd__engine__subcmd__pin_commands() {
@@ -12348,9 +12401,10 @@ _batten__subcmd__help__subcmd__engine_commands() {
     local commands; commands=(
 'digest:Print the source digest of this tree'\''s tracked engine inputs, the value a source pin names' \
 'stamp:Record this tree'\''s source digest beside the running binary, so a source pin can be checked' \
-'update:Move this config'\''s release pin forward to the latest release, then install it' \
+'update:Bring every batten declaration in this config forward to the latest release, then install it' \
 'pin:Set the config'\''s engine pin, or refresh a declared source pin to this tree'\''s digest' \
 'install:Install the engine the batten.toml pin names, from its release or from this tree' \
+'outdated:Compare the config'\''s release pin with the latest published release' \
 'gate:Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call' \
     )
     _describe -t commands 'batten help engine commands' commands "$@"
@@ -12369,6 +12423,11 @@ _batten__subcmd__help__subcmd__engine__subcmd__gate_commands() {
 _batten__subcmd__help__subcmd__engine__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'batten help engine install commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__engine__subcmd__outdated_commands] )) ||
+_batten__subcmd__help__subcmd__engine__subcmd__outdated_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help engine outdated commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__engine__subcmd__pin_commands] )) ||
 _batten__subcmd__help__subcmd__engine__subcmd__pin_commands() {

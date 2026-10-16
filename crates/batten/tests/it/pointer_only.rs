@@ -2205,6 +2205,14 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-2279: with no pin in the corpus the finding is the config's path and
+    // `no engine pin`; behind, it is tags and dates, never a changelog's prose.
+    Verb {
+        path: "engine outdated",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // CLOUD-2203: KEY=VALUE pointers — the path it placed the binary at, the
     // tag, the target — and no byte of any file.
     Verb {

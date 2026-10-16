@@ -946,6 +946,66 @@ const ENGINE_PIN_CHECK: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `engine outdated --notice` (CLOUD-2279): the session's half.
+const ENGINE_OUTDATED_NOTICE: FlagDecl = FlagDecl {
+    id: "notice",
+    long: Some("notice"),
+    short: None,
+    help: "Print one line naming `batten engine update` at most once a day, never in CI, and always exit 0",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// `engine outdated --record <family>` (CLOUD-2279).
+const ENGINE_OUTDATED_RECORD: FlagDecl = FlagDecl {
+    id: "record",
+    long: Some("record"),
+    short: None,
+    help: "Write the `engine-fresh` line into this declared record family, judged by --max-releases and --max-days",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `engine outdated --max-releases <n>` (CLOUD-2279).
+const ENGINE_OUTDATED_MAX_RELEASES: FlagDecl = FlagDecl {
+    id: "max_releases",
+    long: Some("max-releases"),
+    short: None,
+    help: "With --record: more releases behind than this is stale",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `engine outdated --max-days <n>` (CLOUD-2279).
+const ENGINE_OUTDATED_MAX_DAYS: FlagDecl = FlagDecl {
+    id: "max_days",
+    long: Some("max-days"),
+    short: None,
+    help: "With --record: more days behind the first newer release than this is stale",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `engine gate --lane`: a workflow whose command lines run the released binary.
 const ENGINE_LANE: FlagDecl = FlagDecl {
     id: "lane",
@@ -7971,15 +8031,17 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[],
     },
-    // `write`, twice (CLOUD-2287): the config's one `engine` line, moved forward
-    // to the release `main` pins and never backward, then `engine install`'s
-    // write. Not `destructive`: the pin only advances, and the install swaps
-    // atomically.
-    // unreached: "engine update" CLOUD-2279 an operator's verb: moving a consumer's pin is a change to its config no task or workflow may make unasked, and CLOUD-2279's notice is what will name it
+    // `write`, twice (CLOUD-2287, CLOUD-2279): every batten declaration in the
+    // config — the `engine` line, each batten provision row and
+    // `min_batten_version` — moved forward to the release `main` pins and never
+    // backward, then `engine install`'s write. A workflow literal it cannot
+    // rewrite refuses the whole update. Not `destructive`: the pin only
+    // advances, and the install swaps atomically.
+    // unreached: "engine update" CLOUD-2279 an operator's verb: moving a consumer's pin is a change to its config no task or workflow may make unasked, and `engine outdated --notice` is what names it
     CommandDecl {
         path: "engine update",
         id: "engine.update",
-        about: "Move this config's release pin forward to the latest release, then install it",
+        about: "Bring every batten declaration in this config forward to the latest release, then install it",
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
@@ -8014,6 +8076,24 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[],
+    },
+    // `write`, and only through its flags (CLOUD-2279): bare, it reads `main`'s
+    // pin and changelog off the raw-file host and writes nothing. `--record`
+    // writes one record line and `--notice` one stamp file under the
+    // repository's state directory.
+    CommandDecl {
+        path: "engine outdated",
+        id: "engine.outdated",
+        about: "Compare the config's release pin with the latest published release",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Write,
+        flags: &[
+            ENGINE_OUTDATED_NOTICE,
+            ENGINE_OUTDATED_RECORD,
+            ENGINE_OUTDATED_MAX_RELEASES,
+            ENGINE_OUTDATED_MAX_DAYS,
+        ],
     },
     CommandDecl {
         path: "engine gate",

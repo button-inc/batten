@@ -125,7 +125,7 @@ use common::{at_root, git_in, scratch, stderr, stdout, write};
 ///
 /// A LIST RATHER THAN A COUNT, because a count cannot tell an added row from a
 /// renamed one, and the ordering claim below needs the names anyway.
-const DECLARED: [&str; 11] = [
+const DECLARED: [&str; 12] = [
     // NO `session-stamp`: the engine writes the stamp itself before any row runs
     // (CLOUD-1991), which `a_session_start_writes_the_stamp_before_any_row_runs`
     // asserts over the compiled binary.
@@ -134,6 +134,9 @@ const DECLARED: [&str; 11] = [
     // checked out (CLOUD-843): a startup row with no subject is dead wiring.
     "session-doctor",
     "session-batten",
+    // CLOUD-2279: after the engine is installed, so the notice is said by the
+    // engine the pin names.
+    "session-engine-notice",
     "session-git-hooks",
     "session-attribution-identity",
     "session-signing-posture",
