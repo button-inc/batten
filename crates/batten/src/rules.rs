@@ -12311,7 +12311,7 @@ pub(crate) fn spawn_resolving<T>(
     // row, and the ladder then decides exactly as it did before the rung existed.
     let running = std::env::current_exe().ok();
     let mut spawn = spawn;
-    let first = spawn_resolving_on(
+    let first = spawn_resolving_on_image(
         path.as_deref(),
         root,
         running.as_deref(),
@@ -12349,13 +12349,13 @@ pub(crate) fn spawn_resolving<T>(
     {
         let afresh = crate::pinned::re_resolved(root);
         if matches!(&afresh, crate::facts::Look::Is(programs) if programs.contains(program)) {
-            // `None`, because rung -1 already had its turn: this retry is
-            // reached only once the ladder itself failed, and re-offering the
-            // image would spawn a file that just declined to run (CLOUD-2386).
+            // The imageless arity, because rung -1 already had its turn: this
+            // retry is reached only once the ladder itself failed, and
+            // re-offering the image would spawn a file that just declined to
+            // run (CLOUD-2386).
             return spawn_resolving_on(
                 path.as_deref(),
                 root.into(),
-                None,
                 program,
                 &extensions,
                 &afresh,
@@ -12375,7 +12375,29 @@ pub(crate) fn spawn_resolving<T>(
 /// order, over which path* — which is exactly the composition that was missing
 /// when the two rungs were independent `if`s. Testing it here means the Windows
 /// ladder is falsifiable on a Linux host rather than only on a runner.
+///
+/// NO RUNNING IMAGE, AND THAT IS WHAT KEEPS THIS THE SEAM IT ALREADY WAS
+/// (CLOUD-2386). Rung -1 needs one fact more than the rest of the ladder, and
+/// threading it through here would have rewritten every case written against
+/// this arity for a rung none of them exercises — which `test-expectation-changed`
+/// reads as six changed expectations, because a base body spliced into a tree
+/// whose signature moved will not build. [`spawn_resolving_on_image`] is the
+/// whole ladder; this is that ladder with no image, which is also what a caller
+/// holding no readable `/proc` has.
 fn spawn_resolving_on<T>(
+    path: Option<&std::ffi::OsStr>,
+    root: Option<&Path>,
+    program: &str,
+    extensions: &[String],
+    pinned: &crate::pinned::PinnedFacts,
+    spawn: impl FnMut(&str, &[&str]) -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    spawn_resolving_on_image(path, root, None, program, extensions, pinned, spawn)
+}
+
+/// [`spawn_resolving_on`], plus the image that asked — the full ladder, rung -1
+/// included.
+fn spawn_resolving_on_image<T>(
     path: Option<&std::ffi::OsStr>,
     root: Option<&Path>,
     running: Option<&Path>,
@@ -18221,7 +18243,6 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let out = spawn_resolving_on(
             Some(path.as_os_str()),
             Some(Path::new("/nowhere")),
-            None,
             "judge-stub",
             &[".EXE".to_owned()],
             &crate::facts::Look::CouldNotLook,
@@ -18260,7 +18281,6 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let err = spawn_resolving_on(
             Some(path.as_os_str()),
             None,
-            None,
             "stub",
             &[".EXE".to_owned()],
             &crate::facts::Look::CouldNotLook,
@@ -18278,7 +18298,6 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         // lookup finds nothing, so the error never advances past rung 1.
         let absent = spawn_resolving_on(
             Some(path.as_os_str()),
-            None,
             None,
             "no-such-program-anywhere",
             &[".EXE".to_owned()],
@@ -18307,7 +18326,6 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let log = std::cell::RefCell::new(Vec::new());
         let out = spawn_resolving_on(
             Some(std::ffi::OsStr::new("")),
-            None,
             None,
             &scanner.display().to_string(),
             &[".EXE".to_owned()],
@@ -18341,7 +18359,6 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let out = spawn_resolving_on(
             Some(std::ffi::OsStr::new("")),
             Some(root.as_path()),
-            None,
             "bin/checker",
             &[".EXE".to_owned()],
             &crate::facts::Look::CouldNotLook,
@@ -18372,7 +18389,6 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             let log = std::cell::RefCell::new(Vec::new());
             let _out = spawn_resolving_on(
                 Some(std::ffi::OsStr::new("")),
-                None,
                 None,
                 "hk",
                 &[".EXE".to_owned()],
@@ -18448,7 +18464,6 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let _out = spawn_resolving_on(
             Some(dir.as_os_str()),
             None,
-            None,
             "hk",
             &[".EXE".to_owned()],
             &pinned,
@@ -18506,7 +18521,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         runnable: Option<&str>,
     ) -> (bool, Vec<String>) {
         let log = std::cell::RefCell::new(Vec::new());
-        let out = spawn_resolving_on(
+        let out = spawn_resolving_on_image(
             Some(std::ffi::OsStr::new(path)),
             None,
             running,
