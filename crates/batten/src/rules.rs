@@ -18474,6 +18474,57 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A `PATH` directory holding a `batten` stub, and the path of an image that
+    /// is deliberately NEVER created: the ladder is asked what it SPAWNS, and the
+    /// spawn is [`ladder_walk`]'s closure, which reads no file.
+    fn rung_minus_one_fixture() -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("batten-rung-minus-one-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the stub directory is created");
+        let stub = dir.join(crate::surface::BINARY);
+        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").expect("the stub is written");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+                .expect("the stub is executable");
+        }
+        let image = dir.join("image").join(crate::surface::BINARY);
+        (dir, image)
+    }
+
+    /// Every program the ladder tried, in order, and whether it ended `Ok`.
+    ///
+    /// `runnable` is the ONE program the fake loader admits; everything else
+    /// reports `NotFound`, so the log is the whole route rather than just its
+    /// head — which is what lets a case assert ORDER and not only outcome.
+    fn ladder_walk(
+        path: &str,
+        running: Option<&Path>,
+        program: &str,
+        pinned: &crate::pinned::PinnedFacts,
+        runnable: Option<&str>,
+    ) -> (bool, Vec<String>) {
+        let log = std::cell::RefCell::new(Vec::new());
+        let out = spawn_resolving_on(
+            Some(std::ffi::OsStr::new(path)),
+            None,
+            running,
+            program,
+            &[".EXE".to_owned()],
+            pinned,
+            |program: &str, _extra: &[&str]| {
+                log.borrow_mut().push(program.to_owned());
+                if runnable == Some(program) {
+                    Ok("ran")
+                } else {
+                    Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+                }
+            },
+        );
+        (out.is_ok(), log.into_inner())
+    }
+
     /// A declared `batten` runs the image that asked — before `PATH`, before the
     /// pin.
     ///
@@ -18491,51 +18542,16 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     /// than falling through.
     #[test]
     fn a_declared_batten_resolves_to_the_running_image_before_the_pin() {
-        let dir =
-            std::env::temp_dir().join(format!("batten-rung-minus-one-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("the stub directory is created");
-        let stub = dir.join(crate::surface::BINARY);
-        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").expect("the stub is written");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
-                .expect("the stub is executable");
-        }
-        // Never created, and it does not need to be: the ladder is asked what it
-        // SPAWNS, and the spawn is the closure below.
-        let image = dir.join("image").join(crate::surface::BINARY);
+        let (dir, image) = rung_minus_one_fixture();
         let image_name = image.display().to_string();
-
         let pinned = crate::facts::Look::Is(
             [crate::surface::BINARY.to_owned(), "hk".to_owned()]
                 .into_iter()
                 .collect::<std::collections::BTreeSet<_>>(),
         );
-
-        // `runnable` is the ONE program the fake loader admits; everything else
-        // reports `NotFound`, so the log is the whole route the ladder walked
-        // rather than just its head.
         let attempts =
             |path: &str, running: Option<&Path>, program: &str, runnable: Option<&str>| {
-                let log = std::cell::RefCell::new(Vec::new());
-                let out = spawn_resolving_on(
-                    Some(std::ffi::OsStr::new(path)),
-                    None,
-                    running,
-                    program,
-                    &[".EXE".to_owned()],
-                    &pinned,
-                    |program: &str, _extra: &[&str]| {
-                        log.borrow_mut().push(program.to_owned());
-                        if runnable == Some(program) {
-                            Ok("ran")
-                        } else {
-                            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
-                        }
-                    },
-                );
-                (out.is_ok(), log.into_inner())
+                ladder_walk(path, running, program, &pinned, runnable)
             };
 
         let on_path = dir.to_str().expect("the temp path is UTF-8");
