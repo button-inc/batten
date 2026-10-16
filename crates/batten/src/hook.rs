@@ -2805,18 +2805,31 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
     let resolved = candidate.canonicalize().ok().or_else(|| {
         // The DEEPEST ancestor that canonicalizes resolves the most symlinks,
         // which is the reading the prefix test below needs; the tail, `.` and
-        // `..` included (CLOUD-2390), is replayed onto it. Only AFTER the
-        // canonical base, never over the whole path: a `..` past a symlink
-        // climbs the link's target, while the component just past the base does
-        // not exist, so it is no symlink and popping it lexically is right. A
-        // component AFTER that `..` may exist and be a link, and is replayed
-        // lexically too; the host cannot write through the missing component
-        // until the same command creates it, so that spelling is not honest
-        // error, which is the threat this reading answers.
+        // `..` included (CLOUD-2390), is replayed onto it one component at a
+        // time. Only AFTER the canonical base, never over the whole path: a `..`
+        // past a symlink climbs the link's target. The component just past the
+        // base does not exist, so popping it lexically is right — but one AFTER
+        // that `..` can exist and be a link (`missing/../link/x`, which a `Write`
+        // that creates its parent directories really writes through), so each
+        // pushed component that now resolves is canonicalized before the next
+        // `..` climbs it.
         candidate.ancestors().skip(1).find_map(|ancestor| {
-            let base = ancestor.canonicalize().ok()?;
-            let tail = candidate.strip_prefix(ancestor).ok()?;
-            Some(crate::receipt::lexically_normal(&base.join(tail)))
+            let mut resolved = ancestor.canonicalize().ok()?;
+            for component in candidate.strip_prefix(ancestor).ok()?.components() {
+                match component {
+                    std::path::Component::CurDir => {}
+                    std::path::Component::ParentDir => {
+                        resolved.pop();
+                    }
+                    other => {
+                        resolved.push(other);
+                        if let Ok(real) = resolved.canonicalize() {
+                            resolved = real;
+                        }
+                    }
+                }
+            }
+            Some(resolved)
         })
     })?;
     let relative = resolved.strip_prefix(&root).ok()?;

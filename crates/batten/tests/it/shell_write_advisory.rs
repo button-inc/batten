@@ -191,6 +191,23 @@ fn a_dot_dot_after_a_symlink_climbs_the_target() {
     assert_signals_at(&dir, "hop/../../mise-tasks/ready-lint.sh");
 }
 
+/// And a link reached AFTER a `..` that pops a missing directory resolves too.
+/// `door` points at `mise-tasks`, so `not-yet/../door/ready-lint.sh` is the
+/// governed script once the write creates `not-yet`, while a lexical replay of
+/// the tail spells it `door/ready-lint.sh` and reads it as ungoverned.
+#[cfg(unix)]
+#[test]
+fn a_link_after_a_dot_dot_through_a_missing_directory_resolves() {
+    let dir = bench("swa-a_link_after_a_dot_dot_through_a_m");
+    let target = dir
+        .canonicalize()
+        .expect("the bench root resolves")
+        .join("mise-tasks");
+    std::fs::create_dir_all(&target).expect("the link target is made");
+    std::os::unix::fs::symlink(&target, dir.join("door")).expect("the link is made");
+    assert_signals_at(&dir, "not-yet/../door/ready-lint.sh");
+}
+
 /// A bats suite is governed too.
 #[test]
 fn a_write_to_a_bats_suite_signals() {

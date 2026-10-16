@@ -1280,10 +1280,7 @@ fn recorded_base(body: &str) -> Option<String> {
 /// target need not exist, so nothing here may require it to. A `..` above the
 /// root is dropped rather than escaping into a prefix, which keeps the result a
 /// path this containment test can compare.
-///
-/// Also `hook::relative_to`'s tail replay, which applies it only past a
-/// canonical base, so a `..` there never crosses a symlink.
-pub(crate) fn lexically_normal(path: &Path) -> std::path::PathBuf {
+fn lexically_normal(path: &Path) -> std::path::PathBuf {
     let mut normalised = std::path::PathBuf::new();
     for component in path.components() {
         match component {
