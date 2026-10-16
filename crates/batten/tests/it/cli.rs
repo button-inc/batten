@@ -11007,7 +11007,8 @@ fn generate_hooks_refuses_the_contract_only_harness() {
 }
 
 /// Drives a generated `OpenCode` plugin the way its host does: import the module,
-/// build the hooks with a project directory, and call `tool.execute.before`.
+/// build the hooks with a project directory, and call `tool.execute.before` — or,
+/// for the `session.idle` subject, deliver it through the `event` hook.
 ///
 /// `pathToFileURL` because a bare absolute path is not an import specifier on
 /// Windows, where a drive letter reads as a URL scheme.
@@ -11016,7 +11017,11 @@ const [plugin, tool, args] = process.argv.slice(2);
 const { Batten } = await import(pathToFileURL(plugin).href);
 const hooks = await Batten({ directory: process.cwd() });
 try {
-  await hooks["tool.execute.before"]({ tool }, { args: JSON.parse(args) });
+  if (tool === "session.idle") {
+    await hooks.event({ event: { type: tool } });
+  } else {
+    await hooks["tool.execute.before"]({ tool }, { args: JSON.parse(args) });
+  }
   console.log("allowed");
 } catch (error) {
   console.log(`thrown: ${error.message}`);
@@ -11032,6 +11037,8 @@ try {
 /// platform the suite does: a refusal is thrown with the engine's reason, an
 /// allow passes, and an engine that cannot load its rules is thrown too, because
 /// `adjudicate` fails closed there and the plugin must carry that refusal as well.
+/// The end of a turn is the one place that refusal is NOT thrown: `session.idle`
+/// arrives after the session ended, so the same unloadable project resolves.
 ///
 /// No "could not decide" row: `adjudicate` measured exit 0 on every undecodable
 /// or unknown envelope, never 3, so a row for 3 would assert a code this path
@@ -11085,6 +11092,7 @@ fn a_generated_opencode_plugin_throws_the_engine_s_refusal() {
             r#"{"command":"ls"}"#,
             "engine-cannot-adjudicate",
         ),
+        (&unloadable, "session.idle", "{}", "allowed"),
     ] {
         #[expect(
             clippy::disallowed_types,
