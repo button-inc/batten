@@ -67,7 +67,7 @@ makes an empty store a finding rather than a pass.
 lives.** A gate over one harness's own tool belongs in THAT harness's preset,
 which only that harness's consumers enable: `plan write refused` mediates Claude
 Code's plan mode from `claude-code-cloud`, and `plan check first` (CLOUD-2383)
-refuses a session's first `ExitPlanMode` from the same preset. Neither claims to
+refuses a session's first `ExitPlanMode` from `claude-code-plan`. Neither claims to
 answer for the other harnesses, so neither is the silent pass this rule exists to
 prevent — the count it reads is could-not-look wherever no transcript names the
 tool.

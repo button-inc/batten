@@ -845,11 +845,9 @@ than its producer, which writes whole or removes, and reads the same way.",
     //
     // VERSION 3 (CLOUD-2157): a backgrounded call that names no timeout is
     // rewritten to the host's maximum.
-    //
-    // VERSION 4 (CLOUD-2383): a session's first plan presentation is refused once.
     Manifest {
         name: "claude-code-cloud",
-        version: 4,
+        version: 3,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
@@ -899,16 +897,6 @@ than its producer, which writes whole or removes, and reads the same way.",
                     "policy/presets/claude-code-cloud/plan-mode-refuses-writes.rego"
                 ),
             },
-            // CLOUD-2383: a session's first plan is refused once, with the
-            // operator's correction as the reason.
-            PresetModule {
-                scope: RuleScope::MediatedCall,
-                provider: None,
-                pointer: "<preset:claude-code-cloud>/first-plan-is-pressure-tested.rego",
-                source: include_str!(
-                    "policy/presets/claude-code-cloud/first-plan-is-pressure-tested.rego"
-                ),
-            },
             PresetModule {
                 scope: RuleScope::MediatedCall,
                 provider: None,
@@ -951,24 +939,8 @@ than its producer, which writes whole or removes, and reads the same way.",
                 class: "Plan mode is a promise that nothing changes until the plan is approved. The \
 host enforces it by asking the operator, and a session halted on a prompt is the failure this \
 preset exists to remove — so the call is refused instead, and nobody has to answer anything. A \
-read and the plan file itself are never refused, and neither is leaving plan mode, except a \
-session's first plan, which `plan check first` returns once for a verified pass.",
+read, the plan file itself, and leaving plan mode are never refused.",
                 routes: &[run("plan run first", "ExitPlanMode, then make the call")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "plan check first",
-                gloss: "verify, pressure test, validate; present corrected plan",
-                class: "A session's first plan is built from reports nobody re-read against the \
-tree, and the pass that corrects it re-reads with tools: every cited path, symbol and line opened, \
-every number reproduced, the plan handed to a reader that did not write it. Reflection over the \
-same context finds nothing it did not already believe. Refused once per session, by a count of \
-presentations in its transcript; the next presentation is admitted.",
-                routes: &[run(
-                    "plan read first",
-                    "re-read every pointer the plan cites, reproduce its numbers, have an isolated \
-reader check it, then present the corrected plan",
-                )],
                 applicability: crate::verdict::Applicability::Advice,
             },
             VendoredVerdict {
@@ -2131,6 +2103,47 @@ look at again. Read each named failed job's log first; reading is what admits th
             source: include_str!("policy/presets/git/git-call-is-preapproved.rego"),
         }],
         verdicts: &[],
+        patterns: &[],
+    },
+    // CLOUD-2383. A session's first plan is refused once, with the operator's own
+    // correction as the reason, and the next is admitted. Claude Code's plan-exit
+    // tool is the host's vocabulary, which a vendor preset may carry.
+    //
+    // ITS OWN PRESET RATHER THAN A `claude-code-cloud` MODULE, for the row that
+    // enables it. A preset row compiles every module the preset ships at its
+    // scope, so a module added there rides the consumer's existing row — and that
+    // row is named after the one class the preset used to raise. An engine that
+    // ships the module refuses the old name; an engine that does not refuses any
+    // other. Here the enabling row is new and raises one class, so it carries
+    // that class's name under every engine.
+    //
+    // It reads `input.facts.extracted["plan-exits"]`, which the enabling row
+    // declares; a row that declares no extract leaves the module deciding nothing.
+    Manifest {
+        name: "claude-code-plan",
+        version: 1,
+        modules: &[PresetModule {
+            scope: RuleScope::MediatedCall,
+            provider: None,
+            pointer: "<preset:claude-code-plan>/first-plan-is-pressure-tested.rego",
+            source: include_str!(
+                "policy/presets/claude-code-plan/first-plan-is-pressure-tested.rego"
+            ),
+        }],
+        verdicts: &[VendoredVerdict {
+            id: "plan check first",
+            gloss: "verify, pressure test, validate; present corrected plan",
+            class: "A session's first plan is built from reports nobody re-read against the \
+tree, and the pass that corrects it re-reads with tools: every cited path, symbol and line opened, \
+every number reproduced, the plan handed to a reader that did not write it. Refused once per \
+session, by a count of presentations in its transcript; the next is admitted.",
+            routes: &[run(
+                "plan read first",
+                "re-read every pointer the plan cites, reproduce its numbers, have an isolated \
+reader check it, then present the corrected plan",
+            )],
+            applicability: crate::verdict::Applicability::Advice,
+        }],
         patterns: &[],
     },
 ];

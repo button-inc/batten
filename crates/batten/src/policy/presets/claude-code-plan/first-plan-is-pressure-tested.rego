@@ -18,7 +18,7 @@
 # AN UNREAD COUNT ADMITS. Undefined — no transcript, an unsurveyed host, a row
 # that declares no extract — never refuses; this module asks for a pass, it does
 # not guess one is owed.
-package batten.claude_code_cloud
+package batten.claude_code_plan
 
 import rego.v1
 

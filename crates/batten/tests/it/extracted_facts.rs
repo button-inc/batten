@@ -386,10 +386,10 @@ fn plan_fixture(name: &str, transcript: Option<&str>) -> (PathBuf, PathBuf, Opti
         r#"version = 1
 
 [[rule]]
-id = "plan guard now"
+id = "plan check first"
 kind = "policy"
 scope = "mediated_call"
-preset = "claude-code-cloud"
+preset = "claude-code-plan"
 severity = "deny"
 
 [[rule.extract]]
@@ -397,7 +397,7 @@ id = "plan-exits"
 count = "plan-exits"
 "#,
     );
-    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    common::init_repo(&dir);
     let path = transcript.map(|body| {
         write(&dir, "session.jsonl", body);
         dir.join("session.jsonl")
