@@ -2688,19 +2688,23 @@ description = "Build the release binary the hook registrations execute"
 # the working tree, disqualifying on the hottest path in the binary. The gates
 # keep `cargo run` for exactly the reason stated at `batten-check` below.
 #
-# BUILT, STAMPED AND PINNED IN ONE TASK: building to test IS building to use.
-# The build alone left an unstamped binary first on `_.path` while
-# `batten.toml` kept naming the release, so a branch's hook and gates judged it
-# with an engine it had not built — measured on #1132, v0.0.214's floor model
-# refusing a lap while the branch carried the collector that retires it. The
-# stamp records this tree's digest beside the binary; the pin names it, so the
-# config, the binary on PATH and the tree agree. `engine-pin-check` refuses a
-# source pin at landing (CLOUD-2063): a branch flips back to a release pin
-# before it lands, and `main` never carries one.
+# BUILT AND STAMPED IN ONE TASK: building to test IS building to use. The build
+# alone left an unstamped binary first on `_.path`, so a branch's hook and gates
+# judged it with an engine it had not built — measured on #1132, v0.0.214's
+# floor model refusing a lap while the branch carried the collector that
+# retires it. The stamp records this tree's digest beside the binary.
+#
+# AND NEVER PINNED (CLOUD-2398). This task used to end in `engine pin source`,
+# which rewrote the committed `batten.toml`. Run inside a session-start repair it
+# repinned the config mid-hook, and the hook's own engine — the release
+# `install.sh` placed — then could not load what it had just written and denied
+# the session it was provisioning: measured 2026-10-16, a 5m50s inline build
+# ending in `engine-cannot-adjudicate` and a dirty tree `engine-pin-check`
+# refuses at landing. A build never writes the authority; a branch that wants a
+# source pin writes one deliberately.
 run = [
   "cargo build --quiet --release -p batten",
   "target/release/batten engine stamp",
-  "target/release/batten engine pin source",
 ]
 
 [tasks.acquisition-bench]
@@ -3120,11 +3124,14 @@ run = "cargo run --quiet -p batten -- check --rule 'rule watch other'"
 
 [tasks."session:install"]
 description = "Session start: provision the mise toolchain, purely — the step whose absence was CLOUD-196"
-# The load-bearing one. `.mcp.json` launches Serena with `mise exec --`, and
-# `mise exec` INSTALLS a missing tool on demand: on a cold container that install
-# ran inside the MCP client's startup window, measured 24s for `pipx:serena-agent`,
-# the handshake did not complete, and MCP servers are not retried mid-session.
-# This is what makes that `exec` a pure exec.
+# The load-bearing one, and since CLOUD-2398 a BACKGROUND row: the agent launches
+# it, and nobody waits behind the hook for the whole toolchain. It used to run
+# inline for one reason — `.mcp.json` launches Serena with `mise exec --`, which
+# installs a missing tool on demand, measured 24s for `pipx:serena-agent`, and the
+# handshake lost to it. That race is no longer closed by holding the session: a
+# server whose `initialize` fails is gated by `server probe failed`, which names
+# its install commands to launch in the background, and is re-probed after a
+# reclaim.
 #
 # `MISE_LOCKFILE=false` makes it a PURE install (CLOUD-223). A cold install of
 # `ubi:rust-cross/cargo-zigbuild` otherwise appends a platform key `mise lock`

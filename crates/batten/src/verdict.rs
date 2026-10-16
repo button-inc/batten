@@ -1268,6 +1268,10 @@ pub enum Native {
     InitWouldOverwrite,
     /// A configured hook handler denied the call.
     HandlerDenied,
+    /// A background session-start row has not been launched yet (CLOUD-2398).
+    SetupLaunchMissing,
+    /// A declared local MCP server failed its `initialize` probe (CLOUD-2398).
+    ServerProbeFailed,
     /// A `secrets` rule needs a scanner and the config pins none.
     ScannerUnpinned,
     /// The pinned scanner is not in the provision cache.
@@ -1589,6 +1593,8 @@ impl Native {
         Native::ProtectedMutation,
         Native::InitWouldOverwrite,
         Native::HandlerDenied,
+        Native::SetupLaunchMissing,
+        Native::ServerProbeFailed,
         Native::ScannerUnpinned,
         Native::ScannerUnprovisioned,
         Native::SpawningRuleOnReadVerb,
@@ -1720,6 +1726,8 @@ impl Native {
             Native::PlanReadStale => "plan read stale",
             Native::OutcomeTableRefused => "outcome table refused",
             Native::HandlerDenied => "handler answer denied",
+            Native::SetupLaunchMissing => "setup launch missing",
+            Native::ServerProbeFailed => "server probe failed",
             Native::ScannerUnpinned => "scanner pin missing",
             Native::ScannerUnprovisioned => "scanner install missing",
             Native::SpawningRuleOnReadVerb => "spawn run refused",
@@ -2125,6 +2133,30 @@ decision, and absorbing it silently is what this refuses.",
 names a program, the program answered deny, and this carries that answer through. The \
 handler's own reason is free text the consumer configured, so no remedy is invented here \
 — the handler is where a remedy would have to be declared.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "setup launch missing",
+        gloss: "a background session-start row has not been launched",
+        class: "Session start runs only what wires batten in; the slow provisioning a \
+`[hook.handler]` row marks `background` is the agent's to launch, with the host's \
+background flag, so its output and its failure are seen rather than held behind the hook. \
+Until every such row has been launched in this session, a call that could mutate the tree \
+is refused, because the toolchain it would run under is not yet there. The refusal names \
+each command still owed; launching one exactly as named is admitted and recorded.",
+        routes: &[read("config read first", "batten.toml")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "server probe failed",
+        gloss: "a declared local MCP server does not answer `initialize`",
+        class: "A `[[mcp.local]]` row declares a local server, the commands that install it, \
+and the paths routed to it. Batten probes it as an MCP client — spawn, `initialize`, end — \
+and while that fails, a call to the server's tools or to a routed path is refused, because \
+it would reach nothing. A reclaimed container fails the probe again, so the refusal \
+re-arms. It names the install commands to launch in the background; launching one exactly \
+as named is admitted.",
         routes: &[read("config read first", "batten.toml")],
         applicability: Applicability::Advice,
     },
@@ -3566,6 +3598,8 @@ mod tests {
                 Native::ProtectedMutation
                 | Native::InitWouldOverwrite
                 | Native::HandlerDenied
+                | Native::SetupLaunchMissing
+                | Native::ServerProbeFailed
                 | Native::ScannerUnpinned
                 | Native::ScannerUnprovisioned
                 | Native::SpawningRuleOnReadVerb

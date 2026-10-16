@@ -14,9 +14,12 @@
 # interpreter, a `mise run` — is refused in plan mode. That is the ruling's
 # "banned", and a read that needs one is filed as a reader to add, not granted.
 #
-# Read-only is `read_only` from `read-only-is-preapproved.rego`, one definition
-# for both halves, so the set refused here is exactly the complement of the set
-# granted there.
+# WHAT PLAN MODE ADMITS IS `input.call.admission` (CLOUD-2398): `hook::admission`,
+# the one definition the unloadable-config floor and the session setup gate also
+# read. Both answers pass here — `"read"` and `"session"` (leaving plan mode,
+# asking, the todo list) — while pre-approval grants only `"read"`. This module
+# used to keep its own `plan_tools` list beside the read lists, and the floor
+# kept a third that already disagreed with both.
 package batten.claude_code_cloud
 
 import rego.v1
@@ -29,8 +32,7 @@ violation contains {
 } if {
 	input.call.event == "pre-tool"
 	input.call["permission-mode"] == "plan"
-	not read_only(input.call)
-	not plan_tools(input.call.tool)
+	not admitted(input.call)
 	not plan_file_write(input.call)
 
 	# Dropping a PR subscription undoes one the harness made unasked, so it is
@@ -39,11 +41,7 @@ violation contains {
 	not unwatch_method(input.call.tool)
 }
 
-# The host's own plan-mode surface: leaving it, asking, and its task list, which
-# is session state rather than the tree.
-plan_tools(tool) if {
-	tool in {"ExitPlanMode", "EnterPlanMode", "AskUserQuestion", "TodoWrite", "TaskCreate", "TaskUpdate"}
-}
+admitted(call) if call.admission in {"read", "session"}
 
 # The one file plan mode exists to write. Its path is the host's, never a
 # repository's.
@@ -78,7 +76,11 @@ test_a_writer_after_a_reader_is_refused if {
 }
 
 test_a_plan_mode_read_is_not if {
-	count(violation) == 0 with input as {"call": {"event": "pre-tool", "permission-mode": "plan", "tool": "Read"}}
+	count(violation) == 0 with input as {"call": {"event": "pre-tool", "permission-mode": "plan", "tool": "Read", "admission": "read"}}
+}
+
+test_a_question_to_the_operator_is_not if {
+	count(violation) == 0 with input as {"call": {"event": "pre-tool", "permission-mode": "plan", "tool": "AskUserQuestion", "admission": "session"}}
 }
 
 test_the_plan_file_is_not if {
@@ -96,7 +98,7 @@ test_dropping_a_pr_subscription_is_not if {
 }
 
 test_leaving_plan_mode_is_not if {
-	count(violation) == 0 with input as {"call": {"event": "pre-tool", "permission-mode": "plan", "tool": "ExitPlanMode"}}
+	count(violation) == 0 with input as {"call": {"event": "pre-tool", "permission-mode": "plan", "tool": "ExitPlanMode", "admission": "session"}}
 }
 
 test_outside_plan_mode_nothing_is if {

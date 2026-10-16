@@ -1307,6 +1307,40 @@ fn is_runnable_hook(at: &Path) -> bool {
     }
 }
 
+/// The local (`command`-launched) servers `.mcp.json` names that no
+/// `[[mcp.local]]` row declares (CLOUD-2398). Empty where there is no
+/// `.mcp.json`, or it does not parse: nothing to compare, never a finding.
+#[must_use]
+pub fn undeclared_local_servers(dir: &Path, mcp: Option<&crate::mcp::McpConfig>) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(dir.join(crate::mcp::LOCAL_WIRING)) else {
+        return Vec::new();
+    };
+    let Ok(wiring) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let Some(servers) = wiring
+        .get("mcpServers")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Vec::new();
+    };
+    let declared: Vec<&str> = mcp
+        .map(|table| {
+            table
+                .locals
+                .iter()
+                .map(|local| local.server.as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+    servers
+        .iter()
+        .filter(|(_, entry)| entry.get("command").is_some())
+        .map(|(name, _)| name.clone())
+        .filter(|name| !declared.contains(&name.as_str()))
+        .collect()
+}
+
 /// The bare report's `config` check (CLOUD-1428), and `doctor config`'s whole
 /// answer.
 ///
@@ -1329,6 +1363,15 @@ pub fn diagnose_config(dir: &Path) -> Check {
         // message: `config show` names the rows, and nothing else was reading.
         Ok(config) if !config.unresolvable.is_empty() => {
             Check::failed(CONFIG, "config-rows-dropped")
+        }
+        // A LOCAL SERVER NO `[[mcp.local]]` ROW DECLARES (CLOUD-2398). Nothing
+        // probes it, so a cold install loses the host's one handshake and every
+        // call to it reaches nothing for the session — the defect the row
+        // exists to gate. A finding here and never a load refusal: an adopter's
+        // `.mcp.json` predates the table, and refusing the config would turn
+        // every gate off to report one missing row.
+        Ok(config) if !undeclared_local_servers(dir, config.mcp.as_ref()).is_empty() => {
+            Check::failed(CONFIG, "mcp-local-undeclared")
         }
         Ok(_) => match resolve::resolve(dir, &crate::Overrides::default()) {
             Ok(_) => Check::passed(CONFIG),
