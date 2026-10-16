@@ -83,7 +83,7 @@ const USE_MARK: &str = "used";
 /// least recently used evicted first. A partition without a mark — written
 /// before marks existed — takes that path too, and gains one.
 //MUTANT partitions-never-pruned|s@^    prune(\&root, name);$@@|a_new_partition_keeps_its_neighbours_up_to_the_bound
-//MUTANT partition-mark-never-made|s@^        .create_new(true)$@        .create_new(true).write(false)@|a_partition_without_a_mark_gains_one
+//MUTANT partition-mark-never-made|s@^    if std::fs::File::create_new(\&mark).is_err() {$@    if true {@|a_partition_without_a_mark_gains_one
 #[must_use]
 pub fn root_under(parent: &Path) -> Option<PathBuf> {
     // A binary that cannot name itself has no partition, so it caches nothing
@@ -108,12 +108,7 @@ pub fn root_under(parent: &Path) -> Option<PathBuf> {
     // filesystem that has hard links. A partition that cannot be marked is
     // still served but does not prune: without a mark every call lands here,
     // and a directory scan per call is the cost the warm path exists to avoid.
-    if std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&mark)
-        .is_err()
-    {
+    if std::fs::File::create_new(&mark).is_err() {
         return Some(own);
     }
     prune(&root, name);
@@ -134,7 +129,8 @@ const USE_REFRESH: std::time::Duration = std::time::Duration::from_mins(1);
 /// The partition DIRECTORY's time moves too, best-effort: a release before
 /// CLOUD-2361 ranks by it, and sharing a cache with one, a partition marked
 /// only through its file would read to that release as never used. Windows
-/// refuses to open a directory, and that failure is ignored.
+/// refuses to open a directory, and that failure is ignored. It can go once no
+/// supported release ranks by the directory.
 //MUTANT partition-use-never-refreshed|s@^    if stale {$@    if false {@|a_partition_in_use_is_refreshed_and_survives_the_prune
 fn refresh_use(mark: &Path, meta: &std::fs::Metadata) {
     let stale = meta
