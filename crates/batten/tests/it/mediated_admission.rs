@@ -230,6 +230,41 @@ fn a_shape_deny_is_admissible_through_its_class_override() {
     );
 }
 
+/// A spent admission reaches the HOST as an explicit `allow` (CLOUD-2398).
+///
+/// It used to lift batten's refusal to a bare allow, which on Claude Code is no
+/// decision document at all — so the host's own auto-mode classifier then
+/// refused the very call the admission authorised. Measured 2026-10-16 on a
+/// `git rebase` admitted under `patch run loose`.
+#[test]
+fn a_spent_admission_is_an_explicit_allow_to_the_host() {
+    let dir = shape_fixture("mediated-admission-host-allow");
+    let admission = request_as(
+        &dir,
+        "no-merge",
+        SHAPE_CLASS,
+        MERGE_SHAPE,
+        "the remedy cannot perform this one merge",
+    );
+    assert!(spend_as(
+        &dir,
+        &admission,
+        "no-merge",
+        SHAPE_CLASS,
+        MERGE_SHAPE
+    ));
+    let output = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        r#"{"hook_event_name":"PreToolUse","permission_mode":"auto","tool_name":"Bash","tool_input":{"command":"gh pr merge 5"}}"#,
+    );
+    let said = stdout(&output);
+    assert!(
+        said.contains(r#""permissionDecision":"allow""#),
+        "the admission is the host's answer, not a silence the host fills: {said}"
+    );
+}
+
 /// The rule id is the only thing separating two rows that share the class
 /// subject, so one row's admission must not admit another's call.
 #[test]

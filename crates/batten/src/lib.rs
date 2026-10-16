@@ -18803,6 +18803,8 @@ fn settle_repair(
 /// Propagates only a store-resolution failure. An unreadable store, an
 /// unparseable record and an absent directory are all "no admission" inside
 /// [`admission::admitted`] — the fail-closed direction for a suppression.
+//MUTANT-SUITE crates/batten/tests/it/mediated_admission.rs
+//MUTANT admission-silent-allow|s@^            verdict::Native::CallGrantNow,$@            verdict::Native::CallFixSilent,@|a_spent_admission_is_an_explicit_allow_to_the_host
 fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook::Decision> {
     let hook::Decision::Deny(refusal) = &decision else {
         return Ok(decision);
@@ -18834,7 +18836,17 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
         // wrote it. Saying WHICH record admitted the call is what stops this being
         // the silent bypass again, wearing a record's clothes.
         writeln!(out, "batten: {class} admitted by {address} — {subject}")?;
-        return Ok(hook::Decision::Allow);
+        // AN EXPLICIT GRANT, NEVER A BARE ALLOW (CLOUD-2398). `Allow` renders as
+        // no decision at all, which hands the call back to the host's own
+        // permission layer — and Claude Code's auto-mode classifier then refused
+        // a history rewrite this admission had just authorised, measured
+        // 2026-10-16. An admission is an audited decision batten has made, so
+        // the host is told `allow`, and nothing downstream re-litigates it.
+        return Ok(hook::Decision::Preapproved(refusal::Refusal::engine(
+            verdict::Native::CallGrantNow,
+            &[verdict::artifact(&address), verdict::artifact(class)],
+            refusal::Fix::None,
+        )));
     }
     Ok(decision)
 }
