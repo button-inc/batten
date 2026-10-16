@@ -4380,7 +4380,6 @@ impl Policy {
     /// This holds for the write gate too, and deliberately: a write tool is
     /// classified through the same `[[verb]]` table a shell program is, so
     /// "which calls mutate" stays one declared list rather than two.
-    //MUTANT read-route-only-policy-empty|s@^            && !self.redirects.iter().any(\x7crow\x7c row.read.is_some())$@@|a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.shapes.is_empty()
@@ -6326,6 +6325,9 @@ fn followed_cd(
 /// value) come before the start points and are skipped. The first token after
 /// them that begins with `-`, `(` or `!` opens the expression and ends the
 /// list.
+// `Policy::is_empty`'s redirect conjunct (CLOUD-2362), declared here because a
+// row inside an `impl` block is indented by rustfmt and then read by nothing.
+//MUTANT read-route-only-policy-empty|s@^            && !self.redirects.iter().any(\x7crow\x7c row.read.is_some())$@@|a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers
 //MUTANT find-expression-read-as-target|s@^    &rest\[\.\.end\]$@    rest@|a_find_expression_operand_is_never_a_target
 fn find_start_points<'a>(operands: &'a [&'a str]) -> &'a [&'a str] {
     let mut rest = operands;
