@@ -225,6 +225,85 @@ fn a_pointer_whose_parent_is_absent_too_stays_could_not_look() {
     );
 }
 
+/// A session transcript in the host's surveyed grammar, carrying `tool` calls.
+fn transcript(tools: &[&str]) -> String {
+    let mut lines = vec![String::from(
+        r#"{"type":"user","sessionId":"s-1","message":{"role":"user","content":"land the bundle"}}"#,
+    )];
+    for (n, tool) in tools.iter().enumerate() {
+        lines.push(format!(
+            r#"{{"type":"assistant","sessionId":"s-1","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"t{n}","name":"{tool}","input":{{}}}}]}}}}"#
+        ));
+    }
+    lines.join("\n") + "\n"
+}
+
+/// A repository with `body` as its session transcript and the tasks link parked
+/// at a store whose ROOT has never existed: the fresh web container (CLOUD-1820).
+#[cfg(unix)]
+fn rootless(name: &str, body: &str, parent_present: bool) -> PathBuf {
+    let dir = scratch(name, DECLARED);
+    common::write(&dir, ".claude/.transcript.jsonl", body);
+    let root = dir.join("store-root");
+    if parent_present {
+        std::fs::create_dir_all(&root).unwrap();
+    }
+    std::os::unix::fs::symlink(root.join("s-1"), dir.join(".claude/.tasks")).unwrap();
+    dir
+}
+
+/// **A SESSION THAT CALLED NO TASK TOOL READS ZERO, WITH NO STORE ROOT AT ALL.**
+///
+/// The web container never creates `~/.claude/tasks/` until a task is written,
+/// so the parent test above answered could-not-look for every such session.
+/// The transcript is the evidence: it records every tool call, and none of them
+/// declared a task.
+///
+/// Fails by: dropping the transcript arm (`transcript-arm-dropped`), which
+/// falls back to the parent test and answers `3`.
+#[cfg(unix)]
+#[test]
+fn a_transcript_with_no_task_call_is_zero_without_a_store_root() {
+    let dir = rootless("transcript-zero", &transcript(&["Bash", "Read"]), false);
+
+    let output = session(&dir, &[]);
+    assert_eq!(output.status.code(), Some(0), "got: {}", stdout(&output));
+    assert!(
+        stdout(&output).contains("0 of 0 declared task(s) open"),
+        "got: {}",
+        stdout(&output)
+    );
+}
+
+/// **AND A SESSION THAT DID DECLARE A TASK NEVER READS ZERO FROM AN ABSENT STORE.**
+///
+/// The mirror, and stronger than the case above needs: the store's PARENT is
+/// present, which on its own reads as zero. A task call writes the store, so a
+/// store absent after one means the pointer does not reach it, and `0` there
+/// would be CLOUD-1376's false clean.
+#[cfg(unix)]
+#[test]
+fn a_transcript_that_declared_a_task_never_reads_as_zero() {
+    let dir = rootless(
+        "transcript-task",
+        &transcript(&["Bash", "TaskCreate"]),
+        true,
+    );
+
+    let output = session(&dir, &[]);
+    assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
+}
+
+/// An empty transcript observed nothing, so it is not evidence of no work.
+#[cfg(unix)]
+#[test]
+fn an_empty_transcript_is_not_evidence() {
+    let dir = rootless("transcript-empty", "", false);
+
+    let output = session(&dir, &[]);
+    assert_eq!(output.status.code(), Some(3), "got: {}", stdout(&output));
+}
+
 #[test]
 fn an_undeclared_template_is_could_not_look_too() {
     // A DIFFERENT ROUTE TO THE SAME ARM, and kept separate because the remedies

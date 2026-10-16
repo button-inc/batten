@@ -2799,6 +2799,88 @@ fn store_is_merely_unwritten(link: &Path) -> bool {
     target.parent().is_some_and(Path::is_dir)
 }
 
+/// What the session's own transcript says about task declarations (CLOUD-1820).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskEvidence {
+    /// A parsed, non-empty transcript with no call to the host's task tools.
+    NoTaskCall,
+    /// The same parse holds such a call.
+    TaskCalled,
+    /// Nothing that can answer: no transcript, unparseable, an unnamed or
+    /// unsurveyed harness, a harness with no task tools, or an empty stream.
+    Unknown,
+}
+
+/// Read the transcript for task-tool calls.
+///
+/// **THE ZERO COMES FROM EVIDENCE, NEVER FROM AN ABSENCE.** A task is declared
+/// through the host's task tools and the transcript records every tool call, so
+/// a parsed transcript with none is a measured "declared no work". An empty
+/// stream observed nothing and answers [`TaskEvidence::Unknown`].
+//MUTANT-SUITE crates/batten/tests/it/session_drain.rs
+//MUTANT transcript-zero-ignores-task-calls|s@^    if called {$@    if false {@|a_transcript_that_declared_a_task_never_reads_as_zero
+//MUTANT transcript-zero-on-empty-stream|s@^    if stream.records.is_empty() {$@    if false {@|an_empty_transcript_is_not_evidence
+fn transcript_evidence(dir: &Path) -> TaskEvidence {
+    let Ok(resolved) = resolve::resolve(dir, &crate::Overrides::default()) else {
+        return TaskEvidence::Unknown;
+    };
+    let Some(transcript) = resolved.transcript.as_ref() else {
+        return TaskEvidence::Unknown;
+    };
+    let Some(harness) = transcript.harness else {
+        return TaskEvidence::Unknown;
+    };
+    let crate::hook::PlanTools::Surveyed(tools) = harness.capabilities().plan_tools else {
+        return TaskEvidence::Unknown;
+    };
+    if tools.is_empty() {
+        return TaskEvidence::Unknown;
+    }
+    let crate::transcript::Capability::Present(stream) =
+        crate::transcript::resolve(dir, transcript.path.as_deref(), Some(harness))
+    else {
+        return TaskEvidence::Unknown;
+    };
+    if stream.records.is_empty() {
+        return TaskEvidence::Unknown;
+    }
+    let called = stream.records.iter().any(|record| {
+        matches!(&record.event, crate::transcript::Event::ToolCall { name, .. }
+            if tools.contains(&name.as_str()))
+    });
+    if called {
+        return TaskEvidence::TaskCalled;
+    }
+    TaskEvidence::NoTaskCall
+}
+
+/// Whether an absent task store reads as zero declared tasks (CLOUD-1435,
+/// CLOUD-1820).
+///
+/// **NO FILESYSTEM PROBE CAN ANSWER ON ITS OWN.** Measured on the web container:
+/// before any task write `~/.claude/tasks/` does not exist, and the first
+/// `TaskCreate` creates it and the session's directory together. So every depth
+/// of the store is lazily created, and [`store_is_merely_unwritten`]'s parent
+/// test answered could-not-look for every session that declared no work there.
+///
+/// The transcript decides instead, and it gates BOTH arms: a task call writes
+/// the store, so a store absent after one means the pointer does not reach it,
+/// whatever its parent shows. The link must be a parked symlink, so the pointer
+/// and the transcript come from the same `Stop`.
+//MUTANT-SUITE crates/batten/tests/it/session_drain.rs
+//MUTANT transcript-arm-dropped|s@^        TaskEvidence::NoTaskCall => true,$@        TaskEvidence::NoTaskCall => store_is_merely_unwritten(link),@|a_transcript_with_no_task_call_is_zero_without_a_store_root
+//MUTANT transcript-zero-without-a-transcript|s@^        TaskEvidence::Unknown => store_is_merely_unwritten(link),$@        TaskEvidence::Unknown => true,@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
+fn absent_store_is_zero(dir: &Path, link: &Path) -> bool {
+    if std::fs::read_link(link).is_err() {
+        return false;
+    }
+    match transcript_evidence(dir) {
+        TaskEvidence::NoTaskCall => true,
+        TaskEvidence::TaskCalled => false,
+        TaskEvidence::Unknown => store_is_merely_unwritten(link),
+    }
+}
+
 /// Read the live session's task store and count what is not finished.
 ///
 /// # Why this is a verb and not only a nudge
@@ -2858,7 +2940,7 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
     // the false clean CLOUD-1376 exists to refuse.
     let entries = match std::fs::read_dir(&link) {
         Ok(entries) => entries,
-        Err(_) if store_is_merely_unwritten(&link) => {
+        Err(_) if absent_store_is_zero(dir, &link) => {
             return SessionReport {
                 version: config::VERSION,
                 open: Some(0),
