@@ -53,13 +53,21 @@
 //! selection, which handed pkl a proxy CA for a TLS-intercepting sandbox — was
 //! carried into `[tasks.record-verdicts]` and then RETIRED with that body under
 //! CLOUD-843, not carried again. The `config-validator` row's `run` argv passes
-//! no CA: pkl reads extra roots from `~/.pkl/cacerts` itself, so supplying one
-//! is the host's provisioning, and a warm package cache needs no fetch at all.
-//! Both are CLOUD-406's, which is the row these cases are withdrawn to. On a
-//! host that intercepts TLS with neither in place, a cold `pkl eval` now fails
-//! and the recorded non-zero exit refuses `tool judge dirty` — a could-not-fetch
-//! read as a finding, disclosed as the retirement's behaviour change rather than
-//! hidden behind a selection nothing tests.
+//! no CA, and a warm package cache needs no fetch at all.
+//!
+//! THE DISCLOSED BEHAVIOUR CHANGE HAPPENED, AND CLOUD-2311 IS ITS REPAIR. The
+//! sentence that stood here predicted it exactly: on a host that intercepts TLS,
+//! a cold `pkl eval` fails and the recorded non-zero exit refuses `tool judge
+//! dirty` — a could-not-fetch read as a finding. It was measured on an unchanged
+//! `main`. The repair is `mise.toml`'s `[tasks.pkl-package]`, which fetches the
+//! package ahead of the validator and carries the `--ca-certificates` selection
+//! this argv cannot; `config-validator` then reads a warm cache.
+//!
+//! What this paragraph also claimed — that pkl reads extra roots from
+//! `~/.pkl/cacerts` itself, so supplying one is the host's provisioning — is
+//! measured FALSE (CLOUD-2311). That directory is never created, and what does
+//! work is enumerated beside the flag, in `mise.toml`. CLOUD-406 still owns the
+//! CI cache these cases are withdrawn to; it never owned the local one.
 
 // withdrawn: "the coupling is real: a cold cache with egress denied cannot evaluate hk.pkl" CLOUD-406 owns pkl's package cache and the CA pkl is provisioned with; the case measures pkl and the network rather than this repository's verdict
 // withdrawn: "a warm cache breaks it: the same command with egress denied evaluates cleanly" CLOUD-406 owns pkl's package cache and the CA pkl is provisioned with; the case skips outright on any host with no warm cache to copy

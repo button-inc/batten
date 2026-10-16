@@ -186,28 +186,19 @@ fn every_step_is_argv() {
 
 /// CLOUD-2311: the pkl package is fetched before anything runs the validator.
 ///
-/// `pkl eval hk.pkl` fetches the package `hk.pkl` amends, and exits 1 whether
-/// the module is bad or the fetch failed — so a cold cache gets recorded as a
-/// verdict on `hk.pkl`'s bytes and refuses an unchanged tree. The fetch is a
-/// task of its own, and both callers of `record validate config-validator`
-/// depend on it: hk's `pkl` step, reached through `hooks`, and `record-verdicts`.
-///
-/// It is a task `depends` on `hooks` rather than an hk step, because hk loads
-/// `hk.pkl` before any step runs — a step-level ordering would order nothing
-/// against hk's own load.
+/// Both callers of `record validate config-validator` depend on the fetch: hk's
+/// `pkl` step, reached through `hooks`, and `record-verdicts`. Why the fetch is
+/// a task at all, and why it is a task `depends` rather than an hk step, is
+/// argued beside the declarations in `mise.toml`.
 ///
 /// Removing any of the three fails this. It carries `mutation: none`: it asserts
 /// committed config, which no source mutant reaches.
 #[test]
 fn the_pkl_validator_runs_only_after_its_package_is_fetched() {
-    // Panics unless the task is declared: presence is half the claim.
-    let fetch = steps("pkl-package");
-    assert!(
-        fetch
-            .iter()
-            .any(|step| step.contains("pkl download-package")),
-        "[tasks.pkl-package] fetches the package: {fetch:?}"
-    );
+    // Panics unless the task is declared: presence is half the claim. `step_at`
+    // over `one`, so a second fetch step would fail here rather than pass on the
+    // first match.
+    step_at(&steps("pkl-package"), "pkl download-package");
     for caller in ["hooks", "record-verdicts"] {
         let depends = depends_of(caller);
         assert!(
