@@ -1607,11 +1607,13 @@ fn provided_by_pin(dir: &Path, program: &str) -> bool {
 /// times.
 ///
 /// **A row naming the mediator resolves, because the dispatch never looks it up**
-/// (CLOUD-843). `handler::run_one` spawns the RUNNING IMAGE for
-/// `run = ["batten", ...]` (CLOUD-1326), so a `PATH` probe for that name asked a
-/// question the spawn does not: on a CI runner with no `batten` on `PATH` it
-/// failed a row the dispatch would have run, and pushed rows into a one-line task
-/// wrapper purely to satisfy this probe. The doctor asking is itself that image.
+/// (CLOUD-843). `spawn_resolving`'s rung -1 spawns the RUNNING IMAGE for
+/// `run = ["batten", ...]` (CLOUD-1326, CLOUD-2386 — it was `handler::run_one`'s
+/// own case until the predicate moved into the resolver), so a `PATH` probe for
+/// that name asked a question the spawn does not: on a CI runner with no
+/// `batten` on `PATH` it failed a row the dispatch would have run, and pushed
+/// rows into a one-line task wrapper purely to satisfy this probe. The doctor
+/// asking is itself that image.
 fn handler_program_resolves(dir: &Path, program: &str) -> bool {
     if crate::rules::is_own_image(program) {
         return true;
