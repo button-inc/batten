@@ -10907,6 +10907,17 @@ fn run_land_singleton(
     let abandoned = std::env::var("BATTEN_TASK_PROGRAM_ROOT")
         .map(|root| task::abandoned(&git_dir, &root))
         .unwrap_or_default();
+    // ONLY A LEADERLESS GROUP IS SIGNALLED (CLOUD-2366). The record's pgid was
+    // taken when the task registered, and once that group emptied its number
+    // could be reused by an unrelated process leading a group of its own — the
+    // reaper's own task shell included. `group_leaderless` is the kernel's
+    // answer to "is this still the orphan": a reused number always has a live
+    // leader. A record that fails it is still unregistered below; it is only
+    // not signalled.
+    let orphaned: Vec<bool> = abandoned
+        .iter()
+        .map(|entry| exec::group_leaderless(&entry.pgid))
+        .collect();
     // TWO PASSES OVER THE WHOLE SET, NEVER A GRACE PERIOD PER GROUP. Signalling
     // every group before re-observing any of it is what gives each one its
     // chance to act on the TERM — the walk itself, rather than a delay standing
@@ -10914,8 +10925,8 @@ fn run_land_singleton(
     // carries why a group here gets no grace at all: its leader is already dead,
     // so a survivor is not a leaf mid-exit.
     let mut reaped = 0_usize;
-    for entry in &abandoned {
-        if exec::terminate_group(&entry.pgid) {
+    for (entry, orphan) in abandoned.iter().zip(&orphaned) {
+        if *orphan && exec::terminate_group(&entry.pgid) {
             reaped += 1;
         }
     }
@@ -10923,8 +10934,8 @@ fn run_land_singleton(
     // that tells the two apart, and it is the half `land.sh` had that the port
     // dropped.
     let mut escalated = 0_usize;
-    for entry in &abandoned {
-        if exec::escalate_group(&entry.pgid) {
+    for (entry, orphan) in abandoned.iter().zip(&orphaned) {
+        if *orphan && exec::escalate_group(&entry.pgid) {
             escalated += 1;
         }
         // Unregistered only now, so a record survives long enough for both

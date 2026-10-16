@@ -666,6 +666,37 @@ fn resolve_group(pgid: &str) -> Option<rustix::process::Pid> {
     rustix::process::Pid::from_raw(raw)
 }
 
+/// Whether a recorded group has lost its LEADER, which is what makes it an
+/// orphan rather than somebody's live group under a reused number.
+///
+/// **THE KERNEL'S OWN BOOKKEEPING IS THE DISCRIMINATOR** (CLOUD-2366). Linux
+/// keeps a pid number reserved while any live process still uses it as a
+/// process-group id, so an abandoned group whose members survive cannot have its
+/// number handed out again. The number is reusable only once the group is EMPTY,
+/// and a process that then takes it and leads a group of its own is, by
+/// construction, a live process whose pid equals the pgid. So "no process holds
+/// the pgid as its pid" is true of a genuine orphan group and false of every
+/// reused one, including the reaper's own group, whose leader is alive.
+///
+/// `false` for an unparseable or non-positive pgid, and wherever the probe
+/// answers anything but "no such process": a reap may only proceed on proof.
+#[cfg(unix)]
+pub(crate) fn group_leaderless(pgid: &str) -> bool {
+    let Some(group) = resolve_group(pgid) else {
+        return false;
+    };
+    matches!(
+        rustix::process::test_kill_process(group),
+        Err(rustix::io::Errno::SRCH)
+    )
+}
+
+/// No process groups, so none is ever proven leaderless and nothing is reaped.
+#[cfg(not(unix))]
+pub(crate) fn group_leaderless(_pgid: &str) -> bool {
+    false
+}
+
 /// Windows has no process groups, so there is nothing to reap and nothing to
 /// report — the same stance every other `#[cfg(unix)]` half of this module takes.
 #[cfg(not(unix))]
@@ -3398,6 +3429,20 @@ mod tests {
             !escalate_group("4194305"),
             "an empty group did not ignore a term; it is simply gone"
         );
+    }
+
+    /// CLOUD-2366: a group whose leader is a live process is never an orphan,
+    /// however its number was come by; one past `pid_max` has no leader at all.
+    #[cfg(unix)]
+    #[test]
+    fn a_group_whose_leader_lives_is_not_leaderless() {
+        assert!(
+            !group_leaderless(&std::process::id().to_string()),
+            "this process is alive, so a group numbered by it has a leader"
+        );
+        assert!(group_leaderless("4194305"), "no process can hold that pid");
+        assert!(!group_leaderless("0"));
+        assert!(!group_leaderless("not-a-number"));
     }
 
     #[cfg(unix)]

@@ -148,7 +148,15 @@ the command given:
   - all three survivors stayed in `claude-code-bash`.
 
   So a child orphaned before the stop outlives it, and only `land`'s own reap of
-  abandoned groups clears it (`BATTEN_TASK_PROGRAM_ROOT`, CLOUD-2366).
+  abandoned groups clears it (`BATTEN_TASK_PROGRAM_ROOT`, CLOUD-2366). The reap
+  signals a group only once its leader is gone (`exec::group_leaderless`): a
+  reused pgid always has a live leader, so the reap never hits an unrelated
+  group.
+
+- **A container restart is a reboot.** Measured 2026-10-16: `btime` changed,
+  every process died (a detached ticker included), and the disk survived,
+  uncommitted edits too. Nothing survives a restart, which is the crash-only
+  case: the next run's entry is the recovery (CLOUD-2373).
 
 - **What keeps the VM awake.** A harness-tracked background command keeps the
   session live: #1128's backgrounded `land` lived about two hours, until the
