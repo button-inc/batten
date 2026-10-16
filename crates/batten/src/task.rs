@@ -216,16 +216,16 @@ fn write_entry(git_dir: &Path, entry: &Entry) {
 
 /// Whether a registry path is a record rather than a write in flight.
 ///
-/// A record is named by its pid; `durable::replace`'s temp is dot-prefixed, and
-/// one a kill stranded between its sync and its rename is complete enough to
-/// parse. Nothing deletes it now that `alive` reads without deleting (CLOUD-2372),
-/// so a reader that took it for a record would report its crash forever.
+/// A [`crate::durable::is_temp`] file that a kill stranded between its sync and
+/// its rename is complete enough to parse. Nothing deletes it now that `alive`
+/// reads without deleting (CLOUD-2372), so a reader that took it for a record
+/// would report its crash forever.
 fn is_record(path: &Path) -> bool {
     path.is_file()
         && path
             .file_name()
             .and_then(std::ffi::OsStr::to_str)
-            .is_some_and(|name| !name.starts_with('.'))
+            .is_some_and(|name| !crate::durable::is_temp(name))
 }
 
 /// A pid's process group, or the pid itself where there is none to read.

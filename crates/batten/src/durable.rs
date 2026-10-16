@@ -384,6 +384,16 @@ fn temp_name(target: &Path, pid: u32, nanos: u128, sequence: u64) -> PathBuf {
     target.with_file_name(format!(".{name}.{pid}.{nanos}.{sequence}.tmp"))
 }
 
+/// Whether a file name is one of [`temp_name`]'s: a write in flight, or one a
+/// kill stranded between its sync and its rename, never the target itself. A
+/// reader listing a directory these writes land in skips it. The leading dot is
+/// the mark: `temp_name` always draws one, and a target named with one is not a
+/// target these writes serve.
+#[must_use]
+pub(crate) fn is_temp(name: &str) -> bool {
+    name.starts_with('.')
+}
+
 fn write_temp_as(
     temp: &Path,
     target: &Path,
@@ -558,6 +568,16 @@ mod tests {
             temp_name(target, 7, 1_000, 1),
             "same process, same instant, different draw"
         );
+    }
+
+    /// `is_temp` recognises every name `temp_name` draws, and not the target.
+    #[test]
+    fn a_drawn_temp_is_recognised_and_its_target_is_not() {
+        let target = Path::new("dir/4242");
+        let temp = temp_name(target, 7, 1_000, 0);
+        let drawn = temp.file_name().and_then(std::ffi::OsStr::to_str);
+        assert_eq!(drawn.map(is_temp), Some(true));
+        assert!(!is_temp("4242"));
     }
 
     #[test]

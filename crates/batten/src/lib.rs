@@ -11836,9 +11836,6 @@ fn abandon_runs(repo: &str, sha: &str, what: &str, out: &mut dyn Write) -> Resul
 /// other clone holds the lease ([`no_rival_holds_lease`]), so no live lander is
 /// waiting on those runs.
 fn reconcile_at_entry(root: &Path, branch: &str, out: &mut dyn Write) -> Result<()> {
-    if !no_rival_holds_lease(root) {
-        return Ok(());
-    }
     let Some(repo) = repo_slug(root) else {
         return Ok(());
     };
@@ -11858,6 +11855,11 @@ fn reconcile_at_entry(root: &Path, branch: &str, out: &mut dyn Write) -> Result<
     else {
         return Ok(());
     };
+    // ASKED LAST, only once there is something to undo: the lease read is a
+    // round trip to the remote, and most entries have nothing to reconcile.
+    if !no_rival_holds_lease(root) {
+        return Ok(());
+    }
     abandon_runs(
         &repo,
         &stale,
@@ -15551,17 +15553,20 @@ fn asks_before_the_step(
 /// open on these because the cost is a wasted matrix, but the cost here is two
 /// landers writing one trunk (`pipeline::Precheck::LeaseHeld`).
 fn still_holds_lease(root: &Path) -> bool {
-    let Ok(terms) = lease::terms(root) else {
-        return false;
-    };
-    let Ok((_, holder)) = lease_identity(root) else {
-        return false;
-    };
-    let Ok(observed) = lease::observe(&terms) else {
-        return false;
-    };
+    lease_reading(root)
+        .is_some_and(|(observed, holder, now)| lease::holds_now(&observed, &holder, now))
+}
+
+/// The lease as observed now, this clone's holder name, and the instant: the
+/// one lookup [`still_holds_lease`] and [`no_rival_holds_lease`] ask their
+/// complementary questions of. `None` is could-not-look, which both read as
+/// `false`.
+fn lease_reading(root: &Path) -> Option<(lease::Observed, String, i64)> {
+    let terms = lease::terms(root).ok()?;
+    let (_, holder) = lease_identity(root).ok()?;
+    let observed = lease::observe(&terms).ok()?;
     let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
-    lease::holds_now(&observed, &holder, now)
+    Some((observed, holder, now))
 }
 
 /// Is the lease free of every clone but this one — absent, released, expired,
@@ -15573,17 +15578,9 @@ fn still_holds_lease(root: &Path) -> bool {
 /// is: the cost of acting wrongly is another lander's matrix, of not acting a
 /// matrix this landing's own push makes moot.
 fn no_rival_holds_lease(root: &Path) -> bool {
-    let Ok(terms) = lease::terms(root) else {
-        return false;
-    };
-    let Ok((_, holder)) = lease_identity(root) else {
-        return false;
-    };
-    let Ok(observed) = lease::observe(&terms) else {
-        return false;
-    };
-    let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
-    lease::authorises_this_clone(&observed, &holder, now)
+    lease_reading(root).is_some_and(|(observed, holder, now)| {
+        lease::authorises_this_clone(&observed, &holder, now)
+    })
 }
 
 /// How many beats a holder may stop progressing before its lease is disbelieved.
