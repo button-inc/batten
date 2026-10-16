@@ -19047,17 +19047,12 @@ fn run_hook(
     //
     // [`recoverable_without_rules`] carries the argument for which two shapes
     // pass and why every other one still refuses.
+    let handoff = Handoff {
+        raw: &raw,
+        already_handed,
+    };
     let (policy, waivers, pruning) = if adjudicable {
-        match hook_config_or_floor(
-            overrides,
-            harness,
-            &envelope,
-            &raw,
-            mode,
-            already_handed,
-            out,
-            err,
-        )? {
+        match hook_config_or_floor(overrides, harness, &envelope, handoff, mode, out, err)? {
             Ok(loaded) => loaded,
             Err(code) => return Ok(code),
         }
@@ -19752,9 +19747,8 @@ fn hook_config_or_floor(
     overrides: &Overrides,
     harness: hook::Harness,
     envelope: &hook::Envelope,
-    raw: &str,
+    handoff: Handoff<'_>,
     mode: Mode,
-    already_handed: bool,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<Result<HookConfig, ExitCode>> {
@@ -19770,7 +19764,7 @@ fn hook_config_or_floor(
         // is registered to enforce did not load, so nothing judged the call;
         // the floor below still passes a read and the repair write.
         Err(unreadable) => {
-            if let Some(code) = hand_to_checkout_build(raw, already_handed, out)? {
+            if let Some(code) = hand_to_checkout_build(handoff, out)? {
                 return Ok(Err(code));
             }
             if recoverable_without_rules(envelope) {
@@ -19790,6 +19784,25 @@ fn hook_config_or_floor(
             }
         }
     }
+}
+
+/// What the load-fault handoff needs that is not already in the envelope: the
+/// payload to replay on the child's stdin, and whether a follow has already
+/// spent this call's one hand-off (CLOUD-2376).
+///
+/// A pair rather than two parameters because they travel together through
+/// [`hook_config_or_floor`], which is at its argument budget, and because they
+/// answer one question between them: has this call been handed to the
+/// checkout's build yet, and with what.
+#[derive(Debug, Clone, Copy)]
+struct Handoff<'a> {
+    /// The envelope exactly as it arrived, replayed to the child on stdin.
+    raw: &'a str,
+    /// Whether [`follow_pin`] already ran this checkout's build and it exited
+    /// outside the §7 table. Threaded as a value, never published into the
+    /// environment, so no child of this process can inherit a mark about a run
+    /// that is not its own.
+    already_handed: bool,
 }
 
 /// Hand a call this engine cannot judge to the hook authority's own checkout
@@ -19820,13 +19833,9 @@ fn hook_config_or_floor(
 //MUTANT hook-handoff-skipped|s@^    let Some(build) = engine::checkout_build(root) else {$@    let Some(build) = None::<PathBuf> else {@|a_hook_outside_the_checkout_hands_off_to_the_authoritys_build
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT handoff-writes-before-deciding|s@^    let Some(decided) = ExitCode::from_code(code).filter(\x7ccode\x7c \*code != ExitCode::Usage) else {$@    let Some(decided) = Some(ExitCode::from_code(code).unwrap_or(ExitCode::Usage)) else {@|a_crashing_checkout_build_never_fails_the_hook_open
-//MUTANT handoff-reruns-a-crashed-follow|s@^    if already_handed \x7c\x7c std::env::var_os(ENGINE_UPDATED).is_some() {$@    if std::env::var_os(ENGINE_UPDATED).is_some() {@|a_crashing_checkout_build_never_fails_the_hook_open
-fn hand_to_checkout_build(
-    raw: &str,
-    already_handed: bool,
-    out: &mut dyn Write,
-) -> Result<Option<ExitCode>> {
-    if already_handed || std::env::var_os(ENGINE_UPDATED).is_some() {
+//MUTANT handoff-reruns-a-crashed-follow|s@^    if handoff.already_handed \x7c\x7c std::env::var_os(ENGINE_UPDATED).is_some() {$@    if std::env::var_os(ENGINE_UPDATED).is_some() {@|a_crashing_checkout_build_never_fails_the_hook_open
+fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<Option<ExitCode>> {
+    if handoff.already_handed || std::env::var_os(ENGINE_UPDATED).is_some() {
         return Ok(None);
     }
     let root = hook_authority_root();
@@ -19845,9 +19854,13 @@ fn hand_to_checkout_build(
     let mut argv = vec![build.to_string_lossy().into_owned()];
     argv.extend(std::env::args().skip(1));
     let published = [(String::from(ENGINE_UPDATED), Some(String::from("1")))];
-    let Some((code, stdout)) =
-        exec::piped_argv(root, &argv, raw, exec::Diagnostics::Pass, &published)
-    else {
+    let Some((code, stdout)) = exec::piped_argv(
+        root,
+        &argv,
+        handoff.raw,
+        exec::Diagnostics::Pass,
+        &published,
+    ) else {
         return Ok(None);
     };
     // DECIDE, THEN WRITE. Nothing of the child's has reached `out` yet, so a
