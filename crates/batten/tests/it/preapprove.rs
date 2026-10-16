@@ -711,6 +711,12 @@ fn a_plan_mode_git_with_global_options_is_allowed() {
     assert_plan_refused(&shell("plan", "git branch new-branch"));
     // A global option that hands git a program to run is never a read.
     assert_plan_refused(&shell("plan", "git -c core.pager=sh log"));
+    // A read form's arguments can still write: git opens `--output` itself.
+    assert_plan_refused(&shell("plan", "git stash show -p --output=src/main.rs"));
+    assert_plan_refused(&shell(
+        "plan",
+        "git remote -v add o https://example.invalid",
+    ));
 }
 
 #[test]

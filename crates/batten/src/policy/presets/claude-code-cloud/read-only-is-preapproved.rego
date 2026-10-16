@@ -5,6 +5,7 @@
 #MUTANT guide-not-read|s@"Explore", "Plan", "claude-code-guide"@"Explore", "Plan"@|a_plan_mode_guide_subagent_is_allowed
 #MUTANT printenv-not-read|s@"tree", "printenv", "ps",@"tree", "ps",@|a_plan_mode_printenv_is_allowed
 #MUTANT ps-not-read|s@"tree", "printenv", "ps",@"tree", "printenv",@|a_plan_mode_ps_is_allowed
+#MUTANT git-read-form-writes|s@^\tnot some_writing_flag(verb.rest)$@\ttrue@|a_plan_mode_git_with_global_options_is_allowed
 #MUTANT git-global-option-unread|s@^\tnot git_option_value(arguments, i)$@\ti == 0@|a_plan_mode_git_with_global_options_is_allowed
 # A call that only reads is never put to the operator (CLOUD-1949).
 #
@@ -142,26 +143,31 @@ reads(program) if {
 	mcp_read_verb(sprintf("mcp__%s__%s", [program.arguments[2], program.arguments[3]]))
 }
 
+# ONE WRITING-FLAG CHECK FOR EVERY GIT READ (CLOUD-2418): a read form's
+# arguments reach git's diff and log parsers too, and `--output` makes git open
+# the file itself, which no shell redirect check sees.
 reads(program) if {
 	program.name == "git"
 	verb := git_verb(program.arguments)
-	git_reads(verb.name)
+	git_read_verb(verb)
 	not some_writing_flag(verb.rest)
 }
 
+git_read_verb(verb) if git_reads(verb.name)
+
 # Subcommands that read only in some forms: the form is the first argument after
 # the subcommand, or, for `branch`, the absence of anything but listing flags.
-reads(program) if {
-	program.name == "git"
-	verb := git_verb(program.arguments)
-	git_reads_as(verb.name, verb.rest)
-}
+git_read_verb(verb) if git_reads_as(verb.name, verb.rest)
 
 git_reads_as("stash", rest) if rest[0] in {"list", "show"}
 
 git_reads_as("remote", rest) if count(rest) == 0
 
-git_reads_as("remote", rest) if rest[0] in {"-v", "--verbose", "get-url", "show"}
+# `-v` alone lists; `git remote -v add …` is still `add`, so `-v` reads only
+# as the whole argument list.
+git_reads_as("remote", rest) if rest in {["-v"], ["--verbose"]}
+
+git_reads_as("remote", rest) if rest[0] in {"get-url", "show"}
 
 git_reads_as("config", rest) if {
 	some argument in rest
@@ -358,6 +364,9 @@ test_git_global_options_never_hide_a_writer if {
 		["branch", "new-branch"],
 		["branch", "-D", "old"],
 		["remote", "add", "o", "u"],
+		["remote", "-v", "add", "o", "u"],
+		["stash", "show", "-p", "--output=x"],
+		["stash", "list", "--output=x"],
 		["config", "user.name", "x"],
 	] {
 		count(preapprove) == 0 with input as git_call(arguments)
