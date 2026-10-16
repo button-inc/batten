@@ -10927,7 +10927,7 @@ fn run_land_singleton(
     // it is ASKED AGAIN BEFORE EACH PASS: a group the TERM emptied may be reused
     // before the KILL. A record that fails it is still unregistered below; it is
     // only not signalled.
-    let own_group = task::process_group(&std::process::id().to_string());
+    let own_group = task::process_group(&pid);
     // TWO PASSES OVER THE WHOLE SET, NEVER A GRACE PERIOD PER GROUP. Signalling
     // every group before re-observing any of it is what gives each one its
     // chance to act on the TERM — the walk itself, rather than a delay standing

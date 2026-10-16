@@ -117,7 +117,7 @@ impl Entry {
             &self.sig_at,
         ]
         .into_iter()
-        .filter_map(|stamp| stamp.parse::<u64>().ok())
+        .filter_map(|stamp| second(stamp))
         .max()
     }
 
@@ -512,10 +512,13 @@ fn render_line(entry: &Entry, running: bool, now: u64) -> String {
 
 /// Seconds since a recorded stamp, or `None` where none was recorded.
 fn elapsed(stamp: &str, now: u64) -> Option<u64> {
-    stamp
-        .parse::<u64>()
-        .ok()
-        .map(|then| now.saturating_sub(then))
+    second(stamp).map(|then| now.saturating_sub(then))
+}
+
+/// A stamp as the epoch second it records, or `None` for a blank or malformed
+/// one: the one reading of a stamp every reader of the record shares.
+fn second(stamp: &str) -> Option<u64> {
+    stamp.parse().ok()
 }
 
 /// Read the registry, reaping the entries whose process is genuinely gone.

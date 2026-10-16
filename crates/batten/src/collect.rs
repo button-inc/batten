@@ -203,21 +203,11 @@ fn program_name(path: &str) -> String {
 /// clock ticks since boot, against `/proc/stat`'s `btime`.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn processes() -> Option<Vec<Process>> {
-    let boot = proc_stat::boot_seconds(&std::fs::read_to_string("/proc/stat").ok()?)?;
-    let ticks = rustix::param::clock_ticks_per_second().max(1);
-    let entries = std::fs::read_dir("/proc").ok()?;
-    let table = entries
-        .filter_map(Result::ok)
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .bytes()
-                .all(|b| b.is_ascii_digit())
-        })
-        .filter_map(|entry| {
-            let exe = std::fs::read_link(entry.path().join("exe")).ok()?;
-            let stat = std::fs::read_to_string(entry.path().join("stat")).ok()?;
+    let (boot, ticks, pids) = proc_table()?;
+    let table = pids
+        .filter_map(|dir| {
+            let exe = std::fs::read_link(dir.join("exe")).ok()?;
+            let stat = std::fs::read_to_string(dir.join("stat")).ok()?;
             let since_boot = proc_stat::start_ticks(&stat)?;
             let started = SystemTime::UNIX_EPOCH
                 + std::time::Duration::from_secs(boot)
@@ -232,31 +222,53 @@ fn processes() -> Option<Vec<Process>> {
     Some(table)
 }
 
+/// The process table both readers walk: `/proc/stat`'s `btime`, the clock rate
+/// `starttime` counts in (never zero), and each pid's directory, or `None` where
+/// either could not be read.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn proc_table() -> Option<(u64, u64, impl Iterator<Item = PathBuf>)> {
+    let boot = proc_stat::boot_seconds(&std::fs::read_to_string("/proc/stat").ok()?)?;
+    let ticks = rustix::param::clock_ticks_per_second().max(1);
+    let pids = std::fs::read_dir("/proc")
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .bytes()
+                .all(|b| b.is_ascii_digit())
+        })
+        .map(|entry| entry.path());
+    Some((boot, ticks, pids))
+}
+
 /// The `/proc` layouts [`processes`] and [`group_predates`] read, as pure
 /// functions so every platform's suite checks them.
 //MUTANT-SUITE crates/batten/src/collect.rs
 //MUTANT stat-start-misread|s@^        rest.split_whitespace().nth(19)?.parse().ok()$@        rest.split_whitespace().nth(18)?.parse().ok()@|a_stat_line_yields_its_start_ticks
 //MUTANT member-predates-tie|s@ 1 < alive_at@ 1 <= alive_at@|a_group_member_predates_only_strictly_before
 #[cfg(any(target_os = "linux", target_os = "android", test))]
-pub(crate) mod proc_stat {
+mod proc_stat {
     /// Field 22 of a `/proc/<pid>/stat` line, `starttime`: read after the LAST
     /// `)`, since the command name in field 2 may itself hold spaces and parens.
-    pub(crate) fn start_ticks(stat: &str) -> Option<u64> {
+    pub(super) fn start_ticks(stat: &str) -> Option<u64> {
         let (_, rest) = stat.rsplit_once(')')?;
         rest.split_whitespace().nth(19)?.parse().ok()
     }
 
     /// Field 5 of a `/proc/<pid>/stat` line, `pgrp`, read after the last `)`
     /// for [`start_ticks`]'s reason.
-    pub(crate) fn process_group(stat: &str) -> Option<i64> {
+    pub(super) fn process_group(stat: &str) -> Option<i64> {
         let (_, rest) = stat.rsplit_once(')')?;
         rest.split_whitespace().nth(2)?.parse().ok()
     }
 
     /// Whether a `/proc/<pid>/stat` line is a member of `group` that began
-    /// strictly before second `alive_at`, against the boot instant and clock
-    /// rate. One second of slack absorbs `btime`'s own rounding, so a tie is no.
-    pub(crate) fn member_predates(
+    /// strictly before second `alive_at`, against the boot instant and the
+    /// (non-zero) clock rate. One second of slack absorbs `btime`'s own
+    /// rounding, so a tie is no.
+    pub(super) fn member_predates(
         stat: &str,
         group: i64,
         boot: u64,
@@ -264,11 +276,11 @@ pub(crate) mod proc_stat {
         alive_at: u64,
     ) -> bool {
         process_group(stat) == Some(group)
-            && start_ticks(stat).is_some_and(|since| boot + since / ticks.max(1) + 1 < alive_at)
+            && start_ticks(stat).is_some_and(|since| boot + since / ticks + 1 < alive_at)
     }
 
     /// `/proc/stat`'s `btime`: the boot instant, in seconds since the epoch.
-    pub(crate) fn boot_seconds(stat: &str) -> Option<u64> {
+    pub(super) fn boot_seconds(stat: &str) -> Option<u64> {
         stat.lines()
             .find_map(|line| line.strip_prefix("btime "))?
             .trim()
@@ -290,30 +302,26 @@ pub(crate) mod proc_stat {
 /// a reused group loses its leader as easily as an orphan does
 /// (`setsid sh -c 'server &'`), and a zombie leader still answers a probe.
 ///
+/// Across a reboot every process began after `btime`, so a stale record never
+/// qualifies.
+///
 /// It does not know who is asking: excluding the caller's own group is the
 /// reaper's half (`reapable`). What it misses is safe: an orphan whose every
-/// survivor was spawned after the last stamp is not signalled. Across a reboot every process began after `btime`, so a stale
-/// record never qualifies. `false` for an unparseable or
-/// non-positive pgid and wherever `/proc` cannot be read: a reap may only
-/// proceed on proof.
+/// survivor was spawned after the last stamp is not signalled. `false` for a
+/// pgid `exec` could not signal (unparseable, or not a positive `i32`) and
+/// wherever `/proc` cannot be read: a reap may only proceed on proof.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn group_predates(pgid: &str, alive_at: u64) -> bool {
-    let Some(group) = pgid.parse::<i64>().ok().filter(|group| *group > 0) else {
+    let Some(group) = pgid.parse::<i32>().ok().filter(|group| *group > 0) else {
         return false;
     };
-    let Some(boot) = std::fs::read_to_string("/proc/stat")
-        .ok()
-        .and_then(|stat| proc_stat::boot_seconds(&stat))
-    else {
+    let Some((boot, ticks, mut pids)) = proc_table() else {
         return false;
     };
-    let ticks = rustix::param::clock_ticks_per_second();
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return false;
-    };
-    entries.filter_map(Result::ok).any(|entry| {
-        std::fs::read_to_string(entry.path().join("stat"))
-            .is_ok_and(|stat| proc_stat::member_predates(&stat, group, boot, ticks, alive_at))
+    pids.any(|dir| {
+        std::fs::read_to_string(dir.join("stat")).is_ok_and(|stat| {
+            proc_stat::member_predates(&stat, i64::from(group), boot, ticks, alive_at)
+        })
     })
 }
 
@@ -1397,28 +1405,10 @@ mod tests {
         let stat =
             "4243 (a) b) S 1 4242 4242 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 1 0 987654 1000 100";
         assert_eq!(proc_stat::process_group(stat), Some(4242));
-        let boot = 1_700_000_000;
-        assert!(proc_stat::member_predates(
-            stat,
-            4242,
-            boot,
-            100,
-            1_700_009_878
-        ));
-        assert!(!proc_stat::member_predates(
-            stat,
-            4242,
-            boot,
-            100,
-            1_700_009_877
-        ));
-        assert!(!proc_stat::member_predates(
-            stat,
-            4243,
-            boot,
-            100,
-            1_700_009_999
-        ));
+        let predates = |group, at| proc_stat::member_predates(stat, group, 1_700_000_000, 100, at);
+        assert!(predates(4242, 1_700_009_878));
+        assert!(!predates(4242, 1_700_009_877));
+        assert!(!predates(4243, 1_700_009_999));
     }
 
     /// CLOUD-2366: this process's own group holds this process, which began

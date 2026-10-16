@@ -149,9 +149,11 @@ the command given:
 
   So a child orphaned before the stop outlives it, and only `land`'s own reap of
   abandoned groups clears it (`BATTEN_TASK_PROGRAM_ROOT`, CLOUD-2366). The reap
-  signals a group only once its leader is gone (`exec::group_leaderless`): a
-  reused pgid always has a live leader, so the reap never hits an unrelated
-  group.
+  signals a group only when `reapable` holds (`lib.rs`): a member began before
+  the registrant's last stamp (`collect::group_predates` — a pgid number stays
+  reserved while any member lives, so a reused group's members all began later)
+  and the group is not the reaper's own. A leader test cannot decide this: a
+  reused group loses its leader as easily as an orphan does.
 
 - **A container restart is a reboot.** Measured 2026-10-16: `btime` changed,
   every process died (a detached ticker included), and the disk survived,
