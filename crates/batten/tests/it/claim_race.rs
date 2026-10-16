@@ -632,6 +632,56 @@ fn a_competitor_whose_cheap_key_collides_is_fetched_and_one_that_collides_with_n
     );
 }
 
+/// A collider whose BODY closes the key is settled, so it is not fetched even
+/// though it collides (CLOUD-2382).
+///
+/// # Why the widening stops at the branch and title
+///
+/// Source 1 outranks both, and more text can only add matches, so
+/// `closed(body)` is a subset of `closed(body + log)` — a key the body closes
+/// stands whatever the commits say. Fetching such a competitor buys no
+/// information and costs real behaviour: a 502 would put it in `unanswered`,
+/// and the caller declines on an unconfirmed race, downgrading a collision
+/// proven from the listing it already holds into could-not-look. Since
+/// `commit-lint` makes a closing body the common shape here, that would be the
+/// common path, not a corner.
+///
+/// The pair is the case: `"2"` and `"3"` both collide on PROJ-7, and they
+/// differ only in WHERE the key came from — `"2"`'s title, `"3"`'s body.
+#[test]
+fn a_collider_whose_body_closes_the_key_is_settled_and_not_fetched() {
+    let pulls = vec![
+        pull("1", "user/branch-one", "sha1"),
+        Pull {
+            title: "feat: somebody else on PROJ-7".to_owned(),
+            ..pull("2", "user/branch-two", "sha2")
+        },
+        Pull {
+            body: "Closes PROJ-7, and this one means it.".to_owned(),
+            ..pull("3", "user/branch-three", "sha3")
+        },
+    ];
+    let asked = std::sync::Mutex::new(Vec::new());
+
+    let filled = race::with_logs(pulls, "1", &["PROJ-7".to_owned()], &Fake, |number| {
+        asked
+            .lock()
+            .expect("the fixture lock")
+            .push(number.to_owned());
+        Some(String::new())
+    });
+
+    assert_eq!(
+        *asked.lock().expect("the fixture lock"),
+        vec!["2".to_owned()],
+        "the title-named collider is distrusted and asked; the body-closed one is settled"
+    );
+    assert!(
+        !race::races(&["PROJ-7".to_owned()], &filled.pulls, Some("1"), &Fake).is_empty(),
+        "and the settled one still races, on evidence no round trip could improve"
+    );
+}
+
 /// The repository the verb derives from `origin`, deliberately not this one's:
 /// a slug taken from the environment rather than from the remote would read as
 /// a passing case.

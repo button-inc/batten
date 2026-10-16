@@ -505,10 +505,20 @@ pub fn with_logs(
     // through both, because an unfetched competitor is not an unanswered one,
     // so neither of `run_claim_race`'s could-not-look arms ever sees it. A
     // false refusal needs the cheap key to collide with the set this branch
-    // claims, so `claims` is exactly the pulls that can produce one — and a run
-    // that answers clean has none of them. The widening therefore costs ZERO
-    // round trips whenever this verb prints "no open pull request races this
-    // branch's claim".
+    // claims, so `claims` is what narrows the widening to the pulls that can
+    // produce one. It costs a round trip only where such a collision exists —
+    // nothing on a listing that cheaply collides with nothing, and where one
+    // DOES collide, the fetch is what decides between refusing and not.
+    //
+    // **AND ONLY WHERE THE CHEAP KEY COULD BE WRONG.** A body that CLOSES a key
+    // settles it: source 1 outranks branch and title, and more text can only
+    // add matches, so `closed(body) ⊆ closed(body + log)` and that key stands
+    // whatever the commits say. Fetching such a competitor buys nothing and
+    // costs something real — it would land in `unanswered` on a 502, and the
+    // caller declines on an unconfirmed race, turning a collision PROVEN from
+    // data already in hand into could-not-look. `commit-lint` makes a closing
+    // body the common shape here, so that is the common case, not a corner.
+    // Only a cheap key resolved from the branch or title is distrusted.
     //
     // A COLLIDER WHOSE FETCH FAILS IS THE CASE THE CALLER MUST HANDLE, and it
     // is why [`Filled::unanswered`] carries numbers rather than a count. Such a
@@ -539,7 +549,9 @@ pub fn with_logs(
         .filter(|(_, pull)| {
             pull.number != mine_number && {
                 let cheap = claimed(&pull.head_ref, &pull.title, "", &pull.body, keys);
-                cheap.is_empty() || cheap.iter().any(|key| claims.contains(key))
+                let settled = claimed_from("", "", "", &pull.body, keys, Source::ClosingOnly);
+                cheap.is_empty()
+                    || (settled.is_empty() && cheap.iter().any(|key| claims.contains(key)))
             }
         })
         .map(|(slot, pull)| (slot, pull.number.as_str()))
