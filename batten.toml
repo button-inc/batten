@@ -592,13 +592,13 @@ sha256 = "b2c822742e8cbf355ba0cb4cc690c3cd8fdc9ec1916c8148f27bd9098cb7aee4"
 # publishes the same version for every platform here, each with a `.sig`. These
 # rows pin those bytes by sha256, measured on 2026-10-16 when the linux-x86_64
 # binary answered `cargo-mutants 27.1.0`; a changed artifact fails the checksum
-# rather than running. The link puts it where `cargo` finds `cargo-<sub>`.
+# rather than running. No link: `mutate sweep` applies this row itself and runs
+# cargo with the cached binary's directory first on PATH (`use_provisioned`).
 [[provision]]
 name = "cargo-mutants"
 version = "27.1.0"
 unpack = "tar_gz"
 binary = "cargo-mutants"
-link = "~/.local/bin"
 
 [provision.platforms.linux-x86_64]
 url = "https://github.com/cargo-bins/cargo-quickinstall/releases/download/cargo-mutants-27.1.0/cargo-mutants-27.1.0-x86_64-unknown-linux-gnu.tar.gz"

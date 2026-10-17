@@ -1,9 +1,8 @@
 name: CI
 
-# workflow-shell: CLOUD-1746 the `mutants` job adds a job and its steps: the
-# landing-lease precondition every immediately-starting job carries verbatim
-# (`ci-local-parity` property 7), and then argv steps only (checkout, fetch,
-# toolchain, caches, `mise run mutant:changed`).
+# workflow-shell: CLOUD-1746 the `mutants` job adds a job of argv steps only
+# (checkout, fetch, toolchain, caches, `mise run mutant:changed`); it runs
+# behind `ci`, so it carries no landing-lease shell of its own.
 
 # CI minutes cost money; an agent's local execution does not. So CI runs as
 # rarely as correctness allows:
@@ -1112,33 +1111,16 @@ jobs:
     # about 600s, plus a quarter of the 1961s local run. 1200s, x3. Re-derive
     # from `mise run timeout-drift` once this job has 25 runs.
     timeout-minutes: 60 # budget: p95=1200s x3 measured=2026-10-17
+    # BEHIND `ci`, SO IT CARRIES NO LEASE STEP OF ITS OWN. `ci-local-parity`
+    # property 7 puts the landing lease first in every job that starts at once,
+    # and a fourth copy of its twelve shell lines is growth `no-new-shell`
+    # refuses with no override route. A job that `needs:` `ci` starts only after
+    # `ci`'s own lease has run, and a declined run has already been cancelled by
+    # then. The cost is `ci`'s wall time ahead of the shards.
+    needs: [ci]
     permissions:
       contents: read
-      actions: write
     steps:
-      # CLOUD-420: the landing lease, first, as every job that starts at once
-      # carries it (`ci-local-parity` property 7). `|| exit 0` on each line.
-      - name: Landing lease precondition
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          LEASE_HEAD_REF: ${{ github.head_ref }}
-          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          LEASE_RUN_ID: ${{ github.run_id }}
-        run: |
-          installer=$(gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
-          printf '%s\n' "$installer" | \
-            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
-            BATTEN_ALLOW_OFF_PATH=1 BATTEN_REQUIRE="lease guard" sh || exit 0
-          mkdir -p "$RUNNER_TEMP/batten-config" || exit 0
-          gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/batten.toml?ref=main" \
-            >"$RUNNER_TEMP/batten-config/batten.toml" || exit 0
-          "$RUNNER_TEMP/batten-bin/batten" --config-in "$RUNNER_TEMP/batten-config" \
-            lease guard \
-            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # `MUTANT_CHANGED_SINCE=origin/main` diffs the branch against trunk.
@@ -1152,7 +1134,7 @@ jobs:
           # this task judges reach `opa`, `pkl` and `mise run` tasks, and a
           # missing tool would read as a surviving mutant rather than as a
           # provisioning error. One line, for `ci-tools-check`'s reason.
-          install_args: rust hk aqua:cli/cli github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker
+          install_args: rust hk aqua:cli/cli github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker aqua:axodotdev/cargo-dist
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.pkl/cache
