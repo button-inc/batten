@@ -723,6 +723,11 @@ pub struct Resolved {
     /// they were taken, so there is one place to re-measure and no second answer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prune: Option<crate::prune::Prune>,
+    /// The `[task]` table (CLOUD-2370), from the committed authority alone, for
+    /// `prune`'s reason: a local layer lowering the floor or naming a task to
+    /// relaunch would decide a Stop refusal the committed file never stated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<crate::task::TaskTable>,
     /// Where a harness keeps its MCP wiring and what a method's reduction is
     /// (CLOUD-1260), as the authority states it.
     ///
@@ -1811,6 +1816,7 @@ fn assemble(
         ci: repo.ci.clone(),
         host: repo.host.clone(),
         prune: repo.prune.clone(),
+        task: repo.task.clone(),
         mcp: repo.mcp.clone(),
         defects: repo.defects.clone(),
         provisions: repo.provisions.clone(),
@@ -1956,6 +1962,7 @@ fn attribution(
         ("ci", authority_set(repo.ci.is_some())),
         ("host", authority_set(repo.host.is_some())),
         ("prune", authority_set(repo.prune.is_some())),
+        ("task", authority_set(repo.task.is_some())),
         ("mcp", authority_set(repo.mcp.is_some())),
         ("defects", authority_set(repo.defects.is_some())),
         ("provision", authority_set(!repo.provisions.is_empty())),

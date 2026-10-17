@@ -22,7 +22,7 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, batten, scratch, stderr, stdout};
+use common::{Fixture, batten, scratch, stderr, stdout, unassignable_pid};
 
 /// A repository with somewhere to put a lock, and nothing holding one.
 fn lock_repo(name: &str) -> PathBuf {
@@ -49,19 +49,6 @@ fn singleton(dir: &Path, args: &[&str]) -> Output {
 /// Where one task's lock lives.
 fn lock(repo: &Path, task: &str) -> PathBuf {
     repo.join(".git/batten-singleton").join(task)
-}
-
-/// A pid no process can hold.
-///
-/// `/proc/sys/kernel/pid_max` is exclusive — the kernel never assigns it — so
-/// this is a genuine "no such process" rather than a race against whatever
-/// happens to be running. A literal high number would eventually collide, and
-/// the collision would turn a crashed case green.
-fn unassignable_pid() -> String {
-    std::fs::read_to_string("/proc/sys/kernel/pid_max")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<u64>().ok())
-        .map_or_else(|| "4194304".to_owned(), |max| max.to_string())
 }
 
 #[test]

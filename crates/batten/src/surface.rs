@@ -1739,10 +1739,15 @@ const SINGLETON_RECHECK: FlagDecl = FlagDecl {
 /// that consumer — `document_facts::no_artifact_name_reaches_the_core` refuses a
 /// manifest name in this crate for exactly the same reason.
 ///
-/// Required rather than defaulted. A default would be one consumer's layout
-/// promoted to the engine's, and it would fail SILENTLY everywhere else: an
-/// unmatched corroboration reads as alive, so a wrong root produces a registry
-/// that never reports a crash and looks like one that has nothing to report.
+/// Never defaulted. A default would be one consumer's layout promoted to the
+/// engine's, and it would fail SILENTLY everywhere else: an unmatched
+/// corroboration reads as alive, so a wrong root produces a registry that never
+/// reports a crash and looks like one that has nothing to report.
+///
+/// Optional since CLOUD-2370 and TRANSITIONAL: `[task] program_root` is the one
+/// authority, and this flag answers only where the config declares none, so a
+/// manifest written for a release that predates the table keeps working until
+/// its pin carries it. Neither present is could-not-look.
 const TASK_PROGRAM_ROOT: FlagDecl = FlagDecl {
     id: "program_root",
     long: Some("program-root"),
@@ -1751,7 +1756,7 @@ const TASK_PROGRAM_ROOT: FlagDecl = FlagDecl {
     env: EnvDecl::None,
     global: false,
     positional: false,
-    required: true,
+    required: false,
     hidden: false,
     rung: Rung::None,
     value: ValueDecl::Str,
