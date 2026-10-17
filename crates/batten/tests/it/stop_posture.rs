@@ -1311,9 +1311,9 @@ fn the_recursion_bound_holds_for_every_rule() {
 
 /// THE GUARD NEVER EXITS NON-ZERO, so it cannot surface as a hook error. Every
 /// case above reads stdout; this one reads the status, over a rule that fired.
-/// The one exception is CLOUD-2441's refusal of an ignored unlanded pointer,
-/// bounded by its own receipt and pinned by
-/// `an_ignored_unlanded_pointer_refuses_the_next_stop`.
+/// The one exception is CLOUD-2456's refusal after a crashed `land`, which
+/// stands until `land` is re-run and is pinned by
+/// `a_crashed_land_refuses_every_stop`.
 // UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
 // Windows ladder's third rung resolves the interpreter a shebang names — which
 // `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
