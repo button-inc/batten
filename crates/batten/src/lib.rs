@@ -22410,13 +22410,7 @@ const LAND_DISPATCHED: &str = "land-dispatched";
 fn note_land_dispatch(envelope: &hook::Envelope) {
     // BACKGROUNDED ONLY: a foreground land's post-tool fires after it exited,
     // so it is no land waiting for its lock.
-    let backgrounded = ["run_in_background", "runInBackground"].iter().any(|key| {
-        envelope
-            .input
-            .get(*key)
-            .and_then(serde_json::Value::as_bool)
-            == Some(true)
-    });
+    let backgrounded = hook::Field::RunInBackground.read(envelope).as_deref() == Some("true");
     if !backgrounded || hook::singleton_task_started(envelope).as_deref() != Some(LAND_TASK) {
         return;
     }
