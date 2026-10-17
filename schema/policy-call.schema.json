@@ -168,7 +168,7 @@
         },
         "red-head": {
           "additionalProperties": false,
-          "description": "Fact::RedHead (CLOUD-2270) -- the current branch's red-head record, or null when none exists. `head` is the sha a lap's wait stopped red on; `failed` each failed required check's newest run, its id and name, and whether a check-log-read or check-run-read receipt keyed by that id exists; `running` each required check the stop abandoned unconcluded. Pointers only, never a log line.",
+          "description": "Fact::RedHead (CLOUD-2270) -- the current branch's red-head record, or null when none exists or its head is no longer the branch's remote head (CLOUD-2443). `head` is the sha a lap's wait stopped red on; `failed` each run a push over it owes a read -- each failed required check's newest run (a failed fan-in's failed members instead), and each required check's run the stop abandoned unconcluded -- its id and name, and whether a check-log-read or check-run-read receipt keyed by that id exists in any worktree's store; `running` the names of those abandoned runs still unread. Pointers only, never a log line.",
           "properties": {
             "failed": {
               "items": {
