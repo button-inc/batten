@@ -3574,7 +3574,7 @@ zero-is-a-count = true
 # measured nothing `closes 0`, never the stale set before it (review of #1212).
 # The keys column is the same grammar over that text.
 #MUTANT-SUITE crates/batten/tests/it/record_closes.rs
-#MUTANT pr-body-edit-unrecorded|s@^tool = "update_pull_request" # the edit's body$@tool = "never_a_tool"@|an_edited_body_is_the_newest_closing_set
+#MUTANT pr-body-edit-unrecorded|s@^tool = "update_pull_request"[[:space:]]*# the edit's body$@tool = "never_a_tool"@|an_edited_body_is_the_newest_closing_set
 [[recorder]]
 name = "pr-body-edit-closes"
 record = "pr-closes"
@@ -3596,7 +3596,7 @@ zero-is-a-count = true
 # A BODY WAS CREATED WITH THE PULL REQUEST, so it is the first closing set
 # (review of #1212): until someone fetched it, a PR opened through the connector
 # had no `pr-closes` line at all. Same shape and grammar as the edit row above.
-#MUTANT pr-body-create-unrecorded|s@^tool = "create_pull_request" # the created body$@tool = "never_a_tool"@|a_created_body_is_the_first_closing_set
+#MUTANT pr-body-create-unrecorded|s@^tool = "create_pull_request"[[:space:]]*# the created body$@tool = "never_a_tool"@|a_created_body_is_the_first_closing_set
 [[recorder]]
 name = "pr-body-create-closes"
 record = "pr-closes"
