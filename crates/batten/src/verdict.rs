@@ -1238,41 +1238,11 @@ pub fn live_tokens(verdicts: &[DeclaredVerdict]) -> BTreeSet<&str> {
 
 // ─── The native half of the registry ─────────────────────────────────────────
 
-/// Declare the native classes ONCE (CLOUD-2442): each `Variant => "token",`
-/// line yields the enum variant, its place in [`Native::ALL`] and its arm in
-/// [`Native::id`]. Three hand-kept lists — plus a test restating a fourth —
-/// were the same fact typed four times, and adding a class meant editing all of
-/// them; now completeness holds by construction. Declaration order is kept, so
-/// discriminants (which `semver` reads as API) do not move.
-macro_rules! natives {
-    (
-        $(#[$enum_meta:meta])*
-        $vis:vis enum $name:ident {
-            $( $(#[$meta:meta])* $variant:ident => $token:literal, )*
-        }
-    ) => {
-        $(#[$enum_meta])*
-        $vis enum $name {
-            $( $(#[$meta])* $variant, )*
-        }
-
-        impl $name {
-            /// Every native class, in declaration order — derived from the one
-            /// declaration, so no class can exist without being listed.
-            pub const ALL: &'static [$name] = &[ $( $name::$variant, )* ];
-
-            /// The token this class is declared and rendered under.
-            #[must_use]
-            pub fn id(self) -> &'static str {
-                match self {
-                    $( $name::$variant => $token, )*
-                }
-            }
-        }
-    };
-}
-
-natives! {
+// Declared ONCE through `token_enum!` (CLOUD-2442): each `Variant => "token",`
+// line yields the variant, its place in `Native::ALL` and its `Native::id` arm.
+// Declaration order is kept, so discriminants (which `semver` reads as API) do
+// not move.
+token_enum! {
 /// A refusal class the CRATE owns, as opposed to one a consumer declares.
 ///
 /// # Why this is an enum and not a table of strings
@@ -1282,7 +1252,7 @@ natives! {
 /// load; on the native side there is no AST to read, so the coupling has to be
 /// in the type system or it is a convention. An enum gives it for free: a native
 /// site names a variant, [`Native::ALL`] and each token are generated from the
-/// one declaration (`natives!`), and a site raising a class nobody declared is a
+/// one declaration (`token_enum!`), and a site raising a class nobody declared is a
 /// compile error rather than a finding.
 ///
 /// The same discipline `crate::facts::Fact` carries, and for the same reason.
@@ -1296,7 +1266,7 @@ natives! {
 /// house style §8 — and it is not represented here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
-pub enum Native {
+pub enum Native by id {
     /// A mutating verb was aimed at a path the config protects.
     ProtectedMutation => "path write refused",
     /// `batten init` would overwrite the committed authority.
@@ -3428,7 +3398,7 @@ mod tests {
     /// Every native class is a well-formed, unique token.
     ///
     /// Completeness needs no test: `Native::ALL` and the enum are generated
-    /// from one declaration (`natives!`, CLOUD-2442), so a class cannot exist
+    /// from one declaration (`token_enum!`, CLOUD-2442), so a class cannot exist
     /// unlisted. What a declaration CAN get wrong is its token, and that is
     /// what this asserts — so adding a class changes no line here.
     #[test]

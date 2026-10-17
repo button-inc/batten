@@ -8,6 +8,10 @@
 //! thin wrapper around. Keeping the logic in the library keeps it testable and
 //! keeps the binary's `main` trivial.
 
+// FIRST, because a `macro_rules!` is in scope only for modules declared after
+// it: every tokened enum in the crate declares itself through `token_enum!`.
+#[macro_use]
+mod token_enum;
 pub mod action;
 pub mod admission;
 pub mod advisory;
