@@ -111,6 +111,10 @@ declared_modules := {
 	# before landing. It reaches only `minted` (the receipt directory) and
 	# `durable` (the write); `lib` and `hook` read it, and it reads neither.
 	"dispatch",
+	# `token_enum` arrived with CLOUD-2442 and this rule named it on the gate
+	# before landing. It is a leaf: one `macro_rules!` and a `const fn`, reaching
+	# nothing in the crate; `verdict` and `rules` declare their enums through it.
+	"token_enum",
 	# `doc` (CLOUD-2143) and `history` (CLOUD-2144) arrived on one branch, and
 	# this rule named both on the gate before landing. `doc` is a class's
 	# vendored what/why/do/dont, read by `verdict` and `refusal`, and reads
