@@ -538,7 +538,7 @@ const TEST_RUN_FAILED: i32 = 100;
 const BUILD_FAILED: i32 = 101;
 /// The result words `nextest` ends a test's run with. `SLOW`, `START`, `TRY` and
 /// `SETUP` lines name a test too and decide nothing, so only these are read.
-const TERMINAL: &[&str] = &[
+pub(crate) const TERMINAL: &[&str] = &[
     "PASS",
     "FAIL",
     "TIMEOUT",

@@ -1147,7 +1147,7 @@ jobs:
           save-if: false
       - run: mise run mutant:changed
         env:
-          MUTANT_SHARD: ${{ matrix.shard }}/4
+          MUTANT_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           DOCTOR_TARGETS: ""
 
   final:

@@ -2557,12 +2557,13 @@ fn wait_bounded(
 #[cfg(unix)]
 const TERMINATE_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// `SIGTERM` the process group `leader` leads. Best effort, as [`kill_group`].
-//MUTANT runner-not-asked-first|s@^        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::TERM);$@        let _ = group;@|a_suite_that_hangs_is_ended_by_the_sweeps_own_bound
+/// `SIGTERM` the process group `leader` leads, through [`crate::exec::signal_group`].
+/// Best effort, as [`kill_group`].
+//MUTANT runner-not-asked-first|s@^        crate::exec::signal_group(group, rustix::process::Signal::TERM);$@        let _ = group;@|a_suite_that_hangs_is_ended_by_the_sweeps_own_bound
 #[cfg(unix)]
 fn terminate_group(leader: u32) {
     if let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default()) {
-        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::TERM);
+        crate::exec::signal_group(group, rustix::process::Signal::TERM);
     }
 }
 
@@ -2724,9 +2725,10 @@ fn build_bound() -> std::time::Duration {
 
 /// `SIGKILL` the process group `leader` leads, and the leader itself.
 ///
-/// No grace, for `exec::escalate_group`'s measured reason: a suite past its bound
-/// is hung by definition, and a polite signal it ignores only spends the bound
-/// again. The leader is signalled as well so that a group that somehow did not
+/// No grace of its own: [`wait_bounded`] gives a timed-out runner one bounded
+/// `SIGTERM` first ([`TERMINATE_GRACE`]), for a runner that leads groups of its
+/// own, and this is the end that follows whatever was answered. The leader is
+/// signalled as well so that a group that somehow did not
 /// form still ends its direct child — a leak the descendant case would report,
 /// never a hang. Best effort, because `ESRCH` means the process is already gone,
 /// which is the outcome being asked for.
@@ -2805,6 +2807,10 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
 
 /// The directory a committed `[[provision]]` row installed a registered
 /// runner's program into, set once by the verb before it runs ([`use_provisioned`]).
+///
+/// PROCESS-WIDE, AND THAT IS A CHOICE AGAINST TWO BREAKS: a field on `Registry`
+/// fails the existing struct-literal case that `test-replay` replays, and a new
+/// parameter on `run_registered` or `unresolvable` is a semver break of both.
 static PROVISIONED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// Run every registered runner's program from `dir` first: the pinned
@@ -3109,23 +3115,17 @@ fn libtest_ran(output: &str) -> bool {
     output.lines().any(|line| line.contains("test result: "))
 }
 
-/// Case result lines in a nextest run: a status word, then the bracketed
-/// duration, once per selected case whatever its outcome.
+/// Case result lines in a nextest run: one of its terminal status words
+/// ([`crate::replay::TERMINAL`], the one list of them), then the bracketed
+/// duration, once per selected case whatever its outcome. `SIGTERM` is among
+/// them, which [`wait_bounded`] itself sends a timed-out runner.
 fn nextest_lines(output: &str) -> usize {
-    const STATUS: [&str; 6] = [
-        "PASS [",
-        "FAIL [",
-        "TIMEOUT [",
-        "SIGSEGV [",
-        "SIGABRT [",
-        "SIGKILL [",
-    ];
     output
         .lines()
         .filter(|line| {
-            STATUS
-                .iter()
-                .any(|word| line.trim_start().starts_with(word))
+            line.trim_start()
+                .split_once(" [")
+                .is_some_and(|(word, _)| crate::replay::TERMINAL.contains(&word))
         })
         .count()
 }
