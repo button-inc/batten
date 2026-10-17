@@ -1353,6 +1353,7 @@ fn failed_members(
                 Some(crate::forge::Conclusion::Failure | crate::forge::Conclusion::TimedOut)
             )
         })
+        .filter(|(_, run)| run.id != 0)
         .map(|(name, run)| (run.id, name.to_owned()))
         .collect()
 }
@@ -1422,16 +1423,18 @@ fn read_receipts<'a>(
     })
 }
 
-/// Housekeeping (CLOUD-2443): remove the read receipts for each run the record
-/// at `record` names that `kept` does not, in every store, so a receipt does not
-/// outlive the record that owed it. Ids are digits only, as [`RedHead::parse`]
-/// reads them, so none is a path.
-fn sweep_reads(record: &Path, kept: &[String]) {
-    let Ok(previous) = std::fs::read_to_string(record) else {
+/// Housekeeping (CLOUD-2443): remove the read receipts for each run the
+/// `previous` text of the record at `record` named that `kept` does not, in
+/// every store, so a receipt does not outlive the record that owed it. Called
+/// only AFTER the record changed, so a write that fails never leaves a paid
+/// debt owed again. Ids are digits only, as [`RedHead::parse`] reads them, so
+/// none is a path.
+fn sweep_reads(record: &Path, previous: Option<&str>, kept: &[String]) {
+    let Some(previous) = previous else {
         return;
     };
     let stores = receipt_stores(record);
-    for id in RedHead::parse(&previous, |_| false).ids() {
+    for id in RedHead::parse(previous, |_| false).ids() {
         if !kept.contains(&id) {
             read_receipts(&stores, &id).for_each(|file| {
                 let _ = std::fs::remove_file(file);
@@ -1474,9 +1477,11 @@ pub fn record_red_head(root: &Path, branch: &str, sha: &str, reading: &RedReadin
         .chain(running)
         .map(|(id, _)| id.to_string())
         .collect();
-    sweep_reads(&path, &kept);
+    let previous = std::fs::read_to_string(&path).ok();
     crate::durable::replace(&path, text)
-        .with_context(|| format!("land: write the red-head record {}", path.display()))
+        .with_context(|| format!("land: write the red-head record {}", path.display()))?;
+    sweep_reads(&path, previous.as_deref(), &kept);
+    Ok(())
 }
 
 /// The receipt family whose `named` receipt, keyed by a run id, says that
@@ -1572,9 +1577,14 @@ impl RedHead {
             .collect()
     }
 
-    /// The refusal subjects, `<name> job <id>` per unread failure and then
-    /// `<name> still running`, or `None` when every failure was read: a running
-    /// check alone owes nothing, as the preset says.
+    /// The refusal subjects, `<name> job <id>` per unread run and then
+    /// `<name> still running`, or `None` when every run was read.
+    ///
+    /// A run going at the stop is one of them (CLOUD-2443), so it refuses until
+    /// read, and a read mints only once it concludes. Its remedy is to wait for
+    /// it or cancel it and then read it: either way its verdict is seen, which
+    /// is what a push over it would otherwise abandon. The preset's own rule
+    /// still holds over its `running` list, which is a name, never a debt.
     fn owed(&self) -> Option<Vec<String>> {
         let unread: Vec<String> = self
             .failed
@@ -1613,9 +1623,13 @@ fn read_red_head(root: &Path, branch: &str) -> crate::facts::Look<RedHead> {
         }
         Err(_) => return crate::facts::Look::CouldNotLook,
     };
+    // A RECORD WITH NO HEAD is never superseded: it cannot say which head it
+    // was about, so it stays owed rather than read as moved.
     let head = text.lines().find_map(|line| line.strip_prefix("head "));
-    let remote = crate::git::resolve_ref(root, &tracking_ref(branch));
-    if matches!(&remote, Ok(Some(remote)) if Some(remote.as_str()) != head) {
+    if let (Some(head), Ok(Some(remote))) =
+        (head, crate::git::resolve_ref(root, &tracking_ref(branch)))
+        && remote != head
+    {
         return crate::facts::Look::IsNot;
     }
     let stores = receipt_stores(&path);
@@ -1688,9 +1702,12 @@ pub fn clear_red_head(root: &Path, branch: &str) -> Result<bool> {
     let Some(path) = red_head_path(root, branch) else {
         return Ok(false);
     };
-    sweep_reads(&path, &[]);
+    let previous = std::fs::read_to_string(&path).ok();
     match std::fs::remove_file(&path) {
-        Ok(()) => Ok(true),
+        Ok(()) => {
+            sweep_reads(&path, previous.as_deref(), &[]);
+            Ok(true)
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error)
             .with_context(|| format!("land: remove the red-head record {}", path.display())),
@@ -1760,8 +1777,15 @@ pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
             // the branch's remote head, and this ref is how a reader with no
             // network knows that. Left behind, a red stop on this head would
             // compare unequal to it and owe nothing.
-            crate::gitwrite::set_ref(root, &tracking_ref(&reference), &head)
-                .with_context(|| format!("land: track {reference} at {head}"))?;
+            //
+            // THE PUSH LANDED EITHER WAY, so a ref that will not write is never
+            // this call's error. It is deleted instead: a missing ref is a
+            // could-not-look, which leaves a record owed, where a stale one
+            // would read as moved and drop it.
+            let tracking = tracking_ref(&reference);
+            if crate::gitwrite::set_ref(root, &tracking, &head).is_err() {
+                let _ = crate::gitwrite::delete_ref(root, &tracking);
+            }
             Pushed::Landed(head)
         }
         // THE SERVER'S REASON IS DROPPED HERE DELIBERATELY. It is a pointer for
@@ -5968,6 +5992,12 @@ mod tests {
         let alone = vec![run("failure", "final", 1), run("cancelled", "linux", 4)];
         assert_eq!(
             red_runs(&alone, &roster, &[finding("final")]).failed,
+            vec![(1, "final".to_owned())]
+        );
+        // A member with no id is no member: the aggregator stays owed.
+        let id_less = vec![run("failure", "final", 1), run("failure", "status", 0)];
+        assert_eq!(
+            red_runs(&id_less, &roster, &[finding("final")]).failed,
             vec![(1, "final".to_owned())]
         );
     }

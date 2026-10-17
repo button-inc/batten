@@ -106,6 +106,13 @@ fn a_record_for_a_superseded_head_owes_nothing() {
         "a superseded head owes nothing\n{out}"
     );
     assert_eq!(batten::land::red_head_owed(&dir, "work/red"), None);
+
+    // A RECORD WITH NO HEAD cannot say it was superseded, so it stays owed.
+    rewrite_record(&dir, "failed 101 windows\n");
+    assert!(
+        decision(&dir, "git push origin HEAD").contains("job read unread"),
+        "a headless record is owed, never read as moved"
+    );
 }
 
 /// A FAILED FAN-IN OWES ITS FAILED MEMBERS (CLOUD-2443), so reading the
