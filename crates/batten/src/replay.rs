@@ -348,7 +348,7 @@ pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<E
     }
     let refused = admitted
         .iter()
-        .filter(|(_, admission)| *admission == crate::lint::Admission::Refused)
+        .filter(|(_, admission)| matches!(admission, crate::lint::Admission::Refused(_)))
         .count();
     Ok(if refused == 0 {
         ExitCode::Success

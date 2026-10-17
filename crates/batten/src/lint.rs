@@ -829,8 +829,8 @@ fn workspace_rust_version(source: &str) -> Option<String> {
 /// ledger, where a reviewer reads them in the diff that carries them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Admission {
-    /// No answer on this branch admits it.
-    Refused,
+    /// No answer on this branch admits it, for the named cause.
+    Refused(Cause),
     /// A question naming it was answered with an admitting option, and the line
     /// recording that was added on this branch (CLOUD-1078).
     Asked,
@@ -841,8 +841,38 @@ impl Admission {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            Admission::Refused => "refused",
+            Admission::Refused(_) => "refused",
             Admission::Asked => "asked",
+        }
+    }
+}
+
+/// Why the ledger did not admit a pair (CLOUD-2303).
+///
+/// A bare refusal left "ask again" as the only remedy, so an answer already
+/// given was asked for a second time. Each cause names a different repair, and
+/// only one of them is a first question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cause {
+    /// No question added on this branch names the pair: ask it.
+    NotAsked,
+    /// A question naming it was answered, but not with an option whose label
+    /// starts `Admit`, so the answer reads as no: ask with an `Admit` option.
+    AnsweredWithoutAdmit,
+    /// The head does not begin with every base line, so nothing is admitted:
+    /// restore the base lines, in order, ahead of this branch's. A repair, not
+    /// a new question.
+    LedgerRewritten,
+}
+
+impl Cause {
+    /// The stable lowercase token (§6).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Cause::NotAsked => "not-asked",
+            Cause::AnsweredWithoutAdmit => "answered-without-admit",
+            Cause::LedgerRewritten => "ledger-rewritten",
         }
     }
 }
@@ -859,10 +889,15 @@ pub fn admissions(smells: &[Smell], ledger: &crate::asked::Ledger) -> Vec<(Smell
         .iter()
         .map(|smell| {
             let pair = format!("{} {}", smell.id, smell.at);
-            let admission = if ledger.admitting().iter().any(|entry| entry.admits(&pair)) {
+            let entries = ledger.admitting();
+            let admission = if *ledger == crate::asked::Ledger::Rewritten {
+                Admission::Refused(Cause::LedgerRewritten)
+            } else if entries.iter().any(|entry| entry.admits(&pair)) {
                 Admission::Asked
+            } else if entries.iter().any(|entry| entry.question.contains(&pair)) {
+                Admission::Refused(Cause::AnsweredWithoutAdmit)
             } else {
-                Admission::Refused
+                Admission::Refused(Cause::NotAsked)
             };
             (smell.clone(), admission)
         })
@@ -922,7 +957,7 @@ mod tests {
         // way to state this case is a branch that asked nothing.
         let found = [smell("waiver-added", "waiver[x]")];
         let admitted = admissions(&found, &crate::asked::Ledger::Added(Vec::new()));
-        assert_eq!(admitted[0].1, Admission::Refused);
+        assert_eq!(admitted[0].1, Admission::Refused(Cause::NotAsked));
     }
 
     #[test]
@@ -936,7 +971,33 @@ mod tests {
     fn a_refusing_answer_admits_nothing() {
         let found = [smell("waiver-added", "waiver[x]")];
         let admitted = admissions(&found, &answered("waiver-added waiver[x]", "Refuse"));
-        assert_eq!(admitted[0].1, Admission::Refused);
+        assert_eq!(
+            admitted[0].1,
+            Admission::Refused(Cause::AnsweredWithoutAdmit)
+        );
+    }
+
+    #[test]
+    fn a_non_admit_label_is_named_not_reasked() {
+        // THE CLOUD-2251 SHAPE. "Yes, override" meant yes to the human who
+        // picked it, and the ledger reads it as no; the refusal must say so,
+        // since a bare `refused` reads as never asked and gets asked again.
+        let found = [smell("rule-predicate-changed", "rule[r].tools")];
+        let ledger = crate::asked::Ledger::Added(vec![crate::asked::Entry {
+            question: "Override `rule-predicate-changed rule[r].tools`?".to_owned(),
+            options: vec![crate::asked::Choice {
+                label: "Yes, override".to_owned(),
+                description: "the replacement gate covers it".to_owned(),
+            }],
+            answer: "Yes, override".to_owned(),
+            at: 0,
+            head: None,
+        }]);
+        let admitted = admissions(&found, &ledger);
+        assert_eq!(
+            admitted[0].1,
+            Admission::Refused(Cause::AnsweredWithoutAdmit)
+        );
     }
 
     #[test]
@@ -944,14 +1005,37 @@ mod tests {
         // Answering one weakening must not licence another of its kind.
         let found = [smell("waiver-added", "waiver[x]")];
         let admitted = admissions(&found, &answered("waiver-added waiver[y]", "Admit"));
-        assert_eq!(admitted[0].1, Admission::Refused);
+        assert_eq!(admitted[0].1, Admission::Refused(Cause::NotAsked));
     }
 
     #[test]
     fn a_rewritten_ledger_admits_nothing() {
         let found = [smell("waiver-added", "waiver[x]")];
         let admitted = admissions(&found, &crate::asked::Ledger::Rewritten);
-        assert_eq!(admitted[0].1, Admission::Refused);
+        assert_eq!(admitted[0].1, Admission::Refused(Cause::LedgerRewritten));
+    }
+
+    #[test]
+    fn a_rewritten_ledger_names_its_cause() {
+        // A union merge that put the branch's lines ahead of the base's: every
+        // pair is refused for the ORDER, never as unasked, so the repair is
+        // restoring the base lines rather than asking each pair again.
+        let found = [
+            smell("waiver-added", "waiver[x]"),
+            smell("rule-predicate-changed", "rule[r].tools"),
+        ];
+        let admitted = admissions(&found, &crate::asked::Ledger::Rewritten);
+        assert!(
+            admitted
+                .iter()
+                .all(|(_, admission)| *admission == Admission::Refused(Cause::LedgerRewritten)),
+            "{admitted:?}"
+        );
+        assert_eq!(
+            Cause::LedgerRewritten.as_str(),
+            "ledger-rewritten",
+            "the token the refused line prints"
+        );
     }
 
     #[test]
@@ -965,7 +1049,7 @@ mod tests {
         ];
         let admitted = admissions(&found, &answered("waiver-added waiver[x]", "Admit"));
         assert_eq!(admitted[0].1, Admission::Asked);
-        assert_eq!(admitted[1].1, Admission::Refused);
+        assert_eq!(admitted[1].1, Admission::Refused(Cause::NotAsked));
     }
 
     #[test]
