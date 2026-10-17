@@ -23511,7 +23511,7 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
     let git_dir = git::git_dir(Path::new(".")).ok()?;
     let branch = git::current_branch(Path::new(".")).ok().flatten()?;
     // The dispatch excuse is cleared whenever it is no longer about a land
-    // waiting for its lock: no claim to excuse, or the land already holding it.
+    // waiting for its lock: no crash to answer, or no claim to excuse.
     let dispatched = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
     // The crash read first: one failed file read on almost every Stop, where the
     // claim loads the whole findings store.
@@ -23532,9 +23532,9 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
         &[
             verdict::artifact(completion::RULE_ID),
             verdict::Subject::Count { count },
-            verdict::artifact("land crashed: re-run `mise run land`, backgrounded"),
+            verdict::artifact("land crashed"),
         ],
-        refusal::Fix::None,
+        refusal::Fix::Run("mise run land".to_owned()),
     ))
 }
 
