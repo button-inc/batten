@@ -1369,12 +1369,13 @@ fn failed_members(
         required: names.into_iter().map(str::to_owned).collect(),
         ..roster.clone()
     };
-    let (named, unnamed): (Vec<_>, Vec<_>) = crate::checks_green::latest_per_name(runs, &members)
-        .into_iter()
-        .filter(|(_, run)| run_failed(run))
-        .map(|(name, run)| (run.id, name.to_owned()))
-        .partition(|(id, _)| *id != 0);
-    (named, !unnamed.is_empty())
+    let (readable, id_less): (Vec<_>, Vec<_>) =
+        crate::checks_green::latest_per_name(runs, &members)
+            .into_iter()
+            .filter(|(_, run)| run_failed(run))
+            .map(|(name, run)| (run.id, name.to_owned()))
+            .partition(|(id, _)| *id != 0);
+    (readable, !id_less.is_empty())
 }
 
 /// A branch's red-head key, INJECTIVE where the shared branch-receipt slug is
@@ -1648,9 +1649,9 @@ fn read_red_head(root: &Path, branch: &str) -> crate::facts::Look<RedHead> {
     // was about, so it stays owed rather than read as moved.
     let head = text
         .lines()
+        .rev()
         .filter_map(|line| line.strip_prefix("head "))
-        .filter(|head| !head.is_empty())
-        .last();
+        .find(|head| !head.is_empty());
     if let (Some(head), Ok(Some(remote))) =
         (head, crate::git::resolve_ref(root, &tracking_ref(branch)))
         && remote != head
