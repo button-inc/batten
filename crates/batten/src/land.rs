@@ -1213,7 +1213,8 @@ pub fn wait_reading(
 pub struct RedReading {
     /// Each failed required check's newest run, as `(run id, name)`, and each
     /// failed member of a fan-in that failed or is still going, with a failed
-    /// fan-in itself where no member stands for it ([`red_runs`]).
+    /// fan-in itself where no member stands for it or one carries no id
+    /// ([`red_runs`]).
     pub failed: Vec<(u64, String)>,
     /// Each required check still running when the red answered, as
     /// `(run id, name)`, sorted by name.
@@ -6095,7 +6096,14 @@ mod tests {
         );
         assert_eq!(reading.running, vec![(1, "final".to_owned())]);
         // With no failed member it is owed only as running, never called failed.
-        let quiet = red_runs(&going[..2], &roster, &[finding("lint")]);
+        let alone_going = vec![
+            Run {
+                status: "in_progress".to_owned(),
+                ..run("", "final", 1)
+            },
+            run("failure", "lint", 6),
+        ];
+        let quiet = red_runs(&alone_going, &roster, &[finding("lint")]);
         assert_eq!(quiet.failed, vec![(6, "lint".to_owned())]);
         assert_eq!(quiet.running, vec![(1, "final".to_owned())]);
 
