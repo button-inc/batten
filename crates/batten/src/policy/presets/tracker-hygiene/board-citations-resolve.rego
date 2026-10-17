@@ -8,11 +8,13 @@
 #   A READY BLOCK'S CITATIONS AGAINST THE TREE (`board-cites`). A test the
 #   obligations clause names must be carried by some file of the consumer's
 #   declared corpus — fixtures excluded, because a fixture quoting a citation is
-#   not the thing cited. A cited path must exist, OR be marked prospective by
-#   the block, beside its own path, OR be refused (CLOUD-920). A marked path an
-#   ancestor DELETED is refused anyway: history may REFUTE a marker and is never
-#   asked to grant one, and a shallow clone that cannot answer leaves the marker
-#   believed. This checks EXISTENCE, never relevance.
+#   not the thing cited — OR be marked prospective beside its own token, which
+#   history never refutes for a symbol (CLOUD-1110). A cited path must exist,
+#   OR be marked prospective by the block, beside its own path, OR be refused
+#   (CLOUD-920). A marked path an ancestor DELETED is refused anyway: history
+#   may REFUTE a marker and is never asked to grant one, and a shallow clone
+#   that cannot answer leaves the marker believed. This checks EXISTENCE, never
+#   relevance.
 #
 #   THE TREE'S CLAUSE CITATIONS AGAINST THE PAYLOADS (`board-refs`). Every
 #   `<key> §<n>` in the tracked tree must name a clause its issue's Ready block
@@ -40,6 +42,7 @@ import rego.v1
 #MUTANT-SUITE crates/batten/tests/it/board_check.rs
 #MUTANT absent-test-passes|s@^\tcited.found == "no"$@\tfalse@|a_citation_that_resolves_only_in_a_fixture_and_nowhere_else_is_refused
 #MUTANT marker-not-required|s@^\tabsent.marked == "no"$@\tfalse@|an_unmarked_absent_path_is_still_refused
+#MUTANT test-marker-not-required|s@^\tcited.marked == "no"$@\tfalse@|an_unmarked_absent_test_symbol_is_still_refused
 #MUTANT marker-outranks-history|s@^\tstale.deleted == "yes"$@\tfalse@|a_marker_on_a_deleted_path_is_refused_not_believed
 #MUTANT clause-always-present|s@^\tnot board_clause_carried(hit.key, hit.clause)$@\tfalse@|a_citation_naming_a_clause_the_issue_does_not_carry_is_reported_with_its_pointer
 #MUTANT unfetched-issue-passes|s@^\tnot unread.key in board_fetched$@\tfalse@|a_cited_issue_absent_from_the_payload_set_is_could_not_look_never_a_silent_pass
@@ -52,11 +55,11 @@ board_cites_lines := input.tree.records["board-cites"]
 
 board_refs_lines := input.tree.records["board-refs"]
 
-# `test <key> <token> <found>`.
-board_cited_tests contains {"key": f[1], "token": f[2], "found": f[3]} if {
+# `test <key> <token> <found> <marked>`.
+board_cited_tests contains {"key": f[1], "token": f[2], "found": f[3], "marked": f[4]} if {
 	some line in board_cites_lines
 	f := split(line, "\t")
-	count(f) == 4
+	count(f) == 5
 	f[0] == "test"
 }
 
@@ -75,6 +78,15 @@ violation contains {
 } if {
 	some cited in board_cited_tests
 	cited.found == "no"
+	cited.marked == "no"
+}
+
+# A marked absent test symbol is never checked against history: the engine's
+# module header says why (CLOUD-1110).
+board_notes contains sprintf("%s %s prospective-cited-test", [planned.key, planned.token]) if {
+	some planned in board_cited_tests
+	planned.found == "no"
+	planned.marked == "yes"
 }
 
 violation contains {
@@ -163,12 +175,18 @@ board_rendered(found) := {rendered |
 }
 
 test_board_a_test_no_corpus_file_carries_is_refused if {
-	found := violation with input as board_cites_tree(["test\tA-1\ta_case_nobody_wrote\tno"])
+	found := violation with input as board_cites_tree(["test\tA-1\ta_case_nobody_wrote\tno\tno"])
 	board_rendered(found) == {"A-1 a_case_nobody_wrote absent-cited-test"}
 }
 
+test_board_a_marked_absent_test_is_prospective_not_refused if {
+	tree := board_cites_tree(["test\tA-1\ta_case_planned_here\tno\tyes"])
+	count(violation) == 0 with input as tree
+	board_notes == {"A-1 a_case_planned_here prospective-cited-test"} with input as tree
+}
+
 test_board_a_test_the_corpus_carries_passes if {
-	count(violation) == 0 with input as board_cites_tree(["test\tA-1\ta_case_that_exists\tyes"])
+	count(violation) == 0 with input as board_cites_tree(["test\tA-1\ta_case_that_exists\tyes\tno"])
 }
 
 test_board_an_unmarked_absent_path_is_refused if {

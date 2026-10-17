@@ -1440,3 +1440,34 @@ fn the_credential_table_carries_the_names_the_engine_dropped() {
             .expect("names is optional");
     assert!(bare.names.is_empty());
 }
+
+/// EXPIRY DOES NOT CHANGE THE ANSWER (CLOUD-1488); `provision.rs`'s module doc
+/// says why.
+///
+/// DST Root CA X3, a REAL, public root that expired on 2021-09-30, committed for
+/// `one_certificate_bundle`'s reasons. Its `notAfter` is asserted off the
+/// committed bytes rather than remembered, and the mutation beside
+/// `organisation_of` refuses below a fixed instant between this root and ISRG
+/// Root X1 — no host clock, so the verdict never depends on when it runs.
+#[test]
+fn an_expired_certificate_still_names_its_organisation() {
+    use x509_cert::der::DecodePem as _;
+
+    const EXPIRED: &str = include_str!("../fixtures/certs/dst-root-ca-x3.pem");
+    let parsed = x509_cert::Certificate::from_pem(EXPIRED).expect("the fixture parses");
+    assert_eq!(
+        parsed
+            .tbs_certificate
+            .validity
+            .not_after
+            .to_unix_duration()
+            .as_secs(),
+        1_633_010_475,
+        "the fixture is the root that expired 2021-09-30T14:01:15Z"
+    );
+    assert_eq!(
+        batten::provision::organisation_of(EXPIRED).as_deref(),
+        Some("Digital Signature Trust Co."),
+        "an expired authority still names its organisation"
+    );
+}
