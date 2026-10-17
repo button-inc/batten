@@ -22398,7 +22398,7 @@ const LAND_DISPATCHED: &str = "land-dispatched";
 ///
 /// A backgrounded `mise run land` returns at once and the turn ends, while the
 /// land it started is still building and holds no lock yet; the lock alone
-/// would read that, the one compliant answer to the pointer, as no land at all.
+/// would read that, the very answer the pointer asks for, as no land at all.
 /// The receipt excuses exactly one Stop that would otherwise be refused and is
 /// consumed by it, so a land that died before locking is refused at the Stop
 /// after. A count, not a clock.
