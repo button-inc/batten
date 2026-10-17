@@ -3137,6 +3137,7 @@ fn nextest_lines(output: &str) -> usize {
             (result && words.next()?.starts_with('[')).then(|| line.split_once(']'))?
         })
         .map(|(_, case)| case.trim())
+        .filter(|case| !case.is_empty())
         .collect::<std::collections::BTreeSet<_>>()
         .len()
 }
@@ -4450,6 +4451,11 @@ mod tests {
                      Summary [  60.100s] 4 tests run: 1 passed, 3 failed\n   \
                      LEAK-FAIL [   0.010s] batten::it d\n";
         assert_eq!(nextest_lines(ended), 4);
+        assert_eq!(
+            nextest_lines("        PASS [   0.004s]\n"),
+            0,
+            "a result names a case"
+        );
         let empty = "    Starting 0 tests across 1 binary\n     \
                      Summary [   0.000s] 0 tests run: 0 passed, 9 skipped\n";
         assert_eq!(nextest_lines(empty), 0);

@@ -538,7 +538,8 @@ const TEST_RUN_FAILED: i32 = 100;
 const BUILD_FAILED: i32 = 101;
 /// The result words `nextest` ends a test's run with. `SLOW`, `START`, `TRY` and
 /// `SETUP` lines name a test too and decide nothing, so only these are read.
-/// `mutate::nextest_lines` counts selected cases off the same list.
+/// `mutate::nextest_lines` counts selected cases off this list plus `LEAK`
+/// (a pass that leaked handles), which this module does not read yet.
 pub(crate) const TERMINAL: &[&str] = &[
     "PASS",
     "FAIL",
