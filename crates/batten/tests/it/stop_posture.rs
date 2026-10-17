@@ -1044,6 +1044,79 @@ fn an_operator_prompt_rearms_the_unlanded_pointer() {
     );
 }
 
+/// AN IGNORED POINTER REFUSES THE NEXT STOP (CLOUD-2441), once.
+///
+/// The first Stop on the claim is the advisory, exit 0, as before. The second,
+/// with still no `land` running, is the pointer ignored: refused with Claude
+/// Code's `2` and the class on stderr. The third passes, because one forced
+/// continuation is the bound, and `stop_hook_active: false` on every Stop is
+/// what the host sends when reminders interleave (anthropics/claude-code#54360).
+#[test]
+fn an_ignored_unlanded_pointer_refuses_the_next_stop() {
+    let (repo, home) = unlanded_fixture("stop-unlanded-refused");
+    let stop = || hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let first = stop();
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "the first Stop is the advisory"
+    );
+    assert!(unlanded_line(&stdout_of(&first)).is_some(), "and it speaks");
+    let second = stop();
+    let stderr = String::from_utf8_lossy(&second.stderr).into_owned();
+    assert_eq!(
+        second.status.code(),
+        Some(2),
+        "the Stop after an ignored pointer is refused: {stderr}"
+    );
+    assert!(
+        stderr.contains("commit ship missing"),
+        "naming the class whose remedy is the land: {stderr}"
+    );
+    assert_eq!(
+        stop().status.code(),
+        Some(0),
+        "one refusal per claim, so the next Stop passes"
+    );
+}
+
+/// A RUNNING `land` LETS THE TURN END (CLOUD-2441): the work is being moved, so
+/// the Stop that would otherwise be refused is the advisory's silence instead.
+#[test]
+fn a_running_land_lets_the_stop_pass() {
+    let (repo, home) = unlanded_fixture("stop-unlanded-landing");
+    let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let git_dir = repo.join(".git");
+    let pid = std::process::id().to_string();
+    let claim = batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO);
+    assert_eq!(
+        claim,
+        batten::task::Claim::Taken,
+        "the fixture holds the lock"
+    );
+    let second = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    batten::task::singleton_release(&git_dir, "land");
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "a live land holding the lock is the remedy already running"
+    );
+}
+
+/// THE HOST'S OWN BOUND IS HONOURED TOO (CLOUD-2441): a Stop the host marks as
+/// already continued is never refused, whatever the receipt says.
+#[test]
+fn a_continued_stop_is_never_refused() {
+    let (repo, home) = unlanded_fixture("stop-unlanded-continued");
+    let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let second = hook_in(&repo, &home, &stop_payload("Landed and pushed.", true));
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "stop_hook_active ends the turn"
+    );
+}
+
 /// ANTI-VACUITY for the case above (CLOUD-418): the first turn must still speak.
 ///
 /// Without this, a suppression that silenced the rule outright would pass the
@@ -1162,6 +1235,9 @@ fn the_recursion_bound_holds_for_every_rule() {
 
 /// THE GUARD NEVER EXITS NON-ZERO, so it cannot surface as a hook error. Every
 /// case above reads stdout; this one reads the status, over a rule that fired.
+/// The one exception is CLOUD-2441's refusal of an ignored unlanded pointer,
+/// bounded by its own receipt and pinned by
+/// `an_ignored_unlanded_pointer_refuses_the_next_stop`.
 // UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
 // Windows ladder's third rung resolves the interpreter a shebang names — which
 // `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for

@@ -18611,6 +18611,10 @@ fn run_hook(
     // being read. A turn already handed a handler's advice has been told
     // something more specific, so the module's line is appended only to a silent
     // buffer.
+    // The one Stop that can block (CLOUD-2441): see `unlanded_stop_block`.
+    if refused_stop(harness, &envelope, err)? {
+        return Ok(ExitCode::Violation);
+    }
     fill_turn_advice(&policy, &envelope, &facts, overrides, &raw, &mut advice);
     // THE DECISION IS RESOLVED BEFORE THE ADVISORY IS SPOKEN (CLOUD-1175), and
     // that ordering is the whole fix rather than a tidy-up.
@@ -22249,28 +22253,7 @@ fn record_state(overrides: &Overrides) {
 /// nudge form. Only an observed, positive count is a finding.
 //MUTANT unlanded-pointer-repeats|s@^    if already_marked(spoken.as_deref(), \&key) {$@    if false \&\& already_marked(spoken.as_deref(), \&key) {@|an_unchanged_unlanded_pointer_is_spoken_once_across_stops
 fn unlanded_pointer() -> Option<refusal::Refusal> {
-    let branch = git::current_branch(Path::new(".")).ok().flatten()?;
-    let context = format!("refs/heads/{branch}");
-    // THE REPO ROOT, NOT THE HOOK'S ANCHOR, and the two are not the same object.
-    // `run_state_record` — which minted this verdict moments ago — keys the store
-    // on `git::repo_root`, so a reader anchored anywhere else looks in a store
-    // nothing wrote to and reports silence. Measured: the nudge went quiet over a
-    // fixture whose `batten state list` showed the finding.
-    let repo = git::repo_root(Path::new(".")).ok()?;
-    let opened = store::resolve(&repo).ok()?;
-    let dir = store::bound_dir(&opened)?;
-    let records = findings::load_all(&dir).ok()?;
-
-    let (identity, count) = records
-        .iter()
-        .filter(|record| record.rule == completion::RULE_ID)
-        .flat_map(|record| record.instances.iter().map(move |i| (&record.identity, i)))
-        .filter(|(_, instance)| instance.context.to_string() == context)
-        .find_map(|(identity, instance)| match instance.occurrences {
-            // FAIL-CLOSED ON THE OBSERVATION, and this is the arm that carries it.
-            findings::Observation::Observed(count) if count > 0 => Some((identity, count)),
-            _ => None,
-        })?;
+    let UnlandedClaim { branch, key, count } = unlanded_claim()?;
 
     // ONCE PER CLAIM, AND THE KEY IS NOT ONE THE REMEDY CAN MINT (CLOUD-890).
     //
@@ -22295,7 +22278,6 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
     //
     // The marker is also `turn mint ahead`'s `while_marker`, which reads it as
     // "this claim was told".
-    let key = identity.fingerprint.to_hex();
     let git_dir = git::git_dir(Path::new(".")).ok();
     let seen = git_dir
         .as_deref()
@@ -22362,12 +22344,135 @@ fn rearm_unlanded(event: hook::Event) {
     if let Ok(git_dir) = git::git_dir(Path::new(".")) {
         let marker = recorder::record_path(&git_dir, UNLANDED_SPOKEN, &branch, None);
         let _ = std::fs::remove_file(marker);
+        // The Stop refusal's bound re-arms with it (CLOUD-2441): one forced
+        // continuation per claim per operator prompt.
+        let refused = recorder::record_path(&git_dir, UNLANDED_REFUSED, &branch, None);
+        let _ = std::fs::remove_file(refused);
     }
 }
 
 /// The receipt family recording that the unlanded pointer spoke (CLOUD-2332).
 /// Branch-keyed, so `land::retire_branch` sweeps it with the rest.
 const UNLANDED_SPOKEN: &str = "unlanded-spoken";
+
+/// Refuse the Stop [`unlanded_stop_block`] names, with Claude Code's `2` and
+/// the reason on stderr, which resumes the model with it. Other hosts read a
+/// Stop's exit differently, so they keep the advisory.
+fn refused_stop(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    err: &mut dyn Write,
+) -> Result<bool> {
+    if harness != hook::Harness::ClaudeCode {
+        return Ok(false);
+    }
+    let Some(block) = unlanded_stop_block(envelope) else {
+        return Ok(false);
+    };
+    writeln!(err, "{}", block.render_finding(refusal::Arm::Full))?;
+    Ok(true)
+}
+
+/// The receipt family recording that a Stop was refused over the claim
+/// (CLOUD-2441). Branch-keyed like its sibling, and re-armed with it.
+const UNLANDED_REFUSED: &str = "unlanded-refused";
+
+/// The completion claim this branch holds unlanded, as the store recorded it.
+struct UnlandedClaim {
+    branch: String,
+    /// The finding's own identity, which no remedial action re-mints.
+    key: String,
+    count: u64,
+}
+
+/// The observed `completion.unlanded` claim on this branch, or nothing.
+fn unlanded_claim() -> Option<UnlandedClaim> {
+    let branch = git::current_branch(Path::new(".")).ok().flatten()?;
+    let context = format!("refs/heads/{branch}");
+    // THE REPO ROOT, NOT THE HOOK'S ANCHOR, and the two are not the same object.
+    // `run_state_record` — which minted this verdict moments ago — keys the store
+    // on `git::repo_root`, so a reader anchored anywhere else looks in a store
+    // nothing wrote to and reports silence. Measured: the nudge went quiet over a
+    // fixture whose `batten state list` showed the finding.
+    let repo = git::repo_root(Path::new(".")).ok()?;
+    let opened = store::resolve(&repo).ok()?;
+    let dir = store::bound_dir(&opened)?;
+    let records = findings::load_all(&dir).ok()?;
+    let (identity, count) = records
+        .iter()
+        .filter(|record| record.rule == completion::RULE_ID)
+        .flat_map(|record| record.instances.iter().map(move |i| (&record.identity, i)))
+        .filter(|(_, instance)| instance.context.to_string() == context)
+        .find_map(|(identity, instance)| match instance.occurrences {
+            // FAIL-CLOSED ON THE OBSERVATION, and this is the arm that carries it.
+            findings::Observation::Observed(count) if count > 0 => Some((identity, count)),
+            _ => None,
+        })?;
+    Some(UnlandedClaim {
+        branch,
+        key: identity.fingerprint.to_hex(),
+        count,
+    })
+}
+
+/// The Stop to refuse: work that exists only here, already pointed at, and no
+/// `land` running to move it (CLOUD-2441).
+///
+/// # The owner's ruling, and the decision it overrides
+///
+/// Stopping a land is the catastrophic error, not lapping: a local lap is free,
+/// and committed work no lap carries is lost on reclaim. Measured twice on
+/// 2026-10-16: an agent read `commit ship missing` past four Stops on #1174,
+/// and this repository's own author ended a turn mid-landing on #1190 because a
+/// review skill said its reply was the report and nothing else.
+///
+/// CLOUD-889 removed the Stop deny for two reasons, and neither reaches this
+/// predicate. Its `unlanded` held for a branch's whole life, so the deny looped;
+/// here a running `land` clears it, read from the landing lock itself
+/// ([`task::singleton_holder`], the non-taking read built for hooks). Its remedy,
+/// a push, could not clear it; this one's is the land it names.
+///
+/// # The bound is a receipt, not the host's flag
+///
+/// `stop_hook_active` resets whenever a system reminder lands between Stops
+/// (anthropics/claude-code#54360), which a session with background tasks does
+/// constantly, so it is honoured but cannot be what holds this. The receipt
+/// can: ONE refusal per claim, re-armed only by an operator prompt with the
+/// pointer it follows. And it follows the pointer: the first Stop on a claim is
+/// the advisory, which already resumes the model once (CLOUD-2332); the Stop
+/// after it, with still no land, is the pointer ignored, and only that one is
+/// refused.
+//MUTANT unlanded-stop-advises|s@^    if task::singleton_holder(\&git_dir, LAND_TASK).is_some() {$@    if true {@|an_ignored_unlanded_pointer_refuses_the_next_stop
+fn unlanded_stop_block(envelope: &hook::Envelope) -> Option<refusal::Refusal> {
+    if envelope.event != hook::Event::Stop
+        || envelope.stop_active == Some(true)
+        || !envelope.writes_available()
+        || std::env::var_os(UNLANDED_BYPASS).is_some()
+    {
+        return None;
+    }
+    let UnlandedClaim { branch, key, count } = unlanded_claim()?;
+    let git_dir = git::git_dir(Path::new(".")).ok()?;
+    if task::singleton_holder(&git_dir, LAND_TASK).is_some() {
+        return None;
+    }
+    let spoken = recorder::record_path(&git_dir, UNLANDED_SPOKEN, &branch, None);
+    let refused = recorder::record_path(&git_dir, UNLANDED_REFUSED, &branch, None);
+    if !already_marked(Some(&spoken), &key) || already_marked(Some(&refused), &key) {
+        return None;
+    }
+    // An unwritable receipt would refuse every Stop, which is CLOUD-889's loop:
+    // a refusal that cannot record itself is not issued.
+    crate::durable::append(&refused, &key).ok()?;
+    Some(refusal::Refusal::engine(
+        verdict::Native::CommitShipMissing,
+        &[
+            verdict::artifact(completion::RULE_ID),
+            verdict::Subject::Count { count },
+        ],
+        refusal::Fix::None,
+    ))
+}
 
 /// Whether the claim `key` is already recorded in the marker at `seen`.
 fn already_marked(seen: Option<&Path>, key: &str) -> bool {
