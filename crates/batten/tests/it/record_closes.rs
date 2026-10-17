@@ -99,7 +99,7 @@ fn a_body_that_closes_rows_records_them_in_the_readers_own_shape() {
 /// rows as they ship: the whole table names `policy/` modules a scratch
 /// repository does not carry, the hook cannot load it there, and it records
 /// nothing.
-fn edit_config() -> String {
+fn body_recorder_config() -> String {
     let committed: toml::Table = std::fs::read_to_string(common::at_root("batten.toml"))
         .expect("read the committed authority")
         .parse()
@@ -128,10 +128,11 @@ fn edit_config() -> String {
     toml::to_string(&fixture).expect("the fixture serializes")
 }
 
-/// A repository carrying [`edit_config`].
-fn edit_repo(name: &str) -> PathBuf {
+/// A repository carrying [`body_recorder_config`].
+fn body_recorder_repo(name: &str) -> PathBuf {
     let root = repo(name);
-    std::fs::write(root.join("batten.toml"), edit_config()).expect("install the fixture config");
+    std::fs::write(root.join("batten.toml"), body_recorder_config())
+        .expect("install the fixture config");
     root
 }
 
@@ -155,18 +156,27 @@ fn edit_pull_request(root: &Path, input: &str) {
 /// `closes 0`, so the set the cleared body no longer carries stops deciding.
 #[test]
 fn a_cleared_body_records_a_measured_nothing() {
-    let root = edit_repo("record-closes-cleared");
+    let root = body_recorder_repo("record-closes-cleared");
+    // The set the cleared body no longer carries, recorded first.
+    edit_pull_request(
+        &root,
+        r#"{"owner":"o","repo":"r","pullNumber":7,"body":"Closes CLOUD-5\n"}"#,
+    );
     edit_pull_request(
         &root,
         r#"{"owner":"o","repo":"r","pullNumber":7,"body":""}"#,
     );
-    assert_eq!(recorded(&root).as_deref(), Some("closes 0\n"));
+    assert_eq!(
+        recorded(&root).as_deref(),
+        Some("closes 1:CLOUD-5\ncloses 0\n"),
+        "the measured nothing is the newest line, so it decides"
+    );
 }
 
 /// A BODY SET AT CREATION IS THE FIRST CLOSING SET (review of #1212).
 #[test]
 fn a_created_body_is_the_first_closing_set() {
-    let root = edit_repo("record-closes-created");
+    let root = body_recorder_repo("record-closes-created");
     pull_request_call(
         &root,
         "create_pull_request",
@@ -180,7 +190,7 @@ fn a_created_body_is_the_first_closing_set() {
 /// stands rather than the last one fetched.
 #[test]
 fn an_edited_body_is_the_newest_closing_set() {
-    let root = edit_repo("record-closes-edited");
+    let root = body_recorder_repo("record-closes-edited");
     edit_pull_request(
         &root,
         r#"{"owner":"o","repo":"r","pullNumber":7,"body":"Reworked.\n\nCloses CLOUD-7\n"}"#,
@@ -188,7 +198,7 @@ fn an_edited_body_is_the_newest_closing_set() {
     assert_eq!(recorded(&root).as_deref(), Some("closes 1:CLOUD-7\n"));
 
     // ANTI-VACUITY: an edit that sets no body (a state change) records nothing.
-    let untouched = edit_repo("record-closes-state-only");
+    let untouched = body_recorder_repo("record-closes-state-only");
     edit_pull_request(
         &untouched,
         r#"{"owner":"o","repo":"r","pullNumber":7,"state":"closed"}"#,

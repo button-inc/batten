@@ -3617,6 +3617,7 @@ zero-is-a-count = true
 
 # THE CALL SET A BODY, whatever it says: an empty one is a measured nothing,
 # which is the point. Matches any string; a call with no `body` is not selected.
+#MUTANT pr-body-blank-unrecorded|s@^regex = '\^'$@regex = '[^[:space:]]'@|a_cleared_body_records_a_measured_nothing
 [[pattern]]
 id = "pr-body-set"
 regex = '^'
