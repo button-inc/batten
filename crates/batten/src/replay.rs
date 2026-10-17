@@ -538,11 +538,8 @@ const TEST_RUN_FAILED: i32 = 100;
 const BUILD_FAILED: i32 = 101;
 /// The result words `nextest` ends a test's run with. `SLOW`, `START`, `TRY` and
 /// `SETUP` lines name a test too and decide nothing, so only these are read.
-///
-/// TWO READERS: this module's pass/fail, and `mutate::nextest_lines`, which
-/// counts one of these per selected case. A word added here must be one nextest
-/// prints once per case, and a word removed stops a case being counted there.
-pub(crate) const TERMINAL: &[&str] = &[
+/// Both readers reach it through [`terminal_word`].
+const TERMINAL: &[&str] = &[
     "PASS",
     "LEAK",
     "FAIL",
@@ -554,6 +551,18 @@ pub(crate) const TERMINAL: &[&str] = &[
     "SIGTERM",
     "LEAK-FAIL",
 ];
+/// The [`TERMINAL`] word a nextest line ends a case with, or `None` for any other
+/// line. It is the word just before the bracketed duration, so a retried case's
+/// `TRY n` prefix is read past. The one parser of a result line, shared by this
+/// module's pass/fail and `mutate::nextest_lines`' case count.
+pub(crate) fn terminal_word(line: &str) -> Option<&str> {
+    let (before, _) = line.split_once(" [")?;
+    before
+        .split_whitespace()
+        .last()
+        .filter(|word| TERMINAL.contains(word))
+}
+
 /// What `cargo` prints when rustc refused the crate: a base body HEAD's code
 /// cannot compile, as opposed to a build that never reached rustc.
 const COMPILE_FAILED: &str = "could not compile";
@@ -580,11 +589,11 @@ fn passes(outcome: Option<&(i32, String)>, test: &str) -> Result<bool> {
     let statuses: Vec<&str> = output
         .lines()
         .filter_map(|line| {
-            let mut words = line.split_whitespace();
-            let status = words.next()?;
-            let name = words.last()?;
+            let status = terminal_word(line)?;
+            let name = line.split_whitespace().last()?;
             let named = name == test || name.ends_with(&suffix);
-            (named && TERMINAL.contains(&status)).then_some(status)
+            // `LEAK` is a pass that leaked handles; `LEAK-FAIL` is the failure.
+            named.then_some(if status == "LEAK" { "PASS" } else { status })
         })
         .collect();
     if statuses.is_empty() {
@@ -610,6 +619,35 @@ fn said(outcome: Option<&(i32, String)>) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: a retried case read as its `TRY` prefix, or a leaky pass read
+    /// as a failure, so replay calls a test it measured unreplayable or red.
+    #[test]
+    fn a_retried_or_leaky_pass_is_read_as_a_pass() {
+        let retried = (
+            TEST_RUN_FAILED,
+            String::from(
+                "  TRY 1 FAIL [   0.004s] batten::it m::t\n  TRY 2 PASS [   0.004s] batten::it m::t\n",
+            ),
+        );
+        assert_eq!(
+            terminal_word("  TRY 2 PASS [   0.004s] batten::it m::t"),
+            Some("PASS")
+        );
+        assert_eq!(
+            terminal_word("        SLOW [> 60.000s] batten::it m::t"),
+            None
+        );
+        assert!(
+            !passes(Some(&retried), "t").unwrap(),
+            "a retried FAIL is still read"
+        );
+        let leaky = (
+            0,
+            String::from("        LEAK [   0.120s] batten::it m::t\n"),
+        );
+        assert!(passes(Some(&leaky), "t").unwrap());
+    }
 
     const BASE: &str = "\
 fn helper() -> u8 { 1 }

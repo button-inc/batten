@@ -3115,19 +3115,13 @@ fn libtest_ran(output: &str) -> bool {
     output.lines().any(|line| line.contains("test result: "))
 }
 
-/// Case result lines in a nextest run: one of its terminal status words
-/// ([`crate::replay::TERMINAL`], the one list of them), then the bracketed
-/// duration, once per selected case whatever its outcome. `SIGTERM` is among
-/// them, which [`wait_bounded`] itself sends a timed-out runner. A retried
-/// case's `TRY n` prefix is read past, so its status word still counts.
+/// Case result lines in a nextest run, one per selected case whatever its
+/// outcome, as [`crate::replay::terminal_word`] reads them: `SIGTERM` among them,
+/// which [`wait_bounded`] itself sends a timed-out runner, and a retried case.
 fn nextest_lines(output: &str) -> usize {
     output
         .lines()
-        .filter(|line| {
-            line.split_once(" [")
-                .and_then(|(before, _)| before.split_whitespace().last())
-                .is_some_and(|word| crate::replay::TERMINAL.contains(&word))
-        })
+        .filter(|line| crate::replay::terminal_word(line).is_some())
         .count()
 }
 
