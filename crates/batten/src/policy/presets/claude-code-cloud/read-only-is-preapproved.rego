@@ -7,7 +7,7 @@
 #MUTANT ps-not-read|s@"tree", "printenv", "ps",@"tree", "printenv",@|a_plan_mode_ps_is_allowed
 #MUTANT git-read-form-writes|s@^\tnot some_writing_flag(verb.rest)$@\ttrue@|a_plan_mode_git_with_global_options_is_allowed
 #MUTANT git-pager-cluster-unread|s@^\tcontains(argument, "O")$@\tfalse@|a_plan_mode_git_with_global_options_is_allowed
-#MUTANT git-pager-abbreviation-unread|s@^\tsome prefix in {"--output", "--op"}$@\tsome prefix in {"--output"}@|a_plan_mode_git_with_global_options_is_allowed
+#MUTANT git-pager-abbreviation-unread|s@^\tsome prefix in {"--output", "--op", "--ext"}$@\tsome prefix in {"--output", "--ext"}@|a_plan_mode_git_with_global_options_is_allowed
 #MUTANT git-global-option-unread|s@^\tnot git_option_value(arguments, i)$@\ti == 0@|a_plan_mode_git_with_global_options_is_allowed
 # A call that only reads is never put to the operator (CLOUD-1949).
 #
@@ -221,13 +221,14 @@ git_option_value(arguments, i) if {
 	arguments[i - 1] == "-C"
 }
 
-# `--output` writes a file; `-O` hands matches to a pager program. Every spelling
-# git's option parser accepts is the flag: `git grep` takes any unambiguous
-# prefix of `--open-files-in-pager` (`--op`, `--open=`), and a short cluster
-# carries `-O` anywhere in it (`-iO<pager>` is `-i -O<pager>`).
+# `--output` writes a file; `-O` hands matches to a pager program and
+# `--ext-diff` runs the configured diff program. Every spelling git's option
+# parser accepts is the flag: `git grep` takes any unambiguous prefix of
+# `--open-files-in-pager` (`--op`, `--open=`), and a short cluster carries `-O`
+# anywhere in it (`-iO<pager>` is `-i -O<pager>`).
 some_writing_flag(arguments) if {
 	some argument in arguments
-	some prefix in {"--output", "--op"}
+	some prefix in {"--output", "--op", "--ext"}
 	startswith(argument, prefix)
 }
 
@@ -236,13 +237,6 @@ some_writing_flag(arguments) if {
 	startswith(argument, "-")
 	not startswith(argument, "--")
 	contains(argument, "O")
-}
-
-# `--ext-diff` runs the configured external diff program, under any prefix the
-# parser accepts.
-some_writing_flag(arguments) if {
-	some argument in arguments
-	startswith(argument, "--ext")
 }
 
 test_a_host_read_is_preapproved if {

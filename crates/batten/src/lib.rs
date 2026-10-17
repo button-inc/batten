@@ -857,7 +857,7 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
             source: None,
         }),
     )?;
-    let mut cleared = Ok(());
+    let mut cleared: Result<()> = Ok(());
     if synced != text {
         // THE PRINTED PATH IS THE WRITE, AND IT STANDS whatever the install
         // below answers; the refusal floor admits `engine install` to finish it.
@@ -877,7 +877,8 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
         cleared = record::clear_kind("engine update", "engine-fresh", families);
     }
     let installed = install_wanted(want, Some(root), &repository, out)?;
-    cleared.map(|()| installed)
+    cleared?;
+    Ok(installed)
 }
 
 /// `engine gate`'s finding for a source pin, which builds this tree and so never
@@ -1392,10 +1393,7 @@ fn sync_declarations(text: &str, tag: &str, sums: &dyn Fn() -> Result<String>) -
 /// bootstrap's own seam so a suite serves both halves of an install from one
 /// fixture host, else the engine's own.
 fn releases_repository() -> String {
-    std::env::var("BATTEN_RELEASES")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| String::from(env!("CARGO_PKG_REPOSITORY")))
+    named_env("BATTEN_RELEASES").unwrap_or_else(|| String::from(env!("CARGO_PKG_REPOSITORY")))
 }
 
 /// What `engine install` installs, decided before anything is fetched
@@ -1910,13 +1908,14 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
     // window: `land` moves `main` only after it published and verified vX, so a
     // pin naming a draft is a defect the fetch below reports, never a wait.
     let cache = state::repo_state_dir(root)?;
+    let repository = releases_repository();
     // EVERY ARTIFACT IS THE PINNED RELEASE'S OWN (CLOUD-2418): a batten
     // provision row can name the pin and still fetch another release's url or
     // bytes, which `version` alone never shows. The manifest is cached beside the
     // release, so a warm gate reads it without the network, and it is judged
     // before the binary is fetched, so a refused config never pays for one.
     let foreign = engine::stale_artifacts(&text, tag, &|| {
-        engine::pinned_sums(&cache, &releases_repository(), tag)
+        engine::pinned_sums(&cache, &repository, tag)
     })?;
     for (line, what) in &foreign {
         writeln!(
@@ -1928,7 +1927,7 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
     if !foreign.is_empty() {
         return Ok(ExitCode::Violation);
     }
-    let binary = engine::pinned_release(&cache, env!("CARGO_PKG_REPOSITORY"), tag)?;
+    let binary = engine::pinned_release(&cache, &repository, tag)?;
     // The pinned engine must decide as itself: never update itself mid-gate.
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
     // A non-zero child arrives as a `Passthrough` ERROR, which is the right shape
