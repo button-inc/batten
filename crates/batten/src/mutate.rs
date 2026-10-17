@@ -4456,6 +4456,9 @@ mod tests {
             0,
             "a result names a case"
         );
+        // Each word judged alone, so one wrong reading cannot cancel another.
+        assert_eq!(nextest_lines("        LEAK [   0.120s] batten::it a\n"), 1);
+        assert_eq!(nextest_lines("        SLOW [> 60.000s] batten::it e\n"), 0);
         let empty = "    Starting 0 tests across 1 binary\n     \
                      Summary [   0.000s] 0 tests run: 0 passed, 9 skipped\n";
         assert_eq!(nextest_lines(empty), 0);
