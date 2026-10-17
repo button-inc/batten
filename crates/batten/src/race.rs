@@ -521,18 +521,28 @@ pub fn with_logs(
     // and whose cheap reading could be WRONG. The predicate below is those two
     // factors in that order; the known miss is the case they do not reach.
     //
-    // **COULD BE WRONG** is the outer one, and a body that CLOSES a key settles
-    // it: source 1 outranks branch and title, and more text can only add
-    // matches, so `closed(body) ⊆ closed(body + log)` and that key stands
-    // whatever the commits say. Fetching such a competitor buys nothing the
-    // VERDICT rests on — the log can still ADD a second key, so the reported
-    // set may be a row short, but never on the key that refuses, which is the
-    // body's by construction. And it costs something real: the pull would land
-    // in `unanswered` on a 502, and every refusal it is in would then carry an
-    // "unconfirmed" mark it has not earned — the collision is PROVEN from data
-    // already in hand. `closing-key-check` requires the body to close its key
-    // here, so that is the common shape rather than a corner — distinct from
-    // `commit-lint` above, which is why a COMMIT rarely closes one.
+    // **COULD BE WRONG** is the outer one, and a body that closes A KEY THIS
+    // BRANCH CLAIMS settles it: source 1 outranks branch and title, and more
+    // text can only add matches, so `closed(body) ⊆ closed(body + log)` and
+    // that key stands whatever the commits say. Fetching such a competitor buys
+    // nothing the VERDICT rests on — the log can still ADD a second key, so the
+    // reported set may be a row short, but never on the key that refuses, which
+    // is the body's by construction. And it costs something real: the pull
+    // would land in `unanswered` on a 502, and every refusal it is in would
+    // then carry an "unconfirmed" mark it has not earned — the collision is
+    // PROVEN from data already in hand. `closing-key-check` requires the body
+    // to close its key here, so that is the common shape rather than a corner —
+    // distinct from `commit-lint` above, which is why a COMMIT rarely closes
+    // one.
+    //
+    // **THE COLLISION TEST IS LOAD-BEARING IN THAT SENTENCE** and read over
+    // #1198: the argument says the refusing key is the body's, which is only
+    // true where the body closes the key at issue. A competitor whose body
+    // closes some OTHER key — settled, but about a question nobody asked — has
+    // the same claim on its commits as one whose body closes nothing, since its
+    // commits are where a key of ours could still be. Skipping it on the mere
+    // presence of a closing keyword read the two as the same thing, and no
+    // round trip went out for a collider the log would have proven.
     //
     // **LOAD-BEARING** is the inner one, and it has two cases:
     //
@@ -582,12 +592,20 @@ pub fn with_logs(
         .iter()
         .enumerate()
         .filter(|(_, pull)| {
-            pull.number != mine_number && closes(&pull.body, keys).is_empty() && {
-                // THE BODY GOES IN EMPTY on this second call, because the term
-                // before it already answered what the body closes, and source 1
-                // is the only source that reads it. Passing it again re-folds
-                // and re-scans the whole thing for a set the guard has proven
-                // empty — the same answer, over the longest string in hand.
+            // A COLLIDING key, not merely A key. The settling argument is that
+            // the key which refuses is the body's, so no round trip can improve
+            // it — and that only holds of a body key THIS BRANCH CLAIMS. A body
+            // closing some unrelated key settles that key and says nothing
+            // about ours, so skipping on it would leave the commits unread on
+            // precisely the question being asked.
+            let settled = closes(&pull.body, keys);
+            pull.number != mine_number && !settled.iter().any(|key| claims.contains(key)) && {
+                // THE BODY GOES IN EMPTY on this second call. Source 1 is
+                // the only source that reads it, `settled` is already its
+                // answer, and the two places that answer is used — the term
+                // above and this one — need it folded differently. Passing
+                // the body again would re-scan the longest string in hand
+                // for a set already computed.
                 let cheap = claimed(&pull.head_ref, &pull.title, "", "", keys);
                 cheap.is_empty() || cheap.iter().any(|key| claims.contains(key))
             }
