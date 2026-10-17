@@ -22361,6 +22361,8 @@ fn rearm_unlanded(envelope: &hook::Envelope) {
         // continuation per claim per operator prompt.
         let refused = recorder::record_path(&git_dir, UNLANDED_REFUSED, &branch, None);
         let _ = std::fs::remove_file(refused);
+        let dispatched = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
+        let _ = std::fs::remove_file(dispatched);
     }
 }
 
@@ -22406,7 +22408,16 @@ const LAND_DISPATCHED: &str = "land-dispatched";
 /// name, so a consumer whose landing task is spelled otherwise earns no excuse
 /// and is only exposed for the build before its land takes the lock.
 fn note_land_dispatch(envelope: &hook::Envelope) {
-    if hook::singleton_task_started(envelope).as_deref() != Some(LAND_TASK) {
+    // BACKGROUNDED ONLY: a foreground land's post-tool fires after it exited,
+    // so it is no land waiting for its lock.
+    let backgrounded = ["run_in_background", "runInBackground"].iter().any(|key| {
+        envelope
+            .input
+            .get(*key)
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    });
+    if !backgrounded || hook::singleton_task_started(envelope).as_deref() != Some(LAND_TASK) {
         return;
     }
     let Some(branch) = git::current_branch(Path::new(".")).ok().flatten() else {
@@ -22487,6 +22498,8 @@ fn unlanded_claim() -> Option<UnlandedClaim> {
 /// after it, with still no land, is the pointer ignored, and only that one is
 /// refused.
 //MUTANT unlanded-stop-advises|s@^    if task::singleton_holder(\&git_dir, LAND_TASK).is_some() {$@    if true {@|an_ignored_unlanded_pointer_refuses_the_next_stop
+//MUTANT unlanded-stop-unbounded|s@ \x7c\x7c already_marked(Some(\&refused), \&key) {$@ {@|an_ignored_unlanded_pointer_refuses_the_next_stop
+//MUTANT land-dispatch-ignored|s@^    if std::fs::remove_file(\&dispatched).is_ok() {$@    if false {@|a_land_just_started_excuses_one_stop
 ///
 /// Called only from [`stop_nudges`], past every guard it applies: the event,
 /// `stop_active`, both bypasses and plan mode.
