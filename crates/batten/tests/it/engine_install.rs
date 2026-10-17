@@ -864,6 +864,50 @@ fn an_update_repairs_a_stale_digest_at_the_current_version() {
     );
 }
 
+/// A DIGEST IN ANOTHER CASE IS NO DISAGREEMENT (CLOUD-2418): `engine gate`
+/// accepts it, so `engine update` leaves the config it already accepts as it is.
+#[test]
+fn an_update_leaves_a_digest_in_another_case() {
+    use std::fmt::Write as _;
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-update-digest-case");
+    let named = home.join("bin");
+    let named_str = named.display().to_string();
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    let mut config = String::from(
+        "version = 1\nengine = { release = \"v9.9.9\" }\n\n[[provision]]\nname = \"batten\"\nversion = \"9.9.9\"\nbinary = \"batten\"\n",
+    );
+    for &target in PROVISION_TARGETS {
+        writeln!(
+            config,
+            "\n[provision.platforms.{target}]\nurl = \"https://example.invalid/releases/download/v9.9.9/{}\"\nsha256 = \"{}\"",
+            batten::engine::release_asset("v9.9.9", target),
+            published(&home, "v9.9.9", target).to_ascii_uppercase()
+        )
+        .unwrap();
+    }
+    common::write(&home, "batten.toml", &config);
+    let output = engine_verb(
+        "update",
+        &home,
+        std::slice::from_ref(&named),
+        &with_named(&served, &named_str),
+    );
+    assert!(
+        output.status.success(),
+        "{}{}",
+        stdout(&output),
+        common::stderr(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("batten.toml")).unwrap(),
+        config,
+        "the update wrote a config the gate already accepts"
+    );
+}
+
 /// The floor is RAISED, never lowered: a `min_batten_version` already past the
 /// release is the consumer's own word and stays.
 #[test]

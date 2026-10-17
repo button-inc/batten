@@ -1240,6 +1240,8 @@ fn set_str(item: &mut toml_edit::Item, new: &str) {
 /// and its `sha256` read off the release's `SHA256SUMS` by the URL's asset name.
 /// Each is written only where it differs, so a current artifact is left as it
 /// is and a stale one is repaired whatever its row's `version` says.
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT update-digest-case-sensitive|s@^    if !pinned.is_some_and(\x7cpinned\x7c pinned.eq_ignore_ascii_case(&digest)) {$@    if pinned != Some(digest.as_str()) {@|an_update_leaves_a_digest_in_another_case
 fn sync_artifact(
     artifact: &mut dyn toml_edit::TableLike,
     new: &str,
@@ -1274,9 +1276,10 @@ fn sync_artifact(
         set_str(item, &url);
     }
     // A MISSING DIGEST IS WRITTEN, so every artifact `engine gate` judges is one
-    // this can repair; one in another case is written as the release spells it.
+    // this can repair; one in another case is no disagreement, as the gate
+    // judges it, so a config the gate accepts is not rewritten.
     let pinned = artifact.get("sha256").and_then(toml_edit::Item::as_str);
-    if pinned != Some(digest.as_str()) {
+    if !pinned.is_some_and(|pinned| pinned.eq_ignore_ascii_case(&digest)) {
         match artifact.get_mut("sha256") {
             Some(item) => set_str(item, &digest),
             None => {
