@@ -2735,7 +2735,7 @@ fn build_bound() -> std::time::Duration {
 #[cfg(unix)]
 fn kill_group(leader: u32) {
     if let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default()) {
-        crate::exec::signal_group(group, rustix::process::Signal::KILL);
+        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
         let _ = rustix::process::kill_process(group, rustix::process::Signal::KILL);
     }
 }
