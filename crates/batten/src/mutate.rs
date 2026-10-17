@@ -2725,9 +2725,9 @@ fn build_bound() -> std::time::Duration {
 
 /// `SIGKILL` the process group `leader` leads, and the leader itself.
 ///
-/// No grace of its own: [`wait_bounded`] gives a timed-out runner one bounded
-/// `SIGTERM` first ([`TERMINATE_GRACE`]), for a runner that leads groups of its
-/// own, and this is the end that follows whatever was answered. The leader is
+/// No grace of its own. Where the runner TIMED OUT, [`wait_bounded`] first gives
+/// it one bounded `SIGTERM` ([`TERMINATE_GRACE`]), for a runner that leads groups
+/// of its own; on its other paths this is the only signal. The leader is
 /// signalled as well so that a group that somehow did not
 /// form still ends its direct child — a leak the descendant case would report,
 /// never a hang. Best effort, because `ESRCH` means the process is already gone,
@@ -2735,7 +2735,7 @@ fn build_bound() -> std::time::Duration {
 #[cfg(unix)]
 fn kill_group(leader: u32) {
     if let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default()) {
-        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+        crate::exec::signal_group(group, rustix::process::Signal::KILL);
         let _ = rustix::process::kill_process(group, rustix::process::Signal::KILL);
     }
 }
@@ -3118,14 +3118,15 @@ fn libtest_ran(output: &str) -> bool {
 /// Case result lines in a nextest run: one of its terminal status words
 /// ([`crate::replay::TERMINAL`], the one list of them), then the bracketed
 /// duration, once per selected case whatever its outcome. `SIGTERM` is among
-/// them, which [`wait_bounded`] itself sends a timed-out runner.
+/// them, which [`wait_bounded`] itself sends a timed-out runner. A retried
+/// case's `TRY n` prefix is read past, so its status word still counts.
 fn nextest_lines(output: &str) -> usize {
     output
         .lines()
         .filter(|line| {
-            line.trim_start()
-                .split_once(" [")
-                .is_some_and(|(word, _)| crate::replay::TERMINAL.contains(&word))
+            line.split_once(" [")
+                .and_then(|(before, _)| before.split_whitespace().last())
+                .is_some_and(|word| crate::replay::TERMINAL.contains(&word))
         })
         .count()
 }
@@ -4426,6 +4427,14 @@ mod tests {
                    Summary [   0.012s] 2 tests run: 1 passed, 1 failed, 8 skipped\n";
         assert_eq!(nextest_lines(ran), 2);
         assert!(nextest_ran(ran));
+        // Every terminal word counts, the retried form and the one the sweep's
+        // own bound sends included; a non-terminal line does not.
+        let ended = "        LEAK [   0.120s] batten::it a\n  \
+                     TRY 2 PASS [   0.004s] batten::it b\n     \
+                     SIGTERM [  60.000s] batten::it c\n   \
+                     LEAK-FAIL [   0.010s] batten::it d\n        \
+                     SLOW [> 60.000s] batten::it e\n";
+        assert_eq!(nextest_lines(ended), 4);
         let empty = "    Starting 0 tests across 1 binary\n     \
                      Summary [   0.000s] 0 tests run: 0 passed, 9 skipped\n";
         assert_eq!(nextest_lines(empty), 0);

@@ -1147,7 +1147,9 @@ jobs:
           save-if: false
       - run: mise run mutant:changed
         env:
-          MUTANT_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+          # Both halves from `strategy`, so another matrix axis cannot leave a
+          # shard unrun: k is this job's index over every combination.
+          MUTANT_SHARD: ${{ strategy.job-index }}/${{ strategy.job-total }}
           DOCTOR_TARGETS: ""
 
   final:
