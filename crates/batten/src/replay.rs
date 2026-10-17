@@ -551,21 +551,53 @@ const TERMINAL: &[&str] = &[
     "SIGTERM",
     "LEAK-FAIL",
 ];
-/// The [`TERMINAL`] word a nextest line ends an attempt with, or `None` for any
-/// other line: the line's leading word, or the word after an exact `TRY <n>`
-/// prefix (a consumer's config may retry; this repository's refuses it), then
-/// the bracketed duration. Anchored at the line's start, so text that merely
-/// contains a status word mid-line is not a result. The one parser of a result
-/// line, shared by this module's pass/fail and `mutate::nextest_lines`.
-pub(crate) fn terminal_word(line: &str) -> Option<&str> {
+/// One nextest attempt's result: its [`TERMINAL`] word and the case it ended,
+/// the binary and the test's path after the bracketed duration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Attempt<'a> {
+    pub(crate) word: &'a str,
+    pub(crate) case: &'a str,
+}
+
+impl Attempt<'_> {
+    /// The test's own path, the case's last word.
+    pub(crate) fn test(&self) -> &str {
+        self.case.rsplit(' ').next().unwrap_or(self.case)
+    }
+}
+
+/// A nextest result line, or `None` for any other line: a leading [`TERMINAL`]
+/// word, bare or after an exact `TRY <n>` prefix (a consumer's config may retry;
+/// this repository's refuses it), then the bracketed duration, then the case.
+/// Anchored at the line's start, so text holding a status word mid-line is not
+/// a result. The one parser of a result line, shared by this module's pass/fail
+/// and `mutate::nextest_lines`.
+pub(crate) fn attempt(line: &str) -> Option<Attempt<'_>> {
     let mut words = line.split_whitespace();
     let mut word = words.next()?;
     if word == "TRY" {
         words.next()?.parse::<u32>().ok()?;
         word = words.next()?;
     }
-    let after = line.split_once(word)?.1;
-    (after.trim_start().starts_with('[') && TERMINAL.contains(&word)).then_some(word)
+    if !TERMINAL.contains(&word) || !words.next()?.starts_with('[') {
+        return None;
+    }
+    let case = line.split_once(']')?.1.trim();
+    (!case.is_empty()).then_some(Attempt { word, case })
+}
+
+/// Each case's LAST attempt, in case order: a retried case's earlier attempts
+/// are superseded by its final one, so a flaky pass reads as the pass it ended in.
+pub(crate) fn final_attempts(output: &str) -> Vec<Attempt<'_>> {
+    let mut last: BTreeMap<&str, Attempt<'_>> = BTreeMap::new();
+    for found in output
+        .lines()
+        .take_while(|line| !line.trim_start().starts_with("Summary ["))
+        .filter_map(attempt)
+    {
+        last.insert(found.case, found);
+    }
+    last.into_values().collect()
 }
 
 /// What `cargo` prints when rustc refused the crate: a base body HEAD's code
@@ -591,14 +623,17 @@ fn passes(outcome: Option<&(i32, String)>, test: &str) -> Result<bool> {
         return Ok(false);
     }
     let suffix = format!("::{test}");
-    let statuses: Vec<&str> = output
-        .lines()
-        .filter_map(|line| {
-            let status = terminal_word(line)?;
-            let name = line.split_whitespace().last()?;
+    let statuses: Vec<&str> = final_attempts(output)
+        .into_iter()
+        .filter_map(|found| {
+            let name = found.test();
             let named = name == test || name.ends_with(&suffix);
             // `LEAK` is a pass that leaked handles; `LEAK-FAIL` is the failure.
-            named.then_some(if status == "LEAK" { "PASS" } else { status })
+            named.then_some(if found.word == "LEAK" {
+                "PASS"
+            } else {
+                found.word
+            })
         })
         .collect();
     if statuses.is_empty() {
@@ -630,15 +665,18 @@ mod tests {
     /// line that holds a status word mid-line read as a result.
     #[test]
     fn a_leaky_pass_passes_a_retried_failure_fails_and_only_a_leading_word_counts() {
+        let word = |line| attempt(line).map(|found| found.word);
         assert_eq!(
-            terminal_word("        PASS [   0.004s] batten::it m::t"),
+            word("        PASS [   0.004s] batten::it m::t"),
             Some("PASS")
         );
         assert_eq!(
-            terminal_word("  TRY 2 PASS [   0.004s] batten::it m::t"),
+            word("  TRY 2 PASS [   0.004s] batten::it m::t"),
             Some("PASS")
         );
-        assert_eq!(terminal_word("  TRY x PASS [   0.004s] m::t"), None);
+        assert_eq!(word("  TRY x PASS [   0.004s] m::t"), None);
+        assert_eq!(word("        SLOW [> 60.000s] batten::it m::t"), None);
+        assert_eq!(word("assertion failed: status FAIL [exit 1] m::t"), None);
         let retried = (
             TEST_RUN_FAILED,
             String::from(
@@ -646,13 +684,21 @@ mod tests {
             ),
         );
         assert!(!passes(Some(&retried), "t").unwrap());
-        assert_eq!(
-            terminal_word("        SLOW [> 60.000s] batten::it m::t"),
-            None
+        // A flaky case is judged by its last attempt, and the same test name in
+        // another binary is another case.
+        let flaky = (
+            0,
+            String::from(
+                "  TRY 1 FAIL [   0.004s] batten::it m::t\n  TRY 2 PASS [   0.004s] batten::it m::t\n",
+            ),
         );
+        assert!(passes(Some(&flaky), "t").unwrap());
         assert_eq!(
-            terminal_word("assertion failed: status FAIL [exit 1] m::t"),
-            None
+            final_attempts(
+                "        PASS [   0.004s] bin1 m::t\n        PASS [   0.004s] bin2 m::t\n"
+            )
+            .len(),
+            2
         );
         let leaky = (
             0,

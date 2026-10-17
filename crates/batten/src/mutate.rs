@@ -3115,19 +3115,11 @@ fn libtest_ran(output: &str) -> bool {
     output.lines().any(|line| line.contains("test result: "))
 }
 
-/// The cases a nextest run selected: the distinct names on its result lines, as
-/// [`crate::replay::terminal_word`] reads them (`SIGTERM` among them, which
-/// [`wait_bounded`] itself sends a timed-out runner). Distinct, so a case
-/// retried three times is one case. Read up to the `Summary [` line only, past
-/// which nextest repeats each failure.
+/// The cases a nextest run selected, one per case whatever its attempts or
+/// outcome, as [`crate::replay::final_attempts`] reads them (`SIGTERM` among
+/// them, which [`wait_bounded`] itself sends a timed-out runner).
 fn nextest_lines(output: &str) -> usize {
-    output
-        .lines()
-        .take_while(|line| !line.trim_start().starts_with("Summary ["))
-        .filter(|line| crate::replay::terminal_word(line).is_some())
-        .filter_map(|line| line.split_whitespace().last())
-        .collect::<std::collections::BTreeSet<_>>()
-        .len()
+    crate::replay::final_attempts(output).len()
 }
 
 /// Whether a nextest run printed its summary, which it does for an empty
