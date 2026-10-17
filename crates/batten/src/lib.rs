@@ -22344,7 +22344,7 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
 //MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 //MUTANT unlanded-never-rearmed|s@^        let _ = std::fs::remove_file(marker);$@@|an_operator_prompt_rearms_the_unlanded_pointer
 fn rearm_unlanded(envelope: &hook::Envelope) {
-    if envelope.event == hook::Event::PreTool {
+    if envelope.event == hook::Event::PostTool {
         note_land_dispatch(envelope);
         return;
     }
@@ -22397,8 +22397,14 @@ const LAND_DISPATCHED: &str = "land-dispatched";
 /// A backgrounded `mise run land` returns at once and the turn ends, while the
 /// land it started is still building and holds no lock yet; the lock alone
 /// would read that, the one compliant answer to the pointer, as no land at all.
-/// The receipt excuses exactly one Stop and is consumed by it, so a land that
-/// died before locking is refused at the Stop after. A count, not a clock.
+/// The receipt excuses exactly one Stop that would otherwise be refused and is
+/// consumed by it, so a land that died before locking is refused at the Stop
+/// after. A count, not a clock.
+///
+/// AFTER the call, never before: a pre-tool receipt was earned by a `land` the
+/// engine itself then denied. The task is matched by the engine's own singleton
+/// name, so a consumer whose landing task is spelled otherwise earns no excuse
+/// and is only exposed for the build before its land takes the lock.
 fn note_land_dispatch(envelope: &hook::Envelope) {
     if hook::singleton_task_started(envelope).as_deref() != Some(LAND_TASK) {
         return;
@@ -22485,20 +22491,27 @@ fn unlanded_claim() -> Option<UnlandedClaim> {
 /// Called only from [`stop_nudges`], past every guard it applies: the event,
 /// `stop_active`, both bypasses and plan mode.
 fn unlanded_stop_block() -> Option<refusal::Refusal> {
-    let UnlandedClaim { branch, key, count } = unlanded_claim()?;
     let git_dir = git::git_dir(Path::new(".")).ok()?;
-    if task::singleton_holder(&git_dir, LAND_TASK).is_some() {
-        return None;
-    }
-    // A land started since the last Stop and not yet locked excuses this one
-    // Stop, and the receipt goes with it (`note_land_dispatch`).
+    let branch = git::current_branch(Path::new(".")).ok().flatten()?;
+    // The dispatch excuse is cleared whenever it is no longer about a land
+    // waiting for its lock: no claim to excuse, or the land already holding it.
     let dispatched = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
-    if std::fs::remove_file(&dispatched).is_ok() {
+    let Some(UnlandedClaim { key, count, .. }) = unlanded_claim() else {
+        let _ = std::fs::remove_file(&dispatched);
+        return None;
+    };
+    if task::singleton_holder(&git_dir, LAND_TASK).is_some() {
+        let _ = std::fs::remove_file(&dispatched);
         return None;
     }
     let spoken = recorder::record_path(&git_dir, UNLANDED_SPOKEN, &branch, None);
     let refused = recorder::record_path(&git_dir, UNLANDED_REFUSED, &branch, None);
     if !already_marked(Some(&spoken), &key) || already_marked(Some(&refused), &key) {
+        return None;
+    }
+    // Only now, where this Stop would be refused, does a land started since and
+    // not yet locked excuse it, and the receipt goes with it.
+    if std::fs::remove_file(&dispatched).is_ok() {
         return None;
     }
     // An unwritable receipt would refuse every Stop, which is CLOUD-889's loop:

@@ -1135,10 +1135,11 @@ fn a_land_just_started_excuses_one_stop() {
     let (repo, home) = unlanded_fixture("stop-unlanded-dispatched");
     let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
     let start = serde_json::json!({
-        "hook_event_name": "PreToolUse",
+        "hook_event_name": "PostToolUse",
         "session_id": "s-1",
         "tool_name": "Bash",
         "tool_input": {"command": "mise run land", "run_in_background": true},
+        "tool_response": {"backgroundTaskId": "b-1"},
     })
     .to_string();
     let _ = hook_in(&repo, &home, &start);
