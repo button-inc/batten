@@ -48,6 +48,207 @@ fn red_repo(name: &str) -> PathBuf {
     dir
 }
 
+/// Replace `work/red`'s record with `text`.
+fn rewrite_record(dir: &Path, text: &str) {
+    std::fs::write(
+        dir.join(".git/batten-receipts").join(format!(
+            "{}.{}",
+            batten::land::RED_HEAD,
+            batten::land::red_head_slug("work/red")
+        )),
+        text,
+    )
+    .expect("rewrite the red head");
+}
+
+/// A required check's completed run, as a reading carries it.
+fn run(conclusion: &str, name: &str, id: u64) -> batten::checks_green::Run {
+    batten::checks_green::Run {
+        status: "completed".to_owned(),
+        conclusion: conclusion.to_owned(),
+        name: name.to_owned(),
+        started_at: "2026-01-01T00:00:00Z".to_owned(),
+        completed_at: String::new(),
+        id,
+    }
+}
+
+fn roster(required: &[&str], fanin: Option<&str>) -> batten::checks_green::Roster {
+    batten::checks_green::Roster {
+        required: required.iter().map(|name| (*name).to_owned()).collect(),
+        absent_ok: Vec::new(),
+        answered: vec!["success".to_owned(), "failure".to_owned()],
+        fanin: fanin.map(str::to_owned),
+    }
+}
+
+fn failed(check: &str) -> batten::checks_green::Finding {
+    batten::checks_green::Finding {
+        check: check.to_owned(),
+        conclusion: "failure".to_owned(),
+    }
+}
+
+/// A RECORD FOR A SUPERSEDED HEAD OWES NOTHING (CLOUD-2443): once the branch's
+/// remote head is another commit, the runs the record names decide nothing, and
+/// before this the debt stood until a green landing cleared it.
+#[test]
+fn a_record_for_a_superseded_head_owes_nothing() {
+    let dir = red_repo("head-push-superseded");
+    let tip = common::git_in(&dir, &["rev-parse", "HEAD"]);
+    let tip = tip.trim();
+
+    // The remote head IS the recorded head: owed.
+    common::git_in(&dir, &["update-ref", "refs/remotes/origin/work/red", tip]);
+    rewrite_record(&dir, &format!("head {tip}\nfailed 101 windows\n"));
+    assert!(
+        decision(&dir, "git push origin HEAD").contains("job read unread"),
+        "a record for the remote head is owed"
+    );
+
+    // Another route moved the branch: the record is about a head nobody pushes over.
+    rewrite_record(&dir, "head abc123\nfailed 101 windows\n");
+    let out = decision(&dir, "git push origin HEAD");
+    assert!(
+        !out.contains("job read unread"),
+        "a superseded head owes nothing\n{out}"
+    );
+    assert_eq!(batten::land::red_head_owed(&dir, "work/red"), None);
+}
+
+/// A FAILED FAN-IN OWES ITS FAILED MEMBERS (CLOUD-2443), so reading the
+/// aggregator's "a dependency failed" pays nothing: #1132's incident.
+#[test]
+fn a_failed_fan_in_owes_its_failed_members() {
+    let dir = red_repo("head-push-fan-in");
+    let runs = [
+        run("failure", "final", 1),
+        run("failure", "windows", 2),
+        run("cancelled", "linux", 3),
+    ];
+    let reading = batten::land::red_runs(
+        &runs,
+        &roster(&["final"], Some("final")),
+        &[failed("final")],
+    );
+    batten::land::record_red_head(&dir, "work/red", "abc123", &reading).expect("record");
+
+    read_the_log(&dir, 1);
+    let out = decision(&dir, "git push origin HEAD");
+    assert!(
+        out.contains("job read unread") && out.contains("windows job 2"),
+        "the aggregator's log pays nothing; the failed member is owed\n{out}"
+    );
+    read_the_log(&dir, 2);
+    assert!(!decision(&dir, "git push origin HEAD").contains("job read unread"));
+}
+
+/// A CHECK RUNNING AT THE STOP IS OWED UNTIL READ (CLOUD-2443): reading the
+/// named failure no longer admits a push over a check whose verdict it buries.
+#[test]
+fn a_check_running_at_the_stop_is_owed_until_read() {
+    let dir = red_repo("head-push-running");
+    rewrite_record(&dir, "head abc123\nfailed 101 windows\nrunning 102 macos\n");
+    read_the_log(&dir, 101);
+    let out = decision(&dir, "git push origin HEAD");
+    assert!(
+        out.contains("job read unread") && out.contains("macos job 102"),
+        "the run the stop abandoned is still owed\n{out}"
+    );
+    read_the_log(&dir, 102);
+    assert!(!decision(&dir, "git push origin HEAD").contains("job read unread"));
+}
+
+/// ONE RECORD AND EVERY STORE ACROSS WORKTREES (CLOUD-2443): `land` in a
+/// linked worktree writes where the main checkout reads, and a read minted in
+/// the worktree pays a debt judged from the main checkout.
+#[test]
+fn a_linked_worktrees_record_and_reads_are_the_repositorys() {
+    let dir = red_repo("head-push-worktree");
+    let linked = common::scratch("head-push-worktree-linked");
+    let _ = std::fs::remove_dir_all(&linked);
+    common::git_in(
+        &dir,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "work/linked",
+            linked.to_str().expect("utf-8"),
+        ],
+    );
+    std::fs::write(linked.join("batten.toml"), CONFIG).expect("the worktree's config");
+
+    let reading = batten::land::red_runs(
+        &[run("failure", "lint", 7)],
+        &roster(&["lint"], None),
+        &[failed("lint")],
+    );
+    batten::land::record_red_head(&linked, "work/linked", "abc123", &reading).expect("record");
+    assert!(
+        batten::land::red_head_owed(&dir, "work/linked").is_some(),
+        "the main checkout reads the linked worktree's record"
+    );
+
+    // The main checkout's own debt, read from inside the linked worktree.
+    read_the_log(&linked, 101);
+    let out = decision(&dir, "git push origin HEAD");
+    assert!(
+        !out.contains("job read unread"),
+        "a read minted in a linked worktree pays\n{out}"
+    );
+}
+
+/// A RUN WITH NO ID IS NEVER RECORDED (CLOUD-2443): `failed 0 <name>` is a debt
+/// no receipt can name, so it would refuse every push for good.
+#[test]
+fn a_run_with_no_id_owes_nothing() {
+    let dir = red_repo("head-push-no-id");
+    let runs = [run("failure", "lint", 0), run("failure", "fmt", 9)];
+    let reading = batten::land::red_runs(
+        &runs,
+        &roster(&["lint", "fmt"], None),
+        &[failed("lint"), failed("fmt")],
+    );
+    assert_eq!(reading.failed, vec![(9, "fmt".to_owned())]);
+    batten::land::record_red_head(&dir, "work/red", "abc123", &reading).expect("record");
+    read_the_log(&dir, 9);
+    assert_eq!(batten::land::red_head_owed(&dir, "work/red"), None);
+}
+
+/// THE READS GO WITH THE RECORD (CLOUD-2443): a cleared record sweeps the
+/// receipts it named, and a replacing one keeps only those it still names.
+#[test]
+fn a_cleared_record_sweeps_its_reads() {
+    let dir = red_repo("head-push-sweep");
+    let receipt = |id: u64| {
+        dir.join(".git/batten-receipts")
+            .join(format!("{}.{id}", batten::land::CHECK_LOG_READ))
+    };
+    rewrite_record(&dir, "head abc123\nfailed 101 windows\nfailed 102 linux\n");
+    read_the_log(&dir, 101);
+    read_the_log(&dir, 102);
+    assert!(receipt(101).is_file() && receipt(102).is_file());
+
+    let reading = batten::land::RedReading {
+        failed: vec![(101, "windows".to_owned())],
+        running: Vec::new(),
+    };
+    batten::land::record_red_head(&dir, "work/red", "def456", &reading).expect("record");
+    assert!(
+        receipt(101).is_file(),
+        "a run the new record still names keeps its read"
+    );
+    assert!(!receipt(102).is_file(), "a run it no longer names is swept");
+
+    assert!(batten::land::clear_red_head(&dir, "work/red").expect("clear"));
+    assert!(
+        !receipt(101).is_file(),
+        "clearing the record sweeps its reads"
+    );
+}
+
 /// THE KEY IS INJECTIVE (review of #1180): `work/red` and `work-red` are two
 /// branches and two records, so neither's debt is read, or cleared, as the
 /// other's. Under the shared `/` → `-` slug both named one file.
