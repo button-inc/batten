@@ -1349,7 +1349,7 @@ fn failed_members(
         .into_iter()
         .filter(|(_, run)| {
             matches!(
-                crate::forge::RunState::of(Some(&run.status), Some(&run.conclusion)).conclusion(),
+                run.state().conclusion(),
                 Some(crate::forge::Conclusion::Failure | crate::forge::Conclusion::TimedOut)
             )
         })
@@ -1409,17 +1409,33 @@ fn receipt_stores(record: &Path) -> Vec<std::path::PathBuf> {
     std::iter::once(store.to_path_buf()).chain(linked).collect()
 }
 
-/// Remove the read receipts for each run `previous` names that `kept` does not
-/// (CLOUD-2443): a receipt outlives the record that owed it otherwise, in every
-/// store. Ids are digits only, as [`RedHead::parse`] reads them, so none is a
-/// path.
-fn sweep_reads(stores: &[std::path::PathBuf], previous: &str, kept: &[String]) {
-    let ids = RedHead::parse(previous, |_| false).ids();
-    for id in ids.iter().filter(|id| !kept.contains(id)) {
-        for store in stores {
-            for family in [CHECK_LOG_READ, CHECK_RUN_READ] {
-                let _ = std::fs::remove_file(store.join(format!("{family}.{id}")));
-            }
+/// Each file a read of run `id` could be, in every store: the ONE spelling the
+/// reader and the sweep share.
+fn read_receipts<'a>(
+    stores: &'a [std::path::PathBuf],
+    id: &'a str,
+) -> impl Iterator<Item = std::path::PathBuf> + 'a {
+    stores.iter().flat_map(move |store| {
+        [CHECK_LOG_READ, CHECK_RUN_READ]
+            .into_iter()
+            .map(move |family| store.join(format!("{family}.{id}")))
+    })
+}
+
+/// Housekeeping (CLOUD-2443): remove the read receipts for each run the record
+/// at `record` names that `kept` does not, in every store, so a receipt does not
+/// outlive the record that owed it. Ids are digits only, as [`RedHead::parse`]
+/// reads them, so none is a path.
+fn sweep_reads(record: &Path, kept: &[String]) {
+    let Ok(previous) = std::fs::read_to_string(record) else {
+        return;
+    };
+    let stores = receipt_stores(record);
+    for id in RedHead::parse(&previous, |_| false).ids() {
+        if !kept.contains(&id) {
+            read_receipts(&stores, &id).for_each(|file| {
+                let _ = std::fs::remove_file(file);
+            });
         }
     }
 }
@@ -1453,10 +1469,12 @@ pub fn record_red_head(root: &Path, branch: &str, sha: &str, reading: &RedReadin
                 .map(|(id, name)| format!("running {id} {name}")),
         );
     let text: String = lines.map(|line| line + "\n").collect();
-    if let Ok(previous) = std::fs::read_to_string(&path) {
-        let kept = RedHead::parse(&text, |_| false).ids();
-        sweep_reads(&receipt_stores(&path), &previous, &kept);
-    }
+    let kept: Vec<String> = failed
+        .iter()
+        .chain(running)
+        .map(|(id, _)| id.to_string())
+        .collect();
+    sweep_reads(&path, &kept);
     crate::durable::replace(&path, text)
         .with_context(|| format!("land: write the red-head record {}", path.display()))
 }
@@ -1472,11 +1490,7 @@ pub const CHECK_RUN_READ: &str = "check-run-read";
 
 /// Whether the run `id` was read: either receipt, in any store, pays it.
 fn run_was_read(stores: &[std::path::PathBuf], id: &str) -> bool {
-    stores.iter().any(|store| {
-        [CHECK_LOG_READ, CHECK_RUN_READ]
-            .iter()
-            .any(|family| store.join(format!("{family}.{id}")).is_file())
-    })
+    read_receipts(stores, id).any(|file| file.is_file())
 }
 
 /// A branch's red-head record as read, each failed run's `read` already asked
@@ -1599,13 +1613,13 @@ fn read_red_head(root: &Path, branch: &str) -> crate::facts::Look<RedHead> {
         }
         Err(_) => return crate::facts::Look::CouldNotLook,
     };
-    let stores = receipt_stores(&path);
-    let record = RedHead::parse(&text, |id| run_was_read(&stores, id));
+    let head = text.lines().find_map(|line| line.strip_prefix("head "));
     let remote = crate::git::resolve_ref(root, &tracking_ref(branch));
-    if matches!(&remote, Ok(Some(remote)) if *remote != record.head) {
+    if matches!(&remote, Ok(Some(remote)) if Some(remote.as_str()) != head) {
         return crate::facts::Look::IsNot;
     }
-    crate::facts::Look::Is(record)
+    let stores = receipt_stores(&path);
+    crate::facts::Look::Is(RedHead::parse(&text, |id| run_was_read(&stores, id)))
 }
 
 /// The current branch's red-head record as the `red-head` fact projects it:
@@ -1674,9 +1688,7 @@ pub fn clear_red_head(root: &Path, branch: &str) -> Result<bool> {
     let Some(path) = red_head_path(root, branch) else {
         return Ok(false);
     };
-    if let Ok(previous) = std::fs::read_to_string(&path) {
-        sweep_reads(&receipt_stores(&path), &previous, &[]);
-    }
+    sweep_reads(&path, &[]);
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
