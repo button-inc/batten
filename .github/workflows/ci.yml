@@ -1,5 +1,10 @@
 name: CI
 
+# workflow-shell: CLOUD-1746 the `mutants` job adds a job and its steps: the
+# landing-lease precondition every immediately-starting job carries verbatim
+# (`ci-local-parity` property 7), and then argv steps only (checkout, fetch,
+# toolchain, caches, `mise run mutant:changed`).
+
 # CI minutes cost money; an agent's local execution does not. So CI runs as
 # rarely as correctness allows:
 #   - Only on NON-DRAFT PRs. Draft = still being verified locally; no CI.
