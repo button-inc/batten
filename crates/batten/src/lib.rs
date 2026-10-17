@@ -8,6 +8,11 @@
 //! thin wrapper around. Keeping the logic in the library keeps it testable and
 //! keeps the binary's `main` trivial.
 
+// FIRST, because a `macro_rules!` is in scope only for modules declared after
+// it. `verdict::Native` and `rules::NativeGate` declare through `token_enum!`;
+// moving the crate's other hand-kept tokened enums onto it is CLOUD-2454.
+#[macro_use]
+mod token_enum;
 pub mod action;
 pub mod admission;
 pub mod advisory;

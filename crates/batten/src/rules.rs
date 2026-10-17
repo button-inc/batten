@@ -435,38 +435,25 @@ pub enum RuleKind {
     Native,
 }
 
-/// The compiled gates a [`RuleKind::Native`] row may enable (CLOUD-2291).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
-)]
-#[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
-pub enum NativeGate {
-    /// A `git reset` that would discard commits no ref holds (CLOUD-462).
-    DestructiveReset,
-    /// A second copy of a one-per-clone task (CLOUD-438).
-    Singleton,
-    /// A config row changed by a context that has not read its history
-    /// (CLOUD-2144).
-    History,
-}
-
-impl NativeGate {
-    /// Every gate, in the order the mediated chain runs them.
-    pub const ALL: &'static [NativeGate] = &[
-        NativeGate::DestructiveReset,
-        NativeGate::Singleton,
-        NativeGate::History,
-    ];
-
-    /// The `gate = "..."` token (§6).
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            NativeGate::DestructiveReset => "destructive-reset",
-            NativeGate::Singleton => "singleton",
-            NativeGate::History => "history",
-        }
+// Declared ONCE through `token_enum!` (CLOUD-2442): each token is the variant's
+// serde spelling, its `as_str` and its place in `ALL` — the order the mediated
+// chain runs the gates — so the config parser, the weakening diff and the token
+// cannot disagree.
+token_enum! {
+    serde
+    /// The compiled gates a [`RuleKind::Native`] row may enable (CLOUD-2291).
+    #[derive(
+        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
+    )]
+    #[non_exhaustive]
+    pub enum NativeGate by as_str {
+        /// A `git reset` that would discard commits no ref holds (CLOUD-462).
+        DestructiveReset => "destructive-reset",
+        /// A second copy of a one-per-clone task (CLOUD-438).
+        Singleton => "singleton",
+        /// A config row changed by a context that has not read its history
+        /// (CLOUD-2144).
+        History => "history",
     }
 }
 
@@ -17144,24 +17131,16 @@ mod tests {
         }
     }
 
-    /// CLOUD-2291: `NativeGate::ALL` is what the weakening diff walks, so a gate
-    /// missing from it is a gate whose lowering is never reported. The match is
-    /// exhaustive and fails to compile on a new variant; the count pins `ALL` to
-    /// it, and each token is the one the config parser reads.
+    /// CLOUD-2291/2442: the spelling a `gate = "..."` row parses is the token
+    /// the weakening diff reports. `token_enum!`'s `serde` arm makes them one
+    /// literal; this pins that serde HONOURS it, so an enum attribute added
+    /// later (a `rename_all`, an `alias`) cannot split the two silently.
     #[test]
     fn native_gate_all_is_every_gate_and_as_str_is_its_token() {
         for gate in NativeGate::ALL {
-            match gate {
-                NativeGate::DestructiveReset | NativeGate::Singleton | NativeGate::History => {}
-            }
             let token = serde_json::to_value(gate).expect("a gate serializes");
             assert_eq!(token, serde_json::json!(gate.as_str()));
         }
-        assert_eq!(
-            NativeGate::ALL.len(),
-            3,
-            "a new gate must join NativeGate::ALL"
-        );
     }
 
     #[test]
