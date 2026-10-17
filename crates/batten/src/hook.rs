@@ -3059,11 +3059,7 @@ impl Field {
             // non-string value reads as absent rather than as its debug
             // rendering: a caller counting characters must never be handed
             // `{"a":1}` and told it is a prompt.
-            Field::Prompt => envelope
-                .input
-                .get("prompt")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
+            Field::Prompt => input_str(envelope, "prompt"),
             Field::TranscriptPath => envelope.transcript.clone(),
             // The second member read out of `input`, and only ever this key.
             // Two spellings because the hosts disagree the same way they do
@@ -3079,31 +3075,15 @@ impl Field {
             // these keys. Both go through `as_str`, so a non-string value reads
             // as absent — `Field::Prompt`'s rule, and load-bearing for
             // `InputId`, whose whole job is to tell present from absent.
-            Field::InputId => envelope
-                .input
-                .get("id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            Field::InputState => envelope
-                .input
-                .get("state")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
+            Field::InputId => input_str(envelope, "id"),
+            Field::InputState => input_str(envelope, "state"),
             Field::InputDraft => envelope
                 .input
                 .get("draft")
                 .and_then(Value::as_bool)
                 .map(|flag| flag.to_string()),
-            Field::InputOwner => envelope
-                .input
-                .get("owner")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            Field::InputRepo => envelope
-                .input
-                .get("repo")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
+            Field::InputOwner => input_str(envelope, "owner"),
+            Field::InputRepo => input_str(envelope, "repo"),
         };
         value.filter(|text| !text.is_empty())
     }
@@ -5573,7 +5553,7 @@ fn marker_present(marker: &str, scope: Option<&str>) -> bool {
         return true;
     };
     let path = marker_path(&git_dir, marker, &branch);
-    marker_path(&git_dir, marker, &branch).exists() && marker_names(&path, scope)
+    path.exists() && marker_names(&path, scope)
 }
 
 /// The `/`-joined target a row's [`Rule::while_marker_scope`] reads from this
@@ -5607,6 +5587,17 @@ fn marker_names(path: &std::path::Path, scope: Option<&str>) -> bool {
     }
 }
 
+/// One string member of `input`, by its one key. A non-string value reads as
+/// absent rather than as its debug rendering: [`Field::read`]'s rule for every
+/// `input` member it projects.
+fn input_str(envelope: &Envelope, key: &str) -> Option<String> {
+    envelope
+        .input
+        .get(key)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
 /// Where a branch-keyed marker lives.
 ///
 /// Named rather than inlined so the `//MUTANT` rows below can anchor on one line,
@@ -5620,8 +5611,8 @@ fn marker_path(git_dir: &std::path::Path, marker: &str, branch: &str) -> std::pa
 }
 
 //MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
-//MUTANT offer-unread|s@    marker_path(&git_dir, marker, &branch).exists()@    false@|a_write_after_a_punt_is_refused
-//MUTANT every-ending-punts|s@    marker_path(&git_dir, marker, &branch).exists()@    true@|an_ordinary_turn_leaves_the_next_write_alone
+//MUTANT offer-unread|s@    path.exists()@    false@|a_write_after_a_punt_is_refused
+//MUTANT every-ending-punts|s@    path.exists()@    true@|an_ordinary_turn_leaves_the_next_write_alone
 
 /// Fold a value for [`Rule::when_value`]'s comparison.
 ///

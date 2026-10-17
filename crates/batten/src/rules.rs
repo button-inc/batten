@@ -14030,7 +14030,6 @@ pub(crate) const RULE_CENSUS: Rule = Rule {
     id: String::new(),
     kind: RuleKind::Shape,
     glob: None,
-    // Filled by `per_kind`.
     severity: None,
     scope: RuleScope::MediatedCall,
     pattern: None,
@@ -14117,15 +14116,8 @@ pub(crate) const RULE_CENSUS: Rule = Rule {
     predicate_severity: None,
     criteria: None,
     tier: None,
-    // Both filled by `per_kind`.
     no_fix_reason: None,
     checks: None,
-    // Left `None` even where the kind permits it, unlike `checks` above:
-    // a receipt fixture needs SOME receipt named to be valid, and
-    // `checks` above already supplies one. Filling both would make every
-    // blank receipt row carry an alternation no case asked for, and a
-    // fixture that quietly exercises a column is how a test passes for a
-    // reason its author did not choose.
     checks_any: None,
     key: None,
     trigger: None,
@@ -15403,8 +15395,15 @@ mod tests {
     };
 
     // The kind's own default scope, and the three columns whose blank value
-    // depends on the kind, filled by [`per_kind`]; every other column is the
-    // census's (`RULE_CENSUS`).
+    // depends on the kind (`severity`, `no_fix_reason`, `checks`), filled by
+    // [`per_kind`]; every other column is the census's (`RULE_CENSUS`).
+    //
+    // `checks_any` stays `None` even where the kind permits it, unlike `checks`:
+    // a receipt fixture needs SOME receipt named to be valid, and `checks`
+    // already supplies one. Filling both would make every blank receipt row
+    // carry an alternation no case asked for, and a fixture that quietly
+    // exercises a column is how a test passes for a reason its author did not
+    // choose.
     fn blank(id: &str, kind: RuleKind) -> Rule {
         per_kind(Rule {
             id: id.to_owned(),

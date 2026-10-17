@@ -34,10 +34,17 @@ fn repo(name: &str) -> PathBuf {
     repo_with(name, "")
 }
 
+/// This repository's committed config.
+const COMMITTED: &str = include_str!("../../../../batten.toml");
+
 /// [`repo`], with `extra` appended to the committed config.
 fn repo_with(name: &str, extra: &str) -> PathBuf {
-    let config = format!("{}{extra}", include_str!("../../../../batten.toml"));
-    let staged = Fixture::new(name).config(&config);
+    repo_from(name, &format!("{COMMITTED}{extra}"))
+}
+
+/// This repository's rows and modules under `config`, committed on [`BRANCH`].
+fn repo_from(name: &str, config: &str) -> PathBuf {
+    let staged = Fixture::new(name).config(config);
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -71,9 +78,14 @@ fn marker(dir: &Path) -> PathBuf {
 }
 
 fn envelope(event: &str, extra: &str) -> String {
+    envelope_in(event, "", extra)
+}
+
+/// [`envelope`], with `input` prepended to the tool input's members.
+fn envelope_in(event: &str, input: &str, extra: &str) -> String {
     format!(
         "{{\"hook_event_name\":\"{event}\",\"tool_name\":\"{TOOL}\",\
-         \"tool_input\":{{\"title\":\"t\",\"head\":\"{BRANCH}\",\"base\":\"main\"}}{extra}}}"
+         \"tool_input\":{{{input}\"title\":\"t\",\"head\":\"{BRANCH}\",\"base\":\"main\"}}{extra}}}"
     )
 }
 
@@ -185,20 +197,17 @@ fn an_update_that_does_not_close_leaves_the_marker() {
 /// reason: the pinned release refuses a column it does not know, so the row in
 /// `batten.toml` gains it on the pin that carries this engine.
 fn repo_scoped(name: &str) -> PathBuf {
-    let committed = include_str!("../../../../batten.toml");
     let row = "while_marker = \"pr-open\"\n";
     assert!(
-        committed.contains(row),
+        COMMITTED.contains(row),
         "the one-PR row still reads the marker"
     );
-    let scoped = committed.replacen(
+    let scoped = COMMITTED.replacen(
         row,
         "while_marker = \"pr-open\"\nwhile_marker_scope = [\"input-owner\", \"input-repo\"]\n",
         1,
     );
-    let dir = repo(name);
-    std::fs::write(dir.join("batten.toml"), scoped).expect("stage the scoped config");
-    dir
+    repo_from(name, &scoped)
 }
 
 /// `create_pull_request` aimed at `owner/repo`, from the probe branch.
@@ -206,10 +215,10 @@ fn open_a_pr_in(dir: &Path, owner: &str, repo: &str) -> std::process::Output {
     run_with_stdin(
         dir,
         &["adjudicate", "--harness", "exit-code"],
-        &format!(
-            "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"{TOOL}\",\
-             \"tool_input\":{{\"owner\":\"{owner}\",\"repo\":\"{repo}\",\"title\":\"t\",\
-             \"head\":\"{BRANCH}\",\"base\":\"main\"}}}}"
+        &envelope_in(
+            "PreToolUse",
+            &format!("\"owner\":\"{owner}\",\"repo\":\"{repo}\","),
+            "",
         ),
     )
 }
