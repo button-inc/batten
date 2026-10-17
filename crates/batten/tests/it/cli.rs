@@ -11074,7 +11074,7 @@ fn a_generated_opencode_plugin_throws_the_engine_s_refusal() {
             clippy::disallowed_types,
             reason = "stays, and test-only — CLOUD-1942: the subject is the generated plugin running under the pinned Node, a program the batten door does not spawn; the engine it reaches is this build, first on PATH"
         )]
-        let output = std::process::Command::new("node")
+        let output = std::process::Command::new(common::require_tool("node"))
             .arg(&driver)
             .arg(&plugin)
             .arg(tool)
