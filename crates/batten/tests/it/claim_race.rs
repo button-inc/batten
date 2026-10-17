@@ -1048,17 +1048,23 @@ fn speculating(name: &str) -> (std::path::PathBuf, std::path::PathBuf, String) {
     (repo, forge, base)
 }
 
-/// The refusal line carrying the unconfirmed mark, or empty where none does.
+/// EVERY refusal line carrying the unconfirmed mark.
 ///
-/// A line rather than the whole stream, because every assertion about the mark
-/// is about WHICH row carries it: the stream also holds the other refusals and
+/// Lines rather than the whole stream, because every assertion about the mark
+/// is about WHICH rows carry it: the stream also holds the other refusals and
 /// the closing summary, so a bare `contains` over it proves nothing.
-fn unconfirmed_line(output: &std::process::Output) -> String {
+///
+/// ALL of them rather than the first, because the interesting mutant marks
+/// rows it has not earned, and the first marked line is the same under it. A
+/// caller that took only the head could assert the right row carries the mark
+/// and never see a second row carrying it too — so the count is the assertion,
+/// and the caller makes it.
+fn unconfirmed_lines(output: &std::process::Output) -> Vec<String> {
     stderr(output)
         .lines()
-        .find(|line| line.contains("unconfirmed"))
-        .unwrap_or_default()
-        .to_owned()
+        .filter(|line| line.contains("unconfirmed"))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Run `batten claim race` in `repo` against `forge`.
@@ -1330,9 +1336,9 @@ fn a_race_whose_confirming_read_failed_refuses_and_says_it_is_unconfirmed() {
         stdout(&output),
         stderr(&output)
     );
-    let marked = unconfirmed_line(&output);
+    let marked = unconfirmed_lines(&output);
     assert!(
-        marked.contains("#8") && marked.contains("CLOUD-2"),
+        matches!(marked.as_slice(), [one] if one.contains("#8") && one.contains("CLOUD-2")),
         "and the marked row is the refusal itself, naming key and competitor: {marked:?}"
     );
 }
@@ -1353,6 +1359,11 @@ fn a_race_whose_confirming_read_failed_refuses_and_says_it_is_unconfirmed() {
 /// confirming read is refused, #9 collides on CLOUD-1 and its read agrees.
 /// Both are refusals; only #8 is named as unconfirmed. An implementation that
 /// declined over #8, or that marked #9 too, fails here.
+///
+/// THE COUNT IS WHAT CATCHES THE SECOND OF THOSE. `races` emits #8's row
+/// before #9's, so an implementation marking every row still puts #8 on the
+/// first marked line — asserting over that line alone would pass it. Asserting
+/// that exactly ONE line carries the mark is what makes "only" mean only.
 #[test]
 fn a_mixed_listing_reports_both_races_and_marks_only_the_unconfirmed_one() {
     let (repo, forge) = two_rivals("claim-race-mixed-confirmation");
@@ -1370,9 +1381,9 @@ fn a_mixed_listing_reports_both_races_and_marks_only_the_unconfirmed_one() {
         "both collisions are reported, the read one and the unread one: {}",
         stderr(&output)
     );
-    let marked = unconfirmed_line(&output);
+    let marked = unconfirmed_lines(&output);
     assert!(
-        marked.contains("#8") && !marked.contains("#9"),
+        matches!(marked.as_slice(), [one] if one.contains("#8") && !one.contains("#9")),
         "and only the one whose confirming read failed is marked: {marked:?}"
     );
 }

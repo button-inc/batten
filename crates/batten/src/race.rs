@@ -406,10 +406,6 @@ pub struct Filled {
 /// the word "colliding" throughout. Two spellings of one concept inside one
 /// closure is how the two drift apart.
 ///
-/// No distance is quoted between the two call sites. The commit that wrote
-/// this one said "eight lines" and grew the block between them to eleven in
-/// the same commit, which is what a count does.
-///
 /// **ANY, not the first.** Both sides are sets: `claims` is everything this
 /// branch claims, routinely more than one key, and a competitor's body may
 /// close several. So a body closing an unclaimed key and a claimed one is
@@ -452,9 +448,7 @@ fn collides(found: &[String], claims: &[String]) -> bool {
 /// What this does NOT recover is the handshake: the client and the TLS config
 /// are rebuilt per call below here, so eight workers mean eight of each.
 /// CLOUD-2411 owns that — worth a few hundred milliseconds against the 15.8 s
-/// measured above, and it needs an async seam this does not cut. (It read
-/// "thirteen seconds" from the commit that wrote it until /simplify over #1198:
-/// no measurement here has ever been thirteen.)
+/// measured above, and it needs an async seam this does not cut.
 ///
 /// # A pool rather than a wave, and tail latency is what the choice buys
 ///
