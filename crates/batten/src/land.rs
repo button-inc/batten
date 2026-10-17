@@ -1211,8 +1211,8 @@ pub fn wait_reading(
 /// concluded, which a red stop abandons unread. Empty on every other verdict.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RedReading {
-    /// Each failed required check's newest run, as `(run id, name)`; for a
-    /// failed fan-in, its failed members instead.
+    /// Each failed required check's newest run, as `(run id, name)`, and each
+    /// failed member of a fan-in that failed or is still going ([`red_runs`]).
     pub failed: Vec<(u64, String)>,
     /// Each required check still running when the red answered, as
     /// `(run id, name)`, sorted by name.
@@ -1289,10 +1289,9 @@ pub const RED_HEAD: &str = "red-head";
 /// log says only that a dependency failed, so reading it would pay the debt
 /// while the job that failed stays unread. It owes them whenever its newest run
 /// failed or is still going, even where another required check's failure is
-/// the verdict's only finding. The aggregator itself is owed only as the
-/// verdict's own finding with no failed member seen, or beside a failed member
-/// that carries no id a read could name; a fan-in the verdict set aside (its
-/// failure manufactured by cancelled siblings) owes nothing on its own.
+/// the verdict's only finding. A failed aggregator is itself owed where no
+/// failed member is seen, or beside one that carries no id a read could name;
+/// one still going is owed as a `running` run.
 ///
 /// **A RUN WITH NO ID IS NOT RECORDED** (CLOUD-2443): a reading that carries no
 /// id defaults it to `0`, and no read receipt can ever name run `0`, so
@@ -1311,7 +1310,8 @@ pub fn red_runs(
         // A FAN-IN STILL GOING OR FAILED owes the members already failed,
         // whatever the verdict found: its log will only ever say a dependency
         // failed.
-        if !(found || (fanin && (run_failed(run) || !run.completed()))) {
+        let going = fanin && !run.completed();
+        if !(found || going || (fanin && run_failed(run))) {
             continue;
         }
         let (members, unnamed) = if fanin {
@@ -1319,10 +1319,10 @@ pub fn red_runs(
         } else {
             (Vec::new(), false)
         };
-        // The aggregator itself is owed only as the verdict's own finding with
-        // no member to stand for it, or beside a member no read can name. A
-        // fan-in the verdict set aside (cancelled siblings) owes nothing alone.
-        if (found && members.is_empty()) || unnamed {
+        // The aggregator itself is owed where no member stands for it or one
+        // cannot be named: never less than its own failure. A fan-in still
+        // going is owed already, as a `running` run, and never called failed.
+        if !going && (members.is_empty() || unnamed) {
             failed.push((run.id, (*name).to_owned()));
         }
         failed.extend(members);
@@ -1799,9 +1799,8 @@ pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
             // (CLOUD-2443): a red-head record is owed only while its `head` is
             // the branch's remote head, and this ref is how a reader with no
             // network knows that. Left behind, a red stop on this head would
-            // compare unequal to it and owe nothing. Moved AFTER the landed
-            // line is recorded, so the push the remote applied is always one
-            // this store admits.
+            // compare unequal to it and owe nothing. Moved below, beside the
+            // landed line, whether or not that line appends.
             Pushed::Landed(head)
         }
         // THE SERVER'S REASON IS DROPPED HERE DELIBERATELY. It is a pointer for
@@ -1812,7 +1811,17 @@ pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
     };
     // BOTH WRITES ARE ATTEMPTED whichever fails first, so a store that will not
     // append never leaves the tracking ref behind the head that landed.
-    let appended = append(root, branch, std::slice::from_ref(&pushed.line()));
+    // An append that fails after a landed push says the head DID land, so
+    // nobody corrects a remote that is already right.
+    let appended =
+        append(root, branch, std::slice::from_ref(&pushed.line())).map_err(
+            |problem| match &pushed {
+                Pushed::Landed(head) => problem.context(format!(
+                    "land: {reference} landed at {head}, but its record would not append"
+                )),
+                Pushed::Raced => problem,
+            },
+        );
     let tracked = match &pushed {
         Pushed::Landed(head) => track_landed(root, &reference, head),
         Pushed::Raced => Ok(()),
@@ -1820,7 +1829,7 @@ pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
     match (appended, tracked) {
         (Ok(()), Ok(())) => Ok(pushed),
         (Err(problem), Ok(())) | (Ok(()), Err(problem)) => Err(problem),
-        (Err(appending), Err(tracking)) => Err(tracking.context(format!("{appending:#}"))),
+        (Err(appending), Err(tracking)) => Err(anyhow::anyhow!("{tracking:#}; and {appending:#}")),
     }
 }
 
@@ -1843,8 +1852,12 @@ fn track_landed(root: &Path, reference: &str, head: &str) -> Result<()> {
     let Err(gone) = crate::gitwrite::delete_ref(root, &tracking) else {
         return Ok(());
     };
+    // A REF THAT WAS NEVER THERE is already the could-not-look this reaches for.
+    if matches!(crate::git::resolve_ref(root, &tracking), Ok(None)) {
+        return Ok(());
+    }
     Err(anyhow::anyhow!(
-        "land: {reference} landed at {head}, but its tracking ref {tracking} would neither move ({moved:#}) nor go ({gone:#})"
+        "land: {reference} landed at {head}, but its tracking ref would neither move ({moved:#}) nor go ({gone:#})"
     ))
 }
 
@@ -6078,7 +6091,8 @@ mod tests {
         );
         assert_eq!(reading.running, vec![(1, "final".to_owned())]);
 
-        // A FAN-IN THE VERDICT SET ASIDE (cancelled siblings) owes nothing alone.
+        // A FAILED FAN-IN WITH NO FAILED MEMBER SEEN is owed itself, whatever
+        // the verdict found: its own log is the only one holding that failure.
         let cancelled = vec![
             run("failure", "final", 1),
             run("failure", "lint", 6),
@@ -6086,7 +6100,7 @@ mod tests {
         ];
         assert_eq!(
             red_runs(&cancelled, &roster, &[finding("lint")]).failed,
-            vec![(6, "lint".to_owned())]
+            vec![(1, "final".to_owned()), (6, "lint".to_owned())]
         );
 
         // And beside readable members: their reads never pay the id-less one's.
