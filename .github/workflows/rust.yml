@@ -309,6 +309,9 @@ jobs:
           # rather than letting them return, passing, over nothing.
           # cargo-dist is `install_web.rs`'s: the Linux-only tamper case runs the
           # pinned `dist` to generate the installer it refuses (CLOUD-2297).
+          # node is `cli.rs`'s OpenCode plugin case: it runs the generated plugin
+          # under the pinned Node against the real engine (CLOUD-1942), and a
+          # runner image's own Node is not the pin.
           install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa pkl aqua:axodotdev/cargo-dist node
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -350,6 +353,9 @@ jobs:
       - name: pkl resolves on PATH, as install_args declares
         shell: bash
         run: pkl --version
+      - name: node resolves on PATH, as install_args declares
+        shell: bash
+        run: node --version
       - run: mise run test:musl
 
   # The macOS gate. `cargo check` never links, so it cannot see a dependency that
@@ -874,6 +880,9 @@ jobs:
       - name: pkl resolves on PATH, as install_args declares
         shell: bash
         run: pkl --version
+      - name: node resolves on PATH, as install_args declares
+        shell: bash
+        run: node --version
 
       # `mise exec`, NOT `mise run test:cargo`, and the difference is the whole
       # of why the last four runs were red.
@@ -1055,6 +1064,9 @@ jobs:
       - name: pkl resolves on PATH, as install_args declares
         shell: bash
         run: pkl --version
+      - name: node resolves on PATH, as install_args declares
+        shell: bash
+        run: node --version
 
       # `mise exec`, matching `windows`, and here it is parity rather than the
       # workaround it is there: `[tasks."test:cargo"]`'s body is bash and macOS

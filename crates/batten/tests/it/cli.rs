@@ -1960,6 +1960,38 @@ const MATRIX: &[Row] = &[
         expected: 2,
         channel: Channel::StderrReason,
     },
+    // Factory documents Claude Code's verdict object, so its deny is the same
+    // in-band document on exit 0.
+    Row {
+        harness: "factory",
+        case: "allow",
+        command: "gh pr view 42",
+        expected: 0,
+        channel: Channel::Silent,
+    },
+    Row {
+        harness: "factory",
+        case: "deny",
+        command: "gh pr merge 42",
+        expected: 0,
+        channel: Channel::StdoutDenyJson,
+    },
+    // OpenCode's plugin throws the engine's stderr on exit 2, so the engine
+    // answers it on the neutral channel.
+    Row {
+        harness: "opencode",
+        case: "allow",
+        command: "gh pr view 42",
+        expected: 0,
+        channel: Channel::Silent,
+    },
+    Row {
+        harness: "opencode",
+        case: "deny",
+        command: "gh pr merge 42",
+        expected: 2,
+        channel: Channel::StderrReason,
+    },
     Row {
         harness: "exit-code",
         case: "allow",
@@ -4126,6 +4158,7 @@ fn every_host_denies_the_same_call_through_its_own_channel() {
             "\"permissionDecision\":\"deny\"",
         ),
         ("cursor", "cursor", "\"permission\":\"deny\""),
+        ("factory", "factory", "\"permissionDecision\":\"deny\""),
     ] {
         let output = run_hook_in(&dir, harness, &host_fixture(stem));
         assert_eq!(
@@ -4153,6 +4186,7 @@ fn every_host_denies_the_same_call_through_its_own_channel() {
         ("copilot-cli", "copilot-cli"),
         ("gemini-cli", "gemini-cli"),
         ("codex-cli", "codex-cli"),
+        ("opencode", "opencode"),
     ] {
         let output = run_hook_in(&dir, harness, &host_fixture(stem));
         assert_eq!(
@@ -4169,6 +4203,30 @@ fn every_host_denies_the_same_call_through_its_own_channel() {
             "{harness}: the decision travels on stderr here"
         );
     }
+}
+
+/// Factory's deny carries its reason INSIDE the verdict object (CLOUD-1942).
+///
+/// The vendor reference documents `permissionDecisionReason` beside
+/// `permissionDecision`, and the deny exits 0 — so stderr is not read, and a body
+/// without the reason would refuse the call while telling the model nothing about
+/// why. The pinned fixture is the reference's own `PreToolUse` shape, with
+/// Factory's `Execute` shell tool.
+#[test]
+fn a_factory_deny_carries_its_reason_in_the_verdict_object() {
+    let dir = repo_with_gh_policy("factory-deny-reason");
+    let output = run_hook_in(&dir, "factory", &host_fixture("factory"));
+    assert_eq!(output.status.code(), Some(0), "the body is the verdict");
+    let body: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|err| panic!("a Factory deny is one JSON document: {err}"));
+    let verdict = &body["hookSpecificOutput"];
+    assert_eq!(verdict["permissionDecision"], "deny");
+    assert!(
+        verdict["permissionDecisionReason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("commit ship other")),
+        "the reason names the row that refused, got: {body}"
+    );
 }
 
 /// A policy declaring one protected path and **Claude Code's** write vocabulary.
@@ -4216,7 +4274,7 @@ redirect = "write through the surface that owns the file"
 /// below asserts one verdict per harness rather than one per channel.
 fn denied(harness: &str, output: &Output) -> bool {
     match harness {
-        "claude-code" => {
+        "claude-code" | "factory" => {
             String::from_utf8_lossy(&output.stdout).contains("\"permissionDecision\":\"deny\"")
         }
         "cursor" => String::from_utf8_lossy(&output.stdout).contains("\"permission\":\"deny\""),
@@ -4243,6 +4301,8 @@ fn a_protected_write_is_refused_on_every_harness_in_its_own_vocabulary() {
         ("copilot-cli", "copilot-cli-write"),
         ("gemini-cli", "gemini-cli-write"),
         ("codex-cli", "codex-cli-write"),
+        ("factory", "factory-write"),
+        ("opencode", "opencode-write"),
     ] {
         let output = run_hook_in(&dir, harness, &host_fixture(stem));
         assert!(
@@ -4296,7 +4356,14 @@ fn a_read_of_a_protected_path_is_not_refused_on_any_harness() {
     // table. A gate keyed on "the payload names a protected path" would refuse
     // reading the policy file everywhere at once.
     let dir = repo_with_config("protected-read-matrix", PROTECTED_WRITE_CONFIG);
-    for harness in ["claude-code", "cursor", "gemini-cli", "codex-cli"] {
+    for harness in [
+        "claude-code",
+        "cursor",
+        "gemini-cli",
+        "codex-cli",
+        "factory",
+        "opencode",
+    ] {
         let output = run_hook_in(
             &dir,
             harness,
@@ -4352,8 +4419,13 @@ fn an_event_a_host_does_not_declare_degrades_cleanly() {
         "the host that has the capability says nothing about lacking it"
     );
 
-    // Undeclared: still an allow, still nothing on the answer channel.
-    for harness in ["cursor", "copilot-cli", "gemini-cli", "codex-cli"] {
+    // Undeclared: still an allow, still nothing on the answer channel. Every
+    // named host but the one that declares it, read off the matrix so a new
+    // host is covered the moment it joins.
+    for &harness in ATTRIBUTION_HOSTS
+        .iter()
+        .filter(|harness| !["claude-code", "exit-code"].contains(harness))
+    {
         let output = run_hook_in(&dir, harness, &payload);
         assert_eq!(
             output.status.code(),
@@ -4389,14 +4461,7 @@ fn a_payload_that_fits_no_host_fails_open_on_every_host() {
     // §7(c): a payload no adapter can read is an allow, never an error and never
     // a deny — a guard must not be the reason a session cannot proceed.
     let dir = repo_with_gh_policy("host-junk");
-    for harness in [
-        "claude-code",
-        "cursor",
-        "copilot-cli",
-        "gemini-cli",
-        "codex-cli",
-        "exit-code",
-    ] {
+    for &harness in ATTRIBUTION_HOSTS {
         let output = run_hook_in(&dir, harness, "not json at all");
         assert_eq!(output.status.code(), Some(0), "{harness} must fail open");
         assert!(output.stdout.is_empty(), "{harness} emits no verdict");
@@ -10837,6 +10902,7 @@ const INSTALLABLE_HARNESSES: &[&str] = &[
     "copilot-cli",
     "gemini-cli",
     "codex-cli",
+    "factory",
 ];
 
 #[test]
@@ -10916,6 +10982,122 @@ fn generate_hooks_refuses_the_contract_only_harness() {
     );
 }
 
+/// Drives a generated `OpenCode` plugin the way its host does: import the module,
+/// build the hooks with a project directory, and call `tool.execute.before` — or,
+/// for the `session.idle` subject, deliver it through the `event` hook.
+///
+/// `pathToFileURL` because a bare absolute path is not an import specifier on
+/// Windows, where a drive letter reads as a URL scheme.
+const OPENCODE_DRIVER: &str = r#"import { pathToFileURL } from "node:url";
+const [plugin, tool, args] = process.argv.slice(2);
+const { Batten } = await import(pathToFileURL(plugin).href);
+const hooks = await Batten({ directory: process.cwd() });
+try {
+  if (tool === "session.idle") {
+    await hooks.event({ event: { type: tool } });
+  } else {
+    await hooks["tool.execute.before"]({ tool }, { args: JSON.parse(args) });
+  }
+  console.log("allowed");
+} catch (error) {
+  console.log(`thrown: ${error.message}`);
+}
+"#;
+
+/// THE PLUGIN IS A GUARD ONLY IF EXIT 2 BECOMES A THROW (CLOUD-1942).
+///
+/// `OpenCode`'s `tool.execute.before` blocks a tool by throwing and by nothing
+/// else, so a plugin that returned on a refusal would read as installed and
+/// allow every call. Run under the pinned Node against THIS build of the engine,
+/// its own directory first on a `PATH` masked of any installed release (the way
+/// `common::scrub` puts the engine under test there), so the case runs on every
+/// platform the suite does: a refusal is thrown with the engine's reason, an
+/// allow passes, and an engine that cannot load its rules is thrown too, because
+/// `adjudicate` fails closed there and the plugin must carry that refusal as well.
+/// The end of a turn is the one place that refusal is NOT thrown: `session.idle`
+/// arrives after the session ended, so the same unloadable project resolves.
+///
+/// No "could not decide" row: `adjudicate` measured exit 0 on every undecodable
+/// or unknown envelope, never 3, so a row for 3 would assert a code this path
+/// does not produce.
+#[test]
+fn a_generated_opencode_plugin_throws_the_engine_s_refusal() {
+    let generated = generated_wiring("opencode");
+    assert_eq!(
+        generated.status.code(),
+        Some(0),
+        "opencode's adapter is a plugin, so generate emits it: {}",
+        common::stderr(&generated)
+    );
+    let tools = common::scratch("opencode-plugin");
+    let plugin = tools.join("batten.mjs");
+    fs::write(&plugin, common::stdout(&generated)).expect("write the plugin");
+    let driver = tools.join("drive.mjs");
+    fs::write(&driver, OPENCODE_DRIVER).expect("write the driver");
+    let engine = Path::new(env!("CARGO_BIN_EXE_batten"))
+        .parent()
+        .map(Path::to_path_buf);
+    let path = std::env::join_paths(
+        engine
+            .into_iter()
+            .chain(std::env::split_paths(&common::ambient_path())),
+    )
+    .expect("join PATH");
+    let guarded = Fixture::new("opencode-plugin-guarded")
+        .config(PROTECTED_POLICY)
+        .git()
+        .base_commit()
+        .build();
+    let unloadable = Fixture::new("opencode-plugin-unloadable")
+        .config("version = [\n")
+        .git()
+        .base_commit()
+        .build();
+    // `None` is an allow; `Some` is a throw carrying that fragment of the reason.
+    for (project, tool, args, thrown) in [
+        (
+            &guarded,
+            "bash",
+            r#"{"command":"rm guarded/thing"}"#,
+            Some("path write refused"),
+        ),
+        (&guarded, "read", r#"{"filePath":"notes.txt"}"#, None),
+        (
+            &unloadable,
+            "bash",
+            r#"{"command":"ls"}"#,
+            Some("engine-cannot-adjudicate"),
+        ),
+        (&unloadable, "session.idle", "{}", None),
+    ] {
+        #[expect(
+            clippy::disallowed_types,
+            reason = "stays, and test-only — CLOUD-1942: the subject is the generated plugin running under the pinned Node, a program the batten door does not spawn; the engine it reaches is this build, first on PATH"
+        )]
+        let output = std::process::Command::new(common::require_tool("node"))
+            .arg(&driver)
+            .arg(&plugin)
+            .arg(tool)
+            .arg(args)
+            .env("PATH", &path)
+            .current_dir(project)
+            .output()
+            .expect("run the pinned node");
+        let answer = common::stdout(&output);
+        let answer = answer.trim();
+        let matched = match thrown {
+            None => answer == "allowed",
+            Some(reason) => answer.starts_with("thrown: ") && answer.contains(reason),
+        };
+        assert!(
+            matched,
+            "{tool}: expected a throw of {thrown:?} (None is an allow), got {answer:?}; \
+             stderr: {}",
+            common::stderr(&output)
+        );
+    }
+}
+
 // --- per-host attribution adapters (CLOUD-276) -------------------------------
 //
 // The invariant these pin is an asymmetry, and it is the issue's whole point:
@@ -10929,7 +11111,7 @@ fn generate_hooks_refuses_the_contract_only_harness() {
 // judge the identity the sandbox's git happens to resolve, which is asserting a
 // premise the fixture never created (`rules/rust.md`, CLOUD-249).
 
-/// The six harness tokens, as the binary accepts them.
+/// The eight harness tokens, as the binary accepts them.
 ///
 /// Spelled here rather than read off `Harness::ALL` at runtime **and** checked
 /// against it below, so a new host cannot join the enum without joining this
@@ -10940,6 +11122,8 @@ const ATTRIBUTION_HOSTS: &[&str] = &[
     "copilot-cli",
     "gemini-cli",
     "codex-cli",
+    "factory",
+    "opencode",
     "exit-code",
 ];
 
