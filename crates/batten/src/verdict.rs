@@ -3396,12 +3396,13 @@ mod tests {
         assert_eq!(Subject::from_json(&value), None);
     }
 
-    /// Every native class is a well-formed, unique token.
+    /// Every native class is a well-formed token.
     ///
-    /// Completeness needs no test: `Native::ALL` and the enum are generated
-    /// from one declaration (`token_enum!`, CLOUD-2442), so a class cannot exist
-    /// unlisted. What a declaration CAN get wrong is its token, and that is
-    /// what this asserts — so adding a class changes no line here.
+    /// Completeness and uniqueness need no test: `Native::ALL` and the enum are
+    /// generated from one declaration (`token_enum!`, CLOUD-2442), and a token
+    /// declared twice fails the build. What a declaration can still get wrong is
+    /// a token's SHAPE, and that is what this asserts — so adding a class
+    /// changes no line here.
     #[test]
     fn every_native_class_is_listed() {
         for native in Native::ALL {
@@ -3417,11 +3418,6 @@ mod tests {
                 "{named} is not a three-word verdict name"
             );
         }
-        assert_eq!(
-            native_tokens().len(),
-            Native::ALL.len(),
-            "two native classes share a token, so a refusal under it is unattributable"
-        );
     }
 
     /// The vendored table is held to its own validator.
