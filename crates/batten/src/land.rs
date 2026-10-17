@@ -2832,6 +2832,10 @@ pub(crate) const BRANCH_KEYED_RECEIPTS: &[&str] = &[
     "filed-set-nudged",
     "unlanded-nudged",
     "unlanded-spoken",
+    // The Stop refusal's bound and its dispatch excuse (CLOUD-2441): left behind,
+    // a reused branch name would inherit a spent refusal or a free Stop.
+    "unlanded-refused",
+    "land-dispatched",
     // `pr-open`, minted from `create_pull_request`'s own result: this branch has an
     // unlanded pull request, so opening a second one is the bundle split
     // AGENTS.md's "one PR all of it" refuses. Landing sweeps it here, which is what

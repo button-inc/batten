@@ -1118,6 +1118,41 @@ fn a_running_land_lets_the_stop_pass() {
         Some(0),
         "a live land holding the lock is the remedy already running"
     );
+    assert_eq!(
+        hook_in(&repo, &home, &stop_payload("Landed and pushed.", false))
+            .status
+            .code(),
+        Some(2),
+        "and the excused Stop spent no refusal: once the land is gone, the next is refused"
+    );
+}
+
+/// A `land` JUST STARTED EXCUSES ONE STOP (CLOUD-2441): a backgrounded
+/// `mise run land` returns at once and holds no lock while it builds, so the Stop
+/// right after the call that started it passes, and only that one.
+#[test]
+fn a_land_just_started_excuses_one_stop() {
+    let (repo, home) = unlanded_fixture("stop-unlanded-dispatched");
+    let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let start = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "s-1",
+        "tool_name": "Bash",
+        "tool_input": {"command": "mise run land", "run_in_background": true},
+    })
+    .to_string();
+    let _ = hook_in(&repo, &home, &start);
+    let stop = || hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    assert_eq!(
+        stop().status.code(),
+        Some(0),
+        "the Stop after the start passes"
+    );
+    assert_eq!(
+        stop().status.code(),
+        Some(2),
+        "and the next, with still no land holding the lock, is refused"
+    );
 }
 
 /// THE HOST'S OWN BOUND IS HONOURED TOO (CLOUD-2441): a Stop the host marks as

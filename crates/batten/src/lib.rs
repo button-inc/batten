@@ -18299,7 +18299,7 @@ fn run_hook(
         output::message(mode, Verbosity::Verbose, err, &note)?;
         return Ok(ExitCode::Success);
     }
-    rearm_unlanded(envelope.event);
+    rearm_unlanded(&envelope);
     // The advisory drain rides the BATCH boundary (CLOUD-79), and which event
     // that is on this host is the capability table's answer rather than a literal
     // here (CLOUD-389). `degrade` hands back `PostToolBatch` where the host emits
@@ -22343,8 +22343,12 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
 /// prompt.
 //MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 //MUTANT unlanded-never-rearmed|s@^        let _ = std::fs::remove_file(marker);$@@|an_operator_prompt_rearms_the_unlanded_pointer
-fn rearm_unlanded(event: hook::Event) {
-    if event != hook::Event::UserPromptSubmit {
+fn rearm_unlanded(envelope: &hook::Envelope) {
+    if envelope.event == hook::Event::PreTool {
+        note_land_dispatch(envelope);
+        return;
+    }
+    if envelope.event != hook::Event::UserPromptSubmit {
         return;
     }
     let Some(branch) = git::current_branch(Path::new(".")).ok().flatten() else {
@@ -22382,6 +22386,34 @@ fn refused_stop(
 /// The receipt family recording that a Stop was refused over the claim
 /// (CLOUD-2441). Branch-keyed like its sibling, and re-armed with it.
 const UNLANDED_REFUSED: &str = "unlanded-refused";
+
+/// The receipt family recording that a call started `land` and no Stop has
+/// yet been excused by it (CLOUD-2441).
+const LAND_DISPATCHED: &str = "land-dispatched";
+
+/// Record a call that starts `land`, so the Stop that follows it is not refused
+/// before the land takes its lock (CLOUD-2441).
+///
+/// A backgrounded `mise run land` returns at once and the turn ends, while the
+/// land it started is still building and holds no lock yet; the lock alone
+/// would read that, the one compliant answer to the pointer, as no land at all.
+/// The receipt excuses exactly one Stop and is consumed by it, so a land that
+/// died before locking is refused at the Stop after. A count, not a clock.
+fn note_land_dispatch(envelope: &hook::Envelope) {
+    if hook::singleton_task_started(envelope).as_deref() != Some(LAND_TASK) {
+        return;
+    }
+    let Some(branch) = git::current_branch(Path::new(".")).ok().flatten() else {
+        return;
+    };
+    if let Ok(git_dir) = git::git_dir(Path::new(".")) {
+        let path = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = crate::durable::append(&path, LAND_TASK);
+    }
+}
 
 /// The completion claim this branch holds unlanded, as the store recorded it.
 struct UnlandedClaim {
@@ -22456,6 +22488,12 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
     let UnlandedClaim { branch, key, count } = unlanded_claim()?;
     let git_dir = git::git_dir(Path::new(".")).ok()?;
     if task::singleton_holder(&git_dir, LAND_TASK).is_some() {
+        return None;
+    }
+    // A land started since the last Stop and not yet locked excuses this one
+    // Stop, and the receipt goes with it (`note_land_dispatch`).
+    let dispatched = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
+    if std::fs::remove_file(&dispatched).is_ok() {
         return None;
     }
     let spoken = recorder::record_path(&git_dir, UNLANDED_SPOKEN, &branch, None);
