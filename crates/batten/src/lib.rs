@@ -7260,8 +7260,7 @@ fn run_claim_race(
     // agents on one issue.
     let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
     // AND AN INCOMPLETE FILL ALLOWS, like every could-not-look arm above it.
-    // Once
-    // `fetch` answers an `Option`, this arm's common cause is a forge that
+    // Once `fetch` answers an `Option`, this arm's common cause is a forge that
     // refused one read — a 403, a 502, a timeout — and "a forge this cannot
     // reach must never be the reason a branch fails `verify`" is this verb's
     // own rule for precisely that. A rarer cause is a worker that unwound,
