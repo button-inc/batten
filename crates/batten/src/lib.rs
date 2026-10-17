@@ -848,10 +848,7 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     // install the ref's release under a config naming this one. A disagreeing
     // `BATTEN_VERSION` is refused now, before anything is written.
     let want = install_want(
-        std::env::var("BATTEN_VERSION")
-            .ok()
-            .filter(|named| !named.is_empty())
-            .as_deref(),
+        named_env("BATTEN_VERSION").as_deref(),
         None,
         Some(engine::Pin {
             release: Some(target),
@@ -1265,7 +1262,7 @@ fn sync_artifact(
              cannot be moved to {new}; nothing was written"
         )));
     };
-    let asset = url.rsplit('/').next().unwrap_or_default().to_owned();
+    let asset = engine::asset_of(&url).to_owned();
     let digest = engine::published_digest(&sums()?, &asset).ok_or_else(|| {
         UsageError::raise(format!(
             "engine update: the release publishes no digest for {asset}, which a batten \
@@ -1485,6 +1482,12 @@ fn release_bytes(tag: &str, exe: &Path, repository: &str) -> Result<Vec<u8>> {
     }
 }
 
+/// Environment variable `name`, an empty value read as unset: the one reading
+/// `engine install` and `engine update` share of the knobs they both take.
+fn named_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
 /// `batten engine install` (CLOUD-2203, CLOUD-2287): install the `batten.toml`
 /// pin.
 ///
@@ -1511,14 +1514,13 @@ fn release_bytes(tag: &str, exe: &Path, repository: &str) -> Result<Vec<u8>> {
 //MUTANT install-ignores-the-worktree-pin|s@^    let pin = worktree_pin(root.as_deref());$@    let pin: Option<engine::Pin> = None;@|a_pinned_worktree_installs_its_pin
 //MUTANT bootstrap-skips-a-current-pin|s@^    let installed = engine::is_installed(&exe, path.as_deref(), root.as_deref());$@    let installed = true;@|the_bootstrap_places_a_running_pin
 fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
-    let var = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     let repository = releases_repository();
     let root = git::worktree_root(Path::new(".")).ok();
-    let by_ref = var("BATTEN_VERSION_FROM_REF")
+    let by_ref = named_env("BATTEN_VERSION_FROM_REF")
         .map(|reference| engine::ref_release(&repository, &reference))
         .transpose()?;
     let pin = worktree_pin(root.as_deref());
-    let want = install_want(var("BATTEN_VERSION").as_deref(), by_ref, pin)?;
+    let want = install_want(named_env("BATTEN_VERSION").as_deref(), by_ref, pin)?;
     install_wanted(want, root, &repository, out)
 }
 
@@ -1898,11 +1900,11 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
     // window: `land` moves `main` only after it published and verified vX, so a
     // pin naming a draft is a defect the fetch below reports, never a wait.
     let cache = state::repo_state_dir(root)?;
-    let binary = engine::pinned_release(&cache, env!("CARGO_PKG_REPOSITORY"), tag)?;
     // EVERY ARTIFACT IS THE PINNED RELEASE'S OWN (CLOUD-2418): a batten
     // provision row can name the pin and still fetch another release's url or
     // bytes, which `version` alone never shows. The manifest is cached beside the
-    // release, so a warm gate reads it without the network.
+    // release, so a warm gate reads it without the network, and it is judged
+    // before the binary is fetched, so a refused config never pays for one.
     let foreign = engine::stale_artifacts(&text, tag, &|| {
         engine::pinned_sums(&cache, env!("CARGO_PKG_REPOSITORY"), tag)
     })?;
@@ -1916,6 +1918,7 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
     if !foreign.is_empty() {
         return Ok(ExitCode::Violation);
     }
+    let binary = engine::pinned_release(&cache, env!("CARGO_PKG_REPOSITORY"), tag)?;
     // The pinned engine must decide as itself: never update itself mid-gate.
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
     // A non-zero child arrives as a `Passthrough` ERROR, which is the right shape

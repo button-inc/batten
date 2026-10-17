@@ -53,9 +53,9 @@ pub struct Pin {
     pub source: Option<String>,
 }
 
-/// What a [`Pin`] names, decided once (CLOUD-2418): every verb reading a pin
-/// matches this rather than the two fields, so a malformed pin reads the same
-/// everywhere.
+/// What a [`Pin`] names, decided once (CLOUD-2418): a verb that matches this
+/// rather than the two fields reads a malformed pin as every other such verb
+/// does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PinKind {
     /// A published release, by tag.
@@ -399,8 +399,8 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
     let Some(pin) = declared(text) else {
         return Ok(());
     };
-    match (pin.release.as_deref(), pin.source.as_deref()) {
-        (Some(tag), None) => {
+    match pin.kind() {
+        PinKind::Release(tag) => {
             let running = release();
             if tag != running {
                 // A RELEASE PIN IS REPAIRED BY THE RELEASE, NEVER BY A BUILD.
@@ -424,7 +424,7 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
             }
             Ok(())
         }
-        (None, Some(digest)) => {
+        PinKind::Source(digest) => {
             // THE CHECKOUT'S OWN BUILD ANSWERS FOR THE CHECKOUT'S OWN PIN
             // (CLOUD-2232), rustup's `path` toolchain: a source pin names this
             // tree, and a binary cargo built inside it IS that tree's engine —
@@ -444,7 +444,7 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
                 return Ok(());
             }
             let stamp = stamp();
-            if stamp.as_deref() != Some(digest) {
+            if stamp.as_deref() != Some(digest.as_str()) {
                 let running = stamp.as_deref().unwrap_or("unstamped");
                 return Err(UsageError::raise(format!(
                     "{source} pins the engine built from source {digest} and this engine is \
@@ -453,7 +453,7 @@ pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -
             }
             Ok(())
         }
-        _ => Err(UsageError::raise(format!("{source}: {MALFORMED_PIN}"))),
+        PinKind::Malformed => Err(UsageError::raise(format!("{source}: {MALFORMED_PIN}"))),
     }
 }
 
@@ -890,13 +890,16 @@ pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String, &'static str)
     let (Ok(pin), Ok(doc)) = (release_version(tag), toml_edit::Document::parse(text)) else {
         return Vec::new();
     };
-    let line = |item: &toml_edit::Item| item_line(text, item);
     let mut found = Vec::new();
     if let Some(item) = doc.get("min_batten_version")
         && let Some(floor) = item.as_str()
         && semver::Version::parse(floor).is_ok_and(|floor| ahead_of(&floor, &pin))
     {
-        found.push((line(item), format!("min_batten_version {floor}"), PIN_UP));
+        found.push((
+            item_line(text, item),
+            format!("min_batten_version {floor}"),
+            PIN_UP,
+        ));
     }
     let rows = doc
         .get("provision")
@@ -919,7 +922,11 @@ pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String, &'static str)
         } else {
             "run `batten engine update`"
         };
-        found.push((line(item), format!("provision batten {version}"), remedy));
+        found.push((
+            item_line(text, item),
+            format!("provision batten {version}"),
+            remedy,
+        ));
     }
     found.sort();
     found
@@ -966,7 +973,6 @@ pub fn stale_artifacts(
         return Ok(Vec::new());
     };
     let bare = pin.to_string();
-    let line = |item: &toml_edit::Item| item_line(text, item);
     // THE MANIFEST IS READ ONCE, at the first artifact that needs it.
     let mut manifest: Option<String> = None;
     let mut found = Vec::new();
@@ -984,18 +990,18 @@ pub fn stale_artifacts(
             return Ok(());
         };
         if moved != url {
-            found.push((line(item), format!("provision batten url {url}")));
+            found.push((item_line(text, item), format!("provision batten url {url}")));
             return Ok(());
         }
-        let asset = url.rsplit('/').next().unwrap_or_default();
+        let asset = asset_of(url);
         let digest = artifact.get("sha256");
-        if manifest.is_none() {
-            manifest = Some(sums()?);
-        }
-        let body = manifest.as_deref().unwrap_or_default();
+        let body = match &mut manifest {
+            Some(body) => body,
+            slot @ None => slot.insert(sums()?),
+        };
         if digest.and_then(toml_edit::Item::as_str) != published_digest(body, asset).as_deref() {
             found.push((
-                digest.map_or_else(|| line(item), line),
+                item_line(text, digest.unwrap_or(item)),
                 format!("provision batten sha256 for {asset}"),
             ));
         }
@@ -1022,6 +1028,12 @@ pub fn stale_artifacts(
     }
     found.sort();
     Ok(found)
+}
+
+/// The asset a release download `url` names: its last path segment.
+#[must_use]
+pub fn asset_of(url: &str) -> &str {
+    url.rsplit('/').next().unwrap_or_default()
 }
 
 /// The `SHA256SUMS` release `tag` publishes, read once from `repository` and

@@ -161,11 +161,9 @@ git_read_verb(verb) if git_reads_as(verb.name, verb.rest)
 
 git_reads_as("stash", rest) if rest[0] in {"list", "show"}
 
-git_reads_as("remote", rest) if count(rest) == 0
-
 # `-v` alone lists; `git remote -v add …` is still `add`, so `-v` reads only
 # as the whole argument list.
-git_reads_as("remote", rest) if rest in {["-v"], ["--verbose"]}
+git_reads_as("remote", rest) if rest in {[], ["-v"], ["--verbose"]}
 
 git_reads_as("remote", rest) if rest[0] in {"get-url", "show"}
 
@@ -219,17 +217,12 @@ git_option_value(arguments, i) if {
 	arguments[i - 1] == "-C"
 }
 
-# `--output` writes a file; `-O` hands matches to a pager program.
+# `--output` writes a file; `-O` hands matches to a pager program, and
+# `-O<pager>` and `--open-files-in-pager=<pager>` are its attached spellings, so
+# the prefix is the flag.
 some_writing_flag(arguments) if {
 	some argument in arguments
-	startswith(argument, "--output")
-}
-
-# `-O<pager>` and `--open-files-in-pager=<pager>` are the attached spellings
-# of the same pager, so the prefix is the flag.
-some_writing_flag(arguments) if {
-	some argument in arguments
-	some prefix in {"-O", "--open-files-in-pager"}
+	some prefix in {"--output", "-O", "--open-files-in-pager"}
 	startswith(argument, prefix)
 }
 
