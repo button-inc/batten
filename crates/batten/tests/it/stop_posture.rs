@@ -1060,6 +1060,11 @@ fn crashed_land(repo: &Path) {
     );
 }
 
+/// The exit a Stop over a [`crashed_land`] gets: Claude Code's refusal `2` where
+/// a corpse is detectable, and a pass where it is not
+/// ([`common::CORPSE_IS_DETECTABLE`]).
+const CRASHED_STOP_CODE: Option<i32> = Some(if common::CORPSE_IS_DETECTABLE { 2 } else { 0 });
+
 /// A CRASHED LAND REFUSES EVERY STOP (CLOUD-2456): the first included, with no
 /// once-per-claim bound, until `land` is re-run. `stop_hook_active: false` on
 /// every Stop is what the host sends when reminders interleave
@@ -1071,7 +1076,14 @@ fn a_crashed_land_refuses_every_stop() {
     for step in 0..3 {
         let stopped = hook_in(&repo, &home, &stop_payload("Waiting.", false));
         let stderr = String::from_utf8_lossy(&stopped.stderr).into_owned();
-        assert_eq!(stopped.status.code(), Some(2), "Stop {step}: {stderr}");
+        assert_eq!(
+            stopped.status.code(),
+            CRASHED_STOP_CODE,
+            "Stop {step}: {stderr}"
+        );
+        if !common::CORPSE_IS_DETECTABLE {
+            continue;
+        }
         assert!(stderr.contains("commit ship missing"), "{stderr}");
         assert!(
             stderr.contains("mise run land"),
@@ -1103,6 +1115,13 @@ fn a_stop_before_any_land_is_not_refused() {
 fn work_landed_since_the_pointer_is_not_refused() {
     let (repo, home) = unlanded_fixture("stop-unlanded-then-landed");
     crashed_land(&repo);
+    assert_eq!(
+        hook_in(&repo, &home, &stop_payload("Landed and pushed.", false))
+            .status
+            .code(),
+        CRASHED_STOP_CODE,
+        "the control: unlanded behind a crash is refused"
+    );
     common::git_in(&repo, &["branch", "-f", "main", "work"]);
     let second = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
     assert_eq!(
@@ -1145,7 +1164,7 @@ fn a_running_land_lets_the_stop_pass() {
         hook_in(&repo, &home, &stop_payload("Landed and pushed.", false))
             .status
             .code(),
-        Some(2),
+        CRASHED_STOP_CODE,
         "and the same branch is refused once a land dies holding it"
     );
 }
@@ -1174,7 +1193,7 @@ fn a_land_just_started_excuses_one_stop() {
     );
     assert_eq!(
         stop().status.code(),
-        Some(2),
+        CRASHED_STOP_CODE,
         "and the next, with still no land holding the lock, is refused"
     );
 }
