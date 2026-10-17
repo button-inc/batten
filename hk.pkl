@@ -111,6 +111,27 @@ local gate = new Mapping<String, Step> {
     glob = List("mise-tasks/**", "policy/*.rego", "mise.toml")
     check = "mise run mutant-census"
   }
+  // THE CHANGED DIFF'S MUTANTS, AT ADMISSION (CLOUD-1746). cargo-mutants
+  // `--in-diff` over the Rust the branch changed, plus the declared rows of
+  // every gate it touched. `slow` tier, after `test`, so a red suite is
+  // refused as that and not as a wall of caught mutants. CI runs the same task
+  // in its sharded `mutants` job and carves it out of the `ci` job with
+  // `HK_SKIP_STEPS`.
+  ["mutant:changed"] {
+    profiles = List("slow")
+    depends = List("test")
+    glob =
+      List(
+        "**/*.rs",
+        "**/Cargo.toml",
+        "Cargo.lock",
+        "policy/*.rego",
+        "mise.toml",
+        "hk.pkl",
+        "batten.toml",
+      )
+    check = "mise run mutant:changed"
+  }
   // The memory glob is CLOUD-770's, and it has to be here rather than only in the
   // task: the gate now walks `.serena/memories/**`, and a step that does not list
   // it never fires on a memory-only commit — the widening would hold in `verify`

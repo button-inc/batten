@@ -1416,8 +1416,14 @@ pub fn unresolvable(root: &Path, registry: &Registry) -> Vec<Finding> {
                         .is_some_and(|program| resolves(root, program));
                 }
             };
-            !spawn(root, Program::Cargo, &args, &[], HOUSEKEEPING_BOUND)
-                .is_ok_and(|ran| ran.passed())
+            !spawn(
+                root,
+                Program::Cargo,
+                &args,
+                &runner_path(),
+                HOUSEKEEPING_BOUND,
+            )
+            .is_ok_and(|ran| ran.passed())
         })
         .map(|kind| Finding {
             gate: kind.id().to_owned(),
@@ -2776,7 +2782,8 @@ const SUITE_TARGET: &str = "target/mutate-cargo";
 /// sweep and a concurrent local `cargo test` would resolve the same scratch
 /// PATHS. That says nothing about the artifact cache above it.
 fn suite_env(root: &Path) -> Vec<(String, String)> {
-    vec![
+    let mut env = runner_path();
+    env.extend([
         (
             String::from("CARGO_TARGET_DIR"),
             root.join(SUITE_TARGET).to_string_lossy().into_owned(),
@@ -2792,7 +2799,33 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
         // it flipped the profile under the declared sweep's builds, and each
         // flip rebuilt the workspace crates.
         (String::from("CARGO_PROFILE_TEST_DEBUG"), String::from("0")),
-    ]
+    ]);
+    env
+}
+
+/// The directory a committed `[[provision]]` row installed a registered
+/// runner's program into, set once by the verb before it runs ([`use_provisioned`]).
+static PROVISIONED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Run every registered runner's program from `dir` first: the pinned
+/// cargo-mutants a `[[provision]]` row ships, which a CI runner holds nowhere
+/// on its `PATH` (CLOUD-2345). Only the first call takes effect.
+pub fn use_provisioned(dir: PathBuf) {
+    let _ = PROVISIONED.set(dir);
+}
+
+/// `PATH` with [`use_provisioned`]'s directory ahead of the inherited one, or
+/// nothing where none was set, so the inherited `PATH` passes through unchanged.
+fn runner_path() -> Vec<(String, String)> {
+    let Some(dir) = PROVISIONED.get() else {
+        return Vec::new();
+    };
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let paths = std::iter::once(dir.clone()).chain(std::env::split_paths(&inherited));
+    std::env::join_paths(paths).map_or_else(
+        |_| Vec::new(),
+        |joined| vec![(String::from("PATH"), joined.to_string_lossy().into_owned())],
+    )
 }
 
 /// How far a run got, in the order `judge_row` must read it — every state but
@@ -4360,6 +4393,28 @@ fn engine_undeclared(root: &Path, censused: &BTreeMap<String, String>) -> usize 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: the provisioned runner's directory dropped, or put after the
+    /// inherited `PATH`, so a CI runner with no cargo-mutants reads
+    /// `runner-absent` and a host's own version runs instead of the pin. The
+    /// one test that sets the process-wide directory.
+    #[test]
+    fn a_provisioned_runner_directory_leads_every_runner_path() {
+        let dir = PathBuf::from("/provisioned/cargo-mutants");
+        use_provisioned(dir.clone());
+        let env = suite_env(Path::new("/repo"));
+        let path = env
+            .iter()
+            .find(|(key, _)| key == "PATH")
+            .map(|(_, value)| value.clone())
+            .expect("a provisioned directory sets PATH");
+        assert_eq!(
+            std::env::split_paths(&path).next(),
+            Some(dir),
+            "the provisioned directory must come first: {path}"
+        );
+        assert_eq!(runner_path().len(), 1, "unresolvable reads the same PATH");
+    }
 
     /// Fails by: a nextest run read as libtest, which counts no case and finds
     /// no summary, so every declared Cargo row reads `suite-did-not-run`.

@@ -520,7 +520,11 @@ jobs:
           # what `ci-suite-lane` in batten.toml refuses, because
           # `hook-profile-check` reads `hk check --all --plan` and cannot see
           # what a workflow job passes.
-          HK_SKIP_STEPS: batten-check
+          #
+          # `mutant:changed` IS CARVED OUT THE SAME WAY (CLOUD-1746): the
+          # `mutants` job below runs it as a `MUTANT_SHARD` matrix, so CI's
+          # confirmation of a change's mutants costs a shard, not a serial run.
+          HK_SKIP_STEPS: batten-check,mutant:changed
       # THE GATES LEFT THE CHECKOUT AS THEY FOUND IT (CLOUD-1953). `test:cargo`'s
       # retired shell body compared tracked state before and after the suite, and
       # that comparison fired here, inside `mise run ci`. The body is one argv now
@@ -1074,6 +1078,91 @@ jobs:
   # NAME in the second step instead — which is what keeps the merge contract
   # itself unchanged. The host still requires exactly `final`; what `final`
   # means got wider, and that is the property the fan-in exists to provide.
+  # THE CHANGED DIFF'S MUTANTS, SHARDED (CLOUD-1746). `verify` runs
+  # `mutant:changed` whole, and it runs there first. This job confirms it as the
+  # cargo-mutants book's PR recipe does: `--in-diff`, split across a matrix.
+  # `MUTANT_SHARD` slices the cargo-mutants mutants and the declared gates alike
+  # (`run_mutate_sweep`), and a shard skips the baseline the unsharded local run
+  # already took. Measured locally on #1209: 22 mutants plus 3 declared rows in
+  # 32m41s serially, so four shards bring CI's share to about a quarter of that
+  # on top of each shard's warm build. The #1132 matrix this replaces in spirit
+  # was removed because it ran where `verify` never did; this one runs the task
+  # `verify` runs, which is `ci-local-parity` property 3, and the `ci` job's
+  # `HK_SKIP_STEPS` carve is answered here for `ci-suite-lane`.
+  #
+  # The pinned cargo-mutants comes from `batten.toml`'s `[[provision]]` row,
+  # which the sweep applies itself (CLOUD-2345), so no install step names it.
+  #
+  # IN `final`'s `needs:` AND IN `CI_REQUIRED_CHECKS`, for `batten-check`'s
+  # reason above.
+  mutants:
+    name: mutants (${{ matrix.shard }})
+    if: ${{ github.event.pull_request.draft == false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-24.04-arm
+    # DERIVED, NOT OBSERVED: a warm build of the engine and the staged suite,
+    # about 600s, plus a quarter of the 1961s local run. 1200s, x3. Re-derive
+    # from `mise run timeout-drift` once this job has 25 runs.
+    timeout-minutes: 60 # budget: p95=1200s x3 measured=2026-10-17
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      # CLOUD-420: the landing lease, first, as every job that starts at once
+      # carries it (`ci-local-parity` property 7). `|| exit 0` on each line.
+      - name: Landing lease precondition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LEASE_HEAD_REF: ${{ github.head_ref }}
+          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          installer=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/install.sh?ref=main") || exit 0
+          printf '%s\n' "$installer" | \
+            BATTEN_VERSION_FROM_REF=main BATTEN_INSTALL_DIR="$RUNNER_TEMP/batten-bin" \
+            BATTEN_ALLOW_OFF_PATH=1 BATTEN_REQUIRE="lease guard" sh || exit 0
+          mkdir -p "$RUNNER_TEMP/batten-config" || exit 0
+          gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/batten.toml?ref=main" \
+            >"$RUNNER_TEMP/batten-config/batten.toml" || exit 0
+          "$RUNNER_TEMP/batten-bin/batten" --config-in "$RUNNER_TEMP/batten-config" \
+            lease guard \
+            "$LEASE_HEAD_SHA" "$LEASE_HEAD_REF" "$LEASE_RUN_ID" || exit 0
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # `MUTANT_CHANGED_SINCE=origin/main` diffs the branch against trunk.
+          fetch-depth: 0
+      - name: Fetch the comparison base refs
+        run: git fetch origin main:refs/remotes/origin/main
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        with:
+          version: 2026.9.1
+          # The `ci` job's list, for `batten-check`'s reason: the declared rows
+          # this task judges reach `opa`, `pkl` and `mise run` tasks, and a
+          # missing tool would read as a surviving mutant rather than as a
+          # provisioning error. One line, for `ci-tools-check`'s reason.
+          install_args: rust hk aqua:cli/cli github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.pkl/cache
+          key: pkl-${{ runner.os }}-${{ hashFiles('hk.pkl') }}
+      # The `ci-` family's arm64 entry, read-only like every pull-request
+      # consumer of it (CLOUD-1477).
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci-
+          save-if: false
+      - run: mise run mutant:changed
+        env:
+          MUTANT_SHARD: ${{ matrix.shard }}/4
+          DOCTOR_TARGETS: ""
+
   final:
     name: final
     # `always()`, AND NOT `!cancelled()` — which was tried here and reverted,
@@ -1121,7 +1210,7 @@ jobs:
     # `CI_REQUIRED_CHECKS` names all four and `checks-green` decides on that
     # list, which is what `land` reads — in the same shape `commit-lint` and
     # `zizmor` already have.
-    needs: [ci, batten-check, perf]
+    needs: [ci, batten-check, mutants, perf]
     runs-on: ubuntu-latest
     # `checks: read` is the whole reason this job now needs a permission at all:
     # the analyzer's verdict is a check-run on the head commit.

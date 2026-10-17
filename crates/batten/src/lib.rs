@@ -3882,8 +3882,6 @@ fn run_capture(
 /// Every failure is `None`, leaving `become_argv`'s own error naming the
 /// program. Nothing is written to either channel, because stdout is the
 /// transport.
-//MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
-//MUTANT spawn-unprovisioned|s@^        \.find(\x7centry\x7c entry.binary == \*program)?;$@        .find(\x7c_\x7c false)?;@|a_launch_program_missing_from_path_is_provisioned_then_becomes_the_launch_line
 // The rows below this one are judged under the suite they were before
 // (CLOUD-2193: a row runs under the declaration above it).
 //MUTANT-SUITE crates/batten/tests/it/engine_gates.rs
@@ -3892,6 +3890,18 @@ fn provisioned_launch(command: &[String], overrides: &Overrides) -> Option<Vec<S
     if program.contains(['/', '\\']) || rules::on_path_verbatim(program).is_some() {
         return None;
     }
+    let binary = provisioned_binary(program, overrides)?;
+    let mut launch = vec![binary.to_string_lossy().into_owned()];
+    launch.extend(rest.iter().cloned());
+    Some(launch)
+}
+
+/// The installed path of the committed `[[provision]]` row shipping `binary`,
+/// applied first (checksum-verified, cache first); `None` where no row ships it
+/// or it cannot be applied.
+//MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
+//MUTANT spawn-unprovisioned|s@^        \.find(\x7centry\x7c entry.binary == binary)?;$@        .find(\x7c_\x7c false)?;@|a_launch_program_missing_from_path_is_provisioned_then_becomes_the_launch_line
+fn provisioned_binary(binary: &str, overrides: &Overrides) -> Option<PathBuf> {
     let ProvisionSite {
         config,
         repo,
@@ -3901,12 +3911,9 @@ fn provisioned_launch(command: &[String], overrides: &Overrides) -> Option<Vec<S
     let entry = config
         .provisions
         .iter()
-        .find(|entry| entry.binary == *program)?;
+        .find(|entry| entry.binary == binary)?;
     provision::apply(entry, &cache, false, links_host).ok()?;
-    let binary = provision::binary_path(&repo, entry).ok()?;
-    let mut launch = vec![binary.to_string_lossy().into_owned()];
-    launch.extend(rest.iter().cloned());
-    Some(launch)
+    provision::binary_path(&repo, entry).ok()
 }
 
 /// `batten mcp call` (CLOUD-1260).
@@ -17096,6 +17103,15 @@ fn run_registered_runner(
         )?;
         return Ok(ExitCode::Internal);
     };
+    // THE PINNED RUNNER, NOT WHATEVER `PATH` HOLDS (CLOUD-2345): a CI runner has
+    // no cargo-mutants at all, and a host's may be another version. Where no row
+    // ships it, the inherited `PATH` decides and `unresolvable` reports its absence.
+    if kind == mutate::RunnerKind::CargoMutants
+        && let Some(dir) = provisioned_binary("cargo-mutants", &Overrides::default())
+            .and_then(|binary| binary.parent().map(Path::to_path_buf))
+    {
+        mutate::use_provisioned(dir);
+    }
     let absent = mutate::unresolvable(root, registry);
     if !absent.is_empty() {
         for finding in &absent {
