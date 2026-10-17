@@ -1014,7 +1014,7 @@ fn a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_runs() {
     );
 }
 
-/// gke-platform#11 (CLOUD-2189): the ready's fast jobs register within seconds,
+/// A consumer's fan-in (CLOUD-2189): the ready's fast jobs register within seconds,
 /// but the fan-in `final` registers only once every job it needs has finished.
 /// A dead end masking `final` is not confirmed by a sibling's new run: until a
 /// `final` the ready bought exists, the newest `final` is the draft-era skip, and

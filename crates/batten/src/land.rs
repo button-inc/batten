@@ -934,8 +934,8 @@ pub const fn abandons_the_runs(seen: Option<TapVerdict>) -> bool {
 /// stop. A count, never a clock, for the reason [`Ledger`] gives.
 ///
 /// **EACH MASKED NAME, NOT ANY REQUIRED ONE** (CLOUD-2189). Believing the dead
-/// end once any required name re-registered stopped gke-platform#11 three times:
-/// its fast jobs register within seconds of the ready, but its fan-in `final`
+/// end once any required name re-registered stopped a consumer's lap three
+/// times: its fast jobs register within seconds of the ready, but its fan-in `final`
 /// registers only after every job it needs has finished, so for most of the run
 /// the newest `final` was still the draft-era skip. The dead end named `final`;
 /// only a `final` the ready bought can confirm it.
