@@ -1044,40 +1044,49 @@ fn an_operator_prompt_rearms_the_unlanded_pointer() {
     );
 }
 
-/// AN IGNORED POINTER REFUSES THE NEXT STOP (CLOUD-2441), once.
-///
-/// The first Stop on the claim is the advisory, exit 0, as before. The second,
-/// with still no `land` running, is the pointer ignored: refused with Claude
-/// Code's `2` and the class on stderr. The third passes, because one forced
-/// continuation is the bound, and `stop_hook_active: false` on every Stop is
-/// what the host sends when reminders interleave (anthropics/claude-code#54360).
+/// Leave `land`'s singleton lock in `repo` held by a pid that cannot exist, as
+/// a lap the host killed before its guard could release it.
+fn crashed_land(repo: &Path) {
+    let lock = repo.join(".git").join("batten-singleton").join("land");
+    fs::create_dir_all(&lock).expect("lock dir");
+    // Above the kernel's pid ceiling, so no process can ever hold it.
+    fs::write(lock.join("pid"), "4194399\n").expect("lock pid");
+}
+
+/// A CRASHED LAND REFUSES EVERY STOP (CLOUD-2456): the first included, with no
+/// once-per-claim bound, until `land` is re-run. `stop_hook_active: false` on
+/// every Stop is what the host sends when reminders interleave
+/// (anthropics/claude-code#54360).
 #[test]
-fn an_ignored_unlanded_pointer_refuses_the_next_stop() {
-    let (repo, home) = unlanded_fixture("stop-unlanded-refused");
-    let stop = || hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
-    let first = stop();
-    assert_eq!(
-        first.status.code(),
-        Some(0),
-        "the first Stop is the advisory"
-    );
-    assert!(unlanded_line(&stdout_of(&first)).is_some(), "and it speaks");
-    let second = stop();
-    let stderr = String::from_utf8_lossy(&second.stderr).into_owned();
-    assert_eq!(
-        second.status.code(),
-        Some(2),
-        "the Stop after an ignored pointer is refused: {stderr}"
-    );
-    assert!(
-        stderr.contains("commit ship missing"),
-        "naming the class whose remedy is the land: {stderr}"
-    );
-    assert_eq!(
-        stop().status.code(),
-        Some(0),
-        "one refusal per claim, so the next Stop passes"
-    );
+fn a_crashed_land_refuses_every_stop() {
+    let (repo, home) = unlanded_fixture("stop-crashed-land");
+    crashed_land(&repo);
+    for step in 0..3 {
+        let stopped = hook_in(&repo, &home, &stop_payload("Waiting.", false));
+        let stderr = String::from_utf8_lossy(&stopped.stderr).into_owned();
+        assert_eq!(stopped.status.code(), Some(2), "Stop {step}: {stderr}");
+        assert!(stderr.contains("commit ship missing"), "{stderr}");
+        assert!(
+            stderr.contains("mise run land"),
+            "the re-run is named: {stderr}"
+        );
+    }
+}
+
+/// NO LAND STARTED, NO REFUSAL (CLOUD-2456): a branch that has not begun landing
+/// is waiting on a build, a test or a review, which is the designed workflow.
+#[test]
+fn a_stop_before_any_land_is_not_refused() {
+    let (repo, home) = unlanded_fixture("stop-no-land-yet");
+    for _ in 0..3 {
+        let stopped = hook_in(&repo, &home, &stop_payload("Testing first.", false));
+        assert_eq!(
+            stopped.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&stopped.stderr)
+        );
+    }
 }
 
 /// WORK LANDED SINCE THE POINTER IS NOT REFUSED (CLOUD-2441): the Stop judges
@@ -1086,6 +1095,7 @@ fn an_ignored_unlanded_pointer_refuses_the_next_stop() {
 #[test]
 fn work_landed_since_the_pointer_is_not_refused() {
     let (repo, home) = unlanded_fixture("stop-unlanded-then-landed");
+    crashed_land(&repo);
     let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
     common::git_in(&repo, &["branch", "-f", "main", "work"]);
     let second = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
@@ -1122,8 +1132,16 @@ fn a_running_land_lets_the_stop_pass() {
         hook_in(&repo, &home, &stop_payload("Landed and pushed.", false))
             .status
             .code(),
+        Some(0),
+        "an orderly exit released the lock, which is no crash"
+    );
+    crashed_land(&repo);
+    assert_eq!(
+        hook_in(&repo, &home, &stop_payload("Landed and pushed.", false))
+            .status
+            .code(),
         Some(2),
-        "and the excused Stop spent no refusal: once the land is gone, the next is refused"
+        "and the same branch is refused once a land dies holding it"
     );
 }
 
@@ -1133,6 +1151,7 @@ fn a_running_land_lets_the_stop_pass() {
 #[test]
 fn a_land_just_started_excuses_one_stop() {
     let (repo, home) = unlanded_fixture("stop-unlanded-dispatched");
+    crashed_land(&repo);
     let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
     let start = serde_json::json!({
         "hook_event_name": "PostToolUse",
@@ -1161,6 +1180,7 @@ fn a_land_just_started_excuses_one_stop() {
 #[test]
 fn a_continued_stop_is_never_refused() {
     let (repo, home) = unlanded_fixture("stop-unlanded-continued");
+    crashed_land(&repo);
     let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
     let second = hook_in(&repo, &home, &stop_payload("Landed and pushed.", true));
     assert_eq!(

@@ -23377,10 +23377,6 @@ fn rearm_unlanded(envelope: &hook::Envelope) {
     if let Ok(git_dir) = git::git_dir(Path::new(".")) {
         let marker = recorder::record_path(&git_dir, UNLANDED_SPOKEN, &branch, None);
         let _ = std::fs::remove_file(marker);
-        // The Stop refusal's bound re-arms with it (CLOUD-2441): one forced
-        // continuation per claim per operator prompt.
-        let refused = recorder::record_path(&git_dir, UNLANDED_REFUSED, &branch, None);
-        let _ = std::fs::remove_file(refused);
         let dispatched = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
         let _ = std::fs::remove_file(dispatched);
     }
@@ -23404,10 +23400,6 @@ fn refused_stop(
     writeln!(err, "{}", block.render_finding(refusal::Arm::Full))?;
     Ok(true)
 }
-
-/// The receipt family recording that a Stop was refused over the claim
-/// (CLOUD-2441). Branch-keyed like its sibling, and re-armed with it.
-const UNLANDED_REFUSED: &str = "unlanded-refused";
 
 /// The receipt family recording that a call started `land` and no Stop has
 /// yet been excused by it (CLOUD-2441).
@@ -23484,35 +23476,33 @@ fn unlanded_claim() -> Option<UnlandedClaim> {
     })
 }
 
-/// The Stop to refuse: work that exists only here, already pointed at, and no
-/// `land` running to move it (CLOUD-2441).
+/// The Stop to refuse: work that exists only here, and a `land` that was started
+/// and died holding its lock (CLOUD-2441, scoped by CLOUD-2456).
 ///
 /// # The owner's ruling, and the decision it overrides
 ///
 /// Stopping a land is the catastrophic error, not lapping: a local lap is free,
 /// and committed work no lap carries is lost on reclaim. Measured twice on
-/// 2026-10-16: an agent read `commit ship missing` past four Stops on #1174,
-/// and this repository's own author ended a turn mid-landing on #1190 because a
-/// review skill said its reply was the report and nothing else.
+/// 2026-10-16: an agent read `commit ship missing` past four Stops on #1174
+/// after the host's two-hour cap killed its `land`, and this repository's own
+/// author ended a turn mid-landing on #1190.
 ///
 /// CLOUD-889 removed the Stop deny for two reasons, and neither reaches this
 /// predicate. Its `unlanded` held for a branch's whole life, so the deny looped;
-/// here a running `land` clears it, read from the landing lock itself
-/// ([`task::singleton_holder`], the non-taking read built for hooks). Its remedy,
-/// a push, could not clear it; this one's is the land it names.
+/// here only a CRASH refuses ([`task::singleton_abandoned`]: the lock left by a
+/// dead holder, which no orderly exit leaves), so a branch that has not begun
+/// landing, or whose land is running or exited on a verdict, ends its turn. Its
+/// remedy, a push, could not clear it; this one's is the land it names, which
+/// reclaims the corpse lock.
 ///
-/// # The bound is a receipt, not the host's flag
+/// # The bound is the remedy, not a receipt
 ///
-/// `stop_hook_active` resets whenever a system reminder lands between Stops
-/// (anthropics/claude-code#54360), which a session with background tasks does
-/// constantly, so it is honoured but cannot be what holds this. The receipt
-/// can: ONE refusal per claim, re-armed only by an operator prompt with the
-/// pointer it follows. And it follows the pointer: the first Stop on a claim is
-/// the advisory, which already resumes the model once (CLOUD-2332); the Stop
-/// after it, with still no land, is the pointer ignored, and only that one is
-/// refused.
-//MUTANT unlanded-stop-advises|s@^    if task::singleton_holder(\&git_dir, LAND_TASK).is_some() {$@    if true {@|an_ignored_unlanded_pointer_refuses_the_next_stop
-//MUTANT unlanded-stop-unbounded|s@ \x7c\x7c already_marked(Some(\&refused), \&key) {$@ {@|an_ignored_unlanded_pointer_refuses_the_next_stop
+/// The owner scoped this to every Stop while the crash stands (2026-10-17): a
+/// once-per-claim receipt let a second crash pass, and the measured failure was
+/// four ignored advisories. `stop_hook_active` resets whenever a reminder lands
+/// between Stops (anthropics/claude-code#54360), so it is honoured but holds
+/// nothing; the refused turn can always clear the refusal by re-running `land`.
+//MUTANT unlanded-stop-advises|s@^    if !task::singleton_abandoned(\&git_dir, LAND_TASK) {$@    if true {@|a_crashed_land_refuses_every_stop
 //MUTANT land-dispatch-ignored|s@^    if std::fs::remove_file(\&dispatched).is_ok() {$@    if false {@|a_land_just_started_excuses_one_stop
 ///
 /// Called only from [`stop_nudges`], past every guard it applies: the event,
@@ -23523,32 +23513,31 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
     // The dispatch excuse is cleared whenever it is no longer about a land
     // waiting for its lock: no claim to excuse, or the land already holding it.
     let dispatched = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
-    let Some(UnlandedClaim { key, count, .. }) = unlanded_claim() else {
+    let Some(UnlandedClaim { count, .. }) = unlanded_claim() else {
         let _ = std::fs::remove_file(&dispatched);
         return None;
     };
-    if task::singleton_holder(&git_dir, LAND_TASK).is_some() {
+    // ONLY A CRASHED LAND REFUSES (CLOUD-2456, the owner's scope of 2026-10-17).
+    // A live holder is the remedy running; no lock is a branch that has not begun
+    // landing, whose build, test or review is the designed workflow; an orderly
+    // exit — landed, red gate, spent budget — releases the lock. What is left is a
+    // lock its holder died holding: the host's background cap, a SIGKILL, a
+    // reclaim. EVERY Stop while it stands, with no per-claim receipt: the bound is
+    // the remedy, because `mise run land` reclaims the corpse.
+    if !task::singleton_abandoned(&git_dir, LAND_TASK) {
         let _ = std::fs::remove_file(&dispatched);
         return None;
     }
-    let spoken = recorder::record_path(&git_dir, UNLANDED_SPOKEN, &branch, None);
-    let refused = recorder::record_path(&git_dir, UNLANDED_REFUSED, &branch, None);
-    if !already_marked(Some(&spoken), &key) || already_marked(Some(&refused), &key) {
-        return None;
-    }
-    // Only now, where this Stop would be refused, does a land started since and
-    // not yet locked excuse it, and the receipt goes with it.
+    // A land started since the crash and not yet locked excuses this Stop, once.
     if std::fs::remove_file(&dispatched).is_ok() {
         return None;
     }
-    // An unwritable receipt would refuse every Stop, which is CLOUD-889's loop:
-    // a refusal that cannot record itself is not issued.
-    crate::durable::append(&refused, &key).ok()?;
     Some(refusal::Refusal::engine(
         verdict::Native::CommitShipMissing,
         &[
             verdict::artifact(completion::RULE_ID),
             verdict::Subject::Count { count },
+            verdict::artifact("land crashed: re-run `mise run land`, backgrounded"),
         ],
         refusal::Fix::None,
     ))
