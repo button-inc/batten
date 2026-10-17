@@ -453,11 +453,9 @@ pub struct Filled {
 /// but it also appends every request to one shared `args` file and replaces one
 /// `<file>.request` per route, so what a suite READS BACK afterwards is in
 /// scheduler order, and a last writer wins where two requests route to one
-/// file. `claim_race.rs`'s verb-tier cases DO drive this seam, including one
-/// with two eligible competitors, and what keeps them safe is a rule rather
-/// than a count: route every endpoint by URL, and assert over the exit code
-/// and the streams, never over `args`. A case that needs `args` must read it
-/// as a set rather than a sequence.
+/// file. `claim_race.rs`'s verb-tier cases DO drive this seam; the rule that
+/// keeps them safe is stated in that file's own header, where a case author
+/// looks, rather than here.
 ///
 /// # What is decided where
 ///
@@ -504,15 +502,22 @@ pub struct Filled {
 /// CLOUD-1422 retired the shell for and the same one arriving by a different
 /// door. `None` keeps that out of the verdict; `Some("")` is still a real
 /// answer and still judged.
+///
+/// **`Option` rather than [`crate::facts::Look`]**, which is the crate's type
+/// for this same distinction and argues it in the same words. Two reasons it
+/// is not reached for here: `Look` is three-valued and a log read has no
+/// `IsNot`, so one arm would carry no meaning; and the distinction this
+/// function must return is PER COMPETITOR, which is [`Filled::unanswered`],
+/// not a verdict over the fill as a whole. The caller is one `.ok()` from an
+/// `Option` and two from a `Look`.
 #[must_use]
 pub fn with_logs(
-    pulls: Vec<Pull>,
+    mut pulls: Vec<Pull>,
     mine_number: &str,
     claims: &[String],
     keys: &dyn Keys,
     fetch: impl Fn(&str) -> Option<String> + Sync,
 ) -> Filled {
-    let mut pulls = pulls;
     // FETCH A COMPETITOR WHOSE CHEAP READING IS LOAD-BEARING FOR THIS VERDICT,
     // and whose cheap reading could be WRONG. The predicate below is those two
     // factors in that order; the known miss is the case they do not reach.
@@ -577,7 +582,12 @@ pub fn with_logs(
         .enumerate()
         .filter(|(_, pull)| {
             pull.number != mine_number && closes(&pull.body, keys).is_empty() && {
-                let cheap = claimed(&pull.head_ref, &pull.title, "", &pull.body, keys);
+                // THE BODY GOES IN EMPTY on this second call, because the term
+                // before it already answered what the body closes, and source 1
+                // is the only source that reads it. Passing it again re-folds
+                // and re-scans the whole thing for a set the guard has proven
+                // empty — the same answer, over the longest string in hand.
+                let cheap = claimed(&pull.head_ref, &pull.title, "", "", keys);
                 cheap.is_empty() || cheap.iter().any(|key| claims.contains(key))
             }
         })

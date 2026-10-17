@@ -20,6 +20,19 @@
 //! reachable remote, because those are properties of the verb rather than of the
 //! predicate — and a `with input as` equivalent would fabricate the very shape
 //! the verb may be unable to produce.
+//!
+//! # Writing a verb-tier case against the forge fixture
+//!
+//! `rest::from_fixture`'s seam is not concurrency-safe, and `with_logs` fetches
+//! up to `FETCH_WIDTH` competitors at once. Routing by URL settles WHICH answer
+//! each request gets, but every request is also appended to one shared `args`
+//! file and a request body replaces one `<file>.request` per route — so what a
+//! case READS BACK is in scheduler order, with a last writer winning where two
+//! requests route to one file.
+//!
+//! So: route every endpoint the verb will ask, and assert over the exit code
+//! and the two streams, never over `args`. A case that genuinely needs `args`
+//! must read it as a set rather than a sequence.
 
 use batten::race::{self, Keys, Pull};
 
@@ -698,28 +711,13 @@ fn answer(status: u16, body: &str) -> String {
     format!("HTTP/2 {status}\ncontent-type: application/json\n\n{body}\n")
 }
 
-/// A checkout that IS pull request #7, and a forge answering the two endpoints
-/// `batten claim race` asks: the open listing, #7's own commit log, and #8's —
-/// the latter two with statuses the caller chooses.
-///
-/// **The listing is the collision in miniature.** #7's body closes CLOUD-1 while
-/// its COMMITS close CLOUD-2, and #8 names CLOUD-2 in its title. So whether this
-/// branch races turns entirely on whether its own log was read.
-///
-/// #8 IS ROUTED TOO, and the case that forgot it was wrong about itself. Once
-/// the self log resolves CLOUD-2 into `mine`, #8's cheap key collides with it,
-/// so `with_logs` asks for #8's commits to confirm — the widening working as
-/// designed. Without that route the request fell through to the call-order
-/// protocol, answered nothing, and left #8 unanswered: the case passed only
-/// because `races` is computed first, over a doc claiming the opposite. #8's
-/// commits close CLOUD-2 as its title says, so the confirmation agrees and the
-/// race is real.
-///
-/// The REAL grammar rather than [`Fake`], because the subject here is the verb:
-/// the compiled binary resolves `[[pattern]]` rows out of the config it finds,
-/// and a fixture spelling its own would assert about a grammar nothing uses.
 /// A checkout the verb can resolve itself in: the real grammar, an `origin` the
 /// slug derives from, one commit, and the forge directory beside it.
+///
+/// The REAL grammar rather than [`Fake`], because the subject of every case
+/// built on this is the verb: the compiled binary resolves `[[pattern]]` rows
+/// out of the config it finds, and a fixture spelling its own would assert
+/// about a grammar nothing uses.
 ///
 /// Returns the repository, its HEAD — which a listing must carry as some pull
 /// request's head SHA or [`race::identify`] finds no subject — and the forge.
@@ -745,6 +743,18 @@ fn checkout(name: &str) -> (std::path::PathBuf, String, std::path::PathBuf) {
     (repo, head, forge)
 }
 
+/// A checkout that IS pull request #7, and a forge answering the three
+/// endpoints `batten claim race` asks: the open listing, #7's own commit log,
+/// and #8's — the latter two with statuses the caller chooses.
+///
+/// **The listing is the collision in miniature.** #7's body closes CLOUD-1
+/// while its COMMITS close CLOUD-2, and #8 names CLOUD-2 in its title. So
+/// whether this branch races turns entirely on whether its own log was read.
+///
+/// #8's commits are routed too, and close CLOUD-2 as its title says: once the
+/// self log resolves CLOUD-2 into `mine`, #8's cheap key collides with it and
+/// `with_logs` asks for its commits to confirm. The confirmation agrees, so
+/// the race is real.
 fn self_log(
     name: &str,
     commits: u16,
@@ -1016,8 +1026,8 @@ fn a_race_resting_on_a_competitor_nobody_could_read_is_not_a_refusal() {
 /// `with_logs` absorbs, leaves one competitor unread while the rest answered —
 /// and `races.iter().any(..)` would throw the whole list away, discarding a
 /// collision this run fully read and confirmed. That is the same "refusing
-/// information the run already holds" that the judge-first ordering sixteen
-/// lines above exists to keep.
+/// information the run already holds" that `run_claim_race`'s judge-first
+/// ordering exists to keep (`crates/batten/src/lib.rs`, at the `races` call).
 ///
 /// So this listing is deliberately mixed: #8 collides on CLOUD-2 and its
 /// confirming read is refused, #9 collides on CLOUD-1 and its read agrees. The

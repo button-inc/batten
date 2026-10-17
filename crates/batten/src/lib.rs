@@ -7209,7 +7209,7 @@ fn run_claim_race(
     // and that is the spelling which says so.
     let closes_nothing = race::closes(&me.body, &grammar).is_empty();
     // `Option` RATHER THAN A PARALLEL FLAG, for the vocabulary `with_logs`
-    // already argues forty lines down: a read that failed is not a log that is
+    // argues below: a read that failed is not a log that is
     // empty, and `Some("")` is an answer. Two values could disagree — nothing
     // would object to an `Ok` arm returning `false` — where one cannot.
     let log = match bot::forge::commit_messages(&slug, &mine_number) {
@@ -7279,28 +7279,23 @@ fn run_claim_race(
         race::with_logs(pulls, &mine_number, &mine, &grammar, |number| {
             bot::forge::commit_messages(&slug, number).ok()
         });
-    // JUDGED FIRST, AND THE INCOMPLETE ARM ONLY REPLACES THE CLEAN ONE. An
-    // unanswered competitor can only make this list too SHORT, never too long —
-    // its slot keeps the empty log the listing was built with — so a race found
-    // among the ones that DID answer is a true refusal, and returning before
-    // `races` would throw away refusing information the run already holds.
+    // JUDGED FIRST, AND THE COULD-NOT-LOOK ARMS ONLY REPLACE THE CLEAN ONE,
+    // because returning before `races` throws away refusing information the
+    // run already holds. **Every refusal this list reports is sound, for any
+    // fetch set, in three cases and no case analysis beyond them:**
     //
-    // **THAT PROPERTY IS THE ELIGIBILITY FILTER'S, NOT THE EMPTY LOG'S**, and
-    // the coupling is worth naming because `with_logs`'s own doc prescribes
-    // dropping that filter as the fix for the miss it still records. A
-    // competitor is fetched only when its cheap sources resolve to NOTHING, or
-    // when they resolve to a key THIS BRANCH CLAIMS — so an unanswered one
-    // contributes no key it was not already contributing, which is what the
-    // paragraph above needs. **That covers the cheap-EMPTY half only**, which
-    // is the half this arm rests on: an unanswered collider keeps a cheap key
-    // it was already contributing, so it can still enter the list below — and
-    // the partition, not this ordering, is what stops it deciding anything.
+    // * NOT FETCHED — either its body settles it, so its reading is a SUBSET
+    //   of the true one (`closed(body) ⊆ closed(body + log)`, source 1 first),
+    //   or its cheap key is disjoint from `mine` and [`race::races`] emits
+    //   nothing for it at all.
+    // * FETCHED AND ANSWERED — read in full, nothing degraded.
+    // * FETCHED AND UNANSWERED — removed by the partition below.
     //
-    // Fetch EVERY competitor and even that stops holding: `user/cloud-100-x`
-    // whose commits close CLOUD-200 would read as claiming CLOUD-100 on a
-    // failed read, over a key it was contributing to nothing before. Whoever
-    // widens the fetch set that far moves this arm above `races` in the same
-    // change.
+    // Widening the filter only SHRINKS the first case, so the property
+    // strengthens rather than weakens, and no widening can force this
+    // ordering to change. The partition, not the ordering, is what carries it:
+    // an unanswered collider keeps the cheap key it entered with, so it
+    // reaches the list below and is taken out there.
     let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
     // **AND A RACE RESTING ON A COMPETITOR NOBODY READ IS NOT ONE EITHER.** A
     // collider is fetched precisely because its cheap key might be wrong — the
@@ -7322,7 +7317,8 @@ fn run_claim_race(
     if races.is_empty() && !unconfirmed.is_empty() {
         return clean(out, UNCONFIRMED_RACE);
     }
-    // AND AN INCOMPLETE FILL ALLOWS, exactly like the four arms above it. Once
+    // AND AN INCOMPLETE FILL ALLOWS, like every could-not-look arm above it.
+    // Once
     // `fetch` answers an `Option`, this arm's common cause is a forge that
     // refused one read — a 403, a 502, a timeout — and "a forge this cannot
     // reach must never be the reason a branch fails `verify`" is this verb's
@@ -7385,6 +7381,12 @@ fn run_claim_race(
 /// Its own arm rather than a fourth sentence in [`unread_log`]: those three all
 /// answer "no race found over a partial reading", and this one is a race found
 /// over a competitor the run deliberately distrusted and then could not check.
+///
+/// It names the COMPETITOR even where this branch's own log also went unread,
+/// which [`unread_log`]'s third sentence would have named too. That is not an
+/// oversight: the remedy is the same either way — look again — and the
+/// competitor is the half that produced the race being withheld, so it is the
+/// half an operator needs to re-read first.
 const UNCONFIRMED_RACE: &str = "claim race: a competitor whose claim this branch would race could \
                                 not be read, so the collision is unconfirmed — could not look, \
                                 which is not a verdict";
