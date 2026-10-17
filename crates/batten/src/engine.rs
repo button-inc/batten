@@ -335,7 +335,7 @@ fn shell_word(word: &str) -> String {
 
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 //MUTANT pin-unread|s@^    let Some(pin) = declared(text) else {$@    let Some(pin) = None::<Pin> else {@|a_release_pin_naming_another_build_is_refused_with_its_install
-//MUTANT stamp-trusted-when-absent|s@^            if stamp.as_deref() != Some(digest) {$@            if stamp.is_some() \&\& stamp.as_deref() != Some(digest) {@|a_source_pin_without_a_stamp_is_refused
+//MUTANT stamp-trusted-when-absent|s@^            if stamp.as_deref() != Some(digest.as_str()) {$@            if stamp.is_some() \&\& stamp.as_deref() != Some(digest.as_str()) {@|a_source_pin_without_a_stamp_is_refused
 
 /// Whether the running binary lives inside the tree holding `source`, the
 /// config it was refused over — that tree's own build, not an installed engine.
