@@ -3116,10 +3116,29 @@ fn libtest_ran(output: &str) -> bool {
 }
 
 /// The cases a nextest run selected, one per case whatever its attempts or
-/// outcome, as [`crate::replay::case_count`] counts them (`SIGTERM` among the
-/// results, which [`wait_bounded`] itself sends a timed-out runner).
+/// outcome: a line led by one of nextest's result words
+/// ([`crate::replay::TERMINAL`], `SIGTERM` among them, which [`wait_bounded`]
+/// itself sends a timed-out runner, plus `LEAK`, a pass that leaked handles),
+/// bare or after a `TRY <n>` retry prefix, then the bracketed duration. Counted
+/// by distinct case, so a retried case is one, and read up to the `Summary [`
+/// line, past which nextest repeats each failure.
 fn nextest_lines(output: &str) -> usize {
-    crate::replay::case_count(output)
+    output
+        .lines()
+        .take_while(|line| !line.trim_start().starts_with("Summary ["))
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let mut word = words.next()?;
+            if word == "TRY" {
+                words.next()?.parse::<u32>().ok()?;
+                word = words.next()?;
+            }
+            let result = word == "LEAK" || crate::replay::TERMINAL.contains(&word);
+            (result && words.next()?.starts_with('[')).then(|| line.split_once(']'))?
+        })
+        .map(|(_, case)| case.trim())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
 }
 
 /// Whether a nextest run printed its summary, which it does for an empty

@@ -536,13 +536,11 @@ const TEST_RUN_FAILED: i32 = 100;
 /// `nextest`'s exit when the build failed. `cargo` uses it for its own setup
 /// failures too, so it is a finding only beside [`COMPILE_FAILED`].
 const BUILD_FAILED: i32 = 101;
-/// The result words `nextest` ends a test's attempt with. `SLOW`, `START` and
-/// `SETUP` lines name a test too and decide nothing, so only these are read; a
-/// `TRY <n>` prefix marks a retried attempt of one. Both readers reach it
-/// through [`attempt`].
-const TERMINAL: &[&str] = &[
+/// The result words `nextest` ends a test's run with. `SLOW`, `START`, `TRY` and
+/// `SETUP` lines name a test too and decide nothing, so only these are read.
+/// `mutate::nextest_lines` counts selected cases off the same list.
+pub(crate) const TERMINAL: &[&str] = &[
     "PASS",
-    "LEAK",
     "FAIL",
     "TIMEOUT",
     "ABORT",
@@ -552,54 +550,6 @@ const TERMINAL: &[&str] = &[
     "SIGTERM",
     "LEAK-FAIL",
 ];
-/// One nextest attempt's result: its [`TERMINAL`] word and the case it ended,
-/// the binary and the test's path after the bracketed duration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Attempt<'a> {
-    pub(crate) word: &'a str,
-    pub(crate) case: &'a str,
-}
-
-impl Attempt<'_> {
-    /// The test's own path, the case's last word.
-    pub(crate) fn test(&self) -> &str {
-        self.case.split_whitespace().last().unwrap_or(self.case)
-    }
-}
-
-/// A nextest result line, or `None` for any other line: a leading [`TERMINAL`]
-/// word, bare or after an exact `TRY <n>` prefix (a consumer's config may retry;
-/// this repository's refuses it), then the bracketed duration, then the case.
-/// Anchored at the line's start, so text holding a status word mid-line is not
-/// a result. The one parser of a result line, shared by this module's pass/fail
-/// and `mutate::nextest_lines`.
-pub(crate) fn attempt(line: &str) -> Option<Attempt<'_>> {
-    let mut words = line.split_whitespace();
-    let mut word = words.next()?;
-    if word == "TRY" {
-        words.next()?.parse::<u32>().ok()?;
-        word = words.next()?;
-    }
-    if !TERMINAL.contains(&word) || !words.next()?.starts_with('[') {
-        return None;
-    }
-    let case = line.split_once(']')?.1.trim();
-    (!case.is_empty()).then_some(Attempt { word, case })
-}
-
-/// How many distinct cases a nextest run reported a result for, read up to its
-/// `Summary [` line (past which it repeats each failure). A retried case is one
-/// case; the same test path in two binaries is two.
-pub(crate) fn case_count(output: &str) -> usize {
-    output
-        .lines()
-        .take_while(|line| !line.trim_start().starts_with("Summary ["))
-        .filter_map(attempt)
-        .map(|found| found.case)
-        .collect::<std::collections::BTreeSet<_>>()
-        .len()
-}
-
 /// What `cargo` prints when rustc refused the crate: a base body HEAD's code
 /// cannot compile, as opposed to a build that never reached rustc.
 const COMPILE_FAILED: &str = "could not compile";
@@ -623,21 +573,14 @@ fn passes(outcome: Option<&(i32, String)>, test: &str) -> Result<bool> {
         return Ok(false);
     }
     let suffix = format!("::{test}");
-    // EVERY ATTEMPT, the whole output: a retried case that failed once failed,
-    // which is why this repository's own nextest config refuses retries (a
-    // flake would read as a pass).
     let statuses: Vec<&str> = output
         .lines()
-        .filter_map(attempt)
-        .filter_map(|found| {
-            let name = found.test();
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let status = words.next()?;
+            let name = words.last()?;
             let named = name == test || name.ends_with(&suffix);
-            // `LEAK` is a pass that leaked handles; `LEAK-FAIL` is the failure.
-            named.then_some(if found.word == "LEAK" {
-                "PASS"
-            } else {
-                found.word
-            })
+            (named && TERMINAL.contains(&status)).then_some(status)
         })
         .collect();
     if statuses.is_empty() {
@@ -663,51 +606,6 @@ fn said(outcome: Option<&(i32, String)>) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
-    /// Fails by: a leaky pass read as a failure, a retried case's result lost
-    /// (so a test replay saw fail on every attempt reads could-not-look), or a
-    /// line that holds a status word mid-line read as a result.
-    #[test]
-    fn a_leaky_pass_passes_a_retried_failure_fails_and_only_a_leading_word_counts() {
-        let word = |line| attempt(line).map(|found| found.word);
-        assert_eq!(
-            word("        PASS [   0.004s] batten::it m::t"),
-            Some("PASS")
-        );
-        assert_eq!(
-            word("  TRY 2 PASS [   0.004s] batten::it m::t"),
-            Some("PASS")
-        );
-        assert_eq!(word("  TRY x PASS [   0.004s] m::t"), None);
-        assert_eq!(word("        SLOW [> 60.000s] batten::it m::t"), None);
-        assert_eq!(word("assertion failed: status FAIL [exit 1] m::t"), None);
-        let retried = (
-            TEST_RUN_FAILED,
-            String::from(
-                "  TRY 1 FAIL [   0.004s] batten::it m::t\n  TRY 2 FAIL [   0.004s] batten::it m::t\n",
-            ),
-        );
-        assert!(!passes(Some(&retried), "t").unwrap());
-        // A flaky case failed once, so it failed; the count is one case per
-        // case, and the same test path in another binary is another case.
-        let flaky = (
-            0,
-            String::from(
-                "  TRY 1 FAIL [   0.004s] batten::it m::t\n  TRY 2 PASS [   0.004s] batten::it m::t\n",
-            ),
-        );
-        assert!(!passes(Some(&flaky), "t").unwrap());
-        assert_eq!(case_count(&flaky.1), 1);
-        assert_eq!(
-            case_count("        PASS [   0.004s] bin1 m::t\n        PASS [   0.004s] bin2 m::t\n"),
-            2
-        );
-        let leaky = (
-            0,
-            String::from("        LEAK [   0.120s] batten::it m::t\n"),
-        );
-        assert!(passes(Some(&leaky), "t").unwrap());
-    }
 
     const BASE: &str = "\
 fn helper() -> u8 { 1 }
