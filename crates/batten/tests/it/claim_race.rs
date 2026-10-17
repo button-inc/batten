@@ -739,6 +739,51 @@ fn a_body_closing_a_key_nobody_claims_settles_nothing_and_its_commits_are_read()
     );
 }
 
+/// A body closing SEVERAL keys is settled by the claimed one wherever it sits.
+///
+/// The two cases around this one each put exactly one key in a body, so between
+/// them they cannot tell `any` from `first`: swapping the collision test for
+/// `settled.first().is_some_and(..)` or a `.take(1).any(..)` leaves both green.
+/// Here PROJ-9 comes first and is claimed by nobody, PROJ-7 second and is the
+/// key at issue — so under `first` this competitor would be fetched though it
+/// is settled, re-spending the round trip and re-earning the unconfirmed mark
+/// the module's cost argument exists to avoid.
+///
+/// Reachable rather than exotic: `run_claim_race` passes everything this branch
+/// claims, which is routinely more than one key, and nothing orders a body's
+/// closing keywords.
+#[test]
+fn a_body_closing_an_unclaimed_key_before_a_claimed_one_is_still_settled() {
+    let pulls = vec![
+        pull("1", "user/branch-one", "sha1"),
+        Pull {
+            body: "Closes PROJ-9. Also closes PROJ-7, and means that one.".to_owned(),
+            ..pull("5", "user/branch-five", "sha5")
+        },
+    ];
+    let asked = std::sync::Mutex::new(Vec::new());
+
+    let filled = race::with_logs(pulls, "1", &["PROJ-7".to_owned()], &Fake, |number| {
+        asked
+            .lock()
+            .expect("the fixture lock")
+            .push(number.to_owned());
+        Some(String::new())
+    });
+
+    assert!(
+        asked.lock().expect("the fixture lock").is_empty(),
+        "the claimed key settles it even behind an unclaimed one: {:?}",
+        asked.lock().expect("the fixture lock")
+    );
+    assert!(
+        race::races(&["PROJ-7".to_owned()], &filled.pulls, Some("1"), &Fake)
+            .iter()
+            .any(|race| race.number == "5"),
+        "and it still races, on the body alone"
+    );
+}
+
 /// The repository the verb derives from `origin`, deliberately not this one's:
 /// a slug taken from the environment rather than from the remote would read as
 /// a passing case.

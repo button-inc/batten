@@ -398,6 +398,22 @@ pub struct Filled {
     pub unanswered: Vec<String>,
 }
 
+/// Does ANY key in `found` collide with one this branch claims?
+///
+/// Named because [`with_logs`]'s predicate asks it of two different sets eight
+/// lines apart — what a competitor's body closes, and what its branch and
+/// title resolve — and the argument written around that predicate turns on the
+/// word "colliding" throughout. Two spellings of one concept inside one
+/// closure is how the two drift apart.
+///
+/// **ANY, not the first.** Both sides are sets: `claims` is everything this
+/// branch claims, routinely more than one key, and a competitor's body may
+/// close several. So a body closing an unclaimed key and a claimed one is
+/// settled by the claimed one wherever in the text it sits.
+fn collides(found: &[String], claims: &[String]) -> bool {
+    found.iter().any(|key| claims.contains(key))
+}
+
 /// Fill in each competitor's `log`, fetching the eligible ones concurrently.
 ///
 /// # Why this is concurrent, and what the number was
@@ -531,18 +547,27 @@ pub fn with_logs(
     // would land in `unanswered` on a 502, and every refusal it is in would
     // then carry an "unconfirmed" mark it has not earned — the collision is
     // PROVEN from data already in hand. `closing-key-check` requires the body
-    // to close its key here, so that is the common shape rather than a corner —
-    // distinct from `commit-lint` above, which is why a COMMIT rarely closes
-    // one.
+    // to close its key here, so a body that closes SOMETHING is near-universal
+    // — distinct from `commit-lint` above, which is why a COMMIT rarely closes
+    // one. What is rare is a body closing a key WE claim, which is a real
+    // collision; so this factor spares few, and the paragraph below is where
+    // the rest of that population goes.
     //
     // **THE COLLISION TEST IS LOAD-BEARING IN THAT SENTENCE** and read over
-    // #1198: the argument says the refusing key is the body's, which is only
-    // true where the body closes the key at issue. A competitor whose body
-    // closes some OTHER key — settled, but about a question nobody asked — has
-    // the same claim on its commits as one whose body closes nothing, since its
-    // commits are where a key of ours could still be. Skipping it on the mere
-    // presence of a closing keyword read the two as the same thing, and no
-    // round trip went out for a collider the log would have proven.
+    // #1198: the argument says the refusing key is the body's, which holds only
+    // where the body closes the key at issue. A competitor whose body closes
+    // some OTHER key is settled about a question nobody asked, and its commits
+    // are still where a key of ours could be — so it has the same claim on a
+    // round trip as a competitor whose body closes nothing at all. Testing the
+    // mere PRESENCE of a closing keyword put it with the claimed-key bodies
+    // instead, which is the pair that is not alike, and no round trip went out
+    // for a collider the log would have proven.
+    //
+    // THAT IS THIS FACTOR'S COST, and it is the population `closing-key-check`
+    // makes large: a competitor whose body closes only keys we do not claim is
+    // now fetched where it used to be skipped. Bounded by the inner factor
+    // below — it still needs a cheap reading that is empty or colliding — and
+    // by `FETCH_WIDTH`.
     //
     // **LOAD-BEARING** is the inner one, and it has two cases:
     //
@@ -594,20 +619,25 @@ pub fn with_logs(
         .filter(|(_, pull)| {
             // A COLLIDING key, not merely A key. The settling argument is that
             // the key which refuses is the body's, so no round trip can improve
-            // it — and that only holds of a body key THIS BRANCH CLAIMS. A body
+            // it — and that holds only of a body key THIS BRANCH CLAIMS. A body
             // closing some unrelated key settles that key and says nothing
             // about ours, so skipping on it would leave the commits unread on
             // precisely the question being asked.
-            let settled = closes(&pull.body, keys);
-            pull.number != mine_number && !settled.iter().any(|key| claims.contains(key)) && {
-                // THE BODY GOES IN EMPTY on this second call. Source 1 is
-                // the only source that reads it, `settled` is already its
-                // answer, and the two places that answer is used — the term
-                // above and this one — need it folded differently. Passing
-                // the body again would re-scan the longest string in hand
-                // for a set already computed.
+            //
+            // AFTER the number test, so our own body is not scanned for an
+            // answer that is thrown away.
+            pull.number != mine_number && !collides(&closes(&pull.body, keys), claims) && {
+                // THE BODY GOES IN EMPTY on this second call, and that is
+                // a CORRECTNESS guard rather than a saving. [`claimed_from`]
+                // returns source 1's set before it looks at branch or
+                // title, so passing the body here would hand back the very
+                // keys the term above just weighed — a competitor settled
+                // on an unrelated key would come back with that key as its
+                // "cheap" reading, collide with nothing, and be skipped
+                // again through the inner term. Blanked, this reads branch
+                // and title alone, which is the question being asked.
                 let cheap = claimed(&pull.head_ref, &pull.title, "", "", keys);
-                cheap.is_empty() || cheap.iter().any(|key| claims.contains(key))
+                cheap.is_empty() || collides(&cheap, claims)
             }
         })
         .map(|(slot, pull)| (slot, pull.number.as_str()))
