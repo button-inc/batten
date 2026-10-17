@@ -1306,7 +1306,10 @@ pub fn red_runs(
     for (name, run) in &latest {
         let fanin = roster.fanin.as_deref() == Some(*name);
         let found = findings.iter().any(|finding| finding.check == **name);
-        if !(found || fanin && run_failed(run)) {
+        // A FAN-IN STILL GOING OR FAILED owes the members already failed,
+        // whatever the verdict found: its log will only ever say a dependency
+        // failed.
+        if !(found || (fanin && (run_failed(run) || !run.completed()))) {
             continue;
         }
         let (members, unnamed) = if fanin {
@@ -1314,7 +1317,10 @@ pub fn red_runs(
         } else {
             (Vec::new(), false)
         };
-        if members.is_empty() || unnamed {
+        // The aggregator itself is owed only as the verdict's own finding with
+        // no member to stand for it, or beside a member no read can name. A
+        // fan-in the verdict set aside (cancelled siblings) owes nothing alone.
+        if (found && members.is_empty()) || unnamed {
             failed.push((run.id, (*name).to_owned()));
         }
         failed.extend(members);
@@ -1802,10 +1808,13 @@ pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
         // for prose to travel down, which rule 4 refuses.
         crate::lease::Outcome::Rejected { .. } => Pushed::Raced,
     };
-    append(root, branch, std::slice::from_ref(&pushed.line()))?;
+    // BOTH WRITES ARE ATTEMPTED whichever fails first, so a store that will not
+    // append never leaves the tracking ref behind the head that landed.
+    let appended = append(root, branch, std::slice::from_ref(&pushed.line()));
     if let Pushed::Landed(head) = &pushed {
         track_landed(root, &reference, head)?;
     }
+    appended?;
     Ok(pushed)
 }
 
@@ -1822,13 +1831,14 @@ pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
 /// A tracking ref that will neither move nor go.
 fn track_landed(root: &Path, reference: &str, head: &str) -> Result<()> {
     let tracking = tracking_ref(reference);
-    if crate::gitwrite::set_ref(root, &tracking, head).is_ok()
-        || crate::gitwrite::delete_ref(root, &tracking).is_ok()
-    {
+    let Err(moved) = crate::gitwrite::set_ref(root, &tracking, head) else {
         return Ok(());
-    }
+    };
+    let Err(gone) = crate::gitwrite::delete_ref(root, &tracking) else {
+        return Ok(());
+    };
     Err(anyhow::anyhow!(
-        "land: {reference} landed at {head}, but its tracking ref {tracking} would neither move nor go"
+        "land: {reference} landed at {head}, but its tracking ref {tracking} would neither move ({moved:#}) nor go ({gone:#})"
     ))
 }
 
@@ -6046,6 +6056,33 @@ mod tests {
             vec![(2, "windows".to_owned()), (6, "lint".to_owned())]
         );
 
+        // A FAN-IN STILL GOING owes the members already failed.
+        let going = vec![
+            Run {
+                status: "in_progress".to_owned(),
+                ..run("", "final", 1)
+            },
+            run("failure", "lint", 6),
+            run("failure", "windows", 2),
+        ];
+        let reading = red_runs(&going, &roster, &[finding("lint")]);
+        assert_eq!(
+            reading.failed,
+            vec![(2, "windows".to_owned()), (6, "lint".to_owned())]
+        );
+        assert_eq!(reading.running, vec![(1, "final".to_owned())]);
+
+        // A FAN-IN THE VERDICT SET ASIDE (cancelled siblings) owes nothing alone.
+        let cancelled = vec![
+            run("failure", "final", 1),
+            run("failure", "lint", 6),
+            run("cancelled", "windows", 2),
+        ];
+        assert_eq!(
+            red_runs(&cancelled, &roster, &[finding("lint")]).failed,
+            vec![(6, "lint".to_owned())]
+        );
+
         // And beside readable members: their reads never pay the id-less one's.
         let partly = vec![
             run("failure", "final", 1),
@@ -6107,6 +6144,9 @@ mod tests {
         );
         assert_eq!(unread.ids(), vec!["101".to_owned(), "102".to_owned()]);
         assert_eq!(RedHead::parse(text, |_| true).owed(), None);
+
+        // THE LAST NON-EMPTY HEAD, as the supersession check reads it.
+        assert_eq!(RedHead::parse("head abc\nhead \n", |_| false).head, "abc");
     }
 
     /// And the mapping reaches the decision: a lap that ran out of asks over a
