@@ -3570,16 +3570,18 @@ zero-is-a-count = true
 # newest line decides the closing set outright. This row records the body the
 # edit SET, read from the call's own input, once the forge answers with the PR's
 # `url`; an edit that leaves the body alone (a state change, a title) carries no
-# `body` and is not selected. The keys column is the same grammar over that text.
+# `body` and is not selected. A body CLEARED to empty is selected and records the
+# measured nothing `closes 0`, never the stale set before it (review of #1212).
+# The keys column is the same grammar over that text.
 #MUTANT-SUITE crates/batten/tests/it/record_closes.rs
-#MUTANT pr-body-edit-unrecorded|s@^requires-input-matching = { body = "pr-body-text" }$@requires-input-matching = { body = "never-matches" }@|an_edited_body_is_the_newest_closing_set
+#MUTANT pr-body-edit-unrecorded|s@^tool = "update_pull_request" # the edit's body$@tool = "never_a_tool"@|an_edited_body_is_the_newest_closing_set
 [[recorder]]
 name = "pr-body-edit-closes"
 record = "pr-closes"
-tool = "update_pull_request"
+tool = "update_pull_request"                       # the edit's body
 key = "branch"
 requires = ["url"]
-requires-input-matching = { body = "pr-body-text" }
+requires-input-matching = { body = "pr-body-set" }
 
 [[recorder.columns]]
 name = "kind"
@@ -3591,10 +3593,33 @@ value = { authority = { ask = "closing-keys", read = "stdout", stdin = { input =
 counted-with = ":"
 zero-is-a-count = true
 
-# A body that says anything at all: the edit set one, as opposed to leaving it.
+# A BODY WAS CREATED WITH THE PULL REQUEST, so it is the first closing set
+# (review of #1212): until someone fetched it, a PR opened through the connector
+# had no `pr-closes` line at all. Same shape and grammar as the edit row above.
+#MUTANT pr-body-create-unrecorded|s@^tool = "create_pull_request" # the created body$@tool = "never_a_tool"@|a_created_body_is_the_first_closing_set
+[[recorder]]
+name = "pr-body-create-closes"
+record = "pr-closes"
+tool = "create_pull_request"                       # the created body
+key = "branch"
+requires = ["url"]
+requires-input-matching = { body = "pr-body-set" }
+
+[[recorder.columns]]
+name = "kind"
+value = { literal = "closes" }
+
+[[recorder.columns]]
+name = "keys"
+value = { authority = { ask = "closing-keys", read = "stdout", stdin = { input = "body" } } }
+counted-with = ":"
+zero-is-a-count = true
+
+# THE CALL SET A BODY, whatever it says: an empty one is a measured nothing,
+# which is the point. Matches any string; a call with no `body` is not selected.
 [[pattern]]
-id = "pr-body-text"
-regex = '[^[:space:]]'
+id = "pr-body-set"
+regex = '^'
 
 # `issue-search-guard`'s decision, as config (CLOUD-312 row 1, CLOUD-505).
 #

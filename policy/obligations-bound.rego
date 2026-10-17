@@ -67,7 +67,7 @@
 #MUTANT runner-ownership-unchecked|s@^\tregex.match(glob_pattern(trim_space(path_glob)), entry.file)$@\ttrue@|a_runner_token_on_a_file_it_does_not_own_is_refused
 #MUTANT unlanded-row-judged|s@^\tobligation_row\.id in closes$@\ttrue@|an_obligation_from_a_row_the_pr_does_not_close_is_not_judged
 #MUTANT newest-line-ignored|s@^\traw := closes_lines\[count(closes_lines) - 1\]$@\tsome raw in closes_lines@|a_key_dropped_from_the_latest_body_is_not_judged
-#MUTANT unread-fetch-counted|s@^\tcolumns\[1\] != "-"$@\ttrue@|a_newest_unread_fetch_keeps_the_earlier_reading
+#MUTANT unread-fetch-measured|s@^\tcolumns\[1\] != "-"$@\ttrue@|a_newest_unread_fetch_keeps_the_earlier_reading
 #MUTANT nothing-read-as-zero|s@^\tcontains(columns\[1\], ":")$@\ttrue@|a_measured_nothing_closes_no_row_named_zero
 
 # METADATA

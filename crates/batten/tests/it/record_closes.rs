@@ -91,28 +91,40 @@ fn a_body_that_closes_rows_records_them_in_the_readers_own_shape() {
     );
 }
 
-/// The COMMITTED connector-edit recorder, with every committed `[[pattern]]` its
-/// key reader's grammar resolves, and nothing else.
+/// The COMMITTED connector body recorders (edit and create), with ALL the
+/// committed `[[pattern]]` rows: the key reader's grammar resolves many of them,
+/// and a pattern table cannot be cut to "just those" without restating the grammar.
 ///
 /// Cut from the committed table rather than retyped, so this case exercises the
-/// row as it ships: the whole table names `policy/` modules a scratch repository
-/// does not carry, the hook cannot load it there, and it records nothing.
+/// rows as they ship: the whole table names `policy/` modules a scratch
+/// repository does not carry, the hook cannot load it there, and it records
+/// nothing.
 fn edit_config() -> String {
     let committed: toml::Table = std::fs::read_to_string(common::at_root("batten.toml"))
         .expect("read the committed authority")
         .parse()
         .expect("the committed authority parses");
-    let row = committed["recorder"]
+    let rows: Vec<toml::Value> = committed["recorder"]
         .as_array()
         .expect("the authority declares recorders")
         .iter()
-        .find(|row| row["name"].as_str() == Some("pr-body-edit-closes"))
-        .expect("the committed authority declares the connector-edit recorder")
-        .clone();
+        .filter(|row| {
+            matches!(
+                row["name"].as_str(),
+                Some("pr-body-edit-closes" | "pr-body-create-closes")
+            )
+        })
+        .cloned()
+        .collect();
+    assert_eq!(
+        rows.len(),
+        2,
+        "the committed authority declares both body recorders"
+    );
     let mut fixture = toml::Table::new();
     fixture.insert("version".to_owned(), toml::Value::Integer(1));
     fixture.insert("pattern".to_owned(), committed["pattern"].clone());
-    fixture.insert("recorder".to_owned(), toml::Value::Array(vec![row]));
+    fixture.insert("recorder".to_owned(), toml::Value::Array(rows));
     toml::to_string(&fixture).expect("the fixture serializes")
 }
 
@@ -123,15 +135,44 @@ fn edit_repo(name: &str) -> PathBuf {
     root
 }
 
-/// A completed `update_pull_request`, handed to the engine as the host would.
-fn edit_pull_request(root: &Path, input: &str) {
+/// A completed connector call on a pull request, handed to the engine as the
+/// host would.
+fn pull_request_call(root: &Path, tool: &str, input: &str) {
     let payload = format!(
-        "{{\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"mcp__github__update_pull_request\",\
+        "{{\"hook_event_name\":\"PostToolUse\",\"tool_name\":\"mcp__github__{tool}\",\
          \"tool_input\":{input},\
          \"tool_response\":{{\"id\":\"4870062878\",\"url\":\"https://github.com/o/r/pull/7\"}}}}"
     );
     // A post-tool event carries no verdict; what the case reads is the record.
     let _ = common::run_with_stdin(root, &["adjudicate", "--harness", "exit-code"], &payload);
+}
+
+fn edit_pull_request(root: &Path, input: &str) {
+    pull_request_call(root, "update_pull_request", input);
+}
+
+/// A BODY CLEARED TO EMPTY IS A MEASURED NOTHING (review of #1212): recorded as
+/// `closes 0`, so the set the cleared body no longer carries stops deciding.
+#[test]
+fn a_cleared_body_records_a_measured_nothing() {
+    let root = edit_repo("record-closes-cleared");
+    edit_pull_request(
+        &root,
+        r#"{"owner":"o","repo":"r","pullNumber":7,"body":""}"#,
+    );
+    assert_eq!(recorded(&root).as_deref(), Some("closes 0\n"));
+}
+
+/// A BODY SET AT CREATION IS THE FIRST CLOSING SET (review of #1212).
+#[test]
+fn a_created_body_is_the_first_closing_set() {
+    let root = edit_repo("record-closes-created");
+    pull_request_call(
+        &root,
+        "create_pull_request",
+        r#"{"owner":"o","repo":"r","title":"t","head":"work","base":"main","body":"Closes CLOUD-3\n"}"#,
+    );
+    assert_eq!(recorded(&root).as_deref(), Some("closes 1:CLOUD-3\n"));
 }
 
 /// AN EDIT IS A NEW BODY TOO (CLOUD-2444): the body an `update_pull_request`
