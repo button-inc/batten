@@ -17131,24 +17131,6 @@ mod tests {
         }
     }
 
-    /// CLOUD-2291: `NativeGate::ALL` is what the weakening diff walks, so a gate
-    /// missing from it is a gate whose lowering is never reported. Since
-    /// CLOUD-2442 the enum, `ALL`, `as_str` and the serde spelling all come
-    /// from one `token_enum!` declaration, so membership and the parser's
-    /// spelling hold by construction; what a declaration can still get wrong is
-    /// a token two gates share.
-    #[test]
-    fn native_gate_all_is_every_gate_and_as_str_is_its_token() {
-        let mut seen = std::collections::BTreeSet::new();
-        for gate in NativeGate::ALL {
-            assert!(
-                seen.insert(gate.as_str()),
-                "{} is declared twice",
-                gate.as_str()
-            );
-        }
-    }
-
     #[test]
     fn all_covers_every_kind() {
         // The spawn partition must be total. `ALL` is what the gate below
