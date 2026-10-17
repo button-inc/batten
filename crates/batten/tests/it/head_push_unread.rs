@@ -113,6 +113,7 @@ fn a_record_for_a_superseded_head_owes_nothing() {
         decision(&dir, "git push origin HEAD").contains("job read unread"),
         "a headless record is owed, never read as moved"
     );
+    assert!(batten::land::red_head_owed(&dir, "work/red").is_some());
 }
 
 /// A FAILED FAN-IN OWES ITS FAILED MEMBERS (CLOUD-2443), so reading the
