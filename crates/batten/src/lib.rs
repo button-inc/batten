@@ -7184,101 +7184,11 @@ fn run_claim_race(
     let grammar = board_grammar(overrides)?;
     // Taken by value before the listing is rebuilt below: `me` borrows it.
     let mine_number = me.number.clone();
-    // THE SELF SIDE IS HELD TO THE SAME READ AS THE COMPETITORS, and
-    // `unwrap_or_default` here was the same defect one run earlier. If this read
-    // fails, `mine` is computed without the `Refs:` trailer — the source that
-    // actually resolves claims here, per the comment below — and the verb exits
-    // at "this branch claims no issue" over a branch that claims one.
-    //
-    // **AND THE DEGRADED SET IS NOT MERELY SHORT, IT CAN BE WRONG, WHICH IS WHY
-    // THE SILENT-BODY ARM RETURNS BEFORE `races` WHERE THE FAN-OUT'S RETURNS
-    // AFTER.**
-    // `claimed_from` reads source 1 out of `body + log` and returns it BEFORE it
-    // consults branch and title, so losing the log does not subtract keys — it
-    // can invert the precedence. A branch `cloud-100-x` whose log closes
-    // CLOUD-200 resolves to CLOUD-200 with the log and CLOUD-100 without it, so
-    // the partial answer is not a subset of the true one and judging against it
-    // risks a false REFUSAL on a key this branch does not claim. The competitor
-    // arm's subset property, which is what lets it judge first, simply does not
-    // hold on this side. Could-not-look, and nothing judged.
-    //
-    // Hoisted out of the guard below rather than asked inside it: the call is a
-    // regex over one string this scope already holds, so paying it on the
-    // read-succeeded path costs nothing a reader has to weigh. [`race::closes`]
-    // rather than `claimed_from`, because this question is about the body alone
-    // and that is the spelling which says so.
-    let closes_nothing = race::closes(&me.body, &grammar).is_empty();
-    // **A SPECULATIVE LAP READS ITS OWN COMMITS, NOT THE LEASE HOLDER'S** —
-    // CLOUD-748's measured defect arriving by a different door. The forge read
-    // below returns the WHOLE commit list for the pull request, and `land`'s
-    // speculative linearization rebases this branch onto the holder's
-    // published head and pushes, so the holder's unlanded commits are in that
-    // list. Source 1 reads them first, so one closing keyword of theirs makes
-    // `mine` the HOLDER's key and the verb refuses against the very pull
-    // request this branch is waiting on; with no closing keyword the same leak
-    // arrives through the `Refs:` trailer `commit-lint` puts on every commit.
-    //
-    // [`race::authored_log`] is the bound that exists for this, and
-    // `run_claim_keys` already applies it. `land` exports
-    // [`speculation::PUBLISHED_AS`] to its body gates and `verify` — which
-    // runs this verb — is one, so the lap that creates the hazard is the lap
-    // that announces it. ONLY that lap switches source: every other run reads
-    // the forge, so the detached checkout a `pull_request` build leaves is
-    // untouched, and `authored_log` falls back to the wider range by itself
-    // when the exported base is stale or unwound.
-    let speculating =
-        std::env::var_os(speculation::PUBLISHED_AS).is_some_and(|base| !base.is_empty());
-    // `Option` RATHER THAN A PARALLEL FLAG, for the vocabulary `with_logs`
-    // argues below: a read that failed is not a log that is
-    // empty, and `Some("")` is an answer. Two values could disagree — nothing
-    // would object to an `Ok` arm returning `false` — where one cannot. A
-    // speculative lap reads local history, which does not fail this way.
-    let log = if speculating {
-        let trunk = worktree::declared_trunk(repo).ok().flatten();
-        let base = trunk.as_ref().map_or("", |trunk| trunk.tracking.as_str());
-        Some(race::authored_log(repo, base))
-    } else {
-        match bot::forge::commit_messages(&slug, &mine_number) {
-            Ok(log) => Some(log),
-            // A BODY THAT CLOSES A KEY ANSWERS WITHOUT THE LOG, so a failed read is
-            // not always fatal and refusing to judge on all of them discards sound
-            // refusals. More text only adds matches, so `closed(body)` is a SUBSET
-            // of `closed(body + log)`, and `claimed_from` returns that set before it
-            // consults branch and title — with a closing body the empty-log answer
-            // can only under-report, never invert. Judging it keeps the refusal
-            // `unwrap_or_default` also kept.
-            //
-            // Only a body that closes NOTHING falls through to branch and title,
-            // and that is the inverting case the block above describes. It alone is
-            // could-not-look.
-            Err(_) if closes_nothing => {
-                return clean(
-                    out,
-                    "claim race: this branch's own commit log could not be read and its body closes \
-                 no key — could not look, which is not a verdict",
-                );
-            }
-            // **AND THE SUBSET IS CARRIED, NOT ABSORBED.** Under-reporting is what
-            // makes a race found over the short set sound, and it is the same
-            // property that makes a race NOT found unproven — the competitor arm's
-            // discipline, which this side owes symmetrically. A key the commits
-            // close and the body does not — a `Refs:` trailer, or a second `Closes`
-            // in a commit message — is missing from `mine`, so a competitor holding
-            // that key is compared against nothing and the run would print "no open
-            // pull request races this branch's claim" over the collision this verb
-            // **AND THE SUBSET IS CARRIED, NOT ABSORBED.** Under-reporting is
-            // what makes a race found over the short set sound, and the same
-            // property makes a race NOT found unproven — the competitor arm's
-            // discipline, which this side owes symmetrically. A key the
-            // commits close and the body does not — a `Refs:` trailer, or a
-            // second `Closes` in a commit message — is missing from `mine`, so
-            // a competitor holding that key is compared against nothing and
-            // the run would print "no open pull request races this branch's
-            // claim" over the collision this verb exists to refuse. `None`
-            // joins `unanswered` at the clean exit below, so a refusal still
-            // refuses at 2 and only the clean answer declines.
-            Err(_) => None,
-        }
+    // WHICH COMMITS SPEAK FOR THIS BRANCH is [`own_log`]'s, including the one
+    // state it cannot judge for itself: `Err` carries the sentence to exit on.
+    let log = match own_log(repo, &slug, me, &mine_number, &grammar) {
+        Ok(log) => log,
+        Err(blind) => return clean(out, blind),
     };
     let own_log = log.as_deref().unwrap_or_default();
     let mine = race::claimed(&me.head_ref, &me.title, own_log, &me.body, &grammar);
@@ -7412,6 +7322,88 @@ fn run_claim_race(
         races.len()
     )?;
     Ok(ExitCode::Violation)
+}
+
+/// The commits that speak for THIS branch's claim, or the sentence to exit on.
+///
+/// `Ok(None)` is a read that failed where the body still closes a key, which
+/// the caller carries into the verdict like an unanswered competitor. `Err`
+/// is the one state this cannot judge for itself and must not judge wrongly.
+///
+/// # The self side is held to the same read as the competitors
+///
+/// `unwrap_or_default` here was the same defect one run earlier: if the read
+/// fails, `mine` is computed without the `Refs:` trailer — the source that
+/// actually resolves claims in this repository — and the verb exits at "this
+/// branch claims no issue" over a branch that claims one.
+///
+/// **AND THE DEGRADED SET IS NOT MERELY SHORT, IT CAN BE WRONG**, which is why
+/// one of these two arms returns a sentence and the other does not.
+/// `claimed_from` reads source 1 out of `body + log` and returns it BEFORE it
+/// consults branch and title, so losing the log does not subtract keys — it can
+/// invert the precedence. A branch `cloud-100-x` whose log closes CLOUD-200
+/// resolves to CLOUD-200 with the log and CLOUD-100 without it, so the partial
+/// answer is not a subset of the true one and judging against it risks a false
+/// REFUSAL on a key this branch does not claim. The competitor arm's subset
+/// property, which is what lets the caller judge first, does not hold here.
+///
+/// A BODY THAT CLOSES A KEY ANSWERS WITHOUT THE LOG, though, so a failed read
+/// is not always fatal: more text only adds matches, so `closed(body)` is a
+/// SUBSET of `closed(body + log)` and the empty-log answer can only
+/// under-report, never invert. Only a body that closes NOTHING falls through
+/// to branch and title, and that alone is could-not-look.
+///
+/// # A speculative lap reads its own commits, not the lease holder's
+///
+/// CLOUD-748's measured defect by a different door. The forge read returns the
+/// WHOLE commit list for the pull request, and `land`'s speculative
+/// linearization rebases this branch onto the holder's published head and
+/// pushes, so the holder's unlanded commits are in that list. Source 1 reads
+/// them first, so one closing keyword of theirs makes `mine` the HOLDER's key
+/// and the verb refuses against the very pull request this branch is waiting
+/// on; with no closing keyword the same leak arrives through the `Refs:`
+/// trailer `commit-lint` puts on every commit.
+///
+/// [`race::authored_log`] is the bound that exists for this, and
+/// `run_claim_keys` already applies it. `land` exports
+/// [`speculation::PUBLISHED_AS`] to its body gates and `verify` — which runs
+/// this verb — is one, so the lap that creates the hazard is the lap that
+/// announces it. ONLY that lap switches source: every other run reads the
+/// forge, so the detached checkout a `pull_request` build leaves is untouched,
+/// and `authored_log` falls back to the wider range by itself when the
+/// exported base is stale or unwound.
+fn own_log(
+    repo: &Path,
+    slug: &str,
+    me: &race::Pull,
+    mine_number: &str,
+    grammar: &ready::Grammar,
+) -> Result<Option<String>, &'static str> {
+    if std::env::var_os(speculation::PUBLISHED_AS).is_some_and(|base| !base.is_empty()) {
+        let trunk = worktree::declared_trunk(repo).ok().flatten();
+        let base = trunk.as_ref().map_or("", |trunk| trunk.tracking.as_str());
+        return Ok(Some(race::authored_log(repo, base)));
+    }
+    // `Option` RATHER THAN A PARALLEL FLAG, for the vocabulary `with_logs`
+    // argues: a read that failed is not a log that is empty, and `Some("")` is
+    // an answer. Two values could disagree where one cannot.
+    match bot::forge::commit_messages(slug, mine_number) {
+        Ok(log) => Ok(Some(log)),
+        Err(_) if race::closes(&me.body, grammar).is_empty() => Err(
+            "claim race: this branch's own commit log could not be read and its body closes no \
+             key — could not look, which is not a verdict",
+        ),
+        // **THE SUBSET IS CARRIED, NOT ABSORBED.** Under-reporting is what makes
+        // a race found over the short set sound, and the same property makes a
+        // race NOT found unproven. A key the commits close and the body does
+        // not — a `Refs:` trailer, or a second `Closes` — is missing from
+        // `mine`, so a competitor holding it is compared against nothing and
+        // the run would print "no open pull request races this branch's claim"
+        // over the collision this verb exists to refuse. `None` joins
+        // `unanswered` at the caller's clean exit, so a refusal still refuses
+        // at 2 and only the clean answer declines.
+        Err(_) => Ok(None),
+    }
 }
 
 /// WHICH log went unread, for [`run_claim_race`]'s one arm that declines to call
