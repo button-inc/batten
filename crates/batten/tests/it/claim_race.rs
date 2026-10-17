@@ -1015,10 +1015,14 @@ fn a_race_whose_confirming_read_failed_refuses_and_says_it_is_unconfirmed() {
         "naming the key and the competitor as any refusal does: {}",
         stderr(&output)
     );
+    let marked = stderr(&output)
+        .lines()
+        .find(|line| line.contains("unconfirmed"))
+        .unwrap_or_default()
+        .to_owned();
     assert!(
-        stderr(&output).contains("unconfirmed") && stderr(&output).contains("8"),
-        "and saying which competitor's confirming read did not land: {}",
-        stderr(&output)
+        marked.contains('8'),
+        "and saying which competitor's confirming read did not land: {marked:?}"
     );
 }
 
