@@ -1470,13 +1470,14 @@ pub enum Native by id {
     /// discriminants of `ProvisionTableRefused`, `StartupTableRefused`,
     /// `OutcomeTableRefused`, `PlanReadStale` and `ConfigUnreadable`, which is the
     /// whole tail `enum_no_repr_variant_discriminant_changed` reads as broken.
-    /// Position is API; the reading order is not, and `Native::ALL` below is where
-    /// the grouping belongs.
+    /// Position is API; the reading order is not. `Native::ALL` follows
+    /// declaration order since CLOUD-2442, so grouping by meaning lives in the
+    /// subsets (`CONFIG_FAULTS`), never in a reordered list.
     RecordTableRefused => "record declare refused",
     /// The `[[step]]` table would not load (CLOUD-843).
     ///
     /// **APPENDED LAST**, for [`Native::RecordTableRefused`]'s reason: position is
-    /// API, and `Native::ALL` is where the grouping belongs.
+    /// API.
     StepTableRefused => "step declare refused",
     /// A structured READ of a path whose `[[redirect]]` row declares its own
     /// read route (CLOUD-1929). Not [`Native::ToolSubstituted`]: no shell

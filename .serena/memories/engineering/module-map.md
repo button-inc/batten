@@ -96,9 +96,9 @@ row here, so a new module lands with its line.
 - `minted.rs` — one declared FIELD of a receipt `mint.rs` already wrote, read on the TREE surface and bounded by age (CLOUD-1310).
 - `mint.rs` — receipts minted from the tool result that earned them (CLOUD-1024): the `[[mint]]` table, the closed six-form body template, and the dotted path selector.
 - `mutate.rs` — mutation coverage over the declared gate set (CLOUD-418), retired out of `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh` under CLOUD-1267.
+- `token_enum.rs` — `token_enum!`, one declaration per tokened enum: the variants, `ALL` and the token from one `Variant => "token"` list, with duplicate tokens refused at compile time (CLOUD-2442).
 - `verbs.rs` — the mutating-verb table (CLOUD-36): which programs change the world, config-driven (rule 1) and typed by `effect.rs`'s one §5 vocabulary.
 - `verdict.rs` — the refusal vocabulary (CLOUD-1050): the `[[verdict]]` table, its `Subject` pointers and its closed `Route` list.
-- `token_enum.rs` — `token_enum!`, one declaration per tokened enum: the variants, `ALL` and the token from one `Variant => "token"` list (CLOUD-2442).
 - `waiver.rs` — the designed escape hatch (CLOUD-208): a `[[waiver]]` names a rule, a required reason and a required expiry, and `apply` filters findings in the one funnel both `check` and `enforce` pass through.
 - `wiring.rs` — the one WRITE path over a host's hook registrations (CLOUD-893), surfaced as `wiring reclaim`: `destructive`, `-y` required, never the committed file.
 - `worktree.rs` — at-risk work detection (CLOUD-51), surfaced as `worktree status`.

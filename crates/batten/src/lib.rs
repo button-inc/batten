@@ -9,7 +9,8 @@
 //! keeps the binary's `main` trivial.
 
 // FIRST, because a `macro_rules!` is in scope only for modules declared after
-// it: every tokened enum in the crate declares itself through `token_enum!`.
+// it. `verdict::Native` and `rules::NativeGate` declare through `token_enum!`;
+// moving the crate's other hand-kept tokened enums onto it is CLOUD-2454.
 #[macro_use]
 mod token_enum;
 pub mod action;

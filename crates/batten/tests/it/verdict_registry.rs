@@ -528,9 +528,9 @@ fn a_command_route_naming_a_defined_task_is_clean_over_the_engine() {
 /// at all. Every one of those signals says the class is live; none of them
 /// checks it.
 ///
-/// `every_native_class_is_listed` does not close this. It matches without a
-/// wildcard, so a new variant fails to compile until it is LISTED — which is a
-/// statement about the table, not about any call site.
+/// `token_enum!` does not close this. It makes every declared class LISTED in
+/// `Native::ALL` by construction (CLOUD-2442) — which is a statement about the
+/// table, not about any call site.
 ///
 /// # Measured before writing this: the existing twenty are clean
 ///
