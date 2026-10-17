@@ -17104,11 +17104,12 @@ fn run_registered_runner(
         return Ok(ExitCode::Internal);
     };
     // THE PINNED RUNNER, NOT WHATEVER `PATH` HOLDS (CLOUD-2345): a CI runner has
-    // no cargo-mutants at all, and a host's may be another version. Where no row
-    // ships it, the inherited `PATH` decides and `unresolvable` reports its absence.
-    if kind == mutate::RunnerKind::CargoMutants
-        && let Some(dir) = provisioned_binary("cargo-mutants", &Overrides::default())
-            .and_then(|binary| binary.parent().map(Path::to_path_buf))
+    // no cargo-mutants at all, and a host's may be another version. Applied for
+    // every registered runner rather than gated on the kind: the directory only
+    // answers `cargo mutants`, so another runner is unaffected by it. Where no row
+    // ships it, the inherited `PATH` decides and `unresolvable` reports absence.
+    if let Some(dir) = provisioned_binary("cargo-mutants", &Overrides::default())
+        .and_then(|binary| binary.parent().map(Path::to_path_buf))
     {
         mutate::use_provisioned(dir);
     }
