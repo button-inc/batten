@@ -977,82 +977,91 @@ fn a_silent_body_behind_an_unreadable_self_log_judges_nothing() {
     );
 }
 
-/// A race that rests on a competitor whose confirming read FAILED is not a
-/// refusal (CLOUD-2382).
+/// A race whose confirming read FAILED still refuses, and says it is
+/// unconfirmed (CLOUD-2382).
 ///
-/// # The one false refusal the widening could not remove by itself
+/// # Which error this gate prefers
 ///
 /// #8 is fetched only because its cheap key collides with this branch's — that
 /// is, precisely because the branch-derived key might be wrong. When that
-/// confirming read answers 403, reporting the race anyway refuses on the very
-/// evidence the run went out to distrust, and it is unreachable by the
-/// incomplete-fill arm, because `races` is not empty.
+/// confirming read answers 403 there are two errors available, and they are
+/// not symmetric. Declining would lose a refusal the sequential fill made, on
+/// nothing worse than a 502: a false GREEN, two agents on one issue, which is
+/// what this module exists to refuse. Refusing keeps a false RED in the rarer
+/// case, which is recoverable — the line names the key and the pull request,
+/// so a reader sees the competitor is not on that key, and the row has a
+/// declared bypass.
 ///
-/// The fixture differs from the refusing case in one byte, the status of
-/// `pulls/8/commits`: at 200 the confirmation agrees and the verb refuses at 2
-/// over a real collision; at 403 the same listing must decline instead. So the
-/// listing cannot account for the difference, and an arm that allowed without
-/// saying why would pass the first assertion alone.
+/// So the widening only ever improves on the fill without it: the true claim
+/// decides when the read answers, and when it does not this is where the
+/// sequential fill already stood. The fixture differs from the confirmed case
+/// in one byte, the status of `pulls/8/commits`, so the listing cannot account
+/// for the difference — and the third assertion is what stops a silent
+/// refusal from passing the first two.
 #[test]
-fn a_race_resting_on_a_competitor_nobody_could_read_is_not_a_refusal() {
+fn a_race_whose_confirming_read_failed_refuses_and_says_it_is_unconfirmed() {
     let (repo, forge) = self_log("claim-race-rival-unread", OK, "Closes CLOUD-1.", REFUSED);
     let output = raced(&repo, &forge);
 
-    assert!(
-        output.status.success(),
-        "an unconfirmed collision must not fail `verify`: {}",
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a collision the cheap sources see still refuses: {} {}",
+        stdout(&output),
         stderr(&output)
     );
     assert!(
-        stdout(&output).contains("unconfirmed"),
-        "and it says the collision was never confirmed: {}",
-        stdout(&output)
+        stderr(&output).contains("CLOUD-2") && stderr(&output).contains("#8"),
+        "naming the key and the competitor as any refusal does: {}",
+        stderr(&output)
     );
     assert!(
-        !stderr(&output).contains("already claimed"),
-        "the refusal the cheap key alone would have produced is exactly what this arm \
-         withholds: {}",
+        stderr(&output).contains("unconfirmed") && stderr(&output).contains("8"),
+        "and saying which competitor's confirming read did not land: {}",
         stderr(&output)
     );
 }
 
-/// One unreadable competitor does not suppress a CONFIRMED collision beside it
+/// A mixed listing reports BOTH collisions and marks only the unconfirmed one
 /// (CLOUD-2382).
 ///
-/// # Why the arm partitions instead of testing
+/// # Why no arm throws the list away
 ///
-/// Declining on an unconfirmed race is right for that race and wrong for every
-/// other one in the listing. A single 502 mid-fan-out, or the worker unwind
-/// `with_logs` absorbs, leaves one competitor unread while the rest answered —
-/// and `races.iter().any(..)` would throw the whole list away, discarding a
-/// collision this run fully read and confirmed. That is the same "refusing
-/// information the run already holds" that `run_claim_race`'s judge-first
-/// ordering exists to keep (`crates/batten/src/lib.rs`, at the `races` call).
+/// A single 502 mid-fan-out, or the worker unwind `with_logs` absorbs, leaves
+/// one competitor unread while the rest answered. Any arm keyed on "some race
+/// is unconfirmed" discards collisions this run fully read, which is the
+/// "refusing information the run already holds" that `run_claim_race`'s
+/// judge-first ordering exists to keep (`crates/batten/src/lib.rs`, at the
+/// `races` call). The unconfirmed one is annotated, not withheld.
 ///
 /// So this listing is deliberately mixed: #8 collides on CLOUD-2 and its
-/// confirming read is refused, #9 collides on CLOUD-1 and its read agrees. The
-/// verb must refuse over #9 and say nothing about #8. Under `any` it exits 0
-/// instead, which is the mutant this case kills.
+/// confirming read is refused, #9 collides on CLOUD-1 and its read agrees.
+/// Both are refusals; only #8 is named as unconfirmed. An implementation that
+/// declined over #8, or that marked #9 too, fails here.
 #[test]
-fn an_unread_competitor_does_not_suppress_a_confirmed_race_beside_it() {
+fn a_mixed_listing_reports_both_races_and_marks_only_the_unconfirmed_one() {
     let (repo, forge) = two_rivals("claim-race-mixed-confirmation");
     let output = raced(&repo, &forge);
 
     assert_eq!(
         output.status.code(),
         Some(2),
-        "the confirmed collision still refuses: {} {}",
+        "a listing with any confirmed collision refuses: {} {}",
         stdout(&output),
         stderr(&output)
     );
     assert!(
-        stderr(&output).contains("CLOUD-1") && stderr(&output).contains("#9"),
-        "and it is the one that was read that gets named: {}",
+        stderr(&output).contains("#9") && stderr(&output).contains("#8"),
+        "both collisions are reported, the read one and the unread one: {}",
         stderr(&output)
     );
+    let marked = stderr(&output)
+        .lines()
+        .find(|line| line.contains("unconfirmed"))
+        .unwrap_or_default()
+        .to_owned();
     assert!(
-        !stderr(&output).contains("#8"),
-        "while the unconfirmed one is withheld rather than reported: {}",
-        stderr(&output)
+        marked.contains('8') && !marked.contains('9'),
+        "and only the one whose confirming read failed is marked: {marked:?}"
     );
 }

@@ -7297,25 +7297,35 @@ fn run_claim_race(
     // an unanswered collider keeps the cheap key it entered with, so it
     // reaches the list below and is taken out there.
     let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
-    // **AND A RACE RESTING ON A COMPETITOR NOBODY READ IS NOT ONE EITHER.** A
-    // collider is fetched precisely because its cheap key might be wrong — the
-    // branch names one key while the commits close another — so reporting it
-    // on that same cheap key when the confirming read FAILED is refusing on the
-    // evidence this run went out of its way to distrust, and it is the one
-    // false refusal the widening cannot otherwise remove, because a non-empty
-    // `races` means the arm below never runs.
+    // **A RACE RESTING ON A COMPETITOR NOBODY READ STILL REFUSES, AND SAYS SO.**
+    // A collider is fetched because its cheap key might be wrong, so reporting
+    // it on that same key when the confirming read FAILED is refusing on
+    // evidence this run went out of its way to distrust. An earlier revision
+    // therefore DECLINED on such a race — and that was the wrong direction on
+    // this gate.
     //
-    // PARTITIONED RATHER THAN TESTED, because `any` would make this arm wider
-    // than the rule it sits inside. A listing can hold both a confirmed
-    // collision and an unreadable collider — one 502 mid-fan-out is enough —
-    // and discarding the confirmed one over an unrelated third party is
-    // precisely the "throw away refusing information the run already holds"
-    // the paragraph above refuses. Only an ALL-unconfirmed list declines.
-    let (races, unconfirmed): (Vec<_>, Vec<_>) = races
-        .into_iter()
-        .partition(|race| !unanswered.contains(&race.number));
-    if races.is_empty() && !unconfirmed.is_empty() {
-        return clean(out, UNCONFIRMED_RACE);
+    // Weigh the two errors, because they are not symmetric. Declining loses a
+    // refusal the sequential fill made, on nothing worse than a 502, which is
+    // a FALSE GREEN — two agents on one issue, the failure `race.rs` exists to
+    // refuse, where the discarded side is already written and verified.
+    // Refusing keeps a false RED in the rarer case: it needs a closing keyword
+    // in a commit, which `commit-lint` makes almost absent here, and it is
+    // recoverable — the refusal names the key and the pull request, so a
+    // reader sees at once that the competitor is not on that key, and the row
+    // carries a declared bypass. A false green announces nothing.
+    //
+    // So the verdict is the one the fill without a widening would have given,
+    // and the WIDENING ONLY EVER IMPROVES ON IT: when the confirming read
+    // answers, the true claim decides. When it does not, this is exactly where
+    // the sequential fill stood, plus a line saying the collision is
+    // unconfirmed.
+    let unconfirmed: Vec<&str> = races
+        .iter()
+        .filter(|race| unanswered.contains(&race.number))
+        .map(|race| race.number.as_str())
+        .collect();
+    if !unconfirmed.is_empty() {
+        writeln!(err, "{}: {}", UNCONFIRMED_RACE, unconfirmed.join(", "))?;
     }
     // AND AN INCOMPLETE FILL ALLOWS, like every could-not-look arm above it.
     // Once
@@ -7376,20 +7386,15 @@ fn run_claim_race(
     Ok(ExitCode::Violation)
 }
 
-/// What `claim race` says when a competitor it would REFUSE on went unread.
+/// What `claim race` prints BESIDE a refusal whose competitor went unread.
 ///
-/// Its own arm rather than a fourth sentence in [`unread_log`]: those three all
-/// answer "no race found over a partial reading", and this one is a race found
-/// over a competitor the run deliberately distrusted and then could not check.
-///
-/// It names the COMPETITOR even where this branch's own log also went unread,
-/// which [`unread_log`]'s third sentence would have named too. That is not an
-/// oversight: the remedy is the same either way — look again — and the
-/// competitor is the half that produced the race being withheld, so it is the
-/// half an operator needs to re-read first.
-const UNCONFIRMED_RACE: &str = "claim race: a competitor whose claim this branch would race could \
-                                not be read, so the collision is unconfirmed — could not look, \
-                                which is not a verdict";
+/// Not a could-not-look arm, which is why it does not end in that phrase: the
+/// verb still refuses, and this line only says the confirming read did not
+/// land, so the key naming it is the cheap one. On stderr with the refusal it
+/// annotates, where whoever reads the refusal reads it.
+const UNCONFIRMED_RACE: &str = "claim race: the confirming commit read failed for these pull \
+                                requests, so their collision rests on the branch or title \
+                                alone and is unconfirmed";
 
 /// WHICH log went unread, for [`run_claim_race`]'s one arm that declines to call
 /// an incomplete reading clean.

@@ -558,16 +558,19 @@ pub fn with_logs(
     // is why [`Filled::unanswered`] carries numbers rather than a count. Such a
     // pull keeps the empty log the listing was built with, so its cheap key
     // stands and [`races`] still reports it — on exactly the evidence this
-    // widening exists to distrust. `run_claim_race` reads the two apart: a race
-    // whose number is in `unanswered` is unconfirmed and declines, while a
-    // confirmed one beside it still refuses. The widening therefore loses no
-    // refusal it would otherwise have made, but only because the caller
-    // partitions; it is not a property of this function.
+    // widening exists to distrust. `run_claim_race` refuses on it anyway and
+    // names it as unconfirmed, because declining would lose a refusal the
+    // sequential fill made over a 502. So this widening cannot subtract a
+    // refusal, only correct one, and that holds whatever the caller does with
+    // `unanswered`.
     //
     // **THE CASE THE PREDICATE DOES NOT REACH** is the remaining load-bearing
-    // one: a competitor whose branch names a key nobody here claims, while its
-    // commits close one this branch does. Its cheap reading collides with
-    // nothing, so nothing above asks for its log. Reaching it means dropping
+    // one, and it bears on the CLEAN verdict rather than on a refusal: a
+    // competitor whose CHEAP READING resolves a key nobody here claims — from
+    // its branch, its title, or a closing keyword in its body — while its
+    // commits close one this branch does. It collides with nothing, so nothing
+    // above asks for its log, and the key that would have refused is the one
+    // not read. Reaching it means dropping
     // the `claims` term and keeping only the outer factor — fetch every
     // competitor whose body closes nothing — which is a latency decision for
     // the row that owns latency, since what it costs depends on how many open
