@@ -69,6 +69,20 @@ pub(crate) fn set_times(path: &Path, times: fs::FileTimes) {
         .unwrap_or_else(|error| panic!("set the times of {}: {error}", path.display()));
 }
 
+/// A pid no process can hold.
+///
+/// `/proc/sys/kernel/pid_max` is exclusive — the kernel never assigns it — so
+/// this is a genuine "no such process" rather than a race against whatever
+/// happens to be running. A literal high number would eventually collide, and
+/// the collision would turn a crashed case green.
+#[must_use]
+pub(crate) fn unassignable_pid() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/pid_max")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .map_or_else(|| "4194304".to_owned(), |max| max.to_string())
+}
+
 /// The scratch root inside this crate's `target/`, where fixtures that *are*
 /// repositories live.
 #[must_use]

@@ -44,7 +44,7 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, batten, scratch, stderr, stdout};
+use common::{Fixture, batten, scratch, stderr, stdout, unassignable_pid};
 
 /// A repository with a registry to read, and nothing in it yet.
 fn registry_repo(name: &str) -> PathBuf {
@@ -138,20 +138,7 @@ fn this_process() -> (String, String) {
     (root, name)
 }
 
-/// A pid no process can hold.
-///
-/// `/proc/sys/kernel/pid_max` is exclusive — the kernel never assigns it — so
-/// this is a genuine "no such process" rather than a race against whatever
-/// happens to be running. A literal high number would eventually collide, and
-/// the collision would turn a crashed case green.
-fn unassignable_pid() -> String {
-    std::fs::read_to_string("/proc/sys/kernel/pid_max")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<u64>().ok())
-        .map_or_else(|| "4194304".to_owned(), |max| max.to_string())
-}
-
-/// Whether a record under [`unassignable_pid`] can read as a corpse on this target.
+/// Whether a record under [`common::unassignable_pid`] can read as a corpse on this target.
 ///
 /// `pid_exists` has **no probe off unix** — its `#[cfg(not(unix))]` arm answers
 /// `true` for every parseable pid, deliberately, so nothing is ever reported dead

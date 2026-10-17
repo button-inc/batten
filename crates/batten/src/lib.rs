@@ -23048,21 +23048,16 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
     // The dispatch excuse is cleared whenever it is no longer about a land
     // waiting for its lock: no claim to excuse, or the land already holding it.
     let dispatched = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
-    let Some(UnlandedClaim { count, .. }) = unlanded_claim() else {
-        let _ = std::fs::remove_file(&dispatched);
-        return None;
-    };
-    // ONLY A CRASHED LAND REFUSES (CLOUD-2456, the owner's scope of 2026-10-17).
-    // A live holder is the remedy running; no lock is a branch that has not begun
-    // landing, whose build, test or review is the designed workflow; an orderly
-    // exit — landed, red gate, spent budget — releases the lock. What is left is a
-    // lock its holder died holding: the host's background cap, a SIGKILL, a
-    // reclaim. EVERY Stop while it stands, with no per-claim receipt: the bound is
-    // the remedy, because `mise run land` reclaims the corpse.
+    // The crash read first: one failed file read on almost every Stop, where the
+    // claim loads the whole findings store.
     if !task::singleton_abandoned(&git_dir, LAND_TASK) {
         let _ = std::fs::remove_file(&dispatched);
         return None;
     }
+    let Some(UnlandedClaim { count, .. }) = unlanded_claim() else {
+        let _ = std::fs::remove_file(&dispatched);
+        return None;
+    };
     // A land started since the crash and not yet locked excuses this Stop, once.
     if std::fs::remove_file(&dispatched).is_ok() {
         return None;

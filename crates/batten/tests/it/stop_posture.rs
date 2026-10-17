@@ -1047,10 +1047,17 @@ fn an_operator_prompt_rearms_the_unlanded_pointer() {
 /// Leave `land`'s singleton lock in `repo` held by a pid that cannot exist, as
 /// a lap the host killed before its guard could release it.
 fn crashed_land(repo: &Path) {
-    let lock = repo.join(".git").join("batten-singleton").join("land");
-    fs::create_dir_all(&lock).expect("lock dir");
-    // Above the kernel's pid ceiling, so no process can ever hold it.
-    fs::write(lock.join("pid"), "4194399\n").expect("lock pid");
+    let claim = batten::task::singleton_acquire(
+        &repo.join(".git"),
+        "land",
+        &common::unassignable_pid(),
+        std::time::Duration::ZERO,
+    );
+    assert_eq!(
+        claim,
+        batten::task::Claim::Taken,
+        "the corpse holds the lock"
+    );
 }
 
 /// A CRASHED LAND REFUSES EVERY STOP (CLOUD-2456): the first included, with no
@@ -1096,7 +1103,6 @@ fn a_stop_before_any_land_is_not_refused() {
 fn work_landed_since_the_pointer_is_not_refused() {
     let (repo, home) = unlanded_fixture("stop-unlanded-then-landed");
     crashed_land(&repo);
-    let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
     common::git_in(&repo, &["branch", "-f", "main", "work"]);
     let second = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
     assert_eq!(
@@ -1112,7 +1118,6 @@ fn work_landed_since_the_pointer_is_not_refused() {
 #[test]
 fn a_running_land_lets_the_stop_pass() {
     let (repo, home) = unlanded_fixture("stop-unlanded-landing");
-    let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
     let git_dir = repo.join(".git");
     let pid = std::process::id().to_string();
     let claim = batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO);
@@ -1152,7 +1157,6 @@ fn a_running_land_lets_the_stop_pass() {
 fn a_land_just_started_excuses_one_stop() {
     let (repo, home) = unlanded_fixture("stop-unlanded-dispatched");
     crashed_land(&repo);
-    let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
     let start = serde_json::json!({
         "hook_event_name": "PostToolUse",
         "session_id": "s-1",
@@ -1181,7 +1185,6 @@ fn a_land_just_started_excuses_one_stop() {
 fn a_continued_stop_is_never_refused() {
     let (repo, home) = unlanded_fixture("stop-unlanded-continued");
     crashed_land(&repo);
-    let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
     let second = hook_in(&repo, &home, &stop_payload("Landed and pushed.", true));
     assert_eq!(
         second.status.code(),
