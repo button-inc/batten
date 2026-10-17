@@ -536,9 +536,10 @@ const TEST_RUN_FAILED: i32 = 100;
 /// `nextest`'s exit when the build failed. `cargo` uses it for its own setup
 /// failures too, so it is a finding only beside [`COMPILE_FAILED`].
 const BUILD_FAILED: i32 = 101;
-/// The result words `nextest` ends a test's run with. `SLOW`, `START`, `TRY` and
-/// `SETUP` lines name a test too and decide nothing, so only these are read.
-/// Both readers reach it through [`terminal_word`].
+/// The result words `nextest` ends a test's attempt with. `SLOW`, `START` and
+/// `SETUP` lines name a test too and decide nothing, so only these are read; a
+/// `TRY <n>` prefix marks a retried attempt of one. Both readers reach it
+/// through [`attempt`].
 const TERMINAL: &[&str] = &[
     "PASS",
     "LEAK",
@@ -562,7 +563,7 @@ pub(crate) struct Attempt<'a> {
 impl Attempt<'_> {
     /// The test's own path, the case's last word.
     pub(crate) fn test(&self) -> &str {
-        self.case.rsplit(' ').next().unwrap_or(self.case)
+        self.case.split_whitespace().last().unwrap_or(self.case)
     }
 }
 
@@ -586,18 +587,17 @@ pub(crate) fn attempt(line: &str) -> Option<Attempt<'_>> {
     (!case.is_empty()).then_some(Attempt { word, case })
 }
 
-/// Each case's LAST attempt, in case order: a retried case's earlier attempts
-/// are superseded by its final one, so a flaky pass reads as the pass it ended in.
-pub(crate) fn final_attempts(output: &str) -> Vec<Attempt<'_>> {
-    let mut last: BTreeMap<&str, Attempt<'_>> = BTreeMap::new();
-    for found in output
+/// How many distinct cases a nextest run reported a result for, read up to its
+/// `Summary [` line (past which it repeats each failure). A retried case is one
+/// case; the same test path in two binaries is two.
+pub(crate) fn case_count(output: &str) -> usize {
+    output
         .lines()
         .take_while(|line| !line.trim_start().starts_with("Summary ["))
         .filter_map(attempt)
-    {
-        last.insert(found.case, found);
-    }
-    last.into_values().collect()
+        .map(|found| found.case)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
 }
 
 /// What `cargo` prints when rustc refused the crate: a base body HEAD's code
@@ -623,8 +623,12 @@ fn passes(outcome: Option<&(i32, String)>, test: &str) -> Result<bool> {
         return Ok(false);
     }
     let suffix = format!("::{test}");
-    let statuses: Vec<&str> = final_attempts(output)
-        .into_iter()
+    // EVERY ATTEMPT, the whole output: a retried case that failed once failed,
+    // which is why this repository's own nextest config refuses retries (a
+    // flake would read as a pass).
+    let statuses: Vec<&str> = output
+        .lines()
+        .filter_map(attempt)
         .filter_map(|found| {
             let name = found.test();
             let named = name == test || name.ends_with(&suffix);
@@ -684,20 +688,18 @@ mod tests {
             ),
         );
         assert!(!passes(Some(&retried), "t").unwrap());
-        // A flaky case is judged by its last attempt, and the same test name in
-        // another binary is another case.
+        // A flaky case failed once, so it failed; the count is one case per
+        // case, and the same test path in another binary is another case.
         let flaky = (
             0,
             String::from(
                 "  TRY 1 FAIL [   0.004s] batten::it m::t\n  TRY 2 PASS [   0.004s] batten::it m::t\n",
             ),
         );
-        assert!(passes(Some(&flaky), "t").unwrap());
+        assert!(!passes(Some(&flaky), "t").unwrap());
+        assert_eq!(case_count(&flaky.1), 1);
         assert_eq!(
-            final_attempts(
-                "        PASS [   0.004s] bin1 m::t\n        PASS [   0.004s] bin2 m::t\n"
-            )
-            .len(),
+            case_count("        PASS [   0.004s] bin1 m::t\n        PASS [   0.004s] bin2 m::t\n"),
             2
         );
         let leaky = (

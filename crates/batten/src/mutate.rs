@@ -3116,10 +3116,10 @@ fn libtest_ran(output: &str) -> bool {
 }
 
 /// The cases a nextest run selected, one per case whatever its attempts or
-/// outcome, as [`crate::replay::final_attempts`] reads them (`SIGTERM` among
-/// them, which [`wait_bounded`] itself sends a timed-out runner).
+/// outcome, as [`crate::replay::case_count`] counts them (`SIGTERM` among the
+/// results, which [`wait_bounded`] itself sends a timed-out runner).
 fn nextest_lines(output: &str) -> usize {
-    crate::replay::final_attempts(output).len()
+    crate::replay::case_count(output)
 }
 
 /// Whether a nextest run printed its summary, which it does for an empty
