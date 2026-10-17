@@ -167,7 +167,9 @@ git_reads_as("stash", rest) if rest[0] in {"list", "show"}
 # as the whole argument list.
 git_reads_as("remote", rest) if rest in {[], ["-v"], ["--verbose"]}
 
-git_reads_as("remote", rest) if rest[0] in {"get-url", "show"}
+# `remote show <name>` asks the remote, which runs its transport and any
+# credential helper; `get-url` reads only the config.
+git_reads_as("remote", rest) if rest[0] == "get-url"
 
 # The read flag comes FIRST: `git config` stops reading options at the key, so
 # `git config user.name --get` sets user.name to `--get`.
@@ -236,9 +238,11 @@ some_writing_flag(arguments) if {
 	contains(argument, "O")
 }
 
+# `--ext-diff` runs the configured external diff program, under any prefix the
+# parser accepts.
 some_writing_flag(arguments) if {
 	some argument in arguments
-	argument == "--ext-diff"
+	startswith(argument, "--ext")
 }
 
 test_a_host_read_is_preapproved if {
@@ -384,6 +388,8 @@ test_git_global_options_never_hide_a_writer if {
 		["grep", "-iOsh", "x"],
 		["grep", "--open=sh", "x"],
 		["-C", "/x", "grep", "--op=sh", "x"],
+		["diff", "--ext"],
+		["remote", "show", "origin"],
 	] {
 		count(preapprove) == 0 with input as git_call(arguments)
 	}

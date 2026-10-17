@@ -759,7 +759,7 @@ pub fn release_sums(repository: &str, tag: &str) -> Result<String> {
     let answer = crate::fetch::get(&url, &[])?;
     if answer.status != 200 {
         return Err(UsageError::raise(format!(
-            "engine update: {url} answered {}, so {tag}'s digests are unknown; nothing was written",
+            "engine: {url} answered {}, so {tag}'s digests are unknown",
             answer.status
         )));
     }
@@ -999,7 +999,8 @@ pub fn stale_artifacts(
             Some(body) => body,
             slot @ None => slot.insert(sums()?),
         };
-        if digest.and_then(toml_edit::Item::as_str) != published_digest(body, asset).as_deref() {
+        let pinned = digest.and_then(toml_edit::Item::as_str);
+        if pinned.map(str::to_ascii_lowercase) != published_digest(body, asset) {
             found.push((
                 item_line(text, digest.unwrap_or(item)),
                 format!("provision batten sha256 for {asset}"),

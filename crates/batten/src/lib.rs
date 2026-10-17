@@ -769,8 +769,8 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
 //MUTANT failed-install-unwrites-the-pin|s@^        durable::replace(&path, &synced)?;$@@|a_failed_install_leaves_the_moved_pin
 //MUTANT update-moves-the-pin-backward|s@^    let target = if engine::is_newer(&latest, &current)? {$@    let target = if latest != current {@|an_update_never_moves_a_pin_backward
 //MUTANT update-ignores-workflow-literal|s@^    if !stale.is_empty() {$@    if false {@|a_workflow_literal_the_update_cannot_rewrite_refuses_and_writes_nothing
-//MUTANT update-installs-what-the-ref-pins|s@^    install_wanted(want, Some(root), &repository, out)$@    engine_install(out)@|an_update_installs_its_target_whatever_the_ref_pins
-//MUTANT update-keeps-the-fresh-record|s@^        record::clear_kind("engine update", "engine-fresh", families)?;$@@|an_update_clears_the_engine_fresh_record
+//MUTANT update-installs-what-the-ref-pins|s@^    let installed = install_wanted(want, Some(root), &repository, out)?;$@    let installed = engine_install(out)?;@|an_update_installs_its_target_whatever_the_ref_pins
+//MUTANT update-keeps-the-fresh-record|s@^        cleared = record::clear_kind("engine update", "engine-fresh", families);$@@|an_update_clears_the_engine_fresh_record
 fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let root = git::worktree_root(Path::new("."))?;
     let path = root.join(config::CONFIG_FILE);
@@ -811,13 +811,15 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     } else {
         current
     };
-    // ONE FETCH OF THE MANIFEST, AND ONLY WHEN A COPY NEEDS A DIGEST.
+    // ONE FETCH OF THE MANIFEST, AND ONLY WHEN A COPY NEEDS A DIGEST: the copy
+    // cached beside the release, which `engine gate` judges by too.
+    let cache = state::repo_state_dir(&root)?;
     let fetched = std::cell::OnceCell::new();
     let sums = || -> Result<String> {
         if let Some(body) = fetched.get() {
             return Ok(String::clone(body));
         }
-        let body = engine::release_sums(&repository, &target)?;
+        let body = engine::pinned_sums(&cache, &repository, &target)?;
         Ok(fetched.get_or_init(|| body).clone())
     };
     let synced = sync_declarations(&text, &target, &sums)?;
@@ -855,6 +857,7 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
             source: None,
         }),
     )?;
+    let mut cleared = Ok(());
     if synced != text {
         // THE PRINTED PATH IS THE WRITE, AND IT STANDS whatever the install
         // below answers; the refusal floor admits `engine install` to finish it.
@@ -863,16 +866,18 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
         // AN `engine-fresh` READING JUDGED THE PIN THIS JUST MOVED, so it stops
         // standing for it with the write, whatever the install answers: absent
         // until its writer reads the new pin (CLOUD-2418). Its family is the
-        // consumer's name, read off the config's `[[record]]` rows.
+        // consumer's name, read off the config's `[[record]]` rows. A clear
+        // that fails is reported after the install, never instead of it.
         let declared = toml_edit::Document::parse(synced.as_str()).ok();
         let families = declared
             .iter()
             .filter_map(|doc| doc.get("record")?.as_array_of_tables())
             .flat_map(toml_edit::ArrayOfTables::iter)
             .filter_map(|row| row.get("record")?.as_str());
-        record::clear_kind("engine update", "engine-fresh", families)?;
+        cleared = record::clear_kind("engine update", "engine-fresh", families);
     }
-    install_wanted(want, Some(root), &repository, out)
+    let installed = install_wanted(want, Some(root), &repository, out)?;
+    cleared.map(|()| installed)
 }
 
 /// `engine gate`'s finding for a source pin, which builds this tree and so never
@@ -1274,11 +1279,16 @@ fn sync_artifact(
     {
         set_str(item, &url);
     }
+    // A MISSING DIGEST IS WRITTEN, so every artifact `engine gate` judges is one
+    // this can repair; case is not a disagreement.
     let pinned = artifact.get("sha256").and_then(toml_edit::Item::as_str);
-    if pinned != Some(digest.as_str())
-        && let Some(item) = artifact.get_mut("sha256")
-    {
-        set_str(item, &digest);
+    if !pinned.is_some_and(|pinned| pinned.eq_ignore_ascii_case(&digest)) {
+        match artifact.get_mut("sha256") {
+            Some(item) => set_str(item, &digest),
+            None => {
+                artifact.insert("sha256", toml_edit::value(digest));
+            }
+        }
     }
     Ok(())
 }
@@ -1906,7 +1916,7 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
     // release, so a warm gate reads it without the network, and it is judged
     // before the binary is fetched, so a refused config never pays for one.
     let foreign = engine::stale_artifacts(&text, tag, &|| {
-        engine::pinned_sums(&cache, env!("CARGO_PKG_REPOSITORY"), tag)
+        engine::pinned_sums(&cache, &releases_repository(), tag)
     })?;
     for (line, what) in &foreign {
         writeln!(

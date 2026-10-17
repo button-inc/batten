@@ -816,11 +816,14 @@ fn an_update_repairs_a_stale_digest_at_the_current_version() {
         let tag = if n == 0 { "v9.9.9" } else { "v8.8.8" };
         writeln!(
             config,
-            "\n[provision.platforms.{target}]\nurl = \"https://example.invalid/releases/download/{tag}/{}\"\nsha256 = \"{}\"",
+            "\n[provision.platforms.{target}]\nurl = \"https://example.invalid/releases/download/{tag}/{}\"",
             batten::engine::release_asset(tag, target),
-            "0".repeat(64)
         )
         .unwrap();
+        // The last platform carries no digest at all, which the update writes.
+        if n + 1 < PROVISION_TARGETS.len() {
+            writeln!(config, "sha256 = \"{}\"", "0".repeat(64)).unwrap();
+        }
     }
     common::write(&home, "batten.toml", &config);
     let named = home.join("bin");
