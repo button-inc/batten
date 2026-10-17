@@ -23054,9 +23054,7 @@ fn stop_nudges(
     // excuse its own Stop: the watchdog below must see the same land in flight.
     let landing = land_under_way();
     if std::env::var_os(UNLANDED_BYPASS).is_none() {
-        // AFTER `record_state`, so it judges this Stop's verdict, and BEFORE the
-        // pointer, which writes this Stop's spoken receipt: the refusal is for
-        // a pointer an EARLIER Stop spoke (CLOUD-2441).
+        // AFTER `record_state`, so it judges this Stop's verdict (CLOUD-2441).
         *block = unlanded_stop_block();
         if let Some(pointer) = unlanded_pointer() {
             rungs.push(pointer);

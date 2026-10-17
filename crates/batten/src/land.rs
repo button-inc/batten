@@ -3169,6 +3169,10 @@ pub(crate) const BRANCH_KEYED_RECEIPTS: &[&str] = &[
     // The Stop refusal's dispatch excuse (CLOUD-2441): left behind, a reused
     // branch name would inherit a free Stop.
     "land-dispatched",
+    // Written by no build since CLOUD-2456, and still swept: a clone that ran
+    // CLOUD-2441's has these files, and this sweep is the only thing that
+    // retires them.
+    "unlanded-refused",
     // `pr-open`, minted from `create_pull_request`'s own result: this branch has an
     // unlanded pull request, so opening a second one is the bundle split
     // AGENTS.md's "one PR all of it" refuses. Landing sweeps it here, which is what
