@@ -7190,8 +7190,13 @@ fn run_claim_race(
         Ok(log) => log,
         Err(blind) => return clean(out, blind),
     };
-    let own_log = log.as_deref().unwrap_or_default();
-    let mine = race::claimed(&me.head_ref, &me.title, own_log, &me.body, &grammar);
+    let mine = race::claimed(
+        &me.head_ref,
+        &me.title,
+        log.as_deref().unwrap_or_default(),
+        &me.body,
+        &grammar,
+    );
     if mine.is_empty() {
         return clean(
             out,
@@ -7379,7 +7384,13 @@ fn own_log(
     mine_number: &str,
     grammar: &ready::Grammar,
 ) -> Result<Option<String>, &'static str> {
-    if std::env::var_os(speculation::PUBLISHED_AS).is_some_and(|base| !base.is_empty()) {
+    // THE SAME PREDICATE `authored_log` APPLIES, spelled the same way on
+    // purpose: it reads the variable through `var().ok().filter(|v|
+    // !v.trim().is_empty())`, so a blank value is absent to it. Asking
+    // `!is_empty()` here instead would switch the SOURCE on a value the module
+    // that owns the variable treats as unset, while the RANGE fell back to the
+    // trunk — one decision taken on two predicates.
+    if std::env::var(speculation::PUBLISHED_AS).is_ok_and(|base| !base.trim().is_empty()) {
         let trunk = worktree::declared_trunk(repo).ok().flatten();
         let base = trunk.as_ref().map_or("", |trunk| trunk.tracking.as_str());
         return Ok(Some(race::authored_log(repo, base)));

@@ -392,8 +392,9 @@ pub struct Filled {
     ///
     /// **Numbers rather than a count**, because the caller has two different
     /// questions and only one of them is "was this a whole reading". The other
-    /// is WHICH race it is about to report rests on a competitor nobody read,
-    /// since it marks that row and no other — a bool cannot answer it. What to
+    /// is WHICH of the races it is about to report rest on a competitor nobody
+    /// read, since it marks those rows and no others — a bool cannot answer
+    /// that. What to
     /// do in either case is the caller's, and stated there.
     pub unanswered: Vec<String>,
 }
@@ -569,11 +570,10 @@ pub fn with_logs(
     // nothing above asks for its log, and the key that would have refused is
     // the one not read. (A body-closing competitor is spared by the outer
     // factor instead, and its cost is the row-short set named above, not this.)
-    // Reaching it means dropping
-    // the `claims` term and keeping only the outer factor — fetch every
-    // competitor whose body closes nothing — which is a latency decision for
-    // the row that owns latency, since what it costs depends on how many open
-    // pull requests carry a body that closes no key.
+    // Reaching it means dropping the `claims` term and keeping only the outer
+    // factor — fetch every competitor whose body closes nothing — which is a
+    // latency decision for the row that owns latency, since what it costs
+    // depends on how many open pull requests carry a body that closes no key.
     //
     // EACH ENTRY CARRIES ITS DESTINATION, not its queue position. Two parallel
     // vectors — slots here, numbers there — would have to stay in step for the

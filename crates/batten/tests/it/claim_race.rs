@@ -864,6 +864,100 @@ fn two_rivals(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     (repo, forge)
 }
 
+/// A checkout mid-speculative-lap: the lease holder's commit is BEHIND the
+/// borrowed base, this branch's own commit is after it, and a competitor holds
+/// each of the two keys they close.
+///
+/// Its own fixture rather than an axis on [`self_log`], for the reason
+/// [`two_rivals`] has one: the local history has to differ from the pull
+/// request's commit list, which means a real second commit and a listing that
+/// carries the head it produced — neither of which the other cases want.
+///
+/// **The two keys are what make the source observable in both directions.** The
+/// forge answers #7's whole commit list, holder's commit included, as a real
+/// rebase leaves it: `Closes CLOUD-2` from the holder and `Closes CLOUD-3` from
+/// this branch. #8 holds CLOUD-2 and #9 holds CLOUD-3. So reading the forge
+/// races both, reading `base..HEAD` races only #9, and reading nothing at all
+/// — an empty log presented as an answer — races neither. Three sources, three
+/// outcomes, which is what the one-variable claim needs to rest on.
+///
+/// Returns the repository, the forge, and the base to export.
+fn speculating(name: &str) -> (std::path::PathBuf, std::path::PathBuf, String) {
+    let (repo, _, forge) = checkout(name);
+    // REPLAYED, not merely listed: the holder's commit really is in this
+    // checkout's history and really is behind the base, which is the state
+    // `land` leaves and the only one where `base..HEAD` is the interesting
+    // range. A fixture that left it out of local history would exclude it by
+    // accident rather than by the bound under test.
+    git_in(
+        &repo,
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "feat: the holder's work\n\nCloses CLOUD-2",
+        ],
+    );
+    let base = git_in(&repo, &["rev-parse", "HEAD"]);
+    git_in(
+        &repo,
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "fix: our own work\n\nCloses CLOUD-3",
+        ],
+    );
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+    write(
+        &forge,
+        "routes",
+        "pulls/7/commits\tmine.json\npulls/8/commits\tholder.json\n\
+         pulls/9/commits\tthird.json\npulls?\tpulls.json\n",
+    );
+    write(
+        &forge,
+        "pulls.json",
+        &answer(
+            200,
+            &format!(
+                r#"[{{"number":7,"title":"fix: the work","body":"Closes CLOUD-1.",
+                   "head":{{"ref":"user/topic","sha":"{head}"}}}},
+                  {{"number":8,"title":"feat: the lease holder on CLOUD-2","body":"",
+                   "head":{{"ref":"user/holder","sha":"beef"}}}},
+                  {{"number":9,"title":"fix: a third party on CLOUD-3","body":"",
+                   "head":{{"ref":"user/third","sha":"cafe"}}}}]"#
+            ),
+        ),
+    );
+    write(
+        &forge,
+        "mine.json",
+        &answer(
+            OK,
+            r#"[{"commit":{"message":"feat: the holder's work\n\nCloses CLOUD-2"}},
+                {"commit":{"message":"fix: our own work\n\nCloses CLOUD-3"}}]"#,
+        ),
+    );
+    write(
+        &forge,
+        "holder.json",
+        &answer(
+            OK,
+            r#"[{"commit":{"message":"feat: the holder's work\n\nCloses CLOUD-2"}}]"#,
+        ),
+    );
+    write(
+        &forge,
+        "third.json",
+        &answer(
+            OK,
+            r#"[{"commit":{"message":"fix: the third party's work\n\nCloses CLOUD-3"}}]"#,
+        ),
+    );
+    (repo, forge, base)
+}
+
 /// The refusal line carrying the unconfirmed mark, or empty where none does.
 ///
 /// A line rather than the whole stream, because every assertion about the mark
@@ -917,31 +1011,73 @@ fn raced_speculating(
 /// speculating branch is waiting on.
 ///
 /// With `BATTEN_SPEC_BASE` exported, as `land` exports it to every body gate,
-/// the claim comes from `race::authored_log` over local history instead. This
-/// checkout's own commits close nothing, so `mine` is the body's CLOUD-1 and
-/// #8 is not raced. The pair is one environment variable: without it the same
-/// fixture refuses at 2, which the case above asserts.
+/// the claim comes from `race::authored_log` over `base..HEAD` instead, where
+/// the holder's commit is excluded and this branch's own CLOUD-3 commit is not.
+///
+/// **BOTH HALVES ARE ASSERTED, because only one of them is about the forge.**
+/// Dropping #8 proves the holder's commits stopped speaking; keeping #9 proves
+/// the local ones started. A speculative arm that answered an empty log would
+/// satisfy the first and fail the second — it would exit 0 here — which is the
+/// whole difference between reading this branch's history and reading nothing.
+/// [`a_speculative_lap_without_the_variable_reads_the_whole_pull_request`] is
+/// the same fixture with the variable withheld.
 #[test]
 fn a_speculative_lap_does_not_race_the_branch_it_borrowed_its_base_from() {
-    let (repo, forge) = self_log("claim-race-speculating", OK, "Closes CLOUD-1.", OK);
-    let base = git_in(&repo, &["rev-parse", "HEAD"]);
+    let (repo, forge, base) = speculating("claim-race-speculating");
     let output = raced_speculating(&repo, &forge, &base);
 
-    assert!(
-        output.status.success(),
-        "the holder's commits must not speak for this branch's claim: {} {}",
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "this branch's own CLOUD-3 commit still claims CLOUD-3: {} {}",
         stdout(&output),
         stderr(&output)
     );
     assert!(
+        stderr(&output).contains("CLOUD-3") && stderr(&output).contains("#9"),
+        "so the race it reports is the one its own history earns: {}",
+        stderr(&output)
+    );
+    assert!(
         !stderr(&output).contains("#8"),
-        "and #8 is what it would have refused against: {}",
+        "and never the lease holder it was replayed onto: {}",
         stderr(&output)
     );
 }
 
-/// The branch races on a key only its OWN commits close, which is the half that
-/// gives the next case something to lose.
+/// The pair, which is one environment variable: the same fixture read from the
+/// forge races the lease holder it was replayed onto.
+///
+/// This is the defect, not a second feature — it is what `batten claim race`
+/// does inside a speculative lap when nothing tells it one is in force, and it
+/// is pinned here so the bound above cannot be deleted silently.
+#[test]
+fn a_speculative_lap_without_the_variable_reads_the_whole_pull_request() {
+    let (repo, forge, _) = speculating("claim-race-speculating-unbounded");
+    let output = raced(&repo, &forge);
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the holder's CLOUD-2 is in #7's commit list and resolves into `mine`: {} {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("#8"),
+        "so the waiter refuses against the very pull request it is waiting on: {}",
+        stderr(&output)
+    );
+}
+
+/// The branch races on a key only its OWN commits close, which is the half
+/// that gives [`a_self_log_that_could_not_be_read_is_not_a_clean_board`]
+/// something to lose: same fixture, same keys, only the self log's status
+/// differs, so a refusal there is a refusal this case proves was available.
+///
+/// Named rather than placed. A case says which case it pairs with, never
+/// "above" or "below" — an insert between them makes a positional claim false
+/// and nothing reads it.
 #[test]
 fn a_key_closed_by_this_branch_s_commits_alone_still_races() {
     let (repo, forge) = self_log("claim-race-self-log-read", OK, "Closes CLOUD-1.", OK);
