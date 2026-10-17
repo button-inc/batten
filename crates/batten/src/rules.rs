@@ -14016,6 +14016,126 @@ pub fn glob_match(pattern: &str, path: &str) -> bool {
     Selector::new(pattern).is_ok_and(|selector| selector.matches(path))
 }
 
+/// Every `Rule` column, blank: the one census a test fixture spreads from.
+///
+/// `Rule` has no `Default` on purpose — a fixture that spread one would stop
+/// naming the columns it leaves empty — so the columns are named here, once, and
+/// a new column is a compile error until it is. A `const` rather than a function
+/// body, because the literal's length IS the column count: as two function
+/// fixtures it crossed `clippy::too_many_lines` at `while_marker_scope`
+/// (CLOUD-2271), and a census is data rather than control flow.
+#[cfg(test)]
+pub(crate) const RULE_CENSUS: Rule = Rule {
+    review: Vec::new(),
+    id: String::new(),
+    kind: RuleKind::Shape,
+    glob: None,
+    // Filled by `per_kind`.
+    severity: None,
+    scope: RuleScope::MediatedCall,
+    pattern: None,
+    regex: None,
+    exclude: None,
+    content: None,
+    tool: None,
+    measures: None,
+    counts: None,
+    max: None,
+    resolves: Vec::new(),
+    when_absent: None,
+    when_present: None,
+    when_value: None,
+    while_marker: None,
+    while_marker_scope: Vec::new(),
+    while_unpushed: false,
+    key_from: None,
+    key_base: None,
+    key_shape: None,
+    max_age: None,
+    requires_field: None,
+    contains: None,
+    unless_contains: None,
+    require_via: None,
+    requires_key: None,
+    reason: None,
+    policy_url: None,
+    bypass_env: None,
+    check: None,
+    fix: None,
+    produces: None,
+    exclude_paths: Vec::new(),
+    symbols: false,
+    run: None,
+    verbatim: None,
+    identity_key: None,
+    direction: None,
+    base: None,
+    retires_with: None,
+    conserves: None,
+    admits_with: None,
+    format: None,
+    node: None,
+    derives: None,
+    cites: None,
+    reads: None,
+    module: None,
+    bundle: None,
+    preset: None,
+    // No preset, so nothing here reads a CI provider (CLOUD-1625).
+    provider: None,
+    except: Vec::new(),
+    gate: None,
+    documents: Vec::new(),
+    requires_path: Vec::new(),
+    sources: Vec::new(),
+    lines: Vec::new(),
+    line_sources: Vec::new(),
+    invocations: Vec::new(),
+    invocation_sources: Vec::new(),
+    uses: Vec::new(),
+    use_sources: Vec::new(),
+    git: Vec::new(),
+    refs: Vec::new(),
+    ranges: Vec::new(),
+    commits: Vec::new(),
+    staged: Vec::new(),
+    history: Vec::new(),
+    tags: Vec::new(),
+    git_config: Vec::new(),
+    index: Vec::new(),
+    state: Vec::new(),
+    forge: Vec::new(),
+    tools: Vec::new(),
+    plan: Vec::new(),
+    minted: Vec::new(),
+    captured: Vec::new(),
+    tasks: Vec::new(),
+    extract: Vec::new(),
+    landing: Vec::new(),
+    delta_sources: Vec::new(),
+    external: Vec::new(),
+    predicate_severity: None,
+    criteria: None,
+    tier: None,
+    // Both filled by `per_kind`.
+    no_fix_reason: None,
+    checks: None,
+    // Left `None` even where the kind permits it, unlike `checks` above:
+    // a receipt fixture needs SOME receipt named to be valid, and
+    // `checks` above already supplies one. Filling both would make every
+    // blank receipt row carry an alternation no case asked for, and a
+    // fixture that quietly exercises a column is how a test passes for a
+    // reason its author did not choose.
+    checks_any: None,
+    key: None,
+    trigger: None,
+    verdict: None,
+    filters: None,
+    substitutes: None,
+    interprets: None,
+    no_retry_reason: None,
+};
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -15282,126 +15402,15 @@ mod tests {
         traversals: serde_json::Value::Null,
     };
 
-    // One line per `Rule` column, and `Rule` has no `Default` on purpose — a
-    // fixture that spreads one would stop naming the columns it leaves empty,
-    // which is the census this literal is. The three columns whose blank value
-    // depends on the kind are filled by [`per_kind`]. The literal's length is the
-    // column count, and it crossed the ceiling at `while_marker_scope`
-    // (CLOUD-2271); `expect`, so the annotation goes red if it shrinks back under.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "a Rule literal names every column; its length grows with the struct"
-    )]
+    // The kind's own default scope, and the three columns whose blank value
+    // depends on the kind, filled by [`per_kind`]; every other column is the
+    // census's (`RULE_CENSUS`).
     fn blank(id: &str, kind: RuleKind) -> Rule {
         per_kind(Rule {
-            review: Vec::new(),
             id: id.to_owned(),
             kind,
-            glob: None,
-            // Filled by `per_kind`.
-            severity: None,
             scope: kind.scopes()[0],
-            pattern: None,
-            regex: None,
-            exclude: None,
-            content: None,
-            tool: None,
-            measures: None,
-            counts: None,
-            max: None,
-            resolves: Vec::new(),
-            when_absent: None,
-            when_present: None,
-            when_value: None,
-            while_marker: None,
-            while_marker_scope: Vec::new(),
-            while_unpushed: false,
-            key_from: None,
-            key_base: None,
-            key_shape: None,
-            max_age: None,
-            requires_field: None,
-            contains: None,
-            unless_contains: None,
-            require_via: None,
-            requires_key: None,
-            reason: None,
-            policy_url: None,
-            bypass_env: None,
-            check: None,
-            fix: None,
-            produces: None,
-            exclude_paths: Vec::new(),
-            symbols: false,
-            run: None,
-            verbatim: None,
-            identity_key: None,
-            direction: None,
-            base: None,
-            retires_with: None,
-            conserves: None,
-            admits_with: None,
-            format: None,
-            node: None,
-            derives: None,
-            cites: None,
-            reads: None,
-            module: None,
-            bundle: None,
-            preset: None,
-            // No preset, so nothing here reads a CI provider (CLOUD-1625).
-            provider: None,
-            except: Vec::new(),
-            gate: None,
-            documents: Vec::new(),
-            requires_path: Vec::new(),
-            sources: Vec::new(),
-            lines: Vec::new(),
-            line_sources: Vec::new(),
-            invocations: Vec::new(),
-            invocation_sources: Vec::new(),
-            uses: Vec::new(),
-            use_sources: Vec::new(),
-            git: Vec::new(),
-            refs: Vec::new(),
-            ranges: Vec::new(),
-            commits: Vec::new(),
-            staged: Vec::new(),
-            history: Vec::new(),
-            tags: Vec::new(),
-            git_config: Vec::new(),
-            index: Vec::new(),
-            state: Vec::new(),
-            forge: Vec::new(),
-            tools: Vec::new(),
-            plan: Vec::new(),
-            minted: Vec::new(),
-            captured: Vec::new(),
-            tasks: Vec::new(),
-            extract: Vec::new(),
-            landing: Vec::new(),
-            delta_sources: Vec::new(),
-            external: Vec::new(),
-            predicate_severity: None,
-            criteria: None,
-            tier: None,
-            // Both filled by `per_kind`.
-            no_fix_reason: None,
-            checks: None,
-            // Left `None` even where the kind permits it, unlike `checks` above:
-            // a receipt fixture needs SOME receipt named to be valid, and
-            // `checks` above already supplies one. Filling both would make every
-            // blank receipt row carry an alternation no case asked for, and a
-            // fixture that quietly exercises a column is how a test passes for a
-            // reason its author did not choose.
-            checks_any: None,
-            key: None,
-            trigger: None,
-            verdict: None,
-            filters: None,
-            substitutes: None,
-            interprets: None,
-            no_retry_reason: None,
+            ..super::RULE_CENSUS
         })
     }
 
