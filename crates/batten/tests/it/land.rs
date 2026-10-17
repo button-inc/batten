@@ -819,6 +819,50 @@ fn a_lap_over_a_clone_with_no_remote_stops_rather_than_lapping_toward_nothing() 
     );
 }
 
+/// TAKING THE LANDING LOCK CLEARS THE DISPATCH RECEIPT (CLOUD-2370). The receipt
+/// means "started, not yet locked"; left behind once this land holds the lock, it
+/// would read at the Stop watchdog as a relaunch under way over this land's own
+/// later crash. A lap over an origin nothing answers takes the lock before its
+/// first fetch fails, which is all this needs.
+#[test]
+fn taking_the_landing_lock_clears_the_dispatch_receipt() {
+    let repo = repo("land-lock-clears-dispatch");
+    common::git_in(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "http://127.0.0.1:9/unreachable.git",
+        ],
+    );
+    let branch = common::git_in(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    let receipt = repo.join(".git/batten-receipts").join(format!(
+        "land-dispatched.{}",
+        branch.trim().replace('/', "-")
+    ));
+    std::fs::create_dir_all(receipt.parent().expect("a parent")).expect("a receipt dir");
+    std::fs::write(&receipt, "land\n").expect("a receipt");
+    // No entry gates: the developer's `mise.toml` exports some, and asking them
+    // needs a forge this tier does not have, before the lock is ever reached.
+    let output = batten()
+        .args(["land", "lap", "refs/heads/main"])
+        .env("LAND_MAX_LAPS", "1")
+        .env("LAND_VERIFY", "true")
+        .env("LAND_WORKFLOW", "fast-forward.yml")
+        .env_remove("LAND_ENTRY_GATES")
+        .env_remove("LAND_BODY_GATES")
+        .current_dir(&repo)
+        .output()
+        .expect("run batten land lap");
+    assert!(
+        !receipt.exists(),
+        "the land that took the lock consumed its dispatch: {} {}",
+        stdout(&output),
+        stderr(&output)
+    );
+}
+
 /// `batten land fast-forward`, with the workflow named in the environment.
 fn land_fast_forward(repo: &Path, workflow: &str) -> (i32, String, String) {
     let output = batten()

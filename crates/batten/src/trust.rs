@@ -1093,6 +1093,17 @@ pub enum WeakeningKind {
     /// stops counting the merge commits a branch carries. Appended, for the
     /// `Ord` reason its neighbours give.
     CiLinearHistoryDropped,
+    /// A task the base ref's `[task].relaunch` declared is gone, so a crash of it
+    /// no longer refuses the Stop that would idle over the lost work
+    /// (CLOUD-2370). The REMOVED direction only: an added task is one more crash
+    /// watched. Appended, for the `Ord` reason its neighbours give.
+    TaskRelaunchRemoved,
+    /// `[task].min_lifetime_secs` rose, or the table is gone, so a crash must
+    /// have lived longer before it forces a relaunch (CLOUD-2370). A floor a
+    /// crash must clear to refuse, so larger forgives more: the
+    /// [`ceiling_raised`] direction. Appended, for the `Ord` reason its
+    /// neighbours give.
+    TaskLifetimeFloorRaised,
 }
 
 impl WeakeningKind {
@@ -1179,6 +1190,8 @@ impl WeakeningKind {
         WeakeningKind::ShellCensusNarrowed,
         WeakeningKind::ForgeNothingGradedWidened,
         WeakeningKind::MutateGateRemoved,
+        WeakeningKind::TaskRelaunchRemoved,
+        WeakeningKind::TaskLifetimeFloorRaised,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -1246,6 +1259,8 @@ impl WeakeningKind {
             WeakeningKind::ForgeCredentialsRemoved => "forge-credentials-removed",
             WeakeningKind::ForgeNothingGradedWidened => "forge-nothing-graded-widened",
             WeakeningKind::MutateGateRemoved => "mutate-gate-removed",
+            WeakeningKind::TaskRelaunchRemoved => "task-relaunch-removed",
+            WeakeningKind::TaskLifetimeFloorRaised => "task-lifetime-floor-raised",
             WeakeningKind::AdvisoryCeilingRaised => "advisory-ceiling-raised",
             WeakeningKind::HookOutputCeilingRaised => "hook-output-ceiling-raised",
             WeakeningKind::HookRepeatsRaised => "hook-repeats-raised",
@@ -1700,6 +1715,13 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "mutate",
         coverage: Coverage::Compared(&[WeakeningKind::MutateGateRemoved]),
+    },
+    FieldCoverage {
+        field: "task",
+        coverage: Coverage::Compared(&[
+            WeakeningKind::TaskRelaunchRemoved,
+            WeakeningKind::TaskLifetimeFloorRaised,
+        ]),
     },
     FieldCoverage {
         field: "forge",
@@ -2544,6 +2566,7 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
 
     found.extend(perf_exemption_weakenings(base, working));
     found.extend(mutate_gate_weakenings(base, working));
+    found.extend(task_weakenings(base, working));
 
     // The mutating-verb table: a removed row un-gates a tool call at the
     // `PreToolUse` boundary, which is the most consequential of these.
@@ -3699,6 +3722,39 @@ fn mutate_gate_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         &gates(working),
         "mutate.gates",
     )
+}
+
+/// The Stop watchdog's declared bar (CLOUD-2370): a relaunch task dropped, or
+/// the lifetime floor a crash must clear raised. `program_root` is not
+/// compared: two directories cannot be ranked, and a root that names none is
+/// refused at load.
+fn task_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    let relaunch = |config: &Config| {
+        config
+            .task
+            .as_ref()
+            .map(|table| table.relaunch.clone())
+            .unwrap_or_default()
+    };
+    let floor = |config: &Config| {
+        config
+            .task
+            .as_ref()
+            .map(|table| usize::try_from(table.min_lifetime_secs).unwrap_or(usize::MAX))
+    };
+    let mut found = removed_entries(
+        WeakeningKind::TaskRelaunchRemoved,
+        &relaunch(base),
+        &relaunch(working),
+        "task.relaunch",
+    );
+    found.extend(ceiling_raised(
+        WeakeningKind::TaskLifetimeFloorRaised,
+        "task.min_lifetime_secs",
+        floor(base),
+        floor(working),
+    ));
+    found
 }
 
 /// Entries present in `base` and absent from `working`, as weakenings of `key`.
@@ -6123,6 +6179,38 @@ mod tests {
                 "absent",
             )
         );
+        assert!(weakenings(&config(""), &base).is_empty());
+    }
+
+    #[test]
+    fn dropping_a_relaunch_or_raising_the_floor_is_a_weakening() {
+        let table = |relaunch: &str, floor: u32| {
+            config(&format!(
+                "[task]\nprogram_root = \"tasks\"\nrelaunch = [{relaunch}]\nmin_lifetime_secs = {floor}\n"
+            ))
+        };
+        let base = table("\"land\"", 60);
+        assert_eq!(
+            only(&base, &table("", 60)),
+            Weakening::new(
+                WeakeningKind::TaskRelaunchRemoved,
+                "task.relaunch[land]",
+                "present",
+                "absent",
+            )
+        );
+        assert_eq!(
+            only(&base, &table("\"land\"", 61)),
+            Weakening::new(
+                WeakeningKind::TaskLifetimeFloorRaised,
+                "task.min_lifetime_secs",
+                "60",
+                "61",
+            )
+        );
+        // Lowering the floor or adding a task is no weakening, nor is adding the
+        // table where the base declared none.
+        assert!(weakenings(&base, &table("\"land\", \"x\"", 59)).is_empty());
         assert!(weakenings(&config(""), &base).is_empty());
     }
 

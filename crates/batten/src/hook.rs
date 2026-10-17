@@ -2319,6 +2319,13 @@ impl Event {
     /// on `stop` refused every turn, which is the runaway CLOUD-889 removed,
     /// re-entering through the door CLOUD-898 added.
     ///
+    /// **Two native Stop refusals stand outside it, and only two.** Neither is a
+    /// module or a handler, and both are engine predicates bounded by a receipt
+    /// rather than by `stop_hook_active`: CLOUD-2441's unlanded refusal and
+    /// CLOUD-2370's watchdog over a crashed declared task. Both ride
+    /// `stop_nudges`, never this answer, so a module or handler still cannot
+    /// refuse at `Stop`.
+    ///
     /// `dispatch_handlers` consults this rather than re-listing the events,
     /// because a second list is a copy that can disagree — and
     /// `every_undecidable_event_allows_in_adjudicate` is the gate that this one
