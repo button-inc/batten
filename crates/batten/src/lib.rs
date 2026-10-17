@@ -7377,6 +7377,7 @@ fn run_claim_race(
 /// forge, so the detached checkout a `pull_request` build leaves is untouched,
 /// and `authored_log` falls back to the wider range by itself when the
 /// exported base is stale or unwound.
+///
 /// # What holds each arm, since no `//MUTANT` row can
 ///
 /// A declared row here would be swept by nothing: `MUTANT_RUNNERS` gives every
