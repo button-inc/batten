@@ -864,6 +864,19 @@ fn two_rivals(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     (repo, forge)
 }
 
+/// The refusal line carrying the unconfirmed mark, or empty where none does.
+///
+/// A line rather than the whole stream, because every assertion about the mark
+/// is about WHICH row carries it: the stream also holds the other refusals and
+/// the closing summary, so a bare `contains` over it proves nothing.
+fn unconfirmed_line(output: &std::process::Output) -> String {
+    stderr(output)
+        .lines()
+        .find(|line| line.contains("unconfirmed"))
+        .unwrap_or_default()
+        .to_owned()
+}
+
 /// Run `batten claim race` in `repo` against `forge`.
 fn raced(repo: &std::path::Path, forge: &std::path::Path) -> std::process::Output {
     batten()
@@ -983,21 +996,14 @@ fn a_silent_body_behind_an_unreadable_self_log_judges_nothing() {
 /// # Which error this gate prefers
 ///
 /// #8 is fetched only because its cheap key collides with this branch's — that
-/// is, precisely because the branch-derived key might be wrong. When that
-/// confirming read answers 403 there are two errors available, and they are
-/// not symmetric. Declining would lose a refusal the sequential fill made, on
-/// nothing worse than a 502: a false GREEN, two agents on one issue, which is
-/// what this module exists to refuse. Refusing keeps a false RED in the rarer
-/// case, which is recoverable — the line names the key and the pull request,
-/// so a reader sees the competitor is not on that key, and the row has a
-/// declared bypass.
+/// is, precisely because the branch-derived key might be wrong. Declining when
+/// that confirming read fails would lose a refusal the un-widened fill made,
+/// over nothing worse than a 502; the monotonicity argument for refusing
+/// instead is at `run_claim_race`'s `races` call and is not re-derived here.
 ///
-/// So the widening only ever improves on the fill without it: the true claim
-/// decides when the read answers, and when it does not this is where the
-/// sequential fill already stood. The fixture differs from the confirmed case
-/// in one byte, the status of `pulls/8/commits`, so the listing cannot account
-/// for the difference — and the third assertion is what stops a silent
-/// refusal from passing the first two.
+/// The fixture is the confirmed case with one byte changed, the status of
+/// `pulls/8/commits`. The exit code is the inversion these commits make, and
+/// the marked line is what stops a silent refusal from passing it.
 #[test]
 fn a_race_whose_confirming_read_failed_refuses_and_says_it_is_unconfirmed() {
     let (repo, forge) = self_log("claim-race-rival-unread", OK, "Closes CLOUD-1.", REFUSED);
@@ -1010,19 +1016,10 @@ fn a_race_whose_confirming_read_failed_refuses_and_says_it_is_unconfirmed() {
         stdout(&output),
         stderr(&output)
     );
+    let marked = unconfirmed_line(&output);
     assert!(
-        stderr(&output).contains("CLOUD-2") && stderr(&output).contains("#8"),
-        "naming the key and the competitor as any refusal does: {}",
-        stderr(&output)
-    );
-    let marked = stderr(&output)
-        .lines()
-        .find(|line| line.contains("unconfirmed"))
-        .unwrap_or_default()
-        .to_owned();
-    assert!(
-        marked.contains('8'),
-        "and saying which competitor's confirming read did not land: {marked:?}"
+        marked.contains("#8") && marked.contains("CLOUD-2"),
+        "and the marked row is the refusal itself, naming key and competitor: {marked:?}"
     );
 }
 
@@ -1059,13 +1056,9 @@ fn a_mixed_listing_reports_both_races_and_marks_only_the_unconfirmed_one() {
         "both collisions are reported, the read one and the unread one: {}",
         stderr(&output)
     );
-    let marked = stderr(&output)
-        .lines()
-        .find(|line| line.contains("unconfirmed"))
-        .unwrap_or_default()
-        .to_owned();
+    let marked = unconfirmed_line(&output);
     assert!(
-        marked.contains('8') && !marked.contains('9'),
+        marked.contains("#8") && !marked.contains("#9"),
         "and only the one whose confirming read failed is marked: {marked:?}"
     );
 }

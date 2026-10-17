@@ -7289,44 +7289,26 @@ fn run_claim_race(
     //   or its cheap key is disjoint from `mine` and [`race::races`] emits
     //   nothing for it at all.
     // * FETCHED AND ANSWERED — read in full, nothing degraded.
-    // * FETCHED AND UNANSWERED — removed by the partition below.
+    // * FETCHED AND UNANSWERED — judged on the cheap key it entered with,
+    //   which is the verdict the fill WITHOUT this widening gave, and reported
+    //   with that said on the line (see the loop at the end of this function).
     //
     // Widening the filter only SHRINKS the first case, so the property
-    // strengthens rather than weakens, and no widening can force this
-    // ordering to change. The partition, not the ordering, is what carries it:
-    // an unanswered collider keeps the cheap key it entered with, so it
-    // reaches the list below and is taken out there.
+    // strengthens rather than weakens, and no widening can force this ordering
+    // to change.
+    //
+    // **THE THIRD CASE IS WHY THE WIDENING IS MONOTONIC**, which is the whole
+    // argument for refusing there rather than declining: a widening that
+    // exists to catch more collisions must never, on any input, catch fewer.
+    // When the confirming read answers, the true claim decides and a false
+    // refusal is corrected. When it fails, falling back to the cheap key puts
+    // the verb exactly where the sequential fill stood. Declining instead
+    // would have been the one arm here that discards evidence IN HAND rather
+    // than reporting the absence of it — the forge would not be the reason for
+    // the refusal, the listing it already answered would be — and losing a
+    // refusal to a 502 is a false green on a gate whose whole subject is two
+    // agents on one issue.
     let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
-    // **A RACE RESTING ON A COMPETITOR NOBODY READ STILL REFUSES, AND SAYS SO.**
-    // A collider is fetched because its cheap key might be wrong, so reporting
-    // it on that same key when the confirming read FAILED is refusing on
-    // evidence this run went out of its way to distrust. An earlier revision
-    // therefore DECLINED on such a race — and that was the wrong direction on
-    // this gate.
-    //
-    // Weigh the two errors, because they are not symmetric. Declining loses a
-    // refusal the sequential fill made, on nothing worse than a 502, which is
-    // a FALSE GREEN — two agents on one issue, the failure `race.rs` exists to
-    // refuse, where the discarded side is already written and verified.
-    // Refusing keeps a false RED in the rarer case: it needs a closing keyword
-    // in a commit, which `commit-lint` makes almost absent here, and it is
-    // recoverable — the refusal names the key and the pull request, so a
-    // reader sees at once that the competitor is not on that key, and the row
-    // carries a declared bypass. A false green announces nothing.
-    //
-    // So the verdict is the one the fill without a widening would have given,
-    // and the WIDENING ONLY EVER IMPROVES ON IT: when the confirming read
-    // answers, the true claim decides. When it does not, this is exactly where
-    // the sequential fill stood, plus a line saying the collision is
-    // unconfirmed.
-    let unconfirmed: Vec<&str> = races
-        .iter()
-        .filter(|race| unanswered.contains(&race.number))
-        .map(|race| race.number.as_str())
-        .collect();
-    if !unconfirmed.is_empty() {
-        writeln!(err, "{}: {}", UNCONFIRMED_RACE, unconfirmed.join(", "))?;
-    }
     // AND AN INCOMPLETE FILL ALLOWS, like every could-not-look arm above it.
     // Once
     // `fetch` answers an `Option`, this arm's common cause is a forge that
@@ -7369,9 +7351,20 @@ fn run_claim_race(
         );
     }
     for race in &races {
+        // THE MARK GOES ON THE ROW IT QUALIFIES, not on a line of its own
+        // above the loop: a header naming pull numbers that have not been
+        // printed yet makes a reader hold them until the rows arrive, and
+        // `races` carries one entry per (key, pull), so a competitor racing
+        // two keys would be named twice in it.
+        let unconfirmed = if unanswered.contains(&race.number) {
+            " — unconfirmed: the confirming commit read failed, so this rests on the branch or \
+             title alone"
+        } else {
+            ""
+        };
         writeln!(
             err,
-            "claim race: {} is already claimed by open pull request #{} ({})",
+            "claim race: {} is already claimed by open pull request #{} ({}){unconfirmed}",
             race.key, race.number, race.head_ref
         )?;
     }
@@ -7385,16 +7378,6 @@ fn run_claim_race(
     )?;
     Ok(ExitCode::Violation)
 }
-
-/// What `claim race` prints BESIDE a refusal whose competitor went unread.
-///
-/// Not a could-not-look arm, which is why it does not end in that phrase: the
-/// verb still refuses, and this line only says the confirming read did not
-/// land, so the key naming it is the cheap one. On stderr with the refusal it
-/// annotates, where whoever reads the refusal reads it.
-const UNCONFIRMED_RACE: &str = "claim race: the confirming commit read failed for these pull \
-                                requests, so their collision rests on the branch or title \
-                                alone and is unconfirmed";
 
 /// WHICH log went unread, for [`run_claim_race`]'s one arm that declines to call
 /// an incomplete reading clean.

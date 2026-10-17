@@ -392,10 +392,9 @@ pub struct Filled {
     ///
     /// **Numbers rather than a count**, because the caller has two different
     /// questions and only one of them is "was this a whole reading". The other
-    /// is whether a race it is about to REPORT rests on a competitor nobody
-    /// read, which a bool cannot answer and which decides between refusing and
-    /// declining to. What to do in either case is the caller's, and stated
-    /// there.
+    /// is WHICH race it is about to report rests on a competitor nobody read,
+    /// since it marks that row and no other — a bool cannot answer it. What to
+    /// do in either case is the caller's, and stated there.
     pub unanswered: Vec<String>,
 }
 
@@ -529,9 +528,9 @@ pub fn with_logs(
     // VERDICT rests on — the log can still ADD a second key, so the reported
     // set may be a row short, but never on the key that refuses, which is the
     // body's by construction. And it costs something real: the pull would land
-    // in `unanswered` on a 502, which the paragraph below turns into a decline,
-    // converting a collision PROVEN from data already in hand into
-    // could-not-look. `closing-key-check` requires the body to close its key
+    // in `unanswered` on a 502, and every refusal it is in would then carry an
+    // "unconfirmed" mark it has not earned — the collision is PROVEN from data
+    // already in hand. `closing-key-check` requires the body to close its key
     // here, so that is the common shape rather than a corner — distinct from
     // `commit-lint` above, which is why a COMMIT rarely closes one.
     //
@@ -559,18 +558,18 @@ pub fn with_logs(
     // pull keeps the empty log the listing was built with, so its cheap key
     // stands and [`races`] still reports it — on exactly the evidence this
     // widening exists to distrust. `run_claim_race` refuses on it anyway and
-    // names it as unconfirmed, because declining would lose a refusal the
-    // sequential fill made over a 502. So this widening cannot subtract a
-    // refusal, only correct one, and that holds whatever the caller does with
-    // `unanswered`.
+    // marks that row unconfirmed, for the monotonicity argument stated at its
+    // `races` call: a widening that exists to catch more collisions must never
+    // catch fewer.
     //
     // **THE CASE THE PREDICATE DOES NOT REACH** is the remaining load-bearing
     // one, and it bears on the CLEAN verdict rather than on a refusal: a
-    // competitor whose CHEAP READING resolves a key nobody here claims — from
-    // its branch, its title, or a closing keyword in its body — while its
-    // commits close one this branch does. It collides with nothing, so nothing
-    // above asks for its log, and the key that would have refused is the one
-    // not read. Reaching it means dropping
+    // competitor whose BRANCH OR TITLE resolves a key nobody here claims while
+    // its commits close one this branch does. It collides with nothing, so
+    // nothing above asks for its log, and the key that would have refused is
+    // the one not read. (A body-closing competitor is spared by the outer
+    // factor instead, and its cost is the row-short set named above, not this.)
+    // Reaching it means dropping
     // the `claims` term and keeping only the outer factor — fetch every
     // competitor whose body closes nothing — which is a latency decision for
     // the row that owns latency, since what it costs depends on how many open
