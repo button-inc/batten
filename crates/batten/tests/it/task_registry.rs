@@ -44,12 +44,18 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, batten, scratch, stderr, stdout};
+use common::{Fixture, batten, scratch, stderr, stdout, unassignable_pid};
 
 /// A repository with a registry to read, and nothing in it yet.
+///
+/// Its config declares THIS process's program root (CLOUD-2370): the one
+/// authority `task alive` reads, so the live cases corroborate against it.
 fn registry_repo(name: &str) -> PathBuf {
+    let (root, _) = this_process();
     Fixture::at(scratch(name).join("repo"))
-        .config("version = 1\n")
+        .config(&format!(
+            "version = 1\n\n[task]\nprogram_root = \"{root}\"\n"
+        ))
         .git()
         .base_commit()
         .build()
@@ -138,19 +144,6 @@ fn this_process() -> (String, String) {
     (root, name)
 }
 
-/// A pid no process can hold.
-///
-/// `/proc/sys/kernel/pid_max` is exclusive — the kernel never assigns it — so
-/// this is a genuine "no such process" rather than a race against whatever
-/// happens to be running. A literal high number would eventually collide, and
-/// the collision would turn a crashed case green.
-fn unassignable_pid() -> String {
-    std::fs::read_to_string("/proc/sys/kernel/pid_max")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<u64>().ok())
-        .map_or_else(|| "4194304".to_owned(), |max| max.to_string())
-}
-
 /// Whether a record under [`unassignable_pid`] can read as a corpse on this target.
 ///
 /// `pid_exists` has **no probe off unix** — its `#[cfg(not(unix))]` arm answers
@@ -174,14 +167,13 @@ fn an_empty_registry_and_one_that_was_never_created_both_report_nothing() {
     // rather than could-not-look. Conflating those two is the defect CLOUD-425
     // exists to fix, so both are asserted rather than one standing for the pair.
     let repo = registry_repo("task-alive-empty");
-    let (root, _) = this_process();
 
-    let never = alive(&repo, &["--program-root", &root]);
+    let never = alive(&repo, &[]);
     assert_eq!(never.status.code(), Some(0), "{}", stderr(&never));
     assert_eq!(stdout(&never), "alive: nothing registered\n");
 
     std::fs::create_dir_all(entries(&repo)).expect("an empty registry");
-    let empty = alive(&repo, &["--program-root", &root]);
+    let empty = alive(&repo, &[]);
     assert_eq!(empty.status.code(), Some(0), "{}", stderr(&empty));
     assert_eq!(stdout(&empty), "alive: nothing registered\n");
 }
@@ -193,11 +185,11 @@ fn a_running_task_reports_its_task_phase_pid_and_age() {
     // without it the number is whatever the clock said, and a case that could
     // only assert "some number" would pass over a renderer that printed one.
     let repo = registry_repo("task-alive-running");
-    let (root, name) = this_process();
+    let (_, name) = this_process();
     let pid = std::process::id().to_string();
     seed(&repo, &name, &pid, "verify", 1000);
 
-    let output = alive(&repo, &["--program-root", &root, "--instant", "1060"]);
+    let output = alive(&repo, &["--instant", "1060"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(
         stdout(&output),
@@ -216,12 +208,12 @@ fn a_supplied_instant_decides_the_age_rather_than_the_clock() {
     // print a plausible number. A different instant must produce a different age
     // over an identical registry.
     let repo = registry_repo("task-alive-instant");
-    let (root, name) = this_process();
+    let (_, name) = this_process();
     let pid = std::process::id().to_string();
     seed(&repo, &name, &pid, "verify", 1000);
 
-    let early = alive(&repo, &["--program-root", &root, "--instant", "1005"]);
-    let late = alive(&repo, &["--program-root", &root, "--instant", "1500"]);
+    let early = alive(&repo, &["--instant", "1005"]);
+    let late = alive(&repo, &["--instant", "1500"]);
     assert!(stdout(&early).contains(" 5s "), "got: {}", stdout(&early));
     assert!(stdout(&late).contains(" 500s "), "got: {}", stdout(&late));
     assert_ne!(stdout(&early), stdout(&late));
@@ -233,11 +225,11 @@ fn the_same_instant_over_one_registry_state_yields_byte_identical_output() {
     // read a clock cannot promise this, and a reader whose bytes move is one no
     // diff can be taken over.
     let repo = registry_repo("task-alive-stable");
-    let (root, name) = this_process();
+    let (_, name) = this_process();
     let pid = std::process::id().to_string();
     seed(&repo, &name, &pid, "verify", 1000);
 
-    let args = ["--program-root", root.as_str(), "--instant", "9999999999"];
+    let args = ["--instant", "9999999999"];
     let first = alive(&repo, &args);
     let second = alive(&repo, &args);
     assert_eq!(stdout(&first), stdout(&second));
@@ -254,11 +246,10 @@ fn a_record_whose_process_is_gone_reports_crashed_on_every_read() {
     // reap the entry as it reported it, so the first read consumed the evidence
     // every later one needed; the tidy-up is now the next `land`'s reap.
     let repo = registry_repo("task-alive-crashed");
-    let (root, _) = this_process();
     let pid = unassignable_pid();
     seed(&repo, "land", &pid, "verify", 1000);
 
-    let args = ["--program-root", root.as_str(), "--instant", "1060"];
+    let args = ["--instant", "1060"];
     let first = alive(&repo, &args);
     let second = alive(&repo, &args);
     assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
@@ -294,11 +285,10 @@ fn a_live_pid_that_is_not_this_task_reports_crashed_and_is_never_reaped() {
     // So `kill -0` alone licenses deletion. A future corroboration bug then costs
     // a wrong word, never the evidence.
     let repo = registry_repo("task-alive-miscorroborated");
-    let (root, _) = this_process();
     let pid = std::process::id().to_string();
     seed(&repo, "somethingelse", &pid, "verify", 1000);
 
-    let output = alive(&repo, &["--program-root", &root, "--instant", "1000"]);
+    let output = alive(&repo, &["--instant", "1000"]);
 
     // THE CORROBORATION IS LINUX'S, AND THE ENGINE ALREADY SAYS SO. `task_alive`
     // reads `/proc/<pid>/cmdline`, and its own doc records the direction: "an
@@ -345,11 +335,11 @@ fn two_consecutive_calls_over_one_live_task_say_the_same_thing() {
     // answer differently the second time, which is exactly how the measured
     // defect surfaced — `nothing registered` on the follow-up call.
     let repo = registry_repo("task-alive-repeatable");
-    let (root, name) = this_process();
+    let (_, name) = this_process();
     let pid = std::process::id().to_string();
     seed(&repo, &name, &pid, "verify", 1000);
 
-    let args = ["--program-root", root.as_str(), "--instant", "1060"];
+    let args = ["--instant", "1060"];
     assert_eq!(stdout(&alive(&repo, &args)), stdout(&alive(&repo, &args)));
 }
 
@@ -359,11 +349,10 @@ fn a_half_written_record_is_skipped_rather_than_rendered_as_blanks() {
     // nothing else registered the reading falls back to "nothing", which is the
     // honest answer for a registry holding no renderable task.
     let repo = registry_repo("task-alive-partial");
-    let (root, _) = this_process();
     std::fs::create_dir_all(entries(&repo)).expect("a registry");
     std::fs::write(entries(&repo).join("31337"), "task: land\n").expect("a half-written record");
 
-    let output = alive(&repo, &["--program-root", &root, "--instant", "0"]);
+    let output = alive(&repo, &["--instant", "0"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(stdout(&output), "alive: nothing registered\n");
 }
@@ -374,7 +363,6 @@ fn a_record_predating_the_phase_stamp_still_renders() {
     // appended, never substituted, so an older record renders without it rather
     // than failing to render at all.
     let repo = registry_repo("task-alive-old-record");
-    let (root, _) = this_process();
     let pid = unassignable_pid();
     std::fs::create_dir_all(entries(&repo)).expect("a registry");
     std::fs::write(
@@ -383,7 +371,7 @@ fn a_record_predating_the_phase_stamp_still_renders() {
     )
     .expect("a record with no phase stamp");
 
-    let output = alive(&repo, &["--program-root", &root, "--instant", "1060"]);
+    let output = alive(&repo, &["--instant", "1060"]);
     // This row's subject is the RENDERING of a record with no phase stamp, not the
     // liveness word in front of it — so only that word moves off unix, and the
     // missing suffix is asserted on both targets.
@@ -398,7 +386,7 @@ fn a_record_predating_the_phase_stamp_still_renders() {
 #[test]
 fn n_records_report_one_line_each_in_a_stable_order() {
     let repo = registry_repo("task-alive-many");
-    let (root, name) = this_process();
+    let (_, name) = this_process();
     let pid = std::process::id().to_string();
     seed(&repo, &name, &pid, "verify", 1000);
     // A second record under a pid nobody holds: two lines, and the crashed one
@@ -406,7 +394,7 @@ fn n_records_report_one_line_each_in_a_stable_order() {
     let corpse = unassignable_pid();
     seed(&repo, "land", &corpse, "push", 1000);
 
-    let output = alive(&repo, &["--program-root", &root, "--instant", "1000"]);
+    let output = alive(&repo, &["--instant", "1000"]);
     let rendered = stdout(&output);
     let lines: Vec<&str> = rendered.lines().collect();
     assert_eq!(lines.len(), 2, "got: {rendered}");
@@ -440,10 +428,9 @@ fn a_registry_that_cannot_be_read_is_could_not_look_and_never_nothing_runs() {
     // Exit 3, where the retiring shell spelled it 2 — the one contract has one
     // meaning per code and no per-verb exception.
     let repo = registry_repo("task-alive-unreadable");
-    let (root, _) = this_process();
     std::fs::write(entries(&repo), "not a directory\n").expect("a file");
 
-    let output = alive(&repo, &["--program-root", &root]);
+    let output = alive(&repo, &[]);
     assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
     assert!(
         !stdout(&output).contains("nothing registered"),
@@ -454,8 +441,7 @@ fn a_registry_that_cannot_be_read_is_could_not_look_and_never_nothing_runs() {
 #[test]
 fn outside_a_repository_it_is_could_not_look_rather_than_nothing_runs() {
     let outside = Fixture::at(common::scratch_outside_tree("task-registry", "no-repo")).build();
-    let (root, _) = this_process();
-    let output = alive(&outside, &["--program-root", &root]);
+    let output = alive(&outside, &[]);
     assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
 }
 
@@ -478,7 +464,7 @@ fn the_report_is_a_pointer_and_never_a_line_of_any_log() {
     // leak, which is the first version of this case and why it failed: a phase
     // reading `LOG BODY HERE` is the writer's word, emitted correctly.
     let repo = registry_repo("task-alive-pointer");
-    let (root, name) = this_process();
+    let (_, name) = this_process();
     let pid = std::process::id().to_string();
     std::fs::create_dir_all(entries(&repo)).expect("a registry");
     std::fs::write(
@@ -492,7 +478,7 @@ fn the_report_is_a_pointer_and_never_a_line_of_any_log() {
     )
     .expect("a record carrying unrendered fields");
 
-    let output = alive(&repo, &["--program-root", &root, "--instant", "1000"]);
+    let output = alive(&repo, &["--instant", "1000"]);
     let rendered = stdout(&output);
     for line in rendered.lines() {
         let words: Vec<&str> = line.split(' ').collect();
@@ -542,25 +528,73 @@ fn the_reader_sends_no_signal() {
 
 #[test]
 fn the_program_root_is_required_rather_than_defaulted() {
-    // Non-negotiable rule 1 at the surface. A default would be one consumer's
-    // layout promoted to the engine's, and it would fail SILENTLY everywhere
-    // else: an unmatched corroboration reads as alive, so a wrong root produces
-    // a registry that never reports a crash and looks like one with nothing to
-    // report. Refusing the invocation is the only failure mode that is visible.
+    // Non-negotiable rule 1, now in the committed config (CLOUD-2370). A default
+    // would be one consumer's layout promoted to the engine's, and it would fail
+    // SILENTLY everywhere else: an unmatched corroboration reads as alive, so a
+    // wrong root produces a registry that never reports a crash and looks like
+    // one with nothing to report.
     //
-    // Exit 1: a missing required argument is a statement about the INVOCATION,
-    // which the one contract spells `Usage`. `2` is the policy verdict
-    // everywhere and would read as an answer about the registry.
-    let repo = registry_repo("task-alive-no-root");
+    // Exit 3: a config with no `[task] program_root` is could-not-look. The
+    // invocation is well formed, so it is not `1`, and nothing was judged, so it
+    // is not `2`.
+    let repo = Fixture::at(scratch("task-alive-no-root").join("repo"))
+        .config("version = 1\n")
+        .git()
+        .base_commit()
+        .build();
     let output = alive(&repo, &[]);
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("program_root"),
+        "naming the key it needed: {}",
+        stderr(&output)
+    );
+}
+
+/// THE FLAG ANSWERS WHERE THE CONFIG DECLARES NO ROOT (CLOUD-2370), so a manifest
+/// written for a release that predates `[task]` keeps working until its pin does.
+#[test]
+fn the_flag_answers_where_the_config_declares_no_root() {
+    let repo = Fixture::at(scratch("task-alive-flag-root").join("repo"))
+        .config("version = 1\n")
+        .git()
+        .base_commit()
+        .build();
+    let (root, name) = this_process();
+    let pid = std::process::id().to_string();
+    seed(&repo, &name, &pid, "verify", 1000);
+    let output = alive(&repo, &["--program-root", &root, "--instant", "1060"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        format!("{name} verify {pid} 60s in-phase 60s\n"),
+        "the flag's root corroborates the live task: {}",
+        stderr(&output)
+    );
+}
+
+/// A BLANK ROOT IS REFUSED AT LOAD (CLOUD-2370): it corroborates no live task,
+/// so the config does not resolve and `alive` answers could-not-look.
+#[test]
+fn a_blank_program_root_is_no_root() {
+    let repo = Fixture::at(scratch("task-alive-blank-root").join("repo"))
+        .config("version = 1\n\n[task]\nprogram_root = \"\"\n")
+        .git()
+        .base_commit()
+        .build();
+    let output = alive(&repo, &[]);
+    assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("did not resolve"),
+        "the blank root is refused with the config, not read as a registry: {}",
+        stderr(&output)
+    );
 }
 
 #[test]
 fn a_malformed_instant_is_refused_rather_than_silently_read_as_the_clock() {
     let repo = registry_repo("task-alive-bad-instant");
-    let (root, _) = this_process();
-    let output = alive(&repo, &["--program-root", &root, "--instant", "soon"]);
+    let output = alive(&repo, &["--instant", "soon"]);
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
 }
 // -- The writers -------------------------------------------------------------
@@ -857,12 +891,14 @@ fn outside_a_repository_a_write_is_could_not_look_rather_than_a_silent_success()
 // owned by a program the engine could not write, which is the second-authority
 // class `rules/policy-modules.md` records for parsers.
 //
-// **THE PROGRAM ROOT MOVED FROM A LITERAL TO A FLAG, and that is the only
-// deliberate behavioural change in the port.** The shell matched
+// **THE PROGRAM ROOT MOVED FROM A LITERAL TO CONSUMER CONFIG, and that is the
+// only deliberate behavioural change in the port.** The shell matched
 // `/mise-tasks/<task>` inside a live process's cmdline; a literal like that in
 // `crates/batten` is non-negotiable rule 1's violation, and
 // `document_facts::no_artifact_name_reaches_the_core` is the gate that says so.
-// It is `--program-root`, REQUIRED rather than defaulted, because a wrong root
+// The port took it as a flag; the config's `[task] program_root` is now the
+// authority (CLOUD-2370), the flag its fallback until the pinned release
+// carries the table, and one of them is REQUIRED rather than defaulted, because a wrong root
 // fails silently: an unmatched corroboration reads as ALIVE, so a registry with
 // the wrong root never reports a crash and looks exactly like one with nothing
 // to report.

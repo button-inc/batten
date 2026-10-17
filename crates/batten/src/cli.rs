@@ -927,10 +927,11 @@ pub enum TaskCommand {
         /// The process the record is keyed by.
         pid: String,
     },
-    /// Report what is running, reaping the records whose process is gone.
+    /// Report what is running and what crashed, deleting nothing.
     Alive {
-        /// Where this consumer keeps its task programs.
-        program_root: String,
+        /// Where this consumer keeps its task programs, where the config's
+        /// `[task] program_root` declares none (CLOUD-2370, transitional).
+        program_root: Option<String>,
         /// The epoch second ages are measured against. `None` reads the
         /// boundary clock, which is today's behaviour exactly.
         instant: Option<String>,
@@ -3333,13 +3334,11 @@ fn task_of(matches: &ArgMatches) -> Option<TaskCommand> {
         ("unregister", matches) => Some(TaskCommand::Unregister {
             pid: matches.get_one::<String>("pid").cloned()?,
         }),
-        // `program_root` is required by the surface, so clap has already refused
-        // an argv without it; `None` here is unreachable and maps to a refusal
-        // rather than to a default. A defaulted root fails SILENTLY — an
-        // unmatched corroboration reads as alive — which is the one failure mode
-        // the required flag exists to make visible.
+        // `program_root` is optional since CLOUD-2370: the config's `[task]`
+        // table is the authority and the flag its transitional fallback. Absent
+        // both, the verb answers could-not-look rather than defaulting a root.
         ("alive", matches) => Some(TaskCommand::Alive {
-            program_root: matches.get_one::<String>("program_root").cloned()?,
+            program_root: matches.get_one::<String>("program_root").cloned(),
             instant: matches.get_one::<String>("instant").cloned(),
         }),
         _ => None,

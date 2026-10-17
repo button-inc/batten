@@ -196,6 +196,73 @@ pub fn facts(
     Ok(StopFacts { at_risk, pending })
 }
 
+/// What the Stop watchdog decided about one crashed task (CLOUD-2370).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Watch {
+    /// It lived long enough, or died with the container: relaunch it.
+    Relaunch(crate::task::Entry),
+    /// It died under the floor in this boot: a relaunch would die the same way.
+    Advise {
+        /// The crashed record.
+        entry: crate::task::Entry,
+        /// Its proven lifetime in seconds, zero where a stamp does not parse.
+        lived: u64,
+    },
+}
+
+/// The watchdog sentinel: a native refusal at `Stop`, beside CLOUD-2441's
+/// unlanded one (CLOUD-2370).
+///
+/// A function of values, as this module's header requires. `abandoned` is the
+/// crashed records the caller has not yet spoken about, newest first; `live`
+/// the tasks a relaunch of which is already under way; `boot` this
+/// container's boot second.
+///
+/// # Rate, never a count
+///
+/// The operator's ruling: "too fast" is the criterion. A record registered
+/// before this boot died with the container, which does not repeat, so it
+/// relaunches whatever its age. In this boot, the proven lifetime —
+/// [`crate::task::Entry::last_alive`] less its registration, which can only
+/// underestimate — must reach `min_lifetime_secs`; under it, the crash is
+/// advice, because a relaunch would crash the same way and the turn would loop.
+/// A stamp that does not parse proves nothing, so it is advice too.
+///
+/// The bound across Stops is the caller's receipt, not this: one refusal per
+/// crashed record, which `stop_hook_active` cannot provide (it resets whenever
+/// a reminder lands between Stops). The caller drops the records already
+/// spoken about before asking, so one old corpse cannot hide a newer crash.
+//MUTANT watchdog-undeclared|s@^        .find(\x7centry\x7c table.relaunch.contains(\&entry.task) \&\& !live.contains(\&entry.task))?;$@        .find(\x7centry\x7c !live.contains(\&entry.task))?;@|an_undeclared_crash_is_quiet
+//MUTANT watchdog-relaunch-ignored|s@ \&\& !live.contains(\&entry.task))?;$@)?;@|a_relaunch_under_way_is_quiet
+//MUTANT watchdog-reboot-ignored|s@^    if started.is_some_and(\x7cstarted\x7c started < boot) {$@    if false {@|a_crash_before_this_boot_relaunches
+//MUTANT watchdog-too-fast|s@^    if lived.is_some_and(\x7clived\x7c lived >= table.min_lifetime_secs) {$@    if lived.is_some() {@|a_crash_under_the_floor_is_advice
+#[must_use]
+pub fn watchdog(
+    abandoned: &[crate::task::Entry],
+    live: &[String],
+    table: &crate::task::TaskTable,
+    boot: u64,
+) -> Option<Watch> {
+    let entry = abandoned
+        .iter()
+        .find(|entry| table.relaunch.contains(&entry.task) && !live.contains(&entry.task))?;
+    let started = entry.started();
+    let lived = started
+        .zip(entry.last_alive())
+        .map(|(started, last)| last.saturating_sub(started));
+    if started.is_some_and(|started| started < boot) {
+        return Some(Watch::Relaunch(entry.clone()));
+    }
+    if lived.is_some_and(|lived| lived >= table.min_lifetime_secs) {
+        return Some(Watch::Relaunch(entry.clone()));
+    }
+    Some(Watch::Advise {
+        entry: entry.clone(),
+        lived: lived.unwrap_or_default(),
+    })
+}
+
 /// The undischarged denials in a bound store.
 ///
 /// **Undischarged means no disposition**, which is the store's own three-valued
@@ -419,6 +486,84 @@ mod tests {
         assert_eq!(
             facts.pending,
             vec![pending("open-denial", Some("mise run"))]
+        );
+    }
+
+    /// A crashed record registered at `started` and last stamped at `last`.
+    fn crashed(task: &str, started: u64, last: u64) -> crate::task::Entry {
+        crate::task::Entry {
+            task: task.to_owned(),
+            pid: "4242".to_owned(),
+            pgid: "4242".to_owned(),
+            phase: "verify".to_owned(),
+            started_at: started.to_string(),
+            phase_since: last.to_string(),
+            ..crate::task::Entry::default()
+        }
+    }
+
+    fn table() -> crate::task::TaskTable {
+        crate::task::TaskTable {
+            program_root: "programs".to_owned(),
+            relaunch: vec!["land".to_owned()],
+            min_lifetime_secs: 3600,
+        }
+    }
+
+    const BOOT: u64 = 1_000_000;
+
+    #[test]
+    fn a_crash_after_real_work_relaunches() {
+        let entry = crashed("land", BOOT + 10, BOOT + 7010);
+        assert_eq!(
+            watchdog(std::slice::from_ref(&entry), &[], &table(), BOOT),
+            Some(Watch::Relaunch(entry))
+        );
+    }
+
+    #[test]
+    fn a_crash_under_the_floor_is_advice() {
+        let entry = crashed("land", BOOT + 10, BOOT + 130);
+        assert_eq!(
+            watchdog(std::slice::from_ref(&entry), &[], &table(), BOOT),
+            Some(Watch::Advise { entry, lived: 120 }),
+            "a lap that died in two minutes would die again"
+        );
+    }
+
+    #[test]
+    fn a_crash_before_this_boot_relaunches() {
+        // Under the floor, but the container went with it: that does not repeat.
+        let entry = crashed("land", BOOT - 100, BOOT - 40);
+        assert_eq!(
+            watchdog(std::slice::from_ref(&entry), &[], &table(), BOOT),
+            Some(Watch::Relaunch(entry))
+        );
+    }
+
+    #[test]
+    fn an_undeclared_crash_is_quiet() {
+        let entry = crashed("snapshots", BOOT + 10, BOOT + 7010);
+        assert_eq!(watchdog(&[entry], &[], &table(), BOOT), None);
+    }
+
+    #[test]
+    fn a_relaunch_under_way_is_quiet() {
+        let entry = crashed("land", BOOT + 10, BOOT + 7010);
+        assert_eq!(
+            watchdog(&[entry], &["land".to_owned()], &table(), BOOT),
+            None,
+            "a land already relaunched is the remedy running"
+        );
+    }
+
+    #[test]
+    fn an_unparseable_stamp_proves_nothing() {
+        let mut entry = crashed("land", BOOT + 10, BOOT + 7010);
+        entry.started_at = "soon".to_owned();
+        assert_eq!(
+            watchdog(std::slice::from_ref(&entry), &[], &table(), BOOT),
+            Some(Watch::Advise { entry, lived: 0 })
         );
     }
 

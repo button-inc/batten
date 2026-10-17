@@ -59,6 +59,57 @@ use crate::Result;
 /// being a constraint across a boundary and became one authority.
 const STATE_DIR: &str = "batten-tasks";
 
+/// The `[task]` table: where this consumer keeps its task programs, and which
+/// of them the Stop watchdog relaunches (CLOUD-2370).
+///
+/// CONSUMER CONFIG, NOT A CONST (non-negotiable rule 1), for the module
+/// header's reason. It is the authority for the program root: `land`'s reap
+/// and `task alive` read it first. Until the pinned release carries the table,
+/// `BATTEN_TASK_PROGRAM_ROOT` and `task alive --program-root` answer where it
+/// is absent, and they retire once a consumer can declare it (CLOUD-2463).
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct TaskTable {
+    /// The directory, relative to the repository root, the task programs live
+    /// in, matched inside a live process's `cmdline`.
+    pub program_root: String,
+    /// The tasks a crash of which forces one relaunch at `Stop`. Empty
+    /// relaunches nothing.
+    #[serde(default)]
+    pub relaunch: Vec<String>,
+    /// The proven lifetime, in seconds, under which a crash in this boot is
+    /// advice rather than a relaunch: a task that died that fast will die again.
+    #[serde(default = "default_min_lifetime_secs")]
+    pub min_lifetime_secs: u64,
+}
+
+impl TaskTable {
+    /// Validate the table at load (CLOUD-2370).
+    ///
+    /// # Errors
+    ///
+    /// A `program_root` that names no directory — blank, `.`, `/`, or one that
+    /// holds a `..` or a whitespace-padded segment. Such a root corroborates no live task, so it would
+    /// silently read every pid as alive (recycled ones too) and hide each crash
+    /// from the watchdog; refused here, where the error names the key.
+    pub fn validate(&self) -> Result<()> {
+        if normalized_root(&self.program_root).is_none() {
+            return Err(crate::error::UsageError::raise(
+                "[task]: `program_root` names no directory (blank, `.`, `/`, a `..`, or a padded segment), so nothing tells a live task from a recycled pid",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// An hour: a lap that crashed after one has done real work, and one that died
+/// in a minute is a defect a relaunch repeats.
+const fn default_min_lifetime_secs() -> u64 {
+    3600
+}
+
 /// One registered task, as the writer left it.
 ///
 /// Every field is a `String`, and that is deliberate rather than lazy: the record
@@ -119,6 +170,12 @@ impl Entry {
         .into_iter()
         .filter_map(|stamp| second(stamp))
         .max()
+    }
+
+    /// The second it registered, or `None` where the stamp does not parse.
+    #[must_use]
+    pub fn started(&self) -> Option<u64> {
+        second(&self.started_at)
     }
 
     /// Read a record out of its own bytes.
@@ -387,7 +444,46 @@ fn task_alive(program_root: &str, pid: &str, task: &str) -> bool {
     if cmdline.trim().is_empty() {
         return true;
     }
-    matches_cmdline(program_root, task, &cmdline)
+    corroborates(program_root, task, &cmdline)
+}
+
+/// [`matches_cmdline`] over a root as a consumer may have spelled it.
+///
+/// A ROOT THAT NAMES NO DIRECTORY CORROBORATES NOTHING (CLOUD-2370): it reads
+/// the task ALIVE, the direction every unevaluable corroboration here takes, so
+/// `land`'s reap never signals a running lap over a root it could not match.
+/// What a root names is [`normalized_root`]'s.
+//MUTANT blank-root-reads-dead|s@normalized_root(program_root).is_none_or(@normalized_root(program_root).is_some_and(@|a_root_is_trimmed_and_a_blank_one_reads_alive
+fn corroborates(program_root: &str, task: &str, cmdline: &str) -> bool {
+    normalized_root(program_root).is_none_or(|root| matches_cmdline(&root, task, cmdline))
+}
+
+/// The program root as the directory it names, or `None` where it names none.
+///
+/// The ONE reading of a root (CLOUD-2370): the matcher, `[task]`'s load-time
+/// validation and every transitional reader take it, so they cannot disagree on
+/// what a usable root is. LITERAL, as the kernel keeps a process's argv: outer
+/// padding, `.` segments and slashes go, and every other segment is kept exactly
+/// as spelled. A root that cannot be read one way is `None`: a `..` (which
+/// directory it names depends on the filesystem) or a segment padded with
+/// whitespace (a typo or a real name, and the two match different cmdlines).
+#[must_use]
+pub fn normalized_root(program_root: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in Path::new(program_root.trim()).components() {
+        match part {
+            std::path::Component::Normal(name) => {
+                let name = name.to_str()?;
+                if name.trim() != name {
+                    return None;
+                }
+                parts.push(name);
+            }
+            std::path::Component::ParentDir => return None,
+            _ => {}
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
 }
 
 /// The corroboration predicate alone, over a `cmdline` already in hand.
@@ -651,6 +747,24 @@ fn alive_reading(
 /// kill while the registrant stays in its recorded group.
 #[must_use]
 pub fn abandoned(git_dir: &Path, program_root: &str) -> Vec<Entry> {
+    records(git_dir)
+        .into_iter()
+        .filter(|entry| !task_alive(program_root, &entry.pid, &entry.task))
+        .collect()
+}
+
+/// The registry split in one read: `(running, abandoned)`, each record probed
+/// once, so a registrant exiting mid-read lands in exactly one half. The Stop
+/// watchdog reads the first half as a relaunch already under way (CLOUD-2370).
+#[must_use]
+pub fn partition(git_dir: &Path, program_root: &str) -> (Vec<Entry>, Vec<Entry>) {
+    records(git_dir)
+        .into_iter()
+        .partition(|entry| task_alive(program_root, &entry.pid, &entry.task))
+}
+
+/// Every complete record in the registry, in path order.
+fn records(git_dir: &Path) -> Vec<Entry> {
     let dir = state_dir(git_dir);
     let Ok(listing) = std::fs::read_dir(&dir) else {
         // Could-not-look reaps nothing, which is the safe direction: a registry
@@ -668,7 +782,6 @@ pub fn abandoned(git_dir: &Path, program_root: &str) -> Vec<Entry> {
         .filter_map(|file| std::fs::read_to_string(file).ok())
         .map(|body| Entry::parse(&body))
         .filter(Entry::is_complete)
-        .filter(|entry| !task_alive(program_root, &entry.pid, &entry.task))
         .collect()
 }
 
@@ -1609,5 +1722,61 @@ mod tests {
             "land",
             "/repo/scripts/land.sh "
         ));
+    }
+
+    #[test]
+    fn a_table_whose_root_names_no_directory_is_refused_at_load() {
+        let table = |root: &str| TaskTable {
+            program_root: root.to_owned(),
+            relaunch: Vec::new(),
+            min_lifetime_secs: 3600,
+        };
+        assert!(table("mise-tasks").validate().is_ok());
+        assert!(table("./mise-tasks/").validate().is_ok());
+        for blank in [
+            "",
+            " ",
+            ".",
+            "/",
+            "../scripts",
+            "tasks/../scripts",
+            "/ scripts /",
+        ] {
+            assert!(table(blank).validate().is_err(), "{blank:?} is refused");
+        }
+    }
+
+    #[test]
+    fn a_root_is_trimmed_and_a_blank_one_reads_alive() {
+        let live = "/bin/bash /repo/scripts/land.sh ";
+        for spelled in [
+            " scripts/ ",
+            "./scripts",
+            " ./scripts/",
+            "././scripts",
+            "scripts/.",
+        ] {
+            assert!(
+                corroborates(spelled, "land", live),
+                "{spelled:?} names the scripts directory"
+            );
+        }
+        assert!(
+            !corroborates("other", "land", live),
+            "a real root that is not this one still reads gone"
+        );
+        for blank in [
+            "  /  ",
+            ".",
+            "./",
+            " /./ ",
+            "../scripts",
+            "tasks/../scripts",
+        ] {
+            assert!(
+                corroborates(blank, "land", "/bin/bash /elsewhere/unrelated "),
+                "{blank:?} names no directory, so it never reads a task dead"
+            );
+        }
     }
 }

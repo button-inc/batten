@@ -338,6 +338,9 @@ fn authority(spawning: bool) -> String {
          unlanded = [\"subject.txt\"]\n\
          must_land_on = \"refs/heads/main\"\n\
          \n\
+         [task]\n\
+         program_root = \"programs\"\n\
+         \n\
          [[rule]]\n\
          id = \"no-canary\"\n\
          kind = \"forbid\"\n\
@@ -2907,10 +2910,11 @@ const CENSUS: &[Verb] = &[
     // The task registry's reader (CLOUD-425). Pointer-only, and for this verb
     // that is the POINT rather than hygiene: being forced to read a task's log
     // is the defect the registry removes, so a reader emitting log content would
-    // reintroduce it through the front door.
+    // reintroduce it through the front door. The program root is the corpus
+    // config's `[task] program_root` (CLOUD-2370), so the row passes no argument.
     Verb {
         path: "task alive",
-        args: &["--program-root", "mise-tasks"],
+        args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
