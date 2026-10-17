@@ -44,6 +44,10 @@ const AUTHORITY: &str = r#"version = 1
 id = "hk-amends-version"
 regex = 'hk@([0-9]+\.[0-9]+\.[0-9]+)'
 
+[[pattern]]
+id = "hk-download-tag"
+regex = '/v([0-9]+\.[0-9]+\.[0-9]+)/hk@'
+
 [[rule]]
 id = "tool pin other"
 kind = "policy"
@@ -115,11 +119,37 @@ const MODULES: [&str; 3] = [
     "policy/ripcord-untracked.rego",
 ];
 
-/// An `amends` line in the shape `hk.pkl` really spells it.
-fn amends(version: &str) -> String {
+/// An `amends` line with each half of the URL named separately — the release
+/// tag and the `hk@` fragment. Which half drifts is then the only thing a case
+/// states, instead of a reader spotting it inside a 90-character literal.
+fn amends_halves(tag: &str, fragment: &str) -> String {
     format!(
-        "amends \"package://github.com/jdx/hk/releases/download/v{version}/hk@{version}#/Config.pkl\"\n"
+        "amends \"package://github.com/jdx/hk/releases/download/v{tag}/hk@{fragment}#/Config.pkl\"\n"
     )
+}
+
+/// An `amends` line in the shape `hk.pkl` really spells it: both halves agree.
+fn amends(version: &str) -> String {
+    amends_halves(version, version)
+}
+
+/// The `pkl-package` task with each half of its URL named separately — the
+/// release tag and the `hk@` fragment. Which half drifts is then the only thing
+/// a case states, which is `amends_halves`'s reason on the other surface.
+///
+/// Carries the whole task table, not just the URL, so a package case naming
+/// drifting halves is one `format!` over `[tools]` plus this. The case that
+/// names no version at all spells its task inline, since this always writes a
+/// `/v<semver>/` segment.
+fn package_task_halves(tag: &str, fragment: &str) -> String {
+    format!(
+        "[tasks.pkl-package]\nrun = \"pkl download-package package://github.com/jdx/hk/releases/download/v{tag}/hk@{fragment}\"\n"
+    )
+}
+
+/// The `pkl-package` task as `mise.toml` really spells it: both halves agree.
+fn package_task(version: &str) -> String {
+    package_task_halves(version, version)
 }
 
 /// A committed fixture repository carrying the three committed modules, the
@@ -204,12 +234,118 @@ fn agreeing_pins_no_docs_and_no_sentinel_are_clean() {
 // hk-version.
 // ---------------------------------------------------------------------------
 
-/// `#MUTANT hk-pin-disagreement-passes` reddens here.
+/// Both halves of the URL disagree with the pin — the fixture moves `[tools]`,
+/// not the URL — so arms A and A2 both fire on one line and collapse to one
+/// finding.
+///
+/// It does NOT carry `#MUTANT hk-pin-disagreement-passes` any more, and that is
+/// the point: `amends()` writes one version into both halves, so A2 masks A
+/// here and neutering arm A changes nothing this case can see. The mutant names
+/// `an_amends_fragment_naming_another_version_is_refused` instead, where only
+/// the fragment drifts.
 #[test]
 fn a_version_the_amends_url_names_differently_is_refused() {
     let root = fixture(
         "hk-drift",
         &[("mise.toml", "[tools]\nhk = \"1.57.0\"\n")],
+        &[],
+    );
+    denied(&root, "tool pin other", "hk.pkl");
+}
+
+/// `#MUTANT hk-package-disagreement-passes` reddens here.
+///
+/// The third spelling of the pin (CLOUD-2311): `[tasks.pkl-package]` fetches the
+/// package `hk.pkl` amends, so its URL names a version too. Here the amends line
+/// and the `[tools]` pin agree at 1.56.1 and only the fetch drifts — so arm D is
+/// the only arm that can see it, and a pass means the fetch is ungoverned.
+#[test]
+fn a_package_task_naming_another_version_is_refused() {
+    let manifest = format!("[tools]\nhk = \"1.56.1\"\n\n{}", package_task("1.57.0"));
+    let root = fixture("hk-package-drift", &[("mise.toml", &manifest)], &[]);
+    denied(&root, "tool pin other", "mise.toml");
+}
+
+/// The same fixture with the fetch agreeing: the arm refuses the disagreement
+/// and not the task's presence, so declaring it cannot itself be a violation.
+#[test]
+fn a_package_task_naming_the_pin_is_clean() {
+    let manifest = format!("[tools]\nhk = \"1.56.1\"\n\n{}", package_task("1.56.1"));
+    let root = fixture("hk-package-agreed", &[("mise.toml", &manifest)], &[]);
+    clean(&root);
+}
+
+/// `#MUTANT hk-pin-disagreement-passes` reddens here — and NOT on
+/// `a_version_the_amends_url_names_differently_is_refused`, which it used to
+/// name. `amends()` writes one version into both halves of the URL, so arm A2
+/// also fires there and emits a byte-identical finding: neutering arm A changes
+/// nothing a case can see. The module header carries the measurement.
+///
+/// Here only the FRAGMENT drifts. The tag segment equals the pin, so A2 is
+/// silent and arm A is the one arm that can refuse this.
+#[test]
+fn an_amends_fragment_naming_another_version_is_refused() {
+    let root = fixture(
+        "hk-fragment-drift",
+        &[("hk.pkl", &amends_halves("1.56.1", "1.57.0"))],
+        &[],
+    );
+    denied(&root, "tool pin other", "hk.pkl");
+}
+
+/// `#MUTANT hk-amends-merge-narrows-arm-b` reddens here.
+///
+/// A floating FRAGMENT over an agreeing tag. Arm A is silent (nothing to bind),
+/// arm A2 is silent (the tag equals the pin), and only arm B's
+/// `count(amends) == 0` can refuse it — which is true only while `amends` holds
+/// fragment matches alone. Merge the two sets and this goes clean, which is the
+/// defect this branch made on both surfaces before the mutation was declared.
+#[test]
+fn an_amends_fragment_floating_over_an_agreeing_tag_is_refused() {
+    let root = fixture(
+        "hk-fragment-floats",
+        &[("hk.pkl", &amends_halves("1.56.1", "latest"))],
+        &[],
+    );
+    denied(&root, "tool pin other", "hk.pkl");
+}
+
+/// `#MUTANT hk-package-merge-narrows-arm-e` reddens here — the same defect on
+/// the fetch URL, where it would let the fetch float to `latest` while `hk.pkl`
+/// amends a fixed version.
+#[test]
+fn a_package_fragment_floating_over_an_agreeing_tag_is_refused() {
+    let manifest = format!(
+        "[tools]\nhk = \"1.56.1\"\n\n{}",
+        package_task_halves("1.56.1", "latest")
+    );
+    let root = fixture("hk-package-floats", &[("mise.toml", &manifest)], &[]);
+    denied(&root, "tool pin other", "mise.toml");
+}
+
+/// `#MUTANT hk-package-unnamed-passes` reddens here: arm E, which is arm B's
+/// claim for the fetch URL. `hk@latest` over a path with no `/v<semver>/`
+/// segment matches neither pattern, so `packages` is empty and arm D has
+/// nothing to compare — the fetch would warm a package `hk.pkl` does not amend.
+#[test]
+fn a_package_task_naming_no_version_is_refused() {
+    let manifest = "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = \"pkl download-package package://github.com/jdx/hk/releases/download/latest/hk@latest\"\n";
+    let root = fixture("hk-package-unnamed", &[("mise.toml", manifest)], &[]);
+    denied(&root, "tool pin other", "mise.toml");
+}
+
+/// `#MUTANT hk-amends-tag-disagreement-passes` reddens here.
+///
+/// The other half of `hk.pkl`'s own URL (CLOUD-2311): it names the version in
+/// the release tag as well as the `hk@` fragment. Here the fragment agrees with
+/// the pin and only the tag drifts, so arm A sees nothing and only arm A2 can
+/// refuse it — a pass means half the string the module claims to govern is
+/// ungoverned.
+#[test]
+fn an_amends_tag_segment_naming_another_version_is_refused() {
+    let root = fixture(
+        "hk-tag-drift",
+        &[("hk.pkl", &amends_halves("1.57.0", "1.56.1"))],
         &[],
     );
     denied(&root, "tool pin other", "hk.pkl");
