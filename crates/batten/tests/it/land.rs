@@ -569,8 +569,12 @@ fn land_verify_supervised(repo: &Path, gate: &str, task: &str, beats: &str) -> (
         .output()
         .expect("register the supervising task");
     assert!(registered.status.success(), "{}", stderr(&registered));
+    // NO INHERITED GROUP OWNER: under `verify` this suite runs inside a mise
+    // task that exports `MISE_TASK_PGID_MANAGED`, and a gate that inherits it
+    // declines to lead its own group, so the stall's cancel has none to signal.
     let output = batten()
         .args(["land", "verify"])
+        .env_remove("MISE_TASK_PGID_MANAGED")
         .env("LAND_VERIFY", gate)
         .env("BATTEN_TASK_PID", task)
         .env("LAND_SELF_STALL_BEATS", beats)
@@ -601,9 +605,17 @@ fn a_verify_that_never_advances_stops_itself() {
     let (code, out) = land_verify_supervised(&repo, &gate, "424242", "2");
     assert_eq!(code, 3, "a stall is could-not-finish, not a verdict: {out}");
     assert!(out.contains("verify stalled"), "the stop says why: {out}");
+    let record = lap_record(&repo, &branch_of(&repo));
     assert!(
-        lap_record(&repo, &branch_of(&repo)).contains("verify stalled "),
+        record.contains("verify stalled "),
         "the stall reaches the lap record"
+    );
+    // RECLAIMED, NOT OUTLIVED: before the cancel resolved the root `exec` keyed
+    // the gate's group note under, it read another directory, reclaimed nothing,
+    // and this case passed only once the wedged `sleep` ran out on its own.
+    assert!(
+        record.contains("gate-stalled 2 true"),
+        "the cancel reclaimed the gate's group: {record}"
     );
     let gate_pid = std::fs::read_to_string(&marker).expect("the gate started");
     if cfg!(target_os = "linux") {

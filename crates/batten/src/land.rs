@@ -2410,7 +2410,12 @@ fn win(root: &Path, arms: &Arms<'_>, raced: Raced) {
         return;
     }
     drop(arms.raced.send(raced));
-    let reclaimed = crate::exec::cancel_owned_group(root);
+    // THE ROOT THE GATE'S NOTE WAS WRITTEN UNDER: `verify` hands `exec` the
+    // resolved repository root, and the state directory is keyed by a digest of
+    // the path, so a `root` spelled `.` reads a directory the note never
+    // reached and the cancel reclaims nothing.
+    let resolved = crate::git::repo_root(root).unwrap_or_else(|_| root.to_path_buf());
+    let reclaimed = crate::exec::cancel_owned_group(&resolved);
     let _ = arms.cancelled.send(reclaimed);
 }
 
