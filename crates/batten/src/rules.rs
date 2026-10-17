@@ -15285,8 +15285,13 @@ mod tests {
     // One line per `Rule` column, and `Rule` has no `Default` on purpose — a
     // fixture that spreads one would stop naming the columns it leaves empty,
     // which is the census this literal is. The three columns whose blank value
-    // depends on the kind are filled by [`per_kind`], which keeps this literal
-    // under the length ceiling without an escape.
+    // depends on the kind are filled by [`per_kind`]. The literal's length is the
+    // column count, and it crossed the ceiling at `while_marker_scope`
+    // (CLOUD-2271); `expect`, so the annotation goes red if it shrinks back under.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a Rule literal names every column; its length grows with the struct"
+    )]
     fn blank(id: &str, kind: RuleKind) -> Rule {
         per_kind(Rule {
             review: Vec::new(),

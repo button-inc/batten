@@ -11714,6 +11714,13 @@ mod tests {
         live
     }
 
+    // One line per `Rule` column, so its length is the column count: the census
+    // crossed the ceiling at `while_marker_scope` (CLOUD-2271). `expect`, so the
+    // annotation goes red if it ever shrinks back under.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a Rule literal names every column; its length grows with the struct"
+    )]
     fn shape(id: &str, pattern: &str, contains: Option<&str>) -> Rule {
         Rule {
             review: Vec::new(),
