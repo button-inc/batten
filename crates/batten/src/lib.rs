@@ -7377,6 +7377,20 @@ fn run_claim_race(
 /// forge, so the detached checkout a `pull_request` build leaves is untouched,
 /// and `authored_log` falls back to the wider range by itself when the
 /// exported base is stale or unwound.
+/// # What holds each arm, since no `//MUTANT` row can
+///
+/// A declared row here would be swept by nothing: `MUTANT_RUNNERS` gives every
+/// Rust source to `cargo mutants --in-diff`, and `mutant:changed` says so in as
+/// many words — a hand-rolled row on a `.rs` file would stand a second Rust
+/// mutation system at admission, which that task refuses by name. So the two
+/// mutations that matter are held by cases instead, and are named here because
+/// nothing else records which case is load-bearing for which arm:
+///
+/// - Answering `Ok(Some(String::new()))` on the speculative arm is caught by
+///   `a_speculative_lap_does_not_race_the_branch_it_borrowed_its_base_from`,
+///   which exits 0 instead of 2 under it.
+/// - Reading the variable with `!is_empty()` rather than `!trim().is_empty()`
+///   is caught by `a_blank_speculative_base_is_no_base_and_the_forge_still_answers`.
 fn own_log(
     repo: &Path,
     slug: &str,

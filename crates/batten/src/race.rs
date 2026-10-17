@@ -394,8 +394,7 @@ pub struct Filled {
     /// questions and only one of them is "was this a whole reading". The other
     /// is WHICH of the races it is about to report rest on a competitor nobody
     /// read, since it marks those rows and no others — a bool cannot answer
-    /// that. What to
-    /// do in either case is the caller's, and stated there.
+    /// that. What to do in either case is the caller's, and stated there.
     pub unanswered: Vec<String>,
 }
 

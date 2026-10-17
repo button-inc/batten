@@ -864,9 +864,40 @@ fn two_rivals(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     (repo, forge)
 }
 
-/// A checkout mid-speculative-lap: the lease holder's commit is BEHIND the
-/// borrowed base, this branch's own commit is after it, and a competitor holds
+/// The three commit messages [`speculating`] is built from.
+///
+/// Constants because two of them are spelled in BOTH encodings — a real commit
+/// made with `-m`, and a JSON string in the forge's answer — and the fixture is
+/// a replay only while the two agree. Typed twice, editing one spelling leaves
+/// every case green while the fixture quietly stops modelling a rebase, which
+/// is the one invariant its whole value rests on. [`commit_list`] derives the
+/// JSON spelling from these, so there is nothing to keep in step by hand.
+const HOLDER: &str = "feat: the holder's work\n\nCloses CLOUD-2";
+const OURS: &str = "fix: our own work\n\nCloses CLOUD-3";
+const THIRD: &str = "fix: the third party's work\n\nCloses CLOUD-3";
+
+/// One `-i`-style commit-list body, each message escaped as JSON needs it.
+fn commit_list(messages: &[&str]) -> String {
+    let entries: Vec<String> = messages
+        .iter()
+        .map(|message| {
+            format!(
+                r#"{{"commit":{{"message":"{}"}}}}"#,
+                message.replace('\n', "\\n")
+            )
+        })
+        .collect();
+    format!("[{}]", entries.join(","))
+}
+
+/// A checkout mid-speculative-lap: the lease holder's commit IS the borrowed
+/// base, this branch's own commit is the one after it, and a competitor holds
 /// each of the two keys they close.
+///
+/// The holder's commit being the base exactly — not merely somewhere behind it
+/// — is the mechanism, since `base..HEAD` excludes its endpoint. A fixture
+/// described as "behind the base" admits `base == HEAD`, which is what the
+/// previous version of this case did and why a mutant survived it.
 ///
 /// Its own fixture rather than an axis on [`self_log`], for the reason
 /// [`two_rivals`] has one: the local history has to differ from the pull
@@ -885,29 +916,14 @@ fn two_rivals(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
 fn speculating(name: &str) -> (std::path::PathBuf, std::path::PathBuf, String) {
     let (repo, _, forge) = checkout(name);
     // REPLAYED, not merely listed: the holder's commit really is in this
-    // checkout's history and really is behind the base, which is the state
-    // `land` leaves and the only one where `base..HEAD` is the interesting
-    // range. A fixture that left it out of local history would exclude it by
-    // accident rather than by the bound under test.
-    git_in(
-        &repo,
-        &[
-            "commit",
-            "--allow-empty",
-            "-m",
-            "feat: the holder's work\n\nCloses CLOUD-2",
-        ],
-    );
+    // checkout's history, and the base is taken AT it, which is the state
+    // `land` leaves. A fixture that left it out of local history would exclude
+    // it by accident rather than by the bound under test — and one that took
+    // the base at HEAD would exclude everything, which is the empty range a
+    // mutant answering `Some("")` is indistinguishable from.
+    git_in(&repo, &["commit", "--allow-empty", "-m", HOLDER]);
     let base = git_in(&repo, &["rev-parse", "HEAD"]);
-    git_in(
-        &repo,
-        &[
-            "commit",
-            "--allow-empty",
-            "-m",
-            "fix: our own work\n\nCloses CLOUD-3",
-        ],
-    );
+    git_in(&repo, &["commit", "--allow-empty", "-m", OURS]);
     let head = git_in(&repo, &["rev-parse", "HEAD"]);
     write(
         &forge,
@@ -930,31 +946,15 @@ fn speculating(name: &str) -> (std::path::PathBuf, std::path::PathBuf, String) {
             ),
         ),
     );
+    // #7's list is the local history, holder's commit first, which is what
+    // makes this a replay rather than two unrelated texts that happen to agree.
     write(
         &forge,
         "mine.json",
-        &answer(
-            OK,
-            r#"[{"commit":{"message":"feat: the holder's work\n\nCloses CLOUD-2"}},
-                {"commit":{"message":"fix: our own work\n\nCloses CLOUD-3"}}]"#,
-        ),
+        &answer(OK, &commit_list(&[HOLDER, OURS])),
     );
-    write(
-        &forge,
-        "holder.json",
-        &answer(
-            OK,
-            r#"[{"commit":{"message":"feat: the holder's work\n\nCloses CLOUD-2"}}]"#,
-        ),
-    );
-    write(
-        &forge,
-        "third.json",
-        &answer(
-            OK,
-            r#"[{"commit":{"message":"fix: the third party's work\n\nCloses CLOUD-3"}}]"#,
-        ),
-    );
+    write(&forge, "holder.json", &answer(OK, &commit_list(&[HOLDER])));
+    write(&forge, "third.json", &answer(OK, &commit_list(&[THIRD])));
     (repo, forge, base)
 }
 
@@ -1050,7 +1050,9 @@ fn a_speculative_lap_does_not_race_the_branch_it_borrowed_its_base_from() {
 ///
 /// This is the defect, not a second feature — it is what `batten claim race`
 /// does inside a speculative lap when nothing tells it one is in force, and it
-/// is pinned here so the bound above cannot be deleted silently.
+/// is pinned here so
+/// [`a_speculative_lap_does_not_race_the_branch_it_borrowed_its_base_from`]
+/// cannot be deleted silently.
 #[test]
 fn a_speculative_lap_without_the_variable_reads_the_whole_pull_request() {
     let (repo, forge, _) = speculating("claim-race-speculating-unbounded");
@@ -1066,6 +1068,39 @@ fn a_speculative_lap_without_the_variable_reads_the_whole_pull_request() {
     assert!(
         stderr(&output).contains("#8"),
         "so the waiter refuses against the very pull request it is waiting on: {}",
+        stderr(&output)
+    );
+}
+
+/// A BLANK export is not an export, which is the predicate `race::authored_log`
+/// already applies and the one this verb has to apply with it.
+///
+/// `authored_log` reads the variable through `!value.trim().is_empty()`, so a
+/// whitespace-only base is absent to it and the range falls back. Were the
+/// source switched on a bare `!is_empty()` instead, this run would take the
+/// local path while the range fell back to the trunk — one decision on two
+/// predicates, and in this checkout the trunk resolves to nothing, so `mine`
+/// would collapse to the body's CLOUD-1 and the verb would exit 0 over a
+/// listing holding two collisions.
+///
+/// Pinned over the exit code rather than the source directly, because the
+/// source is not observable from outside: what distinguishes the two readings
+/// is exactly which pull requests get named.
+#[test]
+fn a_blank_speculative_base_is_no_base_and_the_forge_still_answers() {
+    let (repo, forge, _) = speculating("claim-race-speculating-blank");
+    let output = raced_speculating(&repo, &forge, "   ");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a blank base leaves the forge as the source, as it does for the range: {} {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("#8"),
+        "so the holder's CLOUD-2 is in `mine` and #8 races: {}",
         stderr(&output)
     );
 }
