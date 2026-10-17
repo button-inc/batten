@@ -34,21 +34,13 @@ fn red_repo(name: &str) -> PathBuf {
         .base_commit()
         .build();
     common::git_in(&dir, &["checkout", "-q", "-b", "work/red"]);
-    let store = dir.join(".git/batten-receipts");
-    std::fs::create_dir_all(&store).expect("the receipt store is creatable");
-    std::fs::write(
-        store.join(format!(
-            "{}.{}",
-            batten::land::RED_HEAD,
-            batten::land::red_head_slug("work/red")
-        )),
-        "head abc123\nfailed 101 windows\nrunning macos\n",
-    )
-    .expect("record the red head");
+    std::fs::create_dir_all(dir.join(".git/batten-receipts"))
+        .expect("the receipt store is creatable");
+    rewrite_record(&dir, "head abc123\nfailed 101 windows\nrunning macos\n");
     dir
 }
 
-/// Replace `work/red`'s record with `text`.
+/// Write `work/red`'s record as `text`.
 fn rewrite_record(dir: &Path, text: &str) {
     std::fs::write(
         dir.join(".git/batten-receipts").join(format!(
