@@ -887,6 +887,59 @@ fn raced(repo: &std::path::Path, forge: &std::path::Path) -> std::process::Outpu
         .expect("the compiled binary runs")
 }
 
+/// The same run inside a speculative `land` lap, which exports the base it
+/// borrowed.
+fn raced_speculating(
+    repo: &std::path::Path,
+    forge: &std::path::Path,
+    base: &str,
+) -> std::process::Output {
+    batten()
+        .args(["claim", "race"])
+        .current_dir(repo)
+        .env("BATTEN_REST_FIXTURE", forge)
+        .env("BATTEN_SPEC_BASE", base)
+        .output()
+        .expect("the compiled binary runs")
+}
+
+/// A speculative lap judges this branch on ITS OWN commits, not on the lease
+/// holder's (CLOUD-748's defect by a different door).
+///
+/// # What a speculative lap does to the forge's answer
+///
+/// `land` rebases a waiting branch onto the lease holder's published head and
+/// pushes, so the holder's unlanded commits are in this pull request's commit
+/// list — and `claimed_from` reads a closing keyword out of that list before
+/// it consults branch or title. The forge here answers exactly that shape:
+/// #7's commits close CLOUD-2, which is #8's key. Read from the forge, `mine`
+/// becomes CLOUD-2 and the verb refuses against #8 — the very pull request a
+/// speculating branch is waiting on.
+///
+/// With `BATTEN_SPEC_BASE` exported, as `land` exports it to every body gate,
+/// the claim comes from `race::authored_log` over local history instead. This
+/// checkout's own commits close nothing, so `mine` is the body's CLOUD-1 and
+/// #8 is not raced. The pair is one environment variable: without it the same
+/// fixture refuses at 2, which the case above asserts.
+#[test]
+fn a_speculative_lap_does_not_race_the_branch_it_borrowed_its_base_from() {
+    let (repo, forge) = self_log("claim-race-speculating", OK, "Closes CLOUD-1.", OK);
+    let base = git_in(&repo, &["rev-parse", "HEAD"]);
+    let output = raced_speculating(&repo, &forge, &base);
+
+    assert!(
+        output.status.success(),
+        "the holder's commits must not speak for this branch's claim: {} {}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert!(
+        !stderr(&output).contains("#8"),
+        "and #8 is what it would have refused against: {}",
+        stderr(&output)
+    );
+}
+
 /// The branch races on a key only its OWN commits close, which is the half that
 /// gives the next case something to lose.
 #[test]
