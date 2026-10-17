@@ -6072,6 +6072,31 @@ fn run_task(command: TaskCommand, out: &mut dyn Write, err: &mut dyn Write) -> R
             program_root,
             instant,
         } => {
+            // COULD-NOT-LOOK WITHOUT THE ROOT, never a default: an unmatched
+            // corroboration reads as alive, so a guessed root would hide every
+            // crash behind a registry that looks healthy. The committed config's
+            // `[task] program_root` first, read at the repository root whatever
+            // directory asked; the flag only where it declares none (CLOUD-2370,
+            // transitional until the pinned release carries the table).
+            let Ok(table) =
+                crate::git::repo_root(Path::new(".")).and_then(|root| task_table(&root))
+            else {
+                writeln!(
+                    err,
+                    "batten: task alive: the committed config did not resolve, so there is no program root to read; `batten config lint` names why"
+                )?;
+                return Ok(ExitCode::Internal);
+            };
+            let Some(program_root) = table
+                .map(|table| table.program_root)
+                .or(program_root.filter(|root| task::normalized_root(root).is_some()))
+            else {
+                writeln!(
+                    err,
+                    "batten: task alive: no [task] program_root in the committed config and no --program-root, so nothing tells a live task from a recycled pid"
+                )?;
+                return Ok(ExitCode::Internal);
+            };
             let reading = task::alive(
                 &git_dir,
                 task::Alive {
@@ -11860,7 +11885,9 @@ fn run_land_singleton(
     // consumer. The first version of this defaulted the value to a literal, which
     // `document_facts::no_artifact_name_reaches_the_core` refused — correctly, and
     // `task.rs`'s own header names that test as the reason the root is a
-    // parameter there rather than a constant.
+    // parameter there rather than a constant. It is `[task] program_root`, which
+    // `task alive` reads too (CLOUD-2370), and until the pinned release carries
+    // that table, the environment's `BATTEN_TASK_PROGRAM_ROOT` where it is absent.
     //
     // Absent, this reaps NOTHING rather than guessing. A wrong root makes
     // `matches_cmdline` miss every live task, so every entry reads as abandoned
@@ -11874,7 +11901,15 @@ fn run_land_singleton(
     // root at all, and skipping them here would trade a reaper for the
     // concurrent-lands defect the lock exists to stop — a strictly worse bargain
     // than reaping nothing.
-    let reaped = std::env::var("BATTEN_TASK_PROGRAM_ROOT")
+    let reaped = task_table(root)
+        .ok()
+        .flatten()
+        .map(|table| table.program_root)
+        .or_else(|| {
+            std::env::var("BATTEN_TASK_PROGRAM_ROOT")
+                .ok()
+                .filter(|root| task::normalized_root(root).is_some())
+        })
         .map(|root| reap_abandoned(&git_dir, &root))
         .unwrap_or_default();
     if reaped.terminated > 0 {
@@ -11891,14 +11926,17 @@ fn run_land_singleton(
     // THE LOCK. `recheck` is the pause a reclaim needs between two sightings;
     // production takes the default, as `singleton_acquire`'s own doc states.
     match task::singleton_acquire(&git_dir, LAND_TASK, &pid, SINGLETON_RECHECK) {
-        task::Claim::Taken => {}
+        task::Claim::Taken => forget_dispatch(root, &git_dir),
         task::Claim::Reclaimed(corpse) => {
+            forget_dispatch(root, &git_dir);
             writeln!(
                 out,
                 "land: reclaimed the landing lock from {corpse}, which is gone"
             )?;
         }
         task::Claim::Held { holder, phase } => {
+            // The dispatch is answered too: refused, so it is no land on its way.
+            forget_dispatch(root, &git_dir);
             let doing = phase.unwrap_or_else(|| String::from("unknown"));
             writeln!(
                 err,
@@ -19161,7 +19199,7 @@ fn run_hook(
     // buffer.
     let block = fill_turn_advice(&policy, &envelope, &facts, overrides, &raw, &mut advice);
     // The one Stop that can block (CLOUD-2441): see `unlanded_stop_block`.
-    if refused_stop(harness, block, err)? {
+    if refused_stop(harness, block, &mut advice, err)? {
         return Ok(ExitCode::Violation);
     }
     // THE DECISION IS RESOLVED BEFORE THE ADVISORY IS SPOKEN (CLOUD-1175), and
@@ -22465,6 +22503,9 @@ fn stop_nudges(
         return Vec::new();
     }
     let mut rungs = Vec::new();
+    // READ BEFORE THE UNLANDED REFUSAL, which consumes the dispatch receipt to
+    // excuse its own Stop: the watchdog below must see the same land in flight.
+    let landing = land_under_way();
     if std::env::var_os(UNLANDED_BYPASS).is_none() {
         // AFTER `record_state`, so it judges this Stop's verdict, and BEFORE the
         // pointer, which writes this Stop's spoken receipt: the refusal is for
@@ -22473,6 +22514,13 @@ fn stop_nudges(
         if let Some(pointer) = unlanded_pointer() {
             rungs.push(pointer);
         }
+    }
+    // THE WATCHDOG (CLOUD-2370), only where the unlanded refusal decided
+    // nothing: one refusal per Stop, and asking it spends its receipt.
+    if block.is_none() {
+        let (refused, advised) = watchdog_stop(root, landing);
+        *block = refused;
+        rungs.extend(advised);
     }
     // RULE 2 — the consumer's declared `[[hook.handler]] on = "stop"` rows, in
     // declaration order, the first that speaks. This is where a program reading
@@ -22921,17 +22969,23 @@ fn rearm_unlanded(envelope: &hook::Envelope) {
 /// Branch-keyed, so `land::retire_branch` sweeps it with the rest.
 const UNLANDED_SPOKEN: &str = "unlanded-spoken";
 
-/// Refuse the Stop [`unlanded_stop_block`] named, with Claude Code's `2` and
-/// the reason on stderr, which resumes the model with it. Other hosts read a
-/// Stop's exit differently, so they keep the advisory.
+/// Refuse the Stop a refusal on the ladder named (CLOUD-2441, CLOUD-2370), with
+/// Claude Code's `2` and the reason on stderr, which resumes the model with it.
+/// Other hosts read a Stop's exit differently, so there the refusal joins the
+/// advisory instead: every producer's block reaches a reader on every host.
 fn refused_stop(
     harness: hook::Harness,
     block: Option<refusal::Refusal>,
+    advice: &mut Vec<advisory::Advice>,
     err: &mut dyn Write,
 ) -> Result<bool> {
-    let Some(block) = block.filter(|_| harness == hook::Harness::ClaudeCode) else {
+    let Some(block) = block else {
         return Ok(false);
     };
+    if harness != hook::Harness::ClaudeCode {
+        push_finding(advice, severity::AdvisoryTier::Caution, block);
+        return Ok(false);
+    }
     writeln!(err, "{}", block.render_finding(refusal::Arm::Full))?;
     Ok(true)
 }
@@ -22969,6 +23023,13 @@ fn note_land_dispatch(envelope: &hook::Envelope) {
         return;
     };
     if let Ok(git_dir) = git::git_dir(Path::new(".")) {
+        // A land already holding the lock is past its unlocked window: one that
+        // locked before this hook ran would otherwise leave a receipt the lock
+        // already cleared, which the Stop watchdog reads as a relaunch under way
+        // over that land's own later crash (CLOUD-2370).
+        if task::singleton_holder(&git_dir, LAND_TASK).is_some() {
+            return;
+        }
         let path = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -23083,6 +23144,193 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
         ],
         refusal::Fix::None,
     ))
+}
+
+/// The receipt naming every crashed record the watchdog has spoken about
+/// (CLOUD-2370): one `<task> <pid> <started_at>` line each, clone-wide, and
+/// never re-armed. It grows by one line per crash a session saw, not per Stop.
+const WATCHDOG_SPOKEN: &str = "watchdog-spoken";
+
+/// `[task]`, the one place the program root and the watchdog's terms come
+/// from (CLOUD-2370), from the committed authority at `root`.
+///
+/// An error is a config that did not resolve, which a caller that must say so
+/// (`task alive`) keeps apart from a config with no table.
+///
+/// A blank `program_root` is no table: `task alive` answers could-not-look, and
+/// the reap and the watchdog fall back or abstain, rather than acting on a root
+/// that can corroborate nothing (`task::corroborates` reads one ALIVE).
+fn task_table(root: &Path) -> Result<Option<task::TaskTable>> {
+    resolve::resolve(root, &Overrides::default()).map(|resolved| {
+        resolved
+            .task
+            .filter(|table| task::normalized_root(&table.program_root).is_some())
+    })
+}
+
+/// Whether the engine's own `land` is moving, as both Stop refusals read it.
+#[derive(Clone, Copy, Default)]
+struct LandMotion {
+    /// A land holds the landing lock.
+    held: bool,
+    /// The second an unconsumed `land-dispatched` receipt was written: a
+    /// backgrounded start that may not have reached the lock yet.
+    dispatched_at: Option<u64>,
+}
+
+/// Read [`LandMotion`] without consuming anything, so it is asked BEFORE the
+/// unlanded refusal spends the dispatch receipt to excuse its own Stop.
+fn land_under_way() -> LandMotion {
+    let Ok(git_dir) = git::git_dir(Path::new(".")) else {
+        return LandMotion::default();
+    };
+    let dispatched_at = git::current_branch(Path::new("."))
+        .ok()
+        .flatten()
+        .and_then(|branch| {
+            let receipt = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
+            std::fs::metadata(receipt)
+                .and_then(|meta| meta.modified())
+                .ok()
+        })
+        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|at| at.as_secs());
+    LandMotion {
+        held: task::singleton_holder(&git_dir, LAND_TASK).is_some(),
+        dispatched_at,
+    }
+}
+
+/// What the Stop watchdog says on this Stop: a refusal, an advisory, or
+/// neither (CLOUD-2370).
+///
+/// [`stop::watchdog`] decides; this reads its inputs and holds the bound. A
+/// relaunch is refused through [`refused_stop`] like CLOUD-2441's refusal (as
+/// advice on a host that reads a Stop's exit differently), and a crash under
+/// the floor is advice. Each crashed
+/// record is spoken about ONCE, either way, by a receipt rather than
+/// `stop_hook_active`, which resets whenever a reminder lands between Stops
+/// (anthropics/claude-code#54360).
+///
+/// THE NEWEST RECORD PER TASK SPEAKS, and the older ones it supersedes are
+/// marked with it: a relaunch that crashed again is one failure to report, not
+/// two, and never the stale pid first.
+///
+/// A relaunch already under way is quiet: a live registered entry of the same
+/// task, or for the engine's own `land`, the lock held or a dispatch receipt
+/// written AFTER the crashed land registered. A receipt older than the record
+/// is that land's own start, left behind when no Stop saw it take the lock —
+/// a background deadline stop while the session idled leaves exactly that.
+///
+/// Cheapest first: no declared task, or no crashed one, returns before the
+/// boot time or the receipt is written. Everything it cannot read says nothing,
+/// as every failure on this routine does.
+//MUTANT watchdog-unbounded|s@^        .filter(\x7centry\x7c !already_marked(Some(\&receipt), \&spoken_key(entry)))$@        .filter(\x7c_\x7c true)@|a_crash_is_refused_once
+//MUTANT watchdog-stale-dispatch|s@\.is_none_or(\x7centry\x7c entry.started().is_some_and(\x7cstarted\x7c at > started))$@.is_none_or(\x7c_\x7c true)@|a_land_dispatch_older_than_the_crash_excuses_nothing
+fn watchdog_stop(
+    root: &Path,
+    landing: LandMotion,
+) -> (Option<refusal::Refusal>, Option<refusal::Refusal>) {
+    let Some(table) = task_table(root)
+        .ok()
+        .flatten()
+        .filter(|table| !table.relaunch.is_empty())
+    else {
+        return (None, None);
+    };
+    let Ok(git_dir) = git::git_dir(root) else {
+        return (None, None);
+    };
+    let receipt = git_dir.join(RECEIPT_DIR).join(WATCHDOG_SPOKEN);
+    let (running, abandoned) = task::partition(&git_dir, &table.program_root);
+    let mut unspoken: Vec<task::Entry> = abandoned
+        .into_iter()
+        .filter(|entry| table.relaunch.contains(&entry.task))
+        .filter(|entry| !already_marked(Some(&receipt), &spoken_key(entry)))
+        .collect();
+    if unspoken.is_empty() {
+        return (None, None);
+    }
+    // Newest first, so the predicate's first match per task is its latest crash.
+    unspoken.sort_by_key(|entry| std::cmp::Reverse(entry.started()));
+    let Some(boot) = reclaim::boot_time().ok().and_then(|boot| boot.parse().ok()) else {
+        return (None, None);
+    };
+    let mut live: Vec<String> = running.into_iter().map(|entry| entry.task).collect();
+    let land_moving = landing.held
+        || landing.dispatched_at.is_some_and(|at| {
+            // A dispatch counts only once it postdates the newest crashed land.
+            unspoken
+                .iter()
+                .find(|entry| entry.task == LAND_TASK)
+                .is_none_or(|entry| entry.started().is_some_and(|started| at > started))
+        });
+    if land_moving {
+        live.push(LAND_TASK.to_owned());
+    }
+    let Some(watch) = stop::watchdog(&unspoken, &live, &table, boot) else {
+        return (None, None);
+    };
+    let (relaunch, entry, fix) = match watch {
+        stop::Watch::Relaunch(entry) => {
+            let fix = format!(
+                "relaunch task {}, backgrounded; if it was stopped on purpose, `batten task unregister --pid {}`",
+                entry.task, entry.pid
+            );
+            (true, entry, fix)
+        }
+        stop::Watch::Advise { entry, lived } => {
+            let fix = format!(
+                "file the crash: task {} lived {lived}s, under the {}s floor, so a relaunch would crash the same way",
+                entry.task, table.min_lifetime_secs
+            );
+            (false, entry, fix)
+        }
+    };
+    if let Some(parent) = receipt.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // A receipt that cannot record itself is not spoken: unbounded, it would
+    // refuse every Stop, which is CLOUD-889's loop. The superseded records of
+    // the same task go with it, in the one write.
+    let keys: Vec<String> = unspoken
+        .iter()
+        .filter(|record| record.task == entry.task)
+        .map(spoken_key)
+        .collect();
+    if crate::durable::append(&receipt, &keys.join("\n")).is_err() {
+        return (None, None);
+    }
+    let said = refusal::Refusal::engine(
+        verdict::Native::StopConditionUnmet,
+        &[verdict::artifact(&format!("task {} crashed", entry.task))],
+        refusal::Fix::Run(fix),
+    );
+    if relaunch {
+        (Some(said), None)
+    } else {
+        (None, Some(said))
+    }
+}
+
+/// Drop the `land-dispatched` receipt once the land it recorded holds the lock,
+/// or is refused it (CLOUD-2370): it meant "started, not yet locked", and left
+/// behind it would excuse this land's own later crash at the Stop watchdog.
+//MUTANT forget-dispatch-inert|s@^        let _ = std::fs::remove_file(recorder::record_path($@        let _ = std::path::PathBuf::from(recorder::record_path(@|taking_the_landing_lock_clears_the_dispatch_receipt
+fn forget_dispatch(root: &Path, git_dir: &Path) {
+    if let Some(branch) = git::current_branch(root).ok().flatten() {
+        let _ = std::fs::remove_file(recorder::record_path(
+            git_dir,
+            LAND_DISPATCHED,
+            &branch,
+            None,
+        ));
+    }
+}
+
+/// One crashed record's line in [`WATCHDOG_SPOKEN`].
+fn spoken_key(entry: &task::Entry) -> String {
+    format!("{} {} {}", entry.task, entry.pid, entry.started_at)
 }
 
 /// Whether the claim `key` is already recorded in the marker at `seen`.

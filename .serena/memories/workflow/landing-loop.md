@@ -148,7 +148,7 @@ the command given:
   - all three survivors stayed in `claude-code-bash`.
 
   So a child orphaned before the stop outlives it, and only `land`'s own reap of
-  abandoned groups clears it (`BATTEN_TASK_PROGRAM_ROOT`, CLOUD-2366). The reap
+  abandoned groups clears it (`BATTEN_TASK_PROGRAM_ROOT`, CLOUD-2366; `[task] program_root` once the pinned release carries it, CLOUD-2370). The reap
   signals a group only when `reapable` holds (`lib.rs`): a member began before
   the registrant's last stamp (`collect::group_orphaned` — a pgid number stays
   reserved while any member lives, so a reused group's members all began later),
