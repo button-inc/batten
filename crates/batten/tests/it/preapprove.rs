@@ -713,6 +713,9 @@ fn a_plan_mode_git_with_global_options_is_allowed() {
     assert_plan_refused(&shell("plan", "git -c core.pager=sh log"));
     // A read form's arguments can still write: git opens `--output` itself.
     assert_plan_refused(&shell("plan", "git stash show -p --output=src/main.rs"));
+    // `-O` hands matches to a pager program in every spelling git accepts.
+    assert_plan_refused(&shell("plan", "git grep -iOsh x"));
+    assert_plan_refused(&shell("plan", "git -C /x grep --open=sh x"));
     assert_plan_refused(&shell(
         "plan",
         "git remote -v add o https://example.invalid",
