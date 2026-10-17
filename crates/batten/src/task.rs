@@ -813,7 +813,8 @@ pub fn singleton_holder(git_dir: &Path, task: &str) -> Option<String> {
 /// red gate and a spent budget alike), so a lock naming a dead pid is a run that
 /// was killed: the host's background cap, a SIGKILL, a container reclaim. A lock
 /// naming no pid is a holder caught mid-create, never a crash — the same reading
-/// [`singleton_holder`] gives it.
+/// [`singleton_holder`] gives it. Off unix `pid_exists` has no probe and answers
+/// alive, so this is never true there: the refusal it feeds fails open.
 #[must_use]
 pub fn singleton_abandoned(git_dir: &Path, task: &str) -> bool {
     holder_of(&singleton_lock(git_dir, task)).is_some_and(|holder| !pid_exists(&holder))

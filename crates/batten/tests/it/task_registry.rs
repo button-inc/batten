@@ -44,7 +44,7 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, batten, scratch, stderr, stdout, unassignable_pid};
+use common::{CORPSE_IS_DETECTABLE, Fixture, batten, scratch, stderr, stdout, unassignable_pid};
 
 /// A repository with a registry to read, and nothing in it yet.
 fn registry_repo(name: &str) -> PathBuf {
@@ -137,23 +137,6 @@ fn this_process() -> (String, String) {
         .to_owned();
     (root, name)
 }
-
-/// Whether a record under [`common::unassignable_pid`] can read as a corpse on this target.
-///
-/// `pid_exists` has **no probe off unix** — its `#[cfg(not(unix))]` arm answers
-/// `true` for every parseable pid, deliberately, so nothing is ever reported dead
-/// and nothing is ever reaped. The helper above compounds it: there is no
-/// `/proc/sys/kernel/pid_max` to read there either, so it falls back to a literal
-/// that is parseable and therefore "alive". A corpse is unreachable off unix, and
-/// every row whose subject is the crashed verdict has to say so.
-///
-/// STATED ONCE, AND AS A `cfg!` RATHER THAN AN ATTRIBUTE. Three rows below need
-/// it and each spelling it inline is how the first two drifted apart. `cfg!`
-/// keeps BOTH arms compiled on every target, so `cross-check` type-checks the
-/// off-unix branch instead of skipping over it unparsed — which matters here more
-/// than usual, since the whole class was discovered by CI compiling what no local
-/// gate runs.
-const CORPSE_IS_DETECTABLE: bool = cfg!(unix);
 
 #[test]
 fn an_empty_registry_and_one_that_was_never_created_both_report_nothing() {
