@@ -3115,17 +3115,19 @@ fn libtest_ran(output: &str) -> bool {
     output.lines().any(|line| line.contains("test result: "))
 }
 
-/// Case result lines in a nextest run, one per selected case whatever its
-/// outcome, as [`crate::replay::terminal_word`] reads them (`SIGTERM` among
-/// them, which [`wait_bounded`] itself sends a timed-out runner). Read up to the
-/// `Summary [` line only: nextest repeats each failure after it, and counting
-/// those would read one failed case as two.
+/// The cases a nextest run selected: the distinct names on its result lines, as
+/// [`crate::replay::terminal_word`] reads them (`SIGTERM` among them, which
+/// [`wait_bounded`] itself sends a timed-out runner). Distinct, so a case
+/// retried three times is one case. Read up to the `Summary [` line only, past
+/// which nextest repeats each failure.
 fn nextest_lines(output: &str) -> usize {
     output
         .lines()
         .take_while(|line| !line.trim_start().starts_with("Summary ["))
         .filter(|line| crate::replay::terminal_word(line).is_some())
-        .count()
+        .filter_map(|line| line.split_whitespace().last())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
 }
 
 /// Whether a nextest run printed its summary, which it does for an empty
@@ -4425,16 +4427,18 @@ mod tests {
         assert_eq!(nextest_lines(ran), 2);
         assert!(nextest_ran(ran));
         // Every terminal word counts, the one the sweep's own bound sends
-        // included; an attempt or progress line does not, and nor does the
-        // failure nextest repeats after its summary.
+        // included; a retried case is one case whatever its attempts; a
+        // progress line does not count, nor the failure repeated after the
+        // summary.
         let ended = "        LEAK [   0.120s] batten::it a\n  \
-                     TRY 1 FAIL [   0.004s] batten::it b\n     \
+                     TRY 1 FAIL [   0.004s] batten::it b\n  \
+                     TRY 2 FAIL [   0.004s] batten::it b\n     \
                      SIGTERM [  60.000s] batten::it c\n   \
                      LEAK-FAIL [   0.010s] batten::it d\n        \
                      SLOW [> 60.000s] batten::it e\n     \
-                     Summary [  60.100s] 3 tests run: 1 passed, 2 failed\n   \
+                     Summary [  60.100s] 4 tests run: 1 passed, 3 failed\n   \
                      LEAK-FAIL [   0.010s] batten::it d\n";
-        assert_eq!(nextest_lines(ended), 3);
+        assert_eq!(nextest_lines(ended), 4);
         let empty = "    Starting 0 tests across 1 binary\n     \
                      Summary [   0.000s] 0 tests run: 0 passed, 9 skipped\n";
         assert_eq!(nextest_lines(empty), 0);

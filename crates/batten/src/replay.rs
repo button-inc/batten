@@ -551,14 +551,21 @@ const TERMINAL: &[&str] = &[
     "SIGTERM",
     "LEAK-FAIL",
 ];
-/// The [`TERMINAL`] word a nextest line ends a case with, or `None` for any other
-/// line: the line's FIRST word, followed by the bracketed duration. Anchored, so
-/// echoed test output that merely contains a status word is not a result, and a
-/// `TRY n` attempt line stays one that decides nothing. The one parser of a
-/// result line, shared by this module's pass/fail and `mutate::nextest_lines`.
+/// The [`TERMINAL`] word a nextest line ends an attempt with, or `None` for any
+/// other line: the line's leading word, or the word after an exact `TRY <n>`
+/// prefix (a consumer's config may retry; this repository's refuses it), then
+/// the bracketed duration. Anchored at the line's start, so text that merely
+/// contains a status word mid-line is not a result. The one parser of a result
+/// line, shared by this module's pass/fail and `mutate::nextest_lines`.
 pub(crate) fn terminal_word(line: &str) -> Option<&str> {
-    let (word, rest) = line.trim_start().split_once(' ')?;
-    (rest.trim_start().starts_with('[') && TERMINAL.contains(&word)).then_some(word)
+    let mut words = line.split_whitespace();
+    let mut word = words.next()?;
+    if word == "TRY" {
+        words.next()?.parse::<u32>().ok()?;
+        word = words.next()?;
+    }
+    let after = line.split_once(word)?.1;
+    (after.trim_start().starts_with('[') && TERMINAL.contains(&word)).then_some(word)
 }
 
 /// What `cargo` prints when rustc refused the crate: a base body HEAD's code
@@ -618,18 +625,27 @@ fn said(outcome: Option<&(i32, String)>) -> String {
 mod tests {
     use super::*;
 
-    /// Fails by: a leaky pass read as a failure, or a line that only contains a
-    /// status word (an attempt line, echoed output) read as a case's result.
+    /// Fails by: a leaky pass read as a failure, a retried case's result lost
+    /// (so a test replay saw fail on every attempt reads could-not-look), or a
+    /// line that holds a status word mid-line read as a result.
     #[test]
-    fn a_leaky_pass_passes_and_only_a_leading_status_word_is_a_result() {
+    fn a_leaky_pass_passes_a_retried_failure_fails_and_only_a_leading_word_counts() {
         assert_eq!(
             terminal_word("        PASS [   0.004s] batten::it m::t"),
             Some("PASS")
         );
         assert_eq!(
             terminal_word("  TRY 2 PASS [   0.004s] batten::it m::t"),
-            None
+            Some("PASS")
         );
+        assert_eq!(terminal_word("  TRY x PASS [   0.004s] m::t"), None);
+        let retried = (
+            TEST_RUN_FAILED,
+            String::from(
+                "  TRY 1 FAIL [   0.004s] batten::it m::t\n  TRY 2 FAIL [   0.004s] batten::it m::t\n",
+            ),
+        );
+        assert!(!passes(Some(&retried), "t").unwrap());
         assert_eq!(
             terminal_word("        SLOW [> 60.000s] batten::it m::t"),
             None
