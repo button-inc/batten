@@ -428,6 +428,7 @@ mod startup_bootstrap;
 #[cfg(unix)]
 mod step_receipt;
 mod stop_posture;
+mod stop_watchdog;
 mod store_lifecycle;
 mod stub_portability;
 mod submodule;

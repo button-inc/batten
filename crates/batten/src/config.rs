@@ -645,6 +645,13 @@ pub struct Config {
     /// is why this is an option rather than a default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prune: Option<crate::prune::Prune>,
+    /// Where the task programs live and which crashed task Stop relaunches
+    /// (CLOUD-2370). Absent means the watchdog is off, and `land`'s reap and
+    /// `task alive` fall back to their transitional sources (the environment's
+    /// `BATTEN_TASK_PROGRAM_ROOT`, the `--program-root` flag) or, without one,
+    /// reap nothing and cannot look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<crate::task::TaskTable>,
     /// The append-only defect ledger (CLOUD-52): where it lives and what may be
     /// in it. Absent means this repository keeps no in-tree ledger and the gate
     /// is simply not active.
@@ -2962,6 +2969,11 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     if let Some(prune) = &config.prune {
         prune.validate()?;
     }
+    // Same reason: a `[task] program_root` that names no directory corroborates
+    // no live task, so it would read every pid alive and hide each crash.
+    if let Some(task) = &config.task {
+        task.validate()?;
+    }
     // Same reason, plus one specific to this table: every one of its values is a
     // regular expression, and an uncompilable pattern is a rule that silently
     // matches nothing. Refused here, where the error names the key, rather than
@@ -4909,6 +4921,7 @@ impl Config {
             // nothing was asked for rather than inventing a number about somebody
             // else's target directory.
             prune: None,
+            task: None,
             defects: None,
             provisions: Vec::new(),
             // Declaring no container preconditions is the ordinary case: a

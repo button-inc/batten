@@ -515,6 +515,17 @@
         }
       ]
     },
+    "task": {
+      "description": "Where the task programs live and which crashed task Stop relaunches\n(CLOUD-2370). Absent means the watchdog is off, and `land`'s reap and\n`task alive` fall back to their transitional sources (the environment's\n`BATTEN_TASK_PROGRAM_ROOT`, the `--program-root` flag) or, without one,\nreap nothing and cannot look.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TaskTable"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "transcript": {
       "description": "The completed-session transcript this repository points `check` at\n(CLOUD-95). Host-specific, never consumer-specific: which file a host\nwrites its transcript to is a property of the harness, not of any one\nrepository, so rule 1 holds. Absent means the repository does not use\nthe capability — a different claim from a path that resolves to\nnothing, which is why `resolve` answers with three states and not two.",
       "anyOf": [
@@ -6105,6 +6116,37 @@
       "required": [
         "manifest",
         "node"
+      ]
+    },
+    "TaskTable": {
+      "description": "The `[task]` table: where this consumer keeps its task programs, and which\nof them the Stop watchdog relaunches (CLOUD-2370).\n\nCONSUMER CONFIG, NOT A CONST (non-negotiable rule 1), for the module\nheader's reason. It is the authority for the program root: `land`'s reap\nand `task alive` read it first. Until the pinned release carries the table,\n`BATTEN_TASK_PROGRAM_ROOT` and `task alive --program-root` answer where it\nis absent, and they retire once a consumer can declare it (CLOUD-2463).",
+      "type": "object",
+      "properties": {
+        "min_lifetime_secs": {
+          "description": "The proven lifetime, in seconds, under which a crash in this boot is\nadvice rather than a relaunch: a task that died that fast will die again.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 3600,
+          "minimum": 0
+        },
+        "program_root": {
+          "description": "The directory, relative to the repository root, the task programs live\nin, matched inside a live process's `cmdline`.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "relaunch": {
+          "description": "The tasks a crash of which forces one relaunch at `Stop`. Empty\nrelaunches nothing.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "program_root"
       ]
     },
     "ToolQuery": {
