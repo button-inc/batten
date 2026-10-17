@@ -2018,6 +2018,11 @@ pub fn verify_raced(
         (trunk, replayed_onto)
     });
     let started = std::time::Instant::now();
+    // THE ROOT THE GATE'S GROUP NOTE IS WRITTEN UNDER, resolved once for both
+    // arms' cancel: `verify` hands `exec` the resolved repository root, and the
+    // state directory is keyed by a digest of the path, so a `root` spelled `.`
+    // would read a directory the note never reached and reclaim nothing.
+    let owner = crate::git::repo_root(root).context("land: resolve this clone's root")?;
     // THE DISK IS NOT THIS RACE'S ARM ANY MORE (CLOUD-2197): one watcher spans
     // the whole landing (`disk_watch::around`), and a volume that cannot hold
     // the gate is refused before it starts by the step's own pre-check.
@@ -2060,11 +2065,12 @@ pub fn verify_raced(
             cancelled,
             stop,
         };
+        let owner = owner.as_path();
         if let Some(stall) = stall {
             let stalls = arms.clone();
-            drop(scope.spawn(move || stall_arm(root, stall, seed, &stalls)));
+            drop(scope.spawn(move || stall_arm(owner, stall, seed, &stalls)));
         }
-        drop(scope.spawn(move || watch_arm(root, watched.as_ref(), started, &arms)));
+        drop(scope.spawn(move || watch_arm(owner, watched.as_ref(), started, &arms)));
 
         drop(tx);
         rx.recv().ok()
@@ -2410,12 +2416,7 @@ fn win(root: &Path, arms: &Arms<'_>, raced: Raced) {
         return;
     }
     drop(arms.raced.send(raced));
-    // THE ROOT THE GATE'S NOTE WAS WRITTEN UNDER: `verify` hands `exec` the
-    // resolved repository root, and the state directory is keyed by a digest of
-    // the path, so a `root` spelled `.` reads a directory the note never
-    // reached and the cancel reclaims nothing.
-    let resolved = crate::git::repo_root(root).unwrap_or_else(|_| root.to_path_buf());
-    let reclaimed = crate::exec::cancel_owned_group(&resolved);
+    let reclaimed = crate::exec::cancel_owned_group(root);
     let _ = arms.cancelled.send(reclaimed);
 }
 
