@@ -18611,11 +18611,11 @@ fn run_hook(
     // being read. A turn already handed a handler's advice has been told
     // something more specific, so the module's line is appended only to a silent
     // buffer.
+    let block = fill_turn_advice(&policy, &envelope, &facts, overrides, &raw, &mut advice);
     // The one Stop that can block (CLOUD-2441): see `unlanded_stop_block`.
-    if refused_stop(harness, &envelope, err)? {
+    if refused_stop(harness, block, err)? {
         return Ok(ExitCode::Violation);
     }
-    fill_turn_advice(&policy, &envelope, &facts, overrides, &raw, &mut advice);
     // THE DECISION IS RESOLVED BEFORE THE ADVISORY IS SPOKEN (CLOUD-1175), and
     // that ordering is the whole fix rather than a tidy-up.
     //
@@ -19660,7 +19660,9 @@ fn record_ripcord(root: &Path, envelope: &hook::Envelope, err: &mut dyn Write) {
 /// function is the hottest in the binary and sits under a line lint, so a third
 /// producer belongs beside the second rather than inline. The ordering is the
 /// ordering below, and each block carries its own argument.
-//MUTANT ladder-one-nudge|s@^    for nudge in stop_nudges(overrides, envelope, raw) {$@    for nudge in stop_nudges(overrides, envelope, raw).into_iter().take(1) {@|every_applicable_stop_rung_speaks_in_rank_order
+///
+/// Returns the Stop refusal [`stop_nudges`] decided, if any (CLOUD-2441).
+//MUTANT ladder-one-nudge|s@^    for nudge in stop_nudges(overrides, envelope, raw, \&mut block) {$@    for nudge in stop_nudges(overrides, envelope, raw, \&mut block).into_iter().take(1) {@|every_applicable_stop_rung_speaks_in_rank_order
 fn fill_turn_advice(
     policy: &hook::Policy,
     envelope: &hook::Envelope,
@@ -19668,7 +19670,8 @@ fn fill_turn_advice(
     overrides: &Overrides,
     raw: &str,
     advice: &mut Vec<advisory::Advice>,
-) {
+) -> Option<refusal::Refusal> {
+    let mut block = None;
     // EVERY APPLICABLE STOP RUNG SPEAKS, IN RANK ORDER (CLOUD-2078). "At most
     // one nudge" bounded the FULL TEXT, and the projection now bounds that per
     // context per window; a rung's POINTER rides every Stop it applies to, so
@@ -19680,7 +19683,7 @@ fn fill_turn_advice(
             refusal.read_through(&policy.redirects),
         );
     }
-    for nudge in stop_nudges(overrides, envelope, raw) {
+    for nudge in stop_nudges(overrides, envelope, raw, &mut block) {
         push_finding(advice, severity::AdvisoryTier::Caution, nudge);
     }
     // THE WRITE-TIME SIGNAL (CLOUD-1131), and it is the delivery half of the
@@ -19702,6 +19705,7 @@ fn fill_turn_advice(
             refusal.read_through(&policy.redirects),
         );
     }
+    block
 }
 
 /// Push a finding unless one with the same POINTER is already in the emission
@@ -21810,6 +21814,7 @@ fn stop_nudges(
     overrides: &Overrides,
     envelope: &hook::Envelope,
     raw: &str,
+    block: &mut Option<refusal::Refusal>,
 ) -> Vec<refusal::Refusal> {
     if envelope.event != hook::Event::Stop {
         return Vec::new();
@@ -21909,10 +21914,14 @@ fn stop_nudges(
         return Vec::new();
     }
     let mut rungs = Vec::new();
-    if std::env::var_os(UNLANDED_BYPASS).is_none()
-        && let Some(pointer) = unlanded_pointer()
-    {
-        rungs.push(pointer);
+    if std::env::var_os(UNLANDED_BYPASS).is_none() {
+        // AFTER `record_state`, so it judges this Stop's verdict, and BEFORE the
+        // pointer, which writes this Stop's spoken receipt: the refusal is for
+        // a pointer an EARLIER Stop spoke (CLOUD-2441).
+        *block = unlanded_stop_block();
+        if let Some(pointer) = unlanded_pointer() {
+            rungs.push(pointer);
+        }
     }
     // RULE 2 — the consumer's declared `[[hook.handler]] on = "stop"` rows, in
     // declaration order, the first that speaks. This is where a program reading
@@ -22355,18 +22364,15 @@ fn rearm_unlanded(event: hook::Event) {
 /// Branch-keyed, so `land::retire_branch` sweeps it with the rest.
 const UNLANDED_SPOKEN: &str = "unlanded-spoken";
 
-/// Refuse the Stop [`unlanded_stop_block`] names, with Claude Code's `2` and
+/// Refuse the Stop [`unlanded_stop_block`] named, with Claude Code's `2` and
 /// the reason on stderr, which resumes the model with it. Other hosts read a
 /// Stop's exit differently, so they keep the advisory.
 fn refused_stop(
     harness: hook::Harness,
-    envelope: &hook::Envelope,
+    block: Option<refusal::Refusal>,
     err: &mut dyn Write,
 ) -> Result<bool> {
-    if harness != hook::Harness::ClaudeCode {
-        return Ok(false);
-    }
-    let Some(block) = unlanded_stop_block(envelope) else {
+    let Some(block) = block.filter(|_| harness == hook::Harness::ClaudeCode) else {
         return Ok(false);
     };
     writeln!(err, "{}", block.render_finding(refusal::Arm::Full))?;
@@ -22443,14 +22449,10 @@ fn unlanded_claim() -> Option<UnlandedClaim> {
 /// after it, with still no land, is the pointer ignored, and only that one is
 /// refused.
 //MUTANT unlanded-stop-advises|s@^    if task::singleton_holder(\&git_dir, LAND_TASK).is_some() {$@    if true {@|an_ignored_unlanded_pointer_refuses_the_next_stop
-fn unlanded_stop_block(envelope: &hook::Envelope) -> Option<refusal::Refusal> {
-    if envelope.event != hook::Event::Stop
-        || envelope.stop_active == Some(true)
-        || !envelope.writes_available()
-        || std::env::var_os(UNLANDED_BYPASS).is_some()
-    {
-        return None;
-    }
+///
+/// Called only from [`stop_nudges`], past every guard it applies: the event,
+/// `stop_active`, both bypasses and plan mode.
+fn unlanded_stop_block() -> Option<refusal::Refusal> {
     let UnlandedClaim { branch, key, count } = unlanded_claim()?;
     let git_dir = git::git_dir(Path::new(".")).ok()?;
     if task::singleton_holder(&git_dir, LAND_TASK).is_some() {

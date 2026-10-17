@@ -1080,6 +1080,23 @@ fn an_ignored_unlanded_pointer_refuses_the_next_stop() {
     );
 }
 
+/// WORK LANDED SINCE THE POINTER IS NOT REFUSED (CLOUD-2441): the Stop judges
+/// the verdict it mints itself, never the previous turn's store. Between the two
+/// Stops `main` takes the branch's commit, which is what a finished land leaves.
+#[test]
+fn work_landed_since_the_pointer_is_not_refused() {
+    let (repo, home) = unlanded_fixture("stop-unlanded-then-landed");
+    let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    common::git_in(&repo, &["branch", "-f", "main", "work"]);
+    let second = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "a claim this Stop's own mint clears is not refused: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+}
+
 /// A RUNNING `land` LETS THE TURN END (CLOUD-2441): the work is being moved, so
 /// the Stop that would otherwise be refused is the advisory's silence instead.
 #[test]
