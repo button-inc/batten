@@ -81,7 +81,7 @@ macro_rules! token_enum {
         serde
         $(#[$enum_meta:meta])*
         $vis:vis enum $name:ident by $method:ident {
-            $( $(#[$meta:meta])* $variant:ident => $token:literal, )*
+            $( $(#[$meta:meta])* $variant:ident => $token:literal ),* $(,)?
         }
     ) => {
         $(#[$enum_meta])*
@@ -93,7 +93,7 @@ macro_rules! token_enum {
     (
         $(#[$enum_meta:meta])*
         $vis:vis enum $name:ident by $method:ident {
-            $( $(#[$meta:meta])* $variant:ident => $token:literal, )*
+            $( $(#[$meta:meta])* $variant:ident => $token:literal ),* $(,)?
         }
     ) => {
         $(#[$enum_meta])*
@@ -102,4 +102,30 @@ macro_rules! token_enum {
         }
         token_enum!(@impl $name $method [$( $variant => $token ),*]);
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{assert_unique, same};
+
+    /// The guard can fail: equal bytes are the same token, and a length or a
+    /// single byte apart are not — the three ways `same` could be wrong.
+    #[test]
+    fn same_is_byte_equality() {
+        assert!(same("tool run loose", "tool run loose"));
+        assert!(!same("tool run loose", "tool run loos"));
+        assert!(!same("tool run loose", "tool run lose!"));
+        assert!(same("", ""));
+    }
+
+    #[test]
+    #[should_panic(expected = "declared twice")]
+    fn a_duplicate_token_is_refused() {
+        assert_unique(&["a b c", "d e f", "a b c"]);
+    }
+
+    #[test]
+    fn distinct_tokens_pass() {
+        assert_unique(&["a b c", "d e f", "a b d"]);
+    }
 }

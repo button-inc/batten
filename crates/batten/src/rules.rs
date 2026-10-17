@@ -17131,6 +17131,18 @@ mod tests {
         }
     }
 
+    /// CLOUD-2291/2442: the spelling a `gate = "..."` row parses is the token
+    /// the weakening diff reports. `token_enum!`'s `serde` arm makes them one
+    /// literal; this pins that serde HONOURS it, so an enum attribute added
+    /// later (a `rename_all`, an `alias`) cannot split the two silently.
+    #[test]
+    fn native_gate_all_is_every_gate_and_as_str_is_its_token() {
+        for gate in NativeGate::ALL {
+            let token = serde_json::to_value(gate).expect("a gate serializes");
+            assert_eq!(token, serde_json::json!(gate.as_str()));
+        }
+    }
+
     #[test]
     fn all_covers_every_kind() {
         // The spawn partition must be total. `ALL` is what the gate below
