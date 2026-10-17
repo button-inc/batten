@@ -223,6 +223,22 @@ fn open_a_pr_in(dir: &Path, owner: &str, repo: &str) -> std::process::Output {
     )
 }
 
+/// THE SAME REPOSITORY IN ANOTHER CASE IS STILL REFUSED. A forge's owner and
+/// repository names are case-insensitive and the marker records the canonical
+/// spelling, so `O/R` names the marker's `o/r` and the second PR is refused.
+#[test]
+fn the_same_repository_in_another_case_is_still_refused() {
+    let dir = repo_scoped("one-pr-same-repo-case");
+    plant(&dir);
+    let refusal = open_a_pr_in(&dir, "O", "R");
+    assert_eq!(refusal.status.code(), Some(2), "{}", stderr(&refusal));
+    let text = stderr(&refusal);
+    assert!(
+        crate::common::refusing_rule(&text).as_deref() == Some("review open twice"),
+        "O/R is o/r: {text}"
+    );
+}
+
 /// A MARKER FOR ANOTHER REPOSITORY ADMITS THE PR (CLOUD-2271). Measured: the
 /// marker minted for one repository's pull request refused another repository's
 /// first, because both sat on a branch of the same name in one clone.

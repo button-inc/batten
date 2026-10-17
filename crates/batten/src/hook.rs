@@ -5563,6 +5563,11 @@ fn marker_present(marker: &str, scope: Option<&str>) -> bool {
 /// a call that does not say which target it names cannot be told apart from the
 /// marker's own target, so the marker keeps counting. Could-not-look selects,
 /// the direction every arm of [`marker_present`] takes.
+///
+/// Folded to ASCII lowercase, as [`marker_names`] folds the body: a forge's
+/// owner and repository names are case-insensitive, and the marker records the
+/// forge's canonical spelling, so a call spelling `Acme/Widgets` as
+/// `acme/widgets` names the same target and must not slip past the marker.
 fn marker_scope(rule: &Rule, envelope: &Envelope) -> Option<String> {
     if rule.while_marker_scope.is_empty() {
         return None;
@@ -5572,7 +5577,7 @@ fn marker_scope(rule: &Rule, envelope: &Envelope) -> Option<String> {
         .iter()
         .map(|field| field.read(envelope))
         .collect();
-    parts.map(|parts| format!("/{}/", parts.join("/")))
+    parts.map(|parts| format!("/{}/", parts.join("/")).to_ascii_lowercase())
 }
 
 /// Whether the marker at `path` names `scope`, read from its recorded body.
@@ -5583,7 +5588,9 @@ fn marker_scope(rule: &Rule, envelope: &Envelope) -> Option<String> {
 fn marker_names(path: &std::path::Path, scope: Option<&str>) -> bool {
     match scope {
         None => true,
-        Some(scope) => std::fs::read_to_string(path).map_or(true, |body| body.contains(scope)),
+        Some(scope) => std::fs::read_to_string(path)
+            .map(|body| body.to_ascii_lowercase())
+            .map_or(true, |body| body.contains(scope)),
     }
 }
 
