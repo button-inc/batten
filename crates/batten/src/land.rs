@@ -1288,9 +1288,11 @@ pub const RED_HEAD: &str = "red-head";
 /// **A FAILED FAN-IN OWES ITS FAILED MEMBERS** (CLOUD-2443): the aggregator's
 /// log says only that a dependency failed, so reading it would pay the debt
 /// while the job that failed stays unread. It owes them whenever its newest run
-/// failed, even where another required check's failure is the verdict's only
-/// finding. The aggregator itself stays owed beside them where no member is
-/// seen failing, or where a failed member carries no id a read could name.
+/// failed or is still going, even where another required check's failure is
+/// the verdict's only finding. The aggregator itself is owed only as the
+/// verdict's own finding with no failed member seen, or beside a failed member
+/// that carries no id a read could name; a fan-in the verdict set aside (its
+/// failure manufactured by cancelled siblings) owes nothing on its own.
 ///
 /// **A RUN WITH NO ID IS NOT RECORDED** (CLOUD-2443): a reading that carries no
 /// id defaults it to `0`, and no read receipt can ever name run `0`, so
@@ -1811,11 +1813,15 @@ pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
     // BOTH WRITES ARE ATTEMPTED whichever fails first, so a store that will not
     // append never leaves the tracking ref behind the head that landed.
     let appended = append(root, branch, std::slice::from_ref(&pushed.line()));
-    if let Pushed::Landed(head) = &pushed {
-        track_landed(root, &reference, head)?;
+    let tracked = match &pushed {
+        Pushed::Landed(head) => track_landed(root, &reference, head),
+        Pushed::Raced => Ok(()),
+    };
+    match (appended, tracked) {
+        (Ok(()), Ok(())) => Ok(pushed),
+        (Err(problem), Ok(())) | (Ok(()), Err(problem)) => Err(problem),
+        (Err(appending), Err(tracking)) => Err(tracking.context(format!("{appending:#}"))),
     }
-    appended?;
-    Ok(pushed)
 }
 
 /// Move `reference`'s tracking ref to the `head` a push landed.
