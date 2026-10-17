@@ -794,6 +794,19 @@ pub fn singleton_holder(git_dir: &Path, task: &str) -> Option<String> {
     pid_exists(&holder).then_some(holder)
 }
 
+/// Whether `task`'s singleton lock was left by a holder that is gone — the mark
+/// only a crash leaves (CLOUD-2441).
+///
+/// Every orderly exit releases the lock (`land`'s guard drops it on a landing, a
+/// red gate and a spent budget alike), so a lock naming a dead pid is a run that
+/// was killed: the host's background cap, a SIGKILL, a container reclaim. A lock
+/// naming no pid is a holder caught mid-create, never a crash — the same reading
+/// [`singleton_holder`] gives it.
+#[must_use]
+pub fn singleton_abandoned(git_dir: &Path, task: &str) -> bool {
+    holder_of(&singleton_lock(git_dir, task)).is_some_and(|holder| !pid_exists(&holder))
+}
+
 /// Take a task's lock for `pid`, or report who holds it.
 ///
 /// `recheck` is the pause between the two sightings a reclaim requires. It is an
