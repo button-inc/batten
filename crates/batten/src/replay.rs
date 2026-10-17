@@ -552,15 +552,13 @@ const TERMINAL: &[&str] = &[
     "LEAK-FAIL",
 ];
 /// The [`TERMINAL`] word a nextest line ends a case with, or `None` for any other
-/// line. It is the word just before the bracketed duration, so a retried case's
-/// `TRY n` prefix is read past. The one parser of a result line, shared by this
-/// module's pass/fail and `mutate::nextest_lines`' case count.
+/// line: the line's FIRST word, followed by the bracketed duration. Anchored, so
+/// echoed test output that merely contains a status word is not a result, and a
+/// `TRY n` attempt line stays one that decides nothing. The one parser of a
+/// result line, shared by this module's pass/fail and `mutate::nextest_lines`.
 pub(crate) fn terminal_word(line: &str) -> Option<&str> {
-    let (before, _) = line.split_once(" [")?;
-    before
-        .split_whitespace()
-        .last()
-        .filter(|word| TERMINAL.contains(word))
+    let (word, rest) = line.trim_start().split_once(' ')?;
+    (rest.trim_start().starts_with('[') && TERMINAL.contains(&word)).then_some(word)
 }
 
 /// What `cargo` prints when rustc refused the crate: a base body HEAD's code
@@ -620,27 +618,25 @@ fn said(outcome: Option<&(i32, String)>) -> String {
 mod tests {
     use super::*;
 
-    /// Fails by: a retried case read as its `TRY` prefix, or a leaky pass read
-    /// as a failure, so replay calls a test it measured unreplayable or red.
+    /// Fails by: a leaky pass read as a failure, or a line that only contains a
+    /// status word (an attempt line, echoed output) read as a case's result.
     #[test]
-    fn a_retried_or_leaky_pass_is_read_as_a_pass() {
-        let retried = (
-            TEST_RUN_FAILED,
-            String::from(
-                "  TRY 1 FAIL [   0.004s] batten::it m::t\n  TRY 2 PASS [   0.004s] batten::it m::t\n",
-            ),
+    fn a_leaky_pass_passes_and_only_a_leading_status_word_is_a_result() {
+        assert_eq!(
+            terminal_word("        PASS [   0.004s] batten::it m::t"),
+            Some("PASS")
         );
         assert_eq!(
             terminal_word("  TRY 2 PASS [   0.004s] batten::it m::t"),
-            Some("PASS")
+            None
         );
         assert_eq!(
             terminal_word("        SLOW [> 60.000s] batten::it m::t"),
             None
         );
-        assert!(
-            !passes(Some(&retried), "t").unwrap(),
-            "a retried FAIL is still read"
+        assert_eq!(
+            terminal_word("assertion failed: status FAIL [exit 1] m::t"),
+            None
         );
         let leaky = (
             0,

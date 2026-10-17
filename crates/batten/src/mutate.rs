@@ -3116,11 +3116,14 @@ fn libtest_ran(output: &str) -> bool {
 }
 
 /// Case result lines in a nextest run, one per selected case whatever its
-/// outcome, as [`crate::replay::terminal_word`] reads them: `SIGTERM` among them,
-/// which [`wait_bounded`] itself sends a timed-out runner, and a retried case.
+/// outcome, as [`crate::replay::terminal_word`] reads them (`SIGTERM` among
+/// them, which [`wait_bounded`] itself sends a timed-out runner). Read up to the
+/// `Summary [` line only: nextest repeats each failure after it, and counting
+/// those would read one failed case as two.
 fn nextest_lines(output: &str) -> usize {
     output
         .lines()
+        .take_while(|line| !line.trim_start().starts_with("Summary ["))
         .filter(|line| crate::replay::terminal_word(line).is_some())
         .count()
 }
@@ -4421,14 +4424,17 @@ mod tests {
                    Summary [   0.012s] 2 tests run: 1 passed, 1 failed, 8 skipped\n";
         assert_eq!(nextest_lines(ran), 2);
         assert!(nextest_ran(ran));
-        // Every terminal word counts, the retried form and the one the sweep's
-        // own bound sends included; a non-terminal line does not.
+        // Every terminal word counts, the one the sweep's own bound sends
+        // included; an attempt or progress line does not, and nor does the
+        // failure nextest repeats after its summary.
         let ended = "        LEAK [   0.120s] batten::it a\n  \
-                     TRY 2 PASS [   0.004s] batten::it b\n     \
+                     TRY 1 FAIL [   0.004s] batten::it b\n     \
                      SIGTERM [  60.000s] batten::it c\n   \
                      LEAK-FAIL [   0.010s] batten::it d\n        \
-                     SLOW [> 60.000s] batten::it e\n";
-        assert_eq!(nextest_lines(ended), 4);
+                     SLOW [> 60.000s] batten::it e\n     \
+                     Summary [  60.100s] 3 tests run: 1 passed, 2 failed\n   \
+                     LEAK-FAIL [   0.010s] batten::it d\n";
+        assert_eq!(nextest_lines(ended), 3);
         let empty = "    Starting 0 tests across 1 binary\n     \
                      Summary [   0.000s] 0 tests run: 0 passed, 9 skipped\n";
         assert_eq!(nextest_lines(empty), 0);
