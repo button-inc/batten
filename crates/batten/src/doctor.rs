@@ -1607,13 +1607,15 @@ fn provided_by_pin(dir: &Path, program: &str) -> bool {
 /// times.
 ///
 /// **A row naming the mediator resolves, because the dispatch never looks it up**
-/// (CLOUD-843). `handler::run_one` spawns the RUNNING IMAGE for
-/// `run = ["batten", ...]` (CLOUD-1326), so a `PATH` probe for that name asked a
-/// question the spawn does not: on a CI runner with no `batten` on `PATH` it
-/// failed a row the dispatch would have run, and pushed rows into a one-line task
-/// wrapper purely to satisfy this probe. The doctor asking is itself that image.
+/// (CLOUD-843). `spawn_resolving`'s rung -1 spawns the RUNNING IMAGE for
+/// `run = ["batten", ...]` (CLOUD-1326, CLOUD-2386 — it was `handler::run_one`'s
+/// own case until the predicate moved into the resolver), so a `PATH` probe for
+/// that name asked a question the spawn does not: on a CI runner with no
+/// `batten` on `PATH` it failed a row the dispatch would have run, and pushed
+/// rows into a one-line task wrapper purely to satisfy this probe. The doctor
+/// asking is itself that image.
 fn handler_program_resolves(dir: &Path, program: &str) -> bool {
-    if program == crate::surface::BINARY {
+    if crate::rules::is_own_image(program) {
         return true;
     }
     if program.contains(std::path::MAIN_SEPARATOR) || program.contains('/') {
@@ -1653,14 +1655,23 @@ pub fn diagnose(dir: &Path) -> Report {
     // names turns the same walk into a diagnosis a reader can fix, and they are
     // this consumer's own declared tokens rather than anything the check read
     // out of a file.
-    // REACHABLE MEANS REACHABLE THE WAY THE SPAWN REACHES IT, which is `PATH` OR
-    // the pin (CLOUD-1324). Nothing a toolchain manager provides is on bare
-    // `PATH` — nor should it be — so without the second arm every pinned program
-    // reads as missing and the whole check is noise.
+    // REACHABLE MEANS REACHABLE THE WAY THE SPAWN REACHES IT, which is the
+    // RUNNING IMAGE, `PATH`, OR the pin (CLOUD-1324, CLOUD-2386). Nothing a
+    // toolchain manager provides is on bare `PATH` — nor should it be — so
+    // without the pin arm every pinned program reads as missing and the whole
+    // check is noise.
+    //
+    // AND A ROW NAMING `batten` RESOLVES, BECAUSE THE SPAWN NEVER LOOKS IT UP —
+    // `spawn_resolving`'s rung -1 runs the running image (CLOUD-2386), the same
+    // reason `handler_program_resolves` gives below.
     let unreachable: Vec<String> = rules
         .iter()
         .filter_map(Rule::program)
-        .filter(|program| !on_path(program) && !provided_by_pin(dir, program))
+        .filter(|program| {
+            !crate::rules::is_own_image(program)
+                && !on_path(program)
+                && !provided_by_pin(dir, program)
+        })
         .map(str::to_owned)
         .collect();
     let unreachable_names = unreachable.clone();
