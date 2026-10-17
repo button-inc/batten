@@ -1212,7 +1212,8 @@ pub fn wait_reading(
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RedReading {
     /// Each failed required check's newest run, as `(run id, name)`, and each
-    /// failed member of a fan-in that failed or is still going ([`red_runs`]).
+    /// failed member of a fan-in that failed or is still going, with a failed
+    /// fan-in itself where no member stands for it ([`red_runs`]).
     pub failed: Vec<(u64, String)>,
     /// Each required check still running when the red answered, as
     /// `(run id, name)`, sorted by name.
@@ -1786,7 +1787,10 @@ impl Pushed {
 /// # Errors
 ///
 /// A transport failure, an unreadable report, or a HEAD this clone cannot
-/// resolve. A rejected update is [`Pushed::Raced`] rather than an error.
+/// resolve. A rejected update is [`Pushed::Raced`] rather than an error. And
+/// AFTER A LANDED PUSH, a record that will not append or a tracking ref that
+/// will neither move nor go (CLOUD-2443): that error names the head that
+/// landed, so a caller must not read every error as "nothing was pushed".
 pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
     let head = crate::git::head_commit(root).context("land: read this clone's HEAD")?;
     let reference = format!("refs/heads/{branch}");
@@ -6090,6 +6094,10 @@ mod tests {
             vec![(2, "windows".to_owned()), (6, "lint".to_owned())]
         );
         assert_eq!(reading.running, vec![(1, "final".to_owned())]);
+        // With no failed member it is owed only as running, never called failed.
+        let quiet = red_runs(&going[..2], &roster, &[finding("lint")]);
+        assert_eq!(quiet.failed, vec![(6, "lint".to_owned())]);
+        assert_eq!(quiet.running, vec![(1, "final".to_owned())]);
 
         // A FAILED FAN-IN WITH NO FAILED MEMBER SEEN is owed itself, whatever
         // the verdict found: its own log is the only one holding that failure.

@@ -13191,9 +13191,11 @@ fn unwind_the_bet(
                     err,
                     "::error:: land: {branch} moved on the remote, so the speculative range it carries was left in place; the next lap re-reads it"
                 )?,
-                Err(_) => writeln!(
+                // The error is SAID: it names the head when the push landed and
+                // only a local write failed, so the remote is not "corrected" twice.
+                Err(problem) => writeln!(
                     err,
-                    "::error:: land: the remote could not be corrected, so {branch} there may still carry another branch's commits"
+                    "::error:: land: the correcting push did not complete cleanly, so {branch} there may still carry another branch's commits: {problem:#}"
                 )?,
             }
         }
