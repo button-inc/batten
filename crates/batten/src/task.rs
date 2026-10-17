@@ -795,7 +795,7 @@ pub fn singleton_holder(git_dir: &Path, task: &str) -> Option<String> {
 }
 
 /// Whether `task`'s singleton lock was left by a holder that is gone — the mark
-/// only a crash leaves (CLOUD-2441).
+/// only a crash leaves (CLOUD-2456).
 ///
 /// Every orderly exit releases the lock (`land`'s guard drops it on a landing, a
 /// red gate and a spent budget alike), so a lock naming a dead pid is a run that
