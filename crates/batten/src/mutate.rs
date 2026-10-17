@@ -1416,8 +1416,14 @@ pub fn unresolvable(root: &Path, registry: &Registry) -> Vec<Finding> {
                         .is_some_and(|program| resolves(root, program));
                 }
             };
-            !spawn(root, Program::Cargo, &args, &[], HOUSEKEEPING_BOUND)
-                .is_ok_and(|ran| ran.passed())
+            !spawn(
+                root,
+                Program::Cargo,
+                &args,
+                &runner_path(),
+                HOUSEKEEPING_BOUND,
+            )
+            .is_ok_and(|ran| ran.passed())
         })
         .map(|kind| Finding {
             gate: kind.id().to_owned(),
@@ -2531,10 +2537,34 @@ fn wait_bounded(
         }
         Err(_) => true,
     };
+    if timed_out {
+        // A RUNNER THAT LEADS ITS OWN GROUPS IS ASKED FIRST. nextest starts each
+        // test in a process group of its own, so a `SIGKILL` to the runner's
+        // group leaves a hung test binary, and whatever it spawned, alive under
+        // init (measured 2026-10-16 once the declared Cargo arm moved onto
+        // nextest). `SIGTERM` is what nextest answers by ending every group it
+        // started. The grace is bounded, and the `SIGKILL` below still follows.
+        terminate_group(pid);
+        let _ = exits.recv_timeout(TERMINATE_GRACE);
+    }
     kill_group(pid);
     let _ = worker.join();
     let status = child.wait()?;
     Ok((status, timed_out))
+}
+
+/// How long a timed-out runner has to end what it started before `SIGKILL`.
+#[cfg(unix)]
+const TERMINATE_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// `SIGTERM` the process group `leader` leads, through [`crate::exec::signal_group`].
+/// Best effort, as [`kill_group`].
+//MUTANT runner-not-asked-first|s@^        crate::exec::signal_group(group, rustix::process::Signal::TERM);$@        let _ = group;@|a_suite_that_hangs_is_ended_by_the_sweeps_own_bound
+#[cfg(unix)]
+fn terminate_group(leader: u32) {
+    if let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default()) {
+        crate::exec::signal_group(group, rustix::process::Signal::TERM);
+    }
 }
 
 /// [`wait_bounded`] off unix, as it was: no `waitid`, no group, and no `kill(2)`
@@ -2695,9 +2725,10 @@ fn build_bound() -> std::time::Duration {
 
 /// `SIGKILL` the process group `leader` leads, and the leader itself.
 ///
-/// No grace, for `exec::escalate_group`'s measured reason: a suite past its bound
-/// is hung by definition, and a polite signal it ignores only spends the bound
-/// again. The leader is signalled as well so that a group that somehow did not
+/// No grace of its own. Where the runner TIMED OUT, [`wait_bounded`] first gives
+/// it one bounded `SIGTERM` ([`TERMINATE_GRACE`]), for a runner that leads groups
+/// of its own; on its other paths this is the only signal. The leader is
+/// signalled as well so that a group that somehow did not
 /// form still ends its direct child — a leak the descendant case would report,
 /// never a hang. Best effort, because `ESRCH` means the process is already gone,
 /// which is the outcome being asked for.
@@ -2753,7 +2784,8 @@ const SUITE_TARGET: &str = "target/mutate-cargo";
 /// sweep and a concurrent local `cargo test` would resolve the same scratch
 /// PATHS. That says nothing about the artifact cache above it.
 fn suite_env(root: &Path) -> Vec<(String, String)> {
-    vec![
+    let mut env = runner_path();
+    env.extend([
         (
             String::from("CARGO_TARGET_DIR"),
             root.join(SUITE_TARGET).to_string_lossy().into_owned(),
@@ -2769,7 +2801,37 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
         // it flipped the profile under the declared sweep's builds, and each
         // flip rebuilt the workspace crates.
         (String::from("CARGO_PROFILE_TEST_DEBUG"), String::from("0")),
-    ]
+    ]);
+    env
+}
+
+/// The directory a committed `[[provision]]` row installed a registered
+/// runner's program into, set once by the verb before it runs ([`use_provisioned`]).
+///
+/// PROCESS-WIDE, AND THAT IS A CHOICE AGAINST TWO BREAKS: a field on `Registry`
+/// fails the existing struct-literal case that `test-replay` replays, and a new
+/// parameter on `run_registered` or `unresolvable` is a semver break of both.
+static PROVISIONED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Run every registered runner's program from `dir` first: the pinned
+/// cargo-mutants a `[[provision]]` row ships, which a CI runner holds nowhere
+/// on its `PATH` (CLOUD-2345). Only the first call takes effect.
+pub fn use_provisioned(dir: PathBuf) {
+    let _ = PROVISIONED.set(dir);
+}
+
+/// `PATH` with [`use_provisioned`]'s directory ahead of the inherited one, or
+/// nothing where none was set, so the inherited `PATH` passes through unchanged.
+fn runner_path() -> Vec<(String, String)> {
+    let Some(dir) = PROVISIONED.get() else {
+        return Vec::new();
+    };
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let paths = std::iter::once(dir.clone()).chain(std::env::split_paths(&inherited));
+    std::env::join_paths(paths).map_or_else(
+        |_| Vec::new(),
+        |joined| vec![(String::from("PATH"), joined.to_string_lossy().into_owned())],
+    )
 }
 
 /// How far a run got, in the order `judge_row` must read it — every state but
@@ -2906,9 +2968,9 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selecti
     };
     let selection = match suite {
         Suite::Cargo { .. } => Selection {
-            selected: libtest_lines(&ran.output),
+            selected: libtest_lines(&ran.output) + nextest_lines(&ran.output),
             ok: ran.passed() && !ran.output.contains("error: could not compile"),
-            reach: Reach::of(libtest_ran(&ran.output), false),
+            reach: Reach::of(libtest_ran(&ran.output) || nextest_ran(&ran.output), false),
         },
         Suite::Tofu { .. } => tofu_verdict(&ran.output, want),
         Suite::Kyverno { .. } => kyverno_verdict(&ran.output, want),
@@ -2941,7 +3003,31 @@ fn invocation(dir: &Path, suite: &Suite, want: &str, junit: &Path) -> (PathBuf, 
         // match nothing is their startup. A target selecting no case is not a
         // pass either: `selected` stays 0 and the caller reports
         // `names-no-case`, which is a could-not-look.
-        Suite::Cargo { .. } => (dir.to_path_buf(), argv(&["cargo", "test", "--", want])),
+        //
+        // UNDER NEXTEST, AS CARGO-MUTANTS ALREADY RUNS (CLOUD-1746). Plain
+        // `cargo test` skips a repository's nextest setup scripts, and a suite
+        // whose cases depend on what one exports then reds unmutated: measured
+        // 2026-10-16, a `one_pr.rs` case passed under nextest and failed in the
+        // staged tree for want of the variable its setup script sets, so the row
+        // read `case-already-red`. `test(<want>)` matches by containment, the
+        // filter libtest applied; `--no-tests=pass` leaves an empty selection
+        // to `names-no-case` rather than to nextest's own error.
+        Suite::Cargo { .. } => {
+            let filter = format!("test({want})");
+            (
+                dir.to_path_buf(),
+                argv(&[
+                    "cargo",
+                    "nextest",
+                    "run",
+                    "--no-fail-fast",
+                    "--no-tests=pass",
+                    "--color=never",
+                    "-E",
+                    &filter,
+                ]),
+            )
+        }
         // `tofu test` runs in the module's root, and a test file lives there or
         // in its `tests/` directory — so the root is read off the path and
         // `-filter` names the file relative to it. `-filter` selects a FILE,
@@ -3027,6 +3113,30 @@ fn libtest_lines(output: &str) -> usize {
 /// one that filters out every case, so its absence means nothing ran.
 fn libtest_ran(output: &str) -> bool {
     output.lines().any(|line| line.contains("test result: "))
+}
+
+/// Case result lines in a nextest run: one of its terminal status words
+/// ([`crate::replay::TERMINAL`], the one list of them), then the bracketed
+/// duration, once per selected case whatever its outcome. `SIGTERM` is among
+/// them, which [`wait_bounded`] itself sends a timed-out runner. A retried
+/// case's `TRY n` prefix is read past, so its status word still counts.
+fn nextest_lines(output: &str) -> usize {
+    output
+        .lines()
+        .filter(|line| {
+            line.split_once(" [")
+                .and_then(|(before, _)| before.split_whitespace().last())
+                .is_some_and(|word| crate::replay::TERMINAL.contains(&word))
+        })
+        .count()
+}
+
+/// Whether a nextest run printed its summary, which it does for an empty
+/// selection under `--no-tests=pass` too; absent, nothing ran.
+fn nextest_ran(output: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.trim_start().starts_with("Summary ["))
 }
 
 /// The named `run`'s verdict out of `tofu test -json`'s machine-readable lines.
@@ -4284,6 +4394,53 @@ fn engine_undeclared(root: &Path, censused: &BTreeMap<String, String>) -> usize 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: the provisioned runner's directory dropped, or put after the
+    /// inherited `PATH`, so a CI runner with no cargo-mutants reads
+    /// `runner-absent` and a host's own version runs instead of the pin. The
+    /// one test that sets the process-wide directory.
+    #[test]
+    fn a_provisioned_runner_directory_leads_every_runner_path() {
+        let dir = PathBuf::from("/provisioned/cargo-mutants");
+        use_provisioned(dir.clone());
+        let env = suite_env(Path::new("/repo"));
+        let path = env
+            .iter()
+            .find(|(key, _)| key == "PATH")
+            .map(|(_, value)| value.clone())
+            .expect("a provisioned directory sets PATH");
+        assert_eq!(
+            std::env::split_paths(&path).next(),
+            Some(dir),
+            "the provisioned directory must come first: {path}"
+        );
+        assert_eq!(runner_path().len(), 1, "unresolvable reads the same PATH");
+    }
+
+    /// Fails by: a nextest run read as libtest, which counts no case and finds
+    /// no summary, so every declared Cargo row reads `suite-did-not-run`.
+    #[test]
+    fn a_nextest_run_is_read_for_its_cases_and_its_summary() {
+        let ran = "    Starting 2 tests across 1 binary\n        \
+                   PASS [   0.004s] batten::it one_pr::a\n        \
+                   FAIL [   0.010s] batten::it one_pr::b\n────────────\n     \
+                   Summary [   0.012s] 2 tests run: 1 passed, 1 failed, 8 skipped\n";
+        assert_eq!(nextest_lines(ran), 2);
+        assert!(nextest_ran(ran));
+        // Every terminal word counts, the retried form and the one the sweep's
+        // own bound sends included; a non-terminal line does not.
+        let ended = "        LEAK [   0.120s] batten::it a\n  \
+                     TRY 2 PASS [   0.004s] batten::it b\n     \
+                     SIGTERM [  60.000s] batten::it c\n   \
+                     LEAK-FAIL [   0.010s] batten::it d\n        \
+                     SLOW [> 60.000s] batten::it e\n";
+        assert_eq!(nextest_lines(ended), 4);
+        let empty = "    Starting 0 tests across 1 binary\n     \
+                     Summary [   0.000s] 0 tests run: 0 passed, 9 skipped\n";
+        assert_eq!(nextest_lines(empty), 0);
+        assert!(nextest_ran(empty));
+        assert!(!nextest_ran("error: could not compile `batten`\n"));
+    }
 
     /// A selected result with no readable verdict outranks its passing
     /// siblings (CLOUD-2264), rather than vanishing from the set.
