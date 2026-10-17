@@ -1255,7 +1255,8 @@ token_enum! {
 /// one declaration (`token_enum!`), and a site raising a class nobody declared is a
 /// compile error rather than a finding.
 ///
-/// The same discipline `crate::facts::Fact` carries, and for the same reason.
+/// The coupling `crate::facts::Fact` also wants, and for the same reason;
+/// `Fact` still keeps its list by hand (CLOUD-2454 moves it where it fits).
 ///
 /// # These are Batten's OWN words
 ///
