@@ -976,6 +976,19 @@ fn routes(refusal: &Refusal) -> Vec<String> {
     rendered
 }
 
+/// The `override request` route admitting `rule` under `class` for `subject`,
+/// quoted so a reader can paste it whole. `override request` names one route
+/// per subject with it when a pasted subject binds nothing (CLOUD-2303).
+#[must_use]
+pub fn override_route(rule: &str, class: &str, subject: &str) -> String {
+    format!(
+        "{OVERRIDE_OPENER}--rule {} --verdict {} --subject {}",
+        quoted(rule),
+        quoted(class),
+        quoted(subject),
+    )
+}
+
 /// One route's text, or `None` where it does not render.
 //MUTANT override-route-unrendered|s@^    if route.kind == RouteKind::Override {$@    if route.kind == RouteKind::Override \&\& false {@|the_override_route_on_the_line_is_the_request_that_admits
 //MUTANT route-reader-unnamed|s@^        Some(reader) => format!("{text} via {reader}"),$@        Some(_) => text,@|a_document_route_into_a_read_redirected_path_names_its_reader
@@ -984,12 +997,7 @@ fn route_text(refusal: &Refusal, route: &crate::verdict::Route) -> Option<String
     if route.kind == RouteKind::Override {
         let class = refusal.verdict()?;
         let subject = refusal.bindings().first()?;
-        return Some(format!(
-            "{OVERRIDE_OPENER}--rule {} --verdict {} --subject {}",
-            quoted(refusal.rule()),
-            quoted(class),
-            quoted(subject),
-        ));
+        return Some(override_route(refusal.rule(), class, subject));
     }
     if route.target == RULE_HOP_PLACEHOLDER {
         return None;
