@@ -1287,8 +1287,10 @@ pub const RED_HEAD: &str = "red-head";
 ///
 /// **A FAILED FAN-IN OWES ITS FAILED MEMBERS** (CLOUD-2443): the aggregator's
 /// log says only that a dependency failed, so reading it would pay the debt
-/// while the job that failed stays unread. Where no member is seen failing the
-/// aggregator itself stays owed, never nothing.
+/// while the job that failed stays unread. It owes them whenever its newest run
+/// failed, even where another required check's failure is the verdict's only
+/// finding. The aggregator itself stays owed beside them where no member is
+/// seen failing, or where a failed member carries no id a read could name.
 ///
 /// **A RUN WITH NO ID IS NOT RECORDED** (CLOUD-2443): a reading that carries no
 /// id defaults it to `0`, and no read receipt can ever name run `0`, so
@@ -1302,17 +1304,17 @@ pub fn red_runs(
     let latest = crate::checks_green::latest_per_name(runs, roster);
     let mut failed: Vec<(u64, String)> = Vec::new();
     for (name, run) in &latest {
-        if !findings.iter().any(|finding| finding.check == **name) {
+        let fanin = roster.fanin.as_deref() == Some(*name);
+        let found = findings.iter().any(|finding| finding.check == **name);
+        if !(found || fanin && run_failed(run)) {
             continue;
         }
-        let members = if roster.fanin.as_deref() == Some(*name) {
+        let (members, unnamed) = if fanin {
             failed_members(runs, roster, name)
         } else {
-            Vec::new()
+            (Vec::new(), false)
         };
-        // A MEMBER NO RECEIPT CAN NAME (id `0`) keeps the aggregator owed beside
-        // the members that can be read, so its failure is never paid by theirs.
-        if members.is_empty() || members.iter().any(|(id, _)| *id == 0) {
+        if members.is_empty() || unnamed {
             failed.push((run.id, (*name).to_owned()));
         }
         failed.extend(members);
@@ -1329,15 +1331,25 @@ pub fn red_runs(
     }
 }
 
-/// Every run outside the roster whose newest attempt FAILED (`failure` or
-/// `timed_out`), as `(run id, name)`: the jobs a failed aggregator stands for.
-/// A required check is never one: its failure is its own finding.
-/// A cancelled or skipped member is the aggregator's doing, never its cause.
+/// Whether a run's newest attempt FAILED: `failure` or `timed_out`. A cancelled
+/// or skipped run is a fan-in's doing, never its cause.
+fn run_failed(run: &crate::checks_green::Run) -> bool {
+    matches!(
+        run.state().conclusion(),
+        Some(crate::forge::Conclusion::Failure | crate::forge::Conclusion::TimedOut)
+    )
+}
+
+/// Every run outside the roster whose newest attempt [`run_failed`], as
+/// `(run id, name)`: the jobs a failed aggregator stands for. A required check
+/// is never one: its failure is its own finding. Beside them, whether any
+/// failed member carries no id (`0`) a read could name, which keeps the
+/// aggregator owed.
 fn failed_members(
     runs: &[crate::checks_green::Run],
     roster: &crate::checks_green::Roster,
     fanin: &str,
-) -> Vec<(u64, String)> {
+) -> (Vec<(u64, String)>, bool) {
     let names: std::collections::BTreeSet<&str> = runs
         .iter()
         .map(|run| run.name.as_str())
@@ -1347,16 +1359,12 @@ fn failed_members(
         required: names.into_iter().map(str::to_owned).collect(),
         ..roster.clone()
     };
-    crate::checks_green::latest_per_name(runs, &members)
+    let (named, unnamed): (Vec<_>, Vec<_>) = crate::checks_green::latest_per_name(runs, &members)
         .into_iter()
-        .filter(|(_, run)| {
-            matches!(
-                run.state().conclusion(),
-                Some(crate::forge::Conclusion::Failure | crate::forge::Conclusion::TimedOut)
-            )
-        })
+        .filter(|(_, run)| run_failed(run))
         .map(|(name, run)| (run.id, name.to_owned()))
-        .collect()
+        .partition(|(id, _)| *id != 0);
+    (named, !unnamed.is_empty())
 }
 
 /// A branch's red-head key, INJECTIVE where the shared branch-receipt slug is
@@ -1552,7 +1560,9 @@ impl RedHead {
                 })
             };
             match kind {
-                "head" => rest.clone_into(&mut record.head),
+                // The last NON-EMPTY head, as `read_red_head`'s supersession
+                // check reads it, so the two never name different heads.
+                "head" if !rest.is_empty() => rest.clone_into(&mut record.head),
                 "failed" => record.failed.extend(run(rest)),
                 "running" => match run(rest).filter(|run| is_run_id(&run.id)) {
                     Some(run) => {
@@ -1781,18 +1791,9 @@ pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
             // (CLOUD-2443): a red-head record is owed only while its `head` is
             // the branch's remote head, and this ref is how a reader with no
             // network knows that. Left behind, a red stop on this head would
-            // compare unequal to it and owe nothing.
-            //
-            // A REF THAT WILL NOT WRITE STOPS THE LAP LOUDLY, though the push
-            // landed: a stale ref would read as moved and drop the debt in
-            // silence, and the next lap's push of the same head is a no-op.
-            crate::gitwrite::set_ref(root, &tracking_ref(&reference), &head).with_context(
-                || {
-                    format!(
-                        "land: {reference} landed at {head}, but its tracking ref would not move"
-                    )
-                },
-            )?;
+            // compare unequal to it and owe nothing. Moved AFTER the landed
+            // line is recorded, so the push the remote applied is always one
+            // this store admits.
             Pushed::Landed(head)
         }
         // THE SERVER'S REASON IS DROPPED HERE DELIBERATELY. It is a pointer for
@@ -1802,7 +1803,33 @@ pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
         crate::lease::Outcome::Rejected { .. } => Pushed::Raced,
     };
     append(root, branch, std::slice::from_ref(&pushed.line()))?;
+    if let Pushed::Landed(head) = &pushed {
+        track_landed(root, &reference, head)?;
+    }
     Ok(pushed)
+}
+
+/// Move `reference`'s tracking ref to the `head` a push landed.
+///
+/// A REF THAT WILL NOT MOVE IS DELETED, which a reader takes as could-not-look
+/// and so leaves a red-head record owed; a stale one would read as moved and
+/// drop the debt in silence. Only when the delete fails too does the landing
+/// stop, naming the head that DID land, so nobody corrects a remote that is
+/// already right.
+///
+/// # Errors
+///
+/// A tracking ref that will neither move nor go.
+fn track_landed(root: &Path, reference: &str, head: &str) -> Result<()> {
+    let tracking = tracking_ref(reference);
+    if crate::gitwrite::set_ref(root, &tracking, head).is_ok()
+        || crate::gitwrite::delete_ref(root, &tracking).is_ok()
+    {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "land: {reference} landed at {head}, but its tracking ref {tracking} would neither move nor go"
+    ))
 }
 
 /// What the lap's verification said about this head.
@@ -6007,6 +6034,18 @@ mod tests {
             red_runs(&id_less, &roster, &[finding("final")]).failed,
             vec![(1, "final".to_owned())]
         );
+        // A REQUIRED FAILURE THAT IS THE VERDICT'S ONLY FINDING does not hide a
+        // failed fan-in: its members are owed too.
+        let masked = vec![
+            run("failure", "final", 1),
+            run("failure", "lint", 6),
+            run("failure", "windows", 2),
+        ];
+        assert_eq!(
+            red_runs(&masked, &roster, &[finding("lint")]).failed,
+            vec![(2, "windows".to_owned()), (6, "lint".to_owned())]
+        );
+
         // And beside readable members: their reads never pay the id-less one's.
         let partly = vec![
             run("failure", "final", 1),
