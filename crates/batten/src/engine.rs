@@ -941,6 +941,7 @@ pub fn disagreements(text: &str, tag: &str) -> Vec<(usize, String, &'static str)
 /// old version is left as it is, which a substring replace was not.
 //MUTANT-SUITE crates/batten/src/engine.rs
 //MUTANT url-swap-unanchored|s@^    Some(format!("{base}/{prefix}{new}/{asset}"))$@    Some(url.replace(old, new))@|a_moved_url_rewrites_only_its_release
+//MUTANT gate-digest-case-sensitive|s@^        if pinned.map(str::to_ascii_lowercase) != published_digest(body, asset) {$@        if pinned.map(str::to_owned) != published_digest(body, asset) {@|an_artifact_at_the_pinned_version_is_judged_by_its_url_and_digest
 #[must_use]
 pub fn moved_url(url: &str, new: &str) -> Option<String> {
     let (head, asset) = url.rsplit_once('/')?;
@@ -1542,6 +1543,10 @@ mod tests {
         };
         let url = "https://h/download/v9.9.9/batten-9.9.9-x.tar.gz";
         assert!(stale_artifacts(&config(url, &"a".repeat(64)), "v9.9.9", &sums)?.is_empty());
+        assert!(
+            stale_artifacts(&config(url, &"A".repeat(64)), "v9.9.9", &sums)?.is_empty(),
+            "a digest's case is no disagreement"
+        );
         assert_eq!(
             stale_artifacts(&config(url, &"0".repeat(64)), "v9.9.9", &sums)?,
             [(

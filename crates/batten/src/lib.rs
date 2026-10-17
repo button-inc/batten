@@ -814,14 +814,7 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     // ONE FETCH OF THE MANIFEST, AND ONLY WHEN A COPY NEEDS A DIGEST: the copy
     // cached beside the release, which `engine gate` judges by too.
     let cache = state::repo_state_dir(&root)?;
-    let fetched = std::cell::OnceCell::new();
-    let sums = || -> Result<String> {
-        if let Some(body) = fetched.get() {
-            return Ok(String::clone(body));
-        }
-        let body = engine::pinned_sums(&cache, &repository, &target)?;
-        Ok(fetched.get_or_init(|| body).clone())
-    };
+    let sums = || engine::pinned_sums(&cache, &repository, &target);
     let synced = sync_declarations(&text, &target, &sums)?;
     let mut published = std::collections::BTreeSet::new();
     let mut stale = Vec::new();
@@ -1281,9 +1274,9 @@ fn sync_artifact(
         set_str(item, &url);
     }
     // A MISSING DIGEST IS WRITTEN, so every artifact `engine gate` judges is one
-    // this can repair; case is not a disagreement.
+    // this can repair; one in another case is written as the release spells it.
     let pinned = artifact.get("sha256").and_then(toml_edit::Item::as_str);
-    if !pinned.is_some_and(|pinned| pinned.eq_ignore_ascii_case(&digest)) {
+    if pinned != Some(digest.as_str()) {
         match artifact.get_mut("sha256") {
             Some(item) => set_str(item, &digest),
             None => {
