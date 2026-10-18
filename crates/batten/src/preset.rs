@@ -2460,9 +2460,253 @@ pub fn verdict_rows() -> Vec<DeclaredVerdict> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::{MANIFESTS, names};
+    use super::{
+        MANIFESTS, Manifest, PresetModule, eject, ejected_from, ejected_source, find,
+        helpers_defined, mode_sources, names, uses, verdict_rows,
+    };
+    use crate::rules::{Rule, RuleScope};
 
     use std::collections::BTreeSet;
+
+    /// A preset of four modules: `a` defines a helper `b` calls, `d` stands
+    /// alone at the same scope, `c` decides the other surface, and `b` reads a
+    /// provider's language.
+    const FIXTURE: Manifest = Manifest {
+        name: "fixture",
+        version: 3,
+        modules: &[
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:fixture>/a.rego",
+                source: "package a\n#MUTANT row|s@x@y@|case\nhelper(x) if { x }\n",
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: Some("github"),
+                pointer: "<preset:fixture>/b.rego",
+                source: "package b\nrules contains \"x\" if { helper(1) }\n",
+            },
+            PresetModule {
+                scope: RuleScope::MediatedCall,
+                provider: None,
+                pointer: "<preset:fixture>/c.rego",
+                source: "package c\n",
+            },
+            PresetModule {
+                scope: RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:fixture>/d.rego",
+                source: "package d\n# helper(1) in a comment links nothing\nlone := 1\n",
+            },
+        ],
+        verdicts: &[],
+        patterns: &[],
+    };
+
+    fn pointers(pairs: &[(String, String)]) -> Vec<&str> {
+        pairs.iter().map(|(pointer, _)| pointer.as_str()).collect()
+    }
+
+    #[test]
+    fn a_manifest_answers_for_its_modules_by_scope_provider_and_name() {
+        let a = &FIXTURE.modules[0];
+        assert_eq!(a.name(), "a");
+        assert!(FIXTURE.decides(RuleScope::Tree));
+        assert!(FIXTURE.decides(RuleScope::MediatedCall));
+        assert_eq!(
+            FIXTURE.scopes(),
+            vec![RuleScope::Tree, RuleScope::MediatedCall]
+        );
+        assert_eq!(
+            pointers(&FIXTURE.modules_at(RuleScope::Tree)),
+            vec![
+                "<preset:fixture>/a.rego",
+                "<preset:fixture>/b.rego",
+                "<preset:fixture>/d.rego"
+            ]
+        );
+        assert_eq!(
+            FIXTURE.modules_at(RuleScope::MediatedCall),
+            vec![(
+                "<preset:fixture>/c.rego".to_owned(),
+                "package c\n".to_owned()
+            )]
+        );
+        assert_eq!(
+            pointers(&FIXTURE.modules_for(RuleScope::Tree, None, &["d".to_owned()])),
+            vec!["<preset:fixture>/a.rego"]
+        );
+        assert_eq!(
+            pointers(&FIXTURE.modules_for(RuleScope::Tree, Some("github"), &[])),
+            vec![
+                "<preset:fixture>/a.rego",
+                "<preset:fixture>/b.rego",
+                "<preset:fixture>/d.rego"
+            ]
+        );
+        assert_eq!(
+            FIXTURE.module("d").map(|module| module.pointer),
+            Some("<preset:fixture>/d.rego")
+        );
+        assert!(FIXTURE.module("e").is_none());
+        assert_eq!(
+            FIXTURE.providers_at(RuleScope::Tree),
+            vec!["no provider", "github"]
+        );
+        assert_eq!(
+            FIXTURE.providers_at(RuleScope::MediatedCall),
+            vec!["no provider"]
+        );
+    }
+
+    /// The closure is the connected component of helper use at one scope: the
+    /// definer and its caller, never the module that only names it in a comment.
+    #[test]
+    fn a_closure_is_every_module_linked_by_a_helper_and_nothing_else() {
+        let closure = |at: usize| -> Vec<&str> {
+            FIXTURE
+                .closure(&FIXTURE.modules[at])
+                .iter()
+                .map(|module| module.name())
+                .collect()
+        };
+        assert_eq!(closure(0), vec!["a", "b"]);
+        assert_eq!(closure(1), vec!["a", "b"]);
+        assert_eq!(closure(3), vec!["d"]);
+        assert_eq!(closure(2), vec!["c"]);
+    }
+
+    #[test]
+    fn a_helper_is_a_column_zero_function_or_complete_rule_and_a_use_is_a_whole_word() {
+        let source = "package p\nimport rego.v1\ndefault allow := false\nf(x) if { x }\n\
+                      flag := true\nset if { true }\nsame = 1\nequal == 1\ntest_case if { true }\n\
+                      rules contains \"x\" if { f(1) }\n  indented := 1\n";
+        assert_eq!(
+            helpers_defined(source),
+            BTreeSet::from([
+                "f(".to_owned(),
+                "flag".to_owned(),
+                "same".to_owned(),
+                "set".to_owned()
+            ])
+        );
+        assert!(uses("x := flag", "flag"));
+        assert!(uses("y := f(2)", "f("));
+        assert!(!uses("x := flagged", "flag"));
+        assert!(!uses("x := input.flag", "flag"));
+        assert!(!uses("x := my_flag", "flag"));
+    }
+
+    #[test]
+    fn an_ejected_copy_records_where_it_came_from_and_drops_the_mutant_rows() {
+        let copy = ejected_source(&FIXTURE, &FIXTURE.modules[0]);
+        assert!(
+            copy.starts_with("# batten-ejected: fixture/a version 3\n"),
+            "{copy}"
+        );
+        assert!(!copy.contains("#MUTANT"), "{copy}");
+        assert!(copy.ends_with("helper(x) if { x }\n"), "{copy}");
+        assert_eq!(
+            ejected_from(&copy),
+            Some(("fixture".to_owned(), "a".to_owned(), 3))
+        );
+        assert_eq!(ejected_from("package a\n"), None);
+    }
+
+    #[test]
+    fn every_vendored_preset_is_found_by_name_and_declares_its_classes() {
+        assert_eq!(names().len(), MANIFESTS.len());
+        for name in names() {
+            assert_eq!(find(name).map(|manifest| manifest.name), Some(name));
+        }
+        assert!(find("no-such-preset").is_none());
+        let declared: usize = MANIFESTS
+            .iter()
+            .map(|manifest| manifest.verdicts.len())
+            .sum();
+        assert_eq!(verdict_rows().len(), declared);
+        assert_eq!(mode_sources().len(), 4);
+    }
+
+    fn rule(text: &str) -> Rule {
+        toml::from_str(text).expect("the fixture row loads")
+    }
+
+    const GIT_ROW: &str = "id = \"git calls\"\nkind = \"policy\"\nscope = \"mediated_call\"\n\
+                           preset = \"git\"\nseverity = \"deny\"\n";
+
+    /// An eject copies the module, excepts it on the one enabling row, and
+    /// appends the row loading the copy; every refusal changes nothing.
+    #[test]
+    fn an_eject_copies_the_module_and_switches_the_vendored_one_off() {
+        let root = crate::scratch::scratch("preset-eject");
+        let config = root.join("batten.toml");
+        let text = format!("version = 1\n\n[[rule]]\n{GIT_ROW}");
+        std::fs::write(&config, &text).unwrap();
+        let target = "git/git-call-is-preapproved";
+        let tree_row = rule(
+            &GIT_ROW
+                .replace("mediated_call", "tree")
+                .replace("git calls", "t"),
+        );
+        let shape_row = rule(&GIT_ROW.replace("policy", "shape").replace("git calls", "s"));
+
+        let refused = |rules: &[Rule]| {
+            assert!(eject(&root, &config, rules, target).is_err());
+            assert_eq!(std::fs::read_to_string(&config).unwrap(), text);
+        };
+        refused(&[rule(GIT_ROW), rule(&GIT_ROW.replace("git calls", "again"))]);
+        refused(&[
+            rule(GIT_ROW),
+            rule(&format!(
+                "{}bundle = \"policy/git\"\n",
+                GIT_ROW
+                    .replace("mediated_call", "tree")
+                    .replace("git calls", "b")
+            )),
+        ]);
+        refused(&[
+            rule(GIT_ROW),
+            rule(
+                &GIT_ROW
+                    .replace("git calls", "git ejected")
+                    .replace("preset = \"git\"", "preset = \"other\""),
+            ),
+        ]);
+
+        let done = eject(
+            &root,
+            &config,
+            &[rule(GIT_ROW), tree_row, shape_row],
+            target,
+        )
+        .unwrap();
+        assert_eq!(
+            done.written,
+            vec!["policy/git/git-call-is-preapproved.rego"]
+        );
+        assert_eq!(
+            (done.row.as_str(), done.copies.as_str(), done.added),
+            ("git calls", "git ejected", true)
+        );
+        let copy = std::fs::read_to_string(root.join(&done.written[0])).unwrap();
+        assert!(copy.starts_with("# batten-ejected: git/git-call-is-preapproved version "));
+        let edited = std::fs::read_to_string(&config).unwrap();
+        assert!(
+            edited.contains("except = [\"git-call-is-preapproved\"]"),
+            "{edited}"
+        );
+        assert!(edited.contains("bundle = \"policy/git\""), "{edited}");
+        assert!(
+            !edited.contains("documents"),
+            "no empty selector is copied: {edited}"
+        );
+        assert!(
+            eject(&root, &config, &[rule(GIT_ROW)], target).is_err(),
+            "a copy already on disk"
+        );
+    }
 
     /// No `command` route's target begins with the verb it renders under
     /// (CLOUD-1470). `render_route` prefixes every command target with `run `,

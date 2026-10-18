@@ -1160,21 +1160,32 @@ const SYSTEM_TRUST_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
 /// operator can see, and the cost of a wrong `true` is traffic silently leaving
 /// a path they chose.
 fn trust_names(org: &str) -> bool {
-    // A VARIABLE THAT IS SET DECIDES WHICH BUNDLE, EVEN IF IT CANNOT BE READ.
-    // Falling through to the system store when the named file is missing would
-    // answer this question about a bundle the operator did not choose — and in an
-    // intercepting sandbox the system store carries the interceptor too, so the
-    // fallback would resurrect the bypass exactly where the operator had pointed
-    // the tool somewhere else. The system path is for a host that names none.
-    let bundle = TRUST_BUNDLE_VARS
-        .iter()
-        .find_map(std::env::var_os)
-        .map_or_else(|| PathBuf::from(SYSTEM_TRUST_BUNDLE), PathBuf::from);
-    let Ok(text) = fs::read_to_string(&bundle) else {
+    let Ok(text) = fs::read_to_string(trust_bundle()) else {
         return false;
     };
-    // Split on the PEM footer rather than feeding the whole file: a bundle is a
-    // concatenation, and the parser takes one document at a time.
+    bundle_names(&text, org)
+}
+
+/// The trust bundle this host's tools read.
+///
+/// A VARIABLE THAT IS SET DECIDES WHICH BUNDLE, EVEN IF IT CANNOT BE READ.
+/// Falling through to the system store when the named file is missing would
+/// answer this question about a bundle the operator did not choose — and in an
+/// intercepting sandbox the system store carries the interceptor too, so the
+/// fallback would resurrect the bypass exactly where the operator had pointed
+/// the tool somewhere else. The system path is for a host that names none.
+fn trust_bundle() -> PathBuf {
+    TRUST_BUNDLE_VARS
+        .iter()
+        .find_map(std::env::var_os)
+        .map_or_else(|| PathBuf::from(SYSTEM_TRUST_BUNDLE), PathBuf::from)
+}
+
+/// Whether any certificate in the concatenated bundle `text` names `org`.
+///
+/// Split on the PEM footer rather than feeding the whole file: a bundle is a
+/// concatenation, and the parser takes one document at a time.
+fn bundle_names(text: &str, org: &str) -> bool {
     text.split_inclusive(PEM_FOOTER)
         .filter(|block| block.contains(PEM_FOOTER))
         .filter_map(|block| organisation_of(block.trim_start()))
@@ -1821,8 +1832,7 @@ trait SplitOnceNewline {
 
 impl SplitOnceNewline for [u8] {
     fn split_once_newline(&self) -> Option<&[u8]> {
-        let at = self.iter().position(|byte| *byte == b'\n')?;
-        self.get(at + 1..)
+        self.splitn(2, |byte| *byte == b'\n').nth(1)
     }
 }
 
@@ -2872,5 +2882,296 @@ mod tests {
         assert!(Freshness::Mismatch.is_stale());
         assert!(!Freshness::Fresh.is_stale());
         assert_ne!(Freshness::Missing.as_str(), Freshness::Mismatch.as_str());
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("batten-provision-tests")
+            .join(name);
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_report_names_only_its_stale_entries_one_line_each() {
+        let status = |name: &str, freshness| EntryStatus {
+            name: name.to_owned(),
+            version: "1.0".to_owned(),
+            freshness,
+        };
+        let fresh = Report {
+            entries: vec![status("a", Freshness::Fresh)],
+        };
+        assert!(!fresh.any_stale());
+        assert!(fresh.stale_lines().is_empty());
+        let stale = Report {
+            entries: vec![
+                status("a", Freshness::Fresh),
+                status("b", Freshness::Missing),
+            ],
+        };
+        assert!(stale.any_stale());
+        assert_eq!(stale.stale_lines(), vec!["b 1.0 missing".to_owned()]);
+    }
+
+    /// An artifact fetched over `file://` installs a runnable binary, reads as
+    /// fresh, reinstalls from the cache once the binary is gone, and a pin that
+    /// does not match is refused rather than installed.
+    #[test]
+    fn an_artifact_installs_verified_and_reinstalls_from_the_cache() {
+        let dir = scratch("apply");
+        let artifact = dir.join("tool.sh");
+        let body = b"#!/bin/sh\nexit 0\n".to_vec();
+        fs::write(&artifact, &body).unwrap();
+        let mut entry = entry("tool", &digest(&body));
+        entry.url = Some(format!("file://{}", artifact.display()));
+        let cache = dir.join("cache");
+        let freshness = |entry: &Provision| status(std::slice::from_ref(entry), &cache).unwrap();
+
+        assert_eq!(freshness(&entry).entries[0].freshness, Freshness::Missing);
+        assert_eq!(
+            apply(&entry, &cache, true, false).unwrap(),
+            Applied::Previewed
+        );
+        assert_eq!(
+            apply(&entry, &cache, false, false).unwrap(),
+            Applied::Installed
+        );
+        let binary = entry_dir(&cache, &entry).join(BIN_DIR).join("tool");
+        assert_eq!(fs::read(&binary).unwrap(), body);
+        if cfg!(unix) {
+            let ran = crate::exec::piped_argv(
+                &dir,
+                &[binary.to_string_lossy().into_owned()],
+                "",
+                crate::exec::Diagnostics::Drop,
+                &[],
+            );
+            assert_eq!(ran.map(|(code, _)| code), Some(0), "installed executable");
+        }
+        assert_eq!(freshness(&entry).entries[0].freshness, Freshness::Fresh);
+        assert_eq!(
+            apply(&entry, &cache, false, false).unwrap(),
+            Applied::AlreadyFresh
+        );
+
+        // The binary gone and the network gone: the cached artifact still pins.
+        fs::remove_file(&binary).unwrap();
+        fs::remove_file(&artifact).unwrap();
+        assert_eq!(
+            apply(&entry, &cache, false, false).unwrap(),
+            Applied::Installed
+        );
+        assert_eq!(fs::read(&binary).unwrap(), body);
+
+        // The binary present and the cached artifact gone is a cache miss.
+        fs::remove_file(entry_dir(&cache, &entry).join(ARTIFACT)).unwrap();
+        assert_eq!(freshness(&entry).entries[0].freshness, Freshness::Missing);
+
+        let mut wrong = entry.clone();
+        wrong.sha256 = Some(digest(b"other bytes"));
+        fs::write(&artifact, &body).unwrap();
+        let cache = dir.join("other-cache");
+        let err = apply(&wrong, &cache, false, false).unwrap_err();
+        assert!(err.downcast_ref::<crate::Denial>().is_some(), "{err}");
+        assert!(
+            !entry_dir(&cache, &wrong)
+                .join(BIN_DIR)
+                .join("tool")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn the_binary_is_found_by_file_name_however_the_tarball_nests_it() {
+        let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::default(),
+        ));
+        for (name, bytes) in [
+            ("tool-1.0/README", &b"read me"[..]),
+            ("tool-1.0/tool", b"ELF"),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder.append_data(&mut header, name, bytes).unwrap();
+        }
+        let tarball = builder.into_inner().unwrap().finish().unwrap();
+        assert_eq!(extract(&tarball, "tool").unwrap(), b"ELF");
+        assert!(extract(&tarball, "other").is_err());
+    }
+
+    #[test]
+    fn only_a_launcher_invocation_is_launched() {
+        let ordinary = ["batten", "status"].map(std::ffi::OsString::from);
+        assert!(launched(ordinary.into_iter()).is_none());
+        let launcher = [
+            std::ffi::OsString::from("batten"),
+            std::ffi::OsString::from(LAUNCHER_VERB),
+            std::ffi::OsString::from("/nowhere/launcher"),
+        ];
+        assert!(
+            launched(launcher.into_iter()).is_some(),
+            "an unreadable launcher fails rather than running batten"
+        );
+    }
+
+    /// Only a launcher naming a missing interpreter is stale; a plain file, a
+    /// present interpreter and another verb are not.
+    #[test]
+    fn a_launcher_whose_interpreter_is_gone_is_stale() {
+        let dir = scratch("relaunch");
+        let file = |name: &str, body: String| {
+            let path = dir.join(name);
+            fs::write(&path, body).unwrap();
+            path
+        };
+        let me = std::env::current_exe().unwrap();
+        assert!(relaunches_a_present_interpreter(&file(
+            "plain",
+            "ELF".to_owned()
+        )));
+        assert!(relaunches_a_present_interpreter(&file(
+            "present",
+            format!("#!{} {LAUNCHER_VERB}\n{{}}\n", me.display())
+        )));
+        assert!(!relaunches_a_present_interpreter(&file(
+            "gone",
+            format!("#!/nowhere/batten {LAUNCHER_VERB}\n{{}}\n")
+        )));
+        assert!(relaunches_a_present_interpreter(&file(
+            "other-verb",
+            "#!/nowhere/batten other\n{}\n".to_owned()
+        )));
+    }
+
+    /// ISRG Root X2, a public root, whose subject spells `O` as a
+    /// `PrintableString` after a `C`.
+    const ISRG_ROOT_X2: &str = "-----BEGIN CERTIFICATE-----
+MIICGzCCAaGgAwIBAgIQQdKd0XLq7qeAwSxs6S+HUjAKBggqhkjOPQQDAzBPMQsw
+CQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJuZXQgU2VjdXJpdHkgUmVzZWFyY2gg
+R3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBYMjAeFw0yMDA5MDQwMDAwMDBaFw00
+MDA5MTcxNjAwMDBaME8xCzAJBgNVBAYTAlVTMSkwJwYDVQQKEyBJbnRlcm5ldCBT
+ZWN1cml0eSBSZXNlYXJjaCBHcm91cDEVMBMGA1UEAxMMSVNSRyBSb290IFgyMHYw
+EAYHKoZIzj0CAQYFK4EEACIDYgAEzZvVn4CDCuwJSvMWSj5cz3es3mcFDR0HttwW
++1qLFNvicWDEukWVEYmO6gbf9yoWHKS5xcUy4APgHoIYOIvXRdgKam7mAHf7AlF9
+ItgKbppbd9/w+kHsOdx1ymgHDB/qo0IwQDAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0T
+AQH/BAUwAwEB/zAdBgNVHQ4EFgQUfEKWrt5LSDv6kviejM9ti6lyN5UwCgYIKoZI
+zj0EAwMDaAAwZQIwe3lORlCEwkSHRhtFcP9Ymd70/aTSVaYgLXTWNLxBo1BfASdW
+tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
+/q4AaOeMSQ+2b1tbFfLn
+-----END CERTIFICATE-----
+";
+
+    #[test]
+    fn the_organisation_is_read_from_the_subject_field() {
+        let org = "Internet Security Research Group";
+        assert_eq!(organisation_of(ISRG_ROOT_X2).as_deref(), Some(org));
+        assert!(organisation_of("not a certificate").is_none());
+        let bundle = format!("{ISRG_ROOT_X2}\n{ISRG_ROOT_X2}");
+        assert!(bundle_names(&bundle, org));
+        assert!(!bundle_names(&bundle, "Some Other Authority"));
+    }
+
+    /// The host's own bundle answers for an organisation it carries and not
+    /// for one it does not; an unreadable bundle answers for nothing.
+    #[test]
+    fn the_host_bundle_names_what_it_carries_and_nothing_else() {
+        assert!(!trust_names("no authority is named this"));
+        match fs::read_to_string(trust_bundle()) {
+            Ok(text) => {
+                let carried = text
+                    .split_inclusive(PEM_FOOTER)
+                    .find_map(|block| organisation_of(block.trim_start()));
+                assert_eq!(
+                    carried.as_deref().is_some_and(trust_names),
+                    carried.is_some()
+                );
+            }
+            Err(_) => assert!(!trust_names("Internet Security Research Group")),
+        }
+    }
+
+    /// A fresh receipt answers without a probe, live or not.
+    #[test]
+    fn a_fresh_credential_receipt_answers_without_a_probe() {
+        let value = Secret::new("batten-provision-test-credential".to_owned());
+        let receipt = credential_receipt_path(&value).expect("tests run inside a checkout");
+        assert!(receipt.ends_with(format!(
+            "credential.{}",
+            digest(b"batten-provision-test-credential")
+        )));
+        fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        let probe = "https://batten-provision-test.invalid/";
+        fs::write(&receipt, "live\n").unwrap();
+        assert!(credential_usable(&value, probe));
+        fs::write(&receipt, "unusable\n").unwrap();
+        assert!(!credential_usable(&value, probe));
+        let _ = fs::remove_file(&receipt);
+    }
+
+    #[test]
+    fn every_credential_verdict_says_which_failure_it_is() {
+        let whys = [
+            Verdict::Live,
+            Verdict::Refused,
+            Verdict::RouteSubstitutes,
+            Verdict::Unreachable,
+            Verdict::NoProbe("the reason".to_owned()),
+        ]
+        .map(|verdict| verdict.why());
+        assert_eq!(whys[0], "the session credential authenticated");
+        assert_eq!(
+            whys[1],
+            "a declared session credential did not authenticate"
+        );
+        assert!(whys[2].starts_with("the route to the credential probe answers"));
+        assert_eq!(whys[3], "the credential probe could not be reached");
+        assert_eq!(whys[4], "no credential probe could be resolved: the reason");
+    }
+
+    /// Each env row shape the loader refuses, and each it accepts.
+    #[test]
+    fn an_env_row_is_exactly_one_rule_for_one_variable() {
+        let mut list = unset_row("A");
+        list.unset = false;
+        list.prepend_list = vec!["/x".to_owned()];
+        let mut sourced = unset_row("A");
+        sourced.unset = false;
+        sourced.from_first_set = vec!["B".to_owned()];
+        let with = |row: &ProvisionEnv, change: &dyn Fn(&mut ProvisionEnv)| {
+            let mut row = row.clone();
+            change(&mut row);
+            let mut entry = entry("tool", &"a".repeat(64));
+            entry.env = vec![row];
+            validate_env(&entry)
+        };
+        for accepted in [&unset_row("A"), &list, &sourced, &credential_row("A")] {
+            assert!(with(accepted, &|_| {}).is_ok(), "{accepted:?}");
+        }
+        let refused: [(&ProvisionEnv, &dyn Fn(&mut ProvisionEnv)); 7] = [
+            (&unset_row("A"), &|row| {
+                row.prepend_list = vec!["/x".to_owned()]
+            }),
+            (&unset_row("A"), &|row| {
+                row.from_first_set = vec!["B".to_owned()]
+            }),
+            (&unset_row("A"), &|row| {
+                row.reject_prefix = Some("p".to_owned())
+            }),
+            (&list, &|row| row.reject_prefix = Some("p".to_owned())),
+            (&list, &|row| row.from_first_set = vec!["B".to_owned()]),
+            (&list, &|row| row.prepend_list.clear()),
+            (&list, &|row| row.name = " ".to_owned()),
+        ];
+        for (row, change) in refused {
+            assert!(with(row, change).is_err(), "{row:?}");
+        }
+        let mut blank = entry("tool", &"a".repeat(64));
+        blank.url = Some("  ".to_owned());
+        assert!(validate(&[blank]).is_err(), "an empty url is refused");
     }
 }

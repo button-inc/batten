@@ -5292,6 +5292,424 @@ mod tests {
     use super::*;
     use crate::error::UsageError;
 
+    // --- `[perf]` and the version floor --------------------------------------
+
+    fn latency(runs: u32, loose_factor: u64) -> Perf {
+        Perf {
+            exempt: Vec::new(),
+            latency: Some(PerfLatency {
+                command: vec!["cargo".to_owned()],
+                runs,
+                budget_seconds: 10,
+                slack_seconds: 1,
+                loose_factor,
+            }),
+        }
+    }
+
+    fn exempt(ratio: &str, expires: &str) -> Perf {
+        Perf {
+            exempt: vec![PerfExempt {
+                path: "check".to_owned(),
+                ratio: ratio.to_owned(),
+                expires: expires.to_owned(),
+                reason: "measured".to_owned(),
+            }],
+            latency: None,
+        }
+    }
+
+    #[test]
+    fn a_perf_table_that_would_decide_nothing_is_refused_at_load() {
+        assert!(latency(1, 1).validate().is_ok());
+        assert!(latency(0, 1).validate().is_err(), "zero runs");
+        assert!(latency(1, 0).validate().is_err(), "zero loose factor");
+        let mut unnamed = latency(1, 1);
+        if let Some(latency) = unnamed.latency.as_mut() {
+            latency.command = vec![" ".to_owned()];
+        }
+        assert!(unnamed.validate().is_err(), "no program to time");
+        assert!(exempt("1.2", "2026-11-30").validate().is_ok());
+        for (ratio, expires) in [
+            ("0", "2026-11-30"),
+            ("x", "2026-11-30"),
+            ("1.2", "2026-9-01"),
+            ("1.2", "2026/11/30"),
+            ("1.2", "2026-11-3x"),
+            ("1.2", "2026-11-301"),
+            ("1.2", "2026-11-3"),
+        ] {
+            assert!(
+                exempt(ratio, expires).validate().is_err(),
+                "{ratio} {expires}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_floor_is_owed_only_for_a_release_adding_a_column_it_does_not_name() {
+        let set = |keys: &[&str]| -> std::collections::BTreeSet<String> {
+            keys.iter().map(|key| (*key).to_owned()).collect()
+        };
+        assert_eq!(
+            additions_since(&set(&["a", "b"]), &set(&["a", "b", "c", "d"])),
+            vec!["c".to_owned(), "d".to_owned()]
+        );
+        assert!(additions_since(&set(&["a"]), &set(&["a"])).is_empty());
+        let added = ["c".to_owned()];
+        assert!(floor_owed(&added, Some("0.0.1"), "0.0.2"));
+        assert!(floor_owed(&added, None, "0.0.2"));
+        assert!(!floor_owed(&added, Some("0.0.2"), "0.0.2"));
+        assert!(!floor_owed(&[], Some("0.0.1"), "0.0.2"));
+    }
+
+    #[test]
+    fn a_floor_above_this_build_is_read_off_the_raw_document() {
+        let running = semver::Version::parse(VERSION).unwrap();
+        let next = format!("{}.{}.{}", running.major, running.minor, running.patch + 1);
+        assert!(build_is_below(&next));
+        assert!(!build_is_below(VERSION), "equal is not below");
+        assert!(!build_is_below("0.0.0"));
+        assert!(!build_is_below("not a version"));
+        assert!(floor_is_above_this_build(&format!(
+            "min_batten_version = \"{next}\"\n[[rule]]\nunknown = 1\n"
+        )));
+        assert!(!floor_is_above_this_build(&format!(
+            "min_batten_version = \"{VERSION}\"\n"
+        )));
+        assert!(!floor_is_above_this_build("[unclosed"));
+    }
+
+    #[test]
+    fn only_a_variant_this_build_lacks_reads_as_an_unknown_variant() {
+        #[derive(serde::Deserialize)]
+        enum Kind {
+            Known,
+        }
+        type Row = std::collections::BTreeMap<String, Kind>;
+        assert!(
+            toml::from_str::<Row>("kind = \"Known\"\n")
+                .is_ok_and(|row| matches!(row["kind"], Kind::Known))
+        );
+        let variant = toml::from_str::<Row>("kind = \"Unknown\"\n").err().unwrap();
+        assert!(is_unknown_variant(&variant), "{variant}");
+        let shape = toml::from_str::<Row>("kind = 1\n").err().unwrap();
+        assert!(!is_unknown_variant(&shape), "{shape}");
+    }
+
+    // --- the text meter and the schema caps (CLOUD-1642) --------------------
+
+    #[derive(serde::Serialize)]
+    enum MeteredShape {
+        New(String),
+        Pair(String, String),
+        Named { text: String },
+    }
+
+    #[derive(serde::Serialize)]
+    struct MeteredTwo(String, String);
+
+    #[derive(serde::Serialize)]
+    struct MeteredRow {
+        list: Vec<String>,
+        pair: (String, String),
+        two: MeteredTwo,
+        map: std::collections::BTreeMap<String, String>,
+        shapes: Vec<MeteredShape>,
+        reason: String,
+    }
+
+    fn metered_row(long: &str, reason: &str) -> MeteredRow {
+        MeteredRow {
+            list: vec!["a".to_owned(), long.to_owned()],
+            pair: ("a".to_owned(), long.to_owned()),
+            two: MeteredTwo("a".to_owned(), long.to_owned()),
+            map: std::collections::BTreeMap::from([("k".to_owned(), long.to_owned())]),
+            shapes: vec![
+                MeteredShape::New(long.to_owned()),
+                MeteredShape::Pair("a".to_owned(), long.to_owned()),
+                MeteredShape::Named {
+                    text: long.to_owned(),
+                },
+            ],
+            reason: reason.to_owned(),
+        }
+    }
+
+    /// Every composite the meter walks restores its path on the way out, so a
+    /// censused column after them is still held to its own tier.
+    #[test]
+    fn a_censused_column_after_every_composite_keeps_its_own_cap() {
+        let reason = "r".repeat(REMEDY_MAX + 1);
+        assert_eq!(
+            text_offenders("rule", &vec![metered_row("short", &reason)]),
+            vec![format!(
+                "rule[0].reason {} over {REMEDY_MAX}",
+                REMEDY_MAX + 1
+            )]
+        );
+    }
+
+    /// A long string is found inside every composite, under a pointer naming
+    /// its element index, map key and variant.
+    #[test]
+    fn a_long_string_is_found_inside_every_composite_by_pointer() {
+        let long = "x".repeat(TEXT_MAX + 1);
+        let over = format!("{} over {TEXT_MAX}", TEXT_MAX + 1);
+        let expected: Vec<String> = [
+            "rule[0].list[1]",
+            "rule[0].pair[1]",
+            "rule[0].two[1]",
+            "rule[0].map.k",
+            "rule[0].shapes[0].New",
+            "rule[0].shapes[1].Pair[1]",
+            "rule[0].shapes[2].Named.text",
+        ]
+        .iter()
+        .map(|at| format!("{at} {over}"))
+        .collect();
+        assert_eq!(
+            text_offenders("rule", &vec![metered_row(&long, "short")]),
+            expected
+        );
+    }
+
+    /// A value the meter cannot walk is loud, naming why, never a clean list.
+    #[test]
+    fn an_unmeterable_value_says_why() {
+        struct Failing;
+        impl serde::Serialize for Failing {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                _: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("boom"))
+            }
+        }
+        let found = text_offenders("rule", &Failing);
+        assert_eq!(found, vec!["rule unmeterable (boom)".to_owned()]);
+    }
+
+    fn capped(schema: serde_json::Value) -> Result<serde_json::Value> {
+        let mut schema = schemars::Schema::try_from(schema).unwrap();
+        cap_text_leaves(&mut schema)?;
+        Ok(schema.as_value().clone())
+    }
+
+    /// A text leaf gets its column's cap wherever the schema reaches it; an
+    /// enumerated or non-text one gets none; a `$def` two caps reach is refused.
+    #[test]
+    fn every_text_leaf_is_capped_by_the_column_it_is_reached_as() {
+        let row = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string"},
+                "n": {"type": "integer"},
+                "kind": {"type": "string", "enum": ["a"]},
+                "fixed": {"type": "string", "const": "a"}
+            }
+        });
+        let out = capped(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "rule": {"type": "array", "items": {"$ref": "#/$defs/Row"}},
+                "both": {"type": ["string", "null"]},
+                "map": {"type": "object", "additionalProperties": {"type": "string"}},
+                "pat": {"type": "object", "patternProperties": {"^x": {"type": "string"}}},
+                "tuple": {"type": "array", "prefixItems": [{"type": "string"}]},
+                "old": {"type": "array", "items": [{"type": "string"}]}
+            },
+            "$defs": {"Row": row}
+        }))
+        .unwrap();
+        let cap = |pointer: &str| out.pointer(pointer).and_then(serde_json::Value::as_u64);
+        let max = |limit: usize| Some(u64::try_from(limit).unwrap());
+        assert_eq!(
+            cap("/$defs/Row/properties/reason/maxLength"),
+            max(REMEDY_MAX)
+        );
+        assert_eq!(cap("/properties/both/maxLength"), max(TEXT_MAX));
+        assert_eq!(
+            cap("/properties/map/additionalProperties/maxLength"),
+            max(TEXT_MAX)
+        );
+        assert_eq!(
+            cap("/properties/pat/patternProperties/^x/maxLength"),
+            max(TEXT_MAX)
+        );
+        assert_eq!(
+            cap("/properties/tuple/prefixItems/0/maxLength"),
+            max(TEXT_MAX)
+        );
+        assert_eq!(cap("/properties/old/items/0/maxLength"), max(TEXT_MAX));
+        for none in ["n", "kind", "fixed"] {
+            assert_eq!(
+                cap(&format!("/$defs/Row/properties/{none}/maxLength")),
+                None,
+                "{none}"
+            );
+        }
+        assert_eq!(cap("/properties/rule/maxLength"), None);
+
+        let twice = capped(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "rule": {"type": "array", "items": {"$ref": "#/$defs/Row"}},
+                "waiver": {"type": "array", "items": {"$ref": "#/$defs/Row"}}
+            },
+            "$defs": {"Row": {"type": "object", "properties": {"reason": {"type": "string"}}}}
+        }));
+        assert!(twice.is_err(), "one `$def` cannot carry two caps");
+    }
+
+    // --- the line scanner `prune_unresolvable` localises a fault with --------
+
+    /// A header as `(is_row, name)`, since [`Header`] carries no `Debug`.
+    fn shape(line: &str) -> Option<(bool, &str)> {
+        header_of(line).map(|header| (header.is_row(), header.name()))
+    }
+
+    #[test]
+    fn a_header_is_a_bracketed_name_with_nothing_but_a_comment_after_it() {
+        assert_eq!(shape("[a]"), Some((false, "a")));
+        assert_eq!(shape("  [[ a.b ]]  # note"), Some((true, "a.b")));
+        assert_eq!(shape("[\"x]y\"]"), Some((false, "\"x]y\"")));
+        assert_eq!(shape("['x]y']"), Some((false, "'x]y'")));
+        assert_eq!(shape("[\"ab\\\"]\"]"), Some((false, "\"ab\\\"]\"")));
+        assert_eq!(shape("[a] x = 1"), None);
+        assert_eq!(shape("[ ]"), None);
+        assert_eq!(shape("a = [1]"), None);
+        assert_eq!(shape("[unclosed"), None);
+    }
+
+    #[test]
+    fn a_single_line_string_is_skipped_to_just_past_its_close() {
+        assert_eq!(skip_basic(b"ab\\\"c\"d", 0), 6);
+        assert_eq!(skip_basic(b"abc", 0), 3);
+        assert_eq!(skip_literal(b"ab\\'c", 0), 4);
+        assert_eq!(skip_literal(b"x'ab'c", 2), 5);
+        assert_eq!(skip_literal(b"abc", 0), 3);
+    }
+
+    #[test]
+    fn a_scan_counts_brackets_outside_strings_and_comments() {
+        let start = Cursor::START;
+        let code = |depth| Cursor {
+            state: Lex::Code,
+            depth,
+        };
+        assert!(start.is_structural());
+        assert!(!code(1).is_structural());
+        assert!(scan_line("a = [1, {b = 2}", start) == code(1));
+        assert!(scan_line("a = 1]]", code(1)) == code(0));
+        assert!(scan_line("x = \"[\\\"[\" # [ {", start) == start);
+        assert!(scan_line("x = '[' + '{'", start) == start);
+        let literal = scan_line("s = '''", start);
+        assert!(literal.state == Lex::MultiLiteral && !literal.is_structural());
+        assert!(scan_line("[ still ''' [", literal) == code(1));
+        let basic = scan_line("d = \"\"\"", start);
+        assert!(basic.state == Lex::MultiBasic);
+        assert!(scan_line("x\\\"\"\" y\"\"\"", basic) == start);
+        assert!(scan_line("x\\\"\"\" [\"\"\" [", basic) == code(1));
+    }
+
+    const SCANNED: &str = "top = 1\n\
+                           [[rule]]\n\
+                           id = \"a\"\n\
+                           list = [\n\
+                           \x20 { k = \"v\" },\n\
+                           ]\n\
+                           # a comment = 1\n\
+                           \n\
+                           [[rule]]\n\
+                           id = \"b\"\n\
+                           [rule.nested]\n\
+                           x = 1\n\
+                           [plain]\n\
+                           y = 2\n";
+
+    fn at(needle: &str) -> usize {
+        SCANNED.find(needle).expect("the fixture carries it")
+    }
+
+    fn second_row() -> usize {
+        at("[[rule]]\nid = \"b\"")
+    }
+
+    #[test]
+    fn a_key_extends_over_its_multi_line_value_to_the_next_structure() {
+        assert_eq!(key_extent(SCANNED, at("list")), (at("list"), second_row()));
+        assert_eq!(
+            key_extent(SCANNED, at("id = \"a\"")),
+            (at("id = \"a\""), at("list"))
+        );
+        assert_eq!(
+            key_extent(SCANNED, at("y = 2")),
+            (at("y = 2"), SCANNED.len())
+        );
+        assert_eq!(
+            key_extent(SCANNED, at("x = 1")),
+            (at("x = 1"), at("[plain]"))
+        );
+    }
+
+    #[test]
+    fn a_key_belongs_to_the_nearest_header_before_it() {
+        let owner = |needle| owning_table(SCANNED, at(needle)).map(|(name, _)| name);
+        assert_eq!(owner("top"), None);
+        assert_eq!(owner("y = 2").as_deref(), Some("plain"));
+        assert_eq!(owner("x = 1").as_deref(), Some("rule.nested"));
+        assert_eq!(owner("list").as_deref(), Some("rule"));
+    }
+
+    #[test]
+    fn a_span_inside_a_row_is_charged_to_that_row_and_none_else() {
+        assert_eq!(
+            owning_row(SCANNED, at("list")),
+            Some(("rule".to_owned(), 0, at("[[rule]]")))
+        );
+        assert_eq!(
+            owning_row(SCANNED, at("x = 1")),
+            Some(("rule".to_owned(), 1, second_row()))
+        );
+        assert_eq!(
+            owning_row(SCANNED, second_row()),
+            Some(("rule".to_owned(), 1, second_row()))
+        );
+        assert_eq!(owning_row(SCANNED, at("y = 2")), None);
+        assert_eq!(owning_row(SCANNED, at("top")), None);
+        assert_eq!(row_end(SCANNED, at("[[rule]]"), "rule"), second_row());
+        assert_eq!(row_end(SCANNED, second_row(), "rule"), at("[plain]"));
+        assert_eq!(row_end(SCANNED, at("[plain]"), "plain"), SCANNED.len());
+    }
+
+    #[test]
+    fn a_blank_keeps_every_newline_and_every_byte_offset() {
+        let mut text = "ab\ncé\r\nd".to_owned();
+        let len = text.len();
+        blank(&mut text, 1, len - 1);
+        assert_eq!(text, "a \n   \r\nd");
+        assert_eq!(text.len(), len);
+        assert_eq!(row_id("[[rule]]\nid = \"a\"\n").as_deref(), Some("a"));
+        assert_eq!(row_id("[[rule]]\nx = 1\n"), None);
+        assert_eq!(row_id("[[rule]]"), None);
+    }
+
+    #[test]
+    fn a_drop_names_its_row_by_ordinal_or_none_for_a_key() {
+        let row = |index| Unresolvable {
+            section: "rule".to_owned(),
+            unit: Unit::Row { id: None, index },
+        };
+        assert_eq!(row(0).row_index(), Some(0));
+        assert_eq!(row(2).row_index(), Some(2));
+        let key = Unresolvable {
+            section: "capture".to_owned(),
+            unit: Unit::Key("k".to_owned()),
+        };
+        assert_eq!(key.row_index(), None);
+    }
+
     /// The source of [`crate::run`]'s body, from its signature to the end of the
     /// file.
     ///

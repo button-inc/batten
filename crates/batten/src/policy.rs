@@ -4628,3 +4628,213 @@ pub fn analyse(bundle: &Bundle) -> Result<Look<Analysis>> {
     unswept.sort();
     Ok(Look::Is(Analysis { swept, unswept }))
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// One module publishing `a`, refusing a write, with one test that does.
+    const MODULE: &str = "package batten.a\nimport rego.v1\n\nrules contains \"a\"\n\n\
+violation contains {\"rule\": \"a\", \"verdict\": \"a\"} if {\n\tinput.call.operation == \"write\"\n}\n\n\
+test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {\"operation\": \"write\"}}\n}\n";
+
+    fn bundle_of(id: &str, sources: &[(&str, &str)]) -> Bundle {
+        let sources: Vec<(String, String)> = sources
+            .iter()
+            .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
+            .collect();
+        compile(id, &sources, &serde_json::json!({})).expect("the fixture compiles")
+    }
+
+    fn suite_of(bundle: &Bundle, mediated: bool) -> Suite {
+        match test(bundle, "{}", mediated).expect("the input parses") {
+            Look::Is(suite) => suite,
+            Look::CouldNotLook | Look::IsNot => panic!("the sweep ran"),
+        }
+    }
+
+    #[test]
+    fn a_bundle_answers_for_its_row_its_modules_and_what_it_publishes() {
+        let before = engines_constructed();
+        let a = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        assert!(engines_constructed() > before, "compile counts its engine");
+        assert_eq!(a.id(), "row");
+        assert_eq!(a.pointer(), "policy/a.rego");
+        assert_eq!(
+            a.modules().iter().map(Module::path).collect::<Vec<_>>(),
+            vec!["policy/a.rego"]
+        );
+        assert_eq!(a.declared(), &BTreeSet::from(["a".to_owned()]));
+        assert!(!a.is_bytecode());
+        assert_eq!(a, bundle_of("row", &[("policy/a.rego", MODULE)]));
+        assert_ne!(a, bundle_of("other", &[("policy/a.rego", MODULE)]));
+        assert_ne!(a, bundle_of("row", &[("policy/b.rego", MODULE)]));
+        let quiet = bundle_of(
+            "quiet",
+            &[("policy/q.rego", "package batten.q\nimport rego.v1\n")],
+        );
+        assert_eq!(quiet.pointer(), "policy/q.rego");
+        let bundles = [a.clone(), quiet];
+        assert_eq!(publishers_of(&bundles, "a"), BTreeSet::from(["row"]));
+        assert!(publishers_of(&bundles, "nothing").is_empty());
+        assert_eq!(preset_names(), crate::preset::names());
+    }
+
+    #[test]
+    fn a_violation_is_raised_for_the_call_its_module_refuses_and_no_other() {
+        let a = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let Look::Is(refused) = deny(&a, r#"{"call":{"operation":"write"}}"#) else {
+            panic!("the bundle answers");
+        };
+        assert_eq!(
+            refused
+                .iter()
+                .map(|v| v.rule.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("a")]
+        );
+        assert_eq!(a.attribute(&refused[0]), "a");
+        let Look::Is(allowed) = deny(&a, r#"{"call":{"operation":"read"}}"#) else {
+            panic!("the bundle answers");
+        };
+        assert!(allowed.is_empty());
+    }
+
+    /// A suite is a violation when a test fails, a predicate goes unexercised,
+    /// or a mediated module's tests never pass a compound command.
+    #[test]
+    fn a_suite_is_a_violation_for_each_of_its_three_faults() {
+        let before = ast_descriptions();
+        let clean = suite_of(&bundle_of("row", &[("policy/a.rego", MODULE)]), false);
+        assert!(
+            ast_descriptions() > before,
+            "the suite describes the bundle"
+        );
+        assert_eq!(clean.passed.len(), 1);
+        assert!(clean.failed.is_empty() && clean.unexercised.is_empty());
+        assert!(!clean.is_violation());
+
+        let failing = MODULE.replace("count(violation) == 1", "count(violation) == 2");
+        let failed = suite_of(&bundle_of("row", &[("policy/a.rego", &failing)]), false);
+        assert_eq!(failed.failed.len(), 1);
+        assert!(failed.is_violation());
+
+        let untested = "package batten.u\nimport rego.v1\n\nrules contains \"u\"\n\n\
+violation contains {\"rule\": \"u\", \"verdict\": \"u\"} if {\n\tinput.call.operation == \"write\"\n}\n";
+        let unexercised = suite_of(&bundle_of("row", &[("policy/u.rego", untested)]), false);
+        assert_eq!(
+            unexercised.untested_modules,
+            vec!["policy/u.rego".to_owned()]
+        );
+        assert_eq!(unexercised.unexercised, vec!["u".to_owned()]);
+        assert!(unexercised.is_violation());
+
+        let bare = suite_of(&bundle_of("row", &[("policy/a.rego", MODULE)]), true);
+        assert_eq!(bare.bare_only_modules, vec!["policy/a.rego".to_owned()]);
+        assert!(bare.failed.is_empty() && bare.unexercised.is_empty());
+        assert!(bare.is_violation());
+    }
+
+    #[test]
+    fn a_bundle_names_the_session_start_facts_its_modules_read() {
+        let pinned = crate::facts::Fact::Pinned.as_str();
+        let module = format!(
+            "package batten.f\nimport rego.v1\n\nreads if {{\n\tinput.facts[\"{pinned}\"]\n}}\n\n\
+             also if {{\n\tinput.facts.receipts\n}}\n"
+        );
+        let facts = bundle_of("row", &[("policy/f.rego", &module)]).session_start_facts();
+        assert_eq!(facts, BTreeSet::from([pinned]));
+    }
+
+    #[test]
+    fn a_module_s_own_tests_are_dropped_from_the_hot_path_and_nothing_else_is() {
+        let source = "package p\n\ntest_one if {\n\ttrue\n}\n\nkept if {\n\ttrue\n}\n\ntest_two := 1\nlast := 2\n";
+        assert_eq!(
+            without_test_rules(source),
+            "package p\n\nkept if {\n\ttrue\n}\n\nlast := 2\n"
+        );
+    }
+
+    #[test]
+    fn a_finding_id_is_read_off_a_declaration_or_a_rule_string_and_nothing_else() {
+        let text = "rules contains \"x\"\nnamed_rules contains \"y\"\n\
+violation contains {\"rule\": \"z\", \"msg\": \"m\"}\n\"rule\": [{\"id\": \"r\"}]\n\
+rules contains not_quoted\n";
+        assert_eq!(
+            finding_ids(text),
+            BTreeSet::from(["x".to_owned(), "z".to_owned()])
+        );
+    }
+
+    fn git_row(extra: &str) -> Rule {
+        toml::from_str(&format!(
+            "id = \"git calls\"\nkind = \"policy\"\nscope = \"mediated_call\"\npreset = \"git\"\n\
+             severity = \"deny\"\n{extra}"
+        ))
+        .expect("the fixture row loads")
+    }
+
+    #[test]
+    fn a_preset_row_compiles_its_scope_s_modules_less_what_it_excepts() {
+        let manifest = crate::preset::find("git").expect("git ships");
+        let module = manifest.modules[0].name();
+        let sources = preset_sources(&git_row(""), manifest, "git").unwrap();
+        assert_eq!(sources.len(), 1);
+        assert!(
+            preset_sources(&git_row("except = [\"no-such-module\"]\n"), manifest, "git").is_err()
+        );
+        assert!(
+            preset_sources(
+                &git_row(&format!("except = [\"{module}\"]\n")),
+                manifest,
+                "git"
+            )
+            .is_err(),
+            "excepting every module decides nothing"
+        );
+        let mut tree = git_row("");
+        tree.scope = crate::rules::RuleScope::Tree;
+        assert!(
+            preset_sources(&tree, manifest, "git").is_err(),
+            "no module at that scope"
+        );
+    }
+
+    #[test]
+    fn an_ejected_copy_is_paired_with_the_vendored_module_its_header_names() {
+        let manifest = crate::preset::find("git").expect("git ships");
+        let module = &manifest.modules[0];
+        let copy = format!(
+            "# batten-ejected: git/{} version {}\npackage x\n",
+            module.name(),
+            manifest.version
+        );
+        let originals = ejected_originals(&[
+            ("policy/git/copy.rego".to_owned(), copy),
+            ("policy/own.rego".to_owned(), "package own\n".to_owned()),
+            (
+                "policy/stale.rego".to_owned(),
+                "# batten-ejected: git/gone version 1\n".to_owned(),
+            ),
+        ]);
+        assert_eq!(
+            originals,
+            BTreeMap::from([("policy/git/copy.rego".to_owned(), module.source)])
+        );
+    }
+
+    #[test]
+    fn both_input_schemas_are_objects_with_properties() {
+        for schema in [tree_input_schema().unwrap(), call_input_schema().unwrap()] {
+            let parsed: serde_json::Value = serde_json::from_str(&schema).unwrap();
+            assert!(
+                parsed
+                    .get("properties")
+                    .and_then(serde_json::Value::as_object)
+                    .is_some_and(|properties| !properties.is_empty()),
+                "{schema}"
+            );
+        }
+    }
+}
