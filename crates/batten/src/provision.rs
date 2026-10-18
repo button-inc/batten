@@ -3129,6 +3129,12 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
     #[test]
     fn the_host_bundle_names_what_it_carries_and_nothing_else() {
         assert!(!trust_names("no authority is named this"));
+        let named = TRUST_BUNDLE_VARS.iter().find_map(std::env::var_os);
+        assert_eq!(
+            trust_bundle(),
+            named.map_or_else(|| PathBuf::from(SYSTEM_TRUST_BUNDLE), PathBuf::from),
+            "a variable that is set decides, else the system store"
+        );
         match fs::read_to_string(trust_bundle()) {
             Ok(text) => {
                 let carried = text
