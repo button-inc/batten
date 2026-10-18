@@ -2511,18 +2511,31 @@ mod tests {
     /// The write files the record exactly where the store reads it.
     #[test]
     fn an_agent_sourced_record_is_written_where_the_store_reads_it() {
-        /// Removes the record this case writes into the checkout's own store,
-        /// whether or not an assertion below fails first. The store reads the
+        /// Every file in the store's directory carrying this case's name, swept
+        /// before the write and again on any exit: a record a killed earlier run
+        /// left behind cannot answer the read-back, and one a writer filed under
+        /// another path does not outlive a failing assertion. The store reads the
         /// checkout it runs in, having no root to take (CLOUD-2475).
-        struct Removed(std::path::PathBuf);
-        impl Drop for Removed {
+        struct Swept(std::path::PathBuf, String);
+        impl Swept {
+            fn sweep(&self) {
+                for entry in std::fs::read_dir(&self.0).into_iter().flatten().flatten() {
+                    if entry.file_name().to_string_lossy().contains(&self.1) {
+                        let _ = std::fs::remove_file(entry.path());
+                    }
+                }
+            }
+        }
+        impl Drop for Swept {
             fn drop(&mut self) {
-                let _ = std::fs::remove_file(&self.0);
+                self.sweep();
             }
         }
         let name = format!("batten-unit-{}", std::process::id());
         let store = sourced_store(&[(&name, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
-        let _written = Removed(store.path(&name).unwrap());
+        let path = store.path(&name).unwrap();
+        let swept = Swept(path.parent().unwrap().to_path_buf(), name.clone());
+        swept.sweep();
         record_sourced(&name, ReceiptKey::Named, Some("CLOUD-1"), &sourced(5)).unwrap();
         assert_eq!(store.record(&name).map(|record| record.rows), Some(5));
         assert!(record_sourced(&name, ReceiptKey::Named, Some("a/b"), &sourced(5)).is_err());
