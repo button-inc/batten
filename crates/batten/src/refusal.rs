@@ -654,8 +654,9 @@ fn parse_labelled(line: &str) -> Option<Parsed> {
         .or_else(|| rest.strip_prefix("rule "))
     {
         Some(after) => unquote(after)?.0,
-        None if verdict.is_some() => String::new(),
-        None => return None,
+        // Only a `verdict` line reaches here without a rule: a line opening
+        // `rule '` always strips its own label above.
+        None => String::new(),
     };
     if verdict.is_none() {
         verdict = named_class(line, &rule);
@@ -1794,6 +1795,191 @@ mod tests {
         assert_eq!(Fix::declared(None), Fix::None);
         assert_eq!(Fix::declared(Some("   ")), Fix::None);
         assert_eq!(Fix::declared(Some(" x ")), Fix::Run("x".to_owned()));
+    }
+
+    /// Fails by: either ceiling refusing a line of exactly its tokens or
+    /// admitting one past them, or an undeclared first-sighting ceiling bounding.
+    #[test]
+    fn a_ceiling_admits_a_line_of_exactly_its_tokens() {
+        let line = "batten deny some-gate at x; run batten check";
+        let tokens = crate::budget::estimate_tokens(line);
+        let ceiling = |max: usize, first: Option<usize>| Ceiling {
+            max_tokens: max,
+            first_sighting_max_tokens: first,
+        };
+        assert!(!ceiling(tokens, Some(tokens)).over(line));
+        assert!(!ceiling(tokens, Some(tokens)).over_first_sighting(line));
+        assert!(ceiling(tokens - 1, Some(tokens - 1)).over(line));
+        assert!(ceiling(tokens - 1, Some(tokens - 1)).over_first_sighting(line));
+        assert!(!ceiling(tokens, None).over_first_sighting(&line.repeat(50)));
+    }
+
+    /// Fails by: a ceiling nothing can satisfy admitted at load, or one that can
+    /// refused.
+    #[test]
+    fn a_ceiling_nothing_can_satisfy_is_refused() {
+        let ceiling = |max: usize, first: Option<usize>| Ceiling {
+            max_tokens: max,
+            first_sighting_max_tokens: first,
+        };
+        assert!(validate(None).is_ok());
+        assert!(validate(Some(&ceiling(1, None))).is_ok());
+        assert!(validate(Some(&ceiling(5, Some(6)))).is_ok());
+        assert!(validate(Some(&ceiling(0, None))).is_err());
+        assert!(validate(Some(&ceiling(5, Some(0)))).is_err());
+        assert!(validate(Some(&ceiling(5, Some(5)))).is_err());
+    }
+
+    /// Fails by: an escaped quote or a literal backslash read wrong, or an
+    /// unterminated name read as one.
+    #[test]
+    fn a_quoted_name_reads_its_escapes() {
+        assert_eq!(unquote(r"'a\'b' rest"), Some(("a'b".to_owned(), " rest")));
+        assert_eq!(unquote(r"'a\b'x"), Some((r"a\b".to_owned(), "x")));
+        assert_eq!(unquote("bare"), None);
+        assert_eq!(unquote("'open"), None);
+    }
+
+    /// Fails by: a pre-CLOUD-2145 line's class taken from a hop naming another
+    /// rule, or a labelled line naming only its class not read.
+    #[test]
+    fn a_labelled_line_names_its_class_by_its_own_hop() {
+        let line = "rule 'r' at x; run batten policy explain 'r' 'cls'";
+        assert_eq!(named_class(line, "r"), Some("cls".to_owned()));
+        assert_eq!(named_class(line, "other"), None);
+        let classed = parse_finding("verdict 'cls' at x").expect("a labelled line");
+        assert_eq!(classed.verdict.as_deref(), Some("cls"));
+        assert_eq!(classed.rule, "");
+    }
+
+    /// Fails by: an override request read as a route, or a head that is not
+    /// `batten <severity> ` read as one.
+    #[test]
+    fn a_line_routes_exclude_its_override_request_and_its_head_is_exact() {
+        let parsed = parse_finding(&format!(
+            "batten deny cls at x; run a; {OVERRIDE_OPENER}z --subject q — def"
+        ))
+        .expect("a finding");
+        assert_eq!(parsed.routes, ["run a"]);
+        assert!(is_headed("batten warn x"));
+        assert!(!is_headed("batten warnx"));
+        assert!(!is_headed("x batten deny y"));
+        assert_ne!(
+            key_of("r", Some("c"), "a definition"),
+            key_of("r", Some("c"), "another")
+        );
+        assert!(key_of("r", Some("c"), "d").starts_with("r\u{1f}c\u{1f}"));
+    }
+
+    /// Fails by: a path subject's own spelling dropped from what an admission
+    /// binds, or bound twice.
+    #[test]
+    fn an_admission_binds_the_printed_subjects_and_the_path_once() {
+        let line = crate::verdict::Subject::Line {
+            path: "src/a.rs".to_owned(),
+            line: 3,
+        };
+        assert_eq!(
+            admission_bindings("cls", &[line]),
+            ["src/a.rs:3", "src/a.rs"]
+        );
+        let path = crate::verdict::Subject::Path {
+            path: "src/a.rs".to_owned(),
+        };
+        assert_eq!(admission_bindings("cls", &[path]), ["src/a.rs"]);
+    }
+
+    /// Fails by: a pass-through or an already-rendered denial wrapped as a
+    /// second finding.
+    #[test]
+    fn a_passthrough_or_a_denial_is_no_failure_to_render() {
+        assert!(of_failure(&crate::error::Passthrough::raise(3)).is_none());
+        let refusal = Refusal::new("g", "r", Fix::None);
+        assert!(of_failure(&crate::error::Denial::raise(&refusal, Arm::Full)).is_none());
+    }
+
+    /// Fails by: two refusals that differ in more than their subjects folded
+    /// into one, or a consumer refusal with no class folded at all.
+    #[test]
+    fn only_a_classed_refusal_differing_in_subjects_absorbs() {
+        let refusal = |subject: &str| {
+            Refusal::engine(
+                crate::verdict::Native::RunBroken,
+                &[crate::verdict::artifact(subject)],
+                Fix::None,
+            )
+        };
+        let mut held = refusal("a");
+        assert!(!held.absorb(&refusal("b").counted(true)), "counted differs");
+        assert_eq!(held.subjects_text(), "a");
+        let mut prose = Refusal::new("g", "r", Fix::None);
+        assert!(!prose.absorb(&Refusal::new("g", "r", Fix::None)));
+        assert!(refusal("a").counted(true).is_counted());
+        assert!(!refusal("a").is_counted());
+    }
+
+    /// Fails by: a route of another kind listed as an override's precondition,
+    /// a document route's reader not named, a command route's named, or the
+    /// line's routes or gloss not the class's.
+    #[test]
+    fn a_refusals_routes_name_their_kinds() {
+        let route =
+            |id: &str, kind, target: &str, precondition: Option<&str>| crate::verdict::Route {
+                id: id.to_owned(),
+                kind,
+                target: target.to_owned(),
+                precondition: precondition.map(str::to_owned),
+            };
+        let mut refusal = Refusal::new("g", "r", Fix::None);
+        refusal.routes = vec![
+            route(
+                "read it",
+                crate::verdict::RouteKind::Document,
+                "rules/x.md",
+                None,
+            ),
+            route(
+                "run it",
+                crate::verdict::RouteKind::Command,
+                "rules/y.md",
+                Some("p"),
+            ),
+            route(
+                "admit",
+                crate::verdict::RouteKind::Override,
+                "",
+                Some("owner said so"),
+            ),
+        ];
+        assert_eq!(refusal.preconditions(), [("admit", "owner said so")]);
+        let redirect = crate::redirect::Redirect {
+            glob: "rules/**".to_owned(),
+            mutation: "m".to_owned(),
+            read: Some("reader".to_owned()),
+            read_server: None,
+        };
+        let read = refusal.read_through(&[redirect]);
+        assert_eq!(
+            read.readers,
+            std::collections::BTreeMap::from([("rules/x.md".to_owned(), "reader".to_owned())])
+        );
+        let routed = Refusal::new("g", "r", Fix::None).with_command_route("mise run x");
+        assert!(
+            routed
+                .routes()
+                .iter()
+                .any(|route| route.contains("mise run x"))
+        );
+        let native = Refusal::engine(crate::verdict::Native::RunBroken, &[], Fix::None);
+        assert_eq!(
+            native.gloss(),
+            crate::verdict::gloss_of(
+                &crate::verdict::vendored(),
+                crate::verdict::Native::RunBroken.id()
+            )
+            .unwrap_or_default()
+        );
+        assert!(!native.gloss().is_empty());
     }
 }
 
