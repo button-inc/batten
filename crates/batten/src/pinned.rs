@@ -716,8 +716,10 @@ mod tests {
     }
 
     /// The mediator is asked, and its two answers are read: the files that
-    /// configure it here, and the `PATH` it composes.
+    /// configure it here, and the `PATH` it composes. Unix only: the Windows
+    /// runner's unit tier does not provision the mediator to ask.
     #[test]
+    #[cfg(unix)]
     fn the_mediator_reports_its_configs_and_its_composed_path() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let found = configs(&root);
