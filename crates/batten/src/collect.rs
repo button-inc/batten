@@ -102,7 +102,12 @@ impl Collected {
 /// of the two and never reaches its watcher.
 #[must_use]
 pub fn tracing() -> bool {
-    std::env::var_os("BATTEN_DISK_TRACE").is_some_and(|value| value == "1")
+    asks_trace(std::env::var_os("BATTEN_DISK_TRACE").as_deref())
+}
+
+/// Whether a `BATTEN_DISK_TRACE` value asks for the trace: exactly `1`.
+fn asks_trace(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| value == "1")
 }
 
 /// One trace line, the one spelling the watcher, the collector and the hook
@@ -166,12 +171,17 @@ pub fn engine_kept() -> Vec<Kept> {
         .map(|path| crate::git::canonical(&path))
         .collect();
     let mut kept = kept(&paths);
-    let named = table
+    kept.extend(kept_by_name(table));
+    kept
+}
+
+/// The [`Kept::Named`] of each process `table` names only by its name: one with
+/// no executable, and a name to match files by.
+fn kept_by_name(table: Vec<Process>) -> impl Iterator<Item = Kept> {
+    table
         .into_iter()
         .filter(|process| process.exe.is_none() && !process.name.is_empty())
-        .map(|process| Kept::Named(process.name));
-    kept.extend(named);
-    kept
+        .map(|process| Kept::Named(process.name))
 }
 
 /// A running process: the program it executes and when it started.
@@ -1122,13 +1132,23 @@ fn ranked(mut live: Vec<Unit>, scratch: Vec<Unit>) -> Vec<Unit> {
 /// Collect: superseded units first, then live units oldest first, until
 /// `need_bytes` are freed or the deadline passes; then re-arm the survivors.
 /// Returns what it freed and removed, and what stopped it short.
+#[must_use]
+pub fn collect(request: &Request<'_>) -> Pass {
+    let (pass, traced) = pass_of(request);
+    if tracing() {
+        let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("{traced}\n").as_bytes());
+    }
+    pass
+}
+
+/// [`collect`]'s pass and its `disk-pass` trace line, composed whether or not
+/// the trace is asked for, so a case reads the counts the trace reports.
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 //MUTANT reachability-pass-skipped|s@^        let (units, bytes) = crate::prune::reclaim_superseded(tree, request.keep_generations);$@        let (units, bytes) = (0, 0);@|a_superseded_unit_goes_before_an_older_live_one
 //MUTANT collects-past-max-free|s@^        if freed >= request.need_bytes \x7c\x7c past(request.deadline) {$@        if past(request.deadline) {@|collection_stops_at_max_free
 //MUTANT held-tree-collected|s@^        let _building = match crate::prune::claim(\&unit.tree, \&unit.profile) {$@        let _building = match Ok::<(), PathBuf>(()) {@|a_tree_a_build_holds_is_never_collected
 //MUTANT engine-unit-collected|s@^            .any(\x7cartifact\x7c is_kept(artifact, request.kept))$@            .any(\x7c_\x7c false)@|the_running_engine_is_never_collected
-#[must_use]
-pub fn collect(request: &Request<'_>) -> Pass {
+fn pass_of(request: &Request<'_>) -> (Pass, String) {
     let past = |deadline: Option<Instant>| deadline.is_some_and(|at| Instant::now() >= at);
     let mut held = Held::default();
     let mut locks: Vec<(PathBuf, std::fs::File)> = Vec::new();
@@ -1230,27 +1250,25 @@ pub fn collect(request: &Request<'_>) -> Pass {
     for (tree, _) in &locks {
         rearm(tree);
     }
-    if tracing() {
-        let traced = trace_line(
-            "disk-pass",
-            &[
-                u64::try_from(locks.len()).unwrap_or(u64::MAX),
-                u64::try_from(why.candidates).unwrap_or(u64::MAX),
-                u64::try_from(why.held).unwrap_or(u64::MAX),
-                u64::try_from(why.kept).unwrap_or(u64::MAX),
-                u64::from(why.live),
-                u64::try_from(removed).unwrap_or(u64::MAX),
-                request.need_bytes / (1024 * 1024),
-            ],
-        );
-        let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("{traced}\n").as_bytes());
-    }
+    let traced = trace_line(
+        "disk-pass",
+        &[
+            u64::try_from(locks.len()).unwrap_or(u64::MAX),
+            u64::try_from(why.candidates).unwrap_or(u64::MAX),
+            u64::try_from(why.held).unwrap_or(u64::MAX),
+            u64::try_from(why.kept).unwrap_or(u64::MAX),
+            u64::from(why.live),
+            u64::try_from(removed).unwrap_or(u64::MAX),
+            request.need_bytes / (1024 * 1024),
+        ],
+    );
     held.live = why.live;
-    Pass {
+    let done = Pass {
         freed_bytes: freed,
         removed,
         held,
-    }
+    };
+    (done, traced)
 }
 
 /// What a pass passed over, for the trace: `disk-pass <trees> <candidates>
@@ -1375,6 +1393,7 @@ pub fn await_builds(held: &[PathBuf], bound: std::time::Duration) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{Kept, Process, darwin, earliest_build_start, proc_stat};
     use std::path::{Path, PathBuf};
@@ -1636,5 +1655,507 @@ mod tests {
             table.len(),
             me.display()
         );
+    }
+
+    /// A fresh directory for one case: the pid and the case keep parallel cases
+    /// and runs apart.
+    fn scratch(case: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("batten-collect-{}-{case}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the scratch dir");
+        dir
+    }
+
+    /// Date a file: read `read` and written `written` seconds ago.
+    fn aged(path: &Path, read: u64, written: u64) {
+        let now = SystemTime::now();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .expect("open the file to date")
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_accessed(now - Duration::from_secs(read))
+                    .set_modified(now - Duration::from_secs(written)),
+            )
+            .expect("date the file");
+    }
+
+    /// One cargo unit in `profile`: a fingerprint file read `age` seconds ago and
+    /// a `deps/<file>` artifact of `bytes` bytes, whose path it returns.
+    fn unit(profile: &Path, name: &str, hash: &str, age: u64, file: &str, bytes: usize) -> PathBuf {
+        let fingerprint = profile.join(".fingerprint").join(format!("{name}-{hash}"));
+        std::fs::create_dir_all(&fingerprint).expect("create the fingerprint");
+        let stamp = fingerprint.join(format!("lib-{name}"));
+        std::fs::write(&stamp, b"fingerprint").expect("write the fingerprint");
+        aged(&stamp, age, age + 10);
+        let deps = profile.join("deps");
+        std::fs::create_dir_all(&deps).expect("create deps");
+        let artifact = deps.join(file);
+        std::fs::write(&artifact, vec![7_u8; bytes]).expect("write the artifact");
+        artifact
+    }
+
+    /// The bytes the one name of `path` holds on disk.
+    fn allocated(path: &Path) -> u64 {
+        let meta = std::fs::symlink_metadata(path).expect("read the file");
+        super::allocation(path, &meta).1
+    }
+
+    /// A request over `trees` asking for `need` bytes, with no deadline and no
+    /// live build.
+    fn ask<'a>(trees: &'a [PathBuf], kept: &'a [Kept], need: u64) -> super::Request<'a> {
+        super::Request {
+            trees,
+            keep_generations: 2,
+            kept,
+            need_bytes: need,
+            deadline: None,
+            wait: false,
+            live_since: None,
+        }
+    }
+
+    /// A `[prune]` table rooted at `target`, with the band `band`.
+    fn band(band: Option<(u64, u64)>) -> crate::prune::Prune {
+        crate::prune::Prune {
+            root: "target".to_owned(),
+            keep: 2,
+            warm: None,
+            cold: None,
+            regrowable: None,
+            min_free_mb: band.map(|(min, _)| min),
+            max_free_mb: band.map(|(_, max)| max),
+        }
+    }
+
+    /// Fails by: a lap-record line dropped, blanked, or spelled otherwise.
+    #[test]
+    fn a_collection_records_every_line() {
+        let done = super::Collected {
+            freed_bytes: 3 * 1024 * 1024 + 5,
+            units: 4,
+            free_after_mb: 900,
+            wall_ms: 12,
+            held: super::Held {
+                locks: vec![PathBuf::from("/t/debug/.cargo-lock")],
+                live: true,
+            },
+        };
+        assert_eq!(
+            done.lines(),
+            vec![
+                "disk-collected 3 4 900".to_owned(),
+                "disk-unlink-ms 12".to_owned(),
+                format!("disk-held {}", Path::new("/t/debug/.cargo-lock").display()),
+                "disk-live".to_owned(),
+            ]
+        );
+    }
+
+    /// Fails by: a trace line blanked, or a value other than exactly `1` read as
+    /// asking for it.
+    #[test]
+    fn a_trace_is_asked_for_by_exactly_one() {
+        assert_eq!(super::trace_line("disk-pass", &[1, 22]), "disk-pass 1 22");
+        assert_eq!(super::trace_line("disk-sample", &[]), "disk-sample");
+        let asks = |value: &str| super::asks_trace(Some(std::ffi::OsStr::new(value)));
+        assert!(asks("1"));
+        assert!(!asks("0"));
+        assert!(!asks("11"));
+        assert!(!super::asks_trace(None));
+        assert_eq!(
+            super::tracing(),
+            super::asks_trace(std::env::var_os("BATTEN_DISK_TRACE").as_deref()),
+            "the variable is the one input"
+        );
+    }
+
+    /// Fails by: a process with a path, or with no name, kept by name.
+    #[test]
+    fn only_a_pathless_named_process_is_kept_by_name() {
+        let process = |exe: Option<&str>, name: &str| Process {
+            exe: exe.map(PathBuf::from),
+            name: name.to_owned(),
+            started: at(1),
+        };
+        let table = vec![
+            process(None, "cargo-nextest"),
+            process(Some("/usr/bin/rustc"), "rustc"),
+            process(None, ""),
+        ];
+        assert_eq!(
+            super::kept_by_name(table).collect::<Vec<_>>(),
+            vec![Kept::Named("cargo-nextest".to_owned())]
+        );
+    }
+
+    /// CLOUD-2366: group 0 is no group `exec` signals, even with a member in it.
+    /// Fails by: a pgid of `0` admitted.
+    #[test]
+    fn a_record_of_group_zero_is_never_orphaned() {
+        let member = [stat_line("44", 0, 100)];
+        assert!(proc_stat::orphaned(
+            &member,
+            0,
+            43,
+            1_700_000_000,
+            100,
+            1_700_000_100
+        ));
+        assert!(!super::orphaned_in(
+            &member,
+            "0",
+            "43",
+            1_700_000_000,
+            100,
+            1_700_000_100
+        ));
+    }
+
+    /// Fails by: an existing file given no identity, or a file kept that only
+    /// shares a directory with the kept one.
+    #[test]
+    fn a_kept_file_is_kept_by_every_name_and_no_other_file() {
+        let dir = scratch("identity");
+        let (engine, other, alias) = (dir.join("engine"), dir.join("other"), dir.join("alias"));
+        std::fs::write(&engine, b"engine").expect("write");
+        std::fs::write(&other, b"other").expect("write");
+        std::fs::hard_link(&engine, &alias).expect("link");
+        let kept = super::kept(&[engine.clone(), dir.join("absent")]);
+        let identified = cfg!(any(unix, windows));
+        assert_eq!(kept.len(), usize::from(identified), "{kept:?}");
+        assert_eq!(super::is_kept(&engine, &kept), identified);
+        assert_eq!(super::is_kept(&alias, &kept), identified);
+        assert!(!super::is_kept(&other, &kept));
+    }
+
+    /// Fails by: a link count or allocation read as a constant, or a removal
+    /// counted as freeing nothing, one byte, or a name that is not the last.
+    #[test]
+    fn a_removal_counts_a_files_blocks_once_its_last_name_goes() {
+        let dir = scratch("remove-counted");
+        let file = dir.join("file");
+        std::fs::write(&file, vec![7_u8; 8192]).expect("write");
+        let meta = std::fs::symlink_metadata(&file).expect("stat");
+        let (links, bytes) = super::allocation(&file, &meta);
+        assert_eq!(links, 1);
+        assert!(bytes >= 8192, "{bytes}");
+        let alias = dir.join("alias");
+        std::fs::hard_link(&file, &alias).expect("link");
+        let meta = std::fs::symlink_metadata(&file).expect("stat");
+        assert_eq!(super::allocation(&file, &meta).0, 2);
+        assert_eq!(
+            super::remove_counted(&alias),
+            0,
+            "a name that is not the last"
+        );
+        assert!(!alias.exists());
+        assert_eq!(super::remove_counted(&file), bytes, "the last name");
+        assert!(!file.exists());
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(tree.join("inner")).expect("mkdir");
+        std::fs::write(tree.join("inner/one"), vec![7_u8; 8192]).expect("write");
+        let one = allocated(&tree.join("inner/one"));
+        assert_eq!(super::remove_counted(&tree), one, "a tree is its files");
+        assert!(!tree.exists());
+        assert_eq!(super::remove_counted(&tree), 0, "nothing left to remove");
+    }
+
+    /// Fails by: a profile's units dropped, or only the units under a whole
+    /// ranked one by one.
+    #[test]
+    fn a_profiles_units_are_ranked_unless_taken_whole() {
+        let tree = scratch("units-in").join("target");
+        let profile = tree.join("debug");
+        let artifact = unit(
+            &profile,
+            "alpha",
+            "1111111111111111",
+            60,
+            "libalpha-1111111111111111.rlib",
+            8,
+        );
+        let fingerprints = vec![profile.join(".fingerprint")];
+        let units = super::units_in(&tree, fingerprints.clone(), &[]);
+        assert_eq!(units.len(), 1);
+        assert_eq!(units[0].artifacts, vec![artifact]);
+        assert_eq!(
+            units[0].fingerprint,
+            profile.join(".fingerprint/alpha-1111111111111111")
+        );
+        assert!(
+            super::units_in(&tree, fingerprints, std::slice::from_ref(&tree)).is_empty(),
+            "a fingerprint under a whole is not its own unit"
+        );
+    }
+
+    /// Fails by: a whole named where the tree has no scratch and no staged copy.
+    #[test]
+    fn a_tree_with_no_scratch_has_no_wholes() {
+        let tree = scratch("wholes-in").join("target");
+        std::fs::create_dir_all(&tree).expect("mkdir");
+        assert!(super::wholes_in(&tree, &[]).is_empty());
+        std::fs::create_dir_all(tree.join("tmp")).expect("mkdir");
+        assert_eq!(super::wholes_in(&tree, &[]), vec![tree.join("tmp")]);
+    }
+
+    /// Fails by: a wait reported finished with no build lock to wait on.
+    #[test]
+    fn only_a_build_lock_is_awaited() {
+        assert!(!super::await_builds(&[], Duration::ZERO));
+        let dir = scratch("await-builds");
+        let collector = dir.join("target");
+        std::fs::create_dir_all(&collector).expect("mkdir");
+        assert!(!super::await_builds(&[collector], Duration::ZERO));
+        let free = dir.join(".cargo-lock");
+        std::fs::write(&free, b"").expect("write");
+        assert!(super::await_builds(&[free], Duration::from_secs(60)));
+    }
+
+    /// Fails by: a pass's counts, freed bytes or trace misreported, or either
+    /// stop (bytes freed) read the wrong way round. Superseded generation, the
+    /// oldest live unit, a kept unit and a held profile, asked for everything.
+    #[test]
+    fn a_pass_counts_what_it_took_and_what_it_passed_over() {
+        let tree = scratch("pass-counts").join("target");
+        let debug = tree.join("debug");
+        let deps = debug.join("deps");
+        std::fs::create_dir_all(&deps).expect("mkdir");
+        // An artifact no fingerprint names: the superseded pass's.
+        let unreachable = deps.join("libgone-aaaaaaaaaaaa.rlib");
+        std::fs::write(&unreachable, b"artifact").expect("write");
+        aged(&unreachable, 60, 60);
+        let old = unit(
+            &debug,
+            "old",
+            "1111111111111111",
+            7200,
+            "libold-1111111111111111.rlib",
+            4096,
+        );
+        let engine = unit(
+            &debug,
+            "engine",
+            "2222222222222222",
+            3600,
+            "libengine-2222222222222222.rlib",
+            4096,
+        );
+        let held = tree.join("held");
+        let busy = unit(
+            &held,
+            "busy",
+            "3333333333333333",
+            1800,
+            "libbusy-3333333333333333.rlib",
+            4096,
+        );
+        let lock = std::fs::File::create(held.join(".cargo-lock")).expect("create the lock");
+        lock.lock().expect("hold the build lock");
+        let stamp = debug.join(".fingerprint/old-1111111111111111/lib-old");
+        let expected = 8 + allocated(&stamp) + allocated(&old);
+        let kept = super::kept(std::slice::from_ref(&engine));
+        let trees = [tree.clone()];
+        let (pass, traced) = super::pass_of(&ask(&trees, &kept, u64::MAX));
+        drop(lock);
+        assert!(!unreachable.exists(), "superseded");
+        assert!(!old.exists(), "the oldest live unit");
+        assert!(busy.exists(), "held");
+        let kept_count = if cfg!(any(unix, windows)) {
+            assert!(engine.exists(), "kept");
+            1
+        } else {
+            0
+        };
+        assert_eq!(pass.removed, 3 - kept_count);
+        assert_eq!(
+            pass.held,
+            super::Held {
+                locks: vec![held.join(".cargo-lock")],
+                live: false,
+            }
+        );
+        if kept_count == 1 {
+            assert_eq!(pass.freed_bytes, expected);
+        }
+        assert_eq!(
+            traced,
+            format!(
+                "disk-pass 1 3 1 {kept_count} 0 {} {}",
+                pass.removed,
+                u64::MAX / (1024 * 1024)
+            )
+        );
+
+        // Asked for nothing, a pass takes nothing, superseded or live.
+        let tree = scratch("pass-nothing").join("target");
+        let deps = tree.join("debug/deps");
+        std::fs::create_dir_all(&deps).expect("mkdir");
+        let unreachable = deps.join("libgone-aaaaaaaaaaaa.rlib");
+        std::fs::write(&unreachable, b"artifact").expect("write");
+        aged(&unreachable, 60, 60);
+        let idle = unit(
+            &tree.join("debug"),
+            "idle",
+            "4444444444444444",
+            7200,
+            "libidle-4444444444444444.rlib",
+            4096,
+        );
+        let trees = [tree.clone()];
+        let (pass, _) = super::pass_of(&ask(&trees, &[], 0));
+        assert_eq!(pass.removed, 0);
+        assert!(unreachable.exists());
+        assert!(idle.exists());
+    }
+
+    /// Fails by: the deadline read the wrong way round. Time is the input here:
+    /// a deadline an hour off stops nothing, one already reached stops all.
+    #[test]
+    fn a_pass_stops_at_a_reached_deadline_only() {
+        let removed = |case: &str, deadline: std::time::Instant| {
+            let tree = scratch(case).join("target");
+            unit(
+                &tree.join("debug"),
+                "due",
+                "5555555555555555",
+                3600,
+                "libdue-5555555555555555.rlib",
+                4096,
+            );
+            let trees = [tree];
+            let mut request = ask(&trees, &[], u64::MAX);
+            request.deadline = Some(deadline);
+            super::pass_of(&request).0.removed
+        };
+        let now = std::time::Instant::now();
+        assert_eq!(
+            removed("deadline-ahead", now + Duration::from_secs(3600)),
+            1
+        );
+        assert_eq!(removed("deadline-reached", now), 0);
+    }
+
+    /// Fails by: a held unit a live build used not reported as the live build
+    /// stopping the pass, or one it did not use reported so.
+    #[test]
+    fn a_held_unit_reports_a_live_build_only_when_one_used_it() {
+        let live = |case: &str, since: SystemTime| {
+            let tree = scratch(case).join("target");
+            let profile = tree.join("debug");
+            unit(
+                &profile,
+                "busy",
+                "6666666666666666",
+                1800,
+                "libbusy-6666666666666666.rlib",
+                4096,
+            );
+            let lock = std::fs::File::create(profile.join(".cargo-lock")).expect("create");
+            lock.lock().expect("hold the build lock");
+            let trees = [tree];
+            let mut request = ask(&trees, &[], u64::MAX);
+            request.live_since = Some(since);
+            let (pass, _) = super::pass_of(&request);
+            drop(lock);
+            assert_eq!(pass.removed, 0, "{case}: held");
+            pass.held.live
+        };
+        let now = SystemTime::now();
+        assert!(live("held-used", now - Duration::from_secs(7200)));
+        assert!(!live("held-unused", now + Duration::from_secs(3600)));
+    }
+
+    /// Fails by: an executable a live run may launch collected, or one no live
+    /// run used kept.
+    #[test]
+    fn an_executable_a_live_run_used_is_kept_and_one_it_did_not_is_not() {
+        let removed = |case: &str, since: SystemTime| {
+            let tree = scratch(case).join("target");
+            unit(
+                &tree.join("debug"),
+                "runner",
+                "7777777777777777",
+                3600,
+                "runner-7777777777777777",
+                4096,
+            );
+            let trees = [tree];
+            let mut request = ask(&trees, &[], u64::MAX);
+            request.live_since = Some(since);
+            let (pass, _) = super::pass_of(&request);
+            (pass.removed, pass.held.live)
+        };
+        let now = SystemTime::now();
+        assert_eq!(
+            removed("run-used", now - Duration::from_secs(7200)),
+            (0, true)
+        );
+        assert_eq!(
+            removed("run-unused", now + Duration::from_secs(3600)),
+            (1, false)
+        );
+    }
+
+    /// Fails by: the checkout's build tree not ranked, or a tree named that is
+    /// not there.
+    #[test]
+    fn the_trees_are_the_build_roots_that_exist() {
+        let repo = scratch("trees");
+        assert!(super::trees(&repo, &band(None)).is_empty());
+        std::fs::create_dir_all(repo.join("target")).expect("mkdir");
+        assert_eq!(super::trees(&repo, &band(None)), vec![repo.join("target")]);
+    }
+
+    /// Fails by: a reading at the minimum collected, or one below it not.
+    #[test]
+    fn a_collection_runs_only_below_the_minimum() {
+        let repo = scratch("pressed");
+        let config = band(Some((10, 20)));
+        let pressed = |free: u64| {
+            super::collect_if_pressed(&repo, &config, &[], &mut || Ok(free), None, false)
+        };
+        assert!(pressed(10).is_none(), "at the minimum");
+        assert!(pressed(9).is_some(), "below it");
+    }
+
+    /// Fails by: the bytes to free misread from the band's MiB. 1 MiB is asked
+    /// for, and two 600 KiB units are needed to free it.
+    #[test]
+    fn a_collection_frees_toward_max_in_mebibytes() {
+        let repo = scratch("toward-max");
+        let profile = repo.join("target/debug");
+        let older = unit(
+            &profile,
+            "older",
+            "8888888888888888",
+            7200,
+            "libolder-8888888888888888.rlib",
+            600 * 1024,
+        );
+        let newer = unit(
+            &profile,
+            "newer",
+            "9999999999999999",
+            3600,
+            "libnewer-9999999999999999.rlib",
+            600 * 1024,
+        );
+        let done = super::collect_toward_max(
+            &repo,
+            &band(Some((0, 1))),
+            &[],
+            0,
+            &mut || Ok(5),
+            None,
+            false,
+        )
+        .expect("a declared band collects");
+        assert_eq!(done.units, 2);
+        assert_eq!(done.free_after_mb, 5);
+        assert!(!older.exists());
+        assert!(!newer.exists());
     }
 }

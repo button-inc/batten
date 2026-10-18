@@ -2475,8 +2475,9 @@ fn refusal_message(text: &str) -> String {
     if line.len() <= REFUSAL_MESSAGE_BOUND {
         return line.to_owned();
     }
+    // No floor is needed: offset 0 is always a character boundary.
     let mut cut = REFUSAL_MESSAGE_BOUND;
-    while cut > 0 && !line.is_char_boundary(cut) {
+    while !line.is_char_boundary(cut) {
         cut -= 1;
     }
     format!("{}…", &line[..cut])
@@ -3213,5 +3214,411 @@ mod tests {
         assert!(!is_bare_server_rule("mcp__box__*", "box"));
         assert!(!is_bare_server_rule("mcp__box__tool", "box"));
         assert!(!is_bare_server_rule("mcp__box2", "box"));
+    }
+
+    /// A fresh directory for one case: the pid and the case keep parallel cases
+    /// and runs apart.
+    fn scratch(case: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("batten-mcp-{}-{case}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// `PATH`, the one variable every host this suite runs on sets non-empty,
+    /// asserted rather than assumed: the workspace forbids the `unsafe` that
+    /// `set_var` requires, so the cases below read a variable that is there.
+    fn path_var() -> String {
+        let value = std::env::var("PATH").unwrap_or_default();
+        assert!(!value.trim().is_empty(), "these cases need PATH set");
+        value
+    }
+
+    /// A settings file in `dir` allowing `allow`.
+    fn settings(dir: &Path, name: &str, allow: &[&str]) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            serde_json::json!({"permissions": {"allow": allow}}).to_string(),
+        )
+        .unwrap();
+        path
+    }
+
+    /// The canonical tree of `json`.
+    fn node(json: &serde_json::Value) -> Node {
+        crate::rules::parse_node(Format::Json, &json.to_string()).unwrap()
+    }
+
+    /// Fails by: a set variable read as unset, on either credential route.
+    #[test]
+    fn a_set_credential_variable_resolves_on_either_route() {
+        let path = path_var();
+        let (header, secret) = credential(&source_with(Some(declared(Some("PATH"), None, ""))))
+            .unwrap()
+            .unwrap();
+        assert_eq!(header, "Authorization");
+        assert_eq!(secret.spend(), path.trim());
+        // A variable naming no readable file is "will not read", never "unset".
+        let err = credential(&source_with(Some(declared(None, Some("PATH"), ""))))
+            .expect_err("PATH names no credential file");
+        assert!(err.to_string().contains("will not read"), "{err}");
+    }
+
+    /// Fails by: a credential row naming a blank variable loading.
+    #[test]
+    fn a_credential_row_naming_a_blank_variable_is_refused_at_load() {
+        for row in [
+            declared(Some("  "), None, ""),
+            declared(None, Some(" "), ""),
+        ] {
+            let err = validate_credential(&source_with(Some(row))).unwrap_err();
+            assert!(err.to_string().contains("empty variable"), "{err}");
+        }
+        assert!(validate_credential(&source_with(Some(declared(Some("A"), None, "")))).is_ok());
+    }
+
+    /// Fails by: a set placeholder read as unset, a literal before or after it
+    /// lost or misplaced, or an empty literal emitted before a leading one.
+    #[test]
+    fn a_set_placeholder_expands_between_its_literals() {
+        let path = path_var();
+        assert_eq!(
+            expand("a${PATH}b").unwrap(),
+            Some(format!("a{path}b")),
+            "the literals on both sides survive"
+        );
+        assert_eq!(expand("${PATH}").unwrap(), Some(path));
+        assert_eq!(parts("${A}").unwrap().len(), 1, "no empty leading literal");
+        assert_eq!(parts("a${A}b").unwrap().len(), 3);
+    }
+
+    /// Fails by: a hex digit of any class decoded to the wrong value, or a
+    /// lowercase escape kept as written.
+    #[test]
+    fn every_hex_digit_class_decodes() {
+        assert_eq!(percent_decoded("%30%39%6a%4A%6F%4f%61%46"), "09jJoOaF");
+    }
+
+    /// Fails by: an entry's endpoint invented, or an empty one taken.
+    #[test]
+    fn an_entry_s_endpoint_is_its_first_non_empty_spelling() {
+        assert_eq!(
+            endpoint_of(&node(&serde_json::json!({"endpoint": "https://e.test/"}))),
+            Some("https://e.test/".to_owned())
+        );
+        assert_eq!(
+            endpoint_of(&node(&serde_json::json!({"httpUrl": "https://h.test/"}))),
+            Some("https://h.test/".to_owned())
+        );
+        assert_eq!(endpoint_of(&node(&serde_json::json!({"url": ""}))), None);
+        assert_eq!(endpoint_of(&node(&serde_json::json!({"name": "x"}))), None);
+    }
+
+    /// Fails by: a lone match counted as none or as several.
+    #[test]
+    fn a_selector_tells_one_match_from_several_and_from_none() {
+        let map = node(&serde_json::json!({
+            "a": {"url": "https://one.test/x"},
+            "b": {"url": "https://two.test/y"},
+            "c": {"url": "https://two.test/z"},
+        }));
+        assert!(matches!(
+            by_endpoint(&map, "one.test"),
+            Matched::One(entry) if endpoint_of(entry) == Some("https://one.test/x".to_owned())
+        ));
+        assert!(matches!(by_endpoint(&map, "two.test"), Matched::Many(2)));
+        assert!(matches!(by_endpoint(&map, "three.test"), Matched::None));
+    }
+
+    /// Fails by: a wiring's scalar headers dropped.
+    #[test]
+    fn a_wiring_carries_its_scalar_headers() {
+        let dir = scratch("wiring-headers");
+        std::fs::write(
+            dir.join("w.json"),
+            serde_json::json!({"srv": {
+                "url": "https://x.invalid/mcp",
+                "headers": {"X-A": "1", "X-Nested": {"n": 1}},
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let mut config = McpConfig::default();
+        config.sources.push(source_with(None));
+        let wired = wiring(&config, &dir, "srv").unwrap();
+        assert_eq!(wired.endpoint, "https://x.invalid/mcp");
+        assert_eq!(wired.headers, vec![("X-A".to_owned(), "1".to_owned())]);
+    }
+
+    /// Fails by: a set root variable read as unset.
+    #[test]
+    fn a_set_root_resolves_the_path_beneath_it() {
+        let path = path_var();
+        let mut source = source_with(None);
+        source.root = Some("PATH".to_owned());
+        assert_eq!(
+            resolved_path(&source, Path::new(".")),
+            Ok(Some(std::path::PathBuf::from(path).join("w.json")))
+        );
+    }
+
+    /// Fails by: a connector whose every tool asks not read as mandatory, one
+    /// with a tool that does not ask read as mandatory, or an empty one either.
+    #[test]
+    fn only_a_connector_whose_every_tool_asks_is_mandatory() {
+        let census = |declared, asks| Bound {
+            declared,
+            asks,
+            granted: None,
+            unenforceable: 0,
+            postures: Vec::new(),
+        };
+        assert!(census(2, 2).mandatory());
+        assert!(!census(2, 1).mandatory());
+        assert!(
+            !census(0, 0).mandatory(),
+            "no tools is not every tool asking"
+        );
+    }
+
+    /// Fails by: the census's declared names dropped, so a grant naming a tool
+    /// the server does not declare reads as a grant.
+    #[test]
+    fn a_census_checks_a_per_tool_grant_against_the_declared_names() {
+        let dir = scratch("bound-names");
+        std::fs::write(
+            dir.join("w.json"),
+            serde_json::json!({"srv": {
+                "url": "https://x.invalid/mcp",
+                "tools": [{"name": "a", "permission_policy": "always_ask"}],
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let allow = settings(&dir, "s.json", &["mcp__srv__b"]);
+        let mut config = McpConfig::default();
+        config.sources.push(source_with(None));
+        assert_eq!(
+            bound(&config, &dir, "srv", &[allow]).unwrap(),
+            Bound {
+                declared: 1,
+                asks: 1,
+                granted: Some(false),
+                unenforceable: 0,
+                postures: Vec::new(),
+            }
+        );
+    }
+
+    /// Fails by: an allow rule counted against a tool the connector allows, a
+    /// tool with no posture, or another server; a per-tool or bare rule not
+    /// counted; or the bare rule counted with nothing asking.
+    #[test]
+    fn an_allow_rule_is_unenforceable_only_against_a_tool_that_still_prompts() {
+        let dir = scratch("unenforceable");
+        let tools = node(&serde_json::json!([
+            {"name": "ask", "permission_policy": "always_ask"},
+            {"name": "allowed", "permission_policy": "always_allow"},
+            {"name": "blank", "permission_policy": ""},
+            {"name": "silent"},
+            {"name": "once", "permission_policy": "ask_once"},
+        ]));
+        let Node::List(tools) = tools else {
+            panic!("a list parses to a list");
+        };
+        let per_tool = settings(
+            &dir,
+            "per-tool.json",
+            &[
+                "mcp__srv__ask",
+                "mcp__srv__allowed",
+                "mcp__srv__blank",
+                "mcp__srv__silent",
+                "mcp__srv__once",
+                "mcp__other__ask",
+            ],
+        );
+        assert_eq!(
+            unenforceable_in(&[per_tool], "srv", &tools),
+            (2, vec!["always_ask".to_owned(), "ask_once".to_owned()])
+        );
+        let bare = settings(&dir, "bare.json", &["mcp__srv"]);
+        assert_eq!(
+            unenforceable_in(std::slice::from_ref(&bare), "srv", &tools),
+            (1, vec!["always_ask".to_owned(), "ask_once".to_owned()])
+        );
+        let Node::List(granted) = node(&serde_json::json!([
+            {"name": "allowed", "permission_policy": "always_allow"},
+        ])) else {
+            panic!("a list parses to a list");
+        };
+        assert_eq!(
+            unenforceable_in(&[bare], "srv", &granted),
+            (0, Vec::new()),
+            "nothing asks, so the bare rule is enforceable"
+        );
+    }
+
+    /// Fails by: any arm of the grant grammar read the wrong way round, or a
+    /// could-not-look read as an answer.
+    #[test]
+    fn a_grant_is_the_bare_rule_or_a_declared_tool_by_name() {
+        let dir = scratch("granted");
+        let mut file = 0;
+        let mut granted = |allow: &[&str], declared: &[&str]| {
+            file += 1;
+            let path = settings(&dir, &format!("{file}.json"), allow);
+            let declared: Vec<String> = declared.iter().map(|name| (*name).to_owned()).collect();
+            granted_in(&[path], "srv", &declared)
+        };
+        assert_eq!(granted(&["mcp__srv"], &["a"]), Some(true), "the bare rule");
+        assert_eq!(granted(&["other"], &["a"]), Some(false));
+        assert_eq!(
+            granted(&["mcp__srv__a"], &["a"]),
+            Some(true),
+            "a declared tool"
+        );
+        assert_eq!(
+            granted(&["mcp__srv__b"], &["a"]),
+            Some(false),
+            "an undeclared one"
+        );
+        assert_eq!(
+            granted(&["mcp__srv__b"], &[]),
+            Some(true),
+            "no names to check"
+        );
+        assert_eq!(granted(&["mcp__srv__"], &[]), Some(false), "an empty tool");
+        assert_eq!(granted(&["mcp__srv__*"], &[]), Some(false), "a wildcard");
+        assert_eq!(
+            granted_in(&[dir.join("absent.json")], "srv", &[]),
+            None,
+            "could not look"
+        );
+    }
+
+    /// Fails by: a method's row not found, or another method's returned.
+    #[test]
+    fn a_method_s_row_is_its_own() {
+        let mut config = McpConfig::default();
+        for method in ["first", "second"] {
+            let mut declared = row(Reduce::Project, &["id"]);
+            declared.method = method.to_owned();
+            config.results.push(declared);
+        }
+        assert_eq!(
+            row_for(&config, "second").map(|row| row.method.as_str()),
+            Some("second")
+        );
+        assert_eq!(row_for(&config, "third"), None);
+    }
+
+    /// Fails by: a value of exactly the bound refused.
+    #[test]
+    fn acknowledge_keeps_a_value_of_exactly_the_bound() {
+        let edge = "x".repeat(TOKEN_MAX);
+        let kept = reduce(
+            &row(Reduce::Acknowledge, &["id"]),
+            &serde_json::json!({ "id": edge }),
+        )
+        .unwrap();
+        assert_eq!(kept.get("id"), Some(&serde_json::json!(edge)));
+    }
+
+    /// Fails by: the elements, their key, or a paging sibling dropped; an
+    /// undeclared, empty, over-long or container sibling emitted; or one at
+    /// exactly the bound refused.
+    #[test]
+    fn each_projects_every_element_and_only_the_bounded_paging_siblings() {
+        let edge = "c".repeat(TOKEN_MAX);
+        let result = serde_json::json!({"page": {
+            "issues": [{"id": "A", "body": "prose"}, {"id": "B"}],
+            "hasNextPage": true,
+            "cursor": "c1",
+            "nextCursor": edge,
+            "endCursor": "e".repeat(TOKEN_MAX + 1),
+            "total": "",
+            "startCursor": {"nested": 1},
+            "account_email": "someone@example.invalid",
+        }});
+        let mut each = row(Reduce::Each, &["id"]);
+        each.node = "page.issues".to_owned();
+        let reduced = reduce(&each, &result).unwrap();
+        assert_eq!(
+            serde_json::Value::Object(reduced),
+            serde_json::json!({
+                "issues": [{"id": "A"}, {"id": "B"}],
+                "hasNextPage": true,
+                "cursor": "c1",
+                "nextCursor": edge,
+            })
+        );
+    }
+
+    /// Fails by: siblings read beside an embedded document, which has no parent
+    /// here.
+    #[test]
+    fn each_over_an_embedded_document_reads_no_siblings() {
+        let result = serde_json::json!({
+            "blob": r#"[{"id": "A"}]"#,
+            "cursor": "c1",
+        });
+        let mut each = row(Reduce::Each, &["id"]);
+        each.node = "blob".to_owned();
+        each.embedded = true;
+        assert_eq!(
+            serde_json::Value::Object(reduce(&each, &result).unwrap()),
+            serde_json::json!({"blob": [{"id": "A"}]})
+        );
+    }
+
+    /// Fails by: the key a projection answers under misread.
+    #[test]
+    fn a_projection_answers_under_its_node_s_last_segment() {
+        assert_eq!(items_key("page.issues"), "issues");
+        assert_eq!(items_key("issues."), "issues");
+        assert_eq!(items_key(""), ITEMS);
+    }
+
+    /// Fails by: the ledger named somewhere other than the checkout's git dir.
+    #[test]
+    fn the_spawn_ledger_lives_in_the_git_dir() {
+        let dir = scratch("spawn-ledger");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        let ledger = spawn_ledger(&dir).unwrap();
+        assert!(
+            ledger.ends_with(Path::new(".git").join(SPAWN_LEDGER)),
+            "{}",
+            ledger.display()
+        );
+    }
+
+    /// Fails by: a cut that lands mid-character, or one that moves the wrong
+    /// way. One ASCII byte first puts the bound inside a two-byte character.
+    #[test]
+    fn a_cut_backs_off_to_the_boundary_before_the_bound() {
+        let text = format!("a{}", "é".repeat(REFUSAL_MESSAGE_BOUND));
+        let cut = refusal_message(&text);
+        assert_eq!(
+            cut,
+            format!("a{}…", "é".repeat((REFUSAL_MESSAGE_BOUND - 2) / 2))
+        );
+    }
+
+    /// Fails by: a challenge whose first word is not a scheme token relayed, or
+    /// a hyphenated scheme refused.
+    #[test]
+    fn a_challenge_is_relayed_only_as_a_scheme_token() {
+        let response = |value: &str| crate::fetch::Response {
+            status: 401,
+            body: Vec::new(),
+            headers: vec![("www-authenticate".to_owned(), value.to_owned())],
+        };
+        assert_eq!(
+            challenge(&response("Negotiate-X token")),
+            Some("NEGOTIATE-X".to_owned())
+        );
+        assert_eq!(challenge(&response(r#"realm="x""#)), None);
     }
 }
