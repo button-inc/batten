@@ -14599,16 +14599,6 @@ mod tests {
                 .join("policy.rs"),
         )
         .expect("policy.rs is readable");
-        // The module, not its tests: a negative case spells an unemitted key on
-        // purpose, and no reader copies a test as an example.
-        assert_eq!(
-            source.matches("\nmod tests {").count(),
-            1,
-            "policy.rs carries one test module to stop the scan at"
-        );
-        let source = source
-            .split_once("\nmod tests {")
-            .map_or(source.as_str(), |(module, _)| module);
 
         let mut checked = 0_usize;
         for (offset, _) in source.match_indices("input.tree.") {

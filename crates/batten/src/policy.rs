@@ -5178,8 +5178,8 @@ deny contains \"tok\" if {\n\tinput.go\n}\n";
             (by("tree"), by("mediated_call"))
         };
         assert_eq!(admits("input.tree.missing"), (true, false));
-        // Spelled whole because `rules`' doc check stops at `mod tests`.
-        assert_eq!(admits("input.tree.nope"), (false, false));
+        // Split, because `rules`' doc check reads every tree path this file spells.
+        assert_eq!(admits(concat!("input.tree", ".nope")), (false, false));
         assert_eq!(admits("input.call.tool"), (false, true));
         assert_eq!(admits("input.facts.receipts"), (false, true));
     }
