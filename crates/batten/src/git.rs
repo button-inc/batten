@@ -5890,6 +5890,754 @@ mod tests {
         );
     }
 
+    /// Fails by: any step of the civil-date arithmetic off — each date sits on
+    /// a boundary one of them decides: the epoch, the day before it, a leap
+    /// day, the month after it, a century that is not a leap year, and the
+    /// start of the era.
+    #[test]
+    fn a_day_count_names_its_civil_date() {
+        for (days, date) in [
+            (0, (1970, 1, 1)),
+            (-1, (1969, 12, 31)),
+            (59, (1970, 3, 1)),
+            (10_957, (2000, 1, 1)),
+            (11_016, (2000, 2, 29)),
+            (11_017, (2000, 3, 1)),
+            (47_540, (2100, 2, 28)),
+            (47_541, (2100, 3, 1)),
+            (-719_468, (0, 3, 1)),
+        ] {
+            assert_eq!(civil_from_days(days), date, "day {days}");
+        }
+        assert_eq!(iso_utc(951_782_400 + 3_661), "2000-02-29T01:01:01Z");
+    }
+
+    /// A three-commit history on `main`: `a.txt` and `b.txt`, then `a.txt`
+    /// rewritten and `c.txt` added, then `b.txt` deleted. Tagged `v1` at the
+    /// first and `v2` at the third; `origin/main` at the second, which is also
+    /// the remote's HEAD. Returns the directory and the three commits.
+    fn history(name: &str) -> (PathBuf, [String; 3]) {
+        let dir = scratch(name);
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let commit = |files: &[(&str, &str)], message: &str| {
+            for (path, text) in files {
+                fs::write(dir.join(path), text).expect("write");
+            }
+            let paths: Vec<String> = files.iter().map(|(path, _)| (*path).to_owned()).collect();
+            crate::gitwrite::commit_paths(&dir, &paths, message).expect("commit");
+            head_commit(&dir).expect("head")
+        };
+        let first = commit(
+            &[("a.txt", "one\n"), ("b.txt", "b\n")],
+            "first\n\nThe body.\n",
+        );
+        let second = commit(
+            &[("a.txt", "two\n"), ("b.txt", "b\n"), ("c.txt", "c\n")],
+            "second\n",
+        );
+        fs::remove_file(dir.join("b.txt")).expect("delete");
+        let third = commit(
+            &[("a.txt", "two\n"), ("c.txt", "c\n")],
+            "third\n\nTrailer: x\n",
+        );
+        let repo = gix::open(&dir).expect("open");
+        for (name, target) in [
+            ("refs/tags/v1", &first),
+            ("refs/tags/v2", &third),
+            ("refs/remotes/origin/main", &second),
+        ] {
+            repo.reference(
+                name,
+                gix::ObjectId::from_hex(target.as_bytes()).expect("an id"),
+                gix::refs::transaction::PreviousValue::Any,
+                "fixture",
+            )
+            .expect("a ref");
+        }
+        fs::write(
+            dir.join(".git/refs/remotes/origin/HEAD"),
+            "ref: refs/remotes/origin/main\n",
+        )
+        .expect("the remote HEAD");
+        let mut config = fs::read_to_string(dir.join(".git/config")).expect("config");
+        config.push_str("[remote \"origin\"]\n\turl = https://example.invalid/r.git\n");
+        fs::write(dir.join(".git/config"), config).expect("config");
+        (dir, [first, second, third])
+    }
+
+    /// Fails by: any history walk answering other than git does over the
+    /// fixture — a range, a count, a reachable set, a message, an ancestry or a
+    /// merge base — or answering nothing.
+    #[test]
+    fn the_history_reads_answer_as_git_does() {
+        let (dir, [first, second, third]) = history("history-reads");
+        let range = format!("{first}..{third}");
+        assert_eq!(root_commits(&dir).unwrap(), [first.clone()]);
+        assert_eq!(
+            commits_in_range(&dir, &first, &third).unwrap(),
+            [third.clone(), second.clone()]
+        );
+        assert_eq!(
+            rev_list(&dir, Window::DEFAULT, &range).unwrap(),
+            [third.clone(), second.clone()]
+        );
+        assert_eq!(commit_count(&dir, &range).unwrap(), 2);
+        assert_eq!(recent_commits(&dir, 2), [third.clone(), second.clone()]);
+        let subjects: Vec<(String, String)> = subjects_in_range(&dir, &first, &third)
+            .unwrap()
+            .into_iter()
+            .map(|subject| (subject.commit, subject.subject))
+            .collect();
+        assert_eq!(
+            subjects,
+            [
+                (third.clone(), "third".to_owned()),
+                (second.clone(), "second".to_owned())
+            ]
+        );
+        assert_eq!(
+            commits_reachable(
+                &dir,
+                std::slice::from_ref(&third),
+                std::slice::from_ref(&first)
+            )
+            .unwrap(),
+            BTreeSet::from([second.clone(), third.clone()])
+        );
+        assert_eq!(
+            messages_reachable(
+                &dir,
+                std::slice::from_ref(&third),
+                std::slice::from_ref(&first)
+            )
+            .unwrap(),
+            "third\n\nTrailer: x\n\nsecond\n\n"
+        );
+        assert_eq!(
+            messages_reachable_from(&dir, "HEAD").as_deref(),
+            Some("third\n\nTrailer: x\n\nsecond\n\nfirst\n\nThe body.\n\n")
+        );
+        assert_eq!(
+            log_messages(&dir, &first).unwrap().as_deref(),
+            Some("third\n\nTrailer: x\n\nsecond\n\n")
+        );
+        assert_eq!(message_of(&dir, &third).unwrap(), "third\n\nTrailer: x\n");
+        assert_eq!(previous_tag(&dir, "v2").unwrap().as_deref(), Some("v1"));
+        assert!(has_object(&dir, &first));
+        assert!(!has_object(&dir, &"0".repeat(40)));
+        assert_eq!(resolve_commit(&dir, "HEAD", "head").unwrap(), third);
+        assert_eq!(is_ancestor(&dir, &first, &third).unwrap(), Some(true));
+        assert_eq!(is_ancestor(&dir, &third, &first).unwrap(), Some(false));
+        assert_eq!(
+            merge_base_of(&dir, &third, &second).unwrap(),
+            Some(second.clone())
+        );
+        assert_eq!(
+            merge_base(&dir, "refs/remotes/origin/main").unwrap(),
+            Some(second)
+        );
+    }
+
+    /// Fails by: a path history, a tree read at a revision, or a write set
+    /// answering other than the fixture's commits made, or nothing.
+    #[test]
+    fn the_change_reads_name_what_each_commit_did() {
+        let (dir, [first, second, third]) = history("change-reads");
+        let set = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect::<BTreeSet<String>>()
+        };
+        assert_eq!(
+            paths_changed_between(&dir, &first, &third).unwrap(),
+            set(&["a.txt", "b.txt", "c.txt"])
+        );
+        assert_eq!(path_was_deleted(&dir, "b.txt").unwrap(), Some(true));
+        assert_eq!(path_was_deleted(&dir, "a.txt").unwrap(), Some(false));
+        assert_eq!(
+            path_changes(&dir, "a.txt").unwrap(),
+            [
+                (second.clone(), "second".to_owned()),
+                (first.clone(), "first".to_owned())
+            ]
+        );
+        assert_eq!(
+            paths_present_at_rev(&dir, &first, &set(&["a.txt", "b.txt", "c.txt"])).unwrap(),
+            set(&["a.txt", "b.txt"])
+        );
+        assert_eq!(count_at_rev(&dir, "HEAD", "*.txt", "two").unwrap(), 1);
+        assert_eq!(count_at_rev(&dir, &second, "*.txt", "\n").unwrap(), 3);
+        let writes: Vec<(String, BTreeSet<String>)> =
+            writes_in_range(&dir, &first, &third, &["*.txt".to_owned()])
+                .unwrap()
+                .into_iter()
+                .map(|write| (write.commit, write.paths))
+                .collect();
+        assert_eq!(
+            writes,
+            [
+                (third.clone(), set(&["b.txt"])),
+                (second, set(&["a.txt", "c.txt"]))
+            ]
+        );
+        let cumulative = branch_patch_id(&dir, "refs/remotes/origin/main").unwrap();
+        assert!(cumulative.is_some());
+        let delta = base_delta(
+            &dir,
+            "refs/remotes/origin/main",
+            &["*.txt".to_owned()],
+            true,
+        )
+        .unwrap()
+        .expect("a delta");
+        assert_eq!(delta.deleted, ["b.txt"]);
+        assert_eq!(delta.patch_id, cumulative);
+        let identities =
+            patch_identities(&dir, Window::DEFAULT, &format!("{first}..{third}")).unwrap();
+        assert_eq!(identities.len(), 2);
+        assert!(identities.contains(cumulative.as_deref().unwrap()));
+        let landed = landing(&dir, "refs/remotes/origin/main", "HEAD", Window::DEFAULT).unwrap();
+        assert!(!landed.is_landed());
+        assert_eq!(landed.unlanded(), [third.as_str()]);
+        assert_eq!(
+            landed.cumulative.as_ref().map(PatchId::as_str),
+            cumulative.as_deref()
+        );
+        assert_eq!(
+            landed.cumulative.as_ref().map(ToString::to_string),
+            cumulative
+        );
+        assert!(
+            landing(&dir, "HEAD", "HEAD", Window::DEFAULT)
+                .unwrap()
+                .is_landed()
+        );
+    }
+
+    /// Fails by: a repository-level read answering other than the fixture's
+    /// remote, branch, refs, directories, ignore rules, shallowness or worktree.
+    #[test]
+    fn the_repository_reads_name_its_own_state() {
+        let (dir, [_, _, third]) = history("repository-reads");
+        assert_eq!(
+            remotes(&dir).unwrap(),
+            [(
+                "origin".to_owned(),
+                "https://example.invalid/r.git".to_owned()
+            )]
+        );
+        assert_eq!(
+            remote_default_branch(&dir).unwrap().as_deref(),
+            Some("refs/remotes/origin/main")
+        );
+        assert_eq!(current_branch(&dir).unwrap().as_deref(), Some("main"));
+        assert_eq!(record_key(&dir).unwrap(), "main");
+        assert_eq!(
+            refs(&dir).unwrap(),
+            [
+                "refs/heads/main",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main"
+            ]
+        );
+        assert_eq!(head_on_a_remote(&dir), Some(false));
+        assert_eq!(
+            unpushed_in_range(&dir, "refs/remotes/origin/main").unwrap(),
+            [third[..12].to_owned()]
+        );
+        assert_eq!(git_dir(&dir).unwrap(), dir.join(".git"));
+        assert_eq!(PathBuf::from(common_dir(&dir).unwrap()), dir.join(".git"));
+        assert_eq!(worktree_root(&dir).unwrap(), dir);
+        assert_eq!(
+            blob_id("x").as_deref(),
+            Some("c1b0730e0133447badcfd47fd144e254807b06e1")
+        );
+        assert_eq!(tagger_of(&dir, "v1").unwrap(), Tagger::Lightweight);
+        assert_eq!(
+            tracked_paths(&dir).unwrap(),
+            BTreeSet::from(["a.txt".to_owned(), "c.txt".to_owned()])
+        );
+        assert_eq!(uncommitted(&dir).unwrap(), 0);
+        fs::write(dir.join("a.txt"), "dirty\n").unwrap();
+        assert_eq!(uncommitted(&dir).unwrap(), 1);
+        assert_eq!(
+            changed_paths(&dir).unwrap(),
+            BTreeSet::from(["a.txt".to_owned()])
+        );
+        fs::write(dir.join(".gitignore"), "*.log\n").unwrap();
+        assert!(check_ignore(&dir, "x.log").unwrap());
+        assert!(!check_ignore(&dir, "a.txt").unwrap());
+        assert!(!is_shallow(&dir).unwrap());
+        fs::write(dir.join(".git/shallow"), format!("{third}\n")).unwrap();
+        assert!(is_shallow(&dir).unwrap());
+    }
+
+    /// Fails by: a declared fact resolving other than git does over the
+    /// fixture, an undeclared or unresolvable declaration present, or a family
+    /// answering nothing.
+    #[test]
+    fn each_declared_fact_family_resolves_what_its_rows_name() {
+        let (dir, [first, second, third]) = history("fact-families");
+        let names = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect::<Vec<String>>()
+        };
+        assert_eq!(
+            ref_facts(&dir, &names(&["HEAD", "refs/tags/v1", "refs/tags/nope"])).unwrap(),
+            BTreeMap::from([
+                ("HEAD".to_owned(), third.clone()),
+                ("refs/tags/v1".to_owned(), first.clone()),
+            ])
+        );
+        let ranges = range_facts(
+            &dir,
+            &names(&["v1..HEAD", "nope..HEAD", "v1..nope", "bare"]),
+        )
+        .unwrap();
+        let subjects: Vec<(&str, &str)> = ranges["v1..HEAD"]
+            .iter()
+            .map(|commit| (commit.commit.as_str(), commit.subject.as_str()))
+            .collect();
+        assert_eq!(
+            ranges.len(),
+            1,
+            "an unresolvable or malformed range is absent"
+        );
+        assert_eq!(
+            subjects,
+            [(third.as_str(), "third"), (second.as_str(), "second")]
+        );
+        let metadata = metadata_facts(&dir, &names(&["v1..HEAD", "v1..nope"])).unwrap();
+        assert_eq!(metadata.len(), 1);
+        let latest = &metadata["v1..HEAD"][0];
+        assert_eq!(
+            (
+                latest.commit.as_str(),
+                latest.subject.as_str(),
+                latest.signed
+            ),
+            (third.as_str(), "third", false)
+        );
+        assert_eq!(latest.paths, ["b.txt"]);
+        assert_eq!(latest.trailers, ["Trailer: x"]);
+        assert_eq!(latest.author, "batten <batten@localhost>");
+        assert_eq!(metadata["v1..HEAD"][1].paths, ["a.txt", "c.txt"]);
+        assert_eq!(
+            staged_facts(&dir, &names(&["a.txt", "b.txt"])).unwrap(),
+            BTreeMap::from([("a.txt".to_owned(), "two\n".to_owned())])
+        );
+        let query = |id: &str, tags: Option<&str>, path: Option<&str>, filter: Option<&str>| {
+            crate::facts::HistoryQuery {
+                id: id.to_owned(),
+                tags: tags.map(str::to_owned),
+                path: path.map(str::to_owned),
+                filter: filter.map(str::to_owned),
+            }
+        };
+        let history = history_facts(
+            &dir,
+            &[
+                query("tags", Some("v*"), None, None),
+                query("deleted", None, Some("b.txt"), Some("D")),
+                query("added", None, Some("c.txt"), Some("A")),
+            ],
+        )
+        .unwrap();
+        let commits = |id: &str| -> Vec<(String, Option<String>)> {
+            history[id]
+                .iter()
+                .map(|commit| (commit.commit.clone(), commit.tag.clone()))
+                .collect()
+        };
+        assert_eq!(
+            commits("tags"),
+            [
+                (first.clone(), Some("v1".to_owned())),
+                (third.clone(), Some("v2".to_owned()))
+            ]
+        );
+        assert_eq!(commits("deleted"), [(third.clone(), None)]);
+        assert_eq!(commits("added"), [(second.clone(), None)]);
+        let landed = landing_facts(
+            &dir,
+            &names(&["refs/remotes/origin/main", "refs/tags/nope"]),
+        )
+        .unwrap();
+        assert_eq!(landed.len(), 1);
+        assert_eq!(landed["refs/remotes/origin/main"].unlanded, [third.clone()]);
+        assert!(!landed["refs/remotes/origin/main"].is_landed());
+        let tags = tag_facts(&dir, &names(&["v*"])).unwrap();
+        let cut: Vec<(&str, &str, bool)> = tags["v*"]
+            .iter()
+            .map(|tag| (tag.tag.as_str(), tag.commit.as_str(), tag.annotated))
+            .collect();
+        assert_eq!(
+            cut,
+            [("v1", first.as_str(), false), ("v2", third.as_str(), false)]
+        );
+        assert_eq!(
+            tags["v*"][0].created.as_deref(),
+            Some(tags["v*"][0].committed.as_str())
+        );
+        let config = config_facts(&dir, &names(&["remote.origin.url", "nope.key"])).unwrap();
+        let url = &config["remote.origin.url"];
+        assert_eq!(
+            url.effective
+                .as_ref()
+                .and_then(|value| value.value.as_deref()),
+            Some("https://example.invalid/r.git")
+        );
+        assert_eq!(
+            url.scopes.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["local"]
+        );
+        assert_eq!(config["nope.key"].effective, None);
+        fs::write(dir.join("a.txt"), "dirty\n").unwrap();
+        fs::remove_file(dir.join("c.txt")).unwrap();
+        fs::write(dir.join("new.txt"), "new\n").unwrap();
+        let index = index_facts(&dir, &names(&["*.txt", "a.txt"])).unwrap();
+        let paths = |fact: &IndexFact| -> Vec<String> {
+            fact.entries
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect()
+        };
+        assert_eq!(paths(&index["*.txt"]), ["a.txt", "c.txt"]);
+        assert_eq!(index["*.txt"].entries[0].mode, "100644");
+        assert_eq!(index["*.txt"].diverged, ["a.txt", "c.txt"]);
+        assert_eq!(index["*.txt"].untracked, ["new.txt"]);
+        assert_eq!(paths(&index["a.txt"]), ["a.txt"]);
+        assert!(index["a.txt"].untracked.is_empty());
+    }
+
+    /// Fails by: a staged change missed, an untracked file reported as staged
+    /// or missed as uncommitted, or a staged question answered with the
+    /// working tree's.
+    #[test]
+    fn staged_and_uncommitted_work_are_told_apart() {
+        let (dir, [first, ..]) = history("staged");
+        // The index stays at the third commit's tree while HEAD moves back to
+        // the first, so `a.txt` (rewritten) and `c.txt` (added) are staged.
+        gix::open(&dir)
+            .expect("open")
+            .reference(
+                "refs/heads/main",
+                gix::ObjectId::from_hex(first.as_bytes()).expect("an id"),
+                gix::refs::transaction::PreviousValue::Any,
+                "fixture",
+            )
+            .expect("move main");
+        fs::write(dir.join("u.txt"), "untracked\n").unwrap();
+        let set = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect::<BTreeSet<String>>()
+        };
+        assert_eq!(staged_paths(&dir).unwrap(), set(&["a.txt", "c.txt"]));
+        assert_eq!(
+            changed_paths(&dir).unwrap(),
+            set(&["a.txt", "c.txt", "u.txt"])
+        );
+        assert_eq!(uncommitted(&dir).unwrap(), 3);
+    }
+
+    /// Fails by: a directory's listing answering other than its entries, or a
+    /// file, an absent path or a non-directory root listed rather than refused.
+    #[test]
+    fn a_tree_lists_a_directory_and_refuses_anything_else() {
+        let dir = scratch("list-tree");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        fs::create_dir_all(dir.join("d")).unwrap();
+        fs::write(dir.join("d/e.txt"), "e\n").unwrap();
+        fs::write(dir.join("top.txt"), "t\n").unwrap();
+        crate::gitwrite::commit_paths(&dir, &["d/e.txt".to_owned(), "top.txt".to_owned()], "tree")
+            .expect("commit");
+        let listed = list_tree(&dir, "HEAD", "d").unwrap();
+        assert!(listed.iter().any(|path| path == "d/e.txt"), "{listed:?}");
+        assert!(
+            listed.iter().all(|path| path.starts_with("d/")),
+            "{listed:?}"
+        );
+        assert!(
+            list_tree(&dir, "HEAD", "top.txt").is_err(),
+            "a file is not a directory"
+        );
+        assert!(list_tree(&dir, "HEAD", "absent").is_err());
+        assert!(list_tree(&dir.join("top.txt"), "HEAD", "d").is_err());
+    }
+
+    /// Fails by: a pending message's trailers misread, or the identity git
+    /// would stamp read from the wrong role or not at all.
+    #[test]
+    fn a_pending_commit_reads_its_trailers_and_each_roles_identity() {
+        let (dir, _) = history("pending");
+        let message = dir.join("MESSAGE");
+        fs::write(&message, "subject\n\nA body.\n\nSigned-off-by: a <b@c>\n").unwrap();
+        assert_eq!(
+            message_trailers(&dir, &message).unwrap(),
+            ["Signed-off-by: a <b@c>"]
+        );
+        set_config_local(&dir, "user.name", "U").unwrap();
+        set_config_local(&dir, "user.email", "u@x").unwrap();
+        set_config_local(&dir, "committer.name", "C").unwrap();
+        assert_eq!(
+            stamped_identity(&dir, "GIT_AUTHOR_IDENT").unwrap(),
+            "U <u@x>"
+        );
+        assert_eq!(
+            stamped_identity(&dir, "GIT_COMMITTER_IDENT").unwrap(),
+            "C <u@x>"
+        );
+        assert!(stamped_identity(&dir, "GIT_OTHER_IDENT").is_err());
+    }
+
+    /// The note `name` carries for `commit`, read back through gix.
+    fn note(dir: &Path, name: &str, commit: &str) -> Option<String> {
+        let repo = gix::open(dir).ok()?;
+        let mut found = repo
+            .find_reference(format!("refs/notes/{name}").as_str())
+            .ok()?;
+        let tree = repo
+            .find_commit(found.peel_to_id().ok()?.detach())
+            .ok()?
+            .tree()
+            .ok()?;
+        let entry = tree.lookup_entry_by_path(commit).ok()??;
+        let blob = repo.find_object(entry.object_id()).ok()?;
+        Some(String::from_utf8_lossy(&blob.data).into_owned())
+    }
+
+    /// Fails by: a note replaced rather than appended to, its lines run
+    /// together, another commit's note dropped, or a name that is not an id
+    /// written under.
+    #[test]
+    fn a_note_appends_and_keeps_every_other_commits() {
+        let (dir, [first, second, _]) = history("notes");
+        append_note(&dir, "perf", &first, "one").unwrap();
+        append_note(&dir, "perf", &first, "two\n").unwrap();
+        append_note(&dir, "perf", &second, "other").unwrap();
+        assert_eq!(note(&dir, "perf", &first).as_deref(), Some("one\ntwo\n"));
+        assert_eq!(note(&dir, "perf", &second).as_deref(), Some("other\n"));
+        assert!(append_note(&dir, "perf", "main", "x").is_err());
+    }
+
+    /// Fails by: a push sending an object the base already carries, missing one
+    /// it does not, or sending any object twice.
+    #[test]
+    fn a_push_sends_exactly_what_the_base_lacks() {
+        let (dir, [_, second, third]) = history("objects-to-send");
+        let kinds = |objects: &[RawObject]| {
+            let count = |kind| objects.iter().filter(|object| object.kind == kind).count();
+            (
+                count(gix::object::Kind::Commit),
+                count(gix::object::Kind::Tree),
+                count(gix::object::Kind::Blob),
+            )
+        };
+        let onto_second = objects_to_send(&dir, Some(&second), "HEAD").unwrap();
+        assert_eq!(
+            kinds(&onto_second),
+            (1, 1, 0),
+            "the third commit and its new tree"
+        );
+        assert_eq!(onto_second[0].id, third);
+        let everything = objects_to_send(&dir, None, "HEAD").unwrap();
+        assert_eq!(
+            kinds(&everything),
+            (3, 3, 4),
+            "every commit, tree and blob, once"
+        );
+    }
+
+    /// Fails by: a selected path classified as added, edited or deleted when it
+    /// was not, an unselected one classified at all, a comment-only edit or a
+    /// prose deletion read as a code change, or an edit's base lines not kept.
+    #[test]
+    fn a_base_delta_classifies_each_selected_path() {
+        let dir = scratch("base-delta");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        for (path, text) in [
+            ("x.sh", "# c1\necho\n"),
+            ("y.md", "prose\n"),
+            ("u.txt", "same\n"),
+        ] {
+            fs::write(dir.join(path), text).unwrap();
+        }
+        let base = ["x.sh", "y.md", "u.txt"].map(str::to_owned);
+        crate::gitwrite::commit_paths(&dir, &base, "base").expect("commit");
+        fs::write(dir.join("x.sh"), "# c2\necho\n").unwrap();
+        fs::remove_file(dir.join("y.md")).unwrap();
+        fs::write(dir.join("z.txt"), "new\n").unwrap();
+        fs::write(dir.join("other.rs"), "fn f() {}\n").unwrap();
+        let globs = ["*.sh", "*.md", "*.txt"].map(str::to_owned);
+        let delta = base_delta(&dir, "HEAD", &globs, false)
+            .unwrap()
+            .expect("a delta");
+        assert_eq!(delta.added, ["z.txt"]);
+        assert_eq!(delta.edited, ["x.sh"]);
+        assert_eq!(delta.deleted, ["y.md"]);
+        assert_eq!(delta.code_changed, ["z.txt"]);
+        assert_eq!(
+            delta.base_lines,
+            BTreeMap::from([(
+                "x.sh".to_owned(),
+                vec!["# c1".to_owned(), "echo".to_owned()]
+            )])
+        );
+        assert_eq!(delta.patch_id, None, "not asked for");
+        assert!(delta.base_date.is_some());
+        assert!(base_delta(&dir, "nope", &globs, false).unwrap().is_none());
+    }
+
+    /// Fails by: a repository with no `origin` asked about `origin` rather than
+    /// its own remote.
+    #[test]
+    fn the_default_branch_is_read_off_the_one_remote_there_is() {
+        let dir = scratch("upstream-only");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let mut config = fs::read_to_string(dir.join(".git/config")).unwrap();
+        config.push_str("[remote \"upstream\"]\n\turl = https://example.invalid/u.git\n");
+        fs::write(dir.join(".git/config"), config).unwrap();
+        fs::create_dir_all(dir.join(".git/refs/remotes/upstream")).unwrap();
+        fs::write(
+            dir.join(".git/refs/remotes/upstream/HEAD"),
+            "ref: refs/remotes/upstream/main\n",
+        )
+        .unwrap();
+        assert_eq!(
+            remote_default_branch(&dir).unwrap().as_deref(),
+            Some("refs/remotes/upstream/main")
+        );
+    }
+
+    /// Fails by: an annotated tag read as lightweight, its tagger or its cut
+    /// time lost, or a tag object with no tagger read as signed.
+    #[test]
+    fn an_annotated_tag_carries_its_tagger_and_when_it_was_cut() {
+        let (dir, [first, ..]) = history("annotated");
+        let repo = gix::open(&dir).expect("open");
+        let tag = |name: &str, tagger: Option<gix::actor::Signature>| {
+            let id = repo
+                .write_object(gix::objs::Tag {
+                    target: gix::ObjectId::from_hex(first.as_bytes()).expect("an id"),
+                    target_kind: gix::object::Kind::Commit,
+                    name: name.into(),
+                    tagger,
+                    message: "cut\n".into(),
+                    signature: None,
+                })
+                .expect("a tag object")
+                .detach();
+            repo.reference(
+                format!("refs/tags/{name}").as_str(),
+                id,
+                gix::refs::transaction::PreviousValue::Any,
+                "fixture",
+            )
+            .expect("a tag ref");
+        };
+        tag(
+            "v3",
+            Some(gix::actor::Signature {
+                name: "batten".into(),
+                email: "batten@localhost".into(),
+                time: gix::date::Time {
+                    seconds: 1_700_000_000,
+                    offset: 0,
+                },
+            }),
+        );
+        tag("v4", None);
+        assert_eq!(
+            tagger_of(&dir, "v3").unwrap(),
+            Tagger::Signed("batten <batten@localhost>".to_owned())
+        );
+        assert_eq!(tagger_of(&dir, "v4").unwrap(), Tagger::Unsigned);
+        let facts = tag_facts(&dir, &["v3".to_owned()]).unwrap();
+        let cut = &facts["v3"][0];
+        assert_eq!(
+            (cut.commit.as_str(), cut.annotated, cut.created.as_deref()),
+            (first.as_str(), true, Some("2023-11-14T22:13:20Z"))
+        );
+    }
+
+    /// Commit a merge of `parents` on `HEAD`, carrying the first parent's tree.
+    fn merge(dir: &Path, parents: [&str; 2]) -> String {
+        let repo = gix::open(dir).expect("open");
+        let id = |hex: &str| gix::ObjectId::from_hex(hex.as_bytes()).expect("an id");
+        let tree = repo
+            .find_commit(id(parents[0]))
+            .expect("the first parent")
+            .tree_id()
+            .expect("its tree")
+            .detach();
+        let signature = gix::actor::Signature {
+            name: "batten".into(),
+            email: "batten@localhost".into(),
+            time: gix::date::Time::now_utc(),
+        };
+        let (mut author, mut committer) = (
+            gix::date::parse::TimeBuf::default(),
+            gix::date::parse::TimeBuf::default(),
+        );
+        repo.commit_as(
+            signature.to_ref(&mut committer),
+            signature.to_ref(&mut author),
+            "HEAD",
+            "merge\n",
+            tree,
+            parents.map(id),
+        )
+        .expect("the merge")
+        .to_string()
+    }
+
+    /// Fails by: a merge commit counted as a commit of the range, which has no
+    /// patch of its own, or a walk running past its window.
+    #[test]
+    fn a_range_skips_its_merges_and_a_walk_stops_at_its_window() {
+        let (dir, [first, second, third]) = history("merges");
+        let merged = merge(&dir, [&third, &second]);
+        let sorted = |mut commits: Vec<String>| {
+            commits.sort();
+            commits
+        };
+        let mut expected = vec![second.clone(), third.clone()];
+        expected.sort();
+        assert_eq!(
+            sorted(commits_in_range(&dir, &first, &merged).unwrap()),
+            expected
+        );
+        let range = format!("{first}..{merged}");
+        assert_eq!(
+            sorted(rev_list(&dir, Window::DEFAULT, &range).unwrap()),
+            expected
+        );
+        let one = Window::of(NonZeroUsize::MIN);
+        assert_eq!(rev_list(&dir, one, &range).unwrap().len(), 1);
+        let subjects = subjects_in_range(&dir, &first, &merged).unwrap();
+        assert_eq!(
+            sorted(subjects.into_iter().map(|subject| subject.commit).collect()),
+            expected
+        );
+        let writes = writes_in_range(&dir, &first, &merged, &["*.txt".to_owned()]).unwrap();
+        assert_eq!(
+            sorted(writes.into_iter().map(|write| write.commit).collect()),
+            expected
+        );
+    }
+
+    /// Fails by: markdown read as anything but prose, which would make every
+    /// prose edit to it a code change.
+    #[test]
+    fn markdown_has_no_code_remainder() {
+        assert_eq!(without_comments("README.md", "# A heading\nprose\n"), "");
+    }
+
     /// And a genuinely unknown extension still takes the admitting direction.
     ///
     /// The paired half of the case above: widening the table must not turn the

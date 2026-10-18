@@ -2582,10 +2582,9 @@ impl Local {
     #[must_use]
     pub fn poisoned(&self) -> Option<(String, String)> {
         let record = std::fs::read_to_string(self.dir.join("poisoned")).ok()?;
+        // Neither half can be empty: the record is trimmed first, so a tab it
+        // still carries has a non-blank byte on each side of it.
         let (tracking, at) = record.trim().split_once('\t')?;
-        if tracking.is_empty() || at.is_empty() {
-            return None;
-        }
         Some((tracking.to_owned(), at.to_owned()))
     }
 
@@ -5501,6 +5500,125 @@ mod tests {
         // empty object set would say "the lease body is unreadable, carry on",
         // which is the direction that loses the fleet.
         assert!(objects_in(b"not a pack at all").is_err());
+    }
+
+    /// Fails by: a base64 group, its padding, or a credential header read wrong
+    /// — RFC 4648's own vectors.
+    #[test]
+    fn a_credential_is_carried_as_rfc_4648_base64() {
+        for (raw, encoded) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(base64_of(raw), encoded, "{raw:?}");
+        }
+        assert_eq!(
+            headers_for("a/b", Some("c/d"), Some("t")),
+            [
+                ("Accept".to_owned(), "a/b".to_owned()),
+                ("Content-Type".to_owned(), "c/d".to_owned()),
+                (
+                    "Authorization".to_owned(),
+                    "Basic eC1hY2Nlc3MtdG9rZW46dA==".to_owned()
+                ),
+            ]
+        );
+        assert_eq!(
+            headers("a/b", None)[0],
+            ("Accept".to_owned(), "a/b".to_owned())
+        );
+    }
+
+    /// Fails by: a reserved byte surviving into a URL, a path's separator
+    /// escaped, a query value's kept, or a high byte's two hex digits misread.
+    #[test]
+    fn a_url_component_escapes_what_would_re_key_the_request() {
+        assert_eq!(path_value("owner/repo x?#é"), "owner/repo%20x%3F%23%C3%A9");
+        assert_eq!(query_value("a/b c~é"), "a%2Fb%20c~%C3%A9");
+    }
+
+    /// Fails by: an equal, older, unreadable or four-part version read as
+    /// newer, or a newer one in any position not.
+    #[test]
+    fn only_a_strictly_newer_three_part_version_outranks() {
+        for (ours, theirs, newer) in [
+            ("1.2.4", "1.2.3", true),
+            ("1.3.0", "1.2.9", true),
+            ("2.0.0", "1.9.9", true),
+            ("1.2.3-rc.1", "1.2.2", true),
+            ("1.2.3", "1.2.3", false),
+            ("1.2.3", "1.2.4", false),
+            ("1.2.3.4", "1.2.0", false),
+            ("1.2", "1.1.0", false),
+            ("x", "1.0.0", false),
+        ] {
+            assert_eq!(outranks(ours, theirs), newer, "{ours} over {theirs}");
+        }
+    }
+
+    /// Fails by: a stand-down asked of a holder that is not older, already
+    /// asked, or the asker itself.
+    #[test]
+    fn a_stand_down_is_asked_only_of_an_older_unasked_other() {
+        let older = Body {
+            holder: "h".to_owned(),
+            writer: "0.0.0".to_owned(),
+            ..Body::default()
+        };
+        assert!(worth_asking(&older, "a"));
+        assert!(!worth_asking(&older, "h"), "never self-addressed");
+        let asked = Body {
+            stand_down: "b".to_owned(),
+            ..older.clone()
+        };
+        assert!(!worth_asking(&asked, "a"), "already asked");
+        let current = Body {
+            writer: writer_version(),
+            ..older
+        };
+        assert!(!worth_asking(&current, "a"), "not older");
+    }
+
+    /// Fails by: a poison not read back, or a record missing either half read
+    /// as one.
+    #[test]
+    fn a_poison_reads_back_only_whole() {
+        let local = Local {
+            dir: crate::scratch::scratch("lease-poisoned"),
+        };
+        assert_eq!(local.poisoned(), None, "never poisoned");
+        local.poison("refs/heads/main", "abc").expect("poison");
+        assert_eq!(
+            local.poisoned(),
+            Some(("refs/heads/main".to_owned(), "abc".to_owned()))
+        );
+        for malformed in ["abc\n", "\tabc\n", "refs/heads/main\t\n"] {
+            std::fs::write(local.dir.join("poisoned"), malformed).expect("write");
+            assert_eq!(local.poisoned(), None, "{malformed:?}");
+        }
+    }
+
+    /// Fails by: a TTL narrower than one beat kept, a beat that fits its TTL
+    /// moved, or one that does not left.
+    #[test]
+    fn the_ttl_and_the_beat_keep_their_relation() {
+        let bounded = |ttl: i64, beat: i64| {
+            let mut terms = Terms {
+                ttl,
+                beat,
+                ..Terms::default()
+            };
+            bound_the_relation(&mut terms);
+            (terms.ttl, terms.beat)
+        };
+        assert_eq!(bounded(1, 1), (BEATS_PER_TTL, 1));
+        assert_eq!(bounded(BEATS_PER_TTL, 1), (BEATS_PER_TTL, 1));
+        assert_eq!(bounded(8 * BEATS_PER_TTL, 8), (8 * BEATS_PER_TTL, 8));
+        assert_eq!(bounded(8 * BEATS_PER_TTL, 9), (8 * BEATS_PER_TTL, 8));
+        assert_eq!(bounded(BEATS_PER_TTL + 1, 1), (BEATS_PER_TTL + 1, 1));
     }
 
     /// One pack member: git's type/size header, `extra` (a delta's base), then
