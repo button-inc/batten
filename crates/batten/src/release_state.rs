@@ -1542,13 +1542,12 @@ mod tests {
     ) -> impl Fn(&str) -> Option<crate::rest::Answer> + use<> {
         let routes = routes.to_vec();
         move |path: &str| {
-            routes
-                .iter()
-                .find(|(needle, _)| path.contains(needle))
-                .map_or_else(
-                    || Some(answer(404, "{}")),
-                    |(_, body)| Some(answer(200, body)),
-                )
+            Some(
+                routes
+                    .iter()
+                    .find(|(needle, _)| path.contains(needle))
+                    .map_or_else(|| answer(404, "{}"), |(_, body)| answer(200, body)),
+            )
         }
     }
 

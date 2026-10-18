@@ -402,9 +402,11 @@ mod tests {
         routes: Vec<(String, String)>,
     ) -> impl Fn(&str) -> Option<crate::rest::Answer> + use<> {
         move |path: &str| {
-            routes.iter().find(|(at, _)| at == path).map_or_else(
-                || Some(answer(404, "{}")),
-                |(_, body)| Some(answer(200, body)),
+            Some(
+                routes
+                    .iter()
+                    .find(|(at, _)| at == path)
+                    .map_or_else(|| answer(404, "{}"), |(_, body)| answer(200, body)),
             )
         }
     }

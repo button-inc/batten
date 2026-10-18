@@ -116,6 +116,9 @@ fn tsv(cell: &str) -> String {
 }
 
 /// An RFC 3339 instant in epoch seconds, or `None` where it does not parse.
+///
+/// An EMPTY stamp is one that does not parse, so a caller need not filter an
+/// unstamped run out first: the `None` already skips it.
 pub(crate) fn epoch(instant: &str) -> Option<i64> {
     crate::landed::second_of(instant)
 }

@@ -2024,16 +2024,12 @@ mod tests {
         ] {
             materialise(&repo, &mut pipeline, &dir, b"tool", tool, mode)
                 .unwrap_or_else(|err| panic!("file: {err}"));
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                let bits = std::fs::metadata(dir.join("tool"))
-                    .unwrap_or_else(|err| panic!("stat: {err}"))
-                    .permissions()
-                    .mode();
-                assert_eq!(bits & 0o111 != 0, executable);
-            }
-            let _ = executable;
+            let landed =
+                std::fs::metadata(dir.join("tool")).unwrap_or_else(|err| panic!("stat: {err}"));
+            assert_eq!(
+                executable_kind(&landed) == gix::objs::tree::EntryKind::BlobExecutable,
+                executable && cfg!(unix)
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
