@@ -646,10 +646,9 @@ pub fn remotes(dir: &Path) -> Result<Vec<(String, String)>> {
         let Some(url) = remote.url(gix::remote::Direction::Fetch) else {
             continue;
         };
-        let url = url.to_bstring().to_string();
-        if !name.is_empty() && !url.is_empty() {
-            found.push((name, url));
-        }
+        // Neither half can be blank: a remote is named by its config section,
+        // and gix refuses a blank url at `find_remote` above.
+        found.push((name, url.to_bstring().to_string()));
     }
     // `read`-order from git config is file order; a recorded value that a gate
     // compares must not depend on it.
@@ -5888,6 +5887,15 @@ mod tests {
             "real = 1",
             "pkl comments are `//`, so the `#` table would misread every line"
         );
+        // An extensionless task is read by its directory, and only there.
+        assert_eq!(
+            without_comments("mise-tasks/land", "# a comment\nreal\n"),
+            "real"
+        );
+        assert_eq!(
+            without_comments("bin/land", "# a comment\nreal\n"),
+            "# a comment\nreal\n"
+        );
     }
 
     /// Fails by: any step of the civil-date arithmetic off — each date sits on
@@ -6100,6 +6108,15 @@ mod tests {
         let landed = landing(&dir, "refs/remotes/origin/main", "HEAD", Window::DEFAULT).unwrap();
         assert!(!landed.is_landed());
         assert_eq!(landed.unlanded(), [third.as_str()]);
+        assert!(!landed.scanned.target_truncated && !landed.scanned.head_truncated);
+        let narrow = landing(
+            &dir,
+            "refs/remotes/origin/main",
+            "HEAD",
+            Window::of(NonZeroUsize::MIN),
+        )
+        .unwrap();
+        assert!(narrow.scanned.target_truncated && narrow.scanned.head_truncated);
         assert_eq!(
             landed.cumulative.as_ref().map(PatchId::as_str),
             cumulative.as_deref()
@@ -6127,6 +6144,134 @@ mod tests {
                 "https://example.invalid/r.git".to_owned()
             )]
         );
+    }
+
+    /// Fails by: a materialised tree missing a file, holding a deleted one, or
+    /// carrying other bytes than the rev's blobs.
+    #[test]
+    fn a_materialised_rev_holds_exactly_its_tree() {
+        let (dir, [first, ..]) = history("materialize");
+        let dest = scratch("materialize-dest");
+        materialize_rev(&dir, &first, &dest).expect("materialise");
+        assert_eq!(fs::read_to_string(dest.join("a.txt")).unwrap(), "one\n");
+        assert_eq!(fs::read_to_string(dest.join("b.txt")).unwrap(), "b\n");
+        assert!(!dest.join("c.txt").exists());
+    }
+
+    /// Fails by: a present linked worktree missing from the list, or one whose
+    /// directory is gone listed.
+    #[test]
+    fn only_a_present_linked_worktree_is_listed() {
+        let (dir, _) = history("linked-worktrees");
+        let present = scratch("linked-worktrees-present");
+        let gone = scratch("linked-worktrees-gone").join("never-made");
+        for (id, base) in [("present", &present), ("gone", &gone)] {
+            let admin = dir.join(".git/worktrees").join(id);
+            fs::create_dir_all(&admin).unwrap();
+            fs::write(
+                admin.join("gitdir"),
+                format!("{}\n", base.join(".git").display()),
+            )
+            .unwrap();
+            fs::write(admin.join("commondir"), "../..\n").unwrap();
+            fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        }
+        fs::write(
+            present.join(".git"),
+            format!("gitdir: {}\n", dir.join(".git/worktrees/present").display()),
+        )
+        .unwrap();
+        assert_eq!(linked_worktree_dirs(&dir), [present]);
+    }
+
+    /// Fails by: a signature header of either name missed, or another header
+    /// read as one.
+    #[test]
+    fn either_signature_header_signs_a_commit_and_nothing_else_does() {
+        let (dir, [first, ..]) = history("signed");
+        let repo = gix::open(&dir).expect("open");
+        let parent = gix::ObjectId::from_hex(first.as_bytes()).expect("an id");
+        let tree = repo
+            .find_commit(parent)
+            .expect("the parent")
+            .tree_id()
+            .expect("its tree")
+            .detach();
+        let who = gix::actor::Signature {
+            name: "S".into(),
+            email: "s@x".into(),
+            time: utc_at(1_700_000_000),
+        };
+        let signed = |header: &str| {
+            let id = repo
+                .write_object(gix::objs::Commit {
+                    tree,
+                    parents: std::iter::once(parent).collect(),
+                    author: who.clone(),
+                    committer: who.clone(),
+                    encoding: None,
+                    message: "m\n".into(),
+                    extra_headers: vec![(header.into(), "value".into())],
+                })
+                .expect("a commit")
+                .to_string();
+            commit_meta(&repo, &id).expect("its meta").signed
+        };
+        assert!(signed("gpgsig"));
+        assert!(signed("gpgsig-sha256"));
+        assert!(!signed("mergetag"));
+    }
+
+    /// Fails by: a clean entry reported, a flipped executable bit or a file
+    /// turned symlink missed, an assume-valid entry compared, or the mode
+    /// counted when `core.filemode` says it does not.
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_diverges_on_content_type_and_mode_alone() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = scratch("entry-diverges");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let mode = |path: &str, bits: u32| {
+            fs::set_permissions(dir.join(path), fs::Permissions::from_mode(bits)).unwrap();
+        };
+        for (path, text) in [
+            ("clean.txt", "clean\n"),
+            ("dirty.txt", "dirty\n"),
+            ("link.txt", "clean.txt"),
+            ("plain.sh", "plain\n"),
+            ("run.sh", "run\n"),
+        ] {
+            fs::write(dir.join(path), text).unwrap();
+        }
+        mode("run.sh", 0o755);
+        let tracked: Vec<String> = ["clean.txt", "dirty.txt", "link.txt", "plain.sh", "run.sh"]
+            .map(String::from)
+            .to_vec();
+        crate::gitwrite::commit_paths(&dir, &tracked, "m\n").expect("commit");
+        // `dirty.txt` is edited under assume-valid, so it is never compared.
+        let repo = gix::open(&dir).expect("open");
+        let mut index = repo.open_index().expect("the index");
+        for (entry, path) in index.entries_mut_with_paths() {
+            if path == "dirty.txt" {
+                entry.flags |= gix::index::entry::Flags::ASSUME_VALID;
+            }
+        }
+        index
+            .write(gix::index::write::Options::default())
+            .expect("write the index");
+        fs::write(dir.join("dirty.txt"), "edited\n").unwrap();
+        // `link.txt` becomes a symlink whose target spells the blob it was.
+        fs::remove_file(dir.join("link.txt")).unwrap();
+        std::os::unix::fs::symlink("clean.txt", dir.join("link.txt")).unwrap();
+        mode("run.sh", 0o644);
+        let diverged = |dir: &Path| {
+            index_facts(dir, &["*".to_owned()]).unwrap()["*"]
+                .diverged
+                .clone()
+        };
+        assert_eq!(diverged(&dir), ["link.txt", "run.sh"]);
+        set_config_local(&dir, "core.filemode", "false").unwrap();
+        assert_eq!(diverged(&dir), ["link.txt"]);
     }
 
     /// Fails by: a repository-level read answering other than the fixture's

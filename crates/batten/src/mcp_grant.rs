@@ -424,4 +424,17 @@ mod tests {
         assert_eq!(rules_in(&settings, "allow"), Some(Vec::new()));
         assert_eq!(rules_in(&dir.join("absent.json"), "deny"), None);
     }
+
+    /// Fails by: an entry resolving to a name no selector, or several, chose.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn an_entry_resolves_only_to_the_one_selector_naming_its_endpoint() {
+        let entry = crate::rules::parse_node(Format::Json, r#"{"url": "https://mcp.a.test/sse"}"#)
+            .expect("an entry");
+        let a = ("a", "https://mcp.a.test/sse");
+        let b = ("b", "https://mcp.b.test/sse");
+        assert_eq!(alias_in(&entry, &[b, a]).as_deref(), Some("a"));
+        assert_eq!(alias_in(&entry, &[b]), None);
+        assert_eq!(alias_in(&entry, &[a, ("a2", a.1)]), None);
+    }
 }
