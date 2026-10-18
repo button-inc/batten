@@ -533,4 +533,37 @@ mod tests {
         ));
         assert!(!read(slug, "main", &forge(off)).unwrap().immutable_releases);
     }
+
+    /// A ruleset guards only the kind of ref it targets: a tag ruleset naming
+    /// the trunk, or a branch ruleset naming the release tags, guards nothing.
+    #[test]
+    fn a_ruleset_naming_a_ref_of_the_other_kind_guards_nothing() {
+        let slug = "o/r";
+        let routes = vec![
+            (
+                format!("repos/{slug}/rulesets?includes_parents=false&per_page=100"),
+                String::from(r#"[{"id":1},{"id":2}]"#),
+            ),
+            (
+                format!("repos/{slug}/rulesets/1"),
+                serde_json::json!({"name": "tag", "enforcement": "active", "target": "tag",
+                    "conditions": {"ref_name": {"include":
+                        ["~DEFAULT_BRANCH", format!("refs/heads/{PROBE_BRANCH}")]}},
+                    "rules": [required(Some(7)), {"type": "non_fast_forward"}],
+                    "bypass_actors": [{"actor_id": 1}]})
+                .to_string(),
+            ),
+            (
+                format!("repos/{slug}/rulesets/2"),
+                serde_json::json!({"name": "branch", "enforcement": "active", "target": "branch",
+                    "conditions": {"ref_name": {"include": ["refs/tags/v*"]}},
+                    "rules": [{"type": "update"}], "bypass_actors": [{"actor_id": 1}]})
+                .to_string(),
+            ),
+        ];
+        assert_eq!(
+            read(slug, "main", &forge(routes)).unwrap(),
+            Facts::default()
+        );
+    }
 }

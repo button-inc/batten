@@ -1912,6 +1912,132 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// An object lands under the id it was read as, once: a second write of an
+    /// object the odb holds is skipped, and bytes that hash elsewhere refuse.
+    #[test]
+    fn an_object_is_written_once_and_only_under_its_own_id() {
+        let dir = crate::scratch::scratch("gitwrite-objects");
+        init_on_main(&dir).unwrap_or_else(|err| panic!("init: {err}"));
+        let hello = |id: &str| Object {
+            id: id.to_owned(),
+            kind: gix::object::Kind::Blob,
+            body: b"hello\n".to_vec(),
+        };
+        let held = [hello("ce013625030ba8dba906f756967f9e9ca394464a")];
+        assert_eq!(
+            write_objects(&dir, &held).unwrap_or_else(|err| panic!("{err}")),
+            1
+        );
+        assert_eq!(
+            write_objects(&dir, &held).unwrap_or_else(|err| panic!("{err}")),
+            0
+        );
+        let misnamed = [hello("1111111111111111111111111111111111111112")];
+        assert!(write_objects(&dir, &misnamed).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_deleted_ref_no_longer_resolves() {
+        let dir = crate::scratch::scratch("gitwrite-delete-ref");
+        init_on_main(&dir).unwrap_or_else(|err| panic!("init: {err}"));
+        commit_paths(&dir, &[], "one").unwrap_or_else(|err| panic!("commit: {err}"));
+        delete_ref(&dir, "refs/heads/main").unwrap_or_else(|err| panic!("delete: {err}"));
+        assert_eq!(
+            crate::git::resolve_ref(&dir, "refs/heads/main").unwrap_or_else(|err| panic!("{err}")),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A named directory is no file to commit, and a nested path lands under its
+    /// directory.
+    #[test]
+    fn a_commit_skips_a_directory_and_nests_a_path() {
+        let dir = crate::scratch::scratch("gitwrite-nested");
+        init_on_main(&dir).unwrap_or_else(|err| panic!("init: {err}"));
+        std::fs::create_dir_all(dir.join("sub")).unwrap_or_else(|err| panic!("{err}"));
+        std::fs::write(dir.join("sub/a.txt"), "a\n").unwrap_or_else(|err| panic!("{err}"));
+        commit_paths(
+            &dir,
+            &[String::from("sub"), String::from("sub/a.txt")],
+            "one",
+        )
+        .unwrap_or_else(|err| panic!("commit: {err}"));
+        assert_eq!(
+            crate::git::show(&dir, "HEAD", "sub/a.txt").unwrap_or_else(|err| panic!("show: {err}")),
+            "a\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A path already gone is no refusal, and neither is a directory still
+    /// holding a file; a path that is not the kind being removed is.
+    #[test]
+    fn removing_gone_paths_tolerates_only_absence_and_occupancy() {
+        let dir = crate::scratch::scratch("gitwrite-gone");
+        std::fs::create_dir_all(dir.join("kept/inner")).unwrap_or_else(|err| panic!("{err}"));
+        std::fs::write(dir.join("kept/untracked"), "x").unwrap_or_else(|err| panic!("{err}"));
+        std::fs::write(dir.join("file"), "x").unwrap_or_else(|err| panic!("{err}"));
+        let paths = |names: &[&str]| -> std::collections::BTreeSet<Vec<u8>> {
+            names.iter().map(|name| name.as_bytes().to_vec()).collect()
+        };
+        assert!(remove_gone(&dir, &paths(&["missing"]), vec![b"kept".to_vec()]).is_ok());
+        assert!(dir.join("kept/untracked").exists());
+        assert!(remove_gone(&dir, &paths(&["kept"]), Vec::new()).is_err());
+        assert!(remove_gone(&dir, &paths(&[]), vec![b"file".to_vec()]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A symlink lands as a link to its blob's path, and a regular file takes
+    /// exactly the executable bit its mode names.
+    #[test]
+    fn a_path_materialises_in_its_mode() {
+        let dir = crate::scratch::scratch("gitwrite-materialise");
+        init_on_main(&dir).unwrap_or_else(|err| panic!("init: {err}"));
+        let repo = gix::open(&dir).unwrap_or_else(|err| panic!("open: {err}"));
+        let (mut pipeline, _) = repo
+            .filter_pipeline(None)
+            .unwrap_or_else(|err| panic!("pipeline: {err}"));
+        let blob = |body: &[u8]| {
+            repo.write_blob(body)
+                .unwrap_or_else(|err| panic!("blob: {err}"))
+                .detach()
+        };
+        let mode = gix::index::entry::Mode::SYMLINK;
+        materialise(
+            &repo,
+            &mut pipeline,
+            &dir,
+            b"link",
+            blob(b"elsewhere"),
+            mode,
+        )
+        .unwrap_or_else(|err| panic!("symlink: {err}"));
+        let meta =
+            std::fs::symlink_metadata(dir.join("link")).unwrap_or_else(|err| panic!("{err}"));
+        assert_eq!(meta.file_type().is_symlink(), cfg!(unix));
+        let tool = blob(b"x");
+        for (mode, executable) in [
+            (gix::index::entry::Mode::FILE_EXECUTABLE, true),
+            (gix::index::entry::Mode::FILE, false),
+        ] {
+            materialise(&repo, &mut pipeline, &dir, b"tool", tool, mode)
+                .unwrap_or_else(|err| panic!("file: {err}"));
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let bits = std::fs::metadata(dir.join("tool"))
+                    .unwrap_or_else(|err| panic!("stat: {err}"))
+                    .permissions()
+                    .mode();
+                assert_eq!(bits & 0o111 != 0, executable);
+            }
+            let _ = executable;
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A replay that moves a path from 100755 to 100644 must leave it 0644:
     /// `durable::replace` keeps the replaced file's bits, so a mode set in one
     /// direction only left the worktree executable where the index said not.

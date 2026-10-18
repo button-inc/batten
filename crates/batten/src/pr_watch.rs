@@ -1072,6 +1072,17 @@ mod tests {
             ])),
             "pr watch: required check(s) with no run at all: ci, final"
         );
+        let finding = |check: &str, conclusion: &str| checks_green::Finding {
+            check: check.to_owned(),
+            conclusion: conclusion.to_owned(),
+        };
+        assert_eq!(
+            describe(&checks_green::Pending::NoVerdict(vec![
+                finding("ci", "neutral"),
+                finding("final", "stale")
+            ])),
+            "pr watch: required check(s) with no verdict: ci neutral, final stale"
+        );
     }
 
     fn roster() -> Roster {

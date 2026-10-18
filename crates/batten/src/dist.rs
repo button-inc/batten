@@ -760,7 +760,10 @@ mod tests {
             .unwrap()
         );
         let said = String::from_utf8(err).unwrap();
-        assert!(said.contains("dist: `cargo` exited "), "{said}");
+        // The program's own output comes first, ended by exactly one newline.
+        assert!(!said.starts_with("dist:"), "{said}");
+        assert!(said.contains("\ndist: `cargo` exited "), "{said}");
+        assert!(!said.contains("\n\ndist:"), "{said}");
         let mut err = Vec::new();
         assert!(!ran(&here, &argv(&["batten-no-such-program-for-dist"]), &mut err).unwrap());
         assert!(String::from_utf8(err).unwrap().contains("could not start"));

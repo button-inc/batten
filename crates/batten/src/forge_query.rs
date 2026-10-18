@@ -1610,7 +1610,9 @@ mod tests {
             matches!(produced, Produced::CouldNotLook(_)),
             "{produced:?}"
         );
-        // And a clock that did not read is not an instant either.
+        // And a clock that did not read is not an instant either, over rows that
+        // are dated, so the clock alone decides.
+        let dated = [r#"{"workflow_runs": [{"id": 1, "created_at": "2026-08-29T10:39:30Z"}]}"#];
         assert!(matches!(
             produce(
                 &row,
@@ -1618,11 +1620,71 @@ mod tests {
                 None,
                 0,
                 &scratch("undated-clock"),
-                &served(&pages, &asked),
+                &served(&dated, &std::cell::RefCell::new(Vec::new())),
             )
             .unwrap(),
             Produced::CouldNotLook(_)
         ));
+    }
+
+    /// The order claim stops the walk only at a row STRICTLY older than the
+    /// cut-off: one exactly at it, or newer, walks on.
+    #[test]
+    fn the_stop_waits_for_a_row_strictly_older_than_the_cut_off() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let pages = [
+            r#"{"total_count": 3, "workflow_runs": [{"id": 1, "created_at": "2026-08-29T10:39:30Z"}, {"id": 2, "created_at": "2026-08-29T10:39:00Z"}]}"#,
+            r#"{"total_count": 3, "workflow_runs": [{"id": 3, "created_at": "2026-08-29T10:00:00Z"}]}"#,
+        ];
+        let row = Query {
+            max_pages: 10,
+            since: Some(Since {
+                field: String::from("created_at"),
+                seconds: 60,
+                stop: true,
+            }),
+            ..query("repos/x/runs")
+        };
+        recorded(
+            produce(
+                &row,
+                &BTreeMap::new(),
+                None,
+                1_788_000_000,
+                &scratch("stop-boundary"),
+                &served(&pages, &asked),
+            )
+            .unwrap(),
+        );
+        assert_eq!(asked.borrow().len(), 2);
+    }
+
+    #[test]
+    fn a_fan_out_counts_the_members_whose_walk_ran_out_of_budget() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let pages = [
+            r#"{"total_count": 9, "jobs": [{"name": "a", "started_at": "2026-08-29T10:00:00Z"}, {"name": "b", "started_at": "2026-08-29T10:00:00Z"}]}"#,
+        ];
+        let row = Query {
+            max_pages: 1,
+            ..jobs()
+        };
+        let body = recorded(
+            produce_each(
+                &row,
+                &BTreeMap::new(),
+                &[serde_json::json!(7)],
+                Some("o/r"),
+                1_788_000_000,
+                &scratch("each-truncated"),
+                &served(&pages, &asked),
+            )
+            .unwrap(),
+        );
+        assert!(
+            body.ends_with("window\tstate=truncated\tread=2\tkept=2\tmembers=1\ttruncated=1\n"),
+            "{body}"
+        );
     }
 
     #[test]
