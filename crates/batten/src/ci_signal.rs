@@ -309,11 +309,11 @@ fn attribute(
 /// Each cancelled run's lifetime — LATENCY, never count — with its record.
 fn cancellations(runs: &[Run], records: &mut Vec<String>) -> Vec<i64> {
     let mut latencies = Vec::new();
-    for run in runs.iter().filter(|run| {
-        run.state.conclusion() == Some(&Conclusion::Cancelled)
-            && !run.started.is_empty()
-            && !run.updated.is_empty()
-    }) {
+    // An undated run is skipped by `epoch` itself: an empty stamp reads as none.
+    for run in runs
+        .iter()
+        .filter(|run| run.state.conclusion() == Some(&Conclusion::Cancelled))
+    {
         let (Some(started), Some(updated)) = (epoch(&run.started), epoch(&run.updated)) else {
             continue;
         };
@@ -391,10 +391,7 @@ fn job_queue(
 /// ordered them, so two runs touching at a boundary count as overlapping.
 fn peak_concurrency(runs: &[Run]) -> i64 {
     let mut events: Vec<(i64, i64)> = Vec::new();
-    for run in runs
-        .iter()
-        .filter(|run| !run.skipped() && !run.started.is_empty() && !run.updated.is_empty())
-    {
+    for run in runs.iter().filter(|run| !run.skipped()) {
         let (Some(started), Some(updated)) = (epoch(&run.started), epoch(&run.updated)) else {
             continue;
         };
@@ -519,7 +516,7 @@ pub fn divergence(spec: &Divergence, slug: &str, git_dir: &Path, fetch: Transpor
     // --- queue delay: created -> run_started, per run -------------------------------
     let queue: Vec<i64> = runs
         .iter()
-        .filter(|run| !run.created.is_empty() && !run.started.is_empty() && !run.skipped())
+        .filter(|run| !run.skipped())
         .filter_map(|run| Some(epoch(&run.started)? - epoch(&run.created)?))
         .collect();
     let queue_p90 = floor_rank(queue, 90);
@@ -997,6 +994,127 @@ mod tests {
             classify(&serde_json::json!({}), &steps),
             ("nonverdict", String::from("unknown"))
         );
+    }
+
+    fn run(row: serde_json::Value) -> Run {
+        Run::of(&row)
+    }
+
+    /// A run on `branch`, created at `created`, concluded `conclusion`.
+    fn graded(branch: &str, created: &str, conclusion: &str) -> Run {
+        run(serde_json::json!({
+            "id": 1, "head_branch": branch, "status": "completed",
+            "conclusion": conclusion, "created_at": created,
+        }))
+    }
+
+    #[test]
+    fn a_landing_is_attributed_its_pre_merge_runs_and_recorded_only_when_it_diverged() {
+        let landed = vec![
+            (
+                String::from("7"),
+                String::from("a"),
+                String::from("2026-01-02"),
+            ),
+            (
+                String::from("8"),
+                String::from("b"),
+                String::from("2026-01-02"),
+            ),
+            (
+                String::from("9"),
+                String::from("c"),
+                String::from("2026-01-02"),
+            ),
+        ];
+        let runs = vec![
+            graded("a", "2026-01-01", "failure"),
+            graded("a", "2026-01-02", "success"),
+            graded("a", "2026-01-03", "cancelled"),
+            graded("a", "2026-01-01", "skipped"),
+            graded("b", "2026-01-01", "success"),
+            graded("c", "2026-01-01", "cancelled"),
+        ];
+        let mut records = Vec::new();
+        assert_eq!(attribute(&landed, &runs, &mut records), (4, 2, 1, 1));
+        assert_eq!(
+            records,
+            vec![String::from(
+                "pr\tnumber=7\tbranch=a\tgraded=2\tgreen=1\tred=1\tcancelled=0"
+            )]
+        );
+    }
+
+    #[test]
+    fn a_cancellation_is_its_lifetime_and_an_undated_one_is_skipped() {
+        let cancelled = |started: &str, updated: &str| {
+            run(serde_json::json!({
+                "id": 5, "head_branch": "a", "status": "completed", "conclusion": "cancelled",
+                "run_started_at": started, "updated_at": updated,
+            }))
+        };
+        let runs = vec![
+            cancelled("2026-01-01T00:00:00Z", "2026-01-01T00:01:40Z"),
+            cancelled("", "2026-01-01T00:01:40Z"),
+            cancelled("2026-01-01T00:00:00Z", ""),
+            run(serde_json::json!({
+                "id": 6, "status": "completed", "conclusion": "failure",
+                "run_started_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:05:00Z",
+            })),
+        ];
+        let mut records = Vec::new();
+        assert_eq!(cancellations(&runs, &mut records), vec![100]);
+        assert_eq!(
+            records,
+            vec![String::from("cancel\trun=5\tbranch=a\tlatency=100")]
+        );
+    }
+
+    #[test]
+    fn peak_concurrency_counts_overlap_and_skips_undated_and_skipped_runs() {
+        let span = |started: &str, updated: &str, conclusion: &str| {
+            run(serde_json::json!({
+                "status": "completed", "conclusion": conclusion,
+                "run_started_at": started, "updated_at": updated,
+            }))
+        };
+        let runs = vec![
+            span("2026-01-01T00:00:00Z", "2026-01-01T00:10:00Z", "success"),
+            span("2026-01-01T00:05:00Z", "2026-01-01T00:15:00Z", "success"),
+            span("2026-01-01T00:06:00Z", "2026-01-01T00:07:00Z", "skipped"),
+            span("", "2026-01-01T00:07:00Z", "success"),
+            span("2026-01-01T00:06:00Z", "", "success"),
+        ];
+        assert_eq!(peak_concurrency(&runs), 2);
+    }
+
+    /// The walk ends at the first row updated strictly before the window.
+    #[test]
+    fn only_a_row_updated_strictly_before_the_window_ends_the_walk() {
+        let since = epoch("2026-01-01T00:00:00Z").unwrap();
+        let row = |at: &str| serde_json::json!({"updated_at": at});
+        assert!(updated_before(&row("2025-12-31T23:59:59Z"), since));
+        assert!(!updated_before(&row("2026-01-01T00:00:00Z"), since));
+        assert!(!updated_before(&serde_json::json!({}), since));
+    }
+
+    #[test]
+    fn a_flag_list_wins_over_the_environment_and_drops_blanks() {
+        let flags = [String::new(), String::from("a"), String::from(" b ")];
+        assert_eq!(
+            listed(&flags, "BATTEN_UNSET_LIST_FOR_A_UNIT_CASE", true),
+            vec![String::from("a"), String::from(" b ")]
+        );
+        assert!(listed(&[], "BATTEN_UNSET_LIST_FOR_A_UNIT_CASE", true).is_empty());
+    }
+
+    #[test]
+    fn a_bound_is_a_whole_number_inside_its_range() {
+        assert_eq!(bounded("v", "--n", " 5 ", 10).unwrap(), 5);
+        assert_eq!(bounded("v", "--n", "10", 10).unwrap(), 10);
+        for refused in ["0", "11", "-1", "x"] {
+            assert!(bounded("v", "--n", refused, 10).is_err(), "{refused}");
+        }
     }
 
     #[test]

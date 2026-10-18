@@ -1518,3 +1518,267 @@ pub fn run_pin(
         Ok(crate::ExitCode::Violation)
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn answer(status: u16, body: &str) -> Option<crate::rest::Answer> {
+        Some(crate::rest::Answer {
+            status,
+            etag: None,
+            poll_floor: None,
+            backoff: None,
+            body: body.to_owned(),
+            headers: std::collections::BTreeMap::new(),
+        })
+    }
+
+    /// A forge whose every path answers from `routes`, by the first needle the
+    /// path contains, and 404 otherwise.
+    fn forge(
+        routes: &[(&'static str, &'static str)],
+    ) -> impl Fn(&str) -> Option<crate::rest::Answer> + use<> {
+        let routes = routes.to_vec();
+        move |path: &str| {
+            routes
+                .iter()
+                .find(|(needle, _)| path.contains(needle))
+                .map_or_else(|| answer(404, "{}"), |(_, body)| answer(200, body))
+        }
+    }
+
+    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn a_full_sha_is_forty_hex_digits() {
+        assert!(full_sha(SHA));
+        assert!(!full_sha(&SHA[..39]));
+        assert!(!full_sha(&format!("{}g", &SHA[..39])));
+    }
+
+    fn baked(lock: &str) -> Head {
+        Head {
+            parent: Some(String::from("target")),
+            changed: [crate::install::LOCK_FILE, BOOTSTRAP_FILE]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            lock: Some(lock.to_owned()),
+        }
+    }
+
+    #[test]
+    fn a_bake_is_a_child_of_the_target_carrying_only_a_lock_that_agrees() {
+        let digest = "a".repeat(64);
+        let sums = format!("{digest}  x.tar.gz\n");
+        let lock = format!("tag v1\n{digest}  x.tar.gz\n");
+        assert!(baked_onto(&baked(&lock), "target", "v1", &sums));
+        assert!(!baked_onto(&baked(&lock), "other", "v1", &sums));
+        assert!(!baked_onto(&baked(&lock), "target", "v2", &sums));
+        assert!(
+            !baked_onto(&baked("tag v1\n"), "target", "v1", &sums),
+            "lists nothing"
+        );
+        let other = format!("{}  x.tar.gz\n", "b".repeat(64));
+        assert!(!baked_onto(&baked(&lock), "target", "v1", &other));
+        let mut wider = baked(&lock);
+        wider.changed.insert(String::from("src/lib.rs"));
+        assert!(!baked_onto(&wider, "target", "v1", &sums));
+    }
+
+    fn facts(target: &str) -> LandFacts {
+        LandFacts {
+            read: Read::Draft {
+                target: target.to_owned(),
+            },
+            tag: String::from("v1.2.3"),
+            sha: String::from(SHA),
+            relation: Relation::Identical,
+            tag_ref: None,
+            pin_at_target: Some(String::from("v1.2.3")),
+            version_at_target: Some(String::from("1.2.3")),
+            head: None,
+            draft_sums: None,
+        }
+    }
+
+    #[test]
+    fn a_draft_at_the_sha_with_its_pin_and_version_is_draft_ok() {
+        assert_eq!(land_state(&facts(SHA)), LandState::DraftOk);
+        let other = "f".repeat(40);
+        assert!(matches!(land_state(&facts(&other)), LandState::DraftBad(_)));
+        let wrong_version = LandFacts {
+            version_at_target: Some(String::from("1.2.4")),
+            ..facts(SHA)
+        };
+        assert!(matches!(land_state(&wrong_version), LandState::DraftBad(_)));
+    }
+
+    #[test]
+    fn a_bump_moves_all_four_paths_and_only_the_workspace_s_lock_lines() {
+        let files = Files {
+            manifest: String::from("[workspace.package]\nversion = \"0.0.9\"\n"),
+            lock: String::from(
+                "[[package]]\nname = \"batten\"\nversion = \"0.0.9\"\n\n\
+                 [[package]]\nname = \"other\"\nversion = \"0.0.9\"\n",
+            ),
+            config: String::from("engine = { release = \"v0.0.9\" }\n"),
+            changelog: String::from(
+                "# Changelog\n\n## [0.0.9](https://x/compare/v0.0.8...v0.0.9) - 2026\n\n## [0.0.8]\n",
+            ),
+        };
+        let (to, bumped) = bump(&files, "0.0.9", &[String::from("batten")]).unwrap();
+        assert_eq!(to, "0.0.10");
+        assert_eq!(
+            bumped.manifest,
+            "[workspace.package]\nversion = \"0.0.10\"\n"
+        );
+        assert_eq!(
+            bumped.lock,
+            "[[package]]\nname = \"batten\"\nversion = \"0.0.10\"\n\n\
+             [[package]]\nname = \"other\"\nversion = \"0.0.9\"\n"
+        );
+        assert_eq!(bumped.config, "engine = { release = \"v0.0.10\" }\n");
+        assert_eq!(
+            bumped.changelog,
+            "# Changelog\n\n## [0.0.10](https://x/compare/v0.0.8...v0.0.10) - 2026\n\n## [0.0.8]\n"
+        );
+        let unpinned = Files {
+            config: String::from("engine = { release = \"v0.0.8\" }\n"),
+            ..files.clone()
+        };
+        assert!(bump(&unpinned, "0.0.9", &[String::from("batten")]).is_err());
+        let unversioned = Files {
+            manifest: String::from("version = \"0.0.8\"\n"),
+            ..files.clone()
+        };
+        assert!(bump(&unversioned, "0.0.9", &[String::from("batten")]).is_err());
+        let unheaded = Files {
+            changelog: String::from("# Changelog\n"),
+            ..files
+        };
+        assert!(bump(&unheaded, "0.0.9", &[String::from("batten")]).is_err());
+    }
+
+    #[test]
+    fn only_the_path_sourced_packages_are_the_workspace_s() {
+        let lock = "version = 4\n\n[[package]]\nname = \"batten\"\nversion = \"1\"\n\n\
+                    [[package]]\nname = \"serde\"\nversion = \"1\"\nsource = \"registry\"\n";
+        assert_eq!(workspace_packages(lock), vec![String::from("batten")]);
+    }
+
+    #[test]
+    fn a_sha_is_read_from_an_accepted_answer_or_refused() {
+        assert_eq!(
+            sha_in(answer(201, r#"{"sha":"abc"}"#), "the blob", "/sha"),
+            Ok(String::from("abc"))
+        );
+        assert!(sha_in(answer(422, r#"{"sha":"abc"}"#), "the blob", "/sha").is_err());
+        assert!(sha_in(answer(200, r#"{}"#), "the blob", "/sha").is_err());
+        assert!(sha_in(None, "the blob", "/sha").is_err());
+    }
+
+    #[test]
+    fn a_tag_exists_where_its_ref_reads() {
+        assert!(tag_exists("o/r", "v1", &forge(&[("git/ref/tags/v1", "{}")])).unwrap());
+        assert!(!tag_exists("o/r", "v1", &forge(&[])).unwrap());
+    }
+
+    #[test]
+    fn the_settings_are_green_only_when_the_latest_run_s_settings_job_succeeded() {
+        let runs = ("/runs?branch=main", r#"{"workflow_runs":[{"id":7}]}"#);
+        let green = forge(&[
+            runs,
+            (
+                "runs/7/jobs",
+                r#"{"jobs":[{"name":"other","status":"completed","conclusion":"failure"},
+                            {"name":"settings","status":"completed","conclusion":"success"}]}"#,
+            ),
+        ]);
+        assert!(settings_green("o/r", "main", "guard.yml", &green).unwrap());
+        let red = forge(&[
+            runs,
+            (
+                "runs/7/jobs",
+                r#"{"jobs":[{"name":"other","status":"completed","conclusion":"success"},
+                            {"name":"settings","status":"completed","conclusion":"failure"}]}"#,
+            ),
+        ]);
+        assert!(!settings_green("o/r", "main", "guard.yml", &red).unwrap());
+        let none = forge(&[("/runs?branch=main", r#"{"workflow_runs":[]}"#)]);
+        assert!(!settings_green("o/r", "main", "guard.yml", &none).unwrap());
+    }
+
+    #[test]
+    fn a_failed_land_is_dated_from_its_latest_failed_land_job() {
+        let runs = vec![
+            serde_json::json!({"id": 1, "display_title": "build v1"}),
+            serde_json::json!({"id": 2, "display_title": "build v2"}),
+        ];
+        let get = forge(&[(
+            "runs/2/jobs",
+            r#"{"jobs":[
+                {"name":"land","conclusion":"failure","completed_at":"2026-01-01T00:00:00Z"},
+                {"name":"land","conclusion":"failure","completed_at":"2026-01-01T00:01:00Z"},
+                {"name":"land","conclusion":"success","completed_at":"2026-01-01T00:05:00Z"},
+                {"name":"build","conclusion":"failure","completed_at":"2026-01-01T00:09:00Z"}]}"#,
+        )]);
+        let at = crate::ci_signal::epoch("2026-01-01T00:01:00Z").unwrap();
+        assert_eq!(
+            land_failed_ago("o/r", "v2", &runs, at + 100, &get).unwrap(),
+            Some(100)
+        );
+        assert_eq!(land_failed_ago("o/r", "v3", &runs, at, &get).unwrap(), None);
+    }
+
+    #[test]
+    fn the_freeze_reads_runs_drafts_and_the_non_latest_pre_releases() {
+        let get = forge(&[
+            (
+                "workflows/build.yml/runs",
+                r#"{"workflow_runs":[{"id":1,"display_title":"build v3","status":"in_progress"}]}"#,
+            ),
+            ("releases/latest", r#"{"tag_name":"v1"}"#),
+            (
+                "releases?per_page=30",
+                r#"[{"tag_name":"v3","draft":true,"created_at":"2026-01-01T00:00:00Z"},
+                    {"tag_name":"v2","prerelease":true},
+                    {"tag_name":"v1","prerelease":true}]"#,
+            ),
+            (
+                "git/ref/tags/v2",
+                r#"{"object":{"sha":"c2","type":"commit"}}"#,
+            ),
+            ("compare/main...c2", r#"{"status":"ahead"}"#),
+        ]);
+        let now = crate::ci_signal::epoch("2026-01-01T00:00:30Z").unwrap();
+        let flight =
+            read_flight("o/r", ("main", &[String::from("build.yml")]), now, 9, &get).unwrap();
+        assert_eq!(flight.active_run.as_deref(), Some("build v3"));
+        assert_eq!(flight.drafts, vec![(String::from("v3"), 30)]);
+        assert_eq!(
+            flight.pending,
+            vec![Pending {
+                tag: String::from("v2"),
+                relation: Relation::MainBehind,
+                land_failed_ago: None,
+            }]
+        );
+        assert_eq!(flight.land_hold, 9);
+    }
+
+    #[test]
+    fn the_head_branch_is_the_open_pull_request_whose_head_is_the_sha() {
+        let get = forge(&[(
+            "commits/abc/pulls",
+            r#"[{"state":"closed","head":{"sha":"abc","ref":"old"}},
+                {"state":"open","head":{"sha":"def","ref":"moved"}},
+                {"state":"open","head":{"sha":"abc","ref":"release/v1"}}]"#,
+        )]);
+        assert_eq!(head_branch("o/r", "abc", &get).unwrap(), "release/v1");
+        let none = forge(&[("commits/abc/pulls", "[]")]);
+        assert!(head_branch("o/r", "abc", &none).is_err());
+    }
+}

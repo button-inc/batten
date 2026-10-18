@@ -724,6 +724,83 @@ fn run_cargo_dist(
 mod tests {
     use super::*;
 
+    #[test]
+    fn cargo_dist_s_own_names_are_spelled_once() {
+        assert_eq!(cargo_dist_checksum("b.tar.xz"), "b.tar.xz.sha256");
+        assert_eq!(
+            cargo_dist_manifest("x86_64-unknown-linux-gnu"),
+            "x86_64-unknown-linux-gnu-dist-manifest.json"
+        );
+        assert_eq!(
+            cargo_dist_staging(Path::new("/w")),
+            Path::new("/w").join("target").join(CARGO_DIST_DIR)
+        );
+    }
+
+    /// A program that ran and exited 0 is the one `true`; any other end says
+    /// why on `err`.
+    #[test]
+    fn a_program_ran_only_when_it_exited_zero() {
+        let here = std::env::current_dir().unwrap();
+        let argv = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let mut err = Vec::new();
+        assert!(ran(&here, &argv(&["cargo", "--version"]), &mut err).unwrap());
+        assert!(err.is_empty());
+        assert!(
+            !ran(
+                &here,
+                &argv(&["cargo", "--no-such-flag-anywhere"]),
+                &mut err
+            )
+            .unwrap()
+        );
+        let said = String::from_utf8(err).unwrap();
+        assert!(said.contains("dist: `cargo` exited "), "{said}");
+        let mut err = Vec::new();
+        assert!(!ran(&here, &argv(&["batten-no-such-program-for-dist"]), &mut err).unwrap());
+        assert!(String::from_utf8(err).unwrap().contains("could not start"));
+    }
+
+    /// A missing earlier output is nothing to remove; any other failure to
+    /// remove one is an error, never a silently kept leftover.
+    #[test]
+    fn a_leftover_that_cannot_be_removed_stops_the_preflight() {
+        let dir =
+            std::env::temp_dir().join(format!("batten-dist-preflight-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("a-directory")).unwrap();
+        let mut err = Vec::new();
+        assert!(!dist_preflight(&dir, &[dir.join("absent").as_path()], &mut err).unwrap());
+        assert!(dist_preflight(&dir, &[dir.join("a-directory").as_path()], &mut err).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `--stem` names the asset from the workspace and never builds, whatever
+    /// builder is named; an unknown builder refuses any request that builds.
+    #[test]
+    fn a_stem_request_names_the_asset_and_an_unknown_builder_refuses_a_build() {
+        let target = "x86_64-unknown-linux-gnu";
+        for named in [None, Some(CARGO_DIST)] {
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            assert_eq!(
+                run(target, true, named, &mut out, &mut err).unwrap(),
+                ExitCode::Success
+            );
+            let said = String::from_utf8(out).unwrap();
+            assert!(
+                said.starts_with("batten-") && said.trim_end().ends_with(target),
+                "{said}"
+            );
+        }
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert!(run(target, false, Some("no-such-builder"), &mut out, &mut err).is_err());
+    }
+
     fn metadata(packages: &Value) -> Value {
         let members: Vec<Value> = packages
             .as_array()

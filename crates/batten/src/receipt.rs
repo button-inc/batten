@@ -3359,6 +3359,39 @@ mod tests {
         );
     }
 
+    /// Judged is the work in the tree: never a path outside it, inside `.git`,
+    /// or ignored. The case runs in the crate directory, inside this checkout.
+    #[test]
+    fn only_a_path_of_the_work_in_this_tree_is_judgeable() {
+        assert!(judgeable("Cargo.toml"));
+        assert!(
+            judgeable("src/no-such-new-file.rs"),
+            "a new file is the work"
+        );
+        assert!(!judgeable("../../.git/HEAD"));
+        assert!(!judgeable("../../../outside-the-repository.md"));
+        assert!(!judgeable("../../target/debug/anything"), "ignored");
+    }
+
+    /// A range from HEAD to itself is empty, whatever the checkout.
+    #[test]
+    fn a_range_from_head_to_itself_counts_nothing() {
+        assert_eq!(own_commit_count("HEAD"), Some(0));
+        assert_eq!(moved_forward("HEAD", "HEAD"), Some(0));
+        assert_eq!(
+            branch_facts("HEAD"),
+            git::current_branch(Path::new("."))
+                .unwrap()
+                .map(|branch| (branch, 0))
+        );
+    }
+
+    #[test]
+    fn a_check_with_no_receipt_is_never_a_valid_head() {
+        assert!(!head_receipt_valid("batten-unit-never-minted"));
+        assert!(!head_receipt_valid("not a check name"));
+    }
+
     /// The delta subject is the branch's patch identity, and an empty change
     /// has none.
     #[test]

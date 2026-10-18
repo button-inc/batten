@@ -888,6 +888,70 @@ mod tests {
     }
 
     #[test]
+    fn a_header_is_the_first_value_sent_under_its_name() {
+        let response = Response {
+            status: 200,
+            body: Vec::new(),
+            headers: vec![
+                (String::from("etag"), String::from("\"a\"")),
+                (String::from("link"), String::from("first")),
+                (String::from("link"), String::from("second")),
+            ],
+        };
+        assert_eq!(response.header("link"), Some("first"));
+        assert_eq!(response.header("etag"), Some("\"a\""));
+        assert_eq!(response.header("absent"), None);
+    }
+
+    /// The host decides, case-insensitively; an unparseable side is never the
+    /// same host.
+    #[test]
+    fn a_redirect_stays_on_its_host_only_when_both_name_the_same_one() {
+        assert!(same_host("https://API.example/a", "https://api.example/b"));
+        assert!(!same_host(
+            "https://api.example/a",
+            "https://storage.example/a"
+        ));
+        assert!(!same_host("not a url", "https://api.example/a"));
+        assert!(!same_host("https://api.example/a", "not a url"));
+    }
+
+    #[test]
+    fn a_credential_bearing_header_is_redacted_from_a_call_s_debug() {
+        assert!(is_sensitive("Authorization"));
+        assert!(is_sensitive("set-cookie"));
+        assert!(!is_sensitive("accept"));
+        let headers = [
+            (
+                String::from("Authorization"),
+                String::from("Bearer secret-token"),
+            ),
+            (String::from("accept"), String::from("application/json")),
+        ];
+        let call = Call {
+            url: "https://api.example/a",
+            headers: &headers,
+            body: None,
+            patch: false,
+            delete: false,
+            direct: false,
+        };
+        let shown = format!("{call:?}");
+        assert!(!shown.contains("secret-token"), "{shown}");
+        assert!(
+            shown.contains("application/json") && shown.contains("api.example"),
+            "{shown}"
+        );
+    }
+
+    /// A loopback destination is always direct, whatever the environment says.
+    #[test]
+    fn a_loopback_destination_is_always_direct() {
+        assert!(is_direct("127.0.0.1"));
+        assert!(proxy_for("localhost").is_none());
+    }
+
+    #[test]
     fn a_url_that_will_not_parse_is_a_usage_error_rather_than_a_panic() {
         let answer = get("not a url", &[]);
         assert!(answer.is_err(), "an unparseable URL must be reported");

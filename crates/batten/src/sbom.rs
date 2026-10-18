@@ -1678,6 +1678,147 @@ fn spawn_code(program: &str, args: &[&str], root: &Path) -> i32 {
 mod tests {
     use super::*;
 
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("batten-sbom-unit-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn record_and_conformance_are_two_producers_never_one_run() {
+        let both = Options {
+            record: true,
+            conformance: true,
+            ..Options::default()
+        };
+        assert!(mode_of(&both).is_err());
+        let record = Options {
+            record: true,
+            ..Options::default()
+        };
+        assert_eq!(mode_of(&record).unwrap(), Mode::Record);
+        let conformance = Options {
+            conformance: true,
+            ..Options::default()
+        };
+        assert_eq!(mode_of(&conformance).unwrap(), Mode::Conformance);
+    }
+
+    #[test]
+    fn a_could_not_look_says_only_why() {
+        assert_eq!(CouldNotLook(String::from("no lock")).to_string(), "no lock");
+    }
+
+    fn declared(actions: Option<&str>) -> Declared {
+        Declared {
+            subject: String::from("batten"),
+            out_dir: String::from("dist"),
+            binary_out_dir: String::from("dist"),
+            exclude: Vec::new(),
+            actions: actions.map(str::to_owned),
+            inventory: None,
+            conformance: None,
+        }
+    }
+
+    /// Only an actions table the base declared and the working tree dropped is
+    /// a weakening.
+    #[test]
+    fn dropping_the_declared_actions_table_is_a_weakening_and_keeping_it_is_not() {
+        let with = declared(Some("actions.toml"));
+        let without = declared(None);
+        assert_eq!(weakenings(Some(&with), Some(&without)).len(), 1);
+        assert!(weakenings(Some(&with), Some(&with)).is_empty());
+        assert!(weakenings(Some(&without), Some(&without)).is_empty());
+    }
+
+    /// The most frequent holder line wins, whatever its sort order.
+    #[test]
+    fn the_most_frequent_holder_line_is_the_crate_s() {
+        let dir = scratch("frequent");
+        std::fs::write(
+            dir.join("a.rs"),
+            "// Copyright 2020 Zed\n// Copyright 2020 Alpha\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("b.rs"), "// Copyright 2020 Zed\n").unwrap();
+        assert_eq!(copyright_of(&dir), "Copyright 2020 Zed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_workspace_with_no_licence_file_states_none() {
+        let dir = scratch("no-licence");
+        assert_eq!(workspace_copyright(&dir), NONE);
+        std::fs::write(dir.join("LICENSE"), "Copyright 2024 Holder\n").unwrap();
+        assert_eq!(workspace_copyright(&dir), "Copyright 2024 Holder");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_empty_version_or_author_is_not_one() {
+        let dir = scratch("empty-fields");
+        std::fs::write(dir.join("Cargo.toml"), "version = \"\"\nauthors = [\"\"]\n").unwrap();
+        assert!(manifest_version(&dir).is_err());
+        assert_eq!(workspace_supplier(&dir), NOASSERTION);
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "version = \"1.2.3\"\nauthors = [\"Holder\"]\n",
+        )
+        .unwrap();
+        assert_eq!(manifest_version(&dir).unwrap(), "1.2.3");
+        assert_eq!(workspace_supplier(&dir), "Organization: Holder");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A source that is present but not a string is still a source: never the
+    /// workspace's own supplier.
+    #[test]
+    fn a_present_source_of_any_shape_is_not_the_workspace() {
+        let metadata = serde_json::json!({"packages": [
+            {"name": "odd", "version": "1", "source": 5},
+            {"name": "own", "version": "1", "source": null},
+        ]});
+        let found = entities(
+            &metadata,
+            &BTreeMap::new(),
+            "Organization: Own",
+            "Copyright Own",
+        );
+        assert_eq!(found["odd@1"].supplier, NOASSERTION);
+        assert_eq!(found["own@1"].supplier, "Organization: Own");
+    }
+
+    /// An absent originator, or a copyright of NONE or NOASSERTION, writes
+    /// nothing into the component.
+    #[test]
+    fn only_a_known_author_and_holder_are_written_into_a_component() {
+        let entity = |originator: &str, copyright: &str| Entity {
+            supplier: String::from("Organization: crates.io"),
+            originator: originator.to_owned(),
+            license: String::from("MIT"),
+            copyright: copyright.to_owned(),
+        };
+        let enriched = |entity: Entity| {
+            let mut document = serde_json::json!({"components": [{"name": "a", "version": "1"}]});
+            enrich_cdx(
+                &mut document,
+                &BTreeMap::from([(String::from("a@1"), entity)]),
+            );
+            document["components"][0].clone()
+        };
+        let known = enriched(entity("Organization: Holder", "Copyright 2020 Holder"));
+        assert_eq!(known["author"], "Holder");
+        assert_eq!(known["copyright"], "Copyright 2020 Holder");
+        for copyright in [NONE, NOASSERTION] {
+            let unknown = enriched(entity(NOASSERTION, copyright));
+            assert!(unknown.get("author").is_none(), "{unknown}");
+            assert!(unknown.get("copyright").is_none(), "{unknown}");
+        }
+    }
+
     #[test]
     fn a_holder_line_is_anchored_and_tidied() {
         let found = holder_lines(

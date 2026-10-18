@@ -870,6 +870,139 @@ mod tests {
         );
     }
 
+    #[test]
+    fn each_reason_has_its_stable_token() {
+        assert_eq!(Reason::BehindGit.token(), "behind-git");
+        assert_eq!(Reason::DeclinedButAdvanced.token(), "declined-but-advanced");
+    }
+
+    /// Only the pulled column is swept for landed work, and only landed work in
+    /// it is a finding.
+    #[test]
+    fn only_a_pulled_row_with_landed_work_is_behind_git() {
+        let evidence = Evidence {
+            claimed: keys(&["CLOUD-1"]),
+            ..Evidence::default()
+        };
+        assert!(decide(&[row("CLOUD-1", "Todo")], &evidence, &columns()).is_clean());
+        assert!(decide(&[row("CLOUD-2", "In Progress")], &evidence, &columns()).is_clean());
+        assert!(!decide(&[row("CLOUD-1", "In Progress")], &evidence, &columns()).is_clean());
+        assert!(!row("CLOUD-1", "Todo").is_in_progress(&columns()));
+    }
+
+    /// The caller's word is named only where it is the ONLY evidence.
+    #[test]
+    fn an_assertion_is_named_only_where_nothing_else_drains_the_row() {
+        let asserted = BTreeMap::from([(String::from("CLOUD-1"), String::from("abc"))]);
+        let only = Evidence {
+            asserted: asserted.clone(),
+            ..Evidence::default()
+        };
+        let report = decide(&[row("CLOUD-1", "In Progress")], &only, &columns());
+        assert_eq!(report.findings[0].asserted_by.as_deref(), Some("abc"));
+        for corroborated in [
+            Evidence {
+                asserted: asserted.clone(),
+                claimed: keys(&["CLOUD-1"]),
+                ..Evidence::default()
+            },
+            Evidence {
+                asserted: asserted.clone(),
+                merged: keys(&["CLOUD-1"]),
+                ..Evidence::default()
+            },
+        ] {
+            let report = decide(&[row("CLOUD-1", "In Progress")], &corroborated, &columns());
+            assert_eq!(report.findings[0].asserted_by, None);
+        }
+    }
+
+    #[test]
+    fn a_key_is_a_non_empty_token_with_no_whitespace() {
+        assert!(is_key("CLOUD-1"));
+        assert!(!is_key(""));
+        assert!(!is_key("CLOUD 1"));
+        assert!(!is_key("id\t"));
+    }
+
+    #[test]
+    fn days_are_counted_on_the_proleptic_calendar() {
+        assert_eq!(day_of("1970-01-01"), Some(0));
+        assert_eq!(day_of("2000-02-29"), Some(11_016));
+        assert_eq!(day_of("2000-03-01"), Some(11_017));
+        assert_eq!(day_of("2026-10-18T10:00:00Z"), Some(20_744));
+        assert_eq!(day_of("0000-01-01"), Some(-719_528));
+        assert_eq!(day_of("0000-03-01"), Some(-719_468));
+    }
+
+    /// Every field is bounded inclusively at its last value: 60 is a leap
+    /// second, 24 is no hour.
+    #[test]
+    fn each_field_of_an_instant_is_held_to_its_range() {
+        let base = second_of("1970-01-01T00:00:00Z").unwrap();
+        assert_eq!(base, 0);
+        assert_eq!(second_of("1970-01-01T23:59:60Z"), Some(86_400));
+        for refused in [
+            "1970-01-01T24:00:00Z",
+            "1970-01-01T00:60:00Z",
+            "1970-01-01T00:00:61Z",
+            "1970-01-01T00:00:00+24:00",
+            "1970-01-01T00:00:00+00:60",
+            "1970-01-01T0x:00:00Z",
+        ] {
+            assert_eq!(second_of(refused), None, "{refused}");
+        }
+        assert_eq!(second_of("1970-01-01T00:00:00+23:59"), Some(-86_340));
+    }
+
+    /// One payload, a bare array, or an array wrapping one.
+    #[test]
+    fn a_claim_set_wrapped_in_an_array_is_read_through_the_wrapper() {
+        let wrapped = serde_json::json!([[{"id": "CLOUD-1", "status": "In Progress"}]]);
+        let claims = claims_from(&wrapped).unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].id, "CLOUD-1");
+        assert!(claims[0].is_in_progress(&columns()));
+        let todo = claims_from(&serde_json::json!({"id": "CLOUD-2", "status": "Todo"})).unwrap();
+        assert!(!todo[0].is_in_progress(&columns()));
+    }
+
+    /// An empty branch name never matches, even against a blank ref.
+    #[test]
+    fn an_empty_branch_is_never_live() {
+        let claim = |branch: &str| Claim {
+            id: String::from("CLOUD-1"),
+            status: String::from("In Progress"),
+            updated_at: None,
+            attachments: None,
+            branch: Some(branch.to_owned()),
+        };
+        assert!(!claim("").has_live_branch(&keys(&[""])));
+        assert!(claim("work").has_live_branch(&keys(&["work"])));
+        assert!(!claim("work").has_live_branch(&keys(&["other"])));
+    }
+
+    #[test]
+    fn a_drain_is_clean_only_with_every_bucket_empty() {
+        assert!(Drain::default().is_clean());
+        for drain in [
+            Drain {
+                landed_unswept: vec![String::from("CLOUD-1")],
+                ..Drain::default()
+            },
+            Drain {
+                abandoned: vec![String::from("CLOUD-1")],
+                ..Drain::default()
+            },
+            Drain {
+                unreadable: vec![String::from("CLOUD-1")],
+                ..Drain::default()
+            },
+        ] {
+            assert!(!drain.is_clean(), "{drain:?}");
+        }
+    }
+
     /// THE SUBSTRING TRAP, asserted rather than assumed. `CLOUD-17` must not be
     /// drained by `CLOUD-179` being on `main`; the predecessor spelled the same
     /// comparison as `grep -qxF`.

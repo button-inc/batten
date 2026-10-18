@@ -380,3 +380,153 @@ pub fn run_settings(
     }
     Ok(crate::ExitCode::Violation)
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn answer(status: u16, body: &str) -> Option<crate::rest::Answer> {
+        Some(crate::rest::Answer {
+            status,
+            etag: None,
+            poll_floor: None,
+            backoff: None,
+            body: body.to_owned(),
+            headers: std::collections::BTreeMap::new(),
+        })
+    }
+
+    /// Every path answers from `routes` by exact match, and 404 otherwise.
+    fn forge(
+        routes: Vec<(String, String)>,
+    ) -> impl Fn(&str) -> Option<crate::rest::Answer> + use<> {
+        move |path: &str| {
+            routes
+                .iter()
+                .find(|(at, _)| at == path)
+                .map_or_else(|| answer(404, "{}"), |(_, body)| answer(200, body))
+        }
+    }
+
+    #[test]
+    fn only_a_ruleset_refusal_holds() {
+        assert!(probe_holds(422, "Repository Rule violations found"));
+        assert!(!probe_holds(422, "Rule says: not a Fast Forward"));
+        assert!(!probe_holds(422, "Validation failed"));
+        assert!(!probe_holds(403, "rule violation"));
+    }
+
+    #[test]
+    fn a_forge_read_is_json_none_on_404_or_could_not_look() {
+        assert_eq!(
+            json_at(&|_: &str| answer(200, r#"{"a":1}"#), "p").unwrap(),
+            Some(serde_json::json!({"a": 1}))
+        );
+        assert_eq!(json_at(&|_: &str| answer(404, "x"), "p").unwrap(), None);
+        assert!(json_at(&|_: &str| answer(500, "{}"), "p").is_err());
+        assert!(json_at(&|_: &str| answer(200, "x"), "p").is_err());
+        assert!(json_at(&|_: &str| None, "p").is_err());
+    }
+
+    fn required(integration_id: Option<u64>) -> serde_json::Value {
+        serde_json::json!({
+            "type": "required_status_checks",
+            "parameters": {"required_status_checks": [
+                {"context": "other"},
+                {"context": crate::release_path::CONTEXT, "integration_id": integration_id},
+            ]}
+        })
+    }
+
+    #[test]
+    fn the_release_path_entry_is_the_required_check_naming_it() {
+        assert_eq!(
+            release_path_entry(&[serde_json::json!({"type": "update"}), required(Some(7))]),
+            Some(Required {
+                context: crate::release_path::CONTEXT.to_owned(),
+                integration_id: Some(7),
+            })
+        );
+        let elsewhere = serde_json::json!({
+            "type": "other",
+            "parameters": {"required_status_checks": [{"context": crate::release_path::CONTEXT}]}
+        });
+        assert_eq!(release_path_entry(&[elsewhere]), None);
+    }
+
+    #[test]
+    fn a_ruleset_targets_a_branch_only_by_an_include_pattern() {
+        let ruleset = serde_json::json!({"conditions": {"ref_name": {
+            "include": ["refs/heads/main"], "exclude": ["refs/heads/other"]}}});
+        assert!(targets(&ruleset, &[String::from("refs/heads/main")]));
+        assert!(!targets(&ruleset, &[String::from("refs/heads/other")]));
+    }
+
+    #[test]
+    fn the_settings_are_read_from_every_active_ruleset_and_the_release_setting() {
+        let slug = "o/r";
+        let ruleset = |id: u64, body: serde_json::Value| {
+            (format!("repos/{slug}/rulesets/{id}"), body.to_string())
+        };
+        let routes = vec![
+            (
+                format!("repos/{slug}/rulesets?includes_parents=false&per_page=100"),
+                String::from(r#"[{"id":1},{"id":2},{"id":3},{"id":4},{"name":"no id"}]"#),
+            ),
+            ruleset(
+                1,
+                serde_json::json!({"name": "trunk", "enforcement": "active", "target": "branch",
+                    "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"]}},
+                    "rules": [required(Some(7)), {"type": "non_fast_forward"}],
+                    "bypass_actors": []}),
+            ),
+            ruleset(
+                2,
+                serde_json::json!({"name": "probe", "enforcement": "active",
+                    "conditions": {"ref_name": {"include": [format!("refs/heads/{PROBE_BRANCH}")]}},
+                    "rules": [required(Some(7))],
+                    "bypass_actors": [{"actor_id": 1}]}),
+            ),
+            ruleset(
+                3,
+                serde_json::json!({"name": "tags", "enforcement": "active", "target": "tag",
+                    "conditions": {"ref_name": {"include": ["refs/tags/v*"]}},
+                    "rules": [{"type": "update"}], "bypass_actors": []}),
+            ),
+            ruleset(
+                4,
+                serde_json::json!({"name": "off", "enforcement": "disabled", "target": "branch",
+                    "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"]}},
+                    "rules": [], "bypass_actors": [{"actor_id": 2}]}),
+            ),
+            (
+                format!("repos/{slug}/immutable-releases"),
+                String::from(r#"{"enabled": true}"#),
+            ),
+        ];
+        let facts = read(slug, "main", &forge(routes.clone())).unwrap();
+        let entry = Some(Required {
+            context: crate::release_path::CONTEXT.to_owned(),
+            integration_id: Some(7),
+        });
+        assert_eq!(
+            facts,
+            Facts {
+                trunk_requires: entry.clone(),
+                trunk_non_fast_forward: true,
+                probe_requires: entry,
+                tags_restrict_updates: true,
+                bypassed: vec![String::from("probe")],
+                immutable_releases: true,
+            }
+        );
+        let mut off = routes;
+        off.pop();
+        off.push((
+            format!("repos/{slug}/immutable-releases"),
+            String::from(r#"{"enabled": false}"#),
+        ));
+        assert!(!read(slug, "main", &forge(off)).unwrap().immutable_releases);
+    }
+}
