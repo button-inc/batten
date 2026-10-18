@@ -2917,7 +2917,15 @@ fn spawn_arm(
 /// program used to end the whole sweep with an error naming nothing about the
 /// gates it never reached.
 fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selection {
-    let env = suite_env(root);
+    let mut env = suite_env(root);
+    if matches!(suite, Suite::Cargo { .. }) {
+        // THE PROFILE EVERY NEXTEST CONFIG HAS. An inherited `NEXTEST_PROFILE`
+        // (this repository's `[env]` sets `ci` under CI) names a profile a
+        // consumer's tree, or a fixture's, may not declare, and nextest then
+        // exits before selecting a case, so every row read `suite-did-not-run`
+        // in CI alone. `default` carries the setup scripts the arm exists for.
+        env.push((String::from("NEXTEST_PROFILE"), String::from("default")));
+    }
     let dir = staged.dir();
     // Where a `JUnit` report lands for the one arm whose verdict is a file
     // rather than a stream. Beside the captures, never inside the tree under
