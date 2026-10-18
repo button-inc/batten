@@ -480,6 +480,60 @@ mod tests {
         assert_eq!(normalise("origin/", &names(&["origin"])), None);
     }
 
+    /// `origin` wins over a first remote that is not it, wherever it is listed.
+    #[test]
+    fn a_configured_origin_is_the_remote_however_the_remotes_are_ordered() {
+        let trunk = normalise("trunk", &names(&["fork", "origin"])).expect("origin listed second");
+        assert_eq!(trunk.tracking, "refs/remotes/origin/trunk");
+    }
+
+    /// A declared target is answered verbatim, whatever the repository says.
+    #[test]
+    fn a_declared_land_target_is_verbatim() {
+        let declared = land_target(Path::new("."), Some("refs/heads/trunk")).unwrap();
+        assert_eq!(declared.as_deref(), Some("refs/heads/trunk"));
+    }
+
+    fn landing(verdict: git::Verdict, target_truncated: bool) -> git::Landing {
+        git::Landing {
+            verdict,
+            commits: Vec::new(),
+            cumulative: None,
+            cumulative_evidence: None,
+            scanned: git::Scan {
+                target_commit: "b".repeat(40),
+                head_commit: "a".repeat(40),
+                target_commits_scanned: 1,
+                target_truncated,
+                head_truncated: false,
+                window: git::Window::DEFAULT,
+            },
+        }
+    }
+
+    #[test]
+    fn only_outstanding_work_is_pointed_at() {
+        assert_eq!(
+            pointer_if_outstanding(
+                &landing(git::Verdict::NotLandedWithinWindow, true),
+                "feature"
+            ),
+            Some(pointer(true))
+        );
+        assert_eq!(
+            pointer_if_outstanding(&landing(git::Verdict::PartiallyLanded, false), "feature"),
+            Some(pointer(false))
+        );
+        assert_eq!(
+            pointer_if_outstanding(&landing(git::Verdict::Landed, false), "feature"),
+            None
+        );
+        assert_eq!(
+            pointer_if_outstanding(&landing(git::Verdict::NothingToLand, false), "feature"),
+            None
+        );
+    }
+
     #[test]
     fn a_bounded_negative_says_so_and_a_proven_one_does_not() {
         assert!(pointer(true).render().ends_with(TRUNCATED));

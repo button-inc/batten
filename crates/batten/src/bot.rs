@@ -360,7 +360,12 @@ pub mod forge {
     /// Anything but a readable answer is an internal error (→ exit `3`): a lane
     /// that cannot read the pull request must not report that it filed nothing.
     fn get(endpoint: &str) -> Result<serde_json::Value> {
-        let answer = crate::rest::get(endpoint, None).ok_or_else(|| {
+        read(endpoint, crate::rest::get(endpoint, None))
+    }
+
+    /// A read's answer, refused unless it is a readable JSON body.
+    fn read(endpoint: &str, answer: Option<crate::rest::Answer>) -> Result<serde_json::Value> {
+        let answer = answer.ok_or_else(|| {
             anyhow::anyhow!("bot lane: cannot reach the forge for {endpoint} — nothing is written")
         })?;
         if !answer.is_reading() {
@@ -411,7 +416,11 @@ pub mod forge {
     /// As [`get`], plus a [`UsageError`] where the answer carries no title: the
     /// derived row's title IS the PR's, so there is nothing to file.
     pub fn pull(repo: &str, number: &str) -> Result<Pull> {
-        let pull = get(&format!("repos/{repo}/pulls/{number}"))?;
+        pull_of(number, &get(&format!("repos/{repo}/pulls/{number}"))?)
+    }
+
+    /// [`pull`]'s reading of the forge's answer.
+    fn pull_of(number: &str, pull: &serde_json::Value) -> Result<Pull> {
         let title = text(&pull["title"]);
         if title.is_empty() {
             return Err(UsageError::raise(format!(
@@ -438,12 +447,18 @@ pub mod forge {
     ///
     /// As [`get`].
     pub fn files(repo: &str, number: &str) -> Result<Vec<String>> {
-        let listing = get(&format!("repos/{repo}/pulls/{number}/files?per_page=100"))?;
-        Ok(items(&listing)
+        Ok(files_in(&get(&format!(
+            "repos/{repo}/pulls/{number}/files?per_page=100"
+        ))?))
+    }
+
+    /// [`files`]' reading of the listing.
+    fn files_in(listing: &serde_json::Value) -> Vec<String> {
+        items(listing)
             .iter()
             .map(|file| text(&file["filename"]))
             .filter(|name| !name.is_empty())
-            .collect())
+            .collect()
     }
 
     /// The mirror issue this pull request already has, if any.
@@ -456,13 +471,19 @@ pub mod forge {
     ///
     /// As [`get`].
     pub fn mirror(repo: &str, number: &str, marker_prefix: &str) -> Result<Option<String>> {
-        let marker = format!("{marker_prefix}{number} -->");
         let listing = get(&format!("repos/{repo}/issues?state=all&per_page=100"))?;
-        Ok(items(&listing)
+        Ok(mirror_in(&listing, number, marker_prefix))
+    }
+
+    /// [`mirror`]'s reading of the listing: the first ISSUE (never a pull
+    /// request) whose body carries the marker naming `number`.
+    fn mirror_in(listing: &serde_json::Value, number: &str, marker_prefix: &str) -> Option<String> {
+        let marker = format!("{marker_prefix}{number} -->");
+        items(listing)
             .iter()
             .find(|issue| issue["pull_request"].is_null() && text(&issue["body"]).contains(&marker))
             .map(|issue| text(&issue["number"]))
-            .filter(|found| !found.is_empty()))
+            .filter(|found| !found.is_empty())
     }
 
     /// The tracker's linkback comment on `issue`, or empty while the sync has not
@@ -479,11 +500,16 @@ pub mod forge {
         let listing = get(&format!(
             "repos/{repo}/issues/{issue}/comments?per_page=100"
         ))?;
-        Ok(items(&listing)
+        Ok(linkback_in(&listing, marker))
+    }
+
+    /// [`linkback`]'s reading of the listing.
+    fn linkback_in(listing: &serde_json::Value, marker: &str) -> String {
+        items(listing)
             .iter()
             .map(|comment| text(&comment["body"]))
             .find(|body| body.contains(marker))
-            .unwrap_or_default())
+            .unwrap_or_default()
     }
 
     /// Open the mirror issue and answer with its number.
@@ -498,15 +524,18 @@ pub mod forge {
     /// named no number — no row exists then, and none is invented.
     pub fn open_issue(repo: &str, title: &str, body: &str) -> Result<String> {
         let endpoint = format!("repos/{repo}/issues");
-        let created = text(
-            &written(
+        number_of(&written(
+            &endpoint,
+            crate::rest::post_json(
                 &endpoint,
-                crate::rest::post_json(
-                    &endpoint,
-                    &serde_json::json!({ "title": title, "body": body }),
-                ),
-            )?["number"],
-        );
+                &serde_json::json!({ "title": title, "body": body }),
+            ),
+        )?)
+    }
+
+    /// [`open_issue`]'s reading of the created issue.
+    fn number_of(created: &serde_json::Value) -> Result<String> {
+        let created = text(&created["number"]);
         if created.is_empty() {
             return Err(anyhow::anyhow!(
                 "bot lane: the mirror issue was accepted and named no number, so no row exists \
@@ -538,11 +567,16 @@ pub mod forge {
     /// As [`get`].
     pub fn open_for(repo: &str, branch: &str) -> Result<Option<String>> {
         let listing = get(&format!("repos/{repo}/pulls?state=open&per_page=100"))?;
-        Ok(items(&listing)
+        Ok(open_for_in(&listing, branch))
+    }
+
+    /// [`open_for`]'s reading of the listing.
+    fn open_for_in(listing: &serde_json::Value, branch: &str) -> Option<String> {
+        items(listing)
             .iter()
             .find(|pull| text(&pull["head"]["ref"]) == branch)
             .map(|pull| text(&pull["number"]))
-            .filter(|found| !found.is_empty()))
+            .filter(|found| !found.is_empty())
     }
 
     /// Every open pull request, as the fields a claim is derived from.
@@ -565,8 +599,14 @@ pub mod forge {
     ///
     /// As [`get`].
     pub fn open_pulls(repo: &str) -> Result<Vec<crate::race::Pull>> {
-        let listing = get(&format!("repos/{repo}/pulls?state=open&per_page=100"))?;
-        Ok(items(&listing)
+        Ok(open_pulls_in(&get(&format!(
+            "repos/{repo}/pulls?state=open&per_page=100"
+        ))?))
+    }
+
+    /// [`open_pulls`]' reading of the listing.
+    fn open_pulls_in(listing: &serde_json::Value) -> Vec<crate::race::Pull> {
+        items(listing)
             .iter()
             .map(|pull| crate::race::Pull {
                 number: text(&pull["number"]),
@@ -576,7 +616,7 @@ pub mod forge {
                 body: text(&pull["body"]).replace(['\t', '\n'], " "),
                 log: String::new(),
             })
-            .collect())
+            .collect()
     }
 
     /// Whether the listing [`open_pulls`] returned is the whole of it.
@@ -598,12 +638,199 @@ pub mod forge {
     ///
     /// As [`get`].
     pub fn commit_messages(repo: &str, number: &str) -> Result<String> {
-        let listing = get(&format!("repos/{repo}/pulls/{number}/commits?per_page=100"))?;
-        Ok(items(&listing)
+        Ok(commit_messages_in(&get(&format!(
+            "repos/{repo}/pulls/{number}/commits?per_page=100"
+        ))?))
+    }
+
+    /// [`commit_messages`]' reading of the listing.
+    fn commit_messages_in(listing: &serde_json::Value) -> String {
+        items(listing)
             .iter()
             .map(|commit| text(&commit["commit"]["message"]))
             .collect::<Vec<_>>()
-            .join("\n"))
+            .join("\n")
+    }
+
+    #[cfg(test)]
+    // Panicking on a refusal the case does not expect is the idiomatic way for a
+    // test to fail loudly.
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    mod tests {
+        use super::*;
+
+        fn answer(status: u16, body: &str) -> crate::rest::Answer {
+            crate::rest::Answer {
+                status,
+                etag: None,
+                poll_floor: None,
+                backoff: None,
+                body: body.to_owned(),
+                headers: std::collections::BTreeMap::new(),
+            }
+        }
+
+        fn pulls(n: usize) -> Vec<crate::race::Pull> {
+            (0..n)
+                .map(|at| crate::race::Pull {
+                    number: at.to_string(),
+                    head_ref: String::new(),
+                    head_sha: String::new(),
+                    title: String::new(),
+                    body: String::new(),
+                    log: String::new(),
+                })
+                .collect()
+        }
+
+        #[test]
+        fn text_is_what_the_jq_filter_printed() {
+            let value = serde_json::json!({ "s": "raw", "n": 41, "z": null });
+            assert_eq!(text(&value["s"]), "raw");
+            assert_eq!(text(&value["n"]), "41");
+            assert_eq!(text(&value["z"]), "");
+            assert_eq!(text(&value["absent"]), "");
+        }
+
+        #[test]
+        fn items_are_a_listing_s_elements_and_nothing_else() {
+            let listing = serde_json::json!([{ "a": 1 }, { "a": 2 }]);
+            assert_eq!(items(&listing).len(), 2);
+            assert_eq!(items(&listing)[1]["a"], 2);
+            assert!(items(&serde_json::json!({ "a": 1 })).is_empty());
+        }
+
+        #[test]
+        fn a_write_is_refused_unless_the_forge_accepted_it() {
+            assert!(written("e", None).is_err());
+            assert!(written("e", Some(answer(422, "{}"))).is_err());
+            assert!(written("e", Some(answer(300, "{}"))).is_err());
+            assert!(written("e", Some(answer(199, "{}"))).is_err());
+            let created = written("e", Some(answer(201, r#"{"number":41}"#))).unwrap();
+            assert_eq!(created["number"], 41);
+            // An accepted write with no JSON is accepted, and reads as nothing.
+            assert!(written("e", Some(answer(204, ""))).unwrap().is_null());
+        }
+
+        #[test]
+        fn a_read_is_refused_unless_it_is_a_readable_json_body() {
+            assert!(read("e", None).is_err());
+            assert!(read("e", Some(answer(404, "{}"))).is_err());
+            assert!(read("e", Some(answer(200, "not json"))).is_err());
+            assert_eq!(read("e", Some(answer(200, r#"{"a":1}"#))).unwrap()["a"], 1);
+        }
+
+        #[test]
+        fn a_pull_is_read_from_its_fields_and_one_with_no_title_is_refused() {
+            let answer = serde_json::json!({
+                "title": "build(deps): x",
+                "body": "b",
+                "user": { "login": "renovate[bot]" },
+                "head": { "ref": "renovate/x" },
+            });
+            let pull = pull_of("7", &answer).unwrap();
+            assert_eq!(
+                (
+                    pull.number.as_str(),
+                    pull.title.as_str(),
+                    pull.body.as_str(),
+                    pull.login.as_str(),
+                    pull.head.as_str()
+                ),
+                ("7", "build(deps): x", "b", "renovate[bot]", "renovate/x")
+            );
+            assert!(pull_of("7", &serde_json::json!({ "body": "b" })).is_err());
+        }
+
+        #[test]
+        fn the_files_are_every_named_path_in_order() {
+            let listing =
+                serde_json::json!([{ "filename": "a" }, { "filename": "" }, { "filename": "b" }]);
+            assert_eq!(files_in(&listing), vec!["a".to_owned(), "b".to_owned()]);
+        }
+
+        #[test]
+        fn the_mirror_is_the_issue_whose_body_carries_this_pull_s_marker() {
+            let listing = serde_json::json!([
+                { "number": 40, "pull_request": {}, "body": "m7 -->" },
+                { "number": 41, "pull_request": null, "body": "m70 -->" },
+                { "number": 42, "body": "row m7 -->" },
+            ]);
+            assert_eq!(mirror_in(&listing, "7", "m").as_deref(), Some("42"));
+            assert_eq!(mirror_in(&listing, "8", "m"), None);
+            let unnumbered = serde_json::json!([{ "body": "m7 -->" }]);
+            assert_eq!(mirror_in(&unnumbered, "7", "m"), None);
+        }
+
+        #[test]
+        fn the_linkback_is_the_first_comment_carrying_the_marker() {
+            let listing = serde_json::json!([
+                { "body": "no" },
+                { "body": "<!-- l --> CLOUD-1" },
+                { "body": "<!-- l --> CLOUD-2" },
+            ]);
+            assert_eq!(linkback_in(&listing, "<!-- l -->"), "<!-- l --> CLOUD-1");
+            assert_eq!(linkback_in(&listing, "<!-- x -->"), "");
+        }
+
+        #[test]
+        fn a_created_issue_names_its_number_or_is_refused() {
+            assert_eq!(
+                number_of(&serde_json::json!({ "number": 41 })).unwrap(),
+                "41"
+            );
+            assert!(number_of(&serde_json::json!({})).is_err());
+        }
+
+        #[test]
+        fn the_open_pull_for_a_branch_is_the_one_whose_head_is_it() {
+            let listing = serde_json::json!([
+                { "number": 6, "head": { "ref": "other" } },
+                { "number": 7, "head": { "ref": "mine" } },
+                { "head": { "ref": "nameless" } },
+            ]);
+            assert_eq!(open_for_in(&listing, "mine").as_deref(), Some("7"));
+            assert_eq!(open_for_in(&listing, "absent"), None);
+            assert_eq!(open_for_in(&listing, "nameless"), None);
+        }
+
+        #[test]
+        fn the_open_pulls_carry_each_head_and_a_one_line_body() {
+            let listing = serde_json::json!([{
+                "number": 7,
+                "title": "t",
+                "body": "a\tb\nc",
+                "head": { "ref": "r", "sha": "s" },
+            }]);
+            assert_eq!(
+                open_pulls_in(&listing),
+                vec![crate::race::Pull {
+                    number: "7".to_owned(),
+                    head_ref: "r".to_owned(),
+                    head_sha: "s".to_owned(),
+                    title: "t".to_owned(),
+                    body: "a b c".to_owned(),
+                    log: String::new(),
+                }]
+            );
+        }
+
+        #[test]
+        fn the_commit_messages_are_joined_one_per_line() {
+            let listing = serde_json::json!([
+                { "commit": { "message": "one" } },
+                { "commit": { "message": "two" } },
+            ]);
+            assert_eq!(commit_messages_in(&listing), "one\ntwo");
+        }
+
+        #[test]
+        fn a_listing_at_the_page_cap_may_be_truncated_and_one_below_cannot() {
+            assert!(open_pulls_are_complete(&pulls(0)));
+            assert!(open_pulls_are_complete(&pulls(PAGE - 1)));
+            assert!(!open_pulls_are_complete(&pulls(PAGE)));
+            assert!(!open_pulls_are_complete(&pulls(PAGE + 1)));
+        }
     }
 }
 
@@ -707,6 +934,40 @@ mod tests {
         let filled = render("pr {{pr}}", &[("pr", "7".to_owned())]).unwrap();
         assert_eq!(filled, "pr 7");
         let refused = render("pr {{pr}} by {{whoever}}", &[("pr", "7".to_owned())]);
-        assert!(refused.is_err(), "an unfilled placeholder must refuse");
+        let message = refused
+            .expect_err("an unfilled placeholder must refuse")
+            .to_string();
+        // The refusal names the placeholder alone, cut at its closing brace.
+        assert!(message.contains("placeholder {{whoever}},"), "{message}");
+    }
+
+    #[test]
+    fn the_receipt_is_named_for_the_branch_with_its_slashes_spelled_out() {
+        assert_eq!(receipt_name("renovate/cargo-1.x"), "bot.renovate-cargo-1.x");
+    }
+
+    #[test]
+    fn a_minted_receipt_is_the_pointer_lines_at_the_branch_s_name() {
+        let receipts = std::env::temp_dir().join(format!("batten-bot-mint-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&receipts);
+        let attested = Attested {
+            key: "CLOUD-700".to_owned(),
+            login: "renovate[bot]".to_owned(),
+            pr: "7".to_owned(),
+        };
+        let path = mint(
+            &receipts,
+            "renovate/x",
+            &attested,
+            None,
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+        assert_eq!(path, receipts.join("bot.renovate-x"));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "CLOUD-700\nbot renovate[bot]\npr 7\nderived-at 2026-01-01T00:00:00Z\nbase -\n"
+        );
+        let _ = std::fs::remove_dir_all(&receipts);
     }
 }

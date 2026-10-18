@@ -300,7 +300,18 @@ fn held_by(patterns: &[NamedPattern], inputs: &BTreeMap<String, String>) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use super::{ordinal, rule_for};
+    use super::{only, ordinal, rule_for};
+
+    #[test]
+    fn only_the_tag_and_hold_inputs_are_read() {
+        let inputs = |keys: &[&str]| {
+            keys.iter()
+                .map(|key| ((*key).to_owned(), String::from("x")))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        assert!(only(&inputs(&["tag", "hold"])).is_ok());
+        assert!(only(&inputs(&["tag", "since"])).is_err());
+    }
 
     #[test]
     fn a_pointer_line_names_its_own_rows_rule_only() {

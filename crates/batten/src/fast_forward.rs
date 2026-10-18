@@ -116,7 +116,12 @@ pub fn open_pull_request(repo: &str, branch: &str) -> Option<String> {
 /// which is the safe direction — where reading it as merged deletes things.
 #[must_use]
 pub fn merged(repo: &str, pr: &str) -> Merged {
-    let Some(answer) = crate::rest::get(&format!("repos/{repo}/pulls/{pr}"), None) else {
+    merged_of(crate::rest::get(&format!("repos/{repo}/pulls/{pr}"), None))
+}
+
+/// [`merged`]'s reading of the forge's answer.
+fn merged_of(answer: Option<crate::rest::Answer>) -> Merged {
+    let Some(answer) = answer else {
         return Merged::Unreadable(0);
     };
     if !answer.is_reading() {
@@ -209,7 +214,12 @@ pub fn look_up_pull_request(repo: &str, branch: &str) -> Lookup {
 /// the branch into it, so carrying them again as arguments was two more ways for
 /// a caller to name a different pull request than the one it asks for.
 fn look_up(path: &str) -> Lookup {
-    let Some(answer) = crate::rest::get(path, None) else {
+    look_up_of(crate::rest::get(path, None))
+}
+
+/// [`look_up`]'s reading of the forge's answer.
+fn look_up_of(answer: Option<crate::rest::Answer>) -> Lookup {
+    let Some(answer) = answer else {
         // The request did not complete at all — no host, no route, no answer.
         // `0` rather than a status, because there was none to carry.
         return Lookup::Unreadable(0);
@@ -397,10 +407,20 @@ pub const ANSWER_POLL_SECONDS: f64 = 2.0;
 
 #[must_use]
 pub fn answer(ask: &Ask, since: &str, comment: &str) -> Answer {
+    answer_with(ask, since, comment, run)
+}
+
+/// [`answer`] over `read`, which answers one API-relative path.
+fn answer_with(
+    ask: &Ask,
+    since: &str,
+    comment: &str,
+    read: impl Fn(&str) -> Option<String>,
+) -> Answer {
     let wanted = key(&ask.pr, comment);
     let mut page = 1;
     while page <= MAX_PAGES {
-        let Some(raw) = run(&answer_request(ask, since, page)) else {
+        let Some(raw) = read(&answer_request(ask, since, page)) else {
             return Answer::Unknown(String::from("unreadable"));
         };
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
@@ -504,8 +524,13 @@ fn grade(conclusion: &Conclusion) -> Answer {
 /// branch.
 #[must_use]
 pub fn refusal(ask: &Ask) -> Option<String> {
+    refusal_with(ask, run)
+}
+
+/// [`refusal`] over `read`, which answers one API-relative path.
+fn refusal_with(ask: &Ask, read: impl Fn(&str) -> Option<String>) -> Option<String> {
     let path = format!("repos/{}/issues/{}/comments?per_page=100", ask.repo, ask.pr);
-    let raw = run(&path)?;
+    let raw = read(&path)?;
     let value = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
     let comments = value.as_array()?;
     // THE LAST ONE, because a pull request that has lapped carries the refusals
@@ -681,6 +706,189 @@ mod tests {
             concluded(&runs, "2026-09-04T01:00:00Z", "fast-forward #42 @1001"),
             None
         );
+    }
+
+    /// The window is inclusive: a run created at the stamp itself is this lap's.
+    #[test]
+    fn a_run_created_at_the_stamp_is_inside_the_window() {
+        let runs = vec![serde_json::json!({
+            "created_at": "2026-09-04T01:00:00Z",
+            "display_title": "fast-forward #42 @1001",
+            "status": "completed",
+            "conclusion": "success",
+        })];
+        assert_eq!(
+            concluded(&runs, "2026-09-04T01:00:00Z", "fast-forward #42 @1001"),
+            Some(Conclusion::Success)
+        );
+    }
+
+    /// A completed run with no conclusion keeps the `-` placeholder.
+    #[test]
+    fn a_completed_run_with_no_conclusion_is_the_placeholder() {
+        assert_eq!(
+            grade(&Conclusion::Unknown(String::new())),
+            Answer::Unknown(String::from("-"))
+        );
+    }
+
+    fn reading(status: u16, body: &str) -> Option<crate::rest::Answer> {
+        Some(crate::rest::Answer {
+            status,
+            etag: None,
+            poll_floor: None,
+            backoff: None,
+            body: body.to_owned(),
+            headers: std::collections::BTreeMap::new(),
+        })
+    }
+
+    #[test]
+    fn a_lookup_is_found_none_or_could_not_look() {
+        assert_eq!(look_up_of(None), Lookup::Unreadable(0));
+        assert_eq!(look_up_of(reading(404, "[]")), Lookup::Unreadable(404));
+        assert_eq!(
+            look_up_of(reading(200, "not json")),
+            Lookup::Unreadable(200)
+        );
+        assert_eq!(look_up_of(reading(200, "{}")), Lookup::Unreadable(200));
+        assert_eq!(look_up_of(reading(200, "[]")), Lookup::None);
+        assert_eq!(
+            look_up_of(reading(200, r#"[{"number": 7}]"#)),
+            Lookup::Found(String::from("7"))
+        );
+        assert_eq!(
+            look_up_of(reading(200, r#"[{"number": "8"}]"#)),
+            Lookup::Found(String::from("8"))
+        );
+        assert_eq!(
+            look_up_of(reading(200, r#"[{"number": null}]"#)),
+            Lookup::Unreadable(200)
+        );
+    }
+
+    #[test]
+    fn only_the_forge_s_own_boolean_says_merged() {
+        assert_eq!(merged_of(None), Merged::Unreadable(0));
+        assert_eq!(merged_of(reading(403, "{}")), Merged::Unreadable(403));
+        assert_eq!(merged_of(reading(200, "not json")), Merged::Unreadable(200));
+        assert_eq!(merged_of(reading(200, r#"{"merged": true}"#)), Merged::Yes);
+        assert_eq!(merged_of(reading(200, r#"{"merged": false}"#)), Merged::No);
+        assert_eq!(
+            merged_of(reading(200, r#"{"state": "closed"}"#)),
+            Merged::Unreadable(200)
+        );
+    }
+
+    fn ask() -> Ask {
+        Ask {
+            repo: String::from("o/r"),
+            pr: String::from("42"),
+            workflow: String::from("land.yml"),
+        }
+    }
+
+    /// One page of `count` stranger runs, plus this lap's run when `mine` names
+    /// its conclusion.
+    fn page(count: usize, mine: Option<&str>) -> String {
+        let mut runs: Vec<serde_json::Value> = (0..count)
+            .map(|at| {
+                serde_json::json!({
+                    "created_at": "2026-09-04T02:00:00Z",
+                    "display_title": format!("fast-forward #9 @{at}"),
+                    "status": "completed",
+                    "conclusion": "failure",
+                })
+            })
+            .collect();
+        if let Some(conclusion) = mine {
+            runs.push(serde_json::json!({
+                "created_at": "2026-09-04T02:00:00Z",
+                "display_title": "fast-forward #42 @1001",
+                "status": "completed",
+                "conclusion": conclusion,
+            }));
+        }
+        serde_json::json!({ "workflow_runs": runs }).to_string()
+    }
+
+    const SINCE: &str = "2026-09-04T01:00:00Z";
+
+    /// The answer is paged until a page comes back short, and only then pending.
+    #[test]
+    fn the_answer_is_read_across_full_pages_and_stops_at_a_short_one() {
+        let full = PER_PAGE as usize;
+        let asked = std::cell::RefCell::new(Vec::new());
+        let read = |path: &str| {
+            asked.borrow_mut().push(path.to_owned());
+            let at = asked.borrow().len();
+            Some(match at {
+                1 => page(full, None),
+                2 => page(full - 1, Some("success")),
+                _ => page(0, None),
+            })
+        };
+        assert_eq!(answer_with(&ask(), SINCE, "1001", read), Answer::Accepted);
+        assert_eq!(asked.borrow().len(), 2);
+        assert!(
+            asked.borrow()[1].contains("&page=2&"),
+            "{:?}",
+            asked.borrow()
+        );
+
+        let asked = std::cell::Cell::new(0);
+        let short = |_: &str| {
+            asked.set(asked.get() + 1);
+            Some(page(full - 1, None))
+        };
+        assert_eq!(answer_with(&ask(), SINCE, "1001", short), Answer::Pending);
+        assert_eq!(asked.get(), 1, "a short page is the end of the window");
+    }
+
+    /// A window of full pages is read to its page budget and no further.
+    #[test]
+    fn the_answer_reads_at_most_the_page_budget() {
+        let asked = std::cell::Cell::new(0u32);
+        let full = |_: &str| {
+            asked.set(asked.get() + 1);
+            Some(page(PER_PAGE as usize, None))
+        };
+        assert_eq!(answer_with(&ask(), SINCE, "1001", full), Answer::Pending);
+        assert_eq!(asked.get(), MAX_PAGES);
+    }
+
+    #[test]
+    fn an_unreadable_answer_page_is_never_a_verdict() {
+        let unknown = Answer::Unknown(String::from("unreadable"));
+        assert_eq!(answer_with(&ask(), SINCE, "1001", |_| None), unknown);
+        assert_eq!(
+            answer_with(&ask(), SINCE, "1001", |_| Some(String::from("x"))),
+            unknown
+        );
+        assert_eq!(
+            answer_with(&ask(), SINCE, "1001", |_| Some(String::from("{}"))),
+            unknown
+        );
+    }
+
+    #[test]
+    fn the_refusal_is_the_newest_refusing_comment_on_the_pull_request() {
+        let comments = serde_json::json!([
+            { "body": "Refusing to fast-forward: first lap\nremedy" },
+            { "body": "/fast-forward" },
+            { "body": "Refusing to fast-forward: this lap\nremedy" },
+        ])
+        .to_string();
+        let read = |path: &str| {
+            assert_eq!(path, "repos/o/r/issues/42/comments?per_page=100");
+            Some(comments.clone())
+        };
+        assert_eq!(
+            refusal_with(&ask(), read).as_deref(),
+            Some("Refusing to fast-forward: this lap")
+        );
+        assert_eq!(refusal_with(&ask(), |_| None), None);
+        assert_eq!(refusal_with(&ask(), |_| Some(String::from("{}"))), None);
     }
 
     #[test]

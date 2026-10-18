@@ -657,6 +657,63 @@ mod tests {
     /// overruled by a `skipped` twin at 02:34:03, six required checks read as "no
     /// verdict", and no branch in the repository could land for six hours.
     #[test]
+    fn a_roster_error_says_which_set_is_empty() {
+        assert_eq!(
+            RosterError::NoRequiredChecks.to_string(),
+            "the required check set is empty, so every check would be unrequired"
+        );
+        assert_eq!(
+            RosterError::NoAnsweredConclusions.to_string(),
+            "the answered-conclusion set is empty, so every conclusion would be an answer"
+        );
+    }
+
+    /// The judged view is one pointer per required name, in roster order, and an
+    /// unrequired name gets neither a vote nor a line.
+    #[test]
+    fn the_judged_view_is_the_required_names_in_roster_order() {
+        let mut runs = green_set();
+        runs.reverse();
+        runs.push(run(
+            "completed",
+            "failure",
+            "other",
+            "2026-08-12T00:00:00Z",
+            9,
+        ));
+        let judged = judged(&runs, &roster());
+        assert_eq!(
+            judged
+                .iter()
+                .map(|found| (found.check.as_str(), found.conclusion.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("ci", "success"), ("perf", "success"), ("final", "success")]
+        );
+        let unrequired = [run(
+            "completed",
+            "success",
+            "other",
+            "2026-08-12T00:00:00Z",
+            9,
+        )];
+        assert!(latest_per_name(&unrequired, &roster()).is_empty());
+    }
+
+    /// A legacy row with no conclusion stamp that has not finished sorts above a
+    /// finished one started after it: not-yet-finished is later than any finish.
+    #[test]
+    fn an_unstamped_run_still_in_flight_outranks_a_later_started_finish() {
+        let mut runs = green_set();
+        runs.retain(|found| found.name != "ci");
+        runs.push(run("in_progress", "", "ci", "2026-09-09T02:00:00Z", 1));
+        runs.push(run("completed", "success", "ci", "2026-09-09T02:10:00Z", 2));
+        assert!(
+            matches!(decide(&runs, &roster()), Ok(Verdict::Pending(_))),
+            "the run still in flight answers for the name"
+        );
+    }
+
+    #[test]
     fn a_later_skipped_twin_does_not_erase_a_verdict() {
         let mut runs = green_set();
         runs.push(run(

@@ -370,6 +370,55 @@ mod tests {
         assert_eq!(captured("tag", ""), "tag=\n");
     }
 
+    /// A command every platform this suite runs on has, which exits 0.
+    fn passing() -> Vec<String> {
+        vec!["cargo".to_owned(), "--version".to_owned()]
+    }
+
+    #[test]
+    fn a_passing_command_is_a_pass_and_its_stdout_is_echoed() {
+        let request = StepRequest {
+            command: passing(),
+            ..StepRequest::default()
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(
+            run(&request, &mut out, &mut err).unwrap(),
+            ExitCode::Success
+        );
+        assert!(String::from_utf8(out).unwrap().starts_with("cargo "));
+        assert!(err.is_empty());
+    }
+
+    /// A row mapping a code the command did not exit with maps nothing.
+    #[test]
+    fn an_unmatched_mapping_row_writes_no_verdict() {
+        let request = StepRequest {
+            command: passing(),
+            verdict: Some("v".to_owned()),
+            on: vec!["7=seven".to_owned()],
+            ..StepRequest::default()
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(
+            run(&request, &mut out, &mut err).unwrap(),
+            ExitCode::Success
+        );
+        assert!(err.is_empty(), "{}", String::from_utf8_lossy(&err));
+    }
+
+    #[test]
+    fn a_mapping_with_no_verdict_key_is_a_usage_error() {
+        let request = StepRequest {
+            command: passing(),
+            on: vec!["0=green".to_owned()],
+            ..StepRequest::default()
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert!(run(&request, &mut out, &mut err).is_err());
+        assert!(out.is_empty(), "nothing ran");
+    }
+
     #[test]
     fn a_summary_keeps_the_tail_of_a_long_log() {
         let mut log = String::new();

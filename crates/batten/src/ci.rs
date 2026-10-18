@@ -856,6 +856,53 @@ mod tests {
     }
 
     #[test]
+    fn the_host_settings_are_read_from_the_repository_object() {
+        let host = super::derive_host(
+            r#"{"delete_branch_on_merge": true, "web_commit_signoff_required": false,
+                "security_and_analysis": {"secret_scanning_push_protection": {"status": "enabled"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            host,
+            super::Host {
+                delete_branch_on_merge: Some(true),
+                web_commit_signoff_required: Some(false),
+                secret_scanning_push_protection: Some(true),
+            }
+        );
+        let off = super::derive_host(
+            r#"{"security_and_analysis": {"secret_scanning_push_protection": {"status": "disabled"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(off.secret_scanning_push_protection, Some(false));
+        assert_eq!(off.delete_branch_on_merge, None);
+    }
+
+    /// A failed fetch is a JSON object too, and reading it as every key absent
+    /// would compare clean against any projection.
+    #[test]
+    fn a_payload_that_is_no_repository_object_is_refused() {
+        assert!(super::derive_host(r#"{"message": "Not Found"}"#).is_err());
+        assert!(super::derive_host("[]").is_err());
+        assert!(super::derive_host("not json").is_err());
+    }
+
+    #[test]
+    fn the_host_payload_is_recognised_by_any_one_repository_key() {
+        let object = |raw: &str| {
+            serde_json::from_str::<serde_json::Value>(raw)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .clone()
+        };
+        assert!(super::is_host_payload(&object(
+            r#"{"delete_branch_on_merge": true}"#
+        )));
+        assert!(!super::is_host_payload(&object(r#"{"message": "x"}"#)));
+    }
+
+    #[test]
     fn every_declared_method_token_validates() {
         // The vocabulary is a census, so a token added to `MERGE_METHODS`
         // without being accepted here would fail loudly.

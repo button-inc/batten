@@ -331,6 +331,12 @@ fn an_absent_tag_or_unreadable_stdin_is_could_not_look() {
     assert!(text.contains("no such tag"), "{text}");
     assert_eq!(released(&dir, "", "").0, Some(1));
     assert_eq!(released(&dir, "v0.0.2", "not json").0, Some(1));
+    // A payload missing either key the reading needs is not a get_issue payload.
+    for payload in [r#"[{"id":"CLOUD-2"}]"#, r#"[{"status":"In Review"}]"#] {
+        let (code, text) = released(&dir, "v0.0.2", payload);
+        assert_eq!(code, Some(1), "{payload}: {text}");
+        assert!(text.contains("not a set of get_issue payloads"), "{text}");
+    }
 }
 
 #[test]

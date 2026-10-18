@@ -430,6 +430,38 @@ mod tests {
         );
     }
 
+    /// Only an edge EVERY kind of which is `dev` is dropped: a normal edge out of
+    /// a dependency, or one that is dev and normal at once, is built.
+    #[test]
+    fn a_normal_or_mixed_edge_out_of_a_dependency_is_in_the_built_closure() {
+        for kinds in [json!([{}]), json!([]), json!([{ "kind": "dev" }, {}])] {
+            let mut meta = chain(None, false, &[]);
+            meta["workspace_members"] = json!([]);
+            meta["resolve"]["nodes"][0]["deps"][0]["dep_kinds"] = kinds.clone();
+            let graph = Graph::from_metadata(&meta);
+            assert!(
+                graph
+                    .reachable(graph.named_roots("root"))
+                    .contains("leaf 1.0.0"),
+                "an edge of kinds {kinds} out of a dependency is built"
+            );
+        }
+    }
+
+    #[test]
+    fn the_reachable_set_is_named_in_name_order_and_unknown_ids_drop() {
+        let graph = Graph::from_metadata(&chain(None, false, &[]));
+        assert_eq!(graph.scanned(), 2);
+        let ids = ["root 1.0.0", "leaf 1.0.0", "nobody 1.0.0"]
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect();
+        assert_eq!(
+            graph.named_in_order(&ids),
+            vec![("leaf", "leaf 1.0.0"), ("root", "root 1.0.0")]
+        );
+    }
+
     #[test]
     fn a_dev_dependency_of_a_workspace_member_is_built() {
         assert!(

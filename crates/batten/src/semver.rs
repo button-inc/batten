@@ -1045,6 +1045,97 @@ mod tests {
     }
 
     #[test]
+    fn a_clean_graded_run_is_compatible() {
+        let mut compared = report("     Checked [] 223 checks: 223 pass, 0 fail\n");
+        compared.code = Some(0);
+        assert_eq!(reconcile(&compared, &[]), Verdict::Compatible);
+    }
+
+    #[test]
+    fn only_a_checked_line_can_grade_nothing() {
+        // The vacuous count on a line the tool did not write as its tally is not
+        // the tally.
+        let compared = report(&format!("note:{VACUOUS}\n"));
+        assert!(!compared.graded_nothing());
+    }
+
+    #[test]
+    fn a_bang_on_a_word_that_is_no_type_declares_nothing() {
+        assert!(!bang_before_colon("Feat!: capitalised"));
+        assert!(!bang_before_colon("!: no type at all"));
+        assert!(!bang_before_colon("(scope)!: no type before the scope"));
+    }
+
+    #[test]
+    fn the_report_is_stdout_then_stderr() {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"out\n".to_vec(),
+            stderr: b"err\n".to_vec(),
+        };
+        assert_eq!(merged(&output), "out\nerr\n");
+    }
+
+    /// The toolchain is READ from the active compiler: a version, never a
+    /// placeholder.
+    #[test]
+    fn the_toolchain_is_the_active_compiler_s_version() {
+        let version = toolchain(Path::new(env!("CARGO_MANIFEST_DIR")))
+            .expect("the active compiler answers its version");
+        assert!(
+            version.starts_with(|character: char| character.is_ascii_digit())
+                && version.contains('.'),
+            "{version}"
+        );
+    }
+
+    /// A toolchain no installation has. The comparison and the doc builds are
+    /// still RUN, and each reports its failure as could-not-look, never a pass.
+    const NO_TOOLCHAIN: &str = "batten-no-such-toolchain";
+
+    fn scratch(name: &str) -> PathBuf {
+        let at = std::env::temp_dir().join(format!("batten-semver-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&at);
+        std::fs::create_dir_all(&at).expect("scratch directory");
+        at
+    }
+
+    #[test]
+    fn a_comparison_that_ran_reports_its_code_on_the_rev_route() {
+        let at = scratch("rev");
+        let compared = against_rev(&at, NO_TOOLCHAIN, "batten", "HEAD", "patch")
+            .expect("the analyser was spawned, so the run is reported");
+        assert_ne!(compared.code, Some(0));
+        assert_eq!(compared.route, Route::Rev);
+        let _ = std::fs::remove_dir_all(&at);
+    }
+
+    #[test]
+    fn a_current_doc_build_that_fails_is_could_not_look() {
+        let at = scratch("current");
+        let refused = current_rustdoc(&at, NO_TOOLCHAIN, "batten", &at)
+            .expect_err("no toolchain builds no document");
+        assert!(
+            refused.starts_with("the current doc build failed"),
+            "{refused}"
+        );
+        let _ = std::fs::remove_dir_all(&at);
+    }
+
+    #[test]
+    fn a_baseline_doc_build_that_fails_is_could_not_look() {
+        let at = scratch("baseline");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let refused = baseline_rustdoc(root, NO_TOOLCHAIN, "batten", "HEAD", &at)
+            .expect_err("no toolchain builds no document");
+        assert!(
+            refused.starts_with("the baseline doc build failed"),
+            "{refused}"
+        );
+        let _ = std::fs::remove_dir_all(&at);
+    }
+
+    #[test]
     fn the_route_is_reportable_so_a_green_names_its_baseline() {
         assert_eq!(Route::Rev.as_str(), "rev");
         assert_eq!(Route::Lock.as_str(), "lock");

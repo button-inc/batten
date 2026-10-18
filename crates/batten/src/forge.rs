@@ -365,6 +365,99 @@ mod tests {
     }
 
     #[test]
+    fn a_pull_state_is_merged_then_its_state_then_its_draft_flag() {
+        let of = |raw: &str| PullState::of(&serde_json::from_str(raw).unwrap());
+        assert_eq!(
+            of(r#"{"merged": true, "state": "closed"}"#),
+            PullState::Merged
+        );
+        assert_eq!(
+            of(r#"{"merged_at": "2026-01-01T00:00:00Z"}"#),
+            PullState::Merged
+        );
+        assert_eq!(
+            of(r#"{"merged_at": null, "state": "OPEN"}"#),
+            PullState::Open
+        );
+        assert_eq!(
+            of(r#"{"merged": false, "state": "MERGED"}"#),
+            PullState::Merged
+        );
+        assert_eq!(of(r#"{"state": "closed"}"#), PullState::Closed);
+        assert_eq!(
+            of(r#"{"state": "closed", "draft": true}"#),
+            PullState::Closed
+        );
+        assert_eq!(of(r#"{"state": "open", "draft": true}"#), PullState::Draft);
+        assert_eq!(of(r#"{"draft": true}"#), PullState::Draft);
+        assert_eq!(of(r#"{"state": "open", "draft": false}"#), PullState::Open);
+        assert_eq!(of(r#"{}"#), PullState::Unknown);
+        assert_eq!(of(r#"{"state": "locked"}"#), PullState::Unknown);
+    }
+
+    #[test]
+    fn only_a_merged_or_closed_pull_is_finished() {
+        assert!(PullState::Merged.is_finished());
+        assert!(PullState::Closed.is_finished());
+        for open in [PullState::Open, PullState::Draft, PullState::Unknown] {
+            assert!(!open.is_finished(), "{open:?}");
+        }
+    }
+
+    #[test]
+    fn a_run_state_is_read_from_both_fields_and_never_borrows_one() {
+        assert_eq!(
+            RunState::of(Some("completed"), Some("failure")),
+            RunState::Completed(Conclusion::Failure)
+        );
+        assert_eq!(
+            RunState::of(Some("completed"), None),
+            RunState::Completed(Conclusion::Unknown(String::new()))
+        );
+        for queued in ["queued", "waiting", "requested", "pending"] {
+            assert_eq!(
+                RunState::of(Some(queued), None),
+                RunState::Queued,
+                "{queued}"
+            );
+        }
+        assert_eq!(
+            RunState::of(Some("in_progress"), None),
+            RunState::InProgress
+        );
+        assert_eq!(RunState::of(None, Some("success")), RunState::InProgress);
+        assert_eq!(
+            RunState::of(Some("completed"), Some("success")).conclusion(),
+            Some(&Conclusion::Success)
+        );
+        assert_eq!(RunState::Queued.conclusion(), None);
+    }
+
+    #[test]
+    fn every_conclusion_round_trips_and_only_its_own_pass() {
+        for token in [
+            "success",
+            "neutral",
+            "skipped",
+            "failure",
+            "cancelled",
+            "timed_out",
+            "action_required",
+            "stale",
+            "something_new",
+        ] {
+            let conclusion = Conclusion::of(token);
+            assert_eq!(conclusion.as_str(), token);
+            assert_eq!(
+                conclusion.passes_gate(),
+                matches!(token, "success" | "neutral"),
+                "{token}"
+            );
+            assert_eq!(conclusion.publishes(), token == "success", "{token}");
+        }
+    }
+
+    #[test]
     fn a_name_with_no_conclusion_is_not_a_verdict() {
         // Recording it as an empty string would let a predicate comparing against
         // `""` succeed, which is a verdict nobody wrote.

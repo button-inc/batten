@@ -218,7 +218,32 @@ pub fn version_of(manifest: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{config_changed_beyond_engine, is_release_path, version_of};
+    use super::{Verdict, config_changed_beyond_engine, is_release_path, pin_of, version_of};
+
+    /// The pin is the `engine` table's `release`, and nothing else names one.
+    #[test]
+    fn the_pin_is_the_engine_release_and_only_that() {
+        assert_eq!(
+            pin_of("version = 1\nengine = { release = \"v0.0.216\" }\n").as_deref(),
+            Some("v0.0.216")
+        );
+        assert_eq!(pin_of("engine = { source = \"abc\" }\n"), None);
+        assert_eq!(pin_of("version = 1\n"), None);
+        assert_eq!(pin_of("not = [toml"), None);
+    }
+
+    #[test]
+    fn a_description_is_one_line_per_verdict() {
+        assert_eq!(Verdict::Success("ok".to_owned()).description(), "ok");
+        assert_eq!(
+            Verdict::Failure(vec!["a".to_owned(), "b".to_owned()]).description(),
+            "a; b"
+        );
+        assert_eq!(
+            Verdict::CouldNotLook("x".to_owned()).description(),
+            "could not look: x"
+        );
+    }
 
     #[test]
     fn the_baked_bootstrap_is_a_release_path_and_nothing_else_new_is() {
