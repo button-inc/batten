@@ -717,8 +717,7 @@ mod tests {
 
     /// The mediator is asked, and its two answers are read: the files that
     /// configure it here, and the `PATH` it composes. Unix only until
-    /// CLOUD-2479 is fixed: it fails on the Windows leg (job 117700711031),
-    /// where the mediator is installed.
+    /// CLOUD-2479, the mediator facts on Windows, is fixed.
     #[test]
     #[cfg(unix)]
     fn the_mediator_reports_its_configs_and_its_composed_path() {
