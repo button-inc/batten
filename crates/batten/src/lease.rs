@@ -1749,12 +1749,9 @@ pub fn terms_from_environment() -> Option<Terms> {
 /// the relation cannot express, and the narrowest that CAN express it is
 /// `BEATS_PER_TTL` seconds.
 fn bound_the_relation(resolved: &mut Terms) {
-    if resolved.ttl < BEATS_PER_TTL {
-        resolved.ttl = BEATS_PER_TTL;
-    }
-    if resolved.beat.saturating_mul(BEATS_PER_TTL) > resolved.ttl {
-        resolved.beat = (resolved.ttl / BEATS_PER_TTL).max(1);
-    }
+    resolved.ttl = resolved.ttl.max(BEATS_PER_TTL);
+    // At least 1 once the TTL is floored, so no beat is ever clamped to 0.
+    resolved.beat = resolved.beat.min(resolved.ttl / BEATS_PER_TTL);
 }
 
 /// The remote the lease lives on, by configured name.
@@ -4852,6 +4849,30 @@ mod tests {
         let first = local.holder().expect("mint");
         assert_eq!(local.holder().expect("read"), first);
         assert!(!first.is_empty());
+        // Two clones never share an id, and each names the process that minted it.
+        let other = Local::under(&scratch("holder-other"))
+            .holder()
+            .expect("mint");
+        assert_ne!(other, first);
+        assert!(
+            first.contains(&format!("-{}-", std::process::id())),
+            "{first}"
+        );
+    }
+
+    /// Fails by: a land's own progress token read as absent, or as other than
+    /// the one its registry entry spells.
+    #[test]
+    fn a_land_reads_its_own_progress_from_the_registry() {
+        let git_dir = scratch("own-progress");
+        std::fs::create_dir_all(git_dir.join("batten-tasks")).expect("registry");
+        std::fs::write(
+            git_dir.join("batten-tasks").join("42"),
+            "phase_since: 5\ntick_at: 7\n",
+        )
+        .expect("entry");
+        assert_eq!(own_progress(&git_dir, 42).as_deref(), Some("5.7"));
+        assert_eq!(own_progress(&git_dir, 43), None);
     }
 
     #[test]
@@ -4954,6 +4975,49 @@ mod tests {
         }
     }
 
+    /// Fails by: a live lease read as nobody's, or as everybody's.
+    #[test]
+    fn a_live_lease_is_held_by_its_holder_alone() {
+        let lease = held("claude/a", "", 900);
+        assert!(holds_now(&lease, "host-1-aa", 100));
+        assert!(!holds_now(&lease, "host-2-bb", 100));
+    }
+
+    /// Fails by: a missing remote's sentence naming nothing, or an unreadable
+    /// one's losing the reason it carries.
+    #[test]
+    fn a_missing_terms_reading_says_what_is_missing() {
+        assert_eq!(
+            TermsMissing::NoRemote.say("origin"),
+            "no remote named origin is configured"
+        );
+        assert_eq!(
+            TermsMissing::Unreadable(String::from("why")).say("origin"),
+            "why"
+        );
+    }
+
+    /// Fails by: a free or held lease reported unhealthy.
+    #[test]
+    fn a_free_or_held_lease_is_healthy() {
+        assert!(Health::Free(String::new()).healthy());
+        assert!(Health::Held(String::new()).healthy());
+        assert!(!Health::Garbage(String::new()).healthy());
+    }
+
+    /// Fails by: an upload-pack request that asks for nothing, or omits a
+    /// `have` or the closing `done`.
+    #[test]
+    fn an_upload_pack_request_wants_then_haves_then_is_done() {
+        let request = upload_pack_request(&"a".repeat(40), &["b".repeat(40)]).expect("a request");
+        let mut expected =
+            pktline(&format!("want {} no-progress ofs-delta\n", "a".repeat(40))).expect("want");
+        expected.extend_from_slice(FLUSH);
+        expected.extend_from_slice(&pktline(&format!("have {}\n", "b".repeat(40))).expect("have"));
+        expected.extend_from_slice(&pktline("done\n").expect("done"));
+        assert_eq!(request, expected);
+    }
+
     #[test]
     fn a_lease_that_cannot_be_read_lets_the_fleet_run() {
         // THE ASYMMETRY IS THE WHOLE JUSTIFICATION. Failing closed here stops
@@ -4993,6 +5057,16 @@ mod tests {
         assert!(matches!(
             authorises(Some(&held("claude/a", "claude/b", 900)), "claude/b", 100),
             Authority::Run(_)
+        ));
+    }
+
+    /// Fails by: a reserved slot admitting every branch rather than the one
+    /// it names.
+    #[test]
+    fn a_successor_slot_naming_another_branch_still_stops_this_one() {
+        assert!(matches!(
+            authorises(Some(&held("claude/a", "claude/c", 900)), "claude/b", 100),
+            Authority::Stop(_)
         ));
     }
 
@@ -5177,6 +5251,58 @@ mod tests {
             "a present-but-empty version field is a writer disagreeing about the \
              field, not a body written before it existed"
         );
+    }
+
+    /// Fails by: an empty advisory field ignored rather than read, so an
+    /// earlier line naming one outlives the later line clearing it.
+    #[test]
+    fn a_later_empty_advisory_field_clears_an_earlier_one() {
+        let object = lease_object(
+            "land-lock\nholder: a\nexpires: 1700000060\nnonce: bb\n\
+             branch: b\nhead: h\nnext: n\nstand-down: s\nprogress: p\n\
+             branch:\nhead:\nnext:\nstand-down:\nprogress:\n",
+            1_700_000_000,
+        )
+        .expect("mint");
+        let body = parse_body(&object.body).expect("a well-formed body");
+        assert_eq!(
+            [
+                body.branch,
+                body.head,
+                body.next,
+                body.stand_down,
+                body.progress
+            ],
+            [""; 5].map(String::from)
+        );
+    }
+
+    /// Fails by: a re-mint carrying the inherited schema, writer or nonce
+    /// rather than stamping its own, or a renewal dropping the progress it was
+    /// handed.
+    #[test]
+    fn every_re_mint_stamps_its_own_schema_writer_and_nonce() {
+        let inherited = Body {
+            holder: String::from("a"),
+            schema: BODY_SCHEMA + 1,
+            writer: String::from("inherited"),
+            nonce: String::from("inherited"),
+            progress: String::from("old"),
+            ..Body::default()
+        };
+        let renewed = renewal(&Terms::default(), &inherited, Some("new"), 1);
+        assert_eq!(renewed.progress, "new");
+        for minted in [
+            tombstone(&inherited),
+            renewed,
+            reservation(&inherited, "b"),
+            notice(&inherited, "b"),
+        ] {
+            assert_eq!(minted.schema, BODY_SCHEMA);
+            assert_eq!(minted.writer, writer_version());
+            assert_ne!(minted.nonce, "inherited");
+            assert_eq!(minted.holder, "a");
+        }
     }
 
     /// The compatibility hinge, unbroken: NO `schema:` line still reads as 1.
@@ -5533,6 +5659,30 @@ mod tests {
             kinds,
             objects.iter().map(|object| object.kind).collect::<Vec<_>>()
         );
+    }
+
+    /// Fails by: a copy length's second byte read at the wrong place value.
+    #[test]
+    fn a_copy_longer_than_one_length_byte_copies_all_of_it() {
+        let base: Vec<u8> = (0..300_u16)
+            .map(|n| u8::try_from(n % 251).unwrap_or(0))
+            .collect();
+        // Base 300 and result 256 as varints, then one copy from offset 0 whose
+        // two length bytes spell 0x0100.
+        let delta = [0xac, 0x02, 0x80, 0x02, 0xb0, 0x00, 0x01];
+        assert_eq!(apply_delta(&base, &delta).expect("apply"), base[..256]);
+    }
+
+    /// Fails by: a pack header exactly as long as the format requires refused,
+    /// or a shorter body read past its end.
+    #[test]
+    fn a_bare_header_is_an_empty_pack_and_less_is_none() {
+        let mut header = Vec::from(*b"PACK");
+        header.extend_from_slice(&PACK_VERSION.to_be_bytes());
+        header.extend_from_slice(&0_u32.to_be_bytes());
+        assert_eq!(objects_in(&header).expect("an empty pack"), Vec::new());
+        assert!(objects_in(b"PACK").is_err());
+        assert!(objects_in(&header[..11]).is_err());
     }
 
     #[test]

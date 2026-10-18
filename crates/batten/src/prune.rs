@@ -1303,6 +1303,54 @@ mod tests {
         assert_eq!(banded.free_band(), Some((1, 2)));
     }
 
+    /// Fails by: an extension-less generation grouped by its name alone, or an
+    /// executable one never grouped at all.
+    #[cfg(unix)]
+    #[test]
+    fn only_executable_extensionless_generations_are_superseded() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let deps = build_root("extensionless").join("deps");
+        mkdir(&deps);
+        for name in ["cli-a1a1a1a1a1a1a1a1", "cli-b2b2b2b2b2b2b2b2"] {
+            let path = deps.join(name);
+            put(&path, b"x");
+            if let Err(why) =
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            {
+                panic!("fixture: {why}");
+            }
+        }
+        for name in ["note-c3c3c3c3c3c3c3c3", "note-d4d4d4d4d4d4d4d4"] {
+            put(&deps.join(name), b"x");
+        }
+        let victims: Vec<PathBuf> = superseded_in(&deps, 1).into_values().flatten().collect();
+        assert_eq!(victims.len(), 1, "{victims:?}");
+        assert!(
+            victims.iter().all(|path| path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("cli-"))),
+            "{victims:?}"
+        );
+    }
+
+    /// Fails by: a free-space reading in other than whole MiB of what the
+    /// volume reports available.
+    #[test]
+    fn free_space_reads_in_whole_mebibytes() {
+        let dir = std::env::temp_dir();
+        let read = match available_megabytes(&dir) {
+            Ok(read) => read,
+            Err(why) => panic!("the temp volume: {why}"),
+        };
+        let volume = fs4::available_space(&dir).unwrap_or(0) / (1024 * 1024);
+        assert!(
+            volume > 64,
+            "premise: the temp volume has room ({volume} MiB)"
+        );
+        assert!(read.abs_diff(volume) <= 16, "{read} against {volume}");
+    }
+
     /// Fails by: the executable bit misread, so an extension-less scratch file
     /// is grouped as a build artifact.
     #[test]
