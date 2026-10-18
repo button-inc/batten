@@ -2514,8 +2514,10 @@ mod tests {
         /// Every file in the store's directory carrying this case's name, swept
         /// before the write and again on any exit: a record a killed earlier run
         /// left behind cannot answer the read-back, and one a writer filed under
-        /// another path does not outlive a failing assertion. The store reads the
-        /// checkout it runs in, having no root to take (CLOUD-2475).
+        /// another name in that directory does not outlive a failing assertion.
+        /// The name is matched with its `.` delimiter, so another process whose
+        /// id extends this one's is never swept. The store reads the checkout it
+        /// runs in, having no root to take (CLOUD-2475).
         struct Swept(std::path::PathBuf, String);
         impl Swept {
             fn sweep(&self) {
@@ -2534,7 +2536,7 @@ mod tests {
         let name = format!("batten-unit-{}", std::process::id());
         let store = sourced_store(&[(&name, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
         let path = store.path(&name).unwrap();
-        let swept = Swept(path.parent().unwrap().to_path_buf(), name.clone());
+        let swept = Swept(path.parent().unwrap().to_path_buf(), format!("{name}."));
         swept.sweep();
         record_sourced(&name, ReceiptKey::Named, Some("CLOUD-1"), &sourced(5)).unwrap();
         assert_eq!(store.record(&name).map(|record| record.rows), Some(5));
