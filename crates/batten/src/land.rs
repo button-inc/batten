@@ -4884,6 +4884,148 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// A remote this clone never saw is refused; one it pushed, or one a
+    /// recorded replay of this head rewrote, is admitted. Only a well-formed
+    /// line of the right kind admits.
+    #[test]
+    fn a_remote_is_admitted_only_by_this_clone_s_own_record_of_it() {
+        let root = std::env::temp_dir().join(format!("batten-land-admit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        crate::gitwrite::init_on_main(&root).unwrap();
+        let tip = || crate::git::resolve_ref(&root, "HEAD").unwrap().unwrap();
+        crate::gitwrite::commit_paths(&root, &[], "base").unwrap();
+        let head = tip();
+        std::fs::write(root.join("sibling.txt"), "theirs\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("sibling.txt")], "sibling").unwrap();
+        let remote = tip();
+        let made = std::cell::Cell::new(0);
+        let admitted = |lines: &[String]| {
+            made.set(made.get() + 1);
+            let branch = format!("work-{}", made.get());
+            super::record_disk(&root, &branch, lines).unwrap();
+            super::admitted(&root, &branch, &remote, &head)
+        };
+        assert!(!admitted(&[]), "a sibling's commit is refused");
+        assert!(admitted(&[format!("push landed {remote} -")]));
+        assert!(admitted(&[format!("rebase replayed {head} {remote}")]));
+        for refused in [
+            vec![format!("push landed {remote}")],
+            vec![String::from("x"), format!("push started {remote} -")],
+            vec![
+                String::from("x"),
+                String::from("y"),
+                format!("rebase replayed {head} -"),
+            ],
+            vec![
+                String::from("x"),
+                String::from("y"),
+                String::from("z"),
+                format!("rebase conflicted {head} {remote}"),
+            ],
+        ] {
+            assert!(!admitted(&refused), "{refused:?}");
+        }
+        assert!(super::admitted(
+            &root,
+            "work-none",
+            crate::lease::ZERO,
+            &head
+        ));
+        assert_eq!(super::pre_replay_head(&root, "main"), remote);
+        assert_eq!(super::pre_replay_head(&root, "no-such-branch"), "-");
+        super::record_disk(
+            &root,
+            "logs",
+            &[
+                String::from("verify-log abc h1 h2"),
+                String::from("verify-log def h3"),
+                String::from("other abc h4"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(super::verify_log(&root, "logs", "abc"), vec!["h1", "h2"]);
+        assert!(super::verify_log(&root, "logs", "fed").is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Only a NEW run of the masked name itself confirms the dead end: a seen
+    /// run of it, or a new run of a sibling, does not.
+    #[test]
+    fn only_a_new_run_of_the_masked_name_registers_since_the_ready() {
+        let run = |name: &str, id: u64| crate::checks_green::Run {
+            status: String::from("completed"),
+            conclusion: String::from("skipped"),
+            name: name.to_owned(),
+            started_at: String::new(),
+            completed_at: String::new(),
+            id,
+        };
+        let masked = [crate::checks_green::Finding {
+            check: String::from("final"),
+            conclusion: String::from("skipped"),
+        }];
+        let seen = std::collections::BTreeSet::from([1]);
+        assert!(!super::registered_since(
+            Some(&seen),
+            &[run("final", 1), run("ci", 2)],
+            &masked
+        ));
+        assert!(super::registered_since(
+            Some(&seen),
+            &[run("final", 3)],
+            &masked
+        ));
+        assert!(super::registered_since(None, &[], &masked));
+    }
+
+    /// Both arms are recorded, and the stale arm's verdict is the token, never
+    /// the base it moved to.
+    #[test]
+    fn a_wait_answers_both_arms_and_the_stale_one_as_a_token() {
+        let answered = super::answers("abc", Some("green"), Some("def"));
+        assert_eq!(
+            answered
+                .iter()
+                .map(|answer| (
+                    answer.arm.token(),
+                    answer.verdict.as_deref(),
+                    answer.sha.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (super::Arm::Green.token(), Some("green"), "abc"),
+                (super::Arm::Stale.token(), Some("moved"), "abc"),
+            ]
+        );
+        let unread = super::answers("abc", None, None);
+        assert!(unread.iter().all(|answer| answer.verdict.is_none()));
+    }
+
+    #[test]
+    fn every_verify_outcome_names_its_head() {
+        let sha = String::from("abc");
+        for outcome in [
+            super::Verified::Clean(sha.clone()),
+            super::Verified::Refused {
+                sha: sha.clone(),
+                cause: super::Refusal::Tree,
+            },
+            super::Verified::Stalled {
+                sha: sha.clone(),
+                beats: 2,
+            },
+        ] {
+            assert_eq!(outcome.sha(), "abc");
+        }
+    }
+
+    #[test]
+    fn only_a_named_workflow_is_a_declared_fan_in() {
+        assert!(super::FanIn::from_workflow_path(".github/workflows/ci.yml").declared());
+        assert!(!super::FanIn::from_workflow_path("").declared());
+    }
+
     #[test]
     fn a_red_head_slug_is_injective_over_slash_and_percent() {
         assert_eq!(super::red_head_slug("feature/a%b"), "feature%2Fa%25b");
