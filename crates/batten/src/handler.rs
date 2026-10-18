@@ -2180,4 +2180,14 @@ mod tests {
         assert_eq!(dispatched.violations().len(), 1);
         assert!(dispatched.advice().is_empty());
     }
+
+    /// Fails by: an owner admitted as a key with an empty or non-alphabetic
+    /// prefix, or an empty or non-numeric number.
+    #[test]
+    fn an_issue_key_is_letters_a_dash_and_digits() {
+        assert!(is_issue_key("ABC-12"));
+        for word in ["ABC", "-12", "AB1-2", "ABC-", "ABC-1x", "soon"] {
+            assert!(!is_issue_key(word), "{word}");
+        }
+    }
 }

@@ -5503,6 +5503,137 @@ mod tests {
         assert!(objects_in(b"not a pack at all").is_err());
     }
 
+    /// One pack member: git's type/size header, `extra` (a delta's base), then
+    /// `inflated` compressed.
+    fn member(number: u8, extra: &[u8], inflated: &[u8]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut size = inflated.len();
+        let mut out = Vec::new();
+        let mut byte = (number << 4) | u8::try_from(size & 0x0f).expect("four bits");
+        size >>= 4;
+        while size > 0 {
+            out.push(byte | 0x80);
+            byte = u8::try_from(size & 0x7f).expect("seven bits");
+            size >>= 7;
+        }
+        out.push(byte);
+        out.extend_from_slice(extra);
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(inflated).expect("compress");
+        out.extend_from_slice(&encoder.finish().expect("compress"));
+        out
+    }
+
+    /// A delta header's little-endian size varint.
+    fn varint(mut value: usize) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let low = u8::try_from(value & 0x7f).expect("seven bits");
+            value >>= 7;
+            if value == 0 {
+                out.push(low);
+                return out;
+            }
+            out.push(low | 0x80);
+        }
+    }
+
+    /// An offset delta's base distance, git's dense big-endian encoding.
+    fn distance(mut value: usize) -> Vec<u8> {
+        let mut out = vec![u8::try_from(value & 0x7f).expect("seven bits")];
+        value >>= 7;
+        while value > 0 {
+            value -= 1;
+            out.push(0x80 | u8::try_from(value & 0x7f).expect("seven bits"));
+            value >>= 7;
+        }
+        out.reverse();
+        out
+    }
+
+    /// Fails by: any octet of a delta's copy offset or length, its 0x10000
+    /// default, an insert, a size varint, an object header past one byte, or
+    /// either delta form's base read wrong — each yields bytes, or an id,
+    /// other than git's.
+    #[test]
+    fn both_delta_forms_resolve_to_the_objects_git_would_read() {
+        let base: Vec<u8> = (0..70_100_usize)
+            .map(|n| u8::try_from(n * 7 % 251).expect("a byte"))
+            .collect();
+        let mut copy = varint(base.len());
+        let produced = 40 + 3 + 0x1_0000 + 50;
+        copy.extend(varint(produced));
+        copy.extend([0x80 | 0x01 | 0x02 | 0x10, 0x02, 0x01, 40]);
+        copy.extend([0x03, b'x', b'y', b'z']);
+        copy.push(0x80);
+        copy.extend([0x80 | 0x01 | 0x02 | 0x04 | 0x10, 0x70, 0x11, 0x01, 50]);
+        let mut want = base[0x102..0x102 + 40].to_vec();
+        want.extend_from_slice(b"xyz");
+        want.extend_from_slice(&base[..0x1_0000]);
+        want.extend_from_slice(&base[70_000..70_050]);
+        assert_eq!(apply_delta(&base, &copy).expect("applies"), want);
+
+        let mut insert = varint(base.len());
+        insert.extend(varint(5));
+        insert.extend([0x05, b'h', b'e', b'l', b'l', b'o']);
+        let id = |body: &[u8]| {
+            gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::object::Kind::Blob, body)
+                .expect("hash")
+        };
+        let first = member(3, &[], &base);
+        let ofs = member(OFS_DELTA, &distance(first.len()), &copy);
+        let refd = member(REF_DELTA, id(&base).as_slice(), &insert);
+        let mut pack = Vec::from(*b"PACK");
+        pack.extend_from_slice(&PACK_VERSION.to_be_bytes());
+        pack.extend_from_slice(&3_u32.to_be_bytes());
+        for part in [&first, &ofs, &refd] {
+            pack.extend_from_slice(part);
+        }
+        let read = objects_in(&pack).expect("unpack");
+        let bodies: Vec<&[u8]> = read.iter().map(|object| object.body.as_slice()).collect();
+        assert_eq!(bodies, [&base[..], &want[..], b"hello"]);
+        for object in &read {
+            assert_eq!(object.kind, gix::object::Kind::Blob);
+            assert_eq!(object.id, id(&object.body).to_string());
+        }
+    }
+
+    /// Fails by: a malformed delta applied rather than refused — the wrong base,
+    /// a zero-length insert, a copy outside the base, or a result of a length
+    /// its header did not declare.
+    #[test]
+    fn a_malformed_delta_is_refused() {
+        let base = b"0123456789";
+        let delta = |declared_base: usize, produced: usize, body: &[u8]| {
+            let mut out = varint(declared_base);
+            out.extend(varint(produced));
+            out.extend_from_slice(body);
+            out
+        };
+        assert_eq!(
+            apply_delta(base, &delta(10, 3, &[0x90, 3])).expect("a copy"),
+            b"012"
+        );
+        assert!(apply_delta(base, &delta(9, 3, &[0x90, 3])).is_err(), "base");
+        assert!(
+            apply_delta(base, &delta(10, 3, &[0x00])).is_err(),
+            "empty insert"
+        );
+        assert!(
+            apply_delta(base, &delta(10, 3, &[0x91, 9, 3])).is_err(),
+            "outside"
+        );
+        assert!(
+            apply_delta(base, &delta(10, 4, &[0x90, 3])).is_err(),
+            "length"
+        );
+        assert!(
+            apply_delta(base, &delta(10, 2, &[0x02, b'a'])).is_err(),
+            "short insert"
+        );
+    }
+
     #[test]
     fn a_truncated_pack_member_is_could_not_look_rather_than_a_short_body() {
         let object = lease_object("holder: a\n", 1_700_000_000).expect("mint");

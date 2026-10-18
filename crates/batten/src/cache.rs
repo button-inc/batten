@@ -337,16 +337,13 @@ pub fn build_id(head: &[u8]) -> Option<Vec<u8>> {
 /// Read `width` bytes at `at` as an unsigned integer in the image's byte order.
 fn uint(bytes: &[u8], at: usize, width: usize, little: bool) -> Option<u64> {
     let field = bytes.get(at..at.checked_add(width)?)?;
-    let mut value: u64 = 0;
-    for index in 0..width {
-        let byte = if little {
-            field.get(width - 1 - index)?
-        } else {
-            field.get(index)?
-        };
-        value = (value << 8) | u64::from(*byte);
+    let mut word = [0_u8; 8];
+    let low = word.get_mut(8_usize.checked_sub(width)?..)?;
+    low.copy_from_slice(field);
+    if little {
+        low.reverse();
     }
-    Some(value)
+    Some(u64::from_be_bytes(word))
 }
 
 fn elf_build_id(head: &[u8]) -> Option<Vec<u8>> {
@@ -674,6 +671,92 @@ mod tests {
         image[0x10c..0x110].copy_from_slice(b"GNU\0");
         image[0x110..0x118].copy_from_slice(&[8, 7, 6, 5, 4, 3, 2, 1]);
         assert_eq!(build_id(&image), Some(vec![8, 7, 6, 5, 4, 3, 2, 1]));
+    }
+
+    /// Fails by: a 32-bit or big-endian image's layout read as the 64-bit
+    /// little-endian one's.
+    #[test]
+    fn a_narrow_big_endian_elf_note_is_read() {
+        let mut image = vec![0_u8; 0x200];
+        image[..4].copy_from_slice(b"\x7fELF");
+        image[4] = 1;
+        image[5] = 2;
+        image[0x1c..0x20].copy_from_slice(&52_u32.to_be_bytes());
+        image[0x2a..0x2c].copy_from_slice(&32_u16.to_be_bytes());
+        image[0x2c..0x2e].copy_from_slice(&1_u16.to_be_bytes());
+        image[52..56].copy_from_slice(&4_u32.to_be_bytes());
+        image[56..60].copy_from_slice(&0x100_u32.to_be_bytes());
+        image[68..72].copy_from_slice(&24_u32.to_be_bytes());
+        image[0x100..0x104].copy_from_slice(&4_u32.to_be_bytes());
+        image[0x104..0x108].copy_from_slice(&8_u32.to_be_bytes());
+        image[0x108..0x10c].copy_from_slice(&3_u32.to_be_bytes());
+        image[0x10c..0x110].copy_from_slice(b"GNU\0");
+        image[0x110..0x118].copy_from_slice(&[1, 3, 5, 7, 2, 4, 6, 8]);
+        assert_eq!(build_id(&image), Some(vec![1, 3, 5, 7, 2, 4, 6, 8]));
+    }
+
+    /// A Mach-O image of `magic`, its header `header` bytes long, carrying an
+    /// `LC_SEGMENT_64` and then an `LC_UUID` of `uuid`.
+    fn macho(magic: [u8; 4], little: bool, header: usize, uuid: [u8; 16]) -> Vec<u8> {
+        let word = |value: u32| {
+            if little {
+                value.to_le_bytes()
+            } else {
+                value.to_be_bytes()
+            }
+        };
+        let mut image = vec![0_u8; 0x100];
+        image[..4].copy_from_slice(&magic);
+        image[16..20].copy_from_slice(&word(2));
+        image[header..header + 4].copy_from_slice(&word(0x19));
+        image[header + 4..header + 8].copy_from_slice(&word(16));
+        let at = header + 16;
+        image[at..at + 4].copy_from_slice(&word(0x1b));
+        image[at + 4..at + 8].copy_from_slice(&word(24));
+        image[at + 8..at + 24].copy_from_slice(&uuid);
+        image
+    }
+
+    /// Fails by: either byte order, or either header width, read wrong, or the
+    /// walk past a load command stepping by anything but its size.
+    #[test]
+    fn a_macho_uuid_is_read_in_every_byte_order_and_width() {
+        let uuid: [u8; 16] = std::array::from_fn(|n| u8::try_from(n).expect("small") + 1);
+        for (magic, little, header) in [
+            ([0xcf, 0xfa, 0xed, 0xfe], true, 32),
+            ([0xce, 0xfa, 0xed, 0xfe], true, 28),
+            ([0xfe, 0xed, 0xfa, 0xcf], false, 32),
+            ([0xfe, 0xed, 0xfa, 0xce], false, 28),
+        ] {
+            assert_eq!(
+                build_id(&macho(magic, little, header, uuid)),
+                Some(uuid.to_vec()),
+                "{magic:x?}"
+            );
+        }
+    }
+
+    /// Fails by: an identity that is not the bytes' hex, or a stat identity that
+    /// is not the file's stamp.
+    #[test]
+    fn an_identity_spells_its_bytes_or_its_stamp() {
+        assert_eq!(hex(&[0x0a, 0xff, 0x00]), "0aff00");
+        let dir = scratch("stat-identity");
+        let file = dir.join("image");
+        std::fs::write(&file, "x").expect("write");
+        let identity = stat_identity(&file).expect("a stat");
+        assert!(identity.starts_with("stat:"), "{identity}");
+        assert_eq!(Some(identity), stamp(&file).map(|stamp| stamp.fields));
+    }
+
+    /// Fails by: an entry's write time that is not the clock's, which would
+    /// make every entry older than any file it vouches for.
+    #[test]
+    fn now_is_the_clocks_reading() {
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("after the epoch");
+        assert!(now() >= before);
     }
 
     /// Make `partition` with its use mark, the mark's time at [`stepped`]
