@@ -712,7 +712,9 @@ impl Wiring {
                 return Err("[[wiring.disarm]]: `path` is empty, so it names no script".to_owned());
             }
             let path = Path::new(&row.path);
-            if path.is_absolute() || path.has_root() {
+            // `has_root` alone: every absolute path has a root on every platform,
+            // and a rooted relative one (`\x` on Windows) still escapes `$HOME`.
+            if path.has_root() {
                 return Err(format!(
                     "[[wiring.disarm]]: `path` {:?} is absolute — a declared script is relative to \
                      the home directory, because a shim over a tracked file would be a mutation of \
@@ -1161,6 +1163,129 @@ mod tests {
         assert_eq!(done.events.len(), expected);
         assert!(!done.written);
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    }
+
+    /// An existing surface is read and extended, and only a disposable
+    /// environment's run writes it back.
+    #[test]
+    fn a_session_root_with_a_surface_is_extended_only_where_disposable() {
+        let root = scratch("register-existing");
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let committed = match claude() {
+            hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
+        };
+        let path = root.join(committed);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{\"permissions\": {}}\n").unwrap();
+        let done = register(&root, &repo, false).unwrap();
+        assert_eq!(done.authoritative, crate::environment::disposable());
+        assert!(!done.events.is_empty(), "the surface lacked batten");
+        assert_eq!(done.written, done.authoritative);
+    }
+
+    #[test]
+    fn two_spellings_of_one_file_are_the_same_file_and_a_missing_one_is_none() {
+        let dir = scratch("same-file");
+        std::fs::write(dir.join("a"), "a").unwrap();
+        std::fs::write(dir.join("b"), "b").unwrap();
+        assert!(same_file(&dir.join("a"), &dir.join(".").join("a")));
+        assert!(!same_file(&dir.join("a"), &dir.join("b")));
+        assert!(!same_file(&dir.join("gone"), &dir.join("gone")));
+    }
+
+    #[test]
+    fn a_record_sums_its_rows_siblings() {
+        let row = |siblings| AtLoadRow {
+            harness: "h".to_owned(),
+            event: "e".to_owned(),
+            siblings,
+        };
+        assert_eq!(
+            AtLoad {
+                rows: vec![row(2), row(3)]
+            }
+            .siblings(),
+            5
+        );
+    }
+
+    /// The record is written once, read back as written, and cleared once.
+    #[test]
+    fn the_at_load_record_is_written_once_read_back_and_cleared() {
+        let dir = scratch("at-load-record");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        let rows = vec![AtLoadRow {
+            harness: "h".to_owned(),
+            event: "e".to_owned(),
+            siblings: 1,
+        }];
+        assert_eq!(read_at_load(&dir).unwrap(), None);
+        assert!(write_at_load(&dir, &rows).unwrap());
+        assert!(!write_at_load(&dir, &[]).unwrap(), "never overwrites");
+        assert_eq!(read_at_load(&dir).unwrap(), Some(AtLoad { rows }));
+        assert!(clear_at_load(&dir).unwrap());
+        assert!(!clear_at_load(&dir).unwrap());
+        assert_eq!(read_at_load(&dir).unwrap(), None);
+    }
+
+    /// A merged surface carrying a sibling is read, counted and, only in a
+    /// disposable environment, rewritten with the record taken first.
+    #[test]
+    fn a_merged_sibling_is_counted_and_reclaimed_only_where_disposable() {
+        let dir = scratch("reclaim-repo");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        let home = scratch("reclaim-home");
+        let harness = hook::Harness::ClaudeCode;
+        let merged = harness.merge_surfaces();
+        let merged_at = merged.first().expect("claude-code merges a surface");
+        let path = home.join(merged_at);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let command = hook::wiring_command(harness);
+        std::fs::write(
+            &path,
+            surface(&[&command, "somebody-elses-hook.sh"]).to_string(),
+        )
+        .unwrap();
+        let checked = reclaim(&dir, &home, true).unwrap();
+        assert_eq!(checked.authoritative, crate::environment::disposable());
+        assert_eq!(
+            checked.rows,
+            vec![AtLoadRow {
+                harness: harness.as_str().to_owned(),
+                event: "SessionStart".to_owned(),
+                siblings: 1,
+            }]
+        );
+        assert_eq!((checked.surfaces_read, checked.surfaces_written), (1, 0));
+        assert!(!checked.recorded);
+
+        let done = reclaim(&dir, &home, false).unwrap();
+        let wrote = usize::from(done.authoritative);
+        assert_eq!((done.surfaces_read, done.surfaces_written), (1, wrote));
+        assert_eq!(done.recorded, done.authoritative);
+    }
+
+    /// Both commit hooks are linked to the checked-in body; an existing hook
+    /// that cannot be removed is refused rather than linked over.
+    #[test]
+    fn the_commit_gate_links_both_hooks_and_refuses_one_it_cannot_replace() {
+        let dir = scratch("link-gate");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        std::fs::write(dir.join("gate.sh"), "#!/bin/sh\n").unwrap();
+        assert_eq!(link_commit_gate(&dir, "gate.sh").unwrap(), 2);
+        let hooks = crate::doctor::hooks_dir(&dir).unwrap();
+        for name in crate::doctor::COMMIT_HOOKS {
+            assert_eq!(
+                std::fs::read_to_string(hooks.join(name)).unwrap(),
+                "#!/bin/sh\n"
+            );
+        }
+        let blocked = hooks.join(crate::doctor::COMMIT_HOOKS[0]);
+        std::fs::remove_file(&blocked).unwrap();
+        std::fs::create_dir_all(&blocked).unwrap();
+        let err = link_commit_gate(&dir, "gate.sh").unwrap_err().to_string();
+        assert!(err.contains("will not be replaced"), "{err}");
     }
 
     #[test]

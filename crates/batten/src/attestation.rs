@@ -111,10 +111,7 @@ pub fn run(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let binary = crate::record::safe_component("binary", binary)?;
-    let verifier = verifier
-        .map(str::trim)
-        .filter(|program| !program.is_empty())
-        .unwrap_or(DEFAULT_VERIFIER);
+    let verifier = verifier_of(verifier);
     let root = Path::new(".");
     match produce(root, tag, &binary, verifier) {
         Produced::Recorded(body) => {
@@ -127,6 +124,15 @@ pub fn run(
             Ok(ExitCode::Internal)
         }
     }
+}
+
+/// The program `--verifier` names, trimmed, or [`DEFAULT_VERIFIER`] where it
+/// names none.
+fn verifier_of(verifier: Option<&str>) -> &str {
+    verifier
+        .map(str::trim)
+        .filter(|program| !program.is_empty())
+        .unwrap_or(DEFAULT_VERIFIER)
 }
 
 /// The reading, from the probe to the last archive's verdict.
@@ -370,7 +376,7 @@ fn find(dir: &Path, binary: &str) -> Option<PathBuf> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::{find, is_binary, untar};
+    use super::{find, is_binary, untar, unzip, verifier_of};
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("batten-attestation-unit-{name}"));
@@ -432,6 +438,26 @@ mod tests {
         let corrupt = dir.join("corrupt.tar.gz");
         std::fs::write(&corrupt, b"not a gzip stream").unwrap();
         assert_eq!(untar(&corrupt, &dir, "tool"), Err(()));
+    }
+
+    /// A named verifier is used trimmed; a blank or absent one is the default.
+    #[test]
+    fn the_verifier_is_the_named_program_or_the_default_where_none_is_named() {
+        assert_eq!(verifier_of(Some(" cosign ")), "cosign");
+        assert_eq!(verifier_of(Some("  ")), "gh");
+        assert_eq!(verifier_of(None), "gh");
+    }
+
+    /// A `.zip` that will not unpack is could-not-look, never an archive read
+    /// as carrying a binary or carrying none.
+    #[test]
+    fn a_zip_that_will_not_unpack_is_could_not_look() {
+        let dir = scratch("corrupt-zip");
+        let corrupt = dir.join("release.zip");
+        std::fs::write(&corrupt, b"not a zip archive").unwrap();
+        let into = dir.join("x");
+        std::fs::create_dir_all(&into).unwrap();
+        assert_eq!(unzip(&dir, &corrupt, &into, "tool"), Err(()));
     }
 
     #[test]

@@ -531,6 +531,62 @@ fn an_unanswered_question_yields_no_admission_and_prints_what_to_answer() {
         stderr.contains("precondition") && stderr.contains("lost"),
         "the declared questions are re-presented: {stderr}"
     );
+    assert!(
+        stderr.contains("This class declares task run first. Name the one you rejected"),
+        "the declined routes are the non-override ones, re-presented: {stderr}"
+    );
+}
+
+/// The head of a `(rule, subject)` chain is the record no other names as its
+/// `prev`, and a chain of another rule or subject is not this one.
+#[test]
+fn the_chain_head_is_the_record_nothing_names_as_prev() {
+    let root = fixture("chain-head");
+    let first = admission::issue(&root, binding("a.rs", "head1", "epoch1", "the first link"))
+        .expect("issued");
+    let mut later = binding("a.rs", "head1", "epoch1", "the second link");
+    later.prev = Some(first.clone());
+    let second = admission::issue(&root, later).expect("issued");
+    admission::issue(&root, binding("b.rs", "head1", "epoch1", "another subject")).expect("issued");
+    let store = admission::store_dir(&root).expect("the store resolves");
+    std::fs::write(store.join("notes.txt"), "not a record").expect("write");
+
+    let head = |rule: &str, subject: &str| {
+        admission::chain_head(&root, rule, subject).expect("the store answered")
+    };
+    assert_eq!(head("diff ship early", "a.rs"), Some(second));
+    assert_eq!(head("diff ship early", "nobody.rs"), None);
+    assert_eq!(head("another rule", "a.rs"), None);
+}
+
+/// A spent block admits exactly the situation it binds: any one of the five
+/// terms differing admits nothing.
+#[test]
+fn a_block_admits_only_the_situation_all_five_terms_name() {
+    let root = fixture("block-terms");
+    let issued = admission::issue(
+        &root,
+        binding("a.rs", "head1", "epoch1", "every term binds the block"),
+    )
+    .expect("issued");
+    admission::consume(&root, &issued, &situation("a.rs", "call:head1", "epoch1"))
+        .expect("the store answered")
+        .expect("spent");
+    let block = admission::block(&admission::load(&root, &issued).expect("the spent record"));
+    let terms = [
+        "diff ship early",
+        "diff ship early",
+        "a.rs",
+        "call:head1",
+        "epoch1",
+    ];
+    let admits = |t: [&str; 5]| admission::admitted_by_block(&block, t[0], t[1], t[2], t[3], t[4]);
+    assert_eq!(admits(terms), Some(issued));
+    for at in 0..terms.len() {
+        let mut other = terms;
+        other[at] = "something else";
+        assert_eq!(admits(other), None, "term {at} differs");
+    }
 }
 
 /// AN ISSUED ADMISSION NAMES THE SPEND IT STILL NEEDS (CLOUD-2078).

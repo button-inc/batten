@@ -807,7 +807,7 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
         // shares its writer's name because it is the same record's other end, so
         // the uniqueness is per mode class: two writers would still let the
         // sorted-later one silently decide the record.
-        if !seen.insert((mint.name.as_str(), mint.mode == MintMode::Clear)) {
+        if !seen.insert((mint.name.as_str(), matches!(mint.mode, MintMode::Clear))) {
             return Err(crate::error::UsageError::raise(format!(
                 "`[[mint]]` `{}` is declared twice; two rows writing one receipt name would let \
                  the sorted-later one silently decide the record",
@@ -1204,6 +1204,99 @@ mod tests {
         let absent = serde_json::json!({});
         assert_eq!(select(&empty, "issues[].id").map(|v| v.len()), Some(0));
         assert!(select(&absent, "issues[].id").is_none());
+    }
+
+    /// The path forms and the authority read the result; a literal, the clock
+    /// and a git ref do not.
+    #[test]
+    fn only_the_result_reading_pieces_read_the_result() {
+        for piece in [
+            Piece::Path("id".to_owned()),
+            Piece::Digest("id".to_owned()),
+            Piece::Slug("id".to_owned()),
+            Piece::Join("id".to_owned()),
+            Piece::Authority(Authority::Ready),
+        ] {
+            assert!(piece.reads_the_result(), "{piece:?}");
+        }
+        for piece in [
+            Piece::Literal("x".to_owned()),
+            Piece::Now,
+            Piece::Git("HEAD".to_owned()),
+        ] {
+            assert!(!piece.reads_the_result(), "{piece:?}");
+        }
+    }
+
+    /// Literal text either side of a placeholder is its own piece, in order, and
+    /// no empty literal is ever pushed.
+    #[test]
+    fn a_template_splits_into_its_literals_and_placeholders_in_order() {
+        assert_eq!(
+            parse("a{now}b"),
+            Ok(vec![
+                Piece::Literal("a".to_owned()),
+                Piece::Now,
+                Piece::Literal("b".to_owned()),
+            ])
+        );
+        assert_eq!(parse("{now}{now}"), Ok(vec![Piece::Now, Piece::Now]));
+    }
+
+    /// A slug folds each run of separators to one `-`, and never leads with one.
+    #[test]
+    fn a_slug_folds_separator_runs_and_never_leads_with_one() {
+        assert_eq!(slug("  Hello,  World!"), "hello-world");
+    }
+
+    /// A result missing any required path is not a success.
+    #[test]
+    fn a_result_missing_a_required_path_is_unsatisfied() {
+        let declared: Declared = serde_json::from_value(serde_json::json!({
+            "name": "r", "tool": "T", "key": "named", "key_from": "id",
+            "requires": ["id", "state"], "mode": "replace", "body": "{id}",
+        }))
+        .expect("shape loads");
+        assert!(satisfied(
+            &declared,
+            &serde_json::json!({"id": "A-1", "state": "x"})
+        ));
+        assert!(!satisfied(&declared, &serde_json::json!({"id": "A-1"})));
+    }
+
+    /// The subject is the declared scalar, from the result or the input, and
+    /// only where it fits the declared shape.
+    #[test]
+    fn the_subject_is_the_declared_scalar_held_to_its_shape() {
+        let row = |columns: serde_json::Value| -> Declared {
+            let mut value = serde_json::json!({
+                "name": "r", "tool": "T", "key": "named", "mode": "replace", "body": "{now}",
+            });
+            for (column, declared) in columns.as_object().expect("columns are an object") {
+                value[column] = declared.clone();
+            }
+            serde_json::from_value(value).expect("shape loads")
+        };
+        let input = serde_json::json!({"args": "B-2"});
+        let result = serde_json::json!({"id": "A-1"});
+        assert_eq!(
+            subject(&row(serde_json::json!({"key_from": "id"})), &input, &result).as_deref(),
+            Some("A-1")
+        );
+        let from_input =
+            row(serde_json::json!({"key_from_input": "args", "key_shape": "^[A-Z]-[0-9]$"}));
+        assert_eq!(
+            subject(&from_input, &input, &result).as_deref(),
+            Some("B-2")
+        );
+        assert_eq!(
+            subject(
+                &from_input,
+                &serde_json::json!({"args": "not-a-key"}),
+                &result
+            ),
+            None
+        );
     }
 
     #[test]

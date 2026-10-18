@@ -1422,6 +1422,78 @@ mod tests {
         );
     }
 
+    /// A key file that cannot be read is refused, never read as absent: an
+    /// absent one is minted, and a mint over an unreadable one is a re-mint.
+    #[test]
+    fn an_unreadable_key_file_is_refused_rather_than_read_as_absent() {
+        let path = scratch("unreadable");
+        fs::create_dir_all(&path).unwrap();
+        assert!(read(&path).is_err(), "a directory is not an absent key");
+    }
+
+    /// A retired generation with no id is half a pair, refused as one.
+    #[test]
+    fn a_retired_key_with_an_empty_id_is_refused() {
+        let path = scratch("retired-empty-id");
+        load_or_mint_at(&path, date()).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let hex = text.lines().nth(1).unwrap().to_owned();
+        fs::write(&path, format!("{text}\n{hex}\n")).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap().lines().nth(2), Some(""));
+        assert!(custody_at(&path, date()).is_err());
+    }
+
+    /// An absent ledger is an empty history, never an unreadable one.
+    #[test]
+    fn an_absent_ledger_is_an_empty_history() {
+        let path = scratch("absent-ledger");
+        assert!(!ledger_beside(&path).exists(), "the premise: no ledger");
+        assert_eq!(events_at(&ledger_beside(&path)).unwrap(), Vec::new());
+    }
+
+    /// The repository's key and ledger sit side by side in its state directory,
+    /// and the first custody of a repository records its mint there; a key lost
+    /// and re-minted orphans the generation the ledger still names.
+    #[test]
+    fn a_repositorys_ledger_records_its_mint_and_names_a_lost_generation() {
+        let root = std::env::temp_dir()
+            .join("batten-secrets-tests")
+            .join("repository-root");
+        fs::create_dir_all(&root).unwrap();
+        let key = key_path(&root).unwrap();
+        assert!(
+            key.ends_with(Path::new(KEY_DIR).join(KEY_FILE)),
+            "{}",
+            key.display()
+        );
+        assert_eq!(ledger_path(&root).unwrap(), key.with_file_name(LEDGER_FILE));
+        let _ = fs::remove_dir_all(key.parent().unwrap());
+
+        custody(&root, date()).unwrap();
+        assert_eq!(
+            events(&root).unwrap(),
+            vec![Event::Minted {
+                key_id: key_id(date()),
+                witness: custody(&root, date()).unwrap().witnesses().unwrap()[0].clone(),
+            }]
+        );
+        assert_eq!(
+            orphaned_key_ids(&root, date()).unwrap(),
+            Vec::<String>::new()
+        );
+
+        fs::remove_file(&key).unwrap();
+        let later = Date {
+            year: 2026,
+            month: 9,
+            day: 1,
+        };
+        assert_eq!(
+            orphaned_key_ids(&root, later).unwrap(),
+            vec![key_id(date())]
+        );
+    }
+
     #[test]
     fn the_key_bytes_reach_no_rendering() {
         let path = scratch("redaction");
@@ -1593,6 +1665,32 @@ severity = "deny"
         // And the parse failure names an ordinal, never the line — asserted at
         // the one place the line is in scope.
         assert!(parse_line(&format!("unknown.rs:1:{SECRET}"), &batch).is_none());
+    }
+
+    /// The scanner is found by its own name; a manifest pinning only some other
+    /// tool pins no scanner, and a scan over it is refused before anything runs.
+    #[test]
+    fn a_manifest_pinning_only_another_tool_pins_no_scanner() {
+        let other: Provision = toml::from_str(
+            r#"
+name = "other-tool"
+version = "1.0.0"
+binary = "other-tool"
+url = "file:///dev/null"
+sha256 = "00"
+"#,
+        )
+        .expect("the fixture row loads");
+        let err = resolve_scanner(&[other], Path::new("/nowhere")).unwrap_err();
+        assert!(err.downcast_ref::<UsageError>().is_some(), "{err}");
+        let text = err.to_string();
+        assert!(
+            text.contains(crate::verdict::Native::ScannerUnpinned.id()),
+            "{text}"
+        );
+        let mut findings = Vec::new();
+        assert!(scan(&rule(), &[], Path::new("/nowhere"), &[], &mut findings).is_err());
+        assert!(findings.is_empty());
     }
 
     #[test]

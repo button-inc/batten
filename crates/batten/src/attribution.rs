@@ -172,14 +172,10 @@ impl Matchers {
         Ok(Self(compiled))
     }
 
+    /// Whether any pattern matches. An empty list matches nothing, so as an
+    /// allow list it is **no exemption**, never "exempt everything".
     fn matches(&self, text: &str) -> bool {
         self.0.iter().any(|regex| regex.is_match(text))
-    }
-
-    /// Whether this list exempts anything at all. An empty list is **no
-    /// exemption**, never "exempt everything".
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
     }
 }
 
@@ -317,12 +313,10 @@ impl Attribution {
             if !trailer.matches(line) {
                 continue;
             }
-            // The carve-out. `is_empty` is checked first and separately: passing
-            // an empty list to `matches` would answer `false` here, which happens
-            // to be right, but the explicit branch is what documents that
-            // emptiness means *no exemption* rather than a pattern that matches
-            // everything.
-            if !allow.is_empty() && allow.matches(line) {
+            // The carve-out. An empty list matches nothing, so emptiness means
+            // *no exemption* rather than a pattern that matches everything —
+            // `an_empty_allow_set_exempts_nothing` holds it.
+            if allow.matches(line) {
                 continue;
             }
             // The key alone. The value is the payload.
@@ -981,6 +975,57 @@ mod tests {
         assert_eq!(
             policy.judge(&subject).unwrap()[0].line(),
             "commit carry refused a1b2c3d4 trailer:Assisted-by"
+        );
+    }
+
+    #[test]
+    fn an_identity_renders_as_git_renders_an_author() {
+        assert_eq!(
+            policy().identity.rendered(),
+            "Accountable Human <human@example.test>"
+        );
+    }
+
+    #[test]
+    fn the_report_is_one_pointer_line_per_finding() {
+        let mut subject = commit();
+        subject.author = "Vendor <bot@no-reply.example>".to_owned();
+        subject.body = "Generated with SomeTool".to_owned();
+        let found = policy().judge(&subject).unwrap();
+        assert_eq!(
+            report(&found),
+            format!("{}\n{}\n", found[0].line(), found[1].line())
+        );
+        assert_eq!(report(&[]), "");
+    }
+
+    /// Every non-merge commit in the range is read, labelled by its short SHA.
+    #[test]
+    fn a_range_reads_each_commit_it_holds() {
+        let dir = crate::scratch::scratch("attribution-read-range");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        std::fs::write(dir.join("a"), "a").unwrap();
+        crate::gitwrite::commit_paths(&dir, &["a".to_owned()], "first").unwrap();
+        std::fs::write(dir.join("a"), "b").unwrap();
+        crate::gitwrite::commit_paths(&dir, &["a".to_owned()], "second\n").unwrap();
+        let read = read_range(&dir, "HEAD~1", "HEAD").unwrap();
+        assert_eq!(read.len(), 1, "{read:?}");
+        assert_eq!(read[0].label.len(), 8);
+        assert!(read[0].body.starts_with("second"), "{:?}", read[0].body);
+    }
+
+    /// Half an identity is no identity: a name with no email is written over,
+    /// never left alone as though it were accountable.
+    #[test]
+    fn an_identity_missing_either_half_is_unset() {
+        let dir = crate::scratch::scratch("attribution-set-identity-half");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        git::set_config_local(&dir, "user.name", "Somebody").unwrap();
+        git::set_config_local(&dir, "user.email", " ").unwrap();
+        assert_eq!(set_identity(&dir, &policy()).unwrap(), Outcome::WasUnset);
+        assert_eq!(
+            git::config_value(&dir, "user.email").unwrap().as_deref(),
+            Some("human@example.test")
         );
     }
 

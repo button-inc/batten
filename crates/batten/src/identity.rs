@@ -1542,12 +1542,12 @@ pub enum CountChange {
 pub const fn compare_to_anchor(anchor: u64, current: u64) -> CountChange {
     if current == 0 {
         CountChange::Resolved
-    } else if current == anchor {
-        CountChange::Unchanged
     } else if current > anchor {
         CountChange::ReRaise
-    } else {
+    } else if current < anchor {
         CountChange::Ratchet
+    } else {
+        CountChange::Unchanged
     }
 }
 
@@ -1555,6 +1555,58 @@ pub const fn compare_to_anchor(anchor: u64, current: u64) -> CountChange {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_kind_is_read_back_from_its_own_tag() {
+        for kind in FindingKind::ALL {
+            assert_eq!(FindingKind::from_tag(kind.as_tag()), Some(*kind));
+            let stored = StoredIdentity::new(*kind, Fingerprint([0; 32]));
+            assert_eq!(stored.kind(), Some(*kind));
+            assert!(!stored.is_secret());
+        }
+        assert_eq!(FindingKind::from_tag("fifth"), None);
+        assert!(StoredIdentity::secret(Fingerprint([0; 32])).is_secret());
+        assert_eq!(IdentityKey::new("k-1", [0; 32]).id(), "k-1");
+    }
+
+    /// The rendered address is its prefix and its digest as lowercase hex, it
+    /// parses back to itself, and `Display` is that rendering.
+    #[test]
+    fn an_address_renders_as_lowercase_hex_and_parses_back() {
+        let mut digest = [0xab; 32];
+        digest[0] = 0x0f;
+        let address = ContentAddress {
+            version: ADDRESS_VERSION,
+            digest,
+        };
+        let rendered = address.render();
+        assert_eq!(rendered, format!("b3-1-0f{}", "ab".repeat(31)));
+        assert_eq!(address.to_string(), rendered);
+        assert_eq!(ContentAddress::parse(&rendered).unwrap(), address);
+        assert!(ContentAddress::parse(&rendered[..rendered.len() - 1]).is_err());
+        assert!(ContentAddress::parse(&rendered.replace("ab", "AB")).is_err());
+        assert!(ContentAddress::parse(&rendered.replace("ab", "gh")).is_err());
+    }
+
+    /// A fingerprint's hex parses back to itself, and only exact lowercase hex.
+    #[test]
+    fn a_fingerprint_parses_back_from_exactly_its_own_hex() {
+        let mut bytes = [0xab; 32];
+        bytes[0] = 0x0f;
+        let fingerprint = Fingerprint(bytes);
+        let hex = fingerprint.to_hex();
+        assert_eq!(fingerprint.to_string(), hex);
+        assert_eq!(Fingerprint::from_hex(&hex).unwrap(), fingerprint);
+        assert!(Fingerprint::from_hex("ab").is_err());
+        assert!(Fingerprint::from_hex(&hex.replace("ab", "gh")).is_err());
+    }
+
+    #[test]
+    fn a_document_input_names_its_arm() {
+        assert_eq!(DocumentInput::Inline(Vec::new()).as_str(), "inline");
+        let address = ContentAddress::of(AddressDomain::Payload, b"x");
+        assert_eq!(DocumentInput::Address(address).as_str(), "address");
+    }
 
     /// CLOUD-2102: canonical text is borrowed, never rewritten, and every input
     /// still canonicalizes to exactly what the full rewrite produces.

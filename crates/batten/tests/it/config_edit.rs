@@ -225,6 +225,83 @@ fn an_empty_path_is_refused() {
     assert!(config_edit::apply(Format::Toml, FIXTURE, &[edit]).is_err());
 }
 
+/// Two `[[rule]]` rows, the first carrying a nested table, and a table after
+/// them: the shape an `InRow` must address by value and an `AppendRow` must
+/// land past.
+const ROWS: &str = "\
+[[rule]]
+id = \"first\"
+level = \"warn\"
+
+[rule.nested]
+k = 1
+
+[[rule]]
+id = \"second\"
+level = \"warn\"  # kept
+
+[after]
+x = 2
+";
+
+fn raise_level(id: &str) -> Edit {
+    Edit::InRow {
+        array: String::from("rule"),
+        id: String::from(id),
+        edits: vec![Edit::Set {
+            path: path(&["level"]),
+            value: Scalar::String(String::from("deny")),
+        }],
+    }
+}
+
+#[test]
+fn an_in_row_edit_changes_only_the_row_its_id_names() {
+    let edited = config_edit::apply(Format::Toml, ROWS, &[raise_level("second")]).unwrap();
+    assert_eq!(only_changed_lines(ROWS, &edited), Some(vec![9]));
+    assert_eq!(
+        edited.lines().nth(9),
+        Some("level = \"deny\"  # kept"),
+        "{edited}"
+    );
+}
+
+#[test]
+fn an_in_row_edit_naming_no_row_or_two_is_refused() {
+    assert!(config_edit::apply(Format::Toml, ROWS, &[raise_level("absent")]).is_err());
+    let twice = ROWS.replace("\"second\"", "\"first\"");
+    assert!(config_edit::apply(Format::Toml, &twice, &[raise_level("first")]).is_err());
+    let not_rows = "[rule]\nid = \"first\"\n";
+    assert!(config_edit::apply(Format::Toml, not_rows, &[raise_level("first")]).is_err());
+}
+
+/// The appended row renders after EVERY table, so the first row's nested
+/// table and the trailing table stay where they were.
+#[test]
+fn an_appended_row_lands_after_every_table() {
+    let append = Edit::AppendRow {
+        array: String::from("rule"),
+        fields: vec![(String::from("id"), Scalar::String(String::from("third")))],
+    };
+    let edited = config_edit::apply(Format::Toml, ROWS, &[append]).unwrap();
+    assert_eq!(edited, format!("{ROWS}\n[[rule]]\nid = \"third\"\n"));
+}
+
+/// The same append into a document whose only table is the root's first one:
+/// the row still lands after it rather than before it.
+#[test]
+fn an_appended_row_lands_after_a_lone_table() {
+    let append = Edit::AppendRow {
+        array: String::from("rule"),
+        fields: vec![(String::from("id"), Scalar::String(String::from("only")))],
+    };
+    for source in ["[a]\nx = 1\n", "[a]\nx = 1\n[b]\ny = 2\n"] {
+        let edited = config_edit::apply(Format::Toml, source, &[append.clone()]).unwrap();
+        assert!(edited.starts_with(source), "{edited}");
+        assert!(edited.ends_with("[[rule]]\nid = \"only\"\n"), "{edited}");
+    }
+}
+
 #[test]
 fn apply_file_writes_only_a_change_and_nothing_on_a_refusal() {
     let dir = common::scratch("config-edit-apply-file");

@@ -657,6 +657,99 @@ mod tests {
     }
 
     #[test]
+    fn a_program_is_reached_through_the_mediators_exec() {
+        assert_eq!(
+            mediated("tool"),
+            (
+                "mise",
+                vec!["exec".to_owned(), "--".to_owned(), "tool".to_owned()]
+            )
+        );
+    }
+
+    /// A config keys itself and the FILES beside it sharing its stem, never a
+    /// directory of that stem and never an unrelated file.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "a fixture that cannot be written is a broken test"
+    )]
+    fn a_config_keys_the_files_sharing_its_stem_and_nothing_else() {
+        let dir = crate::scratch::scratch("pinned-keyed-paths");
+        for file in ["tool.toml", "tool.lock", "other.txt"] {
+            std::fs::write(dir.join(file), file).expect("file");
+        }
+        std::fs::create_dir_all(dir.join("tool.d")).expect("dir");
+        assert_eq!(
+            keyed_paths(&[dir.join("tool.toml")]),
+            BTreeSet::from([dir.join("tool.lock"), dir.join("tool.toml")])
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Only an executable regular file is a program: not the README an archive
+    /// leaves beside one, and not a directory.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "a fixture that cannot be written is a broken test"
+    )]
+    fn only_an_executable_file_is_a_program() {
+        let dir = crate::scratch::scratch("pinned-programs-in");
+        // The running test binary is an executable whatever the platform, and a
+        // copy keeps its mode, so no platform's permission API is needed here.
+        let me = std::env::current_exe().expect("the test binary");
+        std::fs::copy(me, dir.join("tool")).expect("copy");
+        std::fs::write(dir.join("README"), "read me").expect("readme");
+        std::fs::create_dir_all(dir.join("sub")).expect("dir");
+        let expected: BTreeSet<String> = if cfg!(unix) {
+            BTreeSet::from(["tool".to_owned()])
+        } else {
+            BTreeSet::from(["README".to_owned(), "tool".to_owned()])
+        };
+        assert_eq!(programs_in(std::slice::from_ref(&dir)), expected);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The mediator is asked, and its two answers are read: the files that
+    /// configure it here, and the `PATH` it composes.
+    #[test]
+    fn the_mediator_reports_its_configs_and_its_composed_path() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let found = configs(&root);
+        assert!(
+            found.iter().any(|path| path.ends_with("mise.toml")),
+            "{found:?}"
+        );
+        let composed = composed_path(&root).unwrap_or_default();
+        assert!(std::env::split_paths(&composed).count() > 1, "{composed:?}");
+    }
+
+    /// The eager repair repairs a stale record: afterwards it is gone or fresh,
+    /// never still stale.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "a fixture that cannot be written is a broken test"
+    )]
+    fn a_stale_record_does_not_survive_its_repair() {
+        let root = crate::scratch::scratch("pinned-repaired");
+        crate::gitwrite::init_on_main(&root).expect("init");
+        let config = root.join("pin.toml");
+        std::fs::write(&config, "before").expect("config");
+        assert!(record(
+            &root,
+            std::slice::from_ref(&config),
+            &BTreeSet::from(["tool".to_owned()])
+        ));
+        std::fs::write(&config, "after").expect("config");
+        assert!(record_is_stale(&root), "the premise: the record is stale");
+        let _ = repaired(&root);
+        assert!(!record_is_stale(&root));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn the_difference_is_what_the_pin_adds() {
         let added = added_directories("/pin/bin:/usr/bin:/tests/bats/bin", "/usr/bin");
         assert_eq!(

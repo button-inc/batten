@@ -333,6 +333,19 @@ mod tests {
         assert!(!written.contains("/nowhere/at/all"), "{written}");
     }
 
+    /// The repair's report names what it did, and for a disabled signer why.
+    #[test]
+    fn a_repair_line_says_whether_signing_stayed_on_and_why_not() {
+        assert_eq!(
+            super::Repair::LeftOn.line(),
+            "attribution: signer is verifiable, leaving signing on"
+        );
+        assert_eq!(
+            super::Repair::Disabled("the reason").line(),
+            "attribution: signing disabled in this checkout — the reason"
+        );
+    }
+
     /// Pointer-only (rule 4): the reason never carries the key or the signer.
     #[test]
     fn no_reason_echoes_the_key_or_the_signer_path() {

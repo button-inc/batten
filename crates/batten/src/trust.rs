@@ -5820,6 +5820,129 @@ mod tests {
         );
     }
 
+    /// Every projected host setting is compared, not only the first.
+    #[test]
+    fn unprojecting_each_host_setting_is_its_own_weakening() {
+        for key in [
+            "web_commit_signoff_required",
+            "secret_scanning_push_protection",
+        ] {
+            let base = config(&format!("[host]\n{key} = true\n"));
+            let found = only(&base, &config(""));
+            assert_eq!(found.kind, WeakeningKind::HostSettingUnprojected);
+            assert_eq!(found.key, format!("host.{key}"));
+        }
+    }
+
+    /// An unchanged cutover moved nowhere, so it is no weakening.
+    #[test]
+    fn an_unchanged_cutover_is_not_a_weakening() {
+        let base = config("[ready]\nprose_dialect_required_from = \"2026-09-02T00:00:00.000Z\"\n");
+        assert!(weakenings(&base, &base.clone()).is_empty());
+    }
+
+    /// The data channel renders a weakening exactly as its own line does.
+    #[test]
+    fn a_weakening_reaches_the_data_channel_as_its_own_line() {
+        let weakening = Weakening::new(WeakeningKind::ReadyCutoverRelaxed, "k", "a", "b");
+        assert_eq!(
+            crate::output::Line::line(&weakening),
+            format!("{}:k a→b", config::CONFIG_FILE)
+        );
+    }
+
+    /// A pin is recorded for the ref a run read, read back only for that ref,
+    /// verified against its digest, and noted by its ref and short commit.
+    #[test]
+    fn a_recorded_pin_answers_its_own_ref_and_refuses_tampering() {
+        let dir = std::env::temp_dir()
+            .join("batten-trust-tests")
+            .join("pin-roundtrip");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = Pin::path(&dir).expect("a state directory resolves");
+        assert!(path.ends_with(PIN_FILE), "{}", path.display());
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            Pin::read(&dir, "origin/main").unwrap().is_none(),
+            "no pin yet"
+        );
+
+        let loaded = Loaded {
+            config: config("[trust]\noffline_fallback = true\n"),
+            provenance: Provenance::Ref {
+                reference: "origin/main".to_owned(),
+                commit: "0123456789abcdef0123".to_owned(),
+            },
+        };
+        record_pin(&dir, &loaded);
+        assert!(Pin::read(&dir, "origin/other").unwrap().is_none());
+        let pin = Pin::read(&dir, "origin/main").unwrap().expect("the pin");
+        let (pinned, evidence) = pin.clone().verify("origin/main").unwrap();
+        assert!(offline_fallback(&pinned));
+        assert_eq!(evidence.reference(), "origin/main");
+        assert_eq!(evidence.commit(), "0123456789abcdef0123");
+        assert_eq!(evidence.digest(), pin.digest);
+        assert_eq!(evidence.digest(), pin_digest(&pin.config));
+        assert_eq!(
+            pinned_note(&evidence),
+            "origin/main is unreachable; judging by the last validated config, pinned at \
+             0123456789ab — fetch the ref to judge by it again"
+        );
+
+        let mut tampered = pin;
+        tampered.config.push_str("\n# edited\n");
+        assert!(tampered.verify("origin/main").is_err());
+
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(
+            Pin::read(&dir, "origin/main").is_err(),
+            "an unreadable pin is loud"
+        );
+        std::fs::remove_dir_all(&path).unwrap();
+    }
+
+    /// An unreachable ref is answered from its pin only where the call permits
+    /// it and the pinned config declares the fallback.
+    #[test]
+    fn an_unreachable_ref_is_served_from_its_pin_only_where_both_permit() {
+        let dir = std::env::temp_dir()
+            .join("batten-trust-tests")
+            .join("pin-load");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        let reference = "origin/nowhere";
+        let pin = |extra: &str| {
+            record_pin(
+                &dir,
+                &Loaded {
+                    config: config(extra),
+                    provenance: Provenance::Ref {
+                        reference: reference.to_owned(),
+                        commit: "c0ffee".to_owned(),
+                    },
+                },
+            );
+        };
+        pin("[trust]\noffline_fallback = true\n");
+        assert!(matches!(
+            load(&dir, reference, OfflineFallback::Refuse).unwrap(),
+            Load::RefUnreachable { .. }
+        ));
+        let Load::Loaded(served) = load(&dir, reference, OfflineFallback::Permitted).unwrap()
+        else {
+            panic!("a permitted call with a valid pin is served from it");
+        };
+        assert!(matches!(served.provenance, Provenance::Pin(_)));
+        pin("");
+        assert!(matches!(
+            load(&dir, reference, OfflineFallback::Permitted).unwrap(),
+            Load::RefUnreachable { .. }
+        ));
+    }
+
     #[test]
     fn unprojecting_a_host_setting_is_a_weakening_and_changing_its_value_is_not() {
         // CLOUD-380. The comparison is silent over what the tree does not claim,
@@ -6831,6 +6954,36 @@ mod tests {
         assert!(!kinds.contains(&WeakeningKind::FactReturnsLoosened));
     }
 
+    /// A counting fact's `returns` is unread, so loosening it is no weakening
+    /// when EITHER side counts, not only when both do.
+    #[test]
+    fn a_returns_move_beside_a_count_on_one_side_is_not_reported() {
+        let fact = |counts: Option<&str>, returns| crate::facts::Declared {
+            name: "review-answered".to_owned(),
+            command: Some("gh pr list --state open".to_owned()),
+            tool: None,
+            counts: counts.map(str::to_owned),
+            matching: std::collections::BTreeMap::new(),
+            blocking: std::collections::BTreeMap::new(),
+            called_with: std::collections::BTreeMap::new(),
+            returns,
+        };
+        for (was, now) in [(Some("."), None), (None, Some("."))] {
+            let mut base = Config::declaring_nothing();
+            base.facts = vec![fact(was, crate::facts::Returns::JsonArray)];
+            let mut working = Config::declaring_nothing();
+            working.facts = vec![fact(now, crate::facts::Returns::Json)];
+            let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+                .iter()
+                .map(|weakening| weakening.kind)
+                .collect();
+            assert!(
+                !kinds.contains(&WeakeningKind::FactReturnsLoosened),
+                "got: {kinds:?}"
+            );
+        }
+    }
+
     #[test]
     fn an_unchanged_fact_command_is_not_reported() {
         // The other direction, so the case above discriminates rather than
@@ -7125,6 +7278,59 @@ mod tests {
             .map(|weakening| weakening.kind)
             .collect();
         assert!(kinds.contains(&WeakeningKind::MintAdded), "got: {kinds:?}");
+    }
+
+    /// A deny row that is not a marker for this mint arms nothing, so a mint
+    /// it does not read is still charged.
+    #[test]
+    fn a_deny_row_marking_another_mint_does_not_exempt_this_one() {
+        let other = MARKER_DENY.replace("\"pr-open\"", "\"other\"");
+        let base = parse(&format!("version = 1\n{other}"));
+        let working = parse(&format!("version = 1\n{other}{MARKER_MINT}"));
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(kinds.contains(&WeakeningKind::MintAdded), "got: {kinds:?}");
+    }
+
+    /// A receipt row checking some OTHER receipt does not read this mint, so a
+    /// marker-only mint beside it stays exempt.
+    #[test]
+    fn a_receipt_row_reading_another_receipt_leaves_a_marker_mint_exempt() {
+        let reader = receipt_rule("ready", "");
+        let base = parse(&format!("version = 1\n{MARKER_DENY}{reader}"));
+        let working = parse(&format!("version = 1\n{MARKER_DENY}{reader}{MARKER_MINT}"));
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(!kinds.contains(&WeakeningKind::MintAdded), "got: {kinds:?}");
+    }
+
+    /// A `[[rule.minted]]` reader of the mint keeps it charged even beside a
+    /// deny marker, and one reading another mint does not.
+    #[test]
+    fn a_minted_query_reading_the_mint_keeps_it_charged() {
+        let base = parse(&format!("version = 1\n{MARKER_DENY}"));
+        let mut working = parse(&format!("version = 1\n{MARKER_DENY}{MARKER_MINT}"));
+        let query = |mint: &str| crate::facts::MintedQuery {
+            id: "status".to_owned(),
+            mint: mint.to_owned(),
+            field: 1,
+            recency: 0,
+            max_age_days: 1,
+        };
+        let kinds = |working: &Config| -> Vec<WeakeningKind> {
+            weakenings(&base, working)
+                .iter()
+                .map(|weakening| weakening.kind)
+                .collect()
+        };
+        working.rules[0].minted = vec![query("another")];
+        assert!(!kinds(&working).contains(&WeakeningKind::MintAdded));
+        working.rules[0].minted = vec![query("pr-open")];
+        assert!(kinds(&working).contains(&WeakeningKind::MintAdded));
     }
 
     #[test]

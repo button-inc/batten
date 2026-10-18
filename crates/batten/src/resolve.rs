@@ -2076,6 +2076,159 @@ mod tests {
     }
 
     #[test]
+    fn every_layer_and_class_has_its_own_stable_token() {
+        let layers = [
+            (Source::Default, "default"),
+            (Source::RepoConfig, "repo-config"),
+            (Source::LocalFile, "local-file"),
+            (Source::Env, "env"),
+            (Source::Flag, "flag"),
+        ];
+        for (layer, token) in layers {
+            assert_eq!(layer.as_str(), token);
+        }
+        let classes = [
+            (Origin::Builtin, "builtin", false),
+            (Origin::Committed, "committed", true),
+            (Origin::BaseRef, "base-ref", true),
+            (Origin::Uncommitted, "uncommitted", false),
+            (Origin::Ambient, "ambient", false),
+            (Origin::Ingested, "ingested", false),
+        ];
+        for (class, token, committed) in classes {
+            assert_eq!(class.as_str(), token);
+            assert_eq!(class.is_committed(), committed, "{token}");
+        }
+        assert_eq!(token(Strictness::Strict), "strict");
+    }
+
+    #[test]
+    fn a_key_is_committed_when_any_contributor_read_a_committed_class() {
+        assert!(!Contributors::unset().committed());
+        assert!(!Contributors::set_by(Source::LocalFile).committed());
+        let mut both = Contributors::set_by(Source::RepoConfig);
+        both.also(Source::LocalFile);
+        assert!(both.committed());
+        assert_eq!(both.layers(), vec![Source::RepoConfig, Source::LocalFile]);
+        assert_eq!(Contributors::unset().layers(), vec![Source::Default]);
+    }
+
+    #[test]
+    fn an_ingested_authority_is_refused_and_none_is_not() {
+        assert!(authority_refusal(&[]).is_none());
+        let violation = AuthorityViolation {
+            key: "strictness".to_owned(),
+            effective: Origin::Ingested,
+        };
+        assert!(authority_refusal(&[violation]).is_some());
+    }
+
+    /// A local file's protected and unlanded paths are added, and its layer
+    /// named; its scope excludes narrow and name it too, and a key it leaves
+    /// alone names only the authority.
+    #[test]
+    fn a_local_file_adds_paths_and_narrows_scope_under_its_own_layer() {
+        let dir = repo(
+            "local-paths",
+            "version = 1\nscope = [\"**\"]\nprotected = [\"guarded/**\"]\n",
+            Some("version = 1\nprotected = [\"extra/**\"]\nunlanded = [\"wip/**\"]\n"),
+        );
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        assert!(resolved.protected.contains(&"extra/**".to_owned()));
+        assert!(resolved.unlanded.contains(&"wip/**".to_owned()));
+        assert_eq!(resolved.sources["protected"].winner(), Source::LocalFile);
+        assert_eq!(resolved.sources["unlanded"].winner(), Source::LocalFile);
+        assert_eq!(resolved.sources["scope"].layers(), vec![Source::RepoConfig]);
+
+        let dir = repo(
+            "local-scope",
+            "version = 1\nscope = [\"**\"]\n",
+            Some("version = 1\nscope = [\"!vendor/**\"]\n"),
+        );
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        assert_eq!(
+            resolved.scope,
+            vec!["**".to_owned(), "!vendor/**".to_owned()]
+        );
+        assert_eq!(
+            resolved.sources["scope"].layers(),
+            vec![Source::RepoConfig, Source::LocalFile]
+        );
+        assert_eq!(
+            resolved.sources["protected"].layers(),
+            vec![Source::Default]
+        );
+
+        let dir = repo(
+            "local-scope-widen",
+            "version = 1\nscope = [\"**\"]\n",
+            Some("version = 1\nscope = [\"src/**\"]\n"),
+        );
+        let err = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap_err();
+        assert!(is_usage_error(&err), "got: {err}");
+    }
+
+    /// A local output pattern with a new id is appended; one reusing a
+    /// committed id is refused.
+    #[test]
+    fn a_local_file_adds_an_output_pattern_and_may_not_redefine_one() {
+        let pattern = |id: &str| {
+            format!(
+                "\n[[exec_pattern]]\nid = \"{id}\"\npattern = \"warning\"\nreason = \"fix it\"\n"
+            )
+        };
+        let committed = format!("version = 1\n{}", pattern("a"));
+        let dir = repo(
+            "local-pattern-add",
+            &committed,
+            Some(&format!("version = 1\n{}", pattern("b"))),
+        );
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        let ids: Vec<&str> = resolved
+            .exec_patterns
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["a", "b"]);
+        let dir = repo(
+            "local-pattern-redefine",
+            &committed,
+            Some(&format!("version = 1\n{}", pattern("a"))),
+        );
+        assert!(resolve_with_env(&dir, &Overrides::default(), &no_env).is_err());
+    }
+
+    /// A table an empty authority declares nothing in is attributed to the
+    /// default, never to the committed file.
+    #[test]
+    fn an_empty_authority_attributes_its_undeclared_tables_to_the_default() {
+        let dir = repo("undeclared-tables", "version = 1\n", None);
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        for key in [
+            "protected_readers",
+            "records",
+            "verb",
+            "pattern",
+            "traversal",
+            "register",
+            "verdict",
+            "vocabulary",
+            "marker",
+            "exec_pattern",
+            "redirect",
+            "fact",
+            "mint",
+            "recorder",
+            "program",
+            "waiver",
+            "provision",
+            "startup",
+        ] {
+            assert_eq!(resolved.sources[key].winner(), Source::Default, "{key}");
+        }
+    }
+
+    #[test]
     fn source_order_is_the_declared_precedence() {
         // §8: flag > env > local file > repo config > default.
         assert!(Source::Default < Source::RepoConfig);
