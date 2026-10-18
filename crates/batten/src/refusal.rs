@@ -1797,16 +1797,20 @@ mod tests {
         assert_eq!(Fix::declared(Some(" x ")), Fix::Run("x".to_owned()));
     }
 
+    /// A `[refusal]` ceiling of `max` tokens and an optional first-sighting one.
+    fn ceiling(max: usize, first: Option<usize>) -> Ceiling {
+        Ceiling {
+            max_tokens: max,
+            first_sighting_max_tokens: first,
+        }
+    }
+
     /// Fails by: either ceiling refusing a line of exactly its tokens or
     /// admitting one past them, or an undeclared first-sighting ceiling bounding.
     #[test]
     fn a_ceiling_admits_a_line_of_exactly_its_tokens() {
         let line = "batten deny some-gate at x; run batten check";
         let tokens = crate::budget::estimate_tokens(line);
-        let ceiling = |max: usize, first: Option<usize>| Ceiling {
-            max_tokens: max,
-            first_sighting_max_tokens: first,
-        };
         assert!(!ceiling(tokens, Some(tokens)).over(line));
         assert!(!ceiling(tokens, Some(tokens)).over_first_sighting(line));
         assert!(ceiling(tokens - 1, Some(tokens - 1)).over(line));
@@ -1818,10 +1822,6 @@ mod tests {
     /// refused.
     #[test]
     fn a_ceiling_nothing_can_satisfy_is_refused() {
-        let ceiling = |max: usize, first: Option<usize>| Ceiling {
-            max_tokens: max,
-            first_sighting_max_tokens: first,
-        };
         assert!(validate(None).is_ok());
         assert!(validate(Some(&ceiling(1, None))).is_ok());
         assert!(validate(Some(&ceiling(5, Some(6)))).is_ok());
@@ -1930,14 +1930,8 @@ mod tests {
                 target: target.to_owned(),
                 precondition: precondition.map(str::to_owned),
             };
-        let mut refusal = Refusal::new("g", "r", Fix::None);
-        refusal.routes = vec![
-            route(
-                "read it",
-                crate::verdict::RouteKind::Document,
-                "rules/x.md",
-                None,
-            ),
+        let mut refusal = Refusal::new("g", "r", Fix::None).with_document_route("rules/x.md");
+        refusal.routes.extend([
             route(
                 "run it",
                 crate::verdict::RouteKind::Command,
@@ -1950,7 +1944,7 @@ mod tests {
                 "",
                 Some("owner said so"),
             ),
-        ];
+        ]);
         assert_eq!(refusal.preconditions(), [("admit", "owner said so")]);
         let redirect = crate::redirect::Redirect {
             glob: "rules/**".to_owned(),

@@ -471,8 +471,7 @@ mod tests {
         let dir = scratch("array");
         let big = "q".repeat(40_000);
         let sent = serde_json::json!({"tool_response": ["small", big]}).to_string();
-        let count = |text: &str| text.matches('q').count() as u64;
-        let read = super::read(sent.as_bytes(), &dir, 1000, count).expect("reads");
+        let read = super::read(sent.as_bytes(), &dir, 1000, q_count).expect("reads");
         assert_eq!(read.spilled.len(), 1, "{:?}", read.spilled);
         assert_eq!(read.spilled[0].pointer, "/1");
         assert_eq!(read.spilled[0].bytes, 40_000);
@@ -488,12 +487,11 @@ mod tests {
     #[test]
     fn a_leaf_no_longer_than_the_kept_length_is_never_spilled() {
         let dir = scratch("keep");
-        let count = |text: &str| text.matches('q').count() as u64;
         let at = "q".repeat(crate::capture::LEAF_KEEP_BYTES);
-        let kept = super::read(payload(&at).as_bytes(), &dir, 0, count).expect("reads");
+        let kept = super::read(payload(&at).as_bytes(), &dir, 0, q_count).expect("reads");
         assert!(kept.spilled.is_empty(), "{:?}", kept.spilled);
         let past = "q".repeat(crate::capture::LEAF_KEEP_BYTES + 1);
-        let over = super::read(payload(&past).as_bytes(), &dir, 0, count).expect("reads");
+        let over = super::read(payload(&past).as_bytes(), &dir, 0, q_count).expect("reads");
         assert_eq!(over.spilled.len(), 1);
     }
 
@@ -502,11 +500,16 @@ mod tests {
     #[test]
     fn a_result_counting_exactly_the_bound_is_kept() {
         let dir = scratch("at-bound");
-        let text = "q".repeat(40_000);
-        let count = |text: &str| text.matches('q').count() as u64;
-        let kept = super::read(payload(&text).as_bytes(), &dir, 40_000, count).expect("reads");
+        let sent = payload(&"q".repeat(40_000));
+        let kept = super::read(sent.as_bytes(), &dir, 40_000, q_count).expect("reads");
         assert!(kept.spilled.is_empty(), "{:?}", kept.spilled);
-        let over = super::read(payload(&text).as_bytes(), &dir, 39_999, count).expect("reads");
+        let over = super::read(sent.as_bytes(), &dir, 39_999, q_count).expect("reads");
         assert_eq!(over.spilled.len(), 1);
+    }
+
+    /// A counter that charges one token per `q`, so a fixture's count is its
+    /// length in `q`s.
+    fn q_count(text: &str) -> u64 {
+        u64::try_from(text.matches('q').count()).unwrap_or(u64::MAX)
     }
 }

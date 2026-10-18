@@ -1586,8 +1586,8 @@ mod tests {
     fn a_merge_counts_every_entry_it_applied() {
         let dir = store("merge-count");
         crate::findings::save_one(&dir, &record_for("TODO")).unwrap();
-        for disposition in [Disposition::Acted, Disposition::Acted] {
-            append(&dir, "shard", &entry_for("TODO", disposition)).unwrap();
+        for _ in 0..2 {
+            append(&dir, "shard", &entry_for("TODO", Disposition::Acted)).unwrap();
         }
         assert!(matches!(
             merge(&dir).unwrap(),

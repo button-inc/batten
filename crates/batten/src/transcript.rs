@@ -2521,15 +2521,19 @@ mod tests {
         assert_eq!(counted(), Some(whole(&short)), "shorter, same first line");
         std::fs::write(&path, &long).expect("regrow");
         assert_eq!(counted(), Some(whole(&long)));
-        let other = dir.join("other.jsonl");
-        let replaced = format!("{}\n{}\n{}\n{}\n", POOL[0], POOL[5], POOL[6], POOL[7]);
-        std::fs::write(&other, &replaced).expect("another file");
-        std::fs::rename(&other, &path).expect("replace it at the path");
-        assert_eq!(
-            counted(),
-            Some(whole(&replaced)),
-            "another inode, same head"
-        );
+        // Only a unix stat names the inode; elsewhere a same-head replacement
+        // is indistinguishable by design.
+        if cfg!(unix) {
+            let other = dir.join("other.jsonl");
+            let replaced = format!("{}\n{}\n{}\n{}\n", POOL[0], POOL[5], POOL[6], POOL[7]);
+            std::fs::write(&other, &replaced).expect("another file");
+            std::fs::rename(&other, &path).expect("replace it at the path");
+            assert_eq!(
+                counted(),
+                Some(whole(&replaced)),
+                "another inode, same head"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

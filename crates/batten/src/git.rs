@@ -5920,6 +5920,20 @@ mod tests {
         assert_eq!(iso_utc(951_782_400 + 3_661), "2000-02-29T01:01:01Z");
     }
 
+    /// Point `name` at `target` through gix directly: `gitwrite::set_ref`
+    /// cannot write the reflog in a fixture with no committer identity.
+    fn fixture_ref(dir: &Path, name: &str, target: &str) {
+        gix::open(dir)
+            .expect("open")
+            .reference(
+                name,
+                gix::ObjectId::from_hex(target.as_bytes()).expect("an id"),
+                gix::refs::transaction::PreviousValue::Any,
+                "fixture",
+            )
+            .expect("a ref");
+    }
+
     /// A three-commit history on `main`: `a.txt` and `b.txt`, then `a.txt`
     /// rewritten and `c.txt` added, then `b.txt` deleted. Tagged `v1` at the
     /// first and `v2` at the third; `origin/main` at the second, which is also
@@ -5948,28 +5962,20 @@ mod tests {
             &[("a.txt", "two\n"), ("c.txt", "c\n")],
             "third\n\nTrailer: x\n",
         );
-        let repo = gix::open(&dir).expect("open");
         for (name, target) in [
             ("refs/tags/v1", &first),
             ("refs/tags/v2", &third),
             ("refs/remotes/origin/main", &second),
         ] {
-            repo.reference(
-                name,
-                gix::ObjectId::from_hex(target.as_bytes()).expect("an id"),
-                gix::refs::transaction::PreviousValue::Any,
-                "fixture",
-            )
-            .expect("a ref");
+            fixture_ref(&dir, name, target);
         }
         fs::write(
             dir.join(".git/refs/remotes/origin/HEAD"),
             "ref: refs/remotes/origin/main\n",
         )
         .expect("the remote HEAD");
-        let mut config = fs::read_to_string(dir.join(".git/config")).expect("config");
-        config.push_str("[remote \"origin\"]\n\turl = https://example.invalid/r.git\n");
-        fs::write(dir.join(".git/config"), config).expect("config");
+        set_config_local(&dir, "remote.origin.url", "https://example.invalid/r.git")
+            .expect("the remote");
         (dir, [first, second, third])
     }
 
@@ -6181,7 +6187,9 @@ mod tests {
             format!("gitdir: {}\n", dir.join(".git/worktrees/present").display()),
         )
         .unwrap();
-        assert_eq!(linked_worktree_dirs(&dir), [present]);
+        let listed = linked_worktree_dirs(&dir);
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert_same_dir(&listed[0], &present);
     }
 
     /// Fails by: a signature header of either name missed, or another header
@@ -6234,19 +6242,18 @@ mod tests {
         let mode = |path: &str, bits: u32| {
             fs::set_permissions(dir.join(path), fs::Permissions::from_mode(bits)).unwrap();
         };
-        for (path, text) in [
+        let files = [
             ("clean.txt", "clean\n"),
             ("dirty.txt", "dirty\n"),
             ("link.txt", "clean.txt"),
             ("plain.sh", "plain\n"),
             ("run.sh", "run\n"),
-        ] {
+        ];
+        for (path, text) in files {
             fs::write(dir.join(path), text).unwrap();
         }
         mode("run.sh", 0o755);
-        let tracked: Vec<String> = ["clean.txt", "dirty.txt", "link.txt", "plain.sh", "run.sh"]
-            .map(String::from)
-            .to_vec();
+        let tracked: Vec<String> = files.iter().map(|(path, _)| (*path).to_owned()).collect();
         crate::gitwrite::commit_paths(&dir, &tracked, "m\n").expect("commit");
         // `dirty.txt` is edited under assume-valid, so it is never compared.
         let repo = gix::open(&dir).expect("open");
@@ -6305,9 +6312,9 @@ mod tests {
             unpushed_in_range(&dir, "refs/remotes/origin/main").unwrap(),
             [third[..12].to_owned()]
         );
-        assert_eq!(git_dir(&dir).unwrap(), dir.join(".git"));
-        assert_eq!(PathBuf::from(common_dir(&dir).unwrap()), dir.join(".git"));
-        assert_eq!(worktree_root(&dir).unwrap(), dir);
+        assert_same_dir(&git_dir(&dir).unwrap(), &dir.join(".git"));
+        assert_same_dir(&PathBuf::from(common_dir(&dir).unwrap()), &dir.join(".git"));
+        assert_same_dir(&worktree_root(&dir).unwrap(), &dir);
         assert_eq!(
             blob_id("x").as_deref(),
             Some("c1b0730e0133447badcfd47fd144e254807b06e1")
@@ -6480,15 +6487,7 @@ mod tests {
         let (dir, [first, ..]) = history("staged");
         // The index stays at the third commit's tree while HEAD moves back to
         // the first, so `a.txt` (rewritten) and `c.txt` (added) are staged.
-        gix::open(&dir)
-            .expect("open")
-            .reference(
-                "refs/heads/main",
-                gix::ObjectId::from_hex(first.as_bytes()).expect("an id"),
-                gix::refs::transaction::PreviousValue::Any,
-                "fixture",
-            )
-            .expect("move main");
+        fixture_ref(&dir, "refs/heads/main", &first);
         fs::write(dir.join("u.txt"), "untracked\n").unwrap();
         let set = |items: &[&str]| {
             items
@@ -6658,9 +6657,7 @@ mod tests {
     fn the_default_branch_is_read_off_the_one_remote_there_is() {
         let dir = scratch("upstream-only");
         crate::gitwrite::init_on_main(&dir).expect("init");
-        let mut config = fs::read_to_string(dir.join(".git/config")).unwrap();
-        config.push_str("[remote \"upstream\"]\n\turl = https://example.invalid/u.git\n");
-        fs::write(dir.join(".git/config"), config).unwrap();
+        set_config_local(&dir, "remote.upstream.url", "https://example.invalid/u.git").unwrap();
         fs::create_dir_all(dir.join(".git/refs/remotes/upstream")).unwrap();
         fs::write(
             dir.join(".git/refs/remotes/upstream/HEAD"),
@@ -6691,13 +6688,7 @@ mod tests {
                 })
                 .expect("a tag object")
                 .detach();
-            repo.reference(
-                format!("refs/tags/{name}").as_str(),
-                id,
-                gix::refs::transaction::PreviousValue::Any,
-                "fixture",
-            )
-            .expect("a tag ref");
+            fixture_ref(&dir, &format!("refs/tags/{name}"), &id.to_string());
         };
         tag(
             "v3",
@@ -6729,24 +6720,18 @@ mod tests {
     #[test]
     fn a_tracked_head_on_its_remote_is_pushed() {
         let (dir, [.., third]) = history("tracked");
-        let mut config = fs::read_to_string(dir.join(".git/config")).unwrap();
-        config.push_str(
-            "\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch \"main\"]\n\tremote = origin\n\tmerge = refs/heads/main\n",
-        );
-        fs::write(dir.join(".git/config"), config).unwrap();
+        for (key, value) in [
+            ("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"),
+            ("branch.main.remote", "origin"),
+            ("branch.main.merge", "refs/heads/main"),
+        ] {
+            set_config_local(&dir, key, value).unwrap();
+        }
         assert_eq!(
             upstream_of_head(&dir).unwrap().as_deref(),
             Some("refs/remotes/origin/main")
         );
-        gix::open(&dir)
-            .expect("open")
-            .reference(
-                "refs/remotes/origin/main",
-                gix::ObjectId::from_hex(third.as_bytes()).expect("an id"),
-                gix::refs::transaction::PreviousValue::Any,
-                "fixture",
-            )
-            .expect("push it");
+        fixture_ref(&dir, "refs/remotes/origin/main", &third);
         assert_eq!(head_on_a_remote(&dir), Some(true));
         assert!(unpushed_in_range(&dir, &third).unwrap().is_empty());
     }
@@ -6792,8 +6777,7 @@ mod tests {
             commits.sort();
             commits
         };
-        let mut expected = vec![second.clone(), third.clone()];
-        expected.sort();
+        let expected = sorted(vec![second.clone(), third.clone()]);
         assert_eq!(
             sorted(commits_in_range(&dir, &first, &merged).unwrap()),
             expected

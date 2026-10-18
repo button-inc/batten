@@ -4865,6 +4865,8 @@ mod tests {
     #[test]
     fn a_land_reads_its_own_progress_from_the_registry() {
         let git_dir = scratch("own-progress");
+        // Written as the registry spells it: `task::register` would ask the
+        // kernel for pid 42's group, which this fixture does not own.
         std::fs::create_dir_all(git_dir.join("batten-tasks")).expect("registry");
         std::fs::write(
             git_dir.join("batten-tasks").join("42"),

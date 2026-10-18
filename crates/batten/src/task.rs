@@ -1411,7 +1411,8 @@ mod tests {
         );
         assert!(pid_exists(&own));
         assert!(!pid_exists("not-a-pid"));
-        assert!(!pid_exists(NO_SUCH_PID));
+        // Off unix there is no probe, so no parseable pid is ever called gone.
+        assert_eq!(pid_exists(NO_SUCH_PID), cfg!(not(unix)));
     }
 
     /// Fails by: a live registrant whose command line corroborates read as
@@ -1443,12 +1444,14 @@ mod tests {
         assert_eq!(lines.len(), 2, "{lines:?}");
         let mine = format!("{task} running {own} 60s in-phase 60s");
         assert!(lines.contains(&mine), "{lines:?}");
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.starts_with("gone crashed(stuck) ")),
-            "{lines:?}"
-        );
+        // Off unix nothing is ever reported dead, so the gone registrant reads
+        // as running in its phase.
+        let gone = if cfg!(unix) {
+            "gone crashed(stuck) "
+        } else {
+            "gone stuck "
+        };
+        assert!(lines.iter().any(|line| line.starts_with(gone)), "{lines:?}");
         assert!(crate::durable::replace(state_dir(&dir).join("garbled"), [0xff, 0xfe]).is_ok());
         assert!(matches!(alive(&dir, options), Reading::Unreadable(_)));
     }
@@ -1482,16 +1485,24 @@ mod tests {
         let lock = singleton_lock(&dir, "dead");
         assert!(std::fs::create_dir_all(&lock).is_ok());
         assert!(crate::durable::replace(lock.join("pid"), format!("{NO_SUCH_PID}\n")).is_ok());
+        // Off unix no probe calls the pid gone, so the corpse still holds.
         assert_eq!(
             singleton_holder(&dir, "dead"),
-            None,
+            cfg!(not(unix)).then(|| NO_SUCH_PID.to_owned()),
             "a corpse holds nothing"
         );
         let reclaimed = singleton_acquire(&dir, "dead", &own, none);
-        assert!(
-            matches!(&reclaimed, Claim::Reclaimed(from) if from == NO_SUCH_PID),
-            "{reclaimed:?}"
-        );
+        if cfg!(unix) {
+            assert!(
+                matches!(&reclaimed, Claim::Reclaimed(from) if from == NO_SUCH_PID),
+                "{reclaimed:?}"
+            );
+        } else {
+            assert!(
+                matches!(&reclaimed, Claim::Held { holder, .. } if holder == NO_SUCH_PID),
+                "{reclaimed:?}"
+            );
+        }
         let unstamped = singleton_lock(&dir, "unstamped");
         assert!(std::fs::create_dir_all(&unstamped).is_ok());
         let reclaimed = singleton_acquire(&dir, "unstamped", &own, none);
@@ -1521,7 +1532,7 @@ mod tests {
         );
         // Each refused ask waits out its recheck before the next: a lower bound
         // the clock cannot undercut.
-        let recheck = std::time::Duration::from_millis(30);
+        let recheck = std::time::Duration::from_millis(5);
         let started = std::time::Instant::now();
         let held = singleton_acquire_at(&lock, "999", recheck, 2);
         assert!(matches!(held, Claim::Held { .. }), "{held:?}");

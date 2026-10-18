@@ -892,14 +892,17 @@ fn directories_named_outside(root: &Path, name: &str, shielded: &[&str]) -> Vec<
 /// already a dependency, rather than spawning `df` (CLOUD-1924) — and it answers
 /// on every platform, where the spawn answered on unix alone.
 fn available_megabytes(path: &Path) -> Result<u64> {
-    fs4::available_space(path)
-        .map(|bytes| bytes / (1024 * 1024))
-        .with_context(|| {
-            format!(
-                "target-prune: could not read free space for {}",
-                path.display()
-            )
-        })
+    fs4::available_space(path).map(mebibytes).with_context(|| {
+        format!(
+            "target-prune: could not read free space for {}",
+            path.display()
+        )
+    })
+}
+
+/// Whole MiB in `bytes`, a partial one dropped.
+const fn mebibytes(bytes: u64) -> u64 {
+    bytes / (1024 * 1024)
 }
 
 #[cfg(test)]
@@ -1338,16 +1341,18 @@ mod tests {
     /// volume reports available.
     #[test]
     fn free_space_reads_in_whole_mebibytes() {
+        assert_eq!(mebibytes(0), 0);
+        assert_eq!(mebibytes(1024 * 1024 - 1), 0);
+        assert_eq!(mebibytes(1024 * 1024), 1);
+        assert_eq!(mebibytes(2 * 1024 * 1024 + 99), 2);
+        // The volume's own reading, through that conversion: no premise about
+        // how much room it has, only slack for writers between the two reads.
         let dir = std::env::temp_dir();
         let read = match available_megabytes(&dir) {
             Ok(read) => read,
             Err(why) => panic!("the temp volume: {why}"),
         };
-        let volume = fs4::available_space(&dir).unwrap_or(0) / (1024 * 1024);
-        assert!(
-            volume > 64,
-            "premise: the temp volume has room ({volume} MiB)"
-        );
+        let volume = mebibytes(fs4::available_space(&dir).unwrap_or(0));
         assert!(read.abs_diff(volume) <= 16, "{read} against {volume}");
     }
 

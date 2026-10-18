@@ -561,7 +561,7 @@ mod tests {
     /// a file planted at the name it would form is then read.
     #[test]
     fn no_unsafe_key_reaches_the_store() {
-        let dir = std::env::temp_dir().join(format!("batten-turn-unsafe-{}", std::process::id()));
+        let dir = crate::scratch::scratch("turn-unsafe");
         let store = dir.join("batten-receipts");
         std::fs::create_dir_all(store.join("r.a")).unwrap();
         for planted in ["r.", "r..", "r...", "r.a/b", "r.a\\b", "r.ok"] {
