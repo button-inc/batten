@@ -484,7 +484,8 @@ mod tests {
     fn a_remedy_resolves_against_the_surface_and_the_rule_table() {
         let rules = vec!["a-rule".to_owned()];
         let check = |text: &str| validate_remedies([("k".to_owned(), text)], &rules);
-        assert!(check("run `batten check a-rule --json` or `batten check <id>`").is_ok());
+        assert!(check("run `batten check a-rule --json`").is_ok());
+        assert!(check("run `batten check <id>`").is_ok());
         assert!(check("prose with no command").is_ok());
         assert!(check("run `batten nonesuch`").is_err());
         assert!(check("run `batten check another-rule`").is_err());

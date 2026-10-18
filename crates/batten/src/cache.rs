@@ -760,10 +760,8 @@ mod tests {
         let dir = scratch("head");
         let image = dir.join("image");
         std::fs::write(&image, vec![0_u8; 70_000]).expect("write");
-        assert_eq!(
-            read_head(&image).expect("a head").len(),
-            usize::try_from(HEAD_BYTES).expect("fits")
-        );
+        // Spelled rather than read from the constant, so the bound itself is pinned.
+        assert_eq!(read_head(&image).expect("a head").len(), 64 * 1024);
     }
 
     /// Fails by: an entry's write time that is not the clock's, which would

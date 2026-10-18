@@ -1519,6 +1519,13 @@ mod tests {
             matches!(&queued, Claim::Held { holder, .. } if *holder == own),
             "{queued:?}"
         );
+        // Each refused ask waits out its recheck before the next: a lower bound
+        // the clock cannot undercut.
+        let recheck = std::time::Duration::from_millis(30);
+        let started = std::time::Instant::now();
+        let held = singleton_acquire_at(&lock, "999", recheck, 2);
+        assert!(matches!(held, Claim::Held { .. }), "{held:?}");
+        assert!(started.elapsed() >= recheck * 2, "{:?}", started.elapsed());
     }
 
     #[test]

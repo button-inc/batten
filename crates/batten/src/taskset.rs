@@ -407,18 +407,23 @@ mod tests {
     /// [`RECORD_MAX`] on both the write and the read.
     #[test]
     fn a_record_answers_up_to_its_cap_until_its_manifest_moves() {
+        // Spelled rather than read from the constant, so the cap itself is pinned.
+        const CAP: usize = 256 * 1024;
         let dir = crate::scratch::scratch("taskset-record");
         crate::gitwrite::init_on_main(&dir).unwrap();
         let manifest = dir.join("mise.toml");
         std::fs::write(&manifest, "[tasks]\nlint = \"cargo clippy\"\n").unwrap();
         let configs = vec![manifest.clone()];
-        let at_cap = sized(&configs, usize::try_from(RECORD_MAX).unwrap());
+        let small = sized(&configs, 1024);
+        assert!(record(&dir, &configs, &small));
+        assert!(matches!(cached(&dir), Look::Is(read) if read == small));
+        let at_cap = sized(&configs, CAP);
         assert!(
             record(&dir, &configs, &at_cap),
             "a record at the cap is written"
         );
         assert!(matches!(cached(&dir), Look::Is(read) if read == at_cap));
-        let over = sized(&configs, usize::try_from(RECORD_MAX).unwrap() + 1);
+        let over = sized(&configs, CAP + 1);
         assert!(
             !record(&dir, &configs, &over),
             "one byte past it is refused"

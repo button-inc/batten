@@ -2533,6 +2533,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Fails by: a session told from its replacement by less of the first line
+    /// than the probe declares, so two files agreeing on a long prefix share
+    /// one entry.
+    #[test]
+    fn a_first_line_is_compared_past_its_first_kilobyte() {
+        let dir = crate::scratch::scratch("transcript-head-probe");
+        let cache = dir.join("cache");
+        let path = dir.join("session.jsonl");
+        let padded = |line: &str| format!("{{\"pad\":\"{}\",{}", "a".repeat(2000), &line[1..]);
+        let counted = || tally_under(&path, RecordShape::Jsonl, Some(&cache)).map(|t| t.counts());
+        std::fs::write(&path, format!("{}\n", padded(POOL[0]))).expect("a session");
+        assert!(counted().is_some());
+        let replaced = format!("{}\n{}\n{}\n", padded(POOL[5]), POOL[6], POOL[6]);
+        let other = dir.join("other.jsonl");
+        std::fs::write(&other, &replaced).expect("another session");
+        std::fs::rename(&other, &path).expect("replace it at the path");
+        assert_eq!(
+            counted(),
+            Some(
+                parse(&replaced, "t", RecordShape::Jsonl)
+                    .expect("parses")
+                    .counts()
+            )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn attachment(json: &str) -> Attachment {
         serde_json::from_str(json).expect("an attachment")
     }
@@ -2613,11 +2640,14 @@ mod tests {
         assert_eq!(call, "t1");
         assert!(tokens > 0, "the deny's output is its cost");
         assert_eq!(findings, 1, "and its finding is its label");
-        assert!(
+        assert_eq!(
             stream
                 .records
                 .iter()
-                .any(|record| matches!(record.event, Event::SessionBoundary))
+                .filter(|record| matches!(record.event, Event::SessionBoundary))
+                .count(),
+            1,
+            "the start alone opens a cycle"
         );
         let outputs = stream
             .records
@@ -2627,6 +2657,17 @@ mod tests {
         assert_eq!(
             outputs, 2,
             "the deny's and the start's, never the silent one"
+        );
+    }
+
+    /// Fails by: a turn's end alone not recording that the stream reports turns.
+    #[test]
+    fn a_turn_end_alone_records_turns() {
+        let mut tally = Tally::default();
+        tally.fold(&Event::TurnEnd(StopReason::EndTurn));
+        assert_eq!(
+            tally.records(),
+            std::collections::BTreeSet::from([Kind::Turns])
         );
     }
 
