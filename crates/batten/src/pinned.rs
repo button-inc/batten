@@ -716,8 +716,9 @@ mod tests {
     }
 
     /// The mediator is asked, and its two answers are read: the files that
-    /// configure it here, and the `PATH` it composes. Unix only: the Windows
-    /// runner's unit tier does not provision the mediator to ask.
+    /// configure it here, and the `PATH` it composes. Unix only until the
+    /// Windows unit job installs the mediator it asks (CLOUD-2479): the
+    /// mediator runs there, it is just not provisioned.
     #[test]
     #[cfg(unix)]
     fn the_mediator_reports_its_configs_and_its_composed_path() {
