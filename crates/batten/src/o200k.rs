@@ -45,7 +45,10 @@ fn rank(piece: &[u8]) -> Option<u32> {
     let entries = count();
     let (mut low, mut high) = (0, entries);
     while low < high {
-        let middle = low + (high - low) / 2;
+        // `midpoint` rather than `low + (high - low) / 2`: the same value, and
+        // the spelled-out form's `% 2` mutant is a correct linear search — a
+        // survivor no count could tell apart, only a clock.
+        let middle = low.midpoint(high);
         match entry(middle).cmp(piece) {
             std::cmp::Ordering::Less => low = middle + 1,
             std::cmp::Ordering::Greater => high = middle,
@@ -57,7 +60,16 @@ fn rank(piece: &[u8]) -> Option<u32> {
 
 /// How many tokens `piece` is: tiktoken's byte-pair merge, counted.
 fn piece_tokens(piece: &[u8]) -> usize {
-    if piece.len() < 2 || rank(piece).is_some() {
+    if piece.len() < 2 {
+        return 1;
+    }
+    // A SHORTCUT, NOT A RULE: over the whole table, every entry that is one
+    // pre-tokenizer piece merges back to itself (checked exhaustively when this
+    // was split from the length test), so the merge below would answer 1 here
+    // too. Kept for its cost — the common piece is one token — and as its own
+    // test because, joined to the length test, its `&&` mutant could only
+    // survive.
+    if rank(piece).is_some() {
         return 1;
     }
     let pair = |parts: &[(usize, u32)], i: usize| -> u32 {
@@ -77,9 +89,12 @@ fn piece_tokens(piece: &[u8]) -> usize {
         .collect();
     parts.push((piece.len() - 1, u32::MAX));
     parts.push((piece.len(), u32::MAX));
+    // Every part is a candidate: the closing sentinel's rank is `u32::MAX` and
+    // never rewritten (a merge rewrites only `i - 1` and `i`, both before it), so
+    // the filter already excludes it and a `take` stopping short of it was a
+    // second statement of the same bound.
     while let Some((i, _)) = parts
         .iter()
-        .take(parts.len() - 1)
         .enumerate()
         .filter(|(_, (_, rank))| *rank != u32::MAX)
         .min_by_key(|(i, (_, rank))| (*rank, *i))
@@ -177,6 +192,22 @@ pub fn tokens(text: &str) -> u64 {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
+    /// A rank is the token's own id, read from the rank column at the found
+    /// entry, and a byte string that is no token has none.
+    ///
+    /// Fails by: any operator of the rank column's index replaced — every one
+    /// reads a neighbouring word, a different token's rank or an offset.
+    #[test]
+    fn a_rank_is_tiktokens_own_token_id() {
+        let bpe = tiktoken_rs::o200k_base().expect("reference");
+        for piece in ["hello", " world", "!", " the"] {
+            let ids = bpe.encode_ordinary(piece);
+            assert_eq!(ids.len(), 1, "{piece:?} is one token");
+            assert_eq!(super::rank(piece.as_bytes()), Some(ids[0]), "{piece:?}");
+        }
+        assert_eq!(super::rank(b"no such token, surely, at all"), None);
+    }
+
     #[test]
     fn counts_match_tiktoken() {
         // The anti-drift case: the static table and the merge loop give exactly

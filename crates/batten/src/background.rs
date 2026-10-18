@@ -269,8 +269,8 @@ mod tests {
             input: serde_json::json!({}),
             at,
         };
-        defer(&git_dir, "kept", &pending(now - 86_400)).unwrap();
-        defer(&git_dir, "dropped", &pending(now - 86_401)).unwrap();
+        defer(&git_dir, "kept", &pending(now - 86_400)).expect("defer the kept entry");
+        defer(&git_dir, "dropped", &pending(now - 86_401)).expect("defer the dropped entry");
         assert!(resolve(&git_dir, None, now).is_empty());
         let dir = git_dir.join(DIR);
         assert!(dir.join("kept.json").exists());

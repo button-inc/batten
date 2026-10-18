@@ -629,7 +629,22 @@ fn render_capability(
     let (Some(base), Some(mine)) = (result.arms.get("baseline"), result.arms.get("batten")) else {
         return None;
     };
-    let (Some(base_bytes), Some(batten_bytes)) = (base.bytes(), mine.bytes()) else {
+    // Both arms destructured as `Stable` here, so the figure table is handed
+    // the exit each one recorded rather than an `Arm` it would have to match
+    // again — a second match whose `Unstable` arm no input could reach.
+    let (
+        Arm::Stable {
+            bytes: base_bytes,
+            exit: base_exit,
+            steps: base_steps,
+        },
+        Arm::Stable {
+            bytes: batten_bytes,
+            exit: batten_exit,
+            steps: batten_steps,
+        },
+    ) = (base, mine)
+    else {
         line(
             out,
             &format!(
@@ -655,7 +670,10 @@ fn render_capability(
         out,
         &Figures {
             runs: workload.runs,
-            arms: [(base, base_bytes), (mine, batten_bytes)],
+            arms: [
+                (*base_steps, *base_bytes, *base_exit),
+                (*batten_steps, *batten_bytes, *batten_exit),
+            ],
             price,
             divisor,
         },
@@ -671,8 +689,9 @@ fn render_capability(
 struct Figures<'a> {
     /// How many times each arm ran.
     runs: usize,
-    /// The baseline arm and the batten arm, each with its byte count.
-    arms: [(&'a Arm, u64); 2],
+    /// The baseline arm and the batten arm, each byte-stable, as its step
+    /// count, byte count and last exit.
+    arms: [(usize, u64, i32); 2],
     /// The published rates the dollar columns are derived through.
     price: &'a Price,
     /// Bytes per token, from the committed method.
@@ -685,7 +704,10 @@ struct Figures<'a> {
 /// for the reason [`render_method`] records: the escape was the only thing the
 /// annotation bought, and this is the section's own closing half.
 fn render_figures(out: &mut String, figures: &Figures<'_>) {
-    let [(base, base_bytes), (mine, batten_bytes)] = figures.arms;
+    let [
+        (base_steps, base_bytes, base_exit),
+        (batten_steps, batten_bytes, batten_exit),
+    ] = figures.arms;
     let price = figures.price;
     let (base_tokens, batten_tokens) = (
         tokens_of(base_bytes, figures.divisor),
@@ -705,19 +727,20 @@ fn render_figures(out: &mut String, figures: &Figures<'_>) {
         "| arm | steps | bytes | est. tokens | USD / 1k tasks (fresh) | USD / 1k tasks (cache read) | exit |",
     );
     line(out, "| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
-    for (name, arm, bytes, count) in [
-        ("baseline", base, base_bytes, base_tokens),
-        ("batten", mine, batten_bytes, batten_tokens),
+    for (name, steps, bytes, count, exit) in [
+        ("baseline", base_steps, base_bytes, base_tokens, base_exit),
+        (
+            "batten",
+            batten_steps,
+            batten_bytes,
+            batten_tokens,
+            batten_exit,
+        ),
     ] {
-        let exit = match arm {
-            Arm::Stable { exit, .. } => *exit,
-            Arm::Unstable { .. } => -1,
-        };
         line(
             out,
             &format!(
-                "| {name} | {} | {bytes} | {count} | {:.4} | {:.4} | {exit} |",
-                arm.steps(),
+                "| {name} | {steps} | {bytes} | {count} | {:.4} | {:.4} | {exit} |",
                 usd_per_1k(count, price.input_fresh),
                 usd_per_1k(count, price.input_cached_read),
             ),
@@ -872,13 +895,16 @@ pub fn unmethodical(report: &str) -> Vec<Unmethodical> {
         if !opens(line) {
             continue;
         }
-        let end = lines
+        // From the line after the heading up to the next heading of either
+        // level. Skipping rather than slicing from the heading: a body that
+        // began AT it would end there at once, so an off-by-one is visible
+        // rather than an extra line no marker can start with.
+        let body: Vec<&str> = lines
             .iter()
-            .enumerate()
             .skip(index + 1)
-            .find_map(|(other, text)| (opens(text) || closes(text)).then_some(other))
-            .unwrap_or(lines.len());
-        let body = &lines[index + 1..end];
+            .take_while(|text| !opens(text) && !closes(text))
+            .copied()
+            .collect();
 
         let carries = |prefix: &str| body.iter().any(|line| line.starts_with(prefix));
         let publishes = carries("| baseline |") || carries("| batten |");
@@ -1057,5 +1083,280 @@ mod tests {
     #[test]
     fn a_zero_denominator_has_no_ratio() {
         assert_eq!(ratio(10, 0), None);
+    }
+
+    /// Fails by: the ratio's division replaced.
+    #[test]
+    fn a_ratio_is_the_quotient() {
+        let quotient = ratio(10, 4).expect("a ratio");
+        assert!((quotient - 2.5).abs() < 1e-9, "{quotient}");
+    }
+
+    /// Fails by: `bytes` or `steps` answering a constant.
+    #[test]
+    fn an_arm_reports_its_own_bytes_and_steps() {
+        let stable = reduce(&[b"same".to_vec(), b"same".to_vec()], 0, 2);
+        assert_eq!((stable.bytes(), stable.steps()), (Some(4), 2));
+        let unstable = reduce(&[b"one".to_vec(), b"two".to_vec()], 0, 3);
+        assert_eq!((unstable.bytes(), unstable.steps()), (None, 3));
+    }
+
+    /// A fixture is copied whole, each file without its `.in`, and a missing
+    /// fixture or a file lacking the suffix is refused.
+    ///
+    /// Fails by: `materialize` or `collect` answering without staging, or the
+    /// fixture-exists test inverted.
+    #[test]
+    fn a_fixture_is_staged_with_its_suffix_stripped() {
+        let root = crate::scratch::scratch("tokens-materialize-root");
+        let into = crate::scratch::scratch("tokens-materialize-into");
+        let fixtures = root.join("bench/tokens/fixtures");
+        std::fs::create_dir_all(fixtures.join("f/sub")).unwrap();
+        std::fs::write(fixtures.join("f/a.txt.in"), "top").unwrap();
+        std::fs::write(fixtures.join("f/sub/b.txt.in"), "nested").unwrap();
+        let staged = materialize(&root, "f", &into).unwrap();
+        assert_eq!(staged, into.join("f"));
+        assert_eq!(
+            std::fs::read_to_string(staged.join("a.txt")).unwrap(),
+            "top"
+        );
+        assert_eq!(
+            std::fs::read_to_string(staged.join("sub/b.txt")).unwrap(),
+            "nested"
+        );
+        assert!(!staged.join("a.txt.in").exists());
+
+        let missing = materialize(&root, "absent", &into).unwrap_err();
+        assert!(missing.to_string().contains("no fixture"), "{missing}");
+
+        std::fs::create_dir_all(fixtures.join("g")).unwrap();
+        std::fs::write(fixtures.join("g/bare.txt"), "x").unwrap();
+        let unsuffixed = materialize(&root, "g", &into).unwrap_err();
+        assert!(
+            unsuffixed.to_string().contains("missing the .in suffix"),
+            "{unsuffixed}"
+        );
+    }
+
+    /// An arm's output is every step's, concatenated, with `$BATTEN` bound to
+    /// the binary, and its exit is the LAST step's.
+    ///
+    /// Fails by: `run_arm` answering a constant output or exit.
+    #[test]
+    fn an_arm_is_every_steps_output_and_the_last_steps_exit() {
+        let dir = crate::scratch::scratch("tokens-run-arm");
+        let steps = [
+            "printf ab; exit 5".to_owned(),
+            "printf '%s' \"$BATTEN\"; exit 3".to_owned(),
+        ];
+        let (output, exit) = run_arm(&dir, &steps, Path::new("/opt/batten")).unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "ab/opt/batten");
+        assert_eq!(exit, 3);
+    }
+
+    /// Every declared workload is measured, a stated gap carries no arm, and
+    /// each step runs inside a fixture that has been given a git dir.
+    ///
+    /// Fails by: `measure` answering an empty list, or `seed_git` returning
+    /// without seeding — the step that needs `.git` then prints nothing.
+    #[test]
+    fn every_workload_is_measured_in_a_seeded_fixture() {
+        let root = crate::scratch::scratch("tokens-measure-root");
+        let scratch = crate::scratch::scratch("tokens-measure-scratch");
+        std::fs::create_dir_all(root.join("bench/tokens/fixtures/f")).unwrap();
+        std::fs::write(root.join("bench/tokens/fixtures/f/a.txt.in"), "a").unwrap();
+        std::fs::write(
+            root.join(WORKLOADS),
+            "[[workload]]\nid = \"gap\"\ncapability = \"c\"\nquestion = \"q\"\n\
+             not_measured = \"needs two sessions\"\n\n\
+             [[workload]]\nid = \"measured\"\ncapability = \"c\"\nquestion = \"q\"\n\
+             fixture = \"f\"\nruns = 2\nbaseline = [\"printf abc\"]\n\
+             batten = [\"test -d .git && printf git\", \"printf x\"]\n",
+        )
+        .unwrap();
+        let measured = measure(&root, Path::new("batten"), &scratch).unwrap();
+        let shape: Vec<(&str, Vec<(&str, &Arm)>)> = measured
+            .iter()
+            .map(|m| {
+                (
+                    m.id.as_str(),
+                    m.arms.iter().map(|(k, v)| (k.as_str(), v)).collect(),
+                )
+            })
+            .collect();
+        let base = Arm::Stable {
+            bytes: 3,
+            exit: 0,
+            steps: 1,
+        };
+        let mine = Arm::Stable {
+            bytes: 4,
+            exit: 0,
+            steps: 2,
+        };
+        assert_eq!(
+            shape,
+            [
+                ("gap", Vec::new()),
+                ("measured", vec![("baseline", &base), ("batten", &mine)]),
+            ]
+        );
+    }
+
+    /// The method and workloads [`the_table_renders_each_section_and_counts_both_kinds`]
+    /// renders: a stated gap, a figure, an unstable arm and a section with no
+    /// measured pair.
+    fn render_inputs(root: &Path) {
+        std::fs::create_dir_all(root.join("bench/tokens")).unwrap();
+        std::fs::write(
+            root.join(METHOD),
+            "[tokens]\nbytes_per_token = 4\nbasis = \"four bytes\"\n\
+             source = \"https://rates.invalid/tokens\"\nretrieved = \"2026-01-01\"\n\
+             affects = \"the absolute columns only\"\n\n\
+             [price]\nmodel = \"m\"\ninput_fresh = 3.0\ninput_cached_read = 0.3\n\
+             output = 15.0\nsource = \"https://rates.invalid/price\"\n\
+             retrieved = \"2026-01-02\"\n\n\
+             [[not_measured]]\nsubject = \"s\"\nreason = \"r\\nmore\"\n\
+             what_is_measured_instead = \"w\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(WORKLOADS),
+            "[[workload]]\nid = \"gap\"\ncapability = \"cache\"\nquestion = \"q0?\"\n\
+             not_measured = \"two sessions\"\n\n\
+             [[workload]]\nid = \"figure\"\ncapability = \"cap\"\nquestion = \"q?\"\n\
+             runs = 2\nbaseline = [\"printf abc\"]\nbaseline_model = \"greps everything\"\n\
+             batten = [\"$BATTEN check\", \"printf x\"]\nbatten_model = \"one pointer\"\n\n\
+             [[workload]]\nid = \"shaky\"\ncapability = \"s\"\nquestion = \"q2?\"\n\
+             runs = 3\nbaseline = [\"a\"]\nbatten = [\"b\"]\n\n\
+             [[workload]]\nid = \"none\"\ncapability = \"n\"\nquestion = \"q3?\"\n",
+        )
+        .unwrap();
+    }
+
+    /// What was measured for [`render_inputs`], plus one id it never declared.
+    fn render_measured() -> Vec<Measured> {
+        let measured = |id: &str, arms: Vec<(&str, Arm)>| Measured {
+            id: id.to_owned(),
+            arms: arms
+                .into_iter()
+                .map(|(name, arm)| (name.to_owned(), arm))
+                .collect(),
+        };
+        let stable = |bytes: u64, exit: i32, steps: usize| Arm::Stable { bytes, exit, steps };
+        vec![
+            measured("gap", Vec::new()),
+            measured(
+                "figure",
+                vec![("baseline", stable(40, 0, 1)), ("batten", stable(8, 2, 2))],
+            ),
+            measured(
+                "shaky",
+                vec![
+                    ("baseline", stable(1, 0, 1)),
+                    ("batten", Arm::Unstable { runs: 3, steps: 1 }),
+                ],
+            ),
+            measured("none", Vec::new()),
+            measured("undeclared", Vec::new()),
+        ]
+    }
+
+    /// The published table, rendered from a method and workloads on disk.
+    ///
+    /// Fails by: `render`, `render_method`, `render_capability`,
+    /// `render_figures`, `render_tail` or `line` writing nothing, either count
+    /// in the aggregate moving the wrong way, or a figure row's exit or step
+    /// count read from anywhere but its own arm.
+    #[test]
+    fn the_table_renders_each_section_and_counts_both_kinds() {
+        let root = crate::scratch::scratch("tokens-render");
+        render_inputs(&root);
+        let out = render(&root, &render_measured()).unwrap();
+        assert!(out.starts_with("# Token economics, measured\n\n"), "{out}");
+        assert!(
+            out.contains(
+                "| bytes per token | 4 — four bytes | <https://rates.invalid/tokens> | 2026-01-01 |\n\
+                 | m, fresh input | $3.00 / MTok | <https://rates.invalid/price> | 2026-01-02 |\n\
+                 | m, cache read | $0.30 / MTok | <https://rates.invalid/price> | 2026-01-02 |\n\
+                 | m, output | $15.00 / MTok | <https://rates.invalid/price> | 2026-01-02 |\n\
+                 \nThe divisor affects the absolute columns only.\n\n## Per capability\n\n"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "### gap — cache\n\n**Question.** q0?\n\n**not measured** — two sessions\n\n"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "### figure — cap\n\n**Question.** q?\n\n\
+                 **Baseline** (1 step(s), `printf abc`). greps everything\n\n\
+                 **Batten** (2 step(s), `batten check` then `printf x`). one pointer\n\n\
+                 **Method.** measured; 2 runs per arm, byte-identical across all of them; run\n\
+                 count for the task is the step count above.\n\n\
+                 | arm | steps | bytes | est. tokens | USD / 1k tasks (fresh) | USD / 1k tasks (cache read) | exit |\n\
+                 | --- | ---: | ---: | ---: | ---: | ---: | ---: |\n\
+                 | baseline | 1 | 40 | 10 | 0.0300 | 0.0030 | 0 |\n\
+                 | batten | 2 | 8 | 2 | 0.0060 | 0.0006 | 2 |\n\
+                 | **ratio** | | **5.00×** | **5.00×** | | | |\n\n### shaky"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "**not measured** — an arm's output was not byte-identical across 3 runs\n"
+            ),
+            "{out}"
+        );
+        assert!(!out.contains("undeclared"), "{out}");
+        assert!(
+            out.ends_with(
+                "### none — n\n\n**Question.** q3?\n\n\
+                 **Baseline** (0 step(s), ``). \n\n**Batten** (0 step(s), ``). \n\n\
+                 ## Aggregate\n\n\
+                 **Not published.** An aggregate across capabilities is a weighted mean over a\n\
+                 workload mix nobody here has measured, so it would be exactly the unmethodical\n\
+                 figure this benchmark exists to beat. Measured capabilities: 1. Reporting\n\
+                 \"not measured\" with a reason above: 2.\n\n\
+                 ## Stated gaps\n\n\
+                 - **s: not measured.** r more\n  Measured instead: w\n\n"
+            ),
+            "{out}"
+        );
+    }
+
+    /// Every way a section can owe, with the 1-based line of its heading.
+    ///
+    /// Fails by: a section's body starting a line early or ending anywhere but
+    /// the next heading of either level, a blank reason read as one, a present
+    /// marker read as owed, a lone `batten` row read as no figure, or the
+    /// reported line off by one.
+    #[test]
+    fn each_section_owes_exactly_what_it_lacks_at_its_own_line() {
+        let report = "## Per capability\n\n\
+                      ### bare — no figure\n\
+                      ### reasoned — gap\n\
+                      **not measured** — staged elsewhere\n\
+                      ### after — a blank reason\n\
+                      **not measured** —   \n\
+                      ## Aggregate\n\
+                      **not measured** — outside any section\n\
+                      ### partial — one row\n\
+                      **Baseline** (1). b\n\
+                      | batten | 2 |\n";
+        let neither = "a figure, or a stated reason for publishing none";
+        let owed = |line: usize, owed: &'static str| Unmethodical { line, owed };
+        assert_eq!(
+            unmethodical(report),
+            [
+                owed(3, neither),
+                owed(6, neither),
+                owed(10, "the question the capability answers"),
+                owed(10, "the run count behind the figure"),
+            ]
+        );
     }
 }

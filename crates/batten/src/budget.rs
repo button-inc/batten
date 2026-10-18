@@ -1004,4 +1004,172 @@ mod tests {
         // print `0` — two callers, two honest readings.
         assert!(measure_all(Path::new("."), None).unwrap().is_empty());
     }
+
+    /// The verdict `policy budget` reports is the total OR any one file.
+    ///
+    /// Fails by: `breached` answering a constant, or `||` read as `&&` — a
+    /// per-file breach under a set total within budget then reads green.
+    #[test]
+    fn a_breach_is_the_total_or_any_one_file() {
+        let file = |bytes: usize| FileCount {
+            path: "a.md".to_owned(),
+            tokens: 1,
+            lines: 1,
+            bytes,
+        };
+        let within = Report {
+            name: "memories".to_owned(),
+            files: vec![file(100)],
+            tokens: 10,
+            lines: 1,
+            max_tokens: 100,
+            max_lines: None,
+            max_bytes_per_file: Some(100),
+        };
+        assert!(!within.breached(), "everything at its ceiling passes");
+        let one_file = Report {
+            files: vec![file(101)],
+            ..within.clone()
+        };
+        assert!(one_file.breached(), "one file over its ceiling breaches");
+        let total = Report {
+            tokens: 101,
+            ..within.clone()
+        };
+        assert!(total.breached(), "the set total over budget breaches");
+        let unenforced = Report {
+            files: vec![file(1_000_000)],
+            max_bytes_per_file: None,
+            ..within
+        };
+        assert!(!unenforced.breached(), "an absent ceiling is unenforced");
+    }
+
+    /// Fails by: either summary arm, or either `Line` forward, rendering
+    /// anything but its exact bytes.
+    #[test]
+    fn the_report_lines_render_their_exact_bytes() {
+        let report = Report {
+            name: "instructions".to_owned(),
+            files: Vec::new(),
+            tokens: 12,
+            lines: 3,
+            max_tokens: 100,
+            max_lines: Some(40),
+            max_bytes_per_file: None,
+        };
+        let with_lines = "policy-budget instructions: ~12 tokens of 100, 3 lines of 40";
+        assert_eq!(report.summary(), with_lines);
+        assert_eq!(crate::output::Line::line(&report), with_lines);
+        let no_lines = Report {
+            max_lines: None,
+            ..report
+        };
+        assert_eq!(
+            no_lines.summary(),
+            "policy-budget instructions: ~12 tokens of 100, 3 lines"
+        );
+        let file = FileCount {
+            path: "AGENTS.md".to_owned(),
+            tokens: 7,
+            lines: 2,
+            bytes: 28,
+        };
+        assert_eq!(FileCount::line(&file), "AGENTS.md ~7 tokens 2 lines");
+        assert_eq!(
+            crate::output::Line::line(&file),
+            "AGENTS.md ~7 tokens 2 lines"
+        );
+    }
+
+    /// A comment opener mid-line is skipped and the search resumes just past
+    /// it, so the line-anchored one after it is the one stripped.
+    ///
+    /// Fails by: the hit offset or the resume offset multiplied rather than
+    /// added — the first anchors a mid-line opener at byte 0, the second
+    /// resumes past the anchored opener and strips nothing.
+    #[test]
+    fn a_mid_line_opener_is_skipped_for_the_anchored_one_after_it() {
+        assert_eq!(find_line_anchored("ab<!--\n<!-- x -->\n", "<!--"), Some(7));
+        assert_eq!(loaded("ab<!--\n<!-- x -->\nc\n"), "ab<!--\nc\n");
+    }
+
+    /// Fails by: the byte divisor replaced, or the estimate a constant.
+    #[test]
+    fn a_byte_count_estimates_by_the_same_divisor() {
+        assert_eq!(estimate_tokens_over(0), 0);
+        assert_eq!(estimate_tokens_over(9), 2);
+        assert_eq!(estimate_tokens_over(12), 3);
+    }
+
+    /// Both loops sum into the totals, and every embedded format is read.
+    ///
+    /// Fails by: a `+=` over the file or the embedded totals replaced, a format
+    /// arm deleted (it then reads as unknown and refuses), or the embedded
+    /// value answered as a constant.
+    #[test]
+    fn files_and_every_embedded_format_sum_into_the_totals() {
+        let dir = crate::scratch::scratch("budget-measure-totals");
+        fs::write(dir.join("a.md"), "12345678\n").unwrap();
+        fs::write(dir.join("b.md"), "abcdefghijkl\nx\n").unwrap();
+        fs::write(
+            dir.join("c.json"),
+            "{\"k\": {\"v\": \"line one\\nline two\\n\"}}",
+        )
+        .unwrap();
+        fs::write(dir.join("d.toml"), "[a]\nb = \"abcdefgh\"\n").unwrap();
+        fs::write(dir.join("e.yaml"), "x:\n  y: abcdefghijkl\n").unwrap();
+        let embedded = |path: &str, key: &str| EmbeddedDecl {
+            path: path.to_owned(),
+            key: key.to_owned(),
+        };
+        let set = BudgetSet {
+            files: vec!["a.md".to_owned(), "b.md".to_owned()],
+            max_tokens: 1_000,
+            max_lines: None,
+            max_bytes_per_file: None,
+            embedded: vec![
+                embedded("c.json", "k.v"),
+                embedded("d.toml", "a.b"),
+                embedded("e.yaml", "x.y"),
+            ],
+        };
+        let report = measure(&dir, "set", &set).unwrap();
+        let rows: Vec<(&str, usize, usize, usize)> = report
+            .files
+            .iter()
+            .map(|f| (f.path.as_str(), f.tokens, f.lines, f.bytes))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("a.md", 2, 1, 9),
+                ("b.md", 3, 2, 15),
+                ("c.json#k.v", 4, 2, 18),
+                ("d.toml#a.b", 2, 1, 8),
+                ("e.yaml#x.y", 3, 1, 12),
+            ]
+        );
+        assert_eq!((report.tokens, report.lines), (14, 7));
+    }
+
+    /// A missing embedded file is a usage error; any other read failure is not.
+    ///
+    /// Fails by: the `NotFound` guard answered as a constant or inverted — a
+    /// dead entry then escapes as an internal error, or an unreadable one is
+    /// misreported as a dead entry.
+    #[test]
+    fn only_a_missing_embedded_file_is_a_dead_entry() {
+        let dir = crate::scratch::scratch("budget-embedded-errors");
+        fs::create_dir_all(dir.join("dir.json")).unwrap();
+        let decl = |path: &str| EmbeddedDecl {
+            path: path.to_owned(),
+            key: "k".to_owned(),
+        };
+        let missing = embedded_value(&dir, "set", &decl("absent.json")).unwrap_err();
+        assert!(missing.downcast_ref::<UsageError>().is_some());
+        assert!(missing.to_string().contains("matches no file"));
+        let directory = embedded_value(&dir, "set", &decl("dir.json")).unwrap_err();
+        assert!(directory.downcast_ref::<UsageError>().is_none());
+    }
 }

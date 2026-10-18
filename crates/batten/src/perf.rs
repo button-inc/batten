@@ -2057,11 +2057,7 @@ pub fn compare(
     today: &str,
 ) -> Result<Comparison> {
     let records = parse_pairs(input)?;
-    let threshold = std::env::var(REGRESSION_RATIO_VAR)
-        .ok()
-        .and_then(|raw| raw.parse::<f64>().ok())
-        .filter(|parsed| parsed.is_finite() && *parsed > 0.0)
-        .unwrap_or(REGRESSION_RATIO);
+    let threshold = threshold_from(std::env::var(REGRESSION_RATIO_VAR).ok().as_deref());
 
     let heads: Vec<&Paired> = records.iter().filter(|row| row.arm == "head").collect();
     if heads.is_empty() {
@@ -2101,13 +2097,15 @@ pub fn compare(
                      Fix the regression or take the decision again with a new date.",
                     row.path, row.expires
                 ));
-            } else if row.ratio.parse::<f64>().is_ok_and(|raised| raised > limit) {
-                // IT ONLY EVER RAISES THE BAR. A branch already inside the
-                // ordinary threshold is judged by the ordinary threshold, so an
-                // accepted regression cannot become a licence to drift up to it.
-                // Infallible here: the value parsed in the guard above, and
-                // `Perf::validate` refused a table whose rows do not.
-                limit = row.ratio.parse::<f64>().unwrap_or(limit);
+            } else if let Ok(raised) = row.ratio.parse::<f64>() {
+                // IT ONLY EVER RAISES THE BAR, and `max` is what says so. A
+                // branch already inside the ordinary threshold is judged by the
+                // ordinary threshold, so an accepted regression cannot become a
+                // licence to drift up to it. A row at or under the threshold
+                // leaves `limit` where it was, and then `accepted` can never
+                // report: that needs a ratio past the threshold yet within the
+                // limit. `Perf::validate` refused a table whose rows do not parse.
+                limit = limit.max(raised);
                 accepted = Some(row);
             }
         }
@@ -2127,6 +2125,17 @@ pub fn compare(
         }
     }
     Ok(decided)
+}
+
+/// The threshold [`compare`] applies: the override where it is a positive
+/// finite ratio, else [`REGRESSION_RATIO`].
+///
+/// Split from its environment read for [`parse_ns`]'s reason: a case that had
+/// to export the variable would be asserting over process-global state.
+fn threshold_from(raw: Option<&str>) -> f64 {
+    raw.and_then(|raw| raw.parse::<f64>().ok())
+        .filter(|parsed| parsed.is_finite() && *parsed > 0.0)
+        .unwrap_or(REGRESSION_RATIO)
 }
 
 /// The refusal's own opening line, which names the threshold AND the measured
@@ -2408,20 +2417,53 @@ pub fn acquire(repo: &Path) -> Result<Sweep> {
             sides.push(record.p50);
             arms.push(record);
         }
-        let (first, second) = (sides[0], sides[1]);
-        if first <= 0.0 {
-            bail!("perf-acquire: null pair {pair} measured zero, so no ratio can be taken.");
-        }
-        nulls.push(second / first);
+        nulls.push(null_ratio(pair, sides[0], sides[1])?);
     }
 
+    let (ratios, per_document) = sweep_terms(&ns, &p50s, largest)?;
+    Ok(Sweep {
+        arms,
+        ratios,
+        nulls,
+        per_document,
+    })
+}
+
+/// One null pair's ratio, its second side over its first.
+///
+/// Split from [`acquire`] so the arithmetic is exercisable without the
+/// benchmark runner the readings come from, which the `windows` job lacks.
+///
+/// # Errors
+///
+/// A first side that measured zero, over which no ratio can be taken.
+fn null_ratio(pair: usize, first: f64, second: f64) -> Result<f64> {
+    if first <= 0.0 {
+        bail!("perf-acquire: null pair {pair} measured zero, so no ratio can be taken.");
+    }
+    Ok(second / first)
+}
+
+/// [`Sweep::ratios`] and [`Sweep::per_document`], as [`sweep_terms`] derives
+/// them.
+type SweepTerms = (Vec<(String, f64)>, Option<(f64, usize)>);
+
+/// The sweep's ratios against its FIRST point, and the per-document term
+/// across its widest span (`None` where the sweep spans no documents).
+///
+/// Split from [`acquire`] for [`null_ratio`]'s reason.
+///
+/// # Errors
+///
+/// A base arm that measured zero, over which no ratio can be taken.
+fn sweep_terms(ns: &[usize], p50s: &[f64], largest: usize) -> Result<SweepTerms> {
     let base = *p50s.first().unwrap_or(&0.0);
     if base <= 0.0 {
         bail!("perf-acquire: the base arm measured zero, so no ratio can be taken.");
     }
     let ratios = ns
         .iter()
-        .zip(&p50s)
+        .zip(p50s)
         .skip(1)
         .map(|(n, p50)| (format!("acquire-{n}/acquire-{}", ns[0]), p50 / base))
         .collect();
@@ -2435,13 +2477,7 @@ pub fn acquire(repo: &Path) -> Result<Sweep> {
         let width = span as f64;
         ((p50s[p50s.len() - 1] - base) * 1000.0 / width, span)
     });
-
-    Ok(Sweep {
-        arms,
-        ratios,
-        nulls,
-        per_document,
-    })
+    Ok((ratios, per_document))
 }
 
 // ---------------------------------------------------------------------------
@@ -3948,6 +3984,686 @@ mod tests {
             per_document: None,
         };
         assert_eq!(sweep.to_string(), "");
+    }
+
+    /// Fails by: `short` answering anything but the first eight characters, or
+    /// the whole of a shorter one.
+    #[test]
+    fn a_sha_is_shortened_to_eight_characters() {
+        assert_eq!(short("abcdef1234"), "abcdef12");
+        assert_eq!(short("abc"), "abc");
+    }
+
+    /// Fails by: `measurement` rendering anything but `perf`'s own record shape.
+    #[test]
+    fn a_measurement_is_the_record_without_its_arm() {
+        let record = Record {
+            arm: "head",
+            path: String::from("noop"),
+            p50: 1.234,
+            p95: 2.0,
+            mean: 1.5,
+            runs: 3,
+        };
+        assert_eq!(
+            record.measurement(),
+            "path=noop p50=1.23 p95=2 mean=1.5 runs=3"
+        );
+    }
+
+    /// Fails by: `env_or` ignoring the variable or the fallback, or `which`
+    /// answering a constant.
+    #[test]
+    fn the_environment_and_path_are_read_as_declared() -> Result<()> {
+        assert_eq!(env_or("BATTEN_PERF_CASE_NEVER_SET", "fallback"), "fallback");
+        assert_eq!(env_or("PATH", "fallback"), std::env::var("PATH")?);
+        assert_eq!(which("batten-perf-case-no-such-program"), None);
+        if cfg!(unix) {
+            assert!(which("sh").is_some_and(|found| found.is_file()));
+        }
+        Ok(())
+    }
+
+    /// Fails by: `perf_dir`, `out_dir` or `acquire_out_dir` answering an empty
+    /// path, or either out directory keeping a previous run's bytes.
+    #[test]
+    fn each_out_directory_is_under_the_checkout_and_starts_empty() -> Result<()> {
+        let repo = perf_scratch("out-dirs");
+        let perf = perf_dir(&repo);
+        assert!(
+            perf.starts_with(&repo) && perf != repo,
+            "{}",
+            perf.display()
+        );
+        let stale = perf.join("pair").join("stale");
+        std::fs::create_dir_all(&stale)?;
+        let pair = out_dir(&repo)?;
+        assert_eq!(pair, perf.join("pair").canonicalize()?);
+        assert!(!stale.exists(), "a previous run's records are cleared");
+        let acquire = acquire_out_dir(&repo)?;
+        assert!(acquire.starts_with(repo.canonicalize()?));
+        assert!(acquire.ends_with("acquire") && acquire.is_dir());
+        Ok(())
+    }
+
+    /// Fails by: `declared_ns` answering a constant rather than the declaration.
+    #[test]
+    fn the_declared_sweep_is_the_parsed_declaration() -> Result<()> {
+        assert_eq!(declared_ns()?, parse_ns(&env_or(NS_VAR, DEFAULT_NS))?);
+        assert!(declared_ns()?.len() > 1);
+        Ok(())
+    }
+
+    /// Keeping the head removes only the OTHER `base-*` builds: the live base
+    /// and everything that is not a base build stay.
+    ///
+    /// Fails by: either `&&` in the stale test read as `||`, which removes the
+    /// run's own `pair/` directory (and the head inside it) or the live base.
+    #[test]
+    fn keeping_the_head_removes_only_other_base_builds() -> Result<()> {
+        let perf = perf_scratch("keep-others");
+        let head = perf.join("pair").join("batten-head");
+        std::fs::create_dir_all(perf.join("pair"))?;
+        std::fs::write(&head, b"head")?;
+        std::fs::create_dir_all(base_target_dir(&perf, "livebase"))?;
+        std::fs::create_dir_all(base_target_dir(&perf, "stale"))?;
+        keep_as_base(&perf, "headkey", &head, "livebase")?;
+        assert!(head.is_file(), "a directory that is no base build stays");
+        assert!(base_target_dir(&perf, "livebase").is_dir());
+        assert!(!base_target_dir(&perf, "stale").exists());
+        assert_eq!(std::fs::read(base_binary(&perf, "headkey"))?, b"head");
+        Ok(())
+    }
+
+    /// Fails by: `surface_row` answering a constant, or matching every id but
+    /// the one asked for.
+    #[test]
+    fn a_surface_row_is_found_by_id_at_any_depth() {
+        let document = serde_json::json!({
+            "id": "root",
+            "subcommands": [
+                {"id": "a", "path": "x"},
+                {"id": "b", "subcommands": [{"id": "deep", "path": "y"}]},
+            ],
+        });
+        let path = |id: &str| {
+            surface_row(&document, id)
+                .and_then(|row| row.get("path"))
+                .and_then(serde_json::Value::as_str)
+        };
+        assert_eq!(path("deep"), Some("y"));
+        assert_eq!(path("a"), Some("x"));
+        assert!(surface_row(&document, "absent").is_none());
+    }
+
+    /// The mediation verb is asked of the binary, and a binary that cannot
+    /// answer is refused rather than defaulted.
+    ///
+    /// Fails by: `mediation_verb` answering a constant, or its exit-status test
+    /// inverted.
+    #[test]
+    fn the_mediation_verb_is_the_binarys_own() -> Result<()> {
+        let dir = perf_scratch("mediation-verb");
+        // On every target: a binary that cannot be run has no surface to read.
+        let Err(absent) = mediation_verb(&dir.join("absent")) else {
+            bail!("a binary that does not exist has no surface to read");
+        };
+        assert!(absent.to_string().contains("could not ask"), "{absent}");
+        let make_executable = |path: &Path| -> std::io::Result<()> {
+            let _ = path;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+            }
+            Ok(())
+        };
+        if cfg!(unix) {
+            // The stand-in binary is a shell script, which only unix runs.
+            let document = serde_json::json!({
+                "id": "root",
+                "subcommands": [{"id": crate::surface::MEDIATION_ID, "path": "adjudicate"}],
+            });
+            let answers = dir.join("answers");
+            std::fs::write(
+                &answers,
+                format!(
+                    "#!/bin/sh\n[ \"$1 $2 $3\" = 'spec --format json' ] || exit 9\nprintf '%s' '{document}'\n"
+                ),
+            )?;
+            make_executable(&answers)?;
+            assert_eq!(mediation_verb(&answers)?, "adjudicate");
+            let fails = dir.join("fails");
+            std::fs::write(&fails, "#!/bin/sh\nexit 3\n")?;
+            make_executable(&fails)?;
+            let Err(refused) = mediation_verb(&fails) else {
+                bail!("a binary that exits non-zero has no surface to read");
+            };
+            assert!(
+                refused.to_string().contains("could not report its surface"),
+                "{refused}"
+            );
+        } else {
+            // Off unix the stand-in cannot run; only the refusal above is
+            // asserted, and the exit-status and verb mutants go unjudged here.
+            assert!(!dir.join("answers").exists());
+        }
+        Ok(())
+    }
+
+    /// The wired arm is the settings file's batten command, pinned to the arm's
+    /// own binary and tree.
+    ///
+    /// Fails by: `wired_command` answering a constant, the pre-tool spelling
+    /// matched as any OTHER event's, or the bare-`batten` substitution applied
+    /// to a first word that is not `batten`.
+    #[test]
+    fn the_wired_command_is_the_settings_files_own() -> Result<()> {
+        let settings = |tree: &Path, command: &str| -> Result<()> {
+            std::fs::create_dir_all(tree.join(".claude"))?;
+            let document = serde_json::json!({"hooks": {"PreToolUse": [{
+                "matcher": "*",
+                "hooks": [
+                    {"type": "command", "command": "echo unrelated"},
+                    {"type": "command", "command": command},
+                ],
+            }]}});
+            std::fs::write(tree.join(".claude/settings.json"), document.to_string())?;
+            Ok(())
+        };
+        let bare = perf_scratch("wired-bare");
+        settings(&bare, "batten hook --harness claude-code")?;
+        let tree = bare.to_string_lossy().into_owned();
+        assert_eq!(
+            wired_command(&bare, Path::new("/arm/batten"))?,
+            [
+                String::from("env"),
+                format!("-C{tree}"),
+                format!("CLAUDE_PROJECT_DIR={tree}"),
+                String::from("BATTEN_BIN=/arm/batten"),
+                String::from("/arm/batten"),
+                String::from("hook"),
+                String::from("--harness"),
+                String::from("claude-code"),
+            ]
+        );
+        let launcher = perf_scratch("wired-launcher");
+        settings(&launcher, "$CLAUDE_PROJECT_DIR/bin/batten-launch hook")?;
+        let tree = launcher.to_string_lossy().into_owned();
+        assert_eq!(
+            wired_command(&launcher, Path::new("/arm/batten"))?.get(4..),
+            Some(&[format!("{tree}/bin/batten-launch"), String::from("hook")][..])
+        );
+        Ok(())
+    }
+
+    /// Fails by: `stage` answering without copying the fixture.
+    #[test]
+    fn the_fixture_is_staged_without_its_suffix() -> Result<()> {
+        let repo = perf_scratch("stage-repo");
+        let out = perf_scratch("stage-out");
+        let fixture = repo.join("crates/batten/tests/fixtures/repos/forbid-clean");
+        std::fs::create_dir_all(&fixture)?;
+        std::fs::write(fixture.join("batten.toml.in"), "authority")?;
+        std::fs::write(fixture.join("lib.rs.in"), "source")?;
+        let (check, hooks) = stage(&repo, &out)?;
+        assert_eq!(check, out.join("check-repo"));
+        assert_eq!(hooks, repo.join("crates/batten/tests/fixtures/hooks"));
+        assert_eq!(
+            std::fs::read_to_string(check.join("batten.toml"))?,
+            "authority"
+        );
+        assert_eq!(std::fs::read_to_string(check.join("lib.rs"))?, "source");
+        Ok(())
+    }
+
+    /// The trunk is the declared one, and only a record line enters the series.
+    ///
+    /// Fails by: `on_trunk` answering a constant or its branch guard inverted,
+    /// `record_series` answering a constant, or either of its line filters
+    /// inverted.
+    #[test]
+    fn a_series_is_recorded_from_the_declared_trunk_only() -> Result<()> {
+        let repo = perf_scratch("on-trunk");
+        crate::gitwrite::init_on_main(&repo)?;
+        std::fs::write(
+            repo.join("batten.toml"),
+            "version = 1\nmust_land_on = \"origin/main\"\n",
+        )?;
+        crate::gitwrite::commit_paths(&repo, &[String::from("batten.toml")], "one")?;
+        assert_eq!(on_trunk(&repo)?, None);
+
+        let head = crate::git::head_commit(&repo)?;
+        let said = record_series(&repo, "path=noop p50=1\n  \npath=check p50=2\n")?;
+        assert_eq!(
+            said,
+            format!(
+                "perf record: appended a {} measurement to refs/notes/perf for {}",
+                env_or(METRIC_VAR, "wall-clock"),
+                short(&head)
+            )
+        );
+        assert!(record_series(&repo, "\n  \n").is_err());
+        let Err(stray) = record_series(&repo, "path=noop\nnoise\n") else {
+            bail!("a stray line must not enter the series");
+        };
+        assert!(stray.to_string().contains("(noise)"), "{stray}");
+
+        std::fs::write(
+            repo.join("batten.toml"),
+            "version = 1\nmust_land_on = \"origin/trunk\"\n",
+        )?;
+        assert_eq!(on_trunk(&repo)?, Some(String::from("main")));
+        Ok(())
+    }
+
+    /// Fails by: the `HOME` exclusion inverted, which keeps `HOME` alone.
+    #[test]
+    fn a_state_prefix_relocates_everything_but_home() {
+        let argv = [String::from("bin"), String::from("x")];
+        assert_eq!(
+            state_prefixed("/s", &argv),
+            [
+                "env",
+                "APPDATA=/s",
+                "LOCALAPPDATA=/s",
+                "XDG_DATA_HOME=/s",
+                "bin",
+                "x"
+            ]
+        );
+    }
+
+    /// Fails by: the seconds-to-milliseconds factor or the fallback mean's
+    /// divisor replaced.
+    #[test]
+    fn samples_are_summarised_in_milliseconds() -> Result<()> {
+        let summary = |p50: f64, mean: f64| Record {
+            arm: "head",
+            path: String::from("id"),
+            p50,
+            p95: p50,
+            mean,
+            runs: 2,
+        };
+        assert_eq!(
+            summarise("head", "id", &[0.25, 0.25], None)?,
+            summary(250.0, 250.0)
+        );
+        assert_eq!(
+            summarise("head", "id", &[0.25, 0.25], Some(0.5))?,
+            summary(250.0, 500.0)
+        );
+        Ok(())
+    }
+
+    /// Fails by: either summary arm, or the `Line` forward, rendering anything
+    /// but its exact bytes, or the refusal header losing a number.
+    #[test]
+    fn the_comparison_lines_render_their_exact_bytes() {
+        let clean = Comparison {
+            threshold: 1.3,
+            ..Comparison::default()
+        };
+        let within = "perf-compare: every measured path is within 1.3x of the merge base";
+        assert_eq!(clean.summary(), within);
+        assert_eq!(crate::output::Line::line(&clean), within);
+        let accepted = Comparison {
+            accepted: vec![String::from("a"), String::from("b")],
+            ..clean
+        };
+        assert_eq!(
+            accepted.summary(),
+            "perf-compare: every measured path is within 1.3x of the merge base, except 2 \
+             accepted above"
+        );
+        assert_eq!(
+            regression_header(1.3),
+            "perf-compare: an invocation path is measurably slower than the merge base \
+             (threshold 1.3x, measured noise floor 1.102x):"
+        );
+    }
+
+    /// Fails by: `parse_field` answering a constant, or matching a key that is
+    /// only a prefix of the word's.
+    #[test]
+    fn a_field_is_read_by_its_whole_key() {
+        let words = ["arm=base", "pathx=wrong", "path=right"];
+        assert_eq!(parse_field(&words, "path"), Some("right"));
+        assert_eq!(parse_field(&words, "p50"), None);
+    }
+
+    /// Every line that is not a well-formed paired record is named by its
+    /// 1-based number, and a blank one is skipped.
+    ///
+    /// Fails by: any clause of the record test inverted or loosened, the
+    /// accepting arm deleted, the line number off by one, or the malformed
+    /// refusal skipped.
+    #[test]
+    fn every_malformed_record_is_named_by_its_line() -> Result<()> {
+        assert_eq!(
+            parse_pairs("arm=base path=a p50=1.5 p95=2\n\narm=head path=b p50=2\n")?,
+            [
+                Paired {
+                    arm: String::from("base"),
+                    path: String::from("a"),
+                    p50: 1.5,
+                },
+                Paired {
+                    arm: String::from("head"),
+                    path: String::from("b"),
+                    p50: 2.0,
+                },
+            ]
+        );
+        let input = "arm=base path=a p50=1.5\n\
+                     \n\
+                     noise\n\
+                     arm=other path=a p50=1\n\
+                     arm=base p50=1\n\
+                     arm=base path=a p50=0\n\
+                     arm=base path=a p50=inf\n\
+                     arm=base path=a p50=x\n\
+                     arm=head path=a p50=2\n";
+        let Err(refused) = parse_pairs(input) else {
+            bail!("malformed records must be refused");
+        };
+        let message = refused.to_string();
+        let named: Vec<&str> = message
+            .lines()
+            .filter_map(|line| line.trim_start().strip_prefix("stdin:"))
+            .filter_map(|rest| rest.split(':').next())
+            .collect();
+        assert_eq!(named, ["3", "4", "5", "6", "7", "8"], "{message}");
+        Ok(())
+    }
+
+    /// Fails by: the override's finite or positive test loosened, or the
+    /// default replaced.
+    #[test]
+    fn only_a_positive_finite_override_moves_the_threshold() {
+        let threshold = |raw: Option<&str>| threshold_from(raw).to_string();
+        assert_eq!(threshold(None), "1.3");
+        assert_eq!(threshold(Some("2")), "2");
+        for refused in ["0", "-1", "inf", "NaN", "x"] {
+            assert_eq!(threshold(Some(refused)), "1.3", "{refused}");
+        }
+    }
+
+    /// Every verdict a comparison reaches, each at its boundary.
+    ///
+    /// Fails by: a head paired with the wrong base, the ratio's division
+    /// replaced, a ceiling or a threshold compared with anything but `>`, an
+    /// exemption matched to another path, an expiry compared with anything but
+    /// `<`, or the applied threshold dropped from the result.
+    #[test]
+    fn a_comparison_decides_each_path_at_its_boundary() -> Result<()> {
+        let input = "arm=base path=a p50=10\narm=base path=b p50=20\narm=base path=c p50=10\n\
+                     arm=base path=e p50=10\narm=base path=f p50=10\n\
+                     arm=head path=a p50=13\narm=head path=b p50=26.2\narm=head path=c p50=15\n\
+                     arm=head path=e p50=11\narm=head path=f p50=13\n";
+        let exempt = |path: &str, expires: &str| crate::config::PerfExempt {
+            path: path.to_owned(),
+            ratio: String::from("2.0"),
+            expires: expires.to_owned(),
+            reason: format!("accepted {path}"),
+        };
+        let decided = compare(
+            input,
+            &[
+                exempt("c", "2026-10-18"),
+                exempt("e", "2026-01-01"),
+                exempt("f", "2027-01-01"),
+            ],
+            "2026-10-18",
+        )?;
+        assert_eq!(
+            decided,
+            Comparison {
+                regressed: vec![String::from(
+                    "  b: base p50=20ms -> head p50=26.2ms (1.31x)"
+                )],
+                accepted: vec![String::from(
+                    "perf-compare: c is 1.5x, past the 1.3x threshold, accepted until \
+                     2026-10-18 — accepted c"
+                )],
+                lapsed: vec![String::from(
+                    "perf-compare: the exemption for 'e' lapsed on 2026-01-01 and no longer \
+                     applies. Fix the regression or take the decision again with a new date."
+                )],
+                threshold: 1.3,
+            }
+        );
+        Ok(())
+    }
+
+    /// Fails by: `config_load`'s zero-sample or zero-reading refusal inverted,
+    /// or its arms named for anything but the file they priced.
+    #[test]
+    fn a_config_load_reading_prices_the_file_it_was_given() -> Result<()> {
+        let dir = perf_scratch("config-load");
+        let path = dir.join("batten.toml");
+        std::fs::write(&path, "version = 1\n")?;
+        let sweep = config_load(&path)?;
+        let paths: Vec<&str> = sweep.arms.iter().map(|arm| arm.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "config-load-12b",
+                "config-parse-12b",
+                "config-load-null-12b"
+            ]
+        );
+        assert_eq!(sweep.ratios.len(), 1);
+        assert_eq!(sweep.nulls.len(), 1);
+        Ok(())
+    }
+
+    /// The floor arm declares no row, a swept arm declares one document per
+    /// point, and the bundle it registers is what `registered_paths` derives.
+    ///
+    /// Fails by: `sweep_fixture` writing nothing or its floor test inverted, or
+    /// `registered_paths` answering a constant.
+    #[test]
+    fn a_sweep_fixture_declares_one_document_per_point() -> Result<()> {
+        let root = perf_scratch("sweep-fixture");
+        let (floor, two) = (root.join("floor"), root.join("two"));
+        sweep_fixture(&floor, 0)?;
+        assert_eq!(
+            std::fs::read_to_string(floor.join("batten.toml"))?,
+            "version = 1\n"
+        );
+        sweep_fixture(&two, 2)?;
+        let authority = std::fs::read_to_string(two.join("batten.toml"))?;
+        assert!(
+            authority.contains("documents = [\"config0.toml\", \"config1.toml\"]"),
+            "{authority}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(two.join("config1.toml"))?,
+            "quiet = true\n"
+        );
+        assert!(two.join(".git").is_dir());
+        let config = crate::config::parse(&authority, "batten.toml")?;
+        assert_eq!(registered_paths(&config.rules), ["policy-acquisition"]);
+        Ok(())
+    }
+
+    /// The pair's three answers short of a measurement: HEAD as its own merge
+    /// base, a change nothing consulted covers, and a crate change, which goes
+    /// on to measure and — with no buildable tree here — is could-not-look.
+    ///
+    /// Fails by: the null test inverted, the merge-base test inverted, the
+    /// selection test inverted, `changed_between` answering a constant set, or
+    /// `measure` answering an empty measurement.
+    #[test]
+    fn a_pair_skips_exactly_what_cannot_have_changed() -> Result<()> {
+        let repo = perf_scratch("pair-skips");
+        crate::gitwrite::init_on_main(&repo)?;
+        std::fs::write(
+            repo.join("batten.toml"),
+            "version = 1\nmust_land_on = \"origin/main\"\n",
+        )?;
+        crate::gitwrite::commit_paths(&repo, &[String::from("batten.toml")], "one")?;
+        let trunk = repo.join(".git/refs/remotes/origin/main");
+        std::fs::create_dir_all(trunk.parent().unwrap_or(&repo))?;
+        let point_trunk_at_head = || -> Result<String> {
+            let head = crate::git::head_commit(&repo)?;
+            std::fs::write(&trunk, format!("{head}\n"))?;
+            Ok(head)
+        };
+        let skipped = |outcome: Outcome| match outcome {
+            Outcome::Skipped(said) => Some(said),
+            Outcome::Measured(_) => None,
+        };
+
+        let base = point_trunk_at_head()?;
+        let own = skipped(pair(&repo, Options::default())?);
+        assert_eq!(
+            own,
+            Some(format!(
+                "perf-pair: HEAD is its own merge base ({}) — no change to compare. Nothing \
+                 measured.",
+                short(&base)
+            ))
+        );
+
+        std::fs::write(repo.join("README.md"), "docs")?;
+        crate::gitwrite::commit_paths(&repo, &[String::from("README.md")], "docs")?;
+        let docs = skipped(pair(&repo, Options::default())?).unwrap_or_default();
+        assert!(docs.starts_with("perf-pair: nothing between "), "{docs}");
+
+        std::fs::create_dir_all(repo.join("crates"))?;
+        std::fs::write(repo.join("crates/lib.rs"), "fn main() {}")?;
+        crate::gitwrite::commit_paths(&repo, &[String::from("crates/lib.rs")], "code")?;
+        assert!(
+            pair(&repo, Options::default()).is_err(),
+            "a crate change is measured, and nothing here can be built"
+        );
+        Ok(())
+    }
+
+    /// Fails by: the null ratio's zero test inverted or its division replaced.
+    #[test]
+    fn a_null_ratio_is_second_over_a_nonzero_first() -> Result<()> {
+        assert_eq!(null_ratio(0, 2.0, 3.0)?.to_string(), "1.5");
+        let Err(zero) = null_ratio(1, 0.0, 3.0) else {
+            bail!("a zero first side has no ratio");
+        };
+        assert!(zero.to_string().contains("null pair 1"), "{zero}");
+        Ok(())
+    }
+
+    /// Every ratio is against the FIRST point, and the per-document term is
+    /// the widest span's rise in microseconds per document.
+    ///
+    /// Fails by: the base's zero test inverted, a ratio's division replaced,
+    /// the span test compared with anything but `> 0`, or any operator of the
+    /// per-document term replaced.
+    #[test]
+    fn the_sweep_terms_are_taken_against_the_first_point() -> Result<()> {
+        let (ratios, per_document) = sweep_terms(&[1, 16, 256], &[2.0, 3.0, 5.0], 256)?;
+        assert_eq!(
+            format!("{ratios:?} {per_document:?}"),
+            format!(
+                "{:?} {:?}",
+                [
+                    (String::from("acquire-16/acquire-1"), 1.5),
+                    (String::from("acquire-256/acquire-1"), 2.5),
+                ],
+                Some((3000.0 / 255.0, 255_usize))
+            )
+        );
+        let (_, flat) = sweep_terms(&[4], &[2.0], 4)?;
+        assert_eq!(flat, None, "a sweep spanning no documents has no slope");
+        assert!(sweep_terms(&[1], &[0.0], 1).is_err());
+        Ok(())
+    }
+
+    /// Six arms per class with every value distinct where a wrong row would
+    /// show: class A is flat on the warm repeat and unbeaten, class B pays a
+    /// margin and is beaten by `FirstFullThenCompact`.
+    fn margin_records() -> Vec<RenderRecord> {
+        let a = "branch write unsafe";
+        let b = "tool run loose";
+        let order = [
+            (Strategy::FirstFullThenCompact, Residency::Cold),
+            (Strategy::FirstFullThenCompact, Residency::Warm),
+            (Strategy::FullEveryTime, Residency::Cold),
+            (Strategy::FullEveryTime, Residency::Warm),
+            (Strategy::Current, Residency::Cold),
+            (Strategy::Current, Residency::Warm),
+        ];
+        let mut records = Vec::new();
+        for (class, characters) in [(a, [10, 60, 99, 50, 10, 50]), (b, [70, 20, 70, 80, 70, 30])] {
+            for ((strategy, residency), characters) in order.into_iter().zip(characters) {
+                records.push(RenderRecord {
+                    strategy,
+                    residency,
+                    class: class.to_owned(),
+                    first_sighting: first_sighting(strategy, residency),
+                    characters,
+                    tokens: characters / 2,
+                    line: String::new(),
+                });
+            }
+        }
+        records
+    }
+
+    /// Fails by: a margin row found by the wrong class, strategy or residency,
+    /// its match arm deleted, or the flat test inverted.
+    #[test]
+    fn the_margin_note_names_exactly_the_flat_classes() {
+        assert_eq!(
+            refusal_render_margin_note(&margin_records()),
+            "**A zero in the emitted column is a measurement, not a gap in the table**, and 1 \
+             of the measured classes reach it: branch write unsafe. A class whose first \
+             sighting renders exactly what its repeat renders has nothing for a residency \
+             protocol to withhold.\n\n"
+        );
+    }
+
+    /// Fails by: a verdict row found by the wrong class, strategy or residency,
+    /// either `&&` read as `||`, or its match arm deleted.
+    #[test]
+    fn the_verdict_replaces_exactly_the_beaten_classes() {
+        let verdict = refusal_render_verdict(&margin_records());
+        assert!(
+            verdict.starts_with(
+                "## The verdict\n\n**REPLACE the first-sighting/repeat split for tool run \
+                 loose**: a measured strategy emits less on a repeat than the shipped one does \
+                 there.\n\n"
+            ),
+            "{verdict}"
+        );
+    }
+
+    /// Fails by: a class's table carrying another class's rows, or a margin
+    /// line read off the wrong class, strategy or residency.
+    #[test]
+    fn the_report_reads_each_class_off_its_own_rows() {
+        let report = refusal_render_report(&margin_records());
+        let a_table = report
+            .split("## `branch write unsafe`")
+            .nth(1)
+            .and_then(|rest| rest.split("## `tool run loose`").next())
+            .unwrap_or_default();
+        assert!(
+            a_table.contains("99") && !a_table.contains("80"),
+            "{a_table}"
+        );
+        assert!(
+            report.contains(
+                "- **`branch write unsafe`** — a warm repeat emits 50 characters (25 tokens) \
+                 today against 50 (25 tokens) delivered in full every time: **0 characters \
+                 saved per repeat firing**.\n\
+                 - **`tool run loose`** — a warm repeat emits 30 characters (15 tokens) today \
+                 against 80 (40 tokens) delivered in full every time: **50 characters saved \
+                 per repeat firing**.\n"
+            ),
+            "{report}"
+        );
     }
 
     // The two cases over what `sweep_fixture` WRITES live in
