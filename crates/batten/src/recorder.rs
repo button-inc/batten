@@ -1523,6 +1523,10 @@ mod outcome_tests {
     /// produced reaching the record.
     #[test]
     fn a_declared_program_answers_with_its_own_status_and_stdout() {
+        if !cfg!(unix) {
+            // Off unix there is no `sh` to run the declared program's script.
+            return;
+        }
         let dir = crate::scratch::scratch("recorder-run-program");
         let script = dir.join("echo.sh");
         std::fs::write(&script, "#!/bin/sh\ncat\nexit 3\n").expect("script");
