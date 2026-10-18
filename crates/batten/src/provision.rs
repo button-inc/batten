@@ -2884,13 +2884,10 @@ mod tests {
         assert_ne!(Freshness::Missing.as_str(), Freshness::Mismatch.as_str());
     }
 
+    /// This process's own empty directory, reaped once the process is gone, so
+    /// two runs of the suite never share a fixture.
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join("batten-provision-tests")
-            .join(name);
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
+        crate::scratch::scratch(&format!("provision-{name}"))
     }
 
     #[test]
@@ -3098,12 +3095,12 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
     /// A fresh receipt answers without a probe, live or not.
     #[test]
     fn a_fresh_credential_receipt_answers_without_a_probe() {
-        let value = Secret::new("batten-provision-test-credential".to_owned());
+        // Per process, so an overlapping run of this suite in the same checkout
+        // files its receipt under another digest rather than racing this one.
+        let credential = format!("batten-provision-test-credential-{}", std::process::id());
+        let value = Secret::new(credential.clone());
         let receipt = credential_receipt_path(&value).expect("tests run inside a checkout");
-        assert!(receipt.ends_with(format!(
-            "credential.{}",
-            digest(b"batten-provision-test-credential")
-        )));
+        assert!(receipt.ends_with(format!("credential.{}", digest(credential.as_bytes()))));
         fs::create_dir_all(receipt.parent().unwrap()).unwrap();
         let probe = "https://batten-provision-test.invalid/";
         fs::write(&receipt, "live\n").unwrap();

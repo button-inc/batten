@@ -5855,11 +5855,7 @@ mod tests {
     /// verified against its digest, and noted by its ref and short commit.
     #[test]
     fn a_recorded_pin_answers_its_own_ref_and_refuses_tampering() {
-        let dir = std::env::temp_dir()
-            .join("batten-trust-tests")
-            .join("pin-roundtrip");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::scratch("trust-pin-roundtrip");
         let path = Pin::path(&dir).expect("a state directory resolves");
         assert!(path.ends_with(PIN_FILE), "{}", path.display());
         let _ = std::fs::remove_file(&path);
@@ -5907,11 +5903,7 @@ mod tests {
     /// it and the pinned config declares the fallback.
     #[test]
     fn an_unreachable_ref_is_served_from_its_pin_only_where_both_permit() {
-        let dir = std::env::temp_dir()
-            .join("batten-trust-tests")
-            .join("pin-load");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::scratch("trust-pin-load");
         crate::gitwrite::init_on_main(&dir).unwrap();
         let reference = "origin/nowhere";
         let pin = |extra: &str| {

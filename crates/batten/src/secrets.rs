@@ -1318,9 +1318,9 @@ mod tests {
     /// directory (that takes `set_var`, which is unsafe and forbidden here), so
     /// the path is injected through [`load_or_mint_at`] instead.
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join("batten-secrets-tests").join(name);
-        let _ = fs::remove_dir_all(&dir);
-        dir.join(KEY_DIR).join(KEY_FILE)
+        crate::scratch::scratch(&format!("secrets-{name}"))
+            .join(KEY_DIR)
+            .join(KEY_FILE)
     }
 
     #[test]
@@ -1456,10 +1456,7 @@ mod tests {
     /// and re-minted orphans the generation the ledger still names.
     #[test]
     fn a_repositorys_ledger_records_its_mint_and_names_a_lost_generation() {
-        let root = std::env::temp_dir()
-            .join("batten-secrets-tests")
-            .join("repository-root");
-        fs::create_dir_all(&root).unwrap();
+        let root = crate::scratch::scratch("secrets-repository-root");
         let key = key_path(&root).unwrap();
         assert!(
             key.ends_with(Path::new(KEY_DIR).join(KEY_FILE)),
