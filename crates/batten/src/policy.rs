@@ -4779,12 +4779,17 @@ rules contains not_quoted\n";
         );
     }
 
-    fn git_row(extra: &str) -> Rule {
+    /// A deny-severity policy row `id` at `scope`, naming its `source` line.
+    fn policy_row(id: &str, scope: &str, source: &str, extra: &str) -> Rule {
         toml::from_str(&format!(
-            "id = \"git calls\"\nkind = \"policy\"\nscope = \"mediated_call\"\npreset = \"git\"\n\
+            "id = \"{id}\"\nkind = \"policy\"\nscope = \"{scope}\"\n{source}\n\
              severity = \"deny\"\n{extra}"
         ))
         .expect("the fixture row loads")
+    }
+
+    fn git_row(extra: &str) -> Rule {
+        policy_row("git calls", "mediated_call", "preset = \"git\"", extra)
     }
 
     #[test]
@@ -4861,11 +4866,7 @@ rules contains not_quoted\n";
     }
 
     fn module_row(id: &str, scope: &str, extra: &str) -> Rule {
-        toml::from_str(&format!(
-            "id = \"{id}\"\nkind = \"policy\"\nscope = \"{scope}\"\nmodule = \"policy/m.rego\"\n\
-             severity = \"deny\"\n{extra}"
-        ))
-        .expect("the fixture row loads")
+        policy_row(id, scope, "module = \"policy/m.rego\"", extra)
     }
 
     fn class(id: &str, extra: &str) -> crate::verdict::DeclaredVerdict {
@@ -4899,8 +4900,9 @@ rules contains not_quoted\n";
         let tok = Some(vec!["tok".to_owned()]);
         assert!(!Answers::open());
         let before = bytecode_evaluations();
-        assert_eq!(verdicts(&bundle, GO), tok);
-        assert_eq!(verdicts(&bundle, GO), tok);
+        for _ in 0..2 {
+            assert_eq!(verdicts(&bundle, GO), tok);
+        }
         assert_eq!(
             bytecode_evaluations() - before,
             2,
@@ -5039,11 +5041,7 @@ rules contains not_quoted\n";
     #[test]
     fn an_except_names_a_module_at_the_row_s_scope_and_leaves_one_standing() {
         let pointers = |extra: &str| {
-            let row: Rule = toml::from_str(&format!(
-                "id = \"mixed\"\nkind = \"policy\"\nscope = \"tree\"\npreset = \"mixed\"\n\
-                 severity = \"deny\"\n{extra}"
-            ))
-            .expect("the fixture row loads");
+            let row = policy_row("mixed", "tree", "preset = \"mixed\"", extra);
             preset_sources(&row, &MIXED, "mixed")
                 .map(|sources| sources.into_iter().map(|(p, _)| p).collect::<Vec<_>>())
                 .map_err(|err| format!("{err:#}"))
@@ -5080,13 +5078,22 @@ violation := [{\"rule\": \"v\", \"verdict\": \"v\"}]\n\ndeny := [\"bare\"]\n\nfr
             verdicts(&arrays, "{}"),
             Some(vec!["bare".to_owned(), "v".to_owned()])
         );
-        assert!(matches!(strings(&arrays, "{}", "frontier"), Look::Is(found) if found == ["y"]));
+        assert_eq!(read(&arrays, "frontier"), Some(vec!["y".to_owned()]));
 
         let sets = "package batten.s\nimport rego.v1\n\ndeny contains \"bare\"\n\nfrontier contains \"x\"\n";
         let sets = bundle_of("row", &[("policy/s.rego", sets)]);
         assert_eq!(verdicts(&sets, "{}"), Some(vec!["bare".to_owned()]));
-        assert!(matches!(strings(&sets, "{}", "frontier"), Look::Is(found) if found == ["x"]));
-        assert!(matches!(strings(&sets, "{}", "absent"), Look::Is(found) if found.is_empty()));
+        assert_eq!(read(&sets, "frontier"), Some(vec!["x".to_owned()]));
+        assert_eq!(read(&sets, "absent"), Some(Vec::new()));
+    }
+
+    /// The strings rule `rule` answers over an empty input, or `None` for
+    /// could-not-look.
+    fn read(bundle: &Bundle, rule: &str) -> Option<Vec<String>> {
+        match strings(bundle, "{}", rule) {
+            Look::Is(found) => Some(found),
+            Look::CouldNotLook | Look::IsNot => None,
+        }
     }
 
     #[test]
@@ -5129,51 +5136,51 @@ deny contains \"tok\" if {\n\tinput.go\n}\n";
     #[test]
     fn a_module_raises_only_live_declared_tokens_and_names_them_literally() {
         let row = module_row("a", "mediated_call", "");
-        let check = |source: &str, registry: &[crate::verdict::DeclaredVerdict]| {
-            let bundle = bundle_of("row", &[("policy/a.rego", source)]);
-            check_verdicts_are_declared(&row, &bundle, registry, "policy/a.rego")
+        let check = |bundle: &Bundle, registry: &[crate::verdict::DeclaredVerdict]| {
+            check_verdicts_are_declared(&row, bundle, registry, "policy/a.rego")
                 .map_err(|err| format!("{err:#}"))
         };
-        assert!(check(MODULE, &[class("a", "")]).is_ok());
+        let source = |text: &str| bundle_of("row", &[("policy/a.rego", text)]);
+        let module = source(MODULE);
+        let live = [class("a", "")];
+        assert!(check(&module, &live).is_ok());
+        let undeclared = check(&module, &[]).unwrap_err();
         assert!(
-            check(MODULE, &[])
-                .unwrap_err()
-                .contains("no `[[verdict]]` row declares")
+            undeclared.contains("no `[[verdict]]` row declares"),
+            "{undeclared}"
         );
         let retired = [class("a", "successor = \"b\"\n")];
-        assert!(check(MODULE, &retired).unwrap_err().contains("RETIRED"));
-        let msg = MODULE.replace("\"verdict\": \"a\"}", "\"verdict\": \"a\", \"msg\": \"m\"}");
-        assert!(
-            check(&msg, &[class("a", "")])
-                .unwrap_err()
-                .contains("still binds")
-        );
-        let composed = MODULE.replace(
+        assert!(check(&module, &retired).unwrap_err().contains("RETIRED"));
+        let msg =
+            source(&MODULE.replace("\"verdict\": \"a\"}", "\"verdict\": \"a\", \"msg\": \"m\"}"));
+        assert!(check(&msg, &live).unwrap_err().contains("still binds"));
+        let composed = source(&MODULE.replace(
             "\"verdict\": \"a\"}",
             "\"verdict\": sprintf(\"%s\", [\"a\"])}",
-        );
-        assert!(
-            check(&composed, &[class("a", "")])
-                .unwrap_err()
-                .contains("COMPOSES")
-        );
+        ));
+        assert!(check(&composed, &live).unwrap_err().contains("COMPOSES"));
     }
 
     #[test]
     fn a_tree_row_reads_only_keys_the_tree_carries_and_a_call_row_reads_no_tree() {
-        let check = |scope: &str, path: &str| {
+        // Whether a tree row and a call row each admit a module reading `path`.
+        let admits = |path: &str| {
             let module = format!("package batten.t\nimport rego.v1\n\nhit if {{\n\t{path}\n}}\n");
             let bundle = bundle_of("row", &[("policy/t.rego", &module)]);
-            check_tree_paths_are_emittable(&module_row("t", scope, ""), &bundle, "policy/t.rego")
+            let by = |scope| {
+                check_tree_paths_are_emittable(
+                    &module_row("t", scope, ""),
+                    &bundle,
+                    "policy/t.rego",
+                )
                 .is_ok()
+            };
+            (by("tree"), by("mediated_call"))
         };
-        assert!(check("tree", "input.tree.missing"));
-        // Split, because `rules`' doc check reads every tree path this file spells.
-        assert!(!check("tree", concat!("input.tree", ".nope")));
-        assert!(!check("tree", "input.call.tool"));
-        assert!(!check("tree", "input.facts.receipts"));
-        assert!(!check("mediated_call", "input.tree.missing"));
-        assert!(check("mediated_call", "input.call.tool"));
+        assert_eq!(admits("input.tree.missing"), (true, false));
+        assert!(!admits("input.tree.nope").0);
+        assert_eq!(admits("input.call.tool"), (false, true));
+        assert!(!admits("input.facts.receipts").0);
     }
 
     #[test]

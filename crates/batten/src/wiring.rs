@@ -712,8 +712,9 @@ impl Wiring {
                 return Err("[[wiring.disarm]]: `path` is empty, so it names no script".to_owned());
             }
             let path = Path::new(&row.path);
-            // `has_root` alone: every absolute path has a root on every platform,
-            // so this refuses exactly what `is_absolute() || has_root()` did.
+            // A root is the refusal, not absoluteness: on Windows `\x` has a root
+            // and is still relative, yet it escapes `$HOME`. Every absolute path
+            // has one too, so this one test covers both.
             if path.has_root() {
                 return Err(format!(
                     "[[wiring.disarm]]: `path` {:?} is absolute — a declared script is relative to \

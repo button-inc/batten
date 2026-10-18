@@ -5699,7 +5699,7 @@ mod tests {
     }
 
     #[test]
-    fn a_rule_id_is_normalised_only_once_a_vocabulary_is_declared() {
+    fn a_rule_id_is_left_as_written_without_a_vocabulary() {
         let text = "version = 1\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"*\"\n\
                     pattern = \"x\"\nseverity = \"deny\"\n";
         assert_eq!(parse(text, "test").unwrap().rules[0].id, "no-todo");
@@ -5805,23 +5805,14 @@ mod tests {
     fn a_binary_is_behind_a_tree_whose_committed_schema_it_does_not_derive() {
         let root = crate::scratch::scratch("config-schema-skew");
         let source = root.join(CONFIG_FILE);
-        let source = source.to_str().unwrap();
-        assert!(
-            !binary_is_behind_the_config(source, "version = 1\n"),
-            "absent"
-        );
+        let behind = || binary_is_behind_the_config(source.to_str().unwrap(), "version = 1\n");
+        assert!(!behind(), "absent");
         let at = root.join(SCHEMA_PATH);
         fs::create_dir_all(at.parent().unwrap()).unwrap();
         fs::write(&at, format!("{}\n", schema().unwrap())).unwrap();
-        assert!(
-            !binary_is_behind_the_config(source, "version = 1\n"),
-            "the same schema"
-        );
+        assert!(!behind(), "the same schema");
         fs::write(&at, "{}\n").unwrap();
-        assert!(
-            binary_is_behind_the_config(source, "version = 1\n"),
-            "another schema"
-        );
+        assert!(behind(), "another schema");
     }
 
     const SCANNED: &str = "top = 1\n\
