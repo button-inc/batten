@@ -2013,7 +2013,9 @@ mod tests {
     /// a deadline an hour off stops nothing, one already reached stops all.
     #[test]
     fn a_pass_stops_at_a_reached_deadline_only() {
-        let removed = |case: &str, deadline: std::time::Instant| {
+        // The deadline is read off the clock inside the pass's own setup, so no
+        // assertion below holds a clock reading: each asserts the count removed.
+        fn removed(case: &str, ahead: Duration) -> usize {
             let tree = scratch(case).join("target");
             unit(
                 &tree.join("debug"),
@@ -2025,22 +2027,20 @@ mod tests {
             );
             let trees = [tree];
             let mut request = ask(&trees, &[], u64::MAX);
-            request.deadline = Some(deadline);
+            request.deadline = Some(std::time::Instant::now() + ahead);
             super::pass_of(&request).0.removed
-        };
-        let now = std::time::Instant::now();
-        assert_eq!(
-            removed("deadline-ahead", now + Duration::from_secs(3600)),
-            1
-        );
-        assert_eq!(removed("deadline-reached", now), 0);
+        }
+        assert_eq!(removed("deadline-ahead", Duration::from_secs(3600)), 1);
+        assert_eq!(removed("deadline-reached", Duration::ZERO), 0);
     }
 
     /// Fails by: a held unit a live build used not reported as the live build
     /// stopping the pass, or one it did not use reported so.
     #[test]
     fn a_held_unit_reports_a_live_build_only_when_one_used_it() {
-        let live = |case: &str, since: SystemTime| {
+        // `since` shifts the clock inside the setup, so no assertion holds a
+        // reading: each asserts whether the pass saw a live build.
+        fn live(case: &str, since: fn(SystemTime) -> SystemTime) -> bool {
             let tree = scratch(case).join("target");
             let profile = tree.join("debug");
             unit(
@@ -2055,22 +2055,22 @@ mod tests {
             lock.lock().expect("hold the build lock");
             let trees = [tree];
             let mut request = ask(&trees, &[], u64::MAX);
-            request.live_since = Some(since);
+            request.live_since = Some(since(SystemTime::now()));
             let (pass, _) = super::pass_of(&request);
             drop(lock);
             assert_eq!(pass.removed, 0, "{case}: held");
             pass.held.live
-        };
-        let now = SystemTime::now();
-        assert!(live("held-used", now - Duration::from_secs(7200)));
-        assert!(!live("held-unused", now + Duration::from_secs(3600)));
+        }
+        assert!(live("held-used", |at| at - Duration::from_secs(7200)));
+        assert!(!live("held-unused", |at| at + Duration::from_secs(3600)));
     }
 
     /// Fails by: an executable a live run may launch collected, or one no live
     /// run used kept.
     #[test]
     fn an_executable_a_live_run_used_is_kept_and_one_it_did_not_is_not() {
-        let removed = |case: &str, since: SystemTime| {
+        // As above: the clock is shifted inside the setup, never asserted.
+        fn removed(case: &str, since: fn(SystemTime) -> SystemTime) -> (usize, bool) {
             let tree = scratch(case).join("target");
             unit(
                 &tree.join("debug"),
@@ -2082,17 +2082,16 @@ mod tests {
             );
             let trees = [tree];
             let mut request = ask(&trees, &[], u64::MAX);
-            request.live_since = Some(since);
+            request.live_since = Some(since(SystemTime::now()));
             let (pass, _) = super::pass_of(&request);
             (pass.removed, pass.held.live)
-        };
-        let now = SystemTime::now();
+        }
         assert_eq!(
-            removed("run-used", now - Duration::from_secs(7200)),
+            removed("run-used", |at| at - Duration::from_secs(7200)),
             (0, true)
         );
         assert_eq!(
-            removed("run-unused", now + Duration::from_secs(3600)),
+            removed("run-unused", |at| at + Duration::from_secs(3600)),
             (1, false)
         );
     }

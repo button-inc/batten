@@ -4038,10 +4038,13 @@ mod tests {
         let stale = perf.join("pair").join("stale");
         std::fs::create_dir_all(&stale)?;
         let pair = out_dir(&repo)?;
-        assert_eq!(pair, perf.join("pair").canonicalize()?);
+        assert_eq!(
+            crate::git::canonical(&pair),
+            crate::git::canonical(&perf.join("pair"))
+        );
         assert!(!stale.exists(), "a previous run's records are cleared");
         let acquire = acquire_out_dir(&repo)?;
-        assert!(acquire.starts_with(repo.canonicalize()?));
+        assert!(crate::git::canonical(&acquire).starts_with(crate::git::canonical(&repo)));
         assert!(acquire.ends_with("acquire") && acquire.is_dir());
         Ok(())
     }
@@ -4149,8 +4152,18 @@ mod tests {
     /// to a first word that is not `batten`.
     #[test]
     fn the_wired_command_is_the_settings_files_own() -> Result<()> {
+        // The file the harness itself registers, never a name this case spells.
+        let Some(wiring) = Harness::ClaudeCode.wiring() else {
+            bail!("the measured harness registers a wiring file");
+        };
+        let file = match wiring.file {
+            WiringFile::Key { path, .. } | WiringFile::Whole(path) => path,
+        };
         let settings = |tree: &Path, command: &str| -> Result<()> {
-            std::fs::create_dir_all(tree.join(".claude"))?;
+            let path = tree.join(file);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
             let document = serde_json::json!({"hooks": {"PreToolUse": [{
                 "matcher": "*",
                 "hooks": [
@@ -4158,7 +4171,7 @@ mod tests {
                     {"type": "command", "command": command},
                 ],
             }]}});
-            std::fs::write(tree.join(".claude/settings.json"), document.to_string())?;
+            std::fs::write(path, document.to_string())?;
             Ok(())
         };
         let bare = perf_scratch("wired-bare");

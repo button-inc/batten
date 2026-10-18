@@ -2657,6 +2657,32 @@ fn dispatch(
     published: &[(String, String)],
     run: u64,
 ) -> Result<Vec<Outcome>> {
+    // ONE OBSERVATION, READ TWICE (CLOUD-427). Computed here and carried as a
+    // value to each run's spawn and teardown; see `GroupDecision` for why
+    // re-asking is the bug rather than the tidier spelling.
+    //
+    // AND DECLINED OUTRIGHT ABOVE ONE JOB. Batten reports `128 + the signal it
+    // received`, which is one answer; owning N groups at once would make it N,
+    // and a supervisor that cannot say what it tore down is not one.
+    let decision = GroupDecision::observe(wants_group(settings));
+    dispatch_decided(repo_root, bundle, settings, published, run, decision)
+}
+
+/// Whether a run asks Batten to own its group: declared, and one job at a time.
+const fn wants_group(settings: &ExecConfig) -> bool {
+    settings.manage_process_group && settings.jobs <= 1
+}
+
+/// [`dispatch`] under a grouping decision already made: the environment is an
+/// input here, so a case states it rather than inheriting its harness's.
+fn dispatch_decided(
+    repo_root: &Path,
+    bundle: &[&[String]],
+    settings: &ExecConfig,
+    published: &[(String, String)],
+    run: u64,
+    decision: GroupDecision,
+) -> Result<Vec<Outcome>> {
     let jobs = settings.jobs.max(1);
     let mut done: Vec<Outcome> = Vec::with_capacity(bundle.len());
     // Waves rather than a work-stealing pool: `jobs` is a width, the bundle is
@@ -2669,7 +2695,9 @@ fn dispatch(
             // The single-command path stays a plain call, so a bare `batten exec`
             // spawns no thread it does not need — and so the ordinary case is not
             // paying for the bundle case.
-            vec![run_one(repo_root, run, first, wave[0], settings, published)]
+            vec![run_one(
+                repo_root, run, first, wave[0], settings, published, decision,
+            )]
         } else {
             std::thread::scope(|scope| {
                 let handles: Vec<_> = wave
@@ -2677,7 +2705,15 @@ fn dispatch(
                     .enumerate()
                     .map(|(offset, command)| {
                         scope.spawn(move || {
-                            run_one(repo_root, run, first + offset, command, settings, published)
+                            run_one(
+                                repo_root,
+                                run,
+                                first + offset,
+                                command,
+                                settings,
+                                published,
+                                decision,
+                            )
                         })
                     })
                     .collect();
@@ -2718,6 +2754,7 @@ fn run_one(
     command: &[String],
     settings: &ExecConfig,
     published: &[(String, String)],
+    decision: GroupDecision,
 ) -> Result<Outcome> {
     let Some((program, args)) = command.split_first() else {
         return Err(UsageError::raise(
@@ -2732,14 +2769,8 @@ fn run_one(
     // this spawn resolves a relative name against, since it inherits the working
     // directory rather than setting one.
     //
-    // ONE OBSERVATION, READ TWICE (CLOUD-427). Computed here and carried as a
-    // value to the teardown below; see `GroupDecision` for why re-asking is the
-    // bug rather than the tidier spelling.
-    //
-    // AND DECLINED OUTRIGHT ABOVE ONE JOB. Batten reports `128 + the signal it
-    // received`, which is one answer; owning N groups at once would make it N,
-    // and a supervisor that cannot say what it tore down is not one.
-    let decision = GroupDecision::observe(settings.manage_process_group && settings.jobs <= 1);
+    // `decision` is `dispatch`'s one observation, read here at the spawn and
+    // again at the teardown below.
 
     // ARMED BEFORE THE SPAWN, and that ordering is CLOUD-746 S3's whole fix.
     // Everything between the spawn and this call used to be a window in which
@@ -3873,22 +3904,68 @@ mod tests {
         assert_eq!(ran_now(), once, "a withdrawn hook never runs");
     }
 
-    /// `probe`'s first answer, polled to a fixed bound that is this case's
-    /// input rather than its assertion.
-    fn within<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
-        let deadline = std::time::Instant::now() + Duration::from_secs(20);
-        while std::time::Instant::now() < deadline {
-            if let Some(found) = probe() {
-                return found;
-            }
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "the interval of a poll that exits the moment `probe` answers, bounded by \
-                          `deadline` above"
-            )]
-            std::thread::sleep(Duration::from_millis(10));
+    /// A named pipe a child writes to and this case waits on: the event itself,
+    /// never a poll of the filesystem. This case holds it open read-write for
+    /// its whole life, so no open of either end waits for the other and what a
+    /// child writes before the case reads stays in the pipe. A child writes
+    /// with `1<>`, which never blocks either, so a writer that outlives a
+    /// failed case cannot hang on a pipe nobody reads. Unix only.
+    struct Fifo {
+        path: PathBuf,
+        file: std::fs::File,
+    }
+
+    impl Fifo {
+        fn at(path: PathBuf) -> Self {
+            let dir = path.parent().expect("a fifo inside the case's scratch");
+            let made = sh(
+                dir,
+                &format!("mkfifo '{}'", path.display()),
+                "",
+                Diagnostics::Keep,
+            );
+            assert_eq!(made, Some((0, String::new())), "make the fifo");
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .expect("hold the fifo open");
+            Self { path, file }
         }
-        panic!("{what} never happened");
+
+        /// The shell redirection that writes one line to this pipe.
+        fn write(&self, line: &str) -> String {
+            format!("echo {line} 1<>'{}'", self.path.display())
+        }
+
+        /// Write `line` from this case's own end, waking a waiter.
+        fn say(&self, line: &str) {
+            use std::io::Write as _;
+
+            let mut writer = &self.file;
+            writer
+                .write_all(format!("{line}\n").as_bytes())
+                .expect("write the fifo");
+        }
+
+        /// The first write a child makes, waited for up to a fixed bound that
+        /// is this case's input rather than its assertion. The read blocks on
+        /// its own thread; a write that never comes fails the case at the
+        /// bound.
+        fn first(&self, what: &str) -> String {
+            use std::io::Read as _;
+
+            let mut reader = self.file.try_clone().expect("share the fifo");
+            let (sent, answer) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut said = [0u8; 64];
+                let read = reader.read(&mut said).unwrap_or(0);
+                let _ = sent.send(String::from_utf8_lossy(&said[..read]).trim().to_owned());
+            });
+            answer
+                .recv_timeout(Duration::from_secs(20))
+                .unwrap_or_else(|_| panic!("{what} never happened"))
+        }
     }
 
     /// The signal number every case here sends: TERM is 15 on every unix.
@@ -3919,25 +3996,18 @@ mod tests {
         }
     }
 
-    /// A detached `sh` leading its own group, its pid read back from the file
+    /// A detached `sh` leading its own group, its pid read back from the pipe
     /// it writes once `trap` is set. It then spins on builtins alone, so the
     /// group holds that one process and nothing else. Unix only: the caller
     /// holds the platform split.
     fn detached_group(dir: &Path, trap: &str) -> Group {
-        let pidfile = dir.join("pid");
-        let script = format!(
-            "{trap} echo $$ > '{0}.tmp' && mv '{0}.tmp' '{0}'; while :; do :; done",
-            pidfile.display()
-        );
+        let pid = Fifo::at(dir.join("pid"));
+        let script = format!("{trap} {}; while :; do :; done", pid.write("$$"));
         detached(Path::new("/bin/sh"), &["-c".to_owned(), script], &[]);
-        let pid = within("the detached child writing its pid", || {
-            std::fs::read_to_string(&pidfile)
-                .ok()
-                .filter(|body| body.ends_with('\n'))
-        })
-        .trim()
-        .to_owned();
-        Group { pid, reaped: false }
+        Group {
+            pid: pid.first("the detached child writing its pid"),
+            reaped: false,
+        }
     }
 
     /// Reap this process's child `group` leader, which the caller has made
@@ -4021,28 +4091,55 @@ mod tests {
         reap(&mut pid);
     }
 
-    /// Whether Batten may group in this case, asserting on unix the premise
-    /// every managed case rests on: no ancestor already manages the group.
-    /// Off unix the answer is no, which is the contract there.
-    fn batten_may_group() -> bool {
-        let groups = GroupDecision::observe(true).groups();
-        if cfg!(unix) {
-            assert!(
-                std::env::var_os(TASK_PGID_MANAGED_ENV).is_none(),
-                "premise: no ancestor is managing this case's group"
-            );
-            assert!(groups, "and this case is not a session leader");
-        } else {
-            assert!(!groups, "off unix there is nothing to own");
-        }
-        groups
+    /// Fails by: a run asking for its group undeclared or above one job, or
+    /// not asking at one job or below.
+    #[test]
+    fn only_a_declared_run_of_one_job_asks_for_its_group() {
+        let asks = |manage_process_group: bool, jobs: usize| {
+            wants_group(&ExecConfig {
+                manage_process_group,
+                jobs,
+                ..ExecConfig::DEFAULT
+            })
+        };
+        assert!(asks(true, 1));
+        assert!(asks(true, 0), "an unset width runs one at a time");
+        assert!(!asks(true, 2));
+        assert!(!asks(false, 1));
+        assert!(!asks(false, 2));
     }
 
-    /// Fails by: an opted-in run not grouping its child, an opted-out one
+    /// The marker a case's own harness may have exported (mise does, for every
+    /// task), published empty so that only Batten's grouping can set it.
+    fn unmarked() -> [(String, String); 1] {
+        [(TASK_PGID_MANAGED_ENV.to_owned(), String::new())]
+    }
+
+    /// One `sh -c script` dispatched under the decision a managed run reaches
+    /// with no ancestor managing: Batten owns the group. Stated rather than
+    /// observed, because the observation reads this process's environment,
+    /// which is the harness's — `mise run` exports the marker and so declines.
+    /// `each_decline_rule_refuses_on_its_own` holds the observation's rules.
+    fn owned_run(root: &Path, script: &str) -> Result<Vec<Outcome>> {
+        let managed = ExecConfig {
+            manage_process_group: true,
+            ..ExecConfig::DEFAULT
+        };
+        let command = ["sh".to_owned(), "-c".to_owned(), script.to_owned()];
+        dispatch_decided(
+            root,
+            &[&command[..]],
+            &managed,
+            &unmarked(),
+            next_run(),
+            GroupDecision::OWNED,
+        )
+    }
+
+    /// Fails by: an owned run not grouping its child, an opted-out one
     /// grouping it, or the ownership record outliving the reap.
     #[test]
     fn an_opted_in_run_groups_its_child_and_clears_its_record() {
-        assert_eq!(batten_may_group(), cfg!(unix));
         if !cfg!(unix) {
             return;
         }
@@ -4051,23 +4148,13 @@ mod tests {
             .expect("state")
             .join("exec")
             .join(format!("group.{}", std::process::id()));
-        let managed = ExecConfig {
-            manage_process_group: true,
-            ..ExecConfig::DEFAULT
-        };
-        let script = "test \"$MISE_TASK_PGID_MANAGED\" = 1";
-        let code = run_in_with(
-            &root,
-            &["sh".to_owned(), "-c".to_owned(), script.to_owned()],
-            &[],
-            &managed,
-            &mut std::io::sink(),
-        )
-        .expect("the child saw the marker");
-        assert_eq!(code, ExitCode::Success);
+        let outcomes = owned_run(&root, "test \"$MISE_TASK_PGID_MANAGED\" = 1")
+            .expect("the owned run has an outcome");
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].exit, 0, "the child saw Batten's marker");
         assert!(!record.exists(), "the reap clears the record");
 
-        let unmanaged = run_in_with(
+        let unmanaged = run_in_with_env(
             &root,
             &[
                 "sh".to_owned(),
@@ -4076,6 +4163,7 @@ mod tests {
             ],
             &[],
             &ExecConfig::DEFAULT,
+            &unmarked(),
             &mut std::io::sink(),
         )
         .expect("an opted-out child is not marked");
@@ -4086,39 +4174,29 @@ mod tests {
     /// behind. Only an error or an unwind ends the group.
     #[test]
     fn a_clean_managed_run_leaves_its_group_alone() {
-        assert_eq!(batten_may_group(), cfg!(unix));
         if !cfg!(unix) {
             return;
         }
         let root = contained("exec-clean-leaves");
-        let alive = root.join("alive");
+        let alive = Fifo::at(root.join("alive"));
         let go = root.join("go");
         // The job outlives the run by construction: it cannot finish before
         // `go` exists, which this case creates only once the run has returned.
         // The count bounds it should the case fail before then.
         let script = format!(
             "(i=0; while [ ! -e '{go}' ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done; \
-             echo yes > '{alive}') >/dev/null 2>&1 &",
+             {alive}) >/dev/null 2>&1 &",
             go = go.display(),
-            alive = alive.display()
+            alive = alive.write("yes")
         );
-        let managed = ExecConfig {
-            manage_process_group: true,
-            ..ExecConfig::DEFAULT
-        };
-        let code = run_in_with(
-            &root,
-            &["sh".to_owned(), "-c".to_owned(), script],
-            &[],
-            &managed,
-            &mut std::io::sink(),
-        )
-        .expect("the child exits clean");
-        assert_eq!(code, ExitCode::Success);
+        let outcomes = owned_run(&root, &script).expect("the child exits clean");
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].exit, 0);
         std::fs::write(&go, "").expect("release the background job");
-        within("the background job outliving the clean run", || {
-            alive.exists().then_some(())
-        });
+        assert_eq!(
+            alive.first("the background job outliving the clean run"),
+            "yes"
+        );
     }
 
     /// Fails by: a bundle running fewer commands than its width and failure
@@ -4215,22 +4293,20 @@ mod tests {
     }
 
     /// An owned forwarder over a detached group whose TERM trap is `on_term`,
-    /// adopted, with TERM then sent to this case. Returns the forwarder, the
-    /// group's pid, and the file the trap touches. Unix only.
-    fn forwarded(name: &str, on_term: &str) -> (Forwarding, Group, PathBuf) {
+    /// adopted, with TERM then sent to this case and seen to reach the group.
+    /// Returns the forwarder and the group's pid. Unix only.
+    fn forwarded(name: &str, on_term: &str) -> (Forwarding, Group) {
         let dir = crate::scratch::scratch(name);
-        let got = dir.join("got");
+        let got = Fifo::at(dir.join("got"));
         let forwarder = Forwarding::arm(GroupDecision::OWNED).expect("arm");
-        let trap = on_term.replace("GOT", &format!("touch '{}'", got.display()));
+        let trap = on_term.replace("GOT", &got.write("got"));
         let pid = detached_group(&dir, &format!("trap \"{trap}\" TERM;"));
         forwarder
             .adopt(pid.parse().expect("a numeric pid"))
             .expect("adopt");
         term_self();
-        within("the forwarded TERM reaching the group", || {
-            got.exists().then_some(())
-        });
-        (forwarder, pid, got)
+        assert_eq!(got.first("the forwarded TERM reaching the group"), "got");
+        (forwarder, pid)
     }
 
     /// Fails by: a signal Batten was sent not reaching the group it owns, or
@@ -4246,7 +4322,7 @@ mod tests {
             );
             return;
         }
-        let (forwarder, mut pid, _) = forwarded("exec-forward-exit", "GOT; exit 0");
+        let (forwarder, mut pid) = forwarded("exec-forward-exit", "GOT; exit 0");
         reap(&mut pid);
         assert_eq!(forwarder.finish_reporting(), (Some(TERM), None));
     }
@@ -4259,7 +4335,7 @@ mod tests {
             assert_eq!(forwarder.finish(), None, "nothing forwards");
             return;
         }
-        let (forwarder, mut pid, _) = forwarded("exec-forward-finish", "GOT; exit 0");
+        let (forwarder, mut pid) = forwarded("exec-forward-finish", "GOT; exit 0");
         reap(&mut pid);
         assert_eq!(forwarder.finish(), Some(TERM));
     }
@@ -4272,7 +4348,7 @@ mod tests {
             return;
         }
         // The trap notes the first TERM and stays, so only the escalation ends it.
-        let (forwarder, mut pid, _) = forwarded("exec-forward-second", "GOT");
+        let (forwarder, mut pid) = forwarded("exec-forward-second", "GOT");
         term_self();
         reap(&mut pid);
         assert_eq!(
@@ -4285,27 +4361,23 @@ mod tests {
     /// `128 + the signal Batten was sent`.
     #[test]
     fn a_signalled_run_reports_128_plus_the_signal_batten_was_sent() {
-        assert_eq!(batten_may_group(), cfg!(unix));
         if !cfg!(unix) {
             return;
         }
         let root = contained("exec-signalled-run");
-        let started = root.join("started");
-        let command = [
-            "sh".to_owned(),
-            "-c".to_owned(),
-            format!("touch '{}'; exec sleep 10", started.display()),
-        ];
-        let managed = ExecConfig {
-            manage_process_group: true,
-            ..ExecConfig::DEFAULT
-        };
+        let started = Fifo::at(root.join("started"));
+        let script = format!("{}; exec sleep 10", started.write("started"));
         let outcomes = std::thread::scope(|scope| {
             scope.spawn(|| {
-                within("the child starting", || started.exists().then_some(()));
+                assert_eq!(started.first("the child starting"), "started");
                 term_self();
             });
-            dispatch(&root, &[&command[..]], &managed, &[], next_run())
+            let outcomes = owned_run(&root, &script);
+            // A run that returned without its child ever starting must not
+            // leave the waiter above waiting out its bound: it reads this
+            // instead, and fails at once.
+            started.say("returned");
+            outcomes
         })
         .expect("a signalled run still has an outcome");
         assert_eq!(outcomes.len(), 1);

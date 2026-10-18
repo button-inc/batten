@@ -44,7 +44,9 @@ fn entry(entry: usize) -> &'static [u8] {
 fn rank(piece: &[u8]) -> Option<u32> {
     let entries = count();
     let (mut low, mut high) = (0, entries);
-    while low < high {
+    // `is_empty` rather than `low < high`: the same test, and the comparison's
+    // `<=` mutant spins forever on a piece no token is — a hang, not a count.
+    while !(low..high).is_empty() {
         // `midpoint` rather than `low + (high - low) / 2`: the same value, and
         // the spelled-out form's `% 2` mutant is a correct linear search — a
         // survivor no count could tell apart, only a clock.
