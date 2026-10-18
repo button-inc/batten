@@ -1625,6 +1625,26 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn a_placeholder_name_and_a_field_path_are_never_empty() {
+        assert!(is_name("run_id-2"));
+        assert!(!is_name(""));
+        assert!(!is_name("a b"));
+        assert_eq!(segments("a.b.0"), Some(vec!["a", "b", "0"]));
+        assert_eq!(segments(""), None);
+        assert_eq!(segments("a..b"), None);
+        assert_eq!(segments("a."), None);
+    }
+
+    #[test]
+    fn an_endpoint_is_a_relative_path_of_safe_characters() {
+        assert!(validate_endpoint("repos/{owner}/{repo}/actions/runs").is_ok());
+        assert!(validate_endpoint("").is_err());
+        assert!(validate_endpoint("/repos/x").is_err());
+        assert!(validate_endpoint("repos/x?per_page=1").is_err());
+        assert!(validate_endpoint("repos/{bad name}").is_err());
+    }
+
     /// A span measured to now needs the clock, and only that span does.
     #[test]
     fn an_age_needs_a_clock_and_a_clock_is_all_it_needs() {

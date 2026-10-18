@@ -272,9 +272,10 @@ pub fn interval_for(configured: u64, floor: Option<f64>) -> f64 {
         // the interval this poll was told to use — the one direction this
         // function must never take, since `Config::interval` is the caller's
         // floor and nothing here is entitled to lower it.
-        Some(floor) if floor.is_finite() && floor > configured => {
-            floor.min(MAX_FLOOR.max(configured))
-        }
+        //
+        // A floor at or below the configured interval leaves it, which `max`
+        // states without a comparison of its own.
+        Some(floor) if floor.is_finite() => floor.max(configured).min(MAX_FLOOR.max(configured)),
         _ => configured,
     }
 }
@@ -737,7 +738,16 @@ fn render(findings: &[checks_green::Finding]) -> String {
 /// detector rather than a source of spurious movement.
 #[must_use]
 pub fn read(config: &Config, etag: Option<&str>) -> Option<crate::rest::Answer> {
-    let mut answer = crate::rest::get(&page(config, 1), etag)?;
+    read_with(config, etag, crate::rest::get)
+}
+
+/// [`read`] over `get`, which answers one API-relative path.
+fn read_with(
+    config: &Config,
+    etag: Option<&str>,
+    get: impl Fn(&str, Option<&str>) -> Option<crate::rest::Answer>,
+) -> Option<crate::rest::Answer> {
+    let mut answer = get(&page(config, 1), etag)?;
     // A `304` carries no body and a refusal carries an error document; neither is
     // a reading, so neither is walked. `is_reading()` is the same guard `absorb`
     // applies for the same reason.
@@ -754,7 +764,7 @@ pub fn read(config: &Config, etag: Option<&str>) -> Option<crate::rest::Answer> 
         // read so far is still a better reading than page one alone, and the next
         // poll asks again. Losing the whole reading here would re-create the
         // could-not-look-overwrites-a-good-reading shape `absorb` documents.
-        let Some(next) = crate::rest::get(&page(config, number), None) else {
+        let Some(next) = get(&page(config, number), None) else {
             break;
         };
         if !next.is_reading() {
@@ -919,6 +929,167 @@ fn sleep(seconds: f64) {
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+
+    fn config_for(repo: &str) -> Config {
+        Config {
+            sha: String::from("abc"),
+            repo: repo.to_owned(),
+            interval: DEFAULT_INTERVAL,
+            progress: None,
+        }
+    }
+
+    fn answered(status: u16, body: String) -> Option<crate::rest::Answer> {
+        Some(crate::rest::Answer {
+            status,
+            etag: Some(String::from("\"v1\"")),
+            poll_floor: None,
+            backoff: None,
+            body,
+            headers: std::collections::BTreeMap::new(),
+        })
+    }
+
+    /// One page of `count` check runs.
+    fn runs(count: usize) -> String {
+        let rows: Vec<serde_json::Value> = (0..count)
+            .map(|at| serde_json::json!({"name": format!("c{at}"), "status": "completed"}))
+            .collect();
+        serde_json::json!({ "check_runs": rows }).to_string()
+    }
+
+    #[test]
+    fn only_a_named_repository_names_one() {
+        assert!(config_for("o/r").names_a_repository());
+        assert!(!config_for("").names_a_repository());
+        assert!(!config_for("  ").names_a_repository());
+        assert!(!config_for(REPO_PLACEHOLDER).names_a_repository());
+    }
+
+    /// The pages are walked while each comes back full, the validator rides
+    /// page one alone, and the reading is their rows folded into one body.
+    #[test]
+    fn a_full_page_is_followed_and_a_short_one_ends_the_walk() {
+        let full = usize::try_from(PER_PAGE).expect("a page fits");
+        let asked = std::cell::RefCell::new(Vec::new());
+        let get = |path: &str, etag: Option<&str>| {
+            asked
+                .borrow_mut()
+                .push((path.to_owned(), etag.map(str::to_owned)));
+            let count = if asked.borrow().len() == 1 { full } else { 3 };
+            answered(200, runs(count))
+        };
+        let answer = read_with(&config_for("o/r"), Some("\"v0\""), get).expect("an answer");
+        assert_eq!(check_runs_in(&answer.body).len(), full + 3);
+        assert_eq!(
+            asked.borrow().clone(),
+            vec![
+                (page(&config_for("o/r"), 1), Some(String::from("\"v0\""))),
+                (page(&config_for("o/r"), 2), None),
+            ]
+        );
+    }
+
+    /// A head whose every page is full is read to the page budget and no
+    /// further; an unchanged answer is never walked.
+    #[test]
+    fn the_walk_is_bounded_and_a_non_reading_is_returned_as_it_came() {
+        let full = usize::try_from(PER_PAGE).expect("a page fits");
+        let asked = std::cell::Cell::new(0_u32);
+        let get = |_: &str, _: Option<&str>| {
+            asked.set(asked.get() + 1);
+            answered(200, runs(full))
+        };
+        read_with(&config_for("o/r"), None, get).expect("an answer");
+        assert_eq!(asked.get(), MAX_PAGES);
+        let asked = std::cell::Cell::new(0_u32);
+        let unchanged = |_: &str, _: Option<&str>| {
+            asked.set(asked.get() + 1);
+            answered(304, String::new())
+        };
+        let answer = read_with(&config_for("o/r"), Some("\"v1\""), unchanged).expect("an answer");
+        assert_eq!(
+            (answer.status, answer.body.as_str(), asked.get()),
+            (304, "", 1)
+        );
+        assert!(read_with(&config_for("o/r"), None, |_: &str, _: Option<&str>| None).is_none());
+    }
+
+    #[test]
+    fn a_page_names_the_head_and_its_number() {
+        assert_eq!(
+            page(&config_for("o/r"), 3),
+            format!("repos/o/r/commits/abc/check-runs?per_page={PER_PAGE}&page=3")
+        );
+    }
+
+    #[test]
+    fn a_page_s_rows_are_its_check_runs_array_or_nothing() {
+        assert_eq!(check_runs_in(&runs(2)).len(), 2);
+        assert!(check_runs_in("not json").is_empty());
+        assert!(check_runs_in(r#"{"check_runs": {}}"#).is_empty());
+    }
+
+    #[test]
+    fn a_recorder_verb_is_split_into_its_program_and_leading_words() {
+        assert_eq!(
+            recorder_argv("batten task record"),
+            ("batten", vec!["task", "record"])
+        );
+        assert_eq!(recorder_argv("recorder"), ("recorder", Vec::<&str>::new()));
+    }
+
+    #[test]
+    fn the_signature_is_fnv_1a() {
+        assert_eq!(signature(""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(signature("a"), 0xaf63_dc4c_8601_ec8c);
+        assert_ne!(signature("ab"), signature("ba"));
+    }
+
+    /// A floor that is not finite is no floor, and a backoff outranks the
+    /// cadence.
+    #[test]
+    fn the_wait_honours_a_finite_floor_and_the_server_s_backoff() {
+        assert!((interval_for(5, Some(f64::INFINITY)) - 5.0).abs() < f64::EPSILON);
+        assert!((interval_for(5, Some(2.0)) - 5.0).abs() < f64::EPSILON);
+        assert!((interval_for(5, Some(7.5)) - 7.5).abs() < f64::EPSILON);
+        assert!((wait_for(5, None, Some(60)) - 60.0).abs() < f64::EPSILON);
+        assert!((wait_for(5, Some(9.0), None) - 9.0).abs() < f64::EPSILON);
+    }
+
+    /// A poll that could not look still counts, waits its interval and keeps
+    /// the reading it had; one that answered retires the unanswered count.
+    #[test]
+    fn a_poll_folds_could_not_look_and_keeps_its_reading() {
+        let mut poll = Poll::default();
+        assert!((poll.absorb(None, 4) - 4.0).abs() < f64::EPSILON);
+        assert!((poll.absorb(None, 4) - 4.0).abs() < f64::EPSILON);
+        assert_eq!(poll.unanswered_from_the_start(), 2);
+        let answer = answered(200, runs(2)).expect("an answer");
+        poll.absorb(Some(&answer), 4);
+        assert_eq!(poll.runs().len(), 2);
+        assert_eq!(poll.unanswered_from_the_start(), 0);
+        poll.absorb(None, 4);
+        assert_eq!(poll.runs().len(), 2, "could-not-look keeps the reading");
+    }
+
+    #[test]
+    fn a_wait_is_described_by_what_it_waits_on() {
+        assert_eq!(
+            describe(&checks_green::Pending::Running {
+                pending: 2,
+                graded: 3
+            }),
+            "pr watch: 2 required check(s) still running, 3 graded"
+        );
+        assert_eq!(
+            describe(&checks_green::Pending::Unregistered(vec![
+                String::from("ci"),
+                String::from("final")
+            ])),
+            "pr watch: required check(s) with no run at all: ci, final"
+        );
+    }
 
     fn roster() -> Roster {
         Roster {

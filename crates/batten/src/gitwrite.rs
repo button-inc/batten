@@ -1818,6 +1818,108 @@ fn drop_set(
 mod tests {
     use super::*;
 
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("batten-gitwrite-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap_or_else(|err| panic!("fixture dir: {err}"));
+        dir
+    }
+
+    /// Every line of ours, then each line of theirs ours lacks, never a blank.
+    #[test]
+    fn a_union_keeps_ours_then_appends_what_only_theirs_carries() {
+        assert_eq!(union_of(b"a\nb", b"b\nc\n\n"), b"a\nb\nc\n");
+        assert_eq!(union_of(b"a\n", b"b"), b"a\nb\n");
+        assert_eq!(union_of(b"", b"x"), b"x\n");
+    }
+
+    #[test]
+    fn only_a_literal_path_given_merge_union_is_a_union_path() {
+        let dir = scratch("union");
+        std::fs::write(
+            dir.join(".gitattributes"),
+            "CHANGELOG.md merge=union\n*.lock merge=union\n# notes.md merge=union\nother.txt text\n",
+        )
+        .unwrap_or_else(|err| panic!("attributes: {err}"));
+        assert_eq!(
+            union_paths(&dir),
+            std::collections::BTreeSet::from([String::from("CHANGELOG.md")])
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A conflict is kept with its ancestor, in diff3's markers; a merge both
+    /// sides agree on is none.
+    #[test]
+    fn a_conflict_is_kept_as_diff3_and_a_clean_merge_is_none() {
+        let merged = diff3(b"a\nb\nc\n", b"a\nours\nc\n", b"a\ntheirs\nc\n")
+            .unwrap_or_else(|| panic!("a conflict"));
+        assert!(
+            merged.contains("ours") && merged.contains("theirs") && merged.contains("|||||||"),
+            "{merged}"
+        );
+        assert_eq!(diff3(b"a\nb\nc\n", b"a\nb\nc\nd\n", b"z\na\nb\nc\n"), None);
+    }
+
+    /// The executable bit, and nothing else of the mode, decides the kind.
+    #[test]
+    fn a_blob_is_executable_by_its_bit_alone() {
+        let dir = scratch("kind");
+        let path = dir.join("tool");
+        std::fs::write(&path, "x").unwrap_or_else(|err| panic!("fixture file: {err}"));
+        let kind = || {
+            executable_kind(&std::fs::metadata(&path).unwrap_or_else(|err| panic!("stat: {err}")))
+        };
+        set_mode(&path, false).unwrap_or_else(|err| panic!("to 644: {err}"));
+        assert_eq!(kind(), gix::objs::tree::EntryKind::Blob);
+        set_mode(&path, true).unwrap_or_else(|err| panic!("to 755: {err}"));
+        let executable = if cfg!(unix) {
+            gix::objs::tree::EntryKind::BlobExecutable
+        } else {
+            gix::objs::tree::EntryKind::Blob
+        };
+        assert_eq!(kind(), executable);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A seeded fixture commits the directory's files, never its own store.
+    #[test]
+    fn a_seed_commits_the_directory_as_it_stands() {
+        let dir = scratch("seed");
+        std::fs::write(dir.join("a.txt"), "a\n").unwrap_or_else(|err| panic!("fixture: {err}"));
+        seed(&dir).unwrap_or_else(|err| panic!("seed: {err}"));
+        assert_eq!(
+            crate::git::show(&dir, "HEAD", "a.txt").unwrap_or_else(|err| panic!("show: {err}")),
+            "a\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The trunk is `main` whatever the host's git says, and each commit carries
+    /// the one before it.
+    #[test]
+    fn a_fixture_is_on_main_and_each_commit_carries_its_parent() {
+        let dir = scratch("refs");
+        init_on_main(&dir).unwrap_or_else(|err| panic!("init: {err}"));
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".git/HEAD")).unwrap_or_default(),
+            "ref: refs/heads/main\n"
+        );
+        let head = || {
+            crate::git::resolve_ref(&dir, "HEAD")
+                .unwrap_or_else(|err| panic!("resolve: {err}"))
+                .unwrap_or_else(|| panic!("a commit"))
+        };
+        commit_paths(&dir, &[], "one").unwrap_or_else(|err| panic!("commit: {err}"));
+        let first = head();
+        commit_paths(&dir, &[], "two").unwrap_or_else(|err| panic!("commit: {err}"));
+        let second = head();
+        assert!(carries(&dir, &first, &second));
+        assert!(!carries(&dir, &second, &first));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A replay that moves a path from 100755 to 100644 must leave it 0644:
     /// `durable::replace` keeps the replaced file's bits, so a mode set in one
     /// direction only left the worktree executable where the index said not.
