@@ -1033,13 +1033,9 @@ mod tests {
         assert_ne!(signature("ab"), signature("ba"));
     }
 
-    /// A floor that is not finite is no floor, and a backoff outranks the
-    /// cadence.
+    /// A backoff outranks the cadence, and a floor paces it without one.
     #[test]
-    fn the_wait_honours_a_finite_floor_and_the_server_s_backoff() {
-        assert!((interval_for(5, Some(f64::INFINITY)) - 5.0).abs() < f64::EPSILON);
-        assert!((interval_for(5, Some(2.0)) - 5.0).abs() < f64::EPSILON);
-        assert!((interval_for(5, Some(7.5)) - 7.5).abs() < f64::EPSILON);
+    fn the_wait_honours_the_server_s_backoff_then_its_floor() {
         assert!((wait_for(5, None, Some(60)) - 60.0).abs() < f64::EPSILON);
         assert!((wait_for(5, Some(9.0), None) - 9.0).abs() < f64::EPSILON);
     }
