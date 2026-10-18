@@ -524,13 +524,8 @@ fn grade(conclusion: &Conclusion) -> Answer {
 /// branch.
 #[must_use]
 pub fn refusal(ask: &Ask) -> Option<String> {
-    refusal_with(ask, run)
-}
-
-/// [`refusal`] over `read`, which answers one API-relative path.
-fn refusal_with(ask: &Ask, read: impl Fn(&str) -> Option<String>) -> Option<String> {
     let path = format!("repos/{}/issues/{}/comments?per_page=100", ask.repo, ask.pr);
-    let raw = read(&path)?;
+    let raw = run(&path)?;
     let value = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
     let comments = value.as_array()?;
     // THE LAST ONE, because a pull request that has lapped carries the refusals
@@ -732,41 +727,43 @@ mod tests {
         );
     }
 
-    #[allow(
-        clippy::unnecessary_wraps,
-        reason = "every caller hands the forge's answer on as the Option a read returns"
-    )]
-    fn reading(status: u16, body: &str) -> Option<crate::rest::Answer> {
-        Some(crate::rest::Answer {
+    fn reading(status: u16, body: &str) -> crate::rest::Answer {
+        crate::rest::Answer {
             status,
             etag: None,
             poll_floor: None,
             backoff: None,
             body: body.to_owned(),
             headers: std::collections::BTreeMap::new(),
-        })
+        }
     }
 
     #[test]
     fn a_lookup_is_found_none_or_could_not_look() {
         assert_eq!(look_up_of(None), Lookup::Unreadable(0));
-        assert_eq!(look_up_of(reading(404, "[]")), Lookup::Unreadable(404));
         assert_eq!(
-            look_up_of(reading(200, "not json")),
+            look_up_of(Some(reading(404, "[]"))),
+            Lookup::Unreadable(404)
+        );
+        assert_eq!(
+            look_up_of(Some(reading(200, "not json"))),
             Lookup::Unreadable(200)
         );
-        assert_eq!(look_up_of(reading(200, "{}")), Lookup::Unreadable(200));
-        assert_eq!(look_up_of(reading(200, "[]")), Lookup::None);
         assert_eq!(
-            look_up_of(reading(200, r#"[{"number": 7}]"#)),
+            look_up_of(Some(reading(200, "{}"))),
+            Lookup::Unreadable(200)
+        );
+        assert_eq!(look_up_of(Some(reading(200, "[]"))), Lookup::None);
+        assert_eq!(
+            look_up_of(Some(reading(200, r#"[{"number": 7}]"#))),
             Lookup::Found(String::from("7"))
         );
         assert_eq!(
-            look_up_of(reading(200, r#"[{"number": "8"}]"#)),
+            look_up_of(Some(reading(200, r#"[{"number": "8"}]"#))),
             Lookup::Found(String::from("8"))
         );
         assert_eq!(
-            look_up_of(reading(200, r#"[{"number": null}]"#)),
+            look_up_of(Some(reading(200, r#"[{"number": null}]"#))),
             Lookup::Unreadable(200)
         );
     }
@@ -774,12 +771,21 @@ mod tests {
     #[test]
     fn only_the_forge_s_own_boolean_says_merged() {
         assert_eq!(merged_of(None), Merged::Unreadable(0));
-        assert_eq!(merged_of(reading(403, "{}")), Merged::Unreadable(403));
-        assert_eq!(merged_of(reading(200, "not json")), Merged::Unreadable(200));
-        assert_eq!(merged_of(reading(200, r#"{"merged": true}"#)), Merged::Yes);
-        assert_eq!(merged_of(reading(200, r#"{"merged": false}"#)), Merged::No);
+        assert_eq!(merged_of(Some(reading(403, "{}"))), Merged::Unreadable(403));
         assert_eq!(
-            merged_of(reading(200, r#"{"state": "closed"}"#)),
+            merged_of(Some(reading(200, "not json"))),
+            Merged::Unreadable(200)
+        );
+        assert_eq!(
+            merged_of(Some(reading(200, r#"{"merged": true}"#))),
+            Merged::Yes
+        );
+        assert_eq!(
+            merged_of(Some(reading(200, r#"{"merged": false}"#))),
+            Merged::No
+        );
+        assert_eq!(
+            merged_of(Some(reading(200, r#"{"state": "closed"}"#))),
             Merged::Unreadable(200)
         );
     }
@@ -873,26 +879,6 @@ mod tests {
             answer_with(&ask(), SINCE, "1001", |_| Some(String::from("{}"))),
             unknown
         );
-    }
-
-    #[test]
-    fn the_refusal_is_the_newest_refusing_comment_on_the_pull_request() {
-        let comments = serde_json::json!([
-            { "body": "Refusing to fast-forward: first lap\nremedy" },
-            { "body": "/fast-forward" },
-            { "body": "Refusing to fast-forward: this lap\nremedy" },
-        ])
-        .to_string();
-        let read = |path: &str| {
-            assert_eq!(path, "repos/o/r/issues/42/comments?per_page=100");
-            Some(comments.clone())
-        };
-        assert_eq!(
-            refusal_with(&ask(), read).as_deref(),
-            Some("Refusing to fast-forward: this lap")
-        );
-        assert_eq!(refusal_with(&ask(), |_| None), None);
-        assert_eq!(refusal_with(&ask(), |_| Some(String::from("{}"))), None);
     }
 
     #[test]

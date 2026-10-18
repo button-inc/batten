@@ -386,19 +386,15 @@ pub fn run_settings(
 mod tests {
     use super::*;
 
-    #[allow(
-        clippy::unnecessary_wraps,
-        reason = "every caller hands the forge's answer on as the Option a read returns"
-    )]
-    fn answer(status: u16, body: &str) -> Option<crate::rest::Answer> {
-        Some(crate::rest::Answer {
+    fn answer(status: u16, body: &str) -> crate::rest::Answer {
+        crate::rest::Answer {
             status,
             etag: None,
             poll_floor: None,
             backoff: None,
             body: body.to_owned(),
             headers: std::collections::BTreeMap::new(),
-        })
+        }
     }
 
     /// Every path answers from `routes` by exact match, and 404 otherwise.
@@ -406,10 +402,10 @@ mod tests {
         routes: Vec<(String, String)>,
     ) -> impl Fn(&str) -> Option<crate::rest::Answer> + use<> {
         move |path: &str| {
-            routes
-                .iter()
-                .find(|(at, _)| at == path)
-                .map_or_else(|| answer(404, "{}"), |(_, body)| answer(200, body))
+            routes.iter().find(|(at, _)| at == path).map_or_else(
+                || Some(answer(404, "{}")),
+                |(_, body)| Some(answer(200, body)),
+            )
         }
     }
 
@@ -424,12 +420,15 @@ mod tests {
     #[test]
     fn a_forge_read_is_json_none_on_404_or_could_not_look() {
         assert_eq!(
-            json_at(&|_: &str| answer(200, r#"{"a":1}"#), "p").unwrap(),
+            json_at(&|_: &str| Some(answer(200, r#"{"a":1}"#)), "p").unwrap(),
             Some(serde_json::json!({"a": 1}))
         );
-        assert_eq!(json_at(&|_: &str| answer(404, "x"), "p").unwrap(), None);
-        assert!(json_at(&|_: &str| answer(500, "{}"), "p").is_err());
-        assert!(json_at(&|_: &str| answer(200, "x"), "p").is_err());
+        assert_eq!(
+            json_at(&|_: &str| Some(answer(404, "x")), "p").unwrap(),
+            None
+        );
+        assert!(json_at(&|_: &str| Some(answer(500, "{}")), "p").is_err());
+        assert!(json_at(&|_: &str| Some(answer(200, "x")), "p").is_err());
         assert!(json_at(&|_: &str| None, "p").is_err());
     }
 

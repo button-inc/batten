@@ -5020,7 +5020,7 @@ mod tests {
 
     #[test]
     fn only_a_named_workflow_is_a_declared_fan_in() {
-        assert!(super::FanIn::from_workflow_path(".github/workflows/ci.yml").declared());
+        assert!(super::FanIn::from_workflow_path("fan-in.yml").declared());
         assert!(!super::FanIn::from_workflow_path("").declared());
     }
 

@@ -1429,3 +1429,7 @@ mod tests {
         );
     }
 }
+
+// The forge read and the progress recorder run over the compiled binary, so the
+// fixture-forge tier is what judges them.
+//MUTANT-SUITE crates/batten/tests/it/pr_watch.rs

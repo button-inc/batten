@@ -1524,19 +1524,15 @@ pub fn run_pin(
 mod tests {
     use super::*;
 
-    #[allow(
-        clippy::unnecessary_wraps,
-        reason = "every caller hands the forge's answer on as the Option a read returns"
-    )]
-    fn answer(status: u16, body: &str) -> Option<crate::rest::Answer> {
-        Some(crate::rest::Answer {
+    fn answer(status: u16, body: &str) -> crate::rest::Answer {
+        crate::rest::Answer {
             status,
             etag: None,
             poll_floor: None,
             backoff: None,
             body: body.to_owned(),
             headers: std::collections::BTreeMap::new(),
-        })
+        }
     }
 
     /// A forge whose every path answers from `routes`, by the first needle the
@@ -1549,7 +1545,10 @@ mod tests {
             routes
                 .iter()
                 .find(|(needle, _)| path.contains(needle))
-                .map_or_else(|| answer(404, "{}"), |(_, body)| answer(200, body))
+                .map_or_else(
+                    || Some(answer(404, "{}")),
+                    |(_, body)| Some(answer(200, body)),
+                )
         }
     }
 
@@ -1676,11 +1675,11 @@ mod tests {
     #[test]
     fn a_sha_is_read_from_an_accepted_answer_or_refused() {
         assert_eq!(
-            sha_in(answer(201, r#"{"sha":"abc"}"#), "the blob", "/sha"),
+            sha_in(Some(answer(201, r#"{"sha":"abc"}"#)), "the blob", "/sha"),
             Ok(String::from("abc"))
         );
-        assert!(sha_in(answer(422, r#"{"sha":"abc"}"#), "the blob", "/sha").is_err());
-        assert!(sha_in(answer(200, "{}"), "the blob", "/sha").is_err());
+        assert!(sha_in(Some(answer(422, r#"{"sha":"abc"}"#)), "the blob", "/sha").is_err());
+        assert!(sha_in(Some(answer(200, "{}")), "the blob", "/sha").is_err());
         assert!(sha_in(None, "the blob", "/sha").is_err());
     }
 

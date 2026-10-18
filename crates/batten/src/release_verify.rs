@@ -431,19 +431,15 @@ mod tests {
         assert_eq!(base64_decode("+/+/").unwrap(), b"\xfb\xff\xbf");
     }
 
-    #[allow(
-        clippy::unnecessary_wraps,
-        reason = "every caller hands the forge's answer on as the Option a read returns"
-    )]
-    fn answer(status: u16, body: &str) -> Option<crate::rest::Answer> {
-        Some(crate::rest::Answer {
+    fn answer(status: u16, body: &str) -> crate::rest::Answer {
+        crate::rest::Answer {
             status,
             etag: None,
             poll_floor: None,
             backoff: None,
             body: body.to_owned(),
             headers: std::collections::BTreeMap::new(),
-        })
+        }
     }
 
     #[test]
@@ -454,7 +450,7 @@ mod tests {
                     path,
                     format!("repos/o/r/contents/{}?ref=abc", crate::install::LOCK_FILE)
                 );
-                answer(status, body)
+                Some(answer(status, body))
             }
         };
         assert_eq!(
@@ -500,12 +496,12 @@ mod tests {
     fn a_draft_s_object_is_the_list_entry_carrying_its_tag() {
         let get = |path: &str| {
             if path.contains("/releases/tags/") {
-                answer(404, "{}")
+                Some(answer(404, "{}"))
             } else {
-                answer(
+                Some(answer(
                     200,
                     r#"[{"tag_name": "v2", "draft": false}, {"tag_name": "v1", "draft": true}]"#,
-                )
+                ))
             }
         };
         assert_eq!(object("o/r", "v1", &get).unwrap()["draft"], true);
