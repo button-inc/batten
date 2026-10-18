@@ -259,8 +259,9 @@ fn run(root: &Path, verb: &str, gates: &str) -> (i32, String, String) {
         // either way.
         .env("MUTANT_TASKS", "mise.toml")
         // A PROFILE NO TOY DECLARES, as this repository's `[env]` exports under
-        // CI, so every case with a Cargo row proves an undeclared inherited
-        // profile does not reach the sweep's nextest runs.
+        // CI, so every case whose Cargo row reaches nextest (the toy's
+        // `tests/toy.rs` rows) proves an undeclared inherited profile does not
+        // reach the sweep's nextest runs.
         .env("NEXTEST_PROFILE", "ci")
         .output()
         .expect("run batten mutate");

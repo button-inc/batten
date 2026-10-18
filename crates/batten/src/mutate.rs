@@ -1235,6 +1235,7 @@ impl RunnerKind {
 //MUTANT later-unrecognized-costs-the-gate|s@^                None if index == 0 => unrunnable@                None if true => unrunnable@|a_later_unrecognized_suite_costs_only_the_rows_under_it
 //MUTANT suite-first-only|s@^            Some(_) => row.resolved.as_ref(),$@            Some(_) => self.suite.as_ref(),@|each_preset_module_row_runs_under_its_own_declared_suite
 //MUTANT nextest-profile-unpinned|s@^        (String::from("NEXTEST_PROFILE"), String::from("default")),$@        (String::from("NEXTEST_PROFILE"), String::from("ci")),@|every_runner_runs_the_default_nextest_profile
+//MUTANT nextest-profile-dropped|s@^        (String::from("NEXTEST_PROFILE"), String::from("default")),$@@|every_runner_runs_the_default_nextest_profile
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT later-suites-unread|s@^                    own.push(resolved);$@                    if own.is_empty() { own.push(resolved); }@|a_change_to_a_sources_second_suite_sweeps_its_gate
 /// Which registered runner owns which sources.
@@ -4444,15 +4445,13 @@ mod tests {
     /// every declared Cargo row reads `suite-did-not-run`.
     #[test]
     fn every_runner_runs_the_default_nextest_profile() {
-        // The LAST entry, since a spawn's environment is last-wins.
         let env = suite_env(Path::new("/repo"));
         assert_eq!(
             env.iter()
-                .rev()
                 .find(|(key, _)| key == "NEXTEST_PROFILE")
                 .map(|(_, value)| value.as_str()),
             Some("default"),
-            "{env:?}"
+            "suite_env must pin NEXTEST_PROFILE=default: {env:?}"
         );
     }
 
