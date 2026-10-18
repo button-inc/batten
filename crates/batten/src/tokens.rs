@@ -626,24 +626,7 @@ fn render_capability(
         },
     ) = (base, mine)
     else {
-        line(
-            out,
-            &format!(
-                "**not measured** — an arm's output was not byte-identical across {} runs",
-                workload.runs
-            ),
-        );
-        line(out, "(baseline byte-stable: no, batten byte-stable: no),");
-        line(
-            out,
-            "so there is no single figure to report. Byte-stability is the precondition the",
-        );
-        line(
-            out,
-            "cross-session cache claim rests on, so a workload that lacks it has lost the",
-        );
-        line(out, "mechanism, not merely the precision.");
-        line(out, "");
+        render_unstable(out, workload.runs, [base, mine]);
         return Some(Published::Reason);
     };
 
@@ -660,6 +643,39 @@ fn render_capability(
         },
     );
     Some(Published::Figure)
+}
+
+/// The reason a capability whose arms did not both hold still carries no figure,
+/// with each arm saying for itself whether it was byte-stable.
+///
+/// Split out of `render_capability` to keep it under the line lint.
+fn render_unstable(out: &mut String, runs: usize, [base, mine]: [&Arm; 2]) {
+    let stable = |arm: &Arm| match arm {
+        Arm::Stable { .. } => "yes",
+        Arm::Unstable { .. } => "no",
+    };
+    line(
+        out,
+        &format!("**not measured** — an arm's output was not byte-identical across {runs} runs"),
+    );
+    line(
+        out,
+        &format!(
+            "(baseline byte-stable: {}, batten byte-stable: {}),",
+            stable(base),
+            stable(mine)
+        ),
+    );
+    line(
+        out,
+        "so there is no single figure to report. Byte-stability is the precondition the",
+    );
+    line(
+        out,
+        "cross-session cache claim rests on, so a workload that lacks it has lost the",
+    );
+    line(out, "mechanism, not merely the precision.");
+    line(out, "");
 }
 
 /// The two measured arms of one capability, and what prices them.
@@ -1278,7 +1294,8 @@ mod tests {
         );
         assert!(
             out.contains(
-                "**not measured** — an arm's output was not byte-identical across 3 runs\n"
+                "**not measured** — an arm's output was not byte-identical across 3 runs\n\
+                 (baseline byte-stable: yes, batten byte-stable: no),\n"
             ),
             "{out}"
         );
