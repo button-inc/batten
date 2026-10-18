@@ -232,6 +232,25 @@ pub enum Arm {
     },
 }
 
+impl Arm {
+    /// The byte count, where there is one.
+    #[must_use]
+    pub const fn bytes(&self) -> Option<u64> {
+        match self {
+            Arm::Stable { bytes, .. } => Some(*bytes),
+            Arm::Unstable { .. } => None,
+        }
+    }
+
+    /// How many steps this arm costs.
+    #[must_use]
+    pub const fn steps(&self) -> usize {
+        match self {
+            Arm::Stable { steps, .. } | Arm::Unstable { steps, .. } => *steps,
+        }
+    }
+}
+
 /// Reduce a set of runs to an arm.
 ///
 /// **Byte-for-byte across every run.** `arm::stability` is the shared reduction
@@ -1086,6 +1105,15 @@ mod tests {
     fn a_ratio_is_the_quotient() {
         let quotient = ratio(10, 4).expect("a ratio");
         assert!((quotient - 2.5).abs() < 1e-9, "{quotient}");
+    }
+
+    /// Fails by: `bytes` or `steps` answering a constant.
+    #[test]
+    fn an_arm_reports_its_own_bytes_and_steps() {
+        let stable = reduce(&[b"same".to_vec(), b"same".to_vec()], 0, 2);
+        assert_eq!((stable.bytes(), stable.steps()), (Some(4), 2));
+        let unstable = reduce(&[b"one".to_vec(), b"two".to_vec()], 0, 3);
+        assert_eq!((unstable.bytes(), unstable.steps()), (None, 3));
     }
 
     /// A fixture is copied whole, each file without its `.in`, and a missing
