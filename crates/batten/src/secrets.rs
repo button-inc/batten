@@ -1466,12 +1466,12 @@ mod tests {
         assert_eq!(ledger_path(&root).unwrap(), key.with_file_name(LEDGER_FILE));
         let _ = fs::remove_dir_all(key.parent().unwrap());
 
-        custody(&root, date()).unwrap();
+        let held = custody(&root, date()).unwrap();
         assert_eq!(
             events(&root).unwrap(),
             vec![Event::Minted {
                 key_id: key_id(date()),
-                witness: custody(&root, date()).unwrap().witnesses().unwrap()[0].clone(),
+                witness: held.witnesses().unwrap()[0].clone(),
             }]
         );
         assert_eq!(

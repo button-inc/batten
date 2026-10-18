@@ -379,10 +379,7 @@ mod tests {
     use super::{find, is_binary, untar, unzip, verifier_of};
 
     fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("batten-attestation-unit-{name}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+        crate::scratch::scratch(&format!("attestation-unit-{name}"))
     }
 
     /// A gzipped tarball carrying `entries` as `(path, bytes)`.
@@ -444,8 +441,8 @@ mod tests {
     #[test]
     fn the_verifier_is_the_named_program_or_the_default_where_none_is_named() {
         assert_eq!(verifier_of(Some(" cosign ")), "cosign");
-        assert_eq!(verifier_of(Some("  ")), "gh");
-        assert_eq!(verifier_of(None), "gh");
+        assert_eq!(verifier_of(Some("  ")), super::DEFAULT_VERIFIER);
+        assert_eq!(verifier_of(None), super::DEFAULT_VERIFIER);
     }
 
     /// A `.zip` that will not unpack is could-not-look, never an archive read

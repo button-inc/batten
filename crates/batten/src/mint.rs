@@ -807,7 +807,7 @@ pub fn validate(mints: &[Declared]) -> anyhow::Result<()> {
         // shares its writer's name because it is the same record's other end, so
         // the uniqueness is per mode class: two writers would still let the
         // sorted-later one silently decide the record.
-        if !seen.insert((mint.name.as_str(), matches!(mint.mode, MintMode::Clear))) {
+        if !seen.insert((mint.name.as_str(), mint.mode == MintMode::Clear)) {
             return Err(crate::error::UsageError::raise(format!(
                 "`[[mint]]` `{}` is declared twice; two rows writing one receipt name would let \
                  the sorted-later one silently decide the record",

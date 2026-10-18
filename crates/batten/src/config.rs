@@ -5325,9 +5325,7 @@ mod tests {
         assert!(latency(0, 1).validate().is_err(), "zero runs");
         assert!(latency(1, 0).validate().is_err(), "zero loose factor");
         let mut unnamed = latency(1, 1);
-        if let Some(latency) = unnamed.latency.as_mut() {
-            latency.command = vec![" ".to_owned()];
-        }
+        unnamed.latency.as_mut().unwrap().command = vec![" ".to_owned()];
         assert!(unnamed.validate().is_err(), "no program to time");
         assert!(exempt("1.2", "2026-11-30").validate().is_ok());
         for (ratio, expires) in [

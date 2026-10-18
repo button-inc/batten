@@ -1832,7 +1832,8 @@ trait SplitOnceNewline {
 
 impl SplitOnceNewline for [u8] {
     fn split_once_newline(&self) -> Option<&[u8]> {
-        self.splitn(2, |byte| *byte == b'\n').nth(1)
+        let at = self.iter().position(|byte| *byte == b'\n')?;
+        self.get(at + 1..)
     }
 }
 

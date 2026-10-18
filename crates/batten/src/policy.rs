@@ -4706,7 +4706,8 @@ test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {
     #[test]
     fn a_suite_is_a_violation_for_each_of_its_three_faults() {
         let before = ast_descriptions();
-        let clean = suite_of(&bundle_of("row", &[("policy/a.rego", MODULE)]), false);
+        let a = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let clean = suite_of(&a, false);
         assert!(
             ast_descriptions() > before,
             "the suite describes the bundle"
@@ -4730,7 +4731,7 @@ violation contains {\"rule\": \"u\", \"verdict\": \"u\"} if {\n\tinput.call.oper
         assert_eq!(unexercised.unexercised, vec!["u".to_owned()]);
         assert!(unexercised.is_violation());
 
-        let bare = suite_of(&bundle_of("row", &[("policy/a.rego", MODULE)]), true);
+        let bare = suite_of(&a, true);
         assert_eq!(bare.bare_only_modules, vec!["policy/a.rego".to_owned()]);
         assert!(bare.failed.is_empty() && bare.unexercised.is_empty());
         assert!(bare.is_violation());

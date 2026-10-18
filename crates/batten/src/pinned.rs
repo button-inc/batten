@@ -696,10 +696,14 @@ mod tests {
     )]
     fn only_an_executable_file_is_a_program() {
         let dir = crate::scratch::scratch("pinned-programs-in");
-        // The running test binary is an executable whatever the platform, and a
-        // copy keeps its mode, so no platform's permission API is needed here.
-        let me = std::env::current_exe().expect("the test binary");
-        std::fs::copy(me, dir.join("tool")).expect("copy");
+        // A copy keeps its source's mode, so copying a small system executable
+        // needs no platform's permission API. Off unix every regular file is a
+        // program, so any bytes will do.
+        if cfg!(unix) {
+            std::fs::copy("/bin/sh", dir.join("tool")).expect("copy");
+        } else {
+            std::fs::write(dir.join("tool"), "x").expect("tool");
+        }
         std::fs::write(dir.join("README"), "read me").expect("readme");
         std::fs::create_dir_all(dir.join("sub")).expect("dir");
         let expected: BTreeSet<String> = if cfg!(unix) {
