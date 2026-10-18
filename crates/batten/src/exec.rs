@@ -1705,10 +1705,10 @@ impl Forwarding {
 /// produces a value, because only unix forwards.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(
-    not(unix),
+    all(not(unix), not(test)),
     expect(
         dead_code,
-        reason = "only unix forwards a signal, so only unix constructs an `Escalation`"
+        reason = "only unix forwards a signal, so only unix and the tests construct an `Escalation`"
     )
 )]
 pub(crate) enum Escalation {
