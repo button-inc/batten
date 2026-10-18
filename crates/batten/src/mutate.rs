@@ -2806,11 +2806,10 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
         // `NEXTEST_PROFILE` (this repository's `[env]` sets `ci` under CI)
         // names a profile the staged tree may not declare, a fixture's or a
         // consumer's, and nextest then exits before selecting a case: every
-        // declared Cargo row read `suite-did-not-run` in CI alone. A profile
-        // the tree DOES declare is not kept either: its `retries` read a
-        // killing case's flaky pass as a survivor, its `default-filter` empties
-        // the selection, and its timeouts move verdicts, so a sweep's verdict
-        // must not depend on which profile its caller had selected.
+        // declared Cargo row read `suite-did-not-run` in CI alone. A declared
+        // non-default profile is not kept either, so its settings cannot reach
+        // a verdict; `[profile.default]`'s own settings and the other inherited
+        // `NEXTEST_*` variables still do (CLOUD-2466 item 9).
         (String::from("NEXTEST_PROFILE"), String::from("default")),
     ]);
     env
@@ -4437,6 +4436,19 @@ mod tests {
             "the provisioned directory must come first: {path}"
         );
         assert_eq!(runner_path().len(), 1, "unresolvable reads the same PATH");
+    }
+
+    /// Fails by: the pinned profile dropped or changed, so an inherited
+    /// `NEXTEST_PROFILE` the staged tree does not declare reaches nextest and
+    /// every declared Cargo row reads `suite-did-not-run`.
+    #[test]
+    fn every_runner_runs_the_default_nextest_profile() {
+        let env = suite_env(Path::new("/repo"));
+        assert!(
+            env.iter()
+                .any(|(key, value)| key == "NEXTEST_PROFILE" && value == "default"),
+            "suite_env must pin NEXTEST_PROFILE=default: {env:?}"
+        );
     }
 
     /// Fails by: a nextest run read as libtest, which counts no case and finds
