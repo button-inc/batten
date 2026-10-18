@@ -253,6 +253,28 @@ mod tests {
             None
         );
         assert_eq!(task_id(&serde_json::json!({"stdout": "x"})), None);
+        assert_eq!(
+            task_id(&serde_json::json!({"backgroundTaskId": "b-1_x"})),
+            Some("b-1_x")
+        );
+    }
+
+    /// Fails by: an unanswered entry dropped a second early or kept past a day.
+    #[test]
+    fn an_unanswered_entry_is_kept_for_a_day_and_dropped_after() {
+        let git_dir = crate::scratch::scratch("background-stale");
+        let now = 1_000_000;
+        let pending = |at| Pending {
+            tool: String::from("Bash"),
+            input: serde_json::json!({}),
+            at,
+        };
+        defer(&git_dir, "kept", &pending(now - 86_400)).unwrap();
+        defer(&git_dir, "dropped", &pending(now - 86_401)).unwrap();
+        assert!(resolve(&git_dir, None, now).is_empty());
+        let dir = git_dir.join(DIR);
+        assert!(dir.join("kept.json").exists());
+        assert!(!dir.join("dropped.json").exists());
     }
 
     #[test]
