@@ -3949,10 +3949,20 @@ mod tests {
 
     /// Send TERM to this case's own group, asserting the premise that the
     /// harness makes each case lead one (nextest does). Unix only.
+    ///
+    /// The premise is checked BEFORE the signal, by reading this process's group
+    /// rather than sending anything: a case that does not lead its group would
+    /// otherwise have signalled whatever group happens to carry its pid as an id.
     fn term_self() {
-        assert!(
-            terminate_group(&std::process::id().to_string()),
+        let pid = std::process::id().to_string();
+        assert_eq!(
+            crate::task::process_group(&pid),
+            pid,
             "premise: the harness makes this case lead its own process group"
+        );
+        assert!(
+            terminate_group(&pid),
+            "the group this case leads takes the signal"
         );
     }
 

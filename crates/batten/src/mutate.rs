@@ -5776,29 +5776,55 @@ mod tests {
 
     /// Fails by: the wait answering anything but the child's own status and
     /// `false`, or leaving the group the child led alive once it exits — the
-    /// background job then writes to the pipe this case reads to its end.
+    /// background job then holds the fifo this case reads to its end open past
+    /// the deadline.
+    ///
+    /// Through the module's own [`spawn`], so no spawn site exists for the case
+    /// alone. That spawn captures to files it reads at the exit, before a stray
+    /// job could write, so the job is observed through a fifo instead: the suite
+    /// opens its write end and the job inherits it, and the read reaches its end
+    /// only once every writer — the job included — is gone.
     #[test]
     fn a_suite_that_exits_is_answered_with_its_status_and_its_group_is_ended() {
         // Only unix has the group to end; elsewhere the wait is waited out.
         if !cfg!(unix) {
             return;
         }
-        #[expect(
-            clippy::disallowed_types,
-            reason = "the case IS a spawned child handed to `wait_bounded`, with a pipe of its own: the module's `spawn` captures to files and reads them before a stray job could write"
-        )]
-        let mut command = std::process::Command::new("sh");
-        command
-            .args(["-c", "(sleep 5; echo orphaned) & exit 3"])
-            .stdout(std::process::Stdio::piped());
-        crate::exec::lead_group(&mut command);
-        let mut child = command.spawn().expect("sh runs");
-        let mut out = child.stdout.take().expect("a piped stdout");
-        let (status, timed_out) =
-            wait_bounded(child, std::time::Duration::from_secs(60)).expect("the wait answers");
-        let mut said = String::new();
-        std::io::Read::read_to_string(&mut out, &mut said).expect("read the pipe to its end");
-        assert_eq!((status.code(), timed_out), (Some(3), false));
+        let dir = crate::scratch::scratch("mutate-suite-exits");
+        let bound = std::time::Duration::from_secs(60);
+        let made = spawn(
+            &dir,
+            Program::Suite("mkfifo"),
+            &[String::from("held")],
+            &[],
+            bound,
+        )
+        .expect("mkfifo runs");
+        assert_eq!(made.outcome, Outcome::Passed, "{}", made.output);
+        let fifo = dir.join("held");
+        let (send, said) = std::sync::mpsc::channel();
+        // A thread, because opening a fifo's read end blocks until a writer
+        // opens it — which is the suite, below.
+        std::thread::spawn(move || {
+            let read = std::fs::read_to_string(&fifo);
+            let _ = send.send(read);
+        });
+        let ran = spawn(
+            &dir,
+            Program::Suite("sh"),
+            &[
+                String::from("-c"),
+                String::from("exec 3>held; (sleep 30; echo orphaned >&3) & exit 3"),
+            ],
+            &[],
+            bound,
+        )
+        .expect("the wait answers");
+        assert_eq!(ran.outcome, Outcome::Failed(Some(3)), "{}", ran.output);
+        let said = said
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the job the suite left running is ended with it, closing the fifo")
+            .expect("read the fifo to its end");
         assert_eq!(said, "", "the job the suite left running is ended with it");
     }
 

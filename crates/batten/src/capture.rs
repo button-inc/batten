@@ -4052,10 +4052,13 @@ mod tests {
         // Inside both: nothing goes.
         let dir = filled("capture-evict-none", 3);
         assert_eq!(evict_to_budget_in(&dir, None).unwrap(), 0);
-        // Two mebibytes sit inside the default budget.
+        // Exactly eight mebibytes sit inside the default budget, and one byte
+        // more is past it: the default is the boundary itself, either way.
         let dir = crate::scratch::scratch("capture-evict-default");
-        store_in(&dir, Stream::Response, &vec![b'x'; 2 * 1024 * 1024]).unwrap();
+        store_in(&dir, Stream::Response, &vec![b'x'; 8 * 1024 * 1024]).unwrap();
         assert_eq!(evict_to_budget_in(&dir, None).unwrap(), 0);
+        store_in(&dir, Stream::Response, b"y").unwrap();
+        assert_eq!(evict_to_budget_in(&dir, None).unwrap(), 1);
 
         let repo = contained_repo("capture-evict-repo");
         for byte in 0..3_u8 {

@@ -1697,11 +1697,10 @@ fn derive_reading(
         // retired body's `[[ -t 0 ]]`: no payloads, so the tag's refs alone.
         crate::released::FAMILY => {
             let config = resolve::resolve(Path::new("."), overrides)?;
-            let stdin = if document.is_none() && std::io::IsTerminal::is_terminal(&std::io::stdin())
-            {
+            let stdin = if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
                 String::new()
             } else {
-                document_or_stdin(document)?
+                verdict_lines()?
             };
             crate::released::reading(
                 inputs,
@@ -1713,7 +1712,7 @@ fn derive_reading(
         }
         tracker if crate::tracker_reading::is_family(tracker) => {
             let config = resolve::resolve(Path::new("."), overrides)?;
-            let stdin = document_or_stdin(document)?;
+            let stdin = verdict_lines()?;
             crate::tracker_reading::reading(
                 tracker,
                 inputs,
@@ -2502,7 +2501,7 @@ mod tests {
 
         for family in [crate::released::FAMILY, "done"] {
             assert!(
-                !refusal(derive_reading(family, &inputs(&[]), &none, Some("")))
+                !refusal(derive_reading(family, &inputs(&[]), &none, None))
                     .is_some_and(|error| error.contains(UNDECLARED)),
                 "{family} has a reading"
             );
