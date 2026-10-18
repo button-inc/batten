@@ -2654,9 +2654,8 @@ mod tests {
     /// journalling an identity the payload never emitted.
     #[test]
     fn record_emissions_journals_exactly_the_emitted_identities() {
-        let dir = std::env::temp_dir().join(format!("batten-emitted-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::scratch("drain-emitted");
+        assert!(dir.is_dir(), "scratch");
         let records = spread("r", 3);
         let emitted: BTreeMap<String, u64> = records[..2]
             .iter()
@@ -2666,6 +2665,16 @@ mod tests {
             record_emissions(&dir, "shard", &records, &emitted).unwrap(),
             2
         );
-        let _ = std::fs::remove_dir_all(&dir);
+        journal::merge(&dir).unwrap();
+        let mut journalled: Vec<(String, Presentation)> = journal::all(&dir)
+            .into_iter()
+            .map(|entry| (entry.identity, entry.presentation))
+            .collect();
+        journalled.sort_by(|a, b| a.0.cmp(&b.0));
+        let want: Vec<(String, Presentation)> = emitted
+            .keys()
+            .map(|identity| (identity.clone(), Presentation::Shown))
+            .collect();
+        assert_eq!(journalled, want);
     }
 }

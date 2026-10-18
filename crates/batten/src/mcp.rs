@@ -3216,12 +3216,11 @@ mod tests {
         assert!(!is_bare_server_rule("mcp__box2", "box"));
     }
 
-    /// A fresh directory for one case: the pid and the case keep parallel cases
-    /// and runs apart.
+    /// A fresh directory for one case under the crate's shared scratch root,
+    /// which a later run reaps once this process is gone.
     fn scratch(case: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("batten-mcp-{}-{case}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::scratch(&format!("mcp-{case}"));
+        assert!(dir.is_dir(), "scratch");
         dir
     }
 

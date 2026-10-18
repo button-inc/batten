@@ -3777,14 +3777,8 @@ mod tests {
         let root = crate::scratch::scratch("exec-piped-path");
         std::fs::write(root.join("prog"), "#!/bin/sh\nprintf \"$1\"\ncat\nexit 4\n")
             .expect("write the program");
+        crate::engine::make_executable(&root.join("prog")).expect("make the program executable");
         if cfg!(unix) {
-            // `/bin/sh`'s own mode, so the program is executable without a
-            // platform-only permissions API.
-            let executable = std::fs::metadata("/bin/sh")
-                .expect("sh is installed")
-                .permissions();
-            std::fs::set_permissions(root.join("prog"), executable)
-                .expect("make the program executable");
             assert_eq!(
                 piped(&root, Path::new("prog"), &["arg-".to_owned()], "in"),
                 Some((4, "arg-in".to_owned()))
@@ -3900,30 +3894,57 @@ mod tests {
     /// The signal number every case here sends: TERM is 15 on every unix.
     const TERM: i32 = 15;
 
+    /// A detached group's leader pid, which ends the group when dropped unless
+    /// [`reap`] has already reaped the leader — so a case that fails part-way
+    /// cannot leave its spinner running. Once reaped the pid is free for reuse,
+    /// so the guard signals nothing after that.
+    struct Group {
+        pid: String,
+        reaped: bool,
+    }
+
+    impl std::ops::Deref for Group {
+        type Target = str;
+
+        fn deref(&self) -> &str {
+            &self.pid
+        }
+    }
+
+    impl Drop for Group {
+        fn drop(&mut self) {
+            if !self.reaped {
+                let _ = escalate_group(&self.pid);
+            }
+        }
+    }
+
     /// A detached `sh` leading its own group, its pid read back from the file
     /// it writes once `trap` is set. It then spins on builtins alone, so the
     /// group holds that one process and nothing else. Unix only: the caller
     /// holds the platform split.
-    fn detached_group(dir: &Path, trap: &str) -> String {
+    fn detached_group(dir: &Path, trap: &str) -> Group {
         let pidfile = dir.join("pid");
         let script = format!(
             "{trap} echo $$ > '{0}.tmp' && mv '{0}.tmp' '{0}'; while :; do :; done",
             pidfile.display()
         );
         detached(Path::new("/bin/sh"), &["-c".to_owned(), script], &[]);
-        within("the detached child writing its pid", || {
+        let pid = within("the detached child writing its pid", || {
             std::fs::read_to_string(&pidfile)
                 .ok()
                 .filter(|body| body.ends_with('\n'))
         })
         .trim()
-        .to_owned()
+        .to_owned();
+        Group { pid, reaped: false }
     }
 
-    /// Reap this process's child `pid`, which the caller has made sure is
-    /// exiting.
-    fn reap(pid: &str) {
-        await_reaped(pid.parse().expect("a numeric pid"));
+    /// Reap this process's child `group` leader, which the caller has made
+    /// sure is exiting.
+    fn reap(group: &mut Group) {
+        await_reaped(group.pid.parse().expect("a numeric pid"));
+        group.reaped = true;
     }
 
     /// Send TERM to this case's own group, asserting the premise that the
@@ -3953,13 +3974,13 @@ mod tests {
             return;
         }
         let dir = crate::scratch::scratch("exec-live-group");
-        let pid = detached_group(&dir, "trap '' TERM;");
+        let mut pid = detached_group(&dir, "trap '' TERM;");
         assert!(terminate_group(&pid), "a live group was asked to leave");
         assert!(
             escalate_group(&pid),
             "it ignores TERM, so it was still there and was killed"
         );
-        reap(&pid);
+        reap(&mut pid);
         assert!(
             !terminate_group(&pid),
             "an emptied group is nothing to reap"
@@ -3981,13 +4002,13 @@ mod tests {
             assert!(!cancel_owned_group(&root), "no process groups to cancel");
             return;
         }
-        let pid = detached_group(&root, "trap '' TERM;");
-        std::fs::write(&record, format!("{pid}\n")).expect("seed the record");
+        let mut pid = detached_group(&root, "trap '' TERM;");
+        std::fs::write(&record, format!("{}\n", &*pid)).expect("seed the record");
         assert!(
             cancel_owned_group(&root),
             "a live owned group was cancelled"
         );
-        reap(&pid);
+        reap(&mut pid);
     }
 
     /// Whether Batten may group in this case, asserting on unix the premise
@@ -4061,9 +4082,15 @@ mod tests {
         }
         let root = contained("exec-clean-leaves");
         let alive = root.join("alive");
+        let go = root.join("go");
+        // The job outlives the run by construction: it cannot finish before
+        // `go` exists, which this case creates only once the run has returned.
+        // The count bounds it should the case fail before then.
         let script = format!(
-            "(sleep 2; echo yes > '{}') >/dev/null 2>&1 &",
-            alive.display()
+            "(i=0; while [ ! -e '{go}' ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done; \
+             echo yes > '{alive}') >/dev/null 2>&1 &",
+            go = go.display(),
+            alive = alive.display()
         );
         let managed = ExecConfig {
             manage_process_group: true,
@@ -4078,6 +4105,7 @@ mod tests {
         )
         .expect("the child exits clean");
         assert_eq!(code, ExitCode::Success);
+        std::fs::write(&go, "").expect("release the background job");
         within("the background job outliving the clean run", || {
             alive.exists().then_some(())
         });
@@ -4179,7 +4207,7 @@ mod tests {
     /// An owned forwarder over a detached group whose TERM trap is `on_term`,
     /// adopted, with TERM then sent to this case. Returns the forwarder, the
     /// group's pid, and the file the trap touches. Unix only.
-    fn forwarded(name: &str, on_term: &str) -> (Forwarding, String, PathBuf) {
+    fn forwarded(name: &str, on_term: &str) -> (Forwarding, Group, PathBuf) {
         let dir = crate::scratch::scratch(name);
         let got = dir.join("got");
         let forwarder = Forwarding::arm(GroupDecision::OWNED).expect("arm");
@@ -4208,8 +4236,8 @@ mod tests {
             );
             return;
         }
-        let (forwarder, pid, _) = forwarded("exec-forward-exit", "GOT; exit 0");
-        reap(&pid);
+        let (forwarder, mut pid, _) = forwarded("exec-forward-exit", "GOT; exit 0");
+        reap(&mut pid);
         assert_eq!(forwarder.finish_reporting(), (Some(TERM), None));
     }
 
@@ -4221,8 +4249,8 @@ mod tests {
             assert_eq!(forwarder.finish(), None, "nothing forwards");
             return;
         }
-        let (forwarder, pid, _) = forwarded("exec-forward-finish", "GOT; exit 0");
-        reap(&pid);
+        let (forwarder, mut pid, _) = forwarded("exec-forward-finish", "GOT; exit 0");
+        reap(&mut pid);
         assert_eq!(forwarder.finish(), Some(TERM));
     }
 
@@ -4234,9 +4262,9 @@ mod tests {
             return;
         }
         // The trap notes the first TERM and stays, so only the escalation ends it.
-        let (forwarder, pid, _) = forwarded("exec-forward-second", "GOT");
+        let (forwarder, mut pid, _) = forwarded("exec-forward-second", "GOT");
         term_self();
-        reap(&pid);
+        reap(&mut pid);
         assert_eq!(
             forwarder.finish_reporting(),
             (Some(TERM), Some(Escalation::SecondSignal))
@@ -4256,7 +4284,7 @@ mod tests {
         let command = [
             "sh".to_owned(),
             "-c".to_owned(),
-            format!("touch '{}'; exec sleep 60", started.display()),
+            format!("touch '{}'; exec sleep 10", started.display()),
         ];
         let managed = ExecConfig {
             manage_process_group: true,

@@ -1526,12 +1526,7 @@ mod outcome_tests {
         let dir = crate::scratch::scratch("recorder-run-program");
         let script = dir.join("echo.sh");
         std::fs::write(&script, "#!/bin/sh\ncat\nexit 3\n").expect("script");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
-                .expect("mode");
-        }
+        crate::engine::make_executable(&script).expect("mode");
         let program = Program {
             path: "echo.sh".to_owned(),
             args: Vec::new(),

@@ -199,11 +199,10 @@ mod tests {
     /// reads a neighbouring word, a different token's rank or an offset.
     #[test]
     fn a_rank_is_tiktokens_own_token_id() {
-        let bpe = tiktoken_rs::o200k_base().expect("reference");
-        for piece in ["hello", " world", "!", " the"] {
-            let ids = bpe.encode_ordinary(piece);
-            assert_eq!(ids.len(), 1, "{piece:?} is one token");
-            assert_eq!(super::rank(piece.as_bytes()), Some(ids[0]), "{piece:?}");
+        // Each id as `tiktoken_rs::o200k_base().encode_ordinary` gives it, one
+        // token per piece.
+        for (piece, id) in [("hello", 24912), (" world", 2375), ("!", 0), (" the", 290)] {
+            assert_eq!(super::rank(piece.as_bytes()), Some(id), "{piece:?}");
         }
         assert_eq!(super::rank(b"no such token, surely, at all"), None);
     }

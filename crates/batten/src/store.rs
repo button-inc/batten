@@ -1089,8 +1089,7 @@ pub fn run_adopt(store: Option<&str>, err: &mut dyn std::io::Write) -> Result<Ex
 /// [`run_adopt`] for the repository rooted at `root`, which a case names outright
 /// rather than through the process's working directory.
 fn adopt_in(root: &Path, store: Option<&str>, err: &mut dyn std::io::Write) -> Result<ExitCode> {
-    let root = root.to_path_buf();
-    let opened = resolve(&root)?;
+    let opened = resolve(root)?;
 
     let opened = match store {
         None => match opened {
@@ -1101,7 +1100,7 @@ fn adopt_in(root: &Path, store: Option<&str>, err: &mut dyn std::io::Write) -> R
                     Some(record) => Opened::Adopted {
                         record,
                         dir,
-                        observed: observe(&root)?,
+                        observed: observe(root)?,
                         criterion,
                     },
                     None => {
@@ -1114,7 +1113,7 @@ fn adopt_in(root: &Path, store: Option<&str>, err: &mut dyn std::io::Write) -> R
             other => other,
         },
         Some(named) => {
-            let observed = observe(&root)?;
+            let observed = observe(root)?;
             let Some((dir, record)) = scan_stores()?
                 .into_iter()
                 .find(|(_, record)| record.id.as_str() == named)

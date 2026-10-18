@@ -1538,11 +1538,12 @@ pub fn result_view_spilled(
                 .map(|(_, path)| path.as_path()),
             _ => None,
         };
-        // A spilled leaf's own text is its marker, never its bulk, and it is read
-        // only to ask whether the leaf is empty; the section comes from the file.
-        let body = match value {
-            serde_json::Value::String(content) => content.clone(),
-            other => serde_json::to_string_pretty(other)?,
+        // A spilled leaf's section comes from its file, so its marker is never
+        // rendered; any other leaf is rendered here, and left out if that is empty.
+        let body = match (spilled, value) {
+            (Some(_), _) => String::new(),
+            (None, serde_json::Value::String(content)) => content.clone(),
+            (None, other) => serde_json::to_string_pretty(other)?,
         };
         if spilled.is_none() && body.is_empty() {
             return Ok(());

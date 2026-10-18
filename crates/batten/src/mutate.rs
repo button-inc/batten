@@ -2601,7 +2601,7 @@ fn await_exit(pid: u32) -> std::io::Result<()> {
     loop {
         match rustix::process::waitid(
             rustix::process::WaitId::Pid(pid),
-            rustix::process::WaitIdOptions::EXITED.union(rustix::process::WaitIdOptions::NOWAIT),
+            rustix::process::WaitIdOptions::EXITED | rustix::process::WaitIdOptions::NOWAIT,
         ) {
             Ok(_) => return Ok(()),
             // A forwarded signal can interrupt the wait; the child is still the
@@ -5374,10 +5374,7 @@ mod tests {
     /// failed MUTANT scenario read as a failed baseline.
     #[test]
     fn every_outcome_file_counts_toward_ran_and_only_a_failed_baseline_is_one() {
-        let dir =
-            std::env::temp_dir().join(format!("batten-outcome-counts-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("dir");
+        let dir = fixture("outcome-counts");
         let lines = |n: usize| {
             (1..=n)
                 .map(|i| format!("src/a.rs:{i}:1: replace f with ()"))
@@ -5393,10 +5390,8 @@ mod tests {
             r#"{"outcomes":[{"scenario":"Mutant","summary":"MissedMutant"},{"scenario":"Baseline","summary":"Success"}]}"#,
         )
         .expect("outcomes");
-        let outcomes = read_outcomes(&dir);
-        let _ = fs::remove_dir_all(&dir);
         assert_eq!(
-            outcomes,
+            read_outcomes(&dir),
             Outcomes {
                 ran: 7,
                 missed: vec![String::from("src/a.rs:1:1")],
@@ -5511,12 +5506,11 @@ mod tests {
         assert!(!exemption_is_filed("CLOUD-12a|a stated reason"));
     }
 
-    /// A fresh directory for one case, named for it and this process.
+    /// A fresh directory for one case under the crate's shared scratch root,
+    /// which a later run reaps once this process is gone.
     fn fixture(name: &str) -> PathBuf {
-        let root =
-            std::env::temp_dir().join(format!("batten-mutate-unit-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).expect("the fixture root");
+        let root = crate::scratch::scratch(&format!("mutate-{name}"));
+        assert!(root.is_dir(), "the fixture root");
         root
     }
 
@@ -5540,14 +5534,10 @@ mod tests {
             ..row_from(source)
         };
         let owns = |source: &str, want: &str| declares_own_case(&root, &row(source, want));
-        let found = [
-            owns("policy/p.rego", "limit_is_ten"),
-            owns("policy/p.rego", "limit"),
-            owns("policy/p.txt", "limit_is_ten"),
-            owns("policy/absent.rego", "limit_is_ten"),
-        ];
-        let _ = fs::remove_dir_all(&root);
-        assert_eq!(found, [true, false, false, false]);
+        assert!(owns("policy/p.rego", "limit_is_ten"));
+        assert!(!owns("policy/p.rego", "limit"));
+        assert!(!owns("policy/p.txt", "limit_is_ten"));
+        assert!(!owns("policy/absent.rego", "limit_is_ten"));
     }
 
     /// Fails by: an arm's candidate name taken without checking it resolves
@@ -5556,12 +5546,11 @@ mod tests {
     fn a_subject_takes_an_arms_name_only_when_that_name_resolves_back_to_it() {
         let root = fixture("subject-name");
         put(&root, "policy/limit.rego", "package limit\n");
-        let named = [
-            subject_name(&root, "policy/limit.rego"),
+        assert_eq!(subject_name(&root, "policy/limit.rego"), "limit");
+        assert_eq!(
             subject_name(&root, "mise-tasks/absent.sh"),
-        ];
-        let _ = fs::remove_dir_all(&root);
-        assert_eq!(named, ["limit", "mise-tasks/absent.sh"]);
+            "mise-tasks/absent.sh"
+        );
     }
 
     /// Fails by: a program read as runnable whether or not a file answers.
@@ -5569,13 +5558,9 @@ mod tests {
     fn a_program_resolves_only_where_a_file_answers_to_it() {
         let root = fixture("resolves");
         put(&root, "bin/tool.sh", "#!/bin/sh\n");
-        let found = [
-            resolves(&root, "bin/tool.sh"),
-            resolves(&root, "bin/absent.sh"),
-            resolves(&root, "batten-no-program-is-called-this"),
-        ];
-        let _ = fs::remove_dir_all(&root);
-        assert_eq!(found, [true, false, false]);
+        assert!(resolves(&root, "bin/tool.sh"));
+        assert!(!resolves(&root, "bin/absent.sh"));
+        assert!(!resolves(&root, "batten-no-program-is-called-this"));
     }
 
     /// Fails by: an engine module that declares rows but no suite (or the
@@ -5598,11 +5583,9 @@ mod tests {
             put(&root, &format!("{ENGINE}/{plain}"), "fn f() {}\n");
         }
         let found = subjects(&root, None);
-        let undeclared = engine_undeclared(&root, &found);
-        let _ = fs::remove_dir_all(&root);
         let names: Vec<&str> = found.keys().map(String::as_str).collect();
         assert_eq!(names, ["engine-rows-only", "engine-suite-only"]);
-        assert_eq!(undeclared, 3);
+        assert_eq!(engine_undeclared(&root, &found), 3);
     }
 
     /// Fails by: the declaration arm reading outside its `scope` (or only
@@ -5630,16 +5613,15 @@ mod tests {
         };
         let mut scoped = BTreeMap::new();
         declaring_files(&root, &table(&["in/**"]), &mut scoped);
+        assert_eq!(
+            scoped.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["in/decl.txt"]
+        );
         let mut claimed = BTreeMap::from([
             (String::from("dir-gate"), String::from("claimed")),
             (String::from("file-gate"), String::from("exact.txt")),
         ]);
         declaring_files(&root, &table(&[]), &mut claimed);
-        let _ = fs::remove_dir_all(&root);
-        assert_eq!(
-            scoped.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["in/decl.txt"]
-        );
         assert_eq!(
             claimed.keys().map(String::as_str).collect::<Vec<_>>(),
             ["dir-gate", "file-gate", "in/decl.txt", "out/decl.txt"]
@@ -5677,20 +5659,18 @@ mod tests {
             .iter()
             .map(|row| row_key(&root, &gate, row))
             .collect();
-        let heard = [
+        assert_eq!(
             said(&elsewhere, &none),
-            said(&Registry::default(), &caught),
-            said(&Registry::default(), &none),
-        ];
-        let _ = fs::remove_dir_all(&root);
-        let _ = fs::remove_dir_all(staged.dir());
-        assert_eq!(heard[0], "", "a row the registered runner owns");
-        assert_eq!(heard[1], "", "every row recorded caught");
-        assert!(
-            heard[2].contains("building the cargo suites"),
-            "{}",
-            heard[2]
+            "",
+            "a row the registered runner owns"
         );
+        assert_eq!(
+            said(&Registry::default(), &caught),
+            "",
+            "every row recorded caught"
+        );
+        let owed = said(&Registry::default(), &none);
+        assert!(owed.contains("building the cargo suites"), "{owed}");
     }
 
     /// Fails by: the staged copy left without a repository, a path the
@@ -5710,7 +5690,10 @@ mod tests {
         .expect("commit");
         let work = fixture("restage-work");
         Staged::new(&root, work.clone()).expect("the first stage");
-        let repository = work.join(".git").is_dir();
+        assert!(
+            work.join(".git").is_dir(),
+            "the staged copy is a repository"
+        );
         let set = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
         fs::File::options()
             .write(true)
@@ -5720,14 +5703,13 @@ mod tests {
             .expect("set its timestamp");
         crate::gitwrite::commit_paths(&root, &[String::from("keep.txt")], "one").expect("commit");
         Staged::new(&root, work.clone()).expect("the second stage");
-        let dropped = !work.join("drop.txt").exists();
+        assert!(
+            !work.join("drop.txt").exists(),
+            "a path no longer tracked is cleared"
+        );
         let kept = fs::metadata(work.join("keep.txt"))
             .and_then(|meta| meta.modified())
             .expect("the kept file's timestamp");
-        let _ = fs::remove_dir_all(&root);
-        let _ = fs::remove_dir_all(&work);
-        assert!(repository, "the staged copy is a repository");
-        assert!(dropped, "a path no longer tracked is cleared");
         assert_eq!(kept, set, "an unchanged file is not rewritten");
     }
 
@@ -5743,8 +5725,7 @@ mod tests {
             .expect("commit");
         put(&root, "elsewhere/x.rs", "fn f() {\n    let _ = 1;\n}\n");
         let changed = std::collections::BTreeSet::from([String::from("elsewhere/x.rs")]);
-        let mut works = Vec::new();
-        let mut run = |registry: &Registry, kind: RunnerKind, shard: Option<&str>, name: &str| {
+        let run = |registry: &Registry, kind: RunnerKind, shard: Option<&str>, name: &str| {
             let work = fixture(name);
             let site = Site {
                 root: &root,
@@ -5752,35 +5733,24 @@ mod tests {
                 registry,
                 work: &work,
             };
-            let answer = run_registered(&site, &changed, kind, shard, &mut std::io::sink());
-            works.push(work);
-            answer
+            run_registered(&site, &changed, kind, shard, &mut std::io::sink())
         };
         let declared = run(
             &Registry::default(),
             RunnerKind::Declared,
             None,
             "registered-declared",
-        );
+        )
+        .expect("the declared runner returns at once");
+        assert_eq!((declared.sources, declared.findings), (1, Vec::new()));
         let owned = Registry::parse("cargo-mutants=elsewhere/*.rs").expect("parses");
         let unsharded = run(
             &owned,
             RunnerKind::CargoMutants,
             None,
             "registered-unsharded",
-        );
-        let sharded = run(
-            &owned,
-            RunnerKind::CargoMutants,
-            Some("0/1"),
-            "registered-sharded",
-        );
-        for work in works.iter().chain([&root]) {
-            let _ = fs::remove_dir_all(work);
-        }
-        let declared = declared.expect("the declared runner returns at once");
-        assert_eq!((declared.sources, declared.findings), (1, Vec::new()));
-        let unsharded = unsharded.expect("an unsharded run");
+        )
+        .expect("an unsharded run");
         assert_eq!(
             unsharded.findings,
             vec![Finding {
@@ -5793,7 +5763,13 @@ mod tests {
             }]
         );
         assert!(
-            sharded.is_err(),
+            run(
+                &owned,
+                RunnerKind::CargoMutants,
+                Some("0/1"),
+                "registered-sharded",
+            )
+            .is_err(),
             "a listing that fails is an error, never an empty plan"
         );
     }
@@ -5827,24 +5803,54 @@ mod tests {
     }
 
     /// Fails by: a module's own case not judged at all, or a mutation that
-    /// changed its code read as inert or as rewriting only its own row. Over
-    /// this checkout's own `run-shape` module and a row it declares.
+    /// changed its code read as inert or as rewriting only its own row. Over a
+    /// one-rule fixture whose module declares its own row and the case it names.
     #[test]
     fn a_rego_row_is_judged_by_its_modules_own_case() {
-        let root = crate::git::worktree_root(Path::new(env!("CARGO_MANIFEST_DIR")))
-            .expect("the crate is inside its checkout");
-        let work = fixture("own-module");
-        let mut staged = Staged::new(&root, work.clone()).expect("stage the checkout");
-        let row = Row {
-            slug: String::from("background-not-consulted"),
-            script: String::from("s@^\tinput.call\\[\"run-in-background\"\\] != true@\ttrue@"),
-            want: String::from("a_backgrounded_bare_sleep_raises_only_the_timer"),
-            source: String::from("policy/run-shape.rego"),
-            suite: None,
-            resolved: None,
+        let root = fixture("own-module");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        put(
+            &root,
+            "batten.toml",
+            "version = 1\n\n[[rule]]\nid = \"limit-probe\"\nkind = \"policy\"\n\
+             scope = \"tree\"\nmodule = \"policy/limit.rego\"\nseverity = \"warn\"\n\
+             no_fix_reason = \"this row exists to carry its module's own case\"\n\n\
+             [[verdict]]\nid = \"the limit moved\"\ngloss = \"the limit is not ten\"\n\
+             class = \"What this fixture's probe asserts, at the length explain answers with.\"\n\n\
+             [[verdict.route]]\nid = \"read the limit\"\nkind = \"document\"\n\
+             target = \"policy/limit.rego\"\n",
+        );
+        put(
+            &root,
+            "policy/limit.rego",
+            &format!(
+                "#{ROW}limit-moved|s/^limit := 10$/limit := 11/|limit_is_ten\n\
+                 package batten\n\nrules contains \"limit-probe\"\n\nlimit := 10\n\n\
+                 violation contains {{\n\t\"rule\": \"limit-probe\",\n\t\"verdict\": \"the limit moved\",\n\
+                 }} if {{\n\tlimit != 10\n}}\n\n\
+                 test_limit_is_ten if {{\n\tlimit == 10\n}}\n"
+            ),
+        );
+        crate::gitwrite::commit_paths(
+            &root,
+            &[
+                String::from("batten.toml"),
+                String::from("policy/limit.rego"),
+            ],
+            "fixture",
+        )
+        .expect("commit");
+        let Some(gate) = resolve(&root, "limit") else {
+            panic!("the module resolves to a gate");
         };
-        let verdict = judge_by_module(&root, &mut staged, &row);
-        let _ = fs::remove_dir_all(&work);
-        assert_eq!(verdict.expect("the module judges"), Some(Verdict::Caught));
+        let [row] = gate.rows.as_slice() else {
+            panic!("the module declares exactly one row");
+        };
+        assert!(declares_own_case(&root, row), "the row names its own case");
+        let mut staged = Staged::new(&root, fixture("own-module-work")).expect("stage");
+        assert_eq!(
+            judge_by_module(&root, &mut staged, row).expect("the module judges"),
+            Some(Verdict::Caught)
+        );
     }
 }

@@ -1657,13 +1657,11 @@ mod tests {
         );
     }
 
-    /// A fresh directory for one case: the pid and the case keep parallel cases
-    /// and runs apart.
+    /// A fresh directory for one case under the crate's shared scratch root,
+    /// which a later run reaps once this process is gone.
     fn scratch(case: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("batten-collect-{}-{case}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create the scratch dir");
+        let dir = crate::scratch::scratch(&format!("collect-{case}"));
+        assert!(dir.is_dir(), "scratch");
         dir
     }
 
@@ -1911,7 +1909,7 @@ mod tests {
         assert!(!super::await_builds(&[collector], Duration::ZERO));
         let free = dir.join(".cargo-lock");
         std::fs::write(&free, b"").expect("write");
-        assert!(super::await_builds(&[free], Duration::from_secs(60)));
+        assert!(super::await_builds(&[free], Duration::from_secs(5)));
     }
 
     /// Fails by: a pass's counts, freed bytes or trace misreported, or either

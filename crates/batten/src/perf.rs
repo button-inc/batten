@@ -2658,8 +2658,8 @@ fn acquire_out_dir(repo: &Path) -> Result<PathBuf> {
 /// can be asserted everywhere is that the fixture this times is one the ENGINE
 /// accepts — a generated authority that fails to load, or a module that refuses,
 /// makes every arm time a broken tree and still draws a tidy curve. Exposing the
-/// builder is what lets `tests/perf_acquire.rs` put the compiled binary over one
-/// of these trees without a second spelling of the fixture.
+/// builder is what lets `tests/it/acquisition_sweep.rs` put the compiled binary
+/// over one of these trees without a second spelling of the fixture.
 ///
 /// # Errors
 ///
@@ -4109,17 +4109,11 @@ mod tests {
             bail!("a binary that does not exist has no surface to read");
         };
         assert!(absent.to_string().contains("could not ask"), "{absent}");
-        let make_executable = |path: &Path| -> std::io::Result<()> {
-            let _ = path;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
-            }
-            Ok(())
-        };
+        // The stand-in binary is a shell script, which only unix runs: off unix
+        // only the refusal above is asserted, and the exit-status and verb
+        // mutants go unjudged there.
         if cfg!(unix) {
-            // The stand-in binary is a shell script, which only unix runs.
+            use crate::engine::make_executable;
             let document = serde_json::json!({
                 "id": "root",
                 "subcommands": [{"id": crate::surface::MEDIATION_ID, "path": "adjudicate"}],
@@ -4143,10 +4137,6 @@ mod tests {
                 refused.to_string().contains("could not report its surface"),
                 "{refused}"
             );
-        } else {
-            // Off unix the stand-in cannot run; only the refusal above is
-            // asserted, and the exit-status and verb mutants go unjudged here.
-            assert!(!dir.join("answers").exists());
         }
         Ok(())
     }
@@ -4666,9 +4656,9 @@ mod tests {
         );
     }
 
-    // The two cases over what `sweep_fixture` WRITES live in
-    // `crates/batten/tests/it/perf_acquire.rs` rather than here, and the reason is
-    // the workspace lint rather than a preference: reading a file back is a
-    // `Result`, and no module under `src/` waives `unwrap_used`. That builder is
-    // public for exactly this, so the assertion loses nothing by moving.
+    // What `sweep_fixture` WRITES is asserted above, in
+    // `a_sweep_fixture_declares_one_document_per_point`. Whether the ENGINE
+    // accepts what it writes needs the compiled binary, so those cases live in
+    // `crates/batten/tests/it/acquisition_sweep.rs`; the builder is public for
+    // exactly that.
 }

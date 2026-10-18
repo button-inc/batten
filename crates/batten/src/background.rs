@@ -228,6 +228,7 @@ pub fn resolve(git_dir: &Path, transcript: Option<&Path>, now: u64) -> Vec<(Pend
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
