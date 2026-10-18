@@ -1195,6 +1195,130 @@ mod tests {
         assert!(prints.join("sha1-checked-c0ffee00c0ffee01").is_dir());
     }
 
+    /// Write `bytes` at `path`, panicking with the path on failure.
+    fn put(path: &Path, bytes: &[u8]) {
+        if let Err(why) = std::fs::write(path, bytes) {
+            panic!("fixture: could not write {}: {why}", path.display());
+        }
+    }
+
+    /// Fails by: any of the three passes reclaiming the wrong file, or the
+    /// count and bytes they report not summing what they removed.
+    #[test]
+    fn a_reclaim_reports_exactly_what_each_pass_removed() {
+        let root = build_root("reclaim-counts");
+        let profile = root.join("debug");
+        let (old, new) = ("a1a1a1a1a1a1a1a1", "b2b2b2b2b2b2b2b2");
+        variant(&profile, "demo", old, 3000);
+        variant(&profile, "demo", new, 1000);
+        let deps = profile.join("deps");
+        put(&deps.join("libgone-c3c3c3c3c3c3c3c3.rlib"), b"orphan!");
+        put(&deps.join("gone-c3c3c3c3c3c3c3c3.x.rcgu.dwo"), b"abc");
+        let named = format!("demo-{new}.keep.rcgu.dwo");
+        put(&deps.join(format!("libdemo-{new}.rlib")), named.as_bytes());
+        put(&deps.join(&named), b"k");
+        put(&deps.join(format!("demo-{new}.old.rcgu.dwo")), b"gone");
+        assert_eq!(
+            reclaim_superseded(&root, 1),
+            (4, 5 + 7 + 3 + 4),
+            "the old generation, two orphans and one superseded dwo"
+        );
+        assert!(deps.join(&named).is_file(), "the current dwo is kept");
+        assert!(deps.join(format!("libdemo-{new}.rlib")).is_file());
+    }
+
+    /// Fails by: a name cargo did not hash read as an artifact, a hash read
+    /// from a dash-carrying suffix, or a dwo's owner misread.
+    #[test]
+    fn only_a_hashed_name_is_an_artifact() {
+        assert_eq!(
+            split_artifact("libbatten-42061777d57a0311.rlib"),
+            Some(("libbatten", "42061777d57a0311", "rlib"))
+        );
+        assert_eq!(
+            split_artifact("cli-abcdef12"),
+            Some(("cli", "abcdef12", ""))
+        );
+        assert_eq!(split_artifact("cli-aaaaaaaaaaaa.d"), None);
+        assert_eq!(split_artifact("cli-zzzzzzzz"), None);
+        assert_eq!(split_artifact("cli-abcdef1"), None);
+        assert_eq!(
+            dwo_owner_hash("batten-74d53bfe8b80e4a5.cgu.rcgu.dwo"),
+            Some("74d53bfe8b80e4a5")
+        );
+    }
+
+    /// Fails by: a unit's identity read from its `dep-` document, missing a
+    /// field, or not keyed by its hash.
+    #[test]
+    fn a_unit_is_identified_by_its_fingerprint_document() {
+        let root = build_root("unit-identity");
+        let unit = root.join("demo-d1d1d1d1d1d1d1d1");
+        mkdir(&unit);
+        put(&unit.join("dep-lib-demo.json"), br#"{"target": "wrong"}"#);
+        put(
+            &unit.join("lib-demo.json"),
+            br#"{"target": 1, "path": 2, "profile": 3, "features": "[]", "compile_kind": 0}"#,
+        );
+        let identity = "1\u{1f}2\u{1f}3\u{1f}\"[]\"\u{1f}0".to_owned();
+        assert_eq!(unit_identity(&unit), Some(identity.clone()));
+        assert_eq!(
+            unit_identities(&root),
+            BTreeMap::from([("d1d1d1d1d1d1d1d1".to_owned(), identity)])
+        );
+    }
+
+    /// Fails by: a declared reading taken out of order, or the last one not
+    /// repeating.
+    #[test]
+    fn declared_readings_are_taken_in_order_and_the_last_repeats() {
+        let mut readings = Readings {
+            declared: Some(vec![5, 3]),
+            taken: 0,
+        };
+        let taken: Vec<u64> = (0..3)
+            .map(|_| readings.take(Path::new(".")).unwrap_or(0))
+            .collect();
+        assert_eq!(taken, [5, 3, 3]);
+    }
+
+    /// Fails by: an empty table not defaulting its root and its retention, or
+    /// a band of real width refused.
+    #[test]
+    fn an_empty_table_defaults_and_a_wide_band_is_valid() {
+        let empty: Prune = match serde_json::from_str("{}") {
+            Ok(table) => table,
+            Err(why) => panic!("an empty table: {why}"),
+        };
+        assert_eq!((empty.root.as_str(), empty.keep), ("target", 2));
+        let banded = Prune {
+            min_free_mb: Some(1),
+            max_free_mb: Some(2),
+            ..empty
+        };
+        assert!(banded.validate().is_ok());
+        assert_eq!(banded.free_band(), Some((1, 2)));
+    }
+
+    /// Fails by: the executable bit misread, so an extension-less scratch file
+    /// is grouped as a build artifact.
+    #[test]
+    fn only_an_executable_file_reads_as_one() {
+        let root = build_root("executable");
+        let plain = root.join("plain");
+        put(&plain, b"x");
+        let meta = |path: &Path| match std::fs::metadata(path) {
+            Ok(meta) => meta,
+            Err(why) => panic!("fixture: {why}"),
+        };
+        assert!(is_executable(&meta(
+            &std::env::current_exe().unwrap_or_default()
+        )));
+        if cfg!(unix) {
+            assert!(!is_executable(&meta(&plain)), "a 0644 file");
+        }
+    }
+
     // --- a running build's tree is never reclaimed (CLOUD-1913) --------------
 
     /// Hold `profile`'s build lock the way a running cargo does, until dropped.

@@ -181,3 +181,28 @@ pub fn around<T>(watch: Option<DiskWatch<'_>>, body: impl FnOnce() -> T) -> (T, 
         (answer, lines)
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fails by: a watcher printing nothing of what it watches, or printing its
+    /// reader rather than naming it.
+    #[test]
+    fn a_watcher_debugs_its_repository_and_names_its_reader() {
+        let config: crate::prune::Prune = match serde_json::from_str("{}") {
+            Ok(config) => config,
+            Err(why) => panic!("an empty table: {why}"),
+        };
+        let watch = DiskWatch {
+            repo: PathBuf::from("/repo"),
+            config: &config,
+            free_mb: Box::new(|| Ok(0)),
+            kept: Vec::new(),
+        };
+        let printed = format!("{watch:?}");
+        assert!(printed.starts_with("DiskWatch {"), "{printed}");
+        assert!(printed.contains("\"/repo\""), "{printed}");
+        assert!(printed.contains("\"<reader>\""), "{printed}");
+    }
+}

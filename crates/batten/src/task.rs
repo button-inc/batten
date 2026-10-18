@@ -1359,6 +1359,168 @@ mod tests {
         ));
     }
 
+    /// Fails by: a stamp moved by a re-announcement of the value it already
+    /// holds, or kept when the value changed or was never stamped.
+    #[test]
+    fn a_stamp_moves_only_when_its_value_changes() {
+        assert_eq!(stamp_for("a", "a", "100", 200), "100");
+        assert_eq!(stamp_for("b", "a", "100", 200), "200");
+        assert_eq!(stamp_for("a", "a", "", 200), "200");
+    }
+
+    /// Fails by: a registration not recorded with its phase, its stamps or its
+    /// group, a push lost, misfiled or fabricated for a pid that never
+    /// registered, or an unregister that leaves the record.
+    #[test]
+    fn a_record_is_registered_pushed_and_dropped() {
+        let dir = registry("lifecycle");
+        let pid = "4242";
+        register(&dir, "land", pid, "start", 100);
+        let field = |name: &str| read_field(&dir, pid, name);
+        assert_eq!(field("task").as_deref(), Some("land"));
+        assert_eq!(field("phase").as_deref(), Some("start"));
+        assert_eq!(field("phase_since").as_deref(), Some("100"));
+        assert_eq!(field("started_at").as_deref(), Some("100"));
+        assert_eq!(field("pgid"), Some(process_group(pid)));
+        push(&dir, pid, Signal::Phase, "start", 200);
+        assert_eq!(field("phase_since").as_deref(), Some("100"), "not a change");
+        push(&dir, pid, Signal::Phase, "next", 300);
+        assert_eq!(field("phase").as_deref(), Some("next"));
+        assert_eq!(field("phase_since").as_deref(), Some("300"));
+        push(&dir, pid, Signal::Tick, "1", 400);
+        assert_eq!(field("tick_at").as_deref(), Some("400"));
+        push(&dir, pid, Signal::Sig, "moved", 500);
+        assert_eq!(field("sig").as_deref(), Some("moved"));
+        assert_eq!(field("sig_at").as_deref(), Some("500"));
+        push(&dir, "777", Signal::Tick, "1", 600);
+        assert_eq!(read_field(&dir, "777", "tick"), None, "nothing fabricated");
+        unregister(&dir, pid);
+        assert_eq!(field("task"), None);
+    }
+
+    /// Fails by: a pid's group misread, or a field that is not a pid read as
+    /// one.
+    #[test]
+    fn a_group_is_read_for_a_pid_and_kept_for_anything_else() {
+        assert_eq!(process_group("not-a-pid"), "not-a-pid");
+        let own = std::process::id().to_string();
+        assert!(
+            process_group(&own).parse::<u32>().is_ok(),
+            "{}",
+            process_group(&own)
+        );
+        assert!(pid_exists(&own));
+        assert!(!pid_exists("not-a-pid"));
+        assert!(!pid_exists(NO_SUCH_PID));
+    }
+
+    /// Fails by: a live registrant whose command line corroborates read as
+    /// crashed, a gone one read as running, a half-written record rendered, or
+    /// an unreadable record read as absent.
+    #[test]
+    fn alive_reads_each_record_against_its_process() {
+        let dir = registry("alive");
+        let exe = std::env::current_exe().unwrap_or_default();
+        let task = exe
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let root = exe
+            .parent()
+            .map(|parent| parent.to_string_lossy().trim_start_matches('/').to_owned())
+            .unwrap_or_default();
+        let own = std::process::id().to_string();
+        register(&dir, &task, &own, "running", 100);
+        register(&dir, "gone", NO_SUCH_PID, "stuck", 100);
+        assert!(crate::durable::replace(state_dir(&dir).join("half"), "task: x\n").is_ok());
+        let options = Alive {
+            program_root: &root,
+            now: 160,
+        };
+        let Reading::Lines(lines) = alive(&dir, options) else {
+            panic!("two whole records");
+        };
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        let mine = format!("{task} running {own} 60s in-phase 60s");
+        assert!(lines.contains(&mine), "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("gone crashed(stuck) ")),
+            "{lines:?}"
+        );
+        assert!(crate::durable::replace(state_dir(&dir).join("garbled"), [0xff, 0xfe]).is_ok());
+        assert!(matches!(alive(&dir, options), Reading::Unreadable(_)));
+    }
+
+    /// Fails by: a free lock not taken, a live holder's lock taken or reported
+    /// without the phase its registry names, a release that leaves the lock, or
+    /// a lock a dead pid or no pid holds not reclaimed.
+    #[test]
+    fn the_singleton_lock_is_taken_held_released_and_reclaimed() {
+        let dir = registry("singleton");
+        let none = std::time::Duration::ZERO;
+        let own = std::process::id().to_string();
+        assert!(matches!(
+            singleton_acquire(&dir, "land", &own, none),
+            Claim::Taken
+        ));
+        assert_eq!(
+            singleton_holder(&dir, "land").as_deref(),
+            Some(own.as_str())
+        );
+        register(&dir, "land", &own, "lapping", 100);
+        let held = singleton_acquire(&dir, "land", "999", none);
+        assert!(
+            matches!(&held, Claim::Held { holder, phase } if *holder == own && phase.as_deref() == Some("lapping")),
+            "{held:?}"
+        );
+        singleton_release(&dir, "land");
+        assert_eq!(singleton_holder(&dir, "land"), None);
+        assert!(!singleton_lock(&dir, "land").exists());
+
+        let lock = singleton_lock(&dir, "dead");
+        assert!(std::fs::create_dir_all(&lock).is_ok());
+        assert!(crate::durable::replace(lock.join("pid"), format!("{NO_SUCH_PID}\n")).is_ok());
+        assert_eq!(
+            singleton_holder(&dir, "dead"),
+            None,
+            "a corpse holds nothing"
+        );
+        let reclaimed = singleton_acquire(&dir, "dead", &own, none);
+        assert!(
+            matches!(&reclaimed, Claim::Reclaimed(from) if from == NO_SUCH_PID),
+            "{reclaimed:?}"
+        );
+        let unstamped = singleton_lock(&dir, "unstamped");
+        assert!(std::fs::create_dir_all(&unstamped).is_ok());
+        let reclaimed = singleton_acquire(&dir, "unstamped", &own, none);
+        assert!(
+            matches!(&reclaimed, Claim::Reclaimed(from) if from == UNSTAMPED),
+            "{reclaimed:?}"
+        );
+        singleton_release_at(&unstamped);
+        assert!(!unstamped.exists());
+    }
+
+    /// Fails by: a queue of several asks never ending, or ending without
+    /// reporting the live holder.
+    #[test]
+    fn a_queue_of_asks_ends_with_the_holder_it_waited_on() {
+        let dir = registry("singleton-queue");
+        let lock = singleton_lock(&dir, "doctor");
+        let own = std::process::id().to_string();
+        assert!(matches!(
+            singleton_acquire_at(&lock, &own, std::time::Duration::ZERO, 1),
+            Claim::Taken
+        ));
+        let queued = singleton_acquire_at(&lock, "999", std::time::Duration::ZERO, 3);
+        assert!(
+            matches!(&queued, Claim::Held { holder, .. } if *holder == own),
+            "{queued:?}"
+        );
+    }
+
     #[test]
     fn the_program_root_is_a_parameter_rather_than_a_literal() {
         // Non-negotiable rule 1 as a property: a different consumer's layout
