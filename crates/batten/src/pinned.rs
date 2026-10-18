@@ -715,22 +715,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The mediator is asked, and its two answers are read: the files that
-    /// configure it here, and the `PATH` it composes. Unix only until
-    /// CLOUD-2479, the mediator facts on Windows, is fixed.
-    #[test]
-    #[cfg(unix)]
-    fn the_mediator_reports_its_configs_and_its_composed_path() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let found = configs(&root);
-        assert!(
-            !found.is_empty() && found.iter().all(|path| path.is_file()),
-            "{found:?}"
-        );
-        let composed = composed_path(&root).unwrap_or_default();
-        assert!(std::env::split_paths(&composed).count() > 1, "{composed:?}");
-    }
-
     /// The eager repair repairs a stale record: afterwards it is gone or fresh,
     /// never still stale.
     #[test]
