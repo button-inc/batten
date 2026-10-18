@@ -2393,6 +2393,134 @@ mod tests {
         }
     }
 
+    #[test]
+    fn every_validity_has_its_stable_token() {
+        for (state, token) in [
+            (Validity::Valid, "valid"),
+            (Validity::StaleHead, "stale-head"),
+            (Validity::StaleMain, "stale-main"),
+            (Validity::Missing, "missing"),
+            (Validity::Expired, "expired"),
+            (Validity::Refuted, "refuted"),
+        ] {
+            assert_eq!(state.as_str(), token);
+        }
+    }
+
+    #[test]
+    fn a_verified_by_name_no_receipt_can_be_written_for_is_refused() {
+        assert!(validate_verified_by(&["fmt".to_owned(), "lint.v2".to_owned()]).is_ok());
+        assert!(validate_verified_by(&["fmt".to_owned(), "fmt check".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn a_receipt_path_is_the_check_s_fingerprint_under_the_receipt_store() {
+        let path = receipt_path("/home/user/repo", "verify").unwrap();
+        let fingerprint = identity::scope_fingerprint("verify", RECEIPT_SCOPE_KEY).to_hex();
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some(format!("{fingerprint}.json").as_str())
+        );
+        assert!(path.parent().is_some_and(|dir| dir.ends_with("receipts")));
+    }
+
+    /// A subject is one safe path component, refused rather than rewritten.
+    #[test]
+    fn only_a_single_safe_component_is_a_subject() {
+        assert!(safe_subject("CLOUD-1"));
+        assert!(safe_subject(&"a".repeat(128)));
+        for refused in [
+            String::new(),
+            String::from("."),
+            String::from(".."),
+            String::from("a/b"),
+            String::from("a\\b"),
+            String::from("a\0b"),
+            String::from("a\nb"),
+            "a".repeat(129),
+        ] {
+            assert!(!safe_subject(&refused), "{refused:?}");
+        }
+        // A dot inside a name is still one component.
+        assert!(safe_subject("..a"));
+    }
+
+    fn sourced(rows: usize) -> crate::facts::Sourced {
+        crate::facts::Sourced {
+            command: String::from("gh pr list"),
+            seen_at: String::from("2026-01-01T00:00:00Z"),
+            rows,
+        }
+    }
+
+    #[test]
+    fn a_store_finds_each_check_s_record_under_its_subject() {
+        let git_dir = std::env::temp_dir().join(format!("batten-sourced-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&git_dir);
+        let store = SourcedStore {
+            git_dir: git_dir.clone(),
+            subjects: BTreeMap::from([(String::from("open"), String::from("CLOUD-1"))]),
+        };
+        let path = crate::facts::sourced_path(&git_dir, "open", "CLOUD-1");
+        assert_eq!(store.path("open"), Some(path.clone()));
+        assert_eq!(store.path("other"), None);
+        assert!(
+            store.record("open").is_none(),
+            "no record is could-not-look"
+        );
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, sourced(3).render()).unwrap();
+        assert_eq!(store.record("open").map(|record| record.rows), Some(3));
+        let written = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let later = written + std::time::Duration::from_secs(60);
+        assert!(store.expired("open", 30, later));
+        assert!(!store.expired("open", 120, later));
+        assert!(
+            !store.expired("other", 0, later),
+            "no record is never expired"
+        );
+        let _ = std::fs::remove_dir_all(&git_dir);
+    }
+
+    /// The store and the writer resolve a subject the same way, from this
+    /// checkout: the head commit, or a named subject that is one safe component.
+    #[test]
+    fn the_agent_sourced_subject_is_resolved_from_the_checkout() {
+        let head = git::head_commit(Path::new(".")).unwrap();
+        assert_eq!(sourced_subject(ReceiptKey::Head, None), Some(head.clone()));
+        assert_eq!(
+            sourced_subject(ReceiptKey::Named, Some("CLOUD-1")).as_deref(),
+            Some("CLOUD-1")
+        );
+        assert_eq!(sourced_subject(ReceiptKey::Named, Some("a/b")), None);
+        assert_eq!(sourced_subject(ReceiptKey::Delta, None), None);
+
+        let (open, closed) = (String::from("open"), String::from("closed"));
+        let empty = sourced_store(&[], None).unwrap();
+        assert!(empty.subjects.is_empty());
+        let by_head = sourced_store(&[(&open, &ReceiptKey::Head)], None).unwrap();
+        assert_eq!(by_head.subjects.get("open"), Some(&head));
+        let by_name = sourced_store(&[(&closed, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
+        assert_eq!(
+            by_name.subjects.get("closed").map(String::as_str),
+            Some("CLOUD-1")
+        );
+        assert!(sourced_store(&[(&closed, &ReceiptKey::Named)], Some("../x")).is_none());
+        assert!(sourced_store(&[(&closed, &ReceiptKey::Delta)], None).is_none());
+    }
+
+    /// The write files the record exactly where the store reads it.
+    #[test]
+    fn an_agent_sourced_record_is_written_where_the_store_reads_it() {
+        let name = format!("batten-unit-{}", std::process::id());
+        record_sourced(&name, ReceiptKey::Named, Some("CLOUD-1"), &sourced(5)).unwrap();
+        let store = sourced_store(&[(&name, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
+        let written = store.path(&name).unwrap();
+        assert_eq!(store.record(&name).map(|record| record.rows), Some(5));
+        let _ = std::fs::remove_file(written);
+        assert!(record_sourced(&name, ReceiptKey::Named, Some("a/b"), &sourced(5)).is_err());
+    }
+
     // -- The predicate: all four verdicts, in the bash readers' order. --
     #[test]
     fn validity_covers_all_four_verdicts() {
@@ -3169,4 +3297,96 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// Older is strictly older: a receipt exactly at its bound is still fresh,
+    /// and an age nobody could measure is never a refusal.
+    #[test]
+    fn a_receipt_is_older_than_its_bound_only_strictly_past_it() {
+        let dir = std::env::temp_dir().join(format!("batten-older-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("receipt");
+        std::fs::write(&path, "x").unwrap();
+        let written = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let at = |seconds: u64| written + std::time::Duration::from_secs(seconds);
+        assert!(older_than(&path, 30, at(60)));
+        assert!(!older_than(&path, 60, at(60)));
+        assert!(!older_than(&path, 90, at(60)));
+        assert!(!older_than(
+            &path,
+            0,
+            written - std::time::Duration::from_secs(5)
+        ));
+        assert!(!older_than(&dir.join("absent"), 0, at(60)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_receipt_file_is_the_store_s_one_spelling_per_keying() {
+        let facts = RepoFacts {
+            head: String::from("h"),
+            main: String::from("m"),
+            git_dir: String::from("/repo/.git"),
+            repo_root: String::from("/repo"),
+        };
+        let store = Path::new("/repo/.git/batten-receipts");
+        assert_eq!(
+            receipt_file(&facts, "fmt", ReceiptKey::Head, None, None, None),
+            receipt_path("/repo", "fmt").ok()
+        );
+        assert_eq!(
+            receipt_file(&facts, "fmt", ReceiptKey::Branch, Some("a/b"), None, None),
+            Some(store.join("fmt.a-b"))
+        );
+        assert_eq!(
+            receipt_file(
+                &facts,
+                "fmt",
+                ReceiptKey::Named,
+                None,
+                Some("CLOUD-1"),
+                None
+            ),
+            Some(store.join("fmt.CLOUD-1"))
+        );
+        assert_eq!(
+            receipt_file(&facts, "fmt", ReceiptKey::Delta, None, None, Some("abc")),
+            Some(store.join("fmt.abc"))
+        );
+        assert_eq!(
+            receipt_file(&facts, "fmt", ReceiptKey::Named, None, None, None),
+            None
+        );
+    }
+
+    /// The delta subject is the branch's patch identity, and an empty change
+    /// has none.
+    #[test]
+    fn a_delta_subject_is_the_branch_patch_identity() {
+        let root = std::env::temp_dir().join(format!("batten-delta-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        crate::gitwrite::init_on_main(&root).unwrap();
+        let head = || git::resolve_ref(&root, "HEAD").unwrap().unwrap();
+        crate::gitwrite::commit_paths(&root, &[], "base").unwrap();
+        let base = head();
+        let text = root.to_str().unwrap();
+        assert_eq!(delta_subject(text, &base), None, "nothing changed");
+        std::fs::write(root.join("a.txt"), "a\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("a.txt")], "change").unwrap();
+        let identity = delta_subject(text, &base).expect("a change has an identity");
+        assert_eq!(
+            Some(identity),
+            git::branch_patch_id(&root, &base).unwrap(),
+            "the mint's own identity"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
+
+// The receipt verbs and the hook's receipt verdicts read the checkout they run
+// in, so the compiled-binary tier is what judges them.
+//MUTANT-SUITE crates/batten/tests/it/receipt_verified.rs
+//MUTANT-SUITE crates/batten/tests/it/receipt_clean.rs
+//MUTANT-SUITE crates/batten/tests/it/review_receipt_delta.rs
+//MUTANT-SUITE crates/batten/tests/it/call_arguments.rs

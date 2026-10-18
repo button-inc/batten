@@ -204,6 +204,9 @@ pub enum Linearity {
 ///
 /// Separate from the fetch so the judgement is reachable over a local history:
 /// the fetch is HTTPS-only (`fetch::get`), and this is the half that decides.
+// A merge commit is a history the integration tier builds, so that tier judges
+// this function's mutants.
+//MUTANT-SUITE crates/batten/tests/it/linear_check.rs
 #[must_use]
 pub fn linearity(root: &Path, tip: &str, head: &str, requires_line: bool) -> Linearity {
     if !gitwrite::carries(root, tip, head) {
@@ -1305,6 +1308,9 @@ pub fn red_runs(
 /// name, and a green stop on one would then clear the other's unread debt, a
 /// MISSED refusal. Percent-encoding `%` and `/` keeps every branch its own
 /// record and every name a single path component.
+// The record's writer, reader and clear are judged over the compiled binary and
+// the real post-tool mint, which only the integration tier runs (CLOUD-2270).
+//MUTANT-SUITE crates/batten/tests/it/head_push_unread.rs
 #[must_use]
 pub fn red_head_slug(branch: &str) -> String {
     branch.replace('%', "%25").replace('/', "%2F")
@@ -4815,6 +4821,128 @@ mod tests {
             ),
             "a lap carrying no bet must publish no base"
         );
+    }
+
+    /// A conflicted path is named with its candidate or said to have none, and
+    /// the resolve line follows only where some candidate exists.
+    #[test]
+    fn a_proposal_names_every_path_and_the_resolve_line_only_with_a_candidate() {
+        let proposed = crate::gitwrite::Candidate {
+            path: String::from("a.toml"),
+            proposal: Some((
+                std::path::PathBuf::from("/tmp/p/a.toml"),
+                vec![
+                    crate::propose::Shape::CommentOnly,
+                    crate::propose::Shape::ListUnion,
+                ],
+            )),
+        };
+        let bare = crate::gitwrite::Candidate {
+            path: String::from("b.rs"),
+            proposal: None,
+        };
+        let lines = super::proposal_lines("main", &[proposed, bare.clone()]);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert_eq!(
+            lines[0],
+            "land: proposed a.toml (comment-only,list-union) at /tmp/p/a.toml"
+        );
+        assert!(
+            lines[1].starts_with("land: no candidate for b.rs"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[2].contains("batten land replay main --resolve"),
+            "{lines:?}"
+        );
+        assert_eq!(super::proposal_lines("main", &[bare]).len(), 1);
+    }
+
+    /// A merge-free range on the tip is linear under either rule, and a head the
+    /// tip does not reach is behind.
+    #[test]
+    fn a_range_with_no_merge_is_linear_and_an_older_head_is_behind() {
+        let root = std::env::temp_dir().join(format!("batten-land-linear-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        crate::gitwrite::init_on_main(&root).unwrap();
+        let head = || crate::git::resolve_ref(&root, "HEAD").unwrap().unwrap();
+        crate::gitwrite::commit_paths(&root, &[], "one").unwrap();
+        let tip = head();
+        crate::gitwrite::commit_paths(&root, &[], "two").unwrap();
+        let work = head();
+        for requires in [true, false] {
+            assert_eq!(
+                super::linearity(&root, &tip, &work, requires),
+                super::Linearity::Linear
+            );
+            assert_eq!(
+                super::linearity(&root, &work, &tip, requires),
+                super::Linearity::Behind
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_red_head_slug_is_injective_over_slash_and_percent() {
+        assert_eq!(super::red_head_slug("feature/a%b"), "feature%2Fa%25b");
+        assert_ne!(
+            super::red_head_slug("feature/a"),
+            super::red_head_slug("feature-a")
+        );
+    }
+
+    /// Only an all-digit id is asked whether it was read.
+    #[test]
+    fn a_red_head_record_parses_and_only_a_digit_id_can_be_read() {
+        let record = super::RedHead::parse(
+            "head abc\nfailed 101 windows\nfailed x9 macos\nfailed 7\nrunning musl\nnoise\n",
+            |_| true,
+        );
+        assert_eq!(record.head, "abc");
+        assert_eq!(
+            record
+                .failed
+                .iter()
+                .map(|run| (run.id.as_str(), run.name.as_str(), run.read))
+                .collect::<Vec<_>>(),
+            vec![("101", "windows", true), ("x9", "macos", false)]
+        );
+        assert_eq!(record.running, vec![String::from("musl")]);
+        assert_eq!(
+            record.owed(),
+            Some(vec![
+                String::from("macos job x9"),
+                String::from("musl still running")
+            ])
+        );
+        let read = super::RedHead::parse("head abc\nfailed 101 windows\nrunning musl\n", |_| true);
+        assert_eq!(read.owed(), None, "a running check alone owes nothing");
+    }
+
+    /// Only a claimed `false` relaxes the line; absence keeps it.
+    #[test]
+    fn only_a_claimed_false_relaxes_the_linear_history_rule() {
+        let root = std::env::temp_dir().join(format!("batten-land-line-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(super::requires_line(&root).unwrap(), "no batten.toml");
+        let config = |body: &str| {
+            std::fs::write(root.join("batten.toml"), format!("version = 1\n{body}")).unwrap();
+            super::requires_line(&root)
+        };
+        assert!(config("").unwrap(), "no [ci]");
+        assert!(
+            !config("\n[ci]\nrequired_checks = [\"final\"]\nrequired_linear_history = false\n")
+                .unwrap()
+        );
+        assert!(
+            config("\n[ci]\nrequired_checks = [\"final\"]\nrequired_linear_history = true\n")
+                .unwrap()
+        );
+        assert!(config("not = [toml").is_err());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// No declared gates is a clear ready, and the distinction from `Unrunnable`

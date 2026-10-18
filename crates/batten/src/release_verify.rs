@@ -425,4 +425,112 @@ mod tests {
         assert_eq!(base64_decode("Zm9vYmE=").unwrap(), b"fooba");
         assert!(base64_decode("Z").is_none());
     }
+
+    #[test]
+    fn base64_decodes_the_two_symbol_digits() {
+        assert_eq!(base64_decode("+/+/").unwrap(), b"\xfb\xff\xbf");
+    }
+
+    fn answer(status: u16, body: &str) -> Option<crate::rest::Answer> {
+        Some(crate::rest::Answer {
+            status,
+            etag: None,
+            poll_floor: None,
+            backoff: None,
+            body: body.to_owned(),
+            headers: std::collections::BTreeMap::new(),
+        })
+    }
+
+    #[test]
+    fn a_committed_lock_is_its_content_none_or_could_not_look() {
+        let lock = |status: u16, body: &'static str| {
+            move |path: &str| {
+                assert_eq!(
+                    path,
+                    format!("repos/o/r/contents/{}?ref=abc", crate::install::LOCK_FILE)
+                );
+                answer(status, body)
+            }
+        };
+        assert_eq!(
+            committed_lock("o/r", "abc", &lock(200, r#"{"content": "Zm9v\n"}"#)),
+            Ok(Some(String::from("foo")))
+        );
+        assert_eq!(committed_lock("o/r", "abc", &lock(404, "{}")), Ok(None));
+        assert!(committed_lock("o/r", "abc", &lock(500, "{}")).is_err());
+        assert!(committed_lock("o/r", "abc", &lock(200, "{}")).is_err());
+        assert!(committed_lock("o/r", "abc", &|_: &str| None).is_err());
+    }
+
+    #[test]
+    fn a_refusal_is_one_pointer_line() {
+        assert_eq!(
+            Refusal::Mutable.line(),
+            "release verify: published but not immutable"
+        );
+        assert_eq!(
+            Refusal::MissingAsset(String::from("x.tar.gz")).line(),
+            "release verify: missing x.tar.gz"
+        );
+    }
+
+    #[test]
+    fn a_lock_refusal_turns_a_pass_into_a_refusal_and_nothing_else() {
+        assert_eq!(with_lock(Verdict::Verified, Vec::new()), Verdict::Verified);
+        assert_eq!(
+            with_lock(Verdict::Verified, vec![Refusal::Mutable]),
+            Verdict::Refused(vec![Refusal::Mutable])
+        );
+        assert_eq!(
+            with_lock(
+                Verdict::CouldNotLook(String::from("x")),
+                vec![Refusal::Mutable]
+            ),
+            Verdict::CouldNotLook(String::from("x"))
+        );
+    }
+
+    /// A draft is not at its tag, so the list's entry for the tag is the object.
+    #[test]
+    fn a_draft_s_object_is_the_list_entry_carrying_its_tag() {
+        let get = |path: &str| {
+            if path.contains("/releases/tags/") {
+                answer(404, "{}")
+            } else {
+                answer(
+                    200,
+                    r#"[{"tag_name": "v2", "draft": false}, {"tag_name": "v1", "draft": true}]"#,
+                )
+            }
+        };
+        assert_eq!(object("o/r", "v1", &get).unwrap()["draft"], true);
+        assert!(object("o/r", "v3", &get).is_err());
+    }
+
+    #[test]
+    fn an_asset_is_fetched_from_where_its_release_state_serves_it() {
+        let asset = Asset {
+            id: 7,
+            name: String::from("x.tar.gz"),
+        };
+        let download = |path: &str| -> Option<(u16, Vec<u8>)> {
+            match path {
+                "repos/o/r/releases/assets/7" => Some((200, b"draft".to_vec())),
+                "https://github.com/o/r/releases/download/v1/x.tar.gz" => {
+                    Some((200, b"public".to_vec()))
+                }
+                _ => Some((404, Vec::new())),
+            }
+        };
+        assert_eq!(
+            fetch("o/r", "v1", true, &asset, &download).unwrap(),
+            b"draft"
+        );
+        assert_eq!(
+            fetch("o/r", "v1", false, &asset, &download).unwrap(),
+            b"public"
+        );
+        assert!(fetch("o/r", "v2", false, &asset, &download).is_err());
+    }
 }

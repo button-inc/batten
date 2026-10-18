@@ -1625,6 +1625,51 @@ mod tests {
         ));
     }
 
+    /// A span measured to now needs the clock, and only that span does.
+    #[test]
+    fn an_age_needs_a_clock_and_a_clock_is_all_it_needs() {
+        let pages = [r#"{"workflow_runs": [{"id": 1, "created_at": "2026-08-27T23:59:00Z"}]}"#];
+        let row = Query {
+            span: vec![crate::rest::Span {
+                name: String::from("age"),
+                from: String::from("created_at"),
+                to: None,
+                unit: crate::rest::SpanUnit::Days,
+            }],
+            ..query("repos/x/runs")
+        };
+        let asked = std::cell::RefCell::new(Vec::new());
+        let body = recorded(
+            produce(
+                &row,
+                &BTreeMap::new(),
+                None,
+                1_788_000_000,
+                &scratch("age"),
+                &served(&pages, &asked),
+            )
+            .unwrap(),
+        );
+        assert!(body.starts_with("row\t{\"age\":2,"), "{body}");
+        let asked = std::cell::RefCell::new(Vec::new());
+        assert!(matches!(
+            produce(
+                &row,
+                &BTreeMap::new(),
+                None,
+                0,
+                &scratch("age-clock"),
+                &served(&pages, &asked),
+            )
+            .unwrap(),
+            Produced::CouldNotLook(_)
+        ));
+        assert!(
+            asked.borrow().is_empty(),
+            "nothing is asked without a clock"
+        );
+    }
+
     #[test]
     fn a_refusing_forge_is_could_not_look_and_names_no_body() {
         let refusing = |_: &str, _: Option<&str>| {

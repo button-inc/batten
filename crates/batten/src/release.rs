@@ -1258,4 +1258,150 @@ mod tests {
         let why = sweep_one("o/r", &request(), "v1", &forge).unwrap_err();
         assert!(why.contains("refused"), "{why}");
     }
+
+    /// Runs 7 then 8 for the newest-run reads, and a success for a run read.
+    fn appearing() -> impl Fn(&str) -> Option<Answer> {
+        let asked = std::cell::Cell::new(0_u32);
+        move |path: &str| {
+            if path.contains("/runs?") {
+                asked.set(asked.get() + 1);
+                let id = if asked.get() == 1 { 7 } else { 8 };
+                Some(reading(&format!(
+                    r#"{{"workflow_runs": [{{"id": {id}}}]}}"#
+                )))
+            } else {
+                Some(reading(
+                    r#"{"status": "completed", "conclusion": "success"}"#,
+                ))
+            }
+        }
+    }
+
+    /// The poll budget is a count shared by both waits, and a run that finishes
+    /// on the last poll it allows is recorded.
+    #[test]
+    fn a_run_finishing_on_the_last_allowed_poll_is_recorded() {
+        let get = appearing();
+        let post = |_: &str, _: &serde_json::Value| Some(204_u16);
+        let pause = |_: f64| {};
+        let forge = Forge {
+            get: &get,
+            post: &post,
+            pause: &pause,
+        };
+        let request = Backfill {
+            max_polls: 2,
+            ..request()
+        };
+        assert_eq!(sweep_one("o/r", &request, "v1", &forge), Ok(8));
+    }
+
+    /// A run that never appears is waited for exactly the budget, then refused.
+    #[test]
+    fn a_run_that_never_appears_spends_exactly_the_poll_budget() {
+        let get = |_: &str| Some(reading(r#"{"workflow_runs": [{"id": 9}]}"#));
+        let post = |_: &str, _: &serde_json::Value| Some(204_u16);
+        let paused = std::cell::Cell::new(0_u32);
+        let pause = |_: f64| {
+            paused.set(paused.get() + 1);
+            assert!(paused.get() <= 10, "the poll budget is unbounded");
+        };
+        let forge = Forge {
+            get: &get,
+            post: &post,
+            pause: &pause,
+        };
+        assert!(sweep_one("o/r", &request(), "v1", &forge).is_err());
+        assert_eq!(paused.get(), 3);
+    }
+
+    #[test]
+    fn a_sweep_stopping_names_how_many_tags_it_recorded() {
+        let get = appearing();
+        let posted = std::cell::Cell::new(0_u32);
+        let post = |_: &str, _: &serde_json::Value| {
+            posted.set(posted.get() + 1);
+            Some(if posted.get() == 1 { 204_u16 } else { 403 })
+        };
+        let pause = |_: f64| {};
+        let forge = Forge {
+            get: &get,
+            post: &post,
+            pause: &pause,
+        };
+        let tags = [String::from("v1"), String::from("v2")];
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(
+            sweep("o/r", &request(), &tags, &forge, &mut out, &mut err).unwrap(),
+            ExitCode::Internal
+        );
+        let err = String::from_utf8(err).unwrap();
+        assert!(
+            err.contains("; 1 tag(s) were recorded before this"),
+            "{err}"
+        );
+        assert_eq!(format!("{forge:?}"), "Forge { .. }");
+    }
+
+    #[test]
+    fn only_a_listed_draft_of_this_tag_is_a_draft() {
+        let listed = |body: &'static str| move |_: &str| Some(reading(body));
+        let draft = r#"[{"tag_name": "v1", "draft": true}, {"tag_name": "v2", "draft": false}]"#;
+        assert!(is_draft("o/r", "v1", &listed(draft)));
+        assert!(!is_draft("o/r", "v2", &listed(draft)));
+        assert!(!is_draft("o/r", "v3", &listed(draft)));
+        assert!(!is_draft("o/r", "v1", &|_: &str| None));
+        let refused = |_: &str| {
+            Some(Answer {
+                status: 404,
+                ..reading(r#"[{"tag_name": "v1", "draft": true}]"#)
+            })
+        };
+        assert!(!is_draft("o/r", "v1", &refused));
+    }
+
+    /// Only a 404 on a named tag asks the list; a tag that answers is read.
+    #[test]
+    fn a_tag_that_answers_is_read_without_asking_the_list() {
+        let get = |path: &str| {
+            if path.contains("/releases/tags/") {
+                Some(reading(RELEASE))
+            } else {
+                None
+            }
+        };
+        assert_eq!(
+            read_release("o/r", Some("v1.2.3"), &get).unwrap().tag,
+            "v1.2.3"
+        );
+    }
+
+    #[test]
+    fn a_name_no_record_line_can_hold_is_refused() {
+        let get = |_: &str| {
+            Some(reading(
+                r#"{"tag_name": "v1", "assets": [{"id": 1, "name": "a\tb"}]}"#,
+            ))
+        };
+        let download = |_: &str| None;
+        let why = produce_record(Some("o/r"), None, "SUMS", &get, &download).unwrap_err();
+        assert!(why.contains("tab or a line break"), "{why}");
+    }
+
+    #[test]
+    fn a_manifest_name_is_one_file_name() {
+        assert!(manifest_name("v", "SUMS").is_ok());
+        for refused in ["", "a/b", "a\\b", ".", "..", "a\tb"] {
+            assert!(manifest_name("v", refused).is_err(), "{refused:?}");
+        }
+    }
+
+    #[test]
+    fn the_shortest_entry_is_a_one_character_name() {
+        let hex = "a".repeat(64);
+        assert_eq!(
+            entries(&format!("{hex}  x\n")),
+            vec![(hex.clone(), String::from("x"))]
+        );
+    }
 }
