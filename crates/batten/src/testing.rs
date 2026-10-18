@@ -561,4 +561,83 @@ mod tests {
         let dir = checkout("outside");
         assert!(!falls_through(&dir, &dir.join("tmp")));
     }
+
+    /// Fails by: a census that stops recognising a clock spelling, a taint
+    /// through a `let`, an assertion macro's condition count, an `impl` method,
+    /// or an unparsed body — every count and name is asserted exactly.
+    #[test]
+    fn the_clock_census_counts_and_names_each_assertion_exactly() {
+        let file: syn::File = syn::parse_str(
+            r#"
+            fn tainted() {
+                let start = Instant::now();
+                let (from, to) = (std::time::SystemTime::now(), Instant::now());
+                assert!(start < limit);
+                assert_eq!(count, 3, "took {:?}", start.elapsed());
+            }
+            fn elapsed() { assert!(timer().elapsed() < bound); }
+            struct S;
+            impl S {
+                fn deadline() { assert!(deadline > Instant::now()); }
+            }
+            fn second() { debug_assert_ne!(stamp, SystemTime::now()); }
+            fn clean() {
+                let n = count();
+                assert!(n == Clock::now());
+                assert!(t < Instant::MAX);
+                debug_assert!(n.checked_add(1).is_some());
+                assert_ne!(n, 2);
+                other!(Instant::now());
+            }
+            fn unparsed() { assert!(a b); }
+            "#,
+        )
+        .expect("the fixture parses");
+        assert_eq!(
+            clock_census(&file),
+            ClockCensus {
+                judged: 9,
+                clocked: 3,
+                refused: ["tainted", "elapsed", "deadline", "second"]
+                    .map(String::from)
+                    .to_vec(),
+                unparsed: vec!["unparsed".to_owned()],
+            }
+        );
+    }
+
+    /// Fails by: a census that miscounts cases, admits a bare early exit, refuses
+    /// one under `cfg!`/`!cfg!`, lets a guard outlive its `if`, or misses an
+    /// `rstest`, a qualified `test` or a case inside a nested module.
+    #[test]
+    fn the_skip_census_splits_guarded_from_silent_exits_exactly() {
+        let file: syn::File = syn::parse_str(
+            r"
+            #[test]
+            fn bare() { if probe() { return; } assert!(x); }
+            #[test]
+            fn guarded() { if !cfg!(unix) { return; } if cfg!(windows) { if other { return; } } }
+            #[rstest]
+            fn after_guard() { if cfg!(unix) {} return; }
+            #[tokio::test]
+            fn enclosed() { let f = || { return 1; }; fn inner() { return; } }
+            fn helper() { return; }
+            #[test]
+            fn nothing() {}
+            mod tests {
+                #[test]
+                fn nested() { return; }
+            }
+            ",
+        )
+        .expect("the fixture parses");
+        assert_eq!(
+            skip_census(&file),
+            SkipCensus {
+                cases: 6,
+                guarded: 2,
+                refused: ["bare", "after_guard", "nested"].map(String::from).to_vec(),
+            }
+        );
+    }
 }
