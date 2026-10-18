@@ -2512,7 +2512,8 @@ mod tests {
     #[test]
     fn an_agent_sourced_record_is_written_where_the_store_reads_it() {
         /// Removes the record this case writes into the checkout's own store,
-        /// whether or not an assertion below fails first.
+        /// whether or not an assertion below fails first. The store reads the
+        /// checkout it runs in, having no root to take (CLOUD-2475).
         struct Removed(std::path::PathBuf);
         impl Drop for Removed {
             fn drop(&mut self) {
@@ -2520,15 +2521,9 @@ mod tests {
             }
         }
         let name = format!("batten-unit-{}", std::process::id());
-        let keys = [(&name, &ReceiptKey::Named)];
-        let _written = Removed(
-            sourced_store(&keys, Some("CLOUD-1"))
-                .unwrap()
-                .path(&name)
-                .unwrap(),
-        );
+        let store = sourced_store(&[(&name, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
+        let _written = Removed(store.path(&name).unwrap());
         record_sourced(&name, ReceiptKey::Named, Some("CLOUD-1"), &sourced(5)).unwrap();
-        let store = sourced_store(&keys, Some("CLOUD-1")).unwrap();
         assert_eq!(store.record(&name).map(|record| record.rows), Some(5));
         assert!(record_sourced(&name, ReceiptKey::Named, Some("a/b"), &sourced(5)).is_err());
     }
