@@ -1011,7 +1011,10 @@ mod tests {
         assert!(table(Some(10), Some(20)).validate().is_ok());
         assert!(table(Some(10), None).validate().is_err());
         assert!(table(None, Some(20)).validate().is_err());
-        assert!(table(Some(20), Some(20)).validate().is_err(), "no width");
+        match table(Some(20), Some(20)).validate() {
+            Ok(()) => panic!("a band with no width was accepted"),
+            Err(why) => assert!(why.to_string().contains("is not above"), "{why}"),
+        }
     }
 
     #[test]

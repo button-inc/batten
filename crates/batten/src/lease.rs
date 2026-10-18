@@ -194,9 +194,9 @@ fn base64_of(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let triple = chunk.iter().enumerate().fold(0_u32, |acc, (index, byte)| {
-            acc | (u32::from(*byte) << (16 - 8 * index))
-        });
+        let mut padded = [0_u8; 4];
+        padded[1..=chunk.len()].copy_from_slice(chunk);
+        let triple = u32::from_be_bytes(padded);
         for index in 0..=chunk.len() {
             let shift = 18 - 6 * u32::try_from(index).unwrap_or(0);
             let sextet = usize::try_from((triple >> shift) & 0x3f).unwrap_or(0);
@@ -4026,6 +4026,20 @@ mod tests {
         );
     }
 
+    /// Fails by: capabilities read from any line carrying a NUL rather than
+    /// only the first ref's.
+    #[test]
+    fn only_the_first_ref_carries_capabilities() {
+        let body = framed(&[
+            "# service=git-receive-pack\n",
+            "1111111111111111111111111111111111111111 refs/heads/main\0report-status atomic\n",
+            "2222222222222222222222222222222222222222 refs/heads/other\0delete-refs\n",
+            "",
+        ]);
+        let advertisement = parse_advertisement(&body, Service::ReceivePack).expect("parse");
+        assert_eq!(advertisement.capabilities, vec!["report-status", "atomic"]);
+    }
+
     #[test]
     fn an_absent_ref_reads_as_zero_for_the_swap_and_stays_absent_in_the_map() {
         let body = framed(&["# service=git-receive-pack\n", "", ""]);
@@ -5491,6 +5505,34 @@ mod tests {
         // And the id survives the round trip, which is what `fetch_object`'s
         // "does this answer carry what was asked for" check turns on.
         assert!(read.iter().any(|object| object.id == commit.id));
+    }
+
+    /// Fails by: a pack reader that names fewer kinds than the writer packs.
+    #[test]
+    fn every_undeltified_kind_round_trips_through_a_pack() {
+        let objects: Vec<Object> = [
+            gix::object::Kind::Commit,
+            gix::object::Kind::Tree,
+            gix::object::Kind::Blob,
+            gix::object::Kind::Tag,
+        ]
+        .into_iter()
+        .map(|kind| Object {
+            id: String::from("0000000000000000000000000000000000000000"),
+            kind,
+            body: b"payload".to_vec(),
+        })
+        .collect();
+        let pack = pack_of(&objects).expect("pack");
+        let kinds: Vec<_> = objects_in(&pack)
+            .expect("unpack")
+            .into_iter()
+            .map(|object| object.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            objects.iter().map(|object| object.kind).collect::<Vec<_>>()
+        );
     }
 
     #[test]

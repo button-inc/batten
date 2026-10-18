@@ -6115,6 +6115,20 @@ mod tests {
         );
     }
 
+    /// Fails by: a remote whose url is blank listed as though it named one.
+    #[test]
+    fn a_remote_with_a_blank_url_is_not_listed() {
+        let (dir, _) = history("blank-remote");
+        set_config_local(&dir, "remote.blank.url", "").expect("write a blank url");
+        assert_eq!(
+            remotes(&dir).unwrap(),
+            [(
+                "origin".to_owned(),
+                "https://example.invalid/r.git".to_owned()
+            )]
+        );
+    }
+
     /// Fails by: a repository-level read answering other than the fixture's
     /// remote, branch, refs, directories, ignore rules, shallowness or worktree.
     #[test]
