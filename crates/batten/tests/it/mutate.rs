@@ -258,6 +258,10 @@ fn run(root: &Path, verb: &str, gates: &str) -> (i32, String, String) {
         // `[env]` (CLOUD-1909). A toy with no manifest resolves no `task-` gate
         // either way.
         .env("MUTANT_TASKS", "mise.toml")
+        // A PROFILE NO TOY DECLARES, as this repository's `[env]` exports under
+        // CI, so every case here proves the sweep runs nextest on a profile the
+        // staged tree has rather than on whatever its caller selected.
+        .env("NEXTEST_PROFILE", "ci")
         .output()
         .expect("run batten mutate");
     (
@@ -995,27 +999,6 @@ fn a_task_name_with_no_block_is_still_no_such_gate() {
     let (code, out, err) = sweep(&root, "task-nope");
     assert_eq!(code, 3, "{out}{err}");
     assert!(out.contains("no-such-gate"), "{out}");
-}
-
-/// Fails by: the sweep's Cargo arm inheriting the caller's `NEXTEST_PROFILE`.
-/// This repository's `[env]` sets `ci` under CI, a toy (like a consumer) declares
-/// no such profile, and nextest then exits before selecting a case, so a row its
-/// suite catches read `suite-did-not-run` in CI and nowhere else.
-#[cfg(unix)]
-#[test]
-fn a_caught_row_is_caught_whatever_nextest_profile_the_caller_selected() {
-    let root = toy_repo("caught-under-a-foreign-profile", &[CAUGHT]);
-    let answer = common::batten()
-        .args(["mutate", "sweep"])
-        .current_dir(&root)
-        .env("MUTANT_GATES", "toy")
-        .env("MUTANT_TASKS", "mise.toml")
-        .env("NEXTEST_PROFILE", "ci")
-        .output()
-        .expect("run batten mutate");
-    let out = stdout(&answer);
-    assert_eq!(answer.status.code(), Some(0), "{out}{}", stderr(&answer));
-    assert!(out.contains("every one caught"), "{out}");
 }
 
 #[cfg(unix)]
