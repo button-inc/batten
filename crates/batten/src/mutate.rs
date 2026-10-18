@@ -2801,15 +2801,39 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
         // it flipped the profile under the declared sweep's builds, and each
         // flip rebuilt the workspace crates.
         (String::from("CARGO_PROFILE_TEST_DEBUG"), String::from("0")),
-        // THE PROFILE EVERY NEXTEST CONFIG HAS, for both runners that run
-        // nextest (the declared Cargo arm and cargo-mutants). An inherited
-        // `NEXTEST_PROFILE` (this repository's `[env]` sets `ci` under CI)
-        // names a profile the staged tree may not declare, a fixture's or a
-        // consumer's, and nextest then exits before selecting a case: every
-        // declared Cargo row read `suite-did-not-run` in CI alone.
-        (String::from("NEXTEST_PROFILE"), String::from("default")),
+        // A NEXTEST PROFILE THE TREE DECLARES ([`nextest_profile`]). Set on
+        // every spawn over the staged tree; only the nextest runs read it.
+        (
+            String::from("NEXTEST_PROFILE"),
+            nextest_profile(root, std::env::var("NEXTEST_PROFILE").ok().as_deref()),
+        ),
     ]);
     env
+}
+
+/// The nextest profile the sweep runs under: the caller's `inherited` one where
+/// `root`'s `.config/nextest.toml` declares it, else `default`, which every
+/// config has.
+///
+/// AN UNDECLARED PROFILE STOPS NEXTEST BEFORE IT SELECTS A CASE. This
+/// repository's `[env]` exports `ci` under CI, and a tree that does not declare
+/// it, a fixture's or a consumer's, read every declared Cargo row
+/// `suite-did-not-run` in CI alone. A DECLARED ONE IS KEPT, so a consumer's
+/// chosen profile, with its own setup scripts or settings, is not traded away.
+fn nextest_profile(root: &Path, inherited: Option<&str>) -> String {
+    let declared = |name: &str| {
+        fs::read_to_string(root.join(".config/nextest.toml")).is_ok_and(|config| {
+            config.lines().any(|line| {
+                let line = line.trim();
+                line == format!("[profile.{name}]")
+                    || line.starts_with(&format!("[profile.{name}."))
+            })
+        })
+    };
+    match inherited.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) if declared(name) => name.to_owned(),
+        _ => String::from("default"),
+    }
 }
 
 /// The directory a committed `[[provision]]` row installed a registered
@@ -4433,6 +4457,37 @@ mod tests {
             "the provisioned directory must come first: {path}"
         );
         assert_eq!(runner_path().len(), 1, "unresolvable reads the same PATH");
+    }
+
+    /// Fails by: an inherited profile kept when the staged tree does not
+    /// declare it (nextest exits before selecting a case, and every Cargo row
+    /// reads `suite-did-not-run`), or one it does declare thrown away.
+    #[test]
+    fn an_inherited_nextest_profile_is_kept_only_where_the_tree_declares_it() {
+        let root = std::env::temp_dir().join(format!("batten-profile-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(nextest_profile(&root, Some("ci")), "default", "no config");
+        fs::create_dir_all(root.join(".config")).expect("dirs");
+        fs::write(
+            root.join(".config/nextest.toml"),
+            "[profile.ci]\nfail-fast = false\n[profile.slow.junit]\npath = \"j.xml\"\n",
+        )
+        .expect("config");
+        assert_eq!(nextest_profile(&root, Some("ci")), "ci");
+        assert_eq!(
+            nextest_profile(&root, Some("slow")),
+            "slow",
+            "a sub-table declares it"
+        );
+        assert_eq!(
+            nextest_profile(&root, Some("c")),
+            "default",
+            "a prefix is not a name"
+        );
+        assert_eq!(nextest_profile(&root, Some("bench")), "default");
+        assert_eq!(nextest_profile(&root, Some(" ")), "default");
+        assert_eq!(nextest_profile(&root, None), "default");
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// Fails by: a nextest run read as libtest, which counts no case and finds
