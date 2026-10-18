@@ -2801,8 +2801,7 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
         // it flipped the profile under the declared sweep's builds, and each
         // flip rebuilt the workspace crates.
         (String::from("CARGO_PROFILE_TEST_DEBUG"), String::from("0")),
-        // A NEXTEST PROFILE THE TREE DECLARES ([`nextest_profile`]). Set on
-        // every spawn over the staged tree; only the nextest runs read it.
+        // See [`nextest_profile`]; only the nextest runs read it.
         (
             String::from("NEXTEST_PROFILE"),
             nextest_profile(root, std::env::var("NEXTEST_PROFILE").ok().as_deref()),
@@ -2821,18 +2820,20 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
 /// `suite-did-not-run` in CI alone. A DECLARED ONE IS KEPT, so a consumer's
 /// chosen profile, with its own setup scripts or settings, is not traded away.
 fn nextest_profile(root: &Path, inherited: Option<&str>) -> String {
-    let declared = |name: &str| {
-        fs::read_to_string(root.join(".config/nextest.toml")).is_ok_and(|config| {
-            config.lines().any(|line| {
-                let line = line.trim();
-                line == format!("[profile.{name}]")
-                    || line.starts_with(&format!("[profile.{name}."))
-            })
-        })
+    let Some(name) = inherited.map(str::trim).filter(|name| !name.is_empty()) else {
+        return String::from("default");
     };
-    match inherited.map(str::trim).filter(|name| !name.is_empty()) {
-        Some(name) if declared(name) => name.to_owned(),
-        _ => String::from("default"),
+    let config = fs::read_to_string(root.join(".config/nextest.toml")).unwrap_or_default();
+    let declared = toml::from_str::<toml::Table>(&config).is_ok_and(|config| {
+        config
+            .get("profile")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|profiles| profiles.contains_key(name))
+    });
+    if declared {
+        name.to_owned()
+    } else {
+        String::from("default")
     }
 }
 
@@ -4459,9 +4460,8 @@ mod tests {
         assert_eq!(runner_path().len(), 1, "unresolvable reads the same PATH");
     }
 
-    /// Fails by: an inherited profile kept when the staged tree does not
-    /// declare it (nextest exits before selecting a case, and every Cargo row
-    /// reads `suite-did-not-run`), or one it does declare thrown away.
+    /// Fails by: an undeclared inherited profile kept, or a declared one
+    /// dropped, in any of TOML's spellings of a `profile.<name>` table.
     #[test]
     fn an_inherited_nextest_profile_is_kept_only_where_the_tree_declares_it() {
         let root = std::env::temp_dir().join(format!("batten-profile-{}", std::process::id()));
@@ -4470,7 +4470,8 @@ mod tests {
         fs::create_dir_all(root.join(".config")).expect("dirs");
         fs::write(
             root.join(".config/nextest.toml"),
-            "[profile.ci]\nfail-fast = false\n[profile.slow.junit]\npath = \"j.xml\"\n",
+            "[profile.ci]\nfail-fast = false\n[profile.slow.junit]\npath = \"j.xml\"\n\
+             [profile]\nquick.retries = 0\n\"spaced name\" = {}\n",
         )
         .expect("config");
         assert_eq!(nextest_profile(&root, Some("ci")), "ci");
@@ -4484,6 +4485,12 @@ mod tests {
             "default",
             "a prefix is not a name"
         );
+        assert_eq!(
+            nextest_profile(&root, Some("quick")),
+            "quick",
+            "a dotted key"
+        );
+        assert_eq!(nextest_profile(&root, Some("spaced name")), "spaced name");
         assert_eq!(nextest_profile(&root, Some("bench")), "default");
         assert_eq!(nextest_profile(&root, Some(" ")), "default");
         assert_eq!(nextest_profile(&root, None), "default");
