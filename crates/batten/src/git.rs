@@ -6565,6 +6565,33 @@ mod tests {
         );
     }
 
+    /// Fails by: a branch's configured upstream not read, or a `HEAD` a remote
+    /// already carries read as held only here.
+    #[test]
+    fn a_tracked_head_on_its_remote_is_pushed() {
+        let (dir, [.., third]) = history("tracked");
+        let mut config = fs::read_to_string(dir.join(".git/config")).unwrap();
+        config.push_str(
+            "\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch \"main\"]\n\tremote = origin\n\tmerge = refs/heads/main\n",
+        );
+        fs::write(dir.join(".git/config"), config).unwrap();
+        assert_eq!(
+            upstream_of_head(&dir).unwrap().as_deref(),
+            Some("refs/remotes/origin/main")
+        );
+        gix::open(&dir)
+            .expect("open")
+            .reference(
+                "refs/remotes/origin/main",
+                gix::ObjectId::from_hex(third.as_bytes()).expect("an id"),
+                gix::refs::transaction::PreviousValue::Any,
+                "fixture",
+            )
+            .expect("push it");
+        assert_eq!(head_on_a_remote(&dir), Some(true));
+        assert!(unpushed_in_range(&dir, &third).unwrap().is_empty());
+    }
+
     /// Commit a merge of `parents` on `HEAD`, carrying the first parent's tree.
     fn merge(dir: &Path, parents: [&str; 2]) -> String {
         let repo = gix::open(dir).expect("open");
