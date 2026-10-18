@@ -4892,9 +4892,10 @@ rules contains not_quoted\n";
         let bundle = bytecode(bundle_of("row", &[("policy/d.rego", GATED)]));
         assert!(bundle.is_bytecode());
         assert!(
-            matches!(test(&bundle, "{}", false), Ok(Look::CouldNotLook)),
+            bundle.described().is_none(),
             "bytecode carries no AST to describe"
         );
+        assert!(matches!(test(&bundle, "{}", false), Ok(Look::CouldNotLook)));
         let tok = Some(vec!["tok".to_owned()]);
         assert!(!Answers::open());
         let before = bytecode_evaluations();
@@ -5259,7 +5260,8 @@ deny contains \"tok\" if {\n\tinput.go\n}\n";
     fn a_test_that_never_fires_its_predicate_leaves_it_unexercised() {
         let quiet = "package batten.n\nimport rego.v1\n\nrules contains \"n\"\n\n\
 violation contains {\"rule\": \"n\", \"verdict\": \"n\"} if {\n\tinput.call.operation == \"write\"\n}\n\n\
-test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\
+helper := \"z\"\n\n\
+test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\thelper == \"z\"\n\
 \tcount(violation) == 0 with input as {\"call\": {\"operation\": \"read\"}}\n}\n";
         let suite = suite_of(&bundle_of("row", &[("policy/n.rego", quiet)]), false);
         assert_eq!(suite.passed.len(), 1);
