@@ -2511,33 +2511,23 @@ mod tests {
     /// The write files the record exactly where the store reads it.
     #[test]
     fn an_agent_sourced_record_is_written_where_the_store_reads_it() {
-        /// Every file in the store's directory carrying this case's name, swept
-        /// before the write and again on any exit: a record a killed earlier run
-        /// left behind cannot answer the read-back, and one a writer filed under
-        /// another name in that directory does not outlive a failing assertion.
-        /// The name is matched with its `.` delimiter, so another process whose
-        /// id extends this one's is never swept. The store reads the checkout it
-        /// runs in, having no root to take (CLOUD-2475).
-        struct Swept(std::path::PathBuf, String);
-        impl Swept {
-            fn sweep(&self) {
-                for entry in std::fs::read_dir(&self.0).into_iter().flatten().flatten() {
-                    if entry.file_name().to_string_lossy().contains(&self.1) {
-                        let _ = std::fs::remove_file(entry.path());
-                    }
-                }
-            }
-        }
-        impl Drop for Swept {
+        /// Removes the record this case writes into the checkout's own store,
+        /// whether or not an assertion below fails first. The store reads the
+        /// checkout it runs in, having no root to take (CLOUD-2475).
+        struct Removed(std::path::PathBuf);
+        impl Drop for Removed {
             fn drop(&mut self) {
-                self.sweep();
+                let _ = std::fs::remove_file(&self.0);
             }
         }
-        let name = format!("batten-unit-{}", std::process::id());
+        // UNIQUE TO THIS RUN, so no record an earlier run left behind can
+        // answer the read-back for this one.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos());
+        let name = format!("batten-unit-{}-{nanos}", std::process::id());
         let store = sourced_store(&[(&name, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
-        let path = store.path(&name).unwrap();
-        let swept = Swept(path.parent().unwrap().to_path_buf(), format!("{name}."));
-        swept.sweep();
+        let _written = Removed(store.path(&name).unwrap());
         record_sourced(&name, ReceiptKey::Named, Some("CLOUD-1"), &sourced(5)).unwrap();
         assert_eq!(store.record(&name).map(|record| record.rows), Some(5));
         assert!(record_sourced(&name, ReceiptKey::Named, Some("a/b"), &sourced(5)).is_err());
