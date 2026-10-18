@@ -3585,4 +3585,694 @@ mod tests {
         assert_eq!(Passthrough(-1).byte(), u8::MAX);
         assert_eq!(Passthrough(7).byte(), 7);
     }
+
+    /// Fails by: an absent `jobs` key reading as anything but one at a time.
+    #[test]
+    fn an_empty_exec_table_runs_one_job_at_a_time() {
+        let empty: ExecConfig = serde_json::from_str("{}").expect("an empty table parses");
+        assert_eq!(empty.jobs, 1);
+        assert_eq!(empty, ExecConfig::DEFAULT);
+    }
+
+    /// Fails by: a sink showing bytes its style withholds, or withholding
+    /// bytes `--tee` asked to show, or prefixing a style that carries none.
+    #[test]
+    fn a_sink_shows_the_child_only_where_tee_and_the_style_allow() {
+        let sink = |tee: bool, style: OutputStyle| {
+            let settings = ExecConfig {
+                tee,
+                style,
+                ..ExecConfig::DEFAULT
+            };
+            let sink = ChildSink::of(&settings, "child", capture::LiveStream::STDOUT);
+            (sink.prefix, sink.discard)
+        };
+        assert_eq!(sink(true, OutputStyle::Interleave), (None, false));
+        assert_eq!(sink(false, OutputStyle::Interleave), (None, true));
+        assert_eq!(sink(true, OutputStyle::KeepOrder), (None, true));
+        assert_eq!(
+            sink(true, OutputStyle::Prefix),
+            (Some("child| ".to_owned()), false)
+        );
+        assert_eq!(sink(true, OutputStyle::Quiet), (None, false));
+        assert_eq!(sink(true, OutputStyle::Silent), (None, true));
+    }
+
+    /// Fails by: a bare command's lines growing a bundle tag, a bundle's
+    /// losing theirs, or the "ran" line appearing anywhere but a bundle that
+    /// stopped short.
+    #[test]
+    fn a_record_tags_only_a_bundle_and_says_when_it_stopped_short() {
+        let captures = [
+            capture::Capture {
+                stream: "stdout",
+                bytes: 1,
+                digest: "d1".to_owned(),
+            },
+            capture::Capture {
+                stream: "stderr",
+                bytes: 0,
+                digest: "d2".to_owned(),
+            },
+        ];
+        let rendered = |declared: usize, ran: usize| {
+            let record = Record {
+                verb: "exec",
+                exit: 0,
+                declared,
+                commands: (0..ran)
+                    .map(|index| CommandRecord {
+                        index,
+                        exit: 0,
+                        captures: &captures,
+                    })
+                    .collect(),
+            };
+            let mut said = Vec::new();
+            record
+                .emit(OutputFormat::Human, &mut said)
+                .expect("the record renders");
+            String::from_utf8(said).expect("the record is text")
+        };
+        assert_eq!(
+            rendered(1, 1),
+            "exec: stdout 1 byte(s) stdout:d1\nexec: stderr 0 byte(s) stderr:d2\nexec: exit 0\n"
+        );
+        assert_eq!(rendered(1, 0), "exec: exit 0\n");
+        let both = "exec: [0] exit 0\nexec: [0] stdout 1 byte(s) stdout:d1\n\
+                    exec: [0] stderr 0 byte(s) stderr:d2\nexec: [1] exit 0\n\
+                    exec: [1] stdout 1 byte(s) stdout:d1\nexec: [1] stderr 0 byte(s) stderr:d2\n";
+        assert_eq!(rendered(2, 2), format!("{both}exec: exit 0\n"));
+        assert_eq!(
+            rendered(3, 2),
+            format!("{both}exec: 2 of 3 command(s) ran\nexec: exit 0\n")
+        );
+    }
+
+    /// Fails by: an escalation's notice word drifting from the one a case reads.
+    #[test]
+    fn each_escalation_names_itself() {
+        assert_eq!(Escalation::SecondSignal.as_str(), "second-signal");
+        assert_eq!(Escalation::GraceExpired.as_str(), "grace-expired");
+    }
+
+    /// Fails by: two dispatches in one process sharing a run number, and so a
+    /// live-capture spool.
+    #[test]
+    fn two_dispatches_never_share_a_run_number() {
+        let first = next_run();
+        let second = next_run();
+        assert!(second > first, "{first} then {second}");
+    }
+
+    /// Fails by: a held lock surviving its guard.
+    #[test]
+    fn a_held_lock_is_released_when_its_guard_drops() {
+        let dir = crate::scratch::scratch("exec-held-lock");
+        let path = dir.join("the.lock");
+        let want = Lock {
+            place: LockPlace::Path(path.clone()),
+            attempts: 1,
+            label: "the test".to_owned(),
+        };
+        let mut err = Vec::new();
+        let LockOutcome::Held(guard) = hold(Some(&want), &mut err).expect("hold") else {
+            panic!("a free lock is taken: {}", String::from_utf8_lossy(&err));
+        };
+        assert!(path.exists(), "premise: holding it put it on disk");
+        drop(guard);
+        assert!(!path.exists(), "the guard's drop releases it");
+    }
+
+    /// `sh -c script` through [`piped_argv`], from a scratch root.
+    fn sh(
+        root: &Path,
+        script: &str,
+        stdin: &str,
+        diagnostics: Diagnostics,
+    ) -> Option<(i32, String)> {
+        let argv = ["sh".to_owned(), "-c".to_owned(), script.to_owned()];
+        piped_argv(root, &argv, stdin, diagnostics, &[])
+    }
+
+    /// Fails by: a piped child's code, stdout or stdin going astray, or
+    /// stderr being folded in where the caller dropped it, folded with a
+    /// doubled or missing separator, or folded when it said nothing.
+    #[test]
+    fn a_piped_child_answers_its_code_and_stdout_and_keeps_stderr_only_when_asked() {
+        let root = crate::scratch::scratch("exec-piped-argv");
+        assert_eq!(
+            piped_argv(&root, &[], "", Diagnostics::Drop, &[]),
+            None,
+            "an empty argv names nothing to run"
+        );
+        if !cfg!(unix) {
+            // Off unix there is no `sh` to drive the cases below.
+            return;
+        }
+        let both = "printf out; printf why >&2; exit 3";
+        assert_eq!(
+            sh(&root, both, "", Diagnostics::Drop),
+            Some((3, "out".to_owned()))
+        );
+        assert_eq!(
+            sh(&root, both, "", Diagnostics::Keep),
+            Some((3, "out\nwhy".to_owned()))
+        );
+        assert_eq!(
+            sh(
+                &root,
+                "printf 'out\\n'; printf why >&2",
+                "",
+                Diagnostics::Keep
+            ),
+            Some((0, "out\nwhy".to_owned())),
+            "a stdout that already ends its line gets no second separator"
+        );
+        assert_eq!(
+            sh(&root, "printf why >&2", "", Diagnostics::Keep),
+            Some((0, "why".to_owned())),
+            "an empty stdout needs no separator"
+        );
+        assert_eq!(
+            sh(
+                &root,
+                "printf out; printf '  \\n' >&2",
+                "",
+                Diagnostics::Keep
+            ),
+            Some((0, "out".to_owned())),
+            "a blank stderr adds nothing"
+        );
+        assert_eq!(
+            sh(&root, "cat; exit 5", "fed", Diagnostics::Drop),
+            Some((5, "fed".to_owned()))
+        );
+    }
+
+    /// Fails by: `piped` refusing a program that is there, or answering for
+    /// one that is not.
+    #[test]
+    fn piped_runs_a_program_at_its_root_and_refuses_an_absent_one() {
+        let root = crate::scratch::scratch("exec-piped-path");
+        std::fs::write(root.join("prog"), "#!/bin/sh\nprintf \"$1\"\ncat\nexit 4\n")
+            .expect("write the program");
+        if cfg!(unix) {
+            // `/bin/sh`'s own mode, so the program is executable without a
+            // platform-only permissions API.
+            let executable = std::fs::metadata("/bin/sh")
+                .expect("sh is installed")
+                .permissions();
+            std::fs::set_permissions(root.join("prog"), executable)
+                .expect("make the program executable");
+            assert_eq!(
+                piped(&root, Path::new("prog"), &["arg-".to_owned()], "in"),
+                Some((4, "arg-in".to_owned()))
+            );
+        }
+        assert_eq!(piped(&root, Path::new("absent"), &[], ""), None);
+    }
+
+    /// Fails by: a spawn failure being called "not found" when it was
+    /// something else, or not being called that when it was.
+    #[test]
+    fn a_spawn_failure_names_its_own_cause() {
+        let root = crate::scratch::scratch("exec-spawn-failure");
+        let message = |program: &str| {
+            let err = run_in_with(
+                &root,
+                &[program.to_owned()],
+                &[],
+                &ExecConfig::DEFAULT,
+                &mut std::io::sink(),
+            )
+            .expect_err("the program cannot be started");
+            assert!(err.downcast_ref::<UsageError>().is_some(), "{err:#}");
+            format!("{err:#}")
+        };
+        let absent = message("batten-no-such-program-exists");
+        assert!(absent.contains("not found on PATH"), "{absent}");
+        if cfg!(unix) {
+            // Neither executable nor a script: refused, but not "not found".
+            let plain = root.join("plain");
+            std::fs::write(&plain, "no shebang here\n").expect("write the file");
+            let refused = message(plain.to_str().expect("a utf-8 scratch path"));
+            assert!(refused.contains("cannot run"), "{refused}");
+            assert!(!refused.contains("not found on PATH"), "{refused}");
+        }
+    }
+
+    /// Fails by: the terminate hook not being stored, not being withdrawn,
+    /// running twice, or being skipped by a re-raise. Signal 23's default is to
+    /// ignore — SIGURG on Linux, SIGIO on the BSDs and macOS — so the re-raise
+    /// returns and the case can read the hook.
+    #[test]
+    fn the_terminate_hook_runs_once_before_a_reraise_and_not_once_withdrawn() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        const IGNORED_BY_DEFAULT: i32 = 23;
+        let ran = Arc::new(AtomicUsize::new(0));
+        let hook = || {
+            let ran = Arc::clone(&ran);
+            move || {
+                ran.fetch_add(1, Ordering::SeqCst);
+            }
+        };
+        let outcome = |received: Option<i32>| Outcome {
+            index: 0,
+            exit: 0,
+            out_bytes: Vec::new(),
+            err_bytes: Vec::new(),
+            captures: [
+                capture::Capture {
+                    stream: "stdout",
+                    bytes: 0,
+                    digest: String::new(),
+                },
+                capture::Capture {
+                    stream: "stderr",
+                    bytes: 0,
+                    digest: String::new(),
+                },
+            ],
+            notices: Vec::new(),
+            received,
+        };
+        let signalled = [outcome(None), outcome(Some(IGNORED_BY_DEFAULT))];
+        let ran_now = || ran.load(Ordering::SeqCst);
+
+        on_terminate(hook());
+        reraise(&[outcome(None)]).expect("nothing to re-raise");
+        assert_eq!(ran_now(), 0, "no signal, no re-raise");
+        reraise(&signalled).expect("an ignored signal re-raises cleanly");
+        reraise(&signalled).expect("an ignored signal re-raises cleanly");
+        let once = usize::from(cfg!(unix));
+        assert_eq!(
+            ran_now(),
+            once,
+            "the re-raise runs the hook first, and only once; off unix there is nothing to re-raise"
+        );
+
+        on_terminate(hook());
+        clear_on_terminate();
+        reraise(&signalled).expect("an ignored signal re-raises cleanly");
+        assert_eq!(ran_now(), once, "a withdrawn hook never runs");
+    }
+
+    /// `probe`'s first answer, polled to a fixed bound that is this case's
+    /// input rather than its assertion.
+    fn within<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while std::time::Instant::now() < deadline {
+            if let Some(found) = probe() {
+                return found;
+            }
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the interval of a poll that exits the moment `probe` answers, bounded by \
+                          `deadline` above"
+            )]
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("{what} never happened");
+    }
+
+    /// The signal number every case here sends: TERM is 15 on every unix.
+    const TERM: i32 = 15;
+
+    /// A detached `sh` leading its own group, its pid read back from the file
+    /// it writes once `trap` is set. It then spins on builtins alone, so the
+    /// group holds that one process and nothing else. Unix only: the caller
+    /// holds the platform split.
+    fn detached_group(dir: &Path, trap: &str) -> String {
+        let pidfile = dir.join("pid");
+        let script = format!(
+            "{trap} echo $$ > '{0}.tmp' && mv '{0}.tmp' '{0}'; while :; do :; done",
+            pidfile.display()
+        );
+        detached(Path::new("/bin/sh"), &["-c".to_owned(), script], &[]);
+        within("the detached child writing its pid", || {
+            std::fs::read_to_string(&pidfile)
+                .ok()
+                .filter(|body| body.ends_with('\n'))
+        })
+        .trim()
+        .to_owned()
+    }
+
+    /// Reap this process's child `pid`, which the caller has made sure is
+    /// exiting.
+    fn reap(pid: &str) {
+        await_reaped(pid.parse().expect("a numeric pid"));
+    }
+
+    /// Send TERM to this case's own group, asserting the premise that the
+    /// harness makes each case lead one (nextest does). Unix only.
+    fn term_self() {
+        assert!(
+            terminate_group(&std::process::id().to_string()),
+            "premise: the harness makes this case lead its own process group"
+        );
+    }
+
+    /// Batten's state for `root`, contained under the case's own scratch.
+    fn contained(name: &str) -> PathBuf {
+        let root = crate::scratch::scratch(name);
+        crate::testing::contain_state(&root.join("state"));
+        root
+    }
+
+    /// Fails by: a live group read as empty, never signalled, or a reap and an
+    /// escalation reported over a group that is not there.
+    #[test]
+    fn a_live_group_is_asked_then_escalated_and_then_is_gone() {
+        if !cfg!(unix) {
+            // No process groups: the twins answer that nothing was there.
+            assert!(!terminate_group("1"));
+            assert!(!escalate_group("1"));
+            return;
+        }
+        let dir = crate::scratch::scratch("exec-live-group");
+        let pid = detached_group(&dir, "trap '' TERM;");
+        assert!(terminate_group(&pid), "a live group was asked to leave");
+        assert!(
+            escalate_group(&pid),
+            "it ignores TERM, so it was still there and was killed"
+        );
+        reap(&pid);
+        assert!(
+            !terminate_group(&pid),
+            "an emptied group is nothing to reap"
+        );
+        assert!(!escalate_group(&pid), "nor anything to escalate");
+    }
+
+    /// Fails by: the owned-group cancel reporting nothing over a live group.
+    #[test]
+    fn cancelling_the_owned_group_reaches_a_live_one() {
+        let root = contained("exec-cancel-live");
+        let dir = crate::state::repo_state_dir(&root)
+            .expect("state")
+            .join("exec");
+        std::fs::create_dir_all(&dir).expect("seed the record directory");
+        let record = dir.join(format!("group.{}", std::process::id()));
+        if !cfg!(unix) {
+            std::fs::write(&record, "1\n").expect("seed the record");
+            assert!(!cancel_owned_group(&root), "no process groups to cancel");
+            return;
+        }
+        let pid = detached_group(&root, "trap '' TERM;");
+        std::fs::write(&record, format!("{pid}\n")).expect("seed the record");
+        assert!(
+            cancel_owned_group(&root),
+            "a live owned group was cancelled"
+        );
+        reap(&pid);
+    }
+
+    /// Whether Batten may group in this case, asserting on unix the premise
+    /// every managed case rests on: no ancestor already manages the group.
+    /// Off unix the answer is no, which is the contract there.
+    fn batten_may_group() -> bool {
+        let groups = GroupDecision::observe(true).groups();
+        if cfg!(unix) {
+            assert!(
+                std::env::var_os(TASK_PGID_MANAGED_ENV).is_none(),
+                "premise: no ancestor is managing this case's group"
+            );
+            assert!(groups, "and this case is not a session leader");
+        } else {
+            assert!(!groups, "off unix there is nothing to own");
+        }
+        groups
+    }
+
+    /// Fails by: an opted-in run not grouping its child, an opted-out one
+    /// grouping it, or the ownership record outliving the reap.
+    #[test]
+    fn an_opted_in_run_groups_its_child_and_clears_its_record() {
+        assert_eq!(batten_may_group(), cfg!(unix));
+        if !cfg!(unix) {
+            return;
+        }
+        let root = contained("exec-managed-run");
+        let record = crate::state::repo_state_dir(&root)
+            .expect("state")
+            .join("exec")
+            .join(format!("group.{}", std::process::id()));
+        let managed = ExecConfig {
+            manage_process_group: true,
+            ..ExecConfig::DEFAULT
+        };
+        let script = "test \"$MISE_TASK_PGID_MANAGED\" = 1";
+        let code = run_in_with(
+            &root,
+            &["sh".to_owned(), "-c".to_owned(), script.to_owned()],
+            &[],
+            &managed,
+            &mut std::io::sink(),
+        )
+        .expect("the child saw the marker");
+        assert_eq!(code, ExitCode::Success);
+        assert!(!record.exists(), "the reap clears the record");
+
+        let unmanaged = run_in_with(
+            &root,
+            &[
+                "sh".to_owned(),
+                "-c".to_owned(),
+                "test -z \"$MISE_TASK_PGID_MANAGED\"".to_owned(),
+            ],
+            &[],
+            &ExecConfig::DEFAULT,
+            &mut std::io::sink(),
+        )
+        .expect("an opted-out child is not marked");
+        assert_eq!(unmanaged, ExitCode::Success);
+    }
+
+    /// Fails by: a CLEAN managed run tearing down what its child left
+    /// behind. Only an error or an unwind ends the group.
+    #[test]
+    fn a_clean_managed_run_leaves_its_group_alone() {
+        assert_eq!(batten_may_group(), cfg!(unix));
+        if !cfg!(unix) {
+            return;
+        }
+        let root = contained("exec-clean-leaves");
+        let alive = root.join("alive");
+        let script = format!(
+            "(sleep 2; echo yes > '{}') >/dev/null 2>&1 &",
+            alive.display()
+        );
+        let managed = ExecConfig {
+            manage_process_group: true,
+            ..ExecConfig::DEFAULT
+        };
+        let code = run_in_with(
+            &root,
+            &["sh".to_owned(), "-c".to_owned(), script],
+            &[],
+            &managed,
+            &mut std::io::sink(),
+        )
+        .expect("the child exits clean");
+        assert_eq!(code, ExitCode::Success);
+        within("the background job outliving the clean run", || {
+            alive.exists().then_some(())
+        });
+    }
+
+    /// Fails by: a bundle running fewer commands than its width and failure
+    /// policy allow, more than its stop-at-first-failure allows, or its
+    /// concurrent commands losing their declared positions.
+    #[test]
+    fn a_bundle_runs_what_its_width_and_failure_policy_say() {
+        let root = contained("exec-bundle-dispatch");
+        let bundle = |first: &str, second: &str| -> Vec<String> {
+            ["sh", "-c", first, BUNDLE_SEPARATOR, "sh", "-c", second]
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect()
+        };
+        let declared = bundle("exit 0", "exit 0");
+        assert_eq!(split_bundle(&declared).expect("a bundle").len(), 2);
+        if !cfg!(unix) {
+            // Off unix there is no `sh` to drive the runs below.
+            return;
+        }
+        let classify = |command: &[String], settings: &ExecConfig| {
+            let (code, hits, handles) =
+                classify_in_env(&root, command, &[], settings, &[]).expect("the bundle ran");
+            assert!(hits.is_empty());
+            (code, handles.len())
+        };
+        let wide = ExecConfig {
+            jobs: 2,
+            ..ExecConfig::DEFAULT
+        };
+        let onward = ExecConfig {
+            continue_on_error: true,
+            ..ExecConfig::DEFAULT
+        };
+        assert_eq!(
+            classify(&bundle("exit 0", "exit 0"), &wide),
+            (0, 4),
+            "one wave of two"
+        );
+        assert_eq!(
+            classify(&bundle("exit 0", "exit 0"), &ExecConfig::DEFAULT),
+            (0, 4),
+            "a clean first command does not stop the bundle"
+        );
+        assert_eq!(
+            classify(&bundle("exit 3", "exit 0"), &ExecConfig::DEFAULT),
+            (3, 2),
+            "a failure stops it"
+        );
+        assert_eq!(
+            classify(&bundle("exit 3", "exit 0"), &onward),
+            (3, 4),
+            "unless it is told to carry on"
+        );
+
+        let mut said = Vec::new();
+        run_in_with(&root, &bundle("exit 0", "exit 0"), &[], &wide, &mut said)
+            .expect("both commands pass");
+        let said = String::from_utf8(said).expect("the record is text");
+        assert!(
+            said.starts_with("exec: [0] exit 0\n") && said.contains("\nexec: [1] exit 0\n"),
+            "each concurrent command keeps its declared position: {said}"
+        );
+    }
+
+    /// Fails by: `quiet` failing to silence Batten's record, or the default
+    /// failing to emit it.
+    #[test]
+    fn quiet_silences_the_record_and_the_default_emits_it() {
+        assert!(OutputStyle::Quiet.suppresses_batten());
+        if !cfg!(unix) {
+            // Off unix there is no `sh` to drive the runs below.
+            return;
+        }
+        let root = contained("exec-quiet-record");
+        let command = ["sh".to_owned(), "-c".to_owned(), "exit 0".to_owned()];
+        let said = |style: OutputStyle| {
+            let mut said = Vec::new();
+            run_in_with(
+                &root,
+                &command,
+                &[],
+                &ExecConfig {
+                    style,
+                    ..ExecConfig::DEFAULT
+                },
+                &mut said,
+            )
+            .expect("a clean child");
+            String::from_utf8(said).expect("the record is text")
+        };
+        assert!(said(OutputStyle::Quiet).is_empty());
+        assert!(said(OutputStyle::Interleave).ends_with("exec: exit 0\n"));
+    }
+
+    /// An owned forwarder over a detached group whose TERM trap is `on_term`,
+    /// adopted, with TERM then sent to this case. Returns the forwarder, the
+    /// group's pid, and the file the trap touches. Unix only.
+    fn forwarded(name: &str, on_term: &str) -> (Forwarding, String, PathBuf) {
+        let dir = crate::scratch::scratch(name);
+        let got = dir.join("got");
+        let forwarder = Forwarding::arm(GroupDecision::OWNED).expect("arm");
+        let trap = on_term.replace("GOT", &format!("touch '{}'", got.display()));
+        let pid = detached_group(&dir, &format!("trap \"{trap}\" TERM;"));
+        forwarder
+            .adopt(pid.parse().expect("a numeric pid"))
+            .expect("adopt");
+        term_self();
+        within("the forwarded TERM reaching the group", || {
+            got.exists().then_some(())
+        });
+        (forwarder, pid, got)
+    }
+
+    /// Fails by: a signal Batten was sent not reaching the group it owns, or
+    /// a group that left promptly being reported as escalated.
+    #[test]
+    fn a_forwarded_signal_reaches_the_group_and_a_prompt_exit_is_not_escalated() {
+        if !cfg!(unix) {
+            let forwarder = Forwarding::arm(GroupDecision::OWNED).expect("arm");
+            assert_eq!(
+                forwarder.finish_reporting(),
+                (None, None),
+                "nothing forwards"
+            );
+            return;
+        }
+        let (forwarder, pid, _) = forwarded("exec-forward-exit", "GOT; exit 0");
+        reap(&pid);
+        assert_eq!(forwarder.finish_reporting(), (Some(TERM), None));
+    }
+
+    /// Fails by: the signal Batten was sent not being what `finish` reports.
+    #[test]
+    fn finish_reports_the_signal_batten_was_sent() {
+        if !cfg!(unix) {
+            let forwarder = Forwarding::arm(GroupDecision::OWNED).expect("arm");
+            assert_eq!(forwarder.finish(), None, "nothing forwards");
+            return;
+        }
+        let (forwarder, pid, _) = forwarded("exec-forward-finish", "GOT; exit 0");
+        reap(&pid);
+        assert_eq!(forwarder.finish(), Some(TERM));
+    }
+
+    /// Fails by: a second signal waiting out the grace instead of escalating.
+    #[test]
+    fn a_second_signal_escalates_and_says_why() {
+        if !cfg!(unix) {
+            assert_eq!(Escalation::SecondSignal.as_str(), "second-signal");
+            return;
+        }
+        // The trap notes the first TERM and stays, so only the escalation ends it.
+        let (forwarder, pid, _) = forwarded("exec-forward-second", "GOT");
+        term_self();
+        reap(&pid);
+        assert_eq!(
+            forwarder.finish_reporting(),
+            (Some(TERM), Some(Escalation::SecondSignal))
+        );
+    }
+
+    /// Fails by: a command Batten was signalled over reporting anything but
+    /// `128 + the signal Batten was sent`.
+    #[test]
+    fn a_signalled_run_reports_128_plus_the_signal_batten_was_sent() {
+        assert_eq!(batten_may_group(), cfg!(unix));
+        if !cfg!(unix) {
+            return;
+        }
+        let root = contained("exec-signalled-run");
+        let started = root.join("started");
+        let command = [
+            "sh".to_owned(),
+            "-c".to_owned(),
+            format!("touch '{}'; exec sleep 60", started.display()),
+        ];
+        let managed = ExecConfig {
+            manage_process_group: true,
+            ..ExecConfig::DEFAULT
+        };
+        let outcomes = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                within("the child starting", || started.exists().then_some(()));
+                term_self();
+            });
+            dispatch(&root, &[&command[..]], &managed, &[], next_run())
+        })
+        .expect("a signalled run still has an outcome");
+        assert_eq!(outcomes.len(), 1);
+        // `received` is not read here: off unix nothing may read it, and the
+        // exit below is derived from it.
+        assert_eq!(outcomes[0].exit, 128 + TERM);
+    }
 }

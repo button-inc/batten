@@ -2473,4 +2473,199 @@ mod tests {
         let tokens: BTreeSet<&str> = Wake::ALL.iter().map(|wake| wake.as_str()).collect();
         assert_eq!(tokens.len(), Wake::ALL.len());
     }
+
+    /// Fails by: a `#[serde(default = ...)]` function answering anything but
+    /// its shipped constant, so an absent key and an absent table disagree.
+    #[test]
+    fn an_empty_drain_table_resolves_to_the_shipped_defaults() {
+        let empty: DrainConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty, DrainConfig::default());
+        assert_eq!(
+            (
+                empty.interval_ms,
+                empty.cardinality_cap,
+                empty.flap_window,
+                empty.flap_percent,
+                empty.emit_cap,
+            ),
+            (2_000, 10, 8, 50, 3),
+            "each key's own default, not a neighbour's"
+        );
+    }
+
+    /// Fails by: identical locations not collapsing to one `×n` run, or the
+    /// run counting anything but its members.
+    #[test]
+    fn identical_locations_collapse_to_one_counted_run() {
+        let records: Vec<FindingRecord> = ["TODO a", "TODO b", "TODO c", "TODO d"]
+            .iter()
+            .enumerate()
+            .map(|(index, span)| {
+                let mut one = record(FindingKind::Code, "r", "src/a.rs", span);
+                one.instances[0].line = Some(if index == 3 { 2 } else { 1 });
+                one
+            })
+            .collect();
+        let drained = cycle(
+            &records,
+            &changed(&["src/a.rs"]),
+            None,
+            &generous(),
+            &BTreeMap::new(),
+            &[],
+        );
+        assert_eq!(drained.lines, ["batten deny r at src/a.rs:1×3,2"]);
+    }
+
+    /// Fails by: a count at or under the one last told rendering as a rise.
+    /// `locations` is asked directly, because `group` only ever hands it news.
+    #[test]
+    fn only_a_count_that_rose_renders_as_old_to_new() {
+        let same = {
+            let mut one = record(FindingKind::Code, "r", "src/a.rs", "TODO same");
+            one.instances[0].occurrences = Observation::Observed(5);
+            one
+        };
+        let fell = {
+            let mut one = record(FindingKind::Code, "r", "src/b.rs", "TODO fell");
+            one.instances[0].occurrences = Observation::Observed(3);
+            one
+        };
+        let previous: BTreeMap<String, u64> = [
+            (same.identity.fingerprint.to_hex(), 5),
+            (fell.identity.fingerprint.to_hex(), 5),
+        ]
+        .into_iter()
+        .collect();
+        let listed = [
+            Surfaced {
+                record: &same,
+                instance: &same.instances[0],
+            },
+            Surfaced {
+                record: &fell,
+                instance: &fell.instances[0],
+            },
+        ];
+        assert_eq!(locations(&listed, &previous), "src/a.rs:1(5) src/b.rs:1(3)");
+    }
+
+    /// Fails by: a rule capped to no locations still spending a separator on
+    /// the empty list.
+    #[test]
+    fn a_zero_location_cap_lists_nothing_and_points_at_everything() {
+        let drained = cycle(
+            &spread("r", 2),
+            &changed(&["src/a.rs"]),
+            None,
+            &DrainConfig {
+                cardinality_cap: 0,
+                ..generous()
+            },
+            &BTreeMap::new(),
+            &[],
+        );
+        assert_eq!(
+            drained.lines,
+            ["batten deny r at +2 more (2 new); run batten state list --rule 'r'"]
+        );
+    }
+
+    /// Fails by: the cut count missing a withheld rule line or the withheld
+    /// told total, so the closing line under-reports what it cut.
+    #[test]
+    fn a_cut_counts_every_withheld_line_the_told_total_included() {
+        let scope = changed(&["src/a.rs"]);
+        let old = record(FindingKind::Code, "old", "src/a.rs", "TODO old");
+        let first = cycle(
+            std::slice::from_ref(&old),
+            &scope,
+            None,
+            &generous(),
+            &BTreeMap::new(),
+            &[],
+        );
+        let now = vec![
+            old,
+            record(FindingKind::Code, "new", "src/a.rs", "TODO new"),
+        ];
+        let drained = cycle(
+            &now,
+            &scope,
+            None,
+            &DrainConfig {
+                token_budget: 0,
+                ..generous()
+            },
+            &first.counts,
+            &[],
+        );
+        assert_eq!(
+            drained.lines,
+            ["batten note drain fit broken at 2 line(s) past 0 tokens; run batten state list"]
+        );
+        assert_eq!(drained.budget_withheld.len(), 1, "the new rule's record");
+    }
+
+    /// Fails by: a flapping identity not adding one to its rule's count.
+    #[test]
+    fn flapping_identities_are_counted_per_rule() {
+        let mut records = spread("r", 2);
+        records.push(record(FindingKind::Code, "calm", "src/a.rs", "TODO calm"));
+        let mut log = Vec::new();
+        for flapper in &records[..2] {
+            for raised in [true, false, true, false] {
+                log.push(journal::Entry {
+                    identity: flapper.identity.fingerprint.to_hex(),
+                    rule: flapper.rule.clone(),
+                    origin: journal::Origin::Scan,
+                    context: Some("refs/heads/a".to_owned()),
+                    observation: Some(Observation::Observed(u64::from(raised))),
+                    disposition: None,
+                    presentation: Presentation::Shown,
+                    at: None,
+                });
+            }
+        }
+        let drained = cycle(
+            &records,
+            &changed(&["src/a.rs"]),
+            None,
+            &DrainConfig::default(),
+            &BTreeMap::new(),
+            &log,
+        );
+        assert_eq!(
+            drained.flapping,
+            [("r".to_owned(), 2)]
+                .into_iter()
+                .collect::<BTreeMap<_, _>>()
+        );
+    }
+
+    /// Fails by: the wake-state directory resolving anywhere but `drain/`
+    /// under the bound store.
+    #[test]
+    fn the_wake_state_lives_under_the_stores_drain_directory() {
+        assert_eq!(drain_dir(Path::new("/store")), Path::new("/store/drain"));
+    }
+
+    /// Fails by: `record_emissions` miscounting what it appended, or
+    /// journalling an identity the payload never emitted.
+    #[test]
+    fn record_emissions_journals_exactly_the_emitted_identities() {
+        let dir = std::env::temp_dir().join(format!("batten-emitted-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let records = spread("r", 3);
+        let emitted: BTreeMap<String, u64> = records[..2]
+            .iter()
+            .map(|one| (one.identity.fingerprint.to_hex(), 1))
+            .collect();
+        assert_eq!(
+            record_emissions(&dir, "shard", &records, &emitted).unwrap(),
+            2
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
