@@ -1509,4 +1509,103 @@ mod tests {
         assert_eq!(all(&dir), since(&dir, None).unwrap().entries().to_vec());
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// Fails by: a fresh store opened at the oldest record version or left
+    /// without its format file, or a pre-journal store opened at the newest.
+    #[test]
+    fn a_store_opens_at_the_version_its_records_were_written_in() {
+        let fresh = store("open-fresh");
+        let access = open(&fresh).unwrap();
+        assert!(access.is_writable());
+        assert_eq!(access.format().findings_schema, FINDINGS_SCHEMA);
+        assert!(
+            format_path(&fresh).is_file(),
+            "a fresh store records its format"
+        );
+
+        let legacy = store("open-legacy");
+        crate::findings::save_one(&legacy, &record_for("TODO")).unwrap();
+        let access = open(&legacy).unwrap();
+        assert_eq!(access.format().findings_schema, FINDINGS_SCHEMA_MIN);
+        assert!(
+            !format_path(&legacy).exists(),
+            "migration writes it, not open"
+        );
+        let degraded = Access::DegradedReadOnly {
+            format: access.format().clone(),
+            reason: String::new(),
+        };
+        assert!(!degraded.is_writable());
+        let _ = std::fs::remove_dir_all(&fresh);
+        let _ = std::fs::remove_dir_all(&legacy);
+    }
+
+    /// Fails by: two generations minted alike, which would accept a stale
+    /// cursor as current.
+    #[test]
+    fn every_generation_is_new() {
+        let dir = store("generation");
+        let first = mint_generation(&dir, 0);
+        assert_ne!(first, mint_generation(&dir, 1));
+        assert!(!first.is_empty());
+    }
+
+    /// Fails by: an entry's write time that is not the clock's.
+    #[test]
+    fn an_entry_is_stamped_with_the_clock() {
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        assert!(u128::from(now_nanos()) >= before);
+    }
+
+    /// Fails by: a non-shard file or a blank line folded as a record, or the
+    /// healing append leaving a torn fragment to glue onto its record.
+    #[test]
+    fn a_fold_reads_whole_lines_of_shards_and_a_healing_append_drops_a_torn_tail() {
+        let dir = store("fold-lines");
+        let shards = shards_dir(&dir);
+        std::fs::create_dir_all(&shards).unwrap();
+        std::fs::write(shards.join("a.jsonl"), "x\n\ny\ntorn").unwrap();
+        std::fs::write(shards.join("b.txt"), "z\n").unwrap();
+        assert_eq!(
+            fold_lines(&dir),
+            Fold::Records(vec!["x".to_owned(), "y".to_owned()])
+        );
+        append_line_healing(&dir, "a", "w").unwrap();
+        assert_eq!(
+            fold_lines(&dir),
+            Fold::Records(vec!["x".to_owned(), "y".to_owned(), "w".to_owned()])
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fails by: a merge reporting a count other than the entries it applied.
+    #[test]
+    fn a_merge_counts_every_entry_it_applied() {
+        let dir = store("merge-count");
+        crate::findings::save_one(&dir, &record_for("TODO")).unwrap();
+        for disposition in [Disposition::Acted, Disposition::Acted] {
+            append(&dir, "shard", &entry_for("TODO", disposition)).unwrap();
+        }
+        assert!(matches!(
+            merge(&dir).unwrap(),
+            Merge::Merged { applied: 2, .. }
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fails by: a record's line carrying anything but its pointers.
+    #[test]
+    fn a_disposition_line_is_the_records_pointers() {
+        let record = record_for("TODO");
+        assert_eq!(
+            disposition_lines(std::slice::from_ref(&record)),
+            vec![format!(
+                "{} r unsettled shown",
+                record.identity.fingerprint.to_hex()
+            )]
+        );
+    }
 }

@@ -2450,6 +2450,297 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A tool call, a turn's end, and two plan presentations: every member the
+    /// fold carries other than a turn of the operator's.
+    const PLANNED: [&str; 4] = [
+        r#"{"type":"assistant","sessionId":"s-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#,
+        r#"{"type":"assistant","sessionId":"s-1","message":{"role":"assistant","content":[],"stop_reason":"stop_sequence"}}"#,
+        r#"{"type":"assistant","sessionId":"s-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"p1","name":"ExitPlanMode","input":{}}]}}"#,
+        r#"{"type":"assistant","sessionId":"s-1","message":{"role":"assistant","content":[{"type":"tool_use","id":"p2","name":"ExitPlanMode","input":{}}]}}"#,
+    ];
+
+    /// Fails by: a turn's end clearing the kinds already seen, a plan
+    /// presentation not counted, a stop token read as another, or a summary
+    /// read through the trait answering other than the type's own.
+    #[test]
+    fn the_fold_and_the_summary_carry_every_member() {
+        fn summary(of: &dyn Summary) -> (Counts, std::collections::BTreeSet<Kind>, Repeats) {
+            (of.counts(), of.records(), of.repeats())
+        }
+        assert_eq!(
+            StopReason::normalize("stop_sequence"),
+            StopReason::StopSequence
+        );
+        let whole = parse(&PLANNED.join("\n"), "t", RecordShape::Jsonl).expect("parses");
+        let mut tally = Tally::default();
+        whole.fold_into(&mut tally);
+        assert_eq!(tally.plan_exits, 2);
+        assert_eq!(whole.repeats().plan_exits, 2);
+        assert_eq!(tally.records(), whole.records());
+        assert!(whole.records().contains(&Kind::ToolCalls));
+        assert_eq!(
+            summary(&whole),
+            (whole.counts(), whole.records(), whole.repeats())
+        );
+        assert_eq!(
+            summary(&tally),
+            (tally.counts(), tally.records(), tally.repeats())
+        );
+        assert_ne!(summary(&tally), summary(&Tally::default()));
+    }
+
+    /// Fails by: the tally's entry not written once a whole line is folded,
+    /// written for a file with none, served for a shorter file with the same
+    /// first line, or served for a different file at the same path.
+    #[test]
+    fn the_tally_entry_follows_the_file_it_covers() {
+        let dir = crate::scratch::scratch("transcript-entry");
+        let cache = dir.join("cache");
+        let path = dir.join("session.jsonl");
+        let whole = |text: &str| {
+            parse(text, "t", RecordShape::Jsonl)
+                .expect("parses")
+                .counts()
+        };
+        let counted = || tally_under(&path, RecordShape::Jsonl, Some(&cache)).map(|t| t.counts());
+        std::fs::write(&path, POOL[0]).expect("an unterminated line");
+        assert_eq!(counted(), Some(whole(POOL[0])));
+        let label = std::fs::canonicalize(&path).expect("canonical");
+        let entry = cache.join("transcript").join(
+            blake3::hash(label.to_string_lossy().as_bytes())
+                .to_hex()
+                .as_str(),
+        );
+        assert!(!entry.exists(), "no whole line, no entry");
+        let long = format!("{}\n{}\n{}\n", POOL[0], POOL[3], POOL[4]);
+        std::fs::write(&path, &long).expect("append");
+        assert_eq!(counted(), Some(whole(&long)));
+        assert!(entry.is_file(), "a whole line folded is recorded");
+        let short = format!("{}\n", POOL[0]);
+        std::fs::write(&path, &short).expect("truncate in place");
+        assert_eq!(counted(), Some(whole(&short)), "shorter, same first line");
+        std::fs::write(&path, &long).expect("regrow");
+        assert_eq!(counted(), Some(whole(&long)));
+        let other = dir.join("other.jsonl");
+        let replaced = format!("{}\n{}\n{}\n{}\n", POOL[0], POOL[5], POOL[6], POOL[7]);
+        std::fs::write(&other, &replaced).expect("another file");
+        std::fs::rename(&other, &path).expect("replace it at the path");
+        assert_eq!(
+            counted(),
+            Some(whole(&replaced)),
+            "another inode, same head"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn attachment(json: &str) -> Attachment {
+        serde_json::from_str(json).expect("an attachment")
+    }
+
+    /// Fails by: an empty stream joined in, a separator before the first part,
+    /// an empty name taken as the producer, or a tag outside `hook_*` counted.
+    #[test]
+    fn an_emission_joins_its_nonempty_streams_and_names_its_producer() {
+        let parts = attachment(r#"{"stdout": "a", "stderr": "", "additionalContext": "c"}"#);
+        assert_eq!(parts.emitted(), "a\nc");
+        assert_eq!(
+            attachment(r#"{"hookName": "", "hookEvent": "PreToolUse"}"#).producer(),
+            "PreToolUse"
+        );
+        assert_eq!(attachment("{}").producer(), UNNAMED_PRODUCER);
+        assert!(is_hook_tag("hook_success"));
+        assert!(!is_hook_tag("queued_command"));
+    }
+
+    /// Fails by: a queued message counted without the host marking it the
+    /// operator's, by either marking, or another tag counted as one.
+    #[test]
+    fn an_operator_message_is_a_queued_command_a_human_authored() {
+        for (json, operator) in [
+            (r#"{"type": "queued_command", "humanTurn": true}"#, true),
+            (
+                r#"{"type": "queued_command", "origin": {"kind": "human"}}"#,
+                true,
+            ),
+            (
+                r#"{"type": "queued_command", "origin": {"kind": "agent"}}"#,
+                false,
+            ),
+            (r#"{"type": "queued_command"}"#, false),
+            (r#"{"type": "hook_success", "humanTurn": true}"#, false),
+        ] {
+            assert_eq!(attachment(json).is_operator_message(), operator, "{json}");
+        }
+    }
+
+    /// Fails by: a delivered document not counted per path, a host that
+    /// reports injections read as one that does not or the reverse, a deny's
+    /// output not carried onto its refusal, a session start not opening a
+    /// cycle, or an empty emission counted.
+    #[test]
+    fn an_attachment_yields_the_events_its_fields_name() {
+        let memory = |path: &str| {
+            format!(
+                r#"{{"type":"attachment","attachment":{{"type":"nested_memory","displayPath":"{path}"}}}}"#
+            )
+        };
+        let deny = r#"{"type":"attachment","attachment":{"type":"hook_success","hookEvent":"PreToolUse","hookName":"PreToolUse:Bash","toolUseID":"t1","exitCode":2,"stderr":"batten deny some-class at x; run batten check"}}"#;
+        let start = r#"{"type":"attachment","attachment":{"type":"hook_success","hookEvent":"SessionStart","exitCode":0,"stdout":"ctx"}}"#;
+        let silent = r#"{"type":"attachment","attachment":{"type":"hook_success","hookEvent":"PostToolUse","exitCode":0,"stdout":""}}"#;
+        let body = [memory("a.md"), memory("a.md"), memory("b.md")].join("\n");
+        let stream = parse(&body, "t", RecordShape::Jsonl).expect("parses");
+        assert_eq!(
+            stream.memory_injections(),
+            std::collections::BTreeMap::from([("a.md".to_owned(), 2), ("b.md".to_owned(), 1)])
+        );
+        assert!(stream.reports_memory_injections());
+        let stream =
+            parse(&[deny, start, silent].join("\n"), "t", RecordShape::Jsonl).expect("parses");
+        assert!(!stream.reports_memory_injections());
+        let refused = stream
+            .records
+            .iter()
+            .find_map(|record| match &record.event {
+                Event::Refused {
+                    call,
+                    tokens,
+                    findings,
+                    ..
+                } => Some((call.clone(), *tokens, findings.len())),
+                _ => None,
+            });
+        let (call, tokens, findings) = refused.expect("the deny is a refusal");
+        assert_eq!(call, "t1");
+        assert!(tokens > 0, "the deny's output is its cost");
+        assert_eq!(findings, 1, "and its finding is its label");
+        assert!(
+            stream
+                .records
+                .iter()
+                .any(|record| matches!(record.event, Event::SessionBoundary))
+        );
+        let outputs = stream
+            .records
+            .iter()
+            .filter(|record| matches!(record.event, Event::HookOutput { .. }))
+            .count();
+        assert_eq!(
+            outputs, 2,
+            "the deny's and the start's, never the silent one"
+        );
+    }
+
+    /// The origin of the one user turn `line` carries.
+    fn origin(line: &str) -> Origin {
+        let stream = parse(line, "t", RecordShape::Jsonl).expect("parses");
+        stream
+            .records
+            .iter()
+            .find_map(|record| match &record.event {
+                Event::Turn(Role::User, origin) => Some(*origin),
+                _ => None,
+            })
+            .expect("a user turn")
+    }
+
+    /// Fails by: either of the host's synthetic markers ignored, the host's
+    /// authorship field read the other way, or a content shape misread.
+    #[test]
+    fn a_user_turns_origin_is_the_hosts_marker_then_its_shape() {
+        let user = |extra: &str, content: &str| {
+            format!(r#"{{"type":"user",{extra}"message":{{"role":"user","content":{content}}}}}"#)
+        };
+        let text = r#"[{"type":"text","text":"hi"}]"#;
+        let results = r#"[{"type":"tool_result","tool_use_id":"t","content":"ok"}]"#;
+        for (line, want) in [
+            (user(r#""isMeta":true,"#, text), Origin::Synthetic),
+            (user(r#""isSynthetic":true,"#, text), Origin::Synthetic),
+            (
+                user(r#""origin":{"kind":"human"},"#, r#""typed""#),
+                Origin::Authored,
+            ),
+            (
+                user(r#""origin":{"kind":"task-notification"},"#, r#""x""#),
+                Origin::Synthetic,
+            ),
+            (user("", text), Origin::Authored),
+            (user("", results), Origin::Synthetic),
+            (user("", "[]"), Origin::Unknown),
+        ] {
+            assert_eq!(origin(&line), want, "{line}");
+        }
+    }
+
+    /// Fails by: an assistant's blank text, or a user's text, counted as the
+    /// assistant speaking — or the assistant's real text not counted.
+    #[test]
+    fn only_an_assistants_nonblank_text_is_its_text() {
+        let line = |role: &str, text: &str| {
+            format!(
+                r#"{{"type":"{role}","message":{{"role":"{role}","content":[{{"type":"text","text":"{text}"}}]}}}}"#
+            )
+        };
+        let spoke = |body: &str| {
+            parse(body, "t", RecordShape::Jsonl)
+                .expect("parses")
+                .records
+                .iter()
+                .any(|record| matches!(record.event, Event::AssistantText))
+        };
+        assert!(spoke(&line("assistant", "hi")));
+        assert!(!spoke(&line("assistant", "  ")));
+        assert!(!spoke(&line("user", "hi")));
+    }
+
+    /// Fails by: a keyed parse minting no identity for a result with content,
+    /// or a result's blocks read as anything but their text, in order.
+    #[test]
+    fn a_keyed_result_is_identified_by_its_texts() {
+        let key = crate::identity::IdentityKey::new("k", [7; 32]);
+        let result = |content: &str| {
+            format!(
+                r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"t1","content":{content}}}]}}}}"#
+            )
+        };
+        let digest = |content: &str| {
+            parse_keyed(&result(content), "t", Some(&key), RecordShape::Jsonl)
+                .expect("parses")
+                .records
+                .iter()
+                .find_map(|record| match &record.event {
+                    Event::ToolResult { digest, .. } => Some(digest.clone()),
+                    _ => None,
+                })
+                .expect("a result")
+        };
+        let blocks = digest(r#"[{"type":"text","text":"a"},{"type":"image"}]"#);
+        assert!(
+            blocks.is_some(),
+            "a keyed result with content is identified"
+        );
+        assert_eq!(blocks, digest(r#""a\n{\"type\":\"image\"}""#));
+        assert_eq!(
+            result_text(&serde_json::json!([{"type": "text", "text": "a"}, {"type": "image"}])),
+            "a\n{\"type\":\"image\"}"
+        );
+    }
+
+    /// Fails by: a declared path not read, a blank one read, or the task-store
+    /// link put anywhere but beside the transcript's.
+    #[test]
+    fn a_declared_path_is_read_and_its_task_link_sits_beside_it() {
+        let config = |json: &str| serde_json::from_str::<TranscriptConfig>(json).expect("config");
+        assert_eq!(
+            configured_path(Some(&config(r#"{"path": "t/session.jsonl"}"#))),
+            Some(PathBuf::from("t/session.jsonl"))
+        );
+        assert_eq!(configured_path(Some(&config(r#"{"path": ""}"#))), None);
+        assert_eq!(
+            tasks_link(Path::new("/r"), "t/session.jsonl"),
+            Some(PathBuf::from("/r/t/.tasks"))
+        );
+    }
+
     /// No cache partition is a whole read, never could-not-look (code review of
     /// CLOUD-2315).
     #[test]

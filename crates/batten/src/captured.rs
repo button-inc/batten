@@ -309,21 +309,26 @@ mod tests {
         .unwrap();
         // DECOYS THAT DO NOT MENTION THE KEY, one of which sorts ahead of the
         // record in handle order, so containment is what selects it.
-        let decoys: Vec<String> = (0..8)
-            .map(|pad| {
-                crate::capture::store(
-                    &root,
-                    Stream::Response,
-                    format!(r#"{{"pad": {pad}, "state": "wrong"}}"#).as_bytes(),
-                )
+        let first_is_a_decoy = || {
+            crate::capture::list(&root)
                 .unwrap()
-                .digest
-            })
-            .collect();
-        let listed = crate::capture::list(&root).unwrap();
-        let first = listed.iter().find(|capture| capture.stream == "response");
+                .iter()
+                .find(|capture| capture.stream == "response")
+                .is_some_and(|capture| capture.digest != stored.digest)
+        };
+        for pad in 0..64 {
+            if first_is_a_decoy() {
+                break;
+            }
+            crate::capture::store(
+                &root,
+                Stream::Response,
+                format!(r#"{{"pad": {pad}, "state": "wrong"}}"#).as_bytes(),
+            )
+            .unwrap();
+        }
         assert!(
-            first.is_some_and(|capture| decoys.contains(&capture.digest)),
+            first_is_a_decoy(),
             "the fixture puts a decoy first in handle order"
         );
         let row = |id: &str, key: &str, key_at: Option<&str>| CaptureQuery {
