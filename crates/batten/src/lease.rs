@@ -4975,6 +4975,23 @@ mod tests {
         }
     }
 
+    /// Fails by: the terms naming a remote other than the one configured.
+    #[test]
+    fn the_terms_name_the_configured_remote() {
+        let dir = scratch("terms-remote");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        crate::git::set_config_local(
+            &dir,
+            &format!("remote.{}.url", remote_name()),
+            "https://example.invalid/r.git",
+        )
+        .expect("a remote");
+        let resolved = terms(&dir)
+            .map_err(|missing| missing.say("origin"))
+            .expect("terms");
+        assert_eq!(resolved.remote, "https://example.invalid/r.git");
+    }
+
     /// Fails by: a live lease read as nobody's, or as everybody's.
     #[test]
     fn a_live_lease_is_held_by_its_holder_alone() {
