@@ -1678,6 +1678,44 @@ fn spawn_code(program: &str, args: &[&str], root: &Path) -> i32 {
 mod tests {
     use super::*;
 
+    /// An action is unset when either its license or its copyright is, and a
+    /// fully stated one is not.
+    #[test]
+    fn an_action_is_unset_by_either_missing_field() {
+        let action = |license: &str, copyright: &str| {
+            json!({
+                "SPDXID": "SPDXRef-a",
+                "externalRefs": [{"referenceType": "purl", "referenceLocator": "pkg:github/o/a@v1"}],
+                "licenseConcluded": license,
+                "copyrightText": copyright,
+            })
+        };
+        let unset = |packages: &[Value]| {
+            component_counts(packages, &json!({}), &json!({}))
+                .into_iter()
+                .find(|(name, _)| *name == "action-unset")
+                .map(|(_, count)| count)
+        };
+        assert_eq!(unset(&[action("MIT", "(c) o")]), Some(0));
+        assert_eq!(
+            unset(&[
+                action("MIT", NOASSERTION),
+                action(NOASSERTION, "(c) o"),
+                action("MIT", "(c) o"),
+            ]),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn a_scratch_directory_is_removed_when_dropped() {
+        let scratch = Scratch::new("drop").unwrap_or_else(|err| panic!("scratch: {err}"));
+        let dir = scratch.0.clone();
+        assert!(dir.is_dir());
+        drop(scratch);
+        assert!(!dir.exists());
+    }
+
     #[test]
     fn record_and_conformance_are_two_producers_never_one_run() {
         let both = Options {

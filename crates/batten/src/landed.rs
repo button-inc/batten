@@ -825,6 +825,14 @@ pub fn claims_from(value: &serde_json::Value) -> Result<Vec<Claim>> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn two_digits_need_both_to_be_digits() {
+        assert_eq!(two_digits(b"42", 0), Some(42));
+        assert_eq!(two_digits(b"4a", 0), None);
+        assert_eq!(two_digits(b"a4", 0), None);
+        assert_eq!(two_digits(b"4", 0), None);
+    }
+
     /// This repository's own board vocabulary, as `batten.toml` declares it.
     ///
     /// Spelled here rather than reached for from config so the unit tests stay
