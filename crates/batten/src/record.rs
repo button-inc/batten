@@ -164,10 +164,7 @@ pub fn run_tool(id: &str, overrides: &Overrides) -> Result<ExitCode> {
 /// no line reduces: an empty record would be a PRESENT record carrying no name,
 /// which a module reads as a finding whose cause is the producer.
 pub fn run_tool_picked(id: &str, pick: &str, overrides: &Overrides) -> Result<ExitCode> {
-    let Some((name, token)) = pick
-        .split_once('=')
-        .filter(|(name, token)| !name.is_empty() && !token.is_empty())
-    else {
+    let Some((name, token)) = pick_keys(pick) else {
         return Err(UsageError::raise(format!(
             "record tool {id}: `--pick {pick}` is not `<name-key>=<token-key>`"
         )));
@@ -180,6 +177,13 @@ pub fn run_tool_picked(id: &str, pick: &str, overrides: &Overrides) -> Result<Ex
     }
     store_tool(id, &text, overrides)?;
     Ok(ExitCode::Success)
+}
+
+/// The two keys a `--pick <name-key>=<token-key>` names, or `None` where either
+/// is empty — decided before stdin is read, so a malformed pick reads nothing.
+fn pick_keys(pick: &str) -> Option<(&str, &str)> {
+    pick.split_once('=')
+        .filter(|(name, token)| !name.is_empty() && !token.is_empty())
 }
 
 /// The `<name> <token>` lines `pick` reduces `raw` to, in order.
@@ -624,15 +628,43 @@ fn run_forge_fetch(reference: &str, fetch: &Fetch, err: &mut dyn Write) -> Resul
         return Ok(ExitCode::Success);
     };
     // A COUNT, never the names (rule 4), so the limit stays visible.
-    if dropped > 0 {
-        writeln!(
-            err,
-            "record forge: {dropped} check-run name(s) carry whitespace and have no spelling in a forge record; dropped"
-        )?;
+    if let Some(note) = dropped_note(dropped) {
+        writeln!(err, "{note}")?;
     }
     let git_dir = git::git_dir(root)?;
     store(&forge::record_path(&git_dir, &sha), &body)?;
     Ok(ExitCode::Success)
+}
+
+/// The line naming how many check-run names a forge record could not spell, or
+/// `None` when none were dropped. A COUNT, never the names (rule 4).
+fn dropped_note(dropped: usize) -> Option<String> {
+    (dropped > 0).then(|| {
+        format!(
+            "record forge: {dropped} check-run name(s) carry whitespace and have no spelling in a forge record; dropped"
+        )
+    })
+}
+
+/// Whether a tracked path is a bats suite the corpus carries: under `tests/`,
+/// with the `bats` extension in any case.
+///
+/// `extension`, not `ends_with(".bats")`: the string comparison is
+/// case-sensitive where a file name is not everywhere, and a `FOO.BATS` the
+/// runner would run is one this corpus would then never carry.
+fn is_bats_suite(path: &str) -> bool {
+    path.starts_with("tests/")
+        && Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("bats"))
+}
+
+/// The nextest profile a run used, from `NEXTEST_PROFILE`'s value: an unset or
+/// empty one is the `default` profile.
+fn profile_or_default(named: Option<String>) -> String {
+    named
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "default".to_owned())
 }
 
 /// Derive the per-suite cost corpus and print it, or write it (CLOUD-352).
@@ -657,15 +689,7 @@ pub fn run_suites(write: bool, out: &mut dyn Write, err: &mut dyn Write) -> Resu
     // walk would put it there.
     let tracked: std::collections::BTreeSet<String> = crate::git::tracked_paths(root)?
         .into_iter()
-        // `extension`, not `ends_with(".bats")`: the string comparison is
-        // case-sensitive where a file name is not everywhere, and a `FOO.BATS`
-        // the runner would run is one this corpus would then never carry.
-        .filter(|path| {
-            path.starts_with("tests/")
-                && Path::new(path)
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("bats"))
-        })
+        .filter(|path| is_bats_suite(path))
         .collect();
     // TWO RUNNERS, ONE VERB (CLOUD-2059). The bats report is read where the tree
     // still TRACKS a bats suite — a consumer with a bats lane keeps exactly what
@@ -677,10 +701,7 @@ pub fn run_suites(write: bool, out: &mut dyn Write, err: &mut dyn Write) -> Resu
     // reads on the row it is posted to, and `--write`'s committed corpus is the
     // bats lane's contract alone.
     if tracked.is_empty() {
-        let profile = std::env::var("NEXTEST_PROFILE")
-            .ok()
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| "default".to_owned());
+        let profile = profile_or_default(std::env::var("NEXTEST_PROFILE").ok());
         let (rows, text) = crate::suites::derive_nextest(root, &profile)?;
         write!(out, "{text}")?;
         if write {
@@ -1047,6 +1068,30 @@ const PLAN_STATUSES: [&str; 4] = ["pending", "in_progress", "completed", "delete
 /// on there. An internal error when the store cannot be written.
 pub fn run_plan() -> Result<ExitCode> {
     let raw = verdict_lines()?;
+    plan_validated(&raw)?;
+
+    let root = Path::new(".");
+    let git_dir = git::git_dir(root).map_err(|_| {
+        UsageError::raise(
+            "record plan: not a git repository, so there is nothing to key on".to_owned(),
+        )
+    })?;
+    let Ok(Some(branch)) = git::current_branch(root) else {
+        return Err(UsageError::raise(
+            "record plan: a detached HEAD has no branch to key the plan on".to_owned(),
+        ));
+    };
+    let claim = claim_of(&git_dir, &branch);
+    store(
+        &crate::recorder::record_path(&git_dir, "plan", &branch, claim.as_deref()),
+        &raw,
+    )?;
+    Ok(ExitCode::Success)
+}
+
+/// Refuse a plan whose line is not `<id> <status>` or whose status is not one
+/// of [`PLAN_STATUSES`] — before anything is keyed or written.
+fn plan_validated(raw: &str) -> Result<()> {
     for (index, line) in raw.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
@@ -1069,24 +1114,7 @@ pub fn run_plan() -> Result<ExitCode> {
             )));
         }
     }
-
-    let root = Path::new(".");
-    let git_dir = git::git_dir(root).map_err(|_| {
-        UsageError::raise(
-            "record plan: not a git repository, so there is nothing to key on".to_owned(),
-        )
-    })?;
-    let Ok(Some(branch)) = git::current_branch(root) else {
-        return Err(UsageError::raise(
-            "record plan: a detached HEAD has no branch to key the plan on".to_owned(),
-        ));
-    };
-    let claim = claim_of(&git_dir, &branch);
-    store(
-        &crate::recorder::record_path(&git_dir, "plan", &branch, claim.as_deref()),
-        &raw,
-    )?;
-    Ok(ExitCode::Success)
+    Ok(())
 }
 
 // --- the two store families a task can reach (CLOUD-1713) --------------------
@@ -1345,7 +1373,7 @@ pub fn run_derive(
     // nothing.
     // `released` is the preset's sixth family and is cleared with the five, for
     // the same reason: one row decides over all of them.
-    if crate::tracker_reading::is_family(family) || family == crate::released::FAMILY {
+    if clears_tracker_siblings(family) {
         for sibling in crate::tracker_reading::FAMILIES
             .iter()
             .chain(&[crate::released::FAMILY])
@@ -1357,6 +1385,12 @@ pub fn run_derive(
     let family = safe_component("family", family)?;
     store_derived(&family, &derived)?;
     emit_derived(&derived, out)
+}
+
+/// Whether deriving `family` clears every tracker sibling first: the five
+/// tracker families and `released`, which one preset row decides over together.
+fn clears_tracker_siblings(family: &str) -> bool {
+    crate::tracker_reading::is_family(family) || family == crate::released::FAMILY
 }
 
 /// The input a reading consumes: the document a caller already holds, or stdin.
@@ -2229,4 +2263,363 @@ pub fn run_journal_show(family: &str, out: &mut dyn std::io::Write) -> Result<Ex
         crate::journal::Fold::Unreadable(path) => writeln!(out, "unreadable {}", path.display())?,
     }
     Ok(ExitCode::Success)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// A committed repository carrying `files`, entered as this case's working
+    /// directory. nextest runs each case in its own process, so the move is
+    /// this case's; its state root is contained for the same reason.
+    fn enter_repo(name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let dir = crate::scratch::scratch(name);
+        crate::testing::contain_state(&dir.join("state"));
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        for (path, body) in files {
+            let at = repo.join(path);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, body).unwrap();
+        }
+        let tracked: Vec<String> = files.iter().map(|(path, _)| (*path).to_owned()).collect();
+        crate::gitwrite::commit_paths(&repo, &tracked, "fixture").unwrap();
+        std::env::set_current_dir(&repo).expect("enter the fixture");
+        repo
+    }
+
+    fn inputs(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    /// The error a derive answered, as text, or `None` where it answered.
+    fn refusal<T>(result: Result<T>) -> Option<String> {
+        result.err().map(|error| error.to_string())
+    }
+
+    const UNDECLARED: &str = "no reading is declared";
+
+    const PATTERNS: &str = "version = 1\n\n\
+        [[pattern]]\nid = \"cite\"\nregex = 'K-[0-9]+'\n\n\
+        [[pattern]]\nid = \"bare\"\nregex = 'K-[0-9]+'\n\n\
+        [[pattern]]\nid = \"key\"\nregex = '(?P<key>K-[0-9]+)'\n\n\
+        [[pattern]]\nid = \"fw\"\nregex = '^fw$'\n\n\
+        [[pattern]]\nid = \"vend\"\nregex = '^vend$'\n";
+
+    /// Fails by: a name-only line admitted, or a line with more than one token
+    /// refused.
+    #[test]
+    fn a_verdict_line_needs_a_name_and_a_token() {
+        assert!(validated("a pass\n\nb fail extra\n").is_ok());
+        assert!(validated("a pass\nlonely\n").is_err());
+    }
+
+    /// Fails by: a pick with an empty half accepted.
+    #[test]
+    fn a_pick_names_two_non_empty_keys() {
+        assert_eq!(pick_keys("arm=p50"), Some(("arm", "p50")));
+        assert_eq!(pick_keys("=p50"), None);
+        assert_eq!(pick_keys("arm="), None);
+        assert_eq!(pick_keys("arm"), None);
+    }
+
+    /// Fails by: a note for nothing dropped, or none for something dropped.
+    #[test]
+    fn a_dropped_name_is_counted_only_when_one_was() {
+        assert_eq!(dropped_note(0), None);
+        assert!(dropped_note(1).is_some_and(|note| note.contains(" 1 check-run")));
+    }
+
+    /// Fails by: a path outside `tests/` or of another extension counted as a
+    /// bats suite, or an empty profile named.
+    #[test]
+    fn a_bats_suite_and_a_profile_are_read_exactly() {
+        assert!(is_bats_suite("tests/a.bats"));
+        assert!(is_bats_suite("tests/A.BATS"));
+        assert!(!is_bats_suite("other/a.bats"));
+        assert!(!is_bats_suite("tests/a.sh"));
+        assert_eq!(profile_or_default(None), "default");
+        assert_eq!(profile_or_default(Some(String::new())), "default");
+        assert_eq!(profile_or_default(Some("ci".to_owned())), "ci");
+    }
+
+    /// Fails by: a known status refused, or an unknown one admitted.
+    #[test]
+    fn a_plan_line_carries_a_known_status() {
+        assert!(plan_validated("a pending\n\nb completed\n").is_ok());
+        assert!(plan_validated("a bogus\n").is_err());
+        assert!(plan_validated("a\n").is_err());
+    }
+
+    /// Fails by: a non-tracker family clearing the tracker records, or a
+    /// tracker family not clearing them.
+    #[test]
+    fn only_the_tracker_families_clear_their_siblings() {
+        assert!(clears_tracker_siblings("done"));
+        assert!(clears_tracker_siblings(crate::released::FAMILY));
+        assert!(!clears_tracker_siblings("signing-posture"));
+    }
+
+    /// Fails by: any one escape admitted as a component, or a clean one
+    /// refused.
+    #[test]
+    fn a_component_refuses_every_escape() {
+        for bad in ["", " ", ".", "..", "a/b", "a\\b", "a\0b"] {
+            assert!(safe_component("family", bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(safe_component("family", " ok ").unwrap(), "ok");
+    }
+
+    /// Fails by: an input the family does not read admitted.
+    #[test]
+    fn an_unread_input_is_refused() {
+        assert!(only_these_inputs(&inputs(&[("x", "1")]), "f", &["x"]).is_ok());
+        assert!(only_these_inputs(&inputs(&[("y", "1")]), "f", &["x"]).is_err());
+    }
+
+    /// Fails by: a declared family admitted whatever it names.
+    #[test]
+    fn a_declared_family_is_refused_for_each_ill_formed_shape() {
+        let family = |record: &str, writer: &str| Declared {
+            record: record.to_owned(),
+            writer: writer.to_owned(),
+        };
+        assert!(validate(&[family("branch-age", "mise run age")], &[]).is_ok());
+        assert!(validate(&[family("claim", "w")], &[]).is_err());
+        assert!(validate(&[family("a/b", "w")], &[]).is_err());
+        assert!(validate(&[family("f", " ")], &[]).is_err());
+        assert!(validate(&[family("f", "w"), family("f", "w")], &[]).is_err());
+    }
+
+    /// Fails by: a store spelled anywhere but under its own family directory.
+    #[test]
+    fn the_task_stores_are_spelled_under_the_git_dir() {
+        let git_dir = Path::new("g");
+        assert_eq!(
+            journal_store(git_dir, "fam"),
+            git_dir.join("batten-journals").join("fam")
+        );
+        assert!(keyed_path(git_dir, "fam", "k").starts_with(git_dir.join("batten-records/fam")));
+    }
+
+    /// Fails by: a keyed value that does not round-trip, or an absent key read
+    /// as present.
+    #[test]
+    fn a_keyed_value_round_trips_and_an_absent_one_is_none() {
+        let git_dir = crate::scratch::scratch("record-keyed-roundtrip");
+        assert_eq!(keyed_read(&git_dir, "fam", "k"), None);
+        keyed_write(&git_dir, "fam", "k", "value\n").unwrap();
+        assert_eq!(keyed_read(&git_dir, "fam", "k"), Some("value\n".to_owned()));
+        assert_eq!(keyed_read(&git_dir, "fam", "other"), None);
+    }
+
+    /// Fails by: a branch's claim not partitioning the record it keys.
+    #[test]
+    fn a_claim_is_read_off_the_branch_receipt() {
+        let git_dir = crate::scratch::scratch("record-claim-of");
+        assert_eq!(claim_of(&git_dir, "work/a"), None);
+        let receipts = git_dir.join("batten-receipts");
+        std::fs::create_dir_all(&receipts).unwrap();
+        std::fs::write(
+            receipts.join(crate::claim::receipt_name("work/a")),
+            "CLOUD-2 CLOUD-1\n",
+        )
+        .unwrap();
+        assert_eq!(
+            claim_of(&git_dir, "work/a"),
+            Some("CLOUD-1-CLOUD-2".to_owned())
+        );
+    }
+
+    /// Fails by: a stale record that will not remove reported as removed.
+    #[test]
+    fn a_stale_record_that_cannot_be_removed_is_an_error() {
+        let dir = crate::scratch::scratch("record-remove-stale");
+        assert!(remove_stale(&dir.join("absent")).is_ok());
+        assert!(remove_stale(&dir).is_err());
+    }
+
+    /// Fails by: a derived reading that is not written where the named store
+    /// reads, an absent record read as present, or an unreadable one read as
+    /// absent.
+    #[test]
+    fn a_derived_reading_is_read_back_from_the_named_store() {
+        enter_repo("record-named-store", &[("README", "x\n")]);
+        assert_eq!(load_named("v", "fam").unwrap(), None);
+        store_derived("fam", "reading 1\n").unwrap();
+        assert_eq!(
+            load_named("v", "fam").unwrap(),
+            Some("reading 1\n".to_owned())
+        );
+        // A directory where the record should be will not read: that is an
+        // error, never an absence.
+        std::fs::create_dir_all(named_path("v", "hollow").unwrap()).unwrap();
+        assert!(load_named("v", "hollow").is_err());
+    }
+
+    /// Fails by: a declared family's arm missing, or an undeclared family
+    /// answered by some other family's reading.
+    #[test]
+    fn every_declared_family_has_a_reading_and_no_other_does() {
+        let repo = enter_repo("record-derive-arms", &[("batten.toml", PATTERNS)]);
+        let none = Overrides::default();
+        assert!(
+            derive_reading(
+                "evaluator-io-probe",
+                &inputs(&[("status", "0"), ("test", "t")]),
+                &none,
+                Some(""),
+            )
+            .is_ok()
+        );
+        assert!(derive_reading("signing-posture", &inputs(&[]), &none, None).is_ok());
+
+        let transcripts = repo.parent().unwrap().join("transcripts");
+        std::fs::create_dir_all(&transcripts).unwrap();
+        let corpus = derive_reading(
+            "transcript-corpus",
+            &inputs(&[("root", transcripts.to_str().unwrap()), ("threshold", "3")]),
+            &none,
+            None,
+        )
+        .unwrap();
+        assert!(corpus.starts_with("sessions ") && corpus.ends_with("threshold 3\n"));
+        let unwalkable = repo.parent().unwrap().join("no-such-root");
+        assert!(
+            refusal(derive_reading(
+                "transcript-corpus",
+                &inputs(&[("root", unwalkable.to_str().unwrap()), ("threshold", "3")]),
+                &none,
+                None,
+            ))
+            .is_some_and(|error| error.contains("no transcript root"))
+        );
+
+        for family in [crate::released::FAMILY, "done"] {
+            assert!(
+                !refusal(derive_reading(family, &inputs(&[]), &none, None))
+                    .is_some_and(|error| error.contains(UNDECLARED)),
+                "{family} has a reading"
+            );
+        }
+        assert!(
+            refusal(derive_reading("nope", &inputs(&[]), &none, None))
+                .is_some_and(|error| error.contains(UNDECLARED))
+        );
+    }
+
+    /// Fails by: a vendored `links` crate reported, an unvendored one missed,
+    /// or a framework crate matched by anything but its pattern.
+    #[test]
+    fn the_macos_link_reading_names_exactly_what_needs_an_sdk() {
+        enter_repo("record-macos-link", &[("batten.toml", PATTERNS)]);
+        let package = |name: &str, links: Option<&str>| {
+            let mut package = serde_json::json!({
+                "id": format!("{name} 1.0.0"),
+                "name": name,
+                "dependencies": [],
+            });
+            if let Some(links) = links {
+                package["links"] = serde_json::json!(links);
+            }
+            package
+        };
+        let leaves = ["sys", "vend", "fw", "plain"];
+        let mut app = package("app", None);
+        app["dependencies"] = leaves
+            .iter()
+            .map(|name| serde_json::json!({ "name": name }))
+            .collect();
+        let mut nodes = vec![serde_json::json!({
+            "id": "app 1.0.0",
+            "features": [],
+            "deps": leaves
+                .iter()
+                .map(|name| serde_json::json!({ "pkg": format!("{name} 1.0.0") }))
+                .collect::<Vec<_>>(),
+        })];
+        nodes.extend(leaves.iter().map(
+            |name| serde_json::json!({ "id": format!("{name} 1.0.0"), "features": [], "deps": [] }),
+        ));
+        let meta = serde_json::json!({
+            "packages": [
+                app,
+                package("sys", Some("ssl")),
+                package("vend", Some("z")),
+                package("fw", None),
+                package("plain", None),
+            ],
+            "resolve": { "nodes": nodes },
+            "workspace_members": ["app 1.0.0"],
+        });
+        let reading = derive_reading(
+            "macos-link",
+            &inputs(&[("framework", "fw"), ("vendored", "vend")]),
+            &Overrides::default(),
+            Some(&meta.to_string()),
+        )
+        .unwrap();
+        assert!(reading.starts_with("scanned 5\n"), "{reading}");
+        let lines: Vec<&str> = reading.lines().skip(1).collect();
+        let mut sorted = lines.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, vec!["framework fw", "links sys ssl"], "{reading}");
+    }
+
+    /// Fails by: a key row with no `key` group admitted, or a zero field
+    /// number read as a field.
+    #[test]
+    fn a_turn_reading_refuses_a_keyless_row_and_a_zero_field() {
+        enter_repo("record-turn-reading", &[("batten.toml", PATTERNS)]);
+        let none = Overrides::default();
+        let asked = |key: &str, field: &str| {
+            inputs(&[
+                ("citation", "cite"),
+                ("key", key),
+                ("fields", "id"),
+                ("receipt", "read"),
+                ("field", field),
+            ])
+        };
+        assert!(
+            refusal(turn_reading("turn", &asked("bare", "1"), &none))
+                .is_some_and(|error| error.contains("has no `key` group"))
+        );
+        assert!(
+            refusal(turn_reading("turn", &asked("key", "0"), &none))
+                .is_some_and(|error| error.contains("1-indexed"))
+        );
+    }
+
+    /// Fails by: the bats lane writing the corpus when asked only to print it,
+    /// or printing when asked to write.
+    #[test]
+    fn the_bats_corpus_is_printed_or_written_as_asked() {
+        let repo = enter_repo(
+            "record-suites",
+            &[("tests/a.bats", "@test \"a\" { true; }\n")],
+        );
+        let report = repo.join(crate::suites::REPORT);
+        std::fs::create_dir_all(report.parent().unwrap()).unwrap();
+        std::fs::write(
+            &report,
+            "<testsuites>\n<testsuite name=\"a.bats\" tests=\"1\" time=\"1.5\">\n</testsuite>\n</testsuites>\n",
+        )
+        .unwrap();
+        let corpus = crate::suites::corpus_path(&repo);
+
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        run_suites(false, &mut out, &mut err).unwrap();
+        assert!(!out.is_empty());
+        assert!(!corpus.exists());
+
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        run_suites(true, &mut out, &mut err).unwrap();
+        assert!(out.is_empty());
+        assert!(corpus.is_file());
+    }
 }

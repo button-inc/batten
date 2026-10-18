@@ -1538,8 +1538,9 @@ pub fn result_view_spilled(
                 .map(|(_, path)| path.as_path()),
             _ => None,
         };
+        // A spilled leaf's own text is its marker, never its bulk, and it is read
+        // only to ask whether the leaf is empty; the section comes from the file.
         let body = match value {
-            _ if spilled.is_some() => String::new(),
             serde_json::Value::String(content) => content.clone(),
             other => serde_json::to_string_pretty(other)?,
         };
@@ -3734,6 +3735,409 @@ mod tests {
             empty.to_hex(),
             identity::capture_fingerprint("stderr", b"").to_hex()
         );
+    }
+
+    /// A one-commit repository whose state root is this case's own, so the
+    /// repo-rooted entry points resolve a store nobody else reads (CLOUD-2059).
+    fn contained_repo(name: &str) -> PathBuf {
+        let dir = crate::scratch::scratch(name);
+        crate::testing::contain_state(&dir.join("state"));
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        crate::gitwrite::commit_paths(&repo, &[], "fixture").unwrap();
+        repo
+    }
+
+    /// A response capture pointer whose digest is `digest`.
+    fn pointer(digest: &str) -> Capture {
+        Capture {
+            stream: Stream::Response.as_str(),
+            bytes: 0,
+            digest: digest.to_owned(),
+        }
+    }
+
+    /// Fails by: a stream misnamed as the error stream, a partial fidelity
+    /// claiming completeness, or a note other than its own.
+    #[test]
+    fn live_streams_and_fidelities_answer_exactly() {
+        assert!(LiveStream::new(Stream::Stderr).unwrap().is_stderr());
+        assert!(!LiveStream::new(Stream::Stdout).unwrap().is_stderr());
+        let complete: Vec<bool> = Fidelity::ALL.iter().map(|it| it.is_complete()).collect();
+        assert_eq!(complete, vec![true, true, true, false, false]);
+        assert_eq!(
+            Fidelity::Prefix {
+                captured: 1,
+                declared: None
+            }
+            .note(),
+            "a leading prefix; completeness is not claimed"
+        );
+        assert_eq!(
+            Fidelity::LexicalBytes.note(),
+            "the response member as the host framed it; byte-perfect"
+        );
+        assert!(token_is_complete("decoded-content"));
+        assert!(!token_is_complete("prefix"));
+        assert!(!token_is_complete("from-a-newer-binary"));
+    }
+
+    /// Fails by: any rendering or token drifting from its kind-prefixed form.
+    #[test]
+    fn every_locator_identity_and_token_renders_exactly() {
+        let locators = [
+            (Locator::IssueKey("K-1".into()), "issue:K-1", "issue"),
+            (Locator::Handle("h".into()), "handle:h", "handle"),
+            (Locator::SpillPath("/p".into()), "spill:/p", "spill"),
+        ];
+        for (locator, rendered, kind) in locators {
+            assert_eq!(locator.render(), rendered);
+            assert_eq!(locator.kind(), kind);
+        }
+        assert_eq!(OpaqueIdentity::new("ab").render(), "opaque:ab");
+        let freshness = [
+            (Freshness::Unchanged, "unchanged"),
+            (Freshness::Stale, "stale"),
+            (Freshness::Absent, "absent"),
+            (Freshness::Unavailable, "unavailable"),
+        ];
+        for (answer, token) in freshness {
+            assert_eq!(answer.as_str(), token);
+        }
+        assert_eq!(Transport::Inline.as_str(), "inline");
+        assert_eq!(Transport::Addressed.as_str(), "addressed");
+        // At the threshold is inline; one past it is addressed.
+        assert_eq!(
+            transport_for(None, DEFAULT_INLINE_MAX_BYTES),
+            Transport::Inline
+        );
+        assert_eq!(
+            transport_for(None, DEFAULT_INLINE_MAX_BYTES + 1),
+            Transport::Addressed
+        );
+    }
+
+    /// Fails by: any of the three text shapes decoded as another, an empty
+    /// response read as a shape, or a shape read as an empty response.
+    #[test]
+    fn each_response_shape_decodes_to_exactly_its_text() {
+        let decoded = |value: serde_json::Value| decode_response(&value).unwrap();
+        let canonical = |value: serde_json::Value| serde_json::to_vec(&value).unwrap();
+        let text = decoded(serde_json::json!("abc"));
+        assert_eq!((text.bytes, text.blocks), (b"abc".to_vec(), 1));
+        let blocks = decoded(serde_json::json!([
+            {"type": "text", "text": "a"},
+            {"type": "image"},
+            {"type": "text", "text": "b"}
+        ]));
+        assert_eq!((blocks.bytes, blocks.blocks), (b"ab".to_vec(), 2));
+        let empty = decoded(serde_json::json!([]));
+        assert_eq!((empty.bytes, empty.blocks), (Vec::new(), 0));
+        let framing = serde_json::json!([{"type": "image"}]);
+        assert_eq!(decoded(framing.clone()).bytes, canonical(framing));
+        let shell = decoded(serde_json::json!({"stderr": "e", "stdout": "o", "x": 1}));
+        assert_eq!((shell.bytes, shell.blocks), (b"oe".to_vec(), 2));
+        let nothing = decoded(serde_json::json!({}));
+        assert_eq!((nothing.bytes, nothing.blocks), (Vec::new(), 0));
+        let other = serde_json::json!({"file": {"content": "x"}});
+        assert_eq!(decoded(other.clone()).bytes, canonical(other));
+    }
+
+    /// Fails by: an index that loses an entry it did not replace, answers for a
+    /// locator it never recorded, or reads an unreadable index as empty.
+    #[test]
+    fn the_locator_index_records_compares_and_fails_closed() {
+        let dir = crate::scratch::scratch("capture-locator-index");
+        let domain = identity::AddressDomain::Capture;
+        let (first, second) = (
+            identity::ContentAddress::of(domain, b"one"),
+            identity::ContentAddress::of(domain, b"two"),
+        );
+        let (row, other) = (
+            Locator::IssueKey("K-1".into()),
+            Locator::IssueKey("K-2".into()),
+        );
+        let index = Index::at(dir.join("index"));
+        assert_eq!(index.compare(&row, &first), Freshness::Absent);
+        assert_eq!(index.current(&row), None);
+        index.record(&row, &first).unwrap();
+        index.record(&other, &second).unwrap();
+        assert_eq!(index.current(&row), Some(first));
+        assert_eq!(index.compare(&row, &first), Freshness::Unchanged);
+        assert_eq!(index.compare(&row, &second), Freshness::Stale);
+        index.record(&row, &second).unwrap();
+        assert_eq!(index.current(&row), Some(second));
+        assert_eq!(index.current(&other), Some(second));
+
+        // A directory where the index should be cannot be read: could not
+        // look, and recording over it is refused rather than a wipe.
+        let hollow = Index::at(dir.clone());
+        assert_eq!(hollow.compare(&row, &first), Freshness::Unavailable);
+        assert!(hollow.record_locked(&row, &first).is_err());
+    }
+
+    /// Fails by: a taken staging name not retried, or a failure no new name can
+    /// fix retried anyway.
+    #[test]
+    fn a_staging_name_collision_retries_and_nothing_else_does() {
+        use std::sync::atomic::Ordering;
+        let dir = crate::scratch::scratch("capture-staging");
+        let pid = std::process::id();
+        let next = STAGING_ATTEMPT.load(Ordering::Relaxed);
+        for taken in next..next + 2 {
+            std::fs::write(dir.join(format!("x.{pid}.{taken}.tmp")), "").unwrap();
+        }
+        let (_, staged) = open_staging(&dir, "x").unwrap();
+        assert_eq!(staged, dir.join(format!("x.{pid}.{}.tmp", next + 2)));
+        let before = STAGING_ATTEMPT.load(Ordering::Relaxed);
+        assert!(open_staging(&dir.join("missing"), "x").is_err());
+        assert_eq!(STAGING_ATTEMPT.load(Ordering::Relaxed), before + 1);
+    }
+
+    /// Fails by: a live read past its committed bytes, or a watermark read from
+    /// anywhere but the repository's own live store.
+    #[test]
+    fn a_live_capture_reads_from_its_offset_under_its_repository() {
+        let repo = contained_repo("capture-live");
+        let stream = LiveStream::new(Stream::Stdout).unwrap();
+        let mut spool = Spool::open(&repo, stream, "k").unwrap();
+        spool.commit(b"hello").unwrap();
+        let live = state::repo_state_dir(&repo)
+            .unwrap()
+            .join("captures")
+            .join("live");
+        assert_eq!(
+            read_live_in(&live, stream, "k", 2, 100).unwrap(),
+            LiveRead::Bytes(b"llo".to_vec())
+        );
+        assert_eq!(live_watermark(&repo, stream, "k").unwrap(), Some(5));
+        assert_eq!(live_watermark_in(&live, stream, "k"), Some(5));
+        assert_eq!(live_watermark(&repo, stream, "other").unwrap(), None);
+    }
+
+    /// Fails by: a field with no content indexed as one, or one with content
+    /// left out.
+    #[test]
+    fn a_view_indexes_exactly_the_fields_with_content() {
+        let repo = contained_repo("capture-view");
+        let document = serde_json::json!({
+            "a": "", "b": [], "c": {}, "d": "x\ny", "e": null, "f": 1
+        });
+        let (_, index) = view(&repo, &pointer("v1"), document.to_string().as_bytes())
+            .unwrap()
+            .unwrap();
+        let mut pointers: Vec<&str> = index.iter().map(|field| field.pointer.as_str()).collect();
+        pointers.sort_unstable();
+        assert_eq!(pointers, vec!["/d", "/f"]);
+    }
+
+    /// Fails by: any leaf's section placed on the wrong lines, counted at the
+    /// wrong size, taken from the wrong spill, or a null or an empty object
+    /// treated as the other.
+    #[test]
+    fn a_result_view_places_every_leaf_and_streams_its_spill() {
+        let repo = contained_repo("capture-result-view");
+        let spill = repo.parent().unwrap().join("spill");
+        std::fs::write(&spill, "x\ny\nz").unwrap();
+        let decoy = repo.parent().unwrap().join("decoy");
+        std::fs::write(&decoy, "decoy").unwrap();
+        let result = serde_json::json!({
+            "a": {"b": "one\ntwo", "e": {}, "n": null},
+            "s": "MARK",
+            "t": "plain"
+        });
+        let spills = [("OTHER".to_owned(), decoy), ("MARK".to_owned(), spill)];
+        let (path, index) = result_view_spilled(&repo, &pointer("r1"), &result, &spills).unwrap();
+        let placed: Vec<(&str, usize, usize, usize)> = index
+            .iter()
+            .map(|field| (field.pointer.as_str(), field.from, field.to, field.bytes))
+            .collect();
+        assert_eq!(
+            placed,
+            vec![
+                ("/a/b", 2, 3, 7),
+                ("/a/e", 5, 5, 2),
+                ("/s", 7, 9, 5),
+                ("/t", 11, 11, 5)
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "## /a/b\none\ntwo\n## /a/e\n{}\n## /s\nx\ny\nz\n## /t\nplain\n"
+        );
+    }
+
+    /// Fails by: a view recognised outside the store's `views`, or a non-view
+    /// file inside it.
+    #[test]
+    fn only_a_markdown_file_in_the_views_directory_is_a_view() {
+        let repo = contained_repo("capture-is-view");
+        let dir = captures_dir(&repo).unwrap();
+        assert!(is_view(&repo, &dir.join("views").join("x.md")));
+        assert!(!is_view(&repo, &dir.join("views").join("x.txt")));
+        assert!(!is_view(&repo, &dir.join("other").join("x.md")));
+    }
+
+    /// Fails by: a listing that misses a stored capture, or a prune that
+    /// miscounts what it removed.
+    #[test]
+    fn a_prune_removes_and_counts_every_listed_capture() {
+        let repo = contained_repo("capture-prune");
+        store(&repo, Stream::Stdout, b"a").unwrap();
+        store(&repo, Stream::Stderr, b"b").unwrap();
+        assert_eq!(list(&repo).unwrap().len(), 2);
+        assert_eq!(prune(&repo).unwrap(), 2);
+        assert!(list(&repo).unwrap().is_empty());
+    }
+
+    /// Fails by: a chunk that is not cut at its last newline when the text runs
+    /// on, one that is cut when it does not, a cut inside a character, or a
+    /// count AT the bound read as past it.
+    #[test]
+    fn counting_chunks_at_newlines_and_char_boundaries() {
+        let chunks = |text: &str| {
+            let mut seen: Vec<String> = Vec::new();
+            let over = exceeds_counting(&[text], u64::MAX, |chunk| {
+                seen.push(chunk.to_owned());
+                1
+            });
+            assert!(!over);
+            seen
+        };
+        let lines = ("x".repeat(1000) + "\n").repeat(40);
+        let cut = chunks(&lines);
+        let sizes: Vec<usize> = cut.iter().map(String::len).collect();
+        assert_eq!(sizes, vec![16016, 16016, 8008]);
+        assert!(cut.iter().all(|chunk| chunk.ends_with('\n')));
+        assert_eq!(chunks("a\nb"), vec!["a\nb".to_owned()]);
+        let wide: Vec<usize> = chunks(&"€".repeat(10_000))
+            .iter()
+            .map(String::len)
+            .collect();
+        assert_eq!(wide, vec![16383, 13617]);
+        assert!(!exceeds_counting(&["abc"], 1, |_| 1));
+        assert!(exceeds_counting(&["abc"], 0, |_| 1));
+    }
+
+    /// Fails by: eviction stopping early or late on either budget, or a default
+    /// byte budget below its declared eight mebibytes.
+    #[test]
+    fn eviction_removes_exactly_enough_for_each_budget() {
+        let config = |max_bytes: Option<u64>, max_records: Option<u64>| CaptureConfig {
+            max_bytes,
+            max_records,
+            inline_max_bytes: None,
+            result_max_tokens: None,
+        };
+        let filled = |name: &str, records: u8| {
+            let dir = crate::scratch::scratch(name);
+            for byte in 0..records {
+                store_in(&dir, Stream::Response, &[byte; 100]).unwrap();
+            }
+            dir
+        };
+        // Over the byte budget alone: one record makes room.
+        let dir = filled("capture-evict-bytes", 3);
+        assert_eq!(
+            evict_to_budget_in(&dir, Some(&config(Some(250), None))).unwrap(),
+            1
+        );
+        // Over the record budget alone: two records make room.
+        let dir = filled("capture-evict-records", 3);
+        assert_eq!(
+            evict_to_budget_in(&dir, Some(&config(None, Some(1)))).unwrap(),
+            2
+        );
+        // Inside both: nothing goes.
+        let dir = filled("capture-evict-none", 3);
+        assert_eq!(evict_to_budget_in(&dir, None).unwrap(), 0);
+        // Two mebibytes sit inside the default budget.
+        let dir = crate::scratch::scratch("capture-evict-default");
+        store_in(&dir, Stream::Response, &vec![b'x'; 2 * 1024 * 1024]).unwrap();
+        assert_eq!(evict_to_budget_in(&dir, None).unwrap(), 0);
+
+        let repo = contained_repo("capture-evict-repo");
+        for byte in 0..3_u8 {
+            store(&repo, Stream::Response, &[byte; 10]).unwrap();
+        }
+        assert_eq!(
+            evict_to_budget(&repo, Some(&config(None, Some(1)))).unwrap(),
+            2
+        );
+    }
+
+    /// Fails by: a call or an escape that is reported recorded and is not.
+    #[test]
+    fn a_call_and_an_escape_each_leave_their_row() {
+        let repo = contained_repo("capture-record-call");
+        record_call(&repo, &row("s", Some("d1"), None)).unwrap();
+        let handle = Handle {
+            stream: Stream::Response,
+            digest: "d2".to_owned(),
+        };
+        record_escape(&repo, &handle, 7).unwrap();
+        let rows = calls(&repo).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|it| it.source == RAW_ESCAPE
+            && it.tool == "7"
+            && it.digest.as_deref() == Some("d2")));
+    }
+
+    /// Fails by: the trim keeping more or fewer rows than the bound allows, or
+    /// giving up a recent row while a built-in result's row remains.
+    #[test]
+    fn trimming_drops_built_in_results_first_then_the_oldest() {
+        let labelled = |tool: &str, builtin: bool| {
+            let mut it = row("s", None, Some("none"));
+            it.tool = tool.to_owned();
+            if builtin {
+                it.source = POST_TOOL_MEMBER.to_owned();
+            }
+            it
+        };
+        let kept = |name: &str, rows: &[CallRow]| -> Vec<String> {
+            let dir = crate::scratch::scratch(name);
+            trim_calls(&dir, rows, 1).unwrap();
+            read_calls(&dir.join("calls"))
+                .into_iter()
+                .map(|it| it.tool)
+                .collect()
+        };
+        let mixed = [
+            labelled("n0", false),
+            labelled("b1", true),
+            labelled("n2", false),
+            labelled("n3", false),
+            labelled("b4", true),
+            labelled("n5", false),
+        ];
+        assert_eq!(
+            kept("capture-trim-mixed", &mixed),
+            vec!["n0", "n2", "n3", "n5"]
+        );
+        let plain: Vec<CallRow> = (0..6).map(|n| labelled(&format!("n{n}"), false)).collect();
+        assert_eq!(
+            kept("capture-trim-plain", &plain),
+            vec!["n2", "n3", "n4", "n5"]
+        );
+    }
+
+    /// Fails by: a tool-less lookup that finds nothing it was keyed to.
+    #[test]
+    fn a_tool_less_lookup_finds_the_keyed_response() {
+        let repo = contained_repo("capture-find-any");
+        let capture = store(&repo, Stream::Response, br#"{"id":"K-1"}"#).unwrap();
+        record_call(&repo, &row("s", Some(&capture.digest), None)).unwrap();
+        let found = find_any_tool(
+            &repo,
+            &Selector {
+                tools: &[],
+                key: "K-1",
+                key_at: "id",
+            },
+        )
+        .unwrap();
+        assert_eq!(found.map(|it| it.capture.digest), Some(capture.digest));
     }
 }
 

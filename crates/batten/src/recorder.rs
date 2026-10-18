@@ -1418,4 +1418,315 @@ mod outcome_tests {
         assert_eq!(outcome(&row, &context(&backgrounded)), Outcome::NotSelected);
         assert_eq!(outcome(&row, &context(&foreground)), Outcome::Applies);
     }
+
+    /// A context over `input` and `result` with the given tables, rooted at
+    /// `root`. `now` is fixed: nothing here grades a lifetime.
+    fn context_over<'a>(
+        input: &'a serde_json::Value,
+        result: &'a serde_json::Value,
+        programs: &'a BTreeMap<String, Program>,
+        patterns: &'a BTreeMap<String, regex::Regex>,
+        root: &'a Path,
+    ) -> Context<'a> {
+        Context {
+            result,
+            input,
+            programs,
+            patterns,
+            grammar: None,
+            root,
+            branch: Some("work"),
+            now: 0,
+        }
+    }
+
+    /// A row on `Bash` writing `record` with one literal column.
+    fn literal_row(name: &str, record: &str, tool: &str, text: &str) -> Declared {
+        let mut row = declared(&[], &[]);
+        row.name = name.to_owned();
+        row.record = record.to_owned();
+        row.tool = tool.to_owned();
+        row.columns = vec![column(Value::Literal(text.to_owned()))];
+        row
+    }
+
+    fn column(value: Value) -> Column {
+        Column {
+            name: "c".to_owned(),
+            value,
+            minus: None,
+            without: None,
+            counted_with: None,
+            zero_is_a_count: false,
+        }
+    }
+
+    /// Fails by: an iterating path read as a scalar or the reverse, or any
+    /// yield other than exactly the strings the path selects.
+    #[test]
+    fn strings_yields_exactly_what_the_path_selects() {
+        let value = serde_json::json!({"a": {"list": ["x", 1, "y"], "one": "s"}});
+        assert_eq!(strings(&value, "a.list[]"), vec!["x", "y"]);
+        assert_eq!(strings(&value, "a.one"), vec!["s"]);
+        assert_eq!(strings(&value, "a.one[]"), Vec::<String>::new());
+        assert_eq!(strings(&value, "a.missing[]"), Vec::<String>::new());
+    }
+
+    /// Fails by: a value rendered as some other text, a null read as text, or
+    /// a section that keeps the wrong span.
+    #[test]
+    fn text_and_section_read_exactly_their_span() {
+        assert_eq!(as_text(&serde_json::json!("body")), Some("body".to_owned()));
+        assert_eq!(as_text(&serde_json::Value::Null), None);
+        assert_eq!(
+            as_text(&serde_json::json!({"k": 1})),
+            Some(r#"{"k":1}"#.to_owned())
+        );
+        let label = regex::Regex::new("^## ").expect("a test literal compiles");
+        let select = regex::Regex::new("^## Want").expect("a test literal compiles");
+        let text = "intro\n## Other\nno\n## Want\nyes\nalso\n## Later\nno";
+        assert_eq!(section(text, &label, &select), "## Want\nyes\nalso");
+    }
+
+    /// Fails by: an evaluation that resolves to nothing or to a null, or a read
+    /// table that answers for a status it does not map.
+    #[test]
+    fn evaluate_and_read_back_answer_exactly() {
+        let programs = BTreeMap::new();
+        let patterns = BTreeMap::new();
+        let input = serde_json::json!({"ids": ["A", "B"]});
+        let result = serde_json::json!({"id": "R"});
+        let root = Path::new(".");
+        let context = context_over(&input, &result, &programs, &patterns, root);
+        assert_eq!(
+            evaluate(&Value::Literal("k".to_owned()), &context),
+            Some(serde_json::json!("k"))
+        );
+        assert_eq!(
+            evaluate(&Value::Inputs(vec!["ids[]".to_owned()]), &context),
+            Some(serde_json::json!("A B"))
+        );
+        let mut map = BTreeMap::new();
+        map.insert("0".to_owned(), "pass".to_owned());
+        let status = Read::Status(map);
+        assert_eq!(read_back(&status, 0, ""), Some(serde_json::json!("pass")));
+        assert_eq!(read_back(&status, 1, ""), None);
+        let line = Read::StdoutLine("n=".to_owned());
+        assert_eq!(
+            read_back(&line, 0, "x\nn=3\n"),
+            Some(serde_json::json!("3"))
+        );
+        assert_eq!(read_back(&line, 0, "x\n"), None);
+    }
+
+    /// Fails by: a declared program whose status or stdout is not the one it
+    /// produced reaching the record.
+    #[test]
+    fn a_declared_program_answers_with_its_own_status_and_stdout() {
+        let dir = crate::scratch::scratch("recorder-run-program");
+        let script = dir.join("echo.sh");
+        std::fs::write(&script, "#!/bin/sh\ncat\nexit 3\n").expect("script");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+                .expect("mode");
+        }
+        let program = Program {
+            path: "echo.sh".to_owned(),
+            args: Vec::new(),
+        };
+        assert_eq!(
+            run_program(&dir, &program, "payload"),
+            Some((3, "payload".to_owned()))
+        );
+    }
+
+    /// Fails by: a set difference that keeps what it removes, a `without` that
+    /// keeps only the dropped token, or a rendered line that is not exactly the
+    /// joined columns.
+    #[test]
+    fn a_column_renders_its_tokens_after_every_set_operation() {
+        let programs = BTreeMap::new();
+        let patterns = BTreeMap::new();
+        let input = serde_json::json!({});
+        let result = serde_json::json!({});
+        let context = context_over(&input, &result, &programs, &patterns, Path::new("."));
+        let mut col = column(Value::Literal("a b c d".to_owned()));
+        col.minus = Some(Value::Literal("b".to_owned()));
+        col.without = Some(Value::Literal("c".to_owned()));
+        assert_eq!(render_column(&col, &context), "a,d");
+        col.counted_with = Some(":".to_owned());
+        assert_eq!(render_column(&col, &context), "2:a,d");
+        col.minus = Some(Value::Literal("a b d".to_owned()));
+        assert_eq!(render_column(&col, &context), ABSENT);
+        col.zero_is_a_count = true;
+        assert_eq!(render_column(&col, &context), "0");
+
+        let mut row = literal_row("r", "rec", "Bash", "one");
+        row.columns.push(column(Value::Literal("two".to_owned())));
+        assert_eq!(render(&row, &context), Some("one two".to_owned()));
+        row.requires = vec!["absent".to_owned()];
+        assert_eq!(render(&row, &context), None);
+    }
+
+    /// Fails by: any load refusal admitting what it refuses, or refusing the
+    /// well-formed row beside it.
+    #[test]
+    fn validate_admits_the_well_formed_and_refuses_each_dangling_id() {
+        let mut programs = BTreeMap::new();
+        programs.insert(
+            "gate".to_owned(),
+            Program {
+                path: "gate".to_owned(),
+                args: Vec::new(),
+            },
+        );
+        let patterns: std::collections::BTreeSet<String> = ["p".to_owned()].into();
+        let mut status = BTreeMap::new();
+        status.insert("0".to_owned(), "ok".to_owned());
+        let program = |run: &str, read: Read| Value::Program {
+            run: run.to_owned(),
+            stdin: Box::new(Value::Literal("x".to_owned())),
+            read,
+        };
+        let section = |label: &str| Value::Section {
+            from: Box::new(Value::Literal("x".to_owned())),
+            label: label.to_owned(),
+            select: "p".to_owned(),
+        };
+
+        let mut good = literal_row("good", "rec", "Bash", "k");
+        good.requires_input_matching = [("command".to_owned(), "p".to_owned())].into();
+        good.requires_recorded = Some(Recorded {
+            matches: [(0, Value::Literal("k".to_owned()))].into(),
+        });
+        good.columns
+            .push(column(program("gate", Read::Status(status.clone()))));
+        good.columns.push(column(section("p")));
+        let other = literal_row("other", "rec", "Bash", "k");
+        assert!(validate(&[good.clone(), other], &programs, &patterns).is_ok());
+
+        let refused = |row: Declared| validate(&[row], &programs, &patterns).is_err();
+        assert!(validate(&[good.clone(), good.clone()], &programs, &patterns).is_err());
+        let mut row = good.clone();
+        row.requires_input_matching = [("command".to_owned(), "q".to_owned())].into();
+        assert!(refused(row));
+        let mut row = good.clone();
+        row.requires_recorded = Some(Recorded {
+            matches: [(row.columns.len(), Value::Literal("k".to_owned()))].into(),
+        });
+        assert!(refused(row));
+        let mut row = good.clone();
+        row.columns.push(column(section("q")));
+        assert!(refused(row));
+        let mut row = good.clone();
+        row.columns.push(column(program("absent", Read::Stdout)));
+        assert!(refused(row));
+        let mut row = good.clone();
+        row.columns
+            .push(column(program("gate", Read::Status(BTreeMap::new()))));
+        assert!(refused(row));
+        let mut row = good;
+        let mut unparsed = BTreeMap::new();
+        unparsed.insert("zero".to_owned(), "ok".to_owned());
+        row.columns
+            .push(column(program("gate", Read::Status(unparsed))));
+        assert!(refused(row));
+    }
+
+    /// Fails by: a path that does not fold the branch, drop the claim, or
+    /// partition by it.
+    #[test]
+    fn record_and_blocked_paths_fold_the_branch_and_partition_by_claim() {
+        let git = Path::new("g");
+        let receipts = git.join("batten-receipts");
+        assert_eq!(
+            record_path(git, "rec", "a/b", Some("c")),
+            receipts.join("rec.a-b.c")
+        );
+        assert_eq!(
+            record_path(git, "rec", "a/b", None),
+            receipts.join("rec.a-b")
+        );
+        assert_eq!(
+            blocked_path(git, "a/b", Some("c")),
+            receipts.join("recorder-blocked.a-b.c")
+        );
+        assert_eq!(
+            blocked_path(git, "a/b", None),
+            receipts.join("recorder-blocked.a-b")
+        );
+    }
+
+    /// Fails by: a precondition that matches a line missing one of its
+    /// columns, or misses the line carrying all of them.
+    #[test]
+    fn already_recorded_needs_every_named_column_on_one_line() {
+        let programs = BTreeMap::new();
+        let patterns = BTreeMap::new();
+        let input = serde_json::json!({});
+        let result = serde_json::json!({});
+        let context = context_over(&input, &result, &programs, &patterns, Path::new("."));
+        let recorded = Recorded {
+            matches: [
+                (0, Value::Literal("issue".to_owned())),
+                (1, Value::Literal("K-1".to_owned())),
+            ]
+            .into(),
+        };
+        assert!(already_recorded(
+            "comment K-1\nissue K-1 x\n",
+            &recorded,
+            &context
+        ));
+        assert!(!already_recorded(
+            "comment K-1\nissue K-2\n",
+            &recorded,
+            &context
+        ));
+        assert!(!already_recorded("", &recorded, &context));
+    }
+
+    /// Fails by: a row selected that should not be, a snapshot that is not
+    /// taken before the first append, a precondition read inverted, or a count
+    /// that is not the number of lines written.
+    #[test]
+    fn append_all_writes_each_earned_line_against_the_snapshot_and_counts_them() {
+        let git_dir = crate::scratch::scratch("recorder-append-all");
+        let programs = BTreeMap::new();
+        let patterns = BTreeMap::new();
+        let input = serde_json::json!({});
+        let result = serde_json::json!({});
+        let context = context_over(&input, &result, &programs, &patterns, &git_dir);
+        let mut follow = literal_row("follow", "rec", "Bash", "two");
+        follow.requires_recorded = Some(Recorded {
+            matches: [(0, Value::Literal("one".to_owned()))].into(),
+        });
+        let rows = [
+            literal_row("first", "rec", "Bash", "one"),
+            literal_row("unselected", "rec", "Other", "other"),
+            follow,
+        ];
+        let selects = |declared: &str, called: &str| declared == called;
+        let path = record_path(&git_dir, "rec", "main", None);
+
+        // Empty record: `follow`'s precondition reads the snapshot taken before
+        // `first` appended, so only `first` writes.
+        assert_eq!(
+            append_all(&rows, &git_dir, "main", &context, selects, "Bash"),
+            1
+        );
+        assert_eq!(std::fs::read_to_string(&path).expect("record"), "one\n");
+
+        // Now the snapshot carries `one`, so both earn a line.
+        assert_eq!(
+            append_all(&rows, &git_dir, "main", &context, selects, "Bash"),
+            2
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("record"),
+            "one\none\ntwo\n"
+        );
+    }
 }

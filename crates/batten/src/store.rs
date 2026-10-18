@@ -1083,6 +1083,13 @@ fn describe(migrations: &[Migration]) -> String {
 /// or when a named store does not exist.
 pub fn run_adopt(store: Option<&str>, err: &mut dyn std::io::Write) -> Result<ExitCode> {
     let root = git::repo_root(Path::new("."))?;
+    adopt_in(&root, store, err)
+}
+
+/// [`run_adopt`] for the repository rooted at `root`, which a case names outright
+/// rather than through the process's working directory.
+fn adopt_in(root: &Path, store: Option<&str>, err: &mut dyn std::io::Write) -> Result<ExitCode> {
+    let root = root.to_path_buf();
     let opened = resolve(&root)?;
 
     let opened = match store {
@@ -1303,5 +1310,387 @@ mod tests {
             "match_criterion reads repo_name; basename keying merges same-named \
              strangers and splits worktree siblings (CLOUD-164)"
         );
+    }
+
+    /// A one-commit repository at `parent/name`, built in process.
+    fn repo_in(parent: &Path, name: &str) -> PathBuf {
+        let repo = parent.join(name);
+        std::fs::create_dir_all(&repo).unwrap();
+        // The message carries the name, so two fixtures never share a root
+        // commit by sharing a tree and a second.
+        crate::gitwrite::commit_paths(&repo, &[], &format!("root of {name}")).unwrap();
+        repo
+    }
+
+    /// Whether `at` has the shape `rfc3339_utc` renders — never its value.
+    fn is_rfc3339(at: &str) -> bool {
+        let bytes = at.as_bytes();
+        bytes.len() == 20
+            && bytes[4] == b'-'
+            && bytes[10] == b'T'
+            && at.ends_with('Z')
+            && bytes[..4].iter().all(u8::is_ascii_digit)
+    }
+
+    /// Fails by: an id that displays as anything but its own hex, or an
+    /// identity-bearing criterion that stops bearing identity.
+    #[test]
+    fn an_id_displays_as_itself_and_three_criteria_bear_identity() {
+        let id = StoreId("ab".repeat(32));
+        assert_eq!(id.to_string(), "ab".repeat(32));
+        let bearing: Vec<MatchCriterion> = MatchCriterion::ALL
+            .iter()
+            .copied()
+            .filter(|criterion| criterion.is_identity_bearing())
+            .collect();
+        assert_eq!(
+            bearing,
+            vec![
+                MatchCriterion::Marker,
+                MatchCriterion::RootCommit,
+                MatchCriterion::RemoteUrl
+            ]
+        );
+    }
+
+    /// Fails by: a bound store reported unbound, or an unbound arm reported as
+    /// a directory a read path would then list.
+    #[test]
+    fn only_existing_and_adopted_name_a_bound_directory() {
+        let record = StoreRecord {
+            schema: STORE_SCHEMA,
+            id: StoreId("cd".repeat(32)),
+            key_material: KeyMaterial::default(),
+            migrations: Vec::new(),
+        };
+        let dir = PathBuf::from("/stores/one");
+        let existing = Opened::Existing {
+            record: record.clone(),
+            dir: dir.clone(),
+            observed: KeyMaterial::default(),
+            migrations: Vec::new(),
+        };
+        let adopted = Opened::Adopted {
+            record: record.clone(),
+            dir: dir.clone(),
+            observed: KeyMaterial::default(),
+            criterion: MatchCriterion::RootCommit,
+        };
+        assert_eq!(bound_dir(&existing), Some(dir.clone()));
+        assert_eq!(bound_dir(&adopted), Some(dir.clone()));
+        let candidate = Opened::Candidate {
+            id: record.id.clone(),
+            dir: dir.clone(),
+            criterion: MatchCriterion::CommonDir,
+        };
+        let fresh = Opened::Fresh {
+            observed: KeyMaterial::default(),
+            dir: dir.clone(),
+        };
+        let stranger = Opened::Stranger {
+            occupant: record.id,
+            observed: KeyMaterial::default(),
+            dir,
+        };
+        assert_eq!(bound_dir(&candidate), None);
+        assert_eq!(bound_dir(&fresh), None);
+        assert_eq!(bound_dir(&stranger), None);
+    }
+
+    /// Fails by: any token drifting, or the refetch answer inverting for any
+    /// lifecycle arm.
+    #[test]
+    fn every_outcome_token_and_refetch_answer_is_exact() {
+        let resolutions = [
+            (Resolution::Resolved(vec![1]), "resolved"),
+            (Resolution::Missing, "missing"),
+            (Resolution::Unavailable, "unavailable"),
+            (Resolution::Corrupt, "corrupt"),
+            (Resolution::Mismatch, "mismatch"),
+        ];
+        for (resolution, token) in resolutions {
+            assert_eq!(resolution.as_str(), token);
+        }
+        let lifecycles = [
+            (Lifecycle::Pruned, "pruned", false),
+            (Lifecycle::Evicted, "evicted", true),
+            (Lifecycle::Incomplete, "incomplete", true),
+            (Lifecycle::Corrupt, "corrupt", false),
+            (Lifecycle::Unavailable, "unavailable", false),
+        ];
+        for (lifecycle, token, refetch) in lifecycles {
+            assert_eq!(lifecycle.as_str(), token);
+            assert_eq!(lifecycle.refetchable(), refetch, "{token}");
+        }
+        let ids = [
+            (StorageId::Chunk("1".into()), "chunk:1", "chunk"),
+            (StorageId::Cursor("2".into()), "cursor:2", "cursor"),
+            (
+                StorageId::Generation("3".into()),
+                "generation:3",
+                "generation",
+            ),
+            (StorageId::Checksum("4".into()), "checksum:4", "checksum"),
+        ];
+        for (id, rendered, kind) in ids {
+            assert_eq!(id.render(), rendered);
+            assert_eq!(id.kind(), kind);
+        }
+    }
+
+    /// Fails by: a binding that verifies the wrong bytes, or refuses the right
+    /// ones.
+    #[test]
+    fn a_chunk_binding_verifies_exactly_its_whole() {
+        let domain = identity::AddressDomain::Capture;
+        let binding = ChunkBinding {
+            whole: identity::ContentAddress::of(domain, b"whole"),
+            parts: vec![StorageId::Chunk("a".into())],
+        };
+        assert!(binding.verifies(domain, b"whole"));
+        assert!(!binding.verifies(domain, b"other"));
+    }
+
+    /// Fails by: any one of the five outcomes answering as another, or the
+    /// inline fallback answering where it should not (CLOUD-1365).
+    #[test]
+    fn resolving_an_address_names_each_outcome_apart() {
+        let dir = crate::scratch::scratch("store-resolve-address");
+        let domain = identity::AddressDomain::Capture;
+        let good = identity::ContentAddress::of(domain, b"payload");
+        // Nothing stored: missing, and a good inline copy answers as inline.
+        assert_eq!(
+            resolve_address(&dir, domain, &good, None),
+            (Resolution::Missing, Provenance::Store)
+        );
+        assert_eq!(
+            resolve_address(&dir, domain, &good, Some(b"payload")),
+            (
+                Resolution::Resolved(b"payload".to_vec()),
+                Provenance::Inline
+            )
+        );
+        // A bad inline copy never overwrites the store's own verdict.
+        assert_eq!(
+            resolve_address(&dir, domain, &good, Some(b"forged")),
+            (Resolution::Missing, Provenance::Store)
+        );
+        // The right bytes resolve from the store.
+        std::fs::write(dir.join(good.render()), b"payload").unwrap();
+        assert_eq!(
+            resolve_address(&dir, domain, &good, None),
+            (Resolution::Resolved(b"payload".to_vec()), Provenance::Store)
+        );
+        // Wrong bytes at an address are a mismatch, not an absence.
+        let other = identity::ContentAddress::of(domain, b"expected");
+        std::fs::write(dir.join(other.render()), b"tampered").unwrap();
+        assert_eq!(
+            resolve_address(&dir, domain, &other, None),
+            (Resolution::Mismatch, Provenance::Store)
+        );
+        // A directory at an address has no bytes to hash.
+        let hollow = identity::ContentAddress::of(domain, b"hollow");
+        std::fs::create_dir_all(dir.join(hollow.render())).unwrap();
+        assert_eq!(
+            resolve_address(&dir, domain, &hollow, None),
+            (Resolution::Corrupt, Provenance::Store)
+        );
+        // A store "directory" that is a file cannot be looked into: could not
+        // look, never absent.
+        let blocked = dir.join("not-a-dir");
+        std::fs::write(&blocked, b"").unwrap();
+        assert_eq!(
+            resolve_address(&blocked, domain, &good, None),
+            (Resolution::Unavailable, Provenance::Store)
+        );
+    }
+
+    /// Fails by: a record or marker that does not round-trip, a future schema
+    /// partially trusted, or a blank marker read as an id.
+    #[test]
+    fn a_record_and_its_marker_round_trip_and_fail_closed() {
+        let dir = crate::scratch::scratch("store-record-roundtrip");
+        let record = StoreRecord {
+            schema: STORE_SCHEMA,
+            id: StoreId("ef".repeat(32)),
+            key_material: material("/c/.git", &["aaa"], &[], "c"),
+            migrations: Vec::new(),
+        };
+        let store = dir.join("store");
+        write_record(&store, &record).unwrap();
+        assert_eq!(read_record(&store), Some(record.clone()));
+        let future = StoreRecord {
+            schema: STORE_SCHEMA + 1,
+            ..record.clone()
+        };
+        write_record(&store, &future).unwrap();
+        assert_eq!(read_record(&store), None);
+
+        let common = dir.join("common");
+        std::fs::create_dir_all(&common).unwrap();
+        let common = common.to_string_lossy().into_owned();
+        assert_eq!(read_marker(&common), None);
+        write_marker(&common, &record.id).unwrap();
+        assert_eq!(read_marker(&common), Some(record.id));
+        std::fs::write(Path::new(&common).join(MARKER_FILE), "  \n").unwrap();
+        assert_eq!(read_marker(&common), None);
+    }
+
+    /// Fails by: an adoption that records a migration nothing moved, or omits
+    /// the one that did.
+    #[test]
+    fn adopting_records_a_migration_only_when_material_moved() {
+        let dir = crate::scratch::scratch("store-adopt-commit");
+        let common = dir.join("common");
+        std::fs::create_dir_all(&common).unwrap();
+        let unchanged = material(&common.to_string_lossy(), &["aaa"], &[], "repo");
+        let record = StoreRecord {
+            schema: STORE_SCHEMA,
+            id: StoreId("12".repeat(32)),
+            key_material: unchanged.clone(),
+            migrations: Vec::new(),
+        };
+        let bound = commit(Opened::Adopted {
+            record: record.clone(),
+            dir: dir.join("store"),
+            observed: unchanged.clone(),
+            criterion: MatchCriterion::RootCommit,
+        })
+        .unwrap();
+        assert!(bound.record.migrations.is_empty());
+        assert_eq!(
+            bound.note.as_deref(),
+            Some(format!("store {} adopted on root-commit", record.id).as_str())
+        );
+        let moved = KeyMaterial {
+            repo_name: "renamed".to_owned(),
+            ..unchanged
+        };
+        let bound = commit(Opened::Adopted {
+            record: record.clone(),
+            dir: dir.join("store"),
+            observed: moved,
+            criterion: MatchCriterion::RootCommit,
+        })
+        .unwrap();
+        assert_eq!(bound.record.migrations.len(), 1);
+        assert_eq!(bound.record.migrations[0].changed, vec!["repoName"]);
+        assert!(is_rfc3339(&bound.record.migrations[0].at));
+        assert_eq!(read_record(&dir.join("store")), Some(bound.record));
+    }
+
+    /// Fails by: observing nothing, a minted store that cannot be found again
+    /// by its marker, a moved store not followed, or a key-material change not
+    /// recorded as a migration (CLOUD-164).
+    #[test]
+    fn a_minted_store_is_found_again_followed_and_migrated() {
+        let dir = crate::scratch::scratch("store-lifecycle");
+        crate::testing::contain_state(&dir.join("state"));
+        let repo = repo_in(&dir, "proj");
+
+        let observed = observe(&repo).unwrap();
+        assert_eq!(observed.common_dir, git::common_dir(&repo).unwrap());
+        assert_eq!(observed.root_commits.len(), 1);
+        assert_eq!(observed.repo_name, state::derive_repo_name(&repo).unwrap());
+
+        let opened = resolve(&repo).unwrap();
+        assert!(matches!(opened, Opened::Fresh { .. }), "{opened:?}");
+        let minted = commit(opened).unwrap();
+        let id = minted.record.id.clone();
+        assert_eq!(minted.note, Some(format!("store {id} minted")));
+        assert_eq!(read_marker(&observed.common_dir), Some(id.clone()));
+
+        // Found again at its own location, by its marker, with nothing moved.
+        match resolve(&repo).unwrap() {
+            Opened::Existing {
+                record,
+                dir: found,
+                migrations,
+                ..
+            } => {
+                assert_eq!(record.id, id);
+                assert_eq!(found, minted.dir);
+                assert!(migrations.is_empty());
+            }
+            other => panic!("expected the existing store, got {other:?}"),
+        }
+
+        // A remote added is a migration, recorded and described by field name.
+        let config = repo.join(".git/config");
+        let mut text = std::fs::read_to_string(&config).unwrap();
+        text.push_str("[remote \"origin\"]\n\turl = https://h/o/r\n");
+        std::fs::write(&config, text).unwrap();
+        let opened = resolve(&repo).unwrap();
+        match &opened {
+            Opened::Existing { migrations, .. } => {
+                assert_eq!(migrations.len(), 1);
+                assert_eq!(migrations[0].changed, vec!["remotes"]);
+                assert_eq!(migrations[0].criterion, MatchCriterion::Marker);
+                assert!(is_rfc3339(&migrations[0].at));
+            }
+            other => panic!("expected a migrating existing store, got {other:?}"),
+        }
+        let migrated = commit(opened).unwrap();
+        assert_eq!(
+            migrated.note,
+            Some(format!("store {id} migrated (remotes)"))
+        );
+        assert_eq!(
+            read_record(&minted.dir).unwrap().key_material.remotes.len(),
+            1
+        );
+
+        // Moved out of its expected directory: followed by the marker.
+        let elsewhere = state::state_root().unwrap().join("elsewhere");
+        std::fs::rename(&minted.dir, &elsewhere).unwrap();
+        match resolve(&repo).unwrap() {
+            Opened::Adopted {
+                record,
+                dir: found,
+                criterion,
+                ..
+            } => {
+                assert_eq!(record.id, id);
+                assert_eq!(found, elsewhere);
+                assert_eq!(criterion, MatchCriterion::Marker);
+            }
+            other => panic!("expected the marker to follow the move, got {other:?}"),
+        }
+    }
+
+    /// Fails by: `state adopt` refusing the candidate it exists to bind, or
+    /// binding some store other than the one it was named.
+    #[test]
+    fn adopt_binds_the_candidate_or_exactly_the_named_store() {
+        let dir = crate::scratch::scratch("store-adopt-verb");
+        crate::testing::contain_state(&dir.join("state"));
+        let one = repo_in(&dir, "one");
+        let two = repo_in(&dir, "two");
+        let first = commit(resolve(&one).unwrap()).unwrap();
+        let second = commit(resolve(&two).unwrap()).unwrap();
+        let common = observe(&one).unwrap().common_dir;
+
+        // Candidate: only the common dir matches, so resolution refuses to
+        // bind and the verb binds it deliberately.
+        std::fs::remove_file(Path::new(&common).join(MARKER_FILE)).unwrap();
+        let mut record = read_record(&first.dir).unwrap();
+        record.key_material.root_commits = vec!["0".repeat(40)];
+        let moved = state::state_root().unwrap().join("aside");
+        std::fs::remove_dir_all(&first.dir).unwrap();
+        write_record(&moved, &record).unwrap();
+        // `two`'s store shares nothing with `one`, so it cannot be the match.
+        assert!(matches!(
+            resolve(&one).unwrap(),
+            Opened::Candidate { ref id, .. } if *id == record.id
+        ));
+        let mut err = Vec::new();
+        adopt_in(&one, None, &mut err).unwrap();
+        assert_eq!(read_marker(&common), Some(record.id.clone()));
+
+        // Named: `one` is bound to `two`'s store, and to no other — `one`'s own
+        // store is a readable record the lookup would otherwise land on.
+        let mut err = Vec::new();
+        adopt_in(&one, Some(second.record.id.as_str()), &mut err).unwrap();
+        assert_eq!(read_marker(&common), Some(second.record.id));
     }
 }
