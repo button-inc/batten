@@ -5384,10 +5384,13 @@ mod tests {
         enum Kind {
             Known,
         }
-        type Row = std::collections::BTreeMap<String, Kind>;
+        #[derive(serde::Deserialize)]
+        struct Row {
+            kind: Kind,
+        }
         assert!(
             toml::from_str::<Row>("kind = \"Known\"\n")
-                .is_ok_and(|row| matches!(row["kind"], Kind::Known))
+                .is_ok_and(|row| matches!(row.kind, Kind::Known))
         );
         let variant = toml::from_str::<Row>("kind = \"Unknown\"\n").err().unwrap();
         assert!(is_unknown_variant(&variant), "{variant}");

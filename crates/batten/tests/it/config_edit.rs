@@ -296,7 +296,8 @@ fn an_appended_row_lands_after_the_plain_tables() {
         fields: vec![(String::from("id"), Scalar::String(String::from("only")))],
     };
     for source in ["[a]\nx = 1\n", "[a]\nx = 1\n[b]\ny = 2\n"] {
-        let edited = config_edit::apply(Format::Toml, source, &[append.clone()]).unwrap();
+        let edited =
+            config_edit::apply(Format::Toml, source, std::slice::from_ref(&append)).unwrap();
         assert!(edited.starts_with(source), "{edited}");
         assert!(edited.ends_with("[[rule]]\nid = \"only\"\n"), "{edited}");
     }

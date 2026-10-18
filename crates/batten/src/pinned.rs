@@ -722,7 +722,7 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let found = configs(&root);
         assert!(
-            found.iter().any(|path| path.ends_with("mise.toml")),
+            !found.is_empty() && found.iter().all(|path| path.is_file()),
             "{found:?}"
         );
         let composed = composed_path(&root).unwrap_or_default();

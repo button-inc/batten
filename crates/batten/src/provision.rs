@@ -3184,6 +3184,7 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
     /// Each env row shape the loader refuses, and each it accepts.
     #[test]
     fn an_env_row_is_exactly_one_rule_for_one_variable() {
+        type Change<'a> = &'a dyn Fn(&mut ProvisionEnv);
         let mut list = unset_row("A");
         list.unset = false;
         list.prepend_list = vec!["/x".to_owned()];
@@ -3200,15 +3201,15 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
         for accepted in [&unset_row("A"), &list, &sourced, &credential_row("A")] {
             assert!(with(accepted, &|_| {}).is_ok(), "{accepted:?}");
         }
-        let refused: [(&ProvisionEnv, &dyn Fn(&mut ProvisionEnv)); 7] = [
+        let refused: [(&ProvisionEnv, Change); 7] = [
             (&unset_row("A"), &|row| {
-                row.prepend_list = vec!["/x".to_owned()]
+                row.prepend_list = vec!["/x".to_owned()];
             }),
             (&unset_row("A"), &|row| {
-                row.from_first_set = vec!["B".to_owned()]
+                row.from_first_set = vec!["B".to_owned()];
             }),
             (&unset_row("A"), &|row| {
-                row.reject_prefix = Some("p".to_owned())
+                row.reject_prefix = Some("p".to_owned());
             }),
             (&list, &|row| row.reject_prefix = Some("p".to_owned())),
             (&list, &|row| row.from_first_set = vec!["B".to_owned()]),
