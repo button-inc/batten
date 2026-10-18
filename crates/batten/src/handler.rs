@@ -2181,6 +2181,32 @@ mod tests {
         assert!(dispatched.advice().is_empty());
     }
 
+    /// Fails by: a set with two rows of one id admitted, or one of distinct ids
+    /// refused.
+    #[test]
+    fn a_handler_id_is_declared_once() {
+        let a = handler("a", "pre-tool", &["true"]);
+        let b = handler("b", "pre-tool", &["true"]);
+        assert!(validate(&[a.clone(), b]).is_ok());
+        assert!(validate(&[a.clone(), a]).is_err());
+    }
+
+    /// Fails by: a payload's bytes not reaching the handler's stdin, held in
+    /// memory or spooled.
+    #[test]
+    fn a_payload_writes_its_bytes_from_memory_or_its_spool() {
+        let mut sink = Vec::new();
+        Payload::from("in memory")
+            .write_to(&mut sink)
+            .expect("write");
+        assert_eq!(sink, b"in memory");
+        let spool = crate::scratch::scratch("handler-spool").join("payload");
+        std::fs::write(&spool, "spooled").expect("spool");
+        let mut sink = Vec::new();
+        Payload::Spooled(spool).write_to(&mut sink).expect("write");
+        assert_eq!(sink, b"spooled");
+    }
+
     /// Fails by: an owner admitted as a key with an empty or non-alphabetic
     /// prefix, or an empty or non-numeric number.
     #[test]

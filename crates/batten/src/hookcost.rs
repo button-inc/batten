@@ -533,58 +533,59 @@ pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windo
     // address (CLOUD-2145), so its class and routes are the ones already shown.
     let mut told: BTreeMap<String, (String, Vec<String>)> = BTreeMap::new();
     for (index, record) in stream.records.iter().enumerate() {
-        let findings =
-            match &record.event {
-                Event::SessionBoundary => {
-                    window.distinct = keys.len();
-                    keys.clear();
-                    told.clear();
-                    segments.push(std::mem::take(&mut window));
-                    continue;
+        let findings = match &record.event {
+            Event::SessionBoundary => {
+                window.distinct = keys.len();
+                keys.clear();
+                told.clear();
+                segments.push(std::mem::take(&mut window));
+                continue;
+            }
+            Event::HookOutput {
+                tokens, findings, ..
+            } => {
+                charge(&mut window, *tokens, findings);
+                remember(&mut told, findings, &[]);
+                findings
+            }
+            Event::Refused {
+                call,
+                tokens,
+                findings,
+                routes: offered,
+            } => {
+                charge(&mut window, *tokens, findings);
+                window.refusals += 1;
+                if findings.is_empty() {
+                    window.unlabelled_refusals += 1;
                 }
-                Event::HookOutput {
-                    tokens, findings, ..
-                } => {
-                    charge(&mut window, *tokens, findings);
-                    remember(&mut told, findings, &[]);
-                    findings
-                }
-                Event::Refused {
-                    call,
-                    tokens,
-                    findings,
-                    routes: offered,
-                } => {
-                    charge(&mut window, *tokens, findings);
-                    window.refusals += 1;
-                    if findings.is_empty() {
-                        window.unlabelled_refusals += 1;
+                remember(&mut told, findings, offered);
+                let (findings_seen, offered_seen) = recalled(&told, findings, offered);
+                // From `index` itself: that record is this refusal, never a call.
+                let next = stream
+                    .records
+                    .iter()
+                    .skip(index)
+                    .find_map(|later| match &later.event {
+                        Event::ToolCall { name, input, .. } => Some((name.as_str(), input)),
+                        _ => None,
+                    });
+                let bucket = follow(
+                    &findings_seen,
+                    &offered_seen,
+                    calls.get(call.as_str()).copied(),
+                    next,
+                    routes,
+                );
+                for (slot, candidate) in window.buckets.iter_mut().zip(Follow::ALL) {
+                    if candidate == bucket {
+                        *slot += 1;
                     }
-                    remember(&mut told, findings, offered);
-                    let (findings_seen, offered_seen) = recalled(&told, findings, offered);
-                    let next =
-                        stream.records.iter().skip(index + 1).find_map(|later| {
-                            match &later.event {
-                                Event::ToolCall { name, input, .. } => Some((name.as_str(), input)),
-                                _ => None,
-                            }
-                        });
-                    let bucket = follow(
-                        &findings_seen,
-                        &offered_seen,
-                        calls.get(call.as_str()).copied(),
-                        next,
-                        routes,
-                    );
-                    for (slot, candidate) in window.buckets.iter_mut().zip(Follow::ALL) {
-                        if candidate == bucket {
-                            *slot += 1;
-                        }
-                    }
-                    findings
                 }
-                _ => continue,
-            };
+                findings
+            }
+            _ => continue,
+        };
         keys.extend(findings.iter().map(|(key, _)| gate_name(key).to_owned()));
     }
     window.distinct = keys.len();
@@ -1097,6 +1098,68 @@ mod tests {
             "hook output 30 token(s), 25% of 120 session token(s), 1 producer(s), 0 repeat(s)";
         assert_eq!(reading.line(), line);
         assert_eq!(crate::output::Line::line(&reading), line);
+    }
+
+    /// Fails by: a producer's tokens or emissions not summed, or a repeat at
+    /// exactly the declared ceiling refused.
+    #[test]
+    fn a_producer_sums_its_emissions_and_a_ceiling_admits_its_own_count() {
+        let reading = measure(&session(
+            vec![emitted(1, "a", "1111", 5), emitted(2, "a", "1111", 7)],
+            400,
+        ));
+        assert_eq!(
+            reading.per_hook.get("a"),
+            Some(&Cost {
+                tokens: 12,
+                emissions: 2
+            })
+        );
+        let twice = Ceiling {
+            max_tokens: usize::MAX,
+            max_repeats: 2,
+        };
+        assert!(judge(&reading, Some(&twice)).is_empty());
+        assert_eq!(judge(&reading, Some(&Ceiling::once())).len(), 1);
+    }
+
+    /// Fails by: an emission charged to the wrong class, or its tokens not added.
+    #[test]
+    fn an_emission_is_charged_by_the_strongest_arm_it_carries() {
+        let mut window = Window::default();
+        let full = [("k".to_owned(), crate::refusal::Arm::Full)];
+        let pointer = [("k".to_owned(), crate::refusal::Arm::Pointer)];
+        charge(&mut window, 3, &[]);
+        charge(&mut window, 3, &[]);
+        charge(&mut window, 5, &full);
+        charge(&mut window, 7, &pointer);
+        assert_eq!(
+            (
+                window.unlabelled_tokens,
+                window.full_tokens,
+                window.pointer_tokens
+            ),
+            (6, 5, 7)
+        );
+    }
+
+    /// Fails by: the lookup hop counted as a remedy taken, a route whose
+    /// command opens with a placeholder matching every call, or a history read
+    /// not recognised.
+    #[test]
+    fn a_route_is_taken_only_by_the_call_it_names() {
+        assert!(!takes(
+            "run batten policy explain '<id>'",
+            "Bash",
+            "batten policy explain x"
+        ));
+        assert!(takes(
+            "run batten policy explain '<id>' --history",
+            "Bash",
+            "batten policy explain x --history"
+        ));
+        assert!(!takes("run <command>", "Bash", "anything at all"));
+        assert!(takes("run mise run land", "Bash", "cd x && mise run land"));
     }
 
     /// Fails by: a non-`Bash` call's `command` field read as the command it ran.

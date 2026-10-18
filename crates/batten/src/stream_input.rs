@@ -464,6 +464,39 @@ mod tests {
         );
     }
 
+    /// Fails by: a result array's leaves not streamed, or a spilled leaf filed
+    /// under the wrong index or with the wrong length.
+    #[test]
+    fn a_leaf_inside_a_result_array_spills_under_its_index() {
+        let dir = scratch("array");
+        let big = "q".repeat(40_000);
+        let sent = serde_json::json!({"tool_response": ["small", big]}).to_string();
+        let count = |text: &str| text.matches('q').count() as u64;
+        let read = super::read(sent.as_bytes(), &dir, 1000, count).expect("reads");
+        assert_eq!(read.spilled.len(), 1, "{:?}", read.spilled);
+        assert_eq!(read.spilled[0].pointer, "/1");
+        assert_eq!(read.spilled[0].bytes, 40_000);
+        assert_eq!(
+            read.value["tool_response"],
+            serde_json::json!(["small", marker("/1")])
+        );
+        assert_eq!(marker("/1"), "\u{0}batten-spilled:/1\u{0}");
+    }
+
+    /// Fails by: a leaf of exactly the kept length spilled once the bound is
+    /// passed — a leaf that short is kept whole whatever the result's total.
+    #[test]
+    fn a_leaf_no_longer_than_the_kept_length_is_never_spilled() {
+        let dir = scratch("keep");
+        let count = |text: &str| text.matches('q').count() as u64;
+        let at = "q".repeat(crate::capture::LEAF_KEEP_BYTES);
+        let kept = super::read(payload(&at).as_bytes(), &dir, 0, count).expect("reads");
+        assert!(kept.spilled.is_empty(), "{:?}", kept.spilled);
+        let past = "q".repeat(crate::capture::LEAF_KEEP_BYTES + 1);
+        let over = super::read(payload(&past).as_bytes(), &dir, 0, count).expect("reads");
+        assert_eq!(over.spilled.len(), 1);
+    }
+
     /// Fails by: a result whose count reaches the bound exactly treated as past
     /// it — the bound is the most a kept result may count.
     #[test]

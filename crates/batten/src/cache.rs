@@ -749,6 +749,23 @@ mod tests {
         assert_eq!(Some(identity), stamp(&file).map(|stamp| stamp.fields));
     }
 
+    /// Fails by: a partition name admitted at another length or with a
+    /// character that is not hex, or a head read that stops short of the
+    /// declared bound.
+    #[test]
+    fn a_partition_is_sixteen_hex_digits_and_a_head_is_the_bound() {
+        assert!(is_partition("0123456789abcdef"));
+        assert!(!is_partition("0123456789abcdeg"));
+        assert!(!is_partition("0123456789abcde"));
+        let dir = scratch("head");
+        let image = dir.join("image");
+        std::fs::write(&image, vec![0_u8; 70_000]).expect("write");
+        assert_eq!(
+            read_head(&image).expect("a head").len(),
+            usize::try_from(HEAD_BYTES).expect("fits")
+        );
+    }
+
     /// Fails by: an entry's write time that is not the clock's, which would
     /// make every entry older than any file it vouches for.
     #[test]

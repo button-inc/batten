@@ -466,6 +466,29 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).expect("read"), "h 1\nh 2\n");
     }
 
+    /// Fails by: a first append to an empty store probing a tail it does not
+    /// have, or the mode-taking append writing nothing.
+    #[test]
+    fn a_first_append_writes_one_whole_line() {
+        let dir = scratch("first-append");
+        let lines = dir.join("lines");
+        std::fs::write(&lines, "").expect("an empty store");
+        append_whole_lines(&lines, "h 1").expect("append");
+        assert_eq!(std::fs::read_to_string(&lines).expect("read"), "h 1\n");
+        let ledger = dir.join("ledger");
+        append_with_mode(&ledger, "one", 0o600).expect("append");
+        assert_eq!(std::fs::read_to_string(&ledger).expect("read"), "one\n");
+    }
+
+    /// Fails by: a creation that failed for any reason but the name being
+    /// taken reported as "someone else created it".
+    #[test]
+    fn an_exclusive_create_that_cannot_write_is_an_error() {
+        let dir = scratch("exclusive-missing");
+        let refused = create_exclusive(&dir.join("absent").join("mark"), "x");
+        assert!(refused.is_err(), "{refused:?}");
+    }
+
     /// Fails by: a bare name synced through the empty path, which opens nothing.
     #[test]
     fn a_bare_name_lives_in_the_current_directory() {

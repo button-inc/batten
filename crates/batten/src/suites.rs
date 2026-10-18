@@ -646,6 +646,20 @@ mod tests {
         assert_eq!(text, nextest_table(&rows));
     }
 
+    /// Fails by: a corpus whose suites all took no time dividing by its zero
+    /// total, or a corpus written anywhere but its declared path.
+    #[test]
+    fn a_zero_total_has_no_share_and_the_corpus_has_one_home() {
+        let rows = vec![Row {
+            suite: "tests/instant.bats".to_owned(),
+            seconds: 0.0,
+        }];
+        let text = render(&rows);
+        assert!(text.contains("| 0.0 | 0.0% |"), "{text}");
+        let root = Path::new("/r");
+        assert_eq!(corpus_path(root), root.join(CORPUS));
+    }
+
     /// Fails by: a shared entry covering a path it does not name — a neighbour
     /// sharing its prefix, or a directory entry's sibling — or missing one it does.
     #[test]

@@ -302,11 +302,30 @@ mod tests {
                 fidelity: Fidelity::DecodedContent.as_str().to_owned(),
                 seen_at: None,
                 class: None,
-                digest: Some(stored.digest),
+                digest: Some(stored.digest.clone()),
                 absent: None,
             },
         )
         .unwrap();
+        // DECOYS THAT DO NOT MENTION THE KEY, one of which sorts ahead of the
+        // record in handle order, so containment is what selects it.
+        let decoys: Vec<String> = (0..8)
+            .map(|pad| {
+                crate::capture::store(
+                    &root,
+                    Stream::Response,
+                    format!(r#"{{"pad": {pad}, "state": "wrong"}}"#).as_bytes(),
+                )
+                .unwrap()
+                .digest
+            })
+            .collect();
+        let listed = crate::capture::list(&root).unwrap();
+        let first = listed.iter().find(|capture| capture.stream == "response");
+        assert!(
+            first.is_some_and(|capture| decoys.contains(&capture.digest)),
+            "the fixture puts a decoy first in handle order"
+        );
         let row = |id: &str, key: &str, key_at: Option<&str>| CaptureQuery {
             id: id.to_owned(),
             key: key.to_owned(),

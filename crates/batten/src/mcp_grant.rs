@@ -388,4 +388,40 @@ mod tests {
         assert!(!names_verb("mcp__box2__verb", "box", "verb"));
         assert!(!names_verb("Bash(git:*)", "box", "verb"));
     }
+
+    /// Fails by: a report printing anything but the verdict's own token, or a
+    /// settings path beneath the root printed with the root.
+    #[test]
+    fn a_report_names_its_verdict_and_a_relative_settings_path() {
+        let tokens = [Verdict::Allow, Verdict::Deny, Verdict::Silence].map(Verdict::as_str);
+        assert_eq!(tokens, ["allow", "deny", "silence"]);
+        let config = McpConfig::default();
+        let inputs = Inputs {
+            config: &config,
+            repo_root: Path::new("/repo"),
+            settings: Path::new("/repo/.claude/settings.json"),
+            wiring: None,
+        };
+        assert_eq!(inputs.settings_label(), ".claude/settings.json");
+    }
+
+    /// Fails by: an arm's string rules not read, a non-string rule read as one,
+    /// or an unreadable file read as a file that states nothing.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn an_arm_is_its_string_rules_and_an_unread_file_is_none() {
+        let dir = crate::scratch::scratch("mcp-grant-rules");
+        let settings = dir.join("settings.json");
+        std::fs::write(
+            &settings,
+            r#"{"permissions": {"deny": ["mcp__a__x", 1, "mcp__b"]}}"#,
+        )
+        .expect("write the settings");
+        assert_eq!(
+            rules_in(&settings, "deny"),
+            Some(vec!["mcp__a__x".to_owned(), "mcp__b".to_owned()])
+        );
+        assert_eq!(rules_in(&settings, "allow"), Some(Vec::new()));
+        assert_eq!(rules_in(&dir.join("absent.json"), "deny"), None);
+    }
 }

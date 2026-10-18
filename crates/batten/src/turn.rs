@@ -530,6 +530,24 @@ mod tests {
         );
     }
 
+    /// Fails by: a prompt sent as text blocks not opening a turn.
+    #[test]
+    fn a_prompt_of_text_blocks_opens_a_turn() {
+        let blocks = r#"{"type":"user","message":{"content":[{"type":"text","text":"go"}]}}"#;
+        assert_eq!(turn(&format!("{blocks}\n{CITES}\n")).turns, 1);
+    }
+
+    /// Fails by: a string or boolean row field read as no row.
+    #[test]
+    fn a_direct_call_names_its_row_by_any_scalar() {
+        for (input, key) in [(r#""ABC-9""#, "ABC-9"), ("true", "true")] {
+            let call = format!(
+                r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"t","input":{{"id":{input}}}}}]}}}}"#
+            );
+            assert_eq!(turn(&format!("{PROMPT}\n{call}\n")).calls[0].key, key);
+        }
+    }
+
     /// Fails by: a `call` word that does not follow `mcp` read as the route.
     #[test]
     fn the_route_is_the_words_after_mcp_call() {

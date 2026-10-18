@@ -371,6 +371,26 @@ mod tests {
         assert_eq!(describe_cached(&dir, None).unwrap(), uncached);
     }
 
+    /// Fails by: no entry written where the state directory files one, or an
+    /// entry that answers for a surface whose file has since changed.
+    #[test]
+    fn the_cache_is_written_and_never_outlives_its_surface() {
+        let dir = repo("cache-written", "version = 1\n");
+        crate::testing::contain_state(&dir.join("state"));
+        describe_cached(&dir, None).unwrap();
+        let entry = cache_path(&state_dir(&dir).unwrap()).unwrap();
+        assert!(entry.is_file(), "{}", entry.display());
+        fs::write(
+            dir.join("batten.toml"),
+            "version = 1\nstrictness = \"strict\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            describe_cached(&dir, None).unwrap(),
+            describe(&dir, None).unwrap()
+        );
+    }
+
     /// A scratch repository whose `batten.toml` is `text`.
     fn repo(name: &str, text: &str) -> PathBuf {
         let dir = std::env::temp_dir().join("batten-epoch-tests").join(name);
