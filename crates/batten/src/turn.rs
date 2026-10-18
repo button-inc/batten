@@ -505,4 +505,55 @@ mod tests {
         assert!(!rendered.contains("SENTINEL"));
         assert_eq!(rendered, "turns\t1\ncited\ttrue\n");
     }
+
+    /// Fails by: a call line's columns joined wrong, a forged name or key kept,
+    /// or a clean one dropped to `-`.
+    #[test]
+    fn each_call_is_one_line_of_tab_separated_columns() {
+        let read = Turn {
+            turns: 1,
+            cited: false,
+            calls: vec![
+                Call {
+                    name: "save_issue".to_owned(),
+                    key: "ABC-1".to_owned(),
+                },
+                Call {
+                    name: "forged\tname".to_owned(),
+                    key: String::new(),
+                },
+            ],
+        };
+        assert_eq!(
+            render(&read, &|key| format!("col-{key}")),
+            "turns\t1\ncited\tfalse\ncall\tsave_issue\tABC-1\tcol-ABC-1\ncall\t-\t-\t-\n"
+        );
+    }
+
+    /// Fails by: a `call` word that does not follow `mcp` read as the route.
+    #[test]
+    fn the_route_is_the_words_after_mcp_call() {
+        assert_eq!(
+            mediated_call("batten call x; batten mcp call Linear get_issue").as_deref(),
+            Some("mcp call Linear get_issue")
+        );
+    }
+
+    /// Fails by: a key that is not one path component reaching the store, where
+    /// a file planted at the name it would form is then read.
+    #[test]
+    fn no_unsafe_key_reaches_the_store() {
+        let dir = std::env::temp_dir().join(format!("batten-turn-unsafe-{}", std::process::id()));
+        let store = dir.join("batten-receipts");
+        std::fs::create_dir_all(store.join("r.a")).unwrap();
+        for planted in ["r.", "r..", "r...", "r.a/b", "r.a\\b", "r.ok"] {
+            std::fs::write(store.join(planted), "planted\n").unwrap();
+        }
+        assert_eq!(column(Some(&dir), "r", 1, "ok"), "planted");
+        for key in ["", ".", "..", "a/b", "a\\b"] {
+            assert_eq!(column(Some(&dir), "r", 1, key), "-", "{key:?}");
+        }
+        assert_eq!(column(Some(&dir), "r", 0, "ok"), "-");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

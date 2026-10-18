@@ -273,4 +273,62 @@ mod tests {
         let parsed = node(r#"{"labels": []}"#);
         assert_eq!(Reduction::Token.apply(&parsed.at("nothing")), None);
     }
+
+    /// Fails by: a declared path that resolves nothing, or resolves to a text
+    /// that does not parse, and a reduction answering a row nobody declared.
+    #[test]
+    fn each_declared_row_reduces_the_response_its_key_selects() {
+        use crate::capture::{CallRow, Fidelity, Stream};
+        use crate::facts::CaptureQuery;
+        let dir = crate::scratch::scratch("captured-reduce");
+        crate::testing::contain_state(&dir.join("state"));
+        let root = dir.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        let stored = crate::capture::store(
+            &root,
+            Stream::Response,
+            br#"{"id": "CLOUD-1", "state": "todo"}"#,
+        )
+        .unwrap();
+        crate::capture::record_call(
+            &root,
+            &CallRow {
+                order: 0,
+                session: "s".to_owned(),
+                source: "response".to_owned(),
+                host: "claude-code".to_owned(),
+                tool: "get_issue".to_owned(),
+                event: "post-tool".to_owned(),
+                fidelity: Fidelity::DecodedContent.as_str().to_owned(),
+                seen_at: None,
+                class: None,
+                digest: Some(stored.digest),
+                absent: None,
+            },
+        )
+        .unwrap();
+        let row = |id: &str, key: &str, key_at: Option<&str>| CaptureQuery {
+            id: id.to_owned(),
+            key: key.to_owned(),
+            key_at: key_at.map(str::to_owned),
+            node: "state".to_owned(),
+            reduce: Reduction::Token,
+        };
+        let found = super::reduce(
+            &root,
+            &[
+                row("by-path", "CLOUD-1", Some("id")),
+                row("by-text", "CLOUD-1", None),
+                row("unmatched", "CLOUD-9", Some("id")),
+            ],
+        )
+        .expect("the store is readable");
+        assert_eq!(
+            found,
+            std::collections::BTreeMap::from([
+                ("by-path".to_owned(), serde_json::json!("todo")),
+                ("by-text".to_owned(), serde_json::json!("todo")),
+            ])
+        );
+    }
 }

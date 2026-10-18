@@ -378,4 +378,52 @@ mod tests {
         // every substitution it exists to refuse.
         assert!(matches!(refresh(Path::new("."), &[]), Look::CouldNotLook));
     }
+
+    /// A one-task set whose record serializes to exactly `len` bytes over
+    /// `configs`, the task name padding it out.
+    fn sized(configs: &[PathBuf], len: usize) -> BTreeMap<String, Option<Vec<String>>> {
+        let body = |name: String| {
+            serde_json::to_string(&Record {
+                schema: SCHEMA,
+                generator: format!("{}@{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
+                key: crate::pinned::key(configs).unwrap(),
+                configs: configs.to_vec(),
+                tasks: BTreeMap::from([(name, None)]),
+            })
+            .unwrap()
+            .len()
+        };
+        let name = "t".repeat(len - body(String::new()));
+        assert_eq!(
+            body(name.clone()),
+            len,
+            "the padding is one byte a character"
+        );
+        BTreeMap::from([(name, None)])
+    }
+
+    /// Fails by: a record not read back, one about a manifest that has since
+    /// moved still answering, or the size cap applied anywhere but at exactly
+    /// [`RECORD_MAX`] on both the write and the read.
+    #[test]
+    fn a_record_answers_up_to_its_cap_until_its_manifest_moves() {
+        let dir = crate::scratch::scratch("taskset-record");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        let manifest = dir.join("mise.toml");
+        std::fs::write(&manifest, "[tasks]\nlint = \"cargo clippy\"\n").unwrap();
+        let configs = vec![manifest.clone()];
+        let at_cap = sized(&configs, usize::try_from(RECORD_MAX).unwrap());
+        assert!(
+            record(&dir, &configs, &at_cap),
+            "a record at the cap is written"
+        );
+        assert!(matches!(cached(&dir), Look::Is(read) if read == at_cap));
+        let over = sized(&configs, usize::try_from(RECORD_MAX).unwrap() + 1);
+        assert!(
+            !record(&dir, &configs, &over),
+            "one byte past it is refused"
+        );
+        std::fs::write(&manifest, "[tasks]\n").unwrap();
+        assert!(matches!(cached(&dir), Look::CouldNotLook));
+    }
 }

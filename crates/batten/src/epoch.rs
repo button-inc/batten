@@ -343,6 +343,34 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// Fails by: a key that ignores the stamps or the paths, so an entry written
+    /// for one surface answers for another.
+    #[test]
+    fn the_cache_key_names_each_path_and_its_stamp() {
+        let stamp = |fields: &str| crate::cache::Stamp {
+            fields: fields.to_owned(),
+            changed: std::time::Duration::ZERO,
+        };
+        let tracked = vec!["batten.toml".to_owned()];
+        let key = cache_key(&tracked, &[stamp("stat:a")]);
+        assert_ne!(key, cache_key(&tracked, &[stamp("stat:b")]));
+        assert_ne!(
+            key,
+            cache_key(&["other.toml".to_owned()], &[stamp("stat:a")])
+        );
+    }
+
+    /// Fails by: the cached path answering anything but what an uncached read
+    /// of the same surface answers, on the miss that writes and the read after.
+    #[test]
+    fn the_cached_epoch_is_the_uncached_one() {
+        let dir = repo("cached", "version = 1\n");
+        crate::testing::contain_state(&dir.join("state"));
+        let uncached = describe(&dir, None).unwrap();
+        assert_eq!(describe_cached(&dir, None).unwrap(), uncached);
+        assert_eq!(describe_cached(&dir, None).unwrap(), uncached);
+    }
+
     /// A scratch repository whose `batten.toml` is `text`.
     fn repo(name: &str, text: &str) -> PathBuf {
         let dir = std::env::temp_dir().join("batten-epoch-tests").join(name);

@@ -462,4 +462,34 @@ mod tests {
         );
         assert_eq!(resolve(&elsewhere, "guarded/thing"), None);
     }
+
+    /// Fails by: a span that is not a `batten` command, or an empty one, read as
+    /// the remedy's invocation, or prose outside the span read into it.
+    #[test]
+    fn a_remedy_names_the_words_of_its_first_nonempty_batten_span() {
+        assert_eq!(
+            invocation("run `mise run x`, not `batten`, but `batten check a-rule <id>` instead"),
+            Some(vec![
+                "check".to_owned(),
+                "a-rule".to_owned(),
+                "<id>".to_owned()
+            ])
+        );
+        assert_eq!(invocation("run `mise run x` instead"), None);
+    }
+
+    /// Fails by: a declared command refused, an undeclared one admitted, or a
+    /// trailing word admitted that is neither a flag, a placeholder nor a rule.
+    #[test]
+    fn a_remedy_resolves_against_the_surface_and_the_rule_table() {
+        let rules = vec!["a-rule".to_owned()];
+        let check = |text: &str| validate_remedies([("k".to_owned(), text)], &rules);
+        assert!(check("run `batten check a-rule --json` or `batten check <id>`").is_ok());
+        assert!(check("prose with no command").is_ok());
+        assert!(check("run `batten nonesuch`").is_err());
+        assert!(check("run `batten check another-rule`").is_err());
+        assert!(check("run `batten check <>`").is_err());
+        assert!(check("run `batten check <id`").is_err());
+        assert!(check("run `batten check id>`").is_err());
+    }
 }

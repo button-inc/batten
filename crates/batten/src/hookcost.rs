@@ -1077,6 +1077,72 @@ mod tests {
         assert_eq!(reading.line().lines().count(), 1);
     }
 
+    /// Fails by: the summary line, or the data channel's copy of it, carrying
+    /// anything but the reading's own counts and share.
+    #[test]
+    fn the_summary_line_is_the_readings_counts() {
+        let reading = Reading {
+            tokens: 30,
+            session_tokens: 120,
+            per_hook: BTreeMap::from([(
+                "h".to_owned(),
+                Cost {
+                    tokens: 30,
+                    emissions: 2,
+                },
+            )]),
+            repeats: Vec::new(),
+        };
+        let line =
+            "hook output 30 token(s), 25% of 120 session token(s), 1 producer(s), 0 repeat(s)";
+        assert_eq!(reading.line(), line);
+        assert_eq!(crate::output::Line::line(&reading), line);
+    }
+
+    /// Fails by: a non-`Bash` call's `command` field read as the command it ran.
+    #[test]
+    fn only_a_bash_call_runs_its_command_field() {
+        let input = serde_json::json!({"command": "ls"});
+        assert_eq!(command_of("Bash", &input), "ls");
+        assert_eq!(command_of("Other", &input), input.to_string());
+    }
+
+    /// Fails by: a recalled class written over a key that carries its own, into
+    /// a key with no class field, or a gate the window never saw in full recalled.
+    #[test]
+    fn a_recall_fills_only_an_empty_class_and_adds_each_route_once() {
+        let told = BTreeMap::from([(
+            "gate".to_owned(),
+            ("told-class".to_owned(), vec!["run a".to_owned()]),
+        )]);
+        let findings = [
+            ("gate\u{1f}\u{1f}x".to_owned(), crate::refusal::Arm::Pointer),
+            (
+                "gate\u{1f}own\u{1f}x".to_owned(),
+                crate::refusal::Arm::Pointer,
+            ),
+            ("gate".to_owned(), crate::refusal::Arm::Pointer),
+            (
+                "other\u{1f}\u{1f}x".to_owned(),
+                crate::refusal::Arm::Pointer,
+            ),
+        ];
+        let (keys, routes) = recalled(&told, &findings, &["run a".to_owned()]);
+        let keys: Vec<&str> = keys.iter().map(|(key, _)| key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "gate\u{1f}told-class\u{1f}x",
+                "gate\u{1f}own\u{1f}x",
+                "gate",
+                "other\u{1f}\u{1f}x"
+            ]
+        );
+        assert_eq!(routes, ["run a"]);
+        let (_, routes) = recalled(&told, &findings[..1], &[]);
+        assert_eq!(routes, ["run a"], "a recalled gate's routes are offered");
+    }
+
     impl Ceiling {
         /// A ceiling that refuses only a repeat, so a case can vary one predicate.
         fn once() -> Ceiling {

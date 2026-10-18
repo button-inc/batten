@@ -600,4 +600,87 @@ mod tests {
         let text = render(&[]);
         assert!(text.contains("- suites: 0"), "{text}");
     }
+
+    /// Fails by: a report that names an untracked suite, carries no suite or is
+    /// absent derived anyway, or a sound one refused.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn the_corpus_derives_only_from_a_report_over_tracked_suites() {
+        let root = crate::scratch::scratch("suites-derive");
+        let live = tracked(&["tests/live.bats"]);
+        assert!(derive(&root, &live).is_err(), "no report");
+        let report = root.join(REPORT);
+        std::fs::create_dir_all(report.parent().expect("a parent")).expect("dir");
+        std::fs::write(&report, "<testsuites>\n</testsuites>\n").expect("write");
+        assert!(derive(&root, &live).is_err(), "no suite in it");
+        std::fs::write(&report, "<testsuite name=\"live.bats\" time=\"2.0\">\n").expect("write");
+        let (rows, text) = derive(&root, &live).expect("a tracked suite derives");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(text, render(&rows));
+        assert!(
+            derive(&root, &tracked(&["tests/other.bats"])).is_err(),
+            "stale"
+        );
+    }
+
+    /// Fails by: a nextest report that is absent or caseless derived anyway, or
+    /// a sound one answering anything but its rows and their table.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn the_nextest_table_derives_from_the_profiles_report() {
+        let root = crate::scratch::scratch("suites-derive-nextest");
+        assert!(derive_nextest(&root, "default").is_err(), "no report");
+        let report = root.join(format!(
+            "{NEXTEST_REPORT_DIR}/default/{NEXTEST_REPORT_FILE}"
+        ));
+        std::fs::create_dir_all(report.parent().expect("a parent")).expect("dir");
+        std::fs::write(&report, "<testsuites/>\n").expect("write");
+        assert!(derive_nextest(&root, "default").is_err(), "no case in it");
+        std::fs::write(
+            &report,
+            "<testcase name=\"cli::a\" classname=\"batten::it\" time=\"1.5\"/>\n",
+        )
+        .expect("write");
+        let (rows, text) = derive_nextest(&root, "default").expect("derives");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(text, nextest_table(&rows));
+    }
+
+    /// Fails by: a shared entry covering a path it does not name — a neighbour
+    /// sharing its prefix, or a directory entry's sibling — or missing one it does.
+    #[test]
+    fn a_shared_entry_covers_its_own_path_or_its_directory() {
+        let shared = vec!["mise.toml".to_owned(), "tests/helpers/".to_owned()];
+        assert!(is_shared("mise.toml", &shared));
+        assert!(is_shared("tests/helpers/a.bash", &shared));
+        assert!(!is_shared("mise.toml.bak", &shared));
+        assert!(!is_shared("tests/helpers-old/a.bash", &shared));
+        assert!(!is_shared("tests/a.bats", &shared));
+    }
+
+    /// Fails by: a selection that narrows past a path it cannot reason about, or
+    /// widens over one a declared subject or a changed suite already answers.
+    #[test]
+    fn a_selection_narrows_only_over_suites_and_declared_subjects() {
+        let suites = tracked(&["tests/a.bats", "tests/b.bats", "tests/c.bats"]);
+        let subjects = BTreeMap::from([("tests/b.bats".to_owned(), tracked(&["mise-tasks/b"]))]);
+        let shared = vec!["mise.toml".to_owned()];
+        let pick = |changed: &[&str]| select(&tracked(changed), &suites, &subjects, &shared);
+        let narrow = pick(&["tests/a.bats", "tests/gone.bats", "mise-tasks/b"]);
+        assert_eq!(narrow.widened, None);
+        assert_eq!(narrow.suites, vec!["tests/a.bats", "tests/b.bats"]);
+        for widening in [
+            &[][..],
+            &["mise.toml"],
+            &["crates/x.rs"],
+            &["mise-tasks/undeclared"],
+            &["tests/a.txt"],
+        ] {
+            let wide = pick(widening);
+            assert!(wide.widened.is_some(), "{widening:?}");
+            assert_eq!(wide.suites.len(), 3, "{widening:?}");
+        }
+        let undeclared = select(&tracked(&["tests/a.bats"]), &suites, &subjects, &[]);
+        assert!(undeclared.widened.is_some(), "no shared set declared");
+    }
 }

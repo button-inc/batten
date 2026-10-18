@@ -67,7 +67,6 @@ fn literals(expr: &syn::Expr, out: &mut Vec<String>) {
         }
         syn::Expr::Reference(inner) => literals(&inner.expr, out),
         syn::Expr::Paren(inner) => literals(&inner.expr, out),
-        syn::Expr::Group(inner) => literals(&inner.expr, out),
         syn::Expr::Cast(inner) => literals(&inner.expr, out),
         syn::Expr::Array(array) => {
             for element in &array.elems {
@@ -229,6 +228,16 @@ mod tests {
         assert_eq!(
             arguments(r#"fn f() { query(&repo, &["rev-list", "--count"]); }"#),
             vec!["rev-list".to_owned(), "--count".to_owned()]
+        );
+    }
+
+    /// Fails by: a literal behind parentheses, a cast or inside a tuple not
+    /// reaching the argument tier.
+    #[test]
+    fn a_literal_is_read_through_parens_casts_and_tuples() {
+        assert_eq!(
+            arguments(r#"fn f() { g(("a"), "b" as &str, ("c", "d")); }"#),
+            vec!["a", "b", "c", "d"]
         );
     }
 

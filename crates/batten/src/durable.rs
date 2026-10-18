@@ -245,10 +245,7 @@ pub fn replace_as(
     persist: Persist,
 ) -> std::io::Result<()> {
     let target = resolve(path.as_ref());
-    let directory = match target.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
-        _ => PathBuf::from("."),
-    };
+    let directory = directory_of(&target);
     let temp = temp_beside(&target);
     let written = write_temp_as(&temp, &target, contents.as_ref(), persist)
         .and_then(|()| std::fs::rename(&temp, &target));
@@ -292,10 +289,7 @@ pub fn create_exclusive_as(
     contents: impl AsRef<[u8]>,
     persist: Persist,
 ) -> std::io::Result<bool> {
-    let directory = match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
-        _ => PathBuf::from("."),
-    };
+    let directory = directory_of(path);
     let temp = temp_beside(path);
     let linked = write_temp_as(&temp, path, contents.as_ref(), persist)
         .and_then(|()| std::fs::hard_link(&temp, path));
@@ -345,6 +339,15 @@ pub(crate) fn open_handle(path: &Path) -> std::io::Result<std::fs::File> {
     #[cfg(not(windows))]
     {
         std::fs::File::open(path)
+    }
+}
+
+/// The directory whose entry a write to `path` creates: its parent, or `.` for a
+/// bare name, whose parent is the empty path no directory handle opens.
+fn directory_of(path: &Path) -> PathBuf {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
     }
 }
 
@@ -461,6 +464,24 @@ mod tests {
         append_whole_lines(&path, "h 1").expect("append");
         append_whole_lines(&path, "h 2").expect("append");
         assert_eq!(std::fs::read_to_string(&path).expect("read"), "h 1\nh 2\n");
+    }
+
+    /// Fails by: a bare name synced through the empty path, which opens nothing.
+    #[test]
+    fn a_bare_name_lives_in_the_current_directory() {
+        assert_eq!(directory_of(Path::new("file")), PathBuf::from("."));
+        assert_eq!(directory_of(Path::new("dir/file")), PathBuf::from("dir"));
+    }
+
+    /// Fails by: a regular file resolved as a link would be, so a write lands
+    /// on its canonical spelling rather than the path the caller named.
+    #[test]
+    fn only_a_symlink_is_resolved() {
+        let dir = scratch("resolve");
+        std::fs::create_dir_all(dir.join("sub")).expect("sub");
+        std::fs::write(dir.join("file"), "x").expect("file");
+        let named = dir.join("sub").join("..").join("file");
+        assert_eq!(resolve(&named), named);
     }
 
     /// An empty mark is made once: a second creation is `AlreadyExists`, which a

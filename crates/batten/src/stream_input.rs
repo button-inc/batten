@@ -443,4 +443,37 @@ mod tests {
             "a leaf past the cap is never read back"
         );
     }
+
+    /// Fails by: a marker inside an array left in place, or a string that is not
+    /// the marker overwritten with the leaf.
+    #[test]
+    fn only_the_marker_is_restored_wherever_it_sits() {
+        let dir = scratch("restore-array");
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("leaf.txt");
+        std::fs::write(&path, "restored").expect("leaf");
+        let value = serde_json::json!({"a": [marker("/p"), "kept"]});
+        let spilled = [Spilled {
+            pointer: "/p".to_owned(),
+            path,
+            bytes: 8,
+        }];
+        assert_eq!(
+            restore(&value, &spilled),
+            serde_json::json!({"a": ["restored", "kept"]})
+        );
+    }
+
+    /// Fails by: a result whose count reaches the bound exactly treated as past
+    /// it — the bound is the most a kept result may count.
+    #[test]
+    fn a_result_counting_exactly_the_bound_is_kept() {
+        let dir = scratch("at-bound");
+        let text = "q".repeat(40_000);
+        let count = |text: &str| text.matches('q').count() as u64;
+        let kept = super::read(payload(&text).as_bytes(), &dir, 40_000, count).expect("reads");
+        assert!(kept.spilled.is_empty(), "{:?}", kept.spilled);
+        let over = super::read(payload(&text).as_bytes(), &dir, 39_999, count).expect("reads");
+        assert_eq!(over.spilled.len(), 1);
+    }
 }
