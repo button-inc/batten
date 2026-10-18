@@ -287,10 +287,10 @@ fn an_appended_row_lands_after_every_table() {
     assert_eq!(edited, format!("{ROWS}\n[[rule]]\nid = \"third\"\n"));
 }
 
-/// The same append into a document whose only table is the root's first one:
-/// the row still lands after it rather than before it.
+/// The same append into documents holding only plain tables, one or two: the
+/// row lands after the last of them rather than before.
 #[test]
-fn an_appended_row_lands_after_a_lone_table() {
+fn an_appended_row_lands_after_the_plain_tables() {
     let append = Edit::AppendRow {
         array: String::from("rule"),
         fields: vec![(String::from("id"), Scalar::String(String::from("only")))],

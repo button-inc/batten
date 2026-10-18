@@ -1422,8 +1422,8 @@ mod tests {
         );
     }
 
-    /// A key file that cannot be read is refused, never read as absent: an
-    /// absent one is minted, and a mint over an unreadable one is a re-mint.
+    /// A key file that cannot be read is refused rather than read as absent,
+    /// because the caller mints over an absent one.
     #[test]
     fn an_unreadable_key_file_is_refused_rather_than_read_as_absent() {
         let path = scratch("unreadable");
@@ -1456,6 +1456,7 @@ mod tests {
     /// and re-minted orphans the generation the ledger still names.
     #[test]
     fn a_repositorys_ledger_records_its_mint_and_names_a_lost_generation() {
+        crate::testing::contain_state(&crate::scratch::scratch("secrets-data"));
         let root = crate::scratch::scratch("secrets-repository-root");
         let key = key_path(&root).unwrap();
         assert!(

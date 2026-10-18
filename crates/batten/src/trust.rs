@@ -5855,6 +5855,7 @@ mod tests {
     /// verified against its digest, and noted by its ref and short commit.
     #[test]
     fn a_recorded_pin_answers_its_own_ref_and_refuses_tampering() {
+        crate::testing::contain_state(&crate::scratch::scratch("trust-data"));
         let dir = crate::scratch::scratch("trust-pin-roundtrip");
         let path = Pin::path(&dir).expect("a state directory resolves");
         assert!(path.ends_with(PIN_FILE), "{}", path.display());
@@ -5903,6 +5904,7 @@ mod tests {
     /// it and the pinned config declares the fallback.
     #[test]
     fn an_unreachable_ref_is_served_from_its_pin_only_where_both_permit() {
+        crate::testing::contain_state(&crate::scratch::scratch("trust-data"));
         let dir = crate::scratch::scratch("trust-pin-load");
         crate::gitwrite::init_on_main(&dir).unwrap();
         let reference = "origin/nowhere";
