@@ -1678,14 +1678,6 @@ fn spawn_code(program: &str, args: &[&str], root: &Path) -> i32 {
 mod tests {
     use super::*;
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("batten-sbom-unit-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     #[test]
     fn record_and_conformance_are_two_producers_never_one_run() {
         let both = Options {
@@ -1737,7 +1729,7 @@ mod tests {
     /// The most frequent holder line wins, whatever its sort order.
     #[test]
     fn the_most_frequent_holder_line_is_the_crate_s() {
-        let dir = scratch("frequent");
+        let dir = crate::scratch::scratch("sbom-frequent");
         std::fs::write(
             dir.join("a.rs"),
             "// Copyright 2020 Zed\n// Copyright 2020 Alpha\n",
@@ -1750,7 +1742,7 @@ mod tests {
 
     #[test]
     fn a_workspace_with_no_licence_file_states_none() {
-        let dir = scratch("no-licence");
+        let dir = crate::scratch::scratch("sbom-no-licence");
         assert_eq!(workspace_copyright(&dir), NONE);
         std::fs::write(dir.join("LICENSE"), "Copyright 2024 Holder\n").unwrap();
         assert_eq!(workspace_copyright(&dir), "Copyright 2024 Holder");
@@ -1759,7 +1751,7 @@ mod tests {
 
     #[test]
     fn an_empty_version_or_author_is_not_one() {
-        let dir = scratch("empty-fields");
+        let dir = crate::scratch::scratch("sbom-empty-fields");
         std::fs::write(dir.join("Cargo.toml"), "version = \"\"\nauthors = [\"\"]\n").unwrap();
         assert!(manifest_version(&dir).is_err());
         assert_eq!(workspace_supplier(&dir), NOASSERTION);

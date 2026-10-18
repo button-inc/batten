@@ -4428,6 +4428,8 @@ mod lap_tests {
 }
 
 #[cfg(test)]
+// Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
     /// EVERY STEP HAS A DISTINCT, STABLE PHASE TOKEN.
@@ -4862,9 +4864,7 @@ mod tests {
     /// tip does not reach is behind.
     #[test]
     fn a_range_with_no_merge_is_linear_and_an_older_head_is_behind() {
-        let root = std::env::temp_dir().join(format!("batten-land-linear-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let root = crate::scratch::scratch("land-linear");
         crate::gitwrite::init_on_main(&root).unwrap();
         let head = || crate::git::resolve_ref(&root, "HEAD").unwrap().unwrap();
         crate::gitwrite::commit_paths(&root, &[], "one").unwrap();
@@ -4889,9 +4889,7 @@ mod tests {
     /// line of the right kind admits.
     #[test]
     fn a_remote_is_admitted_only_by_this_clone_s_own_record_of_it() {
-        let root = std::env::temp_dir().join(format!("batten-land-admit-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let root = crate::scratch::scratch("land-admit");
         crate::gitwrite::init_on_main(&root).unwrap();
         let tip = || crate::git::resolve_ref(&root, "HEAD").unwrap().unwrap();
         crate::gitwrite::commit_paths(&root, &[], "base").unwrap();
@@ -5026,6 +5024,50 @@ mod tests {
         assert!(!super::FanIn::from_workflow_path("").declared());
     }
 
+    /// The writer, the reader and the clear share one path per branch, and a
+    /// read receipt pays its run.
+    #[test]
+    fn a_red_head_record_is_written_read_and_cleared_at_one_path() {
+        let root = crate::scratch::scratch("land-red-head");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        let branch = "work/red";
+        assert!(matches!(
+            super::read_red_head(&root, branch),
+            crate::facts::Look::IsNot
+        ));
+        let reading = super::RedReading {
+            failed: vec![(101, String::from("windows"))],
+            running: vec![String::from("musl")],
+        };
+        super::record_red_head(&root, branch, "abc", &reading).unwrap();
+        let crate::facts::Look::Is(record) = super::read_red_head(&root, branch) else {
+            panic!("the record reads back");
+        };
+        assert_eq!(record.head, "abc");
+        assert_eq!(
+            record.owed(),
+            Some(vec![
+                String::from("windows job 101"),
+                String::from("musl still running")
+            ])
+        );
+        let path = super::red_head_path(&root, branch).unwrap();
+        std::fs::write(
+            path.parent()
+                .unwrap()
+                .join(format!("{}.101", super::CHECK_LOG_READ)),
+            "read",
+        )
+        .unwrap();
+        let crate::facts::Look::Is(paid) = super::read_red_head(&root, branch) else {
+            panic!("the record reads back");
+        };
+        assert_eq!(paid.owed(), None, "a read failure owes nothing");
+        assert!(super::clear_red_head(&root, branch).unwrap());
+        assert!(!super::clear_red_head(&root, branch).unwrap());
+        assert_eq!(super::red_head_owed(&root, branch), None);
+    }
+
     #[test]
     fn a_red_head_slug_is_injective_over_slash_and_percent() {
         assert_eq!(super::red_head_slug("feature/a%b"), "feature%2Fa%25b");
@@ -5066,9 +5108,7 @@ mod tests {
     /// Only a claimed `false` relaxes the line; absence keeps it.
     #[test]
     fn only_a_claimed_false_relaxes_the_linear_history_rule() {
-        let root = std::env::temp_dir().join(format!("batten-land-line-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let root = crate::scratch::scratch("land-line");
         assert!(super::requires_line(&root).unwrap(), "no batten.toml");
         let config = |body: &str| {
             std::fs::write(root.join("batten.toml"), format!("version = 1\n{body}")).unwrap();

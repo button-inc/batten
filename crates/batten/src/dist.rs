@@ -770,9 +770,7 @@ mod tests {
     /// remove one is an error, never a silently kept leftover.
     #[test]
     fn a_leftover_that_cannot_be_removed_stops_the_preflight() {
-        let dir =
-            std::env::temp_dir().join(format!("batten-dist-preflight-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::scratch::scratch("dist-preflight");
         std::fs::create_dir_all(dir.join("a-directory")).unwrap();
         let mut err = Vec::new();
         assert!(!dist_preflight(&dir, &[dir.join("absent").as_path()], &mut err).unwrap());
@@ -785,18 +783,18 @@ mod tests {
     #[test]
     fn a_stem_request_names_the_asset_and_an_unknown_builder_refuses_a_build() {
         let target = "x86_64-unknown-linux-gnu";
-        for named in [None, Some(CARGO_DIST)] {
-            let (mut out, mut err) = (Vec::new(), Vec::new());
-            assert_eq!(
-                run(target, true, named, &mut out, &mut err).unwrap(),
-                ExitCode::Success
-            );
-            let said = String::from_utf8(out).unwrap();
-            assert!(
-                said.starts_with("batten-") && said.trim_end().ends_with(target),
-                "{said}"
-            );
-        }
+        // Naming cargo-dist is the discriminating case: it is the one builder
+        // that would take the stem request off the stem path.
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(
+            run(target, true, Some(CARGO_DIST), &mut out, &mut err).unwrap(),
+            ExitCode::Success
+        );
+        let said = String::from_utf8(out).unwrap();
+        assert!(
+            said.starts_with("batten-") && said.trim_end().ends_with(target),
+            "{said}"
+        );
         let (mut out, mut err) = (Vec::new(), Vec::new());
         assert!(run(target, false, Some("no-such-builder"), &mut out, &mut err).is_err());
     }

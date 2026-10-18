@@ -820,6 +820,8 @@ pub fn claims_from(value: &serde_json::Value) -> Result<Vec<Claim>> {
 }
 
 #[cfg(test)]
+// Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

@@ -1818,14 +1818,6 @@ fn drop_set(
 mod tests {
     use super::*;
 
-    fn scratch(name: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("batten-gitwrite-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap_or_else(|err| panic!("fixture dir: {err}"));
-        dir
-    }
-
     /// Every line of ours, then each line of theirs ours lacks, never a blank.
     #[test]
     fn a_union_keeps_ours_then_appends_what_only_theirs_carries() {
@@ -1836,7 +1828,7 @@ mod tests {
 
     #[test]
     fn only_a_literal_path_given_merge_union_is_a_union_path() {
-        let dir = scratch("union");
+        let dir = crate::scratch::scratch("gitwrite-union");
         std::fs::write(
             dir.join(".gitattributes"),
             "CHANGELOG.md merge=union\n*.lock merge=union\n# notes.md merge=union\nother.txt text\n",
@@ -1865,7 +1857,7 @@ mod tests {
     /// The executable bit, and nothing else of the mode, decides the kind.
     #[test]
     fn a_blob_is_executable_by_its_bit_alone() {
-        let dir = scratch("kind");
+        let dir = crate::scratch::scratch("gitwrite-kind");
         let path = dir.join("tool");
         std::fs::write(&path, "x").unwrap_or_else(|err| panic!("fixture file: {err}"));
         let kind = || {
@@ -1886,7 +1878,7 @@ mod tests {
     /// A seeded fixture commits the directory's files, never its own store.
     #[test]
     fn a_seed_commits_the_directory_as_it_stands() {
-        let dir = scratch("seed");
+        let dir = crate::scratch::scratch("gitwrite-seed");
         std::fs::write(dir.join("a.txt"), "a\n").unwrap_or_else(|err| panic!("fixture: {err}"));
         seed(&dir).unwrap_or_else(|err| panic!("seed: {err}"));
         assert_eq!(
@@ -1900,7 +1892,7 @@ mod tests {
     /// the one before it.
     #[test]
     fn a_fixture_is_on_main_and_each_commit_carries_its_parent() {
-        let dir = scratch("refs");
+        let dir = crate::scratch::scratch("gitwrite-refs");
         init_on_main(&dir).unwrap_or_else(|err| panic!("init: {err}"));
         assert_eq!(
             std::fs::read_to_string(dir.join(".git/HEAD")).unwrap_or_default(),

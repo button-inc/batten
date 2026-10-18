@@ -272,10 +272,8 @@ pub fn interval_for(configured: u64, floor: Option<f64>) -> f64 {
         // the interval this poll was told to use — the one direction this
         // function must never take, since `Config::interval` is the caller's
         // floor and nothing here is entitled to lower it.
-        //
-        // A floor at or below the configured interval leaves it, which `max`
-        // states without a comparison of its own.
-        Some(floor) if floor.is_finite() => floor.max(configured).min(MAX_FLOOR.max(configured)),
+        // A floor at or below the configured interval leaves it.
+        Some(floor) if floor.is_finite() => floor.clamp(configured, MAX_FLOOR.max(configured)),
         _ => configured,
     }
 }
@@ -738,14 +736,14 @@ fn render(findings: &[checks_green::Finding]) -> String {
 /// detector rather than a source of spurious movement.
 #[must_use]
 pub fn read(config: &Config, etag: Option<&str>) -> Option<crate::rest::Answer> {
-    read_with(config, etag, crate::rest::get)
+    read_with(config, etag, &crate::rest::get)
 }
 
 /// [`read`] over `get`, which answers one API-relative path.
 fn read_with(
     config: &Config,
     etag: Option<&str>,
-    get: impl Fn(&str, Option<&str>) -> Option<crate::rest::Answer>,
+    get: crate::forge::Transport<'_>,
 ) -> Option<crate::rest::Answer> {
     let mut answer = get(&page(config, 1), etag)?;
     // A `304` carries no body and a refusal carries an error document; neither is
@@ -939,17 +937,6 @@ mod tests {
         }
     }
 
-    fn answered(status: u16, body: String) -> Option<crate::rest::Answer> {
-        Some(crate::rest::Answer {
-            status,
-            etag: Some(String::from("\"v1\"")),
-            poll_floor: None,
-            backoff: None,
-            body,
-            headers: std::collections::BTreeMap::new(),
-        })
-    }
-
     /// One page of `count` check runs.
     fn runs(count: usize) -> String {
         let rows: Vec<serde_json::Value> = (0..count)
@@ -977,9 +964,9 @@ mod tests {
                 .borrow_mut()
                 .push((path.to_owned(), etag.map(str::to_owned)));
             let count = if asked.borrow().len() == 1 { full } else { 3 };
-            answered(200, runs(count))
+            Some(answer(200, Some("\"v1\""), &runs(count)))
         };
-        let answer = read_with(&config_for("o/r"), Some("\"v0\""), get).expect("an answer");
+        let answer = read_with(&config_for("o/r"), Some("\"v0\""), &get).expect("an answer");
         assert_eq!(check_runs_in(&answer.body).len(), full + 3);
         assert_eq!(
             asked.borrow().clone(),
@@ -998,21 +985,21 @@ mod tests {
         let asked = std::cell::Cell::new(0_u32);
         let get = |_: &str, _: Option<&str>| {
             asked.set(asked.get() + 1);
-            answered(200, runs(full))
+            Some(answer(200, Some("\"v1\""), &runs(full)))
         };
-        read_with(&config_for("o/r"), None, get).expect("an answer");
+        read_with(&config_for("o/r"), None, &get).expect("an answer");
         assert_eq!(asked.get(), MAX_PAGES);
         let asked = std::cell::Cell::new(0_u32);
         let unchanged = |_: &str, _: Option<&str>| {
             asked.set(asked.get() + 1);
-            answered(304, String::new())
+            Some(answer(304, Some("\"v1\""), ""))
         };
-        let answer = read_with(&config_for("o/r"), Some("\"v1\""), unchanged).expect("an answer");
+        let answer = read_with(&config_for("o/r"), Some("\"v1\""), &unchanged).expect("an answer");
         assert_eq!(
             (answer.status, answer.body.as_str(), asked.get()),
             (304, "", 1)
         );
-        assert!(read_with(&config_for("o/r"), None, |_: &str, _: Option<&str>| None).is_none());
+        assert!(read_with(&config_for("o/r"), None, &|_: &str, _: Option<&str>| None).is_none());
     }
 
     #[test]
@@ -1065,7 +1052,7 @@ mod tests {
         assert!((poll.absorb(None, 4) - 4.0).abs() < f64::EPSILON);
         assert!((poll.absorb(None, 4) - 4.0).abs() < f64::EPSILON);
         assert_eq!(poll.unanswered_from_the_start(), 2);
-        let answer = answered(200, runs(2)).expect("an answer");
+        let answer = answer(200, None, &runs(2));
         poll.absorb(Some(&answer), 4);
         assert_eq!(poll.runs().len(), 2);
         assert_eq!(poll.unanswered_from_the_start(), 0);

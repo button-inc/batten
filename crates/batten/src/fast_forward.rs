@@ -732,6 +732,10 @@ mod tests {
         );
     }
 
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "every caller hands the forge's answer on as the Option a read returns"
+    )]
     fn reading(status: u16, body: &str) -> Option<crate::rest::Answer> {
         Some(crate::rest::Answer {
             status,

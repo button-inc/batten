@@ -996,13 +996,13 @@ mod tests {
         );
     }
 
-    fn run(row: serde_json::Value) -> Run {
-        Run::of(&row)
+    fn run(row: &serde_json::Value) -> Run {
+        Run::of(row)
     }
 
     /// A run on `branch`, created at `created`, concluded `conclusion`.
     fn graded(branch: &str, created: &str, conclusion: &str) -> Run {
-        run(serde_json::json!({
+        run(&serde_json::json!({
             "id": 1, "head_branch": branch, "status": "completed",
             "conclusion": conclusion, "created_at": created,
         }))
@@ -1010,23 +1010,9 @@ mod tests {
 
     #[test]
     fn a_landing_is_attributed_its_pre_merge_runs_and_recorded_only_when_it_diverged() {
-        let landed = vec![
-            (
-                String::from("7"),
-                String::from("a"),
-                String::from("2026-01-02"),
-            ),
-            (
-                String::from("8"),
-                String::from("b"),
-                String::from("2026-01-02"),
-            ),
-            (
-                String::from("9"),
-                String::from("c"),
-                String::from("2026-01-02"),
-            ),
-        ];
+        let landed: Vec<(String, String, String)> = [("7", "a"), ("8", "b"), ("9", "c")]
+            .map(|(number, branch)| (number.into(), branch.into(), "2026-01-02".into()))
+            .to_vec();
         let runs = vec![
             graded("a", "2026-01-01", "failure"),
             graded("a", "2026-01-02", "success"),
@@ -1048,7 +1034,7 @@ mod tests {
     #[test]
     fn a_cancellation_is_its_lifetime_and_an_undated_one_is_skipped() {
         let cancelled = |started: &str, updated: &str| {
-            run(serde_json::json!({
+            run(&serde_json::json!({
                 "id": 5, "head_branch": "a", "status": "completed", "conclusion": "cancelled",
                 "run_started_at": started, "updated_at": updated,
             }))
@@ -1057,7 +1043,7 @@ mod tests {
             cancelled("2026-01-01T00:00:00Z", "2026-01-01T00:01:40Z"),
             cancelled("", "2026-01-01T00:01:40Z"),
             cancelled("2026-01-01T00:00:00Z", ""),
-            run(serde_json::json!({
+            run(&serde_json::json!({
                 "id": 6, "status": "completed", "conclusion": "failure",
                 "run_started_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:05:00Z",
             })),
@@ -1073,7 +1059,7 @@ mod tests {
     #[test]
     fn peak_concurrency_counts_overlap_and_skips_undated_and_skipped_runs() {
         let span = |started: &str, updated: &str, conclusion: &str| {
-            run(serde_json::json!({
+            run(&serde_json::json!({
                 "status": "completed", "conclusion": conclusion,
                 "run_started_at": started, "updated_at": updated,
             }))

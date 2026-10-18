@@ -648,14 +648,6 @@ mod tests {
         }
     }
 
-    /// THE MEASURED SHAPE, and the reason `winner` exists (CLOUD-1722).
-    ///
-    /// GitHub registers the path-filtered COPY of a workflow a few seconds after
-    /// the copy that runs, and the copy that does not apply concludes `skipped`.
-    /// Ordering purely by `started_at` therefore hands the name to the twin that
-    /// judged nothing. Taken from `2ce05b82`: `ci` succeeded at 02:34:02 and was
-    /// overruled by a `skipped` twin at 02:34:03, six required checks read as "no
-    /// verdict", and no branch in the repository could land for six hours.
     #[test]
     fn a_roster_error_says_which_set_is_empty() {
         assert_eq!(
@@ -713,6 +705,14 @@ mod tests {
         );
     }
 
+    /// THE MEASURED SHAPE, and the reason `winner` exists (CLOUD-1722).
+    ///
+    /// GitHub registers the path-filtered COPY of a workflow a few seconds after
+    /// the copy that runs, and the copy that does not apply concludes `skipped`.
+    /// Ordering purely by `started_at` therefore hands the name to the twin that
+    /// judged nothing. Taken from `2ce05b82`: `ci` succeeded at 02:34:02 and was
+    /// overruled by a `skipped` twin at 02:34:03, six required checks read as "no
+    /// verdict", and no branch in the repository could land for six hours.
     #[test]
     fn a_later_skipped_twin_does_not_erase_a_verdict() {
         let mut runs = green_set();

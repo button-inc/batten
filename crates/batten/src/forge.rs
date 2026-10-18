@@ -391,7 +391,7 @@ mod tests {
         assert_eq!(of(r#"{"state": "open", "draft": true}"#), PullState::Draft);
         assert_eq!(of(r#"{"draft": true}"#), PullState::Draft);
         assert_eq!(of(r#"{"state": "open", "draft": false}"#), PullState::Open);
-        assert_eq!(of(r#"{}"#), PullState::Unknown);
+        assert_eq!(of("{}"), PullState::Unknown);
         assert_eq!(of(r#"{"state": "locked"}"#), PullState::Unknown);
     }
 

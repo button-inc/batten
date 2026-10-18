@@ -948,8 +948,7 @@ mod tests {
 
     #[test]
     fn a_minted_receipt_is_the_pointer_lines_at_the_branch_s_name() {
-        let receipts = std::env::temp_dir().join(format!("batten-bot-mint-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&receipts);
+        let receipts = crate::scratch::scratch("bot-mint");
         let attested = Attested {
             key: "CLOUD-700".to_owned(),
             login: "renovate[bot]".to_owned(),

@@ -761,6 +761,8 @@ pub fn reconcile(compared: &Compared, commits: &[Commit]) -> Verdict {
 }
 
 #[cfg(test)]
+// Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -1093,16 +1095,9 @@ mod tests {
     /// still RUN, and each reports its failure as could-not-look, never a pass.
     const NO_TOOLCHAIN: &str = "batten-no-such-toolchain";
 
-    fn scratch(name: &str) -> PathBuf {
-        let at = std::env::temp_dir().join(format!("batten-semver-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&at);
-        std::fs::create_dir_all(&at).expect("scratch directory");
-        at
-    }
-
     #[test]
     fn a_comparison_that_ran_reports_its_code_on_the_rev_route() {
-        let at = scratch("rev");
+        let at = crate::scratch::scratch("semver-rev");
         let compared = against_rev(&at, NO_TOOLCHAIN, "batten", "HEAD", "patch")
             .expect("the analyser was spawned, so the run is reported");
         assert_ne!(compared.code, Some(0));
@@ -1112,7 +1107,7 @@ mod tests {
 
     #[test]
     fn a_current_doc_build_that_fails_is_could_not_look() {
-        let at = scratch("current");
+        let at = crate::scratch::scratch("semver-current");
         let refused = current_rustdoc(&at, NO_TOOLCHAIN, "batten", &at)
             .expect_err("no toolchain builds no document");
         assert!(
@@ -1124,15 +1119,20 @@ mod tests {
 
     #[test]
     fn a_baseline_doc_build_that_fails_is_could_not_look() {
-        let at = scratch("baseline");
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let refused = baseline_rustdoc(root, NO_TOOLCHAIN, "batten", "HEAD", &at)
+        // A one-commit repository: the baseline is materialized before the
+        // build is asked, and a whole checkout would be thirty megabytes of it.
+        let root = crate::scratch::scratch("semver-baseline-root");
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"batten\"\n")
+            .expect("a manifest");
+        crate::gitwrite::commit_paths(&root, &[String::from("Cargo.toml")], "baseline")
+            .expect("a baseline commit");
+        let at = crate::scratch::scratch("semver-baseline");
+        let refused = baseline_rustdoc(&root, NO_TOOLCHAIN, "batten", "HEAD", &at)
             .expect_err("no toolchain builds no document");
         assert!(
             refused.starts_with("the baseline doc build failed"),
             "{refused}"
         );
-        let _ = std::fs::remove_dir_all(&at);
     }
 
     #[test]

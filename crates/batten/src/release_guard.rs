@@ -386,6 +386,10 @@ pub fn run_settings(
 mod tests {
     use super::*;
 
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "every caller hands the forge's answer on as the Option a read returns"
+    )]
     fn answer(status: u16, body: &str) -> Option<crate::rest::Answer> {
         Some(crate::rest::Answer {
             status,

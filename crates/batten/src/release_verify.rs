@@ -431,6 +431,10 @@ mod tests {
         assert_eq!(base64_decode("+/+/").unwrap(), b"\xfb\xff\xbf");
     }
 
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "every caller hands the forge's answer on as the Option a read returns"
+    )]
     fn answer(status: u16, body: &str) -> Option<crate::rest::Answer> {
         Some(crate::rest::Answer {
             status,

@@ -1524,6 +1524,10 @@ pub fn run_pin(
 mod tests {
     use super::*;
 
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "every caller hands the forge's answer on as the Option a read returns"
+    )]
     fn answer(status: u16, body: &str) -> Option<crate::rest::Answer> {
         Some(crate::rest::Answer {
             status,
@@ -1676,7 +1680,7 @@ mod tests {
             Ok(String::from("abc"))
         );
         assert!(sha_in(answer(422, r#"{"sha":"abc"}"#), "the blob", "/sha").is_err());
-        assert!(sha_in(answer(200, r#"{}"#), "the blob", "/sha").is_err());
+        assert!(sha_in(answer(200, "{}"), "the blob", "/sha").is_err());
         assert!(sha_in(None, "the blob", "/sha").is_err());
     }
 

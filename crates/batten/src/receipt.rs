@@ -2455,8 +2455,7 @@ mod tests {
 
     #[test]
     fn a_store_finds_each_check_s_record_under_its_subject() {
-        let git_dir = std::env::temp_dir().join(format!("batten-sourced-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&git_dir);
+        let git_dir = crate::scratch::scratch("sourced");
         let store = SourcedStore {
             git_dir: git_dir.clone(),
             subjects: BTreeMap::from([(String::from("open"), String::from("CLOUD-1"))]),
@@ -3302,9 +3301,7 @@ mod tests {
     /// and an age nobody could measure is never a refusal.
     #[test]
     fn a_receipt_is_older_than_its_bound_only_strictly_past_it() {
-        let dir = std::env::temp_dir().join(format!("batten-older-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::scratch("older");
         let path = dir.join("receipt");
         std::fs::write(&path, "x").unwrap();
         let written = std::fs::metadata(&path).unwrap().modified().unwrap();
@@ -3396,9 +3393,7 @@ mod tests {
     /// has none.
     #[test]
     fn a_delta_subject_is_the_branch_patch_identity() {
-        let root = std::env::temp_dir().join(format!("batten-delta-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let root = crate::scratch::scratch("delta");
         crate::gitwrite::init_on_main(&root).unwrap();
         let head = || git::resolve_ref(&root, "HEAD").unwrap().unwrap();
         crate::gitwrite::commit_paths(&root, &[], "base").unwrap();
