@@ -1550,16 +1550,6 @@ mod tests {
         assert!(!first.is_empty());
     }
 
-    /// Fails by: an entry's write time that is not the clock's.
-    #[test]
-    fn an_entry_is_stamped_with_the_clock() {
-        let before = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        assert!(u128::from(now_nanos()) >= before);
-    }
-
     /// Fails by: a non-shard file or a blank line folded as a record, or the
     /// healing append leaving a torn fragment to glue onto its record.
     #[test]

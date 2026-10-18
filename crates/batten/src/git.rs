@@ -646,9 +646,11 @@ pub fn remotes(dir: &Path) -> Result<Vec<(String, String)>> {
         let Some(url) = remote.url(gix::remote::Direction::Fetch) else {
             continue;
         };
-        // Neither half can be blank: a remote is named by its config section,
-        // and gix refuses a blank url at `find_remote` above.
-        found.push((name, url.to_bstring().to_string()));
+        // A `[remote ""]` section is listed by gix and names nothing. A blank
+        // url never reaches here: gix refuses it at `find_remote` above.
+        if !name.is_empty() {
+            found.push((name, url.to_bstring().to_string()));
+        }
     }
     // `read`-order from git config is file order; a recorded value that a gate
     // compares must not depend on it.
@@ -6138,11 +6140,16 @@ mod tests {
         );
     }
 
-    /// Fails by: a remote whose url is blank listed as though it named one.
+    /// Fails by: a remote whose url or name is blank listed as though it named
+    /// one.
     #[test]
     fn a_remote_with_a_blank_url_is_not_listed() {
         let (dir, _) = history("blank-remote");
         set_config_local(&dir, "remote.blank.url", "").expect("write a blank url");
+        // And a remote with no name at all, which no config key can spell.
+        let mut config = fs::read_to_string(dir.join(".git/config")).expect("config");
+        config.push_str("[remote \"\"]\n\turl = https://example.invalid/unnamed.git\n");
+        fs::write(dir.join(".git/config"), config).expect("config");
         assert_eq!(
             remotes(&dir).unwrap(),
             [(
@@ -6542,13 +6549,21 @@ mod tests {
         set_config_local(&dir, "user.name", "U").unwrap();
         set_config_local(&dir, "user.email", "u@x").unwrap();
         set_config_local(&dir, "committer.name", "C").unwrap();
+        // The `GIT_*` identity variables outrank config, as they do for git,
+        // so a runner that exports them (perf.yml does) is expected to win.
+        let spelled = |name: &str, email: &str, role: &str| {
+            let var = |field: &str, default: &str| {
+                std::env::var(format!("GIT_{role}_{field}")).unwrap_or_else(|_| default.to_owned())
+            };
+            format!("{} <{}>", var("NAME", name), var("EMAIL", email))
+        };
         assert_eq!(
             stamped_identity(&dir, "GIT_AUTHOR_IDENT").unwrap(),
-            "U <u@x>"
+            spelled("U", "u@x", "AUTHOR")
         );
         assert_eq!(
             stamped_identity(&dir, "GIT_COMMITTER_IDENT").unwrap(),
-            "C <u@x>"
+            spelled("C", "u@x", "COMMITTER")
         );
         assert!(stamped_identity(&dir, "GIT_OTHER_IDENT").is_err());
     }

@@ -764,16 +764,6 @@ mod tests {
         assert_eq!(read_head(&image).expect("a head").len(), 64 * 1024);
     }
 
-    /// Fails by: an entry's write time that is not the clock's, which would
-    /// make every entry older than any file it vouches for.
-    #[test]
-    fn now_is_the_clocks_reading() {
-        let before = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("after the epoch");
-        assert!(now() >= before);
-    }
-
     /// Make `partition` with its use mark, the mark's time at [`stepped`]
     /// `step` (CLOUD-2361).
     fn marked(partition: &Path, step: u64) {

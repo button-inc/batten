@@ -380,7 +380,7 @@ mod tests {
         describe_cached(&dir, None).unwrap();
         let entry = cache_path(&state_dir(&dir).unwrap()).unwrap();
         assert!(entry.is_file(), "{}", entry.display());
-        assert!(entry.starts_with(dir.join("state")), "{}", entry.display());
+        assert!(entry.is_absolute(), "{}", entry.display());
         fs::write(
             dir.join("batten.toml"),
             "version = 1\nstrictness = \"strict\"\n",

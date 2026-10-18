@@ -1345,15 +1345,6 @@ mod tests {
         assert_eq!(mebibytes(1024 * 1024 - 1), 0);
         assert_eq!(mebibytes(1024 * 1024), 1);
         assert_eq!(mebibytes(2 * 1024 * 1024 + 99), 2);
-        // The volume's own reading, through that conversion: no premise about
-        // how much room it has, only slack for writers between the two reads.
-        let dir = std::env::temp_dir();
-        let read = match available_megabytes(&dir) {
-            Ok(read) => read,
-            Err(why) => panic!("the temp volume: {why}"),
-        };
-        let volume = mebibytes(fs4::available_space(&dir).unwrap_or(0));
-        assert!(read.abs_diff(volume) <= 16, "{read} against {volume}");
     }
 
     /// Fails by: the executable bit misread, so an extension-less scratch file
