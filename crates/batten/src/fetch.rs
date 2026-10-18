@@ -887,6 +887,67 @@ mod tests {
         );
     }
 
+    /// Run [`tunnel`] against a loopback proxy that reads the CONNECT and
+    /// answers `reply`, then hangs up.
+    fn through_proxy(reply: Vec<u8>) -> std::result::Result<(), String> {
+        use std::io::{Read as _, Write as _};
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|err| panic!("bind: {err}"));
+        let at = listener
+            .local_addr()
+            .unwrap_or_else(|err| panic!("address: {err}"));
+        let proxy = std::thread::spawn(move || {
+            let (mut conn, _) = listener
+                .accept()
+                .unwrap_or_else(|err| panic!("accept: {err}"));
+            let (mut asked, mut byte) = (Vec::new(), [0_u8; 1]);
+            while !asked.ends_with(b"\r\n\r\n") && conn.read(&mut byte).unwrap_or(0) == 1 {
+                asked.push(byte[0]);
+            }
+            let _ = conn.write_all(&reply);
+            asked
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap_or_else(|err| panic!("runtime: {err}"));
+        let outcome = runtime.block_on(async {
+            let stream = tokio::net::TcpStream::connect(at)
+                .await
+                .unwrap_or_else(|err| panic!("connect: {err}"));
+            tunnel(stream, "example.com:443")
+                .await
+                .map(|_| ())
+                .map_err(|err| err.to_string())
+        });
+        let asked = proxy
+            .join()
+            .unwrap_or_else(|_| panic!("the proxy panicked"));
+        assert!(asked.starts_with(b"CONNECT example.com:443 HTTP/1.1\r\n"));
+        outcome
+    }
+
+    /// A head of exactly `len` bytes answering `status`.
+    fn head_of(status: &str, len: usize) -> Vec<u8> {
+        let open = format!("HTTP/1.1 {status} OK\r\nX-Pad: ");
+        let pad = len - open.len() - 4;
+        format!("{open}{}\r\n\r\n", "a".repeat(pad)).into_bytes()
+    }
+
+    /// A tunnel opens on a 200 alone, and a proxy that refuses, hangs up, or
+    /// sends a head past the limit is an error naming which.
+    #[test]
+    fn a_tunnel_opens_only_on_a_bounded_200() {
+        assert_eq!(through_proxy(head_of("200", 40)), Ok(()));
+        let refused = through_proxy(head_of("403", 40)).unwrap_err();
+        assert!(refused.contains("status 403"), "{refused}");
+        let closed = through_proxy(b"HTTP/1.1 200".to_vec()).unwrap_err();
+        assert!(closed.contains("closed"), "{closed}");
+        assert_eq!(through_proxy(head_of("200", PROXY_HEAD_LIMIT + 1)), Ok(()));
+        let long = through_proxy(head_of("200", PROXY_HEAD_LIMIT + 2)).unwrap_err();
+        assert!(long.contains("no usable"), "{long}");
+    }
+
     #[test]
     fn a_header_is_the_first_value_sent_under_its_name() {
         let response = Response {

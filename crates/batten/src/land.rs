@@ -5066,6 +5066,63 @@ mod tests {
         assert!(super::clear_red_head(&root, branch).unwrap());
         assert!(!super::clear_red_head(&root, branch).unwrap());
         assert_eq!(super::red_head_owed(&root, branch), None);
+        // A record that is there and will not read or remove is no absence.
+        let blocked = "work/blocked";
+        std::fs::create_dir_all(super::red_head_path(&root, blocked).unwrap()).unwrap();
+        assert!(matches!(
+            super::read_red_head(&root, blocked),
+            crate::facts::Look::CouldNotLook
+        ));
+        assert!(super::clear_red_head(&root, blocked).is_err());
+    }
+
+    /// A failing entry gate refuses unless it is advisory, and a passing one
+    /// never does.
+    #[test]
+    fn only_a_failing_required_entry_gate_refuses_the_landing() {
+        if !cfg!(unix) {
+            return;
+        }
+        let root = std::env::current_dir().unwrap();
+        let gate = |word: &str| vec![vec![String::from(word)]];
+        assert!(matches!(
+            super::admits_the_landing(&root, &gate("false"), "7"),
+            super::Admitted::Refused { .. }
+        ));
+        assert!(matches!(
+            super::admits_the_landing(&root, &gate(&format!("{}false", super::ADVISORY)), "7"),
+            super::Admitted::Clear
+        ));
+        assert!(matches!(
+            super::admits_the_landing(&root, &gate("true"), "7"),
+            super::Admitted::Clear
+        ));
+    }
+
+    /// Retirement sweeps the branch's own records, claimed or not, and its
+    /// red head, never a branch whose name only extends it.
+    #[test]
+    fn retiring_a_branch_sweeps_its_records_and_red_head_only() {
+        let root = crate::scratch::scratch("land-retire");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        let store = root.join(".git/batten-receipts");
+        std::fs::create_dir_all(&store).unwrap();
+        for name in [
+            "board-writes.work-gone",
+            "board-writes.work-gone.claim",
+            "board-writes.work-gone-2",
+        ] {
+            std::fs::write(store.join(name), "x").unwrap();
+        }
+        let reading = super::RedReading {
+            failed: vec![(1, String::from("ci"))],
+            running: Vec::new(),
+        };
+        super::record_red_head(&root, "work/gone", "abc", &reading).unwrap();
+        let retired = super::retire_branch(&root, "", "work/gone");
+        assert!(!retired.remote, "an unreachable remote deleted nothing");
+        assert_eq!(retired.receipts, 3);
+        assert!(store.join("board-writes.work-gone-2").exists());
     }
 
     #[test]

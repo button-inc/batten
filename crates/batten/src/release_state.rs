@@ -1773,6 +1773,24 @@ mod tests {
         assert_eq!(flight.land_hold, 9);
     }
 
+    /// A draft is in flight for its first ten minutes, and a failed land holds
+    /// six hours by default.
+    #[test]
+    fn a_draft_is_in_flight_for_ten_minutes_and_a_failed_land_holds_six_hours() {
+        let flight = |age: u64| Flight {
+            active_run: None,
+            drafts: vec![(String::from("v3"), age)],
+            pending: Vec::new(),
+            land_hold: 0,
+        };
+        assert_eq!(
+            in_flight(&flight(599)).as_deref(),
+            Some("v3 is a draft 599s old")
+        );
+        assert_eq!(in_flight(&flight(600)), None);
+        assert_eq!(LAND_HOLD_SECS, 21_600);
+    }
+
     #[test]
     fn the_head_branch_is_the_open_pull_request_whose_head_is_the_sha() {
         let get = forge(&[(

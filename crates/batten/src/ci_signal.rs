@@ -593,9 +593,11 @@ fn classify(job: &Value, verdict_steps: &[String]) -> (&'static str, String) {
 }
 
 /// Classify the failed required jobs over `spec`'s window and compose the record.
-// THE CLASSIFIER'S OWN DISCRIMINATION. Its cases live in `nonverdict.rs`: the
-// gate's one suite declaration above names `land_divergence.rs`, and a Rust suite
-// runs `cargo test -- <case>` across every target, so each filter still selects.
+// THE CLASSIFIER'S OWN DISCRIMINATION. Its cases live in `nonverdict.rs`, which is
+// declared here so the whole-file sweep's admission scope runs them too: the rows
+// below select by case name, but a survivor the sweep measures over the scope
+// alone stays live while the suite that kills it is left undeclared.
+//MUTANT-SUITE crates/batten/tests/it/nonverdict.rs
 //MUTANT roster-ignored|s@^                    && spec.roster.iter().any(.required. required == name))$@                    \&\& true)@|the_producer_classifies_failed_required_jobs_and_the_module_decides
 //MUTANT fan-in-counted|s@^                (!spec.excluded.iter().any(.excluded. excluded == name)$@                (true@|the_producer_classifies_failed_required_jobs_and_the_module_decides
 //MUTANT every-failure-a-verdict|s@^        Some(step) => ("verdict", step),$@        Some(step) => ("nonverdict", step),@|the_producer_classifies_failed_required_jobs_and_the_module_decides
@@ -1010,24 +1012,32 @@ mod tests {
 
     #[test]
     fn a_landing_is_attributed_its_pre_merge_runs_and_recorded_only_when_it_diverged() {
-        let landed: Vec<(String, String, String)> = [("7", "a"), ("8", "b"), ("9", "c")]
-            .map(|(number, branch)| (number.into(), branch.into(), "2026-01-02".into()))
-            .to_vec();
+        let landed: Vec<(String, String, String)> =
+            [("7", "a"), ("8", "b"), ("9", "c"), ("10", "d"), ("11", "e")]
+                .map(|(number, branch)| (number.into(), branch.into(), "2026-01-02".into()))
+                .to_vec();
+        // `b` diverged by a second graded run alone, `c` by one red run alone;
+        // `d` and `e`, one cancelled and one green run, are the ideal.
         let runs = vec![
             graded("a", "2026-01-01", "failure"),
             graded("a", "2026-01-02", "success"),
             graded("a", "2026-01-03", "cancelled"),
             graded("a", "2026-01-01", "skipped"),
             graded("b", "2026-01-01", "success"),
-            graded("c", "2026-01-01", "cancelled"),
+            graded("b", "2026-01-02", "success"),
+            graded("c", "2026-01-01", "failure"),
+            graded("d", "2026-01-01", "cancelled"),
+            graded("e", "2026-01-01", "success"),
         ];
         let mut records = Vec::new();
-        assert_eq!(attribute(&landed, &runs, &mut records), (4, 2, 1, 1));
+        assert_eq!(attribute(&landed, &runs, &mut records), (7, 4, 2, 1));
         assert_eq!(
             records,
-            vec![String::from(
-                "pr\tnumber=7\tbranch=a\tgraded=2\tgreen=1\tred=1\tcancelled=0"
-            )]
+            vec![
+                String::from("pr\tnumber=7\tbranch=a\tgraded=2\tgreen=1\tred=1\tcancelled=0"),
+                String::from("pr\tnumber=8\tbranch=b\tgraded=2\tgreen=2\tred=0\tcancelled=0"),
+                String::from("pr\tnumber=9\tbranch=c\tgraded=1\tgreen=0\tred=1\tcancelled=0"),
+            ]
         );
     }
 
@@ -1130,6 +1140,36 @@ mod tests {
             "window\tsince=2026-08-12T00:00:00Z\tlandings=0\tgraded=0\tgreen=0\tred=0\t\
              cancelled=0\tcancel_p50=0\tpeak_concurrency=0\tqueue_p90=0\tqueue_job_p90=0\t\
              retries=0\tff_refused=0\tff_success=0\tunreadable=0\n"
+        );
+    }
+
+    /// A landing-bot count the forge would not answer is counted unreadable,
+    /// once per conclusion, never read as zero refusals.
+    #[test]
+    fn an_unanswered_landing_bot_count_is_unreadable() {
+        let fetch = forge(vec![
+            (
+                "workflows/ci.yml/runs",
+                String::from(r#"{"total_count": 0, "workflow_runs": []}"#),
+            ),
+            ("pulls", String::from("[]")),
+        ]);
+        let spec = Divergence {
+            ci_workflow: String::from("ci.yml"),
+            land_workflow: String::from("land.yml"),
+            since: String::from("2026-08-12T00:00:00Z"),
+            since_at: epoch("2026-08-12T00:00:00Z").unwrap(),
+            max_pages: 10,
+        };
+        let body = recorded(divergence(
+            &spec,
+            "acme/widgets",
+            &scratch("divergence-unread"),
+            &fetch,
+        ));
+        assert!(
+            body.ends_with("ff_refused=0\tff_success=0\tunreadable=2\n"),
+            "{body}"
         );
     }
 }
