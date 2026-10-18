@@ -2549,10 +2549,10 @@ mod tests {
         let counted = || tally_under(&path, RecordShape::Jsonl, Some(&cache)).map(|t| t.counts());
         std::fs::write(&path, format!("{}\n", padded(POOL[0]))).expect("a session");
         assert!(counted().is_some());
+        // Rewritten IN PLACE, so the inode in the entry's key is unchanged and
+        // only the first line can tell the two sessions apart.
         let replaced = format!("{}\n{}\n{}\n", padded(POOL[5]), POOL[6], POOL[6]);
-        let other = dir.join("other.jsonl");
-        std::fs::write(&other, &replaced).expect("another session");
-        std::fs::rename(&other, &path).expect("replace it at the path");
+        std::fs::write(&path, &replaced).expect("another session");
         assert_eq!(
             counted(),
             Some(
