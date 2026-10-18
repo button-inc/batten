@@ -3913,7 +3913,7 @@ fn blank(text: &mut String, at: usize, end: usize) {
 /// same authority the loader uses rather than a second reading of the same
 /// bytes.
 fn row_id(body: &str) -> Option<String> {
-    let after_header = body.find('\n').map_or("", |at| &body[at + 1..]);
+    let after_header = body.split_once('\n').map_or("", |(_, rest)| rest);
     toml::from_str::<toml::Table>(after_header)
         .ok()?
         .get("id")?
@@ -5641,6 +5641,161 @@ mod tests {
         assert!(parse_ungated_with(text, "test", Grammar::Enforced).is_err());
         let skewed = parse_ungated_with(text, "test", Grammar::Skewed);
         assert!(skewed.is_ok(), "{:#}", skewed.unwrap_err());
+    }
+
+    #[test]
+    fn a_prune_drops_a_settings_key_and_an_emptied_dotted_holder() {
+        let key = prune_unresolvable::<Config>("version = 1\n[capture]\nno_such_key = 1\n", false);
+        assert!(key.config.is_some(), "the key goes, the file loads");
+        assert_eq!(key.dropped.len(), 1);
+        assert_eq!(key.dropped[0].row_index(), None);
+        let husk =
+            prune_unresolvable::<Config>("version = 1\n[[hook.handler]]\nbogus = 1\n", false);
+        assert!(
+            husk.config.is_some(),
+            "the emptied `hook` goes with its row"
+        );
+        assert_eq!(husk.dropped.len(), 1);
+    }
+
+    /// A row's position in the live array is its ordinal less the drops before
+    /// it in ITS OWN section, whichever section the loop reaches first.
+    #[test]
+    fn a_prune_shifts_a_row_only_by_its_own_section_s_earlier_drops() {
+        let verdict =
+            |extra: &str| format!("[[verdict]]\nid = \"v\"\ngloss = \"g\"\nclass = \"c\"\n{extra}");
+        let rule = |extra: &str| {
+            format!(
+                "[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"*\"\npattern = \"x\"\n\
+                 severity = \"deny\"\n{extra}"
+            )
+        };
+        let source = format!(
+            "version = 1\n{}{}{}{}{}",
+            verdict("bogus = 1\n"),
+            verdict(""),
+            verdict("bogus = 1\n"),
+            rule(""),
+            rule("bogus = 1\n"),
+        );
+        let pruned = prune_unresolvable::<Config>(&source, false);
+        let config = pruned.config.expect("every unreadable row is dropped");
+        assert_eq!(pruned.dropped.len(), 3);
+        assert_eq!((config.verdicts.len(), config.rules.len()), (1, 1));
+    }
+
+    #[test]
+    fn a_prune_stops_at_its_ceiling() {
+        let mut source = String::from("version = 1\n");
+        for _ in 0..=UNRESOLVABLE_CEILING {
+            source.push_str("[[rule]]\nbogus = 1\n");
+        }
+        let pruned = prune_unresolvable::<Config>(&source, false);
+        assert!(pruned.config.is_none());
+        assert_eq!(pruned.dropped.len(), UNRESOLVABLE_CEILING);
+    }
+
+    #[test]
+    fn a_rule_id_is_normalised_only_once_a_vocabulary_is_declared() {
+        let text = "version = 1\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"*\"\n\
+                    pattern = \"x\"\nseverity = \"deny\"\n";
+        assert_eq!(parse(text, "test").unwrap().rules[0].id, "no-todo");
+    }
+
+    #[test]
+    fn a_minimum_version_that_will_not_parse_is_refused() {
+        let config = |floor: &str| -> Config {
+            toml::from_str(&format!("version = 1\nmin_batten_version = \"{floor}\"\n")).unwrap()
+        };
+        assert!(check_min_version(&config("not a version"), "test").is_err());
+        assert!(check_min_version(&config("0.0.0"), "test").is_ok());
+    }
+
+    #[test]
+    fn a_named_site_is_required_an_anchor_is_not_and_a_directory_is_not_a_file() {
+        let dir = crate::scratch::scratch("config-load-site");
+        let absent = |required| AuthoritySite {
+            path: dir.join("absent").join(CONFIG_FILE),
+            required,
+        };
+        assert!(matches!(
+            load_site(&absent(false)),
+            Ok((_, Authority::Absent))
+        ));
+        assert!(load_site(&absent(true)).is_err());
+        let present = AuthoritySite {
+            path: dir.join(CONFIG_FILE),
+            required: true,
+        };
+        fs::write(&present.path, "version = 1\n").unwrap();
+        assert!(matches!(load_site(&present), Ok((_, Authority::Present))));
+        // Could-not-look is never defaults, and never a usage error either.
+        assert!(load_authority(&dir).is_err());
+        let unreadable = load_override(&dir).unwrap_err();
+        assert!(
+            unreadable.downcast_ref::<UsageError>().is_none(),
+            "{unreadable:#}"
+        );
+        assert!(
+            load_override(&dir.join("absent.toml"))
+                .unwrap_err()
+                .downcast_ref::<UsageError>()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn the_parse_cache_answers_only_once_it_is_switched_on() {
+        let dir = crate::scratch::scratch("config-parse-cache-switch");
+        crate::testing::contain_state(&dir.join("state"));
+        let entry = parse_cache_path("batten.toml").expect("a contained state root");
+        assert!(entry.starts_with(dir.join("state")), "{}", entry.display());
+        assert_eq!(
+            entry.extension().and_then(std::ffi::OsStr::to_str),
+            Some("cfg")
+        );
+        let text = "version = 1\n# switched\n";
+        parse_remembered_with(text, "batten.toml", false).unwrap();
+        assert!(
+            !declared_from_cache(text, "batten.toml"),
+            "off, even when remembered"
+        );
+        persist_parses();
+        assert!(declared_from_cache(text, "batten.toml"));
+    }
+
+    #[test]
+    fn an_unchanged_authority_is_read_once_and_the_same_text_is_shared() {
+        let dir = crate::scratch::scratch("config-read-once");
+        let path = dir.join(CONFIG_FILE);
+        fs::write(&path, "version = 1\n").unwrap();
+        let text = read_text(&path).unwrap();
+        assert!(shared_text(&text).is_some_and(|held| std::sync::Arc::ptr_eq(&held, &text)));
+        assert!(
+            shared_text("version = 1\n").is_none(),
+            "equal bytes are not the allocation"
+        );
+        assert!(same_allocation(&text, &text));
+        assert!(
+            !same_allocation(&text, &text[..2]),
+            "a prefix is not the allocation"
+        );
+
+        // A file just written is always racily clean, so the stamp is built.
+        let secs = std::time::Duration::from_secs;
+        let stamp = crate::cache::Stamp {
+            fields: "identity".to_owned(),
+            changed: secs(10),
+        };
+        assert!(unchanged_since("identity", secs(100), &stamp));
+        assert!(
+            !unchanged_since("other", secs(100), &stamp),
+            "another identity"
+        );
+        assert!(
+            !unchanged_since("identity", secs(10), &stamp),
+            "racily clean"
+        );
     }
 
     #[test]
