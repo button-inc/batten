@@ -5178,9 +5178,10 @@ deny contains \"tok\" if {\n\tinput.go\n}\n";
             (by("tree"), by("mediated_call"))
         };
         assert_eq!(admits("input.tree.missing"), (true, false));
-        assert!(!admits("input.tree.nope").0);
+        // Spelled whole because `rules`' doc check stops at `mod tests`.
+        assert_eq!(admits("input.tree.nope"), (false, false));
         assert_eq!(admits("input.call.tool"), (false, true));
-        assert!(!admits("input.facts.receipts").0);
+        assert_eq!(admits("input.facts.receipts"), (false, true));
     }
 
     #[test]

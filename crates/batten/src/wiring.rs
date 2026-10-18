@@ -713,8 +713,9 @@ impl Wiring {
             }
             let path = Path::new(&row.path);
             // A root is the refusal, not absoluteness: on Windows `\x` has a root
-            // and is still relative, yet it escapes `$HOME`. Every absolute path
-            // has one too, so this one test covers both.
+            // and is still relative, yet it escapes `$HOME`, and every absolute
+            // path has one too. A drive-relative `C:x` has neither and still
+            // passes here (CLOUD-2472).
             if path.has_root() {
                 return Err(format!(
                     "[[wiring.disarm]]: `path` {:?} is absolute — a declared script is relative to \

@@ -5805,7 +5805,8 @@ mod tests {
     fn a_binary_is_behind_a_tree_whose_committed_schema_it_does_not_derive() {
         let root = crate::scratch::scratch("config-schema-skew");
         let source = root.join(CONFIG_FILE);
-        let behind = || binary_is_behind_the_config(source.to_str().unwrap(), "version = 1\n");
+        let source = source.to_str().unwrap();
+        let behind = || binary_is_behind_the_config(source, "version = 1\n");
         assert!(!behind(), "absent");
         let at = root.join(SCHEMA_PATH);
         fs::create_dir_all(at.parent().unwrap()).unwrap();
