@@ -2981,6 +2981,56 @@ mod tests {
         );
     }
 
+    /// An entry declaring an environment links a LAUNCHER, and the link is part
+    /// of freshness: present, naming a live interpreter and carrying the
+    /// declared rules, it is fresh; gone, or carrying other rules, it is not.
+    #[test]
+    fn a_linked_launcher_is_fresh_only_while_it_carries_what_the_entry_declares() {
+        let dir = scratch("linked");
+        let artifact = dir.join("tool.sh");
+        let body = b"#!/bin/sh\nexit 0\n".to_vec();
+        fs::write(&artifact, &body).unwrap();
+        let mut entry = entry("tool", &digest(&body));
+        entry.url = Some(format!("file://{}", artifact.display()));
+        let bin = dir.join("bin");
+        entry.link = Some(bin.to_string_lossy().into_owned());
+        let mut row = unset_row("TOOL_HOME");
+        row.unset = false;
+        row.prepend_list = vec!["/opt/tool".to_owned()];
+        entry.env = vec![row];
+        let cache = dir.join("cache");
+        let freshness = |entry: &Provision| {
+            status(std::slice::from_ref(entry), &cache).unwrap().entries[0].freshness
+        };
+
+        assert_eq!(
+            apply(&entry, &cache, false, true).unwrap(),
+            Applied::Installed
+        );
+        let linked = bin.join("tool");
+        assert!(
+            fs::read_to_string(&linked).unwrap().contains(LAUNCHER_VERB),
+            "an entry with an environment links a launcher"
+        );
+        assert_eq!(freshness(&entry), Freshness::Fresh);
+
+        let mut other = entry.clone();
+        other.env[0].prepend_list = vec!["/opt/elsewhere".to_owned()];
+        assert_eq!(freshness(&other), Freshness::Missing, "other rules");
+
+        let launcher = fs::read_to_string(&linked).unwrap();
+        let rest = launcher.split_once('\n').unwrap().1;
+        fs::write(
+            &linked,
+            format!("#!/nowhere/batten {LAUNCHER_VERB}\n{rest}"),
+        )
+        .unwrap();
+        assert_eq!(freshness(&entry), Freshness::Missing, "a gone interpreter");
+
+        fs::remove_file(&linked).unwrap();
+        assert_eq!(freshness(&entry), Freshness::Missing, "no link");
+    }
+
     #[test]
     fn the_binary_is_found_by_file_name_however_the_tarball_nests_it() {
         let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(

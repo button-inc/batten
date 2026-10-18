@@ -4639,12 +4639,23 @@ mod tests {
 violation contains {\"rule\": \"a\", \"verdict\": \"a\"} if {\n\tinput.call.operation == \"write\"\n}\n\n\
 test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {\"operation\": \"write\"}}\n}\n";
 
-    fn bundle_of(id: &str, sources: &[(&str, &str)]) -> Bundle {
-        let sources: Vec<(String, String)> = sources
+    fn sources_of(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
             .iter()
             .map(|(path, text)| ((*path).to_owned(), (*text).to_owned()))
-            .collect();
-        compile(id, &sources, &serde_json::json!({})).expect("the fixture compiles")
+            .collect()
+    }
+
+    fn bundle_of(id: &str, sources: &[(&str, &str)]) -> Bundle {
+        compile(id, &sources_of(sources), &serde_json::json!({})).expect("the fixture compiles")
+    }
+
+    /// The verdicts `deny` answers over `input`, or `None` for could-not-look.
+    fn verdicts(bundle: &Bundle, input: &str) -> Option<Vec<String>> {
+        match deny(bundle, input) {
+            Look::Is(found) => Some(found.into_iter().map(|v| v.verdict).collect()),
+            Look::CouldNotLook | Look::IsNot => None,
+        }
     }
 
     fn suite_of(bundle: &Bundle, mediated: bool) -> Suite {
@@ -4837,5 +4848,457 @@ rules contains not_quoted\n";
                 "{schema}"
             );
         }
+        let call: serde_json::Value = serde_json::from_str(&call_input_schema().unwrap()).unwrap();
+        let facts = &call["properties"]["facts"]["properties"];
+        for fact in crate::facts::Fact::ALL {
+            assert_eq!(
+                facts.get(fact.as_str()).is_some(),
+                fact.class().surface == crate::facts::Surface::Hook,
+                "{}",
+                fact.as_str()
+            );
+        }
+    }
+
+    fn module_row(id: &str, scope: &str, extra: &str) -> Rule {
+        toml::from_str(&format!(
+            "id = \"{id}\"\nkind = \"policy\"\nscope = \"{scope}\"\nmodule = \"policy/m.rego\"\n\
+             severity = \"deny\"\n{extra}"
+        ))
+        .expect("the fixture row loads")
+    }
+
+    fn class(id: &str, extra: &str) -> crate::verdict::DeclaredVerdict {
+        toml::from_str(&format!(
+            "id = \"{id}\"\ngloss = \"g\"\nclass = \"c\"\n{extra}"
+        ))
+        .expect("the fixture class loads")
+    }
+
+    /// Refuses through the bare `deny` channel on any input carrying `go`.
+    const GATED: &str =
+        "package batten.d\nimport rego.v1\n\ndeny contains \"tok\" if {\n\tinput.go\n}\n";
+    const GO: &str = r#"{"go":true}"#;
+    const STOP: &str = r#"{"stop":true}"#;
+
+    fn bytecode(bundle: Bundle) -> Bundle {
+        Compiled::from_bundle(&bundle, &serde_json::json!({}))
+            .expect("the fixture compiles to bytecode")
+            .into_bundle(bundle)
+    }
+
+    #[test]
+    fn bytecode_answers_with_or_without_a_scope_and_once_per_input_within_one() {
+        let bundle = bytecode(bundle_of("row", &[("policy/d.rego", GATED)]));
+        assert!(bundle.is_bytecode());
+        assert!(
+            matches!(test(&bundle, "{}", false), Ok(Look::CouldNotLook)),
+            "bytecode carries no AST to describe"
+        );
+        let tok = Some(vec!["tok".to_owned()]);
+        assert!(!Answers::open());
+        let before = bytecode_evaluations();
+        assert_eq!(verdicts(&bundle, GO), tok);
+        assert_eq!(verdicts(&bundle, GO), tok);
+        assert_eq!(
+            bytecode_evaluations() - before,
+            2,
+            "unscoped, every ask evaluates"
+        );
+        {
+            let _scope = answer_scope();
+            assert!(Answers::open());
+            let before = bytecode_evaluations();
+            for _ in 0..2 {
+                assert_eq!(verdicts(&bundle, GO), tok);
+                assert_eq!(verdicts(&bundle, STOP), Some(Vec::new()));
+            }
+            assert_eq!(
+                bytecode_evaluations() - before,
+                2,
+                "scoped, each input once"
+            );
+        }
+        assert!(!Answers::open(), "the memo dies with its scope");
+    }
+
+    fn hot(
+        root: &Path,
+        id: &str,
+        sources: &[(String, String)],
+        data: &serde_json::Value,
+    ) -> Bundle {
+        let text = PatternText::new();
+        compile_for(
+            root,
+            id,
+            sources,
+            (data, &text),
+            ModuleChecks::SkipOnHotPath,
+        )
+        .expect("the fixture loads")
+    }
+
+    #[test]
+    fn a_warm_hot_load_reads_back_the_bytecode_written_for_exactly_its_inputs() {
+        let dir = crate::scratch::scratch("policy-cache");
+        crate::testing::contain_state(&dir.join("state"));
+        let root = dir.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        let module =
+            "package batten.c\nimport rego.v1\n\ndeny contains \"on\" if {\n\tdata.flag\n}\n";
+        let on = serde_json::json!({"flag": true});
+        let off = serde_json::json!({"flag": false});
+        let sources = sources_of(&[("policy/c.rego", module)]);
+        assert!(hot(&root, "one", &sources, &on).is_bytecode());
+        hot(&root, "two", &sources, &off);
+        let before = engines_constructed();
+        let warm_on = hot(&root, "one", &sources, &on);
+        let warm_off = hot(&root, "two", &sources, &off);
+        assert_eq!(
+            engines_constructed(),
+            before,
+            "a warm load compiles nothing"
+        );
+        assert_eq!(verdicts(&warm_on, "{}"), Some(vec!["on".to_owned()]));
+        assert_eq!(verdicts(&warm_off, "{}"), Some(Vec::new()));
+        let edited = module.replace("\"on\"", "\"edited\"");
+        let edited = hot(
+            &root,
+            "one",
+            &sources_of(&[("policy/c.rego", &edited)]),
+            &on,
+        );
+        assert_eq!(verdicts(&edited, "{}"), Some(vec!["edited".to_owned()]));
+    }
+
+    #[test]
+    fn the_hot_path_reads_a_module_without_its_tests_and_every_other_load_whole() {
+        let root = crate::scratch::scratch("policy-read-sources");
+        std::fs::create_dir_all(root.join("policy")).unwrap();
+        let text = "package p\n\ntest_one if {\n\ttrue\n}\n\nkept := 1\n";
+        std::fs::write(root.join("policy/t.rego"), text).unwrap();
+        let read = |path: &str, checks| {
+            read_sources(&root, &[path.to_owned()], None, "row", checks).map(|mut s| s.remove(0).1)
+        };
+        assert_eq!(read("policy/t.rego", ModuleChecks::Run).unwrap(), text);
+        assert_eq!(
+            read("policy/t.rego", ModuleChecks::SkipOnHotPath).unwrap(),
+            without_test_rules(text)
+        );
+        assert_ne!(without_test_rules(text), text);
+        assert!(read("policy/absent.rego", ModuleChecks::Run).is_err());
+    }
+
+    #[test]
+    fn a_bundle_enables_exactly_its_rego_files_in_sorted_order() {
+        let root = crate::scratch::scratch("policy-bundle-members");
+        let dir = root.join("set");
+        std::fs::create_dir_all(dir.join("nested.rego")).unwrap();
+        for name in ["b.rego", "a.rego", ".rego", "notes.txt"] {
+            std::fs::write(dir.join(name), "package x\n").unwrap();
+        }
+        assert_eq!(
+            bundle_members(&root, "set/", None, "row").unwrap(),
+            vec!["set/a.rego".to_owned(), "set/b.rego".to_owned()]
+        );
+        std::fs::create_dir_all(root.join("empty")).unwrap();
+        assert!(bundle_members(&root, "empty", None, "row").is_err());
+        assert!(bundle_members(&root, "absent", None, "row").is_err());
+    }
+
+    /// Two tree modules, one reading a provider's language, and one mediated.
+    const MIXED: crate::preset::Manifest = crate::preset::Manifest {
+        name: "mixed",
+        version: 1,
+        modules: &[
+            crate::preset::PresetModule {
+                scope: crate::rules::RuleScope::Tree,
+                provider: None,
+                pointer: "<preset:mixed>/t1.rego",
+                source: "package t1\n",
+            },
+            crate::preset::PresetModule {
+                scope: crate::rules::RuleScope::Tree,
+                provider: Some("github"),
+                pointer: "<preset:mixed>/t2.rego",
+                source: "package t2\n",
+            },
+            crate::preset::PresetModule {
+                scope: crate::rules::RuleScope::MediatedCall,
+                provider: None,
+                pointer: "<preset:mixed>/m.rego",
+                source: "package m\n",
+            },
+        ],
+        verdicts: &[],
+        patterns: &[],
+    };
+
+    #[test]
+    fn an_except_names_a_module_at_the_row_s_scope_and_leaves_one_standing() {
+        let pointers = |extra: &str| {
+            let row: Rule = toml::from_str(&format!(
+                "id = \"mixed\"\nkind = \"policy\"\nscope = \"tree\"\npreset = \"mixed\"\n\
+                 severity = \"deny\"\n{extra}"
+            ))
+            .expect("the fixture row loads");
+            preset_sources(&row, &MIXED, "mixed")
+                .map(|sources| sources.into_iter().map(|(p, _)| p).collect::<Vec<_>>())
+                .map_err(|err| format!("{err:#}"))
+        };
+        assert_eq!(pointers("").unwrap(), vec!["<preset:mixed>/t1.rego"]);
+        assert_eq!(
+            pointers("provider = \"github\"\nexcept = [\"t1\"]\n").unwrap(),
+            vec!["<preset:mixed>/t2.rego"]
+        );
+        let other_scope = pointers("except = [\"m\"]\n").unwrap_err();
+        assert!(
+            other_scope.contains("the modules there are t1, t2"),
+            "{other_scope}"
+        );
+        let every = pointers("except = [\"t1\"]\n").unwrap_err();
+        assert!(every.contains("excepts every module"), "{every}");
+    }
+
+    #[test]
+    fn ids_and_refusals_read_in_either_collection_shape_and_an_undeclared_raise_is_refused() {
+        let raised = "package batten.v\nimport rego.v1\n\nrules contains \"v\"\n\n\
+violation contains {\"rule\": \"v\", \"verdict\": \"v\"} if {\n\tnot input.quiet\n}\n";
+        let set = bundle_of("row", &[("policy/v.rego", raised)]);
+        assert_eq!(set.declared(), &BTreeSet::from(["v".to_owned()]));
+        let undeclared = raised.replace("rules contains \"v\"", "rules contains \"w\"");
+        let undeclared = sources_of(&[("policy/v.rego", &undeclared)]);
+        assert!(compile("row", &undeclared, &serde_json::json!({})).is_err());
+
+        let arrays = "package batten.v\nimport rego.v1\n\nrules := [\"v\"]\n\n\
+violation := [{\"rule\": \"v\", \"verdict\": \"v\"}]\n\ndeny := [\"bare\"]\n\nfrontier := [\"y\"]\n";
+        let arrays = bundle_of("row", &[("policy/v.rego", arrays)]);
+        assert_eq!(arrays.declared(), &BTreeSet::from(["v".to_owned()]));
+        assert_eq!(
+            verdicts(&arrays, "{}"),
+            Some(vec!["bare".to_owned(), "v".to_owned()])
+        );
+        assert!(matches!(strings(&arrays, "{}", "frontier"), Look::Is(found) if found == ["y"]));
+
+        let sets = "package batten.s\nimport rego.v1\n\ndeny contains \"bare\"\n\nfrontier contains \"x\"\n";
+        let sets = bundle_of("row", &[("policy/s.rego", sets)]);
+        assert_eq!(verdicts(&sets, "{}"), Some(vec!["bare".to_owned()]));
+        assert!(matches!(strings(&sets, "{}", "frontier"), Look::Is(found) if found == ["x"]));
+        assert!(matches!(strings(&sets, "{}", "absent"), Look::Is(found) if found.is_empty()));
+    }
+
+    #[test]
+    fn a_rewrite_is_read_from_a_set_or_an_array() {
+        let member = "{\"rule\": \"r\", \"key\": \"timeout\", \"value\": 5}";
+        let expected = vec![Rewrite {
+            rule: "r".to_owned(),
+            key: "timeout".to_owned(),
+            value: 5,
+        }];
+        for body in [
+            format!("rewrite contains {member}\n"),
+            format!("rewrite := [{member}]\n"),
+        ] {
+            let module =
+                format!("package batten.w\nimport rego.v1\n\nrules contains \"r\"\n\n{body}");
+            let bundle = bundle_of("row", &[("policy/w.rego", &module)]);
+            assert!(
+                matches!(rewrite(&bundle, "{}"), Look::Is(found) if found == expected),
+                "{module}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_refusing_rule_s_literals_count_as_emitted() {
+        let helper = format!("{MODULE}\nroute := {{\"verdict\": \"helper\"}}\n");
+        assert_eq!(
+            emitted_verdicts(&bundle_of("row", &[("policy/a.rego", &helper)])),
+            BTreeSet::from(["a".to_owned()])
+        );
+        let bare = "package batten.d\nimport rego.v1\n\nrules contains \"x\"\n\n\
+deny contains \"tok\" if {\n\tinput.go\n}\n";
+        assert_eq!(
+            emitted_verdicts(&bundle_of("row", &[("policy/d.rego", bare)])),
+            BTreeSet::from(["tok".to_owned()])
+        );
+    }
+
+    #[test]
+    fn a_module_raises_only_live_declared_tokens_and_names_them_literally() {
+        let row = module_row("a", "mediated_call", "");
+        let check = |source: &str, registry: &[crate::verdict::DeclaredVerdict]| {
+            let bundle = bundle_of("row", &[("policy/a.rego", source)]);
+            check_verdicts_are_declared(&row, &bundle, registry, "policy/a.rego")
+                .map_err(|err| format!("{err:#}"))
+        };
+        assert!(check(MODULE, &[class("a", "")]).is_ok());
+        assert!(
+            check(MODULE, &[])
+                .unwrap_err()
+                .contains("no `[[verdict]]` row declares")
+        );
+        let retired = [class("a", "successor = \"b\"\n")];
+        assert!(check(MODULE, &retired).unwrap_err().contains("RETIRED"));
+        let msg = MODULE.replace("\"verdict\": \"a\"}", "\"verdict\": \"a\", \"msg\": \"m\"}");
+        assert!(
+            check(&msg, &[class("a", "")])
+                .unwrap_err()
+                .contains("still binds")
+        );
+        let composed = MODULE.replace(
+            "\"verdict\": \"a\"}",
+            "\"verdict\": sprintf(\"%s\", [\"a\"])}",
+        );
+        assert!(
+            check(&composed, &[class("a", "")])
+                .unwrap_err()
+                .contains("COMPOSES")
+        );
+    }
+
+    #[test]
+    fn a_tree_row_reads_only_keys_the_tree_carries_and_a_call_row_reads_no_tree() {
+        let check = |scope: &str, path: &str| {
+            let module = format!("package batten.t\nimport rego.v1\n\nhit if {{\n\t{path}\n}}\n");
+            let bundle = bundle_of("row", &[("policy/t.rego", &module)]);
+            check_tree_paths_are_emittable(&module_row("t", scope, ""), &bundle, "policy/t.rego")
+                .is_ok()
+        };
+        assert!(check("tree", "input.tree.missing"));
+        // Split, because `rules`' doc check reads every tree path this file spells.
+        assert!(!check("tree", concat!("input.tree", ".nope")));
+        assert!(!check("tree", "input.call.tool"));
+        assert!(!check("tree", "input.facts.receipts"));
+        assert!(!check("mediated_call", "input.tree.missing"));
+        assert!(check("mediated_call", "input.call.tool"));
+    }
+
+    #[test]
+    fn every_live_declared_class_is_raised_or_native_and_collides_with_a_row_id() {
+        let live = class("x y z", "");
+        let retired = class("old y z", "successor = \"x y z\"\n");
+        let raised = BTreeSet::from(["x y z".to_owned()]);
+        let none = BTreeSet::new();
+        assert!(check_registry_is_exhausted(&[live.clone(), retired.clone()], &raised).is_ok());
+        assert!(check_registry_is_exhausted(std::slice::from_ref(&live), &none).is_err());
+        assert!(check_registry_is_exhausted(std::slice::from_ref(&retired), &none).is_ok());
+        let native = crate::verdict::native_tokens()
+            .into_iter()
+            .next()
+            .expect("a native class");
+        assert!(check_registry_is_exhausted(&[class(native, "")], &none).is_ok());
+
+        let tokens = collidable_tokens(&[live, retired]);
+        assert!(tokens.contains("x y z") && !tokens.contains("old y z"));
+        assert!(tokens.contains(native));
+        let vendored = crate::preset::verdict_rows()
+            .into_iter()
+            .next()
+            .expect("a vendored class");
+        assert!(tokens.contains(&vendored.id));
+    }
+
+    #[test]
+    fn a_row_spelled_as_a_class_it_does_not_solely_raise_is_refused() {
+        let rows = [module_row("x y z", "tree", "")];
+        let registry = BTreeSet::from(["x y z".to_owned()]);
+        assert!(check_collapse(&rows, &BTreeMap::new(), &registry).is_err());
+        assert!(check_collapse(&rows, &BTreeMap::new(), &BTreeSet::new()).is_ok());
+    }
+
+    #[test]
+    fn ids_are_held_to_the_grammar_claimed_once_and_declared_before_a_severity_names_them() {
+        let sources = sources_of(&[("policy/x.rego", "rules contains \"x\"\n")]);
+        let grammar = crate::verdict::Vocabulary::default();
+        let x = BTreeSet::from(["x".to_owned()]);
+        assert!(check_finding_ids(&sources, Some(&grammar), &BTreeSet::new()).is_err());
+        assert!(check_finding_ids(&sources, Some(&grammar), &x).is_ok());
+        assert!(check_finding_ids(&sources, None, &BTreeSet::new()).is_ok());
+
+        let row = module_row("x", "tree", "predicate_severity = { y = \"warn\" }\n");
+        assert!(check_predicate_severity(&row, &x, "src").is_err());
+        assert!(check_predicate_severity(&row, &BTreeSet::from(["y".to_owned()]), "src").is_ok());
+
+        let mut ids = BTreeMap::new();
+        assert!(claim_ids(&mut ids, &x, "a").is_ok());
+        assert!(claim_ids(&mut ids, &x, "b").is_err());
+    }
+
+    #[test]
+    fn a_module_cites_a_declared_pattern_and_writes_no_regex_inline() {
+        let row = module_row("r", "tree", "");
+        let check = |body: &str, declared: &[&str]| {
+            let module = format!("package batten.r\nimport rego.v1\n\nhit if {{\n\t{body}\n}}\n");
+            let bundle = bundle_of("row", &[("policy/r.rego", &module)]);
+            let declared: BTreeSet<&str> = declared.iter().copied().collect();
+            let plain = check_no_inline_regex(&row, &bundle, &declared, "src")
+                .map_err(|err| format!("{err:#}"));
+            let copy = check_copy_regex(&row, &bundle, &declared, "src", &[])
+                .map_err(|err| format!("{err:#}"));
+            assert_eq!(plain, copy, "a row with no ejected copy is the plain check");
+            plain
+        };
+        let inline = check("regex.match(`[0-9]+`, input.x)", &[]).unwrap_err();
+        assert!(inline.contains("`[0-9]+`"), "{inline}");
+        assert!(
+            check(
+                "regex.match(concat(\"\", [\"[a-z]\", \"+\"]), input.x)",
+                &[]
+            )
+            .is_err()
+        );
+        let cited = "regex.match(data.batten.patterns[\"p\"], input.x)";
+        assert!(check(cited, &["p"]).is_ok());
+        let undeclared = check(cited, &[]).unwrap_err();
+        assert!(undeclared.contains("patterns[\"p\"]"), "{undeclared}");
+    }
+
+    #[test]
+    fn a_test_that_never_fires_its_predicate_leaves_it_unexercised() {
+        let quiet = "package batten.n\nimport rego.v1\n\nrules contains \"n\"\n\n\
+violation contains {\"rule\": \"n\", \"verdict\": \"n\"} if {\n\tinput.call.operation == \"write\"\n}\n\n\
+test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\
+\tcount(violation) == 0 with input as {\"call\": {\"operation\": \"read\"}}\n}\n";
+        let suite = suite_of(&bundle_of("row", &[("policy/n.rego", quiet)]), false);
+        assert_eq!(suite.passed.len(), 1);
+        assert_eq!(suite.unexercised, vec!["n".to_owned()]);
+    }
+
+    #[test]
+    fn a_sweep_names_the_modules_it_never_entered() {
+        let dark = "package batten.f\nimport rego.v1\n\nf(x) := x\n";
+        let both = bundle_of("row", &[("policy/a.rego", MODULE), ("policy/f.rego", dark)]);
+        let Look::Is(half) = analyse(&both).unwrap() else {
+            panic!("the sweep ran");
+        };
+        assert_eq!(half.swept, vec!["policy/a.rego".to_owned()]);
+        assert_eq!(half.unswept, vec!["policy/f.rego".to_owned()]);
+        let only_dark = bundle_of("row", &[("policy/f.rego", dark)]);
+        assert!(matches!(analyse(&only_dark).unwrap(), Look::CouldNotLook));
+    }
+
+    #[test]
+    fn a_row_names_its_source_and_a_config_its_words() {
+        assert_eq!(
+            source_key(&module_row("m", "tree", "")).unwrap(),
+            "policy/m.rego"
+        );
+        let mut preset = git_row("");
+        assert_eq!(source_key(&preset).unwrap(), "git");
+        preset.preset = None;
+        assert!(source_key(&preset).is_err());
+
+        let mut config: crate::config::Config = toml::from_str("version = 1\n").unwrap();
+        assert!(Vocabulary::from(&config).words.is_none());
+        config
+            .vocabulary
+            .subject
+            .push(crate::verdict::VocabularyWord {
+                word: "x".to_owned(),
+                gloss: "g".to_owned(),
+            });
+        assert!(Vocabulary::from(&config).words.is_some());
     }
 }

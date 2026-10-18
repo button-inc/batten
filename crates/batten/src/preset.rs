@@ -2581,10 +2581,12 @@ mod tests {
     fn a_helper_is_a_column_zero_function_or_complete_rule_and_a_use_is_a_whole_word() {
         let source = "package p\nimport rego.v1\ndefault allow := false\nf(x) if { x }\n\
                       flag := true\nset if { true }\nsame = 1\nequal == 1\ntest_case if { true }\n\
-                      rules contains \"x\" if { f(1) }\n  indented := 1\n";
+                      rules contains \"x\" if { f(1) }\n  indented := 1\n\
+                      _private := 1\nUpper := 1\ndefault := 1\n";
         assert_eq!(
             helpers_defined(source),
             BTreeSet::from([
+                "_private".to_owned(),
                 "f(".to_owned(),
                 "flag".to_owned(),
                 "same".to_owned(),
@@ -2617,6 +2619,9 @@ mod tests {
     #[test]
     fn every_vendored_preset_is_found_by_name_and_declares_its_classes() {
         assert_eq!(names().len(), MANIFESTS.len());
+        let git = find("git").expect("git ships");
+        assert!(git.decides(RuleScope::MediatedCall));
+        assert!(!git.decides(RuleScope::Tree), "git ships no tree module");
         for name in names() {
             assert_eq!(find(name).map(|manifest| manifest.name), Some(name));
         }

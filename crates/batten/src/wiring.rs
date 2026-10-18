@@ -1263,6 +1263,15 @@ mod tests {
         assert_eq!(done.recorded, done.authoritative);
     }
 
+    /// A disarm carries the environment's own posture, whatever it declared.
+    #[test]
+    fn a_disarm_reports_whether_its_environment_is_disposable() {
+        let home = scratch("disarm-posture");
+        let done = disarm(&home, &[], true).unwrap();
+        assert_eq!(done.authoritative, crate::environment::disposable());
+        assert!(done.rows.is_empty());
+    }
+
     /// Both commit hooks are linked to the checked-in body; an existing hook
     /// that cannot be removed is refused rather than linked over.
     #[test]

@@ -5515,9 +5515,15 @@ mod tests {
                 "map": {"type": "object", "additionalProperties": {"type": "string"}},
                 "pat": {"type": "object", "patternProperties": {"^x": {"type": "string"}}},
                 "tuple": {"type": "array", "prefixItems": [{"type": "string"}]},
-                "old": {"type": "array", "items": [{"type": "string"}]}
+                "old": {"type": "array", "items": [{"type": "string"}]},
+                "count": {"type": ["integer", "null"]},
+                "nested": {"$ref": "#/$defs/Outer"}
             },
-            "$defs": {"Row": row}
+            "$defs": {
+                "Row": row,
+                "Outer": {"type": "object", "properties": {"inner": {"$ref": "#/$defs/Leaf"}}},
+                "Leaf": {"type": "string"}
+            }
         }))
         .unwrap();
         let cap = |pointer: &str| out.pointer(pointer).and_then(serde_json::Value::as_u64);
@@ -5548,6 +5554,11 @@ mod tests {
             );
         }
         assert_eq!(cap("/properties/rule/maxLength"), None);
+        assert_eq!(cap("/properties/count/maxLength"), None, "no string arm");
+        assert!(
+            cap("/$defs/Leaf/maxLength").is_some(),
+            "a `$def` reached through another"
+        );
 
         let twice = capped(serde_json::json!({
             "type": "object",
@@ -5574,6 +5585,8 @@ mod tests {
         assert_eq!(shape("[\"x]y\"]"), Some((false, "\"x]y\"")));
         assert_eq!(shape("['x]y']"), Some((false, "'x]y'")));
         assert_eq!(shape("[\"ab\\\"]\"]"), Some((false, "\"ab\\\"]\"")));
+        // An escape far enough in that skipping it by doubling runs off the end.
+        assert_eq!(shape("[a.\"xx\\\"]\"]"), Some((false, "a.\"xx\\\"]\"")));
         assert_eq!(shape("[a] x = 1"), None);
         assert_eq!(shape("[ ]"), None);
         assert_eq!(shape("a = [1]"), None);
@@ -5583,6 +5596,7 @@ mod tests {
     #[test]
     fn a_single_line_string_is_skipped_to_just_past_its_close() {
         assert_eq!(skip_basic(b"ab\\\"c\"d", 0), 6);
+        assert_eq!(skip_basic(b"abcd\\\"e\"z", 0), 8);
         assert_eq!(skip_basic(b"abc", 0), 3);
         assert_eq!(skip_literal(b"ab\\'c", 0), 4);
         assert_eq!(skip_literal(b"x'ab'c", 2), 5);
@@ -5609,6 +5623,47 @@ mod tests {
         assert!(basic.state == Lex::MultiBasic);
         assert!(scan_line("x\\\"\"\" y\"\"\"", basic) == start);
         assert!(scan_line("x\\\"\"\" [\"\"\" [", basic) == code(1));
+        // A multi-line string opened and closed mid-line leaves the bracket after
+        // it counted.
+        assert!(scan_line("abc\"\"\"x\"\"\"[", start) == code(1));
+        assert!(scan_line("abc'''x'''[", start) == code(1));
+    }
+
+    #[test]
+    fn a_declared_vocabulary_holds_rule_ids_to_the_grammar_except_on_a_compared_base() {
+        let text = "version = 1\n[vocabulary]\nsubject = [{ word = \"x\", gloss = \"g\" }]\n\
+                    action = [{ word = \"y\", gloss = \"g\" }]\n\
+                    condition = [{ word = \"z\", gloss = \"g\" }]\n\
+                    [[verdict]]\nid = \"x y z\"\ngloss = \"g\"\nclass = \"c\"\n\
+                    route = [{ id = \"x y z\", kind = \"command\", target = \"mise run x\" }]\n\
+                    [[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\n\
+                    pattern = \"TODO\"\nseverity = \"deny\"\n";
+        assert!(parse_ungated_with(text, "test", Grammar::Enforced).is_err());
+        let skewed = parse_ungated_with(text, "test", Grammar::Skewed);
+        assert!(skewed.is_ok(), "{:#}", skewed.unwrap_err());
+    }
+
+    #[test]
+    fn a_binary_is_behind_a_tree_whose_committed_schema_it_does_not_derive() {
+        let root = crate::scratch::scratch("config-schema-skew");
+        let source = root.join(CONFIG_FILE);
+        let source = source.to_str().unwrap();
+        assert!(
+            !binary_is_behind_the_config(source, "version = 1\n"),
+            "absent"
+        );
+        let at = root.join(SCHEMA_PATH);
+        fs::create_dir_all(at.parent().unwrap()).unwrap();
+        fs::write(&at, format!("{}\n", schema().unwrap())).unwrap();
+        assert!(
+            !binary_is_behind_the_config(source, "version = 1\n"),
+            "the same schema"
+        );
+        fs::write(&at, "{}\n").unwrap();
+        assert!(
+            binary_is_behind_the_config(source, "version = 1\n"),
+            "another schema"
+        );
     }
 
     const SCANNED: &str = "top = 1\n\
