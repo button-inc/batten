@@ -542,6 +542,17 @@ mod tests {
     }
 
     #[test]
+    fn a_crash_registered_at_the_boot_second_is_this_boots() {
+        // `btime` is the second this boot began, so a task registered in it ran
+        // under this boot: under the floor, it is advice, not a reboot.
+        let entry = crashed("land", BOOT, BOOT + 120);
+        assert_eq!(
+            watchdog(std::slice::from_ref(&entry), &[], &table(), BOOT),
+            Some(Watch::Advise { entry, lived: 120 })
+        );
+    }
+
+    #[test]
     fn an_undeclared_crash_is_quiet() {
         let entry = crashed("snapshots", BOOT + 10, BOOT + 7010);
         assert_eq!(watchdog(&[entry], &[], &table(), BOOT), None);

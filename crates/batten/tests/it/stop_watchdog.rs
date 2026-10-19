@@ -241,6 +241,104 @@ fn a_land_dispatch_older_than_the_crash_excuses_nothing() {
     assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
 }
 
+/// A DISPATCH IN THE CRASH'S OWN SECOND IS THAT LAND'S START: the receipt is
+/// written as the call returns and the land registers within the second, so only
+/// a STRICTLY later dispatch is a relaunch.
+#[test]
+fn a_land_dispatched_in_the_crash_second_excuses_nothing() {
+    if !cfg!(unix) {
+        return;
+    }
+    let (repo, home) = repo("watchdog-same-second", &format!("version = 1\n{TABLE}"));
+    dispatch_land(&repo, &home);
+    let started = std::fs::metadata(dispatch_receipt(&repo))
+        .and_then(|meta| meta.modified())
+        .expect("the dispatch wrote its receipt")
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("after the epoch")
+        .as_secs();
+    crash(&repo, "land", started, started + 7000);
+    let output = stop(&repo, &home, false);
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+}
+
+/// A LATER CRASH OF A TASK ALREADY SPOKEN FOR SPEAKS AGAIN: the receipt bounds
+/// each record, never the task, so a relaunch that crashed is a new refusal.
+#[test]
+fn a_later_crash_of_a_spoken_task_speaks_again() {
+    if !cfg!(unix) {
+        return;
+    }
+    let (repo, home) = repo("watchdog-again", &format!("version = 1\n{TABLE}"));
+    let first: u64 = unassignable_pid().parse().expect("a number");
+    crash_as(&repo, "land", &first.to_string(), BOOT + 10, BOOT + 7010);
+    let spoken = stop(&repo, &home, false);
+    assert_eq!(spoken.status.code(), Some(2), "{}", stderr(&spoken));
+    crash_as(
+        &repo,
+        "land",
+        &(first + 1).to_string(),
+        BOOT + 8000,
+        BOOT + 15000,
+    );
+    let again = stop(&repo, &home, false);
+    assert_eq!(again.status.code(), Some(2), "{}", stderr(&again));
+    assert!(
+        stderr(&again).contains(&format!("--pid {}", first + 1)),
+        "naming the new crash: {}",
+        stderr(&again)
+    );
+}
+
+/// TAKING THE LANDING LOCK CLEARS THE DISPATCH RECEIPT. The receipt means
+/// "started, not yet locked"; left behind once this land holds the lock, it would
+/// read here as a relaunch under way over this land's own later crash. A lap over
+/// an origin nothing answers takes the lock before its first fetch fails, which
+/// is all this needs.
+#[test]
+fn taking_the_landing_lock_clears_the_dispatch_receipt() {
+    let (repo, _) = repo("watchdog-lock-clears-dispatch", "version = 1\n");
+    common::git_in(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "http://127.0.0.1:9/unreachable.git",
+        ],
+    );
+    let receipt = dispatch_receipt(&repo);
+    std::fs::create_dir_all(receipt.parent().expect("a parent")).expect("a receipt dir");
+    std::fs::write(&receipt, "land\n").expect("a receipt");
+    // No entry gates: the developer's `mise.toml` exports some, and asking them
+    // needs a forge this tier does not have, before the lock is ever reached.
+    let output = batten()
+        .args(["land", "lap", "refs/heads/main"])
+        .env("LAND_MAX_LAPS", "1")
+        .env("LAND_VERIFY", "true")
+        .env("LAND_WORKFLOW", "fast-forward.yml")
+        .env_remove("LAND_ENTRY_GATES")
+        .env_remove("LAND_BODY_GATES")
+        .current_dir(&repo)
+        .output()
+        .expect("run batten land lap");
+    assert!(
+        !receipt.exists(),
+        "the land that took the lock consumed its dispatch: {} {}",
+        stdout(&output),
+        stderr(&output)
+    );
+}
+
+/// Where the `land-dispatched` receipt of `repo`'s current branch lives.
+fn dispatch_receipt(repo: &Path) -> PathBuf {
+    let branch = common::git_in(repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    repo.join(".git/batten-receipts").join(format!(
+        "land-dispatched.{}",
+        branch.trim().replace('/', "-")
+    ))
+}
+
 /// THE NEWEST CRASH SPEAKS, ONCE, FOR ITS TASK: a relaunch that crashed again
 /// is one refusal naming the latest pid, and the superseded record goes quiet
 /// with it.
