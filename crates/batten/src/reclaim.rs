@@ -600,4 +600,82 @@ mod tests {
         assert_eq!(parse_btime("cpu 1 2 3\n"), None);
         assert_eq!(parse_btime("btime x\n"), None);
     }
+
+    #[test]
+    fn tally_counts_each_kind_of_boundary_once() {
+        let counted = tally(
+            &lines(&["1000", "1500", "2000", "2500"]),
+            &lines(&["h 900 1000", "x 1400 1500 land-stopped"]),
+        );
+        assert_eq!(
+            counted,
+            Tally {
+                transitions: 3,
+                active: 1,
+                idle: 1,
+                unobserved: 1
+            }
+        );
+    }
+
+    /// Fails by: this host's boot time read as nothing, or as anything but
+    /// the digits the stores key on — whichever source answers here.
+    #[test]
+    fn this_hosts_boot_time_is_digits() {
+        let boot = boot_time().expect("a linux host or a declared override");
+        assert!(
+            !boot.is_empty() && boot.bytes().all(|byte| byte.is_ascii_digit()),
+            "{boot}"
+        );
+    }
+
+    /// Fails by: a boot not appended where the fold reads it, or appended again
+    /// when it is already the last one recorded.
+    #[test]
+    fn a_boot_is_recorded_once_until_another_follows_it() {
+        let git_dir = crate::scratch::scratch("reclaim-boots");
+        assert_eq!(fold(&git_dir, BOOTS), Some(Vec::new()));
+        assert_eq!(record_boot(&git_dir, "100"), Some(()));
+        assert_eq!(record_boot(&git_dir, "100"), Some(()));
+        assert_eq!(fold(&git_dir, BOOTS), Some(lines(&["100"])));
+        record_boot(&git_dir, "200").unwrap();
+        assert_eq!(fold(&git_dir, BOOTS), Some(lines(&["100", "200"])));
+        assert!(store(&git_dir, BOOTS).starts_with(&git_dir));
+    }
+
+    #[test]
+    fn the_clock_and_the_checkout_are_read() {
+        assert!(now() > 1_700_000_000, "the clock answers");
+        assert!(
+            git_dir().is_some_and(|dir| dir.is_dir()),
+            "a test runs in a checkout"
+        );
+    }
+
+    /// Fails by: a kind other than `h`/`x`, or a reason of two words, written
+    /// rather than refused. Each refusal returns before anything is written.
+    #[test]
+    fn a_malformed_note_is_refused_before_it_is_written() {
+        assert!(run_note("q", None).is_err());
+        assert!(run_note("h", Some("two words")).is_err());
+    }
+
+    #[test]
+    fn the_in_flight_line_names_the_beat_and_both_boots() {
+        assert_eq!(
+            in_flight("1400", "1500", "2000"),
+            "record census: A LANDING WAS IN FLIGHT when this container replaced the last one \
+             (last beat 1400 under boot 1500, now 2000)"
+        );
+    }
+
+    #[test]
+    fn a_mark_answers_only_for_the_boot_it_names() {
+        let dir = crate::scratch::scratch("reclaim-mark");
+        let mark = dir.join("mark");
+        assert!(!marked_for(&mark, "2000"), "an absent mark says nothing");
+        std::fs::write(&mark, "2000\n").unwrap();
+        assert!(marked_for(&mark, "2000"));
+        assert!(!marked_for(&mark, "2500"));
+    }
 }

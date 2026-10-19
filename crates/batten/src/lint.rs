@@ -1300,4 +1300,102 @@ mod tests {
         let err = smells("version = 1\nnot toml\n", "test", None, today(), &[]).unwrap_err();
         assert!(err.downcast_ref::<crate::UsageError>().is_some());
     }
+
+    /// Fails by: a drop from another section, a key drop, or a row at another
+    /// index removing a row here, so the positional pairing slips.
+    #[test]
+    fn only_this_sections_dropped_rows_leave_the_located_view() {
+        let row = |section: &str, index: usize| config::Unresolvable {
+            section: section.to_owned(),
+            unit: config::Unit::Row { id: None, index },
+        };
+        let dropped = [
+            row("rule", 1),
+            row("waiver", 0),
+            config::Unresolvable {
+                section: "rule".to_owned(),
+                unit: config::Unit::Key("x".to_owned()),
+            },
+        ];
+        assert_eq!(
+            without_unresolvable(vec!["a", "b", "c"], "rule", &dropped),
+            ["a", "c"]
+        );
+    }
+
+    #[test]
+    fn a_waiver_expiring_today_has_not_lapsed() {
+        assert!(ids(&with_waivers(&waiver_row("r", "2026-08-10"))).is_empty());
+    }
+
+    /// Fails by: a remedy-less rule, or an unclassed reason, not named.
+    #[test]
+    fn a_rule_owes_a_declared_and_classed_remedy() {
+        let rule = |remedy: &str| {
+            format!(
+                "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\n\
+                 pattern = \"x\"\nseverity = \"deny\"\n{remedy}"
+            )
+        };
+        assert_eq!(ids(&rule("")), vec![REMEDY_UNDECLARED]);
+        assert_eq!(
+            ids(&rule("no_fix_reason = \"nobody knows\"\n")),
+            vec![REASON_UNCLASSED]
+        );
+        assert!(ids(&rule("no_fix_reason = \"class 3 (x): y\"\n")).is_empty());
+    }
+
+    /// Fails by: the working file not linted, or a read that failed for any
+    /// reason but absence answered as an absent config.
+    #[test]
+    fn run_lints_the_working_file_and_tells_absence_from_a_failed_read() {
+        let dir = crate::scratch::scratch("lint-run");
+        std::fs::write(
+            dir.join(config::CONFIG_FILE),
+            "version = 1\nprotected = []\n",
+        )
+        .unwrap();
+        let found = run(&dir, None, today()).unwrap();
+        assert_eq!(
+            found.iter().map(|smell| smell.id).collect::<Vec<_>>(),
+            [EMPTY_PROTECTED_SET]
+        );
+        let absent = crate::scratch::scratch("lint-run-absent");
+        let err = run(&absent, None, today()).unwrap_err();
+        assert!(format!("{err:#}").contains("no config found"), "{err:#}");
+        let unreadable = crate::scratch::scratch("lint-run-unreadable");
+        std::fs::create_dir_all(unreadable.join(config::CONFIG_FILE)).unwrap();
+        let err = run(&unreadable, None, today()).unwrap_err();
+        assert!(!format!("{err:#}").contains("no config found"), "{err:#}");
+    }
+
+    #[test]
+    fn the_workspace_rust_version_is_read_beside_the_config() {
+        let dir = crate::scratch::scratch("lint-rust-version");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = []\n\n[workspace.package]\nrust-version = \"1.80\"\n",
+        )
+        .unwrap();
+        let source = dir.join(config::CONFIG_FILE);
+        assert_eq!(
+            workspace_rust_version(&source.to_string_lossy()).as_deref(),
+            Some("1.80")
+        );
+        let elsewhere = crate::scratch::scratch("lint-rust-version-absent");
+        let source = elsewhere.join(config::CONFIG_FILE);
+        assert_eq!(workspace_rust_version(&source.to_string_lossy()), None);
+    }
+
+    #[test]
+    fn a_smells_data_line_is_its_line_text() {
+        let found = smell(EMPTY_PROTECTED_SET, "protected");
+        assert_eq!(crate::output::Line::line(&found), found.line_text());
+    }
+
+    #[test]
+    fn each_admission_has_its_own_token() {
+        assert_eq!(Admission::Refused.as_str(), "refused");
+        assert_eq!(Admission::Asked.as_str(), "asked");
+    }
 }

@@ -364,7 +364,7 @@ where
     let mut out = Vec::new();
     for raw in argv {
         let token = raw.as_ref().to_string_lossy().into_owned();
-        let clustered = token.len() > 2
+        let clustered = token.bytes().nth(2).is_some()
             && token.starts_with('-')
             && !token.starts_with("--")
             && token
@@ -919,5 +919,107 @@ mod tests {
         assert_ne!(a, b);
         assert!(String::from_utf8(a).unwrap().contains("boom"));
         assert!(String::from_utf8(b).unwrap().contains("boom"));
+    }
+
+    #[test]
+    fn resolve_reads_the_flags_it_is_given() {
+        let flags = Presentation {
+            verbosity: Some(Verbosity::Debug),
+            ..Presentation::default()
+        };
+        assert_eq!(resolve(&flags).unwrap().verbosity, Verbosity::Debug);
+    }
+
+    /// Fails by: any one presentation boolean reading as set only when its
+    /// flag and its variable are BOTH set.
+    #[test]
+    fn a_flag_or_its_variable_alone_sets_each_boolean() {
+        let resolved = |flags: Presentation, values: &[(&'static str, &'static str)]| {
+            let env = Env::new(values);
+            resolve_with(&flags, false, true, &env.reader()).unwrap()
+        };
+        let flag = |set: fn(&mut Presentation)| {
+            let mut flags = Presentation::default();
+            set(&mut flags);
+            flags
+        };
+        assert!(resolved(Presentation::default(), &[]).color, "the premise");
+        assert!(!resolved(flag(|f| f.no_color = true), &[]).color);
+        assert!(!resolved(Presentation::default(), &[(NO_COLOR_ENV, "1")]).color);
+        assert!(resolved(flag(|f| f.no_input = true), &[]).machine);
+        assert!(resolved(Presentation::default(), &[(NO_INPUT_ENV, "1")]).machine);
+        assert!(resolved(flag(|f| f.yes = true), &[]).confirmed);
+        assert!(resolved(Presentation::default(), &[(YES_ENV, "1")]).confirmed);
+    }
+
+    /// Fails by: any one signal of an unattended run needing another beside it.
+    #[test]
+    fn each_unattended_signal_alone_forces_machine_mode() {
+        assert!(!mode(&[], true).machine, "the premise");
+        assert!(mode(&[], false).machine);
+        assert!(mode(&[("CI", "1")], true).machine);
+        assert!(mode(&[("TERM", "dumb")], true).machine);
+        assert!(mode(&[("NO_COLOR", "1")], true).machine);
+        assert!(mode(&[("CLICOLOR_FORCE", "1")], false).color);
+    }
+
+    #[test]
+    fn every_fixed_ladder_flag_selects_its_rung() {
+        for (flag, rung) in [
+            ("--silent", Verbosity::Silent),
+            ("--debug", Verbosity::Debug),
+            ("--trace", Verbosity::Trace),
+        ] {
+            assert_eq!(
+                Presentation::from_argv([flag]).verbosity,
+                Some(rung),
+                "{flag}"
+            );
+        }
+        assert!(Presentation::from_argv(["-y"]).yes);
+        assert!(Presentation::from_argv(["--yes"]).yes);
+    }
+
+    /// Fails by: a named rung's value, or a consumed value, not stepped over,
+    /// or a short flag carrying `=` read as the flag.
+    #[test]
+    fn values_are_stepped_over_and_never_read_as_flags() {
+        assert_eq!(
+            Presentation::from_argv(["--log-level", "-v"]).verbosity,
+            None,
+            "the named value is consumed even when it spells a flag"
+        );
+        assert_eq!(
+            Presentation::from_argv(["--config-from", "--trace"]).verbosity,
+            None
+        );
+        assert_eq!(Presentation::from_argv(["-v=x"]).verbosity, None);
+    }
+
+    /// Fails by: a cluster read from a long flag, a single flag, a token with
+    /// no dash, or a letter outside the counted pair.
+    #[test]
+    fn only_a_dashed_run_of_counted_shorts_is_a_cluster() {
+        let expand = |token: &str| expand_clusters([token]);
+        assert_eq!(expand("-vv"), ["-v", "-v"]);
+        assert_eq!(expand("-qq"), ["-q", "-q"]);
+        assert_eq!(expand("-qv"), ["-q", "-v"]);
+        for kept in ["-", "-v", "--vv", "qvv", "qv", "-vx"] {
+            assert_eq!(expand(kept), [kept], "{kept}");
+        }
+    }
+
+    /// Fails by: the data channel's line not written.
+    #[test]
+    fn a_data_line_is_the_values_line_and_a_newline() {
+        struct Fixed;
+        impl Line for Fixed {
+            fn line(&self) -> String {
+                String::from("pointer")
+            }
+        }
+        let mut out = Vec::new();
+        line(&mut out, &Fixed).unwrap();
+        assert_eq!(out, b"pointer\n");
     }
 }

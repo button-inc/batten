@@ -3136,6 +3136,179 @@ mod tests {
             .expect("a conforming registry loads");
     }
 
+    #[test]
+    fn each_route_kind_and_applicability_has_its_own_token() {
+        assert_eq!(RouteKind::Command.as_str(), "command");
+        assert_eq!(RouteKind::Document.as_str(), "document");
+        assert_eq!(RouteKind::Issue.as_str(), "issue");
+        assert_eq!(RouteKind::Override.as_str(), "override");
+        assert_eq!(Applicability::Advice.as_str(), "advice");
+        assert_eq!(Applicability::Retry.as_str(), "retry");
+        assert_eq!(Applicability::Silent.as_str(), "silent");
+        assert!(Applicability::Advice.is_default() && !Applicability::Advice.repairs());
+        assert!(!Applicability::Retry.is_default() && Applicability::Retry.repairs());
+    }
+
+    /// Fails by: a vocabulary declaring one slot only read as empty.
+    #[test]
+    fn a_vocabulary_is_empty_only_when_every_slot_is() {
+        assert!(Vocabulary::default().is_empty());
+        let full = vocab();
+        for keep in 0..SLOTS {
+            let mut one = full.clone();
+            for slot in 0..SLOTS {
+                if slot != keep {
+                    match slot {
+                        0 => one.subject.clear(),
+                        1 => one.action.clear(),
+                        _ => one.condition.clear(),
+                    }
+                }
+            }
+            assert!(!one.is_empty(), "slot {keep}");
+        }
+    }
+
+    #[test]
+    fn a_word_with_a_space_is_refused_as_not_a_single_word() {
+        let mut spaced = vocab();
+        spaced.subject[0].word = "two words".to_owned();
+        let err = validate(&[named("task read first")], &spaced).unwrap_err();
+        assert!(format!("{err:#}").contains("not a single word"), "{err:#}");
+    }
+
+    /// Fails by: a subject's path dropped, a bare-path member decoded as
+    /// nothing, or a bound subject spelled other than its refusal printed it.
+    #[test]
+    fn a_subject_reads_and_binds_as_the_refusal_prints_it() {
+        let line = Subject::Line {
+            path: "src/a.rs".to_owned(),
+            line: 3,
+        };
+        assert_eq!(line.path(), Some("src/a.rs"));
+        assert_eq!(Subject::Count { count: 2 }.path(), None);
+        assert_eq!(
+            Subject::from_json(&serde_json::json!({"path": "src/a.rs"})),
+            Some(Subject::Path {
+                path: "src/a.rs".to_owned()
+            })
+        );
+        assert_eq!(bound_subject("  a b  "), "a,b");
+        assert_eq!(bound_subject(" docs/a b.md "), "docs/a b.md");
+        assert_eq!(
+            render_line(&[], "task read first", &[line]),
+            "task read first src/a.rs:3"
+        );
+        assert_eq!(render_line(&[], "task read first", &[]), "task read first");
+    }
+
+    /// Fails by: a route of another kind offered as a command, or a class's
+    /// routes not resolved at all.
+    #[test]
+    fn command_routes_are_the_command_kind_only_and_sightings_skip_overrides() {
+        let mut class = entry("one probe probe");
+        class.routes = vec![
+            Route {
+                kind: RouteKind::Document,
+                target: "rules/a.md".to_owned(),
+                ..route("read it")
+            },
+            route("run it"),
+            Route {
+                kind: RouteKind::Override,
+                target: String::new(),
+                ..route("ask")
+            },
+        ];
+        let registry = [class];
+        assert_eq!(
+            command_routes(&registry, "one probe probe"),
+            ["mise run something"]
+        );
+        assert_eq!(
+            first_command_route(&registry, "one probe probe"),
+            Some("mise run something")
+        );
+        assert_eq!(
+            sighting_routes(&registry, "one probe probe"),
+            ["read rules/a.md", "run mise run something"]
+        );
+        assert!(command_routes(&registry, "no such class").is_empty());
+        assert_eq!(
+            declared_tokens(&registry),
+            BTreeSet::from(["one probe probe"])
+        );
+    }
+
+    /// Fails by: a cycle the bound must break spun forever.
+    #[test]
+    fn resolution_terminates_on_a_successor_cycle() {
+        let mut one = entry("one probe probe");
+        one.successor = Some("two probe probe".to_owned());
+        let mut two = entry("two probe probe");
+        two.successor = Some("one probe probe".to_owned());
+        assert!(resolve(&[one, two], "one probe probe").is_some());
+    }
+
+    /// Fails by: a repairing class with one command route admitted, or one
+    /// whose single route is not a command refused.
+    #[test]
+    fn a_repair_owes_a_route_that_is_not_the_repair_itself() {
+        let repairing = |routes: Vec<Route>| {
+            let mut class = entry("one probe probe");
+            class.applicability = Applicability::Retry;
+            class.routes = routes;
+            validate(&[class], &Vocabulary::default())
+        };
+        assert!(repairing(vec![route("run it")]).is_err());
+        assert!(repairing(vec![route("run it"), route("or this")]).is_ok());
+        assert!(
+            repairing(vec![Route {
+                kind: RouteKind::Document,
+                target: "rules/a.md".to_owned(),
+                ..route("read it")
+            }])
+            .is_ok()
+        );
+    }
+
+    /// Fails by: any one exclusion of the deadlock edge dropped.
+    #[test]
+    fn only_a_live_class_whose_every_way_out_is_protected_deadlocks() {
+        let protects = |path: &str| path.starts_with("protected/");
+        let into = |id: &str, kind: RouteKind, target: &str| {
+            let mut class = entry(id);
+            class.routes = vec![Route {
+                kind,
+                target: target.to_owned(),
+                ..route("way out")
+            }];
+            class
+        };
+        let deadlocked = into("one probe probe", RouteKind::Document, "protected/a.md");
+        let runnable = into("two probe probe", RouteKind::Command, "protected/a.md");
+        let mut retired = into("three probe probe", RouteKind::Document, "protected/a.md");
+        retired.successor = Some("one probe probe".to_owned());
+        let mut routeless = entry("four probe probe");
+        routeless.routes.clear();
+        let mut excused = into("five probe probe", RouteKind::Document, "protected/a.md");
+        excused.routes.push(Route {
+            kind: RouteKind::Override,
+            target: String::new(),
+            ..route("ask")
+        });
+        let gate = into(
+            Native::ProtectedMutation.id(),
+            RouteKind::Document,
+            "rules/a.md",
+        );
+        let registry = [deadlocked, runnable, retired, routeless, excused, gate];
+        assert_eq!(
+            routed_only_into_protection(&registry, protects),
+            ["one probe probe"]
+        );
+    }
+
     /// A three-slot fixture vocabulary, enough to spell `task read first`.
     fn vocab() -> Vocabulary {
         let word = |w: &str| VocabularyWord {

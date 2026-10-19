@@ -1168,4 +1168,163 @@ mod tests {
             "a bodyless payload must not read as pullable"
         );
     }
+
+    #[test]
+    fn only_a_non_null_assignee_is_an_assignment() {
+        let read = |assignee: serde_json::Value| {
+            Issue::parse(&serde_json::json!({
+                "id": "CLOUD-1", "status": "Todo", "assignee": assignee
+            }))
+            .unwrap()
+            .assigned
+        };
+        assert!(read(serde_json::json!("someone")));
+        assert!(!read(serde_json::Value::Null));
+    }
+
+    /// Fails by: a body the Ready lint refuses passing the not-ready rule.
+    #[test]
+    fn a_body_with_no_ready_block_is_refused_as_not_ready() {
+        let mut todo = issue("CLOUD-1", "Todo");
+        todo.description = Some(String::from("A body with no Ready block at all."));
+        let verdict = judge(
+            &crate::ready::Grammar::committed(),
+            &test_columns(),
+            &[todo],
+            &Request::default(),
+            Path::new("."),
+            None,
+        )
+        .unwrap();
+        assert_eq!(verdict.refusals.len(), 1);
+        assert!(verdict.refusals[0].rule.starts_with("not-ready"));
+    }
+
+    /// The rule half of a sequence verdict, or `None`.
+    fn sequence(receipts: &Path, description: &str) -> Option<String> {
+        sequence_refusal(&issue("CLOUD-1", "Todo"), description, receipts)
+            .unwrap()
+            .map(|refusal| refusal.rule)
+    }
+
+    /// Fails by: a missing stamp, a missing or hollow receipt, or a changed
+    /// body admitted, or an unchanged one refused.
+    #[test]
+    fn the_sequence_rule_reads_the_stamp_the_receipt_and_the_body() {
+        let receipts = scratch("sequence");
+        let body = "the body as read";
+        assert!(
+            sequence(&receipts, body)
+                .unwrap()
+                .starts_with("no-session-stamp")
+        );
+        stamp_session(&receipts).unwrap();
+        assert!(receipts.join(SESSION_STAMP).is_file());
+        assert!(
+            sequence(&receipts, body)
+                .unwrap()
+                .starts_with("no-read-receipt")
+        );
+        let receipt = receipts.join(format!("{READ_RECEIPT_PREFIX}CLOUD-1"));
+        std::fs::write(&receipt, "a b c -\n").unwrap();
+        assert!(
+            sequence(&receipts, body)
+                .unwrap()
+                .starts_with("no-read-receipt")
+        );
+        let digest = crate::git::blob_id(body).unwrap();
+        std::fs::write(&receipt, format!("a b c {digest}\n")).unwrap();
+        assert_eq!(sequence(&receipts, body), None);
+        assert!(
+            sequence(&receipts, "a body rewritten since")
+                .unwrap()
+                .starts_with("refined-this-session")
+        );
+    }
+
+    /// Fails by: a receipt that exists and will not read, or a store that is
+    /// not a directory, answered as no receipt — or a plain absence refused.
+    #[test]
+    fn a_baseline_that_cannot_be_looked_at_is_not_an_absent_one() {
+        let store = scratch("baseline");
+        let receipt = store.join("issue-read.CLOUD-1");
+        assert_eq!(read_baseline(&receipt, &store).unwrap(), None);
+        std::fs::write(&receipt, "a b c digest\n").unwrap();
+        assert_eq!(
+            read_baseline(&receipt, &store).unwrap().as_deref(),
+            Some("digest")
+        );
+        std::fs::remove_file(&receipt).unwrap();
+        std::fs::create_dir_all(&receipt).unwrap();
+        assert!(
+            read_baseline(&receipt, &store).is_err(),
+            "a receipt that will not read"
+        );
+        let file_store = store.join("not-a-dir");
+        std::fs::write(&file_store, "").unwrap();
+        assert!(read_baseline(&file_store.join("x"), &file_store).is_err());
+    }
+
+    /// Fails by: a takeover minted with no record of what it overrode, or a
+    /// record written for one that overrode nothing.
+    #[test]
+    fn a_receipt_records_what_a_takeover_overrode() {
+        let receipts = scratch("takeover-record");
+        let overrode = Verdict {
+            refusals: Vec::new(),
+            overridden: vec![String::from("CLOUD-1 assigned")],
+        };
+        let dest = mint(
+            &receipts,
+            "user/branch",
+            &[issue("CLOUD-1", "Todo")],
+            &overrode,
+            &Request::default(),
+            Some("abc"),
+            "2026-09-01T00:00:00Z",
+        )
+        .unwrap();
+        let body = std::fs::read_to_string(dest).unwrap();
+        assert!(
+            body.contains("takeover 1 refusal(s) overridden: CLOUD-1 assigned\n"),
+            "{body}"
+        );
+        assert!(!mint_one(&scratch("no-takeover"), "CLOUD-1", None).contains("takeover"));
+    }
+
+    /// Fails by: a directory, a file that is not a claim receipt, a receipt
+    /// naming no branch, or the wrong named orphan adopted — or the old branch
+    /// line carried onto the new receipt.
+    #[test]
+    fn adoption_moves_exactly_the_named_orphan_onto_this_branch() {
+        let receipts = scratch("adopt");
+        std::fs::write(receipts.join("claim.old"), "CLOUD-1\nbranch old\n").unwrap();
+        std::fs::write(receipts.join("claim.older"), "CLOUD-2\nbranch older\n").unwrap();
+        std::fs::write(receipts.join("claim.blank"), "CLOUD-3\nbranch \n").unwrap();
+        std::fs::write(receipts.join("notes.txt"), "branch stray\n").unwrap();
+        std::fs::create_dir_all(receipts.join("claim.dir")).unwrap();
+        let orphan = adopt(&receipts, "new", Some("old"), &|_| false).unwrap();
+        assert_eq!(orphan.recorded, "old");
+        assert_eq!(
+            std::fs::read_to_string(receipts.join(receipt_name("new"))).unwrap(),
+            "CLOUD-1\nbranch new\nadopted-from old\n"
+        );
+        assert!(!receipts.join("claim.old").exists());
+    }
+
+    #[test]
+    fn a_claimed_token_is_the_sorted_keys_of_the_receipts_first_line() {
+        let receipts = scratch("token");
+        assert_eq!(receipt_name("user/branch"), "claim.user-branch");
+        assert_eq!(claimed_token(&receipts, "user/branch"), None);
+        std::fs::write(
+            receipts.join(receipt_name("user/branch")),
+            "CLOUD-2 CLOUD-1\nbase abc\n",
+        )
+        .unwrap();
+        assert_eq!(
+            claimed_token(&receipts, "user/branch").as_deref(),
+            Some("CLOUD-1-CLOUD-2")
+        );
+    }
 }
