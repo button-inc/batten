@@ -380,12 +380,9 @@ mod tests {
         describe_cached(&dir, None).unwrap();
         let entry = cache_path(&state_dir(&dir).unwrap()).unwrap();
         assert!(entry.is_file(), "{}", entry.display());
-        let contained = fs::canonicalize(dir.join("state")).unwrap();
-        assert!(
-            fs::canonicalize(&entry).unwrap().starts_with(&contained),
-            "{}",
-            entry.display()
-        );
+        // Whichever case contained the process first, the entry lies under it.
+        let contained = crate::testing::contained_data_dir().unwrap();
+        assert!(entry.starts_with(contained), "{}", entry.display());
         fs::write(
             dir.join("batten.toml"),
             "version = 1\nstrictness = \"strict\"\n",
