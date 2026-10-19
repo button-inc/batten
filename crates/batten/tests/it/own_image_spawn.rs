@@ -45,6 +45,16 @@ use common::{Fixture, StateHome, batten, scratch};
 /// itself returns for `--version`, so a passing run cannot be the decoy's.
 const DECOY_CODE: i32 = 17;
 
+/// A `PATH` carrying the system directories and NO `batten` of any kind.
+///
+/// This is what the unit tier cannot build: under `cargo test` the checkout's
+/// own build is on `PATH`, so `doctor`'s `on_path` arm answers for `batten` and
+/// its image arm cannot be told apart from it.
+fn path_without_batten() -> std::ffi::OsString {
+    std::env::join_paths([Path::new("/usr/bin"), Path::new("/bin")])
+        .expect("the system PATH composes")
+}
+
 /// A directory whose only `batten` is a script that exits [`DECOY_CODE`].
 ///
 /// Executable on purpose. A decoy that could not run would turn a broken rung
@@ -115,5 +125,54 @@ fn a_command_row_naming_batten_runs_the_image_and_not_the_one_on_path() {
     assert_eq!(
         code, 0,
         "the running image answered `--version` and the row passed. stderr: {stderr}"
+    );
+}
+
+/// `doctor` agrees with the spawn: a `command` row naming `batten` reads as
+/// reachable on a `PATH` that carries no `batten` at all.
+///
+/// **The arm the unit tier cannot decide.** `doctor::command_program_resolves`
+/// ORs the image, `PATH` and the pin, and under `cargo test` the checkout's own
+/// build is on `PATH` — so in-process the `PATH` arm answers for `batten` too
+/// and negating the image arm changes nothing any unit case can see. Every
+/// mutant of that predicate survived for exactly that reason. Here the `PATH`
+/// is the case's own and holds no `batten`, so the image arm is the only thing
+/// that can resolve the row.
+#[test]
+fn doctor_reads_a_command_row_naming_batten_as_reachable_without_it_on_path() {
+    let root = scratch("own-image-doctor");
+    let repo = Fixture::at(root.join("repo"))
+        .config(
+            "version = 1\n\n\
+             [[rule]]\n\
+             id = \"self-image\"\n\
+             kind = \"command\"\n\
+             glob = \"**/*.rs\"\n\
+             check = \"batten --version\"\n\
+             severity = \"deny\"\n",
+        )
+        .file("lib.rs", "fine\n")
+        .git()
+        .base_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+
+    let output = batten()
+        .state_home(&home)
+        .args(["doctor"])
+        .current_dir(&repo)
+        .env("PATH", path_without_batten())
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .output()
+        .expect("run batten doctor");
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        !report.contains("program-not-on-path"),
+        "`batten` is what rung -1 spawns, so the probe must not ask PATH for it: {report}"
     );
 }
