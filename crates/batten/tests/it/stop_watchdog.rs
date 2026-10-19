@@ -82,6 +82,13 @@ fn dispatch_land(repo: &Path, home: &Path) {
     let _ = hook(repo, home, &payload);
 }
 
+/// Where the `land-dispatched` receipt of `repo`'s current branch lives, by the
+/// engine's own record path.
+fn dispatch_receipt(repo: &Path) -> PathBuf {
+    let branch = common::git_in(repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    batten::recorder::record_path(&repo.join(".git"), "land-dispatched", branch.trim(), None)
+}
+
 /// One Claude hook payload through `batten adjudicate`, at the pinned boot.
 fn hook(repo: &Path, home: &Path, payload: &serde_json::Value) -> Output {
     let mut command = batten();
@@ -328,15 +335,6 @@ fn taking_the_landing_lock_clears_the_dispatch_receipt() {
         stdout(&output),
         stderr(&output)
     );
-}
-
-/// Where the `land-dispatched` receipt of `repo`'s current branch lives.
-fn dispatch_receipt(repo: &Path) -> PathBuf {
-    let branch = common::git_in(repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
-    repo.join(".git/batten-receipts").join(format!(
-        "land-dispatched.{}",
-        branch.trim().replace('/', "-")
-    ))
 }
 
 /// THE NEWEST CRASH SPEAKS, ONCE, FOR ITS TASK: a relaunch that crashed again

@@ -735,10 +735,7 @@ pub fn alive(git_dir: &Path, options: Alive<'_>) -> Reading {
 /// kill while the registrant stays in its recorded group.
 #[must_use]
 pub fn abandoned(git_dir: &Path, program_root: &str) -> Vec<Entry> {
-    records(git_dir)
-        .into_iter()
-        .filter(|entry| !task_alive(program_root, &entry.pid, &entry.task))
-        .collect()
+    partition(git_dir, program_root).1
 }
 
 /// The registry split in one read: `(running, abandoned)`, each record probed
