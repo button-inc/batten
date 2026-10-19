@@ -480,14 +480,11 @@ fn a_spilled_leaf_does_not_outlive_the_mcp_response_stored_after_it() {
         .to_string(),
     );
     assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(&posted));
-    let calls = common::run(&dir, &["capture", "list", "--calls", "-J"]);
-    let rows: serde_json::Value = serde_json::from_slice(&calls.stdout).expect("JSON rows");
-    let digest = rows
-        .as_array()
-        .and_then(|rows| rows.iter().rev().find(|row| row["tool"] == tool))
-        .and_then(|row| row["digest"].as_str())
-        .unwrap_or_else(|| panic!("a row naming the MCP response: {rows}"))
-        .to_owned();
+    // The one call this store has seen, so its one row names the response.
+    let recorded = recorded_digests(&dir);
+    let [digest] = recorded.as_slice() else {
+        panic!("one row naming the MCP response: {recorded:?}");
+    };
     let shown = common::run(&dir, &["capture", "show", &format!("response:{digest}")]);
     assert_eq!(
         shown.status.code(),

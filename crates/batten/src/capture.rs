@@ -516,7 +516,7 @@ impl Capture {
 /// # Errors
 ///
 /// When the state root cannot be resolved.
-pub fn captures_dir(repo_root: &Path) -> Result<PathBuf> {
+pub(crate) fn captures_dir(repo_root: &Path) -> Result<PathBuf> {
     Ok(state::repo_state_dir(repo_root)?.join("captures"))
 }
 
@@ -2255,7 +2255,7 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
 //MUTANT unrecorded-evicted-last|s@^    let candidates = unrecorded.into_iter().chain(recorded).chain(in_flight);$@    let candidates = recorded.into_iter().chain(unrecorded).chain(in_flight);@|an_unrecorded_capture_is_evicted_before_a_tracker_read
 //MUTANT in-flight-evicted-first|s@^    let candidates = unrecorded.into_iter().chain(recorded).chain(in_flight);$@    let candidates = unrecorded.into_iter().chain(in_flight).chain(recorded);@|a_capture_still_being_recorded_is_not_evicted_as_an_orphan
 //MUTANT reread-ranked-by-first-row|s@^            latest.insert(found.digest.as_str(), (at, is_builtin_result(row)));$@            latest.entry(found.digest.as_str()).or_insert((at, is_builtin_result(row)));@|a_response_read_again_is_as_new_as_its_latest_call
-pub fn evict_to_budget_in_keeping(
+pub(crate) fn evict_to_budget_in_keeping(
     dir: &Path,
     config: Option<&CaptureConfig>,
     keep: Option<&str>,

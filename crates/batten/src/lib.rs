@@ -20813,6 +20813,9 @@ fn post_tool(
         recorded.result = stream_input::restore(&envelope.result, spilled);
         record_post_tool(overrides, &recorded, harness, advice);
     }
+    // RECORD BEFORE REWRITE: eviction runs in `record_post_tool`, so the
+    // captures the rewrite stores and points at land after it and need no
+    // `keep` of their own (CLOUD-2302). Evicting later would.
     rewrite_post_tool(harness, envelope, spilled, out, advice)
 }
 
@@ -23950,7 +23953,7 @@ fn capture_response(
         harness,
         capture::POST_TOOL_MEMBER,
         decoded.fidelity,
-        stored.digest.clone(),
+        stored.digest,
     );
     if capture::record_call_as(&root, &row, durable::Persist::Atomic).is_err() {
         // THE ONE UNRECORDABLE FAILURE (CLOUD-917 clause 4): the provenance write
@@ -23966,7 +23969,7 @@ fn capture_response(
     // wrong remedy, which is the whole point of a reason id. The response just
     // stored is kept (CLOUD-2302): this call's pointer names it.
     let evicted = capture::captures_dir(&root).and_then(|dir| {
-        capture::evict_to_budget_in_keeping(&dir, capture_budget().as_ref(), Some(&stored.digest))
+        capture::evict_to_budget_in_keeping(&dir, capture_budget().as_ref(), row.digest.as_deref())
     });
     if evicted.is_err() {
         note(capture::STORE_UNWRITABLE);
