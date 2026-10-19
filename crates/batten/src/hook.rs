@@ -19303,4 +19303,206 @@ deny contains "refused by themodule" if {
         assert!(no_facts(|f| policy_preapproval(&granting, &after, f)).is_none());
         assert!(no_facts(|f| policy_rewrite(&granting, &after, f)).is_none());
     }
+
+    /// The subcommand is the first bare word past the options, a value option
+    /// consuming its value; an all-option list has none.
+    ///
+    /// Fails by: a constant answer, the bound widened, the flag test inverted,
+    /// or the step subtracted.
+    #[test]
+    fn the_subcommand_is_the_first_bare_word_past_the_options() {
+        assert_eq!(
+            subcommand_index(&["-C", "/repo", "push"], &GIT_VALUE_OPTIONS),
+            Some(2)
+        );
+        assert_eq!(
+            subcommand_index(&["--no-pager", "push"], &GIT_VALUE_OPTIONS),
+            Some(1)
+        );
+        assert_eq!(subcommand_index(&["push"], &GIT_VALUE_OPTIONS), Some(0));
+        assert_eq!(subcommand_index(&["--no-pager"], &GIT_VALUE_OPTIONS), None);
+        assert_eq!(subcommand_index(&[], &GIT_VALUE_OPTIONS), None);
+    }
+
+    /// The singleton task is the task `mise run` names, past either position's
+    /// options, and nothing another program or verb names.
+    ///
+    /// Fails by: any placeholder, the program or verb test inverted, or the
+    /// task scan starting anywhere but past the verb.
+    #[test]
+    fn the_singleton_task_is_what_mise_run_names() {
+        let started = |command: &str| singleton_task_started(&envelope(command));
+        assert_eq!(started("mise run land").as_deref(), Some("land"));
+        assert_eq!(started("mise -C /repo run land").as_deref(), Some("land"));
+        assert_eq!(started("mise run -E dev land").as_deref(), Some("land"));
+        assert_eq!(started("npm run land"), None);
+        assert_eq!(started("mise exec -- land"), None);
+    }
+
+    /// Only `git push` is a push, past git's own options.
+    ///
+    /// Fails by: a constant answer, or the program and verb tests disjoined.
+    #[test]
+    fn only_git_push_pushes() {
+        let pushes = |command: &str| pushes_git(&envelope(command));
+        assert!(pushes("git -C . push origin main"));
+        assert!(!pushes("git status"));
+        assert!(!pushes("ls push"));
+    }
+
+    /// A hard reset's target is its first operand, `HEAD` when none, and a
+    /// pathspec reset in front of a real one does not end the scan.
+    ///
+    /// Fails by: any placeholder, the program, verb or flag test inverted,
+    /// the operand scan starting at the verb, or taking a flag for the target.
+    #[test]
+    fn a_hard_resets_target_is_its_first_operand() {
+        let target = |command: &str| destructive_reset_target(&envelope(command));
+        assert_eq!(target("git reset --hard HEAD~1").as_deref(), Some("HEAD~1"));
+        assert_eq!(target("git reset --hard").as_deref(), Some("HEAD"));
+        assert_eq!(
+            target("git reset --hard -- a.txt && git reset --hard HEAD~2").as_deref(),
+            Some("HEAD~2")
+        );
+        assert_eq!(target("git reset --soft HEAD~1"), None);
+        assert_eq!(target("ls reset --hard x"), None);
+    }
+
+    /// The effective program is found past assignments, grammar and wrappers,
+    /// and a segment that runs out of tokens has none.
+    ///
+    /// Fails by: any bound widened or narrowed, the grammar guard's step
+    /// changed, or the assignment skip and its bound disjoined.
+    #[test]
+    fn the_effective_program_is_found_past_every_prefix() {
+        assert_eq!(effective_program(&["A=1"]), None);
+        assert_eq!(effective_program(&["(", "git", "push"]), Some(1));
+        assert_eq!(effective_program(&["("]), Some(0));
+        assert_eq!(effective_program(&["FOO=1", "("]), Some(1));
+        assert_eq!(effective_program(&["(", "A=1", "git"]), Some(2));
+        assert_eq!(effective_program(&["(", "A=1"]), None);
+        assert_eq!(effective_program(&["nohup", "-x"]), None);
+        assert_eq!(effective_program(&["mise", "exec", "--"]), None);
+        assert_eq!(effective_program(&["mise", "exec", "--", "git"]), Some(3));
+    }
+
+    /// An assignment's name is identifier characters up to the `=`.
+    ///
+    /// Fails by: scanning the wrong span of the name.
+    #[test]
+    fn an_assignments_name_is_an_identifier() {
+        assert!(is_env_assignment("A_1=x"));
+        assert!(!is_env_assignment("A-B=1"));
+        assert!(!is_env_assignment("A"));
+    }
+
+    /// Claude Code's pre-approval is an allow on the surface that honours it,
+    /// and nothing on one that does not.
+    ///
+    /// Fails by: a constant answer, or the reachability test inverted.
+    #[test]
+    fn a_preapproval_is_encoded_only_where_honoured() {
+        let encoded = encode_preapproval(Harness::ClaudeCode, "PreToolUse", "why", None, None)
+            .expect("serializes")
+            .expect("honoured on pre-tool");
+        let parsed: Value = serde_json::from_str(&encoded).expect("parses");
+        assert_eq!(parsed["hookSpecificOutput"]["permissionDecision"], "allow");
+        assert_eq!(
+            parsed["hookSpecificOutput"]["permissionDecisionReason"],
+            "why"
+        );
+        assert_eq!(
+            encode_preapproval(Harness::ClaudeCode, "Stop", "why", None, None).expect("serializes"),
+            None
+        );
+    }
+
+    /// Each separator is spelled as the shell spells it.
+    ///
+    /// Fails by: an empty or placeholder spelling.
+    #[test]
+    fn every_separator_is_spelled_as_the_shell_spells_it() {
+        let spelled: Vec<&str> = [
+            Separator::Pipe,
+            Separator::Semi,
+            Separator::Or,
+            Separator::And,
+            Separator::Background,
+        ]
+        .iter()
+        .map(|separator| separator.as_str())
+        .collect();
+        assert_eq!(spelled, ["|", ";", "||", "&&", "&"]);
+    }
+
+    /// Operands skip flags and assignments until `--`, after which everything
+    /// is one.
+    ///
+    /// Fails by: either `literal` test inverted, or the flag and assignment
+    /// tests conjoined.
+    #[test]
+    fn operands_skip_flags_until_the_double_dash() {
+        assert_eq!(operands(&["rm", "--", "-weird"], 1), ["-weird"]);
+        assert_eq!(operands(&["rm", "-f", "A=1", "x"], 1), ["x"]);
+        assert_eq!(operands(&["rm", "-f", "x"], 1), ["x"]);
+    }
+
+    /// A trailing separator is dropped, except from the root itself.
+    ///
+    /// Fails by: the emptiness guard answering a constant or inverted.
+    #[test]
+    fn a_trailing_separator_is_dropped_but_not_from_the_root() {
+        assert_eq!(normalise("dir/"), "dir");
+        assert_eq!(normalise("./a"), "a");
+        assert_eq!(normalise("/"), "/");
+    }
+
+    /// A policy protecting exactly `paths`, over `verbs`.
+    fn protecting(paths: &[&str], verbs: Vec<MutatingVerb>) -> Policy {
+        Policy {
+            protected: PathSet::includes(
+                "protected",
+                &paths.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>(),
+            )
+            .expect("well formed"),
+            ..protected_policy(verbs)
+        }
+    }
+
+    fn adjudicated_by(policy: &Policy, command: &str) -> Decision {
+        adjudicate(
+            policy,
+            &envelope(command),
+            &crate::facts::Look::CouldNotLook,
+            &crate::facts::Look::CouldNotLook,
+            &crate::stop::StopFacts::default(),
+        )
+    }
+
+    /// The program's own name, and a subcommand the verb consumed, are never
+    /// read as operands — for a declared verb and for an unknown program.
+    ///
+    /// Fails by: starting the operand scan at the program or the subcommand.
+    #[test]
+    fn neither_the_program_nor_its_subcommand_is_an_operand() {
+        let rm = protecting(&["rm"], vec![verb("rm", None)]);
+        assert_eq!(adjudicated_by(&rm, "rm other"), Decision::Allow);
+        let git_rm = protecting(&["rm"], vec![under_subcommand("git", "rm", None)]);
+        assert_eq!(adjudicated_by(&git_rm, "git rm other"), Decision::Allow);
+        let unknown = protecting(&["foo"], Vec::new());
+        assert_eq!(adjudicated_by(&unknown, "foo other"), Decision::Allow);
+    }
+
+    /// A declared protected reader may read a protected path.
+    ///
+    /// Fails by: inverting the reader membership test.
+    #[test]
+    fn a_declared_reader_may_read_a_protected_path() {
+        let mut policy = protected_policy(Vec::new());
+        policy.protected_readers = vec![String::from("myreader")];
+        assert_eq!(
+            adjudicated_by(&policy, "myreader batten.toml"),
+            Decision::Allow
+        );
+    }
 }
