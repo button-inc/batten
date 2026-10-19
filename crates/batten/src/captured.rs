@@ -289,8 +289,9 @@ mod tests {
         let given = dir.join("repo").join("..").join("repo");
         let root = crate::git::canonical(&given);
         assert_ne!(
-            root, given,
-            "the fixture's root resolves to another spelling"
+            crate::state::repo_state_dir(&root).unwrap(),
+            crate::state::repo_state_dir(&given).unwrap(),
+            "the unresolved spelling addresses another store"
         );
         let stored = crate::capture::store(
             &root,
