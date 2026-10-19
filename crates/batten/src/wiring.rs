@@ -1166,10 +1166,7 @@ mod tests {
         let root = scratch("register-existing");
         let repo = root.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let committed = match claude() {
-            hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
-        };
-        let path = root.join(committed);
+        let path = root.join(claude().path());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "{\"permissions\": {}}\n").unwrap();
         let done = register(&root, &repo, false).unwrap();
