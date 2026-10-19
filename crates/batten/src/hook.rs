@@ -8283,7 +8283,7 @@ pub fn history_read_ids(command: &str) -> Option<Vec<String>> {
     if program.rsplit('/').next() != Some("batten") {
         return None;
     }
-    let rest = &tokens[index + 1..];
+    let rest = &tokens[index..][1..];
     let explain = rest
         .windows(2)
         .position(|pair| pair == ["policy", "explain"])?;
@@ -8321,7 +8321,7 @@ pub fn history_read_ids(command: &str) -> Option<Vec<String>> {
 pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
     let positive = |raw: Option<&str>| {
         raw.and_then(|text| text.trim().parse::<u64>().ok())
-            .filter(|value| *value > 0)
+            .filter(|value| *value != 0)
     };
     let default = positive(default).unwrap_or(120_000);
     let maximum = positive(max).unwrap_or(600_000).max(default);
@@ -19516,8 +19516,14 @@ deny contains "refused by themodule" if {
         assert_eq!(adjudicated_by(&rm, "rm other"), Decision::Allow);
         let git_rm = protecting(&["rm"], vec![under_subcommand("git", "rm", None)]);
         assert_eq!(adjudicated_by(&git_rm, "git rm other"), Decision::Allow);
-        let unknown = protecting(&["foo"], Vec::new());
+        // A `[[verb]]` row is what switches the protected gate on at all
+        // (`Policy::is_empty`); `rm` is it here, and `foo` is not one.
+        let unknown = protecting(&["foo"], vec![verb("rm", None)]);
         assert_eq!(adjudicated_by(&unknown, "foo other"), Decision::Allow);
+        assert!(
+            matches!(adjudicated_by(&unknown, "foo bar foo"), Decision::Deny(_)),
+            "the premise: an unknown program handed a protected operand is refused"
+        );
     }
 
     /// A declared protected reader may read a protected path.
@@ -19525,11 +19531,32 @@ deny contains "refused by themodule" if {
     /// Fails by: inverting the reader membership test.
     #[test]
     fn a_declared_reader_may_read_a_protected_path() {
-        let mut policy = protected_policy(Vec::new());
+        // A `[[verb]]` row is what switches the protected gate on at all.
+        let mut policy = protected_policy(vec![verb("rm", None)]);
+        assert!(
+            matches!(
+                adjudicated_by(&policy, "myreader batten.toml"),
+                Decision::Deny(_)
+            ),
+            "the premise: an undeclared reader is an unknown program"
+        );
         policy.protected_readers = vec![String::from("myreader")];
         assert_eq!(
             adjudicated_by(&policy, "myreader batten.toml"),
             Decision::Allow
+        );
+    }
+
+    /// A process substitution in a redirection's target is a command the call
+    /// runs.
+    ///
+    /// Fails by: not descending into a redirection's target.
+    #[test]
+    fn a_process_substitution_in_a_redirect_is_walked() {
+        assert!(
+            parsed_ok("cat < <(ls)")
+                .iter()
+                .any(|segment| segment.words == ["ls"])
         );
     }
 
