@@ -1344,7 +1344,7 @@ mod tests {
     /// reads the volume a missing path would land on, so there it answers.
     #[test]
     fn free_space_at_a_missing_path_refuses_on_unix_alone() {
-        let absent = std::env::temp_dir().join("batten-prune-no-volume-never-made");
+        let absent = crate::scratch::scratch("prune-no-volume").join("never-made");
         assert_eq!(available_megabytes(&absent).is_err(), cfg!(unix));
     }
 

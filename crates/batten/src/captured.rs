@@ -282,12 +282,16 @@ mod tests {
         use crate::facts::CaptureQuery;
         let dir = crate::scratch::scratch("captured-reduce");
         crate::testing::contain_state(&dir.join("state"));
-        let given = dir.join("repo");
-        std::fs::create_dir_all(&given).unwrap();
+        std::fs::create_dir_all(dir.join("repo")).unwrap();
         // The store is keyed under the resolved spelling, as the hook writes it,
-        // and `reduce` is handed the unresolved one, so resolving it is its own
-        // job: macOS spells its temp dir through a `/private` symlink.
+        // and `reduce` is handed an unresolved one, so resolving it is its own
+        // job on every platform, not only where the temp dir is a symlink.
+        let given = dir.join("repo").join("..").join("repo");
         let root = crate::git::canonical(&given);
+        assert_ne!(
+            root, given,
+            "the fixture's root resolves to another spelling"
+        );
         let stored = crate::capture::store(
             &root,
             Stream::Response,
