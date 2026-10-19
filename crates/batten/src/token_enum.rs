@@ -14,10 +14,13 @@
 
 /// Panic — at compile time, from a `const` — when two tokens are equal.
 pub(crate) const fn assert_unique(tokens: &[&str]) {
-    let mut i = 0;
+    // Each token against every EARLIER one, so the outer bound indexes
+    // `tokens[i]` directly: an off-by-one there reads past the end rather than
+    // running an empty inner loop no test could tell apart.
+    let mut i = 1;
     while i < tokens.len() {
-        let mut j = i + 1;
-        while j < tokens.len() {
+        let mut j = 0;
+        while j < i {
             assert!(
                 !same(tokens[i], tokens[j]),
                 "token_enum!: a token is declared twice"
@@ -127,5 +130,13 @@ mod tests {
     #[test]
     fn distinct_tokens_pass() {
         assert_unique(&["a b c", "d e f", "a b d"]);
+        assert_unique(&["a b c"]);
+        assert_unique(&[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "declared twice")]
+    fn a_duplicate_of_the_first_token_is_refused() {
+        assert_unique(&["a b c", "a b c"]);
     }
 }
