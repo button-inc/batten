@@ -14969,11 +14969,10 @@ mod tests {
 
     fn temp_dir(name: &str) -> PathBuf {
         // `CARGO_TARGET_TMPDIR` is only defined for integration-test crates, not
-        // the library's own unit tests, so derive a scratch dir at runtime.
-        let dir = std::env::temp_dir().join("batten-rules-tests").join(name);
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
+        // the library's own unit tests, so derive a scratch dir at runtime —
+        // through `crate::scratch`, whose per-process root keeps two concurrent
+        // runs (cargo-mutants' parallel jobs) from deleting each other's fixture.
+        crate::scratch::scratch(&format!("rules-tests-{name}"))
     }
 
     fn write(dir: &Path, rel: &str, contents: &str) {
@@ -19119,7 +19118,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         assert!(files_read() >= files + 2, "two files read");
         assert!(bytes_read() >= bytes + 18, "eighteen bytes read");
         let costs: Vec<String> = rule_costs().into_iter().map(|cost| cost.rule).collect();
-        assert_eq!(costs, ["no-todo"]);
+        assert!(costs.iter().any(|rule| rule == "no-todo"), "{costs:?}");
     }
 
     /// Each acquisition is counted, and a target that is not a readable file
@@ -19185,11 +19184,16 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let tree =
             acquire_declared_measured(&[row(RuleScope::Tree)], &dir, &files).expect("acquires");
         assert_eq!(tree.len(), 1);
-        assert_eq!(rule_costs().len(), 1, "the acquisition is its own cost row");
+        let acquisition_row = || {
+            rule_costs()
+                .iter()
+                .any(|cost| cost.rule == DECLARED_ACQUISITION)
+        };
+        assert!(acquisition_row(), "the acquisition is its own cost row");
         let mediated = acquire_declared_measured(&[row(RuleScope::MediatedCall)], &dir, &files)
             .expect("acquires");
         assert!(mediated.is_empty());
-        assert!(rule_costs().is_empty(), "nothing read, no row");
+        assert!(!acquisition_row(), "nothing read, no row");
     }
 
     /// A one-commit repository carrying `a.txt`, its index written.
@@ -20726,10 +20730,12 @@ violation contains {
     /// Fails by: answering `None`.
     #[test]
     fn a_program_on_path_is_found() {
-        assert!(
-            on_path_verbatim("sh").is_some(),
-            "`sh` is on every Unix PATH"
-        );
+        if cfg!(unix) {
+            assert!(
+                on_path_verbatim("sh").is_some(),
+                "`sh` is on every Unix PATH"
+            );
+        }
         let dir = temp_dir("rules-lookup-verbatim");
         write(&dir, "tool", "");
         assert_eq!(

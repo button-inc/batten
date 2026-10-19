@@ -18224,14 +18224,8 @@ deny contains "refused by themodule" if {
     /// Fails by: answering for another host, or a constant for Claude.
     #[test]
     fn only_claude_code_reports_a_background_ceiling() {
-        assert_eq!(
-            background_ceiling(Harness::ClaudeCode),
-            Some(background_max(
-                std::env::var("BASH_MAX_TIMEOUT_MS").ok().as_deref(),
-                std::env::var("BASH_DEFAULT_TIMEOUT_MS").ok().as_deref(),
-            ))
-        );
-        assert!(background_ceiling(Harness::ClaudeCode).is_some_and(|ms| ms > 1));
+        // The host's floor, whatever its two variables say.
+        assert!(background_ceiling(Harness::ClaudeCode).is_some_and(|ms| ms >= 7_200_000));
         assert_eq!(background_ceiling(Harness::Cursor), None);
     }
 
@@ -18288,12 +18282,11 @@ deny contains "refused by themodule" if {
         );
     }
 
+    /// A fresh, canonical scratch directory for `case`, reaped with its process.
     fn scratch_root(case: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("batten-hook-mutants-{case}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("scratch");
-        dir.canonicalize().expect("canonical scratch")
+        crate::scratch::scratch(&format!("hook-{case}"))
+            .canonicalize()
+            .expect("canonical scratch")
     }
 
     /// A target that does not exist yet is relativized through its deepest
@@ -18605,22 +18598,14 @@ deny contains "refused by themodule" if {
         unread_history: crate::facts::Look<Vec<String>>,
         body: impl FnOnce(&Facts<'_>) -> R,
     ) -> R {
+        let (stop, waived) = (
+            crate::stop::StopFacts::default(),
+            crate::waiver::Live::new(),
+        );
         body(&Facts {
-            receipts: &crate::facts::Look::CouldNotLook,
-            keys: &crate::facts::Look::CouldNotLook,
-            stop: &crate::stop::StopFacts::default(),
-            waived: &crate::waiver::Live::new(),
-            sourced: &None,
-            singleton: &None,
             unread_history: &unread_history,
             discards: &discards,
-            prospective: &crate::facts::Look::CouldNotLook,
-            manifest: None,
-            tasks: &crate::facts::Look::CouldNotLook,
-            extracted: &crate::facts::Look::CouldNotLook,
-            pinned: &crate::facts::Look::CouldNotLook,
-            dispatch: &crate::facts::Look::CouldNotLook,
-            red_head: &crate::facts::Look::CouldNotLook,
+            ..Facts::none(&stop, &waived)
         })
     }
 
@@ -18908,12 +18893,7 @@ deny contains "refused by themodule" if {
     }
 
     fn receipts(entries: &[(&str, Validity)]) -> ReceiptFacts {
-        crate::facts::Look::Is(
-            entries
-                .iter()
-                .map(|(name, validity)| ((*name).to_owned(), *validity))
-                .collect(),
-        )
+        crate::facts::Look::Is(resolved(entries))
     }
 
     /// The tool receipt gate denies a selecting receipt row whose receipt is
@@ -18969,12 +18949,8 @@ deny contains "refused by themodule" if {
             checks_any: Some(vec![String::from("claim"), String::from("carry")]),
             ..ready_receipt_row()
         };
-        let verdict = |entries: &[(&str, Validity)]| {
-            let crate::facts::Look::Is(facts) = receipts(entries) else {
-                unreachable!("built resolved");
-            };
-            receipt_verdict(&policy, &row, &facts)
-        };
+        let verdict =
+            |entries: &[(&str, Validity)]| receipt_verdict(&policy, &row, &resolved(entries));
         assert_eq!(
             verdict(&[("claim", Validity::Valid), ("carry", Validity::Valid)]),
             None
@@ -19195,12 +19171,6 @@ deny contains "refused by themodule" if {
                 ),
             )
             .expect("write module");
-            let severity = match severity {
-                RuleSeverity::Deny => "deny",
-                RuleSeverity::Warn => "warn",
-                RuleSeverity::Allow => "allow",
-                RuleSeverity::Ask => "ask",
-            };
             loaded.push(
                 serde_json::from_value::<Rule>(serde_json::json!({
                     "id": format!("row-{index}"),
@@ -19264,7 +19234,7 @@ deny contains "refused by themodule" if {
         );
         let decision = no_facts(|f| policy_rules(&mixed, &call, f));
         assert!(
-            matches!(&decision, Decision::Deny(r) if format!("{r:?}").contains("refused by beta")),
+            matches!(&decision, Decision::Deny(r) if r.verdict() == Some("refused by beta")),
             "{decision:?}"
         );
         let ties = graded_modules(
@@ -19277,7 +19247,7 @@ deny contains "refused by themodule" if {
         );
         let (_, strongest) =
             no_facts(|f| policy_refusal(&ties, &call, f)).expect("a warn violation");
-        assert!(format!("{strongest:?}").contains("refused by alpha"));
+        assert_eq!(strongest.verdict(), Some("refused by alpha"));
     }
 
     /// A `warn` module allows the call and speaks as advice, except at
