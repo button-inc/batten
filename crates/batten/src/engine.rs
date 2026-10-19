@@ -1674,13 +1674,13 @@ mod tests {
         assert_eq!(shell_word("it's"), "'it'\\''s'");
     }
 
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
-    fn a_gnu_linux_build_names_its_own_triple() {
-        assert_eq!(
-            running_target(),
-            format!("{}-unknown-linux-gnu", std::env::consts::ARCH)
-        );
+    fn the_running_target_is_this_builds_own_triple() {
+        let target = running_target();
+        assert!(target.starts_with(std::env::consts::ARCH), "{target}");
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            assert!(target.ends_with("-unknown-linux-gnu"), "{target}");
+        }
     }
 
     #[test]
@@ -1752,18 +1752,21 @@ mod tests {
         assert!(invoked_verbs("batten aB\n").is_empty());
     }
 
-    #[cfg(unix)]
+    /// Windows has no executable bit, so there the case asserts only that the
+    /// call succeeds; the mode is read where the platform has one.
     #[test]
     fn a_fetched_binary_is_made_executable() -> Result<()> {
-        use std::os::unix::fs::PermissionsExt as _;
         let dir = crate::scratch::scratch("engine-make-executable");
         let path = dir.join("batten");
         std::fs::write(&path, "")?;
         make_executable(&path)?;
-        assert_eq!(
-            std::fs::metadata(&path)?.permissions().mode() & 0o777,
-            0o755
-        );
+        let metadata = std::fs::metadata(&path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(metadata.permissions().mode() & 0o777, 0o755);
+        }
+        drop(metadata);
         Ok(())
     }
 }

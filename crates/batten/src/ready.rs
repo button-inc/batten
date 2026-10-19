@@ -2064,3 +2064,658 @@ mod issue_key_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod lint_tests {
+    use super::{
+        Grammar, Payload, Report, adjudicate, body_text, filled, lint, named_paths, owed_from,
+        tokens_in, verdict_token, workspace_version,
+    };
+    use serde_json::{Value, json};
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    /// The consumer's key, spelled from parts for `issue_key_tests`' reason.
+    fn key(n: u32) -> String {
+        format!("{}-{n}", "CL".to_owned() + "OUD")
+    }
+
+    /// A tree whose workspace version is `version`, which is all §6 reads of it.
+    fn versioned(name: &str, version: &str) -> PathBuf {
+        let dir = crate::scratch::scratch(name);
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            format!(
+                "[workspace]\nmembers = []\n\n[workspace.package]\nversion = \"{version}\"\n\n\
+                 [workspace.dependencies]\nversion = \"9.9.9\"\n"
+            ),
+        )
+        .expect("the manifest");
+        dir
+    }
+
+    fn payload(body: &str, relations: Option<Value>) -> Payload {
+        let mut value =
+            json!({"id": key(1), "description": body, "createdAt": "2026-10-01T00:00:00.000Z"});
+        if let Some(relations) = relations {
+            value["relations"] = relations;
+        }
+        Payload::parse(&value).expect("a payload")
+    }
+
+    fn linted(grammar: &Grammar, body: &str, relations: Option<Value>, root: &Path) -> Report {
+        lint(grammar, &payload(body, relations), root).expect("linted")
+    }
+
+    fn rules(report: &Report) -> Vec<String> {
+        report
+            .findings
+            .iter()
+            .map(|f| format!("{}:{}", f.line, f.rule))
+            .collect()
+    }
+
+    fn emitted<'a>(report: &'a Report, label: &str) -> Option<&'a str> {
+        report
+            .emissions
+            .iter()
+            .find_map(|line| line.strip_prefix(label)?.strip_prefix(' '))
+    }
+
+    const OPENER: &str = "**Refinement — Ready (a summary)**";
+    const SOURCE: &str = "* **Source of truth (§1).** One artifact.";
+
+    fn prose(bump: &str) -> String {
+        format!("{OPENER}\n{SOURCE}\n* **Commit / bump (§6).** {bump}\n")
+    }
+
+    #[test]
+    fn a_relations_key_is_present_unless_null_and_every_edge_is_read() {
+        let parsed = payload(
+            "x",
+            Some(
+                json!({"blockedBy": [{"id": "A-1"}], "related": [{"id": "A-2"}], "parent": {"id": "A-3"}}),
+            ),
+        );
+        assert!(parsed.relations_present);
+        assert_eq!(parsed.blocked_by, ["A-1"]);
+        let mut all = parsed.all_relations.clone();
+        all.sort();
+        assert_eq!(all, ["A-1", "A-2", "A-3"]);
+        assert!(!payload("x", Some(Value::Null)).relations_present);
+        assert!(!payload("x", None).relations_present);
+    }
+
+    #[test]
+    fn the_grammar_lends_its_key_and_strips_mention_markup() {
+        let grammar = Grammar::committed();
+        let expression = regex::Regex::new(grammar.key_expression()).expect("compiles");
+        assert!(expression.is_match(&key(5)));
+        assert!(!expression.is_match("no key here"));
+        assert_eq!(
+            grammar.without_mentions("a <issue id=\"7\">b</issue> c"),
+            "a b c"
+        );
+        let found = grammar.keys_in(&key(5));
+        assert_eq!(
+            found.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            [key(5)]
+        );
+    }
+
+    #[test]
+    fn only_an_undisclaimed_closing_verb_before_a_free_standing_key_closes_it() {
+        let grammar = Grammar::committed();
+        let closed = |text: &str| -> Vec<String> {
+            grammar
+                .keys_closed_in(text)
+                .iter()
+                .map(ToString::to_string)
+                .collect()
+        };
+        assert_eq!(closed(&format!("Closes {}", key(5))), [key(5)]);
+        assert!(closed(&format!("does not close {}", key(6))).is_empty());
+        assert!(closed(&format!("see {}", key(7))).is_empty());
+        assert!(closed(&format!("closes{}", key(8))).is_empty());
+    }
+
+    #[test]
+    fn the_workspace_version_is_read_from_the_package_table_alone() {
+        let root = versioned("ready-version", "1.2.3");
+        assert_eq!(workspace_version(&root).expect("read"), "1.2.3");
+    }
+
+    #[test]
+    fn the_body_cites_its_keys_before_any_verdict() {
+        let grammar = Grammar::committed();
+        let report = linted(&grammar, &format!("see {}", key(5)), None, Path::new("."));
+        assert_eq!(
+            report.emissions.first().map(String::as_str),
+            Some(&*format!("cites-body {}", key(5)))
+        );
+        assert_eq!(rules(&report), ["0:no-ready-block"]);
+    }
+
+    #[test]
+    fn a_finding_points_at_its_line_in_the_description() {
+        let grammar = Grammar::committed();
+        let root = Path::new(".");
+        let report = linted(&grammar, &format!("intro\n\n{OPENER}\n"), None, root);
+        assert_eq!(rules(&report), ["3:ready-block-without-clauses"]);
+        let report = linted(
+            &grammar,
+            &format!("intro\n{OPENER}\n{SOURCE}\nOpen questions blocking Ready: one.\n"),
+            None,
+            root,
+        );
+        assert_eq!(rules(&report), ["4:open-questions-block-ready"]);
+        let report = linted(
+            &grammar,
+            &format!("**Definition of Ready**\n{SOURCE}\n"),
+            None,
+            root,
+        );
+        assert!(
+            rules(&report)
+                .contains(&"1:non-canonical-ready-opener (use `**Refinement — Ready`)".to_owned()),
+            "{:?}",
+            rules(&report)
+        );
+    }
+
+    #[test]
+    fn the_clause_floor_spares_a_parent_and_a_block_with_a_clause() {
+        let grammar = Grammar::committed();
+        let root = Path::new(".");
+        assert_eq!(
+            rules(&linted(&grammar, &format!("{OPENER}\n"), None, root)),
+            ["1:ready-block-without-clauses"]
+        );
+        assert!(
+            rules(&linted(
+                &grammar,
+                &format!("{OPENER}\n{SOURCE}\n"),
+                None,
+                root
+            ))
+            .is_empty()
+        );
+        assert!(
+            rules(&linted(
+                &grammar,
+                "## Refinement gate\nsee the document\n",
+                None,
+                root
+            ))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_prose_block_owes_the_object_past_the_cutover_and_reads_its_own_clauses() {
+        let mut grammar = Grammar::committed();
+        let root = versioned("ready-prose-dialect", "1.2.0");
+        let edges = Some(json!({"blockedBy": [{"id": key(3)}]}));
+        let report = linted(&grammar, &prose("`fix` → patch"), edges.clone(), &root);
+        assert!(rules(&report).is_empty(), "{:?}", rules(&report));
+        assert_eq!(emitted(&report, "dialect"), Some("prose"));
+        assert_eq!(emitted(&report, "bump"), Some("patch"));
+        assert_eq!(emitted(&report, "cites-blockers"), Some(&*key(3)));
+        grammar.prose_dialect_required_from = Some("2026-09-01T00:00:00.000Z".to_owned());
+        let report = linted(&grammar, &prose("`fix` → patch"), edges, &root);
+        assert_eq!(rules(&report), ["1:claims-object-absent"]);
+        let report = linted(&grammar, &claims(&json!(complete())), None, &root);
+        assert!(
+            !rules(&report)
+                .iter()
+                .any(|r| r.ends_with("claims-object-absent"))
+        );
+    }
+
+    fn bump_rules(grammar: &Grammar, root: &Path, bump: &str) -> (Vec<String>, Option<String>) {
+        let report = linted(grammar, &prose(bump), None, root);
+        (rules(&report), emitted(&report, "bump").map(str::to_owned))
+    }
+
+    #[test]
+    fn the_declared_bump_agrees_with_the_type_on_a_released_line() {
+        let grammar = Grammar::committed();
+        let root = versioned("ready-bump-one", "1.2.0");
+        let clean = |bump: &str| {
+            let (found, _) = bump_rules(&grammar, &root, bump);
+            assert!(found.is_empty(), "{bump}: {found:?}");
+        };
+        clean("`feat` → minor");
+        clean("`fix` → patch");
+        clean("`feat!` → major");
+        clean("`ci` → no bump");
+        clean("`fix` — the arrow table decides");
+        let (found, emitted) = bump_rules(&grammar, &root, "`feat` → patch");
+        assert_eq!(found, ["3:bump-disagrees-with-type (feat implies minor)"]);
+        assert_eq!(emitted.as_deref(), Some("patch"));
+        let (found, _) = bump_rules(&grammar, &root, "`fix` → minor");
+        assert_eq!(found, ["3:bump-disagrees-with-type (fix implies patch)"]);
+        let (found, emitted) = bump_rules(&grammar, &root, "**none**");
+        assert!(found.is_empty(), "{found:?}");
+        assert_eq!(emitted.as_deref(), Some("none"));
+        let (found, emitted) = bump_rules(&grammar, &root, "nothing said");
+        assert_eq!(found, ["3:commit-type-missing"]);
+        assert_eq!(emitted.as_deref(), Some("-"));
+        let (found, _) = bump_rules(&grammar, &root, "minor, and the type is `feat`");
+        assert_eq!(found, ["3:commit-type-missing"]);
+    }
+
+    #[test]
+    fn below_one_tenth_a_releasing_type_collapses_to_a_patch() {
+        let grammar = Grammar::committed();
+        let root = versioned("ready-bump-zero", "0.0.5");
+        let (found, _) = bump_rules(&grammar, &root, "`feat` → patch");
+        assert!(found.is_empty(), "{found:?}");
+        let (found, _) = bump_rules(&grammar, &root, "`ci` → no bump");
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_break_denial_must_name_its_surface() {
+        let grammar = Grammar::committed();
+        let root = versioned("ready-break", "1.2.0");
+        let rule = "3:unqualified-break-claim (say which surface: `consumer` or `library` — `mise \
+                    run semver` decides the library half)";
+        assert_eq!(
+            bump_rules(&grammar, &root, "`fix` → patch, not breaking").0,
+            [rule]
+        );
+        assert!(
+            bump_rules(
+                &grammar,
+                &root,
+                "`fix` → patch, not breaking for the consumer"
+            )
+            .0
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_deny_gate_owes_its_replay_and_nothing_else_does() {
+        let grammar = Grammar::committed();
+        let root = Path::new(".");
+        let gate = "* **Gate (§3).** `mise-tasks/thing-check.sh`, severity = deny.";
+        let found = rules(&linted(
+            &grammar,
+            &format!("{OPENER}\n{SOURCE}\n{gate}\n"),
+            None,
+            root,
+        ));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].starts_with("3:deny-without-replay"), "{found:?}");
+        let replayed = format!("{OPENER}\n{SOURCE}\n{gate}\nReplay: 40 commits, fired 2 times.\n");
+        assert!(rules(&linted(&grammar, &replayed, None, root)).is_empty());
+        let warn = "* **Gate (§3).** `mise-tasks/thing-check.sh`, severity = warn.";
+        assert!(
+            rules(&linted(
+                &grammar,
+                &format!("{OPENER}\n{SOURCE}\n{warn}\n"),
+                None,
+                root
+            ))
+            .is_empty()
+        );
+        let deny = "* **Severity (§3).** **deny**.";
+        assert!(
+            rules(&linted(
+                &grammar,
+                &format!("{OPENER}\n{SOURCE}\n{deny}\n"),
+                None,
+                root
+            ))
+            .is_empty()
+        );
+    }
+
+    fn complete() -> serde_json::Map<String, Value> {
+        let Value::Object(map) = json!({
+            "source_of_truth": "the row",
+            "gate": {"task": "verify", "exits": [0, 2]},
+            "commit_type": "fix",
+            "blockers": [],
+            "tests": [{"file": "a.rs", "mutation": "slug"}],
+        }) else {
+            unreachable!()
+        };
+        map
+    }
+
+    fn claims(object: &Value) -> String {
+        format!("{OPENER}\n{SOURCE}\n\n```json\n{object}\n```\n")
+    }
+
+    fn claimed(
+        grammar: &Grammar,
+        root: &Path,
+        edit: impl FnOnce(&mut serde_json::Map<String, Value>),
+    ) -> Report {
+        let mut object = complete();
+        edit(&mut object);
+        linted(
+            grammar,
+            &claims(&Value::Object(object)),
+            Some(json!({})),
+            root,
+        )
+    }
+
+    #[test]
+    fn a_complete_object_passes_and_derives_its_bump() {
+        let grammar = Grammar::committed();
+        let root = versioned("ready-claims-complete", "1.2.0");
+        let report = claimed(&grammar, &root, |_| {});
+        assert!(rules(&report).is_empty(), "{:?}", rules(&report));
+        assert_eq!(emitted(&report, "dialect"), Some("json"));
+        assert_eq!(emitted(&report, "bump"), Some("patch"));
+        assert_eq!(emitted(&report, "obligations"), Some("a.rs:slug"));
+        let unparseable = linted(
+            &grammar,
+            &format!("{OPENER}\n{SOURCE}\n```json\n{{nope\n```\n"),
+            None,
+            &root,
+        );
+        assert_eq!(rules(&unparseable), ["1:claims-object-unparseable"]);
+    }
+
+    #[test]
+    fn a_required_claim_must_be_present_and_non_empty() {
+        let grammar = Grammar::committed();
+        let root = versioned("ready-claims-required", "1.2.0");
+        let missing =
+            |edit: fn(&mut serde_json::Map<String, Value>)| rules(&claimed(&grammar, &root, edit));
+        assert_eq!(
+            missing(|o| {
+                o.insert("source_of_truth".into(), json!(" "));
+            }),
+            ["1:claim-missing (source_of_truth)"]
+        );
+        assert_eq!(
+            missing(|o| {
+                o.insert("gate".into(), json!({}));
+            }),
+            ["1:claim-missing (gate)", "1:gate-task-unnamed"]
+        );
+        assert_eq!(
+            missing(|o| {
+                o.insert("tests".into(), json!([]));
+            }),
+            ["1:claim-missing (tests)"]
+        );
+        assert!(
+            missing(|o| {
+                o.insert("commit_type".into(), json!("docs"));
+                o.insert("tests".into(), json!([]));
+            })
+            .is_empty()
+        );
+        assert!(
+            missing(|o| {
+                o.insert("commit_type".into(), json!("none"));
+                o.insert("tests".into(), json!([]));
+            })
+            .is_empty()
+        );
+        assert_eq!(
+            missing(|o| {
+                o.insert("commit_type".into(), json!("docs"));
+                o.insert("source_of_truth".into(), json!([]));
+            }),
+            ["1:claim-missing (source_of_truth)"]
+        );
+    }
+
+    #[test]
+    fn a_feat_owes_its_prior_art_from_the_cutover_and_each_entry_its_shape() {
+        let mut grammar = Grammar::committed();
+        let root = versioned("ready-prior-art", "1.2.0");
+        let feat = |o: &mut serde_json::Map<String, Value>| {
+            o.insert("commit_type".into(), json!("feat"));
+        };
+        assert!(rules(&claimed(&grammar, &root, feat)).is_empty());
+        grammar.prior_art_required_from = Some("2026-09-01T00:00:00.000Z".to_owned());
+        assert_eq!(
+            rules(&claimed(&grammar, &root, feat)),
+            ["1:claim-missing (prior_art)"]
+        );
+        assert!(
+            rules(&claimed(&grammar, &root, |_| {})).is_empty(),
+            "a fix owes none"
+        );
+        let entry = |entry: Value| {
+            rules(&claimed(&grammar, &root, |o| {
+                o.insert("prior_art".into(), json!([entry]));
+            }))
+        };
+        assert!(entry(json!({"tool": "t", "url": "u", "verdict": "adopt"})).is_empty());
+        assert!(
+            entry(json!({"tool": "t", "url": "u", "verdict": " Reject ", "reason": "r"}))
+                .is_empty()
+        );
+        let incomplete = ["1:prior-art-entry-incomplete"];
+        assert_eq!(entry(json!({"url": "u", "verdict": "adopt"})), incomplete);
+        assert_eq!(entry(json!({"tool": "t", "verdict": "adopt"})), incomplete);
+        assert_eq!(
+            entry(json!({"tool": "t", "url": "u", "verdict": "maybe"})),
+            incomplete
+        );
+        assert_eq!(
+            entry(json!({"tool": "t", "url": "u", "verdict": "reject"})),
+            ["1:prior-art-rejection-unreasoned"]
+        );
+        let shapeless = rules(&claimed(&grammar, &root, |o| {
+            o.insert("prior_art".into(), json!("searched"));
+        }));
+        assert_eq!(shapeless, incomplete);
+    }
+
+    #[test]
+    fn a_cutover_applies_from_its_instant_and_could_not_look_passes() {
+        let at = |created: &str| {
+            let mut value = json!({"description": ""});
+            value["createdAt"] = json!(created);
+            Payload::parse(&value).expect("a payload")
+        };
+        let from = Some("2026-09-01T00:00:00.000Z");
+        assert!(owed_from(from, &at("2026-09-01T00:00:00.000Z")));
+        assert!(owed_from(from, &at("2026-10-01T00:00:00.000Z")));
+        assert!(!owed_from(from, &at("2026-08-01T00:00:00.000Z")));
+        assert!(!owed_from(None, &at("2026-10-01T00:00:00.000Z")));
+        assert!(filled(&json!({"k": "x"}), "k"));
+        assert!(!filled(&json!({"k": " "}), "k"));
+        assert!(!filled(&json!({}), "k"));
+    }
+
+    #[test]
+    fn a_gate_names_its_task_and_exits_inside_the_contract() {
+        let grammar = Grammar::committed();
+        let root = versioned("ready-claimed-gate", "1.2.0");
+        let found = rules(&claimed(&grammar, &root, |o| {
+            o.insert("gate".into(), json!({"exits": [7]}));
+        }));
+        assert_eq!(
+            found,
+            ["1:gate-task-unnamed", "1:gate-exit-outside-contract"]
+        );
+    }
+
+    #[test]
+    fn a_claimed_type_derives_its_bump_from_the_arrow_table() {
+        let grammar = Grammar::committed();
+        let derived = |root: &Path, commit_type: &str| {
+            let report = claimed(&grammar, root, |o| {
+                o.insert("commit_type".into(), json!(commit_type));
+                o.insert(
+                    "tests".into(),
+                    json!([{"file": "a.rs", "mutation": "slug"}]),
+                );
+            });
+            (rules(&report), emitted(&report, "bump").map(str::to_owned))
+        };
+        let released = versioned("ready-claimed-type-one", "1.2.0");
+        assert_eq!(derived(&released, "feat").1.as_deref(), Some("minor"));
+        assert_eq!(derived(&released, "Fix").1.as_deref(), Some("patch"));
+        assert_eq!(derived(&released, "feat!").1.as_deref(), Some("major"));
+        assert_eq!(derived(&released, "docs").1.as_deref(), Some("no-release"));
+        assert_eq!(derived(&released, "none").1.as_deref(), Some("none"));
+        assert_eq!(derived(&released, "none").0, Vec::<String>::new());
+        assert_eq!(
+            derived(&released, "fixx").0,
+            ["1:commit-type-unknown (fixx)"]
+        );
+        let early = versioned("ready-claimed-type-zero", "0.0.5");
+        assert_eq!(derived(&early, "feat").1.as_deref(), Some("patch"));
+        assert_eq!(derived(&early, "docs").1.as_deref(), Some("no-release"));
+    }
+
+    #[test]
+    fn a_claimed_blocker_is_held_to_the_edges_or_counted_unjudgeable() {
+        let grammar = Grammar::committed();
+        let root = versioned("ready-claimed-blockers", "1.2.0");
+        let mut object = complete();
+        object.insert("blockers".into(), json!([key(2)]));
+        let body = claims(&Value::Object(object));
+        let unread = linted(&grammar, &body, None, &root);
+        assert_eq!((unread.unjudgeable, unread.unjudged_line), (1, 1));
+        assert_eq!(emitted(&unread, "cites-blockers"), Some(&*key(2)));
+        let unlinked = linted(&grammar, &body, Some(json!({})), &root);
+        assert_eq!(
+            rules(&unlinked),
+            [format!("1:blocker-cited-without-relation ({})", key(2))]
+        );
+        assert_eq!(unlinked.unjudgeable, 0);
+        let linked = linted(
+            &grammar,
+            &body,
+            Some(json!({"blockedBy": [{"id": key(2)}]})),
+            &root,
+        );
+        assert!(rules(&linked).is_empty(), "{:?}", rules(&linked));
+    }
+
+    #[test]
+    fn a_test_claim_names_its_file_and_a_mutation_slug() {
+        let grammar = Grammar::committed();
+        let root = versioned("ready-claimed-tests", "1.2.0");
+        let tests = |entry: Value| {
+            rules(&claimed(&grammar, &root, |o| {
+                o.insert("tests".into(), json!([entry]));
+            }))
+        };
+        assert_eq!(
+            tests(json!({"file": "a.rs"})),
+            ["1:test-claim-incomplete (mutation)"]
+        );
+        assert_eq!(
+            tests(json!({"file": "a.rs", "mutation": "two words"})),
+            ["1:test-claim-mutation-not-a-slug"]
+        );
+    }
+
+    #[test]
+    fn a_deferral_is_held_to_the_relations_and_never_to_the_row_itself() {
+        let grammar = Grammar::committed();
+        let root = Path::new(".");
+        let body = format!(
+            "{OPENER}\n{SOURCE}\nThe rest is deferred to {}.\nAnd {} is now mine.\n",
+            key(2),
+            key(1)
+        );
+        let unread = linted(&grammar, &body, None, root);
+        assert_eq!((unread.unjudgeable, unread.unjudged_line), (1, 3));
+        let unlinked = linted(&grammar, &body, Some(json!({})), root);
+        assert_eq!(
+            rules(&unlinked),
+            [format!("3:deferral-cited-without-relation ({})", key(2))]
+        );
+        let linked = linted(
+            &grammar,
+            &body,
+            Some(json!({"relatedTo": [{"id": key(2)}]})),
+            root,
+        );
+        assert!(rules(&linked).is_empty(), "{:?}", rules(&linked));
+    }
+
+    #[test]
+    fn the_adjudication_answers_in_the_shell_programs_codes() {
+        let grammar = Grammar::committed();
+        let root = Path::new(".");
+        let value = |body: &str, relations: Option<Value>| {
+            let mut value = json!({"id": key(1), "description": body});
+            if let Some(relations) = relations {
+                value["relations"] = relations;
+            }
+            value
+        };
+        let ready = value(&format!("{OPENER}\n{SOURCE}\n"), Some(json!({})));
+        let (status, out) = adjudicate(&grammar, &ready, root).expect("judged");
+        assert_eq!(status, 0);
+        assert_eq!(out, "cites-body \ndialect prose\ncites-blockers \n");
+        assert_eq!(verdict_token(&grammar, &ready, root), Some("ready"));
+        let unready = value("no block", None);
+        assert_eq!(
+            adjudicate(&grammar, &unready, root).map(|(s, _)| s),
+            Some(1)
+        );
+        assert_eq!(verdict_token(&grammar, &unready, root), Some("unready"));
+        let partial = value(
+            &format!("{OPENER}\n{SOURCE}\nDeferred to {}.\n", key(2)),
+            None,
+        );
+        assert_eq!(
+            adjudicate(&grammar, &partial, root).map(|(s, _)| s),
+            Some(2)
+        );
+        assert_eq!(verdict_token(&grammar, &partial, root), None);
+    }
+
+    #[test]
+    fn a_body_names_the_tracked_paths_it_resolves_to_unambiguously() {
+        let dir = crate::scratch::scratch("ready-named-paths");
+        crate::gitwrite::init_on_main(&dir).expect("a repository");
+        let paths = ["src/a.rs", "mise-tasks/land.sh", "x/dup.md", "y/dup.md"];
+        for path in paths {
+            let full = dir.join(path);
+            std::fs::create_dir_all(full.parent().expect("a parent")).expect("a directory");
+            std::fs::write(full, "").expect("a file");
+        }
+        let owned: Vec<String> = paths.iter().map(|p| (*p).to_owned()).collect();
+        crate::gitwrite::commit_paths(&dir, &owned, "chore: seed").expect("a commit");
+        let body = json!({"description": "see a.rs and `land` and dup.md (twice)."});
+        assert_eq!(
+            named_paths(&body, &dir),
+            Some((0, "2 mise-tasks/land.sh src/a.rs\n".to_owned()))
+        );
+        assert_eq!(
+            named_paths(&json!({"description": "nothing"}), &dir),
+            Some((0, "0\n".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_token_is_a_dotted_word_split_on_whitespace_and_backticks() {
+        let by_base: BTreeMap<&str, Vec<&String>> = BTreeMap::new();
+        let found: Vec<String> = tokens_in("`a.rs` x.toml .rs b. `c.d`", &by_base)
+            .into_iter()
+            .collect();
+        assert_eq!(found, ["a.rs", "c.d", "x.toml"]);
+    }
+
+    #[test]
+    fn the_body_is_read_off_any_shape_the_result_carries() {
+        assert_eq!(body_text(&json!("raw")).as_deref(), Some("raw"));
+        assert_eq!(body_text(&json!({"body": "b"})).as_deref(), Some("b"));
+        assert_eq!(
+            body_text(&json!({"description": "d", "body": "b"})).as_deref(),
+            Some("d")
+        );
+        assert_eq!(body_text(&json!({})), None);
+    }
+}

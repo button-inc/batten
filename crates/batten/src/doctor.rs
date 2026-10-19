@@ -4042,3 +4042,364 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod probe_tests {
+    use super::*;
+    use std::time::{Duration, SystemTime};
+
+    /// A git repository holding `config` as its committed authority.
+    fn repository(name: &str, config: Option<&str>) -> PathBuf {
+        let dir = crate::scratch::scratch(name);
+        crate::gitwrite::init_on_main(&dir).expect("a repository");
+        if let Some(text) = config {
+            std::fs::write(dir.join(config::CONFIG_FILE), text).expect("the config");
+        }
+        dir
+    }
+
+    fn check<'a>(report: &'a Report, name: &str) -> &'a Check {
+        report
+            .checks
+            .iter()
+            .find(|check| check.name == name)
+            .expect("the check is reported")
+    }
+
+    fn command_rule(program: &str) -> String {
+        format!(
+            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"command\"\nglob = \"**/*.rs\"\ncheck = \"{program}\"\nseverity = \"deny\"\n"
+        )
+    }
+
+    #[test]
+    fn only_a_failing_check_is_a_finding_and_it_names_its_subjects() {
+        assert!(Check::passed(CONFIG).finding().is_none());
+        assert!(Check::failed(CONFIG, "config-missing").finding().is_some());
+        let subjects = finding_subjects("config", "config-missing", &["a".to_owned()]);
+        assert_eq!(
+            crate::verdict::render_subjects(&subjects),
+            "config config-missing a"
+        );
+    }
+
+    #[test]
+    fn each_state_renders_its_own_pointer_line_on_both_surfaces() {
+        let mediators = [
+            (Mediator::Current, "mediator ok"),
+            (Mediator::Stale, "mediator failed mediator-stale"),
+            (
+                Mediator::BuildBehindSource,
+                "mediator failed mediator-build-behind-source",
+            ),
+            (Mediator::NotApplicable, "mediator ok not-applicable"),
+            (
+                Mediator::Unresolvable,
+                "mediator failed mediator-unresolvable",
+            ),
+            (Mediator::Unbuilt, "mediator failed mediator-unbuilt"),
+        ];
+        for (state, line) in mediators {
+            assert_eq!(state.line(), line);
+            assert_eq!(crate::output::Line::line(&state), line);
+        }
+        let egresses = [
+            (Egress::Unproxied, "egress ok"),
+            (Egress::Partial, "egress failed egress-partial"),
+            (Egress::Unfenced, "egress failed egress-unfenced"),
+        ];
+        for (state, line) in egresses {
+            assert_eq!(state.line(), line);
+            assert_eq!(crate::output::Line::line(&state), line);
+        }
+        let toolchains = [
+            (Toolchain::Provisioned, "toolchain ok"),
+            (
+                Toolchain::Unprovisioned {
+                    missing: vec!["hk".to_owned(), "rust".to_owned()],
+                },
+                "toolchain failed toolchain-unprovisioned hk rust",
+            ),
+            (
+                Toolchain::Unreadable,
+                "toolchain failed toolchain-unreadable",
+            ),
+        ];
+        for (state, line) in toolchains {
+            assert_eq!(state.line(), line);
+            assert_eq!(crate::output::Line::line(&state), line);
+        }
+    }
+
+    #[test]
+    fn rustup_answers_through_the_placed_adapter_by_whole_line() {
+        let (ok, text) = rustup(&["--version"]).expect("rustup runs");
+        assert!(ok, "{text}");
+        assert!(text.contains("rustup"), "{text}");
+        let (_, installed) = rustup(&["target", "list", "--installed"]).expect("rustup runs");
+        let triple = installed
+            .lines()
+            .map(str::trim)
+            .find(|line| line.contains('-') && !line.contains(' '))
+            .expect("an installed target");
+        assert_eq!(rustup_has(triple), Some(true));
+        assert_eq!(rustup_has("no-such-target-triple"), Some(false));
+        let rustlib = rustlib_dir().expect("the sysroot");
+        assert!(rustlib.ends_with("lib/rustlib"), "{}", rustlib.display());
+        assert!(rustlib.is_dir(), "{}", rustlib.display());
+    }
+
+    #[test]
+    fn a_purge_drops_every_trace_of_its_target_and_no_other() {
+        let rustlib = crate::scratch::scratch("doctor-purge");
+        let target = "zz-no-such-target";
+        std::fs::create_dir_all(rustlib.join(target)).expect("the target dir");
+        std::fs::write(rustlib.join(format!("manifest-rust-std-{target}")), "m\n").expect("m");
+        std::fs::write(
+            rustlib.join("components"),
+            format!("rustc\nrust-std-{target}\ncargo\n"),
+        )
+        .expect("components");
+        purge(&rustlib, target);
+        assert!(!rustlib.join(target).exists());
+        assert!(!rustlib.join(format!("manifest-rust-std-{target}")).exists());
+        assert_eq!(
+            std::fs::read_to_string(rustlib.join("components")).expect("components"),
+            "rustc\ncargo\n"
+        );
+    }
+
+    fn gaps(root: &Path) -> String {
+        let mut out = Vec::new();
+        run_gaps(root, &mut out).expect("the gaps render");
+        String::from_utf8(out).expect("utf-8")
+    }
+
+    #[test]
+    fn only_a_counted_refusal_is_recorded_as_a_gap() {
+        let root = repository("doctor-record-gap", None);
+        let refusal = workspace_refusal(&finding_subjects("config", "config-missing", &[]));
+        record_gap(&root, &refusal.clone().counted(false));
+        assert_eq!(gaps(&root), "");
+        record_gap(&root, &refusal.counted(true));
+        let today = crate::waiver::today().expect("a clock").text();
+        let rendered = gaps(&root);
+        assert!(
+            rendered.ends_with(&format!(" 1 last {today}\n")),
+            "{rendered}"
+        );
+        assert_eq!(rendered.lines().count(), 1, "{rendered}");
+    }
+
+    #[test]
+    fn gaps_count_each_pair_and_keep_its_latest_day() {
+        let root = repository("doctor-run-gaps", None);
+        let git_dir = git::git_dir(&root).expect("a git dir");
+        let store = crate::record::journal_store(&git_dir, GAP_FAMILY);
+        let shard = crate::journal::shard_id(&root);
+        for (rule, subject, date) in [
+            ("r", "s", "2026-10-01"),
+            ("q", "", "2026-09-01"),
+            ("r", "s", "2026-10-02"),
+        ] {
+            let line = serde_json::json!({"rule": rule, "subject": subject, "date": date});
+            crate::journal::append_line(&store, &shard, &line.to_string()).expect("appended");
+        }
+        assert_eq!(
+            gaps(&root),
+            "r at s 2 last 2026-10-02\nq 1 last 2026-09-01\n"
+        );
+    }
+
+    #[test]
+    fn only_the_tools_tables_flat_keys_are_tools() {
+        let manifest = "[env]\nX = 1\n\n[tools]\n# note = \"x\"\n\nhk = \"1\"\n\"aqua:cli/cli\" = \"2\"\n\n[tasks.a]\nrun = \"x\"\n";
+        assert_eq!(declared_tools(manifest), ["aqua:cli/cli", "hk"]);
+    }
+
+    #[test]
+    fn a_tree_that_builds_no_mediator_is_not_asked() {
+        let dir = crate::scratch::scratch("doctor-mediator-na");
+        assert_eq!(diagnose_mediator(&dir), Mediator::NotApplicable);
+    }
+
+    /// `path` exists, holding nothing, last modified `seconds` past a fixed base.
+    fn stamped(path: &Path, seconds: u64) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("a directory");
+        }
+        std::fs::write(path, "").expect("a file");
+        let file = std::fs::File::options()
+            .write(true)
+            .open(path)
+            .expect("the file opens");
+        file.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000 + seconds))
+            .expect("the stamp is set");
+    }
+
+    #[test]
+    fn a_build_is_behind_only_a_strictly_newer_source_or_manifest() {
+        let behind = |name: &str, manifest: u64, source: u64| {
+            let dir = crate::scratch::scratch(name);
+            let built = dir.join("target/release/batten");
+            stamped(&built, 100);
+            stamped(&dir.join("Cargo.toml"), manifest);
+            stamped(&dir.join("crates/batten/src/lib.rs"), source);
+            build_is_behind_source(&dir, &built)
+        };
+        assert!(!behind("doctor-behind-none", 50, 50));
+        assert!(behind("doctor-behind-manifest", 200, 50));
+        assert!(!behind("doctor-behind-manifest-equal", 100, 50));
+        assert!(behind("doctor-behind-source", 50, 200));
+        assert!(!behind("doctor-behind-source-equal", 50, 100));
+        let unbuilt = crate::scratch::scratch("doctor-behind-unbuilt");
+        stamped(&unbuilt.join("Cargo.toml"), 200);
+        assert!(!build_is_behind_source(
+            &unbuilt,
+            &unbuilt.join("target/release/batten")
+        ));
+    }
+
+    #[test]
+    fn the_newest_source_is_read_under_src_and_never_under_target() {
+        let root = crate::scratch::scratch("doctor-newest-source");
+        for (at, seconds) in [
+            ("a/src/one.rs", 100),
+            ("a/src/two.rs", 100),
+            ("a/src/three.rs", 100),
+            ("a/src/deep/four.rs", 200),
+            ("a/src/five.rs", 100),
+            ("a/tests/six.rs", 300),
+            ("target/src/seven.rs", 400),
+            ("a/build.rs", 500),
+        ] {
+            stamped(&root.join(at), seconds);
+        }
+        assert_eq!(
+            newest_source_under(&root),
+            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_200))
+        );
+    }
+
+    #[test]
+    fn a_path_bearing_program_is_checked_where_it_points() {
+        let dir = crate::scratch::scratch("doctor-on-path");
+        let program = dir.join("tool");
+        std::fs::write(&program, "").expect("a file");
+        assert!(on_path(&program.to_string_lossy()));
+        assert!(!on_path(&dir.join("absent").to_string_lossy()));
+        assert!(!on_path("batten-no-such-program-anywhere"));
+    }
+
+    #[test]
+    fn a_config_this_build_resolves_passes_and_a_dropped_row_fails() {
+        let clean = repository("doctor-config-clean", Some("version = 1\n"));
+        assert_eq!(diagnose_config(&clean).line(), "config ok");
+        let dropped = repository(
+            "doctor-config-dropped",
+            Some(
+                "version = 1\n\n[[hook.handler]]\nid = \"from-a-newer-schema\"\non = \"user-prompt-submit\"\nrun = [\"true\"]\nowner = \"A-1\"\nexpires = \"2027-02-28\"\nthis_key_does_not_exist_in_any_version = true\n",
+            ),
+        );
+        assert_eq!(
+            diagnose_config(&dropped).line(),
+            "config failed config-rows-dropped"
+        );
+        let missing = repository("doctor-config-missing", None);
+        assert_eq!(
+            diagnose_config(&missing).line(),
+            "config failed config-missing"
+        );
+    }
+
+    #[test]
+    fn a_declared_transcript_earns_a_check_and_an_undeclared_one_none() {
+        let declared = repository(
+            "doctor-transcript-declared",
+            Some(
+                "version = 1\n\n[transcript]\npath = \"session.jsonl\"\nharness = \"claude-code\"\n",
+            ),
+        );
+        assert_eq!(
+            transcript_reason(&declared).map(|check| check.line()),
+            Some("transcript ok".to_owned())
+        );
+        let undeclared = repository("doctor-transcript-undeclared", Some("version = 1\n"));
+        assert!(transcript_reason(&undeclared).is_none());
+    }
+
+    #[test]
+    fn the_pin_record_answers_presence_and_the_programs_it_provides() {
+        let root = repository("doctor-pin-record", None);
+        assert!(record_is_absent(&root));
+        assert!(!provided_by_pin(&root, "tool"));
+        assert_eq!(minted(crate::facts::Fact::Pinned, &root), Some(false));
+        let manifest = root.join("mise.toml");
+        std::fs::write(&manifest, "[tools]\n").expect("the manifest");
+        let programs = std::collections::BTreeSet::from(["tool".to_owned()]);
+        assert!(crate::pinned::record(&root, &[manifest], &programs));
+        assert!(!record_is_absent(&root));
+        assert!(provided_by_pin(&root, "tool"));
+        assert!(!provided_by_pin(&root, "other"));
+        assert_eq!(minted(crate::facts::Fact::Pinned, &root), Some(true));
+    }
+
+    #[test]
+    fn the_task_record_is_minted_once_written() {
+        let root = repository("doctor-task-record", None);
+        assert_eq!(minted(crate::facts::Fact::Tasks, &root), Some(false));
+        let manifest = root.join("mise.toml");
+        std::fs::write(&manifest, "[tasks.a]\nrun = \"x\"\n").expect("the manifest");
+        let tasks = std::collections::BTreeMap::from([("a".to_owned(), None)]);
+        assert!(crate::taskset::record(&root, &[manifest], &tasks));
+        assert_eq!(minted(crate::facts::Fact::Tasks, &root), Some(true));
+        assert!(has_session_start_reader(crate::facts::Fact::Pinned));
+        assert!(has_session_start_reader(crate::facts::Fact::Tasks));
+        assert!(!has_session_start_reader(crate::facts::Fact::Keys));
+    }
+
+    #[test]
+    fn an_unreachable_program_fails_its_check_and_names_the_absent_record() {
+        let missing = diagnose(&repository(
+            "doctor-diagnose-missing",
+            Some(&command_rule("definitely-not-a-real-program-xyz")),
+        ));
+        assert_eq!(
+            check(&missing, COMMAND_PROGRAMS).line(),
+            "command-programs failed program-not-on-path definitely-not-a-real-program-xyz"
+        );
+        assert_eq!(
+            check(&missing, PIN_RECORD).line(),
+            "pin-record failed pin-record-absent definitely-not-a-real-program-xyz"
+        );
+        let present = diagnose(&repository(
+            "doctor-diagnose-present",
+            Some(&command_rule("sh -c true")),
+        ));
+        assert_eq!(
+            check(&present, COMMAND_PROGRAMS).line(),
+            "command-programs ok"
+        );
+        assert_eq!(check(&present, PIN_RECORD).line(), "pin-record ok");
+    }
+
+    #[test]
+    fn a_handler_whose_program_resolves_passes_and_one_that_does_not_fails() {
+        let handler = |program: &str| {
+            format!(
+                "version = 1\n\n[[hook.handler]]\nid = \"h\"\non = \"user-prompt-submit\"\nrun = [\"{program}\"]\nowner = \"A-1\"\nexpires = \"2027-02-28\"\n"
+            )
+        };
+        let resolves = diagnose(&repository("doctor-handler-resolves", Some(&handler("sh"))));
+        assert_eq!(check(&resolves, HOOK_HANDLERS).line(), "hook-handlers ok");
+        let unresolved = diagnose(&repository(
+            "doctor-handler-unresolved",
+            Some(&handler("definitely-not-a-real-program-xyz")),
+        ));
+        assert_eq!(
+            check(&unresolved, HOOK_HANDLERS).line(),
+            "hook-handlers failed handler-program-unresolvable"
+        );
+    }
+}
