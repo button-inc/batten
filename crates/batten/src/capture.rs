@@ -2228,7 +2228,21 @@ pub const DEFAULT_RESPONSE_MAX_RECORDS: u64 = 1024;
 ///
 /// Returns an error when the store cannot be read or a record cannot be removed.
 pub fn evict_to_budget(repo_root: &Path, config: Option<&CaptureConfig>) -> Result<usize> {
-    evict_to_budget_in(&captures_dir(repo_root)?, config)
+    evict_to_budget_keeping(repo_root, config, None)
+}
+
+/// [`evict_to_budget`], never evicting `keep`: the digest the calling call
+/// just stored, which the pointer it prints must still name (CLOUD-2302).
+///
+/// # Errors
+///
+/// As [`evict_to_budget`].
+pub fn evict_to_budget_keeping(
+    repo_root: &Path,
+    config: Option<&CaptureConfig>,
+    keep: Option<&str>,
+) -> Result<usize> {
+    evict_to_budget_in_keeping(&captures_dir(repo_root)?, config, keep)
 }
 
 /// [`evict_to_budget`] over a store directory named outright — [`store_in`]'s
@@ -2237,10 +2251,24 @@ pub fn evict_to_budget(repo_root: &Path, config: Option<&CaptureConfig>) -> Resu
 /// # Errors
 ///
 /// As [`evict_to_budget`].
+pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<usize> {
+    evict_to_budget_in_keeping(dir, config, None)
+}
+
+/// [`evict_to_budget_keeping`] over a store directory named outright.
+///
+/// # Errors
+///
+/// As [`evict_to_budget`].
+//MUTANT kept-digest-evicted|s@^        if keep == Some(record.digest.as_str()) {$@        if false {@|the_digest_a_call_just_stored_survives_its_own_eviction
 //MUTANT unrecorded-evicted-last|s@^    let candidates = unrecorded.into_iter().chain(recorded).chain(in_flight);$@    let candidates = recorded.into_iter().chain(unrecorded).chain(in_flight);@|an_unrecorded_capture_is_evicted_before_a_tracker_read
 //MUTANT in-flight-evicted-first|s@^    let candidates = unrecorded.into_iter().chain(recorded).chain(in_flight);$@    let candidates = unrecorded.into_iter().chain(in_flight).chain(recorded);@|a_capture_still_being_recorded_is_not_evicted_as_an_orphan
 //MUTANT reread-ranked-by-first-row|s@^            latest.insert(found.digest.as_str(), (at, is_builtin_result(row)));$@            latest.entry(found.digest.as_str()).or_insert((at, is_builtin_result(row)));@|a_response_read_again_is_as_new_as_its_latest_call
-pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<usize> {
+pub fn evict_to_budget_in_keeping(
+    dir: &Path,
+    config: Option<&CaptureConfig>,
+    keep: Option<&str>,
+) -> Result<usize> {
     let max_bytes = config
         .and_then(|held| held.max_bytes)
         .unwrap_or(DEFAULT_RESPONSE_MAX_BYTES);
@@ -2330,6 +2358,9 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
     for record in candidates {
         if total <= max_bytes && count <= max_records {
             break;
+        }
+        if keep == Some(record.digest.as_str()) {
+            continue;
         }
         let path = dir.join(format!("{}-{}", record.stream, record.digest));
         if std::fs::remove_file(&path).is_ok() {
@@ -3290,6 +3321,39 @@ mod tests {
         assert!(
             rows.last().is_some_and(|last| last.order >= 8),
             "the trim kept the head rather than the tail"
+        );
+    }
+
+    #[test]
+    fn the_digest_a_call_just_stored_survives_its_own_eviction() {
+        // CLOUD-2302: the call that stores a response points at it, so its own
+        // eviction pass never takes it — even under a budget it alone exceeds.
+        let root = scratch_store("evict-keep");
+        let older = store_in(&root, Stream::Response, b"an older response").unwrap();
+        let kept = store_in(&root, Stream::Response, b"the response just stored").unwrap();
+        for digest in [&older.digest, &kept.digest] {
+            record_call_in(&root, &row("s", Some(digest), None)).unwrap();
+        }
+        let none = CaptureConfig {
+            inline_max_bytes: None,
+            result_max_tokens: None,
+            max_bytes: Some(1),
+            max_records: None,
+        };
+        assert_eq!(
+            evict_to_budget_in_keeping(&root, Some(&none), Some(&kept.digest)).unwrap(),
+            1
+        );
+        let left: Vec<String> = list_in(&root)
+            .unwrap()
+            .into_iter()
+            .filter(|held| held.stream == Stream::Response.as_str())
+            .map(|held| held.digest)
+            .collect();
+        assert_eq!(
+            left,
+            vec![kept.digest],
+            "the call evicted what it had just stored"
         );
     }
 

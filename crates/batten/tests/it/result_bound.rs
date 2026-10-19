@@ -449,3 +449,50 @@ fn a_capture_still_being_recorded_is_not_evicted_as_an_orphan() {
     assert!(row_less, "the capture mid-write stays");
     assert!(!read, "the ranked record goes first");
 }
+
+/// THE CALL THAT STORES A RESPONSE NEVER EVICTS IT (CLOUD-2302): its row is the
+/// newest, so it ranks last, but a budget the store cannot meet without it took
+/// it in the same call, and the `capture show` a reader runs next found nothing.
+/// `#MUTANT kept-digest-evicted`.
+#[test]
+fn a_spilled_leaf_does_not_outlive_the_mcp_response_stored_after_it() {
+    let dir = common::Fixture::at(common::scratch("result-bound-keep").join("repo"))
+        .config("version = 1\n\n[capture]\nmax_bytes = 512\n")
+        .git()
+        .base_commit()
+        .build();
+    let tool = "mcp__linear__get_issue";
+    let issue = serde_json::json!({ "id": "CLOUD-1", "description": payload(60) }).to_string();
+    assert!(
+        issue.len() > 512,
+        "the premise: the response alone exceeds the budget"
+    );
+    let posted = common::run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "bound",
+            "tool_name": tool,
+            "tool_input": { "id": "CLOUD-1" },
+            "tool_response": [{ "type": "text", "text": issue }],
+        })
+        .to_string(),
+    );
+    assert_eq!(posted.status.code(), Some(0), "{}", common::stderr(&posted));
+    let calls = common::run(&dir, &["capture", "list", "--calls", "-J"]);
+    let rows: serde_json::Value = serde_json::from_slice(&calls.stdout).expect("JSON rows");
+    let digest = rows
+        .as_array()
+        .and_then(|rows| rows.iter().rev().find(|row| row["tool"] == tool))
+        .and_then(|row| row["digest"].as_str())
+        .unwrap_or_else(|| panic!("a row naming the MCP response: {rows}"))
+        .to_owned();
+    let shown = common::run(&dir, &["capture", "show", &format!("response:{digest}")]);
+    assert_eq!(
+        shown.status.code(),
+        Some(0),
+        "the MCP response was evicted by the call that stored it: {}",
+        common::stderr(&shown)
+    );
+}

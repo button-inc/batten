@@ -23950,7 +23950,7 @@ fn capture_response(
         harness,
         capture::POST_TOOL_MEMBER,
         decoded.fidelity,
-        stored.digest,
+        stored.digest.clone(),
     );
     if capture::record_call_as(&root, &row, durable::Persist::Atomic).is_err() {
         // THE ONE UNRECORDABLE FAILURE (CLOUD-917 clause 4): the provenance write
@@ -23963,8 +23963,11 @@ fn capture_response(
     // An `Err` here is a store that could not be READ or REWRITTEN — the bytes
     // are already published and the row is already written, so it is never a
     // budget refusal. `BUDGET_EXHAUSTED` would send a `doctor` reader to the
-    // wrong remedy, which is the whole point of a reason id.
-    if capture::evict_to_budget(&root, capture_budget().as_ref()).is_err() {
+    // wrong remedy, which is the whole point of a reason id. The response just
+    // stored is kept (CLOUD-2302): this call's pointer names it.
+    if capture::evict_to_budget_keeping(&root, capture_budget().as_ref(), Some(&stored.digest))
+        .is_err()
+    {
         note(capture::STORE_UNWRITABLE);
     }
 }
