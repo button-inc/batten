@@ -29274,6 +29274,20 @@ pub fn land_ready_owes(
 mod tests {
     use super::*;
 
+    /// `mcp grant` and `mcp posture` judge the operand where one was given, and
+    /// otherwise the committed settings file the MCP permission grammar lives in.
+    #[test]
+    fn mcp_settings_is_the_operand_or_the_committed_claude_settings() {
+        assert_eq!(
+            mcp_settings(Path::new("repo"), Some("elsewhere.json")),
+            PathBuf::from("elsewhere.json")
+        );
+        assert_eq!(
+            mcp_settings(Path::new("repo"), None),
+            Path::new("repo").join(".claude/settings.json")
+        );
+    }
+
     /// CLOUD-2372: the next landing's reap, not a reader, forgets a dead
     /// registrant. A pid past every platform's `pid_max` is dead wherever a
     /// corpse can be found; off unix nothing is found dead and nothing is reaped.

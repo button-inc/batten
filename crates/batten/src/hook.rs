@@ -17920,6 +17920,108 @@ deny contains "refused by themodule" if {
         );
     }
 
+    /// A unified diff is both headers, and `/dev/null` is no file.
+    ///
+    /// A lone `---` line is a markdown rule or a YAML document marker, so it
+    /// opens no diff; and an added or deleted file's other side is `/dev/null`,
+    /// which names nothing to judge.
+    #[test]
+    fn a_unified_patch_needs_both_headers_and_never_names_dev_null() {
+        assert!(
+            patch_targets(&serde_json::json!({ "content": "--- a/batten.toml\nnot a diff" }))
+                .is_empty()
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "--- /dev/null\n+++ b/src/new.rs\n@@ -0,0 +1 @@\n+x\n",
+            })),
+            ["src/new.rs"]
+        );
+    }
+
+    /// A read names its target under each host's spelling of the key.
+    #[test]
+    fn a_read_s_target_is_resolved_under_each_spelling() {
+        for (harness, tool, key) in [
+            (Harness::ClaudeCode, "Read", "file_path"),
+            (Harness::OpenCode, "read", "filePath"),
+        ] {
+            let envelope = decode_value(
+                harness,
+                &serde_json::json!({
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": tool,
+                    "tool_input": { key: "notes.txt" },
+                }),
+            )
+            .expect("decodes");
+            assert_eq!(
+                envelope.reads.as_deref(),
+                Some("notes.txt"),
+                "{}: `{tool}` named its target under `{key}`",
+                harness.as_str()
+            );
+        }
+    }
+
+    /// Each layout answers its path and the key its events live under.
+    #[test]
+    fn a_wiring_file_names_its_path_and_event_key_in_every_layout() {
+        let key = WiringFile::Key {
+            path: "k.json",
+            key: "events",
+        };
+        assert_eq!(
+            [WiringFile::Whole("w.json"), WiringFile::Root("r.json"), key].map(WiringFile::path),
+            ["w.json", "r.json", "k.json"]
+        );
+        assert_eq!(
+            [WiringFile::Whole("w.json"), WiringFile::Root("r.json"), key]
+                .map(WiringFile::event_key),
+            [Some("hooks"), None, Some("events")]
+        );
+    }
+
+    /// Exactly one host has a surveyed question tool and a surveyed MCP log
+    /// tree, read off the table: a new host answers `None` until measured.
+    #[test]
+    fn only_claude_code_has_a_surveyed_question_tool_and_mcp_log_tree() {
+        let surveyed = |fact: fn(Harness) -> Option<&'static str>| -> Vec<(Harness, &'static str)> {
+            Harness::ALL
+                .iter()
+                .filter_map(|&harness| fact(harness).map(|value| (harness, value)))
+                .collect()
+        };
+        assert_eq!(
+            surveyed(Harness::question_tool),
+            [(Harness::ClaudeCode, "AskUserQuestion")]
+        );
+        assert_eq!(
+            surveyed(Harness::mcp_logs),
+            [(Harness::ClaudeCode, ".cache/claude-cli-nodejs")]
+        );
+    }
+
+    /// A pre-approval on a host that reads Claude Code's verdict object is the
+    /// allow verdict with its reason, on the event it is honoured on.
+    #[test]
+    fn a_preapproval_on_a_claude_shaped_host_is_an_allow_with_its_reason() {
+        for harness in [Harness::ClaudeCode, Harness::Factory] {
+            let body = encode_preapproval(harness, "PreToolUse", "the rule allows it", None, None)
+                .expect("serializes")
+                .unwrap_or_else(|| panic!("{} honours a pre-approval", harness.as_str()));
+            let verdict: Value = serde_json::from_str(&body).expect("json");
+            assert_eq!(
+                verdict.pointer("/hookSpecificOutput/permissionDecision"),
+                Some(&serde_json::json!("allow"))
+            );
+            assert_eq!(
+                verdict.pointer("/hookSpecificOutput/permissionDecisionReason"),
+                Some(&serde_json::json!("the rule allows it"))
+            );
+        }
+    }
+
     #[test]
     fn a_write_under_an_undeclared_spelling_still_names_a_fix() {
         // The `[[verb]]` row is message composition now, so a spelling the
