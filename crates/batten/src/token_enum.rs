@@ -60,26 +60,6 @@ const fn same(a: &str, b: &str) -> bool {
 /// }
 /// ```
 macro_rules! token_enum {
-    (@impl $name:ident $method:ident [$( $variant:ident => $token:literal ),*]) => {
-        // TOKEN UNIQUENESS, AT COMPILE TIME: two variants sharing a token make
-        // a refusal unattributable and, under the `serde` arm, a spelling that
-        // silently deserializes to the first. A duplicate fails the build.
-        const _: () = $crate::token_enum::assert_unique(&[ $( $token, )* ]);
-
-        impl $name {
-            /// Every variant, in declaration order — generated from the one
-            /// declaration, so none can exist unlisted.
-            pub const ALL: &'static [$name] = &[ $( $name::$variant, )* ];
-
-            /// The token this variant is declared and rendered under.
-            #[must_use]
-            pub const fn $method(self) -> &'static str {
-                match self {
-                    $( $name::$variant => $token, )*
-                }
-            }
-        }
-    };
     // The `serde` arm is the plain one with a rename on each variant, so the
     // enum is generated in one place.
     (
@@ -106,7 +86,25 @@ macro_rules! token_enum {
         $vis enum $name {
             $( $(#[$meta])* $variant, )*
         }
-        token_enum!(@impl $name $method [$( $variant => $token ),*]);
+
+        // TOKEN UNIQUENESS, AT COMPILE TIME: two variants sharing a token make
+        // a refusal unattributable and, under the `serde` arm, a spelling that
+        // silently deserializes to the first. A duplicate fails the build.
+        const _: () = $crate::token_enum::assert_unique(&[ $( $token, )* ]);
+
+        impl $name {
+            /// Every variant, in declaration order — generated from the one
+            /// declaration, so none can exist unlisted.
+            pub const ALL: &'static [$name] = &[ $( $name::$variant, )* ];
+
+            /// The token this variant is declared and rendered under.
+            #[must_use]
+            pub const fn $method(self) -> &'static str {
+                match self {
+                    $( $name::$variant => $token, )*
+                }
+            }
+        }
     };
 }
 
