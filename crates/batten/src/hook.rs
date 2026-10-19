@@ -17935,4 +17935,419 @@ deny contains "refused by themodule" if {
         );
         assert_eq!(parsed[0].terminator, Some(Separator::Background));
     }
+
+    // ---------------------------------------------------------------------
+    // CLOUD-2485: cases for mutants the CLOUD-2453 sweep left unkilled.
+    // ---------------------------------------------------------------------
+
+    /// Only Claude Code's question tool is surveyed; every other host answers
+    /// `None`, the safe direction.
+    ///
+    /// Fails by: answering `None`, an empty name, or a guessed one for Claude.
+    #[test]
+    fn only_claude_code_names_a_question_tool() {
+        assert_eq!(Harness::ClaudeCode.question_tool(), Some("AskUserQuestion"));
+        for harness in Harness::ALL {
+            if *harness != Harness::ClaudeCode {
+                assert_eq!(harness.question_tool(), None, "{}", harness.as_str());
+            }
+        }
+    }
+
+    /// An `mcp__` prefix is the MCP operation, and any other unknown name is
+    /// `Other` carrying its spelling.
+    ///
+    /// Fails by: the prefix guard answering a constant either way.
+    #[test]
+    fn the_mcp_prefix_and_nothing_else_classifies_as_mcp() {
+        assert_eq!(
+            Harness::ClaudeCode.operation_of("mcp__server__tool"),
+            Operation::Mcp
+        );
+        assert_eq!(
+            Harness::ClaudeCode.operation_of("Glob"),
+            Operation::Other(String::from("Glob"))
+        );
+    }
+
+    /// Each response shape has its own stable token.
+    ///
+    /// Fails by: an empty or placeholder token.
+    #[test]
+    fn every_response_shape_has_its_token() {
+        let tokens: Vec<&str> = ResponseShape::ALL.iter().map(|s| s.as_str()).collect();
+        assert_eq!(tokens, ["post-tool-member", "spill-path", "transcript"]);
+    }
+
+    /// A pre-approval is honoured exactly on the declared surfaces.
+    ///
+    /// Fails by: answering a constant.
+    #[test]
+    fn a_preapproval_is_reachable_only_where_honoured() {
+        let capabilities = Harness::ClaudeCode.capabilities();
+        assert!(capabilities.preapprove_reachable("PreToolUse"));
+        assert!(!capabilities.preapprove_reachable("Stop"));
+    }
+
+    /// The two substitutions fire only when the stand-in is emitted.
+    ///
+    /// Fails by: either guard answering a constant, which a host emitting
+    /// neither the event nor its stand-in tells apart.
+    #[test]
+    fn a_degraded_event_needs_its_stand_in() {
+        let full = Harness::ClaudeCode.capabilities();
+        let only = |events: &'static [Event]| Capabilities { events, ..full };
+        let stop_only = only(&[Event::Stop]);
+        assert_eq!(stop_only.degrade(Event::TaskCompleted), Some(Event::Stop));
+        assert_eq!(stop_only.degrade(Event::PostToolBatch), None);
+        let post_only = only(&[Event::PostTool]);
+        assert_eq!(
+            post_only.degrade(Event::PostToolBatch),
+            Some(Event::PostTool)
+        );
+        assert_eq!(post_only.degrade(Event::TaskCompleted), None);
+        assert_eq!(only(&[]).degrade(Event::TaskCompleted), None);
+    }
+
+    /// The rendered wiring is JSON naming each registered event and the
+    /// derived command.
+    ///
+    /// Fails by: rendering nothing, or a placeholder in place of the JSON.
+    #[test]
+    fn rendered_wiring_parses_and_names_each_registration() {
+        let mut rendered_any = false;
+        for harness in Harness::ALL {
+            let Some(wiring) = harness.wiring() else {
+                continue;
+            };
+            let rendered = render_wiring(*harness, &wiring);
+            let parsed: Value = serde_json::from_str(&rendered)
+                .unwrap_or_else(|e| panic!("{}: {e}: {rendered}", harness.as_str()));
+            let hooks = match wiring.file {
+                WiringFile::Whole(_) => &parsed["hooks"],
+                WiringFile::Key { .. } => &parsed,
+            };
+            for (_, spelling) in wiring.registrations(*harness) {
+                rendered_any = true;
+                assert_eq!(
+                    hooks[spelling][0]["hooks"][0]["command"],
+                    Value::String(wiring_command(*harness)),
+                    "{}: {spelling}",
+                    harness.as_str()
+                );
+            }
+        }
+        assert!(rendered_any, "no host rendered a registration");
+        assert_eq!(json_string("a\"b"), "\"a\\\"b\"");
+    }
+
+    /// Only Claude Code's MCP log tree is surveyed.
+    ///
+    /// Fails by: answering `None`, empty or a placeholder for Claude.
+    #[test]
+    fn only_claude_code_names_an_mcp_log_tree() {
+        assert_eq!(
+            Harness::ClaudeCode.mcp_logs(),
+            Some(".cache/claude-cli-nodejs")
+        );
+        for harness in Harness::ALL {
+            if *harness != Harness::ClaudeCode {
+                assert_eq!(harness.mcp_logs(), None, "{}", harness.as_str());
+            }
+        }
+    }
+
+    /// Each hook source has its own stable token.
+    ///
+    /// Fails by: an empty or placeholder token.
+    #[test]
+    fn every_hook_source_has_its_token() {
+        let tokens: Vec<&str> = HookSource::ALL.iter().map(|s| s.as_str()).collect();
+        assert_eq!(tokens, ["cli", "harness", "git", "ci"]);
+    }
+
+    /// The harness vocabulary names moments, never the unrecognized event.
+    ///
+    /// Fails by: an empty vocabulary, or keeping only the unrecognized event.
+    #[test]
+    fn the_harness_vocabulary_names_no_unrecognized_event() {
+        let vocabulary = harness_vocabulary();
+        assert!(
+            vocabulary
+                .iter()
+                .any(|(name, _)| name == "claude-code:pre-tool"),
+            "{vocabulary:?}"
+        );
+        assert!(
+            !vocabulary
+                .iter()
+                .any(|(name, _)| name.ends_with(":unrecognized")),
+            "{vocabulary:?}"
+        );
+    }
+
+    /// Stop carries no verdict and pre-tool does.
+    ///
+    /// Fails by: answering `true` for every event.
+    #[test]
+    fn stop_carries_no_verdict_and_pre_tool_does() {
+        assert!(!Event::Stop.carries_a_verdict());
+        assert!(Event::PreTool.carries_a_verdict());
+    }
+
+    /// Every converged spelling normalizes to its own event.
+    ///
+    /// Fails by: dropping any arm, which reads that spelling as unrecognized.
+    #[test]
+    fn every_converged_spelling_normalizes_to_its_event() {
+        for (event, spelling) in CLAUDE_SPELLINGS {
+            assert_eq!(Event::normalize(spelling), *event, "{spelling}");
+        }
+        assert_eq!(Event::normalize("Nonsense"), Event::Unrecognized);
+    }
+
+    /// Only `Other` is unclassified.
+    ///
+    /// Fails by: answering `true` for a classified operation.
+    #[test]
+    fn a_classified_operation_is_not_unclassified() {
+        assert!(!Operation::Write.is_unclassified());
+        assert!(Operation::Other(String::from("x")).is_unclassified());
+    }
+
+    fn decoded(raw: &str) -> Envelope {
+        decode(Harness::ClaudeCode, raw).expect("decodes")
+    }
+
+    /// Plan mode alone withholds writes; any other mode, or none, offers them.
+    ///
+    /// Fails by: a constant answer, or the comparison inverted.
+    #[test]
+    fn only_plan_mode_withholds_writes() {
+        assert!(!decoded(r#"{"permission_mode":"plan"}"#).writes_available());
+        assert!(decoded(r#"{"permission_mode":"default"}"#).writes_available());
+        assert!(decoded("{}").writes_available());
+    }
+
+    /// An empty mode is absent, never `Some("")`.
+    ///
+    /// Fails by: keeping the empty string.
+    #[test]
+    fn an_empty_mode_is_absent() {
+        assert_eq!(decoded(r#"{"permission_mode":""}"#).mode, None);
+        assert_eq!(
+            decoded(r#"{"permissionMode":"plan"}"#).mode.as_deref(),
+            Some("plan")
+        );
+    }
+
+    /// A context is the session, with the agent appended when one reads.
+    ///
+    /// Fails by: answering a constant.
+    #[test]
+    fn a_context_is_the_session_and_its_agent() {
+        assert_eq!(
+            decoded(r#"{"session_id":"s1"}"#).context().as_deref(),
+            Some("s1")
+        );
+        assert_eq!(
+            decoded(r#"{"session_id":"s1","agent_id":"a1"}"#)
+                .context()
+                .as_deref(),
+            Some("s1\u{1f}a1")
+        );
+        assert_eq!(decoded("{}").context(), None);
+    }
+
+    /// The agent id is a present, non-empty string or nothing.
+    ///
+    /// Fails by: answering a constant, or keeping the empty string.
+    #[test]
+    fn an_agent_id_must_be_present_and_non_empty() {
+        assert_eq!(
+            present_str(&serde_json::json!({"agent_id": "a"}), "agent_id").as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            present_str(&serde_json::json!({"agent_id": ""}), "agent_id"),
+            None
+        );
+        assert_eq!(present_str(&serde_json::json!({}), "agent_id"), None);
+    }
+
+    /// A read target is the read tool's path, and nothing else's.
+    ///
+    /// Fails by: a constant answer, reading a non-read tool, or keeping an
+    /// empty path.
+    #[test]
+    fn a_read_target_is_the_read_tools_non_empty_path() {
+        let read = |tool: &str, path: &str| {
+            decoded(&format!(
+                r#"{{"tool_name":"{tool}","tool_input":{{"file_path":"{path}"}}}}"#
+            ))
+            .reads
+        };
+        assert_eq!(read("Read", "src/a.rs").as_deref(), Some("src/a.rs"));
+        assert_eq!(read("Read", ""), None);
+        assert_eq!(read("Bash", "src/a.rs"), None);
+    }
+
+    /// An empty write path is no write target.
+    ///
+    /// Fails by: keeping the empty string.
+    #[test]
+    fn an_empty_write_path_is_no_write() {
+        let envelope = decoded(r#"{"tool_name":"Write","tool_input":{"file_path":""}}"#);
+        assert_eq!(envelope.writes, None);
+    }
+
+    /// A field is read off the decoded payload.
+    ///
+    /// Fails by: answering a constant.
+    #[test]
+    fn a_field_is_read_off_the_payload() {
+        assert_eq!(
+            field(
+                Harness::ClaudeCode,
+                r#"{"session_id":"s9"}"#,
+                Field::SessionId
+            )
+            .as_deref(),
+            Some("s9")
+        );
+        assert_eq!(field(Harness::ClaudeCode, "{}", Field::SessionId), None);
+    }
+
+    /// Only Claude Code reports a background ceiling, and it is the one its
+    /// two variables name.
+    ///
+    /// Fails by: answering for another host, or a constant for Claude.
+    #[test]
+    fn only_claude_code_reports_a_background_ceiling() {
+        assert_eq!(
+            background_ceiling(Harness::ClaudeCode),
+            Some(background_max(
+                std::env::var("BASH_MAX_TIMEOUT_MS").ok().as_deref(),
+                std::env::var("BASH_DEFAULT_TIMEOUT_MS").ok().as_deref(),
+            ))
+        );
+        assert!(background_ceiling(Harness::ClaudeCode).is_some_and(|ms| ms > 1));
+        assert_eq!(background_ceiling(Harness::Cursor), None);
+    }
+
+    /// Cursor's renamed events normalize to their concepts.
+    ///
+    /// Fails by: dropping any arm, which reads the spelling as unrecognized.
+    #[test]
+    fn cursors_renamed_events_normalize() {
+        for (raw, event) in [
+            ("afterFileEdit", Event::PostTool),
+            ("stop", Event::Stop),
+            ("subagentStop", Event::Stop),
+            ("sessionStart", Event::SessionStart),
+        ] {
+            assert_eq!(normalize_event(Harness::Cursor, raw), event, "{raw}");
+        }
+    }
+
+    /// Each Cursor specialized event names its own tool.
+    ///
+    /// Fails by: dropping any arm.
+    #[test]
+    fn each_cursor_specialized_event_names_its_tool() {
+        assert_eq!(
+            cursor_specialized_tool("beforeShellExecution"),
+            Some("Shell")
+        );
+        assert_eq!(cursor_specialized_tool("beforeReadFile"), Some("Read"));
+        assert_eq!(cursor_specialized_tool("beforeMCPExecution"), Some("MCP"));
+        assert_eq!(cursor_specialized_tool("preToolUse"), None);
+    }
+
+    /// A repair record names the row, the subject when there is one, and the
+    /// class it spared.
+    ///
+    /// Fails by: an empty or placeholder line.
+    #[test]
+    fn a_repair_line_names_row_subject_and_class() {
+        use crate::refusal::{Severity, head};
+        let head = head(Severity::Note, crate::verdict::Native::CallFixSilent.id());
+        let mut repair = Repair {
+            rule: String::from("row"),
+            repaired: String::from("class"),
+            subject: Some(String::from("KEY-1")),
+        };
+        assert_eq!(
+            repair.line_text(),
+            format!("{head} at row KEY-1 (repaired class)")
+        );
+        repair.subject = None;
+        assert_eq!(
+            repair.line_text(),
+            format!("{head} at row (repaired class)")
+        );
+    }
+
+    fn scratch_root(case: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("batten-hook-mutants-{case}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        dir.canonicalize().expect("canonical scratch")
+    }
+
+    /// A target that does not exist yet is relativized through its deepest
+    /// existing ancestor, and an absolute write is rewritten in place.
+    ///
+    /// Fails by: skipping every component but `.`, or `relativise_writes`
+    /// doing nothing.
+    #[test]
+    fn a_not_yet_existing_target_relativizes_through_its_ancestor() {
+        let root = scratch_root("relativize");
+        let target = root.join("new-dir").join(".").join("file.txt");
+        assert_eq!(
+            relative_to(&root, &target.display().to_string()).as_deref(),
+            Some("new-dir/file.txt")
+        );
+        let mut envelope = decoded(&format!(
+            r#"{{"tool_name":"Write","tool_input":{{"file_path":{}}}}}"#,
+            json_string(&target.display().to_string())
+        ));
+        envelope.relativise_writes(&root);
+        assert_eq!(envelope.writes.as_deref(), Some("new-dir/file.txt"));
+    }
+
+    #[cfg(unix)]
+    fn symlink(target: &Path, link: &Path) {
+        std::os::unix::fs::symlink(target, link).expect("link");
+    }
+
+    #[cfg(not(unix))]
+    fn symlink(_: &Path, _: &Path) {}
+
+    /// A chain of dangling links is followed for exactly `MAX_HOPS` hops and
+    /// no further.
+    ///
+    /// Fails by: following none, one more, or every hop — the last of which
+    /// reaches the chain's end outside the root.
+    #[test]
+    fn a_dangling_link_chain_is_followed_for_forty_hops() {
+        if cfg!(not(unix)) {
+            return;
+        }
+        let root = scratch_root("hops");
+        let outside = scratch_root("hops-outside").join("missing");
+        for n in 0..45 {
+            let next = if n == 44 {
+                outside.clone()
+            } else {
+                PathBuf::from(format!("l{}", n + 1))
+            };
+            symlink(&next, &root.join(format!("l{n}")));
+        }
+        assert_eq!(
+            relative_to(&root, &root.join("l0").display().to_string()).as_deref(),
+            Some("l40")
+        );
+    }
 }
