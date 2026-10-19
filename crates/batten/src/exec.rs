@@ -1897,6 +1897,19 @@ pub fn run_in_with_env(
 /// As [`run`], for a command that could not be dispatched at all. A child that
 /// ran and failed is an answer, not an error, so its code comes back in the
 /// tuple rather than as a [`Passthrough`].
+///
+/// # The suite, and why this file had none
+///
+/// This module declared no `MUTANT-SUITE` at all, so the sweep had nothing to
+/// run for any line of it and every mutation of this function survived at
+/// `0s test` — twenty-seven on the sweep that first reached it, the ones
+/// handing back an invented code and dropping the child's bytes among them. A
+/// source with no declared suite is a could-not-look rather than a pass, and
+/// `(in-diff)` is what surfaced it: no line of this file had changed before.
+/// The caller is the hook's follow, so the suite is the hook's.
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT captured-code-is-not-the-childs|s@^    Ok((first.exit, first.out_bytes, first.err_bytes))$@    Ok((0, first.out_bytes, first.err_bytes))@|a_followed_builds_decision_reaches_the_harness_whole
+//MUTANT captured-bytes-are-dropped|s@^    Ok((first.exit, first.out_bytes, first.err_bytes))$@    Ok((first.exit, Vec::new(), Vec::new()))@|a_followed_builds_decision_reaches_the_harness_whole
 pub(crate) fn captured_in_env(
     repo_root: &Path,
     command: &[String],

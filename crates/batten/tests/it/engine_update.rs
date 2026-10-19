@@ -501,15 +501,29 @@ fn a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path() {
             Path::new("https://localhost:1/example/pkg"),
         )],
     );
+    // A NON-ZERO CODE PROVES NOTHING ON ITS OWN, and asserting it alone is how
+    // the first version of this case passed over the very mutation it was
+    // written for: falling through leaves the PRE-PARSE staleness refusal to
+    // speak instead, and that refuses too. Measured, both readings of a failed
+    // fetch stop the verb; they differ only in which subject is reported.
     assert_ne!(
         output.status.code(),
         Some(0),
-        "a pin that cannot be fetched is reported, never run past: {}",
+        "a pin that cannot be fetched is never run past: {}",
         text(&output)
     );
+    // WHICH SUBJECT SPOKE is therefore the whole assertion, and it is written
+    // as the staleness refusal's ABSENCE rather than the fetch failure's
+    // presence. The fetch's own words are not stable enough to pin: with an
+    // egress proxy in front of it the unreachable host answers `404` and the
+    // subject is a usage refusal at exit 1, and without one the connect fails
+    // and the subject is a transport error at exit 3. Both are the follow
+    // reporting. Only the fall-through reaches this line, in either
+    // environment, because only then has nothing been fetched to report about.
     assert!(
-        !common::stdout(&output).contains("version"),
-        "and the verb it would have run writes nothing: {}",
+        !common::stderr(&output).contains("install the pin with"),
+        "the follow reported the fetch, not the staleness refusal it would \
+         have fallen through to: {}",
         text(&output)
     );
 }
