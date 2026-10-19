@@ -18350,4 +18350,419 @@ deny contains "refused by themodule" if {
             Some("l40")
         );
     }
+
+    /// A `kind = "policy"` row, carrying `shape`'s defaults otherwise.
+    fn policy_row(id: &str) -> Rule {
+        Rule {
+            kind: RuleKind::Policy,
+            ..shape(id, "unused", None)
+        }
+    }
+
+    fn task_query() -> crate::facts::TaskQuery {
+        crate::facts::TaskQuery {
+            manifest: String::from("mise.toml"),
+            node: String::from("tasks"),
+        }
+    }
+
+    /// The pinned fact is read for a policy row and for nothing else.
+    ///
+    /// Fails by: a constant answer, the kind test inverted, or the kind test
+    /// widened to any admitted row.
+    #[test]
+    fn only_a_policy_row_reads_the_pinned_fact() {
+        let call = envelope("ls");
+        assert!(ceiling_policy(vec![policy_row("p")]).reads_pinned(&call));
+        assert!(!ceiling_policy(vec![shape("s", "git push", None)]).reads_pinned(&call));
+        assert!(!ceiling_policy(Vec::new()).reads_pinned(&call));
+    }
+
+    /// The task receipt is read only for a policy row that names a manifest.
+    ///
+    /// Fails by: a constant answer, the kind or emptiness test inverted, or
+    /// either conjunction widened.
+    #[test]
+    fn only_a_policy_row_naming_a_manifest_reads_tasks() {
+        let call = envelope("ls");
+        let tasked = Rule {
+            tasks: vec![task_query()],
+            ..policy_row("p")
+        };
+        assert!(ceiling_policy(vec![tasked.clone()]).reads_tasks(&call));
+        assert!(!ceiling_policy(vec![policy_row("bare")]).reads_tasks(&call));
+        let shaped = Rule {
+            kind: RuleKind::Shape,
+            ..tasked
+        };
+        assert!(!ceiling_policy(vec![shaped]).reads_tasks(&call));
+    }
+
+    /// Extractions and manifests are collected from policy rows only.
+    ///
+    /// Fails by: an empty answer, or collecting from the other kinds.
+    #[test]
+    fn extracts_and_tasks_are_collected_from_policy_rows_only() {
+        let extract = crate::facts::ExtractQuery {
+            id: String::from("turns"),
+            count: crate::facts::Extraction::Turns,
+        };
+        let declaring = |kind| Rule {
+            kind,
+            tasks: vec![task_query()],
+            extract: vec![extract.clone()],
+            ..shape("r", "unused", None)
+        };
+        let policy = ceiling_policy(vec![declaring(RuleKind::Policy)]);
+        assert_eq!(policy.declared_extracts(), vec![extract.clone()]);
+        assert_eq!(policy.declared_tasks(), vec![task_query()]);
+        let shaped = ceiling_policy(vec![declaring(RuleKind::Shape)]);
+        assert!(shaped.declared_extracts().is_empty());
+        assert!(shaped.declared_tasks().is_empty());
+    }
+
+    /// A row keyed on commit evidence, refusing `git push`.
+    fn keyed_push_row() -> Rule {
+        Rule {
+            requires_key: Some(String::from("CLOUD")),
+            base: Some(String::from("origin/main")),
+            ..shape("keyed", "git push", None)
+        }
+    }
+
+    /// The key base is the matching keyed row's, on a pre-tool call with a
+    /// command, and nothing otherwise.
+    ///
+    /// Fails by: `None` throughout, either guard inverted, or the event and
+    /// command guards conjoined.
+    #[test]
+    fn the_key_base_is_read_only_on_a_pre_tool_command() {
+        let policy = ceiling_policy(vec![keyed_push_row()]);
+        assert_eq!(
+            policy.key_base_for(&envelope("git push")),
+            Some("origin/main")
+        );
+        assert_eq!(
+            policy.key_base_for(&envelope_at(Event::PostTool, "git push")),
+            None
+        );
+        assert_eq!(policy.key_base_for(&envelope("")), None);
+        assert_eq!(policy.key_base_for(&envelope("git status")), None);
+    }
+
+    /// A manifest ceiling is consulted on a pre-tool call only.
+    ///
+    /// Fails by: the event and tool guards conjoined.
+    #[test]
+    fn a_manifest_ceiling_is_consulted_on_pre_tool_only() {
+        let policy = ceiling_policy(vec![manifest_row("cap", "Task", 3)]);
+        assert!(policy.manifest_ceiling_for(&task_spawn("x")).is_some());
+        let after = Envelope {
+            event: Event::PostTool,
+            ..task_spawn("x")
+        };
+        assert!(policy.manifest_ceiling_for(&after).is_none());
+    }
+
+    /// A repair is the named row's fix, under a class that repairs, keyed on
+    /// the row's base when the fix asks for a key.
+    ///
+    /// Fails by: any placeholder answer, matching another row or class, or
+    /// repairing under an advice class.
+    #[test]
+    fn a_repair_is_the_named_rows_fix_under_a_repairing_class() {
+        let verdict: crate::verdict::DeclaredVerdict = serde_json::from_value(serde_json::json!({
+            "id": "push refused",
+            "applicability": "retry",
+            "gloss": "g",
+            "class": "c",
+        }))
+        .expect("a declared verdict");
+        let mut policy = ceiling_policy(vec![
+            Rule {
+                fix: Some(String::from("repair {key}")),
+                ..keyed_push_row()
+            },
+            Rule {
+                fix: Some(String::from("plain repair")),
+                ..shape("plain", "git fetch", None)
+            },
+        ]);
+        policy.verdicts = vec![verdict];
+        let call = envelope("git push");
+        assert_eq!(
+            policy.repair_for("keyed", "push refused", &call),
+            Some((
+                String::from("repair {key}"),
+                crate::verdict::Applicability::Retry,
+                Some(String::from("origin/main"))
+            ))
+        );
+        assert_eq!(
+            policy.repair_for("plain", "push refused", &call),
+            Some((
+                String::from("plain repair"),
+                crate::verdict::Applicability::Retry,
+                None
+            ))
+        );
+        assert_eq!(policy.repair_for("absent", "push refused", &call), None);
+        assert_eq!(policy.repair_for("keyed", "other class", &call), None);
+    }
+
+    /// A hatched row is removed and an unhatched one kept.
+    ///
+    /// Fails by: inverting the membership test.
+    #[test]
+    fn only_a_hatched_row_is_removed() {
+        let policy = ceiling_policy(vec![Rule {
+            bypass_env: Some(String::from("HATCH")),
+            ..shape("hatched", "git push", None)
+        }]);
+        let set = |names: &[&str]| names.iter().map(|n| (*n).to_owned()).collect();
+        assert!(policy.without_hatched(&set(&["HATCH"])).shapes.is_empty());
+        assert_eq!(policy.without_hatched(&set(&["OTHER"])).shapes.len(), 1);
+    }
+
+    /// A row conditioned on an absent field is not admitted when it is present.
+    ///
+    /// Fails by: admitting every row.
+    #[test]
+    fn a_when_absent_row_is_not_admitted_when_the_field_is_present() {
+        let row = Rule {
+            when_absent: Some(Field::SessionId),
+            ..shape("r", "git push", None)
+        };
+        let mut call = envelope("git push");
+        assert!(modifier_admits(&row, &call));
+        call.session = Some(String::from("s1"));
+        assert!(!modifier_admits(&row, &call));
+    }
+
+    /// The marker lives in the receipt store under the slugged branch.
+    ///
+    /// Fails by: an empty path.
+    #[test]
+    fn a_marker_path_slugs_the_branch_into_the_receipt_store() {
+        assert_eq!(
+            marker_path(Path::new("/g"), "punt", "feat/x"),
+            Path::new("/g/batten-receipts/punt.feat-x")
+        );
+    }
+
+    /// The mode defaults compile only for Claude Code.
+    ///
+    /// Fails by: the host test inverted.
+    #[test]
+    fn mode_defaults_compile_for_claude_code_only() {
+        assert!(
+            !Policy::mode_default(Harness::ClaudeCode)
+                .expect("compiles")
+                .bundles
+                .is_empty()
+        );
+        assert!(
+            Policy::mode_default(Harness::Cursor)
+                .expect("compiles")
+                .bundles
+                .is_empty()
+        );
+    }
+
+    /// A resolved policy keeps the mediated rows and compiles their modules,
+    /// and only theirs.
+    ///
+    /// Fails by: either scope filter inverted.
+    #[test]
+    fn a_resolved_policy_keeps_only_the_mediated_rows() {
+        let dir = scratch_root("resolved-scope");
+        std::fs::write(
+            dir.join("gate.rego"),
+            "package batten\n\nimport rego.v1\n\ndeny contains \"x\" if { false }\n",
+        )
+        .expect("write module");
+        std::fs::write(
+            dir.join("batten.toml"),
+            "version = 1\n\n\
+             [[rule]]\nid = \"mediated-gate\"\nkind = \"policy\"\n\
+             scope = \"mediated_call\"\nmodule = \"gate.rego\"\nseverity = \"deny\"\n\n\
+             [[rule]]\nid = \"tree-ban\"\nkind = \"forbid\"\nglob = \"*.txt\"\n\
+             regex = \"x\"\nseverity = \"deny\"\n",
+        )
+        .expect("write authority");
+        let resolved = crate::resolve::resolve(&dir, &crate::resolve::Overrides::default())
+            .expect("the authority resolves");
+        let policy =
+            Policy::from_resolved(&resolved, Harness::ExitCode, &dir, None).expect("loads");
+        let ids: Vec<&str> = policy.shapes.iter().map(|rule| rule.id.as_str()).collect();
+        assert_eq!(ids, ["mediated-gate"]);
+        assert_eq!(policy.bundles.len(), 1);
+    }
+
+    /// Run `body` over a fact set carrying only the two native-gate facts.
+    fn with_native_facts<R>(
+        discards: crate::facts::Look<Vec<String>>,
+        unread_history: crate::facts::Look<Vec<String>>,
+        body: impl FnOnce(&Facts<'_>) -> R,
+    ) -> R {
+        body(&Facts {
+            receipts: &crate::facts::Look::CouldNotLook,
+            keys: &crate::facts::Look::CouldNotLook,
+            stop: &crate::stop::StopFacts::default(),
+            waived: &crate::waiver::Live::new(),
+            sourced: &None,
+            singleton: &None,
+            unread_history: &unread_history,
+            discards: &discards,
+            prospective: &crate::facts::Look::CouldNotLook,
+            manifest: None,
+            tasks: &crate::facts::Look::CouldNotLook,
+            extracted: &crate::facts::Look::CouldNotLook,
+            pinned: &crate::facts::Look::CouldNotLook,
+            dispatch: &crate::facts::Look::CouldNotLook,
+            red_head: &crate::facts::Look::CouldNotLook,
+        })
+    }
+
+    /// A `native` row grading the history gate.
+    fn history_graded(severity: RuleSeverity) -> Rule {
+        Rule {
+            kind: RuleKind::Native,
+            gate: Some(NativeGate::History),
+            severity: Some(severity),
+            ..shape("history-grade", "unused", None)
+        }
+    }
+
+    /// An unread row fires the history gate; an empty or unread fact does
+    /// not.
+    ///
+    /// Fails by: the gate answering a constant, or its emptiness guard
+    /// inverted.
+    #[test]
+    fn the_history_gate_fires_on_an_unread_row_only() {
+        use crate::facts::Look;
+        let fired = |unread| with_native_facts(Look::CouldNotLook, unread, |f| history_gate(f));
+        assert!(fired(Look::Is(vec![String::from("row")])).is_some());
+        assert!(fired(Look::Is(Vec::new())).is_none());
+        assert!(fired(Look::CouldNotLook).is_none());
+    }
+
+    /// A destructive reset fires only when it discards something.
+    ///
+    /// Fails by: firing on an empty discard set, or firing nothing.
+    #[test]
+    fn a_reset_fires_only_when_it_discards_a_commit() {
+        use crate::facts::Look;
+        let gates = |discards| {
+            with_native_facts(discards, Look::CouldNotLook, |f| {
+                native_fired(f)
+                    .into_iter()
+                    .map(|(gate, _)| gate)
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(
+            gates(Look::Is(vec![String::from("abc123")])),
+            [NativeGate::DestructiveReset]
+        );
+        assert!(gates(Look::Is(Vec::new())).is_empty());
+    }
+
+    /// A fired gate denies at its default grade, advises at `warn`, and says
+    /// nothing at `allow`.
+    ///
+    /// Fails by: no denial, no advice, or advice at a grade that denies or
+    /// is switched off.
+    #[test]
+    fn a_native_gate_is_disposed_as_its_grade_says() {
+        use crate::facts::Look;
+        let unread = || Look::Is(vec![String::from("row")]);
+        let at = |rows: Vec<Rule>| {
+            let policy = ceiling_policy(rows);
+            with_native_facts(Look::CouldNotLook, unread(), |f| {
+                (native_denial(&policy, f), native_advice(&policy, f).len())
+            })
+        };
+        let (denial, advice) = at(Vec::new());
+        assert!(matches!(denial, Some(Decision::Deny(_))), "{denial:?}");
+        assert_eq!(advice, 0);
+        let (denial, advice) = at(vec![history_graded(RuleSeverity::Warn)]);
+        assert_eq!(denial, None);
+        assert_eq!(advice, 1);
+        let (denial, advice) = at(vec![history_graded(RuleSeverity::Allow)]);
+        assert_eq!(denial, None);
+        assert_eq!(advice, 0);
+    }
+
+    /// The prospective content of a write is the content it carries, and a
+    /// call that writes nothing has none.
+    ///
+    /// Fails by: inverting the write test.
+    #[test]
+    fn only_a_write_has_prospective_content() {
+        let root = scratch_root("prospective-op");
+        let mut write = write_envelope("Write", "a.txt");
+        write.input = serde_json::json!({ "content": "landed" });
+        assert_eq!(
+            prospective_facts(&root, &write),
+            crate::facts::Look::Is(String::from("landed"))
+        );
+        let mut read = envelope("cat a.txt");
+        read.input = serde_json::json!({ "content": "landed" });
+        assert_eq!(
+            prospective_facts(&root, &read),
+            crate::facts::Look::CouldNotLook
+        );
+    }
+
+    /// An edit to a file exactly at the read ceiling is still applied; the
+    /// ceiling refuses only what exceeds it.
+    ///
+    /// Fails by: a ceiling of zero, or refusing at or below the ceiling.
+    #[test]
+    fn an_edit_at_the_ceiling_is_applied_and_one_byte_over_is_not() {
+        let root = scratch_root("prospective-ceiling");
+        let at = usize::try_from(MAX_PROSPECTIVE_BYTES).expect("fits");
+        let mut edit = write_envelope("Edit", "big.txt");
+        edit.input = serde_json::json!({ "old_string": "a", "new_string": "b" });
+        std::fs::write(root.join("big.txt"), "a".repeat(at)).expect("write");
+        let crate::facts::Look::Is(landed) = prospective_facts(&root, &edit) else {
+            panic!("a file at the ceiling is read");
+        };
+        assert!(landed.starts_with("ba"), "the first span was applied");
+        std::fs::write(root.join("big.txt"), "a".repeat(at + 1)).expect("write");
+        assert_eq!(
+            prospective_facts(&root, &edit),
+            crate::facts::Look::CouldNotLook
+        );
+        std::fs::write(root.join("big.txt"), "xay").expect("write");
+        assert_eq!(
+            prospective_facts(&root, &edit),
+            crate::facts::Look::Is(String::from("xby"))
+        );
+    }
+
+    /// The single span, the batch, and their `replace_all` flags are read in
+    /// order; a payload with neither shape is unread.
+    ///
+    /// Fails by: any placeholder span list.
+    #[test]
+    fn edit_spans_are_read_in_order_with_their_flags() {
+        let span = |old: &str, new: &str, all: bool| (old.to_owned(), new.to_owned(), all);
+        assert_eq!(
+            edit_spans_of(&serde_json::json!({ "old_string": "a", "new_string": "b" })),
+            Some(vec![span("a", "b", false)])
+        );
+        assert_eq!(
+            edit_spans_of(&serde_json::json!({
+                "edits": [
+                    { "old_string": "x", "new_string": "y", "replace_all": true },
+                    { "old_string": "p", "new_string": "q" },
+                ]
+            })),
+            Some(vec![span("x", "y", true), span("p", "q", false)])
+        );
+        assert_eq!(edit_spans_of(&serde_json::json!({ "content": "c" })), None);
+    }
 }
