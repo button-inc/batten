@@ -1095,10 +1095,12 @@ fn mint_receipts(declared: &Declared<'_>, ids: &[String], now: u64) {
 // --- the payloads' citations against the tree (`--cites`) ---------------------
 
 /// The preset's outcome word for a prospective path — the one note history can
-/// refute, so the shallow-clone notice counts only these.
+/// refute, so the shallow-clone notice counts only these. Must match the
+/// `board_notes` rule for paths in `board-citations-resolve.rego`.
 const PROSPECTIVE_PATH: &str = "prospective-cited-path";
 /// The preset's outcome word for a prospective test symbol, which history is
-/// never asked about (CLOUD-1110).
+/// never asked about on any clone (CLOUD-1110). Must match the `board_notes`
+/// rule for tests in `board-citations-resolve.rego`.
 const PROSPECTIVE_TEST: &str = "prospective-cited-test";
 
 /// What `--cites` reads, resolved.
@@ -1351,15 +1353,19 @@ fn render_cites(
     for note in &decided.notes {
         writeln!(err, "  {note}")?;
     }
-    // Only a PATH marker is ever checked against history; a test symbol's never
-    // is, on any clone (the module's note on the test arm), so the two notices
-    // count their own notes.
-    let paths = decided
-        .notes
-        .iter()
-        .filter(|note| note.ends_with(PROSPECTIVE_PATH))
-        .count();
-    if paths > 0 && !reading.history {
+    let count = |word: &str| {
+        decided
+            .notes
+            .iter()
+            .filter(|note| note.ends_with(word))
+            .count()
+    };
+    let paths = if reading.history {
+        0
+    } else {
+        count(PROSPECTIVE_PATH)
+    };
+    if paths > 0 {
         writeln!(
             err,
             "::notice:: board check --cites: {paths} prospective path(s) above, and this clone is \
@@ -1368,11 +1374,7 @@ fn render_cites(
              clone can check it."
         )?;
     }
-    let tests = decided
-        .notes
-        .iter()
-        .filter(|note| note.ends_with(PROSPECTIVE_TEST))
-        .count();
+    let tests = count(PROSPECTIVE_TEST);
     if tests > 0 {
         writeln!(
             err,
