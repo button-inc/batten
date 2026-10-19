@@ -17138,6 +17138,11 @@ mod tests {
         for gate in NativeGate::ALL {
             let token = serde_json::to_value(gate).expect("a gate serializes");
             assert_eq!(token, serde_json::json!(gate.as_str()));
+            // PARSES, not only renders: a deserialize-side rename would leave
+            // the line above green while a `gate = "..."` row read differently.
+            let parsed: NativeGate =
+                serde_json::from_value(serde_json::json!(gate.as_str())).expect("its token parses");
+            assert_eq!(parsed, *gate);
         }
     }
 
