@@ -1666,6 +1666,54 @@ mod tests {
         );
     }
 
+    /// Fails by: a doc carrying any one section read as empty, so it serializes
+    /// as no doc at all.
+    #[test]
+    fn a_doc_is_empty_only_when_every_section_is() {
+        assert!(Doc::default().is_empty());
+        assert!(!doc(Some("why"), &[], &[]).is_empty());
+        assert!(!doc(None, &["act"], &[]).is_empty());
+        assert!(!doc(None, &[], &["dont"]).is_empty());
+    }
+
+    /// Fails by: a vendored class's doc lost on the way to its owned form, or
+    /// another class's doc answered.
+    #[test]
+    fn a_vendored_doc_is_its_classes_own_and_an_unknown_class_has_none() {
+        assert_eq!(
+            vendored("claim mint refused"),
+            doc(
+                Some("Two sessions on one issue do the work twice and land neither cleanly"),
+                &[
+                    "pick another issue from the ready queue",
+                    "take it over with `--takeover` only when the holder has stopped",
+                ],
+                &["start the work without the claim receipt"],
+            )
+        );
+        assert!(vendored("no such class").is_empty());
+    }
+
+    /// Fails by: a doc exactly at the byte budget or the item cap refused.
+    #[test]
+    fn a_doc_exactly_at_its_bounds_loads() {
+        let items: Vec<String> = (0..ITEMS_MAX).map(|n| format!("act {n}")).collect();
+        let items: Vec<&str> = items.iter().map(String::as_str).collect();
+        let at_cap = doc(None, &items, &items);
+        assert_eq!(violation(&at_cap, &"x".repeat(DOC_BYTES)), None);
+        assert!(violation(&at_cap, &"x".repeat(DOC_BYTES + 1)).is_some());
+    }
+
+    /// Fails by: any one clause of the key shape dropped, so prose that only
+    /// resembles a key is refused as history.
+    #[test]
+    fn only_an_uppercase_prefix_a_dash_and_digits_is_an_issue_key() {
+        assert!(cites_issue_key("see CLOUD-12 here"));
+        for prose in ["C-12", "Cloud-12", "CLOUD-", "CLOUD-1a", "x-12"] {
+            assert!(!cites_issue_key(prose), "{prose}");
+        }
+    }
+
     #[test]
     fn a_why_of_two_sentences_does_not_load() {
         let two = doc(Some("One thing. Another thing."), &["x"], &[]);

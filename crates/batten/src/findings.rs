@@ -1924,4 +1924,194 @@ mod tests {
             }
         );
     }
+
+    fn advisory() -> Advisory {
+        Advisory {
+            rule: "j".to_owned(),
+            identity: identity_for("j", "src/a.rs", "judged"),
+            tier: AdvisoryTier::Advisory,
+            path: "src/a.rs".to_owned(),
+            line: None,
+            check: Check::Reevaluate,
+            remediation: Remediation::NoFix("fixture".to_owned()),
+        }
+    }
+
+    /// Fails by: a counter of the scan door's summary, or an identity's
+    /// occurrence count, not advanced by one per event.
+    #[test]
+    fn a_scan_counts_its_mints_its_updates_and_each_occurrence() {
+        let dir = store("scan-counts");
+        let context = Context::new("refs/heads/a");
+        let twice = [
+            finding_for(RuleSeverity::Deny),
+            finding_for(RuleSeverity::Deny),
+        ];
+        let first = record(
+            &dir,
+            &context,
+            &"0".repeat(40),
+            None,
+            &twice,
+            FINDINGS_SCHEMA,
+            &all_evaluated(),
+        )
+        .unwrap();
+        assert_eq!((first.minted, first.updated), (1, 1));
+        let stored = load_one(&dir, twice[0].identity.fingerprint)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.instance(&context).unwrap().occurrences,
+            Observation::Observed(2)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fails by: the judge door's mint or update not counted once each.
+    #[test]
+    fn the_judge_door_counts_one_mint_and_one_update_per_call() {
+        let dir = store("advisory-counts");
+        let context = Context::new("refs/heads/a");
+        let first = record_advisory(
+            &dir,
+            &context,
+            &"0".repeat(40),
+            None,
+            &advisory(),
+            FINDINGS_SCHEMA,
+        )
+        .unwrap();
+        assert_eq!((first.minted, first.updated), (1, 1));
+        let again = record_advisory(
+            &dir,
+            &context,
+            &"0".repeat(40),
+            None,
+            &advisory(),
+            FINDINGS_SCHEMA,
+        )
+        .unwrap();
+        assert_eq!((again.minted, again.updated), (0, 1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fails by: a clear minting a record nobody raised, a raise not minting
+    /// one, or a re-evaluation counted under the wrong answer.
+    #[test]
+    fn the_sequence_door_mints_only_on_a_raise_and_counts_each_answer() {
+        let dir = store("sequence-counts");
+        let context = Context::new("refs/heads/a");
+        let commit = "0".repeat(40);
+        let fingerprint = advisory().identity.fingerprint;
+        let at = |observation: Observation| {
+            record_sequence(
+                &dir,
+                &context,
+                &commit,
+                None,
+                &advisory(),
+                observation,
+                FINDINGS_SCHEMA,
+            )
+            .unwrap()
+        };
+        assert_eq!(at(Observation::Observed(0)), Recorded::default());
+        assert!(
+            load_one(&dir, fingerprint).unwrap().is_none(),
+            "never raised"
+        );
+        let raised = at(Observation::Observed(1));
+        assert_eq!((raised.minted, raised.updated), (1, 1));
+        assert!(load_one(&dir, fingerprint).unwrap().is_some());
+        let held = at(Observation::NotObserved(NotObserved::RuleSkipped));
+        assert_eq!((held.minted, held.held), (0, 1));
+        let cleared = at(Observation::Observed(0));
+        assert_eq!(cleared.resolved, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fails by: a dead ref's instance not counted, or not written away, or a
+    /// record left with no live ref kept.
+    #[test]
+    fn gc_counts_every_instance_it_drops() {
+        let dir = store("gc-counts");
+        let partly = record_of(vec![
+            instance("refs/heads/live", Observation::Observed(1)),
+            instance("refs/heads/dead", Observation::Observed(1)),
+        ]);
+        let mut wholly = record_of(vec![
+            instance("refs/heads/gone", Observation::Observed(1)),
+            instance("refs/heads/dead", Observation::Observed(1)),
+        ]);
+        wholly.identity = identity_for("r", "src/b.rs", "TODO");
+        save_one(&dir, &partly).unwrap();
+        save_one(&dir, &wholly).unwrap();
+        let live = BTreeSet::from([Context::new("refs/heads/live")]);
+        assert_eq!(gc(&dir, &live).unwrap(), 3);
+        let kept = load_one(&dir, partly.identity.fingerprint)
+            .unwrap()
+            .unwrap();
+        assert_eq!(kept.instances.len(), 1);
+        assert!(
+            load_one(&dir, wholly.identity.fingerprint)
+                .unwrap()
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fails by: a removal that failed for any reason but absence read as one
+    /// that succeeded.
+    #[test]
+    fn forgetting_a_record_that_cannot_be_removed_is_an_error() {
+        let dir = store("forget-blocked");
+        let fingerprint = identity_for("r", "src/a.rs", "TODO").fingerprint;
+        std::fs::create_dir_all(record_path(&dir, fingerprint)).unwrap();
+        assert!(forget(&dir, fingerprint).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fails by: a pointer line emptied, or a declared ref keyed wrongly.
+    #[test]
+    fn a_pointer_line_names_the_identity_rule_ref_and_count() {
+        let record = record_of(vec![
+            instance("refs/heads/a", Observation::Observed(2)),
+            instance(
+                "refs/heads/b",
+                Observation::NotObserved(NotObserved::RuleSkipped),
+            ),
+        ]);
+        let hex = record.identity.fingerprint.to_hex();
+        let lines = pointer_lines(std::slice::from_ref(&record));
+        assert_eq!(
+            lines,
+            vec![
+                format!("{hex} r refs/heads/a 2"),
+                format!("{hex} r refs/heads/b skipped"),
+            ]
+        );
+        let keyed = pointer_lines_for(
+            std::slice::from_ref(&record),
+            &["refs/heads/a".to_owned(), "refs/heads/c".to_owned()],
+        );
+        assert_eq!(
+            keyed,
+            BTreeMap::from([
+                (
+                    "refs/heads/a".to_owned(),
+                    vec![format!("{hex} r refs/heads/a 2")]
+                ),
+                ("refs/heads/c".to_owned(), Vec::new()),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_context_and_a_disposition_print_their_own_tokens() {
+        assert_eq!(Context::new("refs/heads/a").to_string(), "refs/heads/a");
+        assert_eq!(Disposition::RejectedWrong.as_str(), "rejected-wrong");
+        assert_eq!(Disposition::RejectedByDesign.as_str(), "rejected-by-design");
+        assert_eq!(Disposition::Acted.as_str(), "acted");
+    }
 }

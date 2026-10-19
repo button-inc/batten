@@ -1133,4 +1133,60 @@ mod tests {
             assert_eq!(invoke("r", &argv, payload).unwrap(), want);
         }
     }
+
+    /// Fails by: "said nothing" spelled as a code a judge can really exit
+    /// with, so a crash and a judge's own `1` read alike.
+    #[test]
+    fn a_signal_is_never_mistaken_for_an_exit_a_judge_delivered() {
+        for code in 0..=255 {
+            assert_ne!(Verdict::of(None), Verdict::of(Some(code)), "exit {code}");
+        }
+    }
+
+    #[test]
+    fn each_verdict_and_refusal_has_its_own_token() {
+        assert_eq!(Verdict::Clean.as_str(), "clean");
+        assert_eq!(Verdict::Raised.as_str(), "raised");
+        assert_eq!(Verdict::Unresolved(1).as_str(), "unresolved");
+        let protected = Refusal::Protected {
+            rule: "r".to_owned(),
+            count: 1,
+        };
+        assert_eq!(protected.disposition(), "refused-protected");
+        let over = Refusal::OverCap {
+            rule: "r".to_owned(),
+            bytes: 2,
+            cap: 1,
+        };
+        assert_eq!(over.disposition(), "refused-over-cap");
+    }
+
+    /// Fails by: the withheld count not the spans the class gate kept back.
+    #[test]
+    fn the_payload_counts_what_it_withheld() {
+        let judge = Judge {
+            raw: vec![PayloadClass::SpanText],
+            max_payload_bytes: None,
+            run: None,
+            model: None,
+        };
+        let spans = [
+            span(Some("src/a.rs"), PayloadClass::SpanText, b"sent"),
+            span(Some("src/b.rs"), PayloadClass::FileText, b"kept back"),
+            span(Some("src/c.rs"), PayloadClass::FileText, b"kept back too"),
+        ];
+        let assembled = assemble_ok(&spans, Some(&judge));
+        assert_eq!(assembled.payload.sent, 1);
+        assert_eq!(assembled.payload.withheld, 2);
+    }
+
+    #[test]
+    fn a_pointer_is_path_and_line_path_alone_or_nothing() {
+        let mut at = span(Some("src/a.rs"), PayloadClass::SpanText, b"x");
+        assert_eq!(pointer_of(&at).as_deref(), Some("src/a.rs:7"));
+        at.line = None;
+        assert_eq!(pointer_of(&at).as_deref(), Some("src/a.rs"));
+        at.path = None;
+        assert_eq!(pointer_of(&at), None);
+    }
 }

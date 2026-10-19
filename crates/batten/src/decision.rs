@@ -819,4 +819,40 @@ mod tests {
         absent.context = ContextPointer::Absent;
         assert_ne!(absent.to_line().unwrap(), record().to_line().unwrap());
     }
+
+    #[test]
+    fn a_recording_time_reads_back_its_own_seconds() {
+        assert_eq!(RecordedAt::from_unix_seconds(7).unix_seconds(), 7);
+    }
+
+    #[test]
+    fn append_only_is_a_prefix_and_names_the_first_rewritten_line() {
+        assert_eq!(verify_append_only("a\n", "a\nb\n"), None);
+        assert_eq!(verify_append_only("a\nb\n", "a\nc\n"), Some(2));
+    }
+
+    /// Fails by: a record not written to this worktree's shard, a shard not read
+    /// back, a stray non-shard file read as one, or one commit's records not
+    /// counted together under their caller.
+    #[test]
+    fn appended_records_are_read_back_and_counted_per_commit() {
+        let scratch = crate::scratch::scratch("decision-append");
+        crate::testing::contain_state(&scratch.join("data"));
+        let repo = scratch.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let mut elsewhere = record();
+        elsewhere.anchor.commit = "2".repeat(40);
+        for one in [record(), record(), elsewhere] {
+            append(&repo, &repo, &one).unwrap();
+        }
+        let shard = shard_path(&repo, &repo).unwrap();
+        assert!(shard.is_file(), "{}", shard.display());
+        let stray = shard.with_extension("txt");
+        std::fs::write(&stray, format!("{}\n", record().to_line().unwrap())).unwrap();
+        assert_eq!(load_all(&repo).unwrap().len(), 3);
+        let rows = attribution_for(&repo, &"1".repeat(40)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].records, 2);
+        assert_eq!(rows[0].caller, record().caller);
+    }
 }

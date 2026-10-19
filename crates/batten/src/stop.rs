@@ -374,6 +374,54 @@ mod tests {
         );
     }
 
+    /// Fails by: the store not read, a settled or a warn-severity finding read
+    /// as pending, or a pending denial's discharge dropped.
+    #[test]
+    fn only_an_unsettled_denial_in_the_store_is_pending() {
+        let dir = crate::scratch::scratch("stop-pending");
+        let stored = |rule: &str,
+                      severity: RuleSeverity,
+                      disposition: Option<crate::findings::Disposition>| {
+            crate::findings::FindingRecord {
+                schema: crate::findings::FINDINGS_SCHEMA,
+                identity: crate::identity::StoredIdentity::new(
+                    crate::identity::FindingKind::Code,
+                    crate::identity::code_fingerprint(
+                        rule,
+                        "src/a.rs",
+                        "span",
+                        crate::identity::SpanNormalization::Collapsed,
+                    )
+                    .unwrap(),
+                ),
+                rule: rule.to_owned(),
+                severity,
+                tier: crate::severity::row_for_rule(severity).tier,
+                disposition,
+                presentation: crate::findings::Presentation::Shown,
+                check: Some(Check::Argv(vec!["mise".to_owned(), "run".to_owned()])),
+                remediation: Some(crate::findings::Remediation::NoFix("fixture".to_owned())),
+                instances: Vec::new(),
+            }
+        };
+        for record in [
+            stored("open-denial", RuleSeverity::Deny, None),
+            stored(
+                "settled-denial",
+                RuleSeverity::Deny,
+                Some(crate::findings::Disposition::Acted),
+            ),
+            stored("open-warning", RuleSeverity::Warn, None),
+        ] {
+            findings::save_one(&dir, &record).unwrap();
+        }
+        let facts = facts(None, None, Some(&dir)).unwrap();
+        assert_eq!(
+            facts.pending,
+            vec![pending("open-denial", Some("mise run"))]
+        );
+    }
+
     #[test]
     fn a_settled_disposition_is_not_pending() {
         // The store's three-valued reading is the whole predicate: `None` is

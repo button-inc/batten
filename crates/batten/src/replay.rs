@@ -752,4 +752,57 @@ mod tests {
         assert!(passes(said(4, "").as_ref(), "t").is_err());
         assert!(passes(None, "t").is_err());
     }
+
+    #[test]
+    fn a_line_starts_one_byte_past_each_newline() {
+        assert_eq!(line_starts("a\nbc\n"), vec![0, 2, 5]);
+    }
+
+    /// Fails by: a spliced body's span shifted by the splices before it, or
+    /// counted from zero, so a compile error is charged to the wrong body.
+    #[test]
+    fn each_spliced_body_spans_exactly_the_lines_it_occupies() {
+        let base = BASE.replace(
+            "assert_eq!(1, 1);",
+            "assert_eq!(1, 1);\n        assert_eq!(2, 2);\n        assert_eq!(3, 3);",
+        );
+        let head = base
+            .replace(
+                "assert_eq!(1, 1);\n        assert_eq!(2, 2);\n        assert_eq!(3, 3);",
+                "assert_eq!(9, 9);",
+            )
+            .replace(
+                "assert_eq!(super::helper(), 1);",
+                "let _ = super::helper();",
+            );
+        let changed = compare(&base, &head);
+        let rendered = splice(&head, &changed.modified);
+        let spans = spliced_lines(&head, &changed.modified);
+        assert_eq!(spans.len(), 2);
+        for (inner, first, last) in spans {
+            let body = &changed
+                .modified
+                .iter()
+                .find(|edit| edit.inner == inner)
+                .expect("a span names a modified body")
+                .base_body;
+            let at = rendered.find(body.as_str()).expect("the body is spliced");
+            let expected = rendered[..at].matches('\n').count() + 1;
+            assert_eq!(
+                (first, last),
+                (expected, expected + body.matches('\n').count()),
+                "{inner}"
+            );
+        }
+    }
+
+    #[test]
+    fn what_a_run_said_is_its_exit_and_its_tail() {
+        assert_eq!(said(None), "it could not be spawned");
+        let long: String = (1..=10).map(|n| format!("line {n}\n")).collect();
+        assert_eq!(
+            said(Some(&(3, long))),
+            "exit 3\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10"
+        );
+    }
 }

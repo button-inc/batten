@@ -229,8 +229,12 @@ fn declared(step: &str) -> Option<Step> {
 ///
 /// Each component is a line of its own and every free-form value is JSON-quoted,
 /// so no tool's output can impersonate the lines that follow it.
-fn material(row: &Step, args: &[String], command: Option<&[String]>) -> Option<String> {
-    let root = Path::new(".");
+fn material(
+    root: &Path,
+    row: &Step,
+    args: &[String],
+    command: Option<&[String]>,
+) -> Option<String> {
     let mut lines: Vec<String> = vec![format!("step {}", serde_json::to_string(&row.id).ok()?)];
     // The declaration itself: a receipt earned under one `inputs`/`tools` set
     // never answers under a narrower one.
@@ -334,7 +338,7 @@ fn check(step: &str, args: &[String], command: Option<&[String]>) -> Answer {
     let git_dir = crate::git::git_dir(Path::new(".")).ok();
     let key = row
         .as_ref()
-        .and_then(|row| material(row, args, command))
+        .and_then(|row| material(Path::new("."), row, args, command))
         .map(|material| key_of(&material));
     let Some(key) = key else {
         // Blank the pending slot so a later `record` has nothing to match.
@@ -382,7 +386,7 @@ fn record(
     // record refuses below rather than erroring in a passed step's place.
     let key = declared(step)
         .as_ref()
-        .and_then(|row| material(row, args, command))
+        .and_then(|row| material(Path::new("."), row, args, command))
         .map(|material| key_of(&material));
     if key.as_deref() != Some(expected.as_str()) {
         writeln!(
@@ -541,18 +545,22 @@ mod tests {
     /// something, still keying a receipt the toolchain never vouched for.
     #[test]
     fn a_tool_must_both_exit_zero_and_say_something() {
+        let root = crate::scratch::scratch("step-material");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        std::fs::write(root.join("input"), "x\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("input")], "input").unwrap();
         let row = |tool: &[&str]| Step {
             id: String::from("s"),
-            inputs: Vec::new(),
+            inputs: vec![String::from("input")],
             tools: vec![tool.iter().map(|word| (*word).to_owned()).collect()],
         };
         assert!(
-            material(&row(&["echo", "v1"]), &[], None).is_some(),
+            material(&root, &row(&["echo", "v1"]), &[], None).is_some(),
             "the premise: a tool that answers keys the step"
         );
-        assert_eq!(material(&row(&["true"]), &[], None), None);
+        assert_eq!(material(&root, &row(&["true"]), &[], None), None);
         assert_eq!(
-            material(&row(&["sh", "-c", "echo v1; exit 1"]), &[], None),
+            material(&root, &row(&["sh", "-c", "echo v1; exit 1"]), &[], None),
             None
         );
     }

@@ -243,9 +243,17 @@ pub fn claimed_from(
 /// refuses — never the narrower one, which would silently stop catching races.
 #[must_use]
 pub fn authored_log(dir: &std::path::Path, base: &str) -> String {
-    let speculated = std::env::var(crate::speculation::PUBLISHED_AS)
-        .ok()
-        .filter(|value| !value.trim().is_empty());
+    authored_log_from(
+        dir,
+        base,
+        std::env::var(crate::speculation::PUBLISHED_AS).ok(),
+    )
+}
+
+/// [`authored_log`] over the published-as value read from the environment, so
+/// a case can drive both arms without setting a variable.
+fn authored_log_from(dir: &std::path::Path, base: &str, published: Option<String>) -> String {
+    let speculated = published.filter(|value| !value.trim().is_empty());
     if let Some(spec_base) = speculated {
         // ANCESTOR OF HEAD, spelled as "the merge base with HEAD is the base
         // itself". `merge_base` already answers against HEAD, so an unrelated or
@@ -1046,6 +1054,36 @@ mod tests {
             claimed_from("", "", "Refs: PROJ-1170\n", "", &Fake, Source::All),
             vec![String::from("PROJ-1170")],
             "failing that, the first key of a `Refs:` trailer"
+        );
+    }
+
+    /// Fails by: the published-as base ignored, honoured when blank, or
+    /// honoured only when it is NOT the merge base, so another branch's
+    /// replayed commits read as this one's own.
+    #[test]
+    fn a_published_ancestor_narrows_the_log_and_anything_else_does_not() {
+        let dir = crate::scratch::scratch("race-authored-log");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        crate::gitwrite::commit_paths(&dir, &[], "base").unwrap();
+        let base = crate::git::head_commit(&dir).unwrap();
+        crate::gitwrite::commit_paths(&dir, &[], "feat: theirs").unwrap();
+        let published = crate::git::head_commit(&dir).unwrap();
+        crate::gitwrite::commit_paths(&dir, &[], "feat: mine").unwrap();
+
+        let whole = authored_log_from(&dir, &base, None);
+        assert!(
+            whole.contains("feat: theirs") && whole.contains("feat: mine"),
+            "{whole}"
+        );
+        // Whatever this process inherits names no commit in this scratch
+        // repository, so the read falls back to the whole range either way.
+        assert_eq!(authored_log(&dir, &base), whole);
+        let narrowed = authored_log_from(&dir, &base, Some(published));
+        assert!(narrowed.contains("feat: mine"), "{narrowed}");
+        assert!(!narrowed.contains("feat: theirs"), "{narrowed}");
+        assert_eq!(
+            authored_log_from(&dir, &base, Some(String::from("  "))),
+            whole
         );
     }
 }

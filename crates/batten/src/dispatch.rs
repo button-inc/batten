@@ -281,4 +281,42 @@ mod tests {
         assert_eq!(prompt_of("mcp__x__get_session", &args), None);
         assert_eq!(prompt_of("create_session", &args), None);
     }
+
+    /// Fails by: the digest read from anywhere but just past its token, or a
+    /// token named twice counted twice.
+    #[test]
+    fn every_token_is_read_past_its_prefix_once() {
+        let one = digest("one");
+        let two = digest("two");
+        let text = format!(
+            "go brief:{one} and brief:{} then brief:{two}",
+            one.to_uppercase()
+        );
+        assert_eq!(tokens(&text), vec![one, two]);
+    }
+
+    /// Fails by: a receipt not written where `cleared` reads it, or a prompt
+    /// holding either receipt alone read as cleared.
+    #[test]
+    fn a_prompt_is_cleared_only_by_its_brief_and_its_approval_together() {
+        let git_dir = crate::scratch::scratch("dispatch-cleared");
+        let prompt = "prompt one";
+        let asked = format!("Dispatch brief:{}?", digest(prompt));
+        let input = question(&asked);
+        let yes = serde_json::json!({ "answers": { asked.clone(): APPROVE_LABEL } });
+        let unanswered = serde_json::json!({ "answers": {} });
+
+        assert!(!cleared(&git_dir, prompt));
+        record_brief(&git_dir, prompt).unwrap();
+        assert!(!cleared(&git_dir, prompt), "a brief alone");
+        assert_eq!(record_approvals(&git_dir, &input, &unanswered).unwrap(), 0);
+        assert_eq!(record_approvals(&git_dir, &input, &yes).unwrap(), 1);
+        assert!(cleared(&git_dir, prompt));
+
+        let approved_only = "prompt two";
+        let asked = format!("Dispatch brief:{}?", digest(approved_only));
+        let yes = serde_json::json!({ "answers": { asked.clone(): APPROVE_LABEL } });
+        record_approvals(&git_dir, &question(&asked), &yes).unwrap();
+        assert!(!cleared(&git_dir, approved_only), "an approval alone");
+    }
 }

@@ -941,4 +941,75 @@ mod tests {
         assert_eq!(baseline.minted.minted_at, "2026-08-14");
         assert_eq!(baseline.schema, BASELINE_SCHEMA);
     }
+
+    /// Fails by: an entry looked up by anything but its fingerprint.
+    #[test]
+    fn an_entry_is_found_by_its_fingerprint_alone() {
+        let old = finding("no-todo", "lib.rs", "TODO old");
+        let baseline = minted_over(vec![old.clone()]);
+        assert_eq!(
+            baseline
+                .entry(&old.identity)
+                .map(|entry| entry.rule.as_str()),
+            Some("no-todo")
+        );
+        let fresh = finding("no-todo", "lib.rs", "TODO new");
+        assert_eq!(baseline.entry(&fresh.identity), None);
+    }
+
+    #[test]
+    fn a_refusal_heads_the_at_risk_lines_it_carries() {
+        assert_eq!(
+            Refusal::AtRisk(vec!["uncommitted: 1 paths".to_owned()]).lines(),
+            vec![
+                "baseline refused: only landed, committed state may be baselined".to_owned(),
+                "uncommitted: 1 paths".to_owned(),
+            ]
+        );
+    }
+
+    /// A committed repository with a bound store, under a contained state root.
+    fn bound_repository(name: &str) -> PathBuf {
+        let scratch = crate::scratch::scratch(name);
+        crate::testing::contain_state(&scratch.join("data"));
+        let repo = scratch.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        crate::gitwrite::init_on_main(&repo).unwrap();
+        std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+        crate::gitwrite::commit_paths(&repo, &["a.txt".to_owned()], "first").unwrap();
+        store::commit(store::resolve(&repo).unwrap()).unwrap();
+        repo
+    }
+
+    /// Fails by: the store's baseline not written, not found, or not read back,
+    /// or the short-circuit answering a constant.
+    #[test]
+    fn a_saved_baseline_is_what_the_next_load_reads() {
+        let repo = bound_repository("baseline-round-trip");
+        assert!(!any_baseline_exists(), "the premise: nothing minted yet");
+        assert_eq!(load(&repo).unwrap(), None);
+        let baseline = minted_over(vec![finding("no-todo", "lib.rs", "TODO old")]);
+        let file = save(&repo, &baseline).unwrap();
+        assert_eq!(path(&repo).unwrap(), Some(file.clone()));
+        assert!(file.ends_with(BASELINE_FILE));
+        assert!(any_baseline_exists());
+        assert_eq!(load(&repo).unwrap(), Some(baseline.clone()));
+        let future = Baseline {
+            schema: BASELINE_SCHEMA + 1,
+            ..baseline
+        };
+        save(&repo, &future).unwrap();
+        assert!(load(&repo).is_err(), "an unknown schema is never empty");
+    }
+
+    /// Fails by: uncommitted work admitted to a mint.
+    #[test]
+    fn uncommitted_work_may_not_be_baselined() {
+        let repo = bound_repository("baseline-mintable");
+        std::fs::write(repo.join("a.txt"), "changed\n").unwrap();
+        assert!(matches!(
+            mintable(&repo, None).unwrap(),
+            Some(Refusal::AtRisk(_))
+        ));
+    }
 }

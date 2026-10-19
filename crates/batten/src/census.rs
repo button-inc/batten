@@ -876,6 +876,46 @@ mod tests {
         );
     }
 
+    /// Fails by: an exempt manifest, workflow or file measured as anything but
+    /// its own line count, or an exempt workflow with no shell reported at zero.
+    #[test]
+    fn exempt_paths_are_measured_apart_at_their_own_count() {
+        let root = crate::scratch::scratch("census-exempt");
+        std::fs::write(root.join("m.toml"), "[tasks.a]\nrun = \"a | b\"\n").unwrap();
+        std::fs::write(
+            root.join("w.yml"),
+            "jobs:\n  a:\n    steps:\n      - run: a && b\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("quiet.yml"),
+            "jobs:\n  a:\n    steps:\n      - run: mise run verify\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("x.sh"), "echo one\necho two\n").unwrap();
+        let declared = ShellCensus {
+            manifests: vec![Manifest {
+                path: "m.toml".to_owned(),
+                keys: keys(&["run"]),
+                unit: None,
+            }],
+            workflows: keys(&["*.yml"]),
+            exempt: keys(&["m.toml", "w.yml", "quiet.yml", "x.sh"]),
+        };
+        let tracked: BTreeSet<String> = ["m.toml", "w.yml", "quiet.yml", "x.sh"]
+            .map(str::to_owned)
+            .into();
+        let report = take(&root, &declared, &tracked).unwrap();
+        let exempt: Vec<(&str, usize)> = report
+            .exempt
+            .iter()
+            .map(|entry| (entry.path.as_str(), entry.lines))
+            .collect();
+        assert_eq!(exempt, [("m.toml", 1), ("w.yml", 1), ("x.sh", 2)]);
+        assert_eq!(report.totals.exempt, 4);
+        assert_eq!(report.totals.total, 0, "exempt lines are never totalled");
+    }
+
     #[test]
     fn the_source_bakes_in_no_consumer_path() {
         // Non-negotiable rule 1: which manifest, which workflow directory and

@@ -737,4 +737,47 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn a_records_line_is_the_json_it_parses_back_from() {
+        let one = record("d-1", "false-green");
+        let line = one.line().unwrap();
+        assert!(!line.contains('\n'));
+        assert_eq!(parse(&line).unwrap(), vec![one]);
+    }
+
+    /// A committed ledger of one row, in a repository of its own.
+    fn committed_ledger(name: &str) -> (std::path::PathBuf, Defects, String) {
+        let repo = crate::scratch::scratch(name);
+        crate::gitwrite::init_on_main(&repo).unwrap();
+        let declared = Defects {
+            path: "defects.jsonl".to_owned(),
+            classes: classes(),
+        };
+        let row = record("d-1", "false-green").line().unwrap();
+        std::fs::write(repo.join(&declared.path), format!("{row}\n")).unwrap();
+        crate::gitwrite::commit_paths(&repo, std::slice::from_ref(&declared.path), "ledger")
+            .unwrap();
+        (repo, declared, row)
+    }
+
+    /// Fails by: a base dropped, or the committed ledger not read back at it,
+    /// so a rewritten row passes the append-only half.
+    #[test]
+    fn a_row_rewritten_in_the_working_tree_is_found_against_head() {
+        let (repo, declared, row) = committed_ledger("defects-gate");
+        assert_eq!(bases(&repo).unwrap(), vec!["HEAD".to_owned()]);
+        assert_eq!(
+            at_rev(&repo, "HEAD", &declared.path).unwrap(),
+            Some(format!("{row}\n"))
+        );
+        assert_eq!(at_rev(&repo, "HEAD", "absent.jsonl").unwrap(), None);
+        assert!(gate(&repo, &declared).unwrap().is_empty(), "the premise");
+        let rewritten = record("d-1", "silent-skip").line().unwrap();
+        std::fs::write(repo.join(&declared.path), format!("{rewritten}\n")).unwrap();
+        let found = gate(&repo, &declared).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].rule, NOT_APPEND_ONLY);
+        assert_eq!(found[0].line, Some(1));
+    }
 }

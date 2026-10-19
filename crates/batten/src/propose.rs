@@ -331,4 +331,44 @@ mod tests {
     fn a_clean_merge_is_not_a_proposal() {
         assert_eq!(propose(b"a\n", b"a\nb\n", b"a\n"), None);
     }
+
+    #[test]
+    fn each_shape_prints_its_own_token() {
+        assert_eq!(Shape::CommentOnly.to_string(), "comment-only");
+        assert_eq!(Shape::ListUnion.to_string(), "list-union");
+        assert_eq!(Shape::JsonArrayUnion.to_string(), "json-array-union");
+    }
+
+    /// Fails by: a region read as comment-only when any one side carries code.
+    #[test]
+    fn a_region_is_comment_only_only_when_every_side_is() {
+        assert_eq!(comment_only(&["# a\n"], &["x = 1\n"], &["y = 1\n"]), None);
+        assert_eq!(comment_only(&["x = 1\n"], &["y = 1\n"], &["# c\n"]), None);
+        assert_eq!(comment_only(&["# a\n"], &["x = 1\n"], &["# c\n"]), None);
+    }
+
+    /// Fails by: a list merged when one side assigns a different key.
+    #[test]
+    fn a_list_union_needs_one_key_on_every_side() {
+        let same = ["A = \"x\"\n"];
+        assert_eq!(list_union(&same, &same, &["B = \"y\"\n"]), None);
+        assert_eq!(list_union(&same, &["B = \"y\"\n"], &same), None);
+    }
+
+    /// Fails by: trunk's own additions dropped as if the branch removed them, or
+    /// an item trunk removed restored because the branch still carries it.
+    #[test]
+    fn the_union_keeps_trunks_additions_and_its_removals() {
+        let items = |names: &[&str]| -> Vec<String> {
+            names.iter().map(|name| (*name).to_owned()).collect()
+        };
+        assert_eq!(
+            union(&items(&["a", "t"]), &items(&["a"]), &items(&["a"])),
+            items(&["a", "t"])
+        );
+        assert_eq!(
+            union(&items(&[]), &items(&["x"]), &items(&["x"])),
+            items(&[])
+        );
+    }
 }

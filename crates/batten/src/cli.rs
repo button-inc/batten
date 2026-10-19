@@ -4096,6 +4096,56 @@ mod tests {
         argv
     }
 
+    /// The parsed command for a declared path's minimal argv plus `extra`, as
+    /// its `Debug` rendering.
+    fn dispatched(path: &str, extra: &[&str]) -> String {
+        let mut argv = argv_for(path);
+        argv.extend(extra.iter().map(|word| (*word).to_owned()));
+        let borrowed: Vec<&str> = argv.iter().map(String::as_str).collect();
+        format!("{:?}", parse(&borrowed).command)
+    }
+
+    /// Fails by: a doctor sub-verb falling through to the bare report, which
+    /// every-leaf-dispatches cannot see because the bare report is a command.
+    #[test]
+    fn every_doctor_sub_verb_selects_its_own_report() {
+        for (path, variant) in [
+            ("doctor hooks", "Hooks"),
+            ("doctor mediator", "Mediator"),
+            ("doctor session", "Session"),
+            ("doctor egress", "Egress"),
+            ("doctor gate", "CommitGate"),
+            ("doctor forge", "Forge"),
+            ("doctor gaps", "Gaps"),
+            ("doctor config", "Config"),
+            ("doctor toolchain", "Toolchain"),
+            ("doctor target", "Target"),
+        ] {
+            let shown = dispatched(path, &[]);
+            assert!(
+                shown.starts_with(&format!("Some(Doctor {{ command: {variant}")),
+                "{path}: {shown}"
+            );
+        }
+        assert!(dispatched("doctor hooks", &["--json"]).contains("json: true"));
+    }
+
+    /// Fails by: a typed `--adopt-from` not implying `--adopt`.
+    #[test]
+    fn naming_an_orphan_implies_adopting_one() {
+        assert!(dispatched("claim check", &["--adopt-from", "x"]).contains("adopt: true"));
+        assert!(dispatched("claim check", &[]).contains("adopt: false"));
+    }
+
+    /// Fails by: an `--arg` dropped, or a count read as a constant.
+    #[test]
+    fn every_step_arg_and_every_count_is_read_as_typed() {
+        let shown = dispatched("step check", &["--arg", "a", "--arg", "b"]);
+        assert!(shown.contains(r#"args: ["a", "b"]"#), "{shown}");
+        let shown = dispatched("verdict", &["--findings", "3", "--unjudgeable", "2"]);
+        assert!(shown.contains("findings: 3, unjudgeable: 2"), "{shown}");
+    }
+
     #[test]
     fn every_leaf_verb_dispatches() {
         // The other half of the derivation gate. `surface.rs` pins that every

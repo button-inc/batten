@@ -770,6 +770,81 @@ mod tests {
         assert!(found.contains("curl") && found.contains("tar"), "{found:?}");
     }
 
+    /// Fails by: a system directory chosen though no `PATH` entry names it.
+    #[test]
+    fn a_system_directory_off_path_is_never_chosen() {
+        let user = std::path::PathBuf::from("/home/u/.local/bin");
+        let on_path = vec![std::path::PathBuf::from("/opt/other")];
+        assert_eq!(destination(None, user.clone(), &on_path, |_| true), user);
+    }
+
+    /// Fails by: any one clause of the program reading dropped, so a pattern,
+    /// a comment, a definition, an assignment or a quoted program misreads.
+    #[test]
+    fn programs_are_first_words_and_nothing_else() {
+        let read = |line: &str| -> Vec<String> { programs_in(line).into_iter().collect() };
+        assert_eq!(read("curl x"), ["curl"]);
+        assert_eq!(read("\"curl\" x"), ["curl"]);
+        assert_eq!(read("Darwin) curl x"), ["curl"]);
+        assert_eq!(read("amd64) target=x"), Vec::<String>::new());
+        assert_eq!(read("a | b)"), Vec::<String>::new(), "a bare pattern");
+        assert_eq!(read("# note | jq ."), Vec::<String>::new(), "a comment");
+        assert_eq!(read("curl() {"), Vec::<String>::new(), "a definition");
+        assert_eq!(read("x=1"), Vec::<String>::new(), "an assignment");
+        assert_eq!(read("\"$tmp/batten\" run"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_matrix_target_is_one_legal_token() {
+        let workflow = "- target:\n- target: bad target!\n  - target: x86_64-unknown-linux-gnu\n";
+        assert_eq!(
+            matrix_targets(workflow),
+            BTreeSet::from([String::from("x86_64-unknown-linux-gnu")])
+        );
+    }
+
+    #[test]
+    fn a_manifest_scalar_is_its_unquoted_non_empty_value() {
+        let manifest = "name = \"batten\"\nempty = \"\"\n";
+        assert_eq!(manifest_scalar(manifest, "name").as_deref(), Some("batten"));
+        assert_eq!(manifest_scalar(manifest, "empty"), None);
+        assert_eq!(manifest_scalar(manifest, "absent"), None);
+    }
+
+    /// Fails by: a template that hardcodes or drops either version read as
+    /// carrying it.
+    #[test]
+    fn a_template_is_parametric_only_when_each_name_carries_its_version() {
+        assert!(parametric(("1.0", "b-1.0.tgz"), ("2.0", "b-2.0.tgz")));
+        assert!(!parametric(("1.0", "b.tgz"), ("2.0", "b-2.0.tgz")));
+        assert!(!parametric(("1.0", "b-1.0.tgz"), ("2.0", "b.tgz")));
+        assert!(!parametric(("1.0", "b-1.0.tgz"), ("2.0", "b-1.0.tgz")));
+    }
+
+    #[test]
+    fn a_committed_binary_is_found_by_its_magic() {
+        let root = crate::scratch::scratch("install-binaries");
+        std::fs::write(root.join("tool"), [0x7f, 0x45, 0x4c, 0x46, 0]).unwrap();
+        std::fs::write(root.join("notes.md"), "text").unwrap();
+        let tracked = BTreeSet::from([
+            String::from("tool"),
+            String::from("notes.md"),
+            String::from("gone"),
+        ]);
+        assert_eq!(committed_binaries(&root, &tracked), ["tool"]);
+    }
+
+    #[test]
+    fn a_disagreement_line_names_the_target_and_both_spellings() {
+        let line = Disagreement::AssetName {
+            target: String::from("t"),
+            dist: String::from("a.tgz"),
+            install: String::from("b.tgz"),
+        }
+        .line();
+        assert_eq!(line, "t — dist writes 'a.tgz', install.sh asks for 'b.tgz'");
+    }
+
     #[test]
     fn an_added_program_is_seen_wherever_it_hides() {
         for line in ["jq . x", "x=$(jq . y)", "a | jq .", "true && jq ."] {
