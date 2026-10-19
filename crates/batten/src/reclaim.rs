@@ -622,11 +622,18 @@ mod tests {
     /// the digits the stores key on — whichever source answers here.
     #[test]
     fn this_hosts_boot_time_is_digits() {
-        let boot = boot_time().expect("a linux host or a declared override");
-        assert!(
-            !boot.is_empty() && boot.bytes().all(|byte| byte.is_ascii_digit()),
-            "{boot}"
-        );
+        // Off Linux there is no `/proc/stat`, and the honest answer is
+        // could-not-look rather than a guess.
+        let boot = boot_time();
+        if cfg!(target_os = "linux") {
+            let boot = boot.expect("a linux host reads its boot time");
+            assert!(
+                !boot.is_empty() && boot.bytes().all(|byte| byte.is_ascii_digit()),
+                "{boot}"
+            );
+        } else {
+            assert!(boot.is_err(), "{boot:?}");
+        }
     }
 
     /// Fails by: a boot not appended where the fold reads it, or appended again

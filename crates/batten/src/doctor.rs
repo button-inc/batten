@@ -4294,7 +4294,7 @@ mod probe_tests {
         let dropped = repository(
             "doctor-config-dropped",
             Some(
-                "version = 1\n\n[[hook.handler]]\nid = \"from-a-newer-schema\"\non = \"user-prompt-submit\"\nrun = [\"true\"]\nowner = \"A-1\"\nexpires = \"2027-02-28\"\nthis_key_does_not_exist_in_any_version = true\n",
+                "version = 1\n\n[[hook.handler]]\nid = \"from-a-newer-schema\"\non = \"user-prompt-submit\"\nrun = [\"true\"]\nowner = \"A-1\"\nexpires = \"9999-12-31\"\nthis_key_does_not_exist_in_any_version = true\n",
             ),
         );
         assert_eq!(
@@ -4383,7 +4383,7 @@ mod probe_tests {
     fn a_handler_whose_program_resolves_passes_and_one_that_does_not_fails() {
         let handler = |program: &str| {
             format!(
-                "version = 1\n\n[[hook.handler]]\nid = \"h\"\non = \"user-prompt-submit\"\nrun = [\"{program}\"]\nowner = \"A-1\"\nexpires = \"2027-02-28\"\n"
+                "version = 1\n\n[[hook.handler]]\nid = \"h\"\non = \"user-prompt-submit\"\nrun = [\"{program}\"]\nowner = \"A-1\"\nexpires = \"9999-12-31\"\n"
             )
         };
         let resolves = diagnose(&repository("doctor-handler-resolves", Some(&handler("sh"))));

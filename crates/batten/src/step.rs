@@ -554,14 +554,22 @@ mod tests {
             inputs: vec![String::from("input")],
             tools: vec![tool.iter().map(|word| (*word).to_owned()).collect()],
         };
+        // The platform's own shell spells each tool: one that answers, one
+        // that exits zero saying nothing, and one that answers and fails.
+        let (answers, silent, fails): (&[&str], &[&str], &[&str]) = if cfg!(windows) {
+            (
+                &["cmd", "/C", "echo v1"],
+                &["cmd", "/C", "rem"],
+                &["cmd", "/C", "echo v1& exit 1"],
+            )
+        } else {
+            (&["echo", "v1"], &["true"], &["sh", "-c", "echo v1; exit 1"])
+        };
         assert!(
-            material(&root, &row(&["echo", "v1"]), &[], None).is_some(),
+            material(&root, &row(answers), &[], None).is_some(),
             "the premise: a tool that answers keys the step"
         );
-        assert_eq!(material(&root, &row(&["true"]), &[], None), None);
-        assert_eq!(
-            material(&root, &row(&["sh", "-c", "echo v1; exit 1"]), &[], None),
-            None
-        );
+        assert_eq!(material(&root, &row(silent), &[], None), None);
+        assert_eq!(material(&root, &row(fails), &[], None), None);
     }
 }
