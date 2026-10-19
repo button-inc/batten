@@ -1614,6 +1614,24 @@ fn provided_by_pin(dir: &Path, program: &str) -> bool {
 /// `batten` on `PATH` it failed a row the dispatch would have run, and pushed
 /// rows into a one-line task wrapper purely to satisfy this probe. The doctor
 /// asking is itself that image.
+/// Whether a `command` row's program is reachable THE WAY THE SPAWN REACHES IT:
+/// the running image, `PATH`, or the pin (CLOUD-1324, CLOUD-2386).
+///
+/// Named rather than inline in [`diagnose`] so each arm is falsifiable on its
+/// own — inline, all three survived `cargo mutants`, because no case reaches
+/// this walk without building a whole repository fixture first.
+///
+/// * **The image**, because `spawn_resolving`'s rung -1 runs it for that name
+///   and never looks it up, so a `PATH` probe would ask a question the spawn
+///   does not — [`handler_program_resolves`] below refuses the same for the
+///   handler surface, and the doctor asking is itself that image.
+/// * **The pin**, because nothing a toolchain manager provides is on bare
+///   `PATH` — nor should it be — and without this arm every pinned program
+///   reads as missing and the whole check is noise.
+fn command_program_resolves(dir: &Path, program: &str) -> bool {
+    crate::rules::is_own_image(program) || on_path(program) || provided_by_pin(dir, program)
+}
+
 fn handler_program_resolves(dir: &Path, program: &str) -> bool {
     if crate::rules::is_own_image(program) {
         return true;
@@ -1667,11 +1685,7 @@ pub fn diagnose(dir: &Path) -> Report {
     let unreachable: Vec<String> = rules
         .iter()
         .filter_map(Rule::program)
-        .filter(|program| {
-            !crate::rules::is_own_image(program)
-                && !on_path(program)
-                && !provided_by_pin(dir, program)
-        })
+        .filter(|program| !command_program_resolves(dir, program))
         .map(str::to_owned)
         .collect();
     let unreachable_names = unreachable.clone();
@@ -3167,6 +3181,45 @@ mod tests {
             &dir,
             "batten-no-such-program-anywhere"
         ));
+    }
+
+    /// CLOUD-2386. The `command` probe resolves a program the way
+    /// `spawn_resolving` spawns it, and each of its three arms decides alone.
+    ///
+    /// **One assertion per arm, because inline all three survived
+    /// `cargo mutants`**: the walk sat inside `diagnose`, which no case reaches
+    /// without a whole repository fixture, so negating any term changed nothing
+    /// any test could see.
+    #[test]
+    fn a_command_program_resolves_by_image_path_or_pin_and_each_arm_decides() {
+        let dir = std::env::temp_dir();
+
+        // THE IMAGE ARM IS NOT DECIDED HERE, and saying so is the point. Under
+        // `cargo test` the checkout's own build is on `PATH`, so `on_path`
+        // answers for `batten` too and this assertion cannot tell the arms
+        // apart — it would assert its own premise (`rules/rust.md`). The arm is
+        // decided where `PATH` is controllable, in
+        // `tests/it/own_image_spawn.rs`'s doctor case.
+        assert!(
+            command_program_resolves(&dir, crate::surface::BINARY),
+            "a row naming this engine resolves, by one arm or another"
+        );
+
+        // THE `PATH` ARM, over a program every host running this suite has.
+        // Dropping `on_path` fails here; `sh` is neither the image nor pinned.
+        assert!(
+            command_program_resolves(&dir, "sh"),
+            "a program PATH resolves is reachable: {:?}",
+            std::env::var_os("PATH")
+        );
+
+        // NEITHER, so the check still names something. A probe that answered
+        // `true` unconditionally — the shape each surviving mutant produced —
+        // fails here, which is what makes the two arms above mean anything.
+        assert!(
+            !command_program_resolves(&dir, "batten-no-such-program-anywhere"),
+            "a program nothing provides is what the check exists to name"
+        );
     }
     use std::fs;
 
