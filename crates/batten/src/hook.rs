@@ -19798,4 +19798,88 @@ deny contains "refused by themodule" if {
         assert!(!repo_relative_path("<in/put"));
         assert!(repo_relative_path("src/a.rs"));
     }
+
+    /// Every pipeline stage but the last is followed by a pipe; the last
+    /// carries what followed the pipeline.
+    ///
+    /// Fails by: the last stage read as piped.
+    #[test]
+    fn only_the_last_pipeline_stage_carries_what_follows() {
+        let terminators: Vec<Option<Separator>> = parsed_ok("a | b | c")
+            .iter()
+            .map(|segment| segment.terminator)
+            .collect();
+        assert_eq!(
+            terminators,
+            [Some(Separator::Pipe), Some(Separator::Pipe), None]
+        );
+    }
+
+    /// Every control-flow construct's commands are walked.
+    ///
+    /// Fails by: dropping any construct's arm, which hides its body.
+    #[test]
+    fn every_control_flow_body_is_walked() {
+        let walked = |command: &str, program: &str| {
+            parsed_ok(command)
+                .iter()
+                .any(|segment| segment.words.first().map(String::as_str) == Some(program))
+        };
+        assert!(walked("while true; do sleep 1; done", "sleep"));
+        assert!(walked("if true; then echo a; else tail b; fi", "tail"));
+        assert!(walked("select x in a; do head s; done", "head"));
+        assert!(walked("case x in a) wc c;; esac", "wc"));
+        assert!(walked("f() { stat fn; }", "stat"));
+        assert!(walked("coproc sort co", "sort"));
+    }
+
+    /// A here-string hands its word to stdin; a file redirect hands nothing.
+    ///
+    /// Fails by: reading any redirect's target as stdin text.
+    #[test]
+    fn only_a_here_string_hands_text_to_stdin() {
+        assert_eq!(parsed_ok("cat <<< hi")[0].stdin_text, ["hi"]);
+        assert!(parsed_ok("cat < in.txt")[0].stdin_text.is_empty());
+    }
+
+    /// A heredoc nested in a pipeline, a list or a subshell keeps its body as
+    /// data, and a single multi-line node keeps its quoted newline.
+    ///
+    /// Fails by: dropping any nesting arm of the heredoc test, or joining a
+    /// lone node's lines.
+    #[test]
+    fn a_nested_heredoc_and_a_lone_node_are_not_joined() {
+        for command in [
+            "cat <<EOF | head\nbody\nEOF\necho x",
+            "true && cat <<EOF\nbody\nEOF\necho x",
+            "(cat <<EOF\nbody\nEOF\n)\necho x",
+        ] {
+            let parsed = parsed_ok(command);
+            assert!(
+                !parsed
+                    .iter()
+                    .any(|segment| segment.words.iter().any(|word| word == "body")),
+                "{command:?}: {parsed:?}"
+            );
+            assert!(
+                parsed.iter().any(|segment| segment.words == ["echo", "x"]),
+                "{command:?}: {parsed:?}"
+            );
+        }
+        assert_eq!(parsed_ok("echo 'a\nb'")[0].words, ["echo", "a\nb"]);
+    }
+
+    /// A shape row's operands start after the program, so the program's own
+    /// name never matches as one.
+    ///
+    /// Fails by: starting the operand words at the program.
+    #[test]
+    fn a_shape_rows_operands_start_after_the_program() {
+        let policy = ceiling_policy(vec![shape("echo-echo", "echo echo", None)]);
+        assert!(matching_shape_rows(&policy, &envelope("echo hi")).is_empty());
+        assert_eq!(
+            matching_shape_rows(&policy, &envelope("echo echo")).len(),
+            1
+        );
+    }
 }
