@@ -2461,6 +2461,22 @@ mod tests {
         assert!(load_named("v", "hollow").is_err());
     }
 
+    /// Fails by: an unknown family let into the tracker arm, which resolves the
+    /// config and reads stdin before it too refuses the family.
+    #[test]
+    fn an_unknown_family_is_refused_before_any_config_is_read() {
+        enter_repo("record-derive-unknown", &[("batten.toml", "version = [\n")]);
+        assert!(
+            refusal(derive_reading(
+                "nope",
+                &inputs(&[]),
+                &Overrides::default(),
+                None
+            ))
+            .is_some_and(|error| error.contains(UNDECLARED))
+        );
+    }
+
     /// Fails by: a declared family's arm missing, or an undeclared family
     /// answered by some other family's reading.
     #[test]
