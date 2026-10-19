@@ -687,6 +687,7 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 //MUTANT hook-path-builds|s@^    let may_build = !hook_path;$@    let may_build = true;@|the_hook_path_never_builds_a_source_pin
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT follow-pin-passes-a-crash-through|s@^    if hook_path {$@    if false {@|a_crashing_checkout_build_never_fails_the_hook_open
+//MUTANT fetch-failure-always-falls-through|s@^                Err(_) if !may_build => return Ok(Followed::Nothing),$@                Err(_) => return Ok(Followed::Nothing),@|a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path
 fn follow_pin(hook_path: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<Followed> {
     // THE HOOK FOLLOWS A RELEASE PIN BUT NEVER BUILDS A SOURCE ONE (CLOUD-2062,
     // narrowed under CLOUD-2059), and that is the same bit rather than a second
@@ -717,7 +718,13 @@ fn follow_pin(hook_path: bool, out: &mut dyn Write, err: &mut dyn Write) -> Resu
     let engine = match (pin.release.as_deref(), pin.source.as_deref()) {
         (Some(tag), None) => {
             let cache = state::repo_state_dir(&root)?;
-            match engine::pinned_release(&cache, env!("CARGO_PKG_REPOSITORY"), tag) {
+            // `releases_repository()`, NOT THE BAKED LITERAL (CLOUD-2376). Every
+            // other release fetch in this binary reads that seam; this one spelled
+            // the repository itself, so no fixture could point it anywhere and the
+            // guard below had no reachable failing fetch to be tested against.
+            // Measured: mutating `!may_build` to `true` survived the whole suite.
+            // The default is the same literal, so nothing moves but testability.
+            match engine::pinned_release(&cache, &releases_repository(), tag) {
                 Ok(path) => path,
                 // ON THE HOOK PATH A FETCH THAT FAILS FALLS THROUGH to the
                 // refusal floor, which still decides the call and admits the

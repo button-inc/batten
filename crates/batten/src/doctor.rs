@@ -1209,6 +1209,8 @@ pub fn diagnose_toolchain(manifest: &Path, probe: &str) -> Toolchain {
 ///
 /// Reads both files and hashes them; spawns nothing. Length is compared first
 /// only as a short-circuit — two files of different lengths cannot be identical.
+//MUTANT-SUITE crates/batten/tests/it/doctor.rs
+//MUTANT mediator-reads-this-processes-target-dir|s@^    let Some(built) = crate::engine::checkout_build(dir) else {$@    let Some(built) = crate::engine::own_build(dir) else {@|the_observed_checkouts_build_is_read_whatever_target_dir_this_process_was_handed
 #[must_use]
 pub fn diagnose_mediator(dir: &Path) -> Mediator {
     // The tree builds a mediator iff it carries the crate that produces one.
@@ -1221,8 +1223,6 @@ pub fn diagnose_mediator(dir: &Path) -> Mediator {
     let Some(resolved) = crate::rules::on_path_verbatim("batten") else {
         return Mediator::Unresolvable;
     };
-    //MUTANT-SUITE crates/batten/tests/it/doctor.rs
-    //MUTANT mediator-reads-this-processes-target-dir|s@^    let Some(built) = crate::engine::checkout_build(dir) else {$@    let Some(built) = crate::engine::own_build(dir) else {@|the_observed_checkouts_build_is_read_whatever_target_dir_this_process_was_handed
     // THE CHECKOUT'S OWN NAMER, NOT THIS PROCESS'S (CLOUD-2376). `dir` is a tree
     // this verb OBSERVES and never builds — `doctor` spawns no cargo — so
     // `CARGO_TARGET_DIR` here describes whatever happens to be running batten
