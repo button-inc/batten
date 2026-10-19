@@ -1629,4 +1629,141 @@ mod tests {
         assert!(stale_as("engine = { source = \"ab\" }\n", || None, true).is_none());
         assert!(stale_as("engine = { release = \"v0.0.1\" }\n", || None, true).is_some());
     }
+
+    #[test]
+    fn the_engine_inputs_are_the_crates_and_the_cargo_manifests() {
+        assert!(is_input("crates/batten/src/lib.rs"));
+        assert!(is_input("Cargo.toml"));
+        assert!(is_input("Cargo.lock"));
+        assert!(!is_input("README.md"));
+    }
+
+    #[test]
+    fn a_release_is_newer_only_when_strictly_above() -> Result<()> {
+        assert!(is_newer("v1.0.1", "v1.0.0")?);
+        assert!(!is_newer("v1.0.0", "v1.0.0")?);
+        let one = semver::Version::new(1, 0, 0);
+        assert!(!ahead_of(&one, &one));
+        assert!(ahead_of(&semver::Version::new(1, 0, 1), &one));
+        Ok(())
+    }
+
+    #[test]
+    fn the_repair_is_admitted_whole_bare_or_rooted_and_nothing_else() {
+        let root = Path::new("/work/my repo");
+        assert!(is_repair(REPAIR));
+        assert!(is_repair(REPAIR_PINNED));
+        assert!(!is_repair("batten engine"));
+        assert_eq!(
+            repair_at(root, REPAIR),
+            "cd '/work/my repo' && batten engine install"
+        );
+        assert!(is_repair_at(REPAIR, root));
+        assert!(is_repair_at(&repair_at(root, REPAIR_PINNED), root));
+        assert!(!is_repair_at(
+            "cd /elsewhere && batten engine install",
+            root
+        ));
+    }
+
+    #[test]
+    fn a_shell_word_is_quoted_only_when_the_shell_would_read_it() {
+        assert_eq!(shell_word("/a/b-c_d.e+f@g%h:i,j"), "/a/b-c_d.e+f@g%h:i,j");
+        assert_eq!(shell_word(""), "''");
+        assert_eq!(shell_word("a b"), "'a b'");
+        assert_eq!(shell_word("it's"), "'it'\\''s'");
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn a_gnu_linux_build_names_its_own_triple() {
+        assert_eq!(
+            running_target(),
+            format!("{}-unknown-linux-gnu", std::env::consts::ARCH)
+        );
+    }
+
+    #[test]
+    fn the_releases_between_exclude_the_pin_and_count_a_missing_latest_once() -> Result<()> {
+        let heading = |version: &str| Heading {
+            version: release_version(version).unwrap_or_else(|_| semver::Version::new(0, 0, 0)),
+            date: None,
+        };
+        let versions = |found: Vec<Heading>| -> Vec<String> {
+            found.iter().map(|h| h.version.to_string()).collect()
+        };
+        let headings = [heading("v1.1.0"), heading("v1.0.0")];
+        assert_eq!(
+            versions(releases_between(&headings, "v1.0.0", "v1.1.0")?),
+            ["1.1.0"]
+        );
+        assert!(releases_between(&[], "v1.0.0", "v1.0.0")?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn days_are_counted_whole_from_utc_midnight() {
+        assert_eq!(days_since("1970-01-01", 3 * 86_400 + 5), Some(3));
+        assert_eq!(days_since("1970-01-03", 86_400), Some(0));
+        assert_eq!(days_since("not a date", 0), None);
+    }
+
+    #[test]
+    fn only_a_row_named_batten_is_battens() {
+        let row = |name: &str| {
+            let mut table = toml_edit::Table::new();
+            table.insert("name", toml_edit::value(name));
+            table
+        };
+        assert!(is_batten_row(&row("batten")));
+        assert!(!is_batten_row(&row("hk")));
+    }
+
+    #[test]
+    fn a_comment_starts_outside_a_string_that_opened_where_a_value_can() {
+        assert_eq!(yaml_code("x: 'a # b' # c"), "x: 'a # b' ");
+        assert_eq!(yaml_code("x:'a # b' # c"), "x:'a # b' ");
+        assert_eq!(yaml_code("don't # c"), "don't ");
+        assert_eq!(yaml_code("x # c"), "x ");
+        assert_eq!(yaml_code("x#c"), "x#c");
+    }
+
+    #[test]
+    fn a_copy_key_is_read_after_a_completed_value_and_never_in_a_sequence() {
+        let none = std::collections::BTreeSet::new();
+        assert_eq!(
+            workflow_literals("a: b\nBATTEN_VERSION: v9.9.9\n", "v1.0.0", &none),
+            [(2, "BATTEN_VERSION")]
+        );
+        assert!(
+            workflow_literals(
+                "list:\n  - x\n  - BATTEN_VERSION\n  - v9.9.9\n",
+                "v1.0.0",
+                &none
+            )
+            .is_empty()
+        );
+        assert!(workflow_literals("BATTEN_VERSION: v1.0.0\n", "v1.0.0", &none).is_empty());
+    }
+
+    #[test]
+    fn a_verb_is_only_lowercase_words() {
+        assert!(invoked_verbs("batten -v\n").is_empty());
+        assert!(invoked_verbs("batten aB\n").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_fetched_binary_is_made_executable() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = crate::scratch::scratch("engine-make-executable");
+        let path = dir.join("batten");
+        std::fs::write(&path, "")?;
+        make_executable(&path)?;
+        assert_eq!(
+            std::fs::metadata(&path)?.permissions().mode() & 0o777,
+            0o755
+        );
+        Ok(())
+    }
 }

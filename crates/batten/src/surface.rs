@@ -8762,6 +8762,65 @@ mod tests {
         assert_eq!(command_path(&["--", "policy", "budget"]), None);
     }
 
+    /// Every committed man page is the page the declared surface renders, so a
+    /// flag's help, its requiredness and whether it takes a value are each held
+    /// by an artifact a reader installs rather than by the declaration alone.
+    #[test]
+    fn every_committed_man_page_is_the_one_the_surface_renders() {
+        let root = command();
+        let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../man"));
+        let paths = std::iter::once("").chain(SURFACE.iter().map(|decl| decl.path));
+        for path in paths {
+            let name = crate::render::page_name("batten", path);
+            let committed = std::fs::read_to_string(dir.join(format!("{name}.1")))
+                .unwrap_or_else(|_| panic!("man/{name}.1 is committed"));
+            let rendered = crate::render::man(&root, Some(path)).expect("the page renders");
+            assert!(rendered == committed, "man/{name}.1 is stale");
+        }
+    }
+
+    #[test]
+    fn only_a_declared_value_flag_consumes_the_next_word() {
+        assert!(consumes_a_value("--strictness"));
+        assert!(!consumes_a_value("--quiet"));
+        assert!(!consumes_a_value("--no-such-flag"));
+        assert!(!consumes_a_value("-Z"));
+    }
+
+    #[test]
+    fn each_row_answers_its_own_data_channel_and_an_unknown_path_none() {
+        for decl in SURFACE {
+            assert_eq!(
+                data_channel_for(decl.path),
+                decl.data_channel,
+                "{}",
+                decl.path
+            );
+        }
+        assert!(!data_channel_for("no such path"));
+    }
+
+    #[test]
+    fn a_noun_has_children_and_no_answer_of_its_own() {
+        let row = |path: &str| SURFACE.iter().find(|decl| decl.path == path).expect(path);
+        assert!(is_noun(row("config")));
+        assert!(!is_noun(row("config show")));
+        assert!(!is_noun(row("doctor")));
+        assert!(
+            SURFACE
+                .iter()
+                .any(|decl| decl.data_channel && has_children(decl.path))
+        );
+    }
+
+    #[test]
+    fn an_env_declaration_names_its_variable_whoever_reads_it() {
+        assert_eq!(EnvDecl::None.name(), None);
+        assert_eq!(EnvDecl::Clap("A").name(), Some("A"));
+        assert_eq!(EnvDecl::Layered("B").name(), Some("B"));
+        assert_eq!(EnvDecl::Presentation("C").name(), Some("C"));
+    }
+
     #[test]
     fn every_path_is_declared_once() {
         // A duplicated path would give `effect_for` a silent winner and `command`

@@ -540,4 +540,181 @@ id = \"r\"
             BTreeSet::from(["first rule".to_owned()])
         );
     }
+
+    /// Two rows back to back, the second's comment block directly under the
+    /// first's last key, with a prelude before either.
+    const TWO: &str = "\
+v = 1
+[[rule]]
+id = \"a\"
+x = 1
+# about b
+[[rule]]
+id = \"b\"
+";
+
+    fn row(id: Option<&str>, start: usize, end: usize) -> Row {
+        Row {
+            id: id.map(str::to_owned),
+            start,
+            end,
+        }
+    }
+
+    #[test]
+    fn a_comment_directly_under_content_is_the_next_rows_own() {
+        let a = TWO.find("[[rule]]").expect("a");
+        let b = TWO.find("# about b").expect("b");
+        assert_eq!(
+            rows(TWO),
+            vec![
+                row(None, 0, a),
+                row(Some("a"), a, b),
+                row(Some("b"), b, TWO.len())
+            ]
+        );
+        let bare = &TWO[a..];
+        assert_eq!(
+            rows(bare).len(),
+            2,
+            "no empty prelude before a leading header"
+        );
+    }
+
+    #[test]
+    fn only_a_child_of_the_preceding_kind_is_absorbed() {
+        let text = "[[verdict]]\nid = \"v\"\n[board]\nx = 1\n[[rule]]\nid = \"r\"\n[[verdict.route]]\nid = \"q\"\n";
+        let ids: Vec<Option<String>> = rows(text).into_iter().map(|row| row.id).collect();
+        assert_eq!(
+            ids,
+            [Some("v".to_owned()), None, Some("r".to_owned()), None]
+        );
+    }
+
+    #[test]
+    fn an_insertion_is_owned_strictly_inside_a_row_and_a_range_by_overlap() {
+        let b = TWO.find("# about b").expect("b");
+        let owners = |ranges: &[(usize, usize)]| -> Vec<String> {
+            owner_of(TWO, ranges).into_iter().collect()
+        };
+        assert!(
+            owners(&[(b, b)]).is_empty(),
+            "a boundary insertion is a new row"
+        );
+        assert_eq!(owners(&[(b + 2, b + 2)]), ["b"]);
+        assert_eq!(owners(&[(b + 1, b + 3)]), ["b"]);
+        assert_eq!(owners(&[(b - 3, b)]), ["a"]);
+        assert_eq!(owners(&[(b, b + 1)]), ["b"]);
+    }
+
+    #[test]
+    fn a_whole_file_write_is_cut_to_its_differing_middle() {
+        assert_eq!(
+            changed_ranges("abcX", Some("abcY"), &[]),
+            Some(vec![(3, 4)])
+        );
+        assert_eq!(
+            changed_ranges("Xabc", Some("Yabc"), &[]),
+            Some(vec![(0, 1)])
+        );
+        assert_eq!(changed_ranges("abc", Some("abcd"), &[]), Some(vec![(3, 3)]));
+        assert_eq!(changed_ranges("abc", Some("abc"), &[]), Some(Vec::new()));
+    }
+
+    #[test]
+    fn forgetting_one_context_keeps_anothers_reads() {
+        let git_dir = crate::scratch::scratch("history-forget");
+        record_read(&git_dir, "one", "a", "d", 0).expect("recorded");
+        record_read(&git_dir, "two", "a", "d", 0).expect("recorded");
+        forget_context(&git_dir, "one").expect("forgotten");
+        assert!(!admits(&git_dir, "one", "a", "d"));
+        assert!(admits(&git_dir, "two", "a", "d"));
+    }
+
+    /// A repository whose `batten.toml` went through `versions`, oldest first,
+    /// each committed with its message.
+    fn repo(name: &str, versions: &[(&str, &str)]) -> std::path::PathBuf {
+        let dir = crate::scratch::scratch(name);
+        crate::gitwrite::init_on_main(&dir).expect("a repository");
+        for (text, message) in versions {
+            std::fs::write(dir.join("batten.toml"), text).expect("the config");
+            crate::gitwrite::commit_paths(&dir, &["batten.toml".to_owned()], message)
+                .expect("a commit");
+        }
+        dir
+    }
+
+    fn rule(body: &str) -> String {
+        format!("v = 1\n[[rule]]\nid = \"a\"\nx = \"{body}\"\n")
+    }
+
+    fn assembled(dir: &Path) -> String {
+        Assembler::new(dir, "batten.toml")
+            .expect("the history walks")
+            .assemble("a")
+            .expect("the row is declared")
+    }
+
+    #[test]
+    fn the_newest_three_changes_print_whole_and_the_rest_by_subject() {
+        let texts: Vec<String> = (1..=4).map(|n| rule(&n.to_string())).collect();
+        let messages = ["change 1", "change 2", "change 3", "change 4"];
+        let versions: Vec<(&str, &str)> = texts.iter().map(String::as_str).zip(messages).collect();
+        let out = assembled(&repo("history-four", &versions));
+        assert!(out.contains("\nchanged by, newest first:\n"), "{out}");
+        for whole in ["change 4", "change 3", "change 2"] {
+            assert!(out.contains(&format!("\n{whole}\n")), "{out}");
+        }
+        assert!(out.ends_with(" change 1\n"), "{out}");
+    }
+
+    #[test]
+    fn the_walk_stops_where_the_row_did_not_exist() {
+        let gone = "v = 1\n".to_owned();
+        let (old, new) = (rule("old"), rule("new"));
+        let out = assembled(&repo(
+            "history-recreated",
+            &[(&old, "created"), (&gone, "removed"), (&new, "recreated")],
+        ));
+        assert_eq!(out.matches("created").count(), 1, "{out}");
+        assert!(!out.contains("removed"), "{out}");
+    }
+
+    #[test]
+    fn a_whole_message_just_past_the_cap_falls_back_to_its_subject() {
+        let header = "\nchanged by, newest first:\n".len();
+        // short sha, two newlines around the message and the one after it.
+        let body = "x".repeat(HISTORY_BYTES - header - 10 - 3 + 2 - "subject\n\n".len());
+        let message = format!("subject\n\n{body}");
+        let out = assembled(&repo("history-borderline", &[(&rule("1"), &message)]));
+        assert!(
+            out.ends_with(" subject\n"),
+            "{}",
+            &out[out.len().saturating_sub(80)..]
+        );
+    }
+
+    #[test]
+    fn a_long_row_still_lists_its_change_and_a_cut_counts_what_it_left() {
+        let long = format!(
+            "v = 1\n# {}\n[[rule]]\nid = \"a\"\nx = \"1\"\n",
+            "c".repeat(7_000)
+        );
+        let out = assembled(&repo("history-long-row", &[(&long, "short")]));
+        assert!(
+            out.ends_with("\nshort\n"),
+            "{}",
+            &out[out.len().saturating_sub(80)..]
+        );
+        let subject = "s".repeat(HISTORY_BYTES);
+        let out = assembled(&repo(
+            "history-cut",
+            &[(&rule("1"), &subject), (&rule("2"), "newer")],
+        ));
+        assert!(
+            out.ends_with("… 1 older change(s) not shown\n"),
+            "{}",
+            &out[out.len().saturating_sub(80)..]
+        );
+    }
 }

@@ -1837,4 +1837,278 @@ mod tests {
         assert_eq!(SURFACES[2], &["run", "pre-commit"]);
         assert!(SURFACES.iter().all(|argv| !argv.is_empty()));
     }
+
+    fn query(hook: &str) -> PlanQuery {
+        PlanQuery {
+            id: "plan".to_owned(),
+            hook: hook.to_owned(),
+            required: Vec::new(),
+            prohibited_profiles: Vec::new(),
+            profile: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_hook_is_known_by_the_last_word_of_its_surface() {
+        assert!(!query("check").unknown_hook());
+        assert!(!query("pre-commit").unknown_hook());
+        assert!(query("run").unknown_hook());
+        assert!(query("nope").unknown_hook());
+    }
+
+    #[test]
+    fn each_state_and_refusal_has_its_own_token() {
+        assert_eq!(Capability::Available.as_str(), "available");
+        assert_eq!(Capability::Drifted.as_str(), "drifted");
+        assert_eq!(Capability::Unknown.as_str(), "unknown");
+        let step = || "lint".to_owned();
+        let rendered: Vec<String> = [
+            Incomplete::Uncapable,
+            Incomplete::PlanMismatch,
+            Incomplete::RunMismatch,
+            Incomplete::Missing { step: step() },
+            Incomplete::Duplicated { step: step() },
+            Incomplete::OutOfOrder { step: step() },
+            Incomplete::Truncated,
+            Incomplete::Unplanned { step: step() },
+        ]
+        .iter()
+        .map(Incomplete::render)
+        .collect();
+        assert_eq!(
+            rendered,
+            [
+                "uncapable",
+                "plan-mismatch",
+                "run-mismatch",
+                "missing lint",
+                "duplicated lint",
+                "out-of-order lint",
+                "truncated",
+                "unplanned lint",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_observation_is_named_by_the_hashed_session_and_the_digest() {
+        assert_eq!(hashed("one"), crate::tools::digest(b"one"));
+        assert_ne!(hashed("one"), hashed("two"));
+        let git_dir = Path::new("/repo/.git");
+        assert_eq!(
+            observation_path(git_dir, "one", "abc"),
+            git_dir
+                .join(OBSERVATION_DIR)
+                .join(format!("{}.abc.json", hashed("one")))
+        );
+    }
+
+    fn record(predicate: &str) -> Observation {
+        Observation {
+            predicate_type: predicate.to_owned(),
+            session: hashed("one"),
+            contract_digest: "no-contract".to_owned(),
+            config_epoch: "epoch".to_owned(),
+            tool_version: None,
+            state: Capability::Unknown,
+        }
+    }
+
+    fn write_record(git_dir: &Path, record: &Observation) {
+        let path = observation_path(git_dir, "one", "no-contract");
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the store");
+        std::fs::write(path, serde_json::to_string(record).expect("serialised")).expect("written");
+    }
+
+    #[test]
+    fn only_a_record_of_this_predicate_answers() {
+        let git_dir = crate::scratch::scratch("hk-observed");
+        write_record(&git_dir, &record("someone-else/v1"));
+        assert_eq!(observed(&git_dir, "one", "no-contract"), Look::CouldNotLook);
+        let mine = record(OBSERVATION_PREDICATE);
+        write_record(&git_dir, &mine);
+        assert_eq!(observed(&git_dir, "one", "no-contract"), Look::Is(mine));
+    }
+
+    #[test]
+    fn an_empty_session_observes_nothing_and_a_recorded_one_is_answered_from_its_record() {
+        let root = crate::scratch::scratch("hk-observe");
+        let git_dir = root.join(".git");
+        let mine = record(OBSERVATION_PREDICATE);
+        write_record(&git_dir, &mine);
+        assert_eq!(
+            observe(&root, &git_dir, Some("")).expect("observed"),
+            Look::IsNot
+        );
+        assert_eq!(
+            observe(&root, &git_dir, Some("one")).expect("observed"),
+            Look::Is(mine)
+        );
+    }
+
+    #[test]
+    fn a_contract_agreeing_with_itself_is_available() {
+        let committed = contract(surface(vec![step("one", "included", 0, "group_0")]));
+        assert_eq!(
+            capability(Some(&committed), Some(&committed)),
+            Capability::Available
+        );
+        let mut bumped = committed.clone();
+        bumped.tool_version = "hk 1.57.0".to_owned();
+        assert_eq!(
+            capability(Some(&committed), Some(&bumped)),
+            Capability::Unknown
+        );
+    }
+
+    #[test]
+    fn the_evidence_fixture_renders_as_itself_with_a_newline() {
+        let evidence = capable();
+        let text = evidence.render().expect("rendered");
+        assert!(text.ends_with("}\n"), "{text}");
+        assert_eq!(Evidence::parse(&text).expect("parsed"), evidence);
+    }
+
+    fn capable() -> Evidence {
+        Evidence {
+            version: 1,
+            tool_version: "hk 9".to_owned(),
+            plan_schema: true,
+            run_identity: true,
+            plan_digest_binding: true,
+            step_start_events: true,
+            step_terminal_events: true,
+            skipped_step_events: true,
+            final_exit_events: true,
+            execution_events: ExecutionEvents::Structured,
+        }
+    }
+
+    fn planned(steps: &[(&str, &str)]) -> Planned {
+        Planned {
+            hook: "check".to_owned(),
+            run_type: "check".to_owned(),
+            profiles: Vec::new(),
+            invocation: Vec::new(),
+            tool_version: "hk 9".to_owned(),
+            contract_digest: None,
+            input_fingerprint: "fp".to_owned(),
+            required: Vec::new(),
+            prohibited_profiles: Vec::new(),
+            steps: steps
+                .iter()
+                .enumerate()
+                .map(|(at, (name, status))| PlannedStep {
+                    name: (*name).to_owned(),
+                    status: (*status).to_owned(),
+                    reason_kind: None,
+                    reason_kinds: Vec::new(),
+                    order_index: at as u64,
+                    parallel_group_id: "group_0".to_owned(),
+                    file_count: 0,
+                })
+                .collect(),
+        }
+    }
+
+    fn event(step: Option<&str>, kind: &str, sequence: u64) -> Event {
+        Event {
+            run: "run-1".to_owned(),
+            plan_digest: "plan-1".to_owned(),
+            step: step.map(str::to_owned),
+            kind: kind.to_owned(),
+            sequence,
+        }
+    }
+
+    fn attested(evidence: &Evidence, plan: &Planned, events: &[Event]) -> Result<(), Incomplete> {
+        attest(evidence, plan, "run-1", "plan-1", events)
+    }
+
+    #[test]
+    fn a_complete_stream_from_a_capable_runner_attests() {
+        let plan = planned(&[("one", "included"), ("two", "skipped")]);
+        let stream = [
+            event(Some("one"), "start", 1),
+            event(Some("one"), "terminal", 2),
+            event(None, "exit", 3),
+        ];
+        assert_eq!(attested(&capable(), &plan, &stream), Ok(()));
+        let simultaneous = [
+            event(Some("one"), "start", 1),
+            event(Some("one"), "terminal", 1),
+            event(None, "exit", 2),
+        ];
+        assert_eq!(attested(&capable(), &plan, &simultaneous), Ok(()));
+        let mut uncapable = capable();
+        uncapable.execution_events = ExecutionEvents::None;
+        assert_eq!(
+            attested(&uncapable, &plan, &stream),
+            Err(Incomplete::Uncapable)
+        );
+    }
+
+    #[test]
+    fn each_broken_stream_is_refused_by_its_own_kind() {
+        let plan = planned(&[("one", "included")]);
+        let one = |kind: &str, sequence| event(Some("one"), kind, sequence);
+        let exit = event(None, "exit", 9);
+        let mut foreign_run = one("start", 1);
+        foreign_run.run = "run-2".to_owned();
+        assert_eq!(
+            attested(&capable(), &plan, &[foreign_run, exit.clone()]),
+            Err(Incomplete::RunMismatch)
+        );
+        let mut foreign_plan = one("start", 1);
+        foreign_plan.plan_digest = "plan-2".to_owned();
+        assert_eq!(
+            attested(&capable(), &plan, &[foreign_plan, exit.clone()]),
+            Err(Incomplete::PlanMismatch)
+        );
+        assert_eq!(
+            attested(&capable(), &plan, &[one("start", 1), one("terminal", 2)]),
+            Err(Incomplete::Truncated)
+        );
+        assert_eq!(
+            attested(
+                &capable(),
+                &plan,
+                &[event(Some("zzz"), "start", 1), exit.clone()]
+            ),
+            Err(Incomplete::Unplanned {
+                step: "zzz".to_owned()
+            })
+        );
+        assert_eq!(
+            attested(&capable(), &plan, &[one("start", 1), exit.clone()]),
+            Err(Incomplete::Missing {
+                step: "one".to_owned()
+            })
+        );
+        assert_eq!(
+            attested(
+                &capable(),
+                &plan,
+                &[
+                    one("start", 1),
+                    one("terminal", 2),
+                    one("terminal", 3),
+                    exit.clone()
+                ]
+            ),
+            Err(Incomplete::Duplicated {
+                step: "one".to_owned()
+            })
+        );
+        assert_eq!(
+            attested(
+                &capable(),
+                &plan,
+                &[one("terminal", 1), one("start", 2), exit]
+            ),
+            Err(Incomplete::OutOfOrder {
+                step: "one".to_owned()
+            })
+        );
+    }
 }

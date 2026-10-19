@@ -925,20 +925,25 @@ enum Method {
     Delete,
 }
 
+/// The method a request goes out as: [`Method`]'s override, else its body's
+/// default.
+fn method_of(body: Option<&[u8]>, chosen: Method) -> &'static str {
+    match body {
+        Some(_) if chosen == Method::Patch => "PATCH",
+        Some(_) => "POST",
+        None if chosen == Method::Delete => "DELETE",
+        None => "GET",
+    }
+}
+
 fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method) -> Option<Answer> {
     let now = crate::now_unix();
     let url = format!("{API}/{path}");
     if let Some(dir) = std::env::var_os(FIXTURE) {
-        let method = match body {
-            Some(_) if chosen == Method::Patch => "PATCH",
-            Some(_) => "POST",
-            None if chosen == Method::Delete => "DELETE",
-            None => "GET",
-        };
         return from_fixture(
             std::path::Path::new(&dir),
             &Request {
-                method,
+                method: method_of(body, chosen),
                 url: &url,
                 body,
             },
@@ -1378,5 +1383,73 @@ mod tests {
             None,
             "the window already reopened"
         );
+    }
+
+    #[test]
+    fn a_zero_retry_after_and_a_reset_at_now_are_no_wait() {
+        assert_eq!(backoff_from(&answered(&[("retry-after", "0")]), 1000), None);
+        assert_eq!(
+            backoff_from(
+                &answered(&[
+                    ("x-ratelimit-remaining", "0"),
+                    ("x-ratelimit-reset", "1000")
+                ]),
+                1000
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn each_method_override_applies_only_where_the_body_allows_it() {
+        let body: Option<&[u8]> = Some(b"{}");
+        assert_eq!(method_of(body, Method::Patch), "PATCH");
+        assert_eq!(method_of(body, Method::ByBody), "POST");
+        assert_eq!(method_of(body, Method::Delete), "POST");
+        assert_eq!(method_of(None, Method::Delete), "DELETE");
+        assert_eq!(method_of(None, Method::ByBody), "GET");
+        assert_eq!(method_of(None, Method::Patch), "GET");
+    }
+
+    #[test]
+    fn a_fixture_answers_by_call_order_with_its_headers() {
+        let dir = crate::scratch::scratch("rest-fixture-order");
+        std::fs::write(dir.join("resp.1"), "HTTP/1.1 200 OK\nX-Thing: one\n\nfirst").expect("1");
+        std::fs::write(dir.join("resp.2"), "HTTP/1.1 304 Not Modified\n\n").expect("2");
+        let first = fixture_get(&dir, "repos/o/r").expect("answered");
+        assert_eq!((first.status, first.body.as_str()), (200, "first"));
+        assert_eq!(first.header("X-THING"), Some("one"));
+        assert_eq!(first.header("x-absent"), None);
+        assert!(first.answered());
+        let second = fixture_get(&dir, "repos/o/r").expect("answered");
+        assert_eq!(second.status, 304);
+        assert!(second.answered());
+        std::fs::write(dir.join("resp.last"), "HTTP/1.1 404 Not Found\n\n").expect("last");
+        let third = fixture_get(&dir, "repos/o/r").expect("answered");
+        assert!(!third.answered());
+    }
+
+    #[test]
+    fn a_probe_row_is_probed_unless_it_says_otherwise() {
+        let row: Probe = toml::from_str("endpoint = \"e\"\nclaim = \"c\"\nused_by = \"u\"\n")
+            .expect("a probe row");
+        assert!(row.probe);
+    }
+
+    /// One process, one declaration: nextest runs each case in its own, so the
+    /// `OnceLock` this sets is this case's alone.
+    #[test]
+    fn the_declared_forge_answers_its_credential_and_its_graded_statuses() {
+        let forge = Forge {
+            credential_names: vec!["PATH".to_owned()],
+            ..Forge::default()
+        };
+        declare(forge.clone());
+        assert_eq!(declared(), Some(&forge));
+        assert_eq!(declared_credential(), std::env::var("PATH").ok());
+        assert!(declared_credential().is_some_and(|token| !token.is_empty()));
+        assert_eq!(credential(Some(&forge)), std::env::var("PATH").ok());
+        assert!(declared_nothing_graded(422));
+        assert!(!declared_nothing_graded(404));
     }
 }

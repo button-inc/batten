@@ -1556,7 +1556,19 @@ fn render_refs(
 
 #[cfg(test)]
 mod tests {
-    use super::{by_num, field, payload_set, sort_lines};
+    use super::{
+        CITE_REFUSED, CITED_PATH, CITED_TEST, CiteReading, Cites, Decided, Declared, GRAPH_REPORT,
+        OBLIGATIONS_LABEL, Presence, REF_REFUSED, Readiness, RefReading, Row, Vocabulary, by_num,
+        declared_row, field, graph, graph_findings, payload_set, present, read_claims, readiness,
+        render_cites, render_refs, sort_lines,
+    };
+    use crate::board::Board;
+    use crate::exit::ExitCode;
+    use crate::pattern::NamedPattern;
+    use crate::ready::{Grammar, committed_patterns};
+    use serde_json::{Value, json};
+    use std::collections::BTreeSet;
+    use std::path::Path;
 
     #[test]
     fn an_array_and_a_stream_are_one_set() {
@@ -1600,5 +1612,305 @@ mod tests {
     fn a_field_never_carries_a_separator_into_the_reading() {
         assert_eq!(field("In\tReview\nnow"), "In Review now");
         assert_eq!(field("plain"), "plain");
+    }
+
+    fn board() -> Board {
+        Board {
+            ready: Some("Todo".to_owned()),
+            in_progress: Some("In Progress".to_owned()),
+            review: Some("In Review".to_owned()),
+            settled_types: vec!["completed".to_owned(), "canceled".to_owned()],
+            retired_types: vec!["canceled".to_owned()],
+            ..Board::default()
+        }
+    }
+
+    fn vocabulary(patterns: &[NamedPattern]) -> Vocabulary {
+        Vocabulary::resolve(Some(&board()), patterns).expect("the board declares every word")
+    }
+
+    fn row(id: &str, status: &str, description: &str) -> Value {
+        json!({
+            "id": id,
+            "status": status,
+            "assigneeId": "someone",
+            "relations": {"blockedBy": []},
+            "description": description,
+        })
+    }
+
+    fn cites(patterns: &[NamedPattern], prospective: Option<&str>) -> Cites {
+        let compiled = |id: &str| declared_row(patterns, id).expect("a committed row");
+        Cites {
+            obligations: compiled(OBLIGATIONS_LABEL),
+            cited_test: compiled(CITED_TEST),
+            cited_path: compiled(CITED_PATH),
+            corpus: Vec::new(),
+            exclude: Vec::new(),
+            prospective: prospective.map(str::to_owned),
+        }
+    }
+
+    fn decided(findings: &[(&str, &str)], notes: &[&str]) -> Decided {
+        Decided {
+            findings: findings
+                .iter()
+                .map(|(class, line)| ((*class).to_owned(), (*line).to_owned()))
+                .collect(),
+            notes: notes.iter().map(|note| (*note).to_owned()).collect(),
+            frontier: Vec::new(),
+        }
+    }
+
+    fn text(bytes: &[u8]) -> String {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+
+    /// The workspace root, whose version a §6 clause is read against.
+    const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+
+    const REFINED: &str = "**Refinement — Ready (a summary)**\n\n\
+                           * **Source of truth (§1).** One authoritative artifact.\n\
+                           * **Commit / bump (§6).** `ci` → **no bump**.\n";
+
+    #[test]
+    fn only_null_and_false_are_absent() {
+        assert!(!present(&Value::Null));
+        assert!(!present(&json!(false)));
+        assert!(present(&json!(0)));
+        assert!(present(&json!("")));
+    }
+
+    #[test]
+    fn a_null_milestone_is_empty_rather_than_set() {
+        let mut value = row("CLOUD-1", "Todo", "");
+        let read = |value: &Value| Row::read(value).map(|row| row.milestone);
+        assert_eq!(read(&value), Some(Presence::Absent));
+        value["projectMilestone"] = Value::Null;
+        assert_eq!(read(&value), Some(Presence::Empty));
+        value["projectMilestone"] = json!({"name": "M1"});
+        assert_eq!(read(&value), Some(Presence::Set));
+    }
+
+    #[test]
+    fn a_class_outside_the_known_lanes_is_named() {
+        let decided = decided(
+            &[("issue state wrong", "CLOUD-1 x"), ("odd new class", "x")],
+            &[],
+        );
+        assert_eq!(decided.unknown(&[GRAPH_REPORT]), Some("odd new class"));
+        assert_eq!(decided.unknown(&[GRAPH_REPORT, "odd new class"]), None);
+    }
+
+    #[test]
+    fn readiness_counts_an_uncross_checked_relation_only_when_there_is_one() {
+        let grammar = Grammar::committed();
+        let root = Path::new(ROOT);
+        let judge = |body: &str, relations: bool| {
+            let mut value = row("CLOUD-1", "Todo", body);
+            if !relations {
+                value.as_object_mut().map(|o| o.remove("relations"));
+            }
+            readiness(&grammar, &value, root).0
+        };
+        let deferral = "\nThe rest is deferred to CLOUD-2.\n";
+        let verdict = judge(REFINED, false);
+        assert!(matches!(verdict, Readiness::Ready), "{verdict:?}");
+        assert!(matches!(
+            judge(&format!("{REFINED}{deferral}"), false),
+            Readiness::Unjudgeable
+        ));
+        let floorless = "**Refinement — Ready (a summary)**\n";
+        let Readiness::Unready(lines) = judge(&format!("{floorless}{deferral}"), false) else {
+            panic!("a block with no clause is unready");
+        };
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.ends_with(" unjudgeable-relations")),
+            "{lines:?}"
+        );
+        let Readiness::Unready(lines) = judge(floorless, false) else {
+            panic!("a block with no clause is unready");
+        };
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.ends_with(" unjudgeable-relations")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_set_with_no_status_word_reads_a_bare_mention_as_no_claim() {
+        let patterns = committed_patterns();
+        let grammar = Grammar::committed();
+        let value = row("CLOUD-1", "", "CLOUD-2 is here.");
+        let rows = vec![Row::read(&value).expect("a row")];
+        let mut lines = Vec::new();
+        read_claims(&rows, &grammar, &vocabulary(&patterns), &mut lines);
+        assert!(
+            !lines.iter().any(|line| line.starts_with("claim")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn the_composed_graph_reports_a_false_column() {
+        let patterns = committed_patterns();
+        let grammar = Grammar::committed();
+        let board = board();
+        let declared = Declared {
+            board: Some(&board),
+            patterns: &patterns,
+            grammar: &grammar,
+            root: Path::new(ROOT),
+        };
+        let mut unassigned = row("CLOUD-1", "In Progress", REFINED);
+        unassigned["assigneeId"] = Value::Null;
+        unassigned["projectMilestone"] = json!({"name": "M1"});
+        let found = graph_findings(&[unassigned], &declared).expect("the graph decides");
+        assert!(!found.is_empty(), "{found:?}");
+        assert!(
+            found.iter().all(|line| line.starts_with("CLOUD-1 ")),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_coherent_graph_exits_0_with_nothing_on_stderr() {
+        let patterns = committed_patterns();
+        let grammar = Grammar::committed();
+        let board = board();
+        let declared = Declared {
+            board: Some(&board),
+            patterns: &patterns,
+            grammar: &grammar,
+            root: Path::new(ROOT),
+        };
+        let mut done = row("CLOUD-1", "Done", REFINED);
+        done["statusType"] = json!("completed");
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = graph(&[done], &declared, 0, &mut out, &mut err).expect("the graph renders");
+        assert_eq!(code, ExitCode::Success, "{}", text(&err));
+        assert_eq!(text(&err), "");
+        assert!(
+            text(&out).contains("board coherent (1 issues)"),
+            "{}",
+            text(&out)
+        );
+    }
+
+    #[test]
+    fn the_obligations_span_runs_from_its_label_to_the_next_clause() {
+        let patterns = committed_patterns();
+        let grammar = Grammar::committed();
+        let block = [
+            "**Refinement — Ready**",
+            "* **Obligations (§7).** `alpha_beta_gamma_delta`",
+            "  and `kappa_lambda_mu_nu`",
+            "* **Commit / bump (§6).** `zeta_eta_theta_iota`",
+        ];
+        let contents = vec!["fn alpha_beta_gamma_delta() {}".to_owned()];
+        let mut lines = BTreeSet::new();
+        cites(&patterns, None).tests_in(
+            "CLOUD-1",
+            &block,
+            grammar.clause_label(),
+            &contents,
+            &mut lines,
+        );
+        assert_eq!(
+            lines.into_iter().collect::<Vec<_>>(),
+            [
+                "test\tCLOUD-1\talpha_beta_gamma_delta\tyes",
+                "test\tCLOUD-1\tkappa_lambda_mu_nu\tno",
+            ]
+        );
+    }
+
+    #[test]
+    fn history_is_asked_only_about_a_marked_absent_path() {
+        let dir = crate::scratch::scratch("board-check-paths-in");
+        crate::gitwrite::init_on_main(&dir).expect("a repository");
+        std::fs::create_dir_all(dir.join("src")).expect("a directory");
+        std::fs::write(dir.join("src/here.rs"), "").expect("a file");
+        crate::gitwrite::commit_paths(&dir, &["src/here.rs".to_owned()], "chore: seed")
+            .expect("a commit");
+        let patterns = committed_patterns();
+        let block = [
+            "`src/here.rs` (new)",
+            "`src/gone.rs` (new)",
+            "`src/never.rs`",
+        ];
+        let mut lines = BTreeSet::new();
+        cites(&patterns, Some("(new)")).paths_in("CLOUD-1", &block, &dir, true, &mut lines);
+        assert_eq!(
+            lines.into_iter().collect::<Vec<_>>(),
+            [
+                "path\tCLOUD-1\tsrc/gone.rs\tno\tyes\tno",
+                "path\tCLOUD-1\tsrc/here.rs\tyes\tyes\tunknown",
+                "path\tCLOUD-1\tsrc/never.rs\tno\tno\tunknown",
+            ]
+        );
+    }
+
+    fn render(reading: &CiteReading, decided: &Decided) -> (Option<bool>, String, String) {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let verdict = render_cites(reading, decided, &mut out, &mut err).expect("rendered");
+        (verdict, text(&out), text(&err))
+    }
+
+    #[test]
+    fn a_prospective_note_warns_about_history_only_on_a_shallow_clone() {
+        let reading = |history| CiteReading {
+            lines: Vec::new(),
+            cited: 3,
+            history,
+        };
+        let notes = decided(&[], &["CLOUD-1 src/a.rs prospective"]);
+        let (verdict, out, err) = render(&reading(true), &notes);
+        assert_eq!(verdict, Some(false));
+        assert!(!err.contains("::notice::"), "{err}");
+        assert_eq!(
+            out,
+            "board check --cites: 2 of 3 citation(s) resolve against the tree; 1 prospective\n"
+        );
+        let (_, _, err) = render(&reading(false), &notes);
+        assert!(err.contains("::notice::"), "{err}");
+        let (verdict, out, err) = render(&reading(true), &decided(&[], &[]));
+        assert_eq!(verdict, Some(false));
+        assert_eq!(err, "");
+        assert_eq!(
+            out,
+            "board check --cites: 3 of 3 citation(s) resolve against the tree\n"
+        );
+        let refused = decided(&[(CITE_REFUSED, "CLOUD-1 src/a.rs")], &[]);
+        let (verdict, out, err) = render(&reading(true), &refused);
+        assert_eq!(verdict, Some(true));
+        assert_eq!(out, "");
+        assert!(err.contains("1 of 3 citation(s) resolve nothing"), "{err}");
+    }
+
+    #[test]
+    fn a_refused_reference_is_not_reported_as_resolving() {
+        let reading = RefReading {
+            lines: Vec::new(),
+            hits: 2,
+        };
+        let refused = decided(&[(REF_REFUSED, "src/a.rs:1 CLOUD-1 §9")], &[]);
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let verdict = render_refs(&reading, &refused, &mut out, &mut err).expect("rendered");
+        assert_eq!(verdict, Some((true, false)));
+        assert_eq!(text(&out), "");
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let verdict =
+            render_refs(&reading, &decided(&[], &[]), &mut out, &mut err).expect("rendered");
+        assert_eq!(verdict, Some((false, false)));
+        assert!(
+            text(&out).contains("resolves (2 checked)"),
+            "{}",
+            text(&out)
+        );
     }
 }

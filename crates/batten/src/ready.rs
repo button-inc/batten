@@ -497,32 +497,7 @@ impl Grammar {
     /// declares the whole of [`REQUIRED_PATTERNS`].
     #[cfg(test)]
     pub(crate) fn committed() -> Self {
-        let text =
-            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../batten.toml"))
-                .unwrap_or_default();
-        let rows: Vec<crate::pattern::NamedPattern> = match crate::facts::Format::Toml.read(&text) {
-            crate::facts::Look::Is(crate::facts::Node::Map(map)) => match map.get("pattern") {
-                Some(crate::facts::Node::List(items)) => items
-                    .iter()
-                    .filter_map(|item| {
-                        let crate::facts::Node::Map(row) = item else {
-                            return None;
-                        };
-                        let text_of = |key: &str| match row.get(key) {
-                            Some(crate::facts::Node::Text(value)) => Some(value.clone()),
-                            _ => None,
-                        };
-                        Some(crate::pattern::NamedPattern {
-                            id: text_of("id")?,
-                            regex: text_of("regex")?,
-                        })
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            },
-            _ => Vec::new(),
-        };
-        match Self::resolve(&rows) {
+        match Self::resolve(&committed_patterns()) {
             Ok(grammar) => grammar,
             Err(err) => panic!("the committed [[pattern]] table must declare the grammar: {err}"),
         }
@@ -536,6 +511,36 @@ impl Grammar {
     /// production.
     fn strip_mentions(&self, text: &str) -> String {
         self.mention_markup.replace_all(text, "").into_owned()
+    }
+}
+
+/// The committed `[[pattern]]` rows, read the way [`Grammar::committed`] reads
+/// them — for a test whose gate reads rows beyond the grammar's own.
+#[cfg(test)]
+pub(crate) fn committed_patterns() -> Vec<crate::pattern::NamedPattern> {
+    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../batten.toml"))
+        .unwrap_or_default();
+    match crate::facts::Format::Toml.read(&text) {
+        crate::facts::Look::Is(crate::facts::Node::Map(map)) => match map.get("pattern") {
+            Some(crate::facts::Node::List(items)) => items
+                .iter()
+                .filter_map(|item| {
+                    let crate::facts::Node::Map(row) = item else {
+                        return None;
+                    };
+                    let text_of = |key: &str| match row.get(key) {
+                        Some(crate::facts::Node::Text(value)) => Some(value.clone()),
+                        _ => None,
+                    };
+                    Some(crate::pattern::NamedPattern {
+                        id: text_of("id")?,
+                        regex: text_of("regex")?,
+                    })
+                })
+                .collect(),
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
     }
 }
 
