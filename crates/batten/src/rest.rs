@@ -1436,19 +1436,19 @@ mod tests {
         assert!(row.probe);
     }
 
-    /// One process, one declaration: nextest runs each case in its own, so the
-    /// `OnceLock` this sets is this case's alone.
+    /// `declare` ignores a later call, so the forge this sets is the one every
+    /// case in the binary that declares one sets.
     #[test]
     fn the_declared_forge_answers_its_credential_and_its_graded_statuses() {
+        // THE SAME NAMES `land`'s dialling case declares, so whichever case in
+        // this binary reaches `declare` first sets the one forge both expect.
         let forge = Forge {
-            credential_names: vec!["PATH".to_owned()],
+            credential_names: vec![String::from("GH_TOKEN"), String::from("GITHUB_TOKEN")],
             ..Forge::default()
         };
         declare(forge.clone());
         assert_eq!(declared(), Some(&forge));
-        assert_eq!(declared_credential(), std::env::var("PATH").ok());
-        assert!(declared_credential().is_some_and(|token| !token.is_empty()));
-        assert_eq!(credential(Some(&forge)), std::env::var("PATH").ok());
+        assert_eq!(declared_credential(), credential(Some(&forge)));
         assert!(declared_nothing_graded(422));
         assert!(!declared_nothing_graded(404));
     }

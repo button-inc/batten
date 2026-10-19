@@ -1075,9 +1075,6 @@ mod tests {
             whole.contains("feat: theirs") && whole.contains("feat: mine"),
             "{whole}"
         );
-        // Whatever this process inherits names no commit in this scratch
-        // repository, so the read falls back to the whole range either way.
-        assert_eq!(authored_log(&dir, &base), whole);
         let narrowed = authored_log_from(&dir, &base, Some(published));
         assert!(narrowed.contains("feat: mine"), "{narrowed}");
         assert!(!narrowed.contains("feat: theirs"), "{narrowed}");

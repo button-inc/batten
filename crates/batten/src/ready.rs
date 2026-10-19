@@ -517,8 +517,8 @@ impl Grammar {
 /// The committed `[[pattern]]` rows, read the way [`Grammar::committed`] reads
 /// them — for a test whose gate reads rows beyond the grammar's own.
 ///
-/// Read once per test process: the committed file cannot change during a run,
-/// and every grammar a case builds would otherwise re-read and re-parse it.
+/// Read once per process: a case that asks for the rows and then for the
+/// grammar built from them pays one parse of the committed file, not two.
 #[cfg(test)]
 pub(crate) fn committed_patterns() -> Vec<crate::pattern::NamedPattern> {
     static ROWS: std::sync::LazyLock<Vec<crate::pattern::NamedPattern>> =
