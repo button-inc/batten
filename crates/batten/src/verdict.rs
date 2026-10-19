@@ -1238,10 +1238,8 @@ pub fn live_tokens(verdicts: &[DeclaredVerdict]) -> BTreeSet<&str> {
 
 // ─── The native half of the registry ─────────────────────────────────────────
 
-// Declared ONCE through `token_enum!` (CLOUD-2442): each `Variant => "token",`
-// line yields the variant, its place in `Native::ALL` and its `Native::id` arm.
-// Declaration order is kept, so discriminants (which `semver` reads as API) do
-// not move.
+// Declared through `token_enum!` (CLOUD-2442). Declaration order is kept, so
+// discriminants (which `semver` reads as API) do not move.
 token_enum! {
 /// A refusal class the CRATE owns, as opposed to one a consumer declares.
 ///

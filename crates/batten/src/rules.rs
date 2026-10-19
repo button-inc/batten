@@ -435,10 +435,8 @@ pub enum RuleKind {
     Native,
 }
 
-// Declared ONCE through `token_enum!` (CLOUD-2442): each token is the variant's
-// serde spelling, its `as_str` and its place in `ALL` — the order the mediated
-// chain runs the gates — so the config parser, the weakening diff and the token
-// cannot disagree.
+// Declared through `token_enum!` (CLOUD-2442). `ALL`'s order is the order the
+// mediated chain runs the gates.
 token_enum! {
     serde
     /// The compiled gates a [`RuleKind::Native`] row may enable (CLOUD-2291).

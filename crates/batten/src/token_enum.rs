@@ -80,6 +80,8 @@ macro_rules! token_enum {
             }
         }
     };
+    // The `serde` arm is the plain one with a rename on each variant, so the
+    // enum is generated in one place.
     (
         serde
         $(#[$enum_meta:meta])*
@@ -87,11 +89,12 @@ macro_rules! token_enum {
             $( $(#[$meta:meta])* $variant:ident => $token:literal ),* $(,)?
         }
     ) => {
-        $(#[$enum_meta])*
-        $vis enum $name {
-            $( $(#[$meta])* #[serde(rename = $token)] $variant, )*
+        token_enum! {
+            $(#[$enum_meta])*
+            $vis enum $name by $method {
+                $( $(#[$meta])* #[serde(rename = $token)] $variant => $token, )*
+            }
         }
-        token_enum!(@impl $name $method [$( $variant => $token ),*]);
     };
     (
         $(#[$enum_meta:meta])*
