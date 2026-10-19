@@ -18505,4 +18505,690 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             }
         }
     }
+
+    // ---------------------------------------------------------------------
+    // CLOUD-2485: cases for mutants the CLOUD-2453 sweep left unkilled.
+    // ---------------------------------------------------------------------
+
+    /// The text of a refusal, or empty for a pass.
+    fn refusal(result: anyhow::Result<()>) -> String {
+        result.err().map(|err| err.to_string()).unwrap_or_default()
+    }
+
+    /// Only a `native` row grades a native gate.
+    ///
+    /// Fails by: reading the grade off a row of another kind.
+    #[test]
+    fn only_a_native_row_grades_a_native_gate() {
+        let graded = |kind| Rule {
+            gate: Some(NativeGate::History),
+            severity: Some(RuleSeverity::Allow),
+            ..blank("g", kind)
+        };
+        assert_eq!(
+            native_grade(&[graded(RuleKind::Native)], NativeGate::History),
+            RuleSeverity::Allow
+        );
+        assert_eq!(
+            native_grade(&[graded(RuleKind::Shape)], NativeGate::History),
+            RuleSeverity::Deny
+        );
+    }
+
+    /// Each authority has its own stable token.
+    ///
+    /// Fails by: an empty or placeholder token.
+    #[test]
+    fn every_authority_has_its_token() {
+        let tokens: Vec<&str> = Authority::ALL.iter().map(|a| a.as_str()).collect();
+        assert_eq!(tokens, ["supplied", "acquires", "spawns"]);
+    }
+
+    fn verdict_program(program: &str) -> VerdictProgram {
+        VerdictProgram {
+            program: program.to_owned(),
+            subcommands: None,
+            nested: None,
+            except: None,
+            any_argument: None,
+        }
+    }
+
+    fn words(list: &[&str]) -> Option<Vec<String>> {
+        Some(list.iter().map(|word| (*word).to_owned()).collect())
+    }
+
+    /// A verdict program matches its own program, then its subcommand and
+    /// nested word, its non-query words, or any word at all.
+    ///
+    /// Fails by: a constant answer, the program test inverted, any list test
+    /// inverted, or `any_argument` admitting a bare invocation.
+    #[test]
+    fn a_verdict_program_matches_each_columns_reading() {
+        let nested = VerdictProgram {
+            subcommands: words(&["pr"]),
+            nested: words(&["merge"]),
+            ..verdict_program("gh")
+        };
+        assert!(nested.matches("gh", &["pr", "merge"]));
+        assert!(!nested.matches("gh", &["pr", "view"]));
+        assert!(!nested.matches("hub", &["pr", "merge"]));
+        let except = VerdictProgram {
+            except: words(&["log"]),
+            ..verdict_program("git")
+        };
+        assert!(except.matches("git", &["push"]));
+        assert!(!except.matches("git", &["log"]));
+        let any = VerdictProgram {
+            any_argument: Some(true),
+            ..verdict_program("cargo")
+        };
+        assert!(any.matches("cargo", &["test"]));
+        assert!(!any.matches("cargo", &[]));
+        assert!(!verdict_program("cargo").matches("cargo", &["test"]));
+    }
+
+    /// A verdict program naming two words, or `any_argument` beside a list,
+    /// is refused.
+    ///
+    /// Fails by: passing every row, or either disjunction conjoined.
+    #[test]
+    fn a_verdict_program_refuses_two_words_and_a_narrowed_any() {
+        let two_words = VerdictProgram {
+            subcommands: words(&["x"]),
+            ..verdict_program("git push")
+        };
+        assert!(refusal(two_words.validate("r")).contains("names one program"));
+        let narrowed = VerdictProgram {
+            any_argument: Some(true),
+            subcommands: words(&["x"]),
+            ..verdict_program("git")
+        };
+        assert!(refusal(narrowed.validate("r")).contains("cannot be narrowed"));
+        let fine = VerdictProgram {
+            subcommands: words(&["x"]),
+            ..verdict_program("git")
+        };
+        assert_eq!(refusal(fine.validate("r")), "");
+    }
+
+    /// Only a command row has a program, and it is the check's first word.
+    ///
+    /// Fails by: answering `None`, or for the wrong kinds.
+    #[test]
+    fn only_a_command_row_has_a_program() {
+        assert_eq!(
+            command("c", "*.rs", "cargo test --all").program(),
+            Some("cargo")
+        );
+        let forbid_with_check = Rule {
+            check: Some(String::from("cargo test")),
+            ..forbid("f", "*.rs", "x")
+        };
+        assert_eq!(forbid_with_check.program(), None);
+    }
+
+    /// A partial ceiling is refused, and a rewrite table on a token ceiling
+    /// is too.
+    ///
+    /// Fails by: passing every row, or the unit test inverted.
+    #[test]
+    fn a_ceiling_is_whole_and_its_rewrites_belong_to_the_artifact_unit() {
+        let partial = Rule {
+            measures: Some(crate::hook::Field::Prompt),
+            ..blank("c", RuleKind::Shape)
+        };
+        assert!(
+            refusal(partial.validate_ceiling()).contains("needs `measures`, `counts` and `max`")
+        );
+        let ceiling = |counts| Rule {
+            tool: Some(String::from("Task")),
+            measures: Some(crate::hook::Field::Prompt),
+            counts: Some(counts),
+            max: Some(3),
+            resolves: vec![Rewrite {
+                reference: String::from("a"),
+                path: String::from("b"),
+            }],
+            ..blank("c", RuleKind::Shape)
+        };
+        assert!(
+            refusal(ceiling(CeilingUnit::Tokens).validate_ceiling())
+                .contains("belongs to `counts = \"tracked-artifacts\"`")
+        );
+        assert!(
+            !refusal(ceiling(CeilingUnit::TrackedArtifacts).validate_ceiling())
+                .contains("belongs to `counts = \"tracked-artifacts\"`")
+        );
+    }
+
+    /// A delta key needs its base, and a base belongs to a delta key only.
+    ///
+    /// Fails by: passing every row, or dropping either arm.
+    #[test]
+    fn a_delta_key_and_its_base_travel_together() {
+        let receipt = |key, base: Option<&str>| Rule {
+            key: Some(key),
+            key_base: base.map(ToOwned::to_owned),
+            ..blank("r", RuleKind::Receipt)
+        };
+        assert!(
+            refusal(receipt(ReceiptKey::Delta, None).validate_delta_base())
+                .contains("requires `key_base`")
+        );
+        assert!(
+            refusal(receipt(ReceiptKey::Head, Some("origin/main")).validate_delta_base())
+                .contains("belongs to `key = \"delta\"`")
+        );
+        assert_eq!(
+            refusal(receipt(ReceiptKey::Delta, Some("origin/main")).validate_delta_base()),
+            ""
+        );
+    }
+
+    /// A receipt row keyed on both a pattern and a tool is refused, and a
+    /// named key and its projection travel together.
+    ///
+    /// Fails by: dropping the both-selectors guard or either named-key arm.
+    #[test]
+    fn a_receipt_rows_selectors_and_named_key_are_refused_when_inconsistent() {
+        let both = Rule {
+            pattern: Some(String::from("gh pr ready")),
+            tool: Some(String::from("save_issue")),
+            ..blank("r", RuleKind::Receipt)
+        };
+        assert!(
+            refusal(both.validate_receipt_columns()).contains("carries both `pattern` and `tool`")
+        );
+        let keyed = |key, from| Rule {
+            pattern: Some(String::from("gh pr ready")),
+            key: Some(key),
+            key_from: from,
+            ..blank("r", RuleKind::Receipt)
+        };
+        assert!(
+            refusal(keyed(ReceiptKey::Named, None).validate_receipt_columns())
+                .contains("requires `key_from`")
+        );
+        assert!(
+            refusal(
+                keyed(ReceiptKey::Head, Some(crate::hook::Field::SessionId))
+                    .validate_receipt_columns()
+            )
+            .contains("belongs to `key = \"named\"`")
+        );
+    }
+
+    /// A marker naming no branch-keyed family is refused.
+    ///
+    /// Fails by: passing every row.
+    #[test]
+    fn a_marker_must_name_a_branch_keyed_family() {
+        let marked = |marker: &str| Rule {
+            while_marker: Some(marker.to_owned()),
+            ..blank("m", RuleKind::Shape)
+        };
+        assert!(
+            refusal(marked("no-such-family").validate_marker())
+                .contains("names no branch-keyed receipt family")
+        );
+        assert_eq!(
+            refusal(marked(crate::land::BRANCH_KEYED_RECEIPTS[0]).validate_marker()),
+            ""
+        );
+    }
+
+    /// An empty `checks` list is refused.
+    ///
+    /// Fails by: passing every row.
+    #[test]
+    fn an_empty_checks_list_is_refused() {
+        let empty = Rule {
+            checks: Some(Vec::new()),
+            ..blank("r", RuleKind::Receipt)
+        };
+        assert!(refusal(empty.validate_receipt_names()).contains("at least one entry in `checks`"));
+    }
+
+    /// `ask` is refused off the mediated call, and a deny row there is not
+    /// held to `ask`'s obligations.
+    ///
+    /// Fails by: passing every row, or applying the `ask` checks to `deny`.
+    #[test]
+    fn ask_is_a_mediated_call_disposition_only() {
+        let tree_ask = Rule {
+            severity: Some(RuleSeverity::Ask),
+            ..forbid("f", "*.rs", "x")
+        };
+        assert!(
+            refusal(tree_ask.validate_ask_disposition()).contains("hands the decision to a human")
+        );
+        let reasonless_deny = Rule {
+            reason: None,
+            ..blank("s", RuleKind::Shape)
+        };
+        assert_eq!(refusal(reasonless_deny.validate_ask_disposition()), "");
+    }
+
+    /// An empty tag glob is refused.
+    ///
+    /// Fails by: passing every row.
+    #[test]
+    fn an_empty_tag_glob_is_refused() {
+        let row = Rule {
+            tags: vec![String::new()],
+            ..blank("p", RuleKind::Policy)
+        };
+        assert!(refusal(row.validate_repository_state()).contains("empty glob"));
+    }
+
+    /// A policy row naming no source is refused as naming none, never as
+    /// naming two.
+    ///
+    /// Fails by: dropping the no-source arm.
+    #[test]
+    fn a_policy_row_naming_no_source_is_refused_as_such() {
+        let row = Rule {
+            module: None,
+            bundle: None,
+            preset: None,
+            ..blank("p", RuleKind::Policy)
+        };
+        assert!(refusal(row.validate_policy_source()).contains("requires one of `module`"));
+    }
+
+    /// A declared format must agree with the glob's extension.
+    ///
+    /// Fails by: passing every row, or the agreement test inverted.
+    #[test]
+    fn a_declared_format_must_agree_with_the_globs_extension() {
+        let row = |format| Rule {
+            glob: Some(String::from("*.json")),
+            format: Some(format),
+            ..blank("d", RuleKind::Document)
+        };
+        assert!(
+            refusal(row(crate::facts::Format::Toml).validate_declared_format_matches_glob())
+                .contains("whose extension names")
+        );
+        assert_eq!(
+            refusal(row(crate::facts::Format::Json).validate_declared_format_matches_glob()),
+            ""
+        );
+    }
+
+    /// An external row whose path climbs out of its root is refused, as is
+    /// an empty one.
+    ///
+    /// Fails by: requiring the path be both empty and escaping.
+    #[test]
+    fn an_external_path_must_be_non_empty_and_stay_beneath_its_root() {
+        for path in ["", "../x"] {
+            let row = Rule {
+                external: vec![crate::facts::Rooted {
+                    id: String::from("e"),
+                    root: String::from("HOME"),
+                    path: String::from(path),
+                }],
+                ..blank("p", RuleKind::Policy)
+            };
+            assert!(
+                refusal(row.validate_external_rows()).contains("stays beneath its root"),
+                "{path:?}"
+            );
+        }
+    }
+
+    fn tool_query(id: &str, tool: &str, version: &str, input: &str) -> crate::facts::ToolQuery {
+        crate::facts::ToolQuery {
+            id: id.to_owned(),
+            tool: tool.to_owned(),
+            version: version.to_owned(),
+            input: input.to_owned(),
+            run: Vec::new(),
+        }
+    }
+
+    /// A tool row needs both an id and an input, and one id names one key:
+    /// a second declaration differing in any component is refused, and an
+    /// identical one is not.
+    ///
+    /// Fails by: passing every row, either emptiness test conjoined, or any
+    /// component comparison inverted or conjoined.
+    #[test]
+    fn a_tool_rows_id_names_one_key() {
+        let rows = |tools| Rule {
+            tools,
+            ..blank("p", RuleKind::Policy)
+        };
+        assert!(
+            refusal(rows(vec![tool_query("", "t", "1", "a")]).validate_tool_rows())
+                .contains("non-empty `id` and `input`")
+        );
+        let base = tool_query("v", "t", "1", "a");
+        for other in [
+            tool_query("v", "u", "1", "a"),
+            tool_query("v", "t", "2", "a"),
+            tool_query("v", "t", "1", "b"),
+        ] {
+            assert!(
+                refusal(rows(vec![base.clone(), other.clone()]).validate_tool_rows())
+                    .contains("declared twice"),
+                "{other:?}"
+            );
+        }
+        assert_eq!(
+            refusal(rows(vec![base.clone(), base]).validate_tool_rows()),
+            ""
+        );
+    }
+
+    fn minted_query(
+        id: &str,
+        mint: &str,
+        field: usize,
+        recency: usize,
+        age: u32,
+    ) -> crate::facts::MintedQuery {
+        crate::facts::MintedQuery {
+            id: id.to_owned(),
+            mint: mint.to_owned(),
+            field,
+            recency,
+            max_age_days: age,
+        }
+    }
+
+    /// A minted row's value and recency are different columns, and one id
+    /// names one question: a second declaration differing in any component
+    /// is refused, and an identical one is not.
+    ///
+    /// Fails by: passing every row, the column test inverted, or any
+    /// component comparison inverted or conjoined.
+    #[test]
+    fn a_minted_rows_id_names_one_question() {
+        let rows = |minted| Rule {
+            minted,
+            ..blank("p", RuleKind::Policy)
+        };
+        assert!(
+            refusal(rows(vec![minted_query("m", "issue-read", 1, 1, 7)]).validate_minted_rows())
+                .contains("same index")
+        );
+        let base = minted_query("m", "issue-read", 1, 2, 7);
+        assert_eq!(refusal(rows(vec![base.clone()]).validate_minted_rows()), "");
+        for other in [
+            minted_query("m", "issue-search", 1, 2, 7),
+            minted_query("m", "issue-read", 3, 2, 7),
+            minted_query("m", "issue-read", 1, 3, 7),
+            minted_query("m", "issue-read", 1, 2, 8),
+        ] {
+            assert!(
+                refusal(rows(vec![base.clone(), other.clone()]).validate_minted_rows())
+                    .contains("declared twice"),
+                "{other:?}"
+            );
+        }
+        assert_eq!(
+            refusal(rows(vec![base.clone(), base]).validate_minted_rows()),
+            ""
+        );
+    }
+
+    /// A sink is refused off the tree surface.
+    ///
+    /// Fails by: passing every row, or the scope test inverted.
+    #[test]
+    fn a_sink_belongs_to_a_tree_scoped_row() {
+        let sinking = |scope| Rule {
+            scope,
+            produces: Some(Sink {
+                kind: crate::facts::Production::Journal,
+                key: SinkKey::Rule,
+            }),
+            ..forbid("f", "*.rs", "x")
+        };
+        assert!(
+            refusal(sinking(RuleScope::MediatedCall).validate_sink())
+                .contains("nothing for a sink")
+        );
+        assert!(!refusal(sinking(RuleScope::Tree).validate_sink()).contains("nothing for a sink"));
+    }
+
+    /// `exclude_paths` with no glob to subtract from is refused.
+    ///
+    /// Fails by: passing every row.
+    #[test]
+    fn exclude_paths_need_a_glob() {
+        let row = Rule {
+            glob: None,
+            exclude_paths: vec![String::from("vendor/**")],
+            ..blank("f", RuleKind::Forbid)
+        };
+        assert!(refusal(row.validate_exclude_paths()).contains("declares none"));
+    }
+
+    /// A judge row's settling check is the resolved argv it is handed.
+    ///
+    /// Fails by: answering `None`, or the row's own empty argv.
+    #[test]
+    fn a_judge_settles_on_the_resolved_argv() {
+        let argv = vec![String::from("judge"), String::from("--run")];
+        assert_eq!(
+            blank("j", RuleKind::Judge).settling_argv(&argv),
+            Some(Check::Argv(argv))
+        );
+    }
+
+    /// A document row carries exactly one of `pattern` and `reads`, and a
+    /// forbid row exactly one of `pattern` and `regex`.
+    ///
+    /// Fails by: dropping any arm.
+    #[test]
+    fn each_predicate_pair_is_exactly_one() {
+        let document = |pattern: bool, reads: bool| Rule {
+            pattern: pattern.then(|| String::from("x")),
+            reads: reads.then(|| String::from("y")),
+            ..blank("d", RuleKind::Document)
+        };
+        assert!(refusal(document(true, true).validate_document_predicate()).contains("never both"));
+        assert!(
+            refusal(document(false, false).validate_document_predicate())
+                .contains("requires `pattern`")
+        );
+        let both = Rule {
+            regex: Some(String::from("x")),
+            ..forbid("f", "*.rs", "x")
+        };
+        assert!(refusal(both.validate_forbid_predicate()).contains("never both"));
+    }
+
+    /// Only `policy` repairs at the boundary.
+    ///
+    /// Fails by: answering `false` for every kind.
+    #[test]
+    fn a_policy_row_repairs_at_the_boundary() {
+        assert!(RuleKind::Policy.repairs_at_the_boundary());
+    }
+
+    /// The preset schema enumerates the embedded preset names.
+    ///
+    /// Fails by: an empty schema.
+    #[test]
+    fn the_preset_schema_enumerates_the_embedded_names() {
+        let schema = preset_name_schema(&mut schemars::SchemaGenerator::default());
+        let names = schema
+            .get("enum")
+            .and_then(serde_json::Value::as_array)
+            .expect("an enum of names");
+        assert_eq!(names.len(), crate::policy::preset_names().len());
+        assert!(!names.is_empty());
+    }
+
+    /// A located rule id points at its declaring line, or at the source.
+    ///
+    /// Fails by: an empty or placeholder pointer.
+    #[test]
+    fn a_located_id_points_at_its_line() {
+        let at = Located {
+            text: "version = 1\n\n[[rule]]\nid = \"r\"\n",
+            source: "batten.toml",
+        };
+        assert_eq!(at.pointer("r"), "batten.toml:4");
+        assert_eq!(at.pointer("absent"), "batten.toml");
+    }
+
+    /// Each decidability and error class has its own stable token.
+    ///
+    /// Fails by: an empty or placeholder token.
+    #[test]
+    fn every_decidability_and_error_class_has_its_token() {
+        let decidability: Vec<&str> = Decidability::ALL.iter().map(|d| d.as_str()).collect();
+        assert_eq!(decidability, ["deciding", "approximating"]);
+        let classes: Vec<&str> = ErrorClass::ALL.iter().map(|c| c.as_str()).collect();
+        assert_eq!(classes, ["internal", "panic"]);
+    }
+
+    fn tree_options(scope: &Scope) -> RunOptions<'_> {
+        RunOptions {
+            checks: crate::policy::ModuleChecks::Run,
+            scope,
+            surface: crate::facts::Surface::Check,
+            now: None,
+        }
+    }
+
+    /// Both narrowed entry points and the recorded one run the rows they are
+    /// handed, and the recorded one withholds a spawning row.
+    ///
+    /// Fails by: returning an empty scan, or withholding the non-spawning rows
+    /// instead of the spawning ones.
+    #[test]
+    fn every_entry_point_runs_its_rows() {
+        let dir = temp_dir("rules-entry-points");
+        write(&dir, "src/a.rs", "TODO\n");
+        let rows = [forbid("no-todo", "**/*.rs", "TODO")];
+        let found = |scan: anyhow::Result<Scan>| scan.expect("runs").findings.len();
+        let tree = Scope::Tree;
+        assert_eq!(
+            found(run_static_over(
+                &rows,
+                &[],
+                crate::policy::Vocabulary::EMPTY,
+                &dir,
+                tree_options(&tree)
+            )),
+            1
+        );
+        assert_eq!(
+            found(run_all_over(
+                &rows,
+                &[],
+                crate::policy::Vocabulary::EMPTY,
+                &dir,
+                tree_options(&tree)
+            )),
+            1
+        );
+        let recorded = [rows[0].clone(), command("spawns", "**/*.rs", "false")];
+        assert_eq!(
+            found(run_recorded(
+                &recorded,
+                &[],
+                crate::policy::Vocabulary::EMPTY,
+                &dir,
+                crate::policy::ModuleChecks::Run,
+                crate::facts::Surface::Check,
+            )),
+            1
+        );
+    }
+
+    /// A scan counts the files and bytes it read, and records a cost row per
+    /// rule.
+    ///
+    /// Fails by: a counter answering a constant, `count_read` counting
+    /// nothing, or an empty cost census.
+    #[test]
+    fn a_scan_counts_what_it_read_and_what_each_rule_cost() {
+        let dir = temp_dir("rules-read-counters");
+        write(&dir, "src/a.rs", "TODO one\n");
+        write(&dir, "src/b.rs", "TODO two\n");
+        let (files, bytes) = (files_read(), bytes_read());
+        run_static(&[forbid("no-todo", "**/*.rs", "TODO")], &dir).expect("runs");
+        assert!(files_read() >= files + 2, "two files read");
+        assert!(bytes_read() >= bytes + 18, "eighteen bytes read");
+        let costs: Vec<String> = rule_costs().into_iter().map(|cost| cost.rule).collect();
+        assert_eq!(costs, ["no-todo"]);
+    }
+
+    /// Each acquisition is counted, and a target that is not a readable file
+    /// is unreadable rather than absent.
+    ///
+    /// Fails by: a constant counter, or reading every failure as absent.
+    #[test]
+    fn an_acquisition_is_counted_and_a_directory_is_unreadable() {
+        let dir = temp_dir("rules-acquire");
+        fs::create_dir_all(dir.join("dir.json")).expect("a directory");
+        let want = want_for("dir.json", Wanted::Document);
+        let before = documents_acquired();
+        assert!(matches!(
+            acquire(&dir, "dir.json", want),
+            Acquired::No(NotAcquired::Unreadable)
+        ));
+        assert!(matches!(
+            acquire(&dir, "absent.json", want),
+            Acquired::No(NotAcquired::Absent)
+        ));
+        assert!(documents_acquired() >= before + 2);
+    }
+
+    /// A row's declared documents and uses are its literals plus what its
+    /// globs select, sorted.
+    ///
+    /// Fails by: any placeholder list.
+    #[test]
+    fn declared_documents_and_uses_are_literals_plus_selections() {
+        let files = vec![String::from("x.toml"), String::from("y.rs")];
+        let row = Rule {
+            documents: vec![String::from("a.json")],
+            sources: vec![String::from("*.toml")],
+            uses: vec![String::from("lib.rs")],
+            use_sources: vec![String::from("*.rs")],
+            ..blank("p", RuleKind::Policy)
+        };
+        assert_eq!(
+            declared_documents(&row, &files).expect("selects"),
+            ["a.json", "x.toml"]
+        );
+        assert_eq!(
+            declared_uses(&row, &files).expect("selects"),
+            ["lib.rs", "y.rs"]
+        );
+    }
+
+    /// Only a tree-scoped policy row's documents are acquired, and the
+    /// acquisition gets its own cost row only when it read something.
+    ///
+    /// Fails by: acquiring a mediated row's documents, returning nothing, or
+    /// recording a cost row for an empty acquisition.
+    #[test]
+    fn only_a_tree_policy_rows_documents_are_acquired_and_costed() {
+        let dir = temp_dir("rules-acquire-declared");
+        write(&dir, "a.json", "{}");
+        let files = vec![String::from("a.json")];
+        let row = |scope| Rule {
+            scope,
+            documents: vec![String::from("a.json")],
+            ..blank("p", RuleKind::Policy)
+        };
+        let tree =
+            acquire_declared_measured(&[row(RuleScope::Tree)], &dir, &files).expect("acquires");
+        assert_eq!(tree.len(), 1);
+        assert_eq!(rule_costs().len(), 1, "the acquisition is its own cost row");
+        let mediated = acquire_declared_measured(&[row(RuleScope::MediatedCall)], &dir, &files)
+            .expect("acquires");
+        assert!(mediated.is_empty());
+        assert!(rule_costs().is_empty(), "nothing read, no row");
+    }
 }

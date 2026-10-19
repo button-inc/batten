@@ -18765,4 +18765,267 @@ deny contains "refused by themodule" if {
         );
         assert_eq!(edit_spans_of(&serde_json::json!({ "content": "c" })), None);
     }
+
+    /// A receipt row on `gh pr ready` requiring `verify`.
+    fn ready_receipt_row() -> Rule {
+        Rule {
+            kind: RuleKind::Receipt,
+            checks: Some(vec![String::from("verify")]),
+            ..shape("ready-receipt", "gh pr ready", None)
+        }
+    }
+
+    /// A receipt row selected by the `save_issue` tool, requiring `claim`.
+    fn tool_receipt_row() -> Rule {
+        Rule {
+            kind: RuleKind::Receipt,
+            pattern: None,
+            tool: Some(String::from("save_issue")),
+            checks: Some(vec![String::from("claim")]),
+            ..shape("issue-receipt", "unused", None)
+        }
+    }
+
+    fn matched_ids(policy: &Policy, call: &Envelope) -> Vec<String> {
+        matching_receipt_rows(policy, call)
+            .into_iter()
+            .map(|rule| rule.id.clone())
+            .collect()
+    }
+
+    /// Only receipt rows are matched as receipt rows, on every one of the
+    /// three selectors, and a matching shape row is never one.
+    ///
+    /// Fails by: any kind, blocking or modifier test in the three loops being
+    /// conjoined where it is disjoined.
+    #[test]
+    fn a_shape_row_is_never_matched_as_a_receipt_row() {
+        let shape_like = |row: Rule| Rule {
+            kind: RuleKind::Shape,
+            ..row
+        };
+        let policy = ceiling_policy(vec![
+            shape_like(ready_receipt_row()),
+            shape_like(tool_receipt_row()),
+        ]);
+        assert!(matched_ids(&policy, &envelope("gh pr ready")).is_empty());
+        assert!(matched_ids(&policy, &envelope_for_tool("save_issue")).is_empty());
+        let mut write = write_envelope("Write", "a.txt");
+        write.raw_tool = String::from("save_issue");
+        assert!(matched_ids(&policy, &write).is_empty());
+    }
+
+    /// A tool-keyed receipt row is matched on its tool, while it blocks and
+    /// its modifier admits.
+    ///
+    /// Fails by: skipping the tool loop, inverting its kind, blocking or
+    /// modifier test.
+    #[test]
+    fn a_tool_keyed_receipt_row_is_matched_on_its_tool() {
+        let call = envelope_for_tool("save_issue");
+        assert_eq!(
+            matched_ids(&ceiling_policy(vec![tool_receipt_row()]), &call),
+            ["issue-receipt"]
+        );
+        let warned = Rule {
+            severity: Some(RuleSeverity::Warn),
+            ..tool_receipt_row()
+        };
+        assert!(matched_ids(&ceiling_policy(vec![warned]), &call).is_empty());
+        let conditioned = Rule {
+            when_absent: Some(Field::SessionId),
+            ..tool_receipt_row()
+        };
+        let mut in_session = envelope_for_tool("save_issue");
+        in_session.session = Some(String::from("s1"));
+        assert!(matched_ids(&ceiling_policy(vec![conditioned]), &in_session).is_empty());
+    }
+
+    /// A receipt row's `contains` narrows its command match.
+    ///
+    /// Fails by: inverting the literal test.
+    #[test]
+    fn a_receipt_rows_literal_narrows_its_command_match() {
+        let policy = ceiling_policy(vec![Rule {
+            contains: Some(String::from("--draft")),
+            ..ready_receipt_row()
+        }]);
+        assert_eq!(
+            matched_ids(&policy, &envelope("gh pr ready --draft")),
+            ["ready-receipt"]
+        );
+        assert!(matched_ids(&policy, &envelope("gh pr ready")).is_empty());
+    }
+
+    fn receipts(entries: &[(&str, Validity)]) -> ReceiptFacts {
+        crate::facts::Look::Is(
+            entries
+                .iter()
+                .map(|(name, validity)| ((*name).to_owned(), *validity))
+                .collect(),
+        )
+    }
+
+    /// The tool receipt gate denies a selecting receipt row whose receipt is
+    /// missing, and nothing else.
+    ///
+    /// Fails by: its kind, blocking or modifier test inverted, or the kind
+    /// and blocking tests conjoined.
+    #[test]
+    fn the_tool_receipt_gate_denies_only_a_selecting_receipt_row() {
+        let call = envelope_for_tool("save_issue");
+        let missing = receipts(&[]);
+        let gate = |row: Rule, call: &Envelope| {
+            tool_receipt_rules(&ceiling_policy(vec![row]), call, &missing)
+        };
+        assert!(matches!(gate(tool_receipt_row(), &call), Decision::Deny(_)));
+        let shaped = Rule {
+            kind: RuleKind::Shape,
+            ..tool_receipt_row()
+        };
+        assert_eq!(gate(shaped, &call), Decision::Allow);
+        let warned = Rule {
+            severity: Some(RuleSeverity::Warn),
+            ..tool_receipt_row()
+        };
+        assert_eq!(gate(warned, &call), Decision::Allow);
+        let conditioned = Rule {
+            when_absent: Some(Field::SessionId),
+            ..tool_receipt_row()
+        };
+        let mut in_session = envelope_for_tool("save_issue");
+        in_session.session = Some(String::from("s1"));
+        assert_eq!(gate(conditioned.clone(), &in_session), Decision::Allow);
+        assert!(matches!(gate(conditioned, &call), Decision::Deny(_)));
+        assert_eq!(
+            tool_receipt_rules(
+                &ceiling_policy(vec![tool_receipt_row()]),
+                &call,
+                &receipts(&[("claim", Validity::Valid)])
+            ),
+            Decision::Allow
+        );
+    }
+
+    /// An alternation is satisfied by any one valid receipt, including when
+    /// every one is valid, and refused only when none is.
+    ///
+    /// Fails by: testing for an invalid alternative instead of a valid one.
+    #[test]
+    fn an_alternation_is_satisfied_by_any_valid_receipt() {
+        let policy = ceiling_policy(Vec::new());
+        let row = Rule {
+            checks: None,
+            checks_any: Some(vec![String::from("claim"), String::from("carry")]),
+            ..ready_receipt_row()
+        };
+        let verdict = |entries: &[(&str, Validity)]| {
+            let crate::facts::Look::Is(facts) = receipts(entries) else {
+                unreachable!("built resolved");
+            };
+            receipt_verdict(&policy, &row, &facts)
+        };
+        assert_eq!(
+            verdict(&[("claim", Validity::Valid), ("carry", Validity::Valid)]),
+            None
+        );
+        assert_eq!(verdict(&[("carry", Validity::Valid)]), None);
+        assert!(verdict(&[("claim", Validity::StaleHead)]).is_some());
+    }
+
+    fn owned(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    /// Every command a text runs is its own entry, with no stdin unless one
+    /// was redirected in.
+    ///
+    /// Fails by: any placeholder command list.
+    #[test]
+    fn every_shell_command_is_its_own_entry() {
+        assert_eq!(
+            shell_commands("echo a && echo b"),
+            Some(vec![
+                (owned(&["echo", "a"]), Vec::new()),
+                (owned(&["echo", "b"]), Vec::new()),
+            ])
+        );
+    }
+
+    /// A history read names the ids after `policy explain … --history`, on
+    /// `batten` alone, and nothing for any other shape.
+    ///
+    /// Fails by: a constant answer, the program test inverted, the window
+    /// misplaced, the flag test inverted, or flags taken for ids.
+    #[test]
+    fn a_history_read_names_its_ids() {
+        assert_eq!(
+            history_read_ids("batten policy explain row-a --history"),
+            Some(owned(&["row-a"]))
+        );
+        assert_eq!(
+            history_read_ids("mise exec -- batten policy explain row-a row-b --history"),
+            Some(owned(&["row-a", "row-b"]))
+        );
+        assert_eq!(history_read_ids("batten policy explain row-a"), None);
+        assert_eq!(
+            history_read_ids("other policy explain row-a --history"),
+            None
+        );
+        assert_eq!(history_read_ids("batten policy explain --history"), None);
+    }
+
+    /// Each line's program is projected with its name and arguments.
+    ///
+    /// Fails by: an empty or placeholder projection.
+    #[test]
+    fn each_program_is_projected_with_its_arguments() {
+        let reach = program_reach("./bin/tool --flag x");
+        assert_eq!(reach.len(), 1);
+        assert_eq!(reach[0]["program"], "./bin/tool");
+        assert_eq!(reach[0]["name"], "tool");
+        assert_eq!(reach[0]["arguments"], serde_json::json!(["--flag", "x"]));
+    }
+
+    /// A redirect into a file is a write; into a descriptor or `/dev/null`
+    /// it is not.
+    ///
+    /// Fails by: a constant answer, or either target test inverted or
+    /// disjoined.
+    #[test]
+    fn only_a_redirect_into_a_file_writes() {
+        assert!(redirects_to_a_file(&["cat", "a", ">", "out"]));
+        assert!(!redirects_to_a_file(&["cat", "a", "2>&1"]));
+        assert!(!redirects_to_a_file(&["cat", "a", ">", "/dev/null"]));
+        assert!(!redirects_to_a_file(&["cat", "a"]));
+    }
+
+    /// `batten`'s effect is its subcommand's declared one, and no other
+    /// program has one.
+    ///
+    /// Fails by: a placeholder, or the program test inverted.
+    #[test]
+    fn only_batten_has_a_declared_effect() {
+        assert_eq!(
+            batten_effect("batten", &["check"]),
+            Some(crate::surface::effect_for("check").as_str())
+        );
+        assert_eq!(batten_effect("git", &["status"]), None);
+    }
+
+    /// A key is present when the command or the evidence carries one.
+    ///
+    /// Fails by: a constant answer.
+    #[test]
+    fn a_key_is_present_in_the_command_or_the_evidence() {
+        let none: KeyFacts = crate::facts::Look::Is(vec![String::from("no key here")]);
+        assert!(key_present(
+            r"CLOUD-\d+",
+            "gh pr create --body CLOUD-1",
+            &none
+        ));
+        assert!(!key_present(r"CLOUD-\d+", "gh pr create", &none));
+        let evidence: KeyFacts = crate::facts::Look::Is(vec![String::from("Refs CLOUD-7")]);
+        assert!(key_present(r"CLOUD-\d+", "gh pr create", &evidence));
+    }
 }
