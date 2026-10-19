@@ -23225,6 +23225,7 @@ fn land_under_way() -> LandMotion {
 /// Cheapest first: no declared task, or no crashed one, returns before the
 /// boot time or the receipt is written. Everything it cannot read says nothing,
 /// as every failure on this routine does.
+//MUTANT-SUITE crates/batten/tests/it/stop_watchdog.rs
 //MUTANT watchdog-unbounded|s@^        .filter(\x7centry\x7c !already_marked(Some(\&receipt), \&spoken_key(entry)))$@        .filter(\x7c_\x7c true)@|a_crash_is_refused_once
 //MUTANT watchdog-stale-dispatch|s@\.is_none_or(\x7centry\x7c entry.started().is_some_and(\x7cstarted\x7c at > started))$@.is_none_or(\x7c_\x7c true)@|a_land_dispatch_older_than_the_crash_excuses_nothing
 fn watchdog_stop(

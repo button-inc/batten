@@ -744,6 +744,7 @@ pub fn abandoned(git_dir: &Path, program_root: &str) -> Vec<Entry> {
 /// The registry split in one read: `(running, abandoned)`, each record probed
 /// once, so a registrant exiting mid-read lands in exactly one half. The Stop
 /// watchdog reads the first half as a relaunch already under way (CLOUD-2370).
+//MUTANT-SUITE crates/batten/tests/it/stop_watchdog.rs
 #[must_use]
 pub fn partition(git_dir: &Path, program_root: &str) -> (Vec<Entry>, Vec<Entry>) {
     records(git_dir)
