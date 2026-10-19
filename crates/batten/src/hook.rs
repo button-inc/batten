@@ -19649,4 +19649,153 @@ deny contains "refused by themodule" if {
         assert_eq!(policy.agent_fact("review-happened"), Some(&fact));
         assert_eq!(policy.agent_fact("other"), None);
     }
+
+    /// A pipeline row whose verdict is `mise run` and whose filters are
+    /// `filters`.
+    fn verdict_row(filters: &[&str]) -> Rule {
+        Rule {
+            kind: RuleKind::Pipeline,
+            pattern: None,
+            verdict: Some(vec![crate::rules::VerdictProgram {
+                program: String::from("mise"),
+                subcommands: Some(vec![String::from("run")]),
+                nested: None,
+                except: None,
+                any_argument: None,
+            }]),
+            filters: Some(filters.iter().map(|f| (*f).to_owned()).collect()),
+            ..shape("verdict-kept", "unused", None)
+        }
+    }
+
+    fn piped(row: Rule, command: &str) -> Decision {
+        pipeline_rules(&ceiling_policy(vec![row]), &envelope(command))
+    }
+
+    /// A verdict is discarded by a detach, by a filter downstream in its own
+    /// pipeline, or by a trailing element — and by nothing else.
+    ///
+    /// Fails by: grading a `warn` row as blocking, the detach tests
+    /// conjoined, the downstream walk starting at the verdict or crossing the
+    /// pipeline's end, a filter matched by inequality, or a trailing `;` with
+    /// nothing after it read as a sequence.
+    #[test]
+    fn a_verdict_is_discarded_only_by_what_discards_it() {
+        let head = || verdict_row(&["head"]);
+        assert!(matches!(
+            piped(head(), "mise run ci | head"),
+            Decision::Deny(_)
+        ));
+        assert!(matches!(
+            piped(head(), "nohup mise run ci"),
+            Decision::Deny(_)
+        ));
+        let warned = Rule {
+            severity: Some(RuleSeverity::Warn),
+            ..head()
+        };
+        assert_eq!(piped(warned, "mise run ci | head"), Decision::Allow);
+        assert_eq!(piped(head(), "mise run ci | cat"), Decision::Allow);
+        assert_eq!(piped(head(), "mise run ci | cat; head x"), Decision::Allow);
+        assert_eq!(piped(head(), "mise run ci;"), Decision::Allow);
+        assert_eq!(
+            piped(verdict_row(&["mise"]), "mise run ci | cat"),
+            Decision::Allow,
+            "the verdict's own program is not downstream of itself"
+        );
+    }
+
+    /// A short option is one letter, or a bundle where the grammar bundles;
+    /// a long option or a bare dash is none.
+    ///
+    /// Fails by: the long and empty tests conjoined, or the one-letter test
+    /// inverted.
+    #[test]
+    fn short_options_are_read_per_grammar() {
+        let python = grammar("python3");
+        assert_eq!(python.shorts("--x"), None);
+        assert_eq!(python.shorts("-"), None);
+        assert_eq!(python.shorts("-ce"), Some("ce"));
+        let fallback = grammar("bash");
+        assert_eq!(fallback.shorts("-c"), Some("c"));
+        assert_eq!(fallback.shorts("-ab"), None);
+        assert_eq!(grammar("ruby").valued, "rIEC");
+    }
+
+    /// Only a long option splits at its `=`.
+    ///
+    /// Fails by: splitting every word.
+    #[test]
+    fn only_a_long_option_splits_at_its_equals() {
+        assert_eq!(long_option("--eval=x"), ("--eval", Some("x")));
+        assert_eq!(long_option("a=b"), ("a=b", None));
+    }
+
+    /// An inline option's attached text is the program, past the option's
+    /// own letter.
+    ///
+    /// Fails by: keeping the option letter in the value.
+    #[test]
+    fn an_inline_options_attached_text_is_the_program() {
+        assert_eq!(
+            inline_values(&grammar("python3"), &["-cprint(1)"]),
+            ["print(1)"]
+        );
+    }
+
+    /// An inline long option or an inline short bundle ends the search for a
+    /// script file.
+    ///
+    /// Fails by: the dash and inline-long tests conjoined, or the inline arm
+    /// skipped for a bundle with more after its inline letter.
+    #[test]
+    fn an_inline_option_ends_the_script_search() {
+        assert_eq!(script_operand(&grammar("node"), &["--eval", "x.js"]), None);
+        assert_eq!(script_operand(&grammar("python3"), &["-cx", "s.py"]), None);
+        assert_eq!(script_operand(&grammar("python3"), &["s.py"]), Some("s.py"));
+    }
+
+    /// A placeable word has no expansion, home or redirection, and is not
+    /// empty.
+    ///
+    /// Fails by: any conjunct disjoined.
+    #[test]
+    fn a_placeable_word_has_nothing_to_expand() {
+        assert!(placeable("a/b.py"));
+        for word in ["", "$x", "~/a", "a>b", "a<b"] {
+            assert!(!placeable(word), "{word:?}");
+        }
+    }
+
+    /// A `cd` to an option is not followed; a `cd` to a directory is.
+    ///
+    /// Fails by: requiring the target be both unplaceable and an option.
+    #[test]
+    fn a_cd_to_an_option_is_not_followed() {
+        let followed = |command: &str| {
+            let parsed = parsed_ok(command);
+            followed_cd(&parsed[0], &parsed[0].lines[0], Some(Path::new("/r")))
+        };
+        assert_eq!(followed("cd - && ls"), None);
+        assert_eq!(followed("cd sub && ls"), Some(PathBuf::from("/r/sub")));
+    }
+
+    /// A long option is never a bundle of short ones.
+    ///
+    /// Fails by: requiring both sides be long before refusing.
+    #[test]
+    fn a_long_option_is_not_a_bundle() {
+        assert!(!bundled_short_flag("--posix", "-x"));
+        assert!(bundled_short_flag("-ni", "-i"));
+    }
+
+    /// A redirection is not a repository path.
+    ///
+    /// Fails by: requiring both redirection characters.
+    #[test]
+    fn a_redirection_is_not_a_repository_path() {
+        assert!(!repo_relative_path("2>/dev/null"));
+        assert!(!repo_relative_path("<in/put"));
+        assert!(repo_relative_path("src/a.rs"));
+    }
 }
