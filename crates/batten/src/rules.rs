@@ -19398,4 +19398,1814 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             None
         );
     }
+
+    /// A row declaring nothing declares no fact through any census column.
+    ///
+    /// Fails by: a census closure answering a row with an empty column as
+    /// declaring it (the `tasks` and `extract` negations dropped).
+    #[test]
+    fn an_empty_row_declares_no_census_fact() {
+        let row = blank("p", RuleKind::Policy);
+        let declaring: Vec<&str> = COLUMN_CENSUS
+            .iter()
+            .filter(|column| match column.declares {
+                Declares::Fact(_, declared) => declared(&row),
+                Declares::NotFactBearing(_) => false,
+            })
+            .map(|column| column.field)
+            .collect();
+        assert_eq!(declaring, Vec::<&str>::new());
+    }
+
+    /// A pipeline row carrying `verdict` without `filters` is half a family and
+    /// is refused; carrying both is whole.
+    ///
+    /// Fails by: the discard family read as either column rather than both.
+    #[test]
+    fn half_a_discard_family_is_refused() {
+        let row = |filters: Option<Vec<String>>| Rule {
+            verdict: Some(vec![VerdictProgram {
+                subcommands: words(&["pr"]),
+                ..verdict_program("gh")
+            }]),
+            filters,
+            ..blank("p", RuleKind::Pipeline)
+        };
+        let half = refusal(row(None).validate_pipeline_tables());
+        assert!(half.contains("needs either"), "{half}");
+        assert_eq!(
+            refusal(row(Some(vec![String::from("jq")])).validate_pipeline_tables()),
+            ""
+        );
+    }
+
+    /// A declared effect fact the run could not resolve withholds its rule on
+    /// the hook surface only, and only for the rule that declared it.
+    ///
+    /// Fails by: answering `None` always, the surface test inverted, or either
+    /// declaration test negated or disjoined.
+    #[test]
+    fn an_unresolved_effect_fact_withholds_only_its_declaring_rule_on_the_hook() {
+        let files: Vec<String> = Vec::new();
+        let blind = BareFacts {
+            symbols: crate::facts::Look::CouldNotLook,
+            ..BareFacts::new()
+        };
+        let could_not_look = crate::facts::Look::CouldNotLook;
+        let inputs = RunInputs {
+            review: &could_not_look,
+            ..blind.inputs(&files)
+        };
+        let review: crate::facts::ReviewQuery = serde_json::from_value(serde_json::json!({
+            "id": "r", "prompt": "p", "runner": "x", "version": "1", "subject": "document"
+        }))
+        .expect("a review row");
+        let symbols = Rule {
+            symbols: true,
+            ..blank("s", RuleKind::Policy)
+        };
+        let reviewing = Rule {
+            review: vec![review],
+            ..blank("r", RuleKind::Policy)
+        };
+        let neither = blank("n", RuleKind::Policy);
+        let hook = crate::facts::Surface::Hook;
+        assert_eq!(
+            unresolved_declared_fact(&symbols, &inputs, hook),
+            Some("symbols")
+        );
+        assert_eq!(
+            unresolved_declared_fact(&reviewing, &inputs, hook),
+            Some("review")
+        );
+        assert_eq!(unresolved_declared_fact(&neither, &inputs, hook), None);
+        assert_eq!(
+            unresolved_declared_fact(&symbols, &inputs, crate::facts::Surface::Check),
+            None
+        );
+        let sighted = BareFacts::new();
+        let resolved = sighted.inputs(&files);
+        assert_eq!(unresolved_declared_fact(&symbols, &resolved, hook), None);
+        assert_eq!(unresolved_declared_fact(&reviewing, &resolved, hook), None);
+    }
+
+    /// The first manifest a preset ships, and a module header copied from it at
+    /// `version`.
+    fn ejected_header(version: u32) -> String {
+        let manifest = &crate::preset::MANIFESTS[0];
+        format!(
+            "# batten-ejected: {}/m version {version}\npackage batten.x\n",
+            manifest.name
+        )
+    }
+
+    /// A module copied at an older preset version warns, through `module` or
+    /// through a bundle directory's `.rego` files; a current copy does not.
+    ///
+    /// Fails by: emitting nothing, or the version comparison inverted.
+    #[test]
+    fn a_copy_behind_its_preset_warns() {
+        let shipped = crate::preset::MANIFESTS[0].version;
+        assert!(
+            shipped > 0,
+            "a stale copy needs a version below the shipped one"
+        );
+        let dir = temp_dir("rules-ejected-behind");
+        write(&dir, "old.rego", &ejected_header(shipped - 1));
+        write(&dir, "current.rego", &ejected_header(shipped));
+        write(&dir, "pol/old.rego", &ejected_header(shipped - 1));
+        write(&dir, "pol/notes.txt", &ejected_header(shipped - 1));
+        let warned = |rule: Rule| {
+            let mut findings = Vec::new();
+            ejected_behind(&rule, &dir, &[], &mut findings);
+            findings
+                .into_iter()
+                .map(|finding| (finding.rule, finding.path))
+                .collect::<Vec<_>>()
+        };
+        let module = |path: &str| Rule {
+            module: Some(path.to_owned()),
+            ..blank("p", RuleKind::Policy)
+        };
+        assert_eq!(
+            warned(module("old.rego")),
+            [(MODULE_PIN_STALE.to_owned(), String::from("old.rego"))]
+        );
+        assert_eq!(
+            warned(module("current.rego")),
+            Vec::<(String, String)>::new()
+        );
+        let bundle = Rule {
+            bundle: Some(String::from("pol")),
+            ..blank("p", RuleKind::Policy)
+        };
+        assert_eq!(
+            warned(bundle),
+            [(MODULE_PIN_STALE.to_owned(), String::from("pol/old.rego"))]
+        );
+    }
+
+    /// Only a policy row is checked for a stale copy, and only off the hook.
+    ///
+    /// Fails by: the kind test inverted, the conjunction disjoined, or the
+    /// surface test inverted.
+    #[test]
+    fn only_a_policy_row_off_the_hook_is_checked_for_a_stale_copy() {
+        let dir = temp_dir("rules-evaluate-ejected");
+        let shipped = crate::preset::MANIFESTS[0].version;
+        write(&dir, "old.rego", &ejected_header(shipped - 1));
+        // Held back by an unmet requirement, so only the stale-copy check runs.
+        let held = |id: &str, kind| Rule {
+            module: Some(String::from("old.rego")),
+            requires_path: vec![String::from("absent")],
+            ..blank(id, kind)
+        };
+        let rows = [
+            held("p", RuleKind::Policy),
+            Rule {
+                glob: Some(String::from("*.rs")),
+                pattern: Some(String::from("x")),
+                ..held("f", RuleKind::Forbid)
+            },
+        ];
+        let files: Vec<String> = Vec::new();
+        let facts = BareFacts::new();
+        let owners = |surface| {
+            let inputs = RunInputs {
+                surface,
+                ..facts.inputs(&files)
+            };
+            let mut scan = Scan::default();
+            evaluate_rules(&rows, &dir, &inputs, &mut scan).expect("evaluates");
+            scan.findings
+                .into_iter()
+                .map(|finding| finding.owner)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            owners(crate::facts::Surface::Check),
+            [Some(String::from("p"))]
+        );
+        assert_eq!(
+            owners(crate::facts::Surface::Hook),
+            Vec::<Option<String>>::new()
+        );
+    }
+
+    /// A sink is requested per evaluated producing row, over the findings it
+    /// owns: a digest and count for a journal, a count alone for a marker.
+    ///
+    /// Fails by: requesting nothing, requesting for a withheld row, counting
+    /// another row's findings, a count that does not add, or the marker test
+    /// inverted.
+    #[test]
+    fn a_sink_is_requested_over_the_findings_its_row_owns() {
+        let dir = temp_dir("rules-requested-sinks");
+        write(&dir, "a.rs", "TODO\nTODO\n");
+        write(&dir, "c.rs", "TODO\n");
+        let producing = |id: &str, glob: &str, kind| Rule {
+            produces: Some(Sink {
+                kind,
+                key: SinkKey::Rule,
+            }),
+            ..forbid(id, glob, "TODO")
+        };
+        let rules = [
+            producing("a", "a.rs", crate::facts::Production::Journal),
+            Rule {
+                requires_path: vec![String::from("absent")],
+                ..producing("b", "a.rs", crate::facts::Production::Journal)
+            },
+            producing("c", "c.rs", crate::facts::Production::Marker),
+            forbid("d", "c.rs", "TODO"),
+        ];
+        let scan =
+            super::run_static(&rules, &[], crate::policy::Vocabulary::EMPTY, &dir).expect("runs");
+        let subject: String = scan
+            .findings
+            .iter()
+            .filter(|finding| finding.rule == "a")
+            .map(|finding| format!("{}\n", finding.identity.fingerprint.to_hex()))
+            .collect();
+        assert_eq!(
+            scan.requested,
+            [
+                crate::sink::Requested {
+                    rule: String::from("a"),
+                    key: SinkKey::Rule,
+                    kind: crate::facts::Production::Journal,
+                    digest: crate::receipt::hex_sha256(subject.as_bytes()),
+                    count: 2,
+                },
+                crate::sink::Requested {
+                    rule: String::from("c"),
+                    key: SinkKey::Rule,
+                    kind: crate::facts::Production::Marker,
+                    digest: String::new(),
+                    count: 1,
+                },
+            ]
+        );
+    }
+
+    /// The recorder's could-not-look lines are read last-write-wins, and a
+    /// line missing either half is skipped.
+    ///
+    /// Fails by: any placeholder map, or either half's emptiness test negated
+    /// or disjoined.
+    #[test]
+    fn a_blocked_recorder_line_needs_both_halves() {
+        let git_dir = temp_dir("rules-recorder-blocked");
+        let path = crate::recorder::blocked_path(&git_dir, "feature/x", None);
+        fs::create_dir_all(path.parent().expect("a directory")).expect("mkdir");
+        fs::write(&path, "one first\nhalf \n alone\nbare\none second\n").expect("write");
+        assert_eq!(
+            recorder_blocked(&git_dir, "feature/x"),
+            BTreeMap::from([(String::from("one"), String::from("second"))])
+        );
+    }
+
+    /// A claimed branch's records are read under its claim, except the claim
+    /// receipt itself, which is never partitioned by its own token.
+    ///
+    /// Fails by: any placeholder map, or the claim exception inverted.
+    #[test]
+    fn the_claim_record_is_read_unpartitioned_and_the_rest_under_the_claim() {
+        let git_dir = temp_dir("rules-recorder-records");
+        let receipts = git_dir.join("batten-receipts");
+        fs::create_dir_all(&receipts).expect("mkdir");
+        fs::write(receipts.join("claim.b"), "CLOUD-1\n").expect("claim");
+        fs::write(receipts.join("plan.b.CLOUD-1"), "x\ny\n").expect("partitioned");
+        fs::write(receipts.join("plan.b"), "stale\n").expect("unpartitioned");
+        fs::write(receipts.join("claim.b.CLOUD-1"), "wrong\n").expect("decoy");
+        assert_eq!(
+            recorder_records(&git_dir, "b", &[], &[], &["claim", "plan", "absent"]),
+            BTreeMap::from([
+                (String::from("claim"), vec![String::from("CLOUD-1")]),
+                (
+                    String::from("plan"),
+                    vec![String::from("x"), String::from("y")]
+                ),
+            ])
+        );
+    }
+
+    /// One path's projection answers only from the entry acquired as the form
+    /// asked for, and carries a could-not-look cause through.
+    ///
+    /// Fails by: a constant answer, any guard forced or inverted, or the
+    /// could-not-look arm dropped.
+    #[test]
+    fn a_projection_answers_only_from_its_own_form() {
+        let dir = temp_dir("rules-project-declared");
+        write(&dir, "d.json", "{\"a\": 1}");
+        let parsed = || acquire(&dir, "d.json", want_for("d.json", Wanted::Document));
+        assert!(matches!(parsed(), Acquired::Parsed(_)));
+        let key = |path: &str, wanted| (path.to_owned(), wanted);
+        let cache: BTreeMap<(String, Wanted), Acquired> = BTreeMap::from([
+            (key("d.json", Wanted::Document), parsed()),
+            (
+                key("l.txt", Wanted::Lines),
+                Acquired::Lines(vec![String::from("x")]),
+            ),
+            (
+                key("i.rs", Wanted::Invocations),
+                Acquired::Invocations(Vec::new()),
+            ),
+            (
+                key("u.json", Wanted::Document),
+                Acquired::No(NotAcquired::Unreadable),
+            ),
+            (key("m", Wanted::Lines), parsed()),
+            (
+                key("m", Wanted::Document),
+                Acquired::Lines(vec![String::from("y")]),
+            ),
+            (key("m", Wanted::Uses), Acquired::Invocations(Vec::new())),
+        ]);
+        let document = project_declared(&cache, "d.json", Wanted::Document).expect("parsed");
+        assert_eq!(document["a"], serde_json::json!(1), "{document}");
+        assert_eq!(
+            project_declared(&cache, "l.txt", Wanted::Lines),
+            Ok(serde_json::json!(["x"]))
+        );
+        assert_eq!(
+            project_declared(&cache, "i.rs", Wanted::Invocations),
+            Ok(serde_json::json!([]))
+        );
+        assert_eq!(
+            project_declared(&cache, "u.json", Wanted::Document),
+            Err(NotAcquired::Unreadable)
+        );
+        for wanted in [Wanted::Lines, Wanted::Document, Wanted::Uses] {
+            assert_eq!(
+                project_declared(&cache, "m", wanted),
+                Err(NotAcquired::Absent),
+                "{wanted:?}"
+            );
+        }
+    }
+
+    /// Only a tree-scoped policy row's external rows are acquired.
+    ///
+    /// Fails by: the kind-and-scope conjunction disjoined.
+    #[test]
+    fn only_a_tree_policy_rows_external_rows_are_acquired() {
+        let external = vec![crate::facts::Rooted {
+            id: String::from("e"),
+            root: String::from("BATTEN_RULES_TEST_ROOT_NEVER_SET"),
+            path: String::from("x.json"),
+        }];
+        let row = |kind, scope| Rule {
+            scope,
+            external: external.clone(),
+            ..blank("r", kind)
+        };
+        let acquired = |rule: Rule| {
+            external_facts(&[rule], usize::MAX)
+                .into_iter()
+                .map(|(id, outcome)| (id, matches!(outcome, Acquired::No(NotAcquired::RootUnset))))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            acquired(row(RuleKind::Policy, RuleScope::Tree)),
+            [(String::from("e"), true)]
+        );
+        let nothing: Vec<(String, bool)> = Vec::new();
+        assert_eq!(
+            acquired(row(RuleKind::Policy, RuleScope::MediatedCall)),
+            nothing
+        );
+        assert_eq!(acquired(row(RuleKind::Forbid, RuleScope::Tree)), nothing);
+    }
+
+    /// An external file is projected when parsed and named missing, with its
+    /// cause, otherwise.
+    ///
+    /// Fails by: projecting nothing.
+    #[test]
+    fn an_external_file_is_projected_or_named_missing() {
+        let dir = temp_dir("rules-project-external");
+        write(&dir, "x.json", "{\"k\": 2}");
+        let rooted = |id: &str| crate::facts::Rooted {
+            id: id.to_owned(),
+            root: String::from("R"),
+            path: String::from("x.json"),
+        };
+        let external = BTreeMap::from([
+            (
+                String::from("p"),
+                acquire(&dir, "x.json", want_for("x.json", Wanted::Document)),
+            ),
+            (String::from("n"), Acquired::No(NotAcquired::RootUnset)),
+            (String::from("l"), Acquired::Lines(Vec::new())),
+        ]);
+        let mut out = serde_json::Map::new();
+        let (mut missing, mut causes) = (Vec::new(), Vec::new());
+        project_external(
+            &external,
+            &[rooted("p"), rooted("n"), rooted("l"), rooted("gone")],
+            &mut out,
+            &mut missing,
+            &mut causes,
+        );
+        assert_eq!(
+            out.get("p").map(|node| node["k"].clone()),
+            Some(serde_json::json!(2))
+        );
+        assert_eq!(missing, ["n", "l", "gone"]);
+        assert_eq!(
+            causes,
+            [
+                (String::from("n"), NotAcquired::RootUnset),
+                (String::from("l"), NotAcquired::Absent),
+                (String::from("gone"), NotAcquired::Absent),
+            ]
+        );
+    }
+
+    /// A declared plan nobody could take is present with no value, and an
+    /// undeclared family reads nothing.
+    ///
+    /// Fails by: any placeholder map.
+    #[test]
+    fn a_declared_plan_that_could_not_be_taken_is_present_and_empty() {
+        let dir = temp_dir("rules-plan-facts");
+        let row = Rule {
+            plan: vec![crate::hk::PlanQuery {
+                id: String::from("q"),
+                hook: String::from("no-such-hook"),
+                required: Vec::new(),
+                prohibited_profiles: Vec::new(),
+                profile: Vec::new(),
+            }],
+            ..blank("p", RuleKind::Policy)
+        };
+        let taken = plan_facts(&[row], &dir).map(|plans| {
+            plans
+                .into_iter()
+                .map(|(id, plan)| (id, plan.is_some()))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(taken, Some(vec![(String::from("q"), false)]));
+        assert!(plan_facts(&[blank("p", RuleKind::Policy)], &dir).is_none());
+    }
+
+    /// A declared capture reduction is answered by the capture store's own
+    /// reducer, and an undeclared family reads nothing.
+    ///
+    /// Fails by: any placeholder map.
+    #[test]
+    fn a_declared_capture_reduction_is_the_reducers_answer() {
+        let dir = temp_dir("rules-captured-facts");
+        let declared = vec![crate::facts::CaptureQuery {
+            id: String::from("c"),
+            key: String::from("BATTEN-RULES-NO-SUCH-KEY"),
+            key_at: None,
+            node: String::from("status"),
+            reduce: crate::facts::Reduction::Present,
+        }];
+        let row = Rule {
+            captured: declared.clone(),
+            ..blank("p", RuleKind::Policy)
+        };
+        let answer = captured_facts(&[row], &dir);
+        assert!(answer.is_some(), "the store is addressable here");
+        assert_eq!(answer, crate::captured::reduce(&dir, &declared));
+        assert_eq!(captured_facts(&[blank("p", RuleKind::Policy)], &dir), None);
+    }
+
+    /// A rule set declaring no symbols spends nothing and answers "not asked".
+    ///
+    /// Fails by: the declaration test negated, which resolves the census for
+    /// a run that asked for none.
+    #[test]
+    fn an_undeclared_symbol_census_is_not_taken() {
+        let dir = temp_dir("rules-symbols-undeclared");
+        assert!(matches!(
+            symbols_fact(&[blank("p", RuleKind::Policy)], &dir),
+            crate::facts::Look::IsNot
+        ));
+    }
+
+    /// The review and symbol facts project their records field by field, and
+    /// `null` when nothing resolved.
+    ///
+    /// Fails by: projecting a default value.
+    #[test]
+    fn the_review_and_symbol_facts_project_their_records() {
+        let record = crate::review::Record {
+            provenance: crate::review::Provenance {
+                tool: String::from("agent"),
+                version: String::from("1"),
+                invocation: vec![String::from("--x")],
+                prompt: String::from("d1"),
+            },
+            subject: crate::review::Subject {
+                kind: String::from("document"),
+                digest: String::from("d2"),
+            },
+            findings: vec![crate::review::Finding {
+                path: String::from("a.md"),
+                line: 3,
+                clause: String::from("§7"),
+            }],
+        };
+        let review = crate::facts::Look::Is(BTreeMap::from([(String::from("r"), record)]));
+        assert_eq!(
+            review_value(&review),
+            serde_json::json!({"r": {
+                "provenance": {"tool": "agent", "version": "1", "invocation": ["--x"], "prompt": "d1"},
+                "subject": {"kind": "document", "digest": "d2"},
+                "findings": [{"path": "a.md", "line": 3, "clause": "§7"}],
+            }})
+        );
+        assert_eq!(
+            review_value(&crate::facts::Look::IsNot),
+            serde_json::Value::Null
+        );
+        let resolved = crate::symbols::Resolved {
+            provenance: crate::symbols::Provenance {
+                tool: String::from("lint"),
+                version: String::from("2"),
+                invocation: vec![String::from("--y")],
+            },
+            sites: vec![crate::symbols::Site {
+                path: String::from("a.rs"),
+                line: 4,
+                lint: String::from("clippy::x"),
+            }],
+        };
+        assert_eq!(
+            symbols_value(&crate::facts::Look::Is(resolved)),
+            serde_json::json!({
+                "provenance": {"tool": "lint", "version": "2", "invocation": ["--y"]},
+                "sites": [{"path": "a.rs", "line": 4, "lint": "clippy::x"}],
+            })
+        );
+        assert_eq!(
+            symbols_value(&crate::facts::Look::CouldNotLook),
+            serde_json::Value::Null
+        );
+    }
+
+    fn line_subject(path: &str, line: u64) -> crate::verdict::Subject {
+        crate::verdict::Subject::Line {
+            path: path.to_owned(),
+            line,
+        }
+    }
+
+    /// A finding's pointer is the first path-bearing subject, else the first
+    /// subject rendered, else nothing.
+    ///
+    /// Fails by: any constant pointer, or the pointer index answering for an
+    /// empty list or skipping a leading count.
+    #[test]
+    fn a_policy_findings_pointer_prefers_a_path() {
+        let count = crate::verdict::Subject::Count { count: 2 };
+        let path = crate::verdict::Subject::Path {
+            path: String::from("b.rs"),
+        };
+        assert_eq!(
+            first_pointer(&[count.clone(), line_subject("a.rs", 4)]),
+            (Some(String::from("a.rs")), Some(4))
+        );
+        assert_eq!(
+            first_pointer(&[crate::verdict::artifact("t"), path.clone()]),
+            (Some(String::from("b.rs")), None)
+        );
+        assert_eq!(
+            first_pointer(&[count.clone()]),
+            (Some(String::from("2")), None)
+        );
+        assert_eq!(first_pointer(&[]), (None, None));
+        assert_eq!(pointer_index(&[count.clone(), path]), Some(1));
+        assert_eq!(pointer_index(&[count]), Some(0));
+        assert_eq!(pointer_index(&[]), None);
+    }
+
+    /// A policy finding's fingerprint ingredient is its class, then its
+    /// pointers.
+    ///
+    /// Fails by: a constant ingredient.
+    #[test]
+    fn a_policy_fingerprint_is_the_class_then_its_pointers() {
+        let violation = |subjects| crate::policy::Violation {
+            rule: None,
+            verdict: String::from("some class"),
+            subjects,
+            counted: false,
+        };
+        assert_eq!(fingerprint_of(&violation(Vec::new())), "some class");
+        assert_eq!(
+            fingerprint_of(&violation(vec![
+                line_subject("a.rs", 1),
+                crate::verdict::Subject::Count { count: 2 }
+            ])),
+            "some class a.rs:1 2"
+        );
+    }
+
+    /// A raised class's remedy comes from the registry, and an unknown class
+    /// has none.
+    ///
+    /// Fails by: answering no remedy for a declared class.
+    #[test]
+    fn a_policy_remedy_comes_from_the_registry() {
+        let registry = crate::policy::registry_for(&[]).expect("the vendored registry");
+        assert!(policy_remediation(&registry, MODULE_PIN_STALE).is_some());
+        assert!(policy_remediation(&registry, "no such class anywhere").is_none());
+    }
+
+    /// One bundle compiled from one module, under `id`.
+    fn compiled(id: &str, source: &str) -> crate::policy::Bundle {
+        crate::policy::compile(
+            id,
+            &[(String::from("probe.rego"), source.to_owned())],
+            &crate::pattern::data_document(&[]),
+        )
+        .expect("the probe module compiles")
+    }
+
+    const FIRING: &str = r#"package batten.probe
+
+import rego.v1
+
+rules contains "probe-fires"
+
+violation contains {
+	"rule": "probe-fires",
+	"verdict": "module pin stale",
+	"subjects": [{"path": "a.txt", "line": 3}],
+} if {
+	true
+}
+"#;
+
+    const SILENT: &str = r#"package batten.probe
+
+import rego.v1
+
+rules contains "probe-silent"
+
+violation contains {
+	"rule": "probe-silent",
+	"verdict": "module pin stale",
+	"subjects": [{"path": "a.txt"}],
+} if {
+	input.never == true
+}
+"#;
+
+    /// A policy row evaluates its own bundle, is skipped when a declared
+    /// selector selects nothing, and evaluates when anything resolved.
+    ///
+    /// Fails by: any arm of the selection census negated, conjoined or
+    /// disjoined, the bundle lookup inverted, the abstention test negated or
+    /// disjoined, or the `allow` test inverted.
+    #[test]
+    fn a_policy_row_is_skipped_only_when_its_declared_selectors_select_nothing() {
+        let files = vec![String::from("a.txt")];
+        let firing = compiled("p", FIRING);
+        let silent = compiled("p", SILENT);
+        let run =
+            |rule: Rule, bundle: Option<&crate::policy::Bundle>, git: crate::git::GitFacts| {
+                let facts = BareFacts {
+                    git,
+                    ..BareFacts::new()
+                };
+                let inputs = RunInputs {
+                    bundles: bundle.map_or(&[][..], std::slice::from_ref),
+                    ..facts.inputs(&files)
+                };
+                let (mut findings, mut classes) = (Vec::new(), BTreeMap::new());
+                let skipped = matches!(
+                    policy_rule(&rule, &inputs, &mut findings, &mut classes),
+                    Some(NotObserved::RuleSkipped)
+                );
+                let pointers: Vec<(String, Option<usize>, Option<String>)> = findings
+                    .into_iter()
+                    .map(|finding| (finding.path, finding.line, finding.owner))
+                    .collect();
+                (skipped, pointers)
+            };
+        let fired = vec![(String::from("a.txt"), Some(3), Some(String::from("p")))];
+        let row = || blank("p", RuleKind::Policy);
+        let none = crate::git::GitFacts::default;
+        assert_eq!(run(row(), None, none()), (true, Vec::new()), "no bundle");
+        assert_eq!(run(row(), Some(&firing), none()), (false, fired.clone()));
+        assert_eq!(run(row(), Some(&silent), none()), (false, Vec::new()));
+        let selecting_nothing = || Rule {
+            sources: vec![String::from("*.none")],
+            ..row()
+        };
+        assert_eq!(
+            run(selecting_nothing(), Some(&firing), none()),
+            (true, Vec::new())
+        );
+        let delta = crate::git::GitFacts {
+            base_delta: Some(crate::git::BaseDelta::default()),
+            ..crate::git::GitFacts::default()
+        };
+        assert_eq!(
+            run(selecting_nothing(), Some(&firing), delta),
+            (true, Vec::new()),
+            "a delta nobody declared resolves nothing"
+        );
+        let undelivered_delta = Rule {
+            delta_sources: vec![String::from("*.sh")],
+            ..row()
+        };
+        assert_eq!(
+            run(undelivered_delta, Some(&firing), none()),
+            (true, Vec::new())
+        );
+        let literal = Rule {
+            documents: vec![String::from("x.json")],
+            ..selecting_nothing()
+        };
+        assert_eq!(
+            run(literal, Some(&firing), none()),
+            (false, fired),
+            "a literal document is a selection, and a speaking module is heard over its absence"
+        );
+    }
+
+    /// A policy row sees this branch's recorder records and its blocked lines.
+    ///
+    /// Fails by: dropping either read of the record store.
+    #[test]
+    fn a_policy_row_sees_this_branchs_records_and_blocked_lines() {
+        let dir = seeded("rules-run-records");
+        let git_dir = crate::git::git_dir(&dir).expect("a git dir");
+        let branch = crate::git::record_key(&dir).expect("a record key");
+        let record = crate::recorder::record_path(&git_dir, "plan", &branch, None);
+        fs::create_dir_all(record.parent().expect("a directory")).expect("mkdir");
+        fs::write(&record, "planned\n").expect("record");
+        fs::write(
+            crate::recorder::blocked_path(&git_dir, &branch, None),
+            "recorder why\n",
+        )
+        .expect("blocked");
+        write(
+            &dir,
+            "probe.rego",
+            r#"package batten.probe
+
+import rego.v1
+
+rules contains "records-seen"
+
+rules contains "blocked-seen"
+
+violation contains {
+	"rule": "records-seen",
+	"verdict": "module pin stale",
+	"subjects": [{"artifact": "r"}],
+} if {
+	count(input.tree.records) > 0
+}
+
+violation contains {
+	"rule": "blocked-seen",
+	"verdict": "module pin stale",
+	"subjects": [{"artifact": "b"}],
+} if {
+	count(input.tree["records-blocked"]) > 0
+}
+"#,
+        );
+        let row = Rule {
+            module: Some(String::from("probe.rego")),
+            scope: RuleScope::Tree,
+            ..blank("p", RuleKind::Policy)
+        };
+        let tree = Scope::Tree;
+        let scan = run_static_over(
+            &[row],
+            &[],
+            crate::policy::Vocabulary::EMPTY,
+            &dir,
+            RunOptions {
+                checks: crate::policy::ModuleChecks::SkipOnHotPath,
+                ..tree_options(&tree)
+            },
+        )
+        .expect("runs");
+        let fired: BTreeSet<&str> = scan.findings.iter().map(|f| f.rule.as_str()).collect();
+        assert_eq!(
+            fired,
+            BTreeSet::from(["blocked-seen", "records-seen"]),
+            "{:?}",
+            scan.not_evaluated
+        );
+    }
+
+    /// A repository whose one commit carries `base`, its working tree then
+    /// rewritten to `head` (an empty text deletes the file).
+    fn ratchet_repo(name: &str, base: &[(&str, &str)], head: &[(&str, &str)]) -> PathBuf {
+        let dir = crate::scratch::scratch(name);
+        for (rel, text) in base {
+            write(&dir, rel, text);
+        }
+        let paths: Vec<String> = base.iter().map(|(rel, _)| (*rel).to_owned()).collect();
+        crate::gitwrite::commit_paths(&dir, &paths, "base").expect("commit the base");
+        for (rel, text) in head {
+            if text.is_empty() {
+                fs::remove_file(dir.join(rel)).expect("delete");
+            } else {
+                write(&dir, rel, text);
+            }
+        }
+        dir
+    }
+
+    fn ratchet_row(direction: Direction) -> Rule {
+        Rule {
+            glob: Some(String::from("*.bats")),
+            pattern: Some(String::from("@test \"")),
+            direction: Some(direction),
+            base: Some(String::from("HEAD")),
+            ..blank("r", RuleKind::Ratchet)
+        }
+    }
+
+    /// What a run of `rule` over `dir` found, by path, and the rows it did not
+    /// evaluate.
+    fn ratchet_run(rule: Rule, dir: &Path) -> (Vec<String>, Vec<String>) {
+        let scan =
+            super::run_static(&[rule], &[], crate::policy::Vocabulary::EMPTY, dir).expect("runs");
+        (
+            scan.findings
+                .into_iter()
+                .map(|finding| finding.path)
+                .collect(),
+            scan.not_evaluated.into_keys().collect(),
+        )
+    }
+
+    const TWO_CASES: &str = "@test \"a\" {\n}\n@test \"b\" {\n}\n";
+    const ONE_CASE: &str = "@test \"a\" {\n}\n";
+
+    /// A ratchet refuses a count that moved the banned way and passes one that
+    /// held.
+    ///
+    /// Fails by: never refusing, the `allow` test inverted, the working count
+    /// not summing, or the direction test negated.
+    #[test]
+    fn a_ratchet_refuses_a_fall_and_passes_a_level_count() {
+        let fell = ratchet_repo(
+            "rules-ratchet-fell",
+            &[("t.bats", TWO_CASES)],
+            &[("t.bats", ONE_CASE)],
+        );
+        assert_eq!(
+            ratchet_run(ratchet_row(Direction::NonDecreasing), &fell),
+            (vec![String::from("*.bats 2->1")], Vec::new())
+        );
+        let held = ratchet_repo("rules-ratchet-held", &[("t.bats", TWO_CASES)], &[]);
+        assert_eq!(
+            ratchet_run(ratchet_row(Direction::NonDecreasing), &held),
+            (Vec::new(), Vec::new())
+        );
+    }
+
+    /// A deleted suite whose declared subject died with it buys its decrease,
+    /// which needs the base text read for a `retires_with` row alone.
+    ///
+    /// Fails by: buffering the base text only when `conserves` is also set.
+    #[test]
+    fn a_retirement_whose_subject_died_is_admitted() {
+        let dir = ratchet_repo(
+            "rules-ratchet-retired",
+            &[
+                ("t.bats", "# subject: prog\n@test \"a\" {\n}\n"),
+                ("prog", "#!/bin/sh\n"),
+            ],
+            &[("t.bats", ""), ("prog", "")],
+        );
+        let rule = Rule {
+            retires_with: Some(String::from("# subject:")),
+            ..ratchet_row(Direction::NonDecreasing)
+        };
+        assert_eq!(ratchet_run(rule, &dir), (Vec::new(), Vec::new()));
+    }
+
+    /// A file that grew and declares why buys its increase; one that did not
+    /// declare is refused.
+    ///
+    /// Fails by: recording the files that declared NOTHING as the declaring
+    /// ones.
+    #[test]
+    fn a_growth_that_declares_its_reason_is_admitted() {
+        let row = || Rule {
+            admits_with: Some(String::from("# stays:")),
+            ..ratchet_row(Direction::NonIncreasing)
+        };
+        let grown = format!("# stays: a reason\n{TWO_CASES}");
+        let declared = ratchet_repo(
+            "rules-ratchet-declared-growth",
+            &[("t.bats", ONE_CASE)],
+            &[("t.bats", grown.as_str())],
+        );
+        assert_eq!(ratchet_run(row(), &declared), (Vec::new(), Vec::new()));
+        let silent = ratchet_repo(
+            "rules-ratchet-silent-growth",
+            &[("t.bats", ONE_CASE)],
+            &[("t.bats", TWO_CASES)],
+        );
+        assert_eq!(
+            ratchet_run(row(), &silent),
+            (
+                vec![String::from("*.bats 1->2 [growth-undeclared t.bats]")],
+                Vec::new()
+            )
+        );
+    }
+
+    /// A file's subjects died only when every one was alive at base and none
+    /// is present now.
+    ///
+    /// Fails by: a constant answer, or either term disjoined or un-negated.
+    #[test]
+    fn a_subject_died_only_when_every_one_was_alive_and_is_gone() {
+        let facts = |alive: &[&str], present: &[&str]| SubjectFacts {
+            declared: BTreeMap::from([(
+                String::from("t"),
+                BTreeSet::from([String::from("s1"), String::from("s2")]),
+            )]),
+            alive_at_base: alive.iter().map(|s| (*s).to_owned()).collect(),
+            still_present: present.iter().map(|s| (*s).to_owned()).collect(),
+            ..SubjectFacts::default()
+        };
+        assert!(facts(&["s1", "s2"], &[]).died("t"));
+        assert!(!facts(&["s1", "s2"], &["s2"]).died("t"));
+        assert!(!facts(&["s1"], &[]).died("t"));
+        assert!(!facts(&["s1", "s2"], &[]).died("other"));
+    }
+
+    /// Only a path whose count fell is resolved: one declaring nothing is
+    /// undeclared, one the head tree lost is gone, and a declared subject is
+    /// checked against the base and the head.
+    ///
+    /// Fails by: a default answer, the fall test inverted, the gone test
+    /// negated or inverted, or skipping the base read for a declared subject.
+    #[test]
+    fn subject_facts_resolve_only_the_paths_that_fell() {
+        let dir = seeded("rules-subject-facts");
+        let base_counts = BTreeMap::from([
+            (String::from("a"), 2),
+            (String::from("b"), 1),
+            (String::from("c"), 1),
+        ]);
+        let working_counts: BTreeMap<&str, usize> = BTreeMap::from([("a", 1), ("b", 1)]);
+        let base_text = BTreeMap::from([
+            (String::from("a"), String::from("no header\n")),
+            (String::from("c"), String::from("# subject: a.txt\n")),
+        ]);
+        let files = vec![String::from("a"), String::from("b"), String::from("a.txt")];
+        let facts = subject_facts(
+            &dir,
+            "HEAD",
+            "# subject:",
+            &base_counts,
+            &working_counts,
+            &base_text,
+            &files,
+        )
+        .expect("resolves");
+        let set = |items: &[&str]| -> BTreeSet<String> {
+            items.iter().map(|item| (*item).to_owned()).collect()
+        };
+        assert_eq!(facts.undeclared, set(&["a"]));
+        assert_eq!(
+            facts.declared,
+            BTreeMap::from([(String::from("c"), set(&["a.txt"]))])
+        );
+        assert_eq!(facts.gone, set(&["c"]));
+        assert_eq!(facts.alive_at_base, set(&["a.txt"]));
+        assert_eq!(facts.still_present, set(&["a.txt"]));
+    }
+
+    /// What blocks a decrease: an unmapped undeclared path, a subject that
+    /// never existed, and a surviving subject no ledger arm names — and a
+    /// mapped path that merely shrank owes nothing.
+    ///
+    /// Fails by: any placeholder set, any negation dropped, the surviving-
+    /// subject conjunction disjoined, or the ledger answering for every path.
+    #[test]
+    fn retirement_blockers_name_what_the_ledger_does_not_discharge() {
+        let set = |items: &[&str]| -> BTreeSet<String> {
+            items.iter().map(|item| (*item).to_owned()).collect()
+        };
+        let subjects = SubjectFacts {
+            declared: BTreeMap::from([
+                (String::from("m-partial"), set(&["s-alive"])),
+                (
+                    String::from("m-gone"),
+                    set(&["s-never", "s-target", "s-untargeted", "s-dead"]),
+                ),
+                (String::from("free"), set(&["f-never", "f-alive", "f-dead"])),
+            ]),
+            undeclared: set(&["u1", "u2"]),
+            alive_at_base: set(&[
+                "s-alive",
+                "s-target",
+                "s-untargeted",
+                "s-dead",
+                "f-alive",
+                "f-dead",
+            ]),
+            still_present: set(&["s-alive", "s-target", "s-untargeted", "f-alive"]),
+            gone: set(&["m-gone"]),
+        };
+        let mapped = MappedLedger {
+            targets: BTreeMap::from([
+                (String::from("u1"), set(&[])),
+                (String::from("m-partial"), set(&[])),
+                (String::from("m-gone"), set(&["s-target"])),
+            ]),
+        };
+        assert_eq!(
+            retirement_blockers(&subjects, &mapped),
+            set(&[
+                "subject-undeclared u2",
+                "subject-never-existed s-never",
+                "subject-alive s-untargeted",
+                "subject-never-existed f-never",
+                "subject-alive f-alive",
+            ])
+        );
+    }
+
+    /// Only a file whose own count rose without declaring why blocks an
+    /// increase.
+    ///
+    /// Fails by: any placeholder set, the growth comparison changed, or the
+    /// declaration test disjoined or un-negated.
+    #[test]
+    fn undeclared_growth_names_only_the_silent_risers() {
+        let base = BTreeMap::from([(String::from("a"), 1), (String::from("b"), 2)]);
+        let working: BTreeMap<&str, usize> =
+            BTreeMap::from([("a", 2), ("b", 2), ("c", 1), ("d", 1)]);
+        let declared: BTreeSet<&str> = BTreeSet::from(["c"]);
+        assert_eq!(
+            undeclared_growth(&base, &working, &declared),
+            BTreeSet::from([
+                String::from("growth-undeclared a"),
+                String::from("growth-undeclared d"),
+            ])
+        );
+    }
+
+    /// Every declaring line's paths are unioned.
+    ///
+    /// Fails by: any placeholder set.
+    #[test]
+    fn declared_subjects_union_every_declaring_line() {
+        assert_eq!(
+            declared_subject("# subject: a b\nother\n# subject: c\n", "# subject:"),
+            BTreeSet::from([String::from("a"), String::from("b"), String::from("c")])
+        );
+    }
+
+    /// Each arm has its own token, owes a target unless it withdraws, and owes
+    /// a subject only when it ports.
+    ///
+    /// Fails by: an empty or placeholder token, or a constant obligation.
+    #[test]
+    fn each_arm_has_its_token_and_its_obligations() {
+        let arms = [
+            Arm::Carried,
+            Arm::Subsumed,
+            Arm::Changed,
+            Arm::Withdrawn,
+            Arm::Ported,
+        ];
+        let tokens: Vec<&str> = arms.iter().map(|arm| arm.as_str()).collect();
+        assert_eq!(
+            tokens,
+            ["carried", "subsumed", "changed", "withdrawn", "ported"]
+        );
+        let targets: Vec<bool> = arms.iter().map(|arm| arm.owes_a_target()).collect();
+        assert_eq!(targets, [true, true, true, false, true]);
+        let subjects: Vec<bool> = arms.iter().map(|arm| arm.owes_a_subject()).collect();
+        assert_eq!(subjects, [false, false, false, false, true]);
+    }
+
+    /// A ported arm's subject is its non-empty `subject:` field.
+    ///
+    /// Fails by: a constant answer, or the emptiness filter inverted.
+    #[test]
+    fn a_ported_subject_is_its_non_empty_field() {
+        assert_eq!(
+            ported_subject("why subject:src/a.rs more"),
+            Some("src/a.rs")
+        );
+        assert_eq!(ported_subject("why subject: more"), None);
+        assert_eq!(ported_subject("no field"), None);
+    }
+
+    fn ledger_vocabulary() -> Conserves {
+        Conserves {
+            case: String::from("@test \""),
+            close: String::from("\""),
+            carried: String::from("// carried:"),
+            subsumed: String::from("// subsumed:"),
+            changed: String::from("// changed:"),
+            withdrawn: Some(String::from("// withdrawn:")),
+            ported: Some(String::from("// ported:")),
+            declared_in: String::from("ledger.rs"),
+        }
+    }
+
+    /// An arm's claim records the 1-based line it was written on, and a dying
+    /// file's case names are every closed one.
+    ///
+    /// Fails by: a zero-based line, or any placeholder name set.
+    #[test]
+    fn claims_and_cases_are_read_with_their_lines_and_names() {
+        let dir = temp_dir("rules-claimed-cases");
+        write(&dir, "ledger.rs", "\n// carried: \"one\" kept.rs\n");
+        let conserves = ledger_vocabulary();
+        let claimed = claimed_cases(&dir, &conserves, &[String::from("ledger.rs")]);
+        let lines: Vec<usize> = claimed.claims["one"]
+            .iter()
+            .map(|claim| claim.line)
+            .collect();
+        assert_eq!(lines, [2]);
+        assert_eq!(
+            case_names(
+                "@test \"a\" {\n  @test \"b\"\n@test \"unclosed\n",
+                &conserves
+            ),
+            BTreeSet::from([String::from("a"), String::from("b")])
+        );
+        let rule = Rule {
+            conserves: Some(conserves.clone()),
+            ..ratchet_row(Direction::NonDecreasing)
+        };
+        let empty = ClaimedCases::default();
+        let mapping = Mapping {
+            conserves: &conserves,
+            claimed: &empty,
+            files: &[],
+            subject_died: false,
+            declared_subjects: &NO_SUBJECTS,
+        };
+        let mut findings = Vec::new();
+        unconserved_cases(
+            &rule,
+            "t.bats",
+            "x\n@test \"lost\" {\n",
+            "",
+            &mapping,
+            &mut findings,
+            &mut BTreeSet::new(),
+        );
+        let at: Vec<Option<usize>> = findings.iter().map(|finding| finding.line).collect();
+        assert_eq!(at, [Some(2)]);
+    }
+
+    /// What one resolved claim owes: a withdrawal a dead subject and a reason,
+    /// a port a declared, present survivor that then travels as a target.
+    ///
+    /// Fails by: the withdrawal's subject test un-negated, its emptiness
+    /// conjunction disjoined, the port check dropped, or either of its
+    /// containment tests un-negated or inverted.
+    #[test]
+    fn a_resolved_claim_owes_what_its_arm_owes() {
+        let conserves = ledger_vocabulary();
+        let claimed = ClaimedCases::default();
+        let rule = Rule {
+            conserves: Some(conserves.clone()),
+            ..ratchet_row(Direction::NonDecreasing)
+        };
+        let files = vec![String::from("kept.rs"), String::from("subject.rs")];
+        let judge = |arm, target: &str, reason: &str, died: bool, declared: &[&str]| {
+            let declared: BTreeSet<String> = declared.iter().map(|s| (*s).to_owned()).collect();
+            let mapping = Mapping {
+                conserves: &conserves,
+                claimed: &claimed,
+                files: &files,
+                subject_died: died,
+                declared_subjects: &declared,
+            };
+            let claim = Claim {
+                arm,
+                path: String::from("ledger.rs"),
+                line: 1,
+                target: target.to_owned(),
+                reason: reason.to_owned(),
+            };
+            let (mut findings, mut targets) = (Vec::new(), BTreeSet::new());
+            resolved_claim(&rule, &claim, "case", &mapping, &mut findings, &mut targets);
+            (findings.len(), targets.into_iter().collect::<Vec<_>>())
+        };
+        let none: Vec<String> = Vec::new();
+        assert_eq!(
+            judge(Arm::Withdrawn, "gone", "because", false, &[]),
+            (1, none.clone())
+        );
+        assert_eq!(
+            judge(Arm::Withdrawn, "gone", "", true, &[]),
+            (0, none.clone())
+        );
+        assert_eq!(judge(Arm::Withdrawn, "", "", true, &[]), (1, none.clone()));
+        assert_eq!(
+            judge(
+                Arm::Ported,
+                "kept.rs",
+                "subject:subject.rs",
+                false,
+                &["subject.rs"]
+            ),
+            (0, vec![String::from("kept.rs"), String::from("subject.rs")])
+        );
+        assert_eq!(
+            judge(
+                Arm::Ported,
+                "kept.rs",
+                "subject:other.rs",
+                false,
+                &["other.rs"]
+            ),
+            (1, vec![String::from("kept.rs")])
+        );
+        assert_eq!(
+            judge(
+                Arm::Ported,
+                "kept.rs",
+                "subject:subject.rs",
+                true,
+                &["subject.rs"]
+            ),
+            (1, vec![String::from("kept.rs")])
+        );
+    }
+
+    /// A subject that does not resolve is reported at its declaring line, or
+    /// at line 1 where there is none.
+    ///
+    /// Fails by: raising nothing, a wrong line, or the resolution test
+    /// inverted.
+    #[test]
+    fn an_unresolved_subject_is_reported_at_its_declaration() {
+        let rule = ratchet_row(Direction::NonDecreasing);
+        let files = vec![String::from("here")];
+        let lines = |text: &str| {
+            let mut findings = Vec::new();
+            unresolved_subject(&rule, "t.bats", text, "# subject:", &files, &mut findings);
+            findings
+                .into_iter()
+                .map(|finding| finding.line)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lines("x\n# subject:\n"), [Some(2)]);
+        assert_eq!(lines("x\n# subject: gone\n"), [Some(2)]);
+        assert_eq!(lines("no header\n"), [Some(1)]);
+        assert_eq!(lines("# subject: here\n"), Vec::<Option<usize>>::new());
+    }
+
+    /// Blockers render bounded and sorted, and nothing for none.
+    ///
+    /// Fails by: a placeholder rendering, or the overflow test inverted.
+    #[test]
+    fn blockers_render_bounded() {
+        let set = |items: &[&str]| -> BTreeSet<String> {
+            items.iter().map(|item| (*item).to_owned()).collect()
+        };
+        assert_eq!(render_blockers(&set(&[])), "");
+        assert_eq!(render_blockers(&set(&["b", "a"])), " [a, b]");
+        assert_eq!(
+            render_blockers(&set(&["a", "b", "c", "d", "e"])),
+            " [a, b, c +2 more]"
+        );
+    }
+
+    /// A check with no `{{files}}` runs once even over an empty match.
+    ///
+    /// Fails by: the placeholder test negated, which batches an empty match
+    /// into no run at all.
+    #[test]
+    fn a_self_discovering_check_runs_once() {
+        let dir = temp_dir("rules-command-once");
+        let mut findings = Vec::new();
+        command_rule(&command("c", "*.none", "false"), &dir, &[], &mut findings).expect("runs");
+        assert_eq!(findings.len(), 1);
+    }
+
+    /// Paths are batched while they fit, and split only past the bound.
+    ///
+    /// Fails by: splitting every path, multiplying the running length, or the
+    /// bound comparison changed.
+    #[test]
+    fn batches_split_only_past_the_bound() {
+        let sizes = |paths: &[String]| {
+            let refs: Vec<&String> = paths.iter().collect();
+            batches(&refs).iter().map(Vec::len).collect::<Vec<_>>()
+        };
+        assert_eq!(sizes(&[String::from("a"), String::from("b")]), [2]);
+        let half = "x".repeat(MAX_FILES_BYTES / 2 - 1);
+        assert_eq!(
+            sizes(&[half.clone(), half.clone()]),
+            [2],
+            "exactly at the bound"
+        );
+        assert_eq!(
+            sizes(&[half.clone(), half.clone(), String::from("c")]),
+            [2, 1]
+        );
+        assert_eq!(sizes(&["y".repeat(10_000), "z".repeat(10)]), [2]);
+    }
+
+    /// A program on `PATH` is found by name, through the real `PATH` and a
+    /// supplied one.
+    ///
+    /// Fails by: answering `None`.
+    #[test]
+    fn a_program_on_path_is_found() {
+        assert!(
+            on_path_verbatim("sh").is_some(),
+            "`sh` is on every Unix PATH"
+        );
+        let dir = temp_dir("rules-lookup-verbatim");
+        write(&dir, "tool", "");
+        assert_eq!(
+            lookup_verbatim("tool", dir.as_os_str()),
+            Some(dir.join("tool"))
+        );
+    }
+
+    /// A program not on `PATH` is refused as such, and any other spawn failure
+    /// keeps its own cause.
+    ///
+    /// Fails by: the not-found guard forced either way, or inverted.
+    #[test]
+    fn a_spawn_failure_names_its_own_cause() {
+        let dir = temp_dir("rules-run-once");
+        write(&dir, "data.txt", "not a program\n");
+        let rule = command("c", "*", "x");
+        let refused = |program: &str| {
+            run_once(&rule, &dir, program, &[], &[], &mut Vec::new())
+                .expect_err("refused")
+                .to_string()
+        };
+        assert!(refused("batten-rules-no-such-program").contains("not found on PATH"));
+        let other = refused("./data.txt");
+        assert!(other.contains("cannot run"), "{other}");
+        assert!(!other.contains("not found on PATH"), "{other}");
+    }
+
+    /// Only `verbatim = true` hashes a span verbatim.
+    ///
+    /// Fails by: a constant mode, or the test inverted.
+    #[test]
+    fn only_a_verbatim_row_hashes_verbatim() {
+        let row = |verbatim| Rule {
+            verbatim,
+            ..forbid("f", "*.rs", "x")
+        };
+        assert!(matches!(
+            span_mode(&row(Some(true))),
+            crate::identity::SpanNormalization::Verbatim
+        ));
+        assert!(matches!(
+            span_mode(&row(None)),
+            crate::identity::SpanNormalization::Collapsed
+        ));
+        assert!(matches!(
+            span_mode(&row(Some(false))),
+            crate::identity::SpanNormalization::Collapsed
+        ));
+    }
+
+    /// A listed path the read cannot find is skipped, not an error.
+    ///
+    /// Fails by: the not-found guard forced false.
+    #[test]
+    fn a_vanished_path_is_skipped_by_forbid() {
+        let dir = temp_dir("rules-forbid-vanished");
+        let absent = String::from("absent.rs");
+        let mut findings = Vec::new();
+        forbid_in_files(&forbid("f", "*.rs", "x"), &dir, &[&absent], &mut findings)
+            .expect("a vanished path is not an error");
+        assert!(findings.is_empty());
+    }
+
+    /// A document row passes a node holding its literal and refuses one that
+    /// differs.
+    ///
+    /// Fails by: passing every file, or the comparison inverted.
+    #[test]
+    fn a_document_row_compares_its_node() {
+        let dir = temp_dir("rules-document-in-file");
+        write(&dir, "same.json", "{\"a\": \"1\"}");
+        write(&dir, "other.json", "{\"a\": \"2\"}");
+        let rule = Rule {
+            glob: Some(String::from("*.json")),
+            format: Some(crate::facts::Format::Json),
+            node: Some(String::from("a")),
+            pattern: Some(String::from("1")),
+            ..blank("d", RuleKind::Document)
+        };
+        let found = |path: &str| {
+            let mut findings = Vec::new();
+            document_in_file(&rule, &dir, path, &BTreeMap::new(), &mut findings).expect("reads");
+            findings.len()
+        };
+        assert_eq!(found("same.json"), 0);
+        assert_eq!(found("other.json"), 1);
+    }
+
+    fn table_register(id: &str, path: &str, width: usize) -> crate::register::DeclaredRegister {
+        crate::register::DeclaredRegister {
+            id: id.to_owned(),
+            paths: vec![path.to_owned()],
+            source: crate::register::Source::Table {
+                key: 1,
+                width,
+                row_prefix: None,
+                key_pattern: None,
+                patterns: BTreeMap::new(),
+                unique: false,
+            },
+        }
+    }
+
+    fn cites(register: &str) -> crate::register::Cites {
+        crate::register::Cites {
+            register: register.to_owned(),
+            from_register: None,
+            column: None,
+            split: None,
+            within: None,
+            partition: None,
+            relative_to: None,
+            inverse: false,
+        }
+    }
+
+    const KEYS: &str = "| key | note |\n| --- | --- |\n| alpha | a |\n| beta | b |\n";
+
+    /// Two tables over one fixture: the `keys` register and a one-column
+    /// `src` register.
+    fn register_tables() -> Vec<crate::register::DeclaredRegister> {
+        vec![
+            table_register("keys", "reg.md", 2),
+            table_register("src", "src.md", 1),
+        ]
+    }
+
+    fn reference_fixture(name: &str) -> PathBuf {
+        let dir = temp_dir(name);
+        write(&dir, "reg.md", KEYS);
+        write(&dir, "src.md", "| key |\n| --- |\n| delta |\n");
+        write(&dir, "cite.txt", "x\nsee alpha and gamma\n");
+        write(&dir, "c1.json", "{\"refs\": [\"alpha\"]}");
+        write(&dir, "bad.json", "{not json");
+        dir
+    }
+
+    fn regex_reference() -> Rule {
+        Rule {
+            glob: Some(String::from("cite.txt")),
+            regex: Some(String::from(r"\b(alpha|gamma)\b")),
+            cites: Some(cites("keys")),
+            ..blank("ref", RuleKind::Reference)
+        }
+    }
+
+    /// A reference row resolves its citations against its register, reporting
+    /// the unresolved one; a row citing nothing is skipped.
+    ///
+    /// Fails by: reporting nothing, or the register lookup inverted.
+    #[test]
+    fn a_reference_row_reports_the_token_its_register_lacks() {
+        let dir = reference_fixture("rules-reference-rule");
+        let files = vec![
+            String::from("cite.txt"),
+            String::from("reg.md"),
+            String::from("src.md"),
+        ];
+        let registers = register_tables();
+        let tables = RunTables {
+            registers: &registers,
+            patterns: BTreeMap::new(),
+            traversals: serde_json::Value::Null,
+        };
+        let facts = BareFacts::new();
+        let inputs = RunInputs {
+            tables: &tables,
+            ..facts.inputs(&files)
+        };
+        let mut findings = Vec::new();
+        assert!(matches!(
+            reference_rule(&regex_reference(), &dir, &inputs, &mut findings),
+            Ok(None)
+        ));
+        let at: Vec<(String, Option<usize>)> = findings
+            .iter()
+            .map(|finding| (finding.path.clone(), finding.line))
+            .collect();
+        assert_eq!(at, [(String::from("cite.txt"), Some(2))]);
+        let uncited = Rule {
+            cites: None,
+            ..regex_reference()
+        };
+        assert!(matches!(
+            reference_rule(&uncited, &dir, &inputs, &mut Vec::new()),
+            Ok(Some(NotObserved::RuleSkipped))
+        ));
+        // `run_rule` reaches it for a deny row and skips an `allow` one.
+        let (mut found, mut classes) = (Vec::new(), BTreeMap::new());
+        assert!(matches!(
+            run_rule(&regex_reference(), &dir, &inputs, &mut found, &mut classes),
+            Ok(None)
+        ));
+        let allowed = Rule {
+            severity: Some(RuleSeverity::Allow),
+            ..regex_reference()
+        };
+        assert!(matches!(
+            run_rule(&allowed, &dir, &inputs, &mut Vec::new(), &mut classes),
+            Ok(Some(NotObserved::RuleSkipped))
+        ));
+    }
+
+    /// Each citer shape gathers its tokens with their lines: a line regex, a
+    /// register's column, and a document node — an absent document is
+    /// skipped and an unparseable one reported.
+    ///
+    /// Fails by: gathering nothing, a wrong line, the register lookup
+    /// inverted, or either document arm dropped.
+    #[test]
+    fn every_citer_shape_gathers_its_tokens() {
+        let dir = reference_fixture("rules-gather-citations");
+        let files = vec![
+            String::from("bad.json"),
+            String::from("c1.json"),
+            String::from("c2.json"),
+            String::from("cite.txt"),
+            String::from("reg.md"),
+            String::from("src.md"),
+        ];
+        let registers = register_tables();
+        let tables = RunTables {
+            registers: &registers,
+            patterns: BTreeMap::new(),
+            traversals: serde_json::Value::Null,
+        };
+        let facts = BareFacts::new();
+        let inputs = RunInputs {
+            tables: &tables,
+            ..facts.inputs(&files)
+        };
+        let register_inputs = RegisterInputs {
+            files: &files,
+            patterns: &tables.patterns,
+        };
+        let gather = |rule: &Rule| {
+            let mut findings = Vec::new();
+            let citations = gather_citations(
+                rule,
+                rule.cites.as_ref().expect("cites"),
+                &dir,
+                &inputs,
+                &register_inputs,
+                &mut findings,
+            )
+            .expect("gathers")
+            .expect("a citer");
+            let tokens: Vec<(String, String, Option<usize>)> = citations
+                .into_iter()
+                .map(|citation| (citation.token, citation.at.path, citation.at.line))
+                .collect();
+            (tokens, findings.len())
+        };
+        let cited = |token: &str, path: &str, line| (token.to_owned(), path.to_owned(), line);
+        assert_eq!(
+            gather(&regex_reference()),
+            (
+                vec![
+                    cited("alpha", "cite.txt", Some(2)),
+                    cited("gamma", "cite.txt", Some(2))
+                ],
+                0
+            )
+        );
+        let column = Rule {
+            glob: None,
+            regex: None,
+            cites: Some(crate::register::Cites {
+                from_register: Some(String::from("src")),
+                column: Some(1),
+                ..cites("keys")
+            }),
+            ..regex_reference()
+        };
+        assert_eq!(gather(&column).0, [cited("delta", "src.md", Some(3))]);
+        let node = Rule {
+            glob: Some(String::from("*.json")),
+            regex: None,
+            format: Some(crate::facts::Format::Json),
+            node: Some(String::from("refs")),
+            ..regex_reference()
+        };
+        assert_eq!(gather(&node), (vec![cited("alpha", "c1.json", None)], 1));
+    }
+
+    /// A register reads the tracked paths its globs select, a table from its
+    /// lines and a document set from its frontmatter.
+    ///
+    /// Fails by: any placeholder path list, or either acquisition arm dropped.
+    #[test]
+    fn a_register_is_built_from_the_paths_it_selects() {
+        let dir = temp_dir("rules-build-register");
+        write(&dir, "reg.md", KEYS);
+        write(&dir, "d.md", "---\nid: omega\n---\nbody\n");
+        let files = vec![
+            String::from("a.md"),
+            String::from("b.txt"),
+            String::from("reg.md"),
+        ];
+        let patterns = BTreeMap::new();
+        let inputs = RegisterInputs {
+            files: &files,
+            patterns: &patterns,
+        };
+        let globbed = crate::register::DeclaredRegister {
+            paths: vec![String::from("*.md")],
+            ..table_register("keys", "unused", 2)
+        };
+        assert_eq!(
+            register_paths(&globbed, &inputs).expect("selects"),
+            ["a.md", "reg.md"]
+        );
+        let table = table_register("keys", "reg.md", 2);
+        let built = build_register(&table, &dir, &inputs).expect("builds");
+        assert_eq!(built.contains("alpha"), Some(true));
+        let doc_files = vec![String::from("d.md")];
+        let documents = crate::register::DeclaredRegister {
+            id: String::from("docs"),
+            paths: vec![String::from("d.md")],
+            source: crate::register::Source::Documents {
+                key_node: String::from("id"),
+                refused_values: BTreeMap::new(),
+            },
+        };
+        let built = build_register(
+            &documents,
+            &dir,
+            &RegisterInputs {
+                files: &doc_files,
+                patterns: &patterns,
+            },
+        )
+        .expect("builds");
+        assert_eq!(built.contains("omega"), Some(true));
+    }
+
+    /// Derived values resolve through a chain declared out of order, and a
+    /// producer whose input nothing derives stays unresolved.
+    ///
+    /// Fails by: resolving nothing, the wait negated, or stopping after the
+    /// first pass that advanced.
+    #[test]
+    fn derived_values_resolve_through_a_chain() {
+        let dir = temp_dir("rules-resolve-derived");
+        write(&dir, "a.json", "{\"v\": \"1\"}");
+        write(&dir, "b.json", "{\"v\": \"2\"}");
+        let files = vec![String::from("a.json"), String::from("b.json")];
+        let producer = |id: &str, derives: &str, reads: Option<&str>, glob: &str| Rule {
+            glob: Some(glob.to_owned()),
+            format: Some(crate::facts::Format::Json),
+            node: Some(String::from("v")),
+            derives: Some(derives.to_owned()),
+            reads: reads.map(ToOwned::to_owned),
+            ..blank(id, RuleKind::Document)
+        };
+        let rules = [
+            producer("b", "b", Some("a"), "b.json"),
+            producer("c", "c", Some("nothing"), "a.json"),
+            producer("a", "a", None, "a.json"),
+        ];
+        let resolved: Vec<(String, Option<String>)> = resolve_derived(&rules, &dir, &files)
+            .into_iter()
+            .map(|(name, look)| {
+                let value = match look {
+                    crate::facts::Look::Is(value) => Some(value),
+                    crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => None,
+                };
+                (name, value)
+            })
+            .collect();
+        assert_eq!(
+            resolved,
+            [
+                (String::from("a"), Some(String::from("1"))),
+                (String::from("b"), Some(String::from("2"))),
+            ]
+        );
+    }
+
+    /// The walk stops at a nested repository but never at its own root.
+    ///
+    /// Fails by: the root test inverted, which judges every directory but the
+    /// root as the root.
+    #[test]
+    fn the_walk_stops_at_a_nested_repository() {
+        let dir = temp_dir("rules-tree-files-nested");
+        write(&dir, "a.txt", "a\n");
+        write(&dir, "sub/.git/HEAD", "ref\n");
+        write(&dir, "sub/b.txt", "b\n");
+        assert_eq!(tree_files(&dir).expect("walks"), ["a.txt"]);
+    }
+
+    /// The empty set is empty, and two selectors are equal only over one
+    /// pattern.
+    ///
+    /// Fails by: a constant answer.
+    #[test]
+    fn emptiness_and_selector_equality_are_read_off_the_config() {
+        assert!(PathSet::empty().is_empty());
+        let selector = |glob: &str| Selector::new(glob).expect("compiles");
+        assert!(selector("*.rs") == selector("*.rs"));
+        assert!(selector("*.rs") != selector("*.md"));
+    }
+
+    /// A non-ratchet row selects from the narrowed list, never the whole tree.
+    ///
+    /// Fails by: the ratchet test inverted.
+    #[test]
+    fn only_a_ratchet_selects_from_the_whole_tree() {
+        let dir = temp_dir("rules-run-rule-scoped");
+        write(&dir, "a.rs", "TODO\n");
+        write(&dir, "b.rs", "TODO\n");
+        let files = vec![String::from("a.rs"), String::from("b.rs")];
+        let scoped = vec![String::from("a.rs")];
+        let facts = BareFacts::new();
+        let inputs = RunInputs {
+            scoped: &scoped,
+            ..facts.inputs(&files)
+        };
+        let (mut findings, mut classes) = (Vec::new(), BTreeMap::new());
+        run_rule(
+            &forbid("f", "*.rs", "TODO"),
+            &dir,
+            &inputs,
+            &mut findings,
+            &mut classes,
+        )
+        .expect("runs");
+        let paths: Vec<&str> = findings
+            .iter()
+            .map(|finding| finding.path.as_str())
+            .collect();
+        assert_eq!(paths, ["a.rs"]);
+    }
+
+    /// A declared walk is answered per seed, reading present and absent
+    /// documents and building the register an edge names.
+    ///
+    /// Fails by: answering `null`, the register an edge names left unbuilt, the
+    /// register lookup inverted, or either document arm dropped.
+    #[test]
+    fn a_declared_walk_is_answered_per_seed() {
+        let dir = temp_dir("rules-walk-traversals");
+        write(&dir, "reg.md", KEYS);
+        write(&dir, "s1.md", "---\nspec: alpha\n---\nbody\n");
+        let files = vec![
+            String::from("reg.md"),
+            String::from("s1.md"),
+            String::from("s2.md"),
+        ];
+        let registers = vec![table_register("keys", "reg.md", 2)];
+        let traversals: Vec<crate::traversal::DeclaredTraversal> = vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "t",
+                "seeds": "s*.md",
+                "edge": [{"label": "spec", "field": "spec", "to": {"register": "keys"}}],
+                "max_visits": 10,
+                "max_depth": 5,
+                "reduce": "path",
+            }))
+            .expect("a traversal row"),
+        ];
+        let vocabulary = crate::policy::Vocabulary {
+            registers: &registers,
+            traversals: &traversals,
+            ..crate::policy::Vocabulary::EMPTY
+        };
+        let walked = walk_traversals(vocabulary, &dir, &files, &BTreeMap::new()).expect("walks");
+        let outcome = |seed: &str| walked["t"][seed]["outcome"].clone();
+        assert_eq!(outcome("s1.md"), serde_json::json!("exhausted"), "{walked}");
+        assert_eq!(outcome("s2.md"), serde_json::json!("exhausted"), "{walked}");
+        assert_eq!(
+            walked["t"]["s1.md"]["visited"],
+            serde_json::json!(2),
+            "the seed and the register node it names: {walked}"
+        );
+    }
 }
