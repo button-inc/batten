@@ -18224,6 +18224,13 @@ deny contains "refused by themodule" if {
     /// Fails by: answering for another host, or a constant for Claude.
     #[test]
     fn only_claude_code_reports_a_background_ceiling() {
+        assert_eq!(
+            background_ceiling(Harness::ClaudeCode),
+            Some(background_max(
+                std::env::var("BASH_MAX_TIMEOUT_MS").ok().as_deref(),
+                std::env::var("BASH_DEFAULT_TIMEOUT_MS").ok().as_deref(),
+            ))
+        );
         // The host's floor, whatever its two variables say.
         assert!(background_ceiling(Harness::ClaudeCode).is_some_and(|ms| ms >= 7_200_000));
         assert_eq!(background_ceiling(Harness::Cursor), None);

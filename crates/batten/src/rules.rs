@@ -14972,7 +14972,12 @@ mod tests {
         // the library's own unit tests, so derive a scratch dir at runtime —
         // through `crate::scratch`, whose per-process root keeps two concurrent
         // runs (cargo-mutants' parallel jobs) from deleting each other's fixture.
-        crate::scratch::scratch(&format!("rules-tests-{name}"))
+        let dir = crate::scratch::scratch(&format!("rules-tests-{name}"));
+        assert!(
+            dir.is_dir(),
+            "the scratch fixture {dir:?} could not be created"
+        );
+        dir
     }
 
     fn write(dir: &Path, rel: &str, contents: &str) {
@@ -19118,7 +19123,9 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         assert!(files_read() >= files + 2, "two files read");
         assert!(bytes_read() >= bytes + 18, "eighteen bytes read");
         let costs: Vec<String> = rule_costs().into_iter().map(|cost| cost.rule).collect();
-        assert!(costs.iter().any(|rule| rule == "no-todo"), "{costs:?}");
+        // Exact, because the census is cleared per run and this case is the only
+        // run in its process: nextest forks per case, which `test:cargo` uses.
+        assert_eq!(costs, ["no-todo"]);
     }
 
     /// Each acquisition is counted, and a target that is not a readable file
@@ -19184,21 +19191,23 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let tree =
             acquire_declared_measured(&[row(RuleScope::Tree)], &dir, &files).expect("acquires");
         assert_eq!(tree.len(), 1);
-        let acquisition_row = || {
-            rule_costs()
-                .iter()
-                .any(|cost| cost.rule == DECLARED_ACQUISITION)
-        };
-        assert!(acquisition_row(), "the acquisition is its own cost row");
+        // Exact, for `a_scan_counts_what_it_read_and_what_each_rule_cost`'s reason:
+        // one run per process under nextest, which `test:cargo` uses.
+        let rows = || -> Vec<String> { rule_costs().into_iter().map(|cost| cost.rule).collect() };
+        assert_eq!(
+            rows(),
+            [DECLARED_ACQUISITION],
+            "the acquisition is its own cost row"
+        );
         let mediated = acquire_declared_measured(&[row(RuleScope::MediatedCall)], &dir, &files)
             .expect("acquires");
         assert!(mediated.is_empty());
-        assert!(!acquisition_row(), "nothing read, no row");
+        assert!(rows().is_empty(), "nothing read, no row");
     }
 
     /// A one-commit repository carrying `a.txt`, its index written.
     fn seeded(name: &str) -> PathBuf {
-        let dir = crate::scratch::scratch(name);
+        let dir = temp_dir(name);
         write(&dir, "a.txt", "a\n");
         crate::gitwrite::commit_paths(&dir, &[String::from("a.txt")], "fixture").expect("seed");
         dir
@@ -20209,7 +20218,7 @@ violation contains {
     /// A repository whose one commit carries `base`, its working tree then
     /// rewritten to `head` (an empty text deletes the file).
     fn ratchet_repo(name: &str, base: &[(&str, &str)], head: &[(&str, &str)]) -> PathBuf {
-        let dir = crate::scratch::scratch(name);
+        let dir = temp_dir(name);
         for (rel, text) in base {
             write(&dir, rel, text);
         }
