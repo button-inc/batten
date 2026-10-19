@@ -293,7 +293,7 @@ violation contains {
 	"verdict": "tool pin other",
 	"subjects": [{"path": "mise.toml"}],
 } if {
-	some packaged in packages | package_tags
+	some packaged in (packages | package_tags)
 	packaged.version != pin
 }
 
