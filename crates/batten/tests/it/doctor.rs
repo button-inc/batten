@@ -211,6 +211,33 @@ fn doctor_hooks_counts_each_merged_surface_under_the_resolved_home() {
 }
 
 #[test]
+fn the_observed_checkouts_build_is_read_whatever_target_dir_this_process_was_handed() {
+    // THE ESCAPE THE TWO CASES ABOVE CANNOT SEE (CLOUD-2376). Neither sets
+    // `CARGO_TARGET_DIR`, so both read the same file whether the reader consults
+    // that variable or not — a reader that did would answer `Unbuilt` over this
+    // very fixture on every run where the variable is set and green on every run
+    // where it is not, which is a gate that reports on its own harness rather
+    // than on the tree. `doctor` spawns no cargo, so the variable describes
+    // whatever is running batten and says nothing about `dir`. Setting it here
+    // is what makes the two readers disagree, and therefore what makes this case
+    // discriminate at all.
+    let dir = mediator_fixture("mediator-redirected-target", b"same bytes", b"same bytes");
+    let output = batten()
+        .arg("doctor")
+        .arg("mediator")
+        .current_dir(&dir)
+        .env("PATH", dir.join("planted-bin"))
+        .env("CARGO_TARGET_DIR", dir.join("written-elsewhere"))
+        .env_remove("BATTEN_STRICTNESS")
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .env_remove("BATTEN_CONFIG_FROM")
+        .output()
+        .expect("run batten doctor mediator");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), "mediator ok\n");
+}
+
+#[test]
 fn equal_length_binaries_that_differ_are_still_refused() {
     // The length compare is a short-circuit, never the predicate. Two builds of
     // the same source at the same length is the ordinary case for a change to a
