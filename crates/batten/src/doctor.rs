@@ -1221,10 +1221,19 @@ pub fn diagnose_mediator(dir: &Path) -> Mediator {
     let Some(resolved) = crate::rules::on_path_verbatim("batten") else {
         return Mediator::Unresolvable;
     };
-    // Where cargo was told to write, not where it writes by default
-    // (CLOUD-2376): with `CARGO_TARGET_DIR` set, a literal reads a file cargo
-    // never produced and this answers `Unbuilt` over a tree that is built.
-    let built = crate::engine::release_build(dir);
+    //MUTANT-SUITE crates/batten/tests/it/doctor.rs
+    //MUTANT mediator-reads-this-processes-target-dir|s@^    let Some(built) = crate::engine::checkout_build(dir) else {$@    let Some(built) = crate::engine::own_build(dir) else {@|the_observed_checkouts_build_is_read_whatever_target_dir_this_process_was_handed
+    // THE CHECKOUT'S OWN NAMER, NOT THIS PROCESS'S (CLOUD-2376). `dir` is a tree
+    // this verb OBSERVES and never builds — `doctor` spawns no cargo — so
+    // `CARGO_TARGET_DIR` here describes whatever happens to be running batten
+    // rather than where `dir`'s artifact lives. Reading it would answer
+    // `Unbuilt` over a built checkout on every run where the two differ, which
+    // is every run under a redirected target dir — the harness's own test runner
+    // among them. `engine::release_build` names the artifact of the tree THIS
+    // process runs cargo in, which is `perf`'s question and not this one.
+    let Some(built) = crate::engine::checkout_build(dir) else {
+        return Mediator::Unbuilt;
+    };
     let (Ok(left), Ok(right)) = (std::fs::read(&resolved), std::fs::read(&built)) else {
         return Mediator::Unbuilt;
     };
