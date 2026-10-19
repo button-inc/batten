@@ -5988,7 +5988,7 @@ mod tests {
     fn the_history_reads_answer_as_git_does() {
         let (dir, [first, second, third]) = history("history-reads");
         let range = format!("{first}..{third}");
-        assert_eq!(root_commits(&dir).unwrap(), [first.clone()]);
+        assert_eq!(root_commits(&dir).unwrap(), std::slice::from_ref(&first));
         assert_eq!(
             commits_in_range(&dir, &first, &third).unwrap(),
             [third.clone(), second.clone()]
@@ -6440,8 +6440,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(landed.len(), 1);
-        assert_eq!(landed["refs/remotes/origin/main"].unlanded, [third.clone()]);
+        assert_eq!(
+            landed["refs/remotes/origin/main"].unlanded,
+            std::slice::from_ref(&third)
+        );
         assert!(!landed["refs/remotes/origin/main"].is_landed());
+    }
+
+    /// Fails by: the tag, config or index family answering other than git
+    /// over the fixture, or an undeclared key present.
+    #[test]
+    fn the_tag_config_and_index_families_resolve_what_their_rows_name() {
+        let (dir, [first, _, third]) = history("fact-families-tree");
+        let names = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect::<Vec<String>>()
+        };
         let tags = tag_facts(&dir, &names(&["v*"])).unwrap();
         let cut: Vec<(&str, &str, bool)> = tags["v*"]
             .iter()

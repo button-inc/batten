@@ -5919,10 +5919,13 @@ mod tests {
         for part in [&first, &ofs, &refd] {
             pack.extend_from_slice(part);
         }
-        let read = objects_in(&pack).expect("unpack");
-        let bodies: Vec<&[u8]> = read.iter().map(|object| object.body.as_slice()).collect();
+        let unpacked = objects_in(&pack).expect("unpack");
+        let bodies: Vec<&[u8]> = unpacked
+            .iter()
+            .map(|object| object.body.as_slice())
+            .collect();
         assert_eq!(bodies, [&base[..], &want[..], b"hello"]);
-        for object in &read {
+        for object in &unpacked {
             assert_eq!(object.kind, gix::object::Kind::Blob);
             assert_eq!(object.id, id(&object.body).to_string());
         }

@@ -664,10 +664,10 @@ mod tests {
     /// sharing its prefix, or a directory entry's sibling — or missing one it does.
     #[test]
     fn a_shared_entry_covers_its_own_path_or_its_directory() {
-        let shared = vec!["mise.toml".to_owned(), "tests/helpers/".to_owned()];
-        assert!(is_shared("mise.toml", &shared));
+        let shared = vec!["shared.toml".to_owned(), "tests/helpers/".to_owned()];
+        assert!(is_shared("shared.toml", &shared));
         assert!(is_shared("tests/helpers/a.bash", &shared));
-        assert!(!is_shared("mise.toml.bak", &shared));
+        assert!(!is_shared("shared.toml.bak", &shared));
         assert!(!is_shared("tests/helpers-old/a.bash", &shared));
         assert!(!is_shared("tests/a.bats", &shared));
     }
@@ -678,14 +678,14 @@ mod tests {
     fn a_selection_narrows_only_over_suites_and_declared_subjects() {
         let suites = tracked(&["tests/a.bats", "tests/b.bats", "tests/c.bats"]);
         let subjects = BTreeMap::from([("tests/b.bats".to_owned(), tracked(&["mise-tasks/b"]))]);
-        let shared = vec!["mise.toml".to_owned()];
+        let shared = vec!["shared.toml".to_owned()];
         let pick = |changed: &[&str]| select(&tracked(changed), &suites, &subjects, &shared);
         let narrow = pick(&["tests/a.bats", "tests/gone.bats", "mise-tasks/b"]);
         assert_eq!(narrow.widened, None);
         assert_eq!(narrow.suites, vec!["tests/a.bats", "tests/b.bats"]);
         for widening in [
             &[][..],
-            &["mise.toml"],
+            &["shared.toml"],
             &["crates/x.rs"],
             &["mise-tasks/undeclared"],
             &["tests/a.txt"],

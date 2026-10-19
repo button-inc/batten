@@ -2753,7 +2753,7 @@ mod tests {
                 .records
                 .iter()
                 .find_map(|record| match &record.event {
-                    Event::ToolResult { digest, .. } => Some(digest.clone()),
+                    Event::ToolResult { digest, .. } => Some(*digest),
                     _ => None,
                 })
                 .expect("a result")

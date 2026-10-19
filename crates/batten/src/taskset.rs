@@ -411,7 +411,7 @@ mod tests {
         const CAP: usize = 256 * 1024;
         let dir = crate::scratch::scratch("taskset-record");
         crate::gitwrite::init_on_main(&dir).unwrap();
-        let manifest = dir.join("mise.toml");
+        let manifest = dir.join("tasks.toml");
         std::fs::write(&manifest, "[tasks]\nlint = \"cargo clippy\"\n").unwrap();
         let configs = vec![manifest.clone()];
         let small = sized(&configs, 1024);

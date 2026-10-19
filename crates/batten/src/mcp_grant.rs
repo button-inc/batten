@@ -399,10 +399,10 @@ mod tests {
         let inputs = Inputs {
             config: &config,
             repo_root: Path::new("/repo"),
-            settings: Path::new("/repo/.claude/settings.json"),
+            settings: Path::new("/repo/.host/settings.json"),
             wiring: None,
         };
-        assert_eq!(inputs.settings_label(), ".claude/settings.json");
+        assert_eq!(inputs.settings_label(), ".host/settings.json");
     }
 
     /// Fails by: an arm's string rules not read, a non-string rule read as one,

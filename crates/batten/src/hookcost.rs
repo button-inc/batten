@@ -514,7 +514,7 @@ fn follow(
 /// binary must not link a tokenizer, so tokens are the transcript's own
 /// estimate. `routes` maps a class token to its declared command targets — the
 /// registry declares routes per class only.
-//MUTANT segment-key-not-reset|s@^                    keys.clear();$@                    let _ = keys.len();@|a_window_census_reports_distinct_gates_per_segment
+//MUTANT segment-key-not-reset|s@^                keys.clear();$@                let _ = keys.len();@|a_window_census_reports_distinct_gates_per_segment
 //MUTANT deny-follow-misbucketed|s@^            \.nth(1)$@            .nth(0)@|a_deny_is_bucketed_by_the_call_that_follows_it
 #[must_use]
 pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windows {
