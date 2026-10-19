@@ -1915,13 +1915,20 @@ pub(crate) fn captured_in_env(
         published,
         next_run(),
     )?;
-    let code = bundle_code(&outcomes);
     reraise(&outcomes)?;
-    let (out_bytes, err_bytes) = outcomes
-        .into_iter()
-        .next()
-        .map_or_else(Default::default, |first| (first.out_bytes, first.err_bytes));
-    Ok((code, out_bytes, err_bytes))
+    // THE CODE AND THE BYTES COME OFF THE SAME OUTCOME, so the one-command
+    // property above is structural rather than restated. Reducing the code
+    // with `bundle_code` while taking the buffers from the first outcome gave
+    // the impossible empty dispatch two disagreeing answers — `0` and no bytes
+    // — which this caller would read as "the followed engine answered
+    // Success", the exact fail-open the issue exists to close. There is one
+    // answer for it now, and it is not an answer about the repository.
+    let Some(first) = outcomes.into_iter().next() else {
+        return Err(UsageError::raise(
+            "exec: the dispatch returned no outcome, so there is no child's answer to hand back",
+        ));
+    };
+    Ok((first.exit, first.out_bytes, first.err_bytes))
 }
 
 // -- The named lock a child may be held under (CLOUD-1710) -------------------

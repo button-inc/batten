@@ -439,10 +439,10 @@ pub fn own_build(root: &Path) -> Option<PathBuf> {
 /// It reads THIS PROCESS's environment, which the signature does not show, and
 /// that is right only for the tree this process would run cargo in — which is
 /// what `install_source` asks about, its cargo child inheriting the same
-/// value. Asking about ANOTHER tree is [`checkout_build`]'s question, and its
-/// containment rule is where that difference is answered; a caller that
-/// publishes a target directory to a child instead, as `replay`, `perf` and
-/// `mutate` each do for their own spawns, would have to pass it in.
+/// value. Asking about ANOTHER tree is [`checkout_build`]'s question, which it
+/// answers by reading no environment at all; a caller that publishes a target
+/// directory to a child instead, as `replay`, `perf` and `mutate` each do for
+/// their own spawns, would have to pass it in.
 #[must_use]
 pub fn release_build(root: &Path) -> PathBuf {
     let target = std::env::var_os("CARGO_TARGET_DIR")

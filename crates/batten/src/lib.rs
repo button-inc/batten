@@ -1763,9 +1763,11 @@ fn install_source(root: &Path, want: &str, out: &mut dyn Write) -> Result<ExitCo
         // The digest is read first, so a tree naming no source installs nothing.
         let digest = engine::digest(root)?;
         // ONE PLACE NAMES THE ARTIFACT (CLOUD-2376). This read and
-        // `engine::checkout_build`'s lookup are the two ends of the same file,
-        // and they disagreed about `CARGO_TARGET_DIR`: the build landed where
+        // `engine::own_build`'s lookup are the two ends of the same file, and
+        // they disagreed about `CARGO_TARGET_DIR`: the build landed where
         // cargo was told to put it and the follow looked under `target/`.
+        // `checkout_build` is deliberately NOT the other end — it reads no
+        // environment, because its callers ask about somebody else's tree.
         (std::fs::read(engine::release_build(root))?, digest)
     };
     for target in behind {
