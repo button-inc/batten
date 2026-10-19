@@ -6239,16 +6239,13 @@ mod tests {
 
     /// Fails by: a clean entry reported, a flipped executable bit or a file
     /// turned symlink missed, an assume-valid entry compared, or the mode
-    /// counted when `core.filemode` says it does not.
-    #[cfg(unix)]
+    /// counted when `core.filemode` says it does not. Off unix there is no
+    /// executable bit and a symlink may not be creatable, so the expected
+    /// divergence is what the platform could make.
     #[test]
     fn an_entry_diverges_on_content_type_and_mode_alone() {
-        use std::os::unix::fs::PermissionsExt as _;
         let dir = scratch("entry-diverges");
         crate::gitwrite::init_on_main(&dir).expect("init");
-        let mode = |path: &str, bits: u32| {
-            fs::set_permissions(dir.join(path), fs::Permissions::from_mode(bits)).unwrap();
-        };
         let files = [
             ("clean.txt", "clean\n"),
             ("dirty.txt", "dirty\n"),
@@ -6259,7 +6256,6 @@ mod tests {
         for (path, text) in files {
             fs::write(dir.join(path), text).unwrap();
         }
-        mode("run.sh", 0o755);
         let tracked: Vec<String> = files.iter().map(|(path, _)| (*path).to_owned()).collect();
         crate::gitwrite::commit_paths(&dir, &tracked, "m\n").expect("commit");
         // `dirty.txt` is edited under assume-valid, so it is never compared.
@@ -6276,16 +6272,40 @@ mod tests {
         fs::write(dir.join("dirty.txt"), "edited\n").unwrap();
         // `link.txt` becomes a symlink whose target spells the blob it was.
         fs::remove_file(dir.join("link.txt")).unwrap();
-        std::os::unix::fs::symlink("clean.txt", dir.join("link.txt")).unwrap();
-        mode("run.sh", 0o644);
+        let linked = symlink("clean.txt", &dir.join("link.txt"));
+        if !linked {
+            fs::write(dir.join("link.txt"), "clean.txt").unwrap();
+        }
+        // `run.sh` was committed plain; its bit flips on where there is one.
+        crate::engine::make_executable(&dir.join("run.sh")).unwrap();
         let diverged = |dir: &Path| {
             index_facts(dir, &["*".to_owned()]).unwrap()["*"]
                 .diverged
                 .clone()
         };
-        assert_eq!(diverged(&dir), ["link.txt", "run.sh"]);
+        let link: &[&str] = if linked { &["link.txt"] } else { &[] };
+        let moded: &[&str] = if cfg!(unix) { &["run.sh"] } else { &[] };
+        assert_eq!(diverged(&dir), [link, moded].concat());
         set_config_local(&dir, "core.filemode", "false").unwrap();
-        assert_eq!(diverged(&dir), ["link.txt"]);
+        assert_eq!(diverged(&dir), link);
+    }
+
+    /// Make `path` a symlink to `target`, answering whether the platform let it.
+    #[cfg(unix)]
+    fn symlink(target: &str, path: &Path) -> bool {
+        std::os::unix::fs::symlink(target, path).is_ok()
+    }
+
+    /// Windows creates a file symlink only with the privilege to.
+    #[cfg(windows)]
+    fn symlink(target: &str, path: &Path) -> bool {
+        std::os::windows::fs::symlink_file(target, path).is_ok()
+    }
+
+    /// No other platform is asked for one.
+    #[cfg(not(any(unix, windows)))]
+    fn symlink(_target: &str, _path: &Path) -> bool {
+        false
     }
 
     /// Fails by: a repository-level read answering other than the fixture's
