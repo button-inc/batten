@@ -3729,13 +3729,12 @@ fn mutate_gate_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
 /// compared: two directories cannot be ranked, and a root that names none is
 /// refused at load.
 fn task_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
-    let relaunch = |config: &Config| {
+    fn relaunch(config: &Config) -> &[String] {
         config
             .task
             .as_ref()
-            .map(|table| table.relaunch.clone())
-            .unwrap_or_default()
-    };
+            .map_or(&[][..], |table| table.relaunch.as_slice())
+    }
     let floor = |config: &Config| {
         config
             .task
@@ -3744,8 +3743,8 @@ fn task_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     };
     let mut found = removed_entries(
         WeakeningKind::TaskRelaunchRemoved,
-        &relaunch(base),
-        &relaunch(working),
+        relaunch(base),
+        relaunch(working),
         "task.relaunch",
     );
     found.extend(ceiling_raised(
