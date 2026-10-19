@@ -512,7 +512,11 @@ impl Capture {
 }
 
 /// The directory captures live in, under the repository's state root.
-fn captures_dir(repo_root: &Path) -> Result<PathBuf> {
+///
+/// # Errors
+///
+/// When the state root cannot be resolved.
+pub fn captures_dir(repo_root: &Path) -> Result<PathBuf> {
     Ok(state::repo_state_dir(repo_root)?.join("captures"))
 }
 
@@ -2228,21 +2232,7 @@ pub const DEFAULT_RESPONSE_MAX_RECORDS: u64 = 1024;
 ///
 /// Returns an error when the store cannot be read or a record cannot be removed.
 pub fn evict_to_budget(repo_root: &Path, config: Option<&CaptureConfig>) -> Result<usize> {
-    evict_to_budget_keeping(repo_root, config, None)
-}
-
-/// [`evict_to_budget`], never evicting `keep`: the digest the calling call
-/// just stored, which the pointer it prints must still name (CLOUD-2302).
-///
-/// # Errors
-///
-/// As [`evict_to_budget`].
-pub fn evict_to_budget_keeping(
-    repo_root: &Path,
-    config: Option<&CaptureConfig>,
-    keep: Option<&str>,
-) -> Result<usize> {
-    evict_to_budget_in_keeping(&captures_dir(repo_root)?, config, keep)
+    evict_to_budget_in(&captures_dir(repo_root)?, config)
 }
 
 /// [`evict_to_budget`] over a store directory named outright — [`store_in`]'s
@@ -2255,7 +2245,8 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
     evict_to_budget_in_keeping(dir, config, None)
 }
 
-/// [`evict_to_budget_keeping`] over a store directory named outright.
+/// [`evict_to_budget_in`], never evicting `keep`: the digest the calling call
+/// just stored, which the pointer it prints must still name (CLOUD-2302).
 ///
 /// # Errors
 ///

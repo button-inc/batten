@@ -23965,9 +23965,10 @@ fn capture_response(
     // budget refusal. `BUDGET_EXHAUSTED` would send a `doctor` reader to the
     // wrong remedy, which is the whole point of a reason id. The response just
     // stored is kept (CLOUD-2302): this call's pointer names it.
-    if capture::evict_to_budget_keeping(&root, capture_budget().as_ref(), Some(&stored.digest))
-        .is_err()
-    {
+    let evicted = capture::captures_dir(&root).and_then(|dir| {
+        capture::evict_to_budget_in_keeping(&dir, capture_budget().as_ref(), Some(&stored.digest))
+    });
+    if evicted.is_err() {
         note(capture::STORE_UNWRITABLE);
     }
 }
