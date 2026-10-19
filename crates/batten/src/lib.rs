@@ -19049,11 +19049,10 @@ fn run_hook(
     //
     // [`recoverable_without_rules`] carries the argument for which two shapes
     // pass and why every other one still refuses.
-    let handoff = Handoff {
-        raw: &raw,
-        already_handed,
-    };
     let (policy, waivers, pruning) = if adjudicable {
+        // Built in the arm that uses it: the handoff is the config load's input,
+        // and the other arm loads nothing.
+        let handoff = Handoff::new(&raw, already_handed);
         match hook_config_or_floor(overrides, harness, &envelope, handoff, mode, out, err)? {
             Ok(loaded) => loaded,
             Err(code) => return Ok(code),
@@ -19805,6 +19804,20 @@ struct Handoff<'a> {
     /// environment, so no child of this process can inherit a mark about a run
     /// that is not its own.
     already_handed: bool,
+}
+
+impl<'a> Handoff<'a> {
+    /// Both fields in one line at the call site.
+    ///
+    /// `run_hook` sits at its line budget and rustfmt spells the literal over
+    /// four lines, so this is what keeps a two-field value from costing three of
+    /// them. Nothing else about it is interesting.
+    const fn new(raw: &'a str, already_handed: bool) -> Self {
+        Self {
+            raw,
+            already_handed,
+        }
+    }
 }
 
 /// Hand a call this engine cannot judge to the hook authority's own checkout
