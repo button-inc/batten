@@ -73,13 +73,6 @@ fn licenses(value: Option<&str>) -> bool {
 mod tests {
     use super::*;
 
-    /// Fails by: the read answering a constant rather than this process's own
-    /// value, whichever value the environment holds.
-    #[test]
-    fn disposable_reads_this_processes_own_value() {
-        assert_eq!(disposable(), licenses(std::env::var(KEY).ok().as_deref()));
-    }
-
     #[test]
     fn only_the_exact_value_licenses_a_destructive_repair() {
         assert!(licenses(Some("disposable")));

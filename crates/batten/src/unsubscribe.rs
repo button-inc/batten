@@ -108,15 +108,12 @@ pub fn session(host: &Host) -> Option<String> {
     safe_id(&std::env::var(&host.session_env).ok()?)
 }
 
-/// `value` as a session id, or `None` where it is not one path component.
+/// `value` as a session id, or `None` where it is not one path component —
+/// [`crate::record::safe_component`]'s reading, and no inner whitespace.
 fn safe_id(value: &str) -> Option<String> {
-    let value = value.trim();
-    let unsafe_id = value.is_empty()
-        || value == "."
-        || value == ".."
-        || value.contains(['/', '\\', '\0'])
-        || value.chars().any(char::is_whitespace);
-    (!unsafe_id).then(|| value.to_owned())
+    crate::record::safe_component("session id", value)
+        .ok()
+        .filter(|id| !id.chars().any(char::is_whitespace))
 }
 
 /// Where this session's receipt for `pr` lives.

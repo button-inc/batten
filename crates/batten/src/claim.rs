@@ -1247,7 +1247,7 @@ mod tests {
     #[test]
     fn a_baseline_that_cannot_be_looked_at_is_not_an_absent_one() {
         let store = scratch("baseline");
-        let receipt = store.join("issue-read.CLOUD-1");
+        let receipt = store.join(format!("{READ_RECEIPT_PREFIX}CLOUD-1"));
         assert_eq!(read_baseline(&receipt, &store).unwrap(), None);
         std::fs::write(&receipt, "a b c digest\n").unwrap();
         assert_eq!(
@@ -1298,9 +1298,13 @@ mod tests {
     #[test]
     fn adoption_moves_exactly_the_named_orphan_onto_this_branch() {
         let receipts = scratch("adopt");
-        std::fs::write(receipts.join("claim.old"), "CLOUD-1\nbranch old\n").unwrap();
-        std::fs::write(receipts.join("claim.older"), "CLOUD-2\nbranch older\n").unwrap();
-        std::fs::write(receipts.join("claim.blank"), "CLOUD-3\nbranch \n").unwrap();
+        std::fs::write(receipts.join(receipt_name("old")), "CLOUD-1\nbranch old\n").unwrap();
+        std::fs::write(
+            receipts.join(receipt_name("older")),
+            "CLOUD-2\nbranch older\n",
+        )
+        .unwrap();
+        std::fs::write(receipts.join(receipt_name("blank")), "CLOUD-3\nbranch \n").unwrap();
         std::fs::write(receipts.join("notes.txt"), "branch stray\n").unwrap();
         std::fs::create_dir_all(receipts.join("claim.dir")).unwrap();
         let orphan = adopt(&receipts, "new", Some("old"), &|_| false).unwrap();
@@ -1309,7 +1313,7 @@ mod tests {
             std::fs::read_to_string(receipts.join(receipt_name("new"))).unwrap(),
             "CLOUD-1\nbranch new\nadopted-from old\n"
         );
-        assert!(!receipts.join("claim.old").exists());
+        assert!(!receipts.join(receipt_name("old")).exists());
     }
 
     #[test]

@@ -516,8 +516,18 @@ impl Grammar {
 
 /// The committed `[[pattern]]` rows, read the way [`Grammar::committed`] reads
 /// them — for a test whose gate reads rows beyond the grammar's own.
+///
+/// Read once per test process: the committed file cannot change during a run,
+/// and every grammar a case builds would otherwise re-read and re-parse it.
 #[cfg(test)]
 pub(crate) fn committed_patterns() -> Vec<crate::pattern::NamedPattern> {
+    static ROWS: std::sync::LazyLock<Vec<crate::pattern::NamedPattern>> =
+        std::sync::LazyLock::new(read_committed_patterns);
+    ROWS.clone()
+}
+
+#[cfg(test)]
+fn read_committed_patterns() -> Vec<crate::pattern::NamedPattern> {
     let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../batten.toml"))
         .unwrap_or_default();
     match crate::facts::Format::Toml.read(&text) {
@@ -1969,7 +1979,7 @@ mod issue_key_tests {
     /// The consumer's own key, spelled from parts so this file carries no
     /// derivation of the token — `no-tracker-key-in-core` refuses one anywhere
     /// under `crates/**`, and a test is not exempt from the rule it is testing.
-    fn key(n: u32) -> String {
+    pub(super) fn key(n: u32) -> String {
         format!("{}-{n}", "CL".to_owned() + "OUD")
     }
 
@@ -2076,10 +2086,7 @@ mod lint_tests {
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
-    /// The consumer's key, spelled from parts for `issue_key_tests`' reason.
-    fn key(n: u32) -> String {
-        format!("{}-{n}", "CL".to_owned() + "OUD")
-    }
+    use super::issue_key_tests::key;
 
     /// A tree whose workspace version is `version`, which is all §6 reads of it.
     fn versioned(name: &str, version: &str) -> PathBuf {
@@ -2551,10 +2558,6 @@ mod lint_tests {
         let derived = |root: &Path, commit_type: &str| {
             let report = claimed(&grammar, root, |o| {
                 o.insert("commit_type".into(), json!(commit_type));
-                o.insert(
-                    "tests".into(),
-                    json!([{"file": "a.rs", "mutation": "slug"}]),
-                );
             });
             (rules(&report), emitted(&report, "bump").map(str::to_owned))
         };

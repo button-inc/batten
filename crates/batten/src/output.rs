@@ -364,7 +364,7 @@ where
     let mut out = Vec::new();
     for raw in argv {
         let token = raw.as_ref().to_string_lossy().into_owned();
-        let clustered = token.bytes().nth(2).is_some()
+        let clustered = token.len() > 2
             && token.starts_with('-')
             && !token.starts_with("--")
             && token

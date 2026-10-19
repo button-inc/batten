@@ -476,7 +476,9 @@ pub fn live(waivers: &[Waiver], today: Date) -> Live {
     {
         live.entry(waiver.rule.clone())
             .and_modify(|expires| {
-                *expires = std::mem::take(expires).max(waiver.expires.clone());
+                if waiver.expires > *expires {
+                    expires.clone_from(&waiver.expires);
+                }
             })
             .or_insert_with(|| waiver.expires.clone());
     }

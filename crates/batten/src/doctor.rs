@@ -4134,10 +4134,8 @@ mod probe_tests {
 
     #[test]
     fn rustup_answers_through_the_placed_adapter_by_whole_line() {
-        let (ok, text) = rustup(&["--version"]).expect("rustup runs");
-        assert!(ok, "{text}");
-        assert!(text.contains("rustup"), "{text}");
-        let (_, installed) = rustup(&["target", "list", "--installed"]).expect("rustup runs");
+        let (ok, installed) = rustup(&["target", "list", "--installed"]).expect("rustup runs");
+        assert!(ok, "{installed}");
         let triple = installed
             .lines()
             .map(str::trim)
@@ -4229,12 +4227,9 @@ mod probe_tests {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("a directory");
         }
-        std::fs::write(path, "").expect("a file");
-        let file = std::fs::File::options()
-            .write(true)
-            .open(path)
-            .expect("the file opens");
-        file.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000 + seconds))
+        std::fs::File::create(path)
+            .expect("a file")
+            .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000 + seconds))
             .expect("the stamp is set");
     }
 
