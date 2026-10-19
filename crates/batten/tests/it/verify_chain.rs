@@ -184,7 +184,16 @@ fn every_step_is_argv() {
     }
 }
 
-/// CLOUD-2311: every task that resolves the hk package fetches it as a step.
+/// CLOUD-2311: the three tasks that run a pkl VALIDATOR fetch the package first.
+///
+/// NOT every task that resolves the package, and the narrower claim is the
+/// honest one. `fmt` (`hk fix --all`), `fix`'s last step and `ci:quick` invoke
+/// hk directly with no fetch ahead of them, and hk loads `hk.pkl` — the same
+/// package — before any step runs. That is the hk-config-load exposure
+/// CLOUD-2311 disclaims and records on the issue: a cold cache there fails as hk
+/// failing to start, which reads as what it is. What this orders away is the
+/// narrower defect of a cold cache reaching a VALIDATOR, where it is recorded as
+/// a verdict about the bytes under judgement.
 ///
 /// Two of the three callers run `record validate config-validator` — hk's `pkl`
 /// step, reached through `hooks`, and `record-verdicts` — and for those the

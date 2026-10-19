@@ -53,6 +53,14 @@
 #MUTANT hk-package-merge-narrows-arm-e|s@^\tcount(packages) == 0$@\tcount(union({packages, package_tags})) == 0@|a_package_fragment_floating_over_an_agreeing_tag_is_refused
 #MUTANT hk-amends-tag-disagreement-passes|s@^\ttagged.version != pin$@\tfalse@|an_amends_tag_segment_naming_another_version_is_refused
 #
+# THE OTHER DIRECTION, because arm E is the one arm whose refusal rests on a
+# count being ZERO: everything above fires on something it read, so a weakened
+# guard there goes quiet, while a weakened guard here goes LOUD. Dropping arm
+# E's step guard admits a task that yields no step at all, and the arm then
+# accuses a manifest declaring no fetch URL. Its case asserts clean, so the
+# mutation reddens by a refusal appearing rather than disappearing.
+#MUTANT hk-package-stepless-run-fires|s@^\tcount(package_steps) > 0$@\ttrue@|a_package_task_with_an_empty_run_is_clean
+#
 #MUTANT-SUITE crates/batten/tests/it/tracked_absent.rs
 
 # METADATA
@@ -299,6 +307,16 @@ violation contains {
 # `package_run` FIRST, positively: absence of the task is the structural suite's
 # to refuse, never this module's, so the arm stays undefined without it and
 # fires only over a task that was read.
+#
+# AND AT LEAST ONE STEP, because `package_run` binding is not the same as the
+# task naming anything. `is_array` admits EVERY array while `package_steps`
+# drops entries that are not strings, so `run = []` — or `run = [123]` — left
+# `package_run` defined and `packages` empty, and this arm reported a pin
+# disagreement against a manifest that declares no fetch URL at all. That is the
+# shape-dependent firing the type guard two screens up says it prevents, one
+# step further down than the guard reached. A task yielding no step is read the
+# way an absent one is: D and E undefined together. A `run` mise cannot execute
+# stays a manifest defect, and still not this module's to report.
 violation contains {
 	"rule": "tool pin other",
 	"verdict": "tool pin other",
@@ -306,6 +324,7 @@ violation contains {
 } if {
 	pin
 	package_run
+	count(package_steps) > 0
 	count(packages) == 0
 }
 
@@ -538,6 +557,20 @@ test_a_manifest_without_the_package_task_decides_nothing_here if {
 	count(violation) == 0 with input as tree_with_tasks(
 		{"hk": "1.56.1"},
 		{"hooks": {"run": "hk check --all"}},
+		[amends_line("1.56.1")],
+	)
+		with data.batten.patterns as pattern
+}
+
+# A `pkl-package` whose `run` yields no step: `package_run` binds (an array is
+# one of the two shapes read) and `packages` is empty, so without arm E's step
+# guard this manifest is accused of a pin disagreement it cannot have — there is
+# no fetch URL in it to disagree. `#MUTANT hk-package-stepless-run-fires` is
+# that guard removed, and its Rust twin is what reddens.
+test_a_package_task_yielding_no_step_decides_nothing_here if {
+	count(violation) == 0 with input as tree_with_tasks(
+		{"hk": "1.56.1"},
+		{"pkl-package": {"run": []}},
 		[amends_line("1.56.1")],
 	)
 		with data.batten.patterns as pattern

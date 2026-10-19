@@ -334,6 +334,22 @@ fn a_package_task_naming_no_version_is_refused() {
     denied(&root, "tool pin other", "mise.toml");
 }
 
+/// `#MUTANT hk-package-stepless-run-fires` reddens here, and it is the only
+/// mutation on this module that reddens by a refusal APPEARING.
+///
+/// An empty `run` array binds `package_run` — `is_array` admits it — while
+/// `package_steps` yields nothing, so `packages` is empty for a manifest that
+/// names no fetch URL at all. Arm E without its step guard reports a pin
+/// disagreement here, against a tree that has nothing to disagree with. An
+/// unrunnable `run` is a manifest defect, and the module that answers agreement
+/// is not the one to say so.
+#[test]
+fn a_package_task_with_an_empty_run_is_clean() {
+    let manifest = "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = []\n";
+    let root = fixture("hk-package-stepless", &[("mise.toml", manifest)], &[]);
+    clean(&root);
+}
+
 /// `#MUTANT hk-amends-tag-disagreement-passes` reddens here.
 ///
 /// The other half of `hk.pkl`'s own URL (CLOUD-2311): it names the version in
