@@ -1811,6 +1811,33 @@ mod ready_cites {
     }
 
     #[test]
+    fn a_shallow_clone_names_its_prospective_paths_as_unchecked() {
+        let (source, config) = synthetic("shallow-source");
+        common::write(&source, "tests/second.txt", "a second commit\n");
+        common::git_in(&source, &["add", "-A"]);
+        common::git_in(&source, &["commit", "-q", "-m", "second"]);
+        let parent = common::scratch("board-check-cites-shallow");
+        let url = format!("file://{}", source.display());
+        common::git_in(&parent, &["clone", "-q", "--depth", "1", &url, "clone"]);
+        let clone = parent.join("clone");
+        assert_eq!(
+            common::git_in(&clone, &["rev-parse", "--is-shallow-repository"]),
+            "true"
+        );
+        let output = cites(
+            &clone,
+            &config,
+            &block7("Cases live in `tests/layer-check.bats` (new)."),
+        );
+        assert_eq!(code(&output), 0, "{}", text(&output));
+        assert!(
+            text(&output).contains("1 prospective path(s) above, and this clone is SHALLOW"),
+            "{}",
+            text(&output)
+        );
+    }
+
+    #[test]
     fn an_unmarked_absent_test_symbol_is_still_refused() {
         let (dir, config) = synthetic("unmarked-test");
         let output = cites(
