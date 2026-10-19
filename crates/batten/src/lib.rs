@@ -29282,9 +29282,15 @@ mod tests {
             mcp_settings(Path::new("repo"), Some("elsewhere.json")),
             PathBuf::from("elsewhere.json")
         );
+        // The committed file is the harness table's, never spelled here (rule 1).
+        let committed = hook::Harness::ClaudeCode
+            .wiring()
+            .expect("claude-code is wired")
+            .file
+            .path();
         assert_eq!(
             mcp_settings(Path::new("repo"), None),
-            Path::new("repo").join(".claude/settings.json")
+            Path::new("repo").join(committed)
         );
     }
 
