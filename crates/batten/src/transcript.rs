@@ -2491,7 +2491,8 @@ mod tests {
 
     /// Fails by: the tally's entry not written once a whole line is folded,
     /// written for a file with none, served for a shorter file with the same
-    /// first line, or served for a different file at the same path.
+    /// first line, or — on unix, where the entry's key names the inode —
+    /// served for a different file at the same path.
     #[test]
     fn the_tally_entry_follows_the_file_it_covers() {
         let dir = crate::scratch::scratch("transcript-entry");

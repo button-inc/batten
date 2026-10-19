@@ -6280,7 +6280,6 @@ mod tests {
         fs::remove_file(dir.join("link.txt")).unwrap();
         // Off unix this is git's `core.symlinks=false` file, the same bytes.
         crate::gitwrite::link("clean.txt", &dir.join("link.txt")).unwrap();
-        let linked = cfg!(unix);
         // `run.sh` was committed plain; its bit flips on where there is one.
         crate::engine::make_executable(&dir.join("run.sh")).unwrap();
         let diverged = |dir: &Path| {
@@ -6288,9 +6287,13 @@ mod tests {
                 .diverged
                 .clone()
         };
-        let link: &[&str] = if linked { &["link.txt"] } else { &[] };
-        let moded: &[&str] = if cfg!(unix) { &["run.sh"] } else { &[] };
-        assert_eq!(diverged(&dir), [link, moded].concat());
+        // Off unix neither a symlink nor an executable bit exists to diverge.
+        let (both, link): (&[&str], &[&str]) = if cfg!(unix) {
+            (&["link.txt", "run.sh"], &["link.txt"])
+        } else {
+            (&[], &[])
+        };
+        assert_eq!(diverged(&dir), both);
         set_config_local(&dir, "core.filemode", "false").unwrap();
         assert_eq!(diverged(&dir), link);
     }
