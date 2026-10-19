@@ -96,6 +96,12 @@ fn pin_source(dir: &Path, digest: &str) {
 /// child decided nothing, so nothing it said may reach the harness's stdout.
 const MARKER: &str = "the-crashing-build-spoke";
 
+/// What a build that DOES decide says on each stream. Asserted PRESENT, which
+/// is the half `MARKER` cannot pin: see
+/// [`a_followed_builds_decision_reaches_the_harness_whole`].
+const DECIDED: &str = "the-followed-build-decided";
+const EXPLAINED: &str = "the-followed-build-explained";
+
 /// What `batten.toml` asks for. Deliberately NOT [`built`] — the pin is stale
 /// by construction, and that is the whole reason a follow happens at all. Make
 /// the two equal and every case here passes over a tree nothing was followed
@@ -407,6 +413,103 @@ fn a_followed_exec_still_passes_its_childs_code_and_bytes_through() {
     assert!(
         common::stdout(&output).contains('x'),
         "and its bytes do too: {}",
+        text(&output)
+    );
+}
+
+/// A FOLLOWED BUILD'S DECISION REACHES THE HARNESS WHOLE (CLOUD-2376).
+///
+/// The crash cases above pin the REFUSING half — a code outside the §7 table
+/// decides nothing and none of its bytes escape. They cannot pin the admitting
+/// half, because a child that answered `Success` and a child that crashed both
+/// leave the hook allowing with nothing on stdout a harness reads. Measured:
+/// nineteen mutations replacing `exec::captured_in_env` wholesale with a
+/// constant `(code, stdout, stderr)` survived the entire suite, including the
+/// ones that drop the child's bytes on the floor.
+///
+/// So this case asserts the code AND both streams, and the code is `2`: the one
+/// §7 value a fall-through cannot reach here, since the fixture's config loads
+/// and a hook that judged for itself would allow. A constant in that function's
+/// place now disagrees with this case whatever constant it is.
+#[test]
+fn a_followed_builds_decision_reaches_the_harness_whole() {
+    let (dir, _installed, binary) = case_tree("hook-answer");
+    pin_source(&dir, &pinned());
+    stub_build(
+        &dir.join("target").join("release"),
+        &built(),
+        &format!("#!/bin/sh\necho \"{DECIDED}\"\necho \"{EXPLAINED}\" >&2\nexit 2\n"),
+    );
+
+    let output = run(
+        &binary,
+        &dir,
+        &ADJUDICATE,
+        &bash_envelope("hook-answer", "echo hi"),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the followed build's own code is the hook's: {}",
+        text(&output)
+    );
+    assert!(
+        common::stdout(&output).contains(DECIDED),
+        "and its stdout reaches the harness: {}",
+        text(&output)
+    );
+    assert!(
+        common::stderr(&output).contains(EXPLAINED),
+        "and so does its stderr: {}",
+        text(&output)
+    );
+}
+
+/// A RELEASE PIN THIS BINARY CANNOT FETCH IS A REFUSAL, NOT A SHRUG
+/// (CLOUD-2376).
+///
+/// Only the hook path falls through to the refusal floor on a failed fetch
+/// (CLOUD-2116), because the floor still decides the call and admits the one
+/// repair verb. Every other verb must report: running anyway decides under the
+/// very engine the pin refuses, which is what `follow_pin`'s own doc says the
+/// fetch is not best-effort for.
+///
+/// Nothing tested that guard, and the reason was in the production code rather
+/// than in the suite: `follow_pin` spelled the release repository as a baked
+/// literal, so no fixture could point the fetch anywhere and no case could make
+/// one fail. Mutating `!may_build` to `true` therefore survived. It reads
+/// `releases_repository()` now, like every other fetch in the binary, and
+/// `localhost:1` is this suite's established unreachable host — no network is
+/// touched either way.
+#[test]
+fn a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path() {
+    let (dir, _installed, binary) = case_tree("unreachable-release");
+    common::write(
+        &dir,
+        "batten.toml",
+        "version = 1\nengine = { release = \"v9.9.9\" }\n",
+    );
+
+    let output = run_from(
+        &binary,
+        &dir,
+        &dir,
+        &["config", "show"],
+        "",
+        &[(
+            "BATTEN_RELEASES",
+            Path::new("https://localhost:1/example/pkg"),
+        )],
+    );
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a pin that cannot be fetched is reported, never run past: {}",
+        text(&output)
+    );
+    assert!(
+        !common::stdout(&output).contains("version"),
+        "and the verb it would have run writes nothing: {}",
         text(&output)
     );
 }
