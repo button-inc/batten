@@ -1442,7 +1442,7 @@ fn materialise(
 
 /// Create a symbolic link, or the closest thing the platform has.
 #[cfg(unix)]
-fn link(destination: &str, target: &Path) -> std::io::Result<()> {
+pub(crate) fn link(destination: &str, target: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(destination, target)
 }
 
@@ -1451,7 +1451,7 @@ fn link(destination: &str, target: &Path) -> std::io::Result<()> {
 /// Not `std::os::windows::fs::symlink_file`, which needs a privilege an ordinary
 /// account does not hold, so it would fail rather than degrade.
 #[cfg(not(unix))]
-fn link(destination: &str, target: &Path) -> std::io::Result<()> {
+pub(crate) fn link(destination: &str, target: &Path) -> std::io::Result<()> {
     crate::durable::replace(target, destination)
 }
 

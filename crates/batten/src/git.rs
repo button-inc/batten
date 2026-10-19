@@ -637,6 +637,10 @@ pub fn remotes(dir: &Path) -> Result<Vec<(String, String)>> {
     let mut found: Vec<(String, String)> = Vec::new();
     for name in repo.remote_names() {
         let name = name.to_string();
+        // A `[remote ""]` section is listed by gix and names nothing.
+        if name.is_empty() {
+            continue;
+        }
         // The FETCH url, exactly once per remote — which is what
         // `config --get-regexp remote.*.url` named and what `git remote -v`
         // would have printed twice in a format needing re-parsing.
@@ -646,11 +650,8 @@ pub fn remotes(dir: &Path) -> Result<Vec<(String, String)>> {
         let Some(url) = remote.url(gix::remote::Direction::Fetch) else {
             continue;
         };
-        // A `[remote ""]` section is listed by gix and names nothing. A blank
-        // url never reaches here: gix refuses it at `find_remote` above.
-        if !name.is_empty() {
-            found.push((name, url.to_bstring().to_string()));
-        }
+        // A blank url never reaches here: gix refuses it at `find_remote` above.
+        found.push((name, url.to_bstring().to_string()));
     }
     // `read`-order from git config is file order; a recorded value that a gate
     // compares must not depend on it.
@@ -5922,6 +5923,11 @@ mod tests {
         assert_eq!(iso_utc(951_782_400 + 3_661), "2000-02-29T01:01:01Z");
     }
 
+    /// `items` as the owned declarations a fact family is asked for.
+    fn names(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| (*item).to_owned()).collect()
+    }
+
     /// Point `name` at `target` through gix directly: `gitwrite::set_ref`
     /// cannot write the reflog in a fixture with no committer identity.
     fn fixture_ref(dir: &Path, name: &str, target: &str) {
@@ -6240,8 +6246,8 @@ mod tests {
     /// Fails by: a clean entry reported, a flipped executable bit or a file
     /// turned symlink missed, an assume-valid entry compared, or the mode
     /// counted when `core.filemode` says it does not. Off unix there is no
-    /// executable bit and a symlink may not be creatable, so the expected
-    /// divergence is what the platform could make.
+    /// executable bit and no symlink, so the expected divergence is what the
+    /// platform can make.
     #[test]
     fn an_entry_diverges_on_content_type_and_mode_alone() {
         let dir = scratch("entry-diverges");
@@ -6272,10 +6278,9 @@ mod tests {
         fs::write(dir.join("dirty.txt"), "edited\n").unwrap();
         // `link.txt` becomes a symlink whose target spells the blob it was.
         fs::remove_file(dir.join("link.txt")).unwrap();
-        let linked = symlink("clean.txt", &dir.join("link.txt"));
-        if !linked {
-            fs::write(dir.join("link.txt"), "clean.txt").unwrap();
-        }
+        // Off unix this is git's `core.symlinks=false` file, the same bytes.
+        crate::gitwrite::link("clean.txt", &dir.join("link.txt")).unwrap();
+        let linked = cfg!(unix);
         // `run.sh` was committed plain; its bit flips on where there is one.
         crate::engine::make_executable(&dir.join("run.sh")).unwrap();
         let diverged = |dir: &Path| {
@@ -6288,24 +6293,6 @@ mod tests {
         assert_eq!(diverged(&dir), [link, moded].concat());
         set_config_local(&dir, "core.filemode", "false").unwrap();
         assert_eq!(diverged(&dir), link);
-    }
-
-    /// Make `path` a symlink to `target`, answering whether the platform let it.
-    #[cfg(unix)]
-    fn symlink(target: &str, path: &Path) -> bool {
-        std::os::unix::fs::symlink(target, path).is_ok()
-    }
-
-    /// Windows creates a file symlink only with the privilege to.
-    #[cfg(windows)]
-    fn symlink(target: &str, path: &Path) -> bool {
-        std::os::windows::fs::symlink_file(target, path).is_ok()
-    }
-
-    /// No other platform is asked for one.
-    #[cfg(not(any(unix, windows)))]
-    fn symlink(_target: &str, _path: &Path) -> bool {
-        false
     }
 
     /// Fails by: a repository-level read answering other than the fixture's
@@ -6372,12 +6359,6 @@ mod tests {
     #[test]
     fn each_declared_fact_family_resolves_what_its_rows_name() {
         let (dir, [first, second, third]) = history("fact-families");
-        let names = |items: &[&str]| {
-            items
-                .iter()
-                .map(|item| (*item).to_owned())
-                .collect::<Vec<String>>()
-        };
         assert_eq!(
             ref_facts(&dir, &names(&["HEAD", "refs/tags/v1", "refs/tags/nope"])).unwrap(),
             BTreeMap::from([
@@ -6472,12 +6453,6 @@ mod tests {
     #[test]
     fn the_tag_config_and_index_families_resolve_what_their_rows_name() {
         let (dir, [first, _, third]) = history("fact-families-tree");
-        let names = |items: &[&str]| {
-            items
-                .iter()
-                .map(|item| (*item).to_owned())
-                .collect::<Vec<String>>()
-        };
         let tags = tag_facts(&dir, &names(&["v*"])).unwrap();
         let cut: Vec<(&str, &str, bool)> = tags["v*"]
             .iter()

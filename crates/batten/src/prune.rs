@@ -1343,7 +1343,7 @@ mod tests {
     /// Fails by: a volume that cannot be read answering a reading anyway.
     #[test]
     fn free_space_under_no_volume_is_an_error() {
-        let absent = build_root("no-volume").join("never-made");
+        let absent = std::env::temp_dir().join("batten-prune-no-volume-never-made");
         assert!(available_megabytes(&absent).is_err());
     }
 
