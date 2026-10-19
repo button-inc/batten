@@ -18841,6 +18841,56 @@ deny contains "refused by themodule" if {
         assert!(matched_ids(&ceiling_policy(vec![conditioned]), &in_session).is_empty());
     }
 
+    /// On the command walk, a receipt row that does not block, or that is
+    /// triggered by a write, is not matched by its command; and the program's
+    /// own name is never one of its operands.
+    ///
+    /// Fails by: the trigger or blocking test conjoined with the next one,
+    /// or the operand words starting at the program.
+    #[test]
+    fn the_command_walk_matches_only_a_blocking_command_triggered_row() {
+        let warned = Rule {
+            severity: Some(RuleSeverity::Warn),
+            ..ready_receipt_row()
+        };
+        assert!(matched_ids(&ceiling_policy(vec![warned]), &envelope("gh pr ready")).is_empty());
+        let write_triggered = Rule {
+            trigger: Some(ReceiptTrigger::Write),
+            ..ready_receipt_row()
+        };
+        assert!(
+            matched_ids(
+                &ceiling_policy(vec![write_triggered]),
+                &envelope("gh pr ready")
+            )
+            .is_empty()
+        );
+        let echoing = Rule {
+            pattern: Some(String::from("echo echo")),
+            ..ready_receipt_row()
+        };
+        assert!(matched_ids(&ceiling_policy(vec![echoing]), &envelope("echo hi")).is_empty());
+    }
+
+    /// A row conditioned on a field's value is admitted only at that value.
+    ///
+    /// Fails by: inverting the value comparison.
+    #[test]
+    fn a_when_value_row_is_admitted_only_at_its_value() {
+        let row = Rule {
+            when_present: Some(Field::SessionId),
+            when_value: Some(String::from("s1")),
+            ..shape("r", "git push", None)
+        };
+        let at = |session: &str| {
+            let mut call = envelope("git push");
+            call.session = Some(session.to_owned());
+            modifier_admits(&row, &call)
+        };
+        assert!(at("s1"));
+        assert!(!at("s2"));
+    }
+
     /// A receipt row's `contains` narrows its command match.
     ///
     /// Fails by: inverting the literal test.
