@@ -4100,8 +4100,8 @@ fn mcp_settings(repo: &Path, given: Option<&str>) -> PathBuf {
     if let Some(given) = given {
         return PathBuf::from(given);
     }
-    match hook::Harness::ClaudeCode.wiring().map(|wiring| wiring.file) {
-        Some(hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path)) => repo.join(path),
+    match hook::Harness::ClaudeCode.wiring() {
+        Some(wiring) => repo.join(wiring.file.path()),
         None => repo.to_path_buf(),
     }
 }
@@ -28954,6 +28954,13 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
         // register with". `UsageError` is exit 1 — the caller named something
         // that cannot be asked for, which is a statement about the invocation.
         GenerateCommand::Hooks { harness } => {
+            // A host whose adapter is code rather than a registration gets the
+            // code (CLOUD-1942). The caller writes it to the path named in its
+            // header, exactly as it redirects every other generated artifact.
+            if let Some(plugin) = harness.plugin() {
+                writeln!(out, "{}", (plugin.render)())?;
+                return Ok(ExitCode::Success);
+            }
             let wiring = harness.wiring().ok_or_else(|| {
                 UsageError::raise(format!(
                     "generate hooks: {} is the neutral contract, not a host — it has no \
@@ -29266,6 +29273,26 @@ pub fn land_ready_owes(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// `mcp grant` and `mcp posture` judge the operand where one was given, and
+    /// otherwise the committed settings file the MCP permission grammar lives in.
+    #[test]
+    fn mcp_settings_is_the_operand_or_the_committed_claude_settings() {
+        assert_eq!(
+            mcp_settings(Path::new("repo"), Some("elsewhere.json")),
+            PathBuf::from("elsewhere.json")
+        );
+        // The committed file is the harness table's, never spelled here (rule 1).
+        let committed = hook::Harness::ClaudeCode
+            .wiring()
+            .expect("claude-code is wired")
+            .file
+            .path();
+        assert_eq!(
+            mcp_settings(Path::new("repo"), None),
+            Path::new("repo").join(committed)
+        );
+    }
 
     /// CLOUD-2372: the next landing's reap, not a reader, forgets a dead
     /// registrant. A pid past every platform's `pid_max` is dead wherever a

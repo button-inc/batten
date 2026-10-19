@@ -2119,9 +2119,7 @@ const FILE_UNREADABLE: &str = "hook-wiring-file-unreadable";
 )]
 fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Option<HarnessWiring> {
     let wiring = harness.wiring()?;
-    let path = match wiring.file {
-        hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
-    };
+    let path = wiring.file.path();
     let derived = wiring.registrations(harness);
     let command = hook::wiring_command(harness);
     let mut findings = Vec::new();
@@ -3387,13 +3385,11 @@ mod tests {
     /// lives. And a fixture that hardcoded the path would keep passing if
     /// `Harness::wiring` moved, testing a file the binary no longer reads.
     fn surface_of(harness: hook::Harness) -> &'static str {
-        match harness
+        harness
             .wiring()
             .expect("the harness declares a surface")
             .file
-        {
-            hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
-        }
+            .path()
     }
 
     /// Write `wiring` where Claude Code's surface lives, and diagnose that row.

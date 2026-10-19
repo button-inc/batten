@@ -101,6 +101,23 @@ pub enum Harness {
     /// its own repo says so. No payload shim is needed; the adapter exists so
     /// the host is nameable and its fixture is pinned against drift.
     CodexCli,
+    /// Factory Droid. Claude Code's wire shape — the same event names, the same
+    /// `hookSpecificOutput.permissionDecision` verdict object — over a different
+    /// tool vocabulary (`Create`/`Edit`/`ApplyPatch` write, `Execute` runs a
+    /// shell) and its own hooks-only project file. Fetched 2026-10-03 from
+    /// `docs.factory.com/reference/hooks-reference` (CLOUD-1942).
+    Factory,
+    /// `OpenCode`. No stdin/stdout hook contract at all: its plugin API's
+    /// `tool.execute.before(input, output)` blocks by THROWING. So the adapter is
+    /// a plugin Batten generates (`batten generate hooks --harness opencode`),
+    /// which hands the engine a Claude-shaped envelope and throws the reason on
+    /// exit 2. Fetched 2026-10-03 from `opencode.ai/docs/plugins/` (CLOUD-1942).
+    ///
+    /// The token is one word because the product is: the derive would spell it
+    /// `open-code`, a name the host never uses.
+    #[value(name = "opencode")]
+    #[serde(rename = "opencode")]
+    OpenCode,
     /// The neutral core contract: envelope in, decision as exit code out —
     /// `0` allow, `2` deny (reason on stderr), for any host whose only decision
     /// channel is an exit status. Both codes are the §7 table's, unmodified.
@@ -117,6 +134,8 @@ impl Harness {
         Harness::CopilotCli,
         Harness::GeminiCli,
         Harness::CodexCli,
+        Harness::Factory,
+        Harness::OpenCode,
         Harness::ExitCode,
     ];
 
@@ -133,6 +152,8 @@ impl Harness {
             Harness::CopilotCli => "copilot-cli",
             Harness::GeminiCli => "gemini-cli",
             Harness::CodexCli => "codex-cli",
+            Harness::Factory => "factory",
+            Harness::OpenCode => "opencode",
             Harness::ExitCode => "exit-code",
         }
     }
@@ -190,6 +211,17 @@ impl Harness {
                 // and the two are different fetches.
                 project_dir_var: None,
             }),
+            // A hooks-only project file whose root IS the hooks object: the
+            // vendor reference names `.factory/hooks.json` for the project scope
+            // and says hooks "live directly at the root" of a standalone
+            // `hooks.json`. Claude's event names, so the spellings are shared;
+            // and unlike Codex, the variable IS fetched — the same page names
+            // `$FACTORY_PROJECT_DIR` for referencing project scripts.
+            Harness::Factory => Some(Wiring {
+                file: WiringFile::Root(".factory/hooks.json"),
+                spellings: CLAUDE_SPELLINGS,
+                project_dir_var: Some("FACTORY_PROJECT_DIR"),
+            }),
             // Registered in the PascalCase dialect deliberately: M1 records that
             // the camelCase one omits `hook_event_name` entirely, and the casing
             // of the config key is what selects the dialect. So this row is not
@@ -229,11 +261,16 @@ impl Harness {
                 ],
                 project_dir_var: None,
             }),
+            // A host, but not a JSON registration surface: OpenCode loads code,
+            // not config. Its adapter is the plugin [`Harness::plugin`] names, and
+            // reporting a hooks file here would send `doctor hooks` and the
+            // wiring rule to read events from a JavaScript module.
+            //
             // Not a host. `exit-code` is the neutral contract — envelope in,
             // decision as exit status out — for any host whose only channel is
             // an exit code. There is no file to register in, and inventing one
             // would be claiming something about a host nobody named.
-            Harness::ExitCode => None,
+            Harness::OpenCode | Harness::ExitCode => None,
         }
     }
 
@@ -278,6 +315,16 @@ impl Harness {
             Harness::GeminiCli => &["WriteFile", "Edit", "Write", "MultiEdit", "NotebookEdit"],
             Harness::Cursor => &["Write", "Edit", "MultiEdit", "write", "edit"],
             Harness::CopilotCli => &["Write", "Edit", "MultiEdit", "StrReplaceEditor"],
+            // The vendor reference's own tool list: `Create` makes a file,
+            // `Edit` changes one, `ApplyPatch` applies a diff. Claude's `Write`
+            // is not a Factory tool, which is why this host is not folded into
+            // Claude's row despite sharing its wire shape.
+            Harness::Factory => &["Create", "Edit", "ApplyPatch"],
+            // The tools reference's own names, the three its `edit` permission
+            // covers: `write` and `edit` carry a `filePath`, which the envelope
+            // reader takes beside `file_path`; `apply_patch` names its files
+            // inside `patchText`, which [`patch_targets`] reads.
+            Harness::OpenCode => &["write", "edit", "apply_patch"],
             // The neutral contract: a caller composing the envelope by hand is
             // stating the normalized shape, so it gets the normalized spellings.
             Harness::ExitCode => &["Write", "Edit", "MultiEdit", "NotebookEdit"],
@@ -302,6 +349,8 @@ impl Harness {
         match self {
             Harness::ClaudeCode => Some("AskUserQuestion"),
             Harness::CodexCli
+            | Harness::Factory
+            | Harness::OpenCode
             | Harness::GeminiCli
             | Harness::Cursor
             | Harness::CopilotCli
@@ -351,6 +400,23 @@ impl Harness {
                 // spellings are one operation, or every spawn row goes dead.
                 "Agent" | "Task" => Operation::Subagent,
                 other if other.starts_with(MCP_TOOL_PREFIX) => Operation::Mcp,
+                other => Operation::Other(other.to_owned()),
+            },
+            // The vendor reference names its shell, read and subagent tools and
+            // no MCP spelling, so an MCP call classifies as `Other` — could not
+            // look — rather than borrowing Claude's prefix on the strength of a
+            // shared wire shape.
+            Harness::Factory => match raw_tool {
+                "Execute" => Operation::Execute,
+                "Read" => Operation::Read,
+                "Task" => Operation::Subagent,
+                other => Operation::Other(other.to_owned()),
+            },
+            // The plugin reference names `bash` and `read` beside its writes and
+            // nothing else, so every other tool is could-not-look.
+            Harness::OpenCode => match raw_tool {
+                "bash" => Operation::Execute,
+                "read" => Operation::Read,
                 other => Operation::Other(other.to_owned()),
             },
             Harness::Cursor => match raw_tool {
@@ -403,9 +469,15 @@ impl Harness {
             // has fetched Codex's transcript format, so it is unsurveyed —
             // reading the clone as evidence would be the confident wrong answer
             // `operation_of` declines for the other two.
-            Harness::CodexCli | Harness::Cursor | Harness::GeminiCli | Harness::CopilotCli => {
-                TranscriptShape::Unsurveyed("CLOUD-1781")
-            }
+            // Factory's hook payload names a `transcript_path` and the reference
+            // documents no record grammar behind it, so it is unsurveyed for
+            // Codex's reason.
+            Harness::CodexCli
+            | Harness::Factory
+            | Harness::OpenCode
+            | Harness::Cursor
+            | Harness::GeminiCli
+            | Harness::CopilotCli => TranscriptShape::Unsurveyed("CLOUD-1781"),
         }
     }
 }
@@ -1232,8 +1304,13 @@ impl Capabilities {
 /// business rewriting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WiringFile {
-    /// A hooks-only file, owned whole.
+    /// A hooks-only file, owned whole, whose events sit under a `hooks` key.
     Whole(&'static str),
+    /// A hooks-only file, owned whole, keyed DIRECTLY by event name — no `hooks`
+    /// wrapper (CLOUD-1942). Factory's reference: "Standalone `hooks.json` files
+    /// are keyed directly by event name", and a wrapped document there registers
+    /// nothing, because the host reads `hooks` as an event it does not have.
+    Root(&'static str),
     /// One key inside a file the host shares with other configuration.
     Key {
         /// The file, repo-root-relative.
@@ -1241,6 +1318,44 @@ pub enum WiringFile {
         /// The key batten's registrations live under.
         key: &'static str,
     },
+}
+
+/// A host's plugin adapter: where its host loads it, and the code that renders
+/// it (CLOUD-1942).
+#[derive(Debug, Clone, Copy)]
+pub struct Plugin {
+    /// The path, repo-root-relative, the host loads project plugins from.
+    pub path: &'static str,
+    /// Renders the plugin's source, byte-stable (§6).
+    pub render: fn() -> String,
+}
+
+impl WiringFile {
+    /// The file, repo-root-relative, whatever the layout inside it.
+    #[must_use]
+    pub const fn path(self) -> &'static str {
+        match self {
+            Self::Whole(path) | Self::Root(path) | Self::Key { path, .. } => path,
+        }
+    }
+
+    /// Which key the file's events live under, `None` where the document IS the
+    /// event map.
+    ///
+    /// One answer for every reader — the emitter's shape, `wiring`'s mutable and
+    /// immutable walks, and `perf`'s wired-pair read — so no two of them can
+    /// silently stop describing the same document.
+    #[must_use]
+    pub const fn event_key(self) -> Option<&'static str> {
+        match self {
+            Self::Key { key, .. } => Some(key),
+            // A hooks-only file is what `render_wiring` emits whole, and what it
+            // emits is `{"hooks": {…}}`.
+            Self::Whole(_) => Some("hooks"),
+            // Keyed directly by event name: the document is the map.
+            Self::Root(_) => None,
+        }
+    }
 }
 
 /// One host's hook wiring: where it lives, and what it calls each event.
@@ -1353,11 +1468,17 @@ const CLAUDE_SPELLINGS: &[(Event, &str)] = &[
 /// literal fallback here: emitting `"hook"` when the declaration is gone would
 /// be the fourth spelling this removes, and it would report healthy.
 pub(crate) fn wiring_command(harness: Harness) -> String {
-    let argv = crate::surface::mediation_argv().unwrap_or_default();
+    wiring_argv(harness).join(" ")
+}
+
+/// [`wiring_command`] as argv: the binary, the mediation verb's argv, and the
+/// harness token — for an adapter that spawns the engine rather than naming a
+/// shell command (the `OpenCode` plugin), so both carry one derivation.
+pub(crate) fn wiring_argv(harness: Harness) -> Vec<String> {
     let mut parts = vec![crate::surface::BINARY.to_owned()];
-    parts.extend(argv);
+    parts.extend(crate::surface::mediation_argv().unwrap_or_default());
     parts.push(harness.as_str().to_owned());
-    parts.join(" ")
+    parts
 }
 
 /// Render one harness's registrations as the JSON its host reads.
@@ -1402,8 +1523,10 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
 
     match wiring.file {
         // The key's VALUE alone: the file carries configuration the engine does
-        // not own, so emitting the file would be claiming the rest of it.
-        WiringFile::Key { .. } => {
+        // not own, so emitting the file would be claiming the rest of it. A
+        // root-keyed hooks-only file is the same document for the opposite
+        // reason — the event map IS the whole file.
+        WiringFile::Key { .. } | WiringFile::Root(_) => {
             let body: Vec<String> = registrations
                 .iter()
                 .map(|(_, spelling)| entry(spelling, "  "))
@@ -1437,6 +1560,11 @@ const CONVERGED_EVENTS: &[Event] = &[
     Event::Stop,
     Event::SessionStart,
 ];
+
+/// `OpenCode`'s set: what the generated plugin delivers — `tool.execute.before`
+/// as the pre-tool event, and the `event` hook's `session.idle` as the end of a
+/// turn, which no plugin hook can veto (opencode.ai/docs/plugins).
+const OPENCODE_EVENTS: &[Event] = &[Event::PreTool, Event::Stop];
 
 /// The attribution row group every named host shares: nothing the evidence
 /// answers except the session id (CLOUD-276).
@@ -1815,6 +1943,78 @@ impl Harness {
                 attribution: UNSURVEYED_ATTRIBUTION,
                 capture: UNSURVEYED_CAPTURE,
             },
+            // Every value below is from the vendor reference fetched 2026-10-03
+            // (`docs.factory.com/reference/hooks-reference`) or is stated as
+            // unanswered by it.
+            Harness::Factory => Capabilities {
+                // The reference lists hook-visible tools and no plan tool.
+                plan_tools: PlanTools::Unsurveyed("CLOUD-1781"),
+                events: CONVERGED_EVENTS,
+                // `"ask"` is documented on `PreToolUse` as "Forces a user
+                // confirmation prompt", in the same `hookSpecificOutput` object a
+                // deny travels in.
+                ask: AskReach {
+                    enforced_on: &["PreToolUse"],
+                    declared: Declaration::Yes,
+                },
+                // The reference says stdout "can add context" for
+                // `UserPromptSubmit` and `SessionStart`, neither of which Batten
+                // registers here, and names no field for the events it does. So
+                // the channel exists and is reached nowhere — `ADVISORY_GAPS`
+                // states it.
+                advisory: AdvisoryReach::unreachable(Declaration::Yes),
+                // `permissionDecision: "allow"` is documented on `PreToolUse`,
+                // the same field Claude Code honours there.
+                preapprove: PreapproveReach {
+                    honoured_on: &["PreToolUse"],
+                    declared: Declaration::Yes,
+                },
+                // Unprobed, as every host is until a live probe answers.
+                rewrites_tool_output: Declaration::Unknown,
+                stop_vetoes_completion: false,
+                // The reference states a 60-second default and no timeout
+                // outcome, so nothing here claims it fails open.
+                timeout_fails_open: false,
+                needs_fail_closed_config: false,
+                // "stdout is otherwise visible in transcripts": stray output is
+                // shown, not parsed as a decision.
+                stdout_must_stay_clean: false,
+                // The verdict object carries `permissionDecisionReason`, the
+                // channel the deny below writes.
+                reason_travels_in_band: true,
+                attribution: UNSURVEYED_ATTRIBUTION,
+                capture: UNSURVEYED_CAPTURE,
+            },
+            // From the plugin reference fetched 2026-10-03
+            // (`opencode.ai/docs/plugins/`), and from the plugin itself: the
+            // generated adapter is Batten's own code, so what it carries is a
+            // measurement of that code rather than of a host's documentation.
+            Harness::OpenCode => Capabilities {
+                plan_tools: PlanTools::Unsurveyed("CLOUD-1781"),
+                // What the generated plugin delivers: `tool.execute.before` as
+                // pre-tool, and the `event` hook's `session.idle` as Stop.
+                events: OPENCODE_EVENTS,
+                // The hook's vocabulary is throw or return: there is no third
+                // value to carry an escalation. A documented absence, so `No`.
+                ask: AskReach::unreachable(Declaration::No),
+                // The reference names no channel for a non-blocking message from
+                // this hook.
+                advisory: AdvisoryReach::unreachable(Declaration::Unknown),
+                // Nor any value that suppresses a prompt.
+                preapprove: PreapproveReach::unreachable(Declaration::Unknown),
+                // Unprobed, as every host is until a live probe answers.
+                rewrites_tool_output: Declaration::Unknown,
+                stop_vetoes_completion: false,
+                // The plugin waits for the engine; it sets no timeout of its own.
+                timeout_fails_open: false,
+                needs_fail_closed_config: false,
+                stdout_must_stay_clean: false,
+                // The plugin throws the engine's stderr as the error message, so
+                // the reason travels out of band, as on every exit-code host.
+                reason_travels_in_band: false,
+                attribution: UNSURVEYED_ATTRIBUTION,
+                capture: UNSURVEYED_CAPTURE,
+            },
             Harness::ExitCode => Capabilities {
                 // The neutral contract carries no host tool surface of its own.
                 plan_tools: PlanTools::Surveyed(&[]),
@@ -1925,6 +2125,9 @@ impl Harness {
             // Gemini merges the same user-level file its committed wiring is
             // keyed in — one layout, two locations.
             Harness::GeminiCli => &[".gemini/settings.json"],
+            // The reference's user scope: `~/.factory/hooks.json`, "applies
+            // across projects" — the same layout as the committed file.
+            Harness::Factory => &[".factory/hooks.json"],
             // EMPTY IS A MEASUREMENT HERE, not a gap: these hosts declare a
             // hooks-only project file and the survey records no user-level merge
             // for them, so there is nothing beyond the committed surface to
@@ -1932,6 +2135,9 @@ impl Harness {
             // out to merge has to be answered for rather than defaulting to
             // "does not".
             Harness::Cursor | Harness::CopilotCli | Harness::CodexCli => &[],
+            // OpenCode merges PLUGINS from a global directory, and those are
+            // code: nothing there is a hook registration this census can read.
+            Harness::OpenCode => &[],
             // Not a host: the neutral contract is an envelope in and an exit
             // status out, with no file to merge.
             Harness::ExitCode => &[],
@@ -1958,7 +2164,33 @@ impl Harness {
             Harness::Cursor
             | Harness::CopilotCli
             | Harness::CodexCli
+            | Harness::Factory
+            | Harness::OpenCode
             | Harness::GeminiCli
+            | Harness::ExitCode => None,
+        }
+    }
+
+    /// The plugin adapter for this host, for a host whose adapter is CODE rather
+    /// than a hook registration (CLOUD-1942).
+    ///
+    /// `batten generate hooks` renders it to stdout and the caller writes it to
+    /// its path: the plugin is a generated artifact, never a committed copy, so
+    /// the engine and the plugin cannot drift. The renderer rides in the row so
+    /// a second plugin host is rendered by its own code, never by `OpenCode`'s.
+    #[must_use]
+    pub const fn plugin(self) -> Option<Plugin> {
+        match self {
+            Harness::OpenCode => Some(Plugin {
+                path: ".opencode/plugins/batten.js",
+                render: render_opencode_plugin,
+            }),
+            Harness::ClaudeCode
+            | Harness::Cursor
+            | Harness::CopilotCli
+            | Harness::GeminiCli
+            | Harness::CodexCli
+            | Harness::Factory
             | Harness::ExitCode => None,
         }
     }
@@ -2769,9 +3001,20 @@ fn read_target(operation: &Operation, input: &Value) -> Option<String> {
     if !matches!(operation, Operation::Read) {
         return None;
     }
+    target_path(input)
+}
+
+/// The file a tool's input names, under every spelling a host uses for it.
+///
+/// One lookup for reads and writes alike, so a new spelling cannot reach one
+/// and miss the other. `filePath` is `OpenCode`'s: its `read`, `write` and `edit`
+/// name their target that way (its plugin reference), and the generated plugin
+/// passes the args through unchanged.
+fn target_path(input: &Value) -> Option<String> {
     input
         .pointer("/file_path")
         .or_else(|| input.pointer("/notebook_path"))
+        .or_else(|| input.pointer("/filePath"))
         .and_then(Value::as_str)
         .filter(|path| !path.is_empty())
         .map(ToOwned::to_owned)
@@ -3336,14 +3579,7 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
     let writes = harness
         .write_tools()
         .contains(&tool.as_str())
-        .then(|| {
-            input
-                .pointer("/file_path")
-                .or_else(|| input.pointer("/notebook_path"))
-                .and_then(Value::as_str)
-                .filter(|path| !path.is_empty())
-                .map(ToOwned::to_owned)
-        })
+        .then(|| target_path(&input).or_else(|| patch_targets(&input).into_iter().next()))
         .flatten();
 
     // The neutral vocabulary, resolved here beside `writes` for the same reason
@@ -3476,7 +3712,12 @@ fn normalize_event(harness: Harness, raw: &str) -> Event {
             "sessionStart" => Some(Event::SessionStart),
             _ => None,
         },
-        Harness::ClaudeCode | Harness::CopilotCli | Harness::CodexCli | Harness::ExitCode => None,
+        Harness::ClaudeCode
+        | Harness::CopilotCli
+        | Harness::CodexCli
+        | Harness::Factory
+        | Harness::OpenCode
+        | Harness::ExitCode => None,
     };
     renamed.unwrap_or_else(|| Event::normalize(raw))
 }
@@ -5222,15 +5463,21 @@ pub fn edit_spans_of(input: &Value) -> Option<Vec<(String, String, bool)>> {
 }
 
 fn edit_spans(input: &Value) -> Option<Vec<(String, String, bool)>> {
+    // Each field under both spellings a host uses: snake case, and `OpenCode`'s
+    // camel case (`oldString`, `newString`, `replaceAll`) — the same split
+    // `target_path` reads `filePath` for, so an edit whose target is judged is
+    // never one whose text cannot be looked at.
+    fn field<'a>(value: &'a Value, snake: &str, camel: &str) -> Option<&'a Value> {
+        value.get(snake).or_else(|| value.get(camel))
+    }
     let replace_all = |value: &Value| {
-        value
-            .pointer("/replace_all")
+        field(value, "replace_all", "replaceAll")
             .and_then(Value::as_bool)
             .unwrap_or(false)
     };
     let span = |value: &Value| {
-        let old = value.pointer("/old_string").and_then(Value::as_str)?;
-        let new = value.pointer("/new_string").and_then(Value::as_str)?;
+        let old = field(value, "old_string", "oldString").and_then(Value::as_str)?;
+        let new = field(value, "new_string", "newString").and_then(Value::as_str)?;
         Some((old.to_owned(), new.to_owned(), replace_all(value)))
     };
     if let Some(one) = span(input) {
@@ -8831,18 +9078,35 @@ fn redirected_read(policy: &Policy, envelope: &Envelope) -> Decision {
 /// fact the old `verbs::classify(raw_tool)` was failing to reconstruct from a
 /// consumer's config. The `[[verb]]` row is consulted only for its remedy text,
 /// and its absence costs a more specific sentence rather than the whole gate.
+//MUTANT patch-targets-unread|s@^    let patched = if names_no_path {$@    let patched = if false {@|a_patch_naming_a_protected_file_is_refused_on_every_patch_tool
 fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
-    let Some(path) = envelope.writes.as_deref() else {
-        return Decision::Allow;
+    // A patch tool names its files in its body, never under a path key, so the
+    // body is read for a call that could be a write and named no path. A write
+    // that DID name one is never re-read for header-shaped content: the file it
+    // carries is content, and a fixture holding a patch is not a patch.
+    let names_no_path = matches!(envelope.operation, Operation::Write | Operation::Other(_))
+        && target_path(&envelope.input).is_none();
+    let patched = if names_no_path {
+        patch_targets(&envelope.input)
+    } else {
+        Vec::new()
     };
     // Through `protects` like every other reader (CLOUD-1236). The envelope's
     // target is already relativised upstream by `relativise_writes`, so this
     // changes no verdict here — which is the point: the two readers can no longer
     // drift apart, and a future call site that forgets the upstream step is
-    // covered rather than silently open.
-    if !protects(policy, path) {
+    // covered rather than silently open. A patch's targets take the same lookup,
+    // which is why they need no relativising of their own.
+    let Some(path) = envelope
+        .writes
+        .iter()
+        .cloned()
+        .chain(patched)
+        .find(|target| protects(policy, target))
+    else {
         return Decision::Allow;
-    }
+    };
+    let path = path.as_str();
     // Looked up by program alone, and since CLOUD-442 that is a decision rather
     // than an omission: `verbs::classify` is `qualify` over no arguments, so a row
     // whose mutation is qualified by a flag or a subcommand cannot match here. A
@@ -8860,6 +9124,63 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
             redirect,
         },
     ))
+}
+
+/// The files a patch-shaped tool input names, from its own file headers.
+///
+/// A patch tool — `OpenCode`'s `apply_patch`, Factory's `ApplyPatch`, Codex's
+/// `apply_patch` — carries no path key: its targets are lines inside the patch
+/// text, so [`target_path`] finds nothing and a protected-path write would pass
+/// unjudged under the one tool whose whole job is writing. Every top-level
+/// string that is a patch is read, whatever the host keys it, because the key is
+/// per host and the format is not. Two formats: the `*** Begin Patch` envelope,
+/// and a unified diff's `---`/`+++` headers.
+///
+/// A header counts only at column 0, which is where both formats put it: a
+/// context line quoting one starts with a space, and is the file's content.
+fn patch_targets(input: &Value) -> Vec<String> {
+    const HEADERS: &[&str] = &[
+        "*** Add File: ",
+        "*** Update File: ",
+        "*** Delete File: ",
+        "*** Move to: ",
+    ];
+    let Some(fields) = input.as_object() else {
+        return Vec::new();
+    };
+    let mut targets = Vec::new();
+    for text in fields.values().filter_map(Value::as_str) {
+        if text.contains("*** Begin Patch") {
+            targets.extend(
+                text.lines()
+                    .filter_map(|line| HEADERS.iter().find_map(|header| line.strip_prefix(header)))
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                    .map(ToOwned::to_owned),
+            );
+        } else if text.lines().any(|line| line.starts_with("--- "))
+            && text.lines().any(|line| line.starts_with("+++ "))
+        {
+            targets.extend(
+                text.lines()
+                    .filter_map(|line| {
+                        line.strip_prefix("--- ")
+                            .or_else(|| line.strip_prefix("+++ "))
+                    })
+                    // A header may carry a tab and a timestamp after the path.
+                    .filter_map(|rest| rest.split('\t').next())
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty() && *path != "/dev/null")
+                    .map(|path| {
+                        path.strip_prefix("a/")
+                            .or_else(|| path.strip_prefix("b/"))
+                            .unwrap_or(path)
+                            .to_owned()
+                    }),
+            );
+        }
+    }
+    targets
 }
 
 fn protected_mutation(policy: &Policy, command: &str) -> Decision {
@@ -11131,6 +11452,12 @@ fn encode_cursor_verdict(permission: &str, reason: &str) -> serde_json::Result<S
 ///
 /// Serialization of these fixed shapes cannot practically fail; the `Result` is
 /// the honest signature for a serde boundary.
+//MUTANT-SUITE crates/batten/tests/it/cli.rs
+//MUTANT factory-deny-drops-reason|s@^        Harness::Factory => encode_claude_deny(event, reason).map(Some),$@        Harness::Factory => encode_claude_deny(event, "").map(Some),@|a_factory_deny_carries_its_reason_in_the_verdict_object
+// `match_same_arms` would fold Factory into Claude's arm. Refused for
+// `write_tools`' reason: the two share a wire shape today by coincidence of two
+// vendors' documentation, and each host answers for its own deny.
+#[allow(clippy::match_same_arms)]
 pub fn encode_deny(
     harness: Harness,
     event: &str,
@@ -11138,10 +11465,16 @@ pub fn encode_deny(
 ) -> serde_json::Result<Option<String>> {
     match harness {
         Harness::ClaudeCode => encode_claude_deny(event, reason).map(Some),
+        // Factory documents the same verdict object, reason included, so it
+        // takes Claude's encoder rather than a copy of it. Its own arm so the
+        // reason it carries is pinned for this host by itself.
+        Harness::Factory => encode_claude_deny(event, reason).map(Some),
         Harness::Cursor => encode_cursor_deny(reason).map(Some),
-        Harness::CopilotCli | Harness::GeminiCli | Harness::CodexCli | Harness::ExitCode => {
-            Ok(None)
-        }
+        Harness::CopilotCli
+        | Harness::GeminiCli
+        | Harness::CodexCli
+        | Harness::OpenCode
+        | Harness::ExitCode => Ok(None),
     }
 }
 
@@ -11198,7 +11531,9 @@ pub fn encode_ask(
         // Documented, and merged most-restrictive-first by the host itself
         // (`deny > defer > ask > allow`), so an ask here cannot override another
         // hook's deny.
-        Harness::ClaudeCode => encode_claude_verdict(event, "ask", reason).map(Some),
+        Harness::ClaudeCode | Harness::Factory => {
+            encode_claude_verdict(event, "ask", reason).map(Some)
+        }
         // Reachable on `beforeShellExecution` and `beforeMCPExecution` only, which
         // the guard above has already established by the time this arm runs. The
         // body is the host's one documented verdict shape, the same one a deny
@@ -11209,9 +11544,11 @@ pub fn encode_ask(
         // through the guard above, and stated rather than wildcarded so a row that
         // ever gains an `enforced_on` entry has to come back here and answer for
         // its wire shape.
-        Harness::CopilotCli | Harness::GeminiCli | Harness::CodexCli | Harness::ExitCode => {
-            Ok(None)
-        }
+        Harness::CopilotCli
+        | Harness::GeminiCli
+        | Harness::CodexCli
+        | Harness::OpenCode
+        | Harness::ExitCode => Ok(None),
     }
 }
 
@@ -11305,7 +11642,14 @@ pub fn encode_advice(
         // its wire shape. Cursor documents a verdict body and no advisory one;
         // Copilot's output object is unconfirmed; Codex is unsurveyed; the
         // neutral adapter has an exit status and nothing else.
-        Harness::Cursor | Harness::CopilotCli | Harness::CodexCli | Harness::ExitCode => Ok(None),
+        // Factory's channel reaches no event Batten registers (its capability
+        // row), so the guard above never lets it reach this arm.
+        Harness::Cursor
+        | Harness::CopilotCli
+        | Harness::CodexCli
+        | Harness::Factory
+        | Harness::OpenCode
+        | Harness::ExitCode => Ok(None),
     }
 }
 
@@ -11351,7 +11695,7 @@ pub fn encode_preapproval(
         // The same envelope a deny and an ask travel in, with the third verdict
         // word, and the call's advice beside it (CLOUD-1949) — one document,
         // because the channel reads one.
-        Harness::ClaudeCode => serde_json::to_string(&ClaudeVerdict {
+        Harness::ClaudeCode | Harness::Factory => serde_json::to_string(&ClaudeVerdict {
             hook_specific_output: ClaudeVerdictInner {
                 hook_event_name: event,
                 permission_decision: "allow",
@@ -11371,9 +11715,97 @@ pub fn encode_preapproval(
         | Harness::CopilotCli
         | Harness::GeminiCli
         | Harness::CodexCli
+        | Harness::OpenCode
         | Harness::ExitCode => Ok(None),
     }
 }
+
+/// Render `OpenCode`'s plugin adapter: the module its host loads from
+/// [`Harness::plugin`]'s path (CLOUD-1942).
+///
+/// `OpenCode` has no stdin/stdout hook contract. Its `tool.execute.before(input,
+/// output)` hook blocks by throwing, so the adapter is this module: it hands the
+/// engine a Claude-shaped `PreToolUse` envelope — the tool name and its args
+/// passed through unchanged, the project directory as `cwd` — and throws the
+/// engine's stderr when it exits `2`. Its `event` hook hands the engine a `Stop`
+/// envelope on `session.idle` and never throws: the session has already ended,
+/// so the engine's answer there is a record, never a veto.
+///
+/// **Every other exit lets the call through.** `0` is an allow; anything else —
+/// the engine missing, crashing, or answering `1`/`3` — is a guard that could not
+/// decide, and §7(c) makes that an allow rather than the reason a session cannot
+/// proceed. That is the same fail-open every other adapter takes.
+///
+/// Byte-stable (§6), and generated rather than committed so the plugin and the
+/// engine it spawns are one release: `node:child_process` runs under the Bun the
+/// host executes plugins with, and under Node for the test that drives it.
+//MUTANT opencode-exit2-not-thrown|s@^      throw new Error(run.stderr.trim());$@      return;@|a_generated_opencode_plugin_throws_the_engine_s_refusal
+fn render_opencode_plugin() -> String {
+    let quoted: Vec<String> = wiring_argv(Harness::OpenCode)
+        .iter()
+        .map(|part| json_string(part))
+        .collect();
+    let (program, args) = quoted
+        .split_first()
+        .map_or(("\"\"", &[][..]), |(program, args)| {
+            (program.as_str(), args)
+        });
+    OPENCODE_PLUGIN
+        .replace(
+            "@PATH@",
+            Harness::OpenCode.plugin().map_or("", |plugin| plugin.path),
+        )
+        .replace("@PROGRAM@", program)
+        .replace("@ARGS@", &args.join(", "))
+}
+
+/// The plugin [`render_opencode_plugin`] fills in: the program and its args
+/// from [`wiring_argv`], so the plugin spawns exactly the command every hook
+/// registration runs, and the path it is loaded from.
+///
+/// The engine is spawned ASYNCHRONOUSLY. `spawnSync` would hold the host's
+/// event loop for the whole engine run on every tool call — no UI, no other
+/// plugin, no parallel call — where an awaited child process blocks only the
+/// call it judges. A spawn that fails resolves with a `null` status, which is
+/// an allow like every other exit but `2`.
+const OPENCODE_PLUGIN: &str = r#"// Generated by `batten generate hooks --harness opencode`. Do not edit: regenerate it.
+// OpenCode loads it from @PATH@.
+import { spawn } from "node:child_process";
+
+const adjudicate = (directory, envelope) =>
+  new Promise((resolve) => {
+    const child = spawn(@PROGRAM@, [@ARGS@], {
+      cwd: directory,
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", () => resolve({ status: null, stderr }));
+    child.on("close", (status) => resolve({ status, stderr }));
+    child.stdin.on("error", () => {});
+    child.stdin.end(JSON.stringify({ cwd: directory, ...envelope }));
+  });
+
+export const Batten = async ({ directory }) => ({
+  "tool.execute.before": async (input, output) => {
+    const run = await adjudicate(directory, {
+      hook_event_name: "PreToolUse",
+      tool_name: input.tool,
+      tool_input: output.args,
+    });
+    if (run.status === 2) {
+      throw new Error(run.stderr.trim());
+    }
+  },
+  event: async ({ event }) => {
+    if (event.type === "session.idle") {
+      await adjudicate(directory, { hook_event_name: "Stop" });
+    }
+  },
+});"#;
 
 /// Surfaces where an advisory is documented and Batten does not use it,
 /// **stated** (CLOUD-461).
@@ -11389,16 +11821,25 @@ pub fn encode_preapproval(
 /// describes a gap — so probing a surface fails until its row is removed.
 ///
 /// `pub` because being readable IS the mechanism.
-pub const ADVISORY_GAPS: &[(Harness, &str)] = &[(
-    Harness::ClaudeCode,
-    "`PostToolUse` and `UserPromptSubmit` are documented to accept \
+pub const ADVISORY_GAPS: &[(Harness, &str)] = &[
+    (
+        Harness::ClaudeCode,
+        "`PostToolUse` and `UserPromptSubmit` are documented to accept \
          `additionalContext` and are NOT in `delivered_on`, because nothing here \
          has probed them. Listing an unprobed surface costs a notice that \
          vanishes silently; leaving it out costs only silence. `PreToolUse` was \
          a third entry here until CLOUD-1131 probed it and it delivered — so a \
          row leaving this table is what closing a gap looks like, and the \
          absence of a probe is never itself a finding about the host.",
-)];
+    ),
+    (
+        Harness::Factory,
+        "The reference says stdout \"can add context\" on `UserPromptSubmit` and \
+         `SessionStart` and names no context field on the events Batten \
+         registers, so the channel is declared and reached nowhere. Nothing here \
+         has probed this host at all.",
+    ),
+];
 
 /// Surfaces where a pre-approval is honoured and Batten does not spend one,
 /// **stated**.
@@ -16233,22 +16674,24 @@ deny contains "refused by themodule" if {
     }
 
     #[test]
-    fn five_of_six_hosts_declare_the_response_bytes_unreachable_rather_than_guessing() {
-        // The honest-value discipline, as a count. An unsurveyed response
-        // surface is `Unavailable`, never a guess, and exactly one host has a
-        // measurement here: Claude Code's post-tool member, read as DECODED
+    fn exactly_one_host_has_a_measured_capture_row() {
+        // The honest-value discipline, read off the table. An unsurveyed
+        // response surface is `Unavailable`, never a guess, and exactly one host
+        // has a measurement here: Claude Code's post-tool member, read as DECODED
         // content because the decoder hands the engine an already-parsed value.
-        let unreachable = Harness::ALL
+        let measured: Vec<Harness> = Harness::ALL
             .iter()
+            .copied()
             .filter(|harness| {
                 let capabilities = harness.capabilities();
-                ResponseShape::ALL.iter().all(|shape| {
-                    capabilities.fidelity(*shape) == crate::capture::Fidelity::Unavailable
+                ResponseShape::ALL.iter().any(|shape| {
+                    capabilities.fidelity(*shape) != crate::capture::Fidelity::Unavailable
                 })
             })
-            .count();
+            .collect();
         assert_eq!(
-            unreachable, 5,
+            measured,
+            [Harness::ClaudeCode],
             "exactly one host has a measured capture row; widening another is a \
              measurement, filed per host"
         );
@@ -16571,35 +17014,34 @@ deny contains "refused by themodule" if {
     }
 
     #[test]
-    fn every_harness_declares_a_wiring_row_or_declares_itself_not_a_host() {
-        // CLOUD-62's totality obligation. The `match` in `wiring()` already
-        // makes a new variant a COMPILE error, which is the strong half. This
-        // is the half a compiler cannot give: a variant added as `None` to make
-        // the build pass, with nobody deciding whether it is installable.
+    fn every_harness_declares_one_install_route_or_declares_itself_not_a_host() {
+        // CLOUD-62's totality obligation. The `match`es in `wiring()` and
+        // `plugin()` already make a new variant a COMPILE error, which is the
+        // strong half. This is the half a compiler cannot give: a variant added
+        // as `None` to make the build pass, with nobody deciding whether it is
+        // installable.
         //
-        // So the non-installable set is named here, once. Adding a variant to it
-        // is a deliberate edit in a test that says what the claim means; adding
-        // one silently is a failure.
+        // A host installs by exactly one route — a hook file it reads
+        // (`wiring()`) or code Batten generates for it (`plugin()`, CLOUD-1942).
+        // The non-installable set is named here, once, and has neither. Adding
+        // a variant to it is a deliberate edit in a test that says what the
+        // claim means; adding one silently is a failure.
         const NOT_A_HOST: &[Harness] = &[Harness::ExitCode];
 
         for &harness in Harness::ALL {
             let wiring = harness.wiring();
-            if NOT_A_HOST.contains(&harness) {
-                assert!(
-                    wiring.is_none(),
-                    "{} is declared a contract rather than a host, so it must have no \
-                     wiring row",
-                    harness.as_str()
-                );
+            let routes = usize::from(wiring.is_some()) + usize::from(harness.plugin().is_some());
+            let expected = usize::from(!NOT_A_HOST.contains(&harness));
+            assert_eq!(
+                routes,
+                expected,
+                "{} declares {routes} install route(s); a host has exactly one of a \
+                 wiring row and a plugin, and a NOT_A_HOST contract has neither",
+                harness.as_str()
+            );
+            let Some(wiring) = wiring else {
                 continue;
-            }
-            let wiring = wiring.unwrap_or_else(|| {
-                panic!(
-                    "{} has no wiring row and is not in NOT_A_HOST — decide which it is \
-                     rather than leaving it unregisterable",
-                    harness.as_str()
-                )
-            });
+            };
             let registrations = wiring.registrations(harness);
             assert!(
                 !registrations.is_empty(),
@@ -17183,6 +17625,8 @@ deny contains "refused by themodule" if {
         (Harness::CopilotCli, "StrReplaceEditor"),
         (Harness::GeminiCli, "WriteFile"),
         (Harness::CodexCli, "NotebookEdit"),
+        (Harness::Factory, "Create"),
+        (Harness::OpenCode, "write"),
         (Harness::ExitCode, "Write"),
     ];
 
@@ -17333,6 +17777,247 @@ deny contains "refused by themodule" if {
                 "{}: `{spelling}` reached a protected path and was not refused — \
                  the gate reads as coverage on every harness and enforces on one",
                 harness.as_str()
+            );
+        }
+    }
+
+    /// A PATCH TOOL NAMES ITS FILES IN ITS BODY, AND THEY ARE JUDGED THERE.
+    ///
+    /// `OpenCode`'s `apply_patch`, Factory's `ApplyPatch` and Codex's
+    /// `apply_patch` carry no path key, so a protected file reached through one
+    /// passed unjudged while the same change through `write` was refused. Driven
+    /// through each host's own decoder, with the protected file second so the
+    /// gate must read past the first header.
+    #[test]
+    fn a_patch_naming_a_protected_file_is_refused_on_every_patch_tool() {
+        let policy = protected_policy(vec![verb(
+            "Write",
+            Some("use the surface that owns the file"),
+        )]);
+        let patch = |second: &str| {
+            format!(
+                "*** Begin Patch\n*** Update File: src/ok.rs\n@@\n-a\n+b\n\
+                 *** Update File: {second}\n@@\n-c\n+d\n*** End Patch"
+            )
+        };
+        let judge = |harness: Harness, tool: &str, key: &str, body: String| {
+            let envelope = decode_value(
+                harness,
+                &serde_json::json!({
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": tool,
+                    "tool_input": { key: body },
+                }),
+            )
+            .expect("a Claude-shaped pre-tool payload decodes");
+            adjudicate(
+                &policy,
+                &envelope,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
+                &crate::stop::StopFacts::default(),
+            )
+        };
+        for (harness, tool, key) in [
+            (Harness::OpenCode, "apply_patch", "patchText"),
+            (Harness::Factory, "ApplyPatch", "patch"),
+            (Harness::CodexCli, "apply_patch", "input"),
+        ] {
+            assert!(
+                matches!(
+                    judge(harness, tool, key, patch("batten.toml")),
+                    Decision::Deny(_)
+                ),
+                "{}: `{tool}` patched a protected file and was not refused",
+                harness.as_str()
+            );
+            assert_eq!(
+                judge(harness, tool, key, patch("src/also_ok.rs")),
+                Decision::Allow,
+                "{}: a patch of unprotected files is not refused",
+                harness.as_str()
+            );
+        }
+        // A unified diff names its files in `---`/`+++` headers.
+        assert!(matches!(
+            judge(
+                Harness::Factory,
+                "ApplyPatch",
+                "patch",
+                "--- a/batten.toml\n+++ b/batten.toml\n@@ -1 +1 @@\n-a\n+b\n".to_owned()
+            ),
+            Decision::Deny(_)
+        ));
+        // Header-shaped text that opens no patch is content, not a target.
+        assert_eq!(
+            judge(
+                Harness::OpenCode,
+                "write",
+                "content",
+                "*** Update File: batten.toml".to_owned()
+            ),
+            Decision::Allow,
+        );
+        // A context line quoting a header starts with a space: it is the
+        // patched file's content, and only column-0 headers are targets.
+        assert_eq!(
+            judge(
+                Harness::OpenCode,
+                "apply_patch",
+                "patchText",
+                "*** Begin Patch\n*** Update File: src/ok.rs\n@@\n *** Update File: batten.toml\n-a\n+b\n*** End Patch".to_owned()
+            ),
+            Decision::Allow,
+        );
+    }
+
+    /// A write that names its path is never re-read for patch-shaped content.
+    ///
+    /// The file a `write` carries is content: a fixture holding a whole patch of
+    /// a protected file, written somewhere unprotected, is that somewhere.
+    #[test]
+    fn a_write_carrying_a_patch_as_content_is_judged_by_its_own_path() {
+        let policy = protected_policy(vec![verb(
+            "Write",
+            Some("use the surface that owns the file"),
+        )]);
+        let envelope = decode_value(
+            Harness::OpenCode,
+            &serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "write",
+                "tool_input": {
+                    "filePath": "tests/fixtures/a.patch",
+                    "content": "*** Begin Patch\n*** Update File: batten.toml\n*** End Patch",
+                },
+            }),
+        )
+        .expect("decodes");
+        assert_eq!(
+            adjudicate(
+                &policy,
+                &envelope,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
+                &crate::stop::StopFacts::default(),
+            ),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn an_opencode_edit_s_camel_case_spans_are_read() {
+        // OpenCode's `edit` spells its spans `oldString`/`newString`/
+        // `replaceAll`, beside the `filePath` its target is read from.
+        assert_eq!(
+            edit_spans_of(&serde_json::json!({
+                "filePath": "src/a.rs",
+                "oldString": "a",
+                "newString": "b",
+                "replaceAll": true,
+            })),
+            Some(vec![("a".to_owned(), "b".to_owned(), true)])
+        );
+    }
+
+    /// A unified diff is both headers, and `/dev/null` is no file.
+    ///
+    /// A lone `---` line is a markdown rule or a YAML document marker, so it
+    /// opens no diff; and an added or deleted file's other side is `/dev/null`,
+    /// which names nothing to judge.
+    #[test]
+    fn a_unified_patch_needs_both_headers_and_never_names_dev_null() {
+        assert!(
+            patch_targets(&serde_json::json!({ "content": "--- a/batten.toml\nnot a diff" }))
+                .is_empty()
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "--- /dev/null\n+++ b/src/new.rs\n@@ -0,0 +1 @@\n+x\n",
+            })),
+            ["src/new.rs"]
+        );
+    }
+
+    /// A read names its target under each host's spelling of the key.
+    #[test]
+    fn a_read_s_target_is_resolved_under_each_spelling() {
+        for (harness, tool, key) in [
+            (Harness::ClaudeCode, "Read", "file_path"),
+            (Harness::OpenCode, "read", "filePath"),
+        ] {
+            let envelope = decode_value(
+                harness,
+                &serde_json::json!({
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": tool,
+                    "tool_input": { key: "notes.txt" },
+                }),
+            )
+            .expect("decodes");
+            assert_eq!(
+                envelope.reads.as_deref(),
+                Some("notes.txt"),
+                "{}: `{tool}` named its target under `{key}`",
+                harness.as_str()
+            );
+        }
+    }
+
+    /// Each layout answers its path and the key its events live under.
+    #[test]
+    fn a_wiring_file_names_its_path_and_event_key_in_every_layout() {
+        let key = WiringFile::Key {
+            path: "k.json",
+            key: "events",
+        };
+        assert_eq!(
+            [WiringFile::Whole("w.json"), WiringFile::Root("r.json"), key].map(WiringFile::path),
+            ["w.json", "r.json", "k.json"]
+        );
+        assert_eq!(
+            [WiringFile::Whole("w.json"), WiringFile::Root("r.json"), key]
+                .map(WiringFile::event_key),
+            [Some("hooks"), None, Some("events")]
+        );
+    }
+
+    /// Exactly one host has a surveyed question tool and a surveyed MCP log
+    /// tree, read off the table: a new host answers `None` until measured.
+    #[test]
+    fn only_claude_code_has_a_surveyed_question_tool_and_mcp_log_tree() {
+        let surveyed = |fact: fn(Harness) -> Option<&'static str>| -> Vec<(Harness, &'static str)> {
+            Harness::ALL
+                .iter()
+                .filter_map(|&harness| fact(harness).map(|value| (harness, value)))
+                .collect()
+        };
+        assert_eq!(
+            surveyed(Harness::question_tool),
+            [(Harness::ClaudeCode, "AskUserQuestion")]
+        );
+        assert_eq!(
+            surveyed(Harness::mcp_logs),
+            [(Harness::ClaudeCode, ".cache/claude-cli-nodejs")]
+        );
+    }
+
+    /// A pre-approval on a host that reads Claude Code's verdict object is the
+    /// allow verdict with its reason, on the event it is honoured on.
+    #[test]
+    fn a_preapproval_on_a_claude_shaped_host_is_an_allow_with_its_reason() {
+        for harness in [Harness::ClaudeCode, Harness::Factory] {
+            let body = encode_preapproval(harness, "PreToolUse", "the rule allows it", None, None)
+                .expect("serializes")
+                .unwrap_or_else(|| panic!("{} honours a pre-approval", harness.as_str()));
+            let verdict: Value = serde_json::from_str(&body).expect("json");
+            assert_eq!(
+                verdict.pointer("/hookSpecificOutput/permissionDecision"),
+                Some(&serde_json::json!("allow"))
+            );
+            assert_eq!(
+                verdict.pointer("/hookSpecificOutput/permissionDecisionReason"),
+                Some(&serde_json::json!("the rule allows it"))
             );
         }
     }

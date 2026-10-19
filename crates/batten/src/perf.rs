@@ -74,7 +74,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 
 use crate::error::UsageError;
-use crate::hook::{Event, Harness, WiringFile};
+use crate::hook::{Event, Harness};
 
 /// The base a comparison is taken against, and the run counts.
 ///
@@ -263,20 +263,21 @@ pub fn registered_paths(rules: &[crate::rules::Rule]) -> Vec<String> {
 pub fn wiring_paths() -> Vec<String> {
     let mut paths: BTreeSet<String> = BTreeSet::new();
     for harness in Harness::ALL {
-        let Some(wiring) = harness.wiring() else {
+        // Either install route is a hook surface: a plugin host's adapter file
+        // is as much the gate's input as a settings file (CLOUD-1942).
+        let Some(path) = harness
+            .wiring()
+            .map(|wiring| wiring.file.path())
+            .or_else(|| harness.plugin().map(|plugin| plugin.path))
+        else {
             continue;
         };
-        match wiring.file {
-            WiringFile::Key { path, .. } | WiringFile::Whole(path) => {
-                paths.insert(path.to_owned());
-                // The directory beside the settings file: a host that routes
-                // through a launcher script keeps it there, and CLOUD-697 is the
-                // measured instance of a commit touching only that and skipping
-                // the gate it needed.
-                if let Some((dir, _)) = path.rsplit_once('/') {
-                    paths.insert(dir.to_owned());
-                }
-            }
+        paths.insert(path.to_owned());
+        // The directory beside the settings file: a host that routes through a
+        // launcher script keeps it there, and CLOUD-697 is the measured instance
+        // of a commit touching only that and skipping the gate it needed.
+        if let Some((dir, _)) = path.rsplit_once('/') {
+            paths.insert(dir.to_owned());
         }
     }
     paths.into_iter().collect()
@@ -1081,11 +1082,8 @@ fn wired_command(tree: &Path, bin: &Path) -> Result<Vec<String>> {
             "perf-pair: this harness registers no wiring file, so the wired pair cannot be measured. No measurement."
         );
     };
-    let (path, key) = match wiring.file {
-        WiringFile::Key { path, key } => (path, Some(key)),
-        WiringFile::Whole(path) => (path, None),
-    };
-    let settings = tree.join(path);
+    let key = wiring.file.event_key();
+    let settings = tree.join(wiring.file.path());
     let text = std::fs::read_to_string(&settings).with_context(|| {
         format!(
             "perf-pair: {} wires no settings the wired pair can read. No measurement.",
@@ -3318,6 +3316,43 @@ pub fn latency_verdict(median: u64, budget: u64, slack: u64, loose_factor: u64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The wired arm is the command the committed wiring registers, read through
+    /// the wiring's own layout and pinned to this arm's binary in this tree.
+    #[test]
+    fn the_wired_arm_runs_the_registered_command_against_its_own_tree() -> Result<()> {
+        let tree = std::env::temp_dir().join(format!("batten-perf-wired-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tree);
+        let harness = Harness::ClaudeCode;
+        let wiring = harness
+            .wiring()
+            .ok_or_else(|| anyhow::anyhow!("claude-code is wired"))?;
+        let settings = tree.join(wiring.file.path());
+        std::fs::create_dir_all(settings.parent().unwrap_or(&tree))?;
+        // What the generator emits, placed under the key the layout keeps its
+        // events at, the way the committed file holds it.
+        let events: serde_json::Value =
+            serde_json::from_str(&crate::hook::render_wiring(harness, &wiring))?;
+        let document = match wiring.file.event_key() {
+            Some(key) if events.get(key).is_none() => serde_json::json!({ key: events }),
+            _ => events,
+        };
+        std::fs::write(&settings, document.to_string())?;
+        let bin = tree.join("arm-batten");
+        let argv = wired_command(&tree, &bin)?;
+        let tree_text = tree.to_string_lossy().into_owned();
+        assert_eq!(argv.first().map(String::as_str), Some("env"));
+        assert!(
+            argv.contains(&format!("-C{tree_text}")),
+            "the arm runs in its own tree: {argv:?}"
+        );
+        assert!(
+            argv.contains(&bin.to_string_lossy().into_owned()),
+            "the arm runs its own binary, never whatever PATH holds: {argv:?}"
+        );
+        std::fs::remove_dir_all(&tree)?;
+        Ok(())
+    }
 
     /// CLOUD-2068: a seeded directory carries the dependencies, never the binary.
     #[test]

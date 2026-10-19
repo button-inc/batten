@@ -112,6 +112,7 @@ committed := {
 	".github/hooks/batten.json",
 	".gemini/settings.json",
 	".codex/hooks.json",
+	".factory/hooks.json",
 }
 
 # The surfaces a host MERGES its hook config from beyond the committed one
@@ -126,12 +127,13 @@ merged_ids := {
 	"harness-settings-local",
 	"harness-launcher-settings",
 	"harness-gemini-settings",
+	"harness-factory-hooks",
 }
 
 # A wiring document's event map.
 #
 # `else` rather than one body, because the hosts disagree: Claude Code and Gemini
-# merge hooks into a settings file that carries much else, and the other three
+# merge hooks into a settings file that carries much else, and the other four
 # define a hooks-only file. Reading `.hooks` where it exists and the whole
 # document where it does not is `WiringFile`'s own Key/Whole split, and a module
 # that only read `.hooks` would be silently clean over every hooks-only host.
