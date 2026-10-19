@@ -19028,4 +19028,279 @@ deny contains "refused by themodule" if {
         let evidence: KeyFacts = crate::facts::Look::Is(vec![String::from("Refs CLOUD-7")]);
         assert!(key_present(r"CLOUD-\d+", "gh pr create", &evidence));
     }
+
+    /// A shape row keyed on the `Task` tool.
+    fn task_tool_row() -> Rule {
+        Rule {
+            pattern: None,
+            tool: Some(String::from("Task")),
+            ..shape("task-ban", "unused", None)
+        }
+    }
+
+    /// A tool-keyed shape row refuses its tool while it blocks and its
+    /// modifier admits, and no other kind refuses through this gate.
+    ///
+    /// Fails by: the kind or blocking test inverted or conjoined, or the
+    /// modifier ignored.
+    #[test]
+    fn a_tool_keyed_shape_row_refuses_its_tool() {
+        let call = envelope_for_tool("Task");
+        let gate = |row: Rule, call: &Envelope| tool_rules(&ceiling_policy(vec![row]), call);
+        assert!(matches!(gate(task_tool_row(), &call), Decision::Deny(_)));
+        let receipt = Rule {
+            kind: RuleKind::Receipt,
+            ..task_tool_row()
+        };
+        assert_eq!(gate(receipt, &call), Decision::Allow);
+        let warned = Rule {
+            severity: Some(RuleSeverity::Warn),
+            ..task_tool_row()
+        };
+        assert_eq!(gate(warned, &call), Decision::Allow);
+        let conditioned = Rule {
+            when_absent: Some(Field::SessionId),
+            ..task_tool_row()
+        };
+        let mut in_session = envelope_for_tool("Task");
+        in_session.session = Some(String::from("s1"));
+        assert_eq!(gate(conditioned, &in_session), Decision::Allow);
+    }
+
+    /// Every measured ceiling reaches the process counter, and only a shape
+    /// row is measured.
+    ///
+    /// Fails by: a constant counter, or measuring a row of another kind.
+    #[test]
+    fn measured_ceilings_reach_the_process_counter() {
+        let capped = ceiling_policy(vec![ceiling_row("cap", "Task", 100_000)]);
+        let before = ceilings_measured();
+        for _ in 0..2 {
+            let _ = adjudicate(
+                &capped,
+                &task_spawn("short"),
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
+                &crate::stop::StopFacts::default(),
+            );
+        }
+        assert!(ceilings_measured() >= before + 2);
+        let receipt = ceiling_policy(vec![Rule {
+            kind: RuleKind::Receipt,
+            ..ceiling_row("cap", "Task", 100)
+        }]);
+        let mut measured = 0;
+        let _ = ceiling_rules(&receipt, &task_spawn("short"), &mut measured);
+        assert_eq!(measured, 0);
+    }
+
+    /// A content row refuses landed text that matches it, while it blocks and
+    /// its modifier admits, and no other kind refuses through this gate.
+    ///
+    /// Fails by: the kind, blocking or modifier test inverted.
+    #[test]
+    fn a_content_row_refuses_matching_landed_text() {
+        let row = Rule {
+            pattern: None,
+            content: Some(String::from("SECRET")),
+            ..shape("no-secret", "unused", None)
+        };
+        let landed: ProspectiveFacts = crate::facts::Look::Is(String::from("a SECRET here"));
+        let gate =
+            |row: Rule, call: &Envelope| content_rules(&ceiling_policy(vec![row]), call, &landed);
+        let call = write_envelope("Write", "a.txt");
+        assert!(matches!(gate(row.clone(), &call), Decision::Deny(_)));
+        let receipt = Rule {
+            kind: RuleKind::Receipt,
+            ..row.clone()
+        };
+        assert_eq!(gate(receipt, &call), Decision::Allow);
+        let warned = Rule {
+            severity: Some(RuleSeverity::Warn),
+            ..row.clone()
+        };
+        assert_eq!(gate(warned, &call), Decision::Allow);
+        let conditioned = Rule {
+            when_absent: Some(Field::SessionId),
+            ..row
+        };
+        let mut in_session = write_envelope("Write", "a.txt");
+        in_session.session = Some(String::from("s1"));
+        assert_eq!(gate(conditioned, &in_session), Decision::Allow);
+    }
+
+    /// One mediated module per `(token, severity)` pair, each refusing a call
+    /// whose command names `forbidden`, loaded as the boundary loads them.
+    fn graded_modules(case: &str, rows: &[(&str, RuleSeverity)], extra: &str) -> Policy {
+        let dir = scratch_root(&format!("graded-{case}"));
+        let mut loaded = Vec::new();
+        let mut verdicts = Vec::new();
+        for (index, (token, severity)) in rows.iter().enumerate() {
+            let module = format!("m{index}.rego");
+            std::fs::write(
+                dir.join(&module),
+                format!(
+                    "package batten.m{index}\n\nimport rego.v1\n\n\
+                     deny contains \"{token}\" if {{\n    contains(input.call.command, \"forbidden\")\n}}\n{extra}"
+                ),
+            )
+            .expect("write module");
+            let severity = match severity {
+                RuleSeverity::Deny => "deny",
+                RuleSeverity::Warn => "warn",
+                RuleSeverity::Allow => "allow",
+                RuleSeverity::Ask => "ask",
+            };
+            loaded.push(
+                serde_json::from_value::<Rule>(serde_json::json!({
+                    "id": format!("row-{index}"),
+                    "kind": "policy",
+                    "scope": "mediated_call",
+                    "module": module,
+                    "severity": severity,
+                }))
+                .expect("a policy row"),
+            );
+            verdicts.push(
+                serde_json::from_value::<crate::verdict::DeclaredVerdict>(serde_json::json!({
+                    "id": token,
+                    "gloss": format!("the fixture class {token}"),
+                    "class": format!("What {token} means."),
+                    "route": [{"id": "read the authority", "kind": "document", "target": "batten.toml"}],
+                }))
+                .expect("a declared verdict"),
+            );
+        }
+        let bundles = crate::policy::load(
+            &dir,
+            &loaded,
+            crate::policy::Vocabulary {
+                verdicts: &verdicts,
+                ..crate::policy::Vocabulary::EMPTY
+            },
+            crate::policy::ModuleChecks::Run,
+            None,
+        )
+        .expect("load");
+        Policy {
+            bundles,
+            verdicts: crate::policy::registry_for(&verdicts).expect("registry"),
+            ..ceiling_policy(Vec::new())
+        }
+    }
+
+    fn no_facts<R>(body: impl FnOnce(&Facts<'_>) -> R) -> R {
+        body(&Facts::none(
+            &crate::stop::StopFacts::default(),
+            &crate::waiver::Live::new(),
+        ))
+    }
+
+    /// The strongest module violation decides, declaration order breaks a
+    /// tie, and a `deny` ends the scan.
+    ///
+    /// Fails by: ranking by anything but strictly greater, or breaking on a
+    /// weaker grade.
+    #[test]
+    fn the_strongest_module_violation_decides() {
+        let call = envelope("forbidden");
+        let mixed = graded_modules(
+            "mixed",
+            &[
+                ("refused by alpha", RuleSeverity::Warn),
+                ("refused by beta", RuleSeverity::Deny),
+            ],
+            "",
+        );
+        let decision = no_facts(|f| policy_rules(&mixed, &call, f));
+        assert!(
+            matches!(&decision, Decision::Deny(r) if format!("{r:?}").contains("refused by beta")),
+            "{decision:?}"
+        );
+        let ties = graded_modules(
+            "ties",
+            &[
+                ("refused by alpha", RuleSeverity::Warn),
+                ("refused by beta", RuleSeverity::Warn),
+            ],
+            "",
+        );
+        let (_, strongest) =
+            no_facts(|f| policy_refusal(&ties, &call, f)).expect("a warn violation");
+        assert!(format!("{strongest:?}").contains("refused by alpha"));
+    }
+
+    /// A `warn` module allows the call and speaks as advice, except at
+    /// `Stop`, where it nudges once and only while no nudge is active.
+    ///
+    /// Fails by: denying at `warn`, losing the advice, advising at `Stop`, or
+    /// either stop guard inverted.
+    #[test]
+    fn a_warn_module_advises_and_nudges_at_stop() {
+        let warned = graded_modules("warned", &[("refused by alpha", RuleSeverity::Warn)], "");
+        let call = envelope("forbidden");
+        assert_eq!(
+            no_facts(|f| policy_rules(&warned, &call, f)),
+            Decision::Allow
+        );
+        assert_eq!(no_facts(|f| policy_advice(&warned, &call, f)).len(), 1);
+        let stop = envelope_at(Event::Stop, "forbidden");
+        assert!(no_facts(|f| policy_advice(&warned, &stop, f)).is_empty());
+        assert!(no_facts(|f| stop_advice(&warned, &stop, f)).is_some());
+        let active = Envelope {
+            stop_active: Some(true),
+            ..envelope_at(Event::Stop, "forbidden")
+        };
+        assert!(no_facts(|f| stop_advice(&warned, &active, f)).is_none());
+        assert!(no_facts(|f| stop_advice(&warned, &call, f)).is_none());
+        let off = graded_modules("off", &[("refused by alpha", RuleSeverity::Allow)], "");
+        assert!(no_facts(|f| policy_advice(&off, &call, f)).is_empty());
+    }
+
+    /// A native gate graded `warn` advises on a moment the chain decides, and
+    /// not on one it does not.
+    ///
+    /// Fails by: the policy-emptiness test inverted, or the event and
+    /// emptiness tests disjoined.
+    #[test]
+    fn a_warned_native_gate_advises_where_the_chain_decides() {
+        use crate::facts::Look;
+        let policy = ceiling_policy(vec![history_graded(RuleSeverity::Warn)]);
+        let advice = |event| {
+            with_native_facts(
+                Look::CouldNotLook,
+                Look::Is(vec![String::from("row")]),
+                |f| policy_advice(&policy, &envelope_at(event, "ls"), f).len(),
+            )
+        };
+        assert_eq!(advice(Event::PreTool), 1);
+        assert_eq!(advice(Event::SessionStart), 0);
+    }
+
+    /// A module's pre-approval and rewrite apply to a pre-tool call only.
+    ///
+    /// Fails by: answering a constant, or the event and bundle guards
+    /// inverted or conjoined.
+    #[test]
+    fn a_preapproval_and_rewrite_apply_pre_tool_only() {
+        let granting = graded_modules(
+            "grant",
+            &[("refused by alpha", RuleSeverity::Deny)],
+            "\nrules contains \"read approved probe\"\n\n\
+             preapprove contains \"read approved probe\" if input.call.operation == \"read\"\n\n\
+             rewrite contains {\"rule\": \"read approved probe\", \"key\": \"timeout\", \"value\": 600000} if {\n    \
+             input.call.operation == \"read\"\n}\n",
+        );
+        let read = decoded(r#"{"tool_name":"Read","tool_input":{"file_path":"a"}}"#);
+        assert!(no_facts(|f| policy_preapproval(&granting, &read, f)).is_some());
+        let rewritten = no_facts(|f| policy_rewrite(&granting, &read, f)).expect("a rewrite");
+        assert_eq!(rewritten["timeout"], 600_000);
+        assert_eq!(rewritten["file_path"], "a");
+        let after = Envelope {
+            event: Event::PostTool,
+            ..read.clone()
+        };
+        assert!(no_facts(|f| policy_preapproval(&granting, &after, f)).is_none());
+        assert!(no_facts(|f| policy_rewrite(&granting, &after, f)).is_none());
+    }
 }

@@ -19191,4 +19191,211 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         assert!(mediated.is_empty());
         assert!(rule_costs().is_empty(), "nothing read, no row");
     }
+
+    /// A one-commit repository carrying `a.txt`, its index written.
+    fn seeded(name: &str) -> PathBuf {
+        let dir = crate::scratch::scratch(name);
+        write(&dir, "a.txt", "a\n");
+        crate::gitwrite::commit_paths(&dir, &[String::from("a.txt")], "fixture").expect("seed");
+        dir
+    }
+
+    /// A rule set declaring only a HEAD read still gets it: the early return
+    /// is for a rule set declaring nothing at all.
+    ///
+    /// Fails by: any conjunct of the nothing-declared test disjoined, which
+    /// returns before reading the one declared member.
+    #[test]
+    fn a_lone_git_read_is_still_answered() {
+        let dir = seeded("rules-git-lone-read");
+        let row = Rule {
+            git: vec![GitRead::Head],
+            ..blank("p", RuleKind::Policy)
+        };
+        let facts = git_facts(&[row], &dir);
+        assert!(facts.head.is_some(), "{facts:?}");
+        assert_eq!(facts.head, crate::git::head_fact(&dir).ok());
+    }
+
+    /// Every declared git member is read, each from its own reader.
+    ///
+    /// Fails by: dropping any member from the returned facts, or inverting
+    /// any member's declaration test.
+    #[test]
+    fn every_declared_git_member_is_read() {
+        let dir = seeded("rules-git-every-member");
+        let refs = vec![String::from("HEAD")];
+        let row = Rule {
+            git: vec![
+                GitRead::Head,
+                GitRead::Status,
+                GitRead::Remote,
+                GitRead::Worktrees,
+            ],
+            refs: refs.clone(),
+            ranges: refs.clone(),
+            commits: refs.clone(),
+            staged: vec![String::from("a.txt")],
+            history: vec![crate::facts::HistoryQuery {
+                id: String::from("h"),
+                tags: Some(String::from("*")),
+                path: None,
+                filter: None,
+            }],
+            landing: refs.clone(),
+            delta_sources: vec![String::from("*.txt")],
+            base: Some(String::from("HEAD")),
+            tags: vec![String::from("*")],
+            git_config: vec![String::from("user.name")],
+            index: vec![String::from("a.txt")],
+            ..blank("p", RuleKind::Policy)
+        };
+        let facts = git_facts(&[row.clone()], &dir);
+        assert_eq!(facts.head, crate::git::head_fact(&dir).ok());
+        assert_eq!(facts.status, crate::git::status_fact(&dir).ok());
+        assert_eq!(facts.remote, crate::git::remote_fact(&dir).ok());
+        assert_eq!(facts.worktrees, crate::git::worktree_fact(&dir).ok());
+        assert_eq!(facts.refs, crate::git::ref_facts(&dir, &refs).ok());
+        assert_eq!(facts.ranges, crate::git::range_facts(&dir, &refs).ok());
+        assert_eq!(facts.metadata, crate::git::metadata_facts(&dir, &refs).ok());
+        assert_eq!(
+            facts.staged,
+            crate::git::staged_facts(&dir, &row.staged).ok()
+        );
+        assert_eq!(
+            facts.history,
+            crate::git::history_facts(&dir, &row.history).ok()
+        );
+        assert_eq!(facts.landing, crate::git::landing_facts(&dir, &refs).ok());
+        assert_eq!(
+            facts.base_delta,
+            crate::git::base_delta(&dir, "HEAD", &row.delta_sources, true)
+                .ok()
+                .flatten()
+        );
+        assert_eq!(facts.tags, crate::git::tag_facts(&dir, &row.tags).ok());
+        assert_eq!(
+            facts.config,
+            crate::git::config_facts(&dir, &row.git_config).ok()
+        );
+        assert_eq!(facts.index, crate::git::index_facts(&dir, &row.index).ok());
+        let missing: Vec<&str> = [
+            ("head", facts.head.is_some()),
+            ("status", facts.status.is_some()),
+            ("remote", facts.remote.is_some()),
+            ("worktrees", facts.worktrees.is_some()),
+            ("refs", facts.refs.is_some()),
+            ("ranges", facts.ranges.is_some()),
+            ("metadata", facts.metadata.is_some()),
+            ("staged", facts.staged.is_some()),
+            ("history", facts.history.is_some()),
+            ("landing", facts.landing.is_some()),
+            ("base_delta", facts.base_delta.is_some()),
+            ("tags", facts.tags.is_some()),
+            ("config", facts.config.is_some()),
+            ("index", facts.index.is_some()),
+        ]
+        .into_iter()
+        .filter(|(_, present)| !present)
+        .map(|(member, _)| member)
+        .collect();
+        assert_eq!(missing, Vec::<&str>::new(), "declared and readable here");
+        assert_eq!(
+            git_facts(&[blank("p", RuleKind::Policy)], &dir),
+            Default::default()
+        );
+    }
+
+    fn checks(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    /// A declared forge token is resolved as a ref and answered from the
+    /// record written for its commit; an undeclared family reads nothing.
+    ///
+    /// Fails by: any placeholder map, or answering for a family nobody
+    /// declared.
+    #[test]
+    fn a_forge_verdict_is_read_for_its_declared_ref() {
+        let dir = seeded("rules-forge-facts");
+        let git_dir = crate::git::git_dir(&dir).expect("a git dir");
+        let head =
+            crate::git::ref_facts(&dir, &[String::from("HEAD")]).expect("HEAD resolves")["HEAD"]
+                .clone();
+        let record = crate::forge::record_path(&git_dir, &head);
+        fs::create_dir_all(record.parent().expect("a directory")).expect("mkdir");
+        fs::write(&record, "ci success\n").expect("write record");
+        let row = Rule {
+            forge: vec![String::from("HEAD")],
+            ..blank("p", RuleKind::Policy)
+        };
+        assert_eq!(
+            forge_facts(&[row], &dir),
+            Some(BTreeMap::from([(
+                String::from("HEAD"),
+                checks(&[("ci", "success")])
+            )]))
+        );
+        assert_eq!(forge_facts(&[blank("p", RuleKind::Policy)], &dir), None);
+    }
+
+    /// A declared tool row is answered from the record keyed on its input's
+    /// digest.
+    ///
+    /// Fails by: any placeholder map, or answering for a family nobody
+    /// declared.
+    #[test]
+    fn a_tool_verdict_is_read_for_its_declared_row() {
+        let dir = seeded("rules-tool-facts");
+        let git_dir = crate::git::git_dir(&dir).expect("a git dir");
+        let query = tool_query("probe", "validator", "1.0", "a.txt");
+        let key = crate::tools::record_key(&query, &crate::tools::digest(b"a\n"));
+        let record = crate::tools::record_path(&git_dir, &key);
+        fs::create_dir_all(record.parent().expect("a directory")).expect("mkdir");
+        fs::write(&record, "lint pass\n").expect("write record");
+        let row = Rule {
+            tools: vec![query],
+            ..blank("p", RuleKind::Policy)
+        };
+        assert_eq!(
+            tool_facts(&[row], &dir),
+            Some(BTreeMap::from([(
+                String::from("probe"),
+                checks(&[("lint", "pass")])
+            )]))
+        );
+        assert_eq!(tool_facts(&[blank("p", RuleKind::Policy)], &dir), None);
+    }
+
+    /// A declared minted row is answered from its mint's receipts at the
+    /// instant supplied.
+    ///
+    /// Fails by: any placeholder map, or answering for a family nobody
+    /// declared.
+    #[test]
+    fn a_minted_field_is_read_for_its_declared_row() {
+        let dir = seeded("rules-minted-facts");
+        let git_dir = crate::git::git_dir(&dir).expect("a git dir");
+        let store = crate::minted::store_path(&git_dir);
+        fs::create_dir_all(&store).expect("mkdir");
+        fs::write(store.join("issue-read.CLOUD-1"), "1000 Todo\n").expect("write receipt");
+        let row = Rule {
+            minted: vec![minted_query("status", "issue-read", 1, 0, 1)],
+            ..blank("p", RuleKind::Policy)
+        };
+        assert_eq!(
+            minted_facts(&[row], &dir, Some(1000)),
+            Some(BTreeMap::from([(
+                String::from("status"),
+                checks(&[("CLOUD-1", "Todo")])
+            )]))
+        );
+        assert_eq!(
+            minted_facts(&[blank("p", RuleKind::Policy)], &dir, Some(1000)),
+            None
+        );
+    }
 }
