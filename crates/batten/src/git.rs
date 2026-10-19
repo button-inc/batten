@@ -5928,18 +5928,14 @@ mod tests {
         items.iter().map(|item| (*item).to_owned()).collect()
     }
 
-    /// Point `name` at `target` through gix directly: `gitwrite::set_ref`
-    /// cannot write the reflog in a fixture with no committer identity.
+    /// Point `name` at `target` as a loose ref file. Any gix ref edit writes a
+    /// reflog, which needs a committer identity a CI container does not have.
     fn fixture_ref(dir: &Path, name: &str, target: &str) {
-        gix::open(dir)
-            .expect("open")
-            .reference(
-                name,
-                gix::ObjectId::from_hex(target.as_bytes()).expect("an id"),
-                gix::refs::transaction::PreviousValue::Any,
-                "fixture",
-            )
-            .expect("a ref");
+        let path = dir.join(".git").join(name);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("the ref's directory");
+        }
+        fs::write(path, format!("{target}\n")).expect("a ref");
     }
 
     /// A three-commit history on `main`: `a.txt` and `b.txt`, then `a.txt`
