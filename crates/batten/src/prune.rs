@@ -1340,11 +1340,10 @@ mod tests {
         assert_eq!(stems, expected);
     }
 
-    /// Fails by: a volume that cannot be read answering a reading anyway. Off
-    /// unix the volume a missing path would land on still answers, so the
-    /// refusal is unix's contract only.
+    /// Fails by: a path statvfs cannot read answering a reading anyway. Windows
+    /// reads the volume a missing path would land on, so there it answers.
     #[test]
-    fn free_space_under_no_volume_is_an_error() {
+    fn free_space_at_a_missing_path_refuses_on_unix_alone() {
         let absent = std::env::temp_dir().join("batten-prune-no-volume-never-made");
         assert_eq!(available_megabytes(&absent).is_err(), cfg!(unix));
     }

@@ -282,10 +282,12 @@ mod tests {
         use crate::facts::CaptureQuery;
         let dir = crate::scratch::scratch("captured-reduce");
         crate::testing::contain_state(&dir.join("state"));
-        std::fs::create_dir_all(dir.join("repo")).unwrap();
-        // Canonical, as `reduce` reads it: macOS spells its temp dir through a
-        // `/private` symlink, which would key the store to another name.
-        let root = std::fs::canonicalize(dir.join("repo")).unwrap();
+        let given = dir.join("repo");
+        std::fs::create_dir_all(&given).unwrap();
+        // The store is keyed under the resolved spelling, as the hook writes it,
+        // and `reduce` is handed the unresolved one, so resolving it is its own
+        // job: macOS spells its temp dir through a `/private` symlink.
+        let root = crate::git::canonical(&given);
         let stored = crate::capture::store(
             &root,
             Stream::Response,
@@ -341,7 +343,7 @@ mod tests {
             reduce: Reduction::Token,
         };
         let found = super::reduce(
-            &root,
+            &given,
             &[
                 row("by-path", "CLOUD-1", Some("id")),
                 row("by-text", "CLOUD-1", None),
