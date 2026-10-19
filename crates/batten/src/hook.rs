@@ -18599,6 +18599,39 @@ deny contains "refused by themodule" if {
         assert_eq!(policy.bundles.len(), 1);
     }
 
+    /// A read route whose server no declared source resolves is not offered.
+    ///
+    /// Fails by: the reachability test inverted, keeping a route nobody can
+    /// take.
+    #[test]
+    fn a_read_route_no_declared_source_resolves_is_dropped() {
+        let dir = scratch_root("redirect-unreachable");
+        std::fs::write(dir.join("batten.toml"), "version = 1\n").expect("write authority");
+        let mut resolved = crate::resolve::resolve(&dir, &crate::resolve::Overrides::default())
+            .expect("the authority resolves");
+        resolved.redirects = vec![crate::redirect::Redirect {
+            glob: String::from(".serena/memories/**"),
+            mutation: String::from("use Serena's memory tools"),
+            read: Some(String::from("read_memory")),
+            read_server: Some(String::from("serena")),
+        }];
+        let mut mcp = crate::mcp::McpConfig::default();
+        mcp.sources.push(crate::mcp::Source {
+            endpoint_contains: std::collections::BTreeMap::new(),
+            id: String::from("nowhere"),
+            root: Some(String::from("BATTEN_MCP_ROOT_THAT_IS_NOT_SET")),
+            base: None,
+            path: String::from("wiring.json"),
+            node: String::new(),
+            credential: None,
+        });
+        resolved.mcp = Some(mcp);
+        let policy =
+            Policy::from_resolved(&resolved, Harness::ExitCode, &dir, None).expect("loads");
+        assert_eq!(policy.redirects.len(), 1);
+        assert_eq!(policy.redirects[0].read, None);
+    }
+
     /// Run `body` over a fact set carrying only the two native-gate facts.
     fn with_native_facts<R>(
         discards: crate::facts::Look<Vec<String>>,
