@@ -5928,8 +5928,9 @@ mod tests {
         items.iter().map(|item| (*item).to_owned()).collect()
     }
 
-    /// Point `name` at `target` as a loose ref file. Any gix ref edit writes a
-    /// reflog, which needs a committer identity a CI container does not have.
+    /// Point `name` at `target` as a loose ref file. `Repository::reference`,
+    /// like `gitwrite::set_ref`, also writes a reflog, and a reflog needs a
+    /// committer identity a CI container does not have.
     fn fixture_ref(dir: &Path, name: &str, target: &str) {
         let path = dir.join(".git").join(name);
         if let Some(parent) = path.parent() {
