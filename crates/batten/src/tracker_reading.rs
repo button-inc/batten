@@ -843,4 +843,53 @@ mod tests {
         let word = BTreeMap::from([("window".to_owned(), "sixty".to_owned())]);
         assert!(duplicate_close(&word, set).is_err());
     }
+
+    #[test]
+    fn only_the_declared_families_are_read() {
+        for family in super::FAMILIES {
+            assert!(super::is_family(family), "{family}");
+        }
+        assert!(!super::is_family("nonesuch"));
+    }
+
+    /// Fails by: a misspelled input riding a clean exit.
+    #[test]
+    fn an_input_the_family_does_not_read_is_refused() {
+        let typo = BTreeMap::from([("windw".to_owned(), "16".to_owned())]);
+        let err = done_pr(&typo, r#"[{"id":"A-1"}]"#).expect_err("an unread input");
+        assert!(
+            format!("{err:#}").contains("reads no input `windw`"),
+            "{err:#}"
+        );
+    }
+
+    /// Fails by: a payload carrying only one of `id` and `status` read as a
+    /// tracker payload.
+    #[test]
+    fn a_done_payload_lacking_its_status_is_not_a_tracker_payload() {
+        let inputs = BTreeMap::from([
+            ("released".to_owned(), "v*".to_owned()),
+            ("landed".to_owned(), "HEAD".to_owned()),
+            ("done".to_owned(), "Done".to_owned()),
+        ]);
+        let err = super::done(&inputs, std::path::Path::new("."), r#"[{"id":"A-1"}]"#)
+            .expect_err("no status");
+        assert!(format!("{err:#}").contains("need id and status"), "{err:#}");
+    }
+
+    /// Fails by: a bare-string relation dropped, or a blank or `null` target
+    /// read as an issue it duplicates.
+    #[test]
+    fn a_duplicate_target_is_a_named_issue_however_it_is_spelled() {
+        let of = |relation: serde_json::Value| {
+            super::duplicate_target(&serde_json::json!({"relations": {"duplicateOf": relation}}))
+        };
+        assert_eq!(of(serde_json::json!("A-777")), Some("A-777".to_owned()));
+        assert_eq!(
+            of(serde_json::json!({"id": "A-777"})),
+            Some("A-777".to_owned())
+        );
+        assert_eq!(of(serde_json::json!("null")), None);
+        assert_eq!(of(serde_json::json!("")), None);
+    }
 }

@@ -337,4 +337,67 @@ mod tests {
     fn an_empty_change_set_has_no_identity() {
         assert_eq!(identity(&mut []), None);
     }
+
+    /// Fails by: the NUL heuristic inverted or answered as a constant.
+    #[test]
+    fn a_blob_is_text_unless_it_holds_a_nul() {
+        assert!(super::is_text(b"plain\n"));
+        assert!(super::is_text(b""));
+        assert!(!super::is_text(b"bin\0ary"));
+    }
+
+    /// Fails by: a binary after side letting a text base contribute its mode
+    /// alone, so two edits to different bases collapse to one identity.
+    #[test]
+    fn a_base_whose_after_side_is_binary_contributes_its_object_id() {
+        let change = |oid: &str| Change {
+            path: b"p".to_vec(),
+            kind: Kind::Modified {
+                before: Blob {
+                    oid: oid.repeat(64),
+                    mode: 0o100_644,
+                    text: Some(b"a\n".to_vec()),
+                },
+                after: Blob {
+                    oid: "9".repeat(64),
+                    mode: 0o100_644,
+                    text: None,
+                },
+            },
+        };
+        assert_ne!(identity(&mut [change("1")]), identity(&mut [change("2")]));
+    }
+
+    /// Fails by: either nibble of a digest byte misread, so the identity is
+    /// hex in shape but no longer the digest.
+    #[test]
+    fn the_identity_spells_both_nibbles_of_every_byte() {
+        let hex = identity(&mut [Change {
+            path: b"p".to_vec(),
+            kind: Kind::Added {
+                blob: Blob {
+                    oid: "0".repeat(64),
+                    mode: 0o100_644,
+                    text: None,
+                },
+            },
+        }])
+        .unwrap();
+        assert_eq!(hex.len(), 64);
+        assert!(
+            hex.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
+        assert!(
+            hex.chars().step_by(2).any(|c| c != '0'),
+            "a high nibble is read: {hex}"
+        );
+        assert!(
+            hex.chars()
+                .skip(1)
+                .step_by(2)
+                .any(|c| !matches!(c, '0' | 'f')),
+            "a low nibble is read: {hex}"
+        );
+    }
 }

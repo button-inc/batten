@@ -321,4 +321,24 @@ mod tests {
             }
         }
     }
+
+    /// Fails by: the invocation spelled as a filename or as nothing, so a
+    /// SYNOPSIS documents a command line that does not parse.
+    #[test]
+    fn a_qualified_name_is_the_space_joined_invocation() {
+        assert_eq!(qualified("batten", " "), "batten");
+        assert_eq!(qualified("batten", "config show"), "batten config show");
+    }
+
+    /// Fails by: the root's global flags dropped from the reference, or headed
+    /// as globals only where there are none.
+    #[test]
+    fn the_roots_flags_are_headed_as_globals() {
+        let described = spec::describe(&surface::command());
+        assert!(
+            !described.flags.is_empty(),
+            "the premise: the root has flags"
+        );
+        assert!(markdown(&described).contains("\n## Global flags\n"));
+    }
 }

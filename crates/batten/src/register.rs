@@ -1106,4 +1106,51 @@ mod tests {
         };
         assert!(validate(&[last]).is_ok());
     }
+
+    #[test]
+    fn a_token_is_joined_to_its_citers_directory_and_folded() {
+        assert_eq!(joined("docs/a/b.md", "../c.md"), "docs/c.md");
+        assert_eq!(joined("docs/b.md", "./c.md"), "docs/c.md");
+        assert_eq!(joined("b.md", "c.md"), "c.md");
+    }
+
+    #[test]
+    fn a_tree_register_keys_each_path_by_its_capture() {
+        let reg = DeclaredRegister {
+            id: String::from("tree"),
+            paths: vec![String::from("att/*.md")],
+            source: Source::Tree {
+                pattern: String::from("cap"),
+            },
+        };
+        let patterns = compiled(&[("cap", r"^att/([a-z]+)\.md$")]);
+        let built = build(
+            &reg,
+            &patterns,
+            &[Input::Path("att/key.md"), Input::Path("other/x.txt")],
+        );
+        assert_eq!(built.contains("key"), Some(true));
+        assert_eq!(built.contains("x"), Some(false));
+    }
+
+    #[test]
+    fn a_partition_is_the_first_capture_or_the_root() {
+        let partition = regex::Regex::new("^ws/([^/]+)/").expect("test regex");
+        assert_eq!(partition_of(Some(&partition), "ws/a/n.md"), "a");
+        assert_eq!(partition_of(Some(&partition), "top.md"), "");
+        assert_eq!(partition_of(None, "ws/a/n.md"), "");
+    }
+
+    #[test]
+    fn inverse_refuses_only_the_keys_no_citation_names() {
+        let target = keys_at(&[("key-a", "r.md"), ("key-b", "r.md")]);
+        let refusals = resolve(&target, &[citation("key-a", "n.md")], None, None, true);
+        assert_eq!(
+            refusals,
+            vec![Refusal::Uncited(Witness {
+                path: String::from("r.md"),
+                line: None,
+            })]
+        );
+    }
 }

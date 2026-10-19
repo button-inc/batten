@@ -105,7 +105,11 @@ pub fn pr_number(raw: &str) -> Result<u64> {
 /// one path component would put a receipt outside the store, so it reads as none.
 #[must_use]
 pub fn session(host: &Host) -> Option<String> {
-    let value = std::env::var(&host.session_env).ok()?;
+    safe_id(&std::env::var(&host.session_env).ok()?)
+}
+
+/// `value` as a session id, or `None` where it is not one path component.
+fn safe_id(value: &str) -> Option<String> {
     let value = value.trim();
     let unsafe_id = value.is_empty()
         || value == "."
@@ -441,6 +445,24 @@ pub fn record(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: any one unsafe spelling admitted as a session id, which would
+    /// put a receipt outside the store.
+    #[test]
+    fn a_session_id_is_exactly_one_path_component() {
+        assert_eq!(safe_id(" s-1 "), Some(String::from("s-1")));
+        for unsafe_id in ["", "  ", ".", "..", "a/b", "a\\b", "a\0b", "a b"] {
+            assert_eq!(safe_id(unsafe_id), None, "{unsafe_id:?}");
+        }
+    }
+
+    /// Fails by: a signed number parsed as a pull request.
+    #[test]
+    fn a_pull_request_is_digits_alone() {
+        assert_eq!(pr_number("12").unwrap(), 12);
+        assert!(pr_number("+12").is_err());
+        assert!(pr_number("").is_err());
+    }
 
     #[test]
     fn a_refused_or_errored_call_is_not_accepted() {

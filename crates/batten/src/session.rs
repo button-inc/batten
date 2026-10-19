@@ -811,4 +811,66 @@ mod tests {
         assert!(short.chars().all(|c| c.is_ascii_hexdigit()));
         assert!(!short.contains("host"));
     }
+
+    /// Fails by: an empty session or parent read as declared, or a declared
+    /// session read as none.
+    #[test]
+    fn only_a_non_empty_variable_declares_a_session_or_its_parent() {
+        let env = |session: &'static str, parent: &'static str| {
+            move |name: &str| match name {
+                SESSION_ENV => Some(session.to_owned()),
+                PARENT_ENV => Some(parent.to_owned()),
+                _ => None,
+            }
+        };
+        assert_eq!(declared_with_env(&env("", "p")), None);
+        assert_eq!(
+            declared_with_env(&env("s", "")),
+            Some(Declared {
+                key: String::from("s"),
+                parent: None,
+            })
+        );
+        assert_eq!(
+            declared_with_env(&env("s", "p")),
+            Some(Declared {
+                key: String::from("s"),
+                parent: Some(String::from("p")),
+            })
+        );
+    }
+
+    /// Fails by: the process environment not read at all.
+    #[test]
+    fn declared_reads_this_processes_own_environment() {
+        assert_eq!(
+            declared(),
+            declared_with_env(&|name| std::env::var(name).ok())
+        );
+    }
+
+    /// Fails by: a watermark not written, not read back, or its result not
+    /// cleared, so a drain after a restart points at a payload the context lost.
+    #[test]
+    fn a_saved_watermark_is_read_back_and_forgetting_keeps_its_ordinal() {
+        let dir = store("watermark");
+        let root = Root {
+            key: String::from("lineage"),
+            depth: 0,
+            truncated: false,
+        };
+        assert_eq!(load_watermark(&dir, &root).unwrap(), None);
+        let mark = Watermark::next(None, String::from("abc"));
+        save_watermark(&dir, &root, &mark).unwrap();
+        assert_eq!(load_watermark(&dir, &root).unwrap(), Some(mark));
+        forget_result(&dir, &root).unwrap();
+        assert_eq!(
+            load_watermark(&dir, &root).unwrap(),
+            Some(Watermark {
+                scan: 1,
+                result_id: String::new(),
+            })
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

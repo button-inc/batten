@@ -284,6 +284,27 @@ mod tests {
         document(&surface::command())
     }
 
+    /// Fails by: clap's own `help`/`version` reported as surface, a declared
+    /// flag dropped beside them, or a boolean flag read as consuming a value.
+    #[test]
+    fn flags_are_the_declared_arguments_and_only_booleans_take_no_value() {
+        let command = Command::new("x")
+            .arg(Arg::new("help").long("help").action(ArgAction::SetTrue))
+            .arg(
+                Arg::new("version")
+                    .long("version")
+                    .action(ArgAction::SetTrue),
+            )
+            .arg(Arg::new("yes").long("yes").action(ArgAction::SetTrue))
+            .arg(Arg::new("into").long("into"));
+        let flags = flags_of(&command);
+        let names: Vec<(&str, bool)> = flags
+            .iter()
+            .map(|flag| (flag.name.as_str(), flag.takes_value))
+            .collect();
+        assert_eq!(names, [("into", true), ("yes", false)]);
+    }
+
     /// Collect every command path in the tree whose effect resolves to `ask`
     /// (i.e. is missing from the §5 table). Used by the completeness gate.
     fn unclassified_paths(node: &CommandSpec, root_name: &str, out: &mut Vec<String>) {

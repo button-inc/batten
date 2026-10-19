@@ -439,4 +439,18 @@ mod tests {
             "an empty set must refuse; matching nothing would report every row as not-advanced"
         );
     }
+
+    /// Fails by: the refusal rendered as nothing, so a caller's remedy names no
+    /// key to declare.
+    #[test]
+    fn an_undeclared_column_names_its_key() {
+        let undeclared = Undeclared {
+            key: "board.in_progress",
+        };
+        assert_eq!(
+            undeclared.to_string(),
+            "`board.in_progress` is not declared, so this decides nothing rather than \
+             guessing a column name"
+        );
+    }
 }

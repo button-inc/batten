@@ -542,4 +542,32 @@ mod tests {
             assert_eq!(class.advisable(), class != Class::Unknown);
         }
     }
+
+    /// Fails by: a declarable class's token not resolving, so a row naming it
+    /// is refused at load as a class this build does not know.
+    #[test]
+    fn every_advisable_class_token_resolves_to_its_class() {
+        for class in [
+            Class::CommandNotFound,
+            Class::PermissionDenied,
+            Class::UnsupportedOption,
+        ] {
+            assert_eq!(class_of(class.as_str()), Some(class));
+        }
+        assert_eq!(class_of(Class::Unknown.as_str()), None);
+    }
+
+    /// Fails by: a refused row numbered from zero, so the author edits the
+    /// row above the one at fault.
+    #[test]
+    fn a_refused_row_is_numbered_from_one() {
+        let mut table = signatures();
+        table.push(Signature {
+            class: "invented".to_owned(),
+            code: 1,
+            family: host_family(),
+        });
+        let err = validate(&table).expect_err("an unresolvable class");
+        assert!(format!("{err:#}").contains("row 3:"), "{err:#}");
+    }
 }

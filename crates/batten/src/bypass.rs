@@ -593,4 +593,24 @@ mod tests {
     fn the_deny_code_is_the_one_exit_table_not_a_literal() {
         assert_eq!(DENY_EXIT, 2);
     }
+
+    /// Fails by: a refusal's token emptied or respelled, so a report names it
+    /// by a word no reader matches.
+    #[test]
+    fn each_refusal_has_its_own_stable_token() {
+        assert_eq!(Refusal::Failed.as_str(), "failed");
+        assert_eq!(Refusal::Mediated.as_str(), "mediated");
+    }
+
+    /// Fails by: the no-fix reason emptied, which `is_emittable` would read as
+    /// a finding carrying neither a fix nor a reason.
+    #[test]
+    fn the_no_fix_reason_says_why_nothing_undoes_a_bypass() {
+        let reason = no_fix_reason();
+        assert!(
+            reason.starts_with("a refused operation was retried"),
+            "{reason}"
+        );
+        assert!(reason.contains("no command un-does it"), "{reason}");
+    }
 }

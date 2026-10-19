@@ -583,4 +583,29 @@ mod tests {
             "and one id keys the same snapshot every call"
         );
     }
+
+    /// Fails by: a change set holding only one kind of move reading as empty,
+    /// so that move is never reported.
+    #[test]
+    fn any_one_kind_of_move_makes_the_change_set_non_empty() {
+        let only = |changed: &[&str], added: &[&str], removed: &[&str]| ChangeSet {
+            changed: changed.iter().map(|path| (*path).to_owned()).collect(),
+            added: added.iter().map(|path| (*path).to_owned()).collect(),
+            removed: removed.iter().map(|path| (*path).to_owned()).collect(),
+        };
+        assert!(!only(&["a"], &[], &[]).is_empty());
+        assert!(!only(&[], &["a"], &[]).is_empty());
+        assert!(!only(&[], &[], &["a"]).is_empty());
+        assert!(only(&[], &[], &[]).is_empty());
+    }
+
+    /// Fails by: the snapshot not written, so the next comparison reports the
+    /// same move again, every call.
+    #[test]
+    fn a_recorded_manifest_is_what_the_next_read_returns() {
+        let git_dir = crate::scratch::scratch("contract-record");
+        let shown = manifest(&[("guide.md", "aa"), ("gate.config", "bb")]);
+        record(&git_dir, Some("s-1"), &shown).unwrap();
+        assert_eq!(previous(&git_dir, Some("s-1")), Look::Is(shown));
+    }
 }

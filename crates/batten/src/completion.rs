@@ -498,4 +498,30 @@ mod tests {
             "a consumer's command must not appear in the crate: {reason}"
         );
     }
+
+    /// Fails by: a token emptied or respelled, so a report names an outcome by
+    /// a word no reader matches.
+    #[test]
+    fn each_marker_and_outcome_has_its_own_stable_token() {
+        assert_eq!(Marker::TurnEnd.as_str(), "turn-end");
+        let signal = Signal {
+            line: 4,
+            marker: Marker::TurnEnd,
+        };
+        let raised = Outcome::Raised {
+            signal,
+            unaccounted: 1,
+        };
+        assert_eq!(raised.as_str(), "raised");
+        assert_eq!(Outcome::Cleared.as_str(), "cleared");
+        assert_eq!(Outcome::NotSignaled.as_str(), "not-signaled");
+        let skipped = Outcome::NotComputable { reason: NO_TARGET };
+        assert_eq!(skipped.as_str(), "not-computable");
+        assert_eq!(
+            raised.signal(),
+            Some(signal),
+            "a raised outcome points at it"
+        );
+        assert_eq!(Outcome::Cleared.signal(), None);
+    }
 }

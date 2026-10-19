@@ -143,4 +143,21 @@ mod tests {
             "no byte of the probe log reaches the record"
         );
     }
+
+    /// Fails by: the listing read without the harness's FAILED summary, so a
+    /// log that names the test and never ran to a result reads as discrimination.
+    #[test]
+    fn a_listing_with_no_failed_summary_is_unread() {
+        let listed_only = format!("failures:\n    {TEST}\n");
+        assert_eq!(verdict(101, &listed_only, TEST), Verdict::Unread);
+    }
+
+    /// Fails by: a token emptied or respelled, so a module reading the record
+    /// finds no line it knows.
+    #[test]
+    fn each_verdict_has_its_own_record_token() {
+        assert_eq!(Verdict::Passed.token(), "probe passed");
+        assert_eq!(Verdict::Failed.token(), "probe failed");
+        assert_eq!(Verdict::Unread.token(), "probe unread");
+    }
 }

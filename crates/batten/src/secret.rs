@@ -202,6 +202,12 @@ mod tests {
         assert!(Secret::new(String::new()).is_empty());
     }
 
+    /// Fails by: the wire getting other bytes than the credential it was given.
+    #[test]
+    fn expose_hands_back_the_value_unchanged() {
+        assert_eq!(Secret::new(CANARY.to_owned()).expose(), CANARY);
+    }
+
     /// SHOWN ABLE TO FAIL (CLOUD-418): the wipe is asserted over the buffer the
     /// value occupied rather than over a conclusion, so an implementation that
     /// dropped without writing would leave the canary here.

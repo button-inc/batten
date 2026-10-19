@@ -681,4 +681,35 @@ mod tests {
         rows[0].gloss = "   ".to_owned();
         assert!(validate(&rows).is_err());
     }
+
+    #[test]
+    fn distinct_well_formed_rows_load() {
+        let rows = [
+            row("one", &["true"], None),
+            row("two", &["true"], Some(&["true"])),
+        ];
+        assert!(validate(&rows).is_ok());
+    }
+
+    /// Fails by: the serialized row naming its default reading, or omitting a
+    /// declared one.
+    #[test]
+    fn only_the_exit_status_reading_is_the_default() {
+        assert!(Decided::ExitStatus.is_default());
+        assert!(!Decided::SilentExit.is_default());
+    }
+
+    /// Fails by: a failing row carrying no class, a passing one carrying one,
+    /// or the data channel's line diverging from the row's own.
+    #[test]
+    fn only_a_failing_row_is_a_finding_and_its_line_is_its_own() {
+        assert!(
+            Outcome::failed("broken", NOT_PROVISIONED)
+                .finding()
+                .is_some()
+        );
+        assert!(Outcome::passed("fine").finding().is_none());
+        let repaired = Outcome::repaired("moved");
+        assert_eq!(crate::output::Line::line(&repaired), "moved ok repaired");
+    }
 }

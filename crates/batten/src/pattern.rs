@@ -263,4 +263,23 @@ mod tests {
         );
         assert!(text.contains("declared twice"), "{text}");
     }
+
+    /// Fails by: the compiled table emptied, so every `{authority:…}` piece
+    /// renders `-` over rows that loaded.
+    #[test]
+    fn every_well_formed_row_compiles_under_its_id() {
+        let compiled = super::compiled(&[row("key", "[A-Z]+"), row("bad", "(unclosed")]);
+        assert_eq!(compiled.keys().collect::<Vec<_>>(), ["key"]);
+        assert!(compiled["key"].is_match("ABC"));
+    }
+
+    /// Fails by: the evaluator's document emptied, so a module's lookup by
+    /// name finds nothing.
+    #[test]
+    fn the_data_document_maps_each_id_to_its_expression() {
+        assert_eq!(
+            super::data_document(&[row("key", "[A-Z]+")]),
+            serde_json::json!({"batten": {"patterns": {"key": "[A-Z]+"}}})
+        );
+    }
 }

@@ -1030,4 +1030,40 @@ mod tests {
         .finding();
         assert_eq!(at_one.identity, at_nine.identity);
     }
+
+    /// Fails by: an undecidable binding raised on a claim that never asserted
+    /// it was verified, which is a record standing for nothing yet.
+    #[test]
+    fn an_unverified_claim_owes_no_decidable_binding() {
+        let unverified = || {
+            let mut claim = clean("a");
+            claim.status = Status::Claimed;
+            claim.capture = None;
+            claim
+        };
+        assert!(audit(&[unverified()], DEFAULT_MAX_CAPTURE_BYTES).is_empty());
+        let mut without = unverified();
+        without.capture = Some(Capture {
+            digest: CaptureDigest {
+                sha256: hex_sha256(b"unreachable"),
+            },
+            byte_count: 11,
+            bytes: None,
+        });
+        assert!(audit(&[without], DEFAULT_MAX_CAPTURE_BYTES).is_empty());
+    }
+
+    /// Fails by: the data channel's line diverging from the type's own text.
+    #[test]
+    fn a_problems_line_is_its_line_text() {
+        let problem = Problem {
+            line: 3,
+            id: VERIFIED_ABSENCE,
+            claim: "a".to_owned(),
+            first: None,
+        };
+        let line = crate::output::Line::line(&problem);
+        assert_eq!(line, problem.line_text());
+        assert!(line.contains(VERIFIED_ABSENCE), "{line}");
+    }
 }

@@ -476,9 +476,7 @@ pub fn live(waivers: &[Waiver], today: Date) -> Live {
     {
         live.entry(waiver.rule.clone())
             .and_modify(|expires| {
-                if waiver.expires > *expires {
-                    expires.clone_from(&waiver.expires);
-                }
+                *expires = std::mem::take(expires).max(waiver.expires.clone());
             })
             .or_insert_with(|| waiver.expires.clone());
     }
@@ -1029,5 +1027,25 @@ mod tests {
         for pair in dates.windows(2) {
             assert!(pair[0] < pair[1], "{pair:?} must be in calendar order");
         }
+    }
+
+    /// Fails by: a date admitted with either separator wrong, or with a day of
+    /// zero or past its month's end.
+    #[test]
+    fn every_malformed_separator_and_impossible_day_is_refused() {
+        for bad in ["2026/08-10", "2026-08/10", "2026-01-00", "2026-02-30"] {
+            assert!(Date::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// Fails by: the parser's own message dropped from the expiry refusal, so
+    /// the author is told a waiver is wrong but not what was expected.
+    #[test]
+    fn an_unparseable_expiry_names_the_waiver_and_the_expected_shape() {
+        let err = waiver("r", "soon").expiry().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "waiver r: invalid date \"soon\": expected YYYY-MM-DD"
+        );
     }
 }

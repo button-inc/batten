@@ -376,4 +376,61 @@ mod tests {
         let ledger = compare("", &format!("{line}\n"));
         assert!(ledger.admitting().iter().any(|entry| entry.admits(PAIR)));
     }
+
+    /// Fails by: a parent whose children are only half a checkout taken as one,
+    /// or a lone config read as no checkout, so an answer lands where no gate
+    /// reads it.
+    #[test]
+    fn the_ledger_roots_are_the_anchor_or_its_configured_checkouts() {
+        let lone = crate::scratch::scratch("asked-roots-lone");
+        std::fs::write(lone.join(crate::config::CONFIG_FILE), "").unwrap();
+        assert_eq!(ledger_roots(&lone), vec![lone.clone()], "a config alone");
+
+        let parent = crate::scratch::scratch("asked-roots-parent");
+        for name in ["both", "config-only", "repo-only"] {
+            std::fs::create_dir_all(parent.join(name)).unwrap();
+        }
+        crate::gitwrite::init_on_main(&parent.join("both")).unwrap();
+        std::fs::write(parent.join("both").join(crate::config::CONFIG_FILE), "").unwrap();
+        std::fs::write(
+            parent.join("config-only").join(crate::config::CONFIG_FILE),
+            "",
+        )
+        .unwrap();
+        crate::gitwrite::init_on_main(&parent.join("repo-only")).unwrap();
+        assert_eq!(ledger_roots(&parent), vec![parent.join("both")]);
+
+        assert!(ledger_roots(&parent.join("absent")).is_empty());
+    }
+
+    /// Fails by: the count returned instead of the lines written, either way.
+    #[test]
+    fn record_appends_each_answer_and_counts_it() {
+        let root = crate::scratch::scratch("asked-record");
+        assert_eq!(record(&root, &result("Admit it"), 7).unwrap(), 1);
+        assert_eq!(record(&root, &result("Refuse"), 8).unwrap(), 1);
+        let text = std::fs::read_to_string(root.join(LEDGER)).unwrap();
+        assert_eq!(text.lines().count(), 2);
+        let mut unanswered = result("Admit it");
+        unanswered["answers"] = serde_json::json!({});
+        assert_eq!(record(&root, &unanswered, 9).unwrap(), 0);
+    }
+
+    /// Fails by: the fork point's own ledger not read, so every inherited line
+    /// reads as this branch's addition.
+    #[test]
+    fn only_lines_after_the_fork_points_ledger_are_added() {
+        let root = crate::scratch::scratch("asked-added-since");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        let old = serde_json::to_string(&only("Admit it")).unwrap();
+        let new = serde_json::to_string(&only("Refuse")).unwrap();
+        std::fs::create_dir_all(root.join(".batten")).unwrap();
+        std::fs::write(root.join(LEDGER), format!("{old}\n")).unwrap();
+        crate::gitwrite::commit_paths(&root, &[LEDGER.to_owned()], "base").unwrap();
+        std::fs::write(root.join(LEDGER), format!("{old}\n{new}\n")).unwrap();
+        assert_eq!(
+            added_since(&root, "HEAD").unwrap(),
+            Ledger::Added(vec![only("Refuse")])
+        );
+    }
 }

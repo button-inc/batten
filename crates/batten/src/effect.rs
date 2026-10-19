@@ -159,4 +159,17 @@ mod tests {
         assert_eq!(Effect::from_token("nonsense"), None);
         assert_eq!(Effect::from_token("Read"), None, "lowercase tokens only");
     }
+
+    /// Fails by: the published schema naming another type, or enumerating
+    /// nothing, so it stops describing what the loader takes.
+    #[test]
+    fn the_schema_is_named_effect_and_enumerates_every_token() {
+        assert_eq!(Effect::schema_name(), "Effect");
+        let schema = Effect::json_schema(&mut SchemaGenerator::default());
+        let tokens: Vec<&str> = Effect::ALL.iter().map(|effect| effect.as_str()).collect();
+        assert_eq!(
+            serde_json::to_value(&schema).unwrap(),
+            serde_json::json!({"type": "string", "enum": tokens})
+        );
+    }
 }

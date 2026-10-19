@@ -158,4 +158,18 @@ mod tests {
         assert!(!creates_the_sentinel(Some("batten.toml")));
         assert!(!creates_the_sentinel(None));
     }
+
+    /// Fails by: presence answered as a constant, so the ripcord is pulled in
+    /// every tree or in none. A scratch tree of its own rather than a fixture,
+    /// so this leaf gains no edge onto the crate.
+    #[test]
+    fn the_sentinel_is_present_only_where_the_file_is() {
+        let root = std::env::temp_dir().join(format!("batten-ripcord-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch tree");
+        assert!(!present(&root));
+        std::fs::write(root.join(SENTINEL), "").expect("write sentinel");
+        assert!(present(&root));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

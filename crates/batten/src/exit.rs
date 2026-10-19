@@ -346,4 +346,17 @@ mod tests {
             assert!(u8::try_from(code.code()).is_ok(), "{code:?} must fit u8");
         }
     }
+
+    /// Fails by: the conversion answering one process code whatever the
+    /// variant, so every verdict exits as a success.
+    #[test]
+    fn each_code_converts_to_its_own_process_exit() {
+        for (code, raw) in CONTRACT {
+            assert_eq!(
+                std::process::ExitCode::from(code),
+                std::process::ExitCode::from(u8::try_from(raw).unwrap()),
+                "{code:?}"
+            );
+        }
+    }
 }

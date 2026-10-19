@@ -450,4 +450,36 @@ mod tests {
             "state source hardcodes the repo name {baked}; derive it at runtime"
         );
     }
+
+    #[test]
+    fn a_named_data_directory_holds_the_same_segment() {
+        let repo = Path::new("/x/demo-repo");
+        assert_eq!(
+            repo_state_dir_under(Path::new("/data"), repo).unwrap(),
+            Path::new("/data")
+                .join(APP_NAMESPACE)
+                .join(derive_repo_name(repo).unwrap())
+        );
+    }
+
+    /// Fails by: the authority not written, not read back, or not rewritten
+    /// when the session moves to another repository.
+    #[test]
+    fn a_session_authority_follows_the_session_between_repositories() {
+        let scratch = crate::scratch::scratch("state-session-authority");
+        crate::testing::contain_state(&scratch.join("data"));
+        let (first, second) = (scratch.join("first"), scratch.join("second"));
+        for root in [&first, &second] {
+            std::fs::create_dir_all(root).unwrap();
+            std::fs::write(root.join("batten.toml"), "").unwrap();
+        }
+        assert_eq!(recorded_session_authority("s", "batten.toml"), None);
+        record_session_authority("s", &first).unwrap();
+        assert_eq!(
+            recorded_session_authority("s", "batten.toml"),
+            Some(first.clone())
+        );
+        record_session_authority("s", &second).unwrap();
+        assert_eq!(recorded_session_authority("s", "batten.toml"), Some(second));
+    }
 }

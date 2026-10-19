@@ -615,4 +615,19 @@ mod tests {
         assert_eq!(first.health("b"), second.health("b"));
         assert_eq!(first.decide("a", 1), second.decide("a", 1));
     }
+
+    /// Fails by: a later flapping context overwriting the first one already
+    /// recorded, so the annotation's counts depend on how many refs flap.
+    #[test]
+    fn the_first_flapping_context_keeps_its_counts() {
+        let mut log = alternating("x", Some("refs/heads/a"), 3);
+        log.extend(alternating("x", Some("refs/heads/b"), 5));
+        assert_eq!(
+            assess(&log, 8, 50).health("x"),
+            Health::Flapping {
+                transitions: 2,
+                evaluations: 3,
+            }
+        );
+    }
 }

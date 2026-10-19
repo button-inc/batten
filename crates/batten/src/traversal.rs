@@ -496,6 +496,19 @@ mod tests {
         assert!(validate(&[row("chain")]).is_ok());
     }
 
+    /// Fails by: a register stop admitted beside half of the key/value stop,
+    /// so one walk answers two stop conditions.
+    #[test]
+    fn a_register_stop_beside_either_half_of_a_key_stop_is_refused() {
+        for (key, value) in [(Some("registered"), None), (None, Some("true"))] {
+            let mut both = row("chain");
+            both.until_register = Some("keyset".to_owned());
+            both.until_key = key.map(ToOwned::to_owned);
+            both.until_value = value.map(ToOwned::to_owned);
+            assert!(validate(&[both]).is_err(), "{key:?} {value:?}");
+        }
+    }
+
     #[test]
     fn a_repeated_id_is_refused_because_the_lookup_would_be_ambiguous() {
         assert!(validate(&[row("chain"), row("chain")]).is_err());

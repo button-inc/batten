@@ -368,6 +368,22 @@ pub fn with_effect(table: &[MutatingVerb], effect: Effect) -> Vec<&MutatingVerb>
 mod tests {
     use super::*;
 
+    /// Fails by: the filter answering nothing, or the verbs of every other
+    /// effect.
+    #[test]
+    fn with_effect_is_exactly_the_verbs_declaring_it() {
+        let table = [
+            verb("a", Effect::Write),
+            verb("b", Effect::Destructive),
+            verb("c", Effect::Write),
+        ];
+        let names: Vec<&str> = with_effect(&table, Effect::Write)
+            .iter()
+            .map(|entry| entry.verb.as_str())
+            .collect();
+        assert_eq!(names, ["a", "c"]);
+    }
+
     fn verb(name: &str, effect: Effect) -> MutatingVerb {
         MutatingVerb {
             verb: name.to_owned(),

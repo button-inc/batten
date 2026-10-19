@@ -361,6 +361,7 @@ mod tests {
         assert_eq!(report.missing, vec!["check"]);
         // Reported as missing, never also as unrunnable: one repair, one line.
         assert!(report.unrunnable.is_empty());
+        assert!(!report.is_clean(), "a missing section alone is unclean");
         assert_eq!(report.lines(), vec!["missing: check (1)"]);
     }
 
@@ -370,6 +371,7 @@ mod tests {
         let report = problems(&text);
         assert!(report.missing.is_empty());
         assert_eq!(report.unrunnable, vec!["check"]);
+        assert!(!report.is_clean(), "an unrunnable section alone is unclean");
         assert_eq!(report.lines(), vec!["unrunnable: check (1)"]);
     }
 

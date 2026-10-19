@@ -283,4 +283,48 @@ mod tests {
         let json = serde_json::to_string(&gate).unwrap();
         assert_eq!(json, r#"{"id":"no-secrets","severity":"deny"}"#);
     }
+
+    /// Fails by: `configured` read from whether a config resolved rather than
+    /// from the authority, so the built-in defaults read as a stated policy.
+    #[test]
+    fn configured_follows_the_authority_not_the_resolution() {
+        let absent = crate::scratch::scratch("agent-configured-absent");
+        let resolved =
+            crate::resolve::resolve(&absent, &crate::resolve::Overrides::default()).unwrap();
+        assert_eq!(resolved.authority, Authority::Absent, "the premise");
+        assert!(!capabilities(Some(&resolved)).configured);
+
+        let present = crate::scratch::scratch("agent-configured-present");
+        std::fs::write(present.join(crate::config::CONFIG_FILE), "version = 1\n").unwrap();
+        let resolved =
+            crate::resolve::resolve(&present, &crate::resolve::Overrides::default()).unwrap();
+        assert_eq!(resolved.authority, Authority::Present, "the premise");
+        assert!(capabilities(Some(&resolved)).configured);
+    }
+
+    /// Fails by: a projected row's line emptied or replaced, so the pointer
+    /// channel stops naming what the document carries.
+    #[test]
+    fn every_projected_row_renders_its_own_line() {
+        let exit = ExitMeaning {
+            code: 2,
+            meaning: "policy",
+        };
+        assert_eq!(exit.line(), "exit 2 policy");
+        let reading = capabilities(None);
+        let entry = reading
+            .read_only
+            .first()
+            .expect("the allowlist is never empty");
+        assert_eq!(
+            entry.line(),
+            format!("read-only {} {}", entry.id, entry.path)
+        );
+        assert_eq!(crate::output::Line::line(&reading), reading.summary());
+        assert!(
+            reading.summary().starts_with("agent: "),
+            "{}",
+            reading.summary()
+        );
+    }
 }

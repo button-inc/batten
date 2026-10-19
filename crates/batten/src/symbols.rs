@@ -439,3 +439,42 @@ pub fn unavailable() -> String {
         "the delegated analyser `{ANALYSER} clippy` is not available; install it with `{PROVISION_HINT}`"
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn site(lint: &str) -> Site {
+        Site {
+            path: String::from("src/a.rs"),
+            line: 1,
+            lint: lint.to_owned(),
+        }
+    }
+
+    /// Fails by: the census counting every site, or a constant, rather than the
+    /// sites of the lint asked about.
+    #[test]
+    fn a_count_is_the_sites_of_one_lint() {
+        let resolved = Resolved {
+            provenance: Provenance {
+                tool: String::from(ANALYSER),
+                version: String::from("v"),
+                invocation: Vec::new(),
+            },
+            sites: vec![site("a"), site("b"), site("a")],
+        };
+        assert_eq!(count_of(&resolved, "a"), 2);
+        assert_eq!(count_of(&resolved, "b"), 1);
+        assert_eq!(count_of(&resolved, "c"), 0);
+    }
+
+    /// Fails by: the message emptied, so a missing analyser names no remedy.
+    #[test]
+    fn the_missing_analyser_message_names_its_remedy() {
+        assert_eq!(
+            unavailable(),
+            "the delegated analyser `cargo clippy` is not available; install it with `mise install`"
+        );
+    }
+}

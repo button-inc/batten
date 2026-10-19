@@ -214,6 +214,15 @@ mod tests {
             None,
             "and one outside it is absent rather than present with a stale token"
         );
+        let edge = format!(
+            "CLOUD-1 2026-01-01 {} d in-progress ready",
+            now - 7 * 86_400
+        );
+        assert_eq!(
+            field_of(&edge, &row(), now),
+            Some(String::from("in-progress")),
+            "a reading exactly the bound old still answers"
+        );
     }
 
     /// A line too short to carry the field is could-not-look, not an empty token.

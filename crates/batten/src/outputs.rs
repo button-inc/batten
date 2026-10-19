@@ -385,4 +385,35 @@ mod tests {
         assert!(validate(&[pattern("p", "x", Watched::Both)]).is_ok());
         assert!(validate(&[]).is_ok());
     }
+
+    /// Fails by: a token respelled, so a config written as documented no
+    /// longer names the stream it meant.
+    #[test]
+    fn each_watched_value_has_its_documented_token() {
+        assert_eq!(Watched::Stdout.as_str(), "stdout");
+        assert_eq!(Watched::Stderr.as_str(), "stderr");
+        assert_eq!(Watched::Both.as_str(), "both");
+    }
+
+    /// Fails by: the environment table's validator accepting anything, or
+    /// naming the other table in its refusal.
+    #[test]
+    fn the_environment_table_is_validated_under_its_own_name() {
+        let err = validate_environment(&[pattern("", "x", Watched::Both)])
+            .expect_err("an empty id is refused");
+        assert!(
+            format!("{err:#}").starts_with("verify_environment_pattern:"),
+            "{err:#}"
+        );
+        assert!(validate_environment(&[pattern("p", "x", Watched::Both)]).is_ok());
+    }
+
+    /// Fails by: a reason line emptied or replaced, so the caller is told to
+    /// do something no pattern said.
+    #[test]
+    fn a_reason_line_is_the_patterns_id_and_reason() {
+        let patterns = [pattern("warn", "warning", Watched::Both)];
+        let found = hits(&patterns, Stream::Stdout, b"warning a\n");
+        assert_eq!(reasons(&patterns, &found), vec!["warn: do the thing"]);
+    }
 }

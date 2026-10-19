@@ -232,4 +232,24 @@ mod tests {
     fn an_unreadable_root_reaps_nothing() {
         reap_the_dead(&std::env::temp_dir().join("batten-scratch-absent-entirely"));
     }
+
+    /// Fails by: a scratch directory that is not this process's own, empty, or
+    /// there at all.
+    #[test]
+    fn a_scratch_is_an_empty_directory_under_this_processes_root() {
+        let dir = scratch("emptied");
+        std::fs::write(dir.join("stale"), "bytes").expect("seed");
+        let again = scratch("emptied");
+        assert_eq!(again, root().join("emptied"));
+        assert!(again.is_dir());
+        assert_eq!(std::fs::read_dir(&again).expect("listable").count(), 0);
+    }
+
+    /// Fails by: this process read as dead, which is what would reap a live
+    /// run's corpora. Both arms answer life for a pid that is running.
+    #[test]
+    fn a_running_process_is_live() {
+        let pid = i32::try_from(std::process::id()).expect("a pid fits i32");
+        assert!(pid_is_live(pid));
+    }
 }

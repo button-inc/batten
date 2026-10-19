@@ -350,4 +350,82 @@ mod tests {
         );
         assert_eq!(failure_code("Connection failed"), "unknown");
     }
+
+    /// The attempt the window cases judge: started at second 100.
+    const ATTEMPT: &str = "1970-01-01T00-01-40-873Z.jsonl";
+
+    /// A ledger holding `lines`, each `<at>\t<server>[\t<marker>]`.
+    fn ledger(name: &str, lines: &[String]) -> PathBuf {
+        let path = crate::scratch::scratch(name).join("spawns.tsv");
+        std::fs::write(&path, lines.join("\n")).unwrap();
+        path
+    }
+
+    /// Fails by: the window around the attempt's start widened or narrowed,
+    /// so a launch a second outside it counts, or one on its edge does not.
+    #[test]
+    fn a_launch_counts_only_inside_the_attempts_window() {
+        for (at, verdict) in [
+            (94, "never-spawned"),
+            (95, "spawned-and-unresponsive"),
+            (135, "spawned-and-unresponsive"),
+            (136, "never-spawned"),
+        ] {
+            let path = ledger(
+                &format!("mcp-window-{at}"),
+                &[format!("{at}\ts"), String::from("1\tother")],
+            );
+            assert!(
+                spawn_verdict("s", ATTEMPT, Some(&path)).starts_with(verdict),
+                "a launch at {at} reads {verdict}"
+            );
+        }
+    }
+
+    /// Fails by: an exec failure outside the attempt's window outranking a
+    /// launch inside it, or the failure's line misnumbered.
+    #[test]
+    fn an_exec_failure_names_its_line_and_only_inside_the_window() {
+        let failed = |at: i64| format!("{at}\ts\t{}", crate::mcp::EXEC_FAILED);
+        let path = ledger("mcp-exec-failed", &[String::from("100\ts"), failed(100)]);
+        assert_eq!(
+            spawn_verdict("s", ATTEMPT, Some(&path)),
+            format!(
+                "launch-failed (the ledger recorded the launch line failing to exec at {}:2)",
+                path.display()
+            )
+        );
+        for outside in [94, 136] {
+            let path = ledger(
+                &format!("mcp-exec-outside-{outside}"),
+                &[String::from("100\ts"), failed(outside)],
+            );
+            assert!(
+                spawn_verdict("s", ATTEMPT, Some(&path)).starts_with("spawned-and-unresponsive"),
+                "a failure at {outside} is another attempt's"
+            );
+        }
+    }
+
+    /// Fails by: an empty server name read as an enabled server, so a session
+    /// with none is judged for a server nobody named.
+    #[test]
+    fn an_empty_server_name_enables_nothing() {
+        let document =
+            crate::rules::parse_node(Format::Json, r#"{"enabledMcpjsonServers": [""]}"#).unwrap();
+        let session = Session {
+            logs: Some(crate::scratch::scratch("mcp-empty-name")),
+            spawns: None,
+        };
+        let mut err = Vec::new();
+        assert!(
+            unattached(&document, &session, &mut err)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            err.is_empty(),
+            "nothing enabled, so nothing was even looked for"
+        );
+    }
 }

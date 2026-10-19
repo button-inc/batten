@@ -303,6 +303,25 @@ mod tests {
         );
     }
 
+    /// Fails by: the guard inverted, or the exit status read backwards, so a
+    /// repair that succeeded refuses and one that failed admits.
+    #[test]
+    fn a_repair_that_exits_zero_reports_its_posture_and_one_that_fails_does_not() {
+        let root = Path::new(".");
+        assert_eq!(
+            run(root, "true", None, Applicability::Silent),
+            Outcome::Silent
+        );
+        assert_eq!(
+            run(root, "true", None, Applicability::Retry),
+            Outcome::Retry
+        );
+        assert_eq!(
+            run(root, "false", None, Applicability::Silent),
+            Outcome::Failed
+        );
+    }
+
     #[test]
     fn argv_is_a_program_and_operands_not_a_shell_line() {
         assert_eq!(argv("  batten   mcp call  "), vec!["batten", "mcp", "call"]);

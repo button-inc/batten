@@ -216,3 +216,63 @@ pub fn run(
     )?;
     Ok(ExitCode::Usage)
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn probe(endpoint: &str, claim: &str) -> Probe {
+        Probe {
+            endpoint: endpoint.to_owned(),
+            claim: claim.to_owned(),
+            used_by: String::from("a task"),
+            probe: true,
+        }
+    }
+
+    fn answer(status: u16) -> Answer {
+        Answer {
+            status,
+            etag: None,
+            poll_floor: None,
+            backoff: None,
+            body: String::new(),
+            headers: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// Fails by: a row blank in only one of its two fields loading, so a probe
+    /// with no endpoint, or no claim to report, reads as declared.
+    #[test]
+    fn a_row_blank_in_either_field_is_refused() {
+        assert!(validate(&[probe("repos/{owner}/{repo}", "metadata=read")]).is_ok());
+        assert!(validate(&[probe(" ", "metadata=read")]).is_err());
+        assert!(validate(&[probe("repos/{owner}/{repo}", " ")]).is_err());
+    }
+
+    /// Fails by: a stray opening or closing brace loading, which nothing
+    /// binds and the wire 404s.
+    #[test]
+    fn an_unbound_brace_of_either_kind_is_refused() {
+        assert!(validate(&[probe("repos/{owner}/{issue", "x=read")]).is_err());
+        assert!(validate(&[probe("repos/{owner}/issue}", "x=read")]).is_err());
+    }
+
+    /// Fails by: a success read as anything but a held claim.
+    #[test]
+    fn a_success_holds_the_claim_and_a_403_names_what_is_missing() {
+        assert_eq!(classify(Some(&answer(200))), Found::Held);
+        assert_eq!(classify(Some(&answer(299))), Found::Held);
+        assert_eq!(classify(Some(&answer(404))), Found::Other(Some(404)));
+        let mut refused = answer(403);
+        refused.headers.insert(
+            ACCEPTED_PERMISSIONS.to_owned(),
+            String::from(" checks=read "),
+        );
+        assert_eq!(
+            classify(Some(&refused)),
+            Found::Missing(Some(String::from("checks=read")))
+        );
+    }
+}

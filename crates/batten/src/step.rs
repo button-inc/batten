@@ -536,4 +536,24 @@ mod tests {
         }
         assert!(Answer::Hit(key_of("x")).is_hit());
     }
+
+    /// Fails by: a tool that exits zero saying nothing, or fails while saying
+    /// something, still keying a receipt the toolchain never vouched for.
+    #[test]
+    fn a_tool_must_both_exit_zero_and_say_something() {
+        let row = |tool: &[&str]| Step {
+            id: String::from("s"),
+            inputs: Vec::new(),
+            tools: vec![tool.iter().map(|word| (*word).to_owned()).collect()],
+        };
+        assert!(
+            material(&row(&["echo", "v1"]), &[], None).is_some(),
+            "the premise: a tool that answers keys the step"
+        );
+        assert_eq!(material(&row(&["true"]), &[], None), None);
+        assert_eq!(
+            material(&row(&["sh", "-c", "echo v1; exit 1"]), &[], None),
+            None
+        );
+    }
 }

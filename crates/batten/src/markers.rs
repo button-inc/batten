@@ -453,4 +453,33 @@ mod tests {
             );
         }
     }
+
+    /// Fails by: a marker's glob ignored, or a hit's line numbered from zero,
+    /// so a count reaches files the consumer scoped out and points one line off.
+    #[test]
+    fn a_glob_scopes_the_scan_and_lines_are_one_based() {
+        let dir = scratch("markers-glob");
+        fs::write(dir.join("in.rs"), "x\ny\nA\n").expect("write scoped");
+        fs::write(dir.join("out.md"), "A\n").expect("write unscoped");
+        let scoped = Marker {
+            glob: Some("*.rs".to_owned()),
+            ..marker("m", "A")
+        };
+        assert_eq!(
+            find(&dir, &[scoped]).unwrap(),
+            vec![Hit {
+                path: "in.rs".to_owned(),
+                line: 3,
+                marker: "m".to_owned(),
+            }]
+        );
+    }
+
+    /// Fails by: a duplicated id admitted, or a distinct one refused.
+    #[test]
+    fn a_table_refuses_only_a_duplicated_id() {
+        assert!(validate(&[marker("a", "A"), marker("b", "B")]).is_ok());
+        let err = validate(&[marker("a", "A"), marker("a", "B")]).unwrap_err();
+        assert!(err.downcast_ref::<UsageError>().is_some(), "{err:#}");
+    }
 }

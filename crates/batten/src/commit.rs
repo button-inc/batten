@@ -1160,4 +1160,20 @@ mod tests {
         )]);
         assert!(!report(&found).contains("SECRETLEAK"));
     }
+
+    /// Fails by: the range read as empty, which every judge downstream would
+    /// pass as a range of conforming commits.
+    #[test]
+    fn read_range_yields_each_commit_after_the_base() {
+        let dir = crate::scratch::scratch("commit-read-range");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        crate::gitwrite::commit_paths(&dir, &[], "first").unwrap();
+        let base = git::head_commit(&dir).unwrap();
+        crate::gitwrite::commit_paths(&dir, &[], "feat: second").unwrap();
+        let head = git::head_commit(&dir).unwrap();
+        let read = read_range(&dir, &base, "HEAD").unwrap();
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].text, "feat: second");
+        assert_eq!(read[0].label, short(&head));
+    }
 }

@@ -56,21 +56,28 @@ const DISPOSABLE: &str = "disposable";
 /// committed-override shape the header rules out.
 #[must_use]
 pub fn disposable() -> bool {
-    std::env::var(KEY).is_ok_and(|value| value == DISPOSABLE)
+    licenses(std::env::var(KEY).ok().as_deref())
+}
+
+/// The predicate over its own input, extracted from the environment read.
+///
+/// `rules/rust.md`'s rule for a condition the test cannot create: `set_var` is
+/// `unsafe` and `unsafe` is forbidden here, so a case that reached for the real
+/// environment could not be written at all. What decides is the comparison, and
+/// that is what the cases assert.
+fn licenses(value: Option<&str>) -> bool {
+    value == Some(DISPOSABLE)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The predicate over its own input, extracted from the environment read.
-    ///
-    /// `rules/rust.md`'s rule for a condition the test cannot create:
-    /// `set_var` is `unsafe` and `unsafe` is forbidden here, so a case that
-    /// reached for the real environment could not be written at all. What decides
-    /// is the comparison, and that is what is asserted.
-    fn licenses(value: Option<&str>) -> bool {
-        value == Some(DISPOSABLE)
+    /// Fails by: the read answering a constant rather than this process's own
+    /// value, whichever value the environment holds.
+    #[test]
+    fn disposable_reads_this_processes_own_value() {
+        assert_eq!(disposable(), licenses(std::env::var(KEY).ok().as_deref()));
     }
 
     #[test]

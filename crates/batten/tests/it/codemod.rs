@@ -66,6 +66,15 @@ fn invalid_rust_is_could_not_look() {
     );
 }
 
+/// Fails by: the refusal rendered as nothing, so the reader learns no count.
+#[test]
+fn could_not_look_renders_its_count_and_never_the_messages() {
+    assert_eq!(
+        CouldNotLook { errors: 3 }.to_string(),
+        "the source does not parse (3 error(s)), so no rewrite was attempted"
+    );
+}
+
 #[test]
 fn the_edition_is_an_input() {
     // `gen` is a keyword in 2024, so the same source is could-not-look there

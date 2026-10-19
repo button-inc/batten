@@ -377,4 +377,31 @@ tool/runner-action@aaa\tMIT\tCopyright (c) 2018 A Holder and contributors\n";
             "carry.sbom-actions-carry-20260901T110320Z"
         );
     }
+
+    /// Fails by: a commented-out row, a pin with no repo, or a row with a
+    /// fourth field parsed as a row, so it carries rather than being refused.
+    #[test]
+    fn a_row_that_is_not_a_pin_of_three_fields_is_unparseable() {
+        let commented = "#tool/a@aaa\tMIT\tH\n";
+        assert_eq!(
+            judge(commented, &format!("{commented}#tool/a@bbb\tMIT\tH\n"), &[]),
+            Err(Refusal::Unparseable(2))
+        );
+        let head = format!("{BASE}@ccc\tMIT\tNONE\n");
+        assert_eq!(carried(&head), Err(Refusal::Unparseable(4)));
+        let head = format!("{BASE}tool/install-action@ddd\tApache-2.0 OR MIT\tNONE\textra\n");
+        assert_eq!(carried(&head), Err(Refusal::Unparseable(4)));
+    }
+
+    /// Fails by: the receipt not written, or its path not returned.
+    #[test]
+    fn mint_writes_the_pointer_only_receipt_where_it_says() {
+        let receipts = crate::scratch::scratch("carry-mint");
+        let path = mint(&receipts, "a/b", 2, None, "2026-10-19T00:00:00Z").unwrap();
+        assert_eq!(path, receipts.join("carry.a-b"));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            format!("carry 2 row(s)\ntable {TABLE}\nderived-at 2026-10-19T00:00:00Z\nbase -\n")
+        );
+    }
 }

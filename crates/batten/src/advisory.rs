@@ -549,4 +549,20 @@ mod tests {
             emission.text
         );
     }
+
+    /// Fails by: the closing line emptied or replaced, so a cut report reads as
+    /// complete and names no way to the rest (CLOUD-2175).
+    #[test]
+    fn the_closing_line_counts_the_cut_and_names_where_it_went() {
+        assert_eq!(
+            suppressed_line(2, 30, Some("advisory:abc")),
+            "advisory: 2 further finding(s) past the declared channel ceiling of 30 \
+             token(s); run batten capture show advisory:abc"
+        );
+        assert_eq!(
+            suppressed_line(1, 5, None),
+            "advisory: 1 further finding(s) past the declared channel ceiling of 5 \
+             token(s), and they could not be stored"
+        );
+    }
 }

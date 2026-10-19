@@ -360,12 +360,10 @@ impl Pipeline {
             found.push(Invalid::NoCommitPoint);
             return found;
         };
-        if commit_at + 1 != self.steps.len() {
-            // NAMES THE STEP THAT FOLLOWS IT, not the commit point: the commit
-            // point is where it belongs and the trailing row is the mistake.
-            if let Some(row) = self.steps.get(commit_at + 1) {
-                found.push(Invalid::CommitPointNotLast(row.step));
-            }
+        // NAMES THE STEP THAT FOLLOWS IT, not the commit point: the commit point
+        // is where it belongs and the trailing row is the mistake.
+        if let Some(row) = self.steps.get(commit_at + 1) {
+            found.push(Invalid::CommitPointNotLast(row.step));
         }
 
         for row in &self.steps[..commit_at] {

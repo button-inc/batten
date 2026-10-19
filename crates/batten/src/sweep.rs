@@ -357,6 +357,41 @@ mod tests {
         assert_eq!(payload_set("").unwrap().len(), 0);
         assert!(payload_set("not json").is_none());
     }
+
+    /// Fails by: a refusing gate's report swallowed, or forwarded without its
+    /// closing newline, or the refusal's own summary dropped.
+    #[test]
+    fn a_refusing_gates_report_is_forwarded_whole_and_summarised() {
+        let refusing = SweepGate {
+            name: "r".to_owned(),
+            run: ["sh", "-c", "printf 'bad row'; exit 2"]
+                .map(str::to_owned)
+                .to_vec(),
+            refuses: vec![2],
+            abstains: vec![],
+        };
+        let quiet = SweepGate {
+            name: "q".to_owned(),
+            run: ["sh", "-c", "exit 2"].map(str::to_owned).to_vec(),
+            refuses: vec![2],
+            abstains: vec![],
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = run(
+            Path::new("."),
+            &[refusing, quiet],
+            "[]",
+            1,
+            &mut out,
+            &mut err,
+        )
+        .unwrap();
+        assert_eq!(code, ExitCode::Violation);
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            "bad row\nbatten: board sweep: 2 gate(s) name dissonance above\n"
+        );
+    }
 }
 
 /*
