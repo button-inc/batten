@@ -19505,4 +19505,98 @@ deny contains "refused by themodule" if {
             Decision::Allow
         );
     }
+
+    /// A check's keying is the receipt row's that names it, and no other
+    /// kind's.
+    ///
+    /// Fails by: a constant answer, the kind test inverted, or matching a
+    /// name the row does not carry.
+    #[test]
+    fn a_checks_keying_is_its_receipt_rows() {
+        let policy = ceiling_policy(vec![
+            Rule {
+                key: Some(ReceiptKey::Branch),
+                ..ready_receipt_row()
+            },
+            Rule {
+                kind: RuleKind::Shape,
+                checks: Some(vec![String::from("other")]),
+                key: Some(ReceiptKey::Branch),
+                ..ready_receipt_row()
+            },
+        ]);
+        assert_eq!(
+            policy.receipt_key_for_check("verify"),
+            Some(ReceiptKey::Branch)
+        );
+        assert_eq!(policy.receipt_key_for_check("other"), None);
+        assert_eq!(policy.receipt_key_for_check("absent"), None);
+    }
+
+    /// A named receipt's subject is the row's projection of the call, when
+    /// its shape admits it.
+    ///
+    /// Fails by: any placeholder subject.
+    #[test]
+    fn a_named_receipts_subject_is_its_projection() {
+        let named = |shape: Option<&str>| {
+            ceiling_policy(vec![Rule {
+                key: Some(ReceiptKey::Named),
+                key_from: Some(Field::SessionId),
+                key_shape: shape.map(ToOwned::to_owned),
+                ..ready_receipt_row()
+            }])
+        };
+        let mut call = envelope("gh pr ready");
+        call.session = Some(String::from("s1"));
+        assert_eq!(
+            named(None).named_receipt_subject(&call).as_deref(),
+            Some("s1")
+        );
+        assert_eq!(named(Some(r"^x\d$")).named_receipt_subject(&call), None);
+    }
+
+    /// The declared tables are handed back as declared, and a fact is found
+    /// by its name.
+    ///
+    /// Fails by: an empty table, or a fact matched by anything but its name.
+    #[test]
+    fn the_declared_tables_are_handed_back_and_a_fact_found_by_name() {
+        let fact: crate::facts::Declared = serde_json::from_value(serde_json::json!({
+            "name": "review-happened",
+            "returns": "json-array",
+            "tool": "pull_request_read",
+        }))
+        .expect("a declared fact");
+        let mint: crate::mint::Declared = serde_json::from_value(serde_json::json!({
+            "name": "issue-read",
+            "tool": "get_issue",
+            "key": "named",
+            "key_from": "id",
+            "requires": ["id"],
+            "mode": "replace",
+            "body": "{id}",
+        }))
+        .expect("a declared mint");
+        let recorder: crate::recorder::Declared = serde_json::from_value(serde_json::json!({
+            "name": "board-issue-created",
+            "record": "board-writes",
+            "tool": "save_issue",
+            "key": "branch",
+            "requires": ["id"],
+            "columns": [{"name": "kind", "value": {"literal": "issue"}}],
+        }))
+        .expect("a declared recorder");
+        let policy = Policy {
+            facts: vec![fact.clone()],
+            mints: vec![mint.clone()],
+            recorders: vec![recorder.clone()],
+            ..ceiling_policy(Vec::new())
+        };
+        assert_eq!(policy.declared_facts(), [fact.clone()]);
+        assert_eq!(policy.declared_mints(), [mint]);
+        assert_eq!(policy.declared_recorders(), [recorder]);
+        assert_eq!(policy.agent_fact("review-happened"), Some(&fact));
+        assert_eq!(policy.agent_fact("other"), None);
+    }
 }
