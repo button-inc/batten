@@ -19095,17 +19095,22 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             1
         );
         let recorded = [rows[0].clone(), command("spawns", "**/*.rs", "false")];
+        let scan = run_recorded(
+            &recorded,
+            &[],
+            crate::policy::Vocabulary::EMPTY,
+            &dir,
+            crate::policy::ModuleChecks::Run,
+            crate::facts::Surface::Check,
+        )
+        .expect("runs");
+        let fired: Vec<&str> = scan.findings.iter().map(|f| f.rule.as_str()).collect();
+        assert_eq!(fired, ["no-todo"]);
         assert_eq!(
-            found(run_recorded(
-                &recorded,
-                &[],
-                crate::policy::Vocabulary::EMPTY,
-                &dir,
-                crate::policy::ModuleChecks::Run,
-                crate::facts::Surface::Check,
-            )),
-            1
+            scan.not_evaluated.get("spawns"),
+            Some(&NotObserved::RuleSkipped)
         );
+        assert_eq!(scan.not_evaluated.get("no-todo"), None);
     }
 
     /// A scan counts the files and bytes it read, and records a cost row per
@@ -19228,6 +19233,35 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let facts = git_facts(&[row], &dir);
         assert!(facts.head.is_some(), "{facts:?}");
         assert_eq!(facts.head, crate::git::head_fact(&dir).ok());
+    }
+
+    /// History queries are deduplicated by id, and only by id.
+    ///
+    /// Fails by: the dedup test inverted, which drops every query after the
+    /// first that carries a different id.
+    #[test]
+    fn history_queries_are_deduplicated_by_id() {
+        let dir = seeded("rules-git-history-dedup");
+        let query = |id: &str| crate::facts::HistoryQuery {
+            id: String::from(id),
+            tags: Some(String::from("*")),
+            path: None,
+            filter: None,
+        };
+        let rows = [
+            Rule {
+                history: vec![query("first"), query("first")],
+                ..blank("p", RuleKind::Policy)
+            },
+            Rule {
+                history: vec![query("second")],
+                ..blank("q", RuleKind::Policy)
+            },
+        ];
+        let facts = git_facts(&rows, &dir);
+        let expected = crate::git::history_facts(&dir, &[query("first"), query("second")]).ok();
+        assert!(expected.is_some());
+        assert_eq!(facts.history, expected);
     }
 
     /// Every declared git member is read, each from its own reader.
@@ -20117,6 +20151,24 @@ violation contains {
             run(selecting_nothing(), Some(&firing), none()),
             (true, Vec::new())
         );
+        // Each selector column alone counts as a declaration.
+        let selecting_nothing_by = [
+            Rule {
+                line_sources: vec![String::from("*.none")],
+                ..row()
+            },
+            Rule {
+                invocation_sources: vec![String::from("*.none")],
+                ..row()
+            },
+            Rule {
+                use_sources: vec![String::from("*.none")],
+                ..row()
+            },
+        ];
+        for rule in selecting_nothing_by {
+            assert_eq!(run(rule, Some(&firing), none()), (true, Vec::new()));
+        }
         let delta = crate::git::GitFacts {
             base_delta: Some(crate::git::BaseDelta::default()),
             ..crate::git::GitFacts::default()
