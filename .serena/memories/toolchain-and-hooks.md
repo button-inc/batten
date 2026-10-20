@@ -41,6 +41,36 @@ tree: `target/` carries deliberately corrupt TOML the suite writes on purpose
 (`target/tmp/trust-corrupt-config/batten.toml` is `this is not = = toml`), so a
 bare `taplo lint` fails on its own test data.
 
+## Two pins decide which `batten` runs, and only one of them is gated
+
+Read before answering "do we still need `mise exec -- batten`?" or proposing a
+gate on `cargo run`.
+
+- The **toolchain** pin is gated. The vendored `pinned-toolchain` preset ships
+  `pin reach loose` (`crates/batten/src/policy/presets/pinned-toolchain/pinned-program-via-the-pin.rego:28`)
+  and it fires on a bare `batten` off `PATH`.
+- The **engine** pin is not. `batten.toml`'s `engine = { release = "vX" }` says
+  which batten _adjudicates_; nothing refuses a call that reaches around it.
+  `cargo run -p batten` is that hole, and `pin reach loose` passes it correctly —
+  `cargo` IS pin-provided, so `cargo run` is reached through the pin. CLOUD-2499.
+
+**`mise exec --` is NOT a leftover of the bash era.** The reason is environment
+composition, and it is measured in the preset's own header
+(`pinned-program-via-the-pin.rego:10-17`, 2026-08-23): a session reproduced an
+in-gate failure by running the suite's runner directly — same binary, same
+arguments — and every run died on an unset variable instead of on the assertion
+under test, because the environment the pin composes was missing. Sixty runs
+measured nothing and three false claims were published off them. An
+unset-variable death under `set -u` is indistinguishable from an assertion
+failure at the resolution a caller reads.
+
+So "enforce a bare call only" asserts two things the call cannot check about
+itself: that `PATH` resolves to the pinned build, and that the environment is
+already composed. Both are what the pin exists to guarantee, and the failure
+mode when either is false is the dangerous one — it looks like the failure under
+investigation. A stale `target/release/batten` ahead of `~/.local/bin` on `PATH`
+is the same family (`mem:workflow/landing-loop`, 2026-10-07).
+
 ## Keep the hooks fast — hk.pkl is living config
 
 The pre-commit hook runs on every commit, so its latency is a constant tax.

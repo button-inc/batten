@@ -434,6 +434,32 @@ provably reach the value the code reads, the run measured nothing.
   unanchored pattern then matches only its own declaration and "survives" while
   testing nothing.
 
+## Measured 2026-10-20 (CLOUD-2376)
+
+- **An uncommitted `batten.toml` source pin burns every lap, and the stop does not
+  name the pin.** Working a draft against the branch's own engine means flipping
+  `engine = { release = "vX" }` to `{ source = "<digest>" }`. Leaving that flip
+  UNCOMMITTED is the trap: `verify` runs `linear-check`, which ends in
+  `batten receipt record linear-check`, which refuses because "the working tree
+  differs from HEAD in 1 path(s), so a receipt keyed to that commit would attest
+  bytes no commit contains". `linear-check` fails, `verify` fails, and the lap
+  dies at `check run red` naming the HEAD — not the pin. Two laps were spent this
+  way before the gate log was read. **The pin is for building and testing, not for
+  landing: restore it with `git checkout batten.toml` before the first lap.**
+  Committing it instead is worse — a non-release pin must never reach `main`.
+- **A completion notification is not the log, and `batten task alive` is the only
+  truth about what is running.** A backgrounded `mise run land` that has not
+  notified may be mid-`verify` for many minutes; the tail of its output file still
+  shows the last lap line and reads exactly like a finished run that said nothing.
+  Before starting a second loop, ask `mise run alive` — `alive: nothing registered`
+  is the answer that licenses a new one. Two concurrent landing loops were started
+  from a tail that looked idle.
+- **Never reach past `mise run land` to its inner verb.** The lifecycle tasks are
+  run as written, never wrapped in bespoke retry or pre-check logic, and
+  `cargo run -p batten -- land lap` typed by hand is that wrapping with the loop's
+  own bookkeeping removed. `main` advancing under the branch is the loop working.
+  The engine pin has no gate against this today (CLOUD-2499).
+
 ## Measured 2026-10-07 (CLOUD-2090)
 
 - **The harness subscribes every PR it creates to PR events. Never unsubscribe.**
