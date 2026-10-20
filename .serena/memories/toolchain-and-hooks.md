@@ -41,46 +41,28 @@ tree: `target/` carries deliberately corrupt TOML the suite writes on purpose
 (`target/tmp/trust-corrupt-config/batten.toml` is `this is not = = toml`), so a
 bare `taplo lint` fails on its own test data.
 
-## Two pins decide which `batten` runs, and only one of them is gated
+## Two pins decide which `batten` runs, and BOTH are gated
 
 Read before answering "do we still need `mise exec -- batten`?" or proposing a
-gate on `cargo run`.
+gate on `cargo run`. Two different rules, which is what gets missed:
 
-- The **toolchain** pin is gated. The vendored `pinned-toolchain` preset ships
-  `pin reach loose` (`crates/batten/src/policy/presets/pinned-toolchain/pinned-program-via-the-pin.rego:28`)
-  and it fires on a bare `batten` off `PATH`.
-- The **engine** pin — `batten.toml`'s `engine = { release = "vX" }`, which says
-  which batten _adjudicates_ — is fenced too, but by the OTHER rule, and this is
-  the part that is easy to get wrong. `pin reach loose` does pass `cargo run`,
-  correctly: `cargo` is itself pin-provided. What refuses it is `cargo run loose`
-  (`batten.toml:925`), a `deny` shape row on the mediated-call surface with
-  `pattern = "cargo"` and **`require_via = "mise"`**. So a bare
-  `cargo run -p batten` from an agent's shell is denied, while `mise run land`'s
-  own `cargo run --quiet -p batten` is allowed because it arrives through mise.
-  That key IS the governed-task-vs-agent-shell distinction; do not go looking for
-  a new predicate for it (CLOUD-2499 was filed claiming there was none and
-  cancelled on this evidence). Its stated subject is toolchain SELECTION rather
-  than the program (`batten.toml:908-912`), and fencing the engine pin is the
-  side effect. The gap that remains is `engine update` building a source pin with
-  a bare `cargo` from INSIDE the engine, where no mediated-call rule reaches —
-  CLOUD-2172, still open.
+- **Toolchain** pin: `pin reach loose`, from the vendored `pinned-toolchain`
+  preset, fires on a bare `batten` off `PATH`.
+- **Engine** pin (`batten.toml`'s `engine =`, which says which batten
+  _adjudicates_): `cargo run loose` (`batten.toml:925`) — `pattern = "cargo"`,
+  **`require_via = "mise"`**. A bare `cargo run -p batten` from an agent's shell
+  is denied; `mise run land`'s own inner one is allowed because it arrives
+  through mise. That key IS the governed-task-vs-agent-shell distinction, so do
+  not hunt for a new predicate: CLOUD-2499 was filed claiming no gate existed and
+  cancelled on this. Remaining gap: `engine update`'s bare `cargo` from INSIDE
+  the engine, which no mediated-call rule reaches (CLOUD-2172).
 
-**`mise exec --` is NOT a leftover of the bash era.** The reason is environment
-composition, and it is measured in the preset's own header
-(`pinned-program-via-the-pin.rego:10-17`, 2026-08-23): a session reproduced an
-in-gate failure by running the suite's runner directly — same binary, same
-arguments — and every run died on an unset variable instead of on the assertion
-under test, because the environment the pin composes was missing. Sixty runs
-measured nothing and three false claims were published off them. An
-unset-variable death under `set -u` is indistinguishable from an assertion
-failure at the resolution a caller reads.
-
-So "enforce a bare call only" asserts two things the call cannot check about
-itself: that `PATH` resolves to the pinned build, and that the environment is
-already composed. Both are what the pin exists to guarantee, and the failure
-mode when either is false is the dangerous one — it looks like the failure under
-investigation. A stale `target/release/batten` ahead of `~/.local/bin` on `PATH`
-is the same family (`mem:workflow/landing-loop`, 2026-10-07).
+**`mise exec --` is not a bash-era leftover** — it is environment composition,
+measured in `pinned-program-via-the-pin.rego:10-17` (2026-08-23): a runner run
+directly, same binary and arguments, died on an unset variable instead of the
+assertion under test. Sixty runs measured nothing, three false claims published.
+A bare call cannot check that `PATH` resolves to the pinned build or that the
+environment is composed — which is what the pin is for.
 
 ## Keep the hooks fast — hk.pkl is living config
 
