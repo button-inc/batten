@@ -1439,23 +1439,27 @@ mod tests {
     }
 
     /// `declare` ignores a later call, and other cases in this binary declare
-    /// forges of their own, so the readers are held to whichever forge won
-    /// rather than to the credential names this case offered.
+    /// forges of their own (any config load with a `[forge]` table does), so
+    /// the readers are held to whichever forge won. The list offered here is
+    /// the default's inverse, so where this case's own declaration wins, as it
+    /// does under nextest's process per case, a reader that ignored the
+    /// declaration and answered the default would disagree on both statuses.
     #[test]
     fn the_declared_forge_answers_its_credential_and_its_graded_statuses() {
         declare(Forge {
             credential_names: vec![String::from("GH_TOKEN"), String::from("GITHUB_TOKEN")],
+            nothing_graded: Some(vec![404]),
             ..Forge::default()
         });
         let ruling = declared().expect("a declared forge");
         assert_eq!(declared_credential(), credential(Some(ruling)));
-        // THE PREMISE, STATED: no case in this binary declares a `nothing_graded`
-        // of its own, so the winner keeps the default and the two statuses part.
-        assert_eq!(
-            effective_nothing_graded(Some(ruling)),
-            NOTHING_GRADED_DEFAULT
-        );
-        assert!(declared_nothing_graded(422));
-        assert!(!declared_nothing_graded(404));
+        let graded = effective_nothing_graded(Some(ruling));
+        for status in [422, 404] {
+            assert_eq!(
+                declared_nothing_graded(status),
+                graded.contains(&status),
+                "status {status}"
+            );
+        }
     }
 }
