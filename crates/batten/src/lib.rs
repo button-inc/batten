@@ -322,7 +322,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     let own_surface = matches!(command, Some(Command::Engine { .. }));
     let may_follow = !own_surface && std::env::var_os(ENGINE_UPDATED).is_none();
     let followed = if may_follow {
-        follow_pin(hook_path, out, err)?
+        follow_pin(hook_path, out)?
     } else {
         Followed::Nothing
     };
@@ -331,10 +331,10 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // authority, so without this it would spawn the crashing child a second
     // time to learn what this one already did. Exhaustive, so a fourth
     // outcome cannot quietly read as "nothing was handed".
-    let already_handed = match followed {
+    let drained = match followed {
         Followed::Answered(code) => return Ok(code),
-        Followed::Crashed => true,
-        Followed::Nothing => false,
+        Followed::Crashed(raw) => Some(raw),
+        Followed::Nothing => None,
     };
     match command {
         // Unreachable in practice: `arg_required_else_help` has clap offer the
@@ -392,7 +392,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             supplied_instant(instant.as_deref())?,
             mode,
             &overrides,
-            already_handed,
+            drained.as_deref(),
             out,
             err,
         ),
@@ -670,11 +670,20 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 /// A source pin is built over the running binary as before, and never on the
 /// hook path.
 ///
-/// `out` and `err` serve the HOOK BRANCH ONLY, which holds the child's streams
-/// to judge its code before writing either. Every other verb is a transparent
-/// passthrough: its child inherits this process's own descriptors, so its bytes
-/// never travel through these writers and nothing a caller injects here will
-/// catch them.
+/// `out` serves the HOOK BRANCH ONLY, which holds the child's STDOUT to judge
+/// its code before writing it. Every other verb is a transparent passthrough:
+/// its child inherits this process's own descriptors, so its bytes never travel
+/// through this writer and nothing a caller injects here will catch them.
+///
+/// **Stderr is not withheld, and that is the same choice the sibling hand-off
+/// makes.** A harness reads the DECISION off stdout — that is the document
+/// CLOUD-2376 exists to keep a crashing child out of — while stderr is
+/// diagnostic and is the child's own voice whether or not its code is one the
+/// table names. [`Diagnostics::Keep`] is not the alternative: it folds stderr
+/// in after stdout, which would put a child's prose inside the JSON document
+/// the host parses.
+///
+/// [`Diagnostics::Keep`]: exec::Diagnostics::Keep
 ///
 /// Best-effort on the READ: outside a repository, or with no readable
 /// `batten.toml`, there is no pin to honour and the verb runs as it is. The
@@ -687,7 +696,7 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT follow-pin-passes-a-crash-through|s@^    if hook_path {$@    if false {@|a_crashing_checkout_build_never_fails_the_hook_open
 //MUTANT fetch-failure-always-falls-through|s@^                Err(_) if !may_build => return Ok(Followed::Nothing),$@                Err(_) => return Ok(Followed::Nothing),@|a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path
-fn follow_pin(hook_path: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<Followed> {
+fn follow_pin(hook_path: bool, out: &mut dyn Write) -> Result<Followed> {
     // THE HOOK FOLLOWS A RELEASE PIN BUT NEVER BUILDS A SOURCE ONE (CLOUD-2062,
     // narrowed under CLOUD-2059), and that is the same bit rather than a second
     // one. Two parameters that are provably each other's negation can be passed
@@ -770,12 +779,26 @@ fn follow_pin(hook_path: bool, out: &mut dyn Write, err: &mut dyn Write) -> Resu
     // the refusal floor below to decide the call. Stdin is inherited exactly
     // as before — it is where the envelope arrives.
     if hook_path {
-        let (code, stdout, stderr) = exec::captured_in_env(&root, &argv, &published)?;
-        let Some(decided) = ExitCode::decided(code) else {
-            return Ok(Followed::Crashed);
+        // THE PARENT OWNS THE PAYLOAD BEFORE THE CHILD CAN DRAIN IT. Inheriting
+        // stdin here was wrong in the one case this branch exists for: the
+        // child reads the envelope to EOF, and a crash then left the
+        // fall-through's own `read_envelope` with nothing — a could-not-look
+        // that ALLOWS, so the hook answered `0` over a call nothing judged and
+        // the floor below was never reached. Reading first and replaying the
+        // bytes is exactly what `hand_to_checkout_build` already does with
+        // `handoff.raw`; the two hand-offs are siblings and now spawn alike.
+        let mut raw = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut raw)?;
+        let published = [(String::from(ENGINE_UPDATED), Some(String::from("1")))];
+        let Some((code, stdout)) =
+            exec::piped_argv(&root, &argv, &raw, exec::Diagnostics::Pass, &published)
+        else {
+            return Ok(Followed::Crashed(raw));
         };
-        out.write_all(&stdout)?;
-        err.write_all(&stderr)?;
+        let Some(decided) = ExitCode::decided(code) else {
+            return Ok(Followed::Crashed(raw));
+        };
+        out.write_all(stdout.as_bytes())?;
         return Ok(Followed::Answered(decided));
     }
     // TEED EVERYWHERE ELSE, because the pinned engine's output IS this
@@ -805,15 +828,25 @@ fn follow_pin(hook_path: bool, out: &mut dyn Write, err: &mut dyn Write) -> Resu
 /// [`hand_to_checkout_build`] would spawn it twice to learn the same thing.
 /// Carried as a value rather than published into the environment, so no child
 /// of this process can inherit a mark about a run that is not its own.
-#[derive(Debug, Clone, Copy)]
+///
+/// **`Crashed` CARRIES THE PAYLOAD, and that is a correctness term rather than
+/// a convenience.** The followed child is handed this call's envelope, and a
+/// child that reads it has consumed the stream it arrived on. Measured: with
+/// the child inheriting stdin, a crash left `run_hook`'s own `read_envelope`
+/// at EOF, which is a could-not-look that ALLOWS — so the refusal floor this
+/// fall-through exists to reach was never reached, and the hook answered `0`
+/// over a call nothing had judged. The parent reads the payload before it
+/// spawns and hands it back here, so the floor decides the call it was given.
+#[derive(Debug, Clone)]
 enum Followed {
     /// Nothing was stale, or there was nothing to follow to: run the verb.
     Nothing,
     /// The pinned engine ran and answered; its code is this invocation's.
     Answered(ExitCode),
     /// The pinned engine ran and exited outside the §7 table, so it decided
-    /// nothing. Its output was dropped and the verb falls through.
-    Crashed,
+    /// nothing. Its output was dropped, and the payload it was handed comes
+    /// back so the verb can fall through over the same call.
+    Crashed(String),
 }
 
 /// `batten engine update` (CLOUD-2287, CLOUD-2279): bring every batten
@@ -18884,14 +18917,17 @@ fn run_hook(
     instant: std::time::SystemTime,
     mode: Mode,
     overrides: &Overrides,
-    // Whether `follow_pin` already ran this checkout's build and it crashed
-    // (CLOUD-2376), so the load-fault handoff below does not run it again.
-    already_handed: bool,
+    // The payload a crashed follow already read off stdin (CLOUD-2376). `Some`
+    // says this call was handed to this checkout's build once and it decided
+    // nothing, so the load-fault handoff below must not spawn it again — AND
+    // that stdin is spent, so the envelope is read from these bytes instead.
+    drained: Option<&str>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let _memos = hook_call_memos();
-    let Some((raw, mut envelope, spilled, _spool)) = read_envelope(harness, mode, err)? else {
+    let Some((raw, mut envelope, spilled, _spool)) = read_envelope(harness, mode, err, drained)?
+    else {
         return Ok(ExitCode::Success);
     };
     // THE WRITE TARGET IS READ AS THE REPOSITORY READS IT (CLOUD-1133), and this
@@ -19056,7 +19092,7 @@ fn run_hook(
     let (policy, waivers, pruning) = if adjudicable {
         // Built in the arm that uses it: the handoff is the config load's input,
         // and the other arm loads nothing.
-        let handoff = Handoff::new(&raw, already_handed);
+        let handoff = Handoff::new(&raw, drained.is_some());
         match hook_config_or_floor(overrides, harness, &envelope, handoff, mode, out, err)? {
             Ok(loaded) => loaded,
             Err(code) => return Ok(code),
@@ -19453,6 +19489,11 @@ fn read_envelope(
     harness: hook::Harness,
     mode: Mode,
     err: &mut dyn Write,
+    // The bytes a crashed follow already took off stdin (CLOUD-2376). Stdin is
+    // read exactly once per process, so a fall-through that re-read it found
+    // EOF and allowed; these bytes are the same stream, replayed through the
+    // same streaming reader so the bound and the spill behave identically.
+    drained: Option<&str>,
 ) -> Result<Option<HookRead>> {
     // STREAMED, NEVER HELD WHOLE (CLOUD-2224). Measured: reading a 50 MB payload
     // whole peaked at 150 MiB; streamed, at the process baseline. The bound is
@@ -19467,7 +19508,17 @@ fn read_envelope(
     // envelope pins; `rewrite_post_tool` leaves alone a spilled result that a
     // raised bound would keep.
     let bound = capture::DEFAULT_RESULT_MAX_TOKENS;
-    let read = stream_input::read(std::io::stdin().lock(), &spool, bound, o200k::tokens);
+    let read = drained.map_or_else(
+        || stream_input::read(std::io::stdin().lock(), &spool, bound, o200k::tokens),
+        |bytes| {
+            stream_input::read(
+                std::io::Cursor::new(bytes.as_bytes()),
+                &spool,
+                bound,
+                o200k::tokens,
+            )
+        },
+    );
     let Ok(streamed) = read else {
         let _ = std::fs::remove_dir_all(&spool);
         // STDIN THAT WOULD NOT READ IS NOT A PAYLOAD THAT WOULD NOT DECODE: an

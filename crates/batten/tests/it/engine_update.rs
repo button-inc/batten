@@ -125,7 +125,13 @@ fn crashing_build(dir: &Path, stamp: &str) {
         &dir.join("target").join("release"),
         stamp,
         &format!(
-            "#!/bin/sh\necho ran >> \"{}\"\necho \"{MARKER}\"\nexit 101\n",
+            // DRAINS STDIN, because a real engine does. The hand-off inherits
+            // this process's stdin and that is where the envelope arrives, so a
+            // stub that never reads leaves the payload sitting there for the
+            // parent's fall-through to find — which is not the state a crashed
+            // engine leaves behind. Reading it first is what makes these cases
+            // exercise the fall-through the issue actually ships.
+            "#!/bin/sh\ncat >/dev/null 2>&1\necho ran >> \"{}\"\necho \"{MARKER}\"\nexit 101\n",
             dir.join("runs").display()
         ),
     );
@@ -235,14 +241,32 @@ fn text(output: &Output) -> String {
 /// The adjudication verb, as a harness spells it.
 const ADJUDICATE: [&str; 3] = ["adjudicate", "--harness", "claude-code"];
 
-/// The three things that must hold of a hand-off to a build that crashed: the
-/// code is not one a harness runs past, the build's line is not on stdout, and
-/// it was spawned exactly once.
+/// What must hold of a hand-off to a build that crashed: the FLOOR decided the
+/// call, the build's line is not on stdout, and it was spawned exactly once.
+///
+/// **THE FLOOR'S OWN ANSWER, NOT MERELY "NOT THE CHILD'S CODE".** This read
+/// `!matches!(code, Some(1 | 101))` and was satisfied by exit `0` — which is
+/// exactly what the follow arm returned once the stub drained stdin, because
+/// the fall-through then re-read a spent stream, found nothing to adjudicate,
+/// and ALLOWED. A negative assertion over two codes cannot tell "the floor
+/// refused" from "nobody judged anything", and those are the two outcomes this
+/// whole issue is about.
+///
+/// So both halves are named. `3` is the code: the engine could not load the
+/// rules it is registered to enforce, which is a could-not-look about Batten
+/// rather than a verdict about the tree. The VERDICT rides the document, which
+/// is where this harness reads one — so the deny is asserted there, and the two
+/// hand-offs now answer identically because they spawn identically.
 fn a_crash_decided_nothing(output: &Output, dir: &Path, arm: &str) {
-    assert!(
-        !matches!(output.status.code(), Some(1 | 101)),
-        "{arm}: a crashed child is not the hook's exit: {:?}\n{}",
+    assert_eq!(
         output.status.code(),
+        Some(3),
+        "{arm}: a crashed child decided nothing, so the floor answers: {}",
+        text(output)
+    );
+    assert!(
+        common::stdout(output).contains(r#""permissionDecision":"deny""#),
+        "{arm}: and the floor's answer is a deny the harness reads: {}",
         text(output)
     );
     assert!(
