@@ -842,16 +842,6 @@ struct FollowTarget {
     argv: Vec<String>,
 }
 
-impl FollowTarget {
-    /// The engine itself, which is the argv's first word by construction.
-    ///
-    /// Read by the load-fault hand-off, which must not spawn a binary this
-    /// call has already run; see [`Handoff::ran`].
-    fn engine(&self) -> Option<&Path> {
-        self.argv.first().map(Path::new)
-    }
-}
-
 /// `batten engine update` (CLOUD-2287, CLOUD-2279): bring every batten
 /// declaration in this worktree's config to the latest published release, then
 /// install it as [`engine_install`] does.
@@ -19969,23 +19959,24 @@ fn follow_to_pinned<'a>(
     let Ok(raw) = std::fs::read_to_string(&payload.streamed.raw) else {
         return Ok(Follow::NOTHING);
     };
-    let answer = hand_off(&target.root, &target.argv, &raw, out)?;
-    Ok(Follow {
-        answer,
-        ran: target.engine(),
-    })
+    hand_off(&target.root, &target.argv, &raw, out)
 }
 
 /// What the follow did: the answer if the child decided one, and the engine it
 /// actually spawned (CLOUD-2376).
 ///
-/// **BOTH, BECAUSE THEY ARE DIFFERENT QUESTIONS AND THE SECOND WAS BEING
-/// GUESSED.** `ran` was derived in `run_hook` from "a target was resolved",
-/// which is true on paths where no child was spawned at all — a spool that
-/// would not read, an engine that would not start. The load-fault hand-off
-/// reads it to avoid re-running a binary this call already ran, so a guess in
-/// that direction suppressed a hand-off to a possibly DIFFERENT engine over a
-/// run that never happened. Only this function knows, so only it says.
+/// **BOTH, BECAUSE THEY ARE DIFFERENT QUESTIONS AND THE SECOND KEPT BEING
+/// GUESSED.** `ran` was first derived in `run_hook` from "a target was
+/// resolved", which is true on paths where no child was spawned at all — a
+/// spool that would not read, an engine that would not start. Moving it to
+/// `follow_to_pinned` fixed the first and not the second, because `hand_off`
+/// answers `None` for a program that would not start and for one that ran and
+/// decided nothing alike. So it is set in [`hand_off`], which is the only place
+/// that can tell those apart.
+///
+/// The load-fault hand-off reads it to avoid re-running a binary this call
+/// already ran, so a guess in that direction suppressed a hand-off to a
+/// possibly DIFFERENT engine over a run that never happened.
 struct Follow<'a> {
     answer: Option<ExitCode>,
     ran: Option<&'a Path>,
@@ -20024,25 +20015,36 @@ impl Follow<'_> {
 /// Only a write of the child's accepted answer to `out`.
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT handoff-writes-before-deciding|s@^    let Some(decided) = ExitCode::decided(code) else {$@    let Some(decided) = Some(ExitCode::from_code(code).unwrap_or(ExitCode::Usage)) else {@|a_crashing_followed_build_never_fails_the_hook_open
-fn hand_off(
+fn hand_off<'a>(
     root: &Path,
-    argv: &[String],
+    argv: &'a [String],
     raw: &str,
     out: &mut dyn Write,
-) -> Result<Option<ExitCode>> {
+) -> Result<Follow<'a>> {
     let published = [(String::from(ENGINE_UPDATED), Some(String::from("1")))];
     let Some((code, stdout)) =
         exec::piped_argv(root, argv, raw, exec::Diagnostics::Pass, &published)
     else {
-        return Ok(None);
+        return Ok(Follow::NOTHING);
     };
+    // A CHILD RAN, WHATEVER IT SAID, and this is the only place that knows.
+    // `piped_argv` answers `None` for a program that would not start as well as
+    // for one that died without a code, so a caller reading only the returned
+    // answer cannot tell "nothing was spawned" from "something was spawned and
+    // decided nothing". Those differ for the hand-off below, which must not
+    // re-run a binary this call already ran but is still owed its turn when
+    // nothing ran at all.
+    let ran = argv.first().map(Path::new);
     // DECIDE, THEN WRITE. Nothing of the child's has reached `out` yet, so a
     // code the table does not name costs nothing to drop whole.
     let Some(decided) = ExitCode::decided(code) else {
-        return Ok(None);
+        return Ok(Follow { answer: None, ran });
     };
     out.write_all(stdout.as_bytes())?;
-    Ok(Some(decided))
+    Ok(Follow {
+        answer: Some(decided),
+        ran,
+    })
 }
 
 /// Hand a call this engine cannot judge to the hook authority's own checkout
@@ -20060,15 +20062,14 @@ fn hand_off(
 ///
 /// # The child is judged before it is heard (CLOUD-2376)
 ///
-/// Its stdout is written only for a code [`crate::exit`] names an answer —
-/// `0`, `2`, `3`. Writing first and mapping afterwards put a crashing build's
-/// half-written line on the harness's stdout and then reported [`Usage`],
-/// which every harness reads as "the hook itself failed, run the call": the
-/// fail-open this whole boundary exists to close. `1` is dropped with the
-/// codes outside the table for exactly that reason. What is left is the
-/// refusal floor below, which still admits a read and the config repair.
+/// [`hand_off`] does that, and WHICH codes travel is
+/// [`ExitCode::decided`]'s to say — this used to re-derive the list here and
+/// the copy went stale the moment `decided` stopped admitting `3`, naming the
+/// very code whose adoption is the fail-open. The rule has one home; what is
+/// left when nothing travels is the refusal floor below, which still admits a
+/// read and the config repair.
 ///
-/// [`Usage`]: exit::ExitCode::Usage
+/// [`ExitCode::decided`]: exit::ExitCode::decided
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT hook-handoff-skipped|s@^    let Some(build) = engine::checkout_build(root) else {$@    let Some(build) = None::<PathBuf> else {@|a_hook_outside_the_checkout_hands_off_to_the_authoritys_build
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
@@ -20092,7 +20093,9 @@ fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<O
     }
     let mut argv = vec![build.to_string_lossy().into_owned()];
     argv.extend(std::env::args().skip(1));
-    hand_off(root, &argv, handoff.raw, out)
+    // Only the answer: this is the last hand-off, so nothing downstream asks
+    // what it ran.
+    Ok(hand_off(root, &argv, handoff.raw, out)?.answer)
 }
 
 /// Whether this call has already run `build` — as this process, or as an
