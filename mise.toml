@@ -1214,13 +1214,17 @@ description = "Report: line/region coverage of the Rust suite. A REPORT, never a
 # component that will not install fails the entry, and nothing is reported.
 #
 # Two artifacts from one instrumented run: lcov for tooling that consumes it,
-# and a summary a human reads. `--workspace` matches what `test:cargo` runs.
+# and a summary a human reads. `nextest --workspace` matches what `test:cargo`
+# runs, RUNNER INCLUDED: the suite is nextest's, a process per case with its
+# setup script, and cases lean on that (a case leads its own process group, or
+# moves its own working directory). Plain `cargo test` runs the cases as threads
+# of one process, so the report would be built from a suite that cannot pass.
 # `COVERAGE_OUT_DIR` still moves both, through the template rather than a
 # `${…:-}` expansion.
 run = [
   "rustup component add llvm-tools-preview",
   "mkdir -p {% if env.COVERAGE_OUT_DIR %}{{env.COVERAGE_OUT_DIR}}{% else %}target/coverage{% endif %}",
-  "cargo llvm-cov --workspace --lcov --output-path {% if env.COVERAGE_OUT_DIR %}{{env.COVERAGE_OUT_DIR}}{% else %}target/coverage{% endif %}/lcov.info",
+  "cargo llvm-cov nextest --workspace --lcov --output-path {% if env.COVERAGE_OUT_DIR %}{{env.COVERAGE_OUT_DIR}}{% else %}target/coverage{% endif %}/lcov.info",
   "cargo llvm-cov report --summary-only",
 ]
 
