@@ -399,5 +399,11 @@ mod tests {
                 .any(|c| !matches!(c, '0' | 'f')),
             "a low nibble is read: {hex}"
         );
+        // The digest itself, pinned: an identity that is hex in shape but no
+        // longer this digest is a different identity for the same change.
+        assert_eq!(
+            hex,
+            "83e3aeb0ad3323edb75e0dee853d4c631e3c6f85aacc09108bbfaa802361fdfb"
+        );
     }
 }

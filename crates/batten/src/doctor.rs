@@ -3285,6 +3285,20 @@ mod tests {
         );
     }
 
+    /// Fails by: any assignment refused as a bypass, or a truncated invocation
+    /// read as reaching the engine (or indexed past its end).
+    #[test]
+    fn only_a_batten_assignment_or_a_short_argv_falls_short_of_the_engine() {
+        let harness = hook::Harness::ClaudeCode;
+        let live = hook::wiring_command(harness);
+        assert!(reaches_engine(&format!("env LANG=C {live}"), harness));
+        assert!(!reaches_engine(&format!("BATTEN_X=1 {live}"), harness));
+        let mut words: Vec<&str> = live.split_whitespace().collect();
+        words.pop();
+        assert!(!reaches_engine(&words.join(" "), harness));
+        assert!(!reaches_engine(crate::surface::BINARY, harness));
+    }
+
     #[test]
     fn a_missing_config_is_named_rather_than_lumped_in() {
         let dir = scratch("missing-config");
@@ -3499,6 +3513,11 @@ mod tests {
         let row = claude_row("hooks-underived", &wiring);
         assert!(!row.ok);
         assert_eq!(reasons(&row), vec![EVENT_UNDERIVED]);
+        assert_eq!(
+            row.registrations,
+            claude_spellings().len() + 1,
+            "the underived entry is a registration too"
+        );
     }
 
     #[test]
@@ -3744,6 +3763,8 @@ mod tests {
                         { "hooks": [{ "type": "command", "command": command }] },
                         { "hooks": [{ "type": "command",
                                       "command": "/home/someone/.claude/stop-hook-git-check.sh" }] },
+                        { "hooks": [{ "type": "command",
+                                      "command": ".claude/hooks/batten-renamed.sh" }] },
                     ]
                 }
             })
@@ -3752,14 +3773,15 @@ mod tests {
         .unwrap();
 
         let tally = merged_under(&home, &project, harness, &command, false);
-        assert_eq!(tally.commands, 2, "both commands are on the surface");
+        assert_eq!(tally.commands, 3, "every command is on the surface");
         assert_eq!(tally.siblings, 1, "exactly one of them is not batten's");
         assert_eq!(
             tally.findings.len(),
-            1,
-            "and batten's own merged entry is the finding"
+            2,
+            "and each entry naming batten, exact or renamed, is a finding"
         );
         assert_eq!(tally.findings[0].reason, MERGED_REGISTRATION);
+        assert_eq!(tally.findings[1].reason, MERGED_REGISTRATION);
         // Rule 4 holds over the new counter as well: a number, never a name.
         let rendered = format!("{tally:?}");
         assert!(

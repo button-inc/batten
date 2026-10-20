@@ -518,7 +518,12 @@ mod tests {
     fn until_register_beside_until_key_is_refused() {
         let mut bad = row("chain");
         bad.until_register = Some("captures".to_owned());
-        assert!(validate(&[bad]).is_err());
+        assert!(validate(&[bad.clone()]).is_err());
+        bad.until_key = None;
+        assert!(
+            validate(&[bad]).is_err(),
+            "an until_value alone beside until_register is still two stop conditions"
+        );
     }
 
     #[test]

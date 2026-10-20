@@ -790,6 +790,20 @@ static TRAILER: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
 mod tests {
     use super::*;
 
+    /// Fails by: the committed grammar's keys dropped or replaced on their way
+    /// through the trait this module asks.
+    #[test]
+    fn the_committed_grammar_names_and_closes_through_keys() {
+        let grammar = Grammar::committed();
+        let key = format!("{}-7", "CL".to_owned() + "OUD");
+        assert_eq!(Keys::named(&grammar, &format!("see {key}")), [key.clone()]);
+        assert_eq!(
+            Keys::closed(&grammar, &format!("Closes {key}")),
+            [key.clone()]
+        );
+        assert!(Keys::closed(&grammar, &format!("see {key}")).is_empty());
+    }
+
     /// A [`Keys`] double, so this suite asserts THIS module's predicate rather
     /// than the pattern registry's shape on the way to it.
     ///

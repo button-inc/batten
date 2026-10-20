@@ -2357,6 +2357,8 @@ mod lint_tests {
         ));
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].starts_with("3:deny-without-replay"), "{found:?}");
+        let uncounted = format!("{OPENER}\n{SOURCE}\n{gate}\nA replay is planned.\n");
+        assert_eq!(rules(&linted(&grammar, &uncounted, None, root)).len(), 1);
         let replayed = format!("{OPENER}\n{SOURCE}\n{gate}\nReplay: 40 commits, fired 2 times.\n");
         assert!(rules(&linted(&grammar, &replayed, None, root)).is_empty());
         let warn = "* **Gate (§3).** `mise-tasks/thing-check.sh`, severity = warn.";

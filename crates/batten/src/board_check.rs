@@ -1807,6 +1807,7 @@ mod tests {
         let grammar = Grammar::committed();
         let block = [
             "**Refinement — Ready**",
+            "* **Source of truth (§1).** One artifact.",
             "* **Obligations (§7).** `alpha_beta_gamma_delta`",
             "  and `kappa_lambda_mu_nu`",
             "* **Commit / bump (§6).** `zeta_eta_theta_iota`",

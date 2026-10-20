@@ -4297,4 +4297,47 @@ mod tests {
             );
         }
     }
+
+    /// Fails by: a defaulted enum read as typed when nobody typed it, or a
+    /// typed one dropped.
+    #[test]
+    fn only_a_typed_exec_format_reaches_the_request() {
+        let exec = |argv: &[&str]| match parse(argv).command {
+            Some(Command::Exec(request)) => request,
+            other => panic!("exec parses to its own arm: {other:?}"),
+        };
+        let typed = exec(&["exec", "--format", "json", "--", "true"]);
+        assert_eq!(typed.format, Some(crate::exec::OutputFormat::Json));
+        assert_eq!(exec(&["exec", "--", "true"]).format, None);
+    }
+
+    /// Fails by: an empty reference read as one to replay against.
+    #[test]
+    fn an_empty_land_reference_is_the_declared_trunk() {
+        let reference = |argv: &[&str]| match parse(argv).command {
+            Some(Command::Land {
+                command: LandCommand::Replay { reference, .. },
+            }) => reference,
+            other => panic!("land replay parses to its own arm: {other:?}"),
+        };
+        assert_eq!(
+            reference(&["land", "replay", "main"]),
+            Some("main".to_owned())
+        );
+        assert_eq!(reference(&["land", "replay", ""]), None);
+    }
+
+    #[test]
+    fn sbom_and_dist_carry_the_flags_they_were_given() {
+        let Some(Command::Sbom(sbom)) = parse(&["sbom", "--binary", "b", "--names"]).command else {
+            panic!("sbom parses to its own arm")
+        };
+        assert_eq!(sbom.binary.as_deref(), Some("b"));
+        assert!(sbom.names);
+        let Some(Command::Dist(dist)) = parse(&["dist", "x86_64-unknown-linux-gnu"]).command else {
+            panic!("dist parses to its own arm")
+        };
+        assert_eq!(dist.target, "x86_64-unknown-linux-gnu");
+        assert!(!dist.stem);
+    }
 }

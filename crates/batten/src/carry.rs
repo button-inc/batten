@@ -389,6 +389,10 @@ tool/runner-action@aaa\tMIT\tCopyright (c) 2018 A Holder and contributors\n";
         );
         let head = format!("{BASE}@ccc\tMIT\tNONE\n");
         assert_eq!(carried(&head), Err(Refusal::Unparseable(4)));
+        let head = format!(
+            "{BASE}tool/runner-action@ccc\tMIT\tCopyright (c) 2018 A Holder and contributors\n@ddd\tMIT\tNONE\n"
+        );
+        assert_eq!(carried(&head), Err(Refusal::Unparseable(5)));
         let head = format!("{BASE}tool/install-action@ddd\tApache-2.0 OR MIT\tNONE\textra\n");
         assert_eq!(carried(&head), Err(Refusal::Unparseable(4)));
     }

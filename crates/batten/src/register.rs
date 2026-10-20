@@ -1143,12 +1143,12 @@ mod tests {
 
     #[test]
     fn inverse_refuses_only_the_keys_no_citation_names() {
-        let target = keys_at(&[("key-a", "r.md"), ("key-b", "r.md")]);
+        let target = keys_at(&[("key-a", "a.md"), ("key-b", "b.md")]);
         let refusals = resolve(&target, &[citation("key-a", "n.md")], None, None, true);
         assert_eq!(
             refusals,
             vec![Refusal::Uncited(Witness {
-                path: String::from("r.md"),
+                path: String::from("b.md"),
                 line: None,
             })]
         );
