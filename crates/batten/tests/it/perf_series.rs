@@ -91,12 +91,22 @@ fn record(dir: &Path, input: &str) -> Output {
     let mut child = command.spawn().expect("spawn batten perf record");
     {
         use std::io::Write as _;
-        child
+        // A REFUSAL CAN BEAT THE WRITE: off trunk the child refuses and exits
+        // before it reads, so its end of the pipe may already be closed. The
+        // refusal is what such a case asserts, so a broken pipe is not the
+        // write failing; any other error still is.
+        let written = child
             .stdin
             .as_mut()
             .expect("stdin")
-            .write_all(input.as_bytes())
-            .expect("write records");
+            .write_all(input.as_bytes());
+        if let Err(error) = written {
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe,
+                "write records: {error}"
+            );
+        }
     }
     child.wait_with_output().expect("run batten perf record")
 }
