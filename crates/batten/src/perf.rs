@@ -2264,8 +2264,6 @@ const DEFAULT_NS: &str = "1,16,64,256";
 /// a single ratio is a point and the sweep has to be read against a WIDTH.
 const DEFAULT_NULL_PAIRS: &str = "5";
 
-const DEFAULT_BIN: &str = "target/release/batten";
-
 /// One module, whose body reads whatever was declared. Iterating `documents`
 /// rather than naming a path keeps the module identical across every arm, so the
 /// only thing differing between arms is the row's declaration.
@@ -2671,7 +2669,18 @@ fn acquire_out_dir(repo: &Path) -> Result<PathBuf> {
 /// own fact and answers the same on every host, where a missing hyperfine is
 /// the host's (the `windows` job installs none).
 fn release_binary(repo: &Path) -> Result<PathBuf> {
-    release_binary_at(repo.join(env_or(BIN_VAR, DEFAULT_BIN)))
+    // THE SAME NAMER `invocation` OBEYS (CLOUD-2376), and the last place in the
+    // crate that did not. `acquire` does not build — it tells the operator to
+    // run `mise run build:release`, and that build honours `CARGO_TARGET_DIR`
+    // while a literal `target/release/batten` does not. Under a redirected
+    // target dir this bailed "is missing" against a checkout whose binary had
+    // just been written somewhere else: the exact drift this issue closed
+    // between `install_source` and the follow's own lookup. An operator-supplied
+    // override still wins, and stays repo-relative as it always was.
+    release_binary_at(std::env::var_os(BIN_VAR).map_or_else(
+        || crate::engine::release_build(repo),
+        |named| repo.join(named),
+    ))
 }
 
 /// [`release_binary`] over the path it resolved, so a case can name its own
@@ -3411,7 +3420,7 @@ mod tests {
         assert!(refused.contains("is missing"), "{refused}");
         // Inside the scratch repository by construction: a path the runner's
         // `BENCH_BIN` named could be a real build this case must never write.
-        let binary = repo.join(DEFAULT_BIN);
+        let binary = repo.join("target/release/batten");
         assert!(
             release_binary_at(binary.clone())
                 .err()

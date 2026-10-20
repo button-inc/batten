@@ -274,7 +274,6 @@ pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 // `#[expect]` rather than `#[allow]` for `rules/rust.md`'s reason: it is
 // self-cleaning in both directions, so if the table ever shrinks back under the
 // ceiling this annotation goes red rather than quietly outliving its cause.
-//
 #[expect(
     clippy::too_many_lines,
     reason = "a dispatch table's length is its verb count; splitting it scatters the surface"
@@ -745,12 +744,10 @@ fn follow_pin(hook_path: bool, out: &mut dyn Write, err: &mut dyn Write) -> Resu
         // speaks for — and the one `install_source` builds in, inheriting the
         // same value. The hook's load-fault hand-off asks about somebody
         // else's checkout and so asks the other question.
-        (None, Some(_)) => match engine::own_build(&root) {
+        (None, Some(digest)) => match engine::own_build(&root) {
             Some(build) => build,
             None if may_build => {
-                if let Some(digest) = pin.source.as_deref() {
-                    install_source(&root, digest, &mut std::io::sink())?;
-                }
+                install_source(&root, digest, &mut std::io::sink())?;
                 exe
             }
             None => return Ok(Followed::Nothing),
