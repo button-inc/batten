@@ -1438,24 +1438,19 @@ mod tests {
         assert!(row.probe);
     }
 
-    /// `declare` ignores a later call, and other cases in this binary declare
-    /// forges of their own (any config load with a `[forge]` table does), so
-    /// the graded statuses are held to whichever forge won, read off its own
-    /// field rather than through the helper the readers share. This case
-    /// declares no list, so it never changes the graded answer another case
-    /// reads; its credential names are the ones `land`'s dialling case declares.
+    /// Other cases in this binary declare forges of their own (any config load
+    /// with a `[forge]` table does) and `declare` keeps the first, so this
+    /// case only READS: it never decides what another case sees. The graded
+    /// statuses are held to whatever is declared, read off its own field rather
+    /// than through the helper the readers share, and to the documented default
+    /// where nothing is.
     #[test]
     fn the_declared_forge_answers_its_credential_and_its_graded_statuses() {
-        declare(Forge {
-            credential_names: vec![String::from("GH_TOKEN"), String::from("GITHUB_TOKEN")],
-            ..Forge::default()
-        });
-        let ruling = declared().expect("a declared forge");
-        assert_eq!(declared_credential(), credential(Some(ruling)));
+        let ruling = declared();
+        assert_eq!(declared_credential(), credential(ruling));
         let expected = |status: u16| {
             ruling
-                .nothing_graded
-                .as_deref()
+                .and_then(|forge| forge.nothing_graded.as_deref())
                 .unwrap_or(NOTHING_GRADED_DEFAULT)
                 .contains(&status)
         };
