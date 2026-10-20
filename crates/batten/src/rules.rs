@@ -20813,7 +20813,6 @@ violation contains {
     #[test]
     fn a_spawn_failure_names_its_own_cause() {
         let dir = temp_dir("rules-run-once");
-        write(&dir, "data.txt", "not a program\n");
         let rule = command("c", "*", "x");
         let refused = |program: &str| {
             run_once(&rule, &dir, program, &[], &[], &mut Vec::new())
@@ -20821,13 +20820,11 @@ violation contains {
                 .to_string()
         };
         assert!(refused("batten-rules-no-such-program").contains("not found on PATH"));
-        // A present file without the execute bit is a Unix spawn failure;
-        // Windows resolves `./data.txt` differently and has no such bit.
-        if cfg!(unix) {
-            let other = refused("./data.txt");
-            assert!(other.contains("cannot run"), "{other}");
-            assert!(!other.contains("not found on PATH"), "{other}");
-        }
+        // An interior NUL is refused by the standard library before any OS
+        // call, so this is a non-NotFound spawn failure on every platform.
+        let other = refused("data\0x");
+        assert!(other.contains("cannot run"), "{other}");
+        assert!(!other.contains("not found on PATH"), "{other}");
     }
 
     /// Only `verbatim = true` hashes a span verbatim.
