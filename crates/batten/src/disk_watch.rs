@@ -175,11 +175,21 @@ pub fn around<T>(watch: Option<DiskWatch<'_>>, body: impl FnOnce() -> T) -> (T, 
     let stop = AtomicBool::new(false);
     std::thread::scope(|scope| {
         let handle = self::watch(scope, watch, &stop);
-        // THE FLAG IS SET HOWEVER THE BODY LEAVES, RETURNING OR UNWINDING.
+        // TWO STATEMENTS, NOT ONE WITH A SPARE. The store is the normal
+        // completion point — the body returned, so the watcher's work is over
+        // before the join. [`Stop`] covers the OTHER way out, an unwind, which
+        // reaches neither this line nor anything after it.
+        //
+        // Folding the normal path into the guard was tried and is worse twice
+        // over: it makes a correct return depend on drop order, and it leaves
+        // the guard unprovable — emptying its `drop` then hangs every watched
+        // case at once, so the runner reports could-not-look instead of a
+        // catch. Separate, the guard's own unit test fails in 0.012s.
         let answer = {
             let _stop = Stop(&stop);
             body()
         };
+        stop.store(true, Ordering::Relaxed);
         let lines = handle.join().unwrap_or_default();
         (answer, lines)
     })
