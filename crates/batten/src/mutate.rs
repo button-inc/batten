@@ -1722,7 +1722,7 @@ fn source_args(
     // bound was 46s; `prune_watch.rs`'s `a_step_run_build_is_watched` waits four
     // `disk_watch::TICK`s — 20s — for a collection the mutation prevents, and the
     // suite was killed mid-assertion. The verdict was `suite-timed-out`, which
-    // [`Verdict::could_not_look`] classes as the runner failing to LOOK
+    // `Verdict::could_not_look` classes as the runner failing to LOOK
     // (CLOUD-1267) rather than as anything about coverage. So the sweep reported
     // it could not judge a mutant its own suite catches — and reported it only
     // locally, since the sharded CI run already carried this bound and caught it.
