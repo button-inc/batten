@@ -392,7 +392,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             supplied_instant(instant.as_deref())?,
             mode,
             &overrides,
-            pinned,
+            pinned.as_ref(),
             out,
             err,
         ),
@@ -840,6 +840,16 @@ struct FollowTarget {
     root: PathBuf,
     /// The pinned engine followed by this invocation's own operands.
     argv: Vec<String>,
+}
+
+impl FollowTarget {
+    /// The engine itself, which is the argv's first word by construction.
+    ///
+    /// Read by the load-fault hand-off, which must not spawn a binary this
+    /// call has already run; see [`Handoff::ran`].
+    fn engine(&self) -> Option<&Path> {
+        self.argv.first().map(Path::new)
+    }
 }
 
 /// `batten engine update` (CLOUD-2287, CLOUD-2279): bring every batten
@@ -18968,7 +18978,7 @@ fn run_hook(
     overrides: &Overrides,
     // The pinned engine `follow_pin` resolved and deliberately did not spawn
     // (CLOUD-2376): the envelope has to be read before a child can be handed it.
-    pinned: Option<FollowTarget>,
+    pinned: Option<&FollowTarget>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -18979,7 +18989,6 @@ fn run_hook(
     // THE FOLLOW, NOW THAT THE PAYLOAD EXISTS. An answer the §7 table names is
     // this invocation's; anything else decided nothing and falls through to the
     // floor below, over the envelope this process still owns.
-    let already_handed = pinned.is_some();
     if let Some(code) = follow_to_pinned(pinned, &raw, out)? {
         return Ok(code);
     }
@@ -19145,7 +19154,7 @@ fn run_hook(
     let (policy, waivers, pruning) = if adjudicable {
         // Built in the arm that uses it: the handoff is the config load's input,
         // and the other arm loads nothing.
-        let handoff = Handoff::new(&raw, already_handed);
+        let handoff = Handoff::new(&raw, pinned.and_then(FollowTarget::engine));
         match hook_config_or_floor(overrides, harness, &envelope, handoff, mode, out, err)? {
             Ok(loaded) => loaded,
             Err(code) => return Ok(code),
@@ -19859,11 +19868,24 @@ fn hook_config_or_floor(
 struct Handoff<'a> {
     /// The envelope exactly as it arrived, replayed to the child on stdin.
     raw: &'a str,
-    /// Whether [`follow_pin`] already ran this checkout's build and it exited
-    /// outside the §7 table. Threaded as a value, never published into the
-    /// environment, so no child of this process can inherit a mark about a run
-    /// that is not its own.
-    already_handed: bool,
+    /// The engine [`follow_pin`]'s target already ran for this call, if one
+    /// did. Threaded as a value, never published into the environment, so no
+    /// child of this process can inherit a mark about a run that is not its own.
+    ///
+    /// **A PATH, NOT A FLAG, because the question is identity.** This was a
+    /// bool meaning "a follow already happened", and the two hand-offs do not
+    /// necessarily resolve the same file: the follow reads the working
+    /// directory's worktree through [`engine::own_build`], which honours
+    /// `CARGO_TARGET_DIR`, while the hand-off below reads
+    /// [`hook_authority_root`] through [`engine::checkout_build`], which does
+    /// not — and a cwd that is a different checkout from the session authority
+    /// is precisely the case CLOUD-2204 added the second hand-off for. A
+    /// crashed follow into one engine therefore suppressed a hand-off to
+    /// another, and the call fell to the floor with a working engine
+    /// unconsulted. Recursion is not what this guards — `ENGINE_UPDATED` is —
+    /// so the honest predicate is the one the hand-off already applies against
+    /// `current_exe`: never spawn a binary this call has already run.
+    ran: Option<&'a Path>,
 }
 
 impl<'a> Handoff<'a> {
@@ -19872,11 +19894,8 @@ impl<'a> Handoff<'a> {
     /// `run_hook` sits at its line budget and rustfmt spells the literal over
     /// four lines, so this is what keeps a two-field value from costing three of
     /// them. Nothing else about it is interesting.
-    const fn new(raw: &'a str, already_handed: bool) -> Self {
-        Self {
-            raw,
-            already_handed,
-        }
+    const fn new(raw: &'a str, ran: Option<&'a Path>) -> Self {
+        Self { raw, ran }
     }
 }
 
@@ -19897,24 +19916,52 @@ impl<'a> Handoff<'a> {
 /// # Errors
 ///
 /// Only a write of the child's accepted answer to `out`.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT follow-writes-before-deciding|s@^    let Some(decided) = ExitCode::decided(code) else {$@    let Some(decided) = Some(ExitCode::from_code(code).unwrap_or(ExitCode::Usage)) else {@|a_crashing_followed_build_never_fails_the_hook_open
 fn follow_to_pinned(
-    pinned: Option<FollowTarget>,
+    pinned: Option<&FollowTarget>,
     raw: &str,
     out: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
     let Some(target) = pinned else {
         return Ok(None);
     };
+    hand_off(&target.root, &target.argv, raw, out)
+}
+
+/// THE HAND-OFF ITSELF: spawn a resolved engine over this call's payload and
+/// take its answer, or `None` where it decided nothing (CLOUD-2376).
+///
+/// **One body, because there is one invariant.** Both hand-offs reached this
+/// same fifteen lines — publish the one-hop mark, pipe the payload, test the
+/// code against the §7 table, and write ONLY for an answer the table names —
+/// and each carried its own `//MUTANT` row over its own copy of the decide
+/// line. Those two rows were one mutant: `substitute` applies a script per line
+/// across the whole file, so either row mutated both copies, and neither proved
+/// its own site. A rule ships with ITS mechanism, and this is the mechanism.
+///
+/// What stays with each caller is its RESOLUTION, which is genuinely two
+/// questions: the follow is handed a target resolved from the working
+/// directory, and the load-fault hand-off resolves the authority's own checkout
+/// build and owns the guards that decide whether to look at all.
+///
+/// `None` means this invocation still has to decide the call for itself — the
+/// engine would not spawn, or it exited outside the table. The payload is
+/// intact either way, so the floor answers over it.
+///
+/// # Errors
+///
+/// Only a write of the child's accepted answer to `out`.
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT handoff-writes-before-deciding|s@^    let Some(decided) = ExitCode::decided(code) else {$@    let Some(decided) = Some(ExitCode::from_code(code).unwrap_or(ExitCode::Usage)) else {@|a_crashing_followed_build_never_fails_the_hook_open
+fn hand_off(
+    root: &Path,
+    argv: &[String],
+    raw: &str,
+    out: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
     let published = [(String::from(ENGINE_UPDATED), Some(String::from("1")))];
-    let Some((code, stdout)) = exec::piped_argv(
-        &target.root,
-        &target.argv,
-        raw,
-        exec::Diagnostics::Pass,
-        &published,
-    ) else {
+    let Some((code, stdout)) =
+        exec::piped_argv(root, argv, raw, exec::Diagnostics::Pass, &published)
+    else {
         return Ok(None);
     };
     // DECIDE, THEN WRITE. Nothing of the child's has reached `out` yet, so a
@@ -19953,10 +20000,9 @@ fn follow_to_pinned(
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT hook-handoff-skipped|s@^    let Some(build) = engine::checkout_build(root) else {$@    let Some(build) = None::<PathBuf> else {@|a_hook_outside_the_checkout_hands_off_to_the_authoritys_build
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT handoff-writes-before-deciding|s@^    let Some(decided) = ExitCode::decided(code) else {$@    let Some(decided) = Some(ExitCode::from_code(code).unwrap_or(ExitCode::Usage)) else {@|a_crashing_checkout_build_never_fails_the_hook_open
-//MUTANT handoff-reruns-a-crashed-follow|s@^    if handoff.already_handed \x7c\x7c std::env::var_os(ENGINE_UPDATED).is_some() {$@    if std::env::var_os(ENGINE_UPDATED).is_some() {@|a_crashing_checkout_build_never_fails_the_hook_open
+//MUTANT handoff-reruns-the-binary-already-run|s@^    if already_ran(handoff.ran, \&build)? {$@    if false {@|a_crashing_checkout_build_never_fails_the_hook_open
 fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<Option<ExitCode>> {
-    if handoff.already_handed || std::env::var_os(ENGINE_UPDATED).is_some() {
+    if std::env::var_os(ENGINE_UPDATED).is_some() {
         return Ok(None);
     }
     let root = hook_authority_root();
@@ -19969,28 +20015,32 @@ fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<O
     let Some(build) = engine::checkout_build(root) else {
         return Ok(None);
     };
-    if git::canonical(&std::env::current_exe()?) == git::canonical(&build) {
+    if already_ran(handoff.ran, &build)? {
         return Ok(None);
     }
     let mut argv = vec![build.to_string_lossy().into_owned()];
     argv.extend(std::env::args().skip(1));
-    let published = [(String::from(ENGINE_UPDATED), Some(String::from("1")))];
-    let Some((code, stdout)) = exec::piped_argv(
-        root,
-        &argv,
-        handoff.raw,
-        exec::Diagnostics::Pass,
-        &published,
-    ) else {
-        return Ok(None);
-    };
-    // DECIDE, THEN WRITE. Nothing of the child's has reached `out` yet, so a
-    // code the table does not name costs nothing to drop whole.
-    let Some(decided) = ExitCode::decided(code) else {
-        return Ok(None);
-    };
-    out.write_all(stdout.as_bytes())?;
-    Ok(Some(decided))
+    hand_off(root, &argv, handoff.raw, out)
+}
+
+/// Whether this call has already run `build` — as this process, or as an
+/// engine a follow already spawned for it (CLOUD-2376).
+///
+/// One predicate over both, because they are one question. The self-test was
+/// here first and the follow's was a separate bool, which meant a follow into
+/// one engine suppressed a hand-off to a different one; comparing canonical
+/// paths answers both at the resolution the question is actually asked at.
+///
+/// # Errors
+///
+/// Only resolving this process's own image.
+fn already_ran(ran: Option<&Path>, build: &Path) -> Result<bool> {
+    let build = git::canonical(build);
+    let mine = std::env::current_exe()?;
+    Ok([Some(mine.as_path()), ran]
+        .into_iter()
+        .flatten()
+        .any(|path| git::canonical(path) == build))
 }
 
 /// Refuse a call whose rules this build could not load (CLOUD-1677).
