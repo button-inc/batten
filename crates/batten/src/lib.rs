@@ -18979,15 +18979,19 @@ fn run_hook(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let _memos = hook_call_memos();
-    let Some((raw, mut envelope, spilled, _spool)) = read_envelope(harness, mode, err)? else {
+    let Some(payload) = read_payload(mode, err)? else {
         return Ok(ExitCode::Success);
     };
-    // THE FOLLOW, NOW THAT THE PAYLOAD EXISTS. An answer the §7 table names is
-    // this invocation's; anything else decided nothing and falls through to the
-    // floor below, over the envelope this process still owns.
-    if let Some(code) = follow_to_pinned(pinned, &raw, out)? {
+    // THE FOLLOW, BEFORE THIS BUILD READS THE PAYLOAD FOR ITSELF. An answer the
+    // §7 table names is this invocation's; anything else decided nothing and
+    // falls through, over a stream this process has already taken.
+    if let Some(code) = follow_to_pinned(pinned, &payload, out)? {
         return Ok(code);
     }
+    let Some((raw, mut envelope, spilled, _spool)) = decode_payload(harness, payload, mode, err)?
+    else {
+        return Ok(ExitCode::Success);
+    };
     // THE WRITE TARGET IS READ AS THE REPOSITORY READS IT (CLOUD-1133), and this
     // is the one place that can do it: `decode` is pure and has no repository,
     // and the readers below — the protected gate, and any module over
@@ -19510,11 +19514,7 @@ fn is_adjudicable(envelope: &hook::Envelope) -> bool {
 //MUTANT spill-floor-restored|s@^    let bound = capture::DEFAULT_RESULT_MAX_TOKENS;$@    let bound = 1_000_000;@|a_result_over_the_bound_is_spilled_not_held
 //MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
 //MUTANT handler-bytes-reserialized|s@^    let raw = if streamed.spilled.is_empty() {$@    let raw = if false {@|a_handler_reads_the_payload_the_host_sent
-fn read_envelope(
-    harness: hook::Harness,
-    mode: Mode,
-    err: &mut dyn Write,
-) -> Result<Option<HookRead>> {
+fn read_payload(mode: Mode, err: &mut dyn Write) -> Result<Option<Payload>> {
     // STREAMED, NEVER HELD WHOLE (CLOUD-2224). Measured: reading a 50 MB payload
     // whole peaked at 150 MiB; streamed, at the process baseline. The bound is
     // the default one, because the configured bound lives under the authority
@@ -19546,8 +19546,37 @@ fn read_envelope(
         output::message(mode, Verbosity::Normal, err, said)?;
         return Ok(None);
     };
+    Ok(Some(Payload {
+        streamed,
+        spool: Spool(spool),
+    }))
+}
+
+/// The payload as it arrived, before anything version-specific has read it.
+///
+/// **THE SPLIT IS THE POINT, not a refactor.** Reading the stream is a thing
+/// any build of this engine can do; DECODING it is the half a build can be too
+/// old for, and being too old is the condition a pin exists to repair. Folding
+/// the two together meant a stale binary that could not decode an envelope
+/// answered `Success` for it — a fail-open in precisely the case the pin is
+/// for — because the pinned engine, which could have decoded it, was never
+/// consulted. So the hook reads, hands the bytes to the pin if there is one,
+/// and only decodes for itself once nothing else has answered.
+struct Payload {
+    streamed: stream_input::Streamed,
+    /// Removed when the call is answered on any path.
+    spool: Spool,
+}
+
+/// This build's own reading of a payload it has already taken off the stream.
+fn decode_payload(
+    harness: hook::Harness,
+    payload: Payload,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<Option<HookRead>> {
+    let Payload { streamed, spool } = payload;
     let Some(envelope) = hook::decode_value(harness, &streamed.value) else {
-        let _ = std::fs::remove_dir_all(&spool);
         output::message(mode, Verbosity::Normal, err, UNDECODABLE_PAYLOAD)?;
         return Ok(None);
     };
@@ -19561,7 +19590,7 @@ fn read_envelope(
         serde_json::to_string(&streamed.value).unwrap_or_default()
     };
     let _ = std::fs::remove_file(&streamed.raw);
-    Ok(Some((raw, envelope, streamed.spilled, Spool(spool))))
+    Ok(Some((raw, envelope, streamed.spilled, spool)))
 }
 
 /// One hook payload, read streaming (CLOUD-2224): the document handlers read,
@@ -19914,13 +19943,23 @@ impl<'a> Handoff<'a> {
 /// Only a write of the child's accepted answer to `out`.
 fn follow_to_pinned(
     pinned: Option<&FollowTarget>,
-    raw: &str,
+    payload: &Payload,
     out: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
     let Some(target) = pinned else {
         return Ok(None);
     };
-    hand_off(&target.root, &target.argv, raw, out)
+    // THE HOST'S OWN BYTES, off the spool, and read only once a follow is
+    // actually pending. Not the re-serialized value `decode_payload` hands
+    // handlers: that one carries a marker in place of every spilled leaf, and
+    // the pinned engine would judge the marker text as the result. A spool that
+    // will not read hands the child nothing, so it falls through instead —
+    // a child answering `0` over an empty document is not an answer about this
+    // call.
+    let Ok(raw) = std::fs::read_to_string(&payload.streamed.raw) else {
+        return Ok(None);
+    };
+    hand_off(&target.root, &target.argv, &raw, out)
 }
 
 /// THE HAND-OFF ITSELF: spawn a resolved engine over this call's payload and
