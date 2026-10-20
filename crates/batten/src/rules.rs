@@ -21275,4 +21275,31 @@ violation contains {
             "the seed and the register node it names: {walked}"
         );
     }
+
+    /// A register only an edge names must be declared, as one `until_register`
+    /// names must.
+    ///
+    /// Fails by: dropping the edge targets from the registers the walk builds.
+    #[test]
+    fn an_edge_naming_an_undeclared_register_is_refused() {
+        let dir = temp_dir("rules-walk-undeclared-register");
+        let traversals: Vec<crate::traversal::DeclaredTraversal> = vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "t",
+                "seeds": "s*.md",
+                "edge": [{"label": "spec", "field": "spec", "to": {"register": "missing"}}],
+                "max_visits": 10,
+                "max_depth": 5,
+                "reduce": "path",
+            }))
+            .expect("a traversal row"),
+        ];
+        let vocabulary = crate::policy::Vocabulary {
+            traversals: &traversals,
+            ..crate::policy::Vocabulary::EMPTY
+        };
+        let refused = walk_traversals(vocabulary, &dir, &[], &BTreeMap::new())
+            .expect_err("an undeclared register is refused");
+        assert!(refused.to_string().contains("`missing`"), "{refused}");
+    }
 }
