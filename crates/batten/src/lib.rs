@@ -19903,7 +19903,17 @@ fn hook_config_or_floor(
 /// checkout's build yet, and with what.
 #[derive(Debug, Clone, Copy)]
 struct Handoff<'a> {
-    /// The envelope exactly as it arrived, replayed to the child on stdin.
+    /// The document to replay on the child's stdin.
+    ///
+    /// **The host's own bytes ONLY while nothing spilled**, and the doc used to
+    /// claim "exactly as it arrived" without that clause. [`decode_payload`]
+    /// reads the spool back when `spilled` is empty and otherwise re-serializes
+    /// the parsed value, where every oversized leaf carries a marker in place of
+    /// its text — so on a spilled payload the child judges marker text, as every
+    /// in-process handler does (CLOUD-2224). That is consistent rather than
+    /// correct: [`follow_to_pinned`] replays the host's bytes because it runs
+    /// before the parse and has them. Closing the gap means handing the child the
+    /// spool FILE rather than a `String`, which is an `exec` change and is filed.
     raw: &'a str,
     /// The engine [`follow_pin`]'s target already ran for this call, if one
     /// did. Threaded as a value, never published into the environment, so no
@@ -20095,6 +20105,27 @@ fn hand_off<'a>(
 //MUTANT handoff-reruns-the-binary-already-run|s@^    if already_ran(handoff.ran, \&build)? {$@    if false {@|a_crashing_followed_build_never_fails_the_hook_open
 fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<Option<ExitCode>> {
     if std::env::var_os(ENGINE_UPDATED).is_some() {
+        return Ok(None);
+    }
+    // AN EMPTY DOCUMENT IS NOT THIS CALL, and handing one to a child is the
+    // fail-open this change exists to close, surviving on the other path.
+    // `decode_payload` answers `unwrap_or_default()` for a spool that will not
+    // read, so `raw` is empty exactly where the bytes were LOST — and a child
+    // given empty stdin decodes nothing, exits `0`, and `ExitCode::decided`
+    // carries that `0` back as an allow about a call the child never saw.
+    // `follow_to_pinned` falls through for precisely this reason and says so;
+    // the sibling did not, which is an asymmetry rather than a second rule.
+    //
+    // Falling through costs nothing: nothing ran, so the refusal floor below
+    // still decides the call over the envelope, which decoded fine.
+    //
+    // NO `//MUTANT` ROW, STATED RATHER THAN OMITTED. The case wants a spool that
+    // stops reading between `read_payload` writing it and `decode_payload`
+    // reading it, in one process, after `follow_to_pinned` already read it —
+    // which no fixture here can stage. The honest close is `decode_payload` not
+    // conflating "read failed" with "empty" at all, which changes what it
+    // returns and every handler that reads `raw`.
+    if handoff.raw.is_empty() {
         return Ok(None);
     }
     let root = hook_authority_root();
