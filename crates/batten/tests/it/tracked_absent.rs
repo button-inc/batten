@@ -345,6 +345,27 @@ fn a_package_task_with_an_empty_run_is_clean() {
     clean(&root);
 }
 
+/// `#MUTANT hk-package-empty-run-string-counted` reddens here: the string
+/// spelling of the same empty task. `run = ""` binds `package_run` where
+/// `run = []` does not, so it cleared arm E's step count as one entry naming
+/// nothing until `package_steps` stopped admitting it.
+#[test]
+fn a_package_task_with_an_empty_run_string_is_clean() {
+    let manifest = "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = \"\"\n";
+    let root = fixture("hk-package-empty-run", &[("mise.toml", manifest)], &[]);
+    clean(&root);
+}
+
+/// `#MUTANT hk-package-empty-step-counted` reddens here: the array spelling of
+/// it, which reaches the other emptiness test. One element, a string, naming no
+/// version — the shape `run = []` cannot reach.
+#[test]
+fn a_package_task_whose_only_step_is_empty_is_clean() {
+    let manifest = "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = [\"\"]\n";
+    let root = fixture("hk-package-empty-step", &[("mise.toml", manifest)], &[]);
+    clean(&root);
+}
+
 /// `#MUTANT hk-amends-tag-disagreement-passes` reddens here.
 ///
 /// The other half of `hk.pkl`'s own URL (CLOUD-2311): it names the version in
