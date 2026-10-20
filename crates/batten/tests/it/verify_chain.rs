@@ -192,8 +192,7 @@ fn every_step_is_argv() {
 /// package — before any step runs. That is the hk-config-load exposure
 /// CLOUD-2311 disclaims and records on the issue: a cold cache there fails as hk
 /// failing to start, which reads as what it is. What this orders away is the
-/// narrower defect of a cold cache reaching a VALIDATOR, where it is recorded as
-/// a verdict about the bytes under judgement.
+/// narrower defect of a cold cache reaching a VALIDATOR.
 ///
 /// Two of the three callers run `record validate config-validator` — hk's `pkl`
 /// step, reached through `hooks`, and `record-verdicts` — and for those the

@@ -315,8 +315,7 @@ violation contains {
 # disagreement against a manifest that declares no fetch URL at all. That is the
 # shape-dependent firing the type guard two screens up says it prevents, one
 # step further down than the guard reached. A task yielding no step is read the
-# way an absent one is: D and E undefined together. A `run` mise cannot execute
-# stays a manifest defect, and still not this module's to report.
+# way an absent one is: D and E undefined together.
 violation contains {
 	"rule": "tool pin other",
 	"verdict": "tool pin other",
@@ -562,11 +561,9 @@ test_a_manifest_without_the_package_task_decides_nothing_here if {
 		with data.batten.patterns as pattern
 }
 
-# A `pkl-package` whose `run` yields no step: `package_run` binds (an array is
-# one of the two shapes read) and `packages` is empty, so without arm E's step
-# guard this manifest is accused of a pin disagreement it cannot have — there is
-# no fetch URL in it to disagree. `#MUTANT hk-package-stepless-run-fires` is
-# that guard removed, and its Rust twin is what reddens.
+# An empty `run` array, which binds `package_run` and yields no step.
+# `#MUTANT hk-package-stepless-run-fires` is arm E's step guard removed, and its
+# Rust twin is what reddens.
 test_a_package_task_yielding_no_step_decides_nothing_here if {
 	count(violation) == 0 with input as tree_with_tasks(
 		{"hk": "1.56.1"},
