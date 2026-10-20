@@ -958,13 +958,14 @@ fn a_step_run_build_is_watched() {
     // 200 x 0.05s = 10s, which is TWO full `disk_watch::TICK`s against a MEASURED
     // 1.092s for the real path (nextest, this suite) — the watcher samples at
     // startup rather than after a tick, so the collection lands in about a
-    // second. It was 400 (20s), and that margin is not free: under
-    // `collect_toward_max -> None` the collection never comes, this poll runs to
-    // its budget, and the suite then exceeds the per-mutant bound cargo-mutants
-    // derives from the 9s unmutated baseline — reported as `suite-timed-out`,
-    // which is could-not-look (CLOUD-1267), over a mutant ~40 cases in this file
-    // DO catch. A failure budget wide enough to hide the catch is not margin
-    // (CLOUD-2376).
+    // second. It was 400, which is 18x a path that takes one second, and the
+    // excess is spent only when the collection never comes.
+    //
+    // NOT WHY THE SWEEP TIMED OUT, stated because this comment first said it
+    // was and measurement refuted it. That was `disk_watch::around` skipping its
+    // stop on an unwind (CLOUD-2376), which hung the case outright rather than
+    // making it slow. This number is proportion to a measured path, nothing
+    // more.
     let waits = "for i in $(seq 1 200); do \
                  [ -e target/debug/.fingerprint/aged-dddddddddddddddd ] || exit 0; \
                  sleep 0.05; done; exit 1";
