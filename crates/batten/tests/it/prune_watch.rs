@@ -742,14 +742,12 @@ fn the_arm_watches_past_the_gate() {
         fallen.store(true, std::sync::atomic::Ordering::SeqCst);
         // Every read from here on is the fallen volume. Two more mean a whole
         // pass has run over it: the sample that started it and the reading it
-        // takes once it has removed what it will. A third covers the one sample
-        // that may have read the old volume and is counted only after this
-        // load. So the wait ends on the unit going or on a pass that did not
-        // take it, never on the bound.
+        // takes once it has removed what it will. So the wait ends on the
+        // unit going or on a pass that did not take it, never on the bound.
         let fell_at = samples.load(std::sync::atomic::Ordering::SeqCst);
         wait_for(|| {
             !present(&profile, "stale", "eeeeeeeeeeeeeeee")
-                || samples.load(std::sync::atomic::Ordering::SeqCst) >= fell_at + 3
+                || samples.load(std::sync::atomic::Ordering::SeqCst) >= fell_at + 2
         });
     });
     assert!(!present(&profile, "stale", "eeeeeeeeeeeeeeee"), "LRU went");

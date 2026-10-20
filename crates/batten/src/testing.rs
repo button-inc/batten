@@ -145,7 +145,8 @@ pub struct ClockCensus {
 /// A message argument is never judged: printing the elapsed time beside a count
 /// is a report, and the count is what is asserted. A clock read reaches an
 /// assertion directly or through a `let` in the same function; a field, a
-/// helper's return value or a reassignment carries one unseen.
+/// helper's return value, a reassignment or a call to a local bound to a
+/// closure carries one unseen.
 #[doc(hidden)]
 #[must_use]
 pub fn clock_census(file: &syn::File) -> ClockCensus {
