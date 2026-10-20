@@ -74,9 +74,22 @@ const SCRATCH_ROOT: &str = "batten-scratch";
 #[doc(hidden)]
 #[must_use]
 pub fn root() -> PathBuf {
-    let root = std::env::temp_dir().join(SCRATCH_ROOT);
-    reap_the_dead(&root);
-    root.join(std::process::id().to_string())
+    root_in(&std::env::temp_dir().join(SCRATCH_ROOT))
+}
+
+/// [`root`] over a parent the caller names — all of what `root` does once the
+/// shared parent is chosen.
+///
+/// **Split out so the reap-on-acquire wiring has a witness** (CLOUD-2496). The
+/// case that asserts it cannot seed its corpse under the shared parent:
+/// `i32::MAX` is the one name every concurrent process can prove dead, so a
+/// sibling reaps it mid-seed. Given a parent of its own the case asserts both
+/// the collection and the returned path, and deleting the reap below reddens
+/// it — which calling `reap_the_dead` from the case directly did not.
+//MUTANT reap-not-on-acquire|s@^    reap_the_dead(parent);$@@|a_dead_processes_scratch_is_collected_and_a_live_ones_is_not
+fn root_in(parent: &Path) -> PathBuf {
+    reap_the_dead(parent);
+    parent.join(std::process::id().to_string())
 }
 
 /// An EMPTY scratch directory named `name`, under this process's root.
@@ -100,6 +113,7 @@ pub fn scratch(name: &str) -> PathBuf {
 /// not a pid is left alone rather than parsed loosely, and a directory that will
 /// not remove is left for the next caller. This deletes what it can prove is
 /// dead and nothing else.
+//MUTANT reaper-liveness-guard-dropped|s@^        if !pid_is_live(pid) {$@        if true {@|a_dead_processes_scratch_is_collected_and_a_live_ones_is_not
 fn reap_the_dead(root: &Path) {
     let Ok(listing) = std::fs::read_dir(root) else {
         return;
@@ -177,21 +191,45 @@ mod tests {
     /// decides about corpses, this process's own scratch survives its own reap,
     /// so neither arm can pass by reaping everything.
     ///
+    /// **THE CORPSE IS SEEDED UNDER A PARENT THIS PROCESS OWNS** (CLOUD-2496).
+    /// It was seeded under the shared root, where `i32::MAX` is by construction
+    /// the one name every concurrent process can prove dead — so a sibling
+    /// starting between this case's `mkdir <root>/2147483647` and its
+    /// `mkdir .../left-behind` reaped the parent and the second call answered
+    /// `ENOENT`. Measured on `#1196` head `33a3ed00`, where `create_dir_all`
+    /// panicked with `NotFound` — a thing it can only report when something
+    /// removed a component underneath it. A retry or a different sentinel pid
+    /// would keep the case in the shared root and keep the race; [`scratch`] is
+    /// keyed by this live pid, so nothing else reaps inside it, and the reaper
+    /// is then asked about a corpus only this case can reach — which is also
+    /// what lets the live arm be a pid rather than a file.
+    ///
+    /// It goes through [`root_in`] rather than calling [`reap_the_dead`]
+    /// itself, so the reap-on-acquire wiring still has a witness: asking the
+    /// reaper directly would leave `root` free to stop calling it with this
+    /// case green.
+    ///
     /// Fails by: dropping the `pid_is_live` guard in [`reap_the_dead`], which
-    /// takes the live directory with it.
+    /// takes the live directory with it, or dropping the reap from
+    /// [`root_in`], which leaves the corpse.
     #[test]
     fn a_dead_processes_scratch_is_collected_and_a_live_ones_is_not() {
-        let mine = scratch("still-here");
-        std::fs::write(mine.join("corpus"), "bytes").expect("seed the live subtree");
+        let parent = scratch("reaper-corpus");
 
         // A pid nothing can own. `i32::MAX` is above every `pid_max` this runs
         // on, so the probe answers ESRCH rather than depending on a pid that
         // happens to be free right now.
-        let parent = std::env::temp_dir().join(SCRATCH_ROOT);
         let dead = parent.join(i32::MAX.to_string());
         std::fs::create_dir_all(dead.join("left-behind")).expect("seed the dead subtree");
+        let mine = parent.join(std::process::id().to_string());
+        std::fs::create_dir_all(&mine).expect("seed the live subtree");
+        std::fs::write(mine.join("corpus"), "bytes").expect("seed the live corpus");
 
-        let _ = root();
+        assert_eq!(
+            root_in(&parent),
+            mine,
+            "the root is this process's subtree of the parent it reaps"
+        );
 
         if cfg!(unix) {
             assert!(
@@ -208,7 +246,28 @@ mod tests {
             mine.join("corpus").exists(),
             "this process's own scratch must survive its own reap"
         );
-        let _ = std::fs::remove_dir_all(&dead);
+    }
+
+    /// [`root`]'s own half of the split: WHICH parent every caller shares.
+    /// [`root_in`] is asserted over a parent the case owns, which says nothing
+    /// about the one the product picks — so without this a `root` returning any
+    /// path at all passes.
+    ///
+    /// Asserted as a path rather than by seeding a corpse under the shared
+    /// parent, because that is the race `root_in` exists to keep out of the
+    /// case above.
+    ///
+    /// Fails by: returning anything but this process's subtree of
+    /// `<temp>/batten-scratch` — a different parent, or the parent itself.
+    #[test]
+    fn root_is_this_processs_subtree_of_the_one_shared_parent() {
+        assert_eq!(
+            root(),
+            std::env::temp_dir()
+                .join(SCRATCH_ROOT)
+                .join(std::process::id().to_string()),
+            "every caller shares one parent and owns one subtree of it"
+        );
     }
 
     /// A name that is not a pid is not a corpse. Deleting one would make this
