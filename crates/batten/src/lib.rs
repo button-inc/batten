@@ -745,7 +745,33 @@ fn follow_pin(hook_path: bool) -> Result<Followed> {
         // same value. The hook's load-fault hand-off asks about somebody
         // else's checkout and so asks the other question.
         (None, Some(digest)) => match engine::own_build(&root) {
-            Some(build) => build,
+            Some(build) => {
+                // NEVER THIS IMAGE, AND THE PREFIX TEST ABOVE DOES NOT COVER IT
+                // (CLOUD-2376). `exe.starts_with(&root)` asks CONTAINMENT — is
+                // this build inside the tree it judges — and it answers `false`
+                // for a `CARGO_TARGET_DIR` pointing outside the worktree. That
+                // is exactly the redirect `own_build` honours and
+                // `a_source_pin_is_followed_into_a_redirected_target_dir`
+                // stages, so the pin resolved to the running binary: every
+                // non-hook verb re-exec'd itself with cwd forced to `root`, and
+                // the hook handed the call to the binary the pin had just
+                // called stale and adopted its answer. On `main` this could not
+                // happen because `checkout_build` looked under
+                // `root/target/release`, which the redirect leaves empty.
+                //
+                // Identity is the honest predicate, which is what `already_ran`
+                // says for the other hand-off; asked on the RESOLVED path, not
+                // on a prefix of it. Falling through leaves the pre-parse
+                // refusal to name the stale pin, which is its job.
+                if already_ran(None, &build)? {
+                    return Ok(Followed::Nothing);
+                }
+                build
+            }
+            // NOT THE SAME QUESTION: here nothing was built, `install_source`
+            // has just replaced the image at `exe`, and re-execing that path is
+            // the point — it is the new engine, which is why `exe` was read
+            // before the swap.
             None if may_build => {
                 install_source(&root, digest, &mut std::io::sink())?;
                 exe
@@ -767,8 +793,16 @@ fn follow_pin(hook_path: bool) -> Result<Followed> {
     // "the hook itself failed, run the call". So the bytes are held, the code
     // is tested against the table, and only an answer the table names is
     // passed on; anything else decided nothing and is dropped whole, leaving
-    // the refusal floor below to decide the call. Stdin is inherited exactly
-    // as before — it is where the envelope arrives.
+    // the refusal floor below to decide the call.
+    //
+    // STDIN IS NOT INHERITED ON THE HOOK PATH, and this comment said the
+    // opposite until `/code-review` caught it — a leftover from the
+    // intermediate shape where this function still spawned in place. The one
+    // reader of the real stdin is `read_payload`, so the hook's child is handed
+    // this call's bytes on a PIPE by `hand_off`; a child that inherited stdin
+    // would drain the envelope out from under the fall-through, which is the
+    // fail-open this whole change exists to close. Everywhere else the child
+    // does inherit, which is what makes `exec` a passthrough.
     if hook_path {
         // RESOLVED HERE, SPAWNED WHERE THE PAYLOAD IS. The child is handed this
         // call's envelope, and the one reader of stdin is `read_payload` —
