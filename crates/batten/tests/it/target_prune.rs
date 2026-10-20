@@ -280,6 +280,56 @@ fn the_committed_build_root_is_basis_moving() {
     );
 }
 
+/// THE FOLLOWED BUILD IS A KEEP ROOT TOO, AND IT IS A DIFFERENT FILE
+/// (CLOUD-2376).
+///
+/// The hook reaches the engine by two routes. The load-fault hand-off asks
+/// `engine::checkout_build`, which reads no environment —
+/// `prune_watch::the_checkout_build_is_never_collected` covers that one. The
+/// follow asks `engine::own_build`, which honours `CARGO_TARGET_DIR`, because
+/// for that caller the redirect is true. Sparing only the conventional path
+/// left the pruner free to reclaim the very binary the follow was about to
+/// exec, whenever the redirect lands inside the tree being walked.
+///
+/// The redirect is set on the CHILD rather than this process, because the
+/// workspace forbids `unsafe` and `set_var` is unsafe — and because the verb is
+/// what reads it in production. Nothing is written at `target/release`, so a
+/// keep list carrying only `checkout_build` spares a file that is not there and
+/// collects the one that is.
+#[test]
+fn the_followed_build_is_never_collected() {
+    let dir = Fixture::new("prune-followed-build")
+        .config(&config().replace("root = \"target\"", "root = \"redirected\""))
+        .file("Cargo.toml", "[workspace]\n")
+        .build();
+    let profile = dir.join("redirected/release");
+    live(&profile, "batten", "efefefefefefefef", 3 * 3600, 4 * 1024);
+    std::fs::hard_link(
+        profile.join("deps/batten-efefefefefefefef"),
+        profile.join("batten"),
+    )
+    .unwrap();
+    assert!(
+        !dir.join("target/release/batten").exists(),
+        "the only build is the redirected one"
+    );
+
+    let output = batten()
+        .arg("target")
+        .arg("prune")
+        .env("TARGET_PRUNE_FREE_MB", FREE)
+        .env("CARGO_TARGET_DIR", "redirected")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten");
+
+    assert!(
+        profile.join("deps/batten-efefefefefefefef").exists(),
+        "the build the follow execs is never collected: {}",
+        said(&output)
+    );
+}
+
 /// THE VERB IS ONE COLLECTION, and the spec's own case. Two live units of known
 /// size, free space one MiB short of `max_free_mb`: the older unit goes, the
 /// line is `disk-collected …`, and the exit is 0 — no floor, no basis, no

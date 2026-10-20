@@ -1357,6 +1357,7 @@ pub fn trees(repo: &Path, prune: &crate::prune::Prune) -> Vec<PathBuf> {
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 //MUTANT-SUITE crates/batten/tests/it/target_prune.rs
 //MUTANT checkout-build-collected|s@^    kept.extend(crate::engine::checkout_build(repo).and_then(\x7cbuild\x7c identity(\&build)));$@@|the_checkout_build_is_never_collected
+//MUTANT own-build-collected|s@^    kept.extend(crate::engine::own_build(repo).and_then(\x7cbuild\x7c identity(\&build)));$@@|the_followed_build_is_never_collected
 pub fn collect_toward_max(
     repo: &Path,
     prune: &crate::prune::Prune,
@@ -1373,8 +1374,18 @@ pub fn collect_toward_max(
     // THE CHECKOUT'S OWN BUILD IS A ROOT (CLOUD-2232): the installed engine
     // hands every call to it, so collecting it while nothing runs it would leave
     // the hook refusing until a rebuild.
+    //
+    // BOTH NAMERS, because the hook reaches the engine by two routes and they
+    // are not the same file (CLOUD-2376). The load-fault hand-off asks
+    // `checkout_build`, which reads no environment; the follow asks
+    // `own_build`, which honours `CARGO_TARGET_DIR` because for that caller the
+    // redirect is true. With the variable set to a directory inside the
+    // repository, the pruner walked `repo/target`, found the redirected unit,
+    // and could reclaim the very binary the follow was about to exec. Sparing
+    // only one of the two was a root that moved when the environment did.
     let mut kept = kept.to_vec();
     kept.extend(crate::engine::checkout_build(repo).and_then(|build| identity(&build)));
+    kept.extend(crate::engine::own_build(repo).and_then(|build| identity(&build)));
     let pass = collect(&Request {
         trees: &trees,
         keep_generations: prune.keep,

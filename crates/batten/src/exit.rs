@@ -110,28 +110,37 @@ impl ExitCode {
         }
     }
 
-    /// The code a child DECIDED with: [`from_code`] minus [`Usage`]
-    /// (CLOUD-2376).
+    /// The code a child DECIDED with: [`from_code`] minus the two a failure of
+    /// Batten's own produces (CLOUD-2376).
     ///
     /// The rule a hand-off applies when it stands in front of a child whose
-    /// answer it is about to pass on as its own. `0`, `2` and `3` are answers
-    /// ABOUT THE REPOSITORY and travel; every other integer is a statement
-    /// about the invocation or about nothing at all, and a caller standing in
-    /// for a gate must not report one as the gate's verdict.
+    /// answer it is about to pass on as its own. `0` and `2` are answers ABOUT
+    /// THE REPOSITORY and travel; every other integer is a statement about the
+    /// invocation, or about nothing at all, and a caller standing in for a gate
+    /// must not report one as the gate's verdict.
     ///
-    /// `Usage` is excluded for the reason the module header gives it: `1` is
-    /// one of the two codes a failure of Batten's own produces, so every
-    /// harness reads it as "the hook itself failed, run the call". Passing a
-    /// child's `1` on is therefore indistinguishable from permitting the call
-    /// — which is why the exclusion lives here, beside the table that makes
-    /// `1` non-blocking, rather than being re-derived at each hand-off.
+    /// **BOTH [`Usage`] AND [`Internal`] are excluded, and the module header is
+    /// why**: they "are the only codes a failure of Batten's own can produce,
+    /// and neither blocks" — that is the sentence fail-open rests on. Every
+    /// harness reads either as "the hook itself failed, run the call", so
+    /// passing a child's `1` on is indistinguishable from permitting the call,
+    /// and passing its `3` on adopts the child's own breakage as this gate's
+    /// verdict while skipping the refusal floor that would have answered. `1`
+    /// was excluded here first and `3` was not, which made the hand-off treat
+    /// two codes [`meaning`] describes identically — "fail loud, do not block"
+    /// — as different kinds of answer.
+    ///
+    /// The exclusion lives here, beside the table that makes both non-blocking,
+    /// rather than being re-derived at each hand-off.
     ///
     /// [`from_code`]: ExitCode::from_code
     /// [`Usage`]: ExitCode::Usage
+    /// [`Internal`]: ExitCode::Internal
+    /// [`meaning`]: ExitCode::meaning
     #[must_use]
     pub const fn decided(raw: i32) -> Option<Self> {
         match Self::from_code(raw) {
-            Some(ExitCode::Usage) | None => None,
+            Some(ExitCode::Usage | ExitCode::Internal) | None => None,
             answer => answer,
         }
     }
@@ -420,15 +429,28 @@ mod tests {
 
     #[test]
     fn only_an_answer_about_the_repository_is_handed_on() {
-        // THE BOUNDARY RULE, ASSERTED DIRECTLY (CLOUD-2376). Both of the hook's
-        // hand-offs stand in front of a child and pass its code on as their
-        // own, and each used to spell this predicate itself. `Usage` is the
-        // one the end-to-end cases cannot make obvious: `1` is a code the
-        // table NAMES, so a reader checking only `from_code` would pass it
-        // through — and `1` is what every harness reads as "the hook itself
-        // failed, run the call".
-        assert_eq!(ExitCode::decided(1), None, "`1` is never handed on");
-        for code in [ExitCode::Success, ExitCode::Violation, ExitCode::Internal] {
+        // THE BOUNDARY RULE, ASSERTED DIRECTLY (CLOUD-2376). The hand-off
+        // stands in front of a child and passes its code on as its own, and
+        // both hand-offs used to spell this predicate themselves. These two are
+        // what the end-to-end cases cannot make obvious: `1` and `3` are codes
+        // the table NAMES, so a reader checking only `from_code` passes them
+        // through — and the module header calls them "the only codes a failure
+        // of Batten's own can produce", which every harness reads as "the hook
+        // itself failed, run the call".
+        //
+        // `3` ASSERTED ALONGSIDE `1` BECAUSE IT WAS MISSED ONCE. This case read
+        // `Internal` as travelling, which let a pinned child's own breakage
+        // become the hook's verdict and skip the refusal floor — two codes
+        // `meaning` describes identically, treated as different kinds of
+        // answer.
+        for own in [ExitCode::Usage, ExitCode::Internal] {
+            assert_eq!(
+                ExitCode::decided(own.code()),
+                None,
+                "{own:?} is a failure of Batten's own and is never handed on"
+            );
+        }
+        for code in [ExitCode::Success, ExitCode::Violation] {
             assert_eq!(
                 ExitCode::decided(code.code()),
                 Some(code),
