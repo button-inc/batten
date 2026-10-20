@@ -3735,10 +3735,15 @@ fn task_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
             .as_ref()
             .map_or(&[][..], |table| table.relaunch.as_slice())
     }
+    // The floor is a bar only while a task is watched: with `relaunch` empty the
+    // watchdog is off, and its floor judges nothing. So it is compared only
+    // where both sides watch one; turning the watchdog off is the relaunch
+    // removal above, reported once.
     let floor = |config: &Config| {
         config
             .task
             .as_ref()
+            .filter(|table| !table.relaunch.is_empty())
             .map(|table| usize::try_from(table.min_lifetime_secs).unwrap_or(usize::MAX))
     };
     let mut found = removed_entries(
@@ -3747,12 +3752,14 @@ fn task_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         relaunch(working),
         "task.relaunch",
     );
-    found.extend(ceiling_raised(
-        WeakeningKind::TaskLifetimeFloorRaised,
-        "task.min_lifetime_secs",
-        floor(base),
-        floor(working),
-    ));
+    if let Some(working) = floor(working) {
+        found.extend(ceiling_raised(
+            WeakeningKind::TaskLifetimeFloorRaised,
+            "task.min_lifetime_secs",
+            floor(base),
+            Some(working),
+        ));
+    }
     found
 }
 
@@ -6211,6 +6218,9 @@ mod tests {
         // table where the base declared none.
         assert!(weakenings(&base, &table("\"land\", \"x\"", 59)).is_empty());
         assert!(weakenings(&config(""), &base).is_empty());
+        // With nothing relaunched the watchdog is off, so its floor is no bar.
+        assert!(weakenings(&table("", 60), &table("", 61)).is_empty());
+        assert!(weakenings(&table("", 60), &config("")).is_empty());
     }
 
     #[test]
