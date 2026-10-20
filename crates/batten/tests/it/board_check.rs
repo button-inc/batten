@@ -1796,6 +1796,84 @@ mod ready_cites {
     }
 
     #[test]
+    fn a_test_symbol_the_block_marks_new_is_prospective_not_fatal() {
+        let (dir, config) = synthetic("prospective-test");
+        let output = cites(
+            &dir,
+            &config,
+            &block7("The case `a_case_planned_for_this_row` (new) holds."),
+        );
+        assert_eq!(code(&output), 0, "{}", text(&output));
+        assert!(text(&output).contains("a_case_planned_for_this_row prospective-cited-test"));
+        assert!(text(&output).contains("1 prospective"));
+        assert!(text(&output).contains("never checked against history"));
+        assert!(!text(&output).contains("prospective path(s)"));
+    }
+
+    #[test]
+    fn a_shallow_clone_names_its_prospective_paths_as_unchecked() {
+        let (source, config) = synthetic("shallow-source");
+        common::write(&source, "tests/second.txt", "a second commit\n");
+        common::git_in(&source, &["add", "-A"]);
+        common::git_in(&source, &["commit", "-q", "-m", "second"]);
+        let parent = common::scratch("board-check-cites-shallow");
+        let url = format!("file://{}", source.display());
+        common::git_in(&parent, &["clone", "-q", "--depth", "1", &url, "clone"]);
+        let clone = parent.join("clone");
+        assert_eq!(
+            common::git_in(&clone, &["rev-parse", "--is-shallow-repository"]),
+            "true"
+        );
+        let output = cites(
+            &clone,
+            &config,
+            &block7("Cases live in `tests/layer-check.bats` (new)."),
+        );
+        assert_eq!(code(&output), 0, "{}", text(&output));
+        assert!(
+            text(&output).contains("1 prospective path(s) above, and this clone is SHALLOW"),
+            "{}",
+            text(&output)
+        );
+    }
+
+    #[test]
+    fn an_unmarked_absent_test_symbol_is_still_refused() {
+        let (dir, config) = synthetic("unmarked-test");
+        let output = cites(
+            &dir,
+            &config,
+            &block7("The case `a_case_planned_for_this_row` holds."),
+        );
+        assert_eq!(code(&output), 2, "{}", text(&output));
+        assert!(text(&output).contains("a_case_planned_for_this_row absent-cited-test"));
+        assert!(!text(&output).contains("prospective"));
+    }
+
+    #[test]
+    fn a_new_marker_on_one_test_symbol_does_not_excuse_another() {
+        let (dir, config) = synthetic("unrelated-test");
+        let output = cites(
+            &dir,
+            &config,
+            &block7(
+                "The case `a_case_planned_for_this_row` (new) holds, and so does \
+                 `a_case_nobody_marked_or_wrote`.",
+            ),
+        );
+        assert_eq!(code(&output), 2, "{}", text(&output));
+        let all = text(&output);
+        assert!(
+            all.contains("a_case_nobody_marked_or_wrote absent-cited-test"),
+            "{all}"
+        );
+        assert!(
+            all.contains("a_case_planned_for_this_row prospective-cited-test"),
+            "{all}"
+        );
+    }
+
+    #[test]
     fn an_unmarked_absent_path_is_still_refused() {
         let (dir, config) = synthetic("unmarked");
         let output = cites(
