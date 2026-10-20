@@ -117,7 +117,8 @@ const PLAIN_PATH: &str = "plain.conf";
 /// made `pub(crate)` with its hardcoded `glob = "**/*.conf"` taken as a parameter.
 /// That is a smaller edit than this copy, and it is still a file CLOUD-1496 does
 /// not own, so collapsing it here would widen the PR into a sibling's test module.
-/// Filed as its own row.
+/// CLOUD-2504 carries the shape, and the gate that keeps the next copy from being
+/// written — the half a refactor alone does not ship.
 struct Env {
     repo: PathBuf,
     home: PathBuf,
