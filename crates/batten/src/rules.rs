@@ -20821,9 +20821,13 @@ violation contains {
                 .to_string()
         };
         assert!(refused("batten-rules-no-such-program").contains("not found on PATH"));
-        let other = refused("./data.txt");
-        assert!(other.contains("cannot run"), "{other}");
-        assert!(!other.contains("not found on PATH"), "{other}");
+        // A present file without the execute bit is a Unix spawn failure;
+        // Windows resolves `./data.txt` differently and has no such bit.
+        if cfg!(unix) {
+            let other = refused("./data.txt");
+            assert!(other.contains("cannot run"), "{other}");
+            assert!(!other.contains("not found on PATH"), "{other}");
+        }
     }
 
     /// Only `verbatim = true` hashes a span verbatim.
