@@ -8779,6 +8779,73 @@ mod tests {
         }
     }
 
+    /// Every flag declared REPEATABLE keeps each occurrence: a second one is
+    /// appended, never a usage error and never a silent replacement.
+    #[test]
+    fn a_repeatable_flag_keeps_every_occurrence() {
+        let repeatable = [
+            RECEIPT_OR,
+            CI_STEP_ON,
+            CI_STEP_REQUIRE_ENV,
+            CI_STEP_ARG_ENV,
+            STEP_ARG,
+            BOARD_ISSUE,
+            NONVERDICT_REQUIRED,
+            NONVERDICT_EXCLUDE,
+            NONVERDICT_STEP,
+            IN_FLIGHT_WORKFLOW,
+            BACKFILL_TAG,
+        ];
+        for flag in repeatable {
+            let decl = SURFACE
+                .iter()
+                .find(|decl| {
+                    decl.flags
+                        .iter()
+                        .any(|f| f.id == flag.id && f.long == flag.long && f.help == flag.help)
+                })
+                .unwrap_or_else(|| panic!("`{}` is declared on a row", flag.id));
+            let long = format!(
+                "--{}",
+                flag.long.expect("a repeatable flag has a long spelling")
+            );
+            let mut argv: Vec<String> = vec!["batten".to_owned()];
+            argv.extend(decl.path.split(' ').map(str::to_owned));
+            let mut positionals = Vec::new();
+            let mut trailing = false;
+            for other in decl.flags.iter().filter(|f| f.required && f.id != flag.id) {
+                match (other.positional, &other.value) {
+                    (_, ValueDecl::Trailing) => trailing = true,
+                    (true, _) => positionals.push("x".to_owned()),
+                    (false, ValueDecl::Bool | ValueDecl::Count) => {
+                        argv.push(format!("--{}", other.long.unwrap_or_default()));
+                    }
+                    (false, _) => {
+                        argv.push(format!("--{}", other.long.unwrap_or_default()));
+                        argv.push("x".to_owned());
+                    }
+                }
+            }
+            argv.extend([long.clone(), "a".to_owned(), long, "b".to_owned()]);
+            argv.extend(positionals);
+            if trailing {
+                argv.extend(["--".to_owned(), "true".to_owned()]);
+            }
+            let matches = command()
+                .try_get_matches_from(&argv)
+                .unwrap_or_else(|error| panic!("{}: {error}", argv.join(" ")));
+            let mut leaf = &matches;
+            while let Some((_, sub)) = leaf.subcommand() {
+                leaf = sub;
+            }
+            let values: Vec<&String> = leaf
+                .get_many::<String>(flag.id)
+                .map(Iterator::collect)
+                .unwrap_or_default();
+            assert_eq!(values, ["a", "b"], "{}", argv.join(" "));
+        }
+    }
+
     #[test]
     fn only_a_declared_value_flag_consumes_the_next_word() {
         assert!(consumes_a_value("--strictness"));
