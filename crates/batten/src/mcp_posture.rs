@@ -324,6 +324,7 @@ fn attempt_start(log_name: &str) -> Option<i64> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

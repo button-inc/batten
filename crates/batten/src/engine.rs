@@ -1379,6 +1379,7 @@ pub(crate) fn make_executable(_path: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -1760,13 +1761,12 @@ mod tests {
         let path = dir.join("batten");
         std::fs::write(&path, "")?;
         make_executable(&path)?;
-        let metadata = std::fs::metadata(&path)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
+            let metadata = std::fs::metadata(&path)?;
             assert_eq!(metadata.permissions().mode() & 0o777, 0o755);
         }
-        drop(metadata);
         Ok(())
     }
 }

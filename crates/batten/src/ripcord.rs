@@ -139,6 +139,7 @@ pub fn identity(session: Option<&str>) -> crate::identity::StoredIdentity {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

@@ -1555,6 +1555,7 @@ fn render_refs(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{
         CITE_REFUSED, CITED_PATH, CITED_TEST, CiteReading, Cites, Decided, Declared, GRAPH_REPORT,

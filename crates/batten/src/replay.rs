@@ -612,6 +612,7 @@ mod tests {
 fn helper() -> u8 { 1 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     #[test]
     fn kept() {
@@ -799,7 +800,10 @@ mod tests {
     #[test]
     fn what_a_run_said_is_its_exit_and_its_tail() {
         assert_eq!(said(None), "it could not be spawned");
-        let long: String = (1..=10).map(|n| format!("line {n}\n")).collect();
+        let long = (1..=10)
+            .map(|n| format!("line {n}\n"))
+            .collect::<Vec<_>>()
+            .concat();
         assert_eq!(
             said(Some(&(3, long))),
             "exit 3\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10"

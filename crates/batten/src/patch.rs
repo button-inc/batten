@@ -238,6 +238,7 @@ fn field(hasher: &mut Sha256, bytes: &[u8]) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::{Blob, Change, Kind, identity};
 

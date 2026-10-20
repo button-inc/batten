@@ -936,6 +936,7 @@ fn method_of(body: Option<&[u8]>, chosen: Method) -> &'static str {
     }
 }
 
+//MUTANT-SUITE crates/batten/tests/it/gh_preflight.rs
 fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method) -> Option<Answer> {
     let now = crate::now_unix();
     let url = format!("{API}/{path}");
@@ -1069,6 +1070,7 @@ fn backoff_of(header: impl Fn(&str) -> Option<String>, now: u64) -> Option<u64> 
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

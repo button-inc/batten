@@ -54,6 +54,7 @@ const DISPOSABLE: &str = "disposable";
 /// Read at the point of decision rather than resolved once into config: it is not
 /// a repository fact and giving it a config seat would invite exactly the
 /// committed-override shape the header rules out.
+//MUTANT-SUITE crates/batten/tests/it/wiring_reclaim.rs
 #[must_use]
 pub fn disposable() -> bool {
     licenses(std::env::var(KEY).ok().as_deref())

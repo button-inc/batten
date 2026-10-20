@@ -787,6 +787,7 @@ static TRAILER: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
 });
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -796,10 +797,13 @@ mod tests {
     fn the_committed_grammar_names_and_closes_through_keys() {
         let grammar = Grammar::committed();
         let key = format!("{}-7", "CL".to_owned() + "OUD");
-        assert_eq!(Keys::named(&grammar, &format!("see {key}")), [key.clone()]);
+        assert_eq!(
+            Keys::named(&grammar, &format!("see {key}")),
+            std::slice::from_ref(&key)
+        );
         assert_eq!(
             Keys::closed(&grammar, &format!("Closes {key}")),
-            [key.clone()]
+            std::slice::from_ref(&key)
         );
         assert!(Keys::closed(&grammar, &format!("see {key}")).is_empty());
     }
@@ -1095,6 +1099,15 @@ mod tests {
         assert_eq!(
             authored_log_from(&dir, &base, Some(String::from("  "))),
             whole
+        );
+        assert_eq!(
+            authored_log(&dir, &base),
+            authored_log_from(
+                &dir,
+                &base,
+                std::env::var(crate::speculation::PUBLISHED_AS).ok()
+            ),
+            "the public read is the pure one over the environment's value"
         );
     }
 }

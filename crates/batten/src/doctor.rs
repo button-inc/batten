@@ -4295,7 +4295,7 @@ mod probe_tests {
         }
         assert_eq!(
             newest_source_under(&root),
-            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_200))
+            Some(SystemTime::UNIX_EPOCH + Duration::from_mins(16_670))
         );
     }
 
@@ -4352,7 +4352,7 @@ mod probe_tests {
         assert!(record_is_absent(&root));
         assert!(!provided_by_pin(&root, "tool"));
         assert_eq!(minted(crate::facts::Fact::Pinned, &root), Some(false));
-        let manifest = root.join("mise.toml");
+        let manifest = root.join("tools.toml");
         std::fs::write(&manifest, "[tools]\n").expect("the manifest");
         let programs = std::collections::BTreeSet::from(["tool".to_owned()]);
         assert!(crate::pinned::record(&root, &[manifest], &programs));
@@ -4366,7 +4366,7 @@ mod probe_tests {
     fn the_task_record_is_minted_once_written() {
         let root = repository("doctor-task-record", None);
         assert_eq!(minted(crate::facts::Fact::Tasks, &root), Some(false));
-        let manifest = root.join("mise.toml");
+        let manifest = root.join("tasks.toml");
         std::fs::write(&manifest, "[tasks.a]\nrun = \"x\"\n").expect("the manifest");
         let tasks = std::collections::BTreeMap::from([("a".to_owned(), None)]);
         assert!(crate::taskset::record(&root, &[manifest], &tasks));
