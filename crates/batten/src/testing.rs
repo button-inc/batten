@@ -207,11 +207,6 @@ impl<'ast> Visit<'ast> for Reads<'_> {
         };
         syn::visit::visit_expr_path(self, path);
     }
-
-    /// A closure is a function value, not a reading: binding one that reads the
-    /// clock clocks nothing until it is called, and what that call returns is
-    /// whatever the closure computes.
-    fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {}
 }
 
 /// The names a pattern binds.
@@ -251,7 +246,12 @@ impl<'ast> Visit<'ast> for ClockWalk {
 
     fn visit_local(&mut self, local: &'ast syn::Local) {
         syn::visit::visit_local(self, local);
+        // A LOCAL BOUND TO A CLOSURE IS A FUNCTION VALUE, NOT A READING: what a
+        // call to it returns is whatever the closure computes. Only the binding
+        // is exempt; a clock read inside a closure in a condition, or in one
+        // called on the spot, is still read by `reads_clock`.
         if let (Some(init), Some((_, clocked))) = (&local.init, self.within.last_mut())
+            && !matches!(*init.expr, syn::Expr::Closure(_))
             && reads_clock(&init.expr, clocked)
         {
             let mut bound = Bindings::default();
@@ -567,10 +567,24 @@ mod tests {
         assert!(!falls_through(&dir, &dir.join("tmp")));
     }
 
+    /// Fails by: the closure exemption reaching past a binding, so a clock read
+    /// inside a closure in a condition, or in one called on the spot, goes unseen.
+    #[test]
+    fn a_closure_in_a_condition_still_reads_the_clock() {
+        let none = BTreeSet::new();
+        for condition in [
+            "samples.iter().all(|s| s.elapsed() < LIMIT)",
+            "(|| Instant::now() < deadline)()",
+        ] {
+            let expr: syn::Expr = syn::parse_str(condition).expect("parse");
+            assert!(reads_clock(&expr, &none), "{condition}");
+        }
+    }
+
     /// Fails by: a census that stops recognising a clock spelling, a taint
     /// through a `let`, an assertion macro's condition count, an `impl` method,
-    /// or an unparsed body, or that reads a closure's body as a clock value —
-    /// every count and name is asserted exactly.
+    /// or an unparsed body, or that taints a local bound to a closure that reads
+    /// the clock — every count and name is asserted exactly.
     #[test]
     fn the_clock_census_counts_and_names_each_assertion_exactly() {
         let file: syn::File = syn::parse_str(

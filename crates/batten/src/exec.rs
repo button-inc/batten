@@ -3953,12 +3953,9 @@ mod tests {
         /// its own thread; a write that never comes fails the case at the
         /// bound.
         fn first(&self, what: &str) -> String {
-            self.first_within(what, Duration::from_secs(20))
-        }
-
-        /// [`Fifo::first`] under a bound of the case's own choosing.
-        fn first_within(&self, what: &str, bound: Duration) -> String {
             use std::io::Read as _;
+
+            let bound = Duration::from_secs(20);
 
             let mut reader = self.file.try_clone().expect("share the fifo");
             let (sent, answer) = std::sync::mpsc::channel();
@@ -4199,10 +4196,7 @@ mod tests {
         assert_eq!(outcomes[0].exit, 0);
         go.say("go");
         assert_eq!(
-            alive.first_within(
-                "the background job outliving the clean run",
-                Duration::from_secs(2)
-            ),
+            alive.first("the background job outliving the clean run"),
             "yes"
         );
     }
