@@ -138,9 +138,9 @@ fn amends(version: &str) -> String {
 /// a case states, which is `amends_halves`'s reason on the other surface.
 ///
 /// Carries the whole task table, not just the URL, so a package case naming
-/// drifting halves is one `format!` over `[tools]` plus this. The case that
-/// names no version at all spells its task inline, since this always writes a
-/// `/v<semver>/` segment.
+/// drifting halves is one `format!` over `[tools]` plus this. A case whose `run`
+/// names no version at all goes through `package_manifest` instead, since this
+/// always writes a `/v<semver>/` segment.
 fn package_task_halves(tag: &str, fragment: &str) -> String {
     format!(
         "[tasks.pkl-package]\nrun = \"pkl download-package package://github.com/jdx/hk/releases/download/v{tag}/hk@{fragment}\"\n"
@@ -150,6 +150,17 @@ fn package_task_halves(tag: &str, fragment: &str) -> String {
 /// The `pkl-package` task as `mise.toml` really spells it: both halves agree.
 fn package_task(version: &str) -> String {
     package_task_halves(version, version)
+}
+
+/// A whole `mise.toml` — the agreeing `[tools]` pin plus a `[tasks.pkl-package]`
+/// whose `run` is spelled exactly as the case gives it, TOML and all.
+///
+/// `package_task_halves`'s reason, for the family `package_task_halves` cannot
+/// serve: the cases whose subject is a `run` that names no URL differ from each
+/// other by as little as three spaces, and inline those sat at column 85 of an
+/// escaped one-liner. Here the difference is the argument.
+fn package_manifest(run: &str) -> String {
+    format!("[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = {run}\n")
 }
 
 /// A committed fixture repository carrying the three committed modules, the
@@ -329,8 +340,10 @@ fn a_package_fragment_floating_over_an_agreeing_tag_is_refused() {
 /// nothing to compare — the fetch would warm a package `hk.pkl` does not amend.
 #[test]
 fn a_package_task_naming_no_version_is_refused() {
-    let manifest = "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = \"pkl download-package package://github.com/jdx/hk/releases/download/latest/hk@latest\"\n";
-    let root = fixture("hk-package-unnamed", &[("mise.toml", manifest)], &[]);
+    let manifest = package_manifest(
+        r#""pkl download-package package://github.com/jdx/hk/releases/download/latest/hk@latest""#,
+    );
+    let root = fixture("hk-package-unnamed", &[("mise.toml", &manifest)], &[]);
     denied(&root, "tool pin other", "mise.toml");
 }
 
@@ -340,8 +353,8 @@ fn a_package_task_naming_no_version_is_refused() {
 /// reports a pin disagreement against a tree with nothing to disagree with.
 #[test]
 fn a_package_task_with_an_empty_run_is_clean() {
-    let manifest = "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = []\n";
-    let root = fixture("hk-package-stepless", &[("mise.toml", manifest)], &[]);
+    let manifest = package_manifest("[]");
+    let root = fixture("hk-package-stepless", &[("mise.toml", &manifest)], &[]);
     clean(&root);
 }
 
@@ -350,8 +363,8 @@ fn a_package_task_with_an_empty_run_is_clean() {
 /// empty array binds `package_run` without yielding an entry to test.
 #[test]
 fn a_package_task_with_an_empty_run_string_is_clean() {
-    let manifest = "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = \"\"\n";
-    let root = fixture("hk-package-empty-run", &[("mise.toml", manifest)], &[]);
+    let manifest = package_manifest(r#""""#);
+    let root = fixture("hk-package-empty-run", &[("mise.toml", &manifest)], &[]);
     clean(&root);
 }
 
@@ -360,29 +373,30 @@ fn a_package_task_with_an_empty_run_string_is_clean() {
 /// version.
 #[test]
 fn a_package_task_whose_only_step_is_empty_is_clean() {
-    let manifest = "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = [\"\"]\n";
-    let root = fixture("hk-package-empty-step", &[("mise.toml", manifest)], &[]);
+    let manifest = package_manifest(r#"[""]"#);
+    let root = fixture("hk-package-empty-step", &[("mise.toml", &manifest)], &[]);
     clean(&root);
 }
 
 /// `#MUTANT hk-package-blank-step-counted` reddens here. Whitespace is not a
-/// command, and this is the shape that cleared the string body's emptiness
-/// test — the measurement that turned all three tests into `is_step`.
+/// command, and this is the shape that cleared the string body's emptiness test
+/// — the measurement that folded three guards into `is_step`: the array body's
+/// `is_string` and both `!= ""` tests.
 #[test]
 fn a_package_task_whose_run_is_blank_is_clean() {
-    let manifest = "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = \"   \"\n";
-    let root = fixture("hk-package-blank", &[("mise.toml", manifest)], &[]);
+    let manifest = package_manifest(r#""   ""#);
+    let root = fixture("hk-package-blank", &[("mise.toml", &manifest)], &[]);
     clean(&root);
 }
 
-/// The ARRAY spelling of the blank step, which no row above reaches: the case
-/// over `run = "   "` exercises only the string half of `is_step`'s two call
-/// sites. Without this one, re-inlining a guard on the array half alone would
-/// bring arm E's false refusal back and land green.
+/// `#MUTANT hk-package-array-blank-reinlined` reddens here, and only here: the
+/// array half's guard re-inlined as a bare `!= ""`, which is the shape `is_step`
+/// was extracted to retire. `[""]` stays clean under it and `"   "` never
+/// reaches the array half, so this corner is the one that can show it.
 #[test]
 fn a_package_task_whose_only_step_is_blank_is_clean() {
-    let manifest = "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = [\"   \"]\n";
-    let root = fixture("hk-package-blank-step", &[("mise.toml", manifest)], &[]);
+    let manifest = package_manifest(r#"["   "]"#);
+    let root = fixture("hk-package-blank-step", &[("mise.toml", &manifest)], &[]);
     clean(&root);
 }
 

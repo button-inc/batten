@@ -54,17 +54,20 @@
 #MUTANT hk-amends-tag-disagreement-passes|s@^\ttagged.version != pin$@\tfalse@|an_amends_tag_segment_naming_another_version_is_refused
 #
 # THE OTHER DIRECTION. Every row above weakens a refusal into silence; these
-# four turn silence into a refusal, and their cases assert CLEAN, so each reddens
+# five turn silence into a refusal, and their cases assert CLEAN, so each reddens
 # by a finding appearing. Arm E can accuse a `mise.toml` that declares no fetch
 # URL at all: drop its step guard and a task yielding no step reaches it, weaken
 # either `is_step` call and an empty entry does, weaken `is_step` itself and a
-# blank one does. Every such shape is one mise cannot execute, which is a
-# manifest defect and not this module's question. Arm B rests on a zero count
-# too and owes no such row, because its surface is a file that WAS read.
+# blank one does, and re-inline the array half's guard without the trim — the
+# shape `is_step` was extracted to retire — and a blank array entry does. Every
+# such shape is one mise cannot execute, which is a manifest defect and not this
+# module's question. Arm B rests on a zero count too and owes no such row,
+# because its surface is a file that WAS read.
 #MUTANT hk-package-stepless-run-fires|s@^\tcount(package_steps) > 0$@\ttrue@|a_package_task_with_an_empty_run_is_clean
 #MUTANT hk-package-empty-run-string-counted|s@^\tis_step(package_run)$@\tis_string(package_run)@|a_package_task_with_an_empty_run_string_is_clean
 #MUTANT hk-package-empty-step-counted|s@^\tis_step(step)$@\tis_string(step)@|a_package_task_whose_only_step_is_empty_is_clean
 #MUTANT hk-package-blank-step-counted|s@^\ttrim_space(s) != ""$@\ts != ""@|a_package_task_whose_run_is_blank_is_clean
+#MUTANT hk-package-array-blank-reinlined|s@^\tis_step(step)$@\tstep != ""@|a_package_task_whose_only_step_is_blank_is_clean
 #
 #MUTANT-SUITE crates/batten/tests/it/tracked_absent.rs
 
@@ -251,8 +254,9 @@ package_run := r if {
 # guards that were three spellings of that one claim, arrived at a shape at a
 # time — a non-string array entry, then the empty string in each `run` spelling
 # — and the enumeration was still open when the last of them landed: `run = "   "`
-# cleared both emptiness tests and reached arm E as a step naming nothing, which
-# is a pin disagreement reported against a manifest with no fetch URL. Blank is
+# cleared the string body's emptiness test and reached arm E as a step naming
+# nothing, which is a pin disagreement reported against a manifest with no fetch
+# URL. (The array body's test was never reached: `"   "` is a string.) Blank is
 # not a command, so it is not a step, and the arms that count steps may now say
 # so without each re-deciding what one is.
 is_step(s) if {
@@ -629,10 +633,11 @@ test_a_package_task_whose_run_is_blank_decides_nothing_here if {
 		with data.batten.patterns as pattern
 }
 
-# The array spelling of the blank step. Each of the four cases above reaches
-# exactly one of `is_step`'s two call sites, so neither call site is covered by
-# the other's shape: `[]` and `""` pair off, and so do `[""]` and `"   "` — this
-# is the fourth corner.
+# The fourth corner of spelling × emptiness kind: `""` and `"   "` are decided
+# at the string call site, `[""]` and this one at the array call site. `run = []`
+# above is on neither axis — it yields no step at all, which is arm E's count
+# guard. `#MUTANT hk-package-array-blank-reinlined` is the array half's guard
+# re-inlined without the trim, which only this corner can redden.
 test_a_package_task_whose_only_step_is_blank_decides_nothing_here if {
 	count(violation) == 0 with input as tree_with_tasks(
 		{"hk": "1.56.1"},
