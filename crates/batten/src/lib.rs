@@ -685,7 +685,7 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 //MUTANT follow-pin-source-unfollowed|s@^            Some(build) => build,$@            Some(_) => return Ok(Followed::Nothing),@|a_verb_is_followed_to_the_checkouts_build
 //MUTANT hook-path-builds|s@^    let may_build = !hook_path;$@    let may_build = true;@|the_hook_path_never_builds_a_source_pin
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT follow-pin-passes-a-crash-through|s@^    if hook_path {$@    if false {@|a_crashing_checkout_build_never_fails_the_hook_open
+//MUTANT follow-pin-passes-a-crash-through|s@^    if hook_path {$@    if false {@|a_crashing_followed_build_never_fails_the_hook_open
 //MUTANT fetch-failure-always-falls-through|s@^                Err(_) if !may_build => return Ok(Followed::Nothing),$@                Err(_) => return Ok(Followed::Nothing),@|a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path
 fn follow_pin(hook_path: bool) -> Result<Followed> {
     // THE HOOK FOLLOWS A RELEASE PIN BUT NEVER BUILDS A SOURCE ONE (CLOUD-2062,
@@ -19546,14 +19546,22 @@ fn read_payload(mode: Mode, err: &mut dyn Write) -> Result<Option<Payload>> {
 
 /// The payload as it arrived, before anything version-specific has read it.
 ///
-/// **THE SPLIT IS THE POINT, not a refactor.** Reading the stream is a thing
-/// any build of this engine can do; DECODING it is the half a build can be too
-/// old for, and being too old is the condition a pin exists to repair. Folding
-/// the two together meant a stale binary that could not decode an envelope
-/// answered `Success` for it — a fail-open in precisely the case the pin is
-/// for — because the pinned engine, which could have decoded it, was never
-/// consulted. So the hook reads, hands the bytes to the pin if there is one,
-/// and only decodes for itself once nothing else has answered.
+/// **THE SPLIT IS THE POINT, not a refactor.** DECODING a payload — reading an
+/// envelope's shape — is the half a build is most easily too old for, and being
+/// too old is the condition a pin exists to repair. Folding it in with the read
+/// meant a stale binary that could not decode an envelope answered `Success`
+/// for it, a fail-open in precisely the case the pin is for, because the pinned
+/// engine that could have decoded it was never consulted. So the hook reads,
+/// hands the bytes to the pin if there is one, and decodes for itself only once
+/// nothing else has answered.
+///
+/// **The split narrows that window; it does not close it.** [`read_payload`]
+/// parses, counts tokens and spills, so it is not a version-independent half —
+/// a payload this build's streaming parser rejects still returns `Success`
+/// without the pin being asked. Both builds run the same generic walk and the
+/// envelope is host-serialized, so there is no known shape that divides them;
+/// closing it properly means handing the child the spool before anything reads
+/// it, which is the file-rather-than-`String` change filed on the row.
 struct Payload {
     streamed: stream_input::Streamed,
     /// Removed when the call is answered on any path.
@@ -20031,13 +20039,20 @@ fn hand_off<'a>(
     else {
         return Ok(Follow::NOTHING);
     };
-    // A CHILD RAN, WHATEVER IT SAID, and this is the only place that knows.
-    // `piped_argv` answers `None` for a program that would not start as well as
-    // for one that died without a code, so a caller reading only the returned
-    // answer cannot tell "nothing was spawned" from "something was spawned and
-    // decided nothing". Those differ for the hand-off below, which must not
-    // re-run a binary this call already ran but is still owed its turn when
-    // nothing ran at all.
+    // A CHILD RAN, WHATEVER IT SAID, and this is the nearest place that knows.
+    // A caller reading only the returned answer cannot tell "nothing was
+    // spawned" from "something was spawned and decided nothing", and those
+    // differ for the hand-off below: it must not re-run a binary this call
+    // already ran, and is still owed its turn when nothing ran at all.
+    //
+    // ONE CASE STILL READS AS A NON-SPAWN AND IS NOT: `piped_argv` answers
+    // `None` for a child that died on a SIGNAL, because there is no code to
+    // report — indistinguishable here from a program that would not start. So
+    // a segfaulting engine is handed off to a second time. That is the safe
+    // direction of the two: the alternative, claiming a run that did not
+    // happen, suppresses a hand-off to a possibly working engine, and the cost
+    // of this one is a second crash. Closing it means `piped_argv` saying
+    // whether it spawned, which is an `exec` change filed on the row.
     let ran = argv.first().map(Path::new);
     // DECIDE, THEN WRITE. Nothing of the child's has reached `out` yet, so a
     // code the table does not name costs nothing to drop whole.
@@ -20077,7 +20092,7 @@ fn hand_off<'a>(
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT hook-handoff-skipped|s@^    let Some(build) = engine::checkout_build(root) else {$@    let Some(build) = None::<PathBuf> else {@|a_hook_outside_the_checkout_hands_off_to_the_authoritys_build
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT handoff-reruns-the-binary-already-run|s@^    if already_ran(handoff.ran, \&build)? {$@    if false {@|a_crashing_checkout_build_never_fails_the_hook_open
+//MUTANT handoff-reruns-the-binary-already-run|s@^    if already_ran(handoff.ran, \&build)? {$@    if false {@|a_crashing_followed_build_never_fails_the_hook_open
 fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<Option<ExitCode>> {
     if std::env::var_os(ENGINE_UPDATED).is_some() {
         return Ok(None);

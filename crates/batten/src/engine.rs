@@ -392,8 +392,6 @@ pub(crate) fn runs_local() -> bool {
 /// the tree stopped `follow_pin` finding its own build, reinstating the drift
 /// CLOUD-2376 closed, while a RELATIVE one resolved under the authority and was
 /// honoured for a tree this process never built.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT source-pin-unfollowed|s@^    build.is_file().then_some(build)$@    None::<PathBuf>.filter(\x7c_\x7c build.is_file())@|a_source_pin_is_followed_to_the_checkouts_build
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT foreign-target-dir-read|s@^        .join("target")$@        .join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(\x7c\x7c "target".into()))@|the_handoff_reads_no_target_dir_of_this_process
 #[must_use]
@@ -402,6 +400,21 @@ pub fn checkout_build(root: &Path) -> Option<PathBuf> {
         .join("target")
         .join("release")
         .join(crate::surface::BINARY);
+    existing(build)
+}
+
+/// A named build, or `None` where nothing is there.
+///
+/// **ONE LINE, BECAUSE TWO WERE INDISTINGUISHABLE.** Both lookups ended
+/// `build.is_file().then_some(build)`, and `source-pin-unfollowed` anchored on
+/// that text — but `mutate::substitute` applies a script per LINE across the
+/// whole file, so the row rewrote BOTH functions and isolated neither. The gate
+/// stayed green while proving less than it read as proving, which is the defect
+/// `hand_off` collapsed two hand-offs to fix. Same answer here: one existence
+/// rule, one line, one row over it.
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT build-presence-unchecked|s@^    build.is_file().then_some(build)$@    None::<PathBuf>.filter(\x7c_\x7c build.is_file())@|a_source_pin_is_followed_to_the_checkouts_build
+fn existing(build: PathBuf) -> Option<PathBuf> {
     build.is_file().then_some(build)
 }
 
@@ -414,11 +427,10 @@ pub fn checkout_build(root: &Path) -> Option<PathBuf> {
 /// one file therefore agree for every value of the variable, absolute or
 /// relative — which is the agreement this issue exists to restore.
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT own-build-ignores-the-target-dir|s@^    let build = release_build(root);$@    let build = root.join("target").join("release").join(crate::surface::BINARY);@|a_source_pin_is_followed_into_a_redirected_target_dir
+//MUTANT own-build-ignores-the-target-dir|s@^    existing(release_build(root))$@    existing(root.join("target").join("release").join(crate::surface::BINARY))@|a_source_pin_is_followed_into_a_redirected_target_dir
 #[must_use]
 pub fn own_build(root: &Path) -> Option<PathBuf> {
-    let build = release_build(root);
-    build.is_file().then_some(build)
+    existing(release_build(root))
 }
 
 /// Where this checkout's release build LIVES — the one place that names it
