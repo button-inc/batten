@@ -66,9 +66,10 @@
 //! measurement and the remedy are on CLOUD-1492; `secrets.rs` carries the same
 //! note beside the terminator.
 //!
-//! The non-UTF-8 spawn arm gets the same `--` and is covered by review rather
-//! than by a case — it is unreachable in practice, as its own comment in
-//! `secrets.rs` records.
+//! The non-UTF-8 spawn arm needs no case of its own: the terminator is the last
+//! element of `secrets.rs`'s `SCANNER_FLAGS`, so both arms carry it by
+//! construction and the declared mutant deletes it from both at once. That arm
+//! is unreachable in practice anyway, as its own comment there records.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -104,13 +105,19 @@ const PLAIN_PATH: &str = "plain.conf";
 
 /// A repository, an isolated state home, and somewhere to put the stub.
 ///
-/// A third near-copy of the shape `secrets_kind.rs` and `enforce_journal.rs` both
-/// carry, and the duplication is real rather than justified: `install_scanner`
-/// takes its script as a parameter in all three, so only the glob and this
-/// suite's `STUB` actually differ. Collapsing them into one `common::` helper is
-/// left undone deliberately: `tests/it/common/mod.rs` is a `MUTANT_GATES` file
-/// this row does not own, and the shape it would take is recorded on CLOUD-1496
-/// rather than spun onto a row of its own, which `issue file same` refuses.
+/// A FOURTH near-copy of the shape `secrets_kind.rs`, `enforce_journal.rs` and
+/// `provision.rs` each carry, and the duplication is real rather than justified:
+/// `install_scanner` takes its script as a parameter in the others, so only the
+/// glob and this suite's `STUB` actually differ.
+///
+/// It is left undone for scope, and the honest reason is narrower than a `common::`
+/// helper. These are `mod`s of one integration binary, so the cheap route is not
+/// `tests/it/common/mod.rs` — a `MUTANT_GATES` file with `spawn-factory` allowlist
+/// entries, which this row certainly does not own — but `crate::secrets_kind::Env`
+/// made `pub(crate)` with its hardcoded `glob = "**/*.conf"` taken as a parameter.
+/// That is a smaller edit than this copy, and it is still a file CLOUD-1496 does
+/// not own, so collapsing it here would widen the PR into a sibling's test module.
+/// Filed as its own row.
 struct Env {
     repo: PathBuf,
     home: PathBuf,
@@ -162,7 +169,7 @@ impl Env {
         assert!(
             applied.status.success(),
             "the stub scanner installs: {}",
-            String::from_utf8_lossy(&applied.stderr)
+            stderr(&applied)
         );
     }
 
@@ -205,12 +212,17 @@ impl Env {
 /// tool's own exit 2 — neither its clean (0) nor its found (1) status. After the
 /// terminator every word is a path, reported as a match.
 ///
+/// The trailing status is the literal found (1) rather than a count of what was
+/// reported, because the module doc's "every case leaves at least one surviving
+/// operand" makes a count a variable with one reachable value. A counted exit
+/// would also read as if the pin's clean (0) path were modelled here, which is
+/// exactly what that paragraph says this stub declines to model.
+///
 /// The span is a placeholder rather than a credential shape: this suite asserts
 /// where the scanner was pointed, and a literal credential in a committed file
 /// would trip consumer #1's own `source carry unsafe` rule over this very file.
 const STUB: &str = r#"#!/bin/sh
 terminated=0
-found=0
 for arg in "$@"; do
   if [ "$terminated" -eq 0 ]; then
     case "$arg" in
@@ -223,9 +235,8 @@ for arg in "$@"; do
     esac
   fi
   printf '%s\n' "$arg:1:redacted"
-  found=1
 done
-exit "$found"
+exit 1
 "#;
 
 /// The planted file's contents. Not a credential shape, deliberately — the stub

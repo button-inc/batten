@@ -92,7 +92,15 @@ pub const SCANNER: &str = "ripsecrets";
 /// documentation cannot disagree.
 const PROVISION_VERB: &str = "batten provision apply";
 
-/// The scanner's flags, pinned here beside the parser that reads their output.
+// The terminator is anchored here, on the one line that spells it, rather than
+// on either spawn arm: dropping the element removes it from both arms at once,
+// and nothing about the kill depends on how the arms happen to be indented. The
+// `$` is load-bearing — this row's own text contains the element it deletes, and
+// an unanchored pattern would rewrite the row as well as the const.
+//MUTANT-SUITE crates/batten/tests/it/secrets_operands.rs
+//MUTANT drop-the-operand-terminator|s@, "--"\];$@];@|a_dash_leading_tracked_path_is_scanned_as_a_path
+/// The scanner's flags and the `--` that ends them, pinned here beside the
+/// parser that reads their output.
 ///
 /// `--only-matching` is **not** an option: it is what makes the third output
 /// field the matched literal alone rather than the whole source line. The span
@@ -100,7 +108,54 @@ const PROVISION_VERB: &str = "batten provision apply";
 /// [`crate::identity::secret_code_fingerprint`] forces `Verbatim` normalization —
 /// a whole-line span would fold every edit elsewhere on the line into the
 /// secret's identity, re-minting a finding nobody changed.
-const SCANNER_FLAGS: &[&str] = &["--only-matching"];
+///
+/// # The trailing `--` (CLOUD-1496)
+///
+/// It lives in this slice rather than at the two call sites so that both spawn
+/// arms get it by construction. The arms differ only in how the program is
+/// named, never in what the tree may call a file, and the second is unreachable
+/// in practice — so a terminator written once per arm would be a lockstep
+/// obligation kept by review alone.
+///
+/// WHAT IT CLOSES. `run_once`'s batch is paths the `ignore` walk found in the
+/// judged tree — untracked files included, not only tracked ones — and that tree
+/// is the untrusted input here: a file named `-h` or `--strict-ignore` is
+/// writable in any repository this gate runs over. Without the terminator the
+/// scanner parses such a path as an option, and BOTH directions are wrong. An
+/// option the pin does not know exits 2, which CLOUD-59's fail-closed clause
+/// turns into a refusal of the whole batch; one it DOES know is consumed as a
+/// flag, so the file is never read while the exit stays clean. The second is the
+/// dangerous one: a green tree over a file nobody opened. This is the
+/// `--end-of-options` class CLOUD-718 fixed for git, where `rev-parse` echoed
+/// the terminator instead of consuming it.
+///
+/// Measured against the pinned ripsecrets 0.1.11 rather than assumed. Its flag
+/// table is `--install-pre-commit`, `--strict-ignore`, `--only-matching`,
+/// `--additional-pattern`, `-h`, `-V`; it honours `--`, and bare operands after
+/// it are accepted unprefixed, so CLOUD-718's echo does not recur here. That
+/// makes `--strict-ignore` the known arm and `--no-ignore` — a `ripgrep` flag,
+/// not one of these — the unknown arm; `secrets_operands.rs` has a case for each.
+///
+/// WHAT IT DOES NOT CLOSE, measured the same way: a file named exactly `-`. That
+/// is the STDIN convention, not option parsing, so `--` has no bearing on it —
+/// `-- -` exits 0 having read nothing, and `-- - plain.conf` returns only
+/// `plain.conf`. The unread file is a silent false green of exactly the kind
+/// this terminator closes for flag-named paths. `-- ./-` does report it, so the
+/// remedy is rendering that operand — and rendering is why the hole is
+/// CLOUD-1492's rather than this row's, on cost and not on bookkeeping:
+/// `parse_line` anchors `hit.path` on the batch strings, and `hit.path` is
+/// hashed by [`crate::identity::secret_code_fingerprint`], so rendering every
+/// operand re-mints every stored secret identity, while rendering only the
+/// hostile ones puts the reversal inside `parse_line`. Either way the decision
+/// is about identity and the journal, not about an argv. Recorded there with the
+/// numbers; `-h`, `-V`, `-x`, `--` and both long flags are all fine after the
+/// terminator.
+///
+/// The claim is about THIS spawn and is not a survey of the crate: `rules.rs`'s
+/// `command_rule` expands `{{files}}` into a consumer-written argv whose
+/// terminator position only the consumer can choose. That is CLOUD-1492's too,
+/// with the `[[spawn]] operands` column.
+const SCANNER_FLAGS: &[&str] = &["--only-matching", "--"];
 
 /// The scanner's exit codes, pinned in one place and cross-checked against the
 /// parse count (CLOUD-59's fail-closed clause).
@@ -1166,44 +1221,9 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
     let spawn = |program: &str, leading: &[&str]| {
         std::process::Command::new(program)
             .args(leading)
+            // `SCANNER_FLAGS` ends in `--`, so `batch` is operands whatever the
+            // tree named its files (CLOUD-1496); the const's doc carries why.
             .args(SCANNER_FLAGS)
-            // END-OF-OPTIONS (CLOUD-1496). The claim is about THIS spawn and is not
-            // a survey of the crate: `rules.rs`'s `command_rule` expands
-            // `{{files}}` into a consumer-written argv whose terminator position
-            // only the consumer can choose. That is CLOUD-1492's, with the
-            // `[[spawn]] operands` column.
-            // `batch` is paths the `ignore` walk found in the judged tree —
-            // untracked files included, not only tracked ones — and that tree is
-            // the untrusted input here: a file named `-h` or `--strict-ignore` is
-            // writable in any repository this gate runs over. Without the
-            // terminator the scanner parses such a path as an option, and BOTH
-            // directions are wrong — an option the pin does not know exits 2, which
-            // CLOUD-59's fail-closed clause turns into a refusal of the whole batch,
-            // and one it DOES know is consumed as a flag, so the file is never read
-            // while the exit stays clean. The second is the dangerous one: a green
-            // tree over a file nobody opened.
-            //
-            // Measured against the pinned ripsecrets 0.1.11, whose flag table is
-            // `--install-pre-commit`, `--strict-ignore`, `--only-matching`,
-            // `--additional-pattern`, `-h`, `-V`. So `--strict-ignore` is the known
-            // arm and `--no-ignore` — a `ripgrep` flag, not one of these — is the
-            // unknown arm; `secrets_operands.rs` has a case for each. It honours
-            // `--`, and bare operands after it are accepted unprefixed. This is the
-            // `--end-of-options` class CLOUD-718 fixed for git, where `rev-parse`
-            // echoed the terminator instead of consuming it; the measurement above
-            // is why that does not recur here.
-            //
-            // WHAT THE TERMINATOR DOES NOT CLOSE, measured rather than assumed: a
-            // file named exactly `-`. That is the STDIN convention, not option
-            // parsing, so `--` has no bearing on it — `-- -` exits 0 having read
-            // nothing, and `-- - plain.conf` returns only `plain.conf`, so the
-            // unread file is a silent false green of exactly the kind this
-            // terminator closes for flag-named paths. `-- ./-` does report it, so
-            // the remedy is rendering that one operand, which this row's §1
-            // decided against on a measurement that had not covered it. Recorded
-            // on CLOUD-1492 with the numbers; `-h`, `-V`, `-x`, `--` and both long
-            // flags are all fine after the terminator.
-            .arg("--")
             .args(batch)
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
@@ -1233,12 +1253,6 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
         )]
         None => std::process::Command::new(binary)
             .args(SCANNER_FLAGS)
-            // The same terminator, for the same reason as the arm above. This arm
-            // is unreachable in practice, so it is covered by review rather than by
-            // a case — which is exactly why it has to be written here: the two arms
-            // differ only in how the program is named, never in what the tree may
-            // call a file.
-            .arg("--")
             .args(batch)
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
@@ -1273,9 +1287,6 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
     cross_check(rule, output.status.code(), parsed.len())?;
     Ok(parsed)
 }
-
-//MUTANT-SUITE crates/batten/tests/it/secrets_operands.rs
-//MUTANT drop-the-operand-terminator|s@^            .arg("--")$@@|a_dash_leading_tracked_path_is_scanned_as_a_path
 
 /// The exit-status/parse-count cross-check, both directions.
 ///
