@@ -1451,9 +1451,12 @@ mod tests {
         });
         let ruling = declared().expect("a declared forge");
         assert_eq!(declared_credential(), credential(Some(ruling)));
-        let expected = |status: u16| match &ruling.nothing_graded {
-            Some(list) => list.contains(&status),
-            None => status == 422,
+        let expected = |status: u16| {
+            ruling
+                .nothing_graded
+                .as_deref()
+                .unwrap_or(NOTHING_GRADED_DEFAULT)
+                .contains(&status)
         };
         for status in [422, 404] {
             assert_eq!(
