@@ -19248,18 +19248,19 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             path: None,
             filter: None,
         };
+        let distinct = [query("first"), query("second")];
         let rows = [
             Rule {
-                history: vec![query("first"), query("first")],
+                history: vec![distinct[0].clone(), distinct[0].clone()],
                 ..blank("p", RuleKind::Policy)
             },
             Rule {
-                history: vec![query("second")],
+                history: vec![distinct[1].clone()],
                 ..blank("q", RuleKind::Policy)
             },
         ];
         let facts = git_facts(&rows, &dir);
-        let expected = crate::git::history_facts(&dir, &[query("first"), query("second")]).ok();
+        let expected = crate::git::history_facts(&dir, &distinct).ok();
         assert!(expected.is_some());
         assert_eq!(facts.history, expected);
     }
@@ -19672,7 +19673,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             .findings
             .iter()
             .filter(|finding| finding.rule == "a")
-            .flat_map(|finding| [finding.identity.fingerprint.to_hex(), String::from("\n")])
+            .map(|finding| finding.identity.fingerprint.to_hex() + "\n")
             .collect();
         assert_eq!(
             scan.requested,
