@@ -275,11 +275,79 @@ pub fn derive(payload: &str) -> Result<Contract> {
 /// The smell ids this comparison can raise.
 ///
 /// Named per half so a reader knows which key to edit without parsing prose.
-pub const REQUIRED_CHECKS_DRIFT: &str = "ci-required-checks-drift";
-/// The merge-method half's smell id.
-pub const MERGE_METHODS_DRIFT: &str = "ci-allowed-merge-methods-drift";
-/// The linear-history half's smell id (CLOUD-2273).
-pub const LINEAR_HISTORY_DRIFT: &str = "ci-required-linear-history-drift";
+///
+/// A TYPE RATHER THAN FOUR STRING CONSTANTS (CLOUD-2379). An id a reader cannot
+/// explain is an id that should not reach a report, and the only way to hold
+/// that is to make the vocabulary enumerable: [`crate::lint::SmellId::Drift`]
+/// wraps this, and [`crate::lint::SmellId::all`] therefore reaches every value
+/// here without re-typing one.
+///
+/// **Appended, never inserted**, for [`crate::trust::WeakeningKind`]'s reason:
+/// `Ord` on the wrapper sorts by [`DriftId::as_str`], so declaration order is
+/// not the sort order here — but a variant added mid-list still shifts every
+/// later discriminant, which `semver` reads as a break.
+///
+/// NO `Ord`, deliberately. A [`Drift`] is never sorted by id, and the wrapper's
+/// ordering is [`crate::lint::SmellId`]'s hand-written `as_str` comparison — so
+/// a derived order here would be unreachable state that reads as the sort order
+/// and is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DriftId {
+    /// The projection and the host name different required checks.
+    RequiredChecks,
+    /// The merge-method half.
+    MergeMethods,
+    /// The linear-history half (CLOUD-2273).
+    LinearHistory,
+    /// The `[host]` half (CLOUD-380).
+    HostSetting,
+}
+
+impl DriftId {
+    /// Every id, so anything ranging over the vocabulary is derived rather than
+    /// re-typed — [`crate::trust::WeakeningKind::ALL`]'s idiom.
+    pub const ALL: &'static [DriftId] = &[
+        DriftId::RequiredChecks,
+        DriftId::MergeMethods,
+        DriftId::LinearHistory,
+        DriftId::HostSetting,
+    ];
+
+    /// The stable, lowercase identifier used in machine output (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            DriftId::RequiredChecks => "ci-required-checks-drift",
+            DriftId::MergeMethods => "ci-allowed-merge-methods-drift",
+            DriftId::LinearHistory => "ci-required-linear-history-drift",
+            DriftId::HostSetting => "host-setting-drift",
+        }
+    }
+
+    /// The one-sentence meaning `policy explain` prints (CLOUD-2379).
+    #[must_use]
+    pub const fn definition(self) -> &'static str {
+        match self {
+            DriftId::RequiredChecks => {
+                "The committed `[ci] required_checks` projection and the host's branch rules name \
+                 different checks."
+            }
+            DriftId::MergeMethods => {
+                "The committed `[ci] allowed_merge_methods` projection and the host's branch rules \
+                 admit different merge methods."
+            }
+            DriftId::LinearHistory => {
+                "The committed `ci.required_linear_history` claim disagrees with whether the host \
+                 requires a linear history."
+            }
+            DriftId::HostSetting => {
+                "A `[host]` key the tree projects disagrees with what the host reports, or the \
+                 host did not report it."
+            }
+        }
+    }
+}
 
 /// The repository-object keys [`derive_host`] reads.
 ///
@@ -291,9 +359,6 @@ const HOST_KEYS: &[&str] = &[
     "web_commit_signoff_required",
     "security_and_analysis",
 ];
-
-/// The `[host]` half's smell id (CLOUD-380).
-pub const HOST_SETTING_DRIFT: &str = "host-setting-drift";
 
 /// Repository settings the host decides and the tree projects (CLOUD-380).
 ///
@@ -429,7 +494,7 @@ pub fn host_drift(committed: &Host, host: &Host) -> Vec<Drift> {
         };
         let Some(theirs) = theirs else {
             found.push(Drift {
-                id: HOST_SETTING_DRIFT,
+                id: DriftId::HostSetting,
                 key: format!("host.{key}"),
                 // The same two-token shape, with could-not-look on the host's
                 // side spelled as a TOKEN rather than as a value it never sent.
@@ -439,7 +504,7 @@ pub fn host_drift(committed: &Host, host: &Host) -> Vec<Drift> {
         };
         if mine != theirs {
             found.push(Drift {
-                id: HOST_SETTING_DRIFT,
+                id: DriftId::HostSetting,
                 key: format!("host.{key}"),
                 // POINTER, NEVER PAYLOAD: which side claims what, as two tokens,
                 // and never a byte of the host's response.
@@ -469,7 +534,7 @@ pub fn host_drift(committed: &Host, host: &Host) -> Vec<Drift> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Drift {
     /// The smell id.
-    pub id: &'static str,
+    pub id: DriftId,
     /// The config key path this names.
     pub key: String,
     /// The differing tokens, sorted, each prefixed `+` (the host has it and the
@@ -497,7 +562,7 @@ pub fn drift(committed: &Ci, host: &Contract) -> Vec<Drift> {
     let checks = difference_tokens(&mine.required_checks, &host.required_checks);
     if !checks.is_empty() {
         found.push(Drift {
-            id: REQUIRED_CHECKS_DRIFT,
+            id: DriftId::RequiredChecks,
             key: "ci.required_checks".to_owned(),
             tokens: checks,
         });
@@ -515,7 +580,7 @@ pub fn drift(committed: &Ci, host: &Contract) -> Vec<Drift> {
     };
     if !methods.is_empty() {
         found.push(Drift {
-            id: MERGE_METHODS_DRIFT,
+            id: DriftId::MergeMethods,
             key: "ci.allowed_merge_methods".to_owned(),
             tokens: methods,
         });
@@ -535,7 +600,7 @@ pub fn drift(committed: &Ci, host: &Contract) -> Vec<Drift> {
             '-'
         };
         found.push(Drift {
-            id: LINEAR_HISTORY_DRIFT,
+            id: DriftId::LinearHistory,
             key: "ci.required_linear_history".to_owned(),
             tokens: vec![format!("{sign}required")],
         });
@@ -647,6 +712,63 @@ mod tests {
     }
     use super::*;
 
+    /// `ALL` holds every id, so [`crate::lint::SmellId::all`] reaches each one
+    /// (CLOUD-2379).
+    ///
+    /// Derived from the declaration rather than re-typed, which is
+    /// `trust`'s `the_kind_vocabulary_is_derived_rather_than_re_typed` idiom:
+    /// a variant added without an `ALL` row is one `policy explain` would never
+    /// be asked about, and the census one level up could not see the hole.
+    #[test]
+    fn every_drift_id_is_in_all() {
+        let declared = crate::testing::declared_variants(include_str!("ci.rs"), "DriftId")
+            .expect("the drift id enum is declared here and closes");
+        assert_eq!(declared.delegated, 0, "every drift id is a unit variant");
+        assert_eq!(
+            declared.unit,
+            DriftId::ALL.len(),
+            "every variant must be in `ALL`"
+        );
+    }
+
+    /// Each id answers with its own token and its own sentence (CLOUD-2379).
+    ///
+    /// **THE WHOLE-VOCABULARY CENSUS ONE LEVEL UP DOES NOT COVER THIS, and
+    /// `mutate` is what settled it.** `lint`'s
+    /// `every_smell_id_round_trips_and_all_is_whole` reaches every `DriftId`
+    /// through `SmellId::Drift`, so a per-enum check looked subsumed and was
+    /// dropped as redundant. The sweep then carried `DriftId::as_str` and
+    /// `DriftId::definition` replaced wholesale with `""` and `"xyzzy"` —
+    /// four surviving mutants — because a mutant is only killed by a case the
+    /// runner selects for the file it mutated. Subsumption across files is not
+    /// coverage; the assertion has to sit beside the code it holds.
+    #[test]
+    fn every_drift_id_has_its_own_token_and_definition() {
+        let tokens: Vec<&str> = DriftId::ALL.iter().map(|id| id.as_str()).collect();
+        let definitions: Vec<&str> = DriftId::ALL.iter().map(|id| id.definition()).collect();
+
+        // Non-empty kills the `""` arm; distinct kills the constant arm, which
+        // a mere non-empty check would pass.
+        for (id, token) in DriftId::ALL.iter().zip(&tokens) {
+            assert!(!token.is_empty(), "{id:?} has a token");
+        }
+        for (id, definition) in DriftId::ALL.iter().zip(&definitions) {
+            assert!(!definition.is_empty(), "{id:?} has a definition");
+        }
+        for list in [&tokens, &definitions] {
+            let mut sorted = (*list).clone();
+            let count = sorted.len();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(sorted.len(), count, "two ids answer alike: {list:?}");
+        }
+
+        // Anti-vacuity: the tokens are the ones the retired constants carried,
+        // so a rename is a finding rather than a silently renamed smell id.
+        assert_eq!(DriftId::RequiredChecks.as_str(), "ci-required-checks-drift");
+        assert_eq!(DriftId::HostSetting.as_str(), "host-setting-drift");
+    }
+
     /// The shape this repository's own host returns: one required check, and no
     /// `pull_request` rule at all.
     const RULES: &str = include_str!("../tests/fixtures/ci/rules-required-checks.json");
@@ -684,7 +806,7 @@ mod tests {
         denies.required_linear_history = Some(false);
         let found = drift(&denies, &derive(RULES).unwrap());
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].id, LINEAR_HISTORY_DRIFT);
+        assert_eq!(found[0].id, DriftId::LinearHistory);
         assert_eq!(found[0].rendered(), "+required");
 
         // The projection claims a rule the host does not carry.
@@ -784,7 +906,7 @@ mod tests {
         // The host requires a check the config lacks.
         let missing = drift(&ci(&["other"], None), &host);
         assert_eq!(missing.len(), 1);
-        assert_eq!(missing[0].id, REQUIRED_CHECKS_DRIFT);
+        assert_eq!(missing[0].id, DriftId::RequiredChecks);
         assert_eq!(missing[0].key, "ci.required_checks");
         assert_eq!(
             missing[0].rendered(),
@@ -806,7 +928,7 @@ mod tests {
         let host = derive(RULES_WITH_METHODS).unwrap();
         let found = drift(&ci(&["final"], None), &host);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].id, MERGE_METHODS_DRIFT);
+        assert_eq!(found[0].id, DriftId::MergeMethods);
         assert_eq!(found[0].rendered(), "+squash");
 
         // And the reverse: the config constrains where the host does not.

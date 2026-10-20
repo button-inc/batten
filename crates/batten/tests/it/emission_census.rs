@@ -429,6 +429,42 @@ fn every_refusal_id_the_engine_raises_resolves() {
     );
 }
 
+/// Every id a smell can carry resolves through `policy explain` (CLOUD-2379).
+///
+/// The sibling of `every_refusal_id_the_engine_raises_resolves`, one vocabulary
+/// over, and it has to be a separate case because that one scans
+/// `Refusal::{declared,new,unloaded}(` arguments — a smell is not a `Refusal`,
+/// so the source scan structurally cannot see one. This ranges over the TYPE
+/// instead of over the source, which is the whole point of `SmellId`: a
+/// vocabulary that can be enumerated is one a census can hold whole.
+#[test]
+fn every_smell_id_resolves_through_policy_explain() {
+    let ids: Vec<&'static str> = batten::lint::SmellId::all()
+        .map(batten::lint::SmellId::as_str)
+        .collect();
+    // Anti-vacuity: the three ids CLOUD-2379 measured unresolvable are among
+    // what is asked. An `all` that lost them would satisfy the quantifier below
+    // while answering nothing.
+    for known in [
+        "test-expectation-changed",
+        "test-removed",
+        "deferral-reversible",
+    ] {
+        assert!(
+            ids.contains(&known),
+            "the vocabulary carries {known}: {ids:?}"
+        );
+    }
+    let mut args = vec!["policy", "explain"];
+    args.extend(ids.iter().copied());
+    let explained = common::run(&at_root(""), &args);
+    assert!(
+        explained.status.success(),
+        "every smell id resolves through `policy explain`: {}",
+        common::stderr(&explained)
+    );
+}
+
 #[test]
 fn the_refusal_id_census_discriminates() {
     let consts = std::collections::BTreeMap::from([
