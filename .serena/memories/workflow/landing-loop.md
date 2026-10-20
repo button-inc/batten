@@ -458,7 +458,9 @@ provably reach the value the code reads, the run measured nothing.
   run as written, never wrapped in bespoke retry or pre-check logic, and
   `cargo run -p batten -- land lap` typed by hand is that wrapping with the loop's
   own bookkeeping removed. `main` advancing under the branch is the loop working.
-  The engine pin has no gate against this today (CLOUD-2499).
+  It is also refused: `cargo run loose` (`batten.toml:925`) denies a bare `cargo`
+  on the mediated surface with `require_via = "mise"`, so the task's own inner
+  call is allowed and yours is not. See `mem:toolchain-and-hooks`.
 
 ## Measured 2026-10-07 (CLOUD-2090)
 

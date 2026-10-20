@@ -49,10 +49,21 @@ gate on `cargo run`.
 - The **toolchain** pin is gated. The vendored `pinned-toolchain` preset ships
   `pin reach loose` (`crates/batten/src/policy/presets/pinned-toolchain/pinned-program-via-the-pin.rego:28`)
   and it fires on a bare `batten` off `PATH`.
-- The **engine** pin is not. `batten.toml`'s `engine = { release = "vX" }` says
-  which batten _adjudicates_; nothing refuses a call that reaches around it.
-  `cargo run -p batten` is that hole, and `pin reach loose` passes it correctly —
-  `cargo` IS pin-provided, so `cargo run` is reached through the pin. CLOUD-2499.
+- The **engine** pin — `batten.toml`'s `engine = { release = "vX" }`, which says
+  which batten _adjudicates_ — is fenced too, but by the OTHER rule, and this is
+  the part that is easy to get wrong. `pin reach loose` does pass `cargo run`,
+  correctly: `cargo` is itself pin-provided. What refuses it is `cargo run loose`
+  (`batten.toml:925`), a `deny` shape row on the mediated-call surface with
+  `pattern = "cargo"` and **`require_via = "mise"`**. So a bare
+  `cargo run -p batten` from an agent's shell is denied, while `mise run land`'s
+  own `cargo run --quiet -p batten` is allowed because it arrives through mise.
+  That key IS the governed-task-vs-agent-shell distinction; do not go looking for
+  a new predicate for it (CLOUD-2499 was filed claiming there was none and
+  cancelled on this evidence). Its stated subject is toolchain SELECTION rather
+  than the program (`batten.toml:908-912`), and fencing the engine pin is the
+  side effect. The gap that remains is `engine update` building a source pin with
+  a bare `cargo` from INSIDE the engine, where no mediated-call rule reaches —
+  CLOUD-2172, still open.
 
 **`mise exec --` is NOT a leftover of the bash era.** The reason is environment
 composition, and it is measured in the preset's own header
