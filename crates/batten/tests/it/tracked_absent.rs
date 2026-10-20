@@ -158,7 +158,7 @@ fn package_task(version: &str) -> String {
 /// `package_task_halves`'s reason, for the family `package_task_halves` cannot
 /// serve: the cases whose `run` names no version at all — whether by carrying no
 /// URL or by carrying a `latest` one. They differ from each other by as little
-/// as three spaces, and inline those sat at column 85 of an escaped one-liner.
+/// as three spaces, and inline those sat near the end of an escaped one-liner.
 /// Here the difference is the argument.
 fn package_manifest(run: &str) -> String {
     format!("[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = {run}\n")
