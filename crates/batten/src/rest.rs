@@ -1438,20 +1438,28 @@ mod tests {
         assert!(row.probe);
     }
 
-    /// `declare` ignores a later call, so the forge this sets is the one every
-    /// case in the binary that declares one sets.
+    /// `declare` ignores a later call, and other cases in this binary declare
+    /// forges of their own, so the readers are held to whichever forge won rather
+    /// than to the one this case offered.
     #[test]
     fn the_declared_forge_answers_its_credential_and_its_graded_statuses() {
-        // THE SAME NAMES `land`'s dialling case declares, so whichever case in
-        // this binary reaches `declare` first sets the one forge both expect.
-        let forge = Forge {
+        declare(Forge {
             credential_names: vec![String::from("GH_TOKEN"), String::from("GITHUB_TOKEN")],
             ..Forge::default()
-        };
-        declare(forge.clone());
-        assert_eq!(declared(), Some(&forge));
-        assert_eq!(declared_credential(), credential(Some(&forge)));
-        assert!(declared_nothing_graded(422));
-        assert!(!declared_nothing_graded(404));
+        });
+        let ruling = declared().expect("a declared forge");
+        assert_eq!(declared_credential(), credential(Some(ruling)));
+        for status in [422, 404] {
+            assert_eq!(
+                declared_nothing_graded(status),
+                nothing_graded(Some(ruling), status),
+                "status {status}"
+            );
+        }
+        assert_ne!(
+            declared_nothing_graded(422),
+            declared_nothing_graded(404),
+            "the cases tell a graded status from an ungraded one"
+        );
     }
 }
