@@ -231,4 +231,30 @@ mod tests {
         assert!(printed.contains("\"/repo\""), "{printed}");
         assert!(printed.contains("\"<reader>\""), "{printed}");
     }
+
+    /// [`Stop`] sets the flag when it drops, which is what makes a panicking
+    /// body end the watcher instead of hanging the join (CLOUD-2376).
+    ///
+    /// **ASSERTED ON THE GUARD, NOT THROUGH [`around`], AND THAT IS THE POINT.**
+    /// A case that panics inside a watched body is the honest end-to-end shape,
+    /// and it is unrunnable as a gate: without the guard it does not fail, it
+    /// HANGS, so a runner reports could-not-look over the one mutation that
+    /// matters. Measured — `drop` replaced with `()` timed the suite out at 42s
+    /// rather than failing. The contract is one flag and one drop, so it is
+    /// asserted where it can fail fast.
+    ///
+    /// The end-to-end half is covered by what the fix changed:
+    /// `prune_watch::the_arm_watches_past_the_gate` under a mutated collection
+    /// went from past 100s and killed, to 21.1s and failed.
+    ///
+    /// Fails by: a `drop` that does not store, or stores `false`.
+    #[test]
+    fn the_watcher_is_stopped_however_the_body_leaves() {
+        let stop = AtomicBool::new(false);
+        drop(Stop(&stop));
+        assert!(
+            stop.load(Ordering::Relaxed),
+            "the guard's drop is what ends the watcher on an unwind"
+        );
+    }
 }
