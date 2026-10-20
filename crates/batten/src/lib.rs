@@ -322,7 +322,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     let own_surface = matches!(command, Some(Command::Engine { .. }));
     let may_follow = !own_surface && std::env::var_os(ENGINE_UPDATED).is_none();
     let followed = if may_follow {
-        follow_pin(hook_path, out)?
+        follow_pin(hook_path)?
     } else {
         Followed::Nothing
     };
@@ -331,9 +331,9 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // authority, so without this it would spawn the crashing child a second
     // time to learn what this one already did. Exhaustive, so a fourth
     // outcome cannot quietly read as "nothing was handed".
-    let drained = match followed {
+    let pinned = match followed {
         Followed::Answered(code) => return Ok(code),
-        Followed::Crashed(raw) => Some(raw),
+        Followed::Pinned(target) => Some(target),
         Followed::Nothing => None,
     };
     match command {
@@ -392,7 +392,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             supplied_instant(instant.as_deref())?,
             mode,
             &overrides,
-            drained.as_deref(),
+            pinned,
             out,
             err,
         ),
@@ -670,20 +670,11 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 /// A source pin is built over the running binary as before, and never on the
 /// hook path.
 ///
-/// `out` serves the HOOK BRANCH ONLY, which holds the child's STDOUT to judge
-/// its code before writing it. Every other verb is a transparent passthrough:
-/// its child inherits this process's own descriptors, so its bytes never travel
-/// through this writer and nothing a caller injects here will catch them.
-///
-/// **Stderr is not withheld, and that is the same choice the sibling hand-off
-/// makes.** A harness reads the DECISION off stdout — that is the document
-/// CLOUD-2376 exists to keep a crashing child out of — while stderr is
-/// diagnostic and is the child's own voice whether or not its code is one the
-/// table names. [`Diagnostics::Keep`] is not the alternative: it folds stderr
-/// in after stdout, which would put a child's prose inside the JSON document
-/// the host parses.
-///
-/// [`Diagnostics::Keep`]: exec::Diagnostics::Keep
+/// **IT WRITES NOTHING, on either branch.** Every non-hook verb is a
+/// transparent passthrough whose child inherits this process's own descriptors,
+/// so its bytes never travel through a writer here at all; and the hook branch
+/// no longer spawns, so it has no child's bytes to hold. [`follow_to_pinned`]
+/// does the holding, where the payload the child must be handed already is.
 ///
 /// Best-effort on the READ: outside a repository, or with no readable
 /// `batten.toml`, there is no pin to honour and the verb runs as it is. The
@@ -696,7 +687,7 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT follow-pin-passes-a-crash-through|s@^    if hook_path {$@    if false {@|a_crashing_checkout_build_never_fails_the_hook_open
 //MUTANT fetch-failure-always-falls-through|s@^                Err(_) if !may_build => return Ok(Followed::Nothing),$@                Err(_) => return Ok(Followed::Nothing),@|a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path
-fn follow_pin(hook_path: bool, out: &mut dyn Write) -> Result<Followed> {
+fn follow_pin(hook_path: bool) -> Result<Followed> {
     // THE HOOK FOLLOWS A RELEASE PIN BUT NEVER BUILDS A SOURCE ONE (CLOUD-2062,
     // narrowed under CLOUD-2059), and that is the same bit rather than a second
     // one. Two parameters that are provably each other's negation can be passed
@@ -779,27 +770,12 @@ fn follow_pin(hook_path: bool, out: &mut dyn Write) -> Result<Followed> {
     // the refusal floor below to decide the call. Stdin is inherited exactly
     // as before — it is where the envelope arrives.
     if hook_path {
-        // THE PARENT OWNS THE PAYLOAD BEFORE THE CHILD CAN DRAIN IT. Inheriting
-        // stdin here was wrong in the one case this branch exists for: the
-        // child reads the envelope to EOF, and a crash then left the
-        // fall-through's own `read_envelope` with nothing — a could-not-look
-        // that ALLOWS, so the hook answered `0` over a call nothing judged and
-        // the floor below was never reached. Reading first and replaying the
-        // bytes is exactly what `hand_to_checkout_build` already does with
-        // `handoff.raw`; the two hand-offs are siblings and now spawn alike.
-        let mut raw = String::new();
-        std::io::Read::read_to_string(&mut std::io::stdin().lock(), &mut raw)?;
-        let published = [(String::from(ENGINE_UPDATED), Some(String::from("1")))];
-        let Some((code, stdout)) =
-            exec::piped_argv(&root, &argv, &raw, exec::Diagnostics::Pass, &published)
-        else {
-            return Ok(Followed::Crashed(raw));
-        };
-        let Some(decided) = ExitCode::decided(code) else {
-            return Ok(Followed::Crashed(raw));
-        };
-        out.write_all(stdout.as_bytes())?;
-        return Ok(Followed::Answered(decided));
+        // RESOLVED HERE, SPAWNED WHERE THE PAYLOAD IS. The child is handed this
+        // call's envelope, and the one reader of stdin is `read_envelope` —
+        // which streams it, spills what is over the bound, and owns what a
+        // harness sent. Spawning before that read makes the child the reader
+        // instead, and a crash then leaves the fall-through nothing to judge.
+        return Ok(Followed::Pinned(FollowTarget { root, argv }));
     }
     // TEED EVERYWHERE ELSE, because the pinned engine's output IS this
     // invocation's output, live. `batten exec -- cmd` keeps its child's bytes
@@ -829,24 +805,41 @@ fn follow_pin(hook_path: bool, out: &mut dyn Write) -> Result<Followed> {
 /// Carried as a value rather than published into the environment, so no child
 /// of this process can inherit a mark about a run that is not its own.
 ///
-/// **`Crashed` CARRIES THE PAYLOAD, and that is a correctness term rather than
-/// a convenience.** The followed child is handed this call's envelope, and a
-/// child that reads it has consumed the stream it arrived on. Measured: with
-/// the child inheriting stdin, a crash left `run_hook`'s own `read_envelope`
-/// at EOF, which is a could-not-look that ALLOWS — so the refusal floor this
-/// fall-through exists to reach was never reached, and the hook answered `0`
-/// over a call nothing had judged. The parent reads the payload before it
-/// spawns and hands it back here, so the floor decides the call it was given.
+/// **ON THE HOOK PATH THIS FUNCTION RESOLVES AND DOES NOT SPAWN**, and that is
+/// a correctness term rather than a tidy-up. The followed child is handed this
+/// call's envelope, so it must be handed the BYTES — a child that inherits
+/// stdin reads the stream to EOF, and a crash then left `run_hook`'s own
+/// `read_envelope` with nothing. That is a could-not-look, and a could-not-look
+/// ALLOWS: measured, the hook answered `0` over a call nothing had judged, and
+/// the refusal floor the fall-through exists to reach was never reached.
+///
+/// Reading the payload HERE to replay it was the first fix and the wrong place
+/// for it: it holds whole what CLOUD-2224 streams and spills, it reads stdin
+/// twice over, and its own read error bypasses `read_envelope`'s classification
+/// of what an unreadable stream means. So the hook path returns the target it
+/// resolved and `run_hook` spawns it once the envelope is in hand — which is
+/// also where the load-fault hand-off already lives, so the two are siblings in
+/// one place and "has this call been handed off" stops being a value threaded
+/// through the dispatch.
 #[derive(Debug, Clone)]
 enum Followed {
     /// Nothing was stale, or there was nothing to follow to: run the verb.
     Nothing,
     /// The pinned engine ran and answered; its code is this invocation's.
+    /// Never produced on the hook path, which does not spawn here.
     Answered(ExitCode),
-    /// The pinned engine ran and exited outside the §7 table, so it decided
-    /// nothing. Its output was dropped, and the payload it was handed comes
-    /// back so the verb can fall through over the same call.
-    Crashed(String),
+    /// The hook path resolved a pinned engine and left it unspawned: the root
+    /// it was resolved from, and the argv to run it with.
+    Pinned(FollowTarget),
+}
+
+/// A pinned engine the hook path resolved but has not run (CLOUD-2376).
+#[derive(Debug, Clone)]
+struct FollowTarget {
+    /// The worktree the pin was read from, which the spawn resolves against.
+    root: PathBuf,
+    /// The pinned engine followed by this invocation's own operands.
+    argv: Vec<String>,
 }
 
 /// `batten engine update` (CLOUD-2287, CLOUD-2279): bring every batten
@@ -18607,6 +18600,58 @@ struct Recency<'a> {
     now: std::time::SystemTime,
 }
 
+/// Both halves of this call's receipt evidence, resolved at the boundary.
+///
+/// One unit rather than two because they are one question asked of one
+/// partition: the required checks split into the agent-sourced and the
+/// receipt-keyed, and everything below — the store, the bounds, the
+/// judgeability of a written path — is read once and consumed by both. Keeping
+/// them apart in `run_hook` meant seven locals living across the rest of a
+/// function none of them is used in.
+///
+/// Resolved HERE and not inside `adjudicate` for that function's standing
+/// reason: it is contractually pure, and this reads a file and two git refs.
+fn receipt_evidence(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    instant: std::time::SystemTime,
+) -> (hook::ReceiptFacts, hook::AgentFacts) {
+    let required = policy.required_checks_for(envelope);
+    let judgeable = envelope.writes.as_deref().is_none_or(receipt::judgeable);
+    // CLOUD-988's declared bounds, resolved beside the checks they qualify.
+    let max_ages = policy.max_age_for(envelope);
+    // An AGENT-SOURCED check is resolved from its own record rather than from the
+    // receipt store (CLOUD-776), so the two are split before either is read: a
+    // repository whose required checks are all agent-sourced must not pay
+    // `receipt::verdicts`'s git work for questions it is not asking.
+    let (sourced, receipted): (Vec<_>, Vec<_>) = required
+        .iter()
+        .partition(|(check, _)| policy.agent_fact(check).is_some());
+    let receipted: std::collections::BTreeMap<_, _> = receipted
+        .into_iter()
+        .map(|(check, key)| (check.clone(), *key))
+        .collect();
+    // Where each agent-sourced record lives on THIS call, resolved once for both
+    // readers (CLOUD-859). A record is filed under the subject its receipt row's
+    // `key` names, so the boundary resolves that subject here — `adjudicate` may
+    // not look, and resolving it per reader would let the two disagree.
+    let sourced_store =
+        receipt::sourced_store(&sourced, policy.named_receipt_subject(envelope).as_deref());
+    let receipts: hook::ReceiptFacts = receipt_facts(
+        policy,
+        envelope,
+        &sourced,
+        sourced_store.as_ref(),
+        &receipted,
+        &Recency {
+            max_ages: &max_ages,
+            now: instant,
+        },
+        judgeable,
+    );
+    (receipts, agent_records(&sourced, sourced_store.as_ref()))
+}
+
 fn receipt_facts(
     policy: &hook::Policy,
     envelope: &hook::Envelope,
@@ -18921,19 +18966,23 @@ fn run_hook(
     instant: std::time::SystemTime,
     mode: Mode,
     overrides: &Overrides,
-    // The payload a crashed follow already read off stdin (CLOUD-2376). `Some`
-    // says this call was handed to this checkout's build once and it decided
-    // nothing, so the load-fault handoff below must not spawn it again — AND
-    // that stdin is spent, so the envelope is read from these bytes instead.
-    drained: Option<&str>,
+    // The pinned engine `follow_pin` resolved and deliberately did not spawn
+    // (CLOUD-2376): the envelope has to be read before a child can be handed it.
+    pinned: Option<FollowTarget>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let _memos = hook_call_memos();
-    let Some((raw, mut envelope, spilled, _spool)) = read_envelope(harness, mode, err, drained)?
-    else {
+    let Some((raw, mut envelope, spilled, _spool)) = read_envelope(harness, mode, err)? else {
         return Ok(ExitCode::Success);
     };
+    // THE FOLLOW, NOW THAT THE PAYLOAD EXISTS. An answer the §7 table names is
+    // this invocation's; anything else decided nothing and falls through to the
+    // floor below, over the envelope this process still owns.
+    let already_handed = pinned.is_some();
+    if let Some(code) = follow_to_pinned(pinned, &raw, out)? {
+        return Ok(code);
+    }
     // THE WRITE TARGET IS READ AS THE REPOSITORY READS IT (CLOUD-1133), and this
     // is the one place that can do it: `decode` is pure and has no repository,
     // and the readers below — the protected gate, and any module over
@@ -19096,7 +19145,7 @@ fn run_hook(
     let (policy, waivers, pruning) = if adjudicable {
         // Built in the arm that uses it: the handoff is the config load's input,
         // and the other arm loads nothing.
-        let handoff = Handoff::new(&raw, drained.is_some());
+        let handoff = Handoff::new(&raw, already_handed);
         match hook_config_or_floor(overrides, harness, &envelope, handoff, mode, out, err)? {
             Ok(loaded) => loaded,
             Err(code) => return Ok(code),
@@ -19128,40 +19177,7 @@ fn run_hook(
     // the same "nothing to answer" absence a failed lookup produces. The
     // `check-ignore` behind it runs only when a write-triggered row actually
     // selected, so a repository declaring none pays nothing for it.
-    let required = policy.required_checks_for(&envelope);
-    let judgeable = envelope.writes.as_deref().is_none_or(receipt::judgeable);
-    // CLOUD-988's declared bounds, resolved beside the checks they qualify.
-    let max_ages = policy.max_age_for(&envelope);
-    // An AGENT-SOURCED check is resolved from its own record rather than from the
-    // receipt store (CLOUD-776), so the two are split before either is read: a
-    // repository whose required checks are all agent-sourced must not pay
-    // `receipt::verdicts`'s git work for questions it is not asking.
-    let (sourced, receipted): (Vec<_>, Vec<_>) = required
-        .iter()
-        .partition(|(check, _)| policy.agent_fact(check).is_some());
-    let receipted: std::collections::BTreeMap<_, _> = receipted
-        .into_iter()
-        .map(|(check, key)| (check.clone(), *key))
-        .collect();
-    // Where each agent-sourced record lives on THIS call, resolved once for both
-    // readers (CLOUD-859). A record is filed under the subject its receipt row's
-    // `key` names, so the boundary resolves that subject here — `adjudicate` may
-    // not look, and resolving it per reader would let the two disagree.
-    let sourced_store =
-        receipt::sourced_store(&sourced, policy.named_receipt_subject(&envelope).as_deref());
-    let receipts: hook::ReceiptFacts = receipt_facts(
-        &policy,
-        &envelope,
-        &sourced,
-        sourced_store.as_ref(),
-        &receipted,
-        &Recency {
-            max_ages: &max_ages,
-            now: instant,
-        },
-        judgeable,
-    );
-    let agent_sourced = agent_records(&sourced, sourced_store.as_ref());
+    let (receipts, agent_sourced) = receipt_evidence(&policy, &envelope, instant);
     // The key evidence (CLOUD-446), resolved on the same terms and for the same
     // reason: two git queries a pure `adjudicate` cannot make, spent only when a
     // `requires_key` row has already selected this command. A repository
@@ -19493,11 +19509,6 @@ fn read_envelope(
     harness: hook::Harness,
     mode: Mode,
     err: &mut dyn Write,
-    // The bytes a crashed follow already took off stdin (CLOUD-2376). Stdin is
-    // read exactly once per process, so a fall-through that re-read it found
-    // EOF and allowed; these bytes are the same stream, replayed through the
-    // same streaming reader so the bound and the spill behave identically.
-    drained: Option<&str>,
 ) -> Result<Option<HookRead>> {
     // STREAMED, NEVER HELD WHOLE (CLOUD-2224). Measured: reading a 50 MB payload
     // whole peaked at 150 MiB; streamed, at the process baseline. The bound is
@@ -19512,17 +19523,7 @@ fn read_envelope(
     // envelope pins; `rewrite_post_tool` leaves alone a spilled result that a
     // raised bound would keep.
     let bound = capture::DEFAULT_RESULT_MAX_TOKENS;
-    let read = drained.map_or_else(
-        || stream_input::read(std::io::stdin().lock(), &spool, bound, o200k::tokens),
-        |bytes| {
-            stream_input::read(
-                std::io::Cursor::new(bytes.as_bytes()),
-                &spool,
-                bound,
-                o200k::tokens,
-            )
-        },
-    );
+    let read = stream_input::read(std::io::stdin().lock(), &spool, bound, o200k::tokens);
     let Ok(streamed) = read else {
         let _ = std::fs::remove_dir_all(&spool);
         // STDIN THAT WOULD NOT READ IS NOT A PAYLOAD THAT WOULD NOT DECODE: an
@@ -19877,6 +19878,52 @@ impl<'a> Handoff<'a> {
             already_handed,
         }
     }
+}
+
+/// Run the pinned engine [`follow_pin`] resolved, over the envelope this
+/// process has already read (CLOUD-2376).
+///
+/// The hook's FIRST hand-off, and the sibling of [`hand_to_checkout_build`]
+/// below — same spawn, same decide-before-write, same reason. It is here rather
+/// than in `follow_pin` because the child is handed `raw` on a pipe: stdin is
+/// read exactly once per process, by `read_envelope`, and a child that read it
+/// instead left the fall-through nothing to judge.
+///
+/// `None` means this invocation still has to decide the call for itself —
+/// nothing was pinned, the engine would not spawn, or it exited outside the §7
+/// table and so decided nothing. In every one of those the payload is intact
+/// and the floor below answers over it.
+///
+/// # Errors
+///
+/// Only a write of the child's accepted answer to `out`.
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT follow-writes-before-deciding|s@^    let Some(decided) = ExitCode::decided(code) else {$@    let Some(decided) = Some(ExitCode::from_code(code).unwrap_or(ExitCode::Usage)) else {@|a_crashing_followed_build_never_fails_the_hook_open
+fn follow_to_pinned(
+    pinned: Option<FollowTarget>,
+    raw: &str,
+    out: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let Some(target) = pinned else {
+        return Ok(None);
+    };
+    let published = [(String::from(ENGINE_UPDATED), Some(String::from("1")))];
+    let Some((code, stdout)) = exec::piped_argv(
+        &target.root,
+        &target.argv,
+        raw,
+        exec::Diagnostics::Pass,
+        &published,
+    ) else {
+        return Ok(None);
+    };
+    // DECIDE, THEN WRITE. Nothing of the child's has reached `out` yet, so a
+    // code the table does not name costs nothing to drop whole.
+    let Some(decided) = ExitCode::decided(code) else {
+        return Ok(None);
+    };
+    out.write_all(stdout.as_bytes())?;
+    Ok(Some(decided))
 }
 
 /// Hand a call this engine cannot judge to the hook authority's own checkout
