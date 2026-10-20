@@ -366,12 +366,23 @@ fn a_package_task_whose_only_step_is_empty_is_clean() {
 }
 
 /// `#MUTANT hk-package-blank-step-counted` reddens here. Whitespace is not a
-/// command, and this is the shape that cleared both emptiness tests the two
-/// cases above anchor — the measurement that turned them into `is_step`.
+/// command, and this is the shape that cleared the string body's emptiness
+/// test — the measurement that turned all three tests into `is_step`.
 #[test]
-fn a_package_task_whose_only_step_is_blank_is_clean() {
+fn a_package_task_whose_run_is_blank_is_clean() {
     let manifest = "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = \"   \"\n";
     let root = fixture("hk-package-blank", &[("mise.toml", manifest)], &[]);
+    clean(&root);
+}
+
+/// The ARRAY spelling of the blank step, which no row above reaches: the case
+/// over `run = "   "` exercises only the string half of `is_step`'s two call
+/// sites. Without this one, re-inlining a guard on the array half alone would
+/// bring arm E's false refusal back and land green.
+#[test]
+fn a_package_task_whose_only_step_is_blank_is_clean() {
+    let manifest = "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = [\"   \"]\n";
+    let root = fixture("hk-package-blank-step", &[("mise.toml", manifest)], &[]);
     clean(&root);
 }
 

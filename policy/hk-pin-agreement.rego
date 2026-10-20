@@ -64,7 +64,7 @@
 #MUTANT hk-package-stepless-run-fires|s@^\tcount(package_steps) > 0$@\ttrue@|a_package_task_with_an_empty_run_is_clean
 #MUTANT hk-package-empty-run-string-counted|s@^\tis_step(package_run)$@\tis_string(package_run)@|a_package_task_with_an_empty_run_string_is_clean
 #MUTANT hk-package-empty-step-counted|s@^\tis_step(step)$@\tis_string(step)@|a_package_task_whose_only_step_is_empty_is_clean
-#MUTANT hk-package-blank-step-counted|s@^\ttrim_space(s) != ""$@\ts != ""@|a_package_task_whose_only_step_is_blank_is_clean
+#MUTANT hk-package-blank-step-counted|s@^\ttrim_space(s) != ""$@\ts != ""@|a_package_task_whose_run_is_blank_is_clean
 #
 #MUTANT-SUITE crates/batten/tests/it/tracked_absent.rs
 
@@ -620,10 +620,23 @@ test_a_package_task_whose_only_step_is_empty_decides_nothing_here if {
 		with data.batten.patterns as pattern
 }
 
-test_a_package_task_whose_only_step_is_blank_decides_nothing_here if {
+test_a_package_task_whose_run_is_blank_decides_nothing_here if {
 	count(violation) == 0 with input as tree_with_tasks(
 		{"hk": "1.56.1"},
 		{"pkl-package": {"run": "   "}},
+		[amends_line("1.56.1")],
+	)
+		with data.batten.patterns as pattern
+}
+
+# The array spelling of the blank step. Each of the four cases above reaches
+# exactly one of `is_step`'s two call sites, so neither call site is covered by
+# the other's shape: `[]` and `""` pair off, and so do `[""]` and `"   "` — this
+# is the fourth corner.
+test_a_package_task_whose_only_step_is_blank_decides_nothing_here if {
+	count(violation) == 0 with input as tree_with_tasks(
+		{"hk": "1.56.1"},
+		{"pkl-package": {"run": ["   "]}},
 		[amends_line("1.56.1")],
 	)
 		with data.batten.patterns as pattern
