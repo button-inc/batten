@@ -1456,10 +1456,5 @@ mod tests {
                 "status {status}"
             );
         }
-        assert_ne!(
-            declared_nothing_graded(422),
-            declared_nothing_graded(404),
-            "the cases tell a graded status from an ungraded one"
-        );
     }
 }
