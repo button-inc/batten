@@ -1700,7 +1700,8 @@ fn source_args(
     // built and tested 157 unmutated baselines, most for sources with no
     // mutant in that shard: measured on #1132, the shards ran past their
     // 120-minute bound and only one finished. The book's precondition is a
-    // suite already green on the unmutated tree.
+    // suite already green on the unmutated tree; `--timeout` stands in for the
+    // per-mutant bound the baseline would have measured.
     if let Some((k, n)) = local {
         args.extend([
             String::from("--shard"),
@@ -1708,33 +1709,10 @@ fn source_args(
             String::from("--sharding"),
             String::from("round-robin"),
             String::from("--baseline=skip"),
+            String::from("--timeout"),
+            SHARD_MUTANT_TIMEOUT_SECS.to_string(),
         ]);
     }
-    // THE SAME BOUND ON BOTH PATHS, and it used to ride inside the shard arm
-    // (CLOUD-2376). A shard needs one because it skips the baseline that would
-    // measure it. The unsharded run looked like it needed none, because
-    // cargo-mutants derives one from the baseline — but A BASELINE NEVER RUNS THE
-    // FAILURE PATH A MUTATION EXISTS TO TRIGGER, so a bound taken from it can be
-    // shorter than the assertion that catches the mutant, and the catch is killed
-    // before it fires.
-    //
-    // Measured on `collect.rs:1319` (`collect_toward_max -> None`): the derived
-    // bound was 46s; `prune_watch.rs`'s `a_step_run_build_is_watched` waits four
-    // `disk_watch::TICK`s — 20s — for a collection the mutation prevents, and the
-    // suite was killed mid-assertion. The verdict was `suite-timed-out`, which
-    // `Verdict::could_not_look` classes as the runner failing to LOOK
-    // (CLOUD-1267) rather than as anything about coverage. So the sweep reported
-    // it could not judge a mutant its own suite catches — and reported it only
-    // locally, since the sharded CI run already carried this bound and caught it.
-    // `mise.toml`'s `mutant:changed` claims local and CI parity; this is that
-    // claim holding rather than being asserted.
-    //
-    // Shortening the wait instead was the tempting fix and is the wrong one: the
-    // watcher samples every five seconds, so four ticks is the margin, and buying
-    // a bound with flakiness trades a real catch for a false one. A bound tight
-    // enough to kill a catch buys a false could-not-look, which is the direction
-    // this file exists to refuse.
-    args.extend([String::from("--timeout"), MUTANT_TIMEOUT_SECS.to_string()]);
     // `-v`: a line per mutant as it is judged, caught ones included, so the
     // log says how far a run got against what it was given.
     args.extend([
@@ -1746,13 +1724,18 @@ fn source_args(
     args
 }
 
-/// One mutant's test bound, on every run: the book's CI recipe's `--timeout 300`.
+/// One mutant's test bound in a sharded run, which skips the baseline that
+/// would otherwise measure it: the book's CI recipe's `--timeout 300`.
 ///
-/// A shard needs it because `--baseline=skip` leaves nothing to measure one
-/// from. An unsharded run needs it because what the baseline measures is the
-/// UNMUTATED suite, which never runs the slow failure path a mutation exists to
-/// trigger — so the derived bound can be shorter than the catch (CLOUD-2376).
-const MUTANT_TIMEOUT_SECS: u64 = 300;
+/// **Deliberately NOT extended to the unsharded run (CLOUD-2376).** It was, on
+/// the theory that a bound measured on the unmutated suite can be shorter than a
+/// slow catch. The measurement refuted it: with `--timeout 300` the
+/// `collect.rs:1319` mutant still ran the full 300s, where its baseline tests in
+/// 9s. It does not catch slowly — it HANGS, on a test deadlock the mutation
+/// opens, and a larger bound only buys a more expensive way to learn that. The
+/// unsharded run keeps the measured bound, which reports the same verdict five
+/// times sooner.
+const SHARD_MUTANT_TIMEOUT_SECS: u64 = 300;
 
 /// `$MUTANT_SHARD`'s `k/n`, or `None` where it is not one (`k < n`, `n > 0`).
 #[must_use]

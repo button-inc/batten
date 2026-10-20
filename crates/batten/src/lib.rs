@@ -745,33 +745,7 @@ fn follow_pin(hook_path: bool) -> Result<Followed> {
         // same value. The hook's load-fault hand-off asks about somebody
         // else's checkout and so asks the other question.
         (None, Some(digest)) => match engine::own_build(&root) {
-            Some(build) => {
-                // NEVER THIS IMAGE, AND THE PREFIX TEST ABOVE DOES NOT COVER IT
-                // (CLOUD-2376). `exe.starts_with(&root)` asks CONTAINMENT — is
-                // this build inside the tree it judges — and it answers `false`
-                // for a `CARGO_TARGET_DIR` pointing outside the worktree. That
-                // is exactly the redirect `own_build` honours and
-                // `a_source_pin_is_followed_into_a_redirected_target_dir`
-                // stages, so the pin resolved to the running binary: every
-                // non-hook verb re-exec'd itself with cwd forced to `root`, and
-                // the hook handed the call to the binary the pin had just
-                // called stale and adopted its answer. On `main` this could not
-                // happen because `checkout_build` looked under
-                // `root/target/release`, which the redirect leaves empty.
-                //
-                // Identity is the honest predicate, which is what `already_ran`
-                // says for the other hand-off; asked on the RESOLVED path, not
-                // on a prefix of it. Falling through leaves the pre-parse
-                // refusal to name the stale pin, which is its job.
-                if already_ran(None, &build)? {
-                    return Ok(Followed::Nothing);
-                }
-                build
-            }
-            // NOT THE SAME QUESTION: here nothing was built, `install_source`
-            // has just replaced the image at `exe`, and re-execing that path is
-            // the point — it is the new engine, which is why `exe` was read
-            // before the swap.
+            Some(build) => build,
             None if may_build => {
                 install_source(&root, digest, &mut std::io::sink())?;
                 exe
