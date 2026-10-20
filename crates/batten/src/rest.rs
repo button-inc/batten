@@ -1442,7 +1442,8 @@ mod tests {
     /// forges of their own (any config load with a `[forge]` table does), so
     /// the graded statuses are held to whichever forge won, read off its own
     /// field rather than through the helper the readers share. This case
-    /// declares no list, so it never changes the answer another case reads.
+    /// declares no list, so it never changes the graded answer another case
+    /// reads; its credential names are the ones `land`'s dialling case declares.
     #[test]
     fn the_declared_forge_answers_its_credential_and_its_graded_statuses() {
         declare(Forge {
