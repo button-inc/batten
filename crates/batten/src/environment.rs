@@ -54,25 +54,24 @@ const DISPOSABLE: &str = "disposable";
 /// Read at the point of decision rather than resolved once into config: it is not
 /// a repository fact and giving it a config seat would invite exactly the
 /// committed-override shape the header rules out.
-//MUTANT-SUITE crates/batten/tests/it/wiring_reclaim.rs
 #[must_use]
 pub fn disposable() -> bool {
-    licenses(std::env::var(KEY).ok().as_deref())
-}
-
-/// The predicate over its own input, extracted from the environment read.
-///
-/// `rules/rust.md`'s rule for a condition the test cannot create: `set_var` is
-/// `unsafe` and `unsafe` is forbidden here, so a case that reached for the real
-/// environment could not be written at all. What decides is the comparison, and
-/// that is what the cases assert.
-fn licenses(value: Option<&str>) -> bool {
-    value == Some(DISPOSABLE)
+    std::env::var(KEY).is_ok_and(|value| value == DISPOSABLE)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The predicate over its own input, extracted from the environment read.
+    ///
+    /// `rules/rust.md`'s rule for a condition the test cannot create:
+    /// `set_var` is `unsafe` and `unsafe` is forbidden here, so a case that
+    /// reached for the real environment could not be written at all. What decides
+    /// is the comparison, and that is what is asserted.
+    fn licenses(value: Option<&str>) -> bool {
+        value == Some(DISPOSABLE)
+    }
 
     #[test]
     fn only_the_exact_value_licenses_a_destructive_repair() {
