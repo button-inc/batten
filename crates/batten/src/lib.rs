@@ -28124,6 +28124,9 @@ fn claimed_fork_point(here: &Path, overrides: &Overrides) -> Option<String> {
     git::merge_base(here, &target).ok()?
 }
 
+/// `batten config`'s verbs. `config lint`'s exact output is pinned over the
+/// compiled binary, so its suite judges a mutant here (CLOUD-2303).
+//MUTANT-SUITE crates/batten/tests/it/config_lint.rs
 fn run_config(
     command: &ConfigCommand,
     overrides: &Overrides,
