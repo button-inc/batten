@@ -1494,8 +1494,20 @@ mod tests {
             resolve_address(&dir, domain, &hollow, None),
             (Resolution::Corrupt, Provenance::Store)
         );
-        // A store "directory" that is a file cannot be looked into: could not
-        // look, never absent.
+    }
+
+    /// Fails by: a store "directory" that is a file read as an empty store.
+    #[test]
+    fn a_store_directory_that_is_a_file_cannot_be_looked_into() {
+        if !cfg!(unix) {
+            // Windows answers a path under a file with `NotFound`, so there the
+            // store reads as absent: CLOUD-2503 owns that divergence.
+            return;
+        }
+        let dir = crate::scratch::scratch("store-resolve-blocked");
+        let domain = identity::AddressDomain::Capture;
+        let good = identity::ContentAddress::of(domain, b"payload");
+        // Could not look, never absent.
         let blocked = dir.join("not-a-dir");
         std::fs::write(&blocked, b"").unwrap();
         assert_eq!(
