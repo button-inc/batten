@@ -54,24 +54,17 @@
 #MUTANT hk-amends-tag-disagreement-passes|s@^\ttagged.version != pin$@\tfalse@|an_amends_tag_segment_naming_another_version_is_refused
 #
 # THE OTHER DIRECTION. Every row above weakens a refusal into silence; these
-# three turn silence into a refusal, and their cases assert CLEAN, so each
-# reddens by a finding appearing rather than disappearing. Arm E can accuse a
-# `mise.toml` that declares no fetch URL at all: drop its step guard and a task
-# yielding no step reaches it, and drop either emptiness test in `package_steps`
-# and an empty string reaches it as a step that names nothing. All three shapes
-# are ones mise cannot execute, which is a manifest defect and not this module's
-# question.
-#
-# ARM B IS THE SAME SHAPE AND OWES NO SUCH ROW, which is worth saying because an
-# earlier version of this block claimed arm E was the only arm resting on a zero
-# count. Arm B is `pin; lines; count(amends) == 0`, exactly that shape — but its
-# surface is a tracked `hk.pkl` that WAS read, where naming no version is the
-# disagreement itself, so the refusal is the answer. Arm E's surface can be
-# empty while saying nothing, because whether the task exists at all is
-# `verify_chain.rs`'s question and never this module's.
+# four turn silence into a refusal, and their cases assert CLEAN, so each reddens
+# by a finding appearing. Arm E can accuse a `mise.toml` that declares no fetch
+# URL at all: drop its step guard and a task yielding no step reaches it, weaken
+# either `is_step` call and an empty entry does, weaken `is_step` itself and a
+# blank one does. Every such shape is one mise cannot execute, which is a
+# manifest defect and not this module's question. Arm B rests on a zero count
+# too and owes no such row, because its surface is a file that WAS read.
 #MUTANT hk-package-stepless-run-fires|s@^\tcount(package_steps) > 0$@\ttrue@|a_package_task_with_an_empty_run_is_clean
-#MUTANT hk-package-empty-run-string-counted|s@^\tpackage_run != ""$@\ttrue@|a_package_task_with_an_empty_run_string_is_clean
-#MUTANT hk-package-empty-step-counted|s@^\tstep != ""$@\ttrue@|a_package_task_whose_only_step_is_empty_is_clean
+#MUTANT hk-package-empty-run-string-counted|s@^\tis_step(package_run)$@\tis_string(package_run)@|a_package_task_with_an_empty_run_string_is_clean
+#MUTANT hk-package-empty-step-counted|s@^\tis_step(step)$@\tis_string(step)@|a_package_task_whose_only_step_is_empty_is_clean
+#MUTANT hk-package-blank-step-counted|s@^\ttrim_space(s) != ""$@\ts != ""@|a_package_task_whose_only_step_is_blank_is_clean
 #
 #MUTANT-SUITE crates/batten/tests/it/tracked_absent.rs
 
@@ -254,29 +247,37 @@ package_run := r if {
 	is_array(r)
 }
 
+# WHAT A STEP IS, said once: a string mise would execute. This replaces three
+# guards that were three spellings of that one claim, arrived at a shape at a
+# time — a non-string array entry, then the empty string in each `run` spelling
+# — and the enumeration was still open when the last of them landed: `run = "   "`
+# cleared both emptiness tests and reached arm E as a step naming nothing, which
+# is a pin disagreement reported against a manifest with no fetch URL. Blank is
+# not a command, so it is not a step, and the arms that count steps may now say
+# so without each re-deciding what one is.
+is_step(s) if {
+	is_string(s)
+	trim_space(s) != ""
+}
+
 # `run` is one argv as a string, or an array of them — mise accepts both, so both
 # are read. Reading one spelling only would leave the arm escapable by rewriting
 # the task's shape instead of fixing the version it names.
 #
-# AN EMPTY STRING IS NOT A STEP, in either spelling, and the two emptiness tests
-# are spelled differently on purpose so a `#MUTANT` row can anchor to each. mise
-# executes neither `run = ""` nor `run = [""]`, and arm E's guard counts what
-# this set holds: an empty entry cleared that count while naming nothing, so the
-# arm reported a pin disagreement against a manifest with no fetch URL — the
-# defect the guard was added to stop, surviving in the shape the guard's own
-# case does not use. It is dropped HERE rather than at the guard so that "what
-# is a step" has one answer, which arms D and E then share.
+# `is_step` IS CALLED AT EACH SPELLING rather than filtered over one merged set,
+# so a `#MUTANT` row anchors to each call: a mutation weakening the array half
+# alone is then caught by the array half's own case, which a shared filter on
+# one line could not show. Dropping the entry HERE rather than at arm E's guard
+# is what gives arms D and E one answer to share.
 package_steps contains step if {
-	is_string(package_run)
+	is_step(package_run)
 	step := package_run
-	package_run != ""
 }
 
 package_steps contains step if {
 	is_array(package_run)
 	some step in package_run
-	is_string(step)
-	step != ""
+	is_step(step)
 }
 
 # Every version the fetch names, by the pattern the amends lines are read with.
@@ -596,11 +597,11 @@ test_a_package_task_yielding_no_step_decides_nothing_here if {
 		with data.batten.patterns as pattern
 }
 
-# THE TWO SHAPES THE STEP GUARD ALONE DOES NOT COVER, because each yields an
-# entry that clears a count while naming nothing: `run = ""` binds `package_run`
-# as a string where `[]` does not, and `run = [""]` is a one-element array whose
-# element is a string. `#MUTANT hk-package-empty-run-string-counted` and
-# `#MUTANT hk-package-empty-step-counted` are the two emptiness tests removed.
+# The shapes arm E's step guard alone does not reach, one per `is_step` call and
+# one for `is_step` itself: `#MUTANT hk-package-empty-run-string-counted`,
+# `#MUTANT hk-package-empty-step-counted` and
+# `#MUTANT hk-package-blank-step-counted`. Why an entry naming nothing must not
+# count is `package_steps`'s own comment.
 test_a_package_task_whose_run_is_an_empty_string_decides_nothing_here if {
 	count(violation) == 0 with input as tree_with_tasks(
 		{"hk": "1.56.1"},
@@ -614,6 +615,15 @@ test_a_package_task_whose_only_step_is_empty_decides_nothing_here if {
 	count(violation) == 0 with input as tree_with_tasks(
 		{"hk": "1.56.1"},
 		{"pkl-package": {"run": [""]}},
+		[amends_line("1.56.1")],
+	)
+		with data.batten.patterns as pattern
+}
+
+test_a_package_task_whose_only_step_is_blank_decides_nothing_here if {
+	count(violation) == 0 with input as tree_with_tasks(
+		{"hk": "1.56.1"},
+		{"pkl-package": {"run": "   "}},
 		[amends_line("1.56.1")],
 	)
 		with data.batten.patterns as pattern

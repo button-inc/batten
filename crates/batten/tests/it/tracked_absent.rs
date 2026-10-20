@@ -346,9 +346,8 @@ fn a_package_task_with_an_empty_run_is_clean() {
 }
 
 /// `#MUTANT hk-package-empty-run-string-counted` reddens here: the string
-/// spelling of the same empty task. `run = ""` binds `package_run` where
-/// `run = []` does not, so it cleared arm E's step count as one entry naming
-/// nothing until `package_steps` stopped admitting it.
+/// spelling of the same empty task, which `run = []` cannot reach because an
+/// empty array binds `package_run` without yielding an entry to test.
 #[test]
 fn a_package_task_with_an_empty_run_string_is_clean() {
     let manifest = "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = \"\"\n";
@@ -356,13 +355,23 @@ fn a_package_task_with_an_empty_run_string_is_clean() {
     clean(&root);
 }
 
-/// `#MUTANT hk-package-empty-step-counted` reddens here: the array spelling of
-/// it, which reaches the other emptiness test. One element, a string, naming no
-/// version — the shape `run = []` cannot reach.
+/// `#MUTANT hk-package-empty-step-counted` reddens here: the array spelling,
+/// which reaches the other `is_step` call. One element, a string, naming no
+/// version.
 #[test]
 fn a_package_task_whose_only_step_is_empty_is_clean() {
     let manifest = "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = [\"\"]\n";
     let root = fixture("hk-package-empty-step", &[("mise.toml", manifest)], &[]);
+    clean(&root);
+}
+
+/// `#MUTANT hk-package-blank-step-counted` reddens here. Whitespace is not a
+/// command, and this is the shape that cleared both emptiness tests the two
+/// cases above anchor — the measurement that turned them into `is_step`.
+#[test]
+fn a_package_task_whose_only_step_is_blank_is_clean() {
+    let manifest = "[tools]\nhk = \"1.56.1\"\n\n[tasks.pkl-package]\nrun = \"   \"\n";
+    let root = fixture("hk-package-blank", &[("mise.toml", manifest)], &[]);
     clean(&root);
 }
 
