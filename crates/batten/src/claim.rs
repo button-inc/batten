@@ -911,6 +911,20 @@ pub fn adopt(
 mod tests {
     use super::*;
 
+    /// Fails by: readiness answered as a constant rather than by the one
+    /// definition of Ready.
+    #[test]
+    fn readiness_is_the_ready_lints_own_answer() {
+        let grammar = crate::ready::Grammar::committed();
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let issue = Issue::parse(&serde_json::json!({"id": "A-1", "status": "Todo"})).unwrap();
+        let refined = "**Refinement — Ready (a summary)**\n\
+                       * **Source of truth (§1).** One artifact.\n\
+                       * **Commit / bump (§6).** `ci` → **no bump**.\n";
+        assert!(is_ready(&grammar, &issue, refined, root).unwrap());
+        assert!(!is_ready(&grammar, &issue, "no block", root).unwrap());
+    }
+
     /// This repository's own ready-queue column, as `batten.toml` declares it.
     ///
     /// An INPUT to the predicate now rather than a constant inside it — which is
