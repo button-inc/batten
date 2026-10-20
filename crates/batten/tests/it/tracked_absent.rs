@@ -391,9 +391,9 @@ fn a_package_task_whose_run_is_blank_is_clean() {
 }
 
 /// `#MUTANT hk-package-array-blank-reinlined` reddens here, and only here: the
-/// array half's guard re-inlined as a bare `!= ""`, which is the shape `is_step`
-/// was extracted to retire. `[""]` stays clean under it and `"   "` never
-/// reaches the array half, so this corner is the one that can show it.
+/// array half's guard re-inlined as a bare `!= ""`, half of what `is_step`
+/// replaced there. `[""]` stays clean under it and `"   "` never reaches the
+/// array half, so this corner is the one that can show it.
 #[test]
 fn a_package_task_whose_only_step_is_blank_is_clean() {
     let manifest = package_manifest(r#"["   "]"#);
