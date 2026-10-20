@@ -771,7 +771,7 @@ fn follow_pin(hook_path: bool) -> Result<Followed> {
     // as before — it is where the envelope arrives.
     if hook_path {
         // RESOLVED HERE, SPAWNED WHERE THE PAYLOAD IS. The child is handed this
-        // call's envelope, and the one reader of stdin is `read_envelope` —
+        // call's envelope, and the one reader of stdin is `read_payload` —
         // which streams it, spills what is over the bound, and owns what a
         // harness sent. Spawning before that read makes the child the reader
         // instead, and a crash then leaves the fall-through nothing to judge.
@@ -809,13 +809,13 @@ fn follow_pin(hook_path: bool) -> Result<Followed> {
 /// a correctness term rather than a tidy-up. The followed child is handed this
 /// call's envelope, so it must be handed the BYTES — a child that inherits
 /// stdin reads the stream to EOF, and a crash then left `run_hook`'s own
-/// `read_envelope` with nothing. That is a could-not-look, and a could-not-look
+/// `read_payload` with nothing. That is a could-not-look, and a could-not-look
 /// ALLOWS: measured, the hook answered `0` over a call nothing had judged, and
 /// the refusal floor the fall-through exists to reach was never reached.
 ///
 /// Reading the payload HERE to replay it was the first fix and the wrong place
 /// for it: it holds whole what CLOUD-2224 streams and spills, it reads stdin
-/// twice over, and its own read error bypasses `read_envelope`'s classification
+/// twice over, and its own read error bypasses `read_payload`'s classification
 /// of what an unreadable stream means. So the hook path returns the target it
 /// resolved and `run_hook` spawns it once the envelope is in hand — which is
 /// also where the load-fault hand-off already lives, so the two are siblings in
@@ -18985,7 +18985,8 @@ fn run_hook(
     // THE FOLLOW, BEFORE THIS BUILD READS THE PAYLOAD FOR ITSELF. An answer the
     // §7 table names is this invocation's; anything else decided nothing and
     // falls through, over a stream this process has already taken.
-    if let Some(code) = follow_to_pinned(pinned, &payload, out)? {
+    let followed = follow_to_pinned(pinned, &payload, out)?;
+    if let Some(code) = followed.answer {
         return Ok(code);
     }
     let Some((raw, mut envelope, spilled, _spool)) = decode_payload(harness, payload, mode, err)?
@@ -19154,7 +19155,7 @@ fn run_hook(
     let (policy, waivers, pruning) = if adjudicable {
         // Built in the arm that uses it: the handoff is the config load's input,
         // and the other arm loads nothing.
-        let handoff = Handoff::new(&raw, pinned.and_then(FollowTarget::engine));
+        let handoff = Handoff::new(&raw, followed.ran);
         match hook_config_or_floor(overrides, harness, &envelope, handoff, mode, out, err)? {
             Ok(loaded) => loaded,
             Err(code) => return Ok(code),
@@ -19493,27 +19494,24 @@ fn is_adjudicable(envelope: &hook::Envelope) -> bool {
         || (envelope.event == hook::Event::PreTool && !envelope.raw_tool.is_empty())
 }
 
-/// The mediated call on stdin, or `None` where the call must simply proceed.
+/// The mediated call's bytes off stdin, or `None` where the call must simply
+/// proceed.
 ///
-/// **THE TWO FAIL-OPEN BOUNDARIES, TOGETHER BECAUSE THEY ARE ONE ANSWER.** Stdin
-/// that will not read and a payload that will not decode are both "the engine
-/// does not know what this call IS", and neither may block it: a guard must never
-/// be the reason a session cannot proceed. That is the opposite side of
-/// a config that will not load, where the engine knows the call perfectly well
-/// and has been told it cannot enforce the rules over it.
+/// **THE FIRST OF TWO FAIL-OPEN BOUNDARIES**, the second being
+/// [`decode_payload`]'s. Stdin that will not read and a payload that will not
+/// decode are both "the engine does not know what this call IS", and neither
+/// may block it: a guard must never be the reason a session cannot proceed.
+/// That is the opposite side of a config that will not load, where the engine
+/// knows the call perfectly well and has been told it cannot enforce the rules
+/// over it. They answer alike and they are reached separately, because a build
+/// can be too old to decode a stream it can still read — see [`Payload`].
 ///
 /// **Loud, never silent** (CLOUD-43). A guard that cannot read its input is a gate
 /// that did not run, and the silent version of that is byte-identical to a clean
 /// allow — the false green this engine exists to catch, in the one place nobody
 /// would think to look.
-/// **The RAW bytes travel with the decoded value**, because `dispatch_handlers`
-/// hands a declared handler the payload as it arrived. Re-reading stdin for it is
-/// not an option — the stream is consumed — and re-serializing the envelope would
-/// hand a handler a document the host never sent.
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 //MUTANT spill-floor-restored|s@^    let bound = capture::DEFAULT_RESULT_MAX_TOKENS;$@    let bound = 1_000_000;@|a_result_over_the_bound_is_spilled_not_held
-//MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
-//MUTANT handler-bytes-reserialized|s@^    let raw = if streamed.spilled.is_empty() {$@    let raw = if false {@|a_handler_reads_the_payload_the_host_sent
 fn read_payload(mode: Mode, err: &mut dyn Write) -> Result<Option<Payload>> {
     // STREAMED, NEVER HELD WHOLE (CLOUD-2224). Measured: reading a 50 MB payload
     // whole peaked at 150 MiB; streamed, at the process baseline. The bound is
@@ -19569,6 +19567,18 @@ struct Payload {
 }
 
 /// This build's own reading of a payload it has already taken off the stream.
+///
+/// The second fail-open boundary, on [`read_payload`]'s terms: a document this
+/// build cannot decode is one it does not know the shape of, and it allows
+/// rather than blocking. Reached only once nothing with a better claim — the
+/// pinned engine — has answered.
+///
+/// **The RAW bytes travel with the decoded value**, because `dispatch_handlers`
+/// hands a declared handler the payload as it arrived. Re-reading stdin for it is
+/// not an option — the stream is consumed — and re-serializing the envelope would
+/// hand a handler a document the host never sent.
+//MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
+//MUTANT handler-bytes-reserialized|s@^    let raw = if streamed.spilled.is_empty() {$@    let raw = if false {@|a_handler_reads_the_payload_the_host_sent
 fn decode_payload(
     harness: hook::Harness,
     payload: Payload,
@@ -19930,24 +19940,24 @@ impl<'a> Handoff<'a> {
 /// The hook's FIRST hand-off, and the sibling of [`hand_to_checkout_build`]
 /// below — same spawn, same decide-before-write, same reason. It is here rather
 /// than in `follow_pin` because the child is handed `raw` on a pipe: stdin is
-/// read exactly once per process, by `read_envelope`, and a child that read it
+/// read exactly once per process, by `read_payload`, and a child that read it
 /// instead left the fall-through nothing to judge.
 ///
-/// `None` means this invocation still has to decide the call for itself —
-/// nothing was pinned, the engine would not spawn, or it exited outside the §7
-/// table and so decided nothing. In every one of those the payload is intact
-/// and the floor below answers over it.
+/// No `answer` means this invocation still has to decide the call for itself —
+/// nothing was pinned, the spool would not read, the engine would not spawn, or
+/// it exited outside the §7 table and so decided nothing. In every one of those
+/// the payload is intact and the floor below answers over it.
 ///
 /// # Errors
 ///
 /// Only a write of the child's accepted answer to `out`.
-fn follow_to_pinned(
-    pinned: Option<&FollowTarget>,
+fn follow_to_pinned<'a>(
+    pinned: Option<&'a FollowTarget>,
     payload: &Payload,
     out: &mut dyn Write,
-) -> Result<Option<ExitCode>> {
+) -> Result<Follow<'a>> {
     let Some(target) = pinned else {
-        return Ok(None);
+        return Ok(Follow::NOTHING);
     };
     // THE HOST'S OWN BYTES, off the spool, and read only once a follow is
     // actually pending. Not the re-serialized value `decode_payload` hands
@@ -19955,11 +19965,38 @@ fn follow_to_pinned(
     // the pinned engine would judge the marker text as the result. A spool that
     // will not read hands the child nothing, so it falls through instead —
     // a child answering `0` over an empty document is not an answer about this
-    // call.
+    // call, and NOTHING RAN, so the hand-off below is still owed its turn.
     let Ok(raw) = std::fs::read_to_string(&payload.streamed.raw) else {
-        return Ok(None);
+        return Ok(Follow::NOTHING);
     };
-    hand_off(&target.root, &target.argv, &raw, out)
+    let answer = hand_off(&target.root, &target.argv, &raw, out)?;
+    Ok(Follow {
+        answer,
+        ran: target.engine(),
+    })
+}
+
+/// What the follow did: the answer if the child decided one, and the engine it
+/// actually spawned (CLOUD-2376).
+///
+/// **BOTH, BECAUSE THEY ARE DIFFERENT QUESTIONS AND THE SECOND WAS BEING
+/// GUESSED.** `ran` was derived in `run_hook` from "a target was resolved",
+/// which is true on paths where no child was spawned at all — a spool that
+/// would not read, an engine that would not start. The load-fault hand-off
+/// reads it to avoid re-running a binary this call already ran, so a guess in
+/// that direction suppressed a hand-off to a possibly DIFFERENT engine over a
+/// run that never happened. Only this function knows, so only it says.
+struct Follow<'a> {
+    answer: Option<ExitCode>,
+    ran: Option<&'a Path>,
+}
+
+impl Follow<'_> {
+    /// Nothing was followed, so nothing ran and nothing was decided.
+    const NOTHING: Self = Self {
+        answer: None,
+        ran: None,
+    };
 }
 
 /// THE HAND-OFF ITSELF: spawn a resolved engine over this call's payload and
