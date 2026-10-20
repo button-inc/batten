@@ -765,24 +765,23 @@ fn the_arm_watches_past_the_gate() {
     );
 }
 
-/// How many 50 ms polls [`wait_for`] takes before giving up: two of the
-/// watcher's 5 s ticks.
+/// How many 50 ms polls [`wait_for`] takes before giving up: four of the
+/// watcher's 5 s ticks, the longest a live watcher can take to act.
 ///
-/// **IT IS A FAILURE BUDGET, AND FOUR TICKS HID A CATCH (CLOUD-2376).** It is
-/// spent only when the watcher never acts, which is exactly what mutating the
-/// collection away produces — so `collect_toward_max -> None` made
-/// `the_arm_watches_past_the_gate` run 43.4s and take a SIGTERM, and
-/// cargo-mutants reported `suite-timed-out`, which is could-not-look
-/// (CLOUD-1267), over a mutant 27 cases in this file DO catch. A poll costs
-/// ~108ms rather than 50ms, because `present` walks the profile between sleeps.
+/// **HALVING THIS WAS A WRONG FIX AND IS RECORDED AS ONE (CLOUD-2376).** When
+/// `collect_toward_max -> None` made `the_arm_watches_past_the_gate` take a
+/// SIGTERM at 43.4s, this budget looked like the cost — it is spent in full
+/// exactly when the watcher never acts. Halving it moved the number by 2s,
+/// which is what proved it wrong: the bound WAS being reached, `wait_for` WAS
+/// panicking on schedule, and the case then hung anyway, past 100s when
+/// measured alone. [`batten::disk_watch::around`] skipped its `stop.store` on
+/// the unwind, so the scope's join waited on a watcher that could never stop.
 ///
-/// Two ticks still doubles the longest a LIVE watcher can take to act, and it is
-/// ~10x the measured 1.092s the real path takes (`a_step_run_build_is_watched`,
-/// nextest). The margin that mattered was never the fourth tick; it was keeping
-/// the mutated suite inside the bound cargo-mutants derives from the 9s
-/// unmutated baseline, so a dead watcher fails as an assertion rather than as a
-/// killed run.
-const WAIT_POLLS: u32 = 200;
+/// Four ticks stands, because the real path genuinely needs one: this file's
+/// `the_arm_watches_past_the_gate` passes in a measured 6.018s. A failure budget
+/// is only a cost when a failure cannot terminate, and that is fixed where it
+/// was broken rather than here.
+const WAIT_POLLS: u32 = 400;
 
 /// Wait until `done`, counted rather than clocked: at most [`WAIT_POLLS`]
 /// polls, then the case fails on the outcome it was waiting for.
@@ -793,7 +792,7 @@ fn wait_for(done: impl Fn() -> bool) {
         }
         #[expect(
             clippy::disallowed_methods,
-            reason = "bounded by a count: at most `WAIT_POLLS` polls, two of the watcher's own ticks"
+            reason = "bounded by a count: at most `WAIT_POLLS` polls, four of the watcher's own ticks"
         )]
         std::thread::sleep(Duration::from_millis(50));
     }
