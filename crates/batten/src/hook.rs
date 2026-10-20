@@ -18291,9 +18291,7 @@ deny contains "refused by themodule" if {
 
     /// A fresh, canonical scratch directory for `case`, reaped with its process.
     fn scratch_root(case: &str) -> PathBuf {
-        crate::scratch::scratch(&format!("hook-{case}"))
-            .canonicalize()
-            .expect("canonical scratch")
+        crate::git::canonical(&crate::scratch::scratch(&format!("hook-{case}")))
     }
 
     /// A target that does not exist yet is relativized through its deepest
@@ -18634,8 +18632,8 @@ deny contains "refused by themodule" if {
 
     /// Run `body` over a fact set carrying only the two native-gate facts.
     fn with_native_facts<R>(
-        discards: crate::facts::Look<Vec<String>>,
-        unread_history: crate::facts::Look<Vec<String>>,
+        discards: &crate::facts::Look<Vec<String>>,
+        unread_history: &crate::facts::Look<Vec<String>>,
         body: impl FnOnce(&Facts<'_>) -> R,
     ) -> R {
         let (stop, waived) = (
@@ -18643,8 +18641,8 @@ deny contains "refused by themodule" if {
             crate::waiver::Live::new(),
         );
         body(&Facts {
-            unread_history: &unread_history,
-            discards: &discards,
+            discards,
+            unread_history,
             ..Facts::none(&stop, &waived)
         })
     }
@@ -18667,7 +18665,7 @@ deny contains "refused by themodule" if {
     #[test]
     fn the_history_gate_fires_on_an_unread_row_only() {
         use crate::facts::Look;
-        let fired = |unread| with_native_facts(Look::CouldNotLook, unread, |f| history_gate(f));
+        let fired = |unread| with_native_facts(&Look::CouldNotLook, &unread, history_gate);
         assert!(fired(Look::Is(vec![String::from("row")])).is_some());
         assert!(fired(Look::Is(Vec::new())).is_none());
         assert!(fired(Look::CouldNotLook).is_none());
@@ -18680,7 +18678,7 @@ deny contains "refused by themodule" if {
     fn a_reset_fires_only_when_it_discards_a_commit() {
         use crate::facts::Look;
         let gates = |discards| {
-            with_native_facts(discards, Look::CouldNotLook, |f| {
+            with_native_facts(&discards, &Look::CouldNotLook, |f| {
                 native_fired(f)
                     .into_iter()
                     .map(|(gate, _)| gate)
@@ -18705,7 +18703,7 @@ deny contains "refused by themodule" if {
         let unread = || Look::Is(vec![String::from("row")]);
         let at = |rows: Vec<Rule>| {
             let policy = ceiling_policy(rows);
-            with_native_facts(Look::CouldNotLook, unread(), |f| {
+            with_native_facts(&Look::CouldNotLook, &unread(), |f| {
                 (native_denial(&policy, f), native_advice(&policy, f).len())
             })
         };
@@ -19085,14 +19083,10 @@ deny contains "refused by themodule" if {
     #[test]
     fn a_key_is_present_in_the_command_or_the_evidence() {
         let none: KeyFacts = crate::facts::Look::Is(vec![String::from("no key here")]);
-        assert!(key_present(
-            r"CLOUD-\d+",
-            "gh pr create --body CLOUD-1",
-            &none
-        ));
-        assert!(!key_present(r"CLOUD-\d+", "gh pr create", &none));
-        let evidence: KeyFacts = crate::facts::Look::Is(vec![String::from("Refs CLOUD-7")]);
-        assert!(key_present(r"CLOUD-\d+", "gh pr create", &evidence));
+        assert!(key_present(r"KEY-\d+", "gh pr create --body KEY-1", &none));
+        assert!(!key_present(r"KEY-\d+", "gh pr create", &none));
+        let evidence: KeyFacts = crate::facts::Look::Is(vec![String::from("Refs KEY-7")]);
+        assert!(key_present(r"KEY-\d+", "gh pr create", &evidence));
     }
 
     /// A shape row keyed on the `Task` tool.
@@ -19328,8 +19322,8 @@ deny contains "refused by themodule" if {
         let policy = ceiling_policy(vec![history_graded(RuleSeverity::Warn)]);
         let advice = |event| {
             with_native_facts(
-                Look::CouldNotLook,
-                Look::Is(vec![String::from("row")]),
+                &Look::CouldNotLook,
+                &Look::Is(vec![String::from("row")]),
                 |f| policy_advice(&policy, &envelope_at(event, "ls"), f).len(),
             )
         };
@@ -19680,7 +19674,7 @@ deny contains "refused by themodule" if {
             recorders: vec![recorder.clone()],
             ..ceiling_policy(Vec::new())
         };
-        assert_eq!(policy.declared_facts(), [fact.clone()]);
+        assert_eq!(policy.declared_facts(), std::slice::from_ref(&fact));
         assert_eq!(policy.declared_mints(), [mint]);
         assert_eq!(policy.declared_recorders(), [recorder]);
         assert_eq!(policy.agent_fact("review-happened"), Some(&fact));

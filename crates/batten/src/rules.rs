@@ -18558,8 +18558,8 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         }
     }
 
-    fn words(list: &[&str]) -> Option<Vec<String>> {
-        Some(list.iter().map(|word| (*word).to_owned()).collect())
+    fn words(list: &[&str]) -> Vec<String> {
+        list.iter().map(|word| (*word).to_owned()).collect()
     }
 
     /// A verdict program matches its own program, then its subcommand and
@@ -18570,15 +18570,15 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     #[test]
     fn a_verdict_program_matches_each_columns_reading() {
         let nested = VerdictProgram {
-            subcommands: words(&["pr"]),
-            nested: words(&["merge"]),
+            subcommands: Some(words(&["pr"])),
+            nested: Some(words(&["merge"])),
             ..verdict_program("gh")
         };
         assert!(nested.matches("gh", &["pr", "merge"]));
         assert!(!nested.matches("gh", &["pr", "view"]));
         assert!(!nested.matches("hub", &["pr", "merge"]));
         let except = VerdictProgram {
-            except: words(&["log"]),
+            except: Some(words(&["log"])),
             ..verdict_program("git")
         };
         assert!(except.matches("git", &["push"]));
@@ -18599,18 +18599,18 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     #[test]
     fn a_verdict_program_refuses_two_words_and_a_narrowed_any() {
         let two_words = VerdictProgram {
-            subcommands: words(&["x"]),
+            subcommands: Some(words(&["x"])),
             ..verdict_program("git push")
         };
         assert!(refusal(two_words.validate("r")).contains("names one program"));
         let narrowed = VerdictProgram {
             any_argument: Some(true),
-            subcommands: words(&["x"]),
+            subcommands: Some(words(&["x"])),
             ..verdict_program("git")
         };
         assert!(refusal(narrowed.validate("r")).contains("cannot be narrowed"));
         let fine = VerdictProgram {
-            subcommands: words(&["x"]),
+            subcommands: Some(words(&["x"])),
             ..verdict_program("git")
         };
         assert_eq!(refusal(fine.validate("r")), "");
@@ -19297,7 +19297,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             index: vec![String::from("a.txt")],
             ..blank("p", RuleKind::Policy)
         };
-        let facts = git_facts(&[row.clone()], &dir);
+        let facts = git_facts(std::slice::from_ref(&row), &dir);
         assert_eq!(facts.head, crate::git::head_fact(&dir).ok());
         assert_eq!(facts.status, crate::git::status_fact(&dir).ok());
         assert_eq!(facts.remote, crate::git::remote_fact(&dir).ok());
@@ -19349,7 +19349,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         assert_eq!(missing, Vec::<&str>::new(), "declared and readable here");
         assert_eq!(
             git_facts(&[blank("p", RuleKind::Policy)], &dir),
-            Default::default()
+            crate::git::GitFacts::default()
         );
     }
 
@@ -19472,7 +19472,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     fn half_a_discard_family_is_refused() {
         let row = |filters: Option<Vec<String>>| Rule {
             verdict: Some(vec![VerdictProgram {
-                subcommands: words(&["pr"]),
+                subcommands: Some(words(&["pr"])),
                 ..verdict_program("gh")
             }]),
             filters,
@@ -19672,7 +19672,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             .findings
             .iter()
             .filter(|finding| finding.rule == "a")
-            .map(|finding| format!("{}\n", finding.identity.fingerprint.to_hex()))
+            .flat_map(|finding| [finding.identity.fingerprint.to_hex(), String::from("\n")])
             .collect();
         assert_eq!(
             scan.requested,
@@ -20023,7 +20023,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             (Some(String::from("b.rs")), None)
         );
         assert_eq!(
-            first_pointer(&[count.clone()]),
+            first_pointer(std::slice::from_ref(&count)),
             (Some(String::from("2")), None)
         );
         assert_eq!(first_pointer(&[]), (None, None));
@@ -21198,8 +21198,8 @@ violation contains {
     fn emptiness_and_selector_equality_are_read_off_the_config() {
         assert!(PathSet::empty().is_empty());
         let selector = |glob: &str| Selector::new(glob).expect("compiles");
-        assert!(selector("*.rs") == selector("*.rs"));
-        assert!(selector("*.rs") != selector("*.md"));
+        assert_eq!(selector("*.rs"), selector("*.rs"));
+        assert_ne!(selector("*.rs"), selector("*.md"));
     }
 
     /// A non-ratchet row selects from the narrowed list, never the whole tree.
