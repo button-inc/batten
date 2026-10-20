@@ -132,7 +132,7 @@ impl ExitCode {
     pub const fn decided(raw: i32) -> Option<Self> {
         match Self::from_code(raw) {
             Some(ExitCode::Usage) | None => None,
-            decided => decided,
+            answer => answer,
         }
     }
 

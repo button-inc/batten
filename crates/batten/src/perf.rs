@@ -2262,8 +2262,6 @@ const DEFAULT_NS: &str = "1,16,64,256";
 /// a single ratio is a point and the sweep has to be read against a WIDTH.
 const DEFAULT_NULL_PAIRS: &str = "5";
 
-const DEFAULT_BIN: &str = "target/release/batten";
-
 /// One module, whose body reads whatever was declared. Iterating `documents`
 /// rather than naming a path keeps the module identical across every arm, so the
 /// only thing differing between arms is the row's declaration.
@@ -2398,7 +2396,18 @@ pub fn acquire(repo: &Path) -> Result<Sweep> {
             "perf-acquire: hyperfine is not installed — run `mise install`; it is pinned in the manifest. Nothing measured."
         );
     }
-    let binary = repo.join(env_or(BIN_VAR, DEFAULT_BIN));
+    // THE SAME NAMER `invocation` OBEYS (CLOUD-2376), and the last place in the
+    // crate that did not. `acquire` does not build — it tells the operator to
+    // run `mise run build:release`, and that build honours `CARGO_TARGET_DIR`
+    // while a literal `target/release/batten` does not. Under a redirected
+    // target dir this bailed "is missing" against a checkout whose binary had
+    // just been written somewhere else: the exact drift this issue closed
+    // between `install_source` and the follow's own lookup. An operator-supplied
+    // override still wins, and stays repo-relative as it always was.
+    let binary = std::env::var_os(BIN_VAR).map_or_else(
+        || crate::engine::release_build(repo),
+        |named| repo.join(named),
+    );
     if !binary.is_file() {
         bail!(
             "perf-acquire: {} is missing — run `mise run build:release`. Nothing measured.",
