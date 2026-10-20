@@ -142,6 +142,15 @@ fn mediator(dir: &Path, bin: Option<&Path>, extra: &[&str]) -> Output {
     }
     command
         .current_dir(dir)
+        // A FIXTURE DESCRIBES A WHOLE CHECKOUT, SO IT OWNS THIS TOO. The
+        // fixtures write their build at a literal `target/release/batten`, and
+        // the verb resolves it through `CARGO_TARGET_DIR` because the operator's
+        // own `build:release` does. Letting the RUNNER's value through described
+        // a checkout that cannot exist — a build at one path and a config saying
+        // it is at another — and every mediator case went red under
+        // `cargo-mutants`, which sets it. Removed here so the fixture's layout is
+        // the one the verb reads; the case below sets it deliberately.
+        .env_remove("CARGO_TARGET_DIR")
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_CONFIG_FROM")
@@ -174,29 +183,44 @@ fn a_mediator_built_from_this_tree_passes() {
 }
 
 #[test]
-fn the_observed_checkouts_build_is_read_whatever_target_dir_this_process_was_handed() {
+fn the_mediator_is_compared_against_the_build_this_tree_actually_writes() {
     // THE ESCAPE THE TWO CASES ABOVE CANNOT SEE (CLOUD-2376). Neither sets
-    // `CARGO_TARGET_DIR`, so both read the same file whether the reader consults
-    // that variable or not — a reader that did would answer `Unbuilt` over this
-    // very fixture on every run where the variable is set and green on every run
-    // where it is not, which is a gate that reports on its own harness rather
-    // than on the tree. `doctor` spawns no cargo, so the variable describes
-    // whatever is running batten and says nothing about `dir`. Setting it here
-    // is what makes the two readers disagree, and therefore what makes this case
-    // discriminate at all.
-    let dir = mediator_fixture("mediator-redirected-target", b"same bytes", b"same bytes");
+    // `CARGO_TARGET_DIR`, so both read the same file whether the verb consults
+    // it or not. The verb must consult it: its only production caller passes
+    // `.`, so it is asking about the tree the operator builds, and that build
+    // obeys the variable. A reader that ignored it would answer `Unbuilt` over
+    // a checkout whose binary was just written — which is what this repository's
+    // own worktree setup does on every run.
+    //
+    // So the redirect points where the build IS, and the conventional path is
+    // left EMPTY. A reader of the literal finds nothing and fails; only a reader
+    // of the variable finds the build and matches it.
+    let dir = scratch("mediator-redirected-target", true, Some("version = 1\n"));
+    fs::create_dir_all(dir.join("crates/batten")).unwrap();
+    fs::write(dir.join("crates/batten/Cargo.toml"), "# marker\n").unwrap();
+    let elsewhere = dir.join("written-elsewhere");
+    fs::create_dir_all(elsewhere.join("release")).unwrap();
+    fs::write(elsewhere.join("release/batten"), b"same bytes").unwrap();
+    let bin = dir.join("planted-bin");
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(bin.join("batten"), b"same bytes").unwrap();
+    assert!(
+        !dir.join("target/release/batten").exists(),
+        "the only build is the redirected one"
+    );
+
     let output = batten()
         .arg("doctor")
         .arg("mediator")
         .current_dir(&dir)
-        .env("PATH", dir.join("planted-bin"))
-        .env("CARGO_TARGET_DIR", dir.join("written-elsewhere"))
+        .env("PATH", &bin)
+        .env("CARGO_TARGET_DIR", &elsewhere)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_CONFIG_FROM")
         .output()
         .expect("run batten doctor mediator");
-    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
     assert_eq!(stdout(&output), "mediator ok\n");
 }
 
