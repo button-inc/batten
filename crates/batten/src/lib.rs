@@ -28267,41 +28267,8 @@ fn run_config(
                 .filter(|(_, admission)| matches!(admission, lint::Admission::Refused(_)))
                 .count();
             if !*json {
-                for (smell, admission) in &adjudicated {
-                    // Pointer plus a verdict token, never the clause's prose:
-                    // a reader gets which pair was admitted and on what
-                    // evidence, and the reasoning stays in the groomed body
-                    // where a reviewer reads it in context.
-                    //
-                    // A REFUSAL NAMES ITS CAUSE (CLOUD-2303). A bare refusal
-                    // read as never asked, so an answer already recorded was
-                    // asked for again; the cause says which repair applies.
-                    match admission {
-                        lint::Admission::Refused(cause) => writeln!(
-                            out,
-                            "config-lint: refused {} {} ({})",
-                            smell.id,
-                            smell.at,
-                            cause.as_str()
-                        )?,
-                        lint::Admission::Asked => writeln!(
-                            out,
-                            "config-lint: admitted {} {} ({})",
-                            smell.id,
-                            smell.at,
-                            admission.as_str()
-                        )?,
-                    }
-                }
-                if adjudicated.iter().any(|(_, admission)| {
-                    *admission == lint::Admission::Refused(lint::Cause::LedgerRewritten)
-                }) {
-                    writeln!(
-                        out,
-                        "config-lint: {} must begin with every base line, in order; \
-                         restore them ahead of this branch's lines rather than asking again",
-                        asked::LEDGER
-                    )?;
+                for line in lint::admission_lines(&adjudicated) {
+                    writeln!(out, "{line}")?;
                 }
             }
             Ok(ExitCode::verdict(refused != 0))

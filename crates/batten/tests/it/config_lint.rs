@@ -775,7 +775,10 @@ fn a_severity_lowered_against_the_base_ref_is_a_smell() {
         // the conversion now keeps that location, so the pointer names the key
         // that was lowered and matches what `check --config-from` prints for the
         // same finding (CLOUD-233).
-        "batten.toml:rule[no-todo].severity severity-lowered\nconfig-lint: 1 smell(s)\n"
+        //
+        // The refusal names its cause (CLOUD-2303): nothing on this branch asked.
+        "batten.toml:rule[no-todo].severity severity-lowered\nconfig-lint: 1 smell(s)\n\
+         config-lint: refused severity-lowered rule[no-todo].severity (not-asked)\n"
     );
 }
 
@@ -874,7 +877,10 @@ fn the_keys_cloud_721_added_reach_the_lint_with_their_own_pointers() {
         "batten.toml:rule[no-todo].glob rule-predicate-changed\n\
          batten.toml:verb[rm] verb-removed\n\
          batten.toml:waiver[no-todo].expires waiver-expiry-extended\n\
-         config-lint: 3 smell(s)\n",
+         config-lint: 3 smell(s)\n\
+         config-lint: refused rule-predicate-changed rule[no-todo].glob (not-asked)\n\
+         config-lint: refused verb-removed verb[rm] (not-asked)\n\
+         config-lint: refused waiver-expiry-extended waiver[no-todo].expires (not-asked)\n",
         "each key carries its own pointer, so none of the three can collapse \
          into another (CLOUD-233)"
     );
@@ -935,7 +941,8 @@ fn an_arriving_narrowing_key_is_clean_while_the_same_row_widened_is_not() {
     assert_eq!(
         stdout(&output),
         "batten.toml:rule[ready-receipt].max_age rule-predicate-changed\n\
-         config-lint: 1 smell(s)\n"
+         config-lint: 1 smell(s)\n\
+         config-lint: refused rule-predicate-changed rule[ready-receipt].max_age (not-asked)\n"
     );
 
     // And the counterexample the ranking is DECLARED rather than inferred for:
@@ -951,7 +958,8 @@ fn an_arriving_narrowing_key_is_clean_while_the_same_row_widened_is_not() {
     assert_eq!(
         stdout(&output),
         "batten.toml:rule[ready-receipt].bypass_env rule-predicate-changed\n\
-         config-lint: 1 smell(s)\n"
+         config-lint: 1 smell(s)\n\
+         config-lint: refused rule-predicate-changed rule[ready-receipt].bypass_env (not-asked)\n"
     );
 }
 
@@ -983,7 +991,9 @@ fn the_reverse_edit_of_those_keys_is_clean() {
         // would be a judgement.
         "batten.toml:16 waiver-expired\n\
          batten.toml:rule[no-todo].glob rule-predicate-changed\n\
-         config-lint: 2 smell(s)\n"
+         config-lint: 2 smell(s)\n\
+         config-lint: refused waiver-expired 16 (not-asked)\n\
+         config-lint: refused rule-predicate-changed rule[no-todo].glob (not-asked)\n"
     );
     assert!(
         !stdout(&output).contains("verb-removed"),
@@ -1128,7 +1138,9 @@ fn two_rules_lowered_in_one_edit_are_both_reported() {
         stdout(&output),
         "batten.toml:rule[one].severity severity-lowered\n\
          batten.toml:rule[two].severity severity-lowered\n\
-         config-lint: 2 smell(s)\n",
+         config-lint: 2 smell(s)\n\
+         config-lint: refused severity-lowered rule[one].severity (not-asked)\n\
+         config-lint: refused severity-lowered rule[two].severity (not-asked)\n",
         "both lowerings, each under its own key"
     );
 }

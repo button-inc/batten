@@ -877,6 +877,47 @@ impl Cause {
     }
 }
 
+/// The lines `config lint` prints for an adjudicated set, in order.
+///
+/// Pointer plus a verdict token, never the clause's prose: a reader gets which
+/// pair was admitted and on what evidence, and the reasoning stays in the
+/// groomed body where a reviewer reads it in context.
+///
+/// A REFUSAL NAMES ITS CAUSE (CLOUD-2303). A bare refusal read as never asked,
+/// so an answer already recorded was asked for again; the cause says which
+/// repair applies. A rewritten ledger adds the one line naming that repair.
+#[must_use]
+pub fn admission_lines(adjudicated: &[(Smell, Admission)]) -> Vec<String> {
+    let mut lines: Vec<String> = adjudicated
+        .iter()
+        .map(|(smell, admission)| match admission {
+            Admission::Refused(cause) => format!(
+                "config-lint: refused {} {} ({})",
+                smell.id,
+                smell.at,
+                cause.as_str()
+            ),
+            Admission::Asked => format!(
+                "config-lint: admitted {} {} ({})",
+                smell.id,
+                smell.at,
+                admission.as_str()
+            ),
+        })
+        .collect();
+    if adjudicated
+        .iter()
+        .any(|(_, admission)| *admission == Admission::Refused(Cause::LedgerRewritten))
+    {
+        lines.push(format!(
+            "config-lint: {} must begin with every base line, in order; \
+             restore them ahead of this branch's lines rather than asking again",
+            crate::asked::LEDGER
+        ));
+    }
+    lines
+}
+
 /// Adjudicate each smell against what this branch added to the asked ledger.
 ///
 /// The pair a question must name is exactly what a reader already sees in the
@@ -1035,6 +1076,39 @@ mod tests {
             Cause::LedgerRewritten.as_str(),
             "ledger-rewritten",
             "the token the refused line prints"
+        );
+    }
+
+    #[test]
+    fn each_pair_prints_its_verdict_and_only_a_rewrite_names_the_repair() {
+        let found = [
+            smell("waiver-added", "waiver[x]"),
+            smell("rule-predicate-changed", "rule[r].tools"),
+        ];
+        let answered = admission_lines(&admissions(
+            &found,
+            &answered("waiver-added waiver[x]", "Admit"),
+        ));
+        assert_eq!(
+            answered,
+            [
+                "config-lint: admitted waiver-added waiver[x] (asked)",
+                "config-lint: refused rule-predicate-changed rule[r].tools (not-asked)",
+            ],
+            "no repair line: the ledger was not rewritten"
+        );
+
+        let rewritten = admission_lines(&admissions(&found[..1], &crate::asked::Ledger::Rewritten));
+        assert_eq!(
+            rewritten,
+            [
+                "config-lint: refused waiver-added waiver[x] (ledger-rewritten)".to_owned(),
+                format!(
+                    "config-lint: {} must begin with every base line, in order; restore \
+                     them ahead of this branch's lines rather than asking again",
+                    crate::asked::LEDGER
+                ),
+            ]
         );
     }
 
