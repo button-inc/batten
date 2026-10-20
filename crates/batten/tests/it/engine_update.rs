@@ -552,6 +552,49 @@ fn a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path() {
     );
 }
 
+/// A SOURCE PIN WITH NO BUILD IS BUILT, OFF THE HOOK PATH (CLOUD-2062).
+///
+/// The `None if may_build` arm, which `the_hook_path_never_builds_a_source_pin`
+/// pins only from the other side: that case proves the HOOK does not build, and
+/// is satisfied whether or not any other verb does. Mutating the guard to
+/// `false` therefore survived the whole suite — nothing asserted that a verb
+/// which MAY build reaches `install_source` at all.
+///
+/// Asserted without a successful cargo build, because none is needed to
+/// discriminate. The fixture carries no manifest, so the install attempt fails
+/// at once and the refusal names `cargo build --release -p batten`. Measured by
+/// hand against the arm's other reading, which is what a verb that never
+/// attempts the build does: it runs, prints the effective config and exits `0`
+/// — no refusal of any kind, because a stale SOURCE pin stops nothing by
+/// itself. So both halves are named, the attempt and the silence.
+#[test]
+fn a_source_pin_with_no_build_is_built_off_the_hook_path() {
+    let (dir, _installed, binary) = case_tree("source-pin-builds");
+    pin_source(&dir, &pinned());
+    assert!(
+        !dir.join("target").join("release").join("batten").exists(),
+        "the arm under test is the one with no build to follow"
+    );
+
+    let output = run(&binary, &dir, &["config", "show"], "");
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a pin that could not be built is reported, never run past: {}",
+        text(&output)
+    );
+    assert!(
+        common::stderr(&output).contains("cargo build --release -p batten"),
+        "and the build is what was attempted: {}",
+        text(&output)
+    );
+    assert!(
+        common::stdout(&output).is_empty(),
+        "the verb the follow preceded never ran: {}",
+        text(&output)
+    );
+}
+
 /// ONE PLACE NAMES THE RELEASE BUILD (CLOUD-2376).
 ///
 /// `engine install` wrote into `$CARGO_TARGET_DIR/release`, and the follow read
