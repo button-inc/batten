@@ -1668,9 +1668,7 @@ mod tests {
     /// Date a file: read `read` and written `written` seconds ago.
     fn aged(path: &Path, read: u64, written: u64) {
         let now = SystemTime::now();
-        std::fs::File::options()
-            .write(true)
-            .open(path)
+        crate::durable::open_handle(path)
             .expect("open the file to date")
             .set_times(
                 std::fs::FileTimes::new()
@@ -2013,8 +2011,6 @@ mod tests {
     /// a deadline an hour off stops nothing, one already reached stops all.
     #[test]
     fn a_pass_stops_at_a_reached_deadline_only() {
-        // The deadline is read off the clock inside the pass's own setup, so no
-        // assertion below holds a clock reading: each asserts the count removed.
         fn removed(case: &str, ahead: Duration) -> usize {
             let tree = scratch(case).join("target");
             unit(
@@ -2038,8 +2034,6 @@ mod tests {
     /// stopping the pass, or one it did not use reported so.
     #[test]
     fn a_held_unit_reports_a_live_build_only_when_one_used_it() {
-        // `since` shifts the clock inside the setup, so no assertion holds a
-        // reading: each asserts whether the pass saw a live build.
         fn live(case: &str, since: fn(SystemTime) -> SystemTime) -> bool {
             let tree = scratch(case).join("target");
             let profile = tree.join("debug");
@@ -2069,7 +2063,6 @@ mod tests {
     /// run used kept.
     #[test]
     fn an_executable_a_live_run_used_is_kept_and_one_it_did_not_is_not() {
-        // As above: the clock is shifted inside the setup, never asserted.
         fn removed(case: &str, since: fn(SystemTime) -> SystemTime) -> (usize, bool) {
             let tree = scratch(case).join("target");
             unit(

@@ -159,6 +159,18 @@ fn a_clocked_name_is_the_functions_own() {
 }
 
 #[test]
+fn a_closure_that_reads_the_clock_is_not_a_clocked_local() {
+    // A closure is a function value: what its call returns is whatever it
+    // computes, and the clock it reads inside bounds that work as an input.
+    let found = census(
+        "fn case() { let run = || settle(Instant::now() + P); assert_eq!(run(), Outcome::Done); }",
+    );
+    assert_eq!(found.clocked, 0);
+    assert_eq!(found.judged, 1);
+    assert!(found.refused.is_empty(), "{:?}", found.refused);
+}
+
+#[test]
 fn a_clock_quoted_in_a_string_is_not_a_reading() {
     let found = census("fn case() { assert!(text.contains(\"s.elapsed() < LIMIT\")); }");
     assert!(found.refused.is_empty(), "{:?}", found.refused);

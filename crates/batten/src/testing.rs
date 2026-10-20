@@ -207,6 +207,11 @@ impl<'ast> Visit<'ast> for Reads<'_> {
         };
         syn::visit::visit_expr_path(self, path);
     }
+
+    /// A closure is a function value, not a reading: binding one that reads the
+    /// clock clocks nothing until it is called, and what that call returns is
+    /// whatever the closure computes.
+    fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {}
 }
 
 /// The names a pattern binds.
@@ -564,7 +569,8 @@ mod tests {
 
     /// Fails by: a census that stops recognising a clock spelling, a taint
     /// through a `let`, an assertion macro's condition count, an `impl` method,
-    /// or an unparsed body — every count and name is asserted exactly.
+    /// or an unparsed body, or that reads a closure's body as a clock value —
+    /// every count and name is asserted exactly.
     #[test]
     fn the_clock_census_counts_and_names_each_assertion_exactly() {
         let file: syn::File = syn::parse_str(
@@ -588,6 +594,8 @@ mod tests {
                 debug_assert!(n.checked_add(1).is_some());
                 assert_ne!(n, 2);
                 other!(Instant::now());
+                let run = || outcome(Instant::now());
+                assert_eq!(run(), 3);
             }
             fn unparsed() { assert!(a b); }
             "#,
@@ -596,7 +604,7 @@ mod tests {
         assert_eq!(
             clock_census(&file),
             ClockCensus {
-                judged: 9,
+                judged: 10,
                 clocked: 3,
                 refused: ["tainted", "elapsed", "deadline", "second"]
                     .map(String::from)

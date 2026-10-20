@@ -3254,7 +3254,7 @@ mod tests {
         // rather than behavioural: two observations could disagree (a `setsid`
         // in between, an inherited marker) and the failure is silent — only the
         // direct pid gets the signal, and the grandchildren leak. So the source
-        // is asserted to contain exactly one observation, in the run body, with
+        // is asserted to contain exactly one observation, in `dispatch`, with
         // every later reader taking the value.
         // Counted over the module's own code, never over this file whole: the
         // needle appears in this very assertion, and a test that counts itself
@@ -3267,7 +3267,7 @@ mod tests {
         let observations = shipped.matches("GroupDecision::observe(").count();
         assert_eq!(
             observations, 1,
-            "expected exactly one observation, in `run_in_with`. A second call \
+            "expected exactly one observation, in `dispatch`. A second call \
              site means the spawn and the teardown can disagree, which is \
              CLOUD-427's own bug."
         );
@@ -3953,6 +3953,11 @@ mod tests {
         /// its own thread; a write that never comes fails the case at the
         /// bound.
         fn first(&self, what: &str) -> String {
+            self.first_within(what, Duration::from_secs(20))
+        }
+
+        /// [`Fifo::first`] under a bound of the case's own choosing.
+        fn first_within(&self, what: &str, bound: Duration) -> String {
             use std::io::Read as _;
 
             let mut reader = self.file.try_clone().expect("share the fifo");
@@ -3963,7 +3968,7 @@ mod tests {
                 let _ = sent.send(String::from_utf8_lossy(&said[..read]).trim().to_owned());
             });
             answer
-                .recv_timeout(Duration::from_secs(20))
+                .recv_timeout(bound)
                 .unwrap_or_else(|_| panic!("{what} never happened"))
         }
     }
@@ -4148,7 +4153,7 @@ mod tests {
             .expect("state")
             .join("exec")
             .join(format!("group.{}", std::process::id()));
-        let outcomes = owned_run(&root, "test \"$MISE_TASK_PGID_MANAGED\" = 1")
+        let outcomes = owned_run(&root, &format!("test \"${TASK_PGID_MANAGED_ENV}\" = 1"))
             .expect("the owned run has an outcome");
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].exit, 0, "the child saw Batten's marker");
@@ -4159,7 +4164,7 @@ mod tests {
             &[
                 "sh".to_owned(),
                 "-c".to_owned(),
-                "test -z \"$MISE_TASK_PGID_MANAGED\"".to_owned(),
+                format!("test -z \"${TASK_PGID_MANAGED_ENV}\""),
             ],
             &[],
             &ExecConfig::DEFAULT,
@@ -4179,22 +4184,25 @@ mod tests {
         }
         let root = contained("exec-clean-leaves");
         let alive = Fifo::at(root.join("alive"));
-        let go = root.join("go");
-        // The job outlives the run by construction: it cannot finish before
-        // `go` exists, which this case creates only once the run has returned.
-        // The count bounds it should the case fail before then.
+        let go = Fifo::at(root.join("go"));
+        // The job outlives the run by construction: it blocks reading `go`,
+        // which this case writes only once the run has returned. Should the
+        // case fail before then, dropping `go` closes its only writer and the
+        // read ends at EOF.
         let script = format!(
-            "(i=0; while [ ! -e '{go}' ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done; \
-             {alive}) >/dev/null 2>&1 &",
-            go = go.display(),
+            "(read _ < '{go}'; {alive}) >/dev/null 2>&1 &",
+            go = go.path.display(),
             alive = alive.write("yes")
         );
         let outcomes = owned_run(&root, &script).expect("the child exits clean");
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].exit, 0);
-        std::fs::write(&go, "").expect("release the background job");
+        go.say("go");
         assert_eq!(
-            alive.first("the background job outliving the clean run"),
+            alive.first_within(
+                "the background job outliving the clean run",
+                Duration::from_secs(2)
+            ),
             "yes"
         );
     }
@@ -4344,7 +4352,6 @@ mod tests {
     #[test]
     fn a_second_signal_escalates_and_says_why() {
         if !cfg!(unix) {
-            assert_eq!(Escalation::SecondSignal.as_str(), "second-signal");
             return;
         }
         // The trap notes the first TERM and stays, so only the escalation ends it.

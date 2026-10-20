@@ -669,10 +669,7 @@ fn render_capability(
 ///
 /// Split out of `render_capability` to keep it under the line lint.
 fn render_unstable(out: &mut String, runs: usize, [base, mine]: [&Arm; 2]) {
-    let stable = |arm: &Arm| match arm {
-        Arm::Stable { .. } => "yes",
-        Arm::Unstable { .. } => "no",
-    };
+    let stable = |arm: &Arm| if arm.bytes().is_some() { "yes" } else { "no" };
     line(
         out,
         &format!("**not measured** — an arm's output was not byte-identical across {runs} runs"),

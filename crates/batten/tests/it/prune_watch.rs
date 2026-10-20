@@ -1236,24 +1236,22 @@ fn the_hook_traces_a_call_under_the_trace_variable() {
 /// trace variable (`collect::tracing` read as off), or printed without it.
 #[test]
 fn a_pressed_hook_traces_its_pass_under_the_trace_variable() {
-    let pass_lines = |name: &str, env: &[(&str, &str)]| {
-        let said = hook(&hooked(name, true), "PreToolUse", env);
+    let dir = hooked("hook-pass-trace", true);
+    let pass_lines = |env: &[(&str, &str)]| {
+        let said = hook(&dir, "PreToolUse", env);
         common::stderr(&said)
             .lines()
             .filter(|line| line.starts_with("disk-pass "))
             .count()
     };
     assert_eq!(
-        pass_lines(
-            "hook-pass-traced",
-            &[("TARGET_PRUNE_FREE_MB", "50"), ("BATTEN_DISK_TRACE", "1")]
-        ),
-        1,
-        "below the minimum, the traced pass reports itself once"
+        pass_lines(&[("TARGET_PRUNE_FREE_MB", "50")]),
+        0,
+        "untraced, the pass does not report itself"
     );
     assert_eq!(
-        pass_lines("hook-pass-quiet", &[("TARGET_PRUNE_FREE_MB", "50")]),
-        0,
-        "and untraced, not at all"
+        pass_lines(&[("TARGET_PRUNE_FREE_MB", "50"), ("BATTEN_DISK_TRACE", "1")]),
+        1,
+        "below the minimum, the traced pass reports itself once"
     );
 }
