@@ -453,6 +453,7 @@ fn task_alive(program_root: &str, pid: &str, task: &str) -> bool {
 /// the task ALIVE, the direction every unevaluable corroboration here takes, so
 /// `land`'s reap never signals a running lap over a root it could not match.
 /// What a root names is [`normalized_root`]'s.
+//MUTANT-SUITE crates/batten/src/task.rs
 //MUTANT blank-root-reads-dead|s@normalized_root(program_root).is_none_or(@normalized_root(program_root).is_some_and(@|a_root_is_trimmed_and_a_blank_one_reads_alive
 fn corroborates(program_root: &str, task: &str, cmdline: &str) -> bool {
     normalized_root(program_root).is_none_or(|root| matches_cmdline(&root, task, cmdline))

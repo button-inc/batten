@@ -304,7 +304,7 @@ fn a_later_crash_of_a_spoken_task_speaks_again() {
 /// is all this needs.
 #[test]
 fn taking_the_landing_lock_clears_the_dispatch_receipt() {
-    let (repo, _) = repo("watchdog-lock-clears-dispatch", "version = 1\n");
+    let (repo, home) = repo("watchdog-lock-clears-dispatch", "version = 1\n");
     common::git_in(
         &repo,
         &[
@@ -319,8 +319,11 @@ fn taking_the_landing_lock_clears_the_dispatch_receipt() {
     std::fs::write(&receipt, "land\n").expect("a receipt");
     // No entry gates: the developer's `mise.toml` exports some, and asking them
     // needs a forge this tier does not have, before the lock is ever reached.
-    let output = batten()
+    let mut command = batten();
+    common::state_home(&mut command, &home);
+    let output = command
         .args(["land", "lap", "refs/heads/main"])
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .env("LAND_MAX_LAPS", "1")
         .env("LAND_VERIFY", "true")
         .env("LAND_WORKFLOW", "fast-forward.yml")
