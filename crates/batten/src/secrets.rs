@@ -92,15 +92,15 @@ pub const SCANNER: &str = "ripsecrets";
 /// documentation cannot disagree.
 const PROVISION_VERB: &str = "batten provision apply";
 
-// The terminator is anchored here, on the one line that spells it, rather than
-// on either spawn arm: dropping the element removes it from both arms at once,
-// and nothing about the kill depends on how the arms happen to be indented. The
-// `$` is load-bearing — this row's own text contains the element it deletes, and
-// an unanchored pattern would rewrite the row as well as the const.
-//MUTANT-SUITE crates/batten/tests/it/secrets_operands.rs
-//MUTANT drop-the-operand-terminator|s@, "--"\];$@];@|a_dash_leading_tracked_path_is_scanned_as_a_path
-/// The scanner's flags and the `--` that ends them, pinned here beside the
-/// parser that reads their output.
+/// The scanner's flags, pinned here beside the parser that reads their output.
+///
+/// Flags ONLY: the end-of-options terminator is not one of these, and
+/// [`scanner_argv_head`] is what puts it after them. A flag appended here lands
+/// before the terminator by construction, which is the point — appending it to a
+/// slice that already ended in `--` would have put the flag where the pinned
+/// scanner reads it as a path, silently dropping it. That is the same quiet miss
+/// [`END_OF_OPTIONS`] exists to close, and it is not a trap worth leaving inside
+/// the fix for it.
 ///
 /// `--only-matching` is **not** an option: it is what makes the third output
 /// field the matched literal alone rather than the whole source line. The span
@@ -108,14 +108,9 @@ const PROVISION_VERB: &str = "batten provision apply";
 /// [`crate::identity::secret_code_fingerprint`] forces `Verbatim` normalization —
 /// a whole-line span would fold every edit elsewhere on the line into the
 /// secret's identity, re-minting a finding nobody changed.
-///
-/// # The trailing `--` (CLOUD-1496)
-///
-/// It lives in this slice rather than at the two call sites so that both spawn
-/// arms get it by construction. The arms differ only in how the program is
-/// named, never in what the tree may call a file, and the second is unreachable
-/// in practice — so a terminator written once per arm would be a lockstep
-/// obligation kept by review alone.
+const SCANNER_FLAGS: &[&str] = &["--only-matching"];
+
+/// The end-of-options terminator (CLOUD-1496).
 ///
 /// WHAT IT CLOSES. `run_once`'s batch is paths the `ignore` walk found in the
 /// judged tree — untracked files included, not only tracked ones — and that tree
@@ -155,7 +150,29 @@ const PROVISION_VERB: &str = "batten provision apply";
 /// `command_rule` expands `{{files}}` into a consumer-written argv whose
 /// terminator position only the consumer can choose. That is CLOUD-1492's too,
 /// with the `[[spawn]] operands` column.
-const SCANNER_FLAGS: &[&str] = &["--only-matching", "--"];
+const END_OF_OPTIONS: &str = "--";
+
+/// The argv head both spawn arms pass before the batch: the flags, then the
+/// terminator that ends them.
+///
+/// BUILT rather than spelled, and that is the whole of it. Writing `--` at each
+/// call site makes the two arms a lockstep obligation kept by review — they
+/// differ only in how the program is named, never in what the tree may call a
+/// file, and the second is unreachable in practice, so review is the only thing
+/// that would have caught a drift. Spelling it as the last element of
+/// [`SCANNER_FLAGS`] instead moved the hazard rather than closing it: the
+/// natural edit to a slice of flags is to append one, and an appended flag would
+/// have landed after the terminator. Here neither is possible — the terminator
+/// is placed by this function, after whatever [`SCANNER_FLAGS`] holds.
+//MUTANT-SUITE crates/batten/tests/it/secrets_operands.rs
+//MUTANT drop-the-operand-terminator|s@\.chain(\[END_OF_OPTIONS\])@@|a_dash_leading_tracked_path_is_scanned_as_a_path
+fn scanner_argv_head() -> Vec<&'static str> {
+    SCANNER_FLAGS
+        .iter()
+        .copied()
+        .chain([END_OF_OPTIONS])
+        .collect()
+}
 
 /// The scanner's exit codes, pinned in one place and cross-checked against the
 /// parse count (CLOUD-59's fail-closed clause).
@@ -1221,9 +1238,9 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
     let spawn = |program: &str, leading: &[&str]| {
         std::process::Command::new(program)
             .args(leading)
-            // `SCANNER_FLAGS` ends in `--`, so `batch` is operands whatever the
-            // tree named its files (CLOUD-1496); the const's doc carries why.
-            .args(SCANNER_FLAGS)
+            // Flags then `--`, so `batch` is operands whatever the tree named
+            // its files (CLOUD-1496); `scanner_argv_head` carries why.
+            .args(scanner_argv_head())
             .args(batch)
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
@@ -1252,7 +1269,7 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
             reason = "stays: the same scanner spawn as above, reached when the install path is not UTF-8 — a silent skip would be the worse failure, so the arm exists and carries the same verdict"
         )]
         None => std::process::Command::new(binary)
-            .args(SCANNER_FLAGS)
+            .args(scanner_argv_head())
             .args(batch)
             .current_dir(root)
             .stdout(std::process::Stdio::piped())

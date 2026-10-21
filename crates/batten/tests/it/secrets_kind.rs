@@ -64,9 +64,15 @@ pub(crate) struct Env {
 impl Env {
     pub(crate) fn new(name: &str) -> Self {
         let root = scratch(name);
+        // `base_commit` and not `git` alone: `git` only initialises, so dropping
+        // the commit this fixture used to make by hand would be a silent change
+        // to what every case here starts from. It also pins `origin/main`, which
+        // the hand-rolled sequence did not — harmless for tree-scoped rules and
+        // the published shape.
         let repo = Fixture::at(root.join("repo"))
             .file("README.md", "base\n")
             .git()
+            .base_commit()
             .build();
         let artifacts = root.join("artifacts");
         fs::create_dir_all(&artifacts).unwrap();
@@ -82,8 +88,8 @@ impl Env {
     ///
     /// The one axis a caller outside this module varies: `secrets_operands.rs`
     /// plants files named after scanner flags, which `**/*.conf` cannot match.
-    pub(crate) fn glob(mut self, glob: &str) -> Self {
-        glob.clone_into(&mut self.glob);
+    pub(crate) fn glob(mut self, glob: String) -> Self {
+        self.glob = glob;
         self
     }
 

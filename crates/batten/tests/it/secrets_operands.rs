@@ -104,26 +104,18 @@ const KNOWN_FLAG_PATH: &str = "--strict-ignore";
 /// hostile names, so the expected output is hostile-then-plain.
 const PLAIN_PATH: &str = "plain.conf";
 
-/// The rule glob this suite needs, and every clause of it is load-bearing.
-///
-/// It alternates so the rule selects exactly the hostile path and its plain
-/// companion, and neither `README.md` nor `batten.toml`: a wider glob would put
-/// the config itself in the batch and the assertion would stop being about
-/// operand handling, while a bare `**/-*` would exclude the companion the quiet
-/// half needs. This is the one axis on which this suite differs from
-/// `secrets_kind.rs`, which is why its `Env` takes it rather than being copied.
-fn glob() -> String {
-    format!("**/{{-*,{PLAIN_PATH}}}")
-}
-
 /// A scanner that parses its argv the way the pinned binary does.
 ///
 /// The known-flag list is ripsecrets 0.1.11's, not an invention: `--only-matching`
-/// is what this build passes and `--strict-ignore` is the one a fixture is named
-/// after. Before the terminator a known flag is consumed and any other
-/// `-`-leading word is an unknown option, refused on stderr with the pinned
-/// tool's own exit 2 — neither its clean (0) nor its found (1) status. After the
-/// terminator every word is a path, reported as a match.
+/// is what this build passes and [`KNOWN_FLAG_PATH`] is interpolated rather than
+/// re-typed, because the `case` arm — not the const — is what decides which half
+/// of the hazard a fixture name triggers. Spelled twice, renaming the const to
+/// another real flag would leave the quiet case passing and still dying to the
+/// mutant, but through the LOUD path: a second copy of its sibling, with nothing
+/// asserting the difference. Before the terminator a known flag is consumed and
+/// any other `-`-leading word is an unknown option, refused on stderr with the
+/// pinned tool's own exit 2 — neither its clean (0) nor its found (1) status.
+/// After the terminator every word is a path, reported as a match.
 ///
 /// The trailing status is the literal found (1) rather than a count of what was
 /// reported, because the module doc's "every case leaves at least one surviving
@@ -131,16 +123,17 @@ fn glob() -> String {
 /// would also read as if the pin's clean (0) path were modelled here, which is
 /// exactly what that paragraph says this stub declines to model.
 ///
-/// The span is a placeholder rather than a credential shape: this suite asserts
-/// where the scanner was pointed, and a literal credential in a committed file
-/// would trip consumer #1's own `source carry unsafe` rule over this very file.
-const STUB: &str = r#"#!/bin/sh
+/// The span is a placeholder rather than a credential shape, for [`PLANTED`]'s
+/// reason.
+fn stub() -> String {
+    format!(
+        r#"#!/bin/sh
 terminated=0
 for arg in "$@"; do
   if [ "$terminated" -eq 0 ]; then
     case "$arg" in
       --) terminated=1; continue ;;
-      --only-matching|--strict-ignore) continue ;;
+      --only-matching|{KNOWN_FLAG_PATH}) continue ;;
       -*)
         printf "error: unexpected argument '%s' found\n" "$arg" >&2
         exit 2
@@ -150,7 +143,9 @@ for arg in "$@"; do
   printf '%s\n' "$arg:1:redacted"
 done
 exit 1
-"#;
+"#
+    )
+}
 
 /// The planted file's contents. Not a credential shape, deliberately — the stub
 /// decides what it reports, and a literal one here would trip this repository's
@@ -165,16 +160,24 @@ fn deny_line(path: &str) -> String {
 /// Plant a secret at `hostile` and at the plain companion, install the
 /// argv-reading stub, and run `enforce`.
 ///
-/// The fixture is NOT committed, and that is not an oversight: the secrets batch
-/// is the `ignore` walk filtered by the rule's glob (`rules::tree_files`), never
-/// the git index, so staging it would fork two git processes to change nothing
-/// the gate reads. `secrets_kind.rs` already relies on this — its `app.conf` is
-/// written after its only commit and is still reported.
+/// The planted files are NOT committed, and that is not an oversight: the
+/// secrets batch is the `ignore` walk filtered by the rule's glob
+/// (`rules::tree_files`), never the git index, so staging them would fork two
+/// git processes to change nothing the gate reads. `secrets_kind.rs` relies on
+/// the same thing — its `Env` makes a base commit and then every case writes its
+/// `app.conf` after it, still reported.
+///
+/// The glob alternation is the one axis this suite differs from `secrets_kind.rs`
+/// on, which is why its `Env` takes it rather than being copied. Every clause is
+/// load-bearing: it selects exactly the hostile path and its plain companion, and
+/// neither `README.md` nor `batten.toml` — a wider glob would put the config
+/// itself in the batch and the assertion would stop being about operand handling,
+/// while a bare `**/-*` would drop the companion the quiet half needs.
 fn enforce_over(name: &str, hostile: &str) -> Output {
-    let env = Env::new(name).glob(&glob());
+    let env = Env::new(name).glob(format!("**/{{-*,{PLAIN_PATH}}}"));
     env.file(hostile, PLANTED);
     env.file(PLAIN_PATH, PLANTED);
-    env.install_scanner(STUB);
+    env.install_scanner(&stub());
     env.run(&["enforce"])
 }
 
