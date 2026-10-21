@@ -1561,6 +1561,16 @@ mod tests {
     }
 
     #[test]
+    fn every_cause_is_a_refusal_and_an_admission_is_not() {
+        // The gate's exit code is the count of these, so the predicate is
+        // pinned here rather than only through the binary.
+        for cause in Cause::ALL {
+            assert!(Admission::Refused(*cause).is_refused(), "{cause:?}");
+        }
+        assert!(!Admission::Asked.is_refused());
+    }
+
+    #[test]
     fn each_admission_has_its_own_token() {
         for cause in Cause::ALL {
             assert_eq!(Admission::Refused(*cause).as_str(), "refused");
