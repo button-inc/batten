@@ -94,6 +94,14 @@ const PROVISION_VERB: &str = "batten provision apply";
 
 /// The scanner's flags, pinned here beside the parser that reads their output.
 ///
+/// Flags ONLY: the end-of-options terminator is not one of these, and
+/// [`scanner_argv_head`] is what puts it after them. A flag appended here lands
+/// before the terminator by construction, which is the point — appending it to a
+/// slice that already ended in `--` would have put the flag where the pinned
+/// scanner reads it as a path, silently dropping it. That is the same quiet miss
+/// [`END_OF_OPTIONS`] exists to close, and it is not a trap worth leaving inside
+/// the fix for it.
+///
 /// `--only-matching` is **not** an option: it is what makes the third output
 /// field the matched literal alone rather than the whole source line. The span
 /// this kind hashes has to be the literal, because
@@ -101,6 +109,70 @@ const PROVISION_VERB: &str = "batten provision apply";
 /// a whole-line span would fold every edit elsewhere on the line into the
 /// secret's identity, re-minting a finding nobody changed.
 const SCANNER_FLAGS: &[&str] = &["--only-matching"];
+
+/// The end-of-options terminator (CLOUD-1496).
+///
+/// WHAT IT CLOSES. `run_once`'s batch is paths the `ignore` walk found in the
+/// judged tree — untracked files included, not only tracked ones — and that tree
+/// is the untrusted input here: a file named `-h` or `--strict-ignore` is
+/// writable in any repository this gate runs over. Without the terminator the
+/// scanner parses such a path as an option, and BOTH directions are wrong. An
+/// option the pin does not know exits 2, which CLOUD-59's fail-closed clause
+/// turns into a refusal of the whole batch; one it DOES know is consumed as a
+/// flag, so the file is never read while the exit stays clean. The second is the
+/// dangerous one: a green tree over a file nobody opened. This is the
+/// `--end-of-options` class CLOUD-718 fixed for git, where `rev-parse` echoed
+/// the terminator instead of consuming it.
+///
+/// Measured against the pinned ripsecrets 0.1.11 rather than assumed. Its flag
+/// table is `--install-pre-commit`, `--strict-ignore`, `--only-matching`,
+/// `--additional-pattern`, `-h`, `-V`; it honours `--`, and bare operands after
+/// it are accepted unprefixed, so CLOUD-718's echo does not recur here. That
+/// makes `--strict-ignore` the known arm and `--no-ignore` — a `ripgrep` flag,
+/// not one of these — the unknown arm; `secrets_operands.rs` has a case for each.
+///
+/// WHAT IT DOES NOT CLOSE, measured the same way: a file named exactly `-`. That
+/// is the STDIN convention, not option parsing, so `--` has no bearing on it —
+/// `-- -` exits 0 having read nothing, and `-- - plain.conf` returns only
+/// `plain.conf`. The unread file is a silent false green of exactly the kind
+/// this terminator closes for flag-named paths. `-- ./-` does report it, so the
+/// remedy is rendering that operand — and rendering is why the hole is
+/// CLOUD-1492's rather than this row's, on cost and not on bookkeeping:
+/// `parse_line` anchors `hit.path` on the batch strings, and `hit.path` is
+/// hashed by [`crate::identity::secret_code_fingerprint`], so rendering every
+/// operand re-mints every stored secret identity, while rendering only the
+/// hostile ones puts the reversal inside `parse_line`. Either way the decision
+/// is about identity and the journal, not about an argv. Recorded there with the
+/// numbers; `-h`, `-V`, `-x`, `--` and both long flags are all fine after the
+/// terminator.
+///
+/// The claim is about THIS spawn and is not a survey of the crate: `rules.rs`'s
+/// `command_rule` expands `{{files}}` into a consumer-written argv whose
+/// terminator position only the consumer can choose. That is CLOUD-1492's too,
+/// with the `[[spawn]] operands` column.
+const END_OF_OPTIONS: &str = "--";
+
+/// The argv head both spawn arms pass before the batch: the flags, then the
+/// terminator that ends them.
+///
+/// BUILT rather than spelled, and that is the whole of it. Writing `--` at each
+/// call site makes the two arms a lockstep obligation kept by review — they
+/// differ only in how the program is named, never in what the tree may call a
+/// file, and the second is unreachable in practice, so review is the only thing
+/// that would have caught a drift. Spelling it as the last element of
+/// [`SCANNER_FLAGS`] instead moved the hazard rather than closing it: the
+/// natural edit to a slice of flags is to append one, and an appended flag would
+/// have landed after the terminator. Here neither is possible — the terminator
+/// is placed by this function, after whatever [`SCANNER_FLAGS`] holds.
+//MUTANT-SUITE crates/batten/tests/it/secrets_operands.rs
+//MUTANT drop-the-operand-terminator|s@\.chain(\[END_OF_OPTIONS\])@@|a_dash_leading_tracked_path_is_scanned_as_a_path
+fn scanner_argv_head() -> Vec<&'static str> {
+    SCANNER_FLAGS
+        .iter()
+        .copied()
+        .chain([END_OF_OPTIONS])
+        .collect()
+}
 
 /// The scanner's exit codes, pinned in one place and cross-checked against the
 /// parse count (CLOUD-59's fail-closed clause).
@@ -1166,7 +1238,9 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
     let spawn = |program: &str, leading: &[&str]| {
         std::process::Command::new(program)
             .args(leading)
-            .args(SCANNER_FLAGS)
+            // Flags then `--`, so `batch` is operands whatever the tree named
+            // its files (CLOUD-1496); `scanner_argv_head` carries why.
+            .args(scanner_argv_head())
             .args(batch)
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
@@ -1195,7 +1269,7 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
             reason = "stays: the same scanner spawn as above, reached when the install path is not UTF-8 — a silent skip would be the worse failure, so the arm exists and carries the same verdict"
         )]
         None => std::process::Command::new(binary)
-            .args(SCANNER_FLAGS)
+            .args(scanner_argv_head())
             .args(batch)
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
