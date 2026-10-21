@@ -1562,7 +1562,9 @@ mod tests {
 
     #[test]
     fn each_admission_has_its_own_token() {
-        assert_eq!(Admission::Refused.as_str(), "refused");
+        for cause in Cause::ALL {
+            assert_eq!(Admission::Refused(*cause).as_str(), "refused");
+        }
         assert_eq!(Admission::Asked.as_str(), "asked");
     }
 }
