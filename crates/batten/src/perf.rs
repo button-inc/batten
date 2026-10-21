@@ -970,18 +970,20 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Re
     // `batten`'s own units first; the dependency closure CLOUD-1891 shares is
     // left alone.
     let marker = target_dir.map(|dir| dir.join(LAST_ARM));
-    let cleaned = marker
-        .as_ref()
-        .is_some_and(|marker| switches_arm(std::fs::read_to_string(marker).ok().as_deref(), what));
-    if cleaned {
-        let clean: Vec<String> = ["clean", "-p", "batten", "--profile", profile]
-            .iter()
-            .map(|word| (*word).to_owned())
-            .collect();
-        if !run(dir, Tool::Cargo, &clean, &env)? {
-            bail!(
-                "perf-pair: could not drop the other arm's `batten` units before the {what} build. No measurement."
-            );
+    let mut cleaned = false;
+    if let Some(marker) = &marker {
+        let last = std::fs::read_to_string(marker).ok();
+        if switches_arm(last.as_deref(), what) {
+            let clean: Vec<String> = ["clean", "-p", "batten", "--profile", profile]
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect();
+            if !run(dir, Tool::Cargo, &clean, &env)? {
+                bail!(
+                    "perf-pair: could not drop the other arm's `batten` units before the {what} build. No measurement."
+                );
+            }
+            cleaned = true;
         }
     }
     if !run(dir, Tool::Cargo, &args, &env)? {

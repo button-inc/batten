@@ -507,6 +507,43 @@ fn the_in_diff_patch_is_written_without_git() {
     );
 }
 
+/// A HUNK BELOW THE TOP CARRIES ITS OWN LINE NUMBERS (CLOUD-2507). The case
+/// above changes line 2, so its context starts at line 1 and an offset error
+/// cannot show. Measured on a doc-comment change at line 7: cargo-mutants
+/// refused the patch with "Diff content doesn't match source file … line 4",
+/// and the source was reported `suite-did-not-run`.
+#[test]
+fn a_hunk_below_the_top_names_its_own_lines() {
+    let root = common::scratch("mutate-in-diff-offset");
+    common::init_repo(&root);
+    common::git_in(&root, &["config", "user.email", "t@example.com"]);
+    common::git_in(&root, &["config", "user.name", "t"]);
+    let lines = |seventh: &str| {
+        (1..=12)
+            .map(|n| {
+                if n == 7 {
+                    seventh.to_owned()
+                } else {
+                    format!("l{n}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n"
+    };
+    common::write(&root, "a.rs", &lines("l7"));
+    common::git_in(&root, &["add", "-A"]);
+    common::git_in(&root, &["commit", "--quiet", "-m", "base"]);
+    common::write(&root, "a.rs", &lines("L7"));
+
+    let patch = batten::mutate::in_diff_patch(&root, "HEAD", &[String::from("a.rs")])
+        .expect("write the patch");
+    assert!(
+        patch.contains("@@ -4,7 +4,7 @@\n l4\n l5\n l6\n-l7\n+L7\n l8\n l9\n l10\n"),
+        "the hunk must start where its first context line is: {patch}"
+    );
+}
+
 /// A MODULE'S OWN TEST IS RUN IN PROCESS, AS `policy test` RUNS IT (CLOUD-2255):
 /// the case a `.rego` row names in its own module is judged by that `test_`
 /// rule, under the committed config's registry, with no conftest spawned.

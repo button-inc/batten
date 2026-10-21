@@ -2299,15 +2299,78 @@ pub fn in_diff_patch(root: &Path, base: &str, sources: &[String]) -> Result<Stri
         }
         let input = imara_diff::InternedInput::new(before.as_str(), after.as_str());
         let diff = imara_diff::Diff::compute(imara_diff::Algorithm::Histogram, &input);
-        let printer = imara_diff::BasicLineDiffPrinter(&input.interner);
         let _ = writeln!(patch, "--- a/{source}\n+++ b/{source}");
-        let _ = write!(
-            patch,
-            "{}",
-            diff.unified_diff(&printer, imara_diff::UnifiedDiffConfig::default(), &input)
-        );
+        write_hunks(&mut patch, &diff, &input);
     }
     Ok(patch)
+}
+
+/// Unified hunks with 3 lines of context, each header written from the very
+/// ranges its body prints (CLOUD-2507).
+///
+/// `imara_diff` 0.2.0's own printer starts its cursor at line 0 and moves it
+/// only for a hunk more than twice the context below the cursor, so a first
+/// hunk within six lines of the top printed its context from line 1 under a
+/// header naming `start - 3`. cargo-mutants refused that patch ("Diff content
+/// doesn't match source file") and the source was never mutated. Here a group
+/// of hunks is one `[b0, b1)` range of the before side, and the header and the
+/// body are both read off it.
+fn write_hunks(
+    patch: &mut String,
+    diff: &imara_diff::Diff,
+    input: &imara_diff::InternedInput<&str>,
+) {
+    use std::fmt::Write as _;
+    const CONTEXT: u32 = 3;
+    let line = |patch: &mut String, mark: char, token: imara_diff::Token| {
+        let text = input.interner[token];
+        let _ = write!(patch, "{mark}{text}");
+        if !text.ends_with('\n') {
+            patch.push('\n');
+        }
+    };
+    let hunks: Vec<imara_diff::Hunk> = diff.hunks().collect();
+    let total = u32::try_from(input.before.len()).unwrap_or(u32::MAX);
+    let mut i = 0;
+    while i < hunks.len() {
+        // Hunks whose contexts touch print as one.
+        let mut j = i;
+        while j + 1 < hunks.len() && hunks[j + 1].before.start - hunks[j].before.end <= 2 * CONTEXT
+        {
+            j += 1;
+        }
+        let (first, last) = (&hunks[i], &hunks[j]);
+        //MUTANT hunk-header-from-the-top|s@^        let b0 = first.before.start.saturating_sub(CONTEXT);$@        let b0 = 0;@|a_hunk_below_the_top_names_its_own_lines
+        let b0 = first.before.start.saturating_sub(CONTEXT);
+        let a0 = first.after.start - (first.before.start - b0);
+        let b1 = (last.before.end + CONTEXT).min(total);
+        let a1 = last.after.end + (b1 - last.before.end);
+        let _ = writeln!(
+            patch,
+            "@@ -{},{} +{},{} @@",
+            b0 + 1,
+            b1 - b0,
+            a0 + 1,
+            a1 - a0
+        );
+        let mut pos = b0;
+        for hunk in &hunks[i..=j] {
+            for &token in &input.before[pos as usize..hunk.before.start as usize] {
+                line(patch, ' ', token);
+            }
+            for &token in &input.before[hunk.before.start as usize..hunk.before.end as usize] {
+                line(patch, '-', token);
+            }
+            for &token in &input.after[hunk.after.start as usize..hunk.after.end as usize] {
+                line(patch, '+', token);
+            }
+            pos = hunk.before.end;
+        }
+        for &token in &input.before[pos as usize..b1 as usize] {
+            line(patch, ' ', token);
+        }
+        i = j + 1;
+    }
 }
 
 /// The programs this module runs, CLOSED (CLOUD-1924).
