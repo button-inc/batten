@@ -75,13 +75,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+// The secrets fixture, shared rather than copied. `secrets_kind.rs` owns it and
+// takes the one axis this suite varies — the rule glob — as a parameter; see its
+// `Env` doc for why a per-suite copy is the thing to avoid.
+use crate::secrets_kind::Env;
 
-use std::fs;
-use std::path::PathBuf;
 use std::process::Output;
 
-use batten::provision::digest;
-use common::{Fixture, StateHome, batten, scratch, stderr, stdout, write};
+use common::{stderr, stdout};
 
 /// A path naming an option the pin does NOT know.
 ///
@@ -103,105 +104,16 @@ const KNOWN_FLAG_PATH: &str = "--strict-ignore";
 /// hostile names, so the expected output is hostile-then-plain.
 const PLAIN_PATH: &str = "plain.conf";
 
-/// A repository, an isolated state home, and somewhere to put the stub.
+/// The rule glob this suite needs, and every clause of it is load-bearing.
 ///
-/// A FOURTH near-copy of the shape `secrets_kind.rs`, `enforce_journal.rs` and
-/// `provision.rs` each carry, and the duplication is real rather than justified:
-/// `install_scanner` takes its script as a parameter in the others, so only the
-/// glob and this suite's `STUB` actually differ.
-///
-/// It is left undone for scope, and the honest reason is narrower than a `common::`
-/// helper. These are `mod`s of one integration binary, so the cheap route is not
-/// `tests/it/common/mod.rs` — a `MUTANT_GATES` file with `spawn-factory` allowlist
-/// entries, which this row certainly does not own — but `crate::secrets_kind::Env`
-/// made `pub(crate)` with its hardcoded `glob = "**/*.conf"` taken as a parameter.
-/// That is a smaller edit than this copy, and it is still a file CLOUD-1496 does
-/// not own, so collapsing it here would widen the PR into a sibling's test module.
-/// CLOUD-2504 carries the shape, and the gate that keeps the next copy from being
-/// written — the half a refactor alone does not ship.
-struct Env {
-    repo: PathBuf,
-    home: PathBuf,
-    artifacts: PathBuf,
-}
-
-impl Env {
-    fn new(name: &str) -> Self {
-        let root = scratch(name);
-        let repo = Fixture::at(root.join("repo"))
-            .file("README.md", "base\n")
-            .git()
-            .build();
-        let artifacts = root.join("artifacts");
-        fs::create_dir_all(&artifacts).unwrap();
-        Env {
-            repo,
-            home: root.join("home"),
-            artifacts,
-        }
-    }
-
-    fn run(&self, args: &[&str]) -> Output {
-        batten()
-            .state_home(&self.home)
-            .args(args)
-            .current_dir(&self.repo)
-            .output()
-            .expect("run batten")
-    }
-
-    fn file(&self, path: &str, contents: &str) {
-        write(&self.repo, path, contents);
-    }
-
-    /// Write the argv-reading stub, provision it, and write the config using it.
-    ///
-    /// The digest is taken from `STUB` directly rather than by reading the file
-    /// back: it is a compile-time constant, so the read would re-open a file to
-    /// learn bytes already in hand.
-    fn install_scanner(&self) {
-        let path = self.artifacts.join("ripsecrets");
-        fs::write(&path, STUB).unwrap();
-        self.config(
-            &format!("file://{}", path.display()),
-            &digest(STUB.as_bytes()),
-        );
-        let applied = self.run(&["provision", "apply"]);
-        assert!(
-            applied.status.success(),
-            "the stub scanner installs: {}",
-            stderr(&applied)
-        );
-    }
-
-    fn config(&self, url: &str, sha: &str) {
-        // A TOML *literal* string for the url, because it carries a filesystem
-        // path — `secrets_kind.rs` records the Windows reading that forced it.
-        //
-        // The glob alternates so the rule selects exactly the hostile path and
-        // its plain companion, and neither `README.md` nor `batten.toml`: a
-        // wider glob would put the config itself in the batch and the assertion
-        // would stop being about operand handling, while a bare `**/-*` would
-        // exclude the companion the quiet half needs.
-        self.file(
-            "batten.toml",
-            &format!(
-                "version = 1\n\n\
-                 [[provision]]\n\
-                 name = \"ripsecrets\"\n\
-                 version = \"0.0.0-stub\"\n\
-                 url = '{url}'\n\
-                 sha256 = \"{sha}\"\n\
-                 binary = \"ripsecrets\"\n\n\
-                 [[rule]]\n\
-                 id = \"source carry unsafe\"\n\
-                 kind = \"secrets\"\n\
-                 glob = \"**/{{-*,{PLAIN_PATH}}}\"\n\
-                 severity = \"deny\"\n\
-                 scope = \"tree\"\n"
-            ),
-        );
-    }
+/// It alternates so the rule selects exactly the hostile path and its plain
+/// companion, and neither `README.md` nor `batten.toml`: a wider glob would put
+/// the config itself in the batch and the assertion would stop being about
+/// operand handling, while a bare `**/-*` would exclude the companion the quiet
+/// half needs. This is the one axis on which this suite differs from
+/// `secrets_kind.rs`, which is why its `Env` takes it rather than being copied.
+fn glob() -> String {
+    format!("**/{{-*,{PLAIN_PATH}}}")
 }
 
 /// A scanner that parses its argv the way the pinned binary does.
@@ -259,10 +171,10 @@ fn deny_line(path: &str) -> String {
 /// the gate reads. `secrets_kind.rs` already relies on this — its `app.conf` is
 /// written after its only commit and is still reported.
 fn enforce_over(name: &str, hostile: &str) -> Output {
-    let env = Env::new(name);
+    let env = Env::new(name).glob(&glob());
     env.file(hostile, PLANTED);
     env.file(PLAIN_PATH, PLANTED);
-    env.install_scanner();
+    env.install_scanner(STUB);
     env.run(&["enforce"])
 }
 

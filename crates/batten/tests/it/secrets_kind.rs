@@ -37,37 +37,57 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use batten::provision::digest;
-use common::{Fixture, StateHome, batten, git_in, scratch};
+use common::{Fixture, StateHome, batten, scratch};
+
+/// The rule glob every case in THIS module wants: its fixtures are all `*.conf`.
+const DEFAULT_GLOB: &str = "**/*.conf";
 
 /// A repository, an isolated `HOME`/`XDG_DATA_HOME`, and a place to write stub
 /// artifacts — the shape `tests/provision.rs` already uses, for the same reason:
 /// the cache and the minted key must land somewhere this test owns rather than
 /// in the developer's real state directory.
-struct Env {
+///
+/// `pub(crate)` because `secrets_operands.rs` needs exactly this fixture and
+/// differs on one axis, the rule glob, which [`Env::glob`] takes. These are
+/// `mod`s of one integration binary, so the sharing needs nothing in
+/// `common/mod.rs`; another near-copy was the alternative, and
+/// `common::state_home`'s own doc records what per-suite copies of this
+/// isolation cost — CLOUD-113's Windows `APPDATA` leak was a copy that missed a
+/// hermeticity fix and still passed.
+pub(crate) struct Env {
     repo: PathBuf,
     home: PathBuf,
     artifacts: PathBuf,
+    glob: String,
 }
 
 impl Env {
-    fn new(name: &str) -> Self {
+    pub(crate) fn new(name: &str) -> Self {
         let root = scratch(name);
         let repo = Fixture::at(root.join("repo"))
             .file("README.md", "base\n")
+            .git()
             .build();
-        git_in(&repo, &["init", "-q"]);
-        git_in(&repo, &["add", "-A"]);
-        git_in(&repo, &["commit", "-q", "-m", "base"]);
         let artifacts = root.join("artifacts");
         fs::create_dir_all(&artifacts).unwrap();
         Env {
             repo,
             home: root.join("home"),
             artifacts,
+            glob: DEFAULT_GLOB.to_owned(),
         }
     }
 
-    fn run(&self, args: &[&str]) -> Output {
+    /// Narrow the rule this fixture writes to a different glob.
+    ///
+    /// The one axis a caller outside this module varies: `secrets_operands.rs`
+    /// plants files named after scanner flags, which `**/*.conf` cannot match.
+    pub(crate) fn glob(mut self, glob: &str) -> Self {
+        glob.clone_into(&mut self.glob);
+        self
+    }
+
+    pub(crate) fn run(&self, args: &[&str]) -> Output {
         batten()
             .state_home(&self.home)
             .args(args)
@@ -80,7 +100,7 @@ impl Env {
         self.home.join("data").join("batten")
     }
 
-    fn file(&self, path: &str, contents: &str) {
+    pub(crate) fn file(&self, path: &str, contents: &str) {
         let full = self.repo.join(path);
         if let Some(parent) = full.parent() {
             fs::create_dir_all(parent).unwrap();
@@ -92,7 +112,7 @@ impl Env {
     ///
     /// Returns after `provision apply` has installed it, so a case that wants a
     /// COLD cache simply does not call this.
-    fn install_scanner(&self, script: &str) {
+    pub(crate) fn install_scanner(&self, script: &str) {
         let path = self.artifacts.join("ripsecrets");
         fs::write(&path, script).unwrap();
         let bytes = fs::read(&path).unwrap();
@@ -124,9 +144,10 @@ impl Env {
                  [[rule]]\n\
                  id = \"source carry unsafe\"\n\
                  kind = \"secrets\"\n\
-                 glob = \"**/*.conf\"\n\
+                 glob = \"{glob}\"\n\
                  severity = \"deny\"\n\
-                 scope = \"tree\"\n"
+                 scope = \"tree\"\n",
+                glob = self.glob
             ),
         );
     }
