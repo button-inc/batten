@@ -845,34 +845,48 @@ impl Admission {
             Admission::Asked => "asked",
         }
     }
+
+    /// Whether no answer admits the pair, whatever the cause.
+    #[must_use]
+    pub fn is_refused(self) -> bool {
+        matches!(self, Admission::Refused(_))
+    }
 }
 
-/// Why the ledger did not admit a pair (CLOUD-2303).
-///
-/// A bare refusal left "ask again" as the only remedy, so an answer already
-/// given was asked for a second time. Each cause names a different repair, and
-/// only one of them is a first question.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Cause {
-    /// No question added on this branch names the pair: ask it.
-    NotAsked,
-    /// A question naming it was answered, but not with an option whose label
-    /// starts `Admit`, so the answer reads as no: ask with an `Admit` option.
-    AnsweredWithoutAdmit,
-    /// The head does not begin with every base line, so nothing is admitted:
-    /// restore the base lines, in order, ahead of this branch's. A repair, not
-    /// a new question.
-    LedgerRewritten,
+token_enum! {
+    /// Why the ledger did not admit a pair (CLOUD-2303).
+    ///
+    /// A bare refusal left "ask again" as the only remedy, so an answer already
+    /// given was asked for a second time. Each cause names a different repair,
+    /// and only one of them is a first question.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Cause by as_str {
+        /// No question added on this branch names the pair: ask it.
+        NotAsked => "not-asked",
+        /// A question naming it was answered, but not with an option whose
+        /// label starts `Admit`, so the answer reads as no: ask with an `Admit`
+        /// option.
+        AnsweredWithoutAdmit => "answered-without-admit",
+        /// The head does not begin with every base line, so nothing is
+        /// admitted: restore the base lines, in order, ahead of this branch's.
+        /// A repair, not a new question.
+        LedgerRewritten => "ledger-rewritten",
+    }
 }
 
 impl Cause {
-    /// The stable lowercase token (§6).
+    /// The repair this cause names when it is not a question at all, said once
+    /// per run whatever the number of pairs it refused; `None` where the remedy
+    /// is to ask.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub fn remedy(self) -> Option<String> {
         match self {
-            Cause::NotAsked => "not-asked",
-            Cause::AnsweredWithoutAdmit => "answered-without-admit",
-            Cause::LedgerRewritten => "ledger-rewritten",
+            Cause::LedgerRewritten => Some(format!(
+                "{} must begin with every base line, in order; restore them ahead of \
+                 this branch's lines rather than asking again",
+                crate::asked::LEDGER
+            )),
+            Cause::NotAsked | Cause::AnsweredWithoutAdmit => None,
         }
     }
 }
@@ -885,35 +899,28 @@ impl Cause {
 ///
 /// A REFUSAL NAMES ITS CAUSE (CLOUD-2303). A bare refusal read as never asked,
 /// so an answer already recorded was asked for again; the cause says which
-/// repair applies. A rewritten ledger adds the one line naming that repair.
+/// repair applies, and a cause that is a repair rather than a question adds the
+/// one line naming it ([`Cause::remedy`]).
 #[must_use]
 pub fn admission_lines(adjudicated: &[(Smell, Admission)]) -> Vec<String> {
     let mut lines: Vec<String> = adjudicated
         .iter()
-        .map(|(smell, admission)| match admission {
-            Admission::Refused(cause) => format!(
-                "config-lint: refused {} {} ({})",
-                smell.id,
-                smell.at,
-                cause.as_str()
-            ),
-            Admission::Asked => format!(
-                "config-lint: admitted {} {} ({})",
-                smell.id,
-                smell.at,
-                admission.as_str()
-            ),
+        .map(|(smell, admission)| {
+            let (verdict, token) = match admission {
+                Admission::Refused(cause) => ("refused", cause.as_str()),
+                Admission::Asked => ("admitted", admission.as_str()),
+            };
+            format!("config-lint: {verdict} {} {} ({token})", smell.id, smell.at)
         })
         .collect();
-    if adjudicated
-        .iter()
-        .any(|(_, admission)| *admission == Admission::Refused(Cause::LedgerRewritten))
-    {
-        lines.push(format!(
-            "config-lint: {} must begin with every base line, in order; \
-             restore them ahead of this branch's lines rather than asking again",
-            crate::asked::LEDGER
-        ));
+    for cause in Cause::ALL {
+        if let Some(remedy) = cause.remedy()
+            && adjudicated
+                .iter()
+                .any(|(_, admission)| *admission == Admission::Refused(*cause))
+        {
+            lines.push(format!("config-lint: {remedy}"));
+        }
     }
     lines
 }
@@ -929,16 +936,18 @@ pub fn admissions(smells: &[Smell], ledger: &crate::asked::Ledger) -> Vec<(Smell
     smells
         .iter()
         .map(|smell| {
-            let pair = format!("{} {}", smell.id, smell.at);
-            let entries = ledger.admitting();
-            let admission = if *ledger == crate::asked::Ledger::Rewritten {
-                Admission::Refused(Cause::LedgerRewritten)
-            } else if entries.iter().any(|entry| entry.admits(&pair)) {
-                Admission::Asked
-            } else if entries.iter().any(|entry| entry.question.contains(&pair)) {
-                Admission::Refused(Cause::AnsweredWithoutAdmit)
-            } else {
-                Admission::Refused(Cause::NotAsked)
+            let admission = match ledger {
+                crate::asked::Ledger::Rewritten => Admission::Refused(Cause::LedgerRewritten),
+                crate::asked::Ledger::Added(entries) => {
+                    let pair = format!("{} {}", smell.id, smell.at);
+                    if entries.iter().any(|entry| entry.admits(&pair)) {
+                        Admission::Asked
+                    } else if entries.iter().any(|entry| entry.question.contains(&pair)) {
+                        Admission::Refused(Cause::AnsweredWithoutAdmit)
+                    } else {
+                        Admission::Refused(Cause::NotAsked)
+                    }
+                }
             };
             (smell.clone(), admission)
         })

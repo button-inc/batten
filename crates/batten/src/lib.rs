@@ -28267,7 +28267,7 @@ fn run_config(
             let adjudicated = lint::admissions(&smells, &ledger);
             let refused = adjudicated
                 .iter()
-                .filter(|(_, admission)| matches!(admission, lint::Admission::Refused(_)))
+                .filter(|(_, admission)| admission.is_refused())
                 .count();
             if !*json {
                 for line in lint::admission_lines(&adjudicated) {

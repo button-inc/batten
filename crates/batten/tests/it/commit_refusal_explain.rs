@@ -138,8 +138,9 @@ fn a_multi_subject_refusal_prints_a_route_per_subject() {
         .base_commit()
         .build();
     let request = |subject: &str| {
-        batten()
-            .args([
+        common::run(
+            &dir,
+            &[
                 "override",
                 "request",
                 "--rule",
@@ -148,10 +149,8 @@ fn a_multi_subject_refusal_prints_a_route_per_subject() {
                 "diff ship early",
                 "--subject",
                 subject,
-            ])
-            .current_dir(&dir)
-            .output()
-            .expect("run batten")
+            ],
+        )
     };
 
     let joined = request("a.txt b.txt");
