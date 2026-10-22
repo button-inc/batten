@@ -5836,6 +5836,19 @@ mod tests {
 
     use super::*;
 
+    /// A hunk near the top carries its own start line (CLOUD-2507): line 7 of
+    /// 12 changed is `@@ -4,7 +4,7 @@` over lines 4-10, as `git diff` writes it.
+    #[test]
+    fn a_hunk_near_the_top_names_its_own_lines() {
+        let before: String = (1..=12).map(|n| format!("l{n}\n")).collect();
+        let after = before.replace("l7\n", "L7\n");
+        assert_eq!(
+            unified_hunks(&before, &after).unwrap(),
+            "@@ -4,7 +4,7 @@\n l4\n l5\n l6\n-l7\n+L7\n l8\n l9\n l10\n"
+        );
+        assert_eq!(unified_hunks(&before, &before).unwrap(), "");
+    }
+
     /// A repository nothing was ever added to has no index file, and `ls-files`
     /// answers it with nothing and exit 0 — so this does too, rather than calling
     /// it "not a git repository" (CLOUD-2059).
