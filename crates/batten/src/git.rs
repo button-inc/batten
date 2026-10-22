@@ -980,6 +980,31 @@ pub fn read_at(dir: &Path, reference: &str, path: &str) -> Result<BaseBlob> {
     Ok(BaseBlob::Found { text, commit })
 }
 
+/// The unified hunks of `after` against `before`, 3 lines of context, as `git
+/// diff` writes them below its file headers.
+///
+/// `gix_diff`'s printer rather than `imara_diff` 0.2.0's (CLOUD-2507): that one
+/// starts its cursor at line 0, so a first hunk within six lines of the top
+/// printed its context from line 1 under a header naming `start - 3`, and
+/// cargo-mutants refused the patch.
+///
+/// # Errors
+///
+/// Never in practice: the printer fails only on hunk bytes that are not UTF-8,
+/// and both sides are `str`.
+pub fn unified_hunks(before: &str, after: &str) -> std::io::Result<String> {
+    use gix_diff::blob::unified_diff::{ConsumeBinaryHunk, ContextSize};
+    let input = gix_diff::blob::InternedInput::new(before, after);
+    let diff = gix_diff::blob::Diff::compute(gix_diff::blob::Algorithm::Histogram, &input);
+    gix_diff::blob::UnifiedDiff::new(
+        &diff,
+        &input,
+        ConsumeBinaryHunk::new(String::new(), "\n"),
+        ContextSize::symmetrical(3),
+    )
+    .consume()
+}
+
 /// The files directly inside `directory` at `reference`, as repo-relative paths.
 ///
 /// [`show`]'s sibling, and it exists for the same reason (CLOUD-833): under

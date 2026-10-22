@@ -2277,8 +2277,8 @@ impl Ran {
 /// bytes at `base` against its working bytes, written in process (CLOUD-2255).
 ///
 /// It was `git diff <base> -- <sources>`, spawned, on the reason that `gix`
-/// writes no unified patch; `imara-diff` (already the crate's diff engine) does,
-/// and [`crate::git::read_at`] reads the base blob with no argv. A source absent
+/// writes no unified patch; [`crate::git::unified_hunks`] does, in process, and
+/// [`crate::git::read_at`] reads the base blob with no argv. A source absent
 /// at `base` diffs from empty, a deleted one to empty, as `git diff` shows them.
 ///
 /// # Errors
@@ -2297,75 +2297,10 @@ pub fn in_diff_patch(root: &Path, base: &str, sources: &[String]) -> Result<Stri
         if before == after {
             continue;
         }
-        let input = imara_diff::InternedInput::new(before.as_str(), after.as_str());
-        let diff = imara_diff::Diff::compute(imara_diff::Algorithm::Histogram, &input);
         let _ = writeln!(patch, "--- a/{source}\n+++ b/{source}");
-        write_hunks(&mut patch, &diff, &input);
+        patch.push_str(&crate::git::unified_hunks(&before, &after)?);
     }
     Ok(patch)
-}
-
-/// Unified hunks with 3 lines of context, each header written from the very
-/// ranges its body prints (CLOUD-2507).
-///
-/// `imara_diff` 0.2.0's own printer starts its cursor at line 0 and moves it
-/// only for a hunk more than twice the context below the cursor, so a first
-/// hunk within six lines of the top printed its context from line 1 under a
-/// header naming `start - 3`. cargo-mutants refused that patch ("Diff content
-/// doesn't match source file") and the source was never mutated. Here a group
-/// of hunks is one `[b0, b1)` range of the before side, and the header and the
-/// body are both read off it.
-//MUTANT hunk-header-from-the-top|s@^        let b0 = first.before.start.saturating_sub(CONTEXT);$@        let b0 = 0;@|a_hunk_below_the_top_names_its_own_lines
-fn write_hunks(
-    patch: &mut String,
-    diff: &imara_diff::Diff,
-    input: &imara_diff::InternedInput<&str>,
-) {
-    use std::fmt::Write as _;
-    const CONTEXT: u32 = 3;
-    let line = |patch: &mut String, mark: char, token: imara_diff::Token| {
-        let text = input.interner[token];
-        let _ = write!(patch, "{mark}{text}");
-        if !text.ends_with('\n') {
-            patch.push('\n');
-        }
-    };
-    let hunks: Vec<imara_diff::Hunk> = diff.hunks().collect();
-    let total = u32::try_from(input.before.len()).unwrap_or(u32::MAX);
-    // Hunks whose contexts touch print as one.
-    for group in hunks.chunk_by(|a, b| b.before.start - a.before.end <= 2 * CONTEXT) {
-        let (Some(first), Some(last)) = (group.first(), group.last()) else {
-            continue;
-        };
-        let b0 = first.before.start.saturating_sub(CONTEXT);
-        let a0 = first.after.start - (first.before.start - b0);
-        let b1 = (last.before.end + CONTEXT).min(total);
-        let a1 = last.after.end + (b1 - last.before.end);
-        let _ = writeln!(
-            patch,
-            "@@ -{},{} +{},{} @@",
-            b0 + 1,
-            b1 - b0,
-            a0 + 1,
-            a1 - a0
-        );
-        let mut pos = b0;
-        for hunk in group {
-            for &token in &input.before[pos as usize..hunk.before.start as usize] {
-                line(patch, ' ', token);
-            }
-            for &token in &input.before[hunk.before.start as usize..hunk.before.end as usize] {
-                line(patch, '-', token);
-            }
-            for &token in &input.after[hunk.after.start as usize..hunk.after.end as usize] {
-                line(patch, '+', token);
-            }
-            pos = hunk.before.end;
-        }
-        for &token in &input.before[pos as usize..b1 as usize] {
-            line(patch, ' ', token);
-        }
-    }
 }
 
 /// The programs this module runs, CLOSED (CLOUD-1924).

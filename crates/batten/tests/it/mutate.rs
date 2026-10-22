@@ -514,30 +514,7 @@ fn the_in_diff_patch_is_written_without_git() {
 /// and the source was reported `suite-did-not-run`.
 #[test]
 fn a_hunk_below_the_top_names_its_own_lines() {
-    let root = common::scratch("mutate-in-diff-offset");
-    common::init_repo(&root);
-    common::git_in(&root, &["config", "user.email", "t@example.com"]);
-    common::git_in(&root, &["config", "user.name", "t"]);
-    let lines = |seventh: &str| {
-        (1..=12)
-            .map(|n| {
-                if n == 7 {
-                    seventh.to_owned()
-                } else {
-                    format!("l{n}")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-            + "\n"
-    };
-    common::write(&root, "a.rs", &lines("l7"));
-    common::git_in(&root, &["add", "-A"]);
-    common::git_in(&root, &["commit", "--quiet", "-m", "base"]);
-    common::write(&root, "a.rs", &lines("L7"));
-
-    let patch = batten::mutate::in_diff_patch(&root, "HEAD", &[String::from("a.rs")])
-        .expect("write the patch");
+    let patch = numbered_patch("mutate-in-diff-offset", 12, &[7]);
     assert!(
         patch.contains("@@ -4,7 +4,7 @@\n l4\n l5\n l6\n-l7\n+L7\n l8\n l9\n l10\n"),
         "the hunk must start where its first context line is: {patch}"
@@ -546,34 +523,11 @@ fn a_hunk_below_the_top_names_its_own_lines() {
 
 /// HUNKS WHOSE CONTEXTS TOUCH PRINT AS ONE, AND ONLY THOSE (CLOUD-2507). Lines
 /// 5 and 12 sit exactly twice the context apart, so their contexts meet and
-/// they share a header; line 22 sits further on and gets its own. A grouping
-/// off by one either way prints a different set of headers.
+/// they share a header; line 22 sits further on and gets its own, as `git diff`
+/// prints them.
 #[test]
 fn hunks_whose_contexts_touch_print_as_one() {
-    let root = common::scratch("mutate-in-diff-groups");
-    common::init_repo(&root);
-    common::git_in(&root, &["config", "user.email", "t@example.com"]);
-    common::git_in(&root, &["config", "user.name", "t"]);
-    let lines = |changed: bool| {
-        (1..=30)
-            .map(|n| {
-                if changed && [5, 12, 22].contains(&n) {
-                    format!("L{n}")
-                } else {
-                    format!("l{n}")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-            + "\n"
-    };
-    common::write(&root, "a.rs", &lines(false));
-    common::git_in(&root, &["add", "-A"]);
-    common::git_in(&root, &["commit", "--quiet", "-m", "base"]);
-    common::write(&root, "a.rs", &lines(true));
-
-    let patch = batten::mutate::in_diff_patch(&root, "HEAD", &[String::from("a.rs")])
-        .expect("write the patch");
+    let patch = numbered_patch("mutate-in-diff-groups", 30, &[5, 12, 22]);
     let joined = "@@ -2,14 +2,14 @@\n l2\n l3\n l4\n-l5\n+L5\n l6\n l7\n l8\n l9\n l10\n l11\n-l12\n+L12\n l13\n l14\n l15\n";
     let apart = "@@ -19,7 +19,7 @@\n l19\n l20\n l21\n-l22\n+L22\n l23\n l24\n l25\n";
     assert!(
@@ -581,6 +535,28 @@ fn hunks_whose_contexts_touch_print_as_one() {
         "two touching hunks share one header, a third gets its own: {patch}"
     );
     assert_eq!(patch.matches("@@ -").count(), 2, "{patch}");
+}
+
+/// The in-diff patch of a committed `a.rs` holding `l1`..`l{lines}`, after the
+/// lines named in `changed` are rewritten to `L{n}`.
+fn numbered_patch(name: &str, lines: u32, changed: &[u32]) -> String {
+    let text = |changed: &[u32]| -> String {
+        (1..=lines)
+            .map(|n| {
+                if changed.contains(&n) {
+                    format!("L{n}\n")
+                } else {
+                    format!("l{n}\n")
+                }
+            })
+            .collect()
+    };
+    let root = common::Fixture::new(name)
+        .file("a.rs", &text(&[]))
+        .base_commit()
+        .build();
+    common::write(&root, "a.rs", &text(changed));
+    batten::mutate::in_diff_patch(&root, "HEAD", &[String::from("a.rs")]).expect("write the patch")
 }
 
 /// A MODULE'S OWN TEST IS RUN IN PROCESS, AS `policy test` RUNS IT (CLOUD-2255):
