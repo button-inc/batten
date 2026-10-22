@@ -13,8 +13,7 @@
 //! required check, and the seal in it ([`crate::release_path::seals`]) is what
 //! holds an unverified pin off the trunk. A second required status on the trunk
 //! and a probe ruleset beside it duplicated that, put a branch-protection change
-//! on the release path, and held every release while it was never made. The
-//! `--probe` that proved such a ruleset enforced went with it (CLOUD-2508).
+//! on the release path, and held every release while it was never made.
 //!
 //! [`owed`] is pure over what the shell read.
 
@@ -121,14 +120,12 @@ pub fn read(slug: &str, trunk: &str, get: Get<'_>) -> Result<Facts, String> {
             .get("target")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("branch");
-        let rules: Vec<serde_json::Value> = ruleset
-            .get("rules")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
         let has = |kind: &str| {
-            rules
-                .iter()
+            ruleset
+                .get("rules")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
                 .any(|rule| rule.get("type").and_then(serde_json::Value::as_str) == Some(kind))
         };
         let guards_trunk = target == "branch" && targets(&ruleset, &trunk_names);

@@ -7,9 +7,8 @@ name: release-guard
 # than assumed, hourly.
 #
 # `settings` reads the rulesets and release settings and names every item still
-# owed; `release_guard::owed` is the list. No `release-path` ruleset is among
-# them, and nothing probes for one: the seal in `final` holds an unverified pin
-# off the trunk (CLOUD-2319, CLOUD-2508).
+# owed; `release_guard::owed` is the list, and its module doc says why no
+# `release-path` ruleset is on it.
 #
 # `pinned` verifies the release the trunk's pin names with G1 in published mode
 # and re-marks it latest when `land`'s step (f) did not.
