@@ -15,11 +15,10 @@
 //! and a probe ruleset beside it duplicated that, put a branch-protection change
 //! on the release path, and held every release while it was never made.
 //!
-//! With `--probe` it then proves a `release-path` rule is enforced rather than declared: it
+//! `--probe` and the `release-path` facts outlive that ruling and no workflow
+//! runs them; their removal, a CLI surface change, is its own row. `--probe`
 //! makes a commit on the probe branch's tip that carries no status and asks the
-//! server to fast-forward the branch to it. Only a ruleset refusal passes; an
-//! accepted write, or a refusal for any other reason, is "the server gate does
-//! not hold" (CLOUD-853's class, measured continuously).
+//! server to fast-forward the branch to it. Only a ruleset refusal passes.
 //!
 //! [`owed`] and [`probe_holds`] are pure over what the shell read.
 
