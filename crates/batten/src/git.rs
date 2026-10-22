@@ -5840,7 +5840,11 @@ mod tests {
     /// 12 changed is `@@ -4,7 +4,7 @@` over lines 4-10, as `git diff` writes it.
     #[test]
     fn a_hunk_near_the_top_names_its_own_lines() {
-        let before: String = (1..=12).map(|n| format!("l{n}\n")).collect();
+        let before = (1..=12)
+            .map(|n| format!("l{n}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
         let after = before.replace("l7\n", "L7\n");
         assert_eq!(
             unified_hunks(&before, &after).unwrap(),
