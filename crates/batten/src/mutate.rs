@@ -2315,6 +2315,7 @@ pub fn in_diff_patch(root: &Path, base: &str, sources: &[String]) -> Result<Stri
 /// doesn't match source file") and the source was never mutated. Here a group
 /// of hunks is one `[b0, b1)` range of the before side, and the header and the
 /// body are both read off it.
+//MUTANT hunk-header-from-the-top|s@^        let b0 = first.before.start.saturating_sub(CONTEXT);$@        let b0 = 0;@|a_hunk_below_the_top_names_its_own_lines
 fn write_hunks(
     patch: &mut String,
     diff: &imara_diff::Diff,
@@ -2336,7 +2337,6 @@ fn write_hunks(
         let (Some(first), Some(last)) = (group.first(), group.last()) else {
             continue;
         };
-        //MUTANT hunk-header-from-the-top|s@^        let b0 = first.before.start.saturating_sub(CONTEXT);$@        let b0 = 0;@|a_hunk_below_the_top_names_its_own_lines
         let b0 = first.before.start.saturating_sub(CONTEXT);
         let a0 = first.after.start - (first.before.start - b0);
         let b1 = (last.before.end + CONTEXT).min(total);
