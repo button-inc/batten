@@ -1571,7 +1571,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: batten ci step --arg-env GITHUB_SHA -- batten release path --post
-      - run: batten release settings --probe
+      - run: batten release settings
   pinned:
     runs-on: ubuntu-latest
     steps:
@@ -1675,8 +1675,8 @@ fn every_clobber_is_draft_guarded_and_every_delete_is_discard() {
         "release-gh-delete",
         &[(
             "release-guard.yml",
-            "      - run: batten release settings --probe",
-            "      - run: batten release settings --probe\n      - run: gh release delete v1.0.0 --cleanup-tag",
+            "      - run: batten release settings",
+            "      - run: batten release settings\n      - run: gh release delete v1.0.0 --cleanup-tag",
         )],
     ));
 }
@@ -1696,8 +1696,8 @@ fn no_workflow_creates_a_release_tag() {
                 name,
                 &[(
                     "release-guard.yml",
-                    "      - run: batten release settings --probe",
-                    &format!("      - run: batten release settings --probe\n{step}"),
+                    "      - run: batten release settings",
+                    &format!("      - run: batten release settings\n{step}"),
                 )],
             ),
             "{step}"

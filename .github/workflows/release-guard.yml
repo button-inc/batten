@@ -1,19 +1,15 @@
 name: release-guard
 # workflow-shell: CLOUD-2033 a new workflow of five steps (post `release-path`,
-# probe the settings, resolve, verify and mark the pinned release), each one
+# read the settings, resolve, verify and mark the pinned release), each one
 # `batten` verb or one `gh` call.
 
 # G4 (CLOUD-2033): the server gate the release path rests on, measured rather
-# than assumed, on every push to the trunk and hourly.
+# than assumed, hourly.
 #
 # `settings` reads the rulesets and release settings and names every item still
-# owed — the trunk's ruleset requiring the `release-path` status pinned to one
-# source, a probe ruleset requiring the identical entry, a `v*` tag ruleset
-# restricting updates, no bypass actor on any of them, immutable releases on —
-# and then PROBES: it offers the probe branch a fast-forward to a commit no
-# status was ever posted on, and passes only when the server refuses it for a
-# ruleset. An accepted write, or a refusal for any other reason, is red: the
-# gate does not hold (CLOUD-853's class, re-proved every hour).
+# owed; `release_guard::owed` is the list. No `release-path` ruleset is among
+# them, and nothing probes for one: the seal in `final` holds an unverified pin
+# off the trunk (CLOUD-2319, CLOUD-2508).
 #
 # `pinned` verifies the release the trunk's pin names with G1 in published mode
 # and re-marks it latest when `land`'s step (f) did not.
@@ -63,16 +59,13 @@ jobs:
           install_args: rust
       # THE SEEDING POST, G4's single permitted posting of `release-path`. The
       # trunk's pin is inherited from itself, so the verdict on its head is
-      # success; the probe branch is created at this commit when it does not
-      # exist yet, before its ruleset can require anything of it.
+      # success.
       - name: Grade the trunk's head with the predicate and post release-path
         env:
           BATTEN_GITHUB_TOKEN: ${{ github.token }}
         run: mise run batten -- ci step --arg-env GITHUB_SHA -- mise run batten -- release path --post
       # Administration: read is what `bypass_actors` and `immutable-releases`
-      # need, which the job token never carries. No `--probe`: it proves a
-      # `release-path` ruleset, and none is owed — `final` carries the release
-      # path (CLOUD-2319).
+      # need, which the job token never carries.
       - name: Is every server-side item in place?
         env:
           BATTEN_GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}

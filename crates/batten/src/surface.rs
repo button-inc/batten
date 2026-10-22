@@ -3561,13 +3561,6 @@ const PIN_AT: FlagDecl = FlagDecl::valued(
     "Read the pin at this revision rather than the working tree",
 );
 
-/// `--probe` on `release settings`.
-const SETTINGS_PROBE: FlagDecl = FlagDecl::switch(
-    "probe",
-    "probe",
-    "Offer the probe branch a status-less fast-forward and require a ruleset refusal",
-);
-
 /// `--last-run <workflow>` on `release settings`.
 const SETTINGS_LAST_RUN: FlagDecl = FlagDecl::valued(
     "last_run",
@@ -4560,16 +4553,15 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[PIN_AT],
     },
-    // G4 (CLOUD-2033): `write`, because `--probe` makes a commit and offers it
-    // to the server.
+    // G4 (CLOUD-2033): `read` since `--probe`, the one write, went (CLOUD-2508).
     CommandDecl {
         path: "release settings",
         id: "release.settings",
         about: "Exit 0 only when the rulesets and release settings the release path rests on hold",
         data_channel: false,
         exits: EXITS_STANDARD,
-        effect: Effect::Write,
-        flags: &[SETTINGS_PROBE, SETTINGS_LAST_RUN],
+        effect: Effect::Read,
+        flags: &[SETTINGS_LAST_RUN],
     },
     // The release pipeline's backfill sweep, retiring `[tasks.release-backfill]`
     // (CLOUD-843). `unclassified` rather than `write`: every dispatch starts a

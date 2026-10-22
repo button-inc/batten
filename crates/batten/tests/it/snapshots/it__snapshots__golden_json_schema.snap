@@ -4369,7 +4369,7 @@ expression: stdout_of(&output)
           "path": "release settings",
           "id": "release.settings",
           "about": "Exit 0 only when the rulesets and release settings the release path rests on hold",
-          "effect": "write",
+          "effect": "read",
           "data_channel": false,
           "flags": [
             {
@@ -4379,14 +4379,6 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": false,
               "help": "Answer from the settings job of this guard workflow's last completed run on the trunk"
-            },
-            {
-              "name": "probe",
-              "short": null,
-              "long": "probe",
-              "takes_value": false,
-              "positional": false,
-              "help": "Offer the probe branch a status-less fast-forward and require a ruleset refusal"
             }
           ],
           "subcommands": []
@@ -5652,6 +5644,10 @@ expression: stdout_of(&output)
     {
       "id": "release.pin",
       "path": "release pin"
+    },
+    {
+      "id": "release.settings",
+      "path": "release settings"
     },
     {
       "id": "show",

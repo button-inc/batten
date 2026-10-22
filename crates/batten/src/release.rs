@@ -1020,8 +1020,8 @@ pub fn run(
         crate::cli::ReleaseCommand::Pin { at } => {
             crate::release_state::run_pin(at.as_deref(), out, err)
         }
-        crate::cli::ReleaseCommand::Settings { probe, last_run } => {
-            crate::release_guard::run_settings(probe, last_run.as_deref(), out, err)
+        crate::cli::ReleaseCommand::Settings { last_run } => {
+            crate::release_guard::run_settings(last_run.as_deref(), out, err)
         }
         crate::cli::ReleaseCommand::Guard { tag, sha } => {
             crate::release_state::run_guard(&tag, &sha, out, err)

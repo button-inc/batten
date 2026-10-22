@@ -131,10 +131,8 @@ step of it.
 
 The gates: **G1** `release verify`, **G2** `release path`, **G3** the
 `release wire wrong` clauses of `policy/ci-parity.rego` over the workflow shape,
-**G4** `release-guard.yml` — `batten release settings`, hourly: the trunk
-refuses a non-fast-forward write, a `v*` tag ruleset restricts updates, no
-ruleset has a bypass actor, and releases are immutable. No `release-path`
-ruleset is owed (CLOUD-2319): the seal in `final` holds an unverified pin.
+**G4** `release-guard.yml` — `batten release settings`, hourly, over the
+items `release_guard::owed` names.
 
 ## Commit identity: which authority wins, and why the question keeps returning
 

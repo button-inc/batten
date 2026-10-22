@@ -715,12 +715,15 @@ mod tests {
                 // stored and open nothing.
                 "record fold".to_owned(),
                 "record show".to_owned(),
-                // The release path's four readers (CLOUD-2033): each asks the
+                // The release path's five readers (CLOUD-2033): each asks the
                 // forge or git a question and prints one answer; none writes.
+                // `settings` joined when `--probe`, its one write, went
+                // (CLOUD-2508).
                 "release guard".to_owned(),
                 "release in-flight".to_owned(),
                 "release land-state".to_owned(),
                 "release pin".to_owned(),
+                "release settings".to_owned(),
                 // CLOUD-1180's recovered `agent` slice. BOTH the noun and its
                 // leaf are read, and that is the row's §2 predicate rather than
                 // an accident: `show` is the read band under CLOUD-1184's
@@ -1299,10 +1302,10 @@ mod tests {
             "release backfill".to_owned(),
             // The release path's verbs (CLOUD-2033). Off the allowlist:
             // `bump-unusable` commits onto the release branch, `cut` drafts and
-            // dispatches, `discard` deletes, `path` posts a status, `settings`
-            // makes the probe commit, `verify` writes the release's record.
-            // `guard`, `in-flight`, `land-state` and `pin` only read, and are on
-            // the read-only allowlist above.
+            // dispatches, `discard` deletes, `path` posts a status, `verify`
+            // writes the release's record. `guard`, `in-flight`, `land-state`,
+            // `pin` and `settings` only read, and are on the read-only allowlist
+            // above.
             // `bake` commits onto the release head, or writes two files
             // (CLOUD-2287).
             "release bake".to_owned(),

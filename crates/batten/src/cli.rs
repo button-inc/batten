@@ -2260,8 +2260,6 @@ pub enum ReleaseCommand {
     },
     /// Whether the server gate the release path rests on holds (CLOUD-2033 G4).
     Settings {
-        /// Prove it: offer the probe branch a status-less fast-forward.
-        probe: bool,
         /// Answer instead from the last completed run of this guard workflow.
         last_run: Option<String>,
     },
@@ -2931,7 +2929,6 @@ fn release_of(matches: &ArgMatches) -> Option<ReleaseCommand> {
             at: matches.get_one::<String>("at").cloned(),
         }),
         ("settings", matches) => Some(ReleaseCommand::Settings {
-            probe: flag(matches, "probe"),
             last_run: matches.get_one::<String>("last_run").cloned(),
         }),
         ("bake", matches) => Some(ReleaseCommand::Bake {

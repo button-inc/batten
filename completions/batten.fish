@@ -962,7 +962,6 @@ normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
-complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -l probe -d 'Offer the probe branch a status-less fast-forward and require a ruleset refusal'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -l silent -d 'Say nothing but a verdict or a usage error'
 complete -c batten -n "__fish_batten_using_subcommand release; and __fish_seen_subcommand_from settings" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
