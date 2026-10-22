@@ -2331,15 +2331,11 @@ fn write_hunks(
     };
     let hunks: Vec<imara_diff::Hunk> = diff.hunks().collect();
     let total = u32::try_from(input.before.len()).unwrap_or(u32::MAX);
-    let mut i = 0;
-    while i < hunks.len() {
-        // Hunks whose contexts touch print as one.
-        let mut j = i;
-        while j + 1 < hunks.len() && hunks[j + 1].before.start - hunks[j].before.end <= 2 * CONTEXT
-        {
-            j += 1;
-        }
-        let (first, last) = (&hunks[i], &hunks[j]);
+    // Hunks whose contexts touch print as one.
+    for group in hunks.chunk_by(|a, b| b.before.start - a.before.end <= 2 * CONTEXT) {
+        let (Some(first), Some(last)) = (group.first(), group.last()) else {
+            continue;
+        };
         //MUTANT hunk-header-from-the-top|s@^        let b0 = first.before.start.saturating_sub(CONTEXT);$@        let b0 = 0;@|a_hunk_below_the_top_names_its_own_lines
         let b0 = first.before.start.saturating_sub(CONTEXT);
         let a0 = first.after.start - (first.before.start - b0);
@@ -2354,7 +2350,7 @@ fn write_hunks(
             a1 - a0
         );
         let mut pos = b0;
-        for hunk in &hunks[i..=j] {
+        for hunk in group {
             for &token in &input.before[pos as usize..hunk.before.start as usize] {
                 line(patch, ' ', token);
             }
@@ -2369,7 +2365,6 @@ fn write_hunks(
         for &token in &input.before[pos as usize..b1 as usize] {
             line(patch, ' ', token);
         }
-        i = j + 1;
     }
 }
 

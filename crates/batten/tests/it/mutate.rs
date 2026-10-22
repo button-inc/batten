@@ -544,6 +544,45 @@ fn a_hunk_below_the_top_names_its_own_lines() {
     );
 }
 
+/// HUNKS WHOSE CONTEXTS TOUCH PRINT AS ONE, AND ONLY THOSE (CLOUD-2507). Lines
+/// 5 and 12 sit exactly twice the context apart, so their contexts meet and
+/// they share a header; line 22 sits further on and gets its own. A grouping
+/// off by one either way prints a different set of headers.
+#[test]
+fn hunks_whose_contexts_touch_print_as_one() {
+    let root = common::scratch("mutate-in-diff-groups");
+    common::init_repo(&root);
+    common::git_in(&root, &["config", "user.email", "t@example.com"]);
+    common::git_in(&root, &["config", "user.name", "t"]);
+    let lines = |changed: bool| {
+        (1..=30)
+            .map(|n| {
+                if changed && [5, 12, 22].contains(&n) {
+                    format!("L{n}")
+                } else {
+                    format!("l{n}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n"
+    };
+    common::write(&root, "a.rs", &lines(false));
+    common::git_in(&root, &["add", "-A"]);
+    common::git_in(&root, &["commit", "--quiet", "-m", "base"]);
+    common::write(&root, "a.rs", &lines(true));
+
+    let patch = batten::mutate::in_diff_patch(&root, "HEAD", &[String::from("a.rs")])
+        .expect("write the patch");
+    let joined = "@@ -2,14 +2,14 @@\n l2\n l3\n l4\n-l5\n+L5\n l6\n l7\n l8\n l9\n l10\n l11\n-l12\n+L12\n l13\n l14\n l15\n";
+    let apart = "@@ -19,7 +19,7 @@\n l19\n l20\n l21\n-l22\n+L22\n l23\n l24\n l25\n";
+    assert!(
+        patch.contains(&format!("{joined}{apart}")),
+        "two touching hunks share one header, a third gets its own: {patch}"
+    );
+    assert_eq!(patch.matches("@@ -").count(), 2, "{patch}");
+}
+
 /// A MODULE'S OWN TEST IS RUN IN PROCESS, AS `policy test` RUNS IT (CLOUD-2255):
 /// the case a `.rego` row names in its own module is judged by that `test_`
 /// rule, under the committed config's registry, with no conftest spawned.
