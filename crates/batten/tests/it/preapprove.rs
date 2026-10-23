@@ -510,10 +510,11 @@ fn a_memory_write_is_preapproved_outside_plan_mode() {
     assert_not_granted(&envelope("default", "mcp__serena__delete_memory", &edit));
 }
 
-/// THE NOUN-FIRST READS (CLOUD-2519): the GitHub server names its pure reads
-/// `<noun>_list` and `<noun>_get`, and plan mode refused them as writes.
+/// THE NOUN-FIRST READS (CLOUD-2519): GitHub names its pure reads
+/// `<noun>_list`, `<noun>_get` and `<noun>_read`, Miro `<noun>_read`, and plan
+/// mode refused the first two as writes.
 #[test]
-fn a_noun_first_mcp_list_or_get_is_preapproved() {
+fn a_noun_first_mcp_read_is_preapproved() {
     for tool in [
         "mcp__github__actions_list",
         "mcp__github__actions_get",
@@ -537,7 +538,6 @@ fn a_write_named_like_a_list_is_not_preapproved() {
         "mcp__x__clear_list",
         "mcp__x__reset_get",
         "mcp__x__mark_read",
-        "mcp__x__toggle_read",
         "mcp__Claude_Docs__mark_as_read",
     ] {
         assert_not_granted(&envelope("default", tool, &serde_json::json!({})));

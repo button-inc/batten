@@ -27084,7 +27084,7 @@ fn run_release_path(
         "release path: {state} at {sha}: {}",
         verdict.description()
     )?;
-    // `--strict` is the landers' refusal: a failure verdict is exit 2.
+    // `--strict` is the landers' refusal: a failure verdict is `Violation`.
     let verdict_code = if strict && matches!(verdict, release_path::Verdict::Failure(_)) {
         ExitCode::Violation
     } else {
