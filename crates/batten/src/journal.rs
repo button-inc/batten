@@ -1068,11 +1068,11 @@ mod tests {
     fn the_stamp_is_the_readings_nanoseconds() {
         let epoch = std::time::UNIX_EPOCH;
         assert_eq!(
-            crate::cache::pinned::at(epoch + std::time::Duration::from_nanos(4_242), now_nanos),
+            crate::cache::clock::at(epoch + std::time::Duration::from_nanos(4_242), now_nanos),
             4_242
         );
         let beyond = epoch + std::time::Duration::from_secs(u64::MAX / 1_000_000_000 + 1);
-        assert_eq!(crate::cache::pinned::at(beyond, now_nanos), u64::MAX);
+        assert_eq!(crate::cache::clock::at(beyond, now_nanos), u64::MAX);
     }
 
     #[test]

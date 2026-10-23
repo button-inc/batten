@@ -537,16 +537,12 @@ pub fn now() -> std::time::Duration {
         .unwrap_or_default()
 }
 
-/// The wall clock, which a case may pin on its own thread (CLOUD-2509).
-///
-/// THE SEAM FOR A CLOCK LEAF. A case may not assert a reading of the real clock
-/// (`wall_clock.rs`: time is an input, never what a case asserts), so a leaf
-/// that only converts that reading had nothing a case could hold it to. Pinned,
-/// the reading is an input and the conversion is the subject. Test-only, so the
-/// production path is the plain read.
+/// The wall clock, which a case may pin on its own thread (CLOUD-2509): a case
+/// may not assert the real clock (`wall_clock.rs`), so pinned, the reading is an
+/// input and the conversion of it is what a case holds to account.
 fn wall_clock() -> std::time::SystemTime {
     #[cfg(test)]
-    if let Some(pinned) = pinned::reading() {
+    if let Some(pinned) = clock::reading() {
         return pinned;
     }
     std::time::SystemTime::now()
@@ -554,7 +550,7 @@ fn wall_clock() -> std::time::SystemTime {
 
 /// The instant [`wall_clock`] answers on this thread while a case holds it.
 #[cfg(test)]
-pub(crate) mod pinned {
+pub(crate) mod clock {
     use std::cell::Cell;
     use std::time::SystemTime;
 
@@ -609,8 +605,8 @@ mod tests {
     fn now_is_the_readings_distance_from_the_epoch() {
         let epoch = std::time::UNIX_EPOCH;
         let seven = std::time::Duration::from_secs(7);
-        assert_eq!(pinned::at(epoch + seven, now), seven);
-        assert_eq!(pinned::at(epoch - seven, now), std::time::Duration::ZERO);
+        assert_eq!(clock::at(epoch + seven, now), seven);
+        assert_eq!(clock::at(epoch - seven, now), std::time::Duration::ZERO);
     }
 
     /// An entry answers only its own key, and only with the bytes written.

@@ -732,29 +732,12 @@ fn programs_in(dirs: &[PathBuf]) -> BTreeSet<String> {
 /// allowlist — is a second authority over what counts as a program.
 fn executable(path: &Path) -> bool {
     std::fs::metadata(path)
-        .is_ok_and(|meta| program_reading(crate::git::executable_bit(&meta), meta.is_file()))
-}
-
-/// [`executable`]'s decision over what the platform read: the execute bit where
-/// there is one, else whether the entry is a regular file. A pure function so
-/// the off-unix reading is compiled and tested on every leg (CLOUD-2509).
-fn program_reading(bit: Option<bool>, is_file: bool) -> bool {
-    bit.unwrap_or(is_file)
+        .is_ok_and(|meta| crate::git::executable_bit(&meta).unwrap_or(meta.is_file()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// CLOUD-2509: the off-unix reading, on every leg. Fails by: a constant, or
-    /// the regular-file fallback consulted where an execute bit was read.
-    #[test]
-    fn a_program_is_its_execute_bit_else_a_regular_file() {
-        assert!(program_reading(Some(true), false));
-        assert!(!program_reading(Some(false), true));
-        assert!(program_reading(None, true));
-        assert!(!program_reading(None, false));
-    }
 
     /// CLOUD-2315: an absent member and a present member holding the absence
     /// token's bytes are two different keys. Unframed, both concatenated to the

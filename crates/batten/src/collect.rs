@@ -234,10 +234,8 @@ fn program_name(path: &str) -> String {
 ///
 /// Elsewhere no process table is read.
 ///
-/// ONE FUNCTION, EACH PLATFORM'S READ UNDER `cfg` AND NOTHING ELSE (CLOUD-2509).
-/// The layouts are [`darwin`]'s and [`windows_table`]'s pure parsers, which
-/// every leg tests; what stays per platform carries no operator, arm or guard
-/// for a sweep to mutate on a leg that cannot compile it.
+/// Only each platform's read is under `cfg`; the layouts are [`darwin`]'s and
+/// [`windows_table`]'s pure parsers, which every leg tests (CLOUD-2509).
 fn processes() -> Option<Vec<Process>> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
@@ -247,13 +245,10 @@ fn processes() -> Option<Vec<Process>> {
                 let exe = std::fs::read_link(dir.join("exe")).ok()?;
                 let stat = std::fs::read_to_string(dir.join("stat")).ok()?;
                 let since_boot = proc_stat::start_ticks(&stat)?;
-                let started = SystemTime::UNIX_EPOCH
-                    + std::time::Duration::from_secs(boot)
-                    + std::time::Duration::from_millis(since_boot.saturating_mul(1000) / ticks);
                 Some(Process {
                     name: program_name(&exe.to_string_lossy()),
                     exe: Some(exe),
-                    started,
+                    started: proc_stat::started(boot, since_boot, ticks),
                 })
             })
             .collect();
@@ -336,6 +331,14 @@ mod proc_stat {
     pub(super) fn start_ticks(stat: &str) -> Option<u64> {
         let (_, rest) = stat.rsplit_once(')')?;
         rest.split_whitespace().nth(19)?.parse().ok()
+    }
+
+    /// The instant a process began: `since_boot` clock ticks at `ticks` per
+    /// second (never zero) after the boot second.
+    pub(super) fn started(boot: u64, since_boot: u64, ticks: u64) -> std::time::SystemTime {
+        std::time::SystemTime::UNIX_EPOCH
+            + std::time::Duration::from_secs(boot)
+            + std::time::Duration::from_millis(since_boot.saturating_mul(1000) / ticks)
     }
 
     /// Field 1 of a `/proc/<pid>/stat` line, the pid, which precedes the
@@ -422,10 +425,13 @@ mod proc_stat {
 /// proceed on proof.
 ///
 /// Where there is no `/proc` to read a group's members from, none is ever proven
-/// the orphan's and nothing is reaped. One function with only the read under
-/// `cfg`, not a `cfg` twin, so its mutants are judged on every leg (CLOUD-2509).
+/// the orphan's and nothing is reaped. Only the read is under `cfg` (CLOUD-2509).
 //MUTANT-SUITE crates/batten/tests/it/process_group.rs
 pub(crate) fn group_orphaned(pgid: &str, registrant: &str, alive_at: u64) -> bool {
+    #[cfg(test)]
+    if let Some((boot, ticks, stats)) = process_table::pinned() {
+        return orphaned_in(stats, pgid, registrant, boot, ticks, alive_at);
+    }
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         let Some((boot, ticks, pids)) = proc_table() else {
@@ -438,6 +444,33 @@ pub(crate) fn group_orphaned(pgid: &str, registrant: &str, alive_at: u64) -> boo
     {
         let _ = (pgid, registrant, alive_at);
         false
+    }
+}
+
+/// The process table [`group_orphaned`] reads on this thread while a case holds
+/// one (CLOUD-2509): an orphaned group is a state no case can make in the live
+/// `/proc` without spawning and abandoning one, so the table is the input.
+#[cfg(test)]
+mod process_table {
+    use std::cell::RefCell;
+
+    /// `(boot, ticks, stat lines)`, as `proc_table` reads them.
+    type Table = (u64, u64, Vec<String>);
+
+    thread_local! {
+        static PINNED: RefCell<Option<Table>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn pinned() -> Option<Table> {
+        PINNED.with(|pinned| pinned.borrow().clone())
+    }
+
+    /// Run `body` with `table` as this thread's process table.
+    pub(super) fn with<T>(table: Table, body: impl FnOnce() -> T) -> T {
+        let previous = PINNED.with(|pinned| pinned.replace(Some(table)));
+        let out = body();
+        PINNED.with(|pinned| *pinned.borrow_mut() = previous);
+        out
     }
 }
 
@@ -649,8 +682,7 @@ pub fn kept(paths: &[PathBuf]) -> Vec<Kept> {
 /// A file's `(dev, ino)`, which names it across its hardlinks.
 ///
 /// On Windows, volume serial and file index: the same pair, which `std` keeps
-/// unstable there. One function with each platform's read under `cfg`, not a
-/// `cfg` twin, so its mutants are judged on every leg (CLOUD-2509).
+/// unstable there. Only each platform's read is under `cfg` (CLOUD-2509).
 fn identity(path: &Path) -> Option<Kept> {
     #[cfg(unix)]
     {
@@ -1019,8 +1051,7 @@ fn remove_counted(path: &Path) -> u64 {
 /// read as a constant 1, a hardlinked file counted as freed and the pass stopped
 /// short. The handle is dropped before the caller removes the file, which
 /// Windows refuses while one is open; a count that cannot be read is the old 1.
-/// One function with each platform's read under `cfg`, not a `cfg` twin, so its
-/// mutants are judged on every leg (CLOUD-2509).
+/// Only each platform's read is under `cfg` (CLOUD-2509).
 fn allocation(path: &Path, meta: &std::fs::Metadata) -> (u64, u64) {
     #[cfg(unix)]
     {
@@ -1547,6 +1578,28 @@ mod tests {
         for nonsense in ["0", "-42", "not-a-number"] {
             assert!(!orphaned(nonsense, "43"), "{nonsense}");
         }
+    }
+
+    /// CLOUD-2509: the orphan the process table proves is the orphan reported,
+    /// so a reap can proceed. Fails by: a `group_orphaned` that never proves
+    /// one, which no live table can show.
+    #[test]
+    fn an_orphan_in_the_table_is_reported() {
+        let table = (1_700_000_000, 100, vec![stat_line("44", 42, 100)]);
+        assert!(super::process_table::with(table, || super::group_orphaned(
+            "42",
+            "43",
+            1_700_000_100
+        )));
+    }
+
+    /// CLOUD-2509: a process began `since_boot` ticks after the boot second.
+    /// Fails by: either sum subtracting, or the rate taken as a remainder.
+    #[test]
+    fn a_start_is_its_ticks_after_boot() {
+        let at = |millis| SystemTime::UNIX_EPOCH + Duration::from_millis(millis);
+        assert_eq!(proc_stat::started(100, 250, 100), at(102_500));
+        assert_eq!(proc_stat::started(0, 0, 100), at(0));
     }
 
     /// CLOUD-2366: wherever `/proc` is read live, a group its registrant still
