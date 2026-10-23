@@ -1233,9 +1233,9 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
         let perf = perf_dir(repo);
         let key = base_key(repo, base_sha)?;
         let base_bin = base_binary(&perf, &key);
-        if !base_arm_is_built(&perf, &key) {
-            seed_base_target_dir(&perf, &key)?;
-        }
+        // Unguarded: a built arm has its target directory, and the seed does
+        // nothing where that directory exists.
+        seed_base_target_dir(&perf, &key)?;
         if !base_arm_is_built(&perf, &key) {
             base_built_now = true;
             build(&base_tree, Some(&shared), "base", PAIR_PROFILE)?;
@@ -1263,7 +1263,10 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
     // checkout files this binary under its own tree key. Best-effort: a failure
     // here costs a later lap one base build, never this lap's verdict. A dirty
     // tree is skipped, because then the binary is not the build of HEAD's trees.
-    if !options.null && crate::git::uncommitted(repo).is_ok_and(|changed| changed == 0) {
+    // Read once: both the kept base and the sources check below ask it, and
+    // nothing between them writes the tree.
+    let clean = crate::git::uncommitted(repo).is_ok_and(|changed| changed == 0);
+    if !options.null && clean {
         let perf = perf_dir(repo);
         if let (Ok(head_key), Ok(keep)) = (base_key(repo, "HEAD"), base_key(repo, base_sha))
             && !base_arm_is_built(&perf, &head_key)
@@ -1277,8 +1280,7 @@ fn measure(repo: &Path, options: Options, base_sha: &str) -> Result<Vec<Record>>
     // identical binary sources are the expected build, never a contradiction
     // (CLOUD-2164); a dirty tree's sources are not HEAD's, so it stays armed.
     let base_sources = binary_source_key(repo, base_sha).ok();
-    let head_sources = crate::git::uncommitted(repo)
-        .is_ok_and(|changed| changed == 0)
+    let head_sources = clean
         .then(|| binary_source_key(repo, "HEAD").ok())
         .flatten();
     if arms_suspect(
