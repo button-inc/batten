@@ -436,10 +436,13 @@ fn replay(
 /// is charged to itself and the rest rebuilt without it — a sequence of runs a
 /// real `nextest` produces only over a real broken body, and a run handed in
 /// produces on demand.
+/// One union run over the splices still standing: its exit code and output.
+type UnionRun<'a> = &'a dyn Fn(&BTreeMap<String, (String, Vec<Modified>)>) -> Option<(i32, String)>;
+
 fn judge(
     tree: &Path,
     splices: &BTreeMap<String, (String, Vec<Modified>)>,
-    run: &dyn Fn(&BTreeMap<String, (String, Vec<Modified>)>) -> Option<(i32, String)>,
+    run: UnionRun<'_>,
 ) -> Result<Vec<Finding>> {
     let mut splices = splices.clone();
     let mut findings = Vec::new();

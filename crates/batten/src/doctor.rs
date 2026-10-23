@@ -887,6 +887,9 @@ pub fn run_target(target: &str, out: &mut dyn Write, err: &mut dyn Write) -> Res
     install_target(&rustlib, target, &rustup_has, &rustup, out, err)
 }
 
+/// One rustup subcommand's outcome: whether it succeeded, and what it printed.
+type RustupRun<'a> = &'a dyn Fn(&[&str]) -> Option<(bool, String)>;
+
 /// [`run_target`]'s critical section, with rustup's two questions handed in:
 /// whether `target` is installed (`has`), and the outcome of one subcommand
 /// (`run`).
@@ -898,7 +901,7 @@ fn install_target(
     rustlib: &Path,
     target: &str,
     has: &dyn Fn(&str) -> Option<bool>,
-    run: &dyn Fn(&[&str]) -> Option<(bool, String)>,
+    run: RustupRun<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {

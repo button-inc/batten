@@ -1491,3 +1491,4 @@ mod tests {
 // `config lint` over the compiled binary: the host-rules payload a path names,
 // and the located view a dropped row must not shift.
 //MUTANT-SUITE crates/batten/tests/it/config_lint.rs
+//MUTANT host-rules-path-unread|s@^    let payload = if source == "-" {$@    let payload = if true {@|a_linear_history_rule_the_config_denies_is_drift
