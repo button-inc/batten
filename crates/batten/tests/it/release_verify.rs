@@ -450,21 +450,8 @@ fn uncut_forge(name: &str, extra: &[(&str, &str, &str)]) -> std::path::PathBuf {
     forge
 }
 
-/// A RELEASE NOT CUT YET IS REFUSED, NEVER COULD-NOT-LOOK (CLOUD-2518): both
-/// reads answered, so its absence is a measurement and the verb exits 2.
-#[test]
-fn an_uncut_release_is_refused_not_could_not_look() {
-    let version = env!("CARGO_PKG_VERSION");
-    let repo = common::Fixture::new("release-verify-uncut")
-        .config(&format!(
-            "version = 1\nengine = {{ release = \"v{version}\" }}\n"
-        ))
-        .file(
-            "Cargo.toml",
-            &format!("[workspace.package]\nversion = \"{version}\"\n"),
-        )
-        .base_commit()
-        .build();
+/// `repo` with the forge remote its slug is read from.
+fn with_origin(repo: std::path::PathBuf) -> std::path::PathBuf {
     common::git_in(
         &repo,
         &[
@@ -474,6 +461,32 @@ fn an_uncut_release_is_refused_not_could_not_look() {
             "https://github.com/acme/widgets.git",
         ],
     );
+    repo
+}
+
+/// A one-commit repository pinning the running version, so every load's
+/// engine check passes, with its forge remote.
+fn pinned_repo(name: &str) -> std::path::PathBuf {
+    let version = env!("CARGO_PKG_VERSION");
+    with_origin(
+        common::Fixture::new(name)
+            .config(&format!(
+                "version = 1\nengine = {{ release = \"v{version}\" }}\n"
+            ))
+            .file(
+                "Cargo.toml",
+                &format!("[workspace.package]\nversion = \"{version}\"\n"),
+            )
+            .base_commit()
+            .build(),
+    )
+}
+
+/// A RELEASE NOT CUT YET IS REFUSED, NEVER COULD-NOT-LOOK (CLOUD-2518): both
+/// reads answered, so its absence is a measurement and the verb exits 2.
+#[test]
+fn an_uncut_release_is_refused_not_could_not_look() {
+    let repo = pinned_repo("release-verify-uncut");
     let forge = uncut_forge("release-verify-uncut-forge", &[]);
     let output = common::batten()
         .current_dir(&repo)
@@ -494,26 +507,7 @@ fn an_uncut_release_is_refused_not_could_not_look() {
 /// stays could-not-look and exits 3, whatever the list says.
 #[test]
 fn a_tag_read_that_failed_otherwise_stays_could_not_look() {
-    let version = env!("CARGO_PKG_VERSION");
-    let repo = common::Fixture::new("release-verify-tag-500")
-        .config(&format!(
-            "version = 1\nengine = {{ release = \"v{version}\" }}\n"
-        ))
-        .file(
-            "Cargo.toml",
-            &format!("[workspace.package]\nversion = \"{version}\"\n"),
-        )
-        .base_commit()
-        .build();
-    common::git_in(
-        &repo,
-        &[
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/acme/widgets.git",
-        ],
-    );
+    let repo = pinned_repo("release-verify-tag-500");
     let forge = uncut_forge(
         "release-verify-tag-500-forge",
         &[(
@@ -547,22 +541,15 @@ fn a_release_head_whose_release_is_not_cut_is_not_sealed_once_settings_are_green
         format!("must_land_on = \"origin/main\"\nversion = 1\nengine = {{ release = \"{pin}\" }}\n")
     };
     let manifest = |at: &str| format!("[workspace.package]\nversion = \"{at}\"\n");
-    let repo = common::Fixture::new("release-path-uncut-head")
-        .config(&config("v0.0.1"))
-        .file("Cargo.toml", &manifest("0.0.1"))
-        .base_commit()
-        .config(&config(&format!("v{version}")))
-        .file("Cargo.toml", &manifest(version))
-        .work_commit()
-        .build();
-    common::git_in(
-        &repo,
-        &[
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/acme/widgets.git",
-        ],
+    let repo = with_origin(
+        common::Fixture::new("release-path-uncut-head")
+            .config(&config("v0.0.1"))
+            .file("Cargo.toml", &manifest("0.0.1"))
+            .base_commit()
+            .config(&config(&format!("v{version}")))
+            .file("Cargo.toml", &manifest(version))
+            .work_commit()
+            .build(),
     );
     let head = common::git_in(&repo, &["rev-parse", "HEAD"])
         .trim()

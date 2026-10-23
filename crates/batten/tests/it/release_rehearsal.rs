@@ -39,65 +39,44 @@ use crate::common;
 /// The literal sources that carry the two moves.
 const MOVED: [&str; 2] = ["batten.toml", "Cargo.toml"];
 
-/// `x.y.z` → `x.y.(z+1)`, the patch release release-plz cuts next.
-fn next_patch(version: &str) -> String {
-    let mut parts: Vec<u64> = version
-        .split('.')
-        .map(|part| part.parse().expect("a numeric version part"))
-        .collect();
-    assert_eq!(parts.len(), 3, "a three-part version: {version}");
-    parts[2] += 1;
-    format!("{}.{}.{}", parts[0], parts[1], parts[2])
-}
-
-/// The workspace version `Cargo.toml` declares.
-fn workspace_version(manifest: &str) -> String {
-    batten::release_path::version_of(manifest).expect("Cargo.toml declares a version")
-}
-
 /// Every tracked file of the checkout at `root`, copied under `scratch`.
 fn copy_tracked(root: &Path, scratch: &Path) {
     for path in common::git_in(root, &["ls-files"]).lines() {
-        let from = root.join(path);
-        // A tracked path deleted in the working tree is not part of the tree a
-        // rule reads, so it is not part of the rehearsal either.
-        let Ok(bytes) = fs::read(&from) else {
-            continue;
-        };
         let to = scratch.join(path);
         fs::create_dir_all(to.parent().expect("a tracked file has a parent")).expect("scratch dir");
-        fs::write(&to, bytes).expect("copy a tracked file");
+        // A tracked path deleted in the working tree is not part of the tree a
+        // rule reads, so it is not part of the rehearsal either.
+        let _ = fs::copy(root.join(path), &to);
     }
 }
 
-/// Apply the release PR's two moves to the copy, and return the version.
+/// Apply the release PR's two moves to the copy, through the crate's own
+/// version step and pin writer, and return the version.
 fn move_to_next_release(scratch: &Path) -> String {
     let manifest = fs::read_to_string(scratch.join("Cargo.toml")).expect("Cargo.toml");
-    let current = workspace_version(&manifest);
-    let next = next_patch(&current);
+    let current = batten::release_path::version_of(&manifest).expect("a workspace version");
+    let next = batten::release_state::next_version(&current).expect("a three-part version");
     let moved = manifest.replacen(
         &format!("version = \"{current}\""),
         &format!("version = \"{next}\""),
         1,
     );
-    assert_eq!(workspace_version(&moved), next, "the version moved");
+    assert_eq!(
+        batten::release_path::version_of(&moved).as_deref(),
+        Some(next.as_str()),
+        "the version moved"
+    );
     fs::write(scratch.join("Cargo.toml"), moved).expect("move the version");
     let config = fs::read_to_string(scratch.join("batten.toml")).expect("batten.toml");
-    let pin = format!("engine = {{ release = \"v{next}\" }}");
-    let mut found = false;
-    let moved: Vec<String> = config
-        .lines()
-        .map(|line| {
-            if line.trim_start().starts_with("engine =") {
-                found = true;
-                pin.clone()
-            } else {
-                line.to_owned()
-            }
-        })
-        .collect();
-    assert!(found, "batten.toml carries an engine line to move");
-    fs::write(scratch.join("batten.toml"), moved.join("\n") + "\n").expect("move the pin");
+    let pin = batten::engine::Pin {
+        release: Some(format!("v{next}")),
+        source: None,
+    };
+    fs::write(
+        scratch.join("batten.toml"),
+        batten::engine::rewrite(&config, &pin),
+    )
+    .expect("move the pin");
     next
 }
 
