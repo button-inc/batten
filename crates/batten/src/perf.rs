@@ -2666,7 +2666,12 @@ fn acquire_out_dir(repo: &Path) -> Result<PathBuf> {
 /// own fact and answers the same on every host, where a missing hyperfine is
 /// the host's (the `windows` job installs none).
 fn release_binary(repo: &Path) -> Result<PathBuf> {
-    let binary = repo.join(env_or(BIN_VAR, DEFAULT_BIN));
+    release_binary_at(repo.join(env_or(BIN_VAR, DEFAULT_BIN)))
+}
+
+/// [`release_binary`] over the path it resolved, so a case can name its own
+/// scratch path rather than whatever `BENCH_BIN` points at.
+fn release_binary_at(binary: PathBuf) -> Result<PathBuf> {
     if !binary.is_file() {
         bail!(
             "perf-acquire: {} is missing — run `mise run build:release`. Nothing measured.",
@@ -3399,11 +3404,18 @@ mod tests {
             .map(|err| err.to_string())
             .unwrap_or_default();
         assert!(refused.contains("is missing"), "{refused}");
-        // Wherever the runner's `BENCH_BIN` points, if it sets one.
-        let binary = repo.join(env_or(BIN_VAR, DEFAULT_BIN));
+        // Inside the scratch repository by construction: a path the runner's
+        // `BENCH_BIN` named could be a real build this case must never write.
+        let binary = repo.join(DEFAULT_BIN);
+        assert!(
+            release_binary_at(binary.clone())
+                .err()
+                .is_some_and(|err| err.to_string().contains("is missing")),
+            "an absent build is missing"
+        );
         std::fs::create_dir_all(binary.parent().unwrap_or(&repo))?;
         std::fs::write(&binary, b"a release build")?;
-        let past = release_binary(&repo).map_err(|err| err.to_string());
+        let past = release_binary_at(binary.clone()).map_err(|err| err.to_string());
         assert!(
             past.as_ref().is_ok_and(|found| *found == binary)
                 || past.as_ref().is_err_and(|why| !why.contains("is missing")),

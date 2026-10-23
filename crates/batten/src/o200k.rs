@@ -173,10 +173,14 @@ fn pieces<'a>(
         {
             end -= piece.chars().last().map_or(0, char::len_utf8);
         }
-        // AN EMPTY PIECE ENDS THE PIECES rather than repeating forever: every
-        // alternative consumes a character, so one is no input's, and a reader
-        // that met one could only spin on it.
-        let out = text.get(at..end).filter(|out| !out.is_empty())?;
+        // AN EMPTY PIECE TAKES THE REST WHOLE, as a DFA that cannot search does,
+        // rather than repeating forever or dropping it: every alternative
+        // consumes a character, so one is no input's, and the rest counted as
+        // one piece errs toward an over-count, the posture this module keeps.
+        let Some(out) = text.get(at..end).filter(|out| !out.is_empty()) else {
+            at = text.len();
+            return Some(remaining);
+        };
         at = end;
         Some(out)
     })
