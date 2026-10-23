@@ -454,6 +454,7 @@ pub(crate) mod synced {
         FILES.with(|count| count.set(count.get() + 1));
     }
 
+    #[cfg(unix)]
     pub(super) fn directory() {
         DIRECTORIES.with(|count| count.set(count.get() + 1));
     }
