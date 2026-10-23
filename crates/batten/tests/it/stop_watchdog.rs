@@ -89,14 +89,22 @@ fn dispatch_receipt(repo: &Path) -> PathBuf {
     batten::recorder::record_path(&repo.join(".git"), "land-dispatched", branch.trim(), None)
 }
 
-/// One Claude hook payload through `batten adjudicate`, at the pinned boot.
-fn hook(repo: &Path, home: &Path, payload: &serde_json::Value) -> Output {
+/// `batten` in `repo` under the case's own state `home`: every spawn in this
+/// suite starts here, so none reads the developer's state.
+fn isolated(repo: &Path, home: &Path) -> common::Batten {
     let mut command = batten();
     common::state_home(&mut command, home);
     command
         .current_dir(repo)
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"));
+    command
+}
+
+/// One Claude hook payload through `batten adjudicate`, at the pinned boot.
+fn hook(repo: &Path, home: &Path, payload: &serde_json::Value) -> Output {
+    let mut command = isolated(repo, home);
+    command
         .args(["adjudicate", "--harness", "claude-code"])
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .env("BATTEN_BOOT_TIME", BOOT.to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -319,17 +327,13 @@ fn taking_the_landing_lock_clears_the_dispatch_receipt() {
     std::fs::write(&receipt, "land\n").expect("a receipt");
     // No entry gates: the developer's `mise.toml` exports some, and asking them
     // needs a forge this tier does not have, before the lock is ever reached.
-    let mut command = batten();
-    common::state_home(&mut command, &home);
-    let output = command
+    let output = isolated(&repo, &home)
         .args(["land", "lap", "refs/heads/main"])
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .env("LAND_MAX_LAPS", "1")
         .env("LAND_VERIFY", "true")
         .env("LAND_WORKFLOW", "fast-forward.yml")
         .env_remove("LAND_ENTRY_GATES")
         .env_remove("LAND_BODY_GATES")
-        .current_dir(&repo)
         .output()
         .expect("run batten land lap");
     assert!(
