@@ -1702,9 +1702,11 @@ mod tests {
     fn each_build_names_its_own_triple() {
         for (os, musl, gnu, triple) in [
             ("linux", true, false, "x-unknown-linux-musl"),
+            ("linux", true, true, "x-unknown-linux-musl"),
             ("linux", false, true, "x-unknown-linux-gnu"),
-            ("macos", false, false, "x-apple-darwin"),
-            ("windows", false, true, "x-pc-windows-gnu"),
+            ("macos", true, true, "x-apple-darwin"),
+            ("windows", true, true, "x-pc-windows-gnu"),
+            ("windows", true, false, "x-pc-windows-msvc"),
             ("windows", false, false, "x-pc-windows-msvc"),
             ("freebsd", false, false, "x-unknown-freebsd"),
         ] {
