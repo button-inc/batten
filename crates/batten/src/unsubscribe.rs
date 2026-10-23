@@ -313,6 +313,34 @@ pub fn drop_subscription(
         return give_up(out, pr, "the credential file will not read");
     };
     let token = token.trim_end();
+    ask_endpoint(
+        git_dir,
+        host,
+        (&session, token),
+        pr,
+        crate::fetch::spend,
+        out,
+    )
+}
+
+/// The transport an unsubscribe is spent through: [`crate::fetch::spend`], in
+/// every caller but the unit suite.
+type Spend = fn(&[crate::fetch::Call<'_>]) -> Result<Vec<crate::fetch::Response>>;
+
+/// [`drop_subscription`] once the session and its credential are in hand: ask
+/// the endpoint through `spend`, and attest only an accepted answer.
+///
+/// **THE SEAM THE ACCEPTANCE IS TESTED THROUGH.** Whether an answer is a drop
+/// or a refusal is the endpoint's to say, and no hermetic fixture is that
+/// endpoint; a transport handed in answers as either.
+fn ask_endpoint(
+    git_dir: &Path,
+    host: &Host,
+    (session, token): (&str, &str),
+    pr: u64,
+    spend: Spend,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
     let (Some(endpoint), Some(tool), Some(template)) = (
         host.endpoint.as_deref(),
         host.tool.as_deref(),
@@ -323,14 +351,14 @@ pub fn drop_subscription(
     let slug = crate::repo_slug(Path::new("."))
         .as_deref()
         .and_then(owner_repo);
-    let Some(arguments) = fill_arguments(template, pr, &session, slug.as_ref()) else {
+    let Some(arguments) = fill_arguments(template, pr, session, slug.as_ref()) else {
         return give_up(
             out,
             pr,
             "the arguments will not fill: not a JSON object, or no owner/repo for this clone",
         );
     };
-    let url = endpoint.replace("{session}", &session);
+    let url = endpoint.replace("{session}", session);
     let document = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -359,7 +387,7 @@ pub fn drop_subscription(
         delete: false,
         direct: false,
     };
-    let Ok(answers) = crate::fetch::spend(&[call]) else {
+    let Ok(answers) = spend(&[call]) else {
         return give_up(out, pr, "the endpoint could not be reached");
     };
     let Some(answer) = answers.first() else {
@@ -368,7 +396,7 @@ pub fn drop_subscription(
     if !accepted(answer.status, &answer.body) {
         return give_up(out, pr, &format!("http {}", answer.status));
     }
-    let Ok(digest) = mint(git_dir, host, &session, pr, &answer.body, "endpoint") else {
+    let Ok(digest) = mint(git_dir, host, session, pr, &answer.body, "endpoint") else {
         return give_up(out, pr, "cannot write the receipt");
     };
     writeln!(
@@ -507,6 +535,52 @@ mod tests {
             "session\t-\npr\t489\nreceipt\tabsent\n"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn answering(body: &'static str) -> Result<Vec<crate::fetch::Response>> {
+        Ok(vec![crate::fetch::Response {
+            status: 200,
+            body: body.as_bytes().to_vec(),
+            headers: Vec::new(),
+        }])
+    }
+
+    fn drops(_: &[crate::fetch::Call<'_>]) -> Result<Vec<crate::fetch::Response>> {
+        answering(r#"{"result":{"content":[]}}"#)
+    }
+
+    fn refuses(_: &[crate::fetch::Call<'_>]) -> Result<Vec<crate::fetch::Response>> {
+        answering(r#"{"result":{"isError":true}}"#)
+    }
+
+    /// Fails by: an endpoint's refusal attested as a drop, or its acceptance
+    /// given up on — the receipt must follow the answer, not the exchange.
+    #[test]
+    fn only_an_accepted_answer_is_attested() {
+        let host = Host {
+            session_env: "BATTEN_UNSUBSCRIBE_UNIT_NEVER_SET".to_owned(),
+            endpoint: Some("https://endpoint.invalid/{session}".to_owned()),
+            tool: Some("unsubscribe".to_owned()),
+            arguments: Some(r#"{"pullNumber":"{pr}"}"#.to_owned()),
+            family: "pr-unsubscribed".to_owned(),
+            ..Host::default()
+        };
+        for (spend, recorded) in [(drops as Spend, true), (refuses, false)] {
+            let dir = std::env::temp_dir().join(format!(
+                "batten-unsubscribe-ask-{recorded}-{}",
+                std::process::id()
+            ));
+            let mut out = Vec::new();
+            let code = ask_endpoint(&dir, &host, ("cse_a", "t0ken"), 489, spend, &mut out).unwrap();
+            assert_eq!(code, ExitCode::Success, "a drop never blocks");
+            assert_eq!(
+                receipt_path(&dir, &host, "cse_a", 489).is_file(),
+                recorded,
+                "{}",
+                String::from_utf8_lossy(&out)
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]

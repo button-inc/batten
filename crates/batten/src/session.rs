@@ -874,3 +874,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+// The host-declared session over the compiled binary: `state record` reads it
+// from the environment the suite hands the child, and records its lineage.
+//MUTANT-SUITE crates/batten/tests/it/advisory_drain.rs
