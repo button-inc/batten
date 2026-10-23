@@ -655,7 +655,7 @@ pub fn pack_of(objects: &[Object]) -> Result<Vec<u8>> {
         // The type/size header: four size bits in the first byte beside the
         // type, then seven per continuation byte, little-endian, with the high
         // bit meaning "another byte follows".
-        let mut size = object.body.len();
+        let size = object.body.len();
         #[expect(
             clippy::cast_possible_truncation,
             reason = "masked to four bits before the cast"
@@ -663,8 +663,11 @@ pub fn pack_of(objects: &[Object]) -> Result<Vec<u8>> {
         // A SUM OF DISJOINT FIELDS rather than `|`, which `^` would equal: the
         // type sits above bit 3 and the size bits below it.
         let mut byte = (pack_type(object.kind) << 4) + ((size & 0x0f) as u8);
-        size >>= 4;
-        while size > 0 {
+        // ANOTHER BYTE WHILE ANY SIZE IS LEFT, asked as "is the rest non-zero"
+        // rather than compared: a comparison's `>=` mutant never lets the rest
+        // reach a stop, and hangs where it should fail.
+        let mut rest = size >> 4;
+        while let Some(left) = std::num::NonZeroUsize::new(rest) {
             // Below 0x80 by construction, so the continuation bit is added.
             pack.push(byte + 0x80);
             #[expect(
@@ -672,9 +675,9 @@ pub fn pack_of(objects: &[Object]) -> Result<Vec<u8>> {
                 reason = "masked to seven bits before the cast"
             )]
             {
-                byte = (size & 0x7f) as u8;
+                byte = (left.get() & 0x7f) as u8;
             }
-            size >>= 7;
+            rest = left.get() >> 7;
         }
         pack.push(byte);
         let mut encoder =

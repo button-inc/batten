@@ -869,11 +869,9 @@ fn a_group_its_leader_and_registrant_left_is_an_orphan() {
     let group = leader.id().to_string();
     leader.wait().expect("the leader exits");
     let member: i32 = await_file(&note).parse().expect("the member's pid");
-    let stamped = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("after the epoch")
-        .as_secs()
-        + 5;
+    // A stamp every live member predates, fixed rather than read off the clock:
+    // 2100-01-01, so no assertion here is about the time it ran.
+    let stamped = 4_102_444_800;
     let orphaned = batten::collect::is_orphaned_group(&group, &group, stamped);
     let predated = batten::collect::is_orphaned_group(&group, &group, 0);
     signal(u32::try_from(member).expect("a pid"), "KILL");

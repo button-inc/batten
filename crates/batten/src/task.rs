@@ -856,7 +856,23 @@ pub fn singleton_acquire_at(
     recheck: std::time::Duration,
     attempts: usize,
 ) -> Claim {
-    acquire_pausing(lock, pid, recheck, attempts, PAUSE)
+    // THE ONE DECLARED PAUSE IN THIS MODULE, and the only waived delay it owns.
+    // One site rather than two is a rule rather than tidiness: the
+    // delay-waiver ratchet counts every annotation standing over a sleep in this
+    // crate (CLOUD-1148), so a queue with its own loop and sleep would have spent
+    // a second waiver on a pause this one already owns. It serves both readings:
+    // the interval separating the two sightings a reclaim requires, and the one
+    // between two asks for a lock somebody else holds. Neither is a poll standing
+    // in for an exit condition (CLOUD-1177): the bound is `attempts`, a count the
+    // caller declares. The thread's own sleep is handed over by name rather than
+    // wrapped, since a wrapper's one-call body has a mutant no case can tell from
+    // the real pause.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the module's one declared pause: it separates the two sightings a reclaim requires AND the two asks a queue makes, bounded by `attempts` rather than by a clock, so it is neither a poll nor a timer standing in for an exit condition"
+    )]
+    let pause = std::thread::sleep;
+    acquire_pausing(lock, pid, recheck, attempts, pause)
 }
 
 /// [`singleton_acquire_at`] over an injected pause, so a case can move the lock
@@ -937,35 +953,6 @@ fn acquire_pausing(
         phase: None,
     })
 }
-
-/// The one declared pause in this module, and the only waived delay it owns.
-///
-/// **One site rather than two, and that is a rule rather than tidiness.**
-/// `delay-waivers-not-growing` ratchets how many waiver annotations stand over a
-/// sleep in this crate, because *a ban you can waive at will is not a ban*
-/// (CLOUD-1148). A queue written as its own loop with its own sleep would have
-/// spent a twelfth waiver to express a pause this function already owns.
-///
-/// The annotation below is deliberately not spelled anywhere in this prose: that
-/// row's `pattern` is an unanchored literal, so a doc comment naming it counts
-/// as a waiver. Measured — the first draft of this comment took the count to 12
-/// on its own, which is `no-new-ignores`' documented hazard (*"a bare `#[ignore]`
-/// is a literal substring, so it also matches every prose mention"*) arriving in
-/// the row that did not anchor for it.
-///
-/// It serves both readings, and they are the same pause seen from two sides: the
-/// interval separating the two sightings a reclaim requires, and the interval
-/// between two asks for a lock somebody else holds. Neither is a poll standing
-/// in for an exit condition (CLOUD-1177) — the bound is `attempts`, a count the
-/// caller declares, exactly as `land` bounds its laps.
-///
-/// The thread's own sleep, named rather than wrapped: a wrapper's body is one
-/// call, so a mutant emptying it is a pause no case can tell from the real one.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the module's one declared pause: it separates the two sightings a reclaim requires AND the two asks a queue makes, bounded by `attempts` rather than by a clock, so it is neither a poll nor a timer standing in for an exit condition"
-)]
-const PAUSE: fn(std::time::Duration) = std::thread::sleep;
 
 /// Drop a lock at an explicit path, whether or not it was ever taken.
 pub fn singleton_release_at(lock: &Path) {
