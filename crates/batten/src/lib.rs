@@ -26968,7 +26968,7 @@ fn run_release_verify(
 
 /// G1 read and judged: the release as read, where it could be, and the verdict.
 //MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT uncut-release-could-not-look|s@^        Err(_) if release::uncut(\&slug, tag, \&get) => {$@        Err(_) if false => {@|an_uncut_release_is_refused_not_could_not_look
+//MUTANT uncut-release-could-not-look|s@^        Err(_) if release_state::read_found(\&slug, tag, \&get) == Ok(release_state::Found::Absent) => {$@        Err(_) if false => {@|an_uncut_release_is_refused_not_could_not_look
 fn release_verdict(
     tag: &str,
     draft: bool,
@@ -26983,7 +26983,17 @@ fn release_verdict(
             )),
         );
     };
-    let get = |path: &str| rest::get(path, None);
+    // ONE ANSWER PER PATH FOR THE LIFE OF THIS VERDICT: the read, its absence
+    // check and the release object each ask for the tag and the list, and a
+    // one-shot `rest::get` holds no cache.
+    let answered = std::cell::RefCell::new(std::collections::HashMap::new());
+    let get = |path: &str| {
+        answered
+            .borrow_mut()
+            .entry(path.to_owned())
+            .or_insert_with(|| rest::get(path, None))
+            .clone()
+    };
     // A RELEASE NOT CUT YET IS A REFUSAL, NEVER A COULD-NOT-LOOK (CLOUD-2518).
     // The release PR's head pins the release its own cut creates, so the read
     // fails there by construction; as could-not-look it made `release path
@@ -26991,7 +27001,9 @@ fn release_verdict(
     // sighting of absence counts: any other failed read stays could-not-look.
     let release = match release_verify::read(&slug, tag, &get) {
         Ok(release) => release,
-        Err(_) if release::uncut(&slug, tag, &get) => {
+        Err(_)
+            if release_state::read_found(&slug, tag, &get) == Ok(release_state::Found::Absent) =>
+        {
             return (
                 None,
                 release_verify::Verdict::Refused(vec![release_verify::Refusal::Absent(

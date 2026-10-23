@@ -211,33 +211,6 @@ pub fn is_draft(slug: &str, tag: &str, get: Get<'_>) -> bool {
     })
 }
 
-/// Whether the release tagged `tag` has not been cut yet (CLOUD-2518): its tag
-/// read answers 404 AND the release list answers a reading that carries no
-/// entry for it.
-///
-/// A POSITIVE SIGHTING OF ABSENCE, as [`is_draft`] is of a draft. Both reads
-/// must answer: a tag read that fails any other way, or a list that does not
-/// answer, is `false`, so a forge that cannot be read is never turned into a
-/// refusal. An old published release past the list's first page answers its
-/// tag read with 200, so the page bound never mints one either.
-#[must_use]
-pub fn uncut(slug: &str, tag: &str, get: Get<'_>) -> bool {
-    if tag.is_empty()
-        || get(&release_path(slug, Some(tag))).is_none_or(|answer| answer.status != 404)
-    {
-        return false;
-    }
-    let path = format!("repos/{slug}/releases?per_page=100");
-    let Some(answer) = get(&path).filter(Answer::is_reading) else {
-        return false;
-    };
-    serde_json::from_str::<Vec<serde_json::Value>>(&answer.body).is_ok_and(|listed| {
-        !listed
-            .iter()
-            .any(|entry| entry.get("tag_name").and_then(|name| name.as_str()) == Some(tag))
-    })
-}
-
 /// The release tagged `tag`, read from the release list (CLOUD-2121).
 ///
 /// Only an entry whose `tag_name` IS the tag is taken; a list with none is the
@@ -1385,36 +1358,6 @@ mod tests {
             })
         };
         assert!(!is_draft("o/r", "v1", &refused));
-    }
-
-    /// Uncut only when BOTH reads answered: the tag 404, the list without it.
-    #[test]
-    fn uncut_only_when_the_tag_reads_404_and_the_list_lacks_it() {
-        let forge = |tag_status: u16, list: Option<Answer>| {
-            move |path: &str| {
-                if path.contains("/releases/tags/") {
-                    Some(Answer {
-                        status: tag_status,
-                        ..reading("{}")
-                    })
-                } else {
-                    list.clone()
-                }
-            }
-        };
-        let without = Some(reading(r#"[{"tag_name": "v1"}]"#));
-        assert!(uncut("o/r", "v2", &forge(404, without.clone())));
-        assert!(!uncut("o/r", "v1", &forge(404, without.clone())));
-        assert!(!uncut("o/r", "v2", &forge(500, without.clone())));
-        assert!(!uncut("o/r", "v2", &forge(200, without)));
-        assert!(!uncut("o/r", "v2", &forge(404, None)));
-        let refused = Some(Answer {
-            status: 403,
-            ..reading("[]")
-        });
-        assert!(!uncut("o/r", "v2", &forge(404, refused)));
-        assert!(!uncut("o/r", "v2", &forge(404, Some(reading("{}")))));
-        assert!(!uncut("o/r", "", &forge(404, Some(reading("[]")))));
     }
 
     /// Only a 404 on a named tag asks the list; a tag that answers is read.
