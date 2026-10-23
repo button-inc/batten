@@ -51,15 +51,12 @@ const MOVED: [&str; 3] = ["Cargo.toml", "Cargo.lock", "batten.toml"];
 
 /// Every tracked file of the checkout at `root`, copied under `scratch`.
 fn copy_tracked(root: &Path, scratch: &Path) {
-    // `-z`: unquoted and NUL-separated. Plain `ls-files` C-quotes a path with
-    // unusual bytes, which would read as missing below and drop out unseen.
-    for path in common::git_in(root, &["ls-files", "-z"])
-        .split('\0')
-        .filter(|path| !path.is_empty())
-    {
-        let to = scratch.join(path);
+    // From the index, unquoted: plain `ls-files` C-quotes a path with unusual
+    // bytes, which would read as missing below and drop out unseen.
+    for path in batten::git::tracked_paths(root).expect("the tracked set") {
+        let to = scratch.join(&path);
         fs::create_dir_all(to.parent().expect("a tracked file has a parent")).expect("scratch dir");
-        match fs::copy(root.join(path), &to) {
+        match fs::copy(root.join(&path), &to) {
             Ok(_) => {}
             // A tracked path deleted in the working tree is not part of the
             // tree a rule reads, so it is not part of the rehearsal either.
