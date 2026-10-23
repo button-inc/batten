@@ -771,7 +771,7 @@ pub fn run_discard(
 /// [`run_discard`] in the clone at `here`, whose forge remote names the
 /// repository.
 ///
-/// The deletions are [`delete_steps`]'s, the one loop `cut` shares, rather
+/// The deletions are [`perform_discard`]'s, the one loop `cut` shares, rather
 /// than a second copy of it (CLOUD-2509).
 fn run_discard_in(
     here: &std::path::Path,
@@ -783,40 +783,34 @@ fn run_discard_in(
         return Ok(crate::ExitCode::Internal);
     };
     let get = |path: &str| crate::rest::get(path, None);
-    let found = match read_found(&slug, tag, &get) {
-        Ok(found) => found,
-        Err(why) => {
-            writeln!(err, "batten: release discard: could not look: {why}")?;
-            return Ok(crate::ExitCode::Internal);
+    match perform_discard(&slug, tag, &get) {
+        Discarded::Nothing => {
+            writeln!(
+                out,
+                "release discard: no release is tagged {tag}; nothing deleted"
+            )?;
+            Ok(crate::ExitCode::Success)
         }
-    };
-    let steps = match discard(&found) {
-        Ok(steps) => steps,
-        Err(why) => {
-            writeln!(err, "release discard: {tag}: {why}")?;
-            return Ok(crate::ExitCode::Violation);
-        }
-    };
-    if steps.is_empty() {
-        writeln!(
-            out,
-            "release discard: no release is tagged {tag}; nothing deleted"
-        )?;
-        return Ok(crate::ExitCode::Success);
-    }
-    match delete_steps(&slug, tag, steps) {
-        Ok(()) => {
+        Discarded::Deleted => {
             writeln!(out, "release discard: deleted the draft {tag} and its tag")?;
             Ok(crate::ExitCode::Success)
         }
-        Err((path, Some(status))) => {
+        Discarded::Refused(why) => {
+            writeln!(err, "release discard: {tag}: {why}")?;
+            Ok(crate::ExitCode::Violation)
+        }
+        Discarded::Unread(why) => {
+            writeln!(err, "batten: release discard: could not look: {why}")?;
+            Ok(crate::ExitCode::Internal)
+        }
+        Discarded::Undeleted(path, Some(status)) => {
             writeln!(
                 err,
                 "batten: release discard: could not delete {path}: the forge answered {status}"
             )?;
             Ok(crate::ExitCode::Internal)
         }
-        Err((path, None)) => {
+        Discarded::Undeleted(path, None) => {
             writeln!(err, "batten: release discard: could not delete {path}")?;
             Ok(crate::ExitCode::Internal)
         }
@@ -1214,25 +1208,16 @@ pub fn section(changelog: &str, version: &str) -> Option<String> {
     Some(body.join("\n").trim().to_owned())
 }
 
-/// Delete whatever `discard` says to for `tag`: `Ok(Ok(n))` deletions made,
-/// `Ok(Err(why))` a refusal, `Err` could-not-look.
-fn perform_discard(slug: &str, tag: &str, get: Get<'_>) -> Result<Result<usize, String>, String> {
-    let steps = match discard(&read_found(slug, tag, get)?) {
-        Ok(steps) => steps,
-        Err(why) => return Ok(Err(why)),
+/// Delete whatever `discard` says to for `tag`: `Unread` could-not-look, `Undeleted` the first deletion the forge refused
+/// with the status it answered, `None` where it did not answer. A tag already
+/// gone counts as deleted.
+fn perform_discard(slug: &str, tag: &str, get: Get<'_>) -> Discarded {
+    let steps = match read_found(slug, tag, get).map(|found| discard(&found)) {
+        Ok(Ok(steps)) if steps.is_empty() => return Discarded::Nothing,
+        Ok(Ok(steps)) => steps,
+        Ok(Err(why)) => return Discarded::Refused(why),
+        Err(why) => return Discarded::Unread(why),
     };
-    let made = steps.len();
-    match delete_steps(slug, tag, steps) {
-        Ok(()) => Ok(Ok(made)),
-        Err((path, Some(status))) => Err(format!("{path} answered {status}")),
-        Err((path, None)) => Err(format!("{path} did not answer")),
-    }
-}
-
-/// Make each of `steps` for `tag`, stopping at the first the forge refuses:
-/// its path and the status it answered, `None` where it did not answer. A tag
-/// already gone counts as deleted.
-fn delete_steps(slug: &str, tag: &str, steps: Vec<Step>) -> Result<(), (String, Option<u16>)> {
     for step in steps {
         let (path, gone_is_fine) = match step {
             Step::DeleteRelease(id) => (format!("repos/{slug}/releases/{id}"), false),
@@ -1241,11 +1226,21 @@ fn delete_steps(slug: &str, tag: &str, steps: Vec<Step>) -> Result<(), (String, 
         match crate::rest::delete(&path) {
             Some(answer) if (200..300).contains(&answer.status) => {}
             Some(answer) if gone_is_fine && matches!(answer.status, 404 | 422) => {}
-            Some(answer) => return Err((path, Some(answer.status))),
-            None => return Err((path, None)),
+            Some(answer) => return Discarded::Undeleted(path, Some(answer.status)),
+            None => return Discarded::Undeleted(path, None),
         }
     }
-    Ok(())
+    Discarded::Deleted
+}
+
+/// What [`perform_discard`] did, one case per line `discard` and `cut` say.
+#[derive(Debug, PartialEq, Eq)]
+enum Discarded {
+    Nothing,
+    Deleted,
+    Refused(String),
+    Unread(String),
+    Undeleted(String, Option<u16>),
 }
 
 /// `batten release cut <tag> --sha <sha> --changelog <path> --workflow <file>`
@@ -1305,8 +1300,14 @@ fn run_cut_in(
                 return Ok(Ok(Some(land.to_owned())));
             }
         }
-        if let Err(why) = perform_discard(&slug, tag, &get)? {
-            return Ok(Err(why));
+        match perform_discard(&slug, tag, &get) {
+            Discarded::Nothing | Discarded::Deleted => {}
+            Discarded::Refused(why) => return Ok(Err(why)),
+            Discarded::Unread(why) => return Err(why),
+            Discarded::Undeleted(path, Some(status)) => {
+                return Err(format!("{path} answered {status}"));
+            }
+            Discarded::Undeleted(path, None) => return Err(format!("{path} did not answer")),
         }
         let text = crate::git::show(here, sha, changelog).map_err(|why| why.to_string())?;
         let Some(notes) = section(&text, tag.trim_start_matches('v')) else {
@@ -1710,11 +1711,24 @@ mod tests {
                 perform_discard("o/r", "v1", &rest_get)
             })
         };
-        assert_eq!(over("discard-gone-tag", 204, 422), Ok(Ok(2)));
-        assert_eq!(over("discard-404-tag", 200, 404), Ok(Ok(2)));
-        assert!(over("discard-gone-release", 404, 204).is_err());
-        assert!(over("discard-refused-release", 500, 204).is_err());
-        assert!(over("discard-refused-tag", 204, 500).is_err());
+        assert_eq!(over("discard-gone-tag", 204, 422), Discarded::Deleted);
+        assert_eq!(over("discard-404-tag", 200, 404), Discarded::Deleted);
+        let undeleted = |found: Discarded| match found {
+            Discarded::Undeleted(path, status) => Some((path.contains("/tags/"), status)),
+            _ => None,
+        };
+        assert_eq!(
+            undeleted(over("discard-gone-release", 404, 204)),
+            Some((false, Some(404)))
+        );
+        assert_eq!(
+            undeleted(over("discard-refused-release", 500, 204)),
+            Some((false, Some(500)))
+        );
+        assert_eq!(
+            undeleted(over("discard-refused-tag", 204, 500)),
+            Some((true, Some(500)))
+        );
         let absent = crate::rest::routed(
             "discard-absent",
             &[
@@ -1724,13 +1738,13 @@ mod tests {
         );
         assert_eq!(
             crate::rest::with_fixture(&absent, || perform_discard("o/r", "v1", &rest_get)),
-            Ok(Ok(0))
+            Discarded::Nothing
         );
         let published =
             crate::rest::routed("discard-published", &[("releases/tags/v1", 200, "{}")]);
         assert!(matches!(
             crate::rest::with_fixture(&published, || perform_discard("o/r", "v1", &rest_get)),
-            Ok(Err(_))
+            Discarded::Refused(_)
         ));
     }
 
