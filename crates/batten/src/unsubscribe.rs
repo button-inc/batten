@@ -318,7 +318,11 @@ pub fn drop_subscription(
         host,
         (&session, token),
         pr,
-        crate::fetch::spend,
+        (crate::fetch::spend, &|| {
+            crate::repo_slug(Path::new("."))
+                .as_deref()
+                .and_then(owner_repo)
+        }),
         out,
     )
 }
@@ -328,17 +332,18 @@ pub fn drop_subscription(
 type Spend = fn(&[crate::fetch::Call<'_>]) -> Result<Vec<crate::fetch::Response>>;
 
 /// [`drop_subscription`] once the session and its credential are in hand: ask
-/// the endpoint through `spend`, and attest only an accepted answer.
+/// the endpoint through `spend`, and attest only an accepted answer. `slug` is
+/// this clone's owner/repo, asked only once the arguments need filling.
 ///
 /// **THE SEAM THE ACCEPTANCE IS TESTED THROUGH.** Whether an answer is a drop
 /// or a refusal is the endpoint's to say, and no hermetic fixture is that
-/// endpoint; a transport handed in answers as either.
+/// endpoint; a transport handed in answers as either, and no clone is read.
 fn ask_endpoint(
     git_dir: &Path,
     host: &Host,
     (session, token): (&str, &str),
     pr: u64,
-    spend: Spend,
+    (spend, slug): (Spend, &dyn Fn() -> Option<(String, String)>),
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
     let (Some(endpoint), Some(tool), Some(template)) = (
@@ -348,10 +353,7 @@ fn ask_endpoint(
     ) else {
         return give_up(out, pr, "no endpoint, tool or arguments declared");
     };
-    let slug = crate::repo_slug(Path::new("."))
-        .as_deref()
-        .and_then(owner_repo);
-    let Some(arguments) = fill_arguments(template, pr, session, slug.as_ref()) else {
+    let Some(arguments) = fill_arguments(template, pr, session, slug().as_ref()) else {
         return give_up(
             out,
             pr,
@@ -568,7 +570,15 @@ mod tests {
         for (spend, recorded) in [(drops as Spend, true), (refuses, false)] {
             let dir = crate::scratch::scratch(&format!("unsubscribe-ask-{recorded}"));
             let mut out = Vec::new();
-            let code = ask_endpoint(&dir, &host, ("cse_a", "t0ken"), 489, spend, &mut out).unwrap();
+            let code = ask_endpoint(
+                &dir,
+                &host,
+                ("cse_a", "t0ken"),
+                489,
+                (spend, &|| None),
+                &mut out,
+            )
+            .unwrap();
             assert_eq!(code, ExitCode::Success, "a drop never blocks");
             assert_eq!(
                 receipt_path(&dir, &host, "cse_a", 489).is_file(),
