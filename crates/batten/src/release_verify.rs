@@ -95,7 +95,7 @@ impl Refusal {
                 "release verify: {} disagrees with {SUMS}: {what}",
                 crate::install::LOCK_FILE
             ),
-            Self::Absent(tag) => format!("release verify: no release is tagged {tag}"),
+            Self::Absent(tag) => format!("release verify: {tag} is not cut yet"),
         }
     }
 }

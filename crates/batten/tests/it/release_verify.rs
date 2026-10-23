@@ -482,8 +482,9 @@ fn pinned_repo(name: &str) -> std::path::PathBuf {
     )
 }
 
-/// The refusal `release verify` prints for the uncut tag `verify_uncut` asks.
-const ABSENT: &str = "no release is tagged v9.9.9";
+/// The refusal `release verify` prints for the uncut tag `verify_uncut` asks,
+/// worded apart from every could-not-look so a negative check discriminates.
+const ABSENT: &str = "release verify: v9.9.9 is not cut yet";
 
 /// `release verify v9.9.9 <flags>` against `uncut_forge(.., extra)`: its exit
 /// code and its stderr.
