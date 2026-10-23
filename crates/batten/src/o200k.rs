@@ -148,16 +148,14 @@ fn pieces<'a>(
         // #1132). The skip-one-character fallback this replaces was therefore
         // unreachable, and cargo-mutants' mutants of it could only survive. A
         // DFA that cannot search at all ends the pieces with the rest whole.
-        let found = match dfa.try_search_fwd(&input) {
-            // NO GUARD ON THE MATCH'S LENGTH, for the fallback's reason above:
-            // every alternative consumes a character, so a match ending at `at`
-            // is one no input produces, and a guard against it is a condition
-            // whose `true` mutant no case can tell from it.
-            Ok(Some(found)) => found,
-            _ => {
-                at = text.len();
-                return Some(remaining);
-            }
+        //
+        // NO GUARD ON THE MATCH'S LENGTH, for the fallback's reason above: every
+        // alternative consumes a character, so a match ending at `at` is one no
+        // input produces, and a guard against it is a condition whose `true`
+        // mutant no case can tell from it.
+        let Ok(Some(found)) = dfa.try_search_fwd(&input) else {
+            at = text.len();
+            return Some(remaining);
         };
         let mut end = found.offset();
         let piece = text.get(at..end).unwrap_or_default();

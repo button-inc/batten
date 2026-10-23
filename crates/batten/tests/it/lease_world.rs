@@ -35,10 +35,9 @@ fn fixture(name: &str) -> PathBuf {
 fn route(dir: &Path, needle: &str, status: u16, body: &str) {
     let forge = dir.join("forge");
     let routes = forge.join("routes");
-    let mut table = std::fs::read_to_string(&routes).unwrap_or_default();
+    let table = std::fs::read_to_string(&routes).unwrap_or_default();
     let file = format!("answer.{}", table.lines().count());
-    table.push_str(&format!("{needle}\t{file}\n"));
-    std::fs::write(&routes, table).expect("the route table");
+    std::fs::write(&routes, format!("{table}{needle}\t{file}\n")).expect("the route table");
     std::fs::write(
         forge.join(file),
         format!("HTTP/2 {status}\ncontent-type: application/json\n\n{body}\n"),

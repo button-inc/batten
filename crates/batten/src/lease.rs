@@ -3997,9 +3997,12 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("scratch");
         crate::gitwrite::commit_paths(&dir, &[], "base").expect("a repository with a commit");
         let config = dir.join(".git").join("config");
-        let mut text = std::fs::read_to_string(&config).expect("config");
-        text.push_str(&format!("[remote \"origin\"]\n\turl = {REMOTE}\n"));
-        std::fs::write(&config, text).expect("remote");
+        let text = std::fs::read_to_string(&config).expect("config");
+        std::fs::write(
+            &config,
+            format!("{text}[remote \"origin\"]\n\turl = {REMOTE}\n"),
+        )
+        .expect("remote");
         dir
     }
 

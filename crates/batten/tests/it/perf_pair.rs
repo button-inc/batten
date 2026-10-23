@@ -604,7 +604,7 @@ fn measurable(name: &str) -> std::path::PathBuf {
     for entry in std::fs::read_dir(fixtures.join("hooks")).unwrap() {
         let entry = entry.unwrap();
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.ends_with(".json") {
+        if entry.path().extension().is_none_or(|ext| ext != "json") {
             continue;
         }
         fixture = fixture.file(
