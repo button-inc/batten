@@ -505,3 +505,249 @@ fn the_default_sample_is_at_least_what_the_null_was_remeasured_at() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// The measurement end to end, over stubbed instruments (CLOUD-2509).
+// ---------------------------------------------------------------------------
+
+/// A `cargo` that builds by writing a `batten` that is the real one under
+/// another name, stamped with the manifest it was asked to build so two arms
+/// are never the same bytes; and a `hyperfine` that writes one result per
+/// command it was handed. Both append their argv to `instruments.log`.
+///
+/// Off unix a `#!/bin/sh` stub cannot stand in for a program, so the cases
+/// built on this say so and assert nothing further there.
+fn instruments(repo: &std::path::Path) -> std::ffi::OsString {
+    let bin = repo.join("stub-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = repo.join("instruments.log");
+    let cargo = format!(
+        r#"#!/bin/sh
+printf 'cargo %s\n' "$*" >> '{log}'
+[ "$1" = clean ] && exit 0
+profile=; manifest=; prev=
+for word in "$@"; do
+  case "$prev" in --profile) profile=$word ;; --manifest-path) manifest=$word ;; esac
+  prev=$word
+done
+target=${{CARGO_TARGET_DIR:-$(dirname "$manifest")/target}}
+mkdir -p "$target/$profile"
+printf '#!/bin/sh\n# built from %s\nexec %s "$@"\n' "$manifest" '{batten}' > "$target/$profile/batten"
+chmod +x "$target/$profile/batten"
+"#,
+        log = log.display(),
+        batten = env!("CARGO_BIN_EXE_batten"),
+    );
+    let hyperfine = format!(
+        r#"#!/bin/sh
+printf 'hyperfine %s\n' "$*" >> '{log}'
+json=; take=; commands=0
+for word in "$@"; do
+  if [ -n "$take" ]; then [ "$take" = json ] && json=$word; take=; continue; fi
+  case "$word" in
+    --export-json) take=json ;;
+    --warmup|--runs|--style|--input|--prepare) take=value ;;
+    --*) ;;
+    *) commands=$((commands + 1)) ;;
+  esac
+done
+{{
+  printf '{{"results":['
+  index=0
+  while [ "$index" -lt "$commands" ]; do
+    [ "$index" -gt 0 ] && printf ','
+    printf '{{"mean":0.01,"times":[0.01,0.02,0.03]}}'
+    index=$((index + 1))
+  done
+  printf ']}}'
+}} > "$json"
+"#,
+        log = log.display(),
+    );
+    for (name, body) in [("cargo", cargo), ("hyperfine", hyperfine)] {
+        let stub = bin.join(name);
+        std::fs::write(&stub, body).unwrap();
+        make_executable(&stub);
+    }
+    std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap()
+}
+
+/// Every argv the stubbed instruments were handed, in order.
+fn instrumented(repo: &std::path::Path) -> String {
+    std::fs::read_to_string(repo.join("instruments.log")).unwrap_or_default()
+}
+
+/// A checkout carrying what the arms are measured against: the pinned fixture
+/// and hook payloads, a wiring that reaches the binary, and a crate source the
+/// arm key reads.
+fn measurable(name: &str) -> std::path::PathBuf {
+    let fixtures = common::at_root("crates/batten/tests/fixtures");
+    let mut fixture = Fixture::new(name)
+        .config("version = 1\n")
+        .file(
+            ".claude/settings.json",
+            r#"{"hooks":{"PreToolUse":[{"matcher":"","hooks":[{"type":"command","command":"batten adjudicate --harness claude-code"}]}]}}"#,
+        )
+        .file("Cargo.toml", "[workspace]\n")
+        .file("crates/batten/src/lib.rs", "// base\n")
+        .file(".gitignore", "stub-bin/\ninstruments.log\ntarget/\n");
+    for file in ["batten.toml.in", "lib.rs.in"] {
+        let path = format!("crates/batten/tests/fixtures/repos/forbid-clean/{file}");
+        fixture = fixture.file(
+            &path,
+            &std::fs::read_to_string(fixtures.join("repos/forbid-clean").join(file)).unwrap(),
+        );
+    }
+    for entry in std::fs::read_dir(fixtures.join("hooks")).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(".json") {
+            continue;
+        }
+        fixture = fixture.file(
+            &format!("crates/batten/tests/fixtures/hooks/{name}"),
+            &std::fs::read_to_string(entry.path()).unwrap(),
+        );
+    }
+    fixture.git().base_commit().build()
+}
+
+/// `batten perf <verb>` over the stubbed instruments.
+fn perf(repo: &std::path::Path, path: &std::ffi::OsStr, args: &[&str]) -> std::process::Output {
+    common::batten()
+        .arg("perf")
+        .args(args)
+        .current_dir(repo)
+        .env("PATH", path)
+        .env("BENCH_RUNS", "1")
+        .env("BENCH_WARMUP", "0")
+        .output()
+        .expect("run batten perf")
+}
+
+/// The published measurement builds the release binary, finds it, and times
+/// every path it budgets.
+///
+/// Fails by: a build that succeeded read as one that failed, a binary that is
+/// there read as missing, or the paths measured and their records dropped.
+#[test]
+fn a_measurement_times_every_path_off_its_release_build() {
+    let repo = measurable("perf-measure-whole");
+    let path = instruments(&repo);
+    let measured = perf(&repo, &path, &["measure"]);
+    if !cfg!(unix) {
+        return;
+    }
+    let said = stdout(&measured);
+    assert!(
+        measured.status.success(),
+        "{said}{}",
+        String::from_utf8_lossy(&measured.stderr)
+    );
+    for id in ["noop", "check", "hook", "passthrough", "posttool", "wired"] {
+        assert!(said.contains(id), "the {id} path is recorded: {said}");
+    }
+    let argv = instrumented(&repo);
+    assert!(argv.contains("--profile release"), "{argv}");
+    // ONLY THE POST-TOOL ARM EMPTIES A STORE BETWEEN RUNS: it is the one whose
+    // binary writes, and a prepare step on any other would time the deletion.
+    let timed: Vec<&str> = argv
+        .lines()
+        .filter(|line| line.starts_with("hyperfine "))
+        .collect();
+    assert_eq!(timed.len(), 6, "{argv}");
+    for line in timed {
+        assert_eq!(
+            line.contains("--prepare"),
+            line.contains("posttool.json"),
+            "{line}"
+        );
+    }
+}
+
+/// A pair over a changed head builds both arms into the shared directory,
+/// dropping the other arm's units between them, measures every path, and
+/// files the clean head as the next lap's base.
+///
+/// Fails by: an arm built or reused on the wrong reading of what is built, a
+/// succeeded `cargo clean` read as failed, arms that differ read as
+/// identical, the records dropped, or a clean head not kept.
+#[test]
+fn a_pair_over_a_changed_head_measures_both_arms() {
+    let repo = measurable("perf-pair-whole");
+    let base = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    common::write(&repo, "crates/batten/src/lib.rs", "// head\n");
+    common::git_in(&repo, &["commit", "-qam", "head"]);
+    let head = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    let path = instruments(&repo);
+    let paired = common::batten()
+        .args(["perf", "pair"])
+        .current_dir(&repo)
+        .env("PATH", &path)
+        .env("BENCH_BASE_REF", &base)
+        .env("BENCH_RUNS", "1")
+        .env("BENCH_WARMUP", "0")
+        .output()
+        .expect("run batten perf pair");
+    if !cfg!(unix) {
+        return;
+    }
+    let said = stdout(&paired);
+    assert!(
+        paired.status.success(),
+        "{said}{}",
+        String::from_utf8_lossy(&paired.stderr)
+    );
+    for arm in ["arm=base", "arm=head"] {
+        assert!(said.contains(arm), "{said}");
+    }
+    let argv = instrumented(&repo);
+    assert_eq!(argv.matches("cargo build").count(), 2, "{argv}");
+    assert!(argv.contains("cargo clean"), "{argv}");
+    let kept = batten::perf::base_key(&repo, &head).unwrap();
+    assert!(
+        base_arm_is_built(&perf_dir(&repo), &kept),
+        "the clean head is kept as the next base"
+    );
+}
+
+/// A dirty head is not the build of HEAD's trees, so it is never kept as a
+/// base.
+///
+/// Fails by: the clean-tree half of the keep dropped.
+#[test]
+fn a_dirty_head_is_not_kept_as_a_base() {
+    let repo = measurable("perf-pair-dirty");
+    let base = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    common::write(&repo, "crates/batten/src/lib.rs", "// head\n");
+    common::git_in(&repo, &["commit", "-qam", "head"]);
+    let head = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    common::write(&repo, "crates/batten/src/lib.rs", "// dirty\n");
+    let path = instruments(&repo);
+    let paired = common::batten()
+        .args(["perf", "pair"])
+        .current_dir(&repo)
+        .env("PATH", &path)
+        .env("BENCH_BASE_REF", &base)
+        .env("BENCH_RUNS", "1")
+        .env("BENCH_WARMUP", "0")
+        .output()
+        .expect("run batten perf pair");
+    if !cfg!(unix) {
+        return;
+    }
+    assert!(
+        paired.status.success(),
+        "{}{}",
+        stdout(&paired),
+        String::from_utf8_lossy(&paired.stderr)
+    );
+    let head_key = batten::perf::base_key(&repo, &head).unwrap();
+    assert!(
+        !base_arm_is_built(&perf_dir(&repo), &head_key),
+        "a dirty head is not kept"
+    );
+}

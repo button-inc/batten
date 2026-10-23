@@ -2388,16 +2388,19 @@ pub fn acquire(repo: &Path) -> Result<Sweep> {
         .canonicalize()
         .with_context(|| format!("perf-acquire: could not resolve {}", repo.display()))?;
 
-    if which("hyperfine").is_none() {
-        bail!(
-            "perf-acquire: hyperfine is not installed — run `mise install`; it is pinned in the manifest. Nothing measured."
-        );
-    }
+    // THE BINARY FIRST, THE INSTRUMENT SECOND: a missing build is this
+    // checkout's own fact and answers the same on every host, where a missing
+    // hyperfine is the host's (the `windows` job installs none).
     let binary = repo.join(env_or(BIN_VAR, DEFAULT_BIN));
     if !binary.is_file() {
         bail!(
             "perf-acquire: {} is missing — run `mise run build:release`. Nothing measured.",
             binary.display()
+        );
+    }
+    if which("hyperfine").is_none() {
+        bail!(
+            "perf-acquire: hyperfine is not installed — run `mise install`; it is pinned in the manifest. Nothing measured."
         );
     }
 
@@ -3373,6 +3376,37 @@ pub fn latency_verdict(median: u64, budget: u64, slack: u64, loose_factor: u64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sweep refuses a checkout with no release build, and gets past that
+    /// check for one that has it, whatever the host's instrument then says.
+    ///
+    /// Fails by: a binary that is there read as missing, or one that is not
+    /// read as present.
+    #[test]
+    fn the_sweep_refuses_only_a_missing_build() -> Result<()> {
+        assert!(
+            std::env::var(BIN_VAR).is_err(),
+            "the premise: the default binary path is the one asked about"
+        );
+        let repo = std::env::temp_dir().join(format!("batten-perf-acquire-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(&repo)?;
+        let refused = acquire(&repo)
+            .err()
+            .map(|err| err.to_string())
+            .unwrap_or_default();
+        assert!(refused.contains("is missing"), "{refused}");
+        let binary = repo.join(DEFAULT_BIN);
+        std::fs::create_dir_all(binary.parent().unwrap_or(&repo))?;
+        std::fs::write(&binary, b"not a program, so no arm can time it")?;
+        let past = acquire(&repo)
+            .err()
+            .map(|err| err.to_string())
+            .unwrap_or_default();
+        assert!(!past.contains("is missing"), "{past}");
+        std::fs::remove_dir_all(&repo)?;
+        Ok(())
+    }
 
     /// CLOUD-2068: a seeded directory carries the dependencies, never the binary.
     #[test]
