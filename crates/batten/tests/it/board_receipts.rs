@@ -1505,8 +1505,15 @@ fn the_recorded_instant_is_the_read_rather_than_a_later_transcription() {
         modified_secs(&marker),
         modified_secs(&repo.join(".git/batten-receipts/issue-read.CLOUD-1")),
     );
+    // A file's mtime comes from the kernel's COARSE clock, which can trail the
+    // system clock the stamp is read from by part of a tick. Across a second
+    // boundary the receipt's own mtime then reads one second BEFORE the stamp
+    // written into it (measured: 1792761964 against 1792761963), so the upper
+    // bound carries that one second. A stamp transcribed later than the read is
+    // still outside it. The lower bound needs nothing: the marker's mtime can
+    // only err earlier.
     assert!(
-        (before..=written).contains(&stamped),
+        (before..=written + 1).contains(&stamped),
         "the receipt records the read, not a transcription: {stamped} outside {before}..={written}"
     );
 }
