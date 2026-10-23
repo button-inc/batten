@@ -614,7 +614,6 @@ impl SourcedStore {
 /// that cannot see the repository must not become a gate that denies everything.
 /// An empty `checks` answers an empty store having done no git work at all,
 /// which is the narrowing every other fact on this path applies.
-///
 pub(crate) fn sourced_store(
     checks: &[(&String, &ReceiptKey)],
     named: Option<&str>,

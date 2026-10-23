@@ -239,8 +239,7 @@ pub fn reading(
 ///
 /// Apart from [`reading`] so the shape is a case of its own rather than one a
 /// case reaches only past a tagged repository and the committed grammar
-/// (CLOUD-2509): `board.review`'s refusal follows it, and with the board
-/// undeclared that later refusal answered a malformed payload in its place.
+/// (CLOUD-2509).
 fn payloads(stdin: &str) -> Result<Vec<Value>> {
     crate::board_check::payload_set(stdin)
         .filter(|set| {

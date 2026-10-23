@@ -771,7 +771,7 @@ pub fn run_discard(
 /// [`run_discard`] in the clone at `here`, whose forge remote names the
 /// repository.
 ///
-/// The deletions are [`perform_discard`]'s, the one loop `cut` shares, rather
+/// The deletions are [`delete_steps`]'s, the one loop `cut` shares, rather
 /// than a second copy of it (CLOUD-2509).
 fn run_discard_in(
     here: &std::path::Path,
@@ -783,24 +783,41 @@ fn run_discard_in(
         return Ok(crate::ExitCode::Internal);
     };
     let get = |path: &str| crate::rest::get(path, None);
-    match perform_discard(&slug, tag, &get) {
-        Ok(Ok(0)) => {
-            writeln!(
-                out,
-                "release discard: no release is tagged {tag}; nothing deleted"
-            )?;
-            Ok(crate::ExitCode::Success)
+    let found = match read_found(&slug, tag, &get) {
+        Ok(found) => found,
+        Err(why) => {
+            writeln!(err, "batten: release discard: could not look: {why}")?;
+            return Ok(crate::ExitCode::Internal);
         }
-        Ok(Ok(_)) => {
+    };
+    let steps = match discard(&found) {
+        Ok(steps) => steps,
+        Err(why) => {
+            writeln!(err, "release discard: {tag}: {why}")?;
+            return Ok(crate::ExitCode::Violation);
+        }
+    };
+    if steps.is_empty() {
+        writeln!(
+            out,
+            "release discard: no release is tagged {tag}; nothing deleted"
+        )?;
+        return Ok(crate::ExitCode::Success);
+    }
+    match delete_steps(&slug, tag, steps) {
+        Ok(()) => {
             writeln!(out, "release discard: deleted the draft {tag} and its tag")?;
             Ok(crate::ExitCode::Success)
         }
-        Ok(Err(why)) => {
-            writeln!(err, "release discard: {tag}: {why}")?;
-            Ok(crate::ExitCode::Violation)
+        Err((path, Some(status))) => {
+            writeln!(
+                err,
+                "batten: release discard: could not delete {path}: the forge answered {status}"
+            )?;
+            Ok(crate::ExitCode::Internal)
         }
-        Err(why) => {
-            writeln!(err, "batten: release discard: could not look: {why}")?;
+        Err((path, None)) => {
+            writeln!(err, "batten: release discard: could not delete {path}")?;
             Ok(crate::ExitCode::Internal)
         }
     }
@@ -1205,6 +1222,17 @@ fn perform_discard(slug: &str, tag: &str, get: Get<'_>) -> Result<Result<usize, 
         Err(why) => return Ok(Err(why)),
     };
     let made = steps.len();
+    match delete_steps(slug, tag, steps) {
+        Ok(()) => Ok(Ok(made)),
+        Err((path, Some(status))) => Err(format!("{path} answered {status}")),
+        Err((path, None)) => Err(format!("{path} did not answer")),
+    }
+}
+
+/// Make each of `steps` for `tag`, stopping at the first the forge refuses:
+/// its path and the status it answered, `None` where it did not answer. A tag
+/// already gone counts as deleted.
+fn delete_steps(slug: &str, tag: &str, steps: Vec<Step>) -> Result<(), (String, Option<u16>)> {
     for step in steps {
         let (path, gone_is_fine) = match step {
             Step::DeleteRelease(id) => (format!("repos/{slug}/releases/{id}"), false),
@@ -1213,11 +1241,11 @@ fn perform_discard(slug: &str, tag: &str, get: Get<'_>) -> Result<Result<usize, 
         match crate::rest::delete(&path) {
             Some(answer) if (200..300).contains(&answer.status) => {}
             Some(answer) if gone_is_fine && matches!(answer.status, 404 | 422) => {}
-            Some(answer) => return Err(format!("{path} answered {}", answer.status)),
-            None => return Err(format!("{path} did not answer")),
+            Some(answer) => return Err((path, Some(answer.status))),
+            None => return Err((path, None)),
         }
     }
-    Ok(Ok(made))
+    Ok(())
 }
 
 /// `batten release cut <tag> --sha <sha> --changelog <path> --workflow <file>`
@@ -1741,10 +1769,13 @@ mod tests {
         let published =
             crate::rest::routed("discard-verb-published", &[("releases/tags/v1", 200, "{}")]);
         assert_eq!(run(&published).0, crate::ExitCode::Violation);
-        assert_eq!(
-            run(&discarding("discard-verb-refused", 500, 204)).0,
-            crate::ExitCode::Internal
+        let (code, _, err) = run(&discarding("discard-verb-refused", 500, 204));
+        assert_eq!(code, crate::ExitCode::Internal);
+        assert!(
+            err.starts_with("batten: release discard: could not delete repos/"),
+            "{err}"
         );
+        assert!(err.ends_with(": the forge answered 500\n"), "{err}");
     }
 
     #[test]
