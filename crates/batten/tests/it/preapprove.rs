@@ -514,7 +514,12 @@ fn a_memory_write_is_preapproved_outside_plan_mode() {
 /// `<noun>_list` and `<noun>_get`, and plan mode refused them as writes.
 #[test]
 fn a_noun_first_mcp_list_or_get_is_preapproved() {
-    for tool in ["mcp__github__actions_list", "mcp__github__actions_get"] {
+    for tool in [
+        "mcp__github__actions_list",
+        "mcp__github__actions_get",
+        "mcp__github__pull_request_read",
+        "mcp__Miro__board_preview_read",
+    ] {
         assert_granted_by(
             &envelope("plan", tool, &serde_json::json!({})),
             "call read now",
@@ -522,9 +527,9 @@ fn a_noun_first_mcp_list_or_get_is_preapproved() {
     }
 }
 
-/// A WRITE NAMED LIKE A READ IS STILL A WRITE (CLOUD-2519): `_list`/`_get`
-/// are reads on the GitHub server alone, so `clear_list` elsewhere is not,
-/// and a write verb before `_read` is excluded by name, on any server.
+/// A WRITE NAMED LIKE A READ IS STILL A WRITE (CLOUD-2519): a noun-first read
+/// is one only on the servers measured to name reads that way, so
+/// `clear_list` or `mark_read` on any other server is not.
 #[test]
 fn a_write_named_like_a_list_is_not_preapproved() {
     for tool in [
@@ -532,6 +537,7 @@ fn a_write_named_like_a_list_is_not_preapproved() {
         "mcp__x__clear_list",
         "mcp__x__reset_get",
         "mcp__x__mark_read",
+        "mcp__x__toggle_read",
         "mcp__Claude_Docs__mark_as_read",
     ] {
         assert_not_granted(&envelope("default", tool, &serde_json::json!({})));

@@ -3,7 +3,7 @@
 #MUTANT mcp-verb-unread|s@^\tmcp_read_verb(call.tool)$@\tstartswith(call.tool, "mcp__")@|an_mcp_write_is_not_preapproved
 #MUTANT noun-first-read-unread|s@^mcp_read_verb(tool) if regex.match(`^mcp__github__@mcp_read_verb(tool) if regex.match(`^mcp__nothing__@|a_noun_first_mcp_list_or_get_is_preapproved
 #MUTANT noun-first-unscoped|s@`^mcp__github__\[a-z0-9_\]+_(list@`^mcp__[^_].*__[a-z0-9_]+_(list@|a_write_named_like_a_list_is_not_preapproved
-#MUTANT write-verb-read-as-read|s@^\tnot regex.match(`__(add\x7cappend@\ttrue # (add\x7cappend@|a_write_named_like_a_list_is_not_preapproved
+#MUTANT noun-first-read-unscoped|s@`^mcp__(github\x7cMiro)__\[a-z0-9_\]+_read\$`@`^mcp__[^_].*__[a-z0-9_]+_read$`@|a_write_named_like_a_list_is_not_preapproved
 #MUTANT mcp-call-unread|s@^\tprogram.name == "batten"$@\tprogram.name == "none"@|a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not
 #MUTANT guide-not-read|s@"Explore", "Plan", "claude-code-guide"@"Explore", "Plan"@|a_plan_mode_guide_subagent_is_allowed
 #MUTANT printenv-not-read|s@"tree", "printenv", "ps",@"tree", "ps",@|a_plan_mode_printenv_is_allowed
@@ -58,23 +58,17 @@ read_tools(tool) if {
 # `read_`/`query_`/`fetch_`/`find_`.
 mcp_read_verb(tool) if regex.match(`^mcp__[^_].*__(get|list|search|read|query|fetch|find)(_[a-z0-9_]+)?$`, tool)
 
-# Or noun-first with a trailing `_read`, on any server.
+# Or noun-first, on the servers measured to name their pure reads that way
+# (CLOUD-2519): a trailing `_read` on GitHub (`issue_read`,
+# `pull_request_read`) and Miro (`board_preview_read`, `prototype_read`), and a
+# trailing `_list` or `_get` on GitHub (`actions_list`, `actions_get`), which
+# plan mode refused.
 #
-# A WRITE VERB FIRST IS STILL A WRITE, whatever the noun after it: the suffix
-# alone reads `mark_read` as a read, so a method opening on a writing verb is
-# excluded by name. The exclusion is anchored to the method, the segment after
-# the last `__`, which carries single underscores only. RE2 has no lookaround,
-# so it is its own clause rather than part of the pattern.
-mcp_read_verb(tool) if {
-	regex.match(`^mcp__[^_].*__[a-z0-9_]+_read$`, tool)
-	not regex.match(`__(add|append|archive|assign|close|create|delete|edit|insert|mark|merge|move|patch|post|push|put|remove|rename|reply|save|send|set|share|submit|sync|trash|update|upsert|write)(_[a-z0-9]+)+$`, tool)
-}
+# SCOPED TO THE SERVERS MEASURED, NEVER GENERAL. A suffix alone admits a write
+# named like a read (`mark_read`, `clear_list`), and no verb list can name every
+# such write, so a noun-first read fails closed on every other server.
+mcp_read_verb(tool) if regex.match(`^mcp__(github|Miro)__[a-z0-9_]+_read$`, tool)
 
-# Or `_list` or `_get` last, on the GitHub server alone (CLOUD-2519). It names
-# its pure reads noun-first (`actions_list`, `actions_get`), and plan mode
-# refused them. SCOPED TO THE SERVER MEASURED, NEVER GENERAL: a verb list cannot
-# name every write a suffix would admit (`clear_list`, `reset_list`), so the
-# widening fails closed on every other server rather than open.
 mcp_read_verb(tool) if regex.match(`^mcp__github__[a-z0-9_]+_(list|get)$`, tool)
 
 # Programs that leave their operands alone and that the engine's floor does not
