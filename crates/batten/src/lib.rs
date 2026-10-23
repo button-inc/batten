@@ -26945,7 +26945,7 @@ fn run_release_verify(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    match release_verdict(tag, draft, mode, overrides).1 {
+    match release_verdict(tag, draft, !draft, mode, overrides).1 {
         release_verify::Verdict::Verified => {
             writeln!(
                 out,
@@ -26975,12 +26975,17 @@ fn uncut(slug: &str, tag: &str, get: release::Get<'_>) -> bool {
 }
 
 /// G1 read and judged: the release as read, where it could be, and the verdict.
+///
+/// `absent_refuses` is whether a release the forge has positively not cut is a
+/// refusal on the caller's surface (CLOUD-2518), decided by the caller because
+/// only it knows whether the release must already exist there.
 //MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT uncut-release-could-not-look|s@^        Err(_) if !draft \&\& uncut(\&slug, tag, \&get) => {$@        Err(_) if false => {@|an_uncut_release_is_refused_not_could_not_look
-//MUTANT uncut-draft-refused|s@^        Err(_) if !draft \&\& uncut(\&slug, tag, \&get) => {$@        Err(_) if uncut(\&slug, tag, \&get) => {@|an_uncut_draft_stays_could_not_look
+//MUTANT uncut-release-could-not-look|s@^        Err(_) if absent_refuses \&\& uncut(\&slug, tag, \&get) => {$@        Err(_) if false => {@|an_uncut_release_is_refused_not_could_not_look
+//MUTANT uncut-refused-everywhere|s@^        Err(_) if absent_refuses \&\& uncut(\&slug, tag, \&get) => {$@        Err(_) if uncut(\&slug, tag, \&get) => {@|an_uncut_draft_stays_could_not_look
 fn release_verdict(
     tag: &str,
     draft: bool,
+    absent_refuses: bool,
     mode: Mode,
     overrides: &Overrides,
 ) -> (Option<release_verify::Release>, release_verify::Verdict) {
@@ -27003,19 +27008,20 @@ fn release_verdict(
             .or_insert_with(|| rest::get(path, None))
             .clone()
     };
-    // A RELEASE NOT CUT YET IS A REFUSAL, NEVER A COULD-NOT-LOOK (CLOUD-2518).
+    // A RELEASE NOT CUT YET IS A REFUSAL WHERE THE CALLER SAYS SO (CLOUD-2518).
     // The release PR's head pins the release its own cut creates, so the read
     // fails there by construction; as could-not-look it made `release path
     // --seal` exit 3 and held the cut that would create it. Only a positive
     // sighting of absence counts: any other failed read stays could-not-look.
     //
-    // NEVER FOR `--draft`. That mode verifies a draft `land-state` has just
-    // seen, so its absence is a lagging list rather than a fact, and
-    // `release-land` maps a refusal there to `release discard`: a refusal would
-    // delete a good draft that a could-not-look leaves to be retried.
+    // WHERE THE RELEASE MUST EXIST, absence is lag and stays could-not-look:
+    // `--draft` verifies a draft `land-state` has just seen, and `release-land`
+    // maps a refusal there to `release discard`; an unsealed `release path`
+    // grades a release `release-land` has just published, and a posted
+    // `failure` would outlive the lag.
     let release = match release_verify::read(&slug, tag, &get) {
         Ok(release) => release,
-        Err(_) if !draft && uncut(&slug, tag, &get) => {
+        Err(_) if absent_refuses && uncut(&slug, tag, &get) => {
             return (
                 None,
                 release_verify::Verdict::Refused(vec![release_verify::Refusal::Absent(
@@ -27220,19 +27226,10 @@ fn release_path_verdict(
     };
     let other_config_change =
         release_path::config_changed_beyond_engine(&base_config, &head_config);
-    let mut verify = |tag: &str| match release_verdict(tag, false, mode, overrides) {
+    let mut verify = |tag: &str| match release_verdict(tag, false, sealing, mode, overrides) {
         (Some(release), release_verify::Verdict::Verified) => Ok(
             release_path::Published::Verified(release.tag_commit.unwrap_or(release.target)),
         ),
-        // AN UNCUT RELEASE IS A FAILURE ONLY UNDER THE SEAL. There it is the
-        // release PR's pre-cut head, whose cut has not run; anywhere else the
-        // release exists, so a release `release-land` just published reading as
-        // absent is lag, and a posted `failure` would outlive it.
-        (_, release_verify::Verdict::Refused(refused))
-            if !sealing && matches!(refused.as_slice(), [release_verify::Refusal::Absent(_)]) =>
-        {
-            Err(format!("{tag} is not cut yet"))
-        }
         (_, release_verify::Verdict::Refused(refused)) => Ok(release_path::Published::Refused(
             refused.iter().map(release_verify::Refusal::line).collect(),
         )),
