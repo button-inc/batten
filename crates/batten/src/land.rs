@@ -3651,6 +3651,13 @@ pub fn spending(repo: &str, sha: &str) -> Option<Vec<Spending>> {
     )
 }
 
+/// The forge as [`abandon`] reaches it: the runs still spending on a head, and
+/// one cancellation.
+pub type Forge = (
+    fn(&str, &str) -> Option<Vec<Spending>>,
+    fn(&str) -> crate::rest::Posted,
+);
+
 /// Cancel every run a red verdict made worthless, sparing the fan-in's.
 ///
 /// **BEST-EFFORT THROUGHOUT AND NEVER A VERDICT.** A refused cancellation costs
@@ -3660,8 +3667,12 @@ pub fn spending(repo: &str, sha: &str) -> Option<Vec<Spending>> {
 /// **NOT "cancelling somebody else's runs".** A head sha is one no other branch
 /// has, so the blast radius is one push's worth of runs by construction rather
 /// than by filtering — the same argument the lease guard's own cancel carries.
+///
+/// **THE FORGE IS HANDED IN** ([`spending`] and [`crate::rest::post`] in the one
+/// caller): which runs are cancelled, spared and refused is the counting this
+/// tests, and no forge a test can reach answers a cancellation on demand.
 #[must_use]
-pub fn abandon(repo: &str, sha: &str, fanin: &FanIn) -> Abandoned {
+pub fn abandon(repo: &str, sha: &str, fanin: &FanIn, (spent, post): Forge) -> Abandoned {
     // AN UNSET FAN-IN CANCELS NOTHING RATHER THAN GUESSING, and this is the
     // guard whose absence would have been worst: with no name to spare, EVERY
     // run is doomed — including the one carrying the fan-in, whose cancelled
@@ -3671,7 +3682,7 @@ pub fn abandon(repo: &str, sha: &str, fanin: &FanIn) -> Abandoned {
     if !fanin.declared() {
         return Abandoned::default();
     }
-    let Some(in_flight) = spending(repo, sha) else {
+    let Some(in_flight) = spent(repo, sha) else {
         return Abandoned::default();
     };
     let (doomed, spared) = worthless(&in_flight, fanin);
@@ -3681,7 +3692,7 @@ pub fn abandon(repo: &str, sha: &str, fanin: &FanIn) -> Abandoned {
     };
     for run in doomed {
         if matches!(
-            crate::rest::post(&format!("repos/{repo}/actions/runs/{}/cancel", run.id)),
+            post(&format!("repos/{repo}/actions/runs/{}/cancel", run.id)),
             crate::rest::Posted::Accepted
         ) {
             report.cancelled += 1;
@@ -5496,6 +5507,45 @@ mod tests {
             doomed.len(),
             1,
             "which is why `abandon` refuses before ever calling this"
+        );
+    }
+
+    /// Fails by: a pass that reports nothing while cancelling, or counts a
+    /// refused cancellation as done, or acts at all with no fan-in declared.
+    #[test]
+    fn an_abandon_pass_counts_what_the_forge_answered() {
+        let three: fn(&str, &str) -> Option<Vec<Spending>> = |_, _| {
+            Some(vec![
+                run("1", "the-fan-in.yml"),
+                run("2", "a.yml"),
+                run("3", "b.yml"),
+            ])
+        };
+        let first_only: fn(&str) -> crate::rest::Posted = |path| {
+            if path.ends_with("/runs/2/cancel") {
+                crate::rest::Posted::Accepted
+            } else {
+                crate::rest::Posted::Refused
+            }
+        };
+        let declared = FanIn::from_workflow_path("the-fan-in.yml");
+        assert_eq!(
+            abandon("o/r", "abc", &declared, (three, first_only)),
+            Abandoned {
+                cancelled: 1,
+                spared: 1,
+                refused: 1,
+            }
+        );
+        assert_eq!(
+            abandon(
+                "o/r",
+                "abc",
+                &FanIn::from_workflow_path(""),
+                (three, first_only)
+            ),
+            Abandoned::default(),
+            "an undeclared fan-in cancels nothing"
         );
     }
 
