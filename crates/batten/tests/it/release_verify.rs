@@ -489,6 +489,53 @@ fn an_uncut_release_is_refused_not_could_not_look() {
     );
 }
 
+/// ONLY A SIGHTING OF ABSENCE IS A REFUSAL (CLOUD-2518). A tag read the forge
+/// failed some other way says nothing about whether the release exists, so it
+/// stays could-not-look and exits 3, whatever the list says.
+#[test]
+fn a_tag_read_that_failed_otherwise_stays_could_not_look() {
+    let version = env!("CARGO_PKG_VERSION");
+    let repo = common::Fixture::new("release-verify-tag-500")
+        .config(&format!(
+            "version = 1\nengine = {{ release = \"v{version}\" }}\n"
+        ))
+        .file(
+            "Cargo.toml",
+            &format!("[workspace.package]\nversion = \"{version}\"\n"),
+        )
+        .base_commit()
+        .build();
+    common::git_in(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    let forge = uncut_forge(
+        "release-verify-tag-500-forge",
+        &[(
+            "/releases/tags/",
+            "broken",
+            "HTTP/2 500\ncontent-type: application/json\n\n{\"message\":\"no\"}\n",
+        )],
+    );
+    let output = common::batten()
+        .current_dir(&repo)
+        .env("BATTEN_REST_FIXTURE", &forge)
+        .args(["release", "verify", "v9.9.9"])
+        .output()
+        .expect("run release verify");
+    assert_eq!(output.status.code(), Some(3), "{}", common::stderr(&output));
+    assert!(
+        !common::stderr(&output).contains("no release is tagged"),
+        "{}",
+        common::stderr(&output)
+    );
+}
+
 /// THE RELEASE PR'S PRE-CUT HEAD (CLOUD-2518). Its pin names the release its
 /// own cut creates, so G1 refuses it; on a release-shaped head with the guard's
 /// settings green, the seal excuses that failure and `final` may pass, which is
