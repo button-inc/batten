@@ -3743,7 +3743,7 @@ fn task_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         config
             .task
             .as_ref()
-            .filter(|table| !table.relaunch.is_empty())
+            .filter(|_| !relaunch(config).is_empty())
             .map(|table| usize::try_from(table.min_lifetime_secs).unwrap_or(usize::MAX))
     };
     let mut found = removed_entries(
@@ -3752,14 +3752,14 @@ fn task_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         relaunch(working),
         "task.relaunch",
     );
-    if let Some(working) = floor(working) {
-        found.extend(ceiling_raised(
+    found.extend(floor(base).zip(floor(working)).and_then(|(base, working)| {
+        ceiling_raised(
             WeakeningKind::TaskLifetimeFloorRaised,
             "task.min_lifetime_secs",
-            floor(base),
+            Some(base),
             Some(working),
-        ));
-    }
+        )
+    }));
     found
 }
 
