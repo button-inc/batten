@@ -791,7 +791,7 @@ pub fn run_discard(
             Ok(crate::ExitCode::Violation)
         }
         Err(why) => {
-            writeln!(err, "batten: release discard: could not finish: {why}")?;
+            writeln!(err, "batten: release discard: could not look: {why}")?;
             Ok(crate::ExitCode::Internal)
         }
     }

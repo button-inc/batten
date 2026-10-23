@@ -1900,14 +1900,8 @@ pub fn verify(
     // the caller's window: measured on #1132, 57,764 tokens of which two lines
     // were the verdict. The bytes are still sealed in the capture store, and the
     // driver prints the one line that points at them (`verify_log`), so the
-    // reason a gate refused is one `batten capture show` away, not lost. That
-    // is `ExecConfig::DEFAULT`'s own `tee`, so it is inherited rather than
-    // restated: a restated default is a field whose deletion changes nothing
-    // (CLOUD-2509).
-    let settings = crate::exec::ExecConfig {
-        manage_process_group: true,
-        ..crate::exec::ExecConfig::DEFAULT
-    };
+    // reason a gate refused is one `batten capture show` away, not lost.
+    let settings = VERIFY_SETTINGS;
     // CLASSIFIED, NEVER PROMOTED. `run_in_with_env` scans patterns only on a
     // `0`, because its question is whether a green run is lying; the question
     // here is what kind of failure a red one was, and `classify_in_env` is the
@@ -1932,6 +1926,18 @@ pub fn verify(
     append(root, branch, &lines)?;
     Ok(verified)
 }
+
+/// How [`verify`] runs the gate: its process group managed, so the race can
+/// cancel it, and its output stored, never teed.
+///
+/// The `tee` is `ExecConfig::DEFAULT`'s, inherited rather than restated, since
+/// a restated default is a field whose deletion changes nothing (CLOUD-2509);
+/// `verify_settings_manage_the_group_and_store_the_output` pins it here, so a
+/// default flipped for another caller cannot stream a gate log into the lap.
+const VERIFY_SETTINGS: crate::exec::ExecConfig = crate::exec::ExecConfig {
+    manage_process_group: true,
+    ..crate::exec::ExecConfig::DEFAULT
+};
 
 /// What a gate that RAN said about `head`: its exit code first, then the
 /// declared patterns its output matched.
@@ -4383,6 +4389,12 @@ mod forge_tests {
             watching("land-watch-none", &[BASE], false),
             (None, Vec::new())
         );
+    }
+
+    #[test]
+    fn verify_settings_manage_the_group_and_store_the_output() {
+        assert!(VERIFY_SETTINGS.manage_process_group);
+        assert!(!VERIFY_SETTINGS.tee);
     }
 
     #[test]

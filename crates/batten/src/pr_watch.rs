@@ -508,7 +508,7 @@ pub fn watch(
         roster,
         &Pacing {
             read: &read,
-            pause: &|seconds| pause_until(seconds, &NEVER),
+            pause: &|seconds| pause_until(seconds, &std::sync::atomic::AtomicBool::new(false)),
         },
         out,
         err,
@@ -863,10 +863,6 @@ fn record(progress: &Progress, signal: &str, value: &str) {
 /// how coarsely it is served. One second because that is the poll's own default
 /// cadence, so an arm that is NOT stopped behaves exactly as it did.
 const STOP_CHECK_SLICE: f64 = 1.0;
-
-/// The flag a caller with nothing to stop its pause hands [`pause_until`]:
-/// nothing ever raises it.
-pub(crate) static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The wait between requests, abandoned early when `stop` is raised. A real
 /// sleep, and the only clock in the crate.
