@@ -196,7 +196,11 @@ fn doctor_hooks_counts_each_merged_surface_under_the_resolved_home() {
         .expect("harnesses is a list");
     let count = |field: &str| -> u64 {
         rows.iter()
-            .map(|row| row[field].as_u64().unwrap_or_default())
+            .map(|row| {
+                row[field]
+                    .as_u64()
+                    .expect("every merged-surface count is a number")
+            })
             .sum()
     };
     assert!(

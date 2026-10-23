@@ -1441,6 +1441,17 @@ fn the_credential_table_carries_the_names_the_engine_dropped() {
     assert!(bare.names.is_empty());
 }
 
+/// The launcher's environment dump narrowed to the two variables these cases
+/// read, so a failure message never prints whatever else the host exported.
+#[cfg(unix)]
+fn watched(stdout: &[u8]) -> String {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter(|line| line.starts_with("CRED_TOKEN=") || line.starts_with("DOOMED="))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// An `unset` row behind a declared credential, applied, and the launcher run
 /// in the repository with `token` in the one declared name.
 #[cfg(unix)]
@@ -1484,7 +1495,7 @@ fn a_freshly_proven_credential_lets_an_unset_row_remove_its_variable() {
         &env.repo.parent().unwrap().join("bin-live"),
         "tok_proven",
     );
-    let seen = String::from_utf8_lossy(&ran.stdout);
+    let seen = watched(&ran.stdout);
     assert!(
         seen.lines().any(|line| line == "CRED_TOKEN=tok_proven"),
         "the launcher ran its tool: {seen}"
@@ -1507,7 +1518,7 @@ fn an_unprovable_credential_keeps_the_variable_and_says_so() {
         &env.repo.parent().unwrap().join("bin-dead"),
         "tok_unproven",
     );
-    let seen = String::from_utf8_lossy(&ran.stdout);
+    let seen = watched(&ran.stdout);
     assert!(
         seen.lines().any(|line| line == "DOOMED=present"),
         "no proven replacement, so nothing is removed: {seen}"
