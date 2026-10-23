@@ -522,15 +522,17 @@ fn a_noun_first_mcp_list_or_get_is_preapproved() {
     }
 }
 
-/// A WRITE VERB FIRST IS STILL A WRITE (CLOUD-2519): the noun-first suffixes
-/// never read `create_list` or `mark_read` as a read.
+/// A WRITE NAMED LIKE A READ IS STILL A WRITE (CLOUD-2519): `_list`/`_get`
+/// are reads on the GitHub server alone, so `clear_list` elsewhere is not,
+/// and a write verb before `_read` is excluded by name, on any server.
 #[test]
 fn a_write_named_like_a_list_is_not_preapproved() {
     for tool in [
         "mcp__x__create_list",
-        "mcp__x__update_allow_list",
+        "mcp__x__clear_list",
+        "mcp__x__reset_get",
         "mcp__x__mark_read",
-        "mcp__x__delete_get",
+        "mcp__Claude_Docs__mark_as_read",
     ] {
         assert_not_granted(&envelope("default", tool, &serde_json::json!({})));
     }
