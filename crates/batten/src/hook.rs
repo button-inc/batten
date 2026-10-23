@@ -6164,12 +6164,13 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
                     return disposed(rule, pipeline_refusal(rule, Discard::Piped));
                 }
             }
-            // The element AFTER this one, by position rather than by `index + 1`:
-            // `segments` never leaves a `;` or `||` on the last element
-            // (`a_trailing_separator_ends_no_segment`), so an offset written as
-            // arithmetic has a `* 1` no case can tell from it.
+            // Something must FOLLOW the separator. `segments` never leaves a `;`
+            // or `||` on the last element (`a_trailing_separator_ends_no_segment`),
+            // so this holds wherever the separator does; it is read as "the
+            // second of the elements from here" rather than at `index + 1`,
+            // whose `* 1` no case could tell from it.
             if matches!(segment.terminator, Some(Separator::Semi | Separator::Or))
-                && parsed.iter().skip(index).nth(1).is_some()
+                && parsed.get(index..).and_then(|rest| rest.get(1)).is_some()
             {
                 return disposed(rule, pipeline_refusal(rule, Discard::Trailing));
             }

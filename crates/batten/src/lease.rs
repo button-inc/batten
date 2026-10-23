@@ -4105,10 +4105,16 @@ mod tests {
         assert!(fetch(REMOTE, &dir, "main").is_err());
     }
 
-    /// Every answer a recorder column gives, over a stand-in lease.
+    /// Every answer a recorder column gives, over a stand-in lease, and ONE
+    /// reading per root while a different root takes its own.
     ///
-    /// Fails by: any constant reply, a reading never taken, or a garbage ref
-    /// graded as a holder.
+    /// One case rather than two, because the pairing is one process-wide slot:
+    /// a second case adjudicating on another thread would move it between
+    /// this case's two reads of one root.
+    ///
+    /// Fails by: any constant reply, a reading never taken, a garbage ref
+    /// graded as a holder, or the cache answering for a root it was not taken
+    /// for or not answering for the one it was.
     #[test]
     fn a_recorder_column_grades_the_lease_it_reads() {
         let mine = leased_clone("adjudicate-mine");
@@ -4142,39 +4148,24 @@ mod tests {
         );
 
         let free = leased_clone("adjudicate-free");
-        let _ = standing(&[], Vec::new());
+        let stand = standing(&[], Vec::new());
         assert_eq!(
             adjudicate(Asked::Successor, &free, 0),
             Some((0, String::from("\n")))
         );
-    }
-
-    /// ONE reading per root, and a different root takes its own.
-    ///
-    /// Fails by: the cache answering for a root it was not taken for, or not
-    /// answering for the one it was.
-    #[test]
-    fn a_reading_is_paired_per_root() {
-        let reference = Terms::default().reference;
-        let first = leased_clone("paired-first");
-        let lease = lease_of(&held_by("a", "first-next"));
-        let _ = standing(&[(&reference, &lease.id)], vec![lease.clone()]);
+        let lease = lease_of(&held_by("a", "renewed-next"));
+        let restood = standing(&[(&reference, &lease.id)], vec![lease.clone()]);
         assert_eq!(
-            adjudicate(Asked::Successor, &first, 0),
-            Some((0, String::from("first-next\n")))
+            adjudicate(Asked::Successor, &free, 0),
+            Some((0, String::from("\n"))),
+            "the free root's reading is reused"
         );
-        let second = leased_clone("paired-second");
-        let lease = lease_of(&held_by("a", "second-next"));
-        let stand = standing(&[(&reference, &lease.id)], vec![lease.clone()]);
+        assert!(restood.borrow().asked.is_empty(), "and nothing is re-read");
+        assert_eq!(stand.borrow().asked.len(), 1, "one discovery, no lease ref");
         assert_eq!(
-            adjudicate(Asked::Successor, &first, 0),
-            Some((0, String::from("first-next\n"))),
-            "the first root's reading is reused"
-        );
-        assert!(stand.borrow().asked.is_empty(), "and nothing is re-read");
-        assert_eq!(
-            adjudicate(Asked::Successor, &second, 0),
-            Some((0, String::from("second-next\n")))
+            adjudicate(Asked::Successor, &mine, 0),
+            Some((0, String::from("renewed-next\n"))),
+            "another root takes its own"
         );
     }
 
@@ -4277,20 +4268,29 @@ mod tests {
         assert_eq!(positive_secs("soon"), None);
     }
 
-    /// The process variable is read: the test runner sets the package's patch
-    /// version for every case it runs, so it is a variable whose value the
-    /// case knows without setting it.
+    /// The process variable is read: the test runner exports the package's
+    /// version components for every case it runs, so each is a variable whose
+    /// value the case knows without setting it, and some component of a
+    /// released version is positive.
     ///
     /// Fails by: any constant answer in place of the read.
     #[test]
     fn a_variable_in_the_environment_is_read_as_seconds() {
-        let patch = env!("CARGO_PKG_VERSION_PATCH");
+        let components = [
+            ("CARGO_PKG_VERSION_PATCH", env!("CARGO_PKG_VERSION_PATCH")),
+            ("CARGO_PKG_VERSION_MINOR", env!("CARGO_PKG_VERSION_MINOR")),
+            ("CARGO_PKG_VERSION_MAJOR", env!("CARGO_PKG_VERSION_MAJOR")),
+        ];
+        let (name, value) = components
+            .iter()
+            .find(|(_, value)| positive_secs(value).is_some())
+            .expect("the premise: a released version has a positive component");
         assert_eq!(
-            std::env::var("CARGO_PKG_VERSION_PATCH").as_deref(),
-            Ok(patch),
+            std::env::var(name).as_deref(),
+            Ok(*value),
             "the premise: the runner exports the package version"
         );
-        assert_eq!(env_secs("CARGO_PKG_VERSION_PATCH"), positive_secs(patch));
+        assert_eq!(env_secs(name), positive_secs(value));
         assert_eq!(env_secs("BATTEN_NO_SUCH_VARIABLE_ANYWHERE"), None);
     }
 

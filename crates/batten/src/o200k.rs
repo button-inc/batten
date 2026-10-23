@@ -170,7 +170,10 @@ fn pieces<'a>(
         {
             end -= piece.chars().last().map_or(0, char::len_utf8);
         }
-        let out = text.get(at..end).unwrap_or_default();
+        // AN EMPTY PIECE ENDS THE PIECES rather than repeating forever: every
+        // alternative consumes a character, so one is no input's, and a reader
+        // that met one could only spin on it.
+        let out = text.get(at..end).filter(|out| !out.is_empty())?;
         at = end;
         Some(out)
     })

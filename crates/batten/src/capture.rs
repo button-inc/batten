@@ -2336,6 +2336,7 @@ pub(crate) fn evict_to_budget_in_keeping(
     // blob and then appends its row, so a concurrent call's eviction between the
     // two sees a record no row names yet. Taking that first deleted another
     // hook's capture mid-write; a young one keeps the old place, last.
+    let now = std::time::SystemTime::now();
     let (unrecorded, in_flight): (Vec<Capture>, Vec<Capture>) = held
         .iter()
         .filter(|record| !taken.contains(record.digest.as_str()))
@@ -2344,7 +2345,7 @@ pub(crate) fn evict_to_budget_in_keeping(
             older_than(
                 &dir.join(format!("{}-{}", record.stream, record.digest)),
                 UNRECORDED_GRACE,
-                std::time::SystemTime::now(),
+                now,
             )
         });
     let candidates = unrecorded.into_iter().chain(recorded).chain(in_flight);

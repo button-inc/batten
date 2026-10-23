@@ -205,9 +205,13 @@ fn a_stale_guard_asks_to_cancel_and_runs_when_refused() {
 /// `stop` signals the holder it names, so its own trap runs.
 ///
 /// Fails by: no signal sent at all, which leaves the holder sleeping out its
-/// whole interval.
+/// whole interval. Off unix there is no signal to send (`stop` is inert by
+/// construction there), so there is no subject to drive.
 #[test]
 fn stop_terminates_the_holder_it_names() {
+    if cfg!(not(unix)) {
+        return;
+    }
     #[expect(
         clippy::disallowed_types,
         reason = "stays, and test-only: the subject is a signal to ANOTHER process, so a real child is the only holder that can receive one"
@@ -224,10 +228,7 @@ fn stop_terminates_the_holder_it_names() {
         assert_eq!(status.signal(), Some(15), "stopped by SIGTERM: {status:?}");
     }
     #[cfg(not(unix))]
-    assert!(
-        status.success(),
-        "no signal exists to send here: {status:?}"
-    );
+    let _ = status;
 }
 
 /// A discovery ceiling between a directory and its repository fences the walk,

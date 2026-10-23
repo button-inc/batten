@@ -627,6 +627,10 @@ fn perf(
         .args(args)
         .current_dir(repo)
         .env("PATH", path)
+        // The stubs write where cargo would, so an inherited target or binary
+        // override must not point them at a real build.
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("BENCH_BIN")
         .env("BENCH_RUNS", "1")
         .env("BENCH_WARMUP", "0");
     for (key, value) in env {
