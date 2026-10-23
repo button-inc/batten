@@ -510,6 +510,29 @@ fn a_memory_write_is_preapproved_outside_plan_mode() {
     assert_not_granted(&envelope("default", "mcp__serena__delete_memory", &edit));
 }
 
+/// THE NOUN-FIRST READS (CLOUD-2519): the GitHub server names its pure reads
+/// `<noun>_list` and `<noun>_get`, and plan mode refused them as writes.
+#[test]
+fn a_noun_first_mcp_list_or_get_is_preapproved() {
+    for tool in ["mcp__github__actions_list", "mcp__github__actions_get"] {
+        assert_granted_by(
+            &envelope("plan", tool, &serde_json::json!({})),
+            "call read now",
+        );
+    }
+}
+
+/// The widening reaches no write: a trigger is neither suffix.
+#[test]
+fn an_mcp_trigger_is_not_preapproved() {
+    let trigger = envelope(
+        "default",
+        "mcp__github__actions_run_trigger",
+        &serde_json::json!({}),
+    );
+    assert_not_granted(&trigger);
+}
+
 #[test]
 fn an_mcp_write_is_not_preapproved() {
     let write = envelope(
