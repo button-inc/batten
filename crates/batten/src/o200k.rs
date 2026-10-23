@@ -138,7 +138,10 @@ fn pieces<'a>(
     use regex_automata::dfa::Automaton as _;
     let mut at = 0;
     std::iter::from_fn(move || {
-        let remaining = text.get(at..).filter(|remaining| !remaining.is_empty())?;
+        // The rest ends where its first character is absent, read without a
+        // negation whose deletion would answer an empty rest forever.
+        let remaining = text.get(at..)?;
+        remaining.chars().next()?;
         let input = regex_automata::Input::new(text)
             .range(at..)
             .anchored(regex_automata::Anchored::Yes);

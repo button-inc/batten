@@ -877,15 +877,11 @@ fn acquire_pausing(
         return Claim::CouldNotLook(parent.to_path_buf());
     }
 
-    // At least one ask, so `attempts = 0` is a single non-blocking attempt rather
-    // than a silent "never look" that would report a free lock as held.
-    let rounds = attempts.max(1);
-    let mut round = 0_usize;
-    loop {
-        round += 1;
-        let last = round >= rounds;
+    // One ask: the claim it settles, or `None` for a lock someone else still
+    // holds.
+    let mut ask = || {
         if take(lock, pid) {
-            return Claim::Taken;
+            return Some(Claim::Taken);
         }
 
         // An EMPTY OR ABSENT pid file is neither held nor free on ONE sighting
@@ -918,19 +914,28 @@ fn acquire_pausing(
             && std::fs::remove_dir_all(lock).is_ok()
             && take(lock, pid)
         {
-            return Claim::Reclaimed(holder.unwrap_or_else(|| UNSTAMPED.to_owned()));
+            return Some(Claim::Reclaimed(
+                holder.unwrap_or_else(|| UNSTAMPED.to_owned()),
+            ));
         }
-
-        // The lock changed under us, or a live holder took it: whoever holds it
-        // now is real. Re-read rather than reporting the corpse seen a moment
-        // ago.
-        if last {
-            return Claim::Held {
-                holder: holder_of(lock).unwrap_or_else(|| "unknown".to_owned()),
-                phase: None,
-            };
+        None
+    };
+    // Every ask but the last, as a range rather than a counter: a counter's
+    // `+=` and `>=` have mutants that never reach the last ask, and so hang
+    // rather than fail. At least one ask follows, so `attempts = 0` is a single
+    // non-blocking attempt rather than a silent "never look" that would report a
+    // free lock as held.
+    for _ in 1..attempts {
+        if let Some(claim) = ask() {
+            return claim;
         }
     }
+    // The lock changed under us, or a live holder took it: whoever holds it now
+    // is real. Re-read rather than reporting the corpse seen a moment ago.
+    ask().unwrap_or_else(|| Claim::Held {
+        holder: holder_of(lock).unwrap_or_else(|| "unknown".to_owned()),
+        phase: None,
+    })
 }
 
 /// The one declared pause in this module, and the only waived delay it owns.
