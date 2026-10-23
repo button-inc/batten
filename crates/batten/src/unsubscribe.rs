@@ -566,10 +566,7 @@ mod tests {
             ..Host::default()
         };
         for (spend, recorded) in [(drops as Spend, true), (refuses, false)] {
-            let dir = std::env::temp_dir().join(format!(
-                "batten-unsubscribe-ask-{recorded}-{}",
-                std::process::id()
-            ));
+            let dir = crate::scratch::scratch(&format!("unsubscribe-ask-{recorded}"));
             let mut out = Vec::new();
             let code = ask_endpoint(&dir, &host, ("cse_a", "t0ken"), 489, spend, &mut out).unwrap();
             assert_eq!(code, ExitCode::Success, "a drop never blocks");
@@ -579,7 +576,6 @@ mod tests {
                 "{}",
                 String::from_utf8_lossy(&out)
             );
-            let _ = std::fs::remove_dir_all(&dir);
         }
     }
 

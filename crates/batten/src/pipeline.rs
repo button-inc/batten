@@ -122,8 +122,7 @@ impl Compensation {
     /// A `match` rather than a comparison, EVERY VARIANT NAMED: an arm nobody
     /// has written yet is a compile error HERE rather than a default, and its
     /// author is asked this module header's question — does the undo land
-    /// outside the process performing it? A durability predicate used to ask
-    /// it at runtime, and answered `true` for every arm it could ever see.
+    /// outside the process performing it?
     #[must_use]
     pub const fn owed_on_attempt(self) -> bool {
         match self {

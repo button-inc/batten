@@ -140,8 +140,8 @@ impl Verbosity {
             .iter()
             .position(|rung| *rung == Verbosity::DEFAULT)
             .unwrap_or(2);
-        // NEVER EQUAL: `DEFAULT` returned above, so `Equal` shares the upward
-        // arm and the walk has exactly two directions.
+        // `Equal` is unreachable (`DEFAULT` returned above), so it shares the
+        // upward arm.
         let index = match here.cmp(&origin) {
             std::cmp::Ordering::Less => here.saturating_sub(steps),
             std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => {
@@ -367,8 +367,7 @@ where
     let mut out = Vec::new();
     for raw in argv {
         let token = raw.as_ref().to_string_lossy().into_owned();
-        // `> 1`, not `> 2`: a lone `-v` expands to itself, and the bound is
-        // what keeps a bare `-` (stdin) from reading as an empty cluster.
+        // A bare `-` (stdin) is not a cluster; a lone `-v` expands to itself.
         let clustered = token.len() > 1
             && token.starts_with('-')
             && !token.starts_with("--")

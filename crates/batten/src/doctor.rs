@@ -2426,6 +2426,10 @@ fn diagnose_merged(
 ) -> MergedTally {
     use etcetera::BaseStrategy as _;
 
+    // Nothing to resolve a home for: the lookup is paid only where it is read.
+    if harness.merge_surfaces().is_empty() {
+        return MergedTally::default();
+    }
     let home = etcetera::choose_base_strategy()
         .ok()
         .map(|strategy| strategy.home_dir().to_path_buf());
@@ -2445,11 +2449,8 @@ fn merged_from(
     command: &str,
     exclusive: bool,
 ) -> MergedTally {
-    let declared = harness.merge_surfaces().len();
-    if declared == 0 {
-        return MergedTally::default();
-    }
     let Some(home) = home else {
+        let declared = harness.merge_surfaces().len();
         // No resolvable home is COULD NOT LOOK, and it says so in its own
         // counter rather than as a zero in `read` — which is where three other
         // answers used to arrive looking identical.

@@ -1574,6 +1574,15 @@ mod tests {
     use std::collections::BTreeSet;
     use std::path::Path;
 
+    /// `read_claims` asks only the key's emptiness because the span is this
+    /// expression, and it never matches empty. Fails by: an edit that lets it.
+    #[test]
+    fn a_capitalised_span_is_never_empty() {
+        let span = regex::Regex::new(&format!("^(?:{})$", super::CAPITALISED)).unwrap();
+        assert!(!span.is_match(""));
+        assert!(span.is_match("In Review"));
+    }
+
     #[test]
     fn an_array_and_a_stream_are_one_set() {
         let array = payload_set(r#"[{"id":"A-1"},{"id":"A-2"}]"#).unwrap_or_default();

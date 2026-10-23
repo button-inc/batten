@@ -7492,7 +7492,3 @@ mod tests {
         );
     }
 }
-
-// `report` is best-effort stderr, so only a subprocess reads what it said: the
-// provision suite asserts the unusable-credential line it carries.
-//MUTANT-SUITE crates/batten/tests/it/provision.rs

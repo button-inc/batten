@@ -1441,27 +1441,16 @@ fn the_credential_table_carries_the_names_the_engine_dropped() {
     assert!(bare.names.is_empty());
 }
 
-/// A loopback address with nothing listening: bound, read, released.
-#[cfg(unix)]
-fn closed_probe() -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    format!("https://127.0.0.1:{port}/probe")
-}
-
 /// An `unset` row behind a declared credential, applied, and the launcher run
 /// in the repository with `token` in the one declared name.
 #[cfg(unix)]
 fn launch_unsetting(env: &Env, dest: &Path, token: &str) -> Output {
     let bytes = fs::read(env_binary()).unwrap();
     let (url, sha) = env.artifact("demo.bin", &bytes);
-    let rows = format!(
-        "\n[[provision.env]]\nname = \"DOOMED\"\nunset = true\n\n[credential]\n\
-         probe_url = \"{}\"\nnames = [\"CRED_TOKEN\"]\n",
-        closed_probe()
-    );
-    env.config(&linking_manifest(&url, &sha, dest, &rows));
+    // `.invalid` never resolves (RFC 2606), so nothing can answer the probe.
+    let rows = "\n[[provision.env]]\nname = \"DOOMED\"\nunset = true\n\n[credential]\n\
+                probe_url = \"https://probe.invalid/probe\"\nnames = [\"CRED_TOKEN\"]\n";
+    env.config(&linking_manifest(&url, &sha, dest, rows));
     assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
     #[expect(
         clippy::disallowed_types,

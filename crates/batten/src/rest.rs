@@ -938,7 +938,6 @@ fn method_of(body: Option<&[u8]>, chosen: Method) -> &'static str {
 
 /// What a live exchange puts on the wire beyond its URL and body: the headers,
 /// and whether the request goes out as a `PATCH` or a `DELETE`.
-#[derive(Debug, PartialEq, Eq)]
 struct Wire {
     headers: Vec<(String, String)>,
     patch: bool,
@@ -1133,11 +1132,6 @@ mod tests {
         }
     }
 
-    /// Every endpoint a caller hands over is API-relative.
-    ///
-    /// A leading slash produces a double one and a `404`, which every caller here
-    /// reads as could-not-look — silent, and exactly the dead-gate class this
-    /// crate exists to refuse.
     /// Fails by: an empty body claimed as JSON, or the method override read
     /// backwards — both invisible to every suite, which answers from the fixture.
     #[test]
@@ -1152,6 +1146,11 @@ mod tests {
         assert!(!json(&deleted) && deleted.delete && !deleted.patch);
     }
 
+    /// Every endpoint a caller hands over is API-relative.
+    ///
+    /// A leading slash produces a double one and a `404`, which every caller here
+    /// reads as could-not-look — silent, and exactly the dead-gate class this
+    /// crate exists to refuse.
     #[test]
     fn an_api_relative_path_keeps_the_forge_clients_own_spelling() {
         for path in [
