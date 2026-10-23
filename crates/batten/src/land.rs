@@ -4159,6 +4159,10 @@ mod forge_tests {
             assert!(redraft("o/r", "7", "N"));
             assert!(!mark_ready("o/r", "7", "N"));
         });
+        let refused = crate::rest::routed("land-mutate-refused", &[("graphql", 403, "{}")]);
+        crate::rest::with_fixture(&refused, || {
+            assert!(!redraft("o/r", "7", "N"));
+        });
     }
 
     #[test]
