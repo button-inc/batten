@@ -2538,6 +2538,89 @@ fn frame(text: &str) -> String {
 mod tests {
     use super::*;
 
+    /// A remote answering the handshake with `session` and the notification
+    /// with `acknowledged`, recording the session header each call carried.
+    fn serving_mcp(
+        session: &'static str,
+        acknowledged: u16,
+    ) -> std::rc::Rc<std::cell::RefCell<Vec<Option<String>>>> {
+        let carried = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = std::rc::Rc::clone(&carried);
+        crate::fetch::stand_in(Box::new(move |calls: &[crate::fetch::Call<'_>]| {
+            Ok(calls
+                .iter()
+                .map(|call| {
+                    seen.borrow_mut().push(
+                        call.headers
+                            .iter()
+                            .find(|(name, _)| name == SESSION_HEADER)
+                            .map(|(_, value)| value.clone()),
+                    );
+                    let request: serde_json::Value =
+                        serde_json::from_slice(call.body.unwrap_or_default()).unwrap_or_default();
+                    let (status, body, headers) =
+                        match request.get("method").and_then(serde_json::Value::as_str) {
+                            Some("initialize") => (
+                                200,
+                                r#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
+                                vec![(SESSION_HEADER.to_owned(), session.to_owned())],
+                            ),
+                            Some("notifications/initialized") => (acknowledged, "", Vec::new()),
+                            _ => (
+                                200,
+                                r#"{"jsonrpc":"2.0","id":2,"result":{"answered":true}}"#,
+                                Vec::new(),
+                            ),
+                        };
+                    crate::fetch::Response {
+                        status,
+                        body: body.as_bytes().to_vec(),
+                        headers,
+                    }
+                })
+                .collect())
+        }));
+        carried
+    }
+
+    fn stood_up() -> Wiring {
+        Wiring {
+            source: "s".to_owned(),
+            endpoint: "https://mcp.invalid/mcp".to_owned(),
+            headers: Vec::new(),
+            credential: None,
+        }
+    }
+
+    /// Fails by: the session the handshake minted dropped from the calls after
+    /// it, or the batch after the handshake never sent.
+    #[test]
+    fn a_dispatch_carries_the_minted_session_to_its_call() {
+        let carried = serving_mcp("abc", 202);
+        let result = dispatch(&stood_up(), "list", &serde_json::json!({})).expect("dispatched");
+        assert_eq!(result, serde_json::json!({"answered": true}));
+        assert_eq!(
+            *carried.borrow(),
+            [None, Some(String::from("abc")), Some(String::from("abc"))]
+        );
+    }
+
+    /// Fails by: an EMPTY session header carried back as though it named one.
+    #[test]
+    fn an_empty_session_is_none_to_carry() {
+        let carried = serving_mcp("", 202);
+        dispatch(&stood_up(), "list", &serde_json::json!({})).expect("dispatched");
+        assert_eq!(*carried.borrow(), [None, None, None]);
+    }
+
+    /// Fails by: a refused initialized notification followed as though the
+    /// handshake had completed.
+    #[test]
+    fn a_refused_notification_stops_the_dispatch() {
+        let _ = serving_mcp("abc", 400);
+        assert!(dispatch(&stood_up(), "list", &serde_json::json!({})).is_err());
+    }
+
     /// Fails by: the failure marker read from a fixed position, or matched as a
     /// bare suffix. A launch record that gains a field moves the marker one place
     /// right, and a positional reader then misses every failure, or takes the new

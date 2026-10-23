@@ -840,3 +840,49 @@ fn a_surviving_grandchild_cannot_hang_exec() {
          nothing by the first: {said}"
     );
 }
+
+/// A group whose leader and registrant are both gone, with a member that began
+/// before the record's last stamp, is the orphan a reap may signal
+/// (CLOUD-2366); the same group against a stamp no member predates is not.
+///
+/// Fails by: the live process table never consulted, so no orphan is ever
+/// proven and nothing is reaped; or every group read as one.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: an orphaned group is a property of processes this one is not, so only a real spawn can leave one"
+)]
+fn a_group_its_leader_and_registrant_left_is_an_orphan() {
+    use std::os::unix::process::CommandExt as _;
+
+    let dir = scratch("pgroup-orphaned");
+    let note = dir.join("member.pid");
+    let mut leader = Command::new("sh")
+        .args([
+            "-c",
+            &format!("sleep 600 & printf '%s' \"$!\" > '{}'", note.display()),
+        ])
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("a leader to leave its group");
+    let group = leader.id().to_string();
+    leader.wait().expect("the leader exits");
+    let member: i32 = await_file(&note).parse().expect("the member's pid");
+    let stamped = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("after the epoch")
+        .as_secs()
+        + 5;
+    let orphaned = batten::collect::is_orphaned_group(&group, &group, stamped);
+    let predated = batten::collect::is_orphaned_group(&group, &group, 0);
+    signal(u32::try_from(member).expect("a pid"), "KILL");
+    assert_eq!(
+        orphaned,
+        cfg!(any(target_os = "linux", target_os = "android")),
+        "only a /proc reader proves an orphan"
+    );
+    assert!(!predated, "no member began before second 0");
+}

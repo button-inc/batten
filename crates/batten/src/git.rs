@@ -746,6 +746,7 @@ fn open(dir: &Path) -> Result<gix::Repository> {
 ///
 /// This is not `gix::discover`'s `_with_environment_overrides`, which re-admits
 /// the redirecting variables too. Only the ceiling is read, and only here.
+//MUTANT-SUITE crates/batten/tests/it/lease_world.rs
 fn ceiling_dirs() -> Vec<PathBuf> {
     std::env::var_os("GIT_CEILING_DIRECTORIES")
         .map(|raw| std::env::split_paths(&raw).collect())

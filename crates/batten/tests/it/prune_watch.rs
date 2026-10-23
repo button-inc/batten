@@ -765,6 +765,80 @@ fn the_arm_watches_past_the_gate() {
     );
 }
 
+/// Watch `repo` under `config` with `free_mb` answering each sample by its
+/// count, until `done` holds over the samples taken and what is present.
+fn watched(
+    repo: &Path,
+    config: &Prune,
+    free_mb: impl Fn(usize) -> u64 + Send + 'static,
+    done: impl Fn(usize) -> bool,
+) -> Vec<String> {
+    let samples = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = std::sync::Arc::clone(&samples);
+    let watch = batten::disk_watch::DiskWatch {
+        repo: repo.to_path_buf(),
+        config,
+        free_mb: Box::new(move || {
+            Ok(free_mb(
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            ))
+        }),
+        kept: Vec::new(),
+    };
+    let ((), lines) = batten::disk_watch::around(Some(watch), || {
+        wait_for(|| done(samples.load(std::sync::atomic::Ordering::SeqCst)));
+    });
+    lines
+}
+
+/// A sample exactly AT the minimum is not below it, so nothing goes.
+///
+/// Fails by: the band read as inclusive, which collects a volume sitting on
+/// its floor on every sample.
+#[test]
+fn a_sample_at_the_minimum_collects_nothing() {
+    let repo = common::scratch("prune-watch-at-the-minimum");
+    common::init_repo(&repo);
+    let profile = repo.join("target/debug");
+    unit(&profile, "stale", "eeeeeeeeeeeeeeee", 7200, 2 << 20);
+    let mut config = rules("target");
+    config.min_free_mb = Some(10);
+    config.max_free_mb = Some(11);
+    let lines = watched(&repo, &config, |_| 10, |taken| taken >= 2);
+    assert!(present(&profile, "stale", "eeeeeeeeeeeeeeee"), "{lines:?}");
+    assert!(lines.is_empty(), "{lines:?}");
+}
+
+/// The FIRST sample below the minimum collects, when no collection is already
+/// running.
+///
+/// Fails by: the running-collection flag read the wrong way round, so the
+/// sample that found none running starts none, and the volume is back above
+/// the minimum before any sample does.
+#[test]
+fn the_first_sample_below_the_minimum_collects() {
+    let repo = common::scratch("prune-watch-first-fall");
+    common::init_repo(&repo);
+    let profile = repo.join("target/debug");
+    unit(&profile, "stale", "eeeeeeeeeeeeeeee", 7200, 2 << 20);
+    unit(&profile, "fresh", "ffffffffffffffff", 1, 1 << 20);
+    let mut config = rules("target");
+    config.min_free_mb = Some(10);
+    config.max_free_mb = Some(11);
+    let gone = profile.clone();
+    let lines = watched(
+        &repo,
+        &config,
+        |taken| if taken == 0 { 9 } else { 50 },
+        move |taken| !present(&gone, "stale", "eeeeeeeeeeeeeeee") || taken >= 3,
+    );
+    assert!(!present(&profile, "stale", "eeeeeeeeeeeeeeee"), "{lines:?}");
+    assert!(
+        lines.iter().any(|line| line.starts_with("disk-collected ")),
+        "{lines:?}"
+    );
+}
+
 /// How many 50 ms polls [`wait_for`] takes before giving up: four of the
 /// watcher's 5 s ticks, the longest a live watcher can take to act.
 const WAIT_POLLS: u32 = 400;

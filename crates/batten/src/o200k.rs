@@ -149,10 +149,11 @@ fn pieces<'a>(
         // unreachable, and cargo-mutants' mutants of it could only survive. A
         // DFA that cannot search at all ends the pieces with the rest whole.
         let found = match dfa.try_search_fwd(&input) {
-            // `!=` rather than `>`: an anchored forward match never ends
-            // before `at`, so the two agree, and `>`'s `>=` mutant would be
-            // equivalent — a survivor no case could kill.
-            Ok(Some(found)) if found.offset() != at => found,
+            // NO GUARD ON THE MATCH'S LENGTH, for the fallback's reason above:
+            // every alternative consumes a character, so a match ending at `at`
+            // is one no input produces, and a guard against it is a condition
+            // whose `true` mutant no case can tell from it.
+            Ok(Some(found)) => found,
             _ => {
                 at = text.len();
                 return Some(remaining);

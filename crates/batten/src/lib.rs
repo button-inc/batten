@@ -14615,7 +14615,7 @@ fn run_lease_guard_unleased(
         lease::Carries::Stale { .. } => None,
         lease::Carries::Current | lease::Carries::Unknown { .. } => {
             let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
-            lease::terms_from_environment().map(|terms| {
+            lease::terms_from_environment(|name| std::env::var(name).ok()).map(|terms| {
                 let observed = lease::observe(&terms).ok();
                 lease::authorises(observed.as_ref(), branch, now)
             })

@@ -352,6 +352,7 @@ mod proc_stat {
 /// pgid `exec` could not signal (unparseable, or not a positive `i32`), an
 /// unparseable registrant, and wherever `/proc` cannot be read: a reap may only
 /// proceed on proof.
+//MUTANT-SUITE crates/batten/tests/it/process_group.rs
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn group_orphaned(pgid: &str, registrant: &str, alive_at: u64) -> bool {
     let Some((boot, ticks, pids)) = proc_table() else {
@@ -359,6 +360,17 @@ pub(crate) fn group_orphaned(pgid: &str, registrant: &str, alive_at: u64) -> boo
     };
     let stats = pids.filter_map(|dir| std::fs::read_to_string(dir.join("stat")).ok());
     orphaned_in(stats, pgid, registrant, boot, ticks, alive_at)
+}
+
+/// [`group_orphaned`], public so a suite can prove it over a REAL orphan.
+///
+/// The decision is [`orphaned_in`]'s and its cases pin it over tables they
+/// write; what they cannot pin is that the live table is the one read. Only a
+/// separate process can leave a group whose leader and registrant are gone, so
+/// only a suite that spawns one can show this ever answers `true`.
+#[must_use]
+pub fn is_orphaned_group(pgid: &str, registrant: &str, alive_at: u64) -> bool {
+    group_orphaned(pgid, registrant, alive_at)
 }
 
 /// [`group_orphaned`] over a given process table: the record's strings parsed

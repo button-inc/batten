@@ -107,17 +107,6 @@ impl Advertisement {
     }
 }
 
-/// The bearer token this repository's remote needs, or `None`.
-///
-/// **Delegated to [`crate::rest::credential`]**, which is this function
-/// promoted rather than a second reader. The four spawns CLOUD-1338 removed all
-/// justified themselves with *"this crate carries no HTTP client that resolves a
-/// forge credential"*, and one of them was written in this file — so the reader
-/// has one home now and the sentence has nowhere left to be true.
-fn credential() -> Option<String> {
-    crate::rest::declared_credential()
-}
-
 /// The request headers for one exchange, with the credential attached when there
 /// is one.
 ///
@@ -152,8 +141,17 @@ fn credential() -> Option<String> {
 /// The username is ignored by GitHub for a token — `x-access-token` is the
 /// convention its own documentation and tooling use, so it is what a reader
 /// grepping for this will recognise.
+///
+/// The credential is [`crate::rest::declared_credential`]'s, read here rather
+/// than through a reader of this module's own: the four spawns CLOUD-1338
+/// removed all justified themselves with *"this crate carries no HTTP client
+/// that resolves a forge credential"*, so the reader has one home.
 fn headers(accept: &str, content_type: Option<&str>) -> Vec<(String, String)> {
-    headers_for(accept, content_type, credential().as_deref())
+    headers_for(
+        accept,
+        content_type,
+        crate::rest::declared_credential().as_deref(),
+    )
 }
 
 /// [`headers`]'s decision, over a credential the caller already resolved.
@@ -1684,10 +1682,13 @@ impl TermsMissing {
 /// `None` where it does not — which keeps this a strictly ADDITIONAL reading. A
 /// caller that cannot build these terms is exactly where it was before, and the
 /// guard's fail-open posture is unchanged.
+///
+/// `lookup` is the environment, supplied by the caller (`|name|
+/// std::env::var(name).ok()`), so every branch here is a case rather than a
+/// process variable a suite would need `unsafe` to set.
 #[must_use]
-pub fn terms_from_environment() -> Option<Terms> {
-    let server = std::env::var("GITHUB_SERVER_URL")
-        .ok()
+pub fn terms_from_environment(lookup: impl Fn(&str) -> Option<String>) -> Option<Terms> {
+    let server = lookup("GITHUB_SERVER_URL")
         .filter(|url| !url.trim().is_empty())
         .unwrap_or_else(|| String::from("https://github.com"));
     // **A NON-DEFAULT `LAND_LOCK_REMOTE` IS UNANSWERABLE FROM HERE, SO IT IS
@@ -1702,26 +1703,26 @@ pub fn terms_from_environment() -> Option<Terms> {
     //
     // `None` is the documented fail-open and leaves such a consumer exactly
     // where it was, which is the honest answer: a reading nobody can take.
-    if remote_name() != "origin" {
+    // [`remote_name`]'s reading, through the caller's lookup.
+    if lookup("LAND_LOCK_REMOTE").is_some_and(|name| name != "origin") {
         return None;
     }
-    let slug = std::env::var("GITHUB_REPOSITORY")
-        .ok()
-        .filter(|slug| !slug.trim().is_empty())?;
+    let slug = lookup("GITHUB_REPOSITORY").filter(|slug| !slug.trim().is_empty())?;
     let mut resolved = Terms {
         remote: format!("{}/{slug}", server.trim_end_matches('/')),
         ..Terms::default()
     };
     // The same two bounds `terms` honours, through the same reader, so a suite
     // driving one path does not silently get the shipped values on the other.
-    if let Some(ttl) = env_secs("LAND_LOCK_TTL") {
+    let secs = |name: &str| lookup(name).as_deref().and_then(positive_secs);
+    if let Some(ttl) = secs("LAND_LOCK_TTL") {
         resolved.ttl = ttl;
     }
-    if let Some(beat) = env_secs("LAND_LOCK_HEARTBEAT") {
+    if let Some(beat) = secs("LAND_LOCK_HEARTBEAT") {
         resolved.beat = beat;
     }
     bound_the_relation(&mut resolved);
-    if let Ok(reference) = std::env::var("LAND_LOCK_BRANCH") {
+    if let Some(reference) = lookup("LAND_LOCK_BRANCH") {
         resolved.reference = format!("refs/heads/{reference}");
     }
     Some(resolved)
@@ -1773,9 +1774,12 @@ pub fn remote_name() -> String {
 /// into a tighter test.
 #[must_use]
 pub fn env_secs(name: &str) -> Option<i64> {
-    std::env::var(name)
-        .ok()?
-        .trim()
+    std::env::var(name).ok().as_deref().and_then(positive_secs)
+}
+
+/// [`env_secs`]'s reading of one value: a positive whole number of seconds.
+fn positive_secs(raw: &str) -> Option<i64> {
+    raw.trim()
         .parse::<i64>()
         .ok()
         .filter(|seconds| *seconds > 0)
@@ -3572,7 +3576,7 @@ pub enum Carries {
 /// **IN PROCESS, over [`crate::rest`].** This was a `gh` spawn whose
 /// `#[expect(clippy::disallowed_types)]` reason claimed the crate carries no
 /// HTTP client that resolves a forge credential — eighty lines from
-/// [`credential`]'s predecessor in this same file, which reads `GH_TOKEN` and
+/// the credential reader's predecessor in this same file, which reads `GH_TOKEN` and
 /// attaches a bearer header to a [`crate::fetch`] call. The claim was false where
 /// it was easiest to check.
 ///
@@ -3592,6 +3596,7 @@ pub enum Carries {
 ///
 /// [`crate::rest::Answer::is_reading`] is the one test, and this file's own
 /// siblings already take it.
+//MUTANT-SUITE crates/batten/tests/it/lease_world.rs
 #[must_use]
 fn forge_read(path: &str) -> String {
     crate::rest::get(path, None).map_or_else(String::new, |answer| {
@@ -3894,6 +3899,399 @@ mod tests {
             }
         }
         body
+    }
+
+    /// A remote standing in for the network: the refs it advertises, the
+    /// objects it serves, the status it answers, and every call it was asked.
+    struct Stand {
+        status: u16,
+        refs: Vec<(String, String)>,
+        objects: Vec<Object>,
+        asked: Vec<String>,
+        sent: Vec<Vec<u8>>,
+    }
+
+    type Shared = std::rc::Rc<std::cell::RefCell<Stand>>;
+
+    /// A remote answering `200` over `refs`, serving `objects`.
+    fn standing(refs: &[(&str, &str)], objects: Vec<Object>) -> Shared {
+        let stand = std::rc::Rc::new(std::cell::RefCell::new(Stand {
+            status: 200,
+            refs: refs
+                .iter()
+                .map(|(name, id)| ((*name).to_owned(), (*id).to_owned()))
+                .collect(),
+            objects,
+            asked: Vec::new(),
+            sent: Vec::new(),
+        }));
+        serving(&stand);
+        stand
+    }
+
+    /// Answer this thread's smart-HTTP calls from `stand`: an advertisement
+    /// for `info/refs`, `NAK` and a pack for upload-pack, and an applied report
+    /// for receive-pack.
+    fn serving(stand: &Shared) {
+        let stand = std::rc::Rc::clone(stand);
+        let remote: fetch::StandIn = Box::new(move |calls: &[Call<'_>]| {
+            let mut stand = stand.borrow_mut();
+            let mut answers = Vec::new();
+            for call in calls {
+                stand.asked.push(call.url.to_owned());
+                stand
+                    .sent
+                    .push(call.body.map(<[u8]>::to_vec).unwrap_or_default());
+                let body = if let Some((_, service)) = call.url.split_once("service=") {
+                    let mut lines = vec![format!("# service={service}\n"), String::new()];
+                    for (index, (name, id)) in stand.refs.iter().enumerate() {
+                        let capabilities = if index == 0 { "\0report-status" } else { "" };
+                        lines.push(format!("{id} {name}{capabilities}\n"));
+                    }
+                    lines.push(String::new());
+                    framed(&lines.iter().map(String::as_str).collect::<Vec<_>>())
+                } else if call.url.ends_with(Service::UploadPack.as_str()) {
+                    let mut body = framed(&["NAK\n"]);
+                    body.extend_from_slice(&pack_of(&stand.objects)?);
+                    body
+                } else {
+                    framed(&["unpack ok\n", ""])
+                };
+                answers.push(fetch::Response {
+                    status: stand.status,
+                    body,
+                    headers: Vec::new(),
+                });
+            }
+            Ok(answers)
+        });
+        fetch::stand_in(remote);
+    }
+
+    /// The remote every stand-in case names.
+    const REMOTE: &str = "https://lease.invalid/acme/widgets.git";
+
+    /// A lease object whose body is `body`.
+    fn lease_of(body: &Body) -> Object {
+        lease_object(&body.render(), 1_700_000_000).expect("mint")
+    }
+
+    /// A live body held by `holder`, admitting `next`.
+    fn held_by(holder: &str, next: &str) -> Body {
+        Body {
+            holder: holder.to_owned(),
+            expires: i64::MAX,
+            next: next.to_owned(),
+            schema: BODY_SCHEMA,
+            nonce: nonce(),
+            ..Body::default()
+        }
+    }
+
+    /// A fresh repository at a scratch path whose lease remote is [`REMOTE`].
+    fn leased_clone(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir()
+            .join("batten-lease-tests")
+            .join(format!("{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        crate::gitwrite::commit_paths(&dir, &[], "base").expect("a repository with a commit");
+        let config = dir.join(".git").join("config");
+        let mut text = std::fs::read_to_string(&config).expect("config");
+        text.push_str(&format!("[remote \"origin\"]\n\turl = {REMOTE}\n"));
+        std::fs::write(&config, text).expect("remote");
+        dir
+    }
+
+    /// This clone's own holder id.
+    fn own_holder(root: &Path) -> String {
+        Local::under(&crate::git::git_dir(root).expect("git dir"))
+            .holder()
+            .expect("holder")
+    }
+
+    /// Fails by: a `200` discovery read as a failure.
+    #[test]
+    fn a_served_advertisement_is_read() {
+        let tip = "1".repeat(40);
+        let stand = standing(&[("refs/heads/main", &tip)], Vec::new());
+        let advertised = advertise(REMOTE, Service::ReceivePack).expect("advertised");
+        assert_eq!(advertised.head_of("refs/heads/main"), tip);
+        assert_eq!(
+            stand.borrow().asked,
+            [format!("{REMOTE}/info/refs?service=git-receive-pack")]
+        );
+        stand.borrow_mut().status = 401;
+        assert!(advertise(REMOTE, Service::ReceivePack).is_err());
+    }
+
+    /// Fails by: a `200` report read as a failed push, or the object a pack
+    /// carries beside the one asked for taken in its place.
+    #[test]
+    fn a_swap_applies_and_a_fetch_takes_the_object_asked_for() {
+        let first = lease_of(&held_by("a", ""));
+        let second = lease_of(&held_by("b", ""));
+        let stand = standing(&[], vec![first, second.clone()]);
+        let update = Update {
+            old: String::from(ZERO),
+            new: second.id.clone(),
+            name: String::from("refs/heads/x"),
+        };
+        assert_eq!(
+            swap(REMOTE, &update, &pack_of(&[]).expect("pack")).expect("swapped"),
+            Outcome::Applied
+        );
+        assert_eq!(fetch_object(REMOTE, &second.id).expect("fetched"), second);
+        stand.borrow_mut().status = 500;
+        assert!(swap(REMOTE, &update, &pack_of(&[]).expect("pack")).is_err());
+        assert!(fetch_object(REMOTE, &second.id).is_err());
+    }
+
+    /// Fails by: an absent ref "deleted" with a swap anyway, or a present one
+    /// left in place.
+    #[test]
+    fn deleting_an_absent_ref_sends_nothing() {
+        let stand = standing(&[], Vec::new());
+        assert_eq!(
+            delete_ref(REMOTE, "refs/heads/gone").expect("idempotent"),
+            Outcome::Applied
+        );
+        assert_eq!(stand.borrow().asked.len(), 1, "discovery only");
+        let present = "3".repeat(40);
+        let stand = standing(&[("refs/heads/here", &present)], Vec::new());
+        assert_eq!(
+            delete_ref(REMOTE, "refs/heads/here").expect("deleted"),
+            Outcome::Applied
+        );
+        let asked = stand.borrow().asked.clone();
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        assert!(
+            String::from_utf8_lossy(&stand.borrow().sent[1])
+                .contains(&format!("{present} {ZERO} refs/heads/here")),
+            "the swap deletes from what was advertised"
+        );
+    }
+
+    /// Fails by: a push its caller did not admit sent anyway, or a first push
+    /// of a branch subtracting a base the remote never had.
+    #[test]
+    fn a_push_sends_only_what_was_admitted() {
+        let dir = leased_clone("push");
+        let head = crate::git::head_commit(&dir).expect("head");
+        let stand = standing(&[], Vec::new());
+        let refused = push(REMOTE, &dir, "refs/heads/topic", &head, &|_| false)
+            .expect("a refusal is an outcome");
+        assert!(matches!(refused, Outcome::Rejected { .. }), "{refused:?}");
+        assert_eq!(stand.borrow().asked.len(), 1, "discovery only");
+        let pushed =
+            push(REMOTE, &dir, "refs/heads/topic", &head, &|old| old == ZERO).expect("pushed");
+        assert_eq!(pushed, Outcome::Applied);
+        assert!(
+            String::from_utf8_lossy(&stand.borrow().sent[2])
+                .contains(&format!("{ZERO} {head} refs/heads/topic")),
+            "the first push creates the ref"
+        );
+    }
+
+    /// Fails by: a `200` upload-pack answer read as a failed fetch.
+    #[test]
+    fn a_fetch_takes_the_advertised_tip() {
+        let dir = leased_clone("fetch");
+        let tip = lease_of(&held_by("a", ""));
+        let stand = standing(&[("refs/heads/main", &tip.id)], vec![tip.clone()]);
+        let fetched = fetch(REMOTE, &dir, "main").expect("fetched");
+        assert_eq!(fetched.head, tip.id);
+        stand.borrow_mut().status = 503;
+        assert!(fetch(REMOTE, &dir, "main").is_err());
+    }
+
+    /// Every answer a recorder column gives, over a stand-in lease.
+    ///
+    /// Fails by: any constant reply, a reading never taken, or a garbage ref
+    /// graded as a holder.
+    #[test]
+    fn a_recorder_column_grades_the_lease_it_reads() {
+        let mine = leased_clone("adjudicate-mine");
+        let holder = own_holder(&mine);
+        let lease = lease_of(&held_by(&holder, "feature/next"));
+        let reference = Terms::default().reference;
+        let _ = standing(&[(&reference, &lease.id)], vec![lease.clone()]);
+        assert_eq!(
+            adjudicate(Asked::Status, &mine, 0),
+            Some((0, String::new()))
+        );
+        assert_eq!(
+            adjudicate(Asked::Successor, &mine, 0),
+            Some((0, String::from("feature/next\n")))
+        );
+
+        let theirs = leased_clone("adjudicate-theirs");
+        let lease = lease_of(&held_by("somebody-else", ""));
+        let _ = standing(&[(&reference, &lease.id)], vec![lease.clone()]);
+        assert_eq!(
+            adjudicate(Asked::Status, &theirs, 0),
+            Some((crate::exit::ExitCode::Violation.code(), String::new()))
+        );
+
+        let garbled = leased_clone("adjudicate-garbage");
+        let junk = lease_object("not a lease\n", 1).expect("mint");
+        let _ = standing(&[(&reference, &junk.id)], vec![junk.clone()]);
+        assert_eq!(
+            adjudicate(Asked::Status, &garbled, 0),
+            Some((crate::exit::ExitCode::Internal.code(), String::new()))
+        );
+
+        let free = leased_clone("adjudicate-free");
+        let _ = standing(&[], Vec::new());
+        assert_eq!(
+            adjudicate(Asked::Successor, &free, 0),
+            Some((0, String::from("\n")))
+        );
+    }
+
+    /// ONE reading per root, and a different root takes its own.
+    ///
+    /// Fails by: the cache answering for a root it was not taken for, or not
+    /// answering for the one it was.
+    #[test]
+    fn a_reading_is_paired_per_root() {
+        let reference = Terms::default().reference;
+        let first = leased_clone("paired-first");
+        let lease = lease_of(&held_by("a", "first-next"));
+        let _ = standing(&[(&reference, &lease.id)], vec![lease.clone()]);
+        assert_eq!(
+            adjudicate(Asked::Successor, &first, 0),
+            Some((0, String::from("first-next\n")))
+        );
+        let second = leased_clone("paired-second");
+        let lease = lease_of(&held_by("a", "second-next"));
+        let stand = standing(&[(&reference, &lease.id)], vec![lease.clone()]);
+        assert_eq!(
+            adjudicate(Asked::Successor, &first, 0),
+            Some((0, String::from("first-next\n"))),
+            "the first root's reading is reused"
+        );
+        assert!(stand.borrow().asked.is_empty(), "and nothing is re-read");
+        assert_eq!(
+            adjudicate(Asked::Successor, &second, 0),
+            Some((0, String::from("second-next\n")))
+        );
+    }
+
+    /// Fails by: a lease this clone holds left unrenewed, or a renewal whose
+    /// swap applied reported as not written.
+    #[test]
+    fn a_beat_renews_the_lease_this_clone_holds() {
+        let dir = leased_clone("beat");
+        let holder = own_holder(&dir);
+        let terms = terms(&dir).expect("terms");
+        let lease = lease_of(&held_by(&holder, ""));
+        let stand = standing(&[(&terms.reference, &lease.id)], vec![lease.clone()]);
+        assert_eq!(beat(&dir, &terms, Some("1.2"), 0), Beat::Renewed);
+        assert!(
+            stand
+                .borrow()
+                .asked
+                .last()
+                .is_some_and(|url| url.ends_with(Service::ReceivePack.as_str())),
+            "the renewal is swapped in"
+        );
+        let theirs = lease_of(&held_by("somebody-else", ""));
+        let _ = standing(&[(&terms.reference, &theirs.id)], vec![theirs.clone()]);
+        assert_eq!(beat(&dir, &terms, None, 0), Beat::Quiet);
+    }
+
+    /// Fails by: a process whose command line does not carry the marker read
+    /// as the holder.
+    #[test]
+    fn a_live_pid_without_the_marker_is_not_the_holder() {
+        assert!(!holder_alive(
+            std::process::id(),
+            "batten-no-such-marker-in-any-cmdline"
+        ));
+    }
+
+    /// The environment's terms, every reading of it, through the caller's
+    /// lookup.
+    ///
+    /// Fails by: a constant answer, a server or slug that is blank read as one,
+    /// an alias remote guessed at, or a bound the environment set dropped.
+    #[test]
+    fn the_environment_terms_are_read_through_the_lookup() {
+        let looking = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| (*value).to_owned())
+            }
+        };
+        assert_eq!(terms_from_environment(looking(&[])), None);
+        assert_eq!(
+            terms_from_environment(looking(&[("GITHUB_REPOSITORY", "  ")])),
+            None
+        );
+        assert_eq!(
+            terms_from_environment(looking(&[
+                ("GITHUB_REPOSITORY", "acme/widgets"),
+                ("LAND_LOCK_REMOTE", "upstream"),
+            ])),
+            None
+        );
+        let defaulted = terms_from_environment(looking(&[
+            ("GITHUB_REPOSITORY", "acme/widgets"),
+            ("GITHUB_SERVER_URL", " "),
+            ("LAND_LOCK_REMOTE", "origin"),
+        ]))
+        .expect("terms");
+        assert_eq!(defaulted.remote, "https://github.com/acme/widgets");
+        assert_eq!(defaulted.ttl, Terms::default().ttl);
+        assert_eq!(defaulted.reference, Terms::default().reference);
+        let bounded = terms_from_environment(looking(&[
+            ("GITHUB_REPOSITORY", "acme/widgets"),
+            ("GITHUB_SERVER_URL", "https://forge.example/"),
+            ("LAND_LOCK_TTL", "400"),
+            ("LAND_LOCK_HEARTBEAT", "20"),
+            ("LAND_LOCK_BRANCH", "lock"),
+        ]))
+        .expect("terms");
+        assert_eq!(
+            bounded,
+            Terms {
+                remote: String::from("https://forge.example/acme/widgets"),
+                reference: String::from("refs/heads/lock"),
+                ttl: 400,
+                beat: 20,
+            }
+        );
+    }
+
+    /// Fails by: zero, a negative or a non-number read as a duration, or a
+    /// positive one refused.
+    #[test]
+    fn only_a_positive_whole_number_is_seconds() {
+        assert_eq!(positive_secs(" 7 "), Some(7));
+        assert_eq!(positive_secs("1"), Some(1));
+        assert_eq!(positive_secs("0"), None);
+        assert_eq!(positive_secs("-3"), None);
+        assert_eq!(positive_secs("soon"), None);
+    }
+
+    /// The process variable is read: the test runner sets the package's patch
+    /// version for every case it runs, so it is a variable whose value the
+    /// case knows without setting it.
+    ///
+    /// Fails by: any constant answer in place of the read.
+    #[test]
+    fn a_variable_in_the_environment_is_read_as_seconds() {
+        let patch = env!("CARGO_PKG_VERSION_PATCH");
+        assert_eq!(
+            std::env::var("CARGO_PKG_VERSION_PATCH").as_deref(),
+            Ok(patch),
+            "the premise: the runner exports the package version"
+        );
+        assert_eq!(env_secs("CARGO_PKG_VERSION_PATCH"), positive_secs(patch));
+        assert_eq!(env_secs("BATTEN_NO_SUCH_VARIABLE_ANYWHERE"), None);
     }
 
     /// GIT-OVER-HTTP TAKES `Basic`, AND THIS SENT `Bearer` — so a configured

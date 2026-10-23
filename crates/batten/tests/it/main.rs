@@ -258,6 +258,7 @@ mod lease_lifecycle;
 mod lease_namespace_premise;
 mod lease_precondition;
 mod lease_record;
+mod lease_world;
 mod license_table;
 #[cfg(unix)]
 mod linear_check;

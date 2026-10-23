@@ -2344,6 +2344,7 @@ pub(crate) fn evict_to_budget_in_keeping(
             older_than(
                 &dir.join(format!("{}-{}", record.stream, record.digest)),
                 UNRECORDED_GRACE,
+                std::time::SystemTime::now(),
             )
         });
     let candidates = unrecorded.into_iter().chain(recorded).chain(in_flight);
@@ -2384,13 +2385,14 @@ fn is_builtin_result(row: &CallRow) -> bool {
 /// gate resolves for that long.
 pub const UNRECORDED_GRACE: std::time::Duration = std::time::Duration::from_mins(1);
 
-/// Whether `path` was last modified more than `age` ago. A file whose time
-/// cannot be read is not old: the caller's default is to keep it.
-fn older_than(path: &Path, age: std::time::Duration) -> bool {
+/// Whether `path` was last modified more than `age` before `now`. A file whose
+/// time cannot be read is not old: the caller's default is to keep it. `now`
+/// is the caller's, as `receipt`'s twin takes it, so the bound is a case.
+fn older_than(path: &Path, age: std::time::Duration, now: std::time::SystemTime) -> bool {
     std::fs::metadata(path)
         .and_then(|meta| meta.modified())
         .ok()
-        .and_then(|modified| modified.elapsed().ok())
+        .and_then(|modified| now.duration_since(modified).ok())
         .is_some_and(|elapsed| elapsed > age)
 }
 
@@ -3021,6 +3023,27 @@ mod tests {
     /// `*_in` rather than the repo-rooted entry points, for `scratch_live`'s
     /// reason: resolving the state root reads the OS data directory, and a unit
     /// test must not write into a developer's.
+    /// An unrecorded capture is an orphan only strictly past its grace, and one
+    /// whose time cannot be read never is.
+    ///
+    /// Fails by: the grace read as inclusive.
+    #[test]
+    fn a_capture_is_older_than_its_grace_only_strictly_past_it() {
+        let dir = crate::scratch::scratch("capture-older");
+        let path = dir.join("capture");
+        std::fs::write(&path, "x").expect("write");
+        let written = std::fs::metadata(&path)
+            .and_then(|meta| meta.modified())
+            .expect("mtime");
+        let grace = std::time::Duration::from_secs(60);
+        let at = |seconds: u64| written + std::time::Duration::from_secs(seconds);
+        assert!(older_than(&path, grace, at(61)));
+        assert!(!older_than(&path, grace, at(60)));
+        assert!(!older_than(&path, grace, written));
+        assert!(!older_than(&dir.join("absent"), grace, at(600)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn scratch_store(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("batten-calls-{}-{name}", std::process::id()));
         drop(std::fs::remove_dir_all(&dir));
