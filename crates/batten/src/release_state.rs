@@ -1432,13 +1432,14 @@ pub fn run_bake(
     out: &mut dyn std::io::Write,
     err: &mut dyn std::io::Write,
 ) -> anyhow::Result<crate::ExitCode> {
-    run_bake_in(std::path::Path::new("."), (tag, onto), write_only, out, err)
+    run_bake_in(std::path::Path::new("."), tag, onto, write_only, out, err)
 }
 
 /// [`run_bake`] in the clone at `here`.
 fn run_bake_in(
     here: &std::path::Path,
-    (tag, (sha, branch)): (&str, (Option<&str>, Option<&str>)),
+    tag: &str,
+    (sha, branch): (Option<&str>, Option<&str>),
     write_only: bool,
     out: &mut dyn std::io::Write,
     err: &mut dyn std::io::Write,
@@ -1979,7 +1980,7 @@ mod tests {
         let fixture = published_with_sums("bake-write", &[]);
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let code = crate::rest::with_fixture(&fixture, || {
-            run_bake_in(&dir, ("v1.0.0", (None, None)), true, &mut out, &mut err).unwrap()
+            run_bake_in(&dir, "v1.0.0", (None, None), true, &mut out, &mut err).unwrap()
         });
         assert_eq!(code, crate::ExitCode::Success);
         assert_eq!(
@@ -2008,7 +2009,8 @@ mod tests {
         let code = crate::rest::with_fixture(&fixture, || {
             run_bake_in(
                 &dir,
-                ("v1.0.0", (Some(head), Some("rel"))),
+                "v1.0.0",
+                (Some(head), Some("rel")),
                 false,
                 &mut out,
                 &mut err,

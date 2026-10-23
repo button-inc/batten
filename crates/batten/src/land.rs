@@ -1900,8 +1900,9 @@ pub fn verify(
     // the caller's window: measured on #1132, 57,764 tokens of which two lines
     // were the verdict. The bytes are still sealed in the capture store, and the
     // driver prints the one line that points at them (`verify_log`), so the
-    // reason a gate refused is one `batten capture show` away, not lost.
-    let settings = VERIFY_SETTINGS;
+    // reason a gate refused is one `batten capture show` away, not lost. Both
+    // halves are `VERIFY_SETTINGS`.
+    //
     // CLASSIFIED, NEVER PROMOTED. `run_in_with_env` scans patterns only on a
     // `0`, because its question is whether a green run is lying; the question
     // here is what kind of failure a red one was, and `classify_in_env` is the
@@ -1909,12 +1910,11 @@ pub fn verify(
     // opposite verdicts over identical bytes.
     let mut log = Vec::new();
     let classified =
-        crate::exec::classify_in_env(&started, command, environment, &settings, published).map(
-            |(code, found, handles)| {
+        crate::exec::classify_in_env(&started, command, environment, &VERIFY_SETTINGS, published)
+            .map(|(code, found, handles)| {
                 log = handles;
                 (code, found)
-            },
-        );
+            });
     let verified = match classified {
         Ok(ran) => gate_said(head, ran, environment),
         Err(problem) => return Err(problem.context("land: run the configured verify command")),
