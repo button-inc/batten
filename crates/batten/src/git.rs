@@ -5963,33 +5963,27 @@ fn entry_diverges(
 /// Where the platform has no executable bit there is nothing to compare: git on
 /// such a platform runs with `core.fileMode = false` for the same reason.
 fn mode_diverges(metadata: &std::fs::Metadata, recorded_executable: bool) -> bool {
-    executable_bit(metadata).is_some_and(|bit| bit != recorded_executable)
+    executable_bit_or(metadata, recorded_executable) != recorded_executable
 }
 
-/// Whether any execute bit stands on `meta`, or `None` where the platform has no
-/// such bit to read.
+/// Whether any execute bit stands on `meta`, or `elsewhere` where the platform
+/// has no such bit to read.
 ///
 /// The one platform read behind every executable-bit reader (CLOUD-2509): each
-/// caller's off-unix answer is its reading of `None`, a line every leg compiles,
-/// tests and mutates, where a `#[cfg(not(unix))]` twin was code no unix sweep
+/// caller states its off-unix answer as `elsewhere`, an argument every leg
+/// compiles and tests, where a `#[cfg(not(unix))]` twin was code no unix sweep
 /// could build.
-#[cfg_attr(
-    unix,
-    expect(
-        clippy::unnecessary_wraps,
-        reason = "`None` is the off-unix reading; unix always has the bit"
-    )
-)]
-pub(crate) fn executable_bit(meta: &std::fs::Metadata) -> Option<bool> {
+pub(crate) fn executable_bit_or(meta: &std::fs::Metadata, elsewhere: bool) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        Some(meta.permissions().mode() & 0o111 != 0)
+        let _ = elsewhere;
+        meta.permissions().mode() & 0o111 != 0
     }
     #[cfg(not(unix))]
     {
         let _ = meta;
-        None
+        elsewhere
     }
 }
 
@@ -6043,9 +6037,9 @@ mod tests {
 
     use super::*;
 
-    /// CLOUD-2509: the execute bit is read where the platform has one, and
-    /// `None` where it does not — the reading every caller's off-unix answer
-    /// rests on. Fails by: a constant reading, or a mask that sees a read or
+    /// CLOUD-2509: the execute bit is read where the platform has one, and the
+    /// caller's stated answer is returned where it does not. Fails by: a
+    /// constant reading, the fallback read on unix, or a mask that sees a read or
     /// write bit as an execute bit. A created file never carries an execute bit
     /// (creation's mode is `0o666` under any umask), and this test binary does.
     #[test]
@@ -6053,15 +6047,18 @@ mod tests {
         let plain = crate::scratch::scratch("git-execute-bit").join("plain");
         crate::durable::replace(&plain, "text").unwrap();
         let program = std::env::current_exe().unwrap();
-        let reading = |bit: bool| cfg!(unix).then_some(bit);
-        assert_eq!(
-            executable_bit(&fs::metadata(&plain).unwrap()),
-            reading(false)
-        );
-        assert_eq!(
-            executable_bit(&fs::metadata(&program).unwrap()),
-            reading(true)
-        );
+        for (path, bit) in [(&plain, false), (&program, true)] {
+            let meta = fs::metadata(path).unwrap();
+            for elsewhere in [false, true] {
+                let reading = if cfg!(unix) { bit } else { elsewhere };
+                assert_eq!(
+                    executable_bit_or(&meta, elsewhere),
+                    reading,
+                    "{} elsewhere={elsewhere}",
+                    path.display()
+                );
+            }
+        }
     }
 
     /// A hunk near the top carries its own start line (CLOUD-2507): line 7 of
