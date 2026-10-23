@@ -967,7 +967,8 @@ pub fn run_guard(
 
 /// The workspace's own package names, from `Cargo.lock`'s path-sourced entries
 /// (those without a `source` line).
-fn workspace_packages(lock: &str) -> Vec<String> {
+#[must_use]
+pub fn workspace_packages(lock: &str) -> Vec<String> {
     let mut packages = Vec::new();
     for block in lock.split("[[package]]").skip(1) {
         if block.lines().any(|line| line.starts_with("source = ")) {
