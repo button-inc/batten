@@ -2038,10 +2038,9 @@ mod tests {
     fn replayable(case: &str) -> std::path::PathBuf {
         let dir = crate::scratch::scratch(case);
         init_on_main(&dir).unwrap_or_else(|err| panic!("init: {err}"));
-        let config = dir.join(".git/config");
-        let mut text = std::fs::read_to_string(&config).unwrap_or_else(|err| panic!("{err}"));
-        text.push_str("[user]\n\tname = t\n\temail = t@example.com\n");
-        std::fs::write(&config, text).unwrap_or_else(|err| panic!("{err}"));
+        for (key, value) in [("user.name", "t"), ("user.email", "t@example.com")] {
+            crate::git::set_config_local(&dir, key, value).unwrap_or_else(|err| panic!("{err}"));
+        }
         dir
     }
 

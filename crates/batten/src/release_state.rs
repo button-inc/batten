@@ -1546,13 +1546,12 @@ mod tests {
 
     const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
-    /// The slug a clone whose `origin` names `o/r` reads as: `GH_REPO`
-    /// outranks the remote, so a runner that sets it is answered too.
-    fn slug() -> String {
+    /// The slug `GH_REPO` declares, which outranks any remote, so a runner
+    /// that sets it is answered too.
+    fn declared_repo() -> Option<String> {
         std::env::var("GH_REPO")
             .ok()
             .filter(|declared| !declared.trim().is_empty())
-            .unwrap_or_else(|| String::from("o/r"))
     }
 
     /// A clone whose `origin` names `o/r` with `main` its default branch:
@@ -1578,18 +1577,15 @@ mod tests {
             crate::gitwrite::commit_paths(&dir, &tracked, &format!("commit {n}")).unwrap();
             shas.push(crate::git::resolve_ref(&dir, "HEAD").unwrap().unwrap());
         }
-        let mut config = std::fs::read_to_string(dir.join(".git/config")).unwrap();
-        config.push_str(
-            "[remote \"origin\"]\n\turl = https://github.com/o/r.git\n\
-             \tfetch = +refs/heads/*:refs/remotes/origin/*\n",
-        );
-        std::fs::write(dir.join(".git/config"), config).unwrap();
-        std::fs::create_dir_all(dir.join(".git/refs/remotes/origin")).unwrap();
-        std::fs::write(
-            dir.join(".git/refs/remotes/origin/main"),
-            format!("{}\n", shas[main_at]),
-        )
-        .unwrap();
+        for (key, value) in [
+            ("remote.origin.url", "https://github.com/o/r.git"),
+            ("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"),
+            ("user.name", "t"),
+            ("user.email", "t@example.com"),
+        ] {
+            crate::git::set_config_local(&dir, key, value).unwrap();
+        }
+        crate::gitwrite::set_ref(&dir, "refs/remotes/origin/main", &shas[main_at]).unwrap();
         std::fs::write(
             dir.join(".git/refs/remotes/origin/HEAD"),
             "ref: refs/remotes/origin/main\n",
@@ -1606,7 +1602,10 @@ mod tests {
     fn the_slug_and_the_trunk_are_the_clone_s_own() {
         let (dir, _) = clone_of("release-state-clone", &[&[("a", "1")]], 0);
         let mut err = Vec::new();
-        assert_eq!(slug_or_say(&dir, "x", &mut err).unwrap(), Some(slug()));
+        assert_eq!(
+            slug_or_say(&dir, "x", &mut err).unwrap(),
+            Some(declared_repo().unwrap_or_else(|| String::from("o/r")))
+        );
         assert!(err.is_empty());
         assert_eq!(
             trunk(&dir),
@@ -1616,9 +1615,7 @@ mod tests {
             ))
         );
         let bare = crate::scratch::scratch("release-state-no-clone");
-        let declared = std::env::var("GH_REPO")
-            .ok()
-            .filter(|declared| !declared.trim().is_empty());
+        let declared = declared_repo();
         assert_eq!(slug_or_say(&bare, "x", &mut err).unwrap(), declared);
         assert_eq!(
             String::from_utf8(err)

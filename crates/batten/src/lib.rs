@@ -14508,9 +14508,8 @@ fn report_guard(
     }
 
     // WAIT TO BE KILLED. See `CANCEL_TICKS`.
-    let never = std::sync::atomic::AtomicBool::new(false);
     for _ in 0..CANCEL_TICKS {
-        pr_watch::pause_until(CANCEL_TICK_SECONDS, &never);
+        pr_watch::pause_until(CANCEL_TICK_SECONDS, &pr_watch::NEVER);
     }
     writeln!(
         err,

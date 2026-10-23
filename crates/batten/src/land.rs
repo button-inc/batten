@@ -4097,7 +4097,7 @@ mod mutate_tests {
     use super::graphql_took;
     use crate::rest::Answer;
 
-    fn answer(status: u16, body: &str) -> Answer {
+    pub(super) fn answer(status: u16, body: &str) -> Answer {
         Answer {
             status,
             etag: None,
@@ -4228,13 +4228,17 @@ mod forge_tests {
     const BASE: &str = "1111111111111111111111111111111111111111";
 
     fn reading(body: &str) -> crate::rest::Answer {
-        crate::rest::Answer {
-            status: 200,
-            etag: None,
-            poll_floor: None,
-            backoff: None,
-            body: body.to_owned(),
-            headers: std::collections::BTreeMap::new(),
+        super::mutate_tests::answer(200, body)
+    }
+
+    /// The trunk `main` of `o/r`, replayed onto [`BASE`], polled every
+    /// `interval` seconds.
+    fn trunk_at(interval: u64) -> crate::main_watch::Config {
+        crate::main_watch::Config {
+            repo: String::from("o/r"),
+            branch: String::from("main"),
+            base: String::from(BASE),
+            interval,
         }
     }
 
@@ -4260,12 +4264,7 @@ mod forge_tests {
             interval: 7,
             progress: None,
         };
-        let trunk = crate::main_watch::Config {
-            repo: String::from("o/r"),
-            branch: String::from("main"),
-            base: String::from(BASE),
-            interval: 9,
-        };
+        let trunk = trunk_at(9);
         let roster = crate::checks_green::Roster {
             required: vec![String::from("ci")],
             absent_ok: Vec::new(),
@@ -4329,12 +4328,7 @@ mod forge_tests {
     /// moving to, and every pause it asked for. The fifth pause raises the
     /// flag, so an arm that never answers still ends.
     fn watching(case: &str, trunks: &[&str], watched: bool) -> (Option<String>, Vec<f64>) {
-        let trunk = crate::main_watch::Config {
-            repo: String::from("o/r"),
-            branch: String::from("main"),
-            base: String::from(BASE),
-            interval: 9,
-        };
+        let trunk = trunk_at(9);
         let asked = std::cell::Cell::new(0_usize);
         let read = |_: &crate::main_watch::Config, _: Option<&str>| {
             let sha = trunks[asked.get().min(trunks.len() - 1)];
@@ -4430,13 +4424,10 @@ mod forge_tests {
         std::fs::write(dir.join("a"), "1").unwrap();
         crate::gitwrite::commit_paths(&dir, &[String::from("a")], "one").unwrap();
         let head = crate::git::resolve_ref(&dir, "HEAD").unwrap().unwrap();
-        std::fs::create_dir_all(dir.join(".git/refs/remotes/origin")).unwrap();
+        crate::git::set_config_local(&dir, "user.name", "t").unwrap();
+        crate::git::set_config_local(&dir, "user.email", "t@example.com").unwrap();
         for name in tracking {
-            std::fs::write(
-                dir.join(format!(".git/refs/remotes/origin/{name}")),
-                format!("{head}\n"),
-            )
-            .unwrap();
+            crate::gitwrite::set_ref(&dir, &format!("refs/remotes/origin/{name}"), &head).unwrap();
         }
         (dir, head)
     }

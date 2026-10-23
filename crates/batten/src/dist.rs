@@ -454,10 +454,12 @@ pub fn run(
     let Some(package) = read_package(err)? else {
         return Ok(ExitCode::Internal);
     };
-    let piped = |dir: &Path, argv: &[String], diagnostics: Diagnostics| {
-        exec::piped_argv(dir, argv, "", diagnostics, &[])
-    };
     build_and_stage(target, &package, (tool, by_dist), (out, err), &piped)
+}
+
+/// The [`Runner`] every real build goes through.
+fn piped(dir: &Path, argv: &[String], diagnostics: Diagnostics) -> Option<(i32, String)> {
+    exec::piped_argv(dir, argv, "", diagnostics, &[])
 }
 
 /// [`run`] past its reads: the stem, or the build `tool` (cargo-dist's when
@@ -754,11 +756,6 @@ mod tests {
     use super::*;
 
     const TARGET: &str = "x86_64-unknown-linux-gnu";
-
-    /// The production runner, for the cases that run real programs.
-    fn piped(dir: &Path, argv: &[String], diagnostics: Diagnostics) -> Option<(i32, String)> {
-        exec::piped_argv(dir, argv, "", diagnostics, &[])
-    }
 
     /// A package rooted in a scratch directory, its binary built when `built`.
     fn scratch_package(case: &str, built: bool) -> Package {

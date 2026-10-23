@@ -798,33 +798,30 @@ thread_local! {
 /// needs), so a verb's forge half was testable only from a spawned binary and
 /// its unit tier reached none of it. Thread-scoped rather than process-wide,
 /// so cases running side by side never answer from each other's directory; a
-/// thread the body spawns carries it only through [`scoped`] and [`within`].
-/// It opens nothing the environment variable does not: the answers are files
-/// the caller wrote.
+/// thread the body spawns sees no fixture, which is why the threaded readers
+/// take their reads as an input instead (`land::Waiting`). It opens nothing
+/// the environment variable does not: the answers are files the caller wrote.
+///
+/// The previous scope is restored on the way out, unwinding included, so a
+/// case that panics leaves no fixture behind for the next one on the thread.
 pub fn with_fixture<T>(dir: &std::path::Path, body: impl FnOnce() -> T) -> T {
-    within(Some(dir.to_path_buf()), body)
-}
-
-/// The fixture directory [`with_fixture`] scoped to this thread, for a thread
-/// it spawns to carry with [`within`].
-#[must_use]
-pub fn scoped() -> Option<std::path::PathBuf> {
-    SCOPED.with(|scoped| scoped.borrow().clone())
-}
-
-/// Run `body` under the scope [`scoped`] read on another thread: none answers
-/// from the environment as before.
-pub fn within<T>(dir: Option<std::path::PathBuf>, body: impl FnOnce() -> T) -> T {
-    let previous = SCOPED.with(|scoped| scoped.replace(dir));
-    let answered = body();
-    SCOPED.with(|scoped| scoped.replace(previous));
-    answered
+    /// Puts the scope it replaced back when dropped.
+    struct Restore(Option<std::path::PathBuf>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SCOPED.with(|scoped| scoped.replace(self.0.take()));
+        }
+    }
+    let _restore = Restore(SCOPED.with(|scoped| scoped.replace(Some(dir.to_path_buf()))));
+    body()
 }
 
 /// The fixture directory this exchange answers from: [`with_fixture`]'s scope,
 /// else `BATTEN_REST_FIXTURE`.
 fn fixture_dir() -> Option<std::path::PathBuf> {
-    scoped().or_else(|| std::env::var_os(FIXTURE).map(std::path::PathBuf::from))
+    SCOPED
+        .with(|scoped| scoped.borrow().clone())
+        .or_else(|| std::env::var_os(FIXTURE).map(std::path::PathBuf::from))
 }
 
 /// One GET of `path` answered from the fixture directory `dir`, as [`get`]
@@ -1481,26 +1478,19 @@ mod tests {
         assert_eq!(method_of(None, Method::Patch), "GET");
     }
 
-    /// A scoped fixture answers this thread's exchanges and nothing after its
-    /// scope; a thread carries it only through `within` (CLOUD-2509).
+    /// A scoped fixture answers this thread's exchanges, and nothing once its
+    /// scope has ended, by return or by panic (CLOUD-2509).
     #[test]
-    fn a_scoped_fixture_answers_inside_its_scope_and_on_threads_that_carry_it() {
+    fn a_scoped_fixture_answers_inside_its_scope_and_nowhere_after() {
         let dir = routed("rest-scoped", &[("repos/o/r", 200, "scoped")]);
+        let scoped = || SCOPED.with(|scoped| scoped.borrow().clone());
         assert_eq!(scoped(), None);
-        let (inside, carried, uncarried) = with_fixture(&dir, || {
-            let inside = get("repos/o/r", None).map(|answer| answer.body);
-            let held = scoped();
-            let carried = std::thread::spawn(move || {
-                within(held, || get("repos/o/r", None).map(|answer| answer.body))
-            })
-            .join()
-            .expect("the carrying thread");
-            let uncarried = std::thread::spawn(scoped).join().expect("the bare thread");
-            (inside, carried, uncarried)
-        });
+        let inside = with_fixture(&dir, || get("repos/o/r", None).map(|answer| answer.body));
         assert_eq!(inside.as_deref(), Some("scoped"));
-        assert_eq!(carried.as_deref(), Some("scoped"));
-        assert_eq!(uncarried, None);
+        assert_eq!(scoped(), None);
+        let unwound =
+            std::panic::catch_unwind(|| with_fixture(&dir, || -> u8 { panic!("mid-case") }));
+        assert!(unwound.is_err());
         assert_eq!(scoped(), None);
         assert_eq!(
             with_fixture(&dir, || download("repos/o/r")),

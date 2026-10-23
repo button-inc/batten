@@ -508,7 +508,7 @@ pub fn watch(
         roster,
         &Pacing {
             read: &read,
-            pause: &|seconds| pause_until(seconds, &std::sync::atomic::AtomicBool::new(false)),
+            pause: &|seconds| pause_until(seconds, &NEVER),
         },
         out,
         err,
@@ -864,6 +864,10 @@ fn record(progress: &Progress, signal: &str, value: &str) {
 /// cadence, so an arm that is NOT stopped behaves exactly as it did.
 const STOP_CHECK_SLICE: f64 = 1.0;
 
+/// The flag a caller with nothing to stop its pause hands [`pause_until`]:
+/// nothing ever raises it.
+pub(crate) static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// The wait between requests, abandoned early when `stop` is raised. A real
 /// sleep, and the only clock in the crate.
 ///
@@ -932,14 +936,14 @@ fn sliced(seconds: f64, stop: &std::sync::atomic::AtomicBool, sleep: &dyn Fn(f64
 mod tests {
     use super::*;
 
-    /// The slices one wait of `seconds` asks the sleeper for. The flag is
-    /// raised at the sixth, so a wait that never ends still returns.
+    /// The slices one wait of `seconds` asks the sleeper for, the flag raised
+    /// at slice `stop_after` so a wait that never ends still returns.
     fn slices(seconds: f64, stop_after: usize) -> Vec<f64> {
         let stop = std::sync::atomic::AtomicBool::new(false);
         let slept = std::cell::RefCell::new(Vec::new());
         sliced(seconds, &stop, &|slice| {
             slept.borrow_mut().push(slice);
-            if slept.borrow().len() >= stop_after.min(6) {
+            if slept.borrow().len() >= stop_after {
                 stop.store(true, std::sync::atomic::Ordering::Relaxed);
             }
         });
@@ -948,14 +952,14 @@ mod tests {
 
     #[test]
     fn a_wait_is_served_in_slices_that_sum_to_it() {
-        assert_eq!(slices(2.5, usize::MAX), vec![1.0, 1.0, 0.5]);
-        assert_eq!(slices(0.25, usize::MAX), vec![0.25]);
+        assert_eq!(slices(2.5, 6), vec![1.0, 1.0, 0.5]);
+        assert_eq!(slices(0.25, 6), vec![0.25]);
     }
 
     #[test]
     fn a_wait_that_is_not_a_positive_finite_interval_sleeps_nothing() {
         for seconds in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert_eq!(slices(seconds, usize::MAX), Vec::<f64>::new(), "{seconds}");
+            assert_eq!(slices(seconds, 6), Vec::<f64>::new(), "{seconds}");
         }
     }
 

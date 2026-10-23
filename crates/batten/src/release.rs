@@ -941,9 +941,7 @@ pub fn run_backfill(
         post: &|path: &str, body: &serde_json::Value| {
             crate::rest::post_json(path, body).map(|answer| answer.status)
         },
-        pause: &|seconds| {
-            crate::pr_watch::pause_until(seconds, &std::sync::atomic::AtomicBool::new(false));
-        },
+        pause: &|seconds| crate::pr_watch::pause_until(seconds, &crate::pr_watch::NEVER),
     };
     sweep(&slug, request, &tags, &forge, out, err)
 }
