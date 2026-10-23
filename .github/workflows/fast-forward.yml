@@ -315,9 +315,10 @@ jobs:
 
       # THE RELEASE FREEZE AND THE RELEASE PREDICATE (CLOUD-2033) ARE NOT HERE
       # YET: this lane runs the engine `main` pins, and `release in-flight` and
-      # `release path` first ship in the release this change cuts. They join this
-      # job with the pin bump that names that release (the PR's after-release
-      # step), when `ci-parity`'s freeze arm starts demanding them.
+      # `release path` first ship in v0.0.217. They join this job in the first
+      # pull request after `main` pins that release, never with its pin bump: a
+      # release head may change only the release paths (CLOUD-2515), so the bump
+      # cannot carry them. `ci-parity`'s freeze arm demands them from v0.0.219.
 
       # THE ACTION'S PUSH CREDENTIAL IS OURS TO CACHE (CLOUD-2288). The action
       # approves `github_token` into a credential store only when the PR head is

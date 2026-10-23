@@ -1717,6 +1717,48 @@ fn every_lander_and_the_cut_check_the_freeze() {
     ));
 }
 
+/// A lander without the freeze, under the engine pin `pin` (CLOUD-2515).
+fn unfrozen_lander_pinned(name: &str, pin: &str) -> Vec<String> {
+    let root = release_tree(
+        name,
+        &[(
+            "fast-forward.yml",
+            "      - run: batten release in-flight --workflow release-artifacts.yml\n",
+            "",
+        )],
+    );
+    common::write(&root, "batten.toml", &format!("version = 1\n{pin}\n"));
+    verdicts_raised(&root)
+}
+
+/// THE RELEASE PR'S PIN MOVE ARMS NOTHING ITS HEAD CANNOT SATISFY (CLOUD-2515).
+/// v0.0.217's own release PR rehearses v0.0.218, so the freeze may not demand a
+/// step there: a release-shaped head cannot add it.
+#[test]
+fn a_pin_one_release_past_the_cut_arms_no_freeze() {
+    let raised = unfrozen_lander_pinned(
+        "release-lander-pinned-218",
+        "engine = { release = \"v0.0.218\" }",
+    );
+    assert!(
+        !raised.iter().any(|v| v == "release wire wrong"),
+        "v0.0.218 is short of the freeze threshold: {raised:?}"
+    );
+}
+
+/// A source pin never lands, so it arms nothing (CLOUD-2515).
+#[test]
+fn a_source_pin_arms_no_freeze() {
+    let raised = unfrozen_lander_pinned(
+        "release-lander-source-pinned",
+        &format!("engine = {{ source = \"{}\" }}", "0".repeat(64)),
+    );
+    assert!(
+        !raised.iter().any(|v| v == "release wire wrong"),
+        "a source pin arms no freeze: {raised:?}"
+    );
+}
+
 #[test]
 fn the_cut_and_release_pr_are_gated_on_settings() {
     assert!(wire_wrong(
