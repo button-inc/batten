@@ -434,4 +434,9 @@ expires = "2027-03-31"
         "the stub on PATH ran in place of the running image: {}",
         String::from_utf8_lossy(&outcome.stderr)
     );
+    assert!(
+        outcome.status.success(),
+        "the running image answered the row: {}",
+        String::from_utf8_lossy(&outcome.stderr)
+    );
 }

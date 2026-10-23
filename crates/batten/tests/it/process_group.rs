@@ -858,10 +858,8 @@ fn a_group_its_leader_and_registrant_left_is_an_orphan() {
     let dir = scratch("pgroup-orphaned");
     let note = dir.join("member.pid");
     let mut leader = Command::new("sh")
-        .args([
-            "-c",
-            &format!("sleep 600 & printf '%s' \"$!\" > '{}'", note.display()),
-        ])
+        .args(["-c", "sleep 600 & printf '%s' \"$!\" > \"$MEMBER_PID\""])
+        .env("MEMBER_PID", &note)
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

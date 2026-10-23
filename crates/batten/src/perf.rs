@@ -3391,17 +3391,14 @@ mod tests {
     /// read as present.
     #[test]
     fn the_sweep_refuses_only_a_missing_build() -> Result<()> {
-        assert!(
-            std::env::var(BIN_VAR).is_err(),
-            "the premise: the default binary path is the one asked about"
-        );
         let repo = crate::scratch::scratch("perf-acquire");
         let refused = acquire(&repo)
             .err()
             .map(|err| err.to_string())
             .unwrap_or_default();
         assert!(refused.contains("is missing"), "{refused}");
-        let binary = repo.join(DEFAULT_BIN);
+        // Wherever the runner's `BENCH_BIN` points, if it sets one.
+        let binary = repo.join(env_or(BIN_VAR, DEFAULT_BIN));
         std::fs::create_dir_all(binary.parent().unwrap_or(&repo))?;
         std::fs::write(&binary, b"a release build")?;
         let past = release_binary(&repo).map_err(|err| err.to_string());

@@ -532,7 +532,7 @@ for word in "$@"; do
 done
 target=${{CARGO_TARGET_DIR:-$(dirname "$manifest")/target}}
 mkdir -p "$target/$profile"
-printf '#!/bin/sh\n# built from %s\nexec %s "$@"\n' "$manifest" '{batten}' > "$target/$profile/batten"
+printf '#!/bin/sh\n# built from %s\nexec '"'"'%s'"'"' "$@"\n' "$manifest" '{batten}' > "$target/$profile/batten"
 chmod +x "$target/$profile/batten"
 "#,
         log = log.display(),

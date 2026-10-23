@@ -220,8 +220,18 @@ fn stop_terminates_the_holder_it_names() {
         .arg("600")
         .spawn()
         .expect("a holder to stop");
-    batten::lease::stop(holder.id());
-    let status = holder.wait().expect("the holder is reaped");
+    let pid = holder.id();
+    // Reaped on its own thread, so a `stop` that sends nothing FAILS here within
+    // the bound rather than hanging out the holder's whole interval.
+    let (reaped, exited) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = reaped.send(holder.wait());
+    });
+    batten::lease::stop(pid);
+    let status = exited
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("the holder exits once stopped")
+        .expect("the holder is reaped");
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
@@ -264,6 +274,7 @@ fn a_ceiling_between_a_directory_and_its_repository_fences_the_walk() {
             .env("BATTEN_REST_FIXTURE", &forge)
             .env_remove("GH_REPO")
             .env_remove("LAND_LOCK_REMOTE")
+            .env_remove("GIT_CEILING_DIRECTORIES")
             .current_dir(&below);
         if let Some(ceiling) = ceiling {
             command.env("GIT_CEILING_DIRECTORIES", ceiling);
