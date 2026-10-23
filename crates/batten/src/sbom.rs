@@ -420,20 +420,31 @@ pub fn run(
         }
         Err(error) => match error.downcast::<CouldNotLook>() {
             Ok(CouldNotLook(why)) => {
-                match &mode {
-                    Mode::Binary { .. } => crate::record::clear_named(VERB, BINARY_FAMILY)?,
-                    Mode::Conformance => {
-                        if let Some(conformance) = &declared.conformance {
-                            crate::record::clear_named(VERB, &conformance.record)?;
-                        }
-                    }
-                    _ => {}
+                if let Some(family) = stale_record(&mode, &declared) {
+                    crate::record::clear_named(VERB, family)?;
                 }
                 writeln!(err, "batten: {VERB}: could not look: {why}")?;
                 Ok(ExitCode::Internal)
             }
             Err(other) => Err(other),
         },
+    }
+}
+
+/// The record family a could-not-look in `mode` leaves stale, so the run
+/// removes it: the binary's, or the declared conformance checker's. The tree's
+/// modes record nothing to remove.
+///
+/// Apart from [`run`] so each mode is a case rather than a producer a case
+/// must make fail to look (CLOUD-2509).
+fn stale_record<'a>(mode: &Mode, declared: &'a Declared) -> Option<&'a str> {
+    match mode {
+        Mode::Binary { .. } => Some(BINARY_FAMILY),
+        Mode::Conformance => declared
+            .conformance
+            .as_ref()
+            .map(|conformance| conformance.record.as_str()),
+        Mode::Tree | Mode::TreeNames | Mode::BinaryName { .. } | Mode::Record => None,
     }
 }
 
@@ -1750,6 +1761,29 @@ mod tests {
             actions: actions.map(str::to_owned),
             inventory: None,
             conformance: None,
+        }
+    }
+
+    #[test]
+    fn a_could_not_look_removes_only_the_record_its_mode_writes() {
+        let mut checked = declared(None);
+        checked.conformance = Some(Conformance {
+            record: String::from("sbom-conformance"),
+            checker: String::from("c"),
+            standards: vec![String::from("s")],
+        });
+        let binary = Mode::Binary {
+            binary: String::from("b"),
+            target: String::from("t"),
+        };
+        assert_eq!(stale_record(&binary, &checked), Some(BINARY_FAMILY));
+        assert_eq!(
+            stale_record(&Mode::Conformance, &checked),
+            Some("sbom-conformance")
+        );
+        assert_eq!(stale_record(&Mode::Conformance, &declared(None)), None);
+        for mode in [Mode::Tree, Mode::TreeNames, Mode::Record] {
+            assert_eq!(stale_record(&mode, &checked), None, "{mode:?}");
         }
     }
 

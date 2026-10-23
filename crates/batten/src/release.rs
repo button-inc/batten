@@ -941,7 +941,9 @@ pub fn run_backfill(
         post: &|path: &str, body: &serde_json::Value| {
             crate::rest::post_json(path, body).map(|answer| answer.status)
         },
-        pause: &crate::pr_watch::pause,
+        pause: &|seconds| {
+            crate::pr_watch::pause_until(seconds, &std::sync::atomic::AtomicBool::new(false));
+        },
     };
     sweep(&slug, request, &tags, &forge, out, err)
 }
@@ -991,7 +993,7 @@ pub fn run(
             run_backfill(&request, out, err)
         }
         crate::cli::ReleaseCommand::Discard { tag } => {
-            crate::release_state::run_discard(&tag, out, err)
+            crate::release_state::run_discard(std::path::Path::new("."), &tag, out, err)
         }
         crate::cli::ReleaseCommand::InFlight { workflows } => {
             crate::release_state::run_in_flight(&workflows, out, err)
@@ -1011,8 +1013,8 @@ pub fn run(
             workflow,
             land_workflow,
         } => crate::release_state::run_cut(
-            &tag,
-            &sha,
+            std::path::Path::new("."),
+            (&tag, &sha),
             (&changelog, &workflow, land_workflow.as_deref()),
             out,
             err,
@@ -1032,6 +1034,7 @@ pub fn run(
             branch,
             write_only,
         } => crate::release_state::run_bake(
+            std::path::Path::new("."),
             &tag,
             (sha.as_deref(), branch.as_deref()),
             write_only,

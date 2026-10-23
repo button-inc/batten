@@ -2034,6 +2034,187 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A repository with a committer, so a replay can mint commits.
+    fn replayable(case: &str) -> std::path::PathBuf {
+        let dir = crate::scratch::scratch(case);
+        init_on_main(&dir).unwrap_or_else(|err| panic!("init: {err}"));
+        let config = dir.join(".git/config");
+        let mut text = std::fs::read_to_string(&config).unwrap_or_else(|err| panic!("{err}"));
+        text.push_str("[user]\n\tname = t\n\temail = t@example.com\n");
+        std::fs::write(&config, text).unwrap_or_else(|err| panic!("{err}"));
+        dir
+    }
+
+    /// Commit `tool` holding `text`, executable, on `HEAD`; answer the commit.
+    fn commit_tool(dir: &Path, text: &str, message: &str) -> String {
+        let path = dir.join("tool");
+        std::fs::write(&path, text).unwrap_or_else(|err| panic!("{err}"));
+        set_mode(&path, true).unwrap_or_else(|err| panic!("{err}"));
+        commit_paths(dir, &[String::from("tool")], message).unwrap_or_else(|err| panic!("{err}"));
+        crate::git::resolve_ref(dir, "HEAD")
+            .unwrap_or_else(|err| panic!("{err}"))
+            .unwrap_or_else(|| panic!("a HEAD"))
+    }
+
+    /// `main` holding `ours` on the root `tool` commit, and `refs/heads/base`
+    /// holding `base` on that same root: a replay of `main` onto `base`.
+    /// Answers the root.
+    fn diverged(dir: &Path, base: &str, ours: Option<&str>) -> String {
+        let root = commit_tool(dir, "1\n", "root");
+        commit_tool(dir, base, "base");
+        let moved = crate::git::resolve_ref(dir, "HEAD")
+            .unwrap_or_else(|err| panic!("{err}"))
+            .unwrap_or_else(|| panic!("a HEAD"));
+        set_ref(dir, "refs/heads/base", &moved).unwrap_or_else(|err| panic!("{err}"));
+        reset_hard(dir, "refs/heads/main", &root).unwrap_or_else(|err| panic!("{err}"));
+        commit_tool(dir, ours.unwrap_or("1\n"), "ours");
+        root
+    }
+
+    /// The entry `path` names in `rev`'s tree.
+    fn entry_at(dir: &Path, rev: &str, path: &str) -> gix::objs::tree::EntryKind {
+        let repo = gix::open(dir).unwrap_or_else(|err| panic!("open: {err}"));
+        let tree = repo
+            .rev_parse_single(rev)
+            .unwrap_or_else(|err| panic!("{err}"))
+            .object()
+            .unwrap_or_else(|err| panic!("{err}"))
+            .peel_to_tree()
+            .unwrap_or_else(|err| panic!("{err}"));
+        tree.lookup_entry_by_path(path)
+            .unwrap_or_else(|err| panic!("{err}"))
+            .unwrap_or_else(|| panic!("{path} in {rev}"))
+            .mode()
+            .kind()
+    }
+
+    /// An ordinary commit whose replay changes nothing is still replayed; only
+    /// a catch-up merge the base already holds is skipped (CLOUD-2477).
+    #[test]
+    fn an_empty_ordinary_commit_is_replayed_not_skipped() {
+        let dir = replayable("gitwrite-replay-empty");
+        diverged(&dir, "2\n", None);
+        let replayed = rebase(&dir, "refs/heads/main", "refs/heads/base")
+            .unwrap_or_else(|err| panic!("rebase: {err}"));
+        let Rebase::Replayed { commits, .. } = replayed else {
+            panic!("a replay: {replayed:?}");
+        };
+        assert_eq!(commits, 1);
+    }
+
+    /// A replayed commit drops its signature, which signs bytes that no longer
+    /// exist (CLOUD-2477).
+    #[test]
+    fn a_replayed_commit_carries_no_signature() {
+        let dir = replayable("gitwrite-replay-signed");
+        diverged(&dir, "1\n", Some("1\nmore\n"));
+        let repo = gix::open(&dir).unwrap_or_else(|err| panic!("open: {err}"));
+        let head = repo
+            .rev_parse_single("refs/heads/main")
+            .unwrap_or_else(|err| panic!("{err}"))
+            .detach();
+        let mut signed = repo
+            .find_commit(head)
+            .unwrap_or_else(|err| panic!("{err}"))
+            .decode()
+            .unwrap_or_else(|err| panic!("{err}"))
+            .into_owned()
+            .unwrap_or_else(|err| panic!("{err}"));
+        signed
+            .extra_headers
+            .push(("gpgsig".into(), "-----BEGIN PGP SIGNATURE-----".into()));
+        let signed = repo
+            .write_object(&signed)
+            .unwrap_or_else(|err| panic!("{err}"))
+            .detach();
+        set_ref(&dir, "refs/heads/main", &signed.to_hex().to_string())
+            .unwrap_or_else(|err| panic!("{err}"));
+        let replayed = rebase(&dir, "refs/heads/main", "refs/heads/base")
+            .unwrap_or_else(|err| panic!("rebase: {err}"));
+        let Rebase::Replayed { head, .. } = replayed else {
+            panic!("a replay: {replayed:?}");
+        };
+        let repo = gix::open(&dir).unwrap_or_else(|err| panic!("open: {err}"));
+        let minted = repo
+            .find_commit(
+                gix::ObjectId::from_hex(head.as_bytes()).unwrap_or_else(|err| panic!("{err}")),
+            )
+            .unwrap_or_else(|err| panic!("{err}"));
+        let decoded = minted.decode().unwrap_or_else(|err| panic!("{err}"));
+        assert!(
+            decoded.extra_headers().find("gpgsig").is_none(),
+            "the signature rode the replay"
+        );
+    }
+
+    /// A conflict at a path every tree holds gets a candidate, and a placed
+    /// resolution keeps the path's executable mode (CLOUD-2477).
+    #[test]
+    fn a_conflict_proposes_a_candidate_and_a_resolution_keeps_the_mode() {
+        let dir = replayable("gitwrite-replay-conflict");
+        diverged(&dir, "2\n", Some("3\n"));
+        let into = crate::scratch::scratch("gitwrite-replay-candidates");
+        let (stopped, candidates) =
+            rebase_proposing(&dir, "refs/heads/main", "refs/heads/base", &[], &into)
+                .unwrap_or_else(|err| panic!("propose: {err}"));
+        assert!(matches!(stopped, Rebase::Conflicted { .. }), "{stopped:?}");
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|found| found.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["tool"]
+        );
+        std::fs::write(dir.join("tool"), "resolved\n").unwrap_or_else(|err| panic!("{err}"));
+        let resolved = rebase_resolving(
+            &dir,
+            "refs/heads/main",
+            "refs/heads/base",
+            &[String::from("tool")],
+        )
+        .unwrap_or_else(|err| panic!("resolve: {err}"));
+        assert!(matches!(resolved, Rebase::Replayed { .. }), "{resolved:?}");
+        assert_eq!(
+            entry_at(&dir, "refs/heads/main", "tool"),
+            entry_at(&dir, "refs/heads/base", "tool")
+        );
+        assert_eq!(
+            entry_at(&dir, "refs/heads/main", "tool") == gix::objs::tree::EntryKind::BlobExecutable,
+            cfg!(unix)
+        );
+    }
+
+    /// A symlink over a path that will not unlink refuses with the removal's
+    /// own error, not the link's that would follow it (CLOUD-2509).
+    #[test]
+    fn a_symlink_over_an_unremovable_path_names_the_removal() {
+        let dir = crate::scratch::scratch("gitwrite-materialise-occupied");
+        init_on_main(&dir).unwrap_or_else(|err| panic!("init: {err}"));
+        let repo = gix::open(&dir).unwrap_or_else(|err| panic!("open: {err}"));
+        let (mut pipeline, _) = repo
+            .filter_pipeline(None)
+            .unwrap_or_else(|err| panic!("pipeline: {err}"));
+        std::fs::create_dir_all(dir.join("occupied/inside"))
+            .unwrap_or_else(|err| panic!("fixture dir: {err}"));
+        let destination = repo
+            .write_blob(b"elsewhere")
+            .unwrap_or_else(|err| panic!("blob: {err}"))
+            .detach();
+        let refused = materialise(
+            &repo,
+            &mut pipeline,
+            &dir,
+            b"occupied",
+            destination,
+            gix::index::entry::Mode::SYMLINK,
+        )
+        .map(|_| ())
+        .expect_err("a non-empty directory does not unlink")
+        .to_string();
+        assert!(refused.starts_with("gitwrite: occupied: "), "{refused}");
+        assert!(!refused.contains("will not link"), "{refused}");
+    }
+
     /// A replay that moves a path from 100755 to 100644 must leave it 0644:
     /// `durable::replace` keeps the replaced file's bits, so a mode set in one
     /// direction only left the worktree executable where the index said not.

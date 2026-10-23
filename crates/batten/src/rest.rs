@@ -731,9 +731,9 @@ pub fn download(path: &str) -> Option<(u16, Vec<u8>)> {
     } else {
         format!("{API}/{path}")
     };
-    if let Some(dir) = std::env::var_os(FIXTURE) {
+    if let Some(dir) = fixture_dir() {
         let answer = from_fixture(
-            std::path::Path::new(&dir),
+            &dir,
             &Request {
                 method: "GET",
                 url: &url,
@@ -1478,6 +1478,33 @@ mod tests {
         assert_eq!(method_of(None, Method::Delete), "DELETE");
         assert_eq!(method_of(None, Method::ByBody), "GET");
         assert_eq!(method_of(None, Method::Patch), "GET");
+    }
+
+    /// A scoped fixture answers this thread's exchanges and nothing after its
+    /// scope; a thread carries it only through `within` (CLOUD-2509).
+    #[test]
+    fn a_scoped_fixture_answers_inside_its_scope_and_on_threads_that_carry_it() {
+        let dir = routed("rest-scoped", &[("repos/o/r", 200, "scoped")]);
+        assert_eq!(scoped(), None);
+        let (inside, carried, uncarried) = with_fixture(&dir, || {
+            let inside = get("repos/o/r", None).map(|answer| answer.body);
+            let held = scoped();
+            let carried = std::thread::spawn(move || {
+                within(held, || get("repos/o/r", None).map(|answer| answer.body))
+            })
+            .join()
+            .expect("the carrying thread");
+            let uncarried = std::thread::spawn(scoped).join().expect("the bare thread");
+            (inside, carried, uncarried)
+        });
+        assert_eq!(inside.as_deref(), Some("scoped"));
+        assert_eq!(carried.as_deref(), Some("scoped"));
+        assert_eq!(uncarried, None);
+        assert_eq!(scoped(), None);
+        assert_eq!(
+            with_fixture(&dir, || download("repos/o/r")).map(|(status, body)| (status, body)),
+            Some((200, b"scoped".to_vec()))
+        );
     }
 
     #[test]

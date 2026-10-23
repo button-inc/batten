@@ -14448,7 +14448,7 @@ fn verify_environment(root: &Path) -> Vec<outputs::OutputPattern> {
 /// would red the run. So neither, for as long as a cancellation plausibly takes.
 const CANCEL_TICKS: u32 = 24;
 
-/// One tick, in seconds. `pr_watch::pause` carries the crate's single sleep
+/// One tick, in seconds. `pr_watch::pause_until` carries the crate's single sleep
 /// exemption, so waiting through it opens no new site for `sleep_ban.rs`.
 const CANCEL_TICK_SECONDS: f64 = 5.0;
 
@@ -14508,8 +14508,9 @@ fn report_guard(
     }
 
     // WAIT TO BE KILLED. See `CANCEL_TICKS`.
+    let never = std::sync::atomic::AtomicBool::new(false);
     for _ in 0..CANCEL_TICKS {
-        pr_watch::pause(CANCEL_TICK_SECONDS);
+        pr_watch::pause_until(CANCEL_TICK_SECONDS, &never);
     }
     writeln!(
         err,
@@ -19035,8 +19036,11 @@ fn run_hook(
     // readers (CLOUD-859). A record is filed under the subject its receipt row's
     // `key` names, so the boundary resolves that subject here — `adjudicate` may
     // not look, and resolving it per reader would let the two disagree.
-    let sourced_store =
-        receipt::sourced_store(&sourced, policy.named_receipt_subject(&envelope).as_deref());
+    let sourced_store = receipt::sourced_store(
+        Path::new("."),
+        &sourced,
+        policy.named_receipt_subject(&envelope).as_deref(),
+    );
     let receipts: hook::ReceiptFacts = receipt_facts(
         &policy,
         &envelope,
