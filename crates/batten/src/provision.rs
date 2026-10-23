@@ -1339,14 +1339,14 @@ fn credential_usable(value: &Secret, probe: &str) -> bool {
     // ORDER IS THE WHOLE DESIGN: establish the route can REFUSE before believing
     // that it accepted. Reversed, a substituting route reports every credential
     // live — including one that has been revoked.
-    let verdict = match route_honours_credentials(probe, value) {
+    let verdict = match route_honours_credentials(probe, value, crate::fetch::get_direct) {
         // Nobody could reach it. The reason is already on stderr.
         None => Verdict::Unreachable,
         // The route answered for a token that cannot be this credential, so it
         // is answering with an identity of its own and nothing it says about
         // ours is evidence.
         Some(false) => Verdict::RouteSubstitutes,
-        Some(true) => match probe_credential(probe, value) {
+        Some(true) => match probe_credential(probe, value, crate::fetch::get_direct) {
             Look::Answered(true) => Verdict::Live,
             Look::Answered(false) => Verdict::Refused,
             Look::CouldNotLook(_) => Verdict::Unreachable,
@@ -1430,6 +1430,14 @@ fn credential_health() -> Credential {
     }
 }
 
+/// The direct GET a credential probe is spent through:
+/// [`crate::fetch::get_direct`], in every caller but the unit suite.
+///
+/// **THE SEAM THE CONTROL ARM IS TESTED THROUGH.** Its three answers — refused,
+/// substituted, unreachable — are a forge's to give, and no hermetic fixture is
+/// a forge. A transport handed in is where a case can answer as each one.
+type DirectGet = fn(&str, &[(String, String)]) -> Result<crate::fetch::Response>;
+
 /// Whether the route to `probe` honours the credential we send, at all.
 ///
 /// **THIS IS THE CONTROL ARM, AND WITHOUT IT EVERY VERDICT BELOW IS WORTHLESS.**
@@ -1454,8 +1462,8 @@ fn credential_health() -> Credential {
 /// [`known_bad_like`] — and never to send it. The control arm must be spent per
 /// candidate rather than once, because "shaped like it" is only meaningful
 /// against a particular credential.
-fn route_honours_credentials(probe: &str, real: &Secret) -> Option<bool> {
-    match probe_credential(probe, &known_bad_like(real)) {
+fn route_honours_credentials(probe: &str, real: &Secret, get: DirectGet) -> Option<bool> {
+    match probe_credential(probe, &known_bad_like(real), get) {
         Look::Answered(accepted) => Some(!accepted),
         Look::CouldNotLook(why) => {
             crate::config::report(&format!(
@@ -1610,7 +1618,7 @@ enum Look {
 /// exactly the dead-gate shape the policy-module rules record one layer up.
 ///
 /// Pointer-only: the verdict is a boolean over a status and no body is read.
-fn probe_credential(probe: &str, token: &Secret) -> Look {
+fn probe_credential(probe: &str, token: &Secret, get: DirectGet) -> Look {
     // `expose` at the LAST possible moment and into a value that goes straight
     // to the wire. `Call`'s own `Debug` redacts this header, so the credential
     // is out of the type for exactly the length of one request build.
@@ -1618,7 +1626,7 @@ fn probe_credential(probe: &str, token: &Secret) -> Look {
         "Authorization".to_owned(),
         format!("Bearer {}", token.expose()),
     )];
-    match crate::fetch::get_direct(probe, &headers) {
+    match get(probe, &headers) {
         Ok(response) => Look::Answered((200..300).contains(&response.status)),
         Err(why) => Look::CouldNotLook(why.to_string()),
     }
@@ -3229,4 +3237,49 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
         blank.url = Some("  ".to_owned());
         assert!(validate(&[blank]).is_err(), "an empty url is refused");
     }
+
+    fn answered(status: u16) -> Result<crate::fetch::Response> {
+        Ok(crate::fetch::Response {
+            status,
+            body: Vec::new(),
+            headers: Vec::new(),
+        })
+    }
+
+    fn refuses_every_token(_: &str, _: &[(String, String)]) -> Result<crate::fetch::Response> {
+        answered(401)
+    }
+
+    fn accepts_every_token(_: &str, _: &[(String, String)]) -> Result<crate::fetch::Response> {
+        answered(200)
+    }
+
+    fn reaches_nothing(_: &str, _: &[(String, String)]) -> Result<crate::fetch::Response> {
+        anyhow::bail!("connection refused")
+    }
+
+    /// The control arm's three answers, one transport each: a route that
+    /// refuses the known-bad token honours credentials, one that accepts it
+    /// substitutes its own, and one nothing reaches decides neither.
+    #[test]
+    fn the_control_arm_reads_refused_substituted_and_unreachable_apart() {
+        let real = Secret::new("tok_0123456789".to_owned());
+        let probe = "https://forge.invalid/probe";
+        assert_eq!(
+            route_honours_credentials(probe, &real, refuses_every_token),
+            Some(true)
+        );
+        assert_eq!(
+            route_honours_credentials(probe, &real, accepts_every_token),
+            Some(false)
+        );
+        assert_eq!(
+            route_honours_credentials(probe, &real, reaches_nothing),
+            None
+        );
+    }
 }
+
+// The launcher and probe suite over the compiled binary: its subprocess cases
+// reach the credential verdicts and the HTTPS fetch no unit case can.
+//MUTANT-SUITE crates/batten/tests/it/provision.rs

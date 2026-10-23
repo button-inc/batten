@@ -1440,3 +1440,92 @@ fn the_credential_table_carries_the_names_the_engine_dropped() {
             .expect("names is optional");
     assert!(bare.names.is_empty());
 }
+
+/// A loopback address with nothing listening: bound, read, released.
+#[cfg(unix)]
+fn closed_probe() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    format!("https://127.0.0.1:{port}/probe")
+}
+
+/// An `unset` row behind a declared credential, applied, and the launcher run
+/// in the repository with `token` in the one declared name.
+#[cfg(unix)]
+fn launch_unsetting(env: &Env, dest: &Path, token: &str) -> Output {
+    let bytes = fs::read(env_binary()).unwrap();
+    let (url, sha) = env.artifact("demo.bin", &bytes);
+    let rows = format!(
+        "\n[[provision.env]]\nname = \"DOOMED\"\nunset = true\n\n[credential]\n\
+         probe_url = \"{}\"\nnames = [\"CRED_TOKEN\"]\n",
+        closed_probe()
+    );
+    env.config(&linking_manifest(&url, &sha, dest, &rows));
+    assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the launcher must be spawned for its credential verdict to be read (CLOUD-320)"
+    )]
+    let ran = std::process::Command::new(dest.join("demo"))
+        .current_dir(&env.repo)
+        .env("CRED_TOKEN", token)
+        .env("DOOMED", "present")
+        .output()
+        .expect("run the launcher");
+    ran
+}
+
+/// A CREDENTIAL PROVED RECENTLY AUTHORISES THE REMOVAL, from its receipt and
+/// with no network: the `unset` row is a removal, so it is the row that asks,
+/// and the declared name's non-empty value is the candidate the receipt proves.
+#[cfg(unix)]
+#[test]
+fn a_freshly_proven_credential_lets_an_unset_row_remove_its_variable() {
+    let env = Env::new("provision-credential-live");
+    let receipts = env.repo.join(".git").join("batten-receipts");
+    fs::create_dir_all(&receipts).unwrap();
+    fs::write(
+        receipts.join(format!("credential.{}", digest(b"tok_proven"))),
+        "live\n",
+    )
+    .unwrap();
+    let ran = launch_unsetting(
+        &env,
+        &env.repo.parent().unwrap().join("bin-live"),
+        "tok_proven",
+    );
+    let seen = String::from_utf8_lossy(&ran.stdout);
+    assert!(
+        seen.lines().any(|line| line == "CRED_TOKEN=tok_proven"),
+        "the launcher ran its tool: {seen}"
+    );
+    assert!(
+        !seen.lines().any(|line| line.starts_with("DOOMED=")),
+        "a live credential removes the unset row's variable: {seen}"
+    );
+}
+
+/// AN UNPROVABLE CREDENTIAL KEEPS THE HOST'S WIRING AND SAYS SO. Nothing answers
+/// the probe, so the verdict is unusable: the variable stays, and the report
+/// naming the degraded state reaches stderr — the boundary is where it is read.
+#[cfg(unix)]
+#[test]
+fn an_unprovable_credential_keeps_the_variable_and_says_so() {
+    let env = Env::new("provision-credential-unreachable");
+    let ran = launch_unsetting(
+        &env,
+        &env.repo.parent().unwrap().join("bin-dead"),
+        "tok_unproven",
+    );
+    let seen = String::from_utf8_lossy(&ran.stdout);
+    assert!(
+        seen.lines().any(|line| line == "DOOMED=present"),
+        "no proven replacement, so nothing is removed: {seen}"
+    );
+    let said = String::from_utf8_lossy(&ran.stderr);
+    assert!(
+        said.contains("keeping the host's proxy wiring"),
+        "the unusable verdict is reported where it degrades the session: {said}"
+    );
+}

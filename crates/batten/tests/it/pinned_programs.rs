@@ -434,3 +434,104 @@ fn a_fixture_root_asks_the_pin_nothing_through_the_eager_door() {
          tree that simply has no record, which is every fixture in this suite"
     );
 }
+
+/// THE PIN IS ASKED AT SESSION START, AND ITS TWO ANSWERS BECOME THE RECORD.
+///
+/// The one case that reaches the mediator for real: `configs`, `composed_path`
+/// and the spawn under both are otherwise exercised only by a host that has the
+/// mediator installed, which is no fixture. A stub of that name stands first on
+/// the child's `PATH` and answers the two questions the module asks — the files
+/// configuring it, and a composed `PATH` one directory longer than the ambient —
+/// so the record a later call reads is the proof both answers arrived.
+#[cfg(unix)]
+#[test]
+fn a_session_start_records_the_programs_the_pin_composes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = Fixture::new("pinned-session-start")
+        .config(
+            "version = 1\n\n\
+             [[pattern]]\n\
+             id = \"md-quoted-span\"\n\
+             regex = '\"[^\"]*\"'\n\n\
+             [[verdict]]\n\
+             id = \"tool reach absent\"\n\
+             gloss = \"a by-path invocation depends on a tool it will not get\"\n\
+             class = \"Every hook here fails open, so an absent tool allows silently.\"\n\n\
+             [[verdict.route]]\n\
+             id = \"prose read first\"\n\
+             kind = \"document\"\n\
+             target = \"AGENTS.md\"\n\n\
+             [[verdict]]\n\
+             id = \"tool list empty\"\n\
+             gloss = \"the manifest pins nothing, so the question cannot be asked\"\n\
+             class = \"With the pinned set empty every by-path hook passes vacuously.\"\n\n\
+             [[verdict.route]]\n\
+             id = \"prose read first\"\n\
+             kind = \"document\"\n\
+             target = \"AGENTS.md\"\n\n\
+             [[rule]]\n\
+             id = \"hook pin stale\"\n\
+             kind = \"policy\"\n\
+             scope = \"tree\"\n\
+             line_sources = [\"mise.toml\"]\n\
+             module = \"policy/hook-pin-check.rego\"\n\
+             severity = \"deny\"\n",
+        )
+        .file("AGENTS.md", "the consumer's own authority\n")
+        .file("mise.toml", "[tools]\njq = \"1.7\"\n")
+        .file(
+            "policy/hook-pin-check.rego",
+            &std::fs::read_to_string(common::at_root("policy/hook-pin-check.rego"))
+                .expect("the committed module is readable"),
+        )
+        .git()
+        .base_commit()
+        .build();
+    let executable = |path: &Path, body: &str| {
+        std::fs::write(path, body).expect("the stub is written");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .expect("the stub is executable");
+    };
+    let tools = dir.join("pin-tools");
+    std::fs::create_dir_all(&tools).expect("the pin's tool directory is created");
+    executable(&tools.join("pinnedtool"), "#!/bin/sh\n");
+    let bin = dir.join("stub-bin");
+    std::fs::create_dir_all(&bin).expect("the stub directory is created");
+    let (mediator, _) = pinned::mediated("anything");
+    executable(
+        &bin.join(mediator),
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n\
+             env) printf '{{\"PATH\":\"%s:%s\"}}\\n' '{}' \"$PATH\" ;;\n\
+             config) printf '[{{\"path\":\"%s\"}}]\\n' '{}' ;;\n\
+             esac\n",
+            tools.display(),
+            dir.join("mise.toml").display()
+        ),
+    );
+    let ambient = std::env::var("PATH").unwrap_or_default();
+    let payload = format!(
+        "{{\"hook_event_name\":\"SessionStart\",\"session_id\":\"s-pin\",\"cwd\":{}}}",
+        serde_json::to_string(&dir.display().to_string()).expect("a path is encodable")
+    );
+    let mut command = common::batten();
+    command.env("PATH", format!("{}:{ambient}", bin.display()));
+    let _ = common::stdin_run(
+        &mut command,
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+
+    match pinned::cached(&dir) {
+        Look::Is(programs) => assert_eq!(
+            programs,
+            BTreeSet::from(["pinnedtool".to_owned()]),
+            "the record holds exactly what the composed PATH added"
+        ),
+        Look::IsNot | Look::CouldNotLook => {
+            panic!("session start recorded nothing the pin composed")
+        }
+    }
+}

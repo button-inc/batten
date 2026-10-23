@@ -818,9 +818,7 @@ pub fn run_gaps(root: &Path, out: &mut dyn Write) -> Result<ExitCode> {
         };
         let entry = tally.entry((gap.rule, gap.subject)).or_default();
         entry.0 += 1;
-        if gap.date > entry.1 {
-            entry.1 = gap.date;
-        }
+        entry.1 = std::cmp::max(std::mem::take(&mut entry.1), gap.date);
     }
     let mut lines: Vec<_> = tally.into_iter().collect();
     // Most-refused first; the (rule, subject) key breaks a tie, byte-stably (§6).
@@ -886,15 +884,32 @@ pub fn run_target(target: &str, out: &mut dyn Write, err: &mut dyn Write) -> Res
         crate::exec::LockOutcome::Refused(code) => return Ok(code),
         held => held,
     };
+    install_target(&rustlib, target, &rustup_has, &rustup, out, err)
+}
 
-    let Some(installed) = rustup_has(target) else {
+/// [`run_target`]'s critical section, with rustup's two questions handed in:
+/// whether `target` is installed (`has`), and the outcome of one subcommand
+/// (`run`).
+///
+/// **THE SEAM THE POST-CONDITION IS TESTED THROUGH.** An `add` that reports
+/// success while the target stays absent is CLOUD-220's measured shape, and no
+/// rustup a test can run produces it on demand; probes handed in can.
+fn install_target(
+    rustlib: &Path,
+    target: &str,
+    has: &dyn Fn(&str) -> Option<bool>,
+    run: &dyn Fn(&[&str]) -> Option<(bool, String)>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let Some(installed) = has(target) else {
         writeln!(
             err,
             "::error:: doctor target: rustup could not list its installed targets, so whether {target} is present is unknown"
         )?;
         return Ok(ExitCode::Internal);
     };
-    match rustup_target(&rustlib, target, installed) {
+    match rustup_target(rustlib, target, installed) {
         RustupTarget::Installed => {
             writeln!(out, "doctor target: {target} already installed")?;
             return Ok(ExitCode::Success);
@@ -904,14 +919,14 @@ pub fn run_target(target: &str, out: &mut dyn Write, err: &mut dyn Write) -> Res
                 out,
                 "doctor target: {target} is half-installed — purging the residue before reinstalling"
             )?;
-            purge(&rustlib, target);
+            purge(rustlib, target);
         }
         RustupTarget::Missing => writeln!(out, "doctor target: {target} missing — installing")?,
     }
 
     // THE LAST LINE OF rustup's OWN OUTPUT, never the backtrace: a pointer to
     // what went wrong rather than the payload (non-negotiable rule 4).
-    match rustup(&["target", "add", target]) {
+    match run(&["target", "add", target]) {
         Some((true, _)) => {}
         Some((false, text)) => {
             let last = text.lines().next_back().unwrap_or("rustup said nothing");
@@ -933,7 +948,7 @@ pub fn run_target(target: &str, out: &mut dyn Write, err: &mut dyn Write) -> Res
     // THE POST-CONDITION IS ASSERTED, not assumed. `add` reporting success while
     // the target is still absent is the exact shape CLOUD-220 measured, and a
     // verb that trusted the exit code would report the failure as a success.
-    if rustup_has(target) == Some(true) {
+    if has(target) == Some(true) {
         writeln!(out, "doctor target: {target} installed")?;
         Ok(ExitCode::Success)
     } else {
@@ -1296,11 +1311,8 @@ fn newest_source_under(root: &Path) -> Option<std::time::SystemTime> {
                     continue;
                 }
                 walk(&path, in_src || name == Some("src"), newest);
-            } else if in_src
-                && let Ok(stamp) = path.metadata().and_then(|meta| meta.modified())
-                && newest.is_none_or(|current| stamp > current)
-            {
-                *newest = Some(stamp);
+            } else if in_src && let Ok(stamp) = path.metadata().and_then(|meta| meta.modified()) {
+                *newest = (*newest).max(Some(stamp));
             }
         }
     }
@@ -1323,7 +1335,7 @@ fn newest_source_under(root: &Path) -> Option<std::time::SystemTime> {
 /// program on PATH" is one too many: the probe must agree with the spawn it is
 /// predicting, or it diagnoses a run that would have worked.
 fn on_path(program: &str) -> bool {
-    if program.contains(std::path::MAIN_SEPARATOR) || program.contains('/') {
+    if program.contains([std::path::MAIN_SEPARATOR, '/']) {
         return Path::new(program).is_file();
     }
     crate::rules::on_path_verbatim(program).is_some()
@@ -1616,7 +1628,7 @@ fn handler_program_resolves(dir: &Path, program: &str) -> bool {
     if program == crate::surface::BINARY {
         return true;
     }
-    if program.contains(std::path::MAIN_SEPARATOR) || program.contains('/') {
+    if program.contains([std::path::MAIN_SEPARATOR, '/']) {
         return dir.join(program).is_file();
     }
     on_path(program)
@@ -2422,11 +2434,30 @@ fn diagnose_merged(
 ) -> MergedTally {
     use etcetera::BaseStrategy as _;
 
+    let home = etcetera::choose_base_strategy()
+        .ok()
+        .map(|strategy| strategy.home_dir().to_path_buf());
+    merged_from(home.as_deref(), dir, harness, command, exclusive)
+}
+
+/// [`diagnose_merged`] over a home directory already resolved, or `None` where
+/// none could be.
+///
+/// Split so the unresolvable arm is reachable: a host with no home is one no
+/// test process can become, and its counter is the one that keeps "could not
+/// look" from reading as three other zeroes.
+fn merged_from(
+    home: Option<&Path>,
+    dir: &Path,
+    harness: hook::Harness,
+    command: &str,
+    exclusive: bool,
+) -> MergedTally {
     let declared = harness.merge_surfaces().len();
     if declared == 0 {
         return MergedTally::default();
     }
-    let Ok(strategy) = etcetera::choose_base_strategy() else {
+    let Some(home) = home else {
         // No resolvable home is COULD NOT LOOK, and it says so in its own
         // counter rather than as a zero in `read` — which is where three other
         // answers used to arrive looking identical.
@@ -2435,7 +2466,7 @@ fn diagnose_merged(
             ..MergedTally::default()
         };
     };
-    merged_under(strategy.home_dir(), dir, harness, command, exclusive)
+    merged_under(home, dir, harness, command, exclusive)
 }
 
 /// The counting half of [`diagnose_merged`], with the home directory passed in.
@@ -2855,12 +2886,9 @@ fn transcript_evidence(
     let Ok(bytes) = std::fs::read(dir.join(path)) else {
         return TaskEvidence::Unknown;
     };
-    let (complete, partial) = bytes.split_at(
-        bytes
-            .iter()
-            .rposition(|&b| b == b'\n')
-            .map_or(0, |at| at + 1),
-    );
+    // The last newline opens the tail rather than closing the body: the trim
+    // below discards it there, and the body's lines read the same without it.
+    let (complete, partial) = bytes.split_at(bytes.iter().rposition(|&b| b == b'\n').unwrap_or(0));
     if !partial.trim_ascii().is_empty() {
         return TaskEvidence::Torn;
     }
@@ -3737,6 +3765,48 @@ mod tests {
         let tally = merged_under(&home, &project, harness, "batten hook", false);
         assert_eq!(tally.unreadable, 1);
         assert!(tally.partitions(declared), "{tally:?}");
+
+        // Unreadable: present, and not a file at all — the read itself fails,
+        // even as root, over a path that exists. Not absent.
+        let home = scratch("merged-partition-directory");
+        let project = scratch("merged-partition-directory-project");
+        fs::create_dir_all(home.join(harness.merge_surfaces()[0])).unwrap();
+        let tally = merged_under(&home, &project, harness, "batten hook", false);
+        assert_eq!((tally.unreadable, tally.absent), (1, declared - 1));
+        assert!(tally.partitions(declared), "{tally:?}");
+
+        // Unresolvable: no home at all, every surface in its own counter.
+        let tally = merged_from(None, &project, harness, "batten hook", false);
+        assert_eq!(tally.unresolvable, declared);
+        assert!(tally.partitions(declared), "{tally:?}");
+    }
+
+    /// THE POST-CONDITION DECIDES, NOT `add`'s EXIT (CLOUD-220). Both arms
+    /// report a successful `add`; only the listing asked afterwards tells an
+    /// installed target from one rustup claimed and left absent.
+    #[test]
+    fn a_target_add_is_judged_by_the_listing_after_it() {
+        let rustlib = scratch("target-post-condition");
+        let added = |_: &[&str]| Some((true, String::new()));
+        for (after, code, said) in [
+            (true, ExitCode::Success, "installed"),
+            (false, ExitCode::Usage, "still absent after add"),
+        ] {
+            let asked = std::cell::Cell::new(0);
+            let has = |_: &str| {
+                asked.set(asked.get() + 1);
+                Some(asked.get() > 1 && after)
+            };
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let ran = install_target(&rustlib, "x-unknown-none", &has, &added, &mut out, &mut err);
+            assert_eq!(ran.unwrap(), code);
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out),
+                String::from_utf8_lossy(&err)
+            );
+            assert!(text.contains(said), "{text}");
+        }
     }
 
     /// A merged sibling is counted apart from batten's own merged registration.
@@ -4420,3 +4490,10 @@ mod probe_tests {
         );
     }
 }
+
+// The compiled-binary suite over `doctor`: the mediator comparison reads the
+// `PATH` a subprocess is handed, and the merged-surface count the home it is.
+//MUTANT-SUITE crates/batten/tests/it/doctor.rs
+// The session-start chain over the binary: which facts a registered rule reads
+// and whether this session minted them.
+//MUTANT-SUITE crates/batten/tests/it/doctor_session.rs
