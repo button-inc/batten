@@ -1447,33 +1447,99 @@ fn the_credential_table_carries_the_names_the_engine_dropped() {
 fn watched(stdout: &[u8]) -> String {
     String::from_utf8_lossy(stdout)
         .lines()
-        .filter(|line| line.starts_with("CRED_TOKEN=") || line.starts_with("DOOMED="))
+        .filter(|line| {
+            ["CRED_TOKEN=", "DOOMED=", "FORGE_TOKEN="]
+                .iter()
+                .any(|name| line.starts_with(name))
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-/// An `unset` row behind a declared credential, applied, and the launcher run
-/// in the repository with `token` in the one declared name.
+/// `rows` behind a declared credential, applied, and the launcher run in the
+/// repository with `vars` set.
 #[cfg(unix)]
-fn launch_unsetting(env: &Env, dest: &Path, token: &str) -> Output {
+fn launch(env: &Env, dest: &Path, rows: &str, vars: &[(&str, &str)]) -> Output {
     let bytes = fs::read(env_binary()).unwrap();
     let (url, sha) = env.artifact("demo.bin", &bytes);
     // `.invalid` never resolves (RFC 2606), so nothing can answer the probe.
-    let rows = "\n[[provision.env]]\nname = \"DOOMED\"\nunset = true\n\n[credential]\n\
-                probe_url = \"https://probe.invalid/probe\"\nnames = [\"CRED_TOKEN\"]\n";
-    env.config(&linking_manifest(&url, &sha, dest, rows));
+    let rows = format!(
+        "{rows}\n[credential]\nprobe_url = \"https://probe.invalid/probe\"\n\
+         names = [\"CRED_TOKEN\"]\n"
+    );
+    env.config(&linking_manifest(&url, &sha, dest, &rows));
     assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
     #[expect(
         clippy::disallowed_types,
         reason = "stays: the launcher must be spawned for its credential verdict to be read (CLOUD-320)"
     )]
-    let ran = std::process::Command::new(dest.join("demo"))
-        .current_dir(&env.repo)
-        .env("CRED_TOKEN", token)
-        .env("DOOMED", "present")
-        .output()
-        .expect("run the launcher");
-    ran
+    let mut command = std::process::Command::new(dest.join("demo"));
+    command.current_dir(&env.repo);
+    for (name, value) in vars {
+        command.env(name, value);
+    }
+    command.output().expect("run the launcher")
+}
+
+/// The one `unset` row the credential cases share.
+#[cfg(unix)]
+const UNSET_ROW: &str = "\n[[provision.env]]\nname = \"DOOMED\"\nunset = true\n";
+
+/// An `unset` row behind a declared credential, applied, and the launcher run
+/// in the repository with `token` in the one declared name.
+#[cfg(unix)]
+fn launch_unsetting(env: &Env, dest: &Path, token: &str) -> Output {
+    launch(
+        env,
+        dest,
+        UNSET_ROW,
+        &[("CRED_TOKEN", token), ("DOOMED", "present")],
+    )
+}
+
+/// A credential receipt that proves `token` live, as a probe that answered
+/// minutes ago would have written it.
+#[cfg(unix)]
+fn prove_live(env: &Env, token: &str) {
+    let receipts = env.repo.join(".git").join("batten-receipts");
+    fs::create_dir_all(&receipts).unwrap();
+    fs::write(
+        receipts.join(format!("credential.{}", digest(token.as_bytes()))),
+        "live\n",
+    )
+    .unwrap();
+}
+
+/// A `reject_prefix` ROW ALONE ASKS FOR THE CREDENTIAL TOO. Rejecting a
+/// placeholder is a removal, so it is gated on a proven replacement exactly as
+/// an `unset` row is — and with one proven, the variable that carries only the
+/// marker is cleared rather than handed the placeholder candidate.
+#[cfg(unix)]
+#[test]
+fn a_reject_prefix_row_alone_is_gated_on_the_proven_credential() {
+    let env = Env::new("provision-credential-reject");
+    prove_live(&env, "tok_proven");
+    let rows = "\n[[provision.env]]\nname = \"FORGE_TOKEN\"\n\
+                from_first_set = [\"MARKED_SRC\"]\nreject_prefix = \"placeholder_\"\n";
+    let ran = launch(
+        &env,
+        &env.repo.parent().unwrap().join("bin-reject"),
+        rows,
+        &[
+            ("CRED_TOKEN", "tok_proven"),
+            ("MARKED_SRC", "placeholder_one"),
+            ("FORGE_TOKEN", "placeholder_two"),
+        ],
+    );
+    let seen = watched(&ran.stdout);
+    assert!(
+        seen.lines().any(|line| line == "CRED_TOKEN=tok_proven"),
+        "the launcher ran its tool: {seen}"
+    );
+    assert!(
+        !seen.lines().any(|line| line.starts_with("FORGE_TOKEN=")),
+        "a proven credential clears the marker rather than setting the placeholder: {seen}"
+    );
 }
 
 /// A CREDENTIAL PROVED RECENTLY AUTHORISES THE REMOVAL, from its receipt and
@@ -1483,13 +1549,7 @@ fn launch_unsetting(env: &Env, dest: &Path, token: &str) -> Output {
 #[test]
 fn a_freshly_proven_credential_lets_an_unset_row_remove_its_variable() {
     let env = Env::new("provision-credential-live");
-    let receipts = env.repo.join(".git").join("batten-receipts");
-    fs::create_dir_all(&receipts).unwrap();
-    fs::write(
-        receipts.join(format!("credential.{}", digest(b"tok_proven"))),
-        "live\n",
-    )
-    .unwrap();
+    prove_live(&env, "tok_proven");
     let ran = launch_unsetting(
         &env,
         &env.repo.parent().unwrap().join("bin-live"),
