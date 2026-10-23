@@ -615,10 +615,17 @@ impl SourcedStore {
 /// An empty `checks` answers an empty store having done no git work at all,
 /// which is the narrowing every other fact on this path applies.
 ///
-/// `here` is the checkout the subject is read from: the caller's, so a case
-/// can hand it a branch or a detached HEAD rather than whichever the suite's
-/// own checkout happens to be (CLOUD-2475).
 pub(crate) fn sourced_store(
+    checks: &[(&String, &ReceiptKey)],
+    named: Option<&str>,
+) -> Option<SourcedStore> {
+    sourced_store_in(Path::new("."), checks, named)
+}
+
+/// [`sourced_store`] read from the checkout at `here`, so a case can hand it a
+/// branch or a detached HEAD rather than whichever the suite's own checkout
+/// happens to be (CLOUD-2475).
+fn sourced_store_in(
     here: &Path,
     checks: &[(&String, &ReceiptKey)],
     named: Option<&str>,
@@ -2500,19 +2507,17 @@ mod tests {
         assert_eq!(sourced_subject(ReceiptKey::Delta, None), None);
 
         let (open, closed) = (String::from("open"), String::from("closed"));
-        let here = Path::new(".");
-        let empty = sourced_store(here, &[], None).unwrap();
+        let empty = sourced_store(&[], None).unwrap();
         assert!(empty.subjects.is_empty());
-        let by_head = sourced_store(here, &[(&open, &ReceiptKey::Head)], None).unwrap();
+        let by_head = sourced_store(&[(&open, &ReceiptKey::Head)], None).unwrap();
         assert_eq!(by_head.subjects.get("open"), Some(&head));
-        let by_name =
-            sourced_store(here, &[(&closed, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
+        let by_name = sourced_store(&[(&closed, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
         assert_eq!(
             by_name.subjects.get("closed").map(String::as_str),
             Some("CLOUD-1")
         );
-        assert!(sourced_store(here, &[(&closed, &ReceiptKey::Named)], Some("../x")).is_none());
-        assert!(sourced_store(here, &[(&closed, &ReceiptKey::Delta)], None).is_none());
+        assert!(sourced_store(&[(&closed, &ReceiptKey::Named)], Some("../x")).is_none());
+        assert!(sourced_store(&[(&closed, &ReceiptKey::Delta)], None).is_none());
     }
 
     /// A branch-keyed record files under the checkout's branch, and a detached
@@ -2525,17 +2530,17 @@ mod tests {
         crate::gitwrite::commit_paths(&dir, &[String::from("a")], "one").unwrap();
         let (open, closed) = (String::from("open"), String::from("closed"));
         let checks = [(&open, &ReceiptKey::Branch), (&closed, &ReceiptKey::Head)];
-        let store = sourced_store(&dir, &checks, None).unwrap();
+        let store = sourced_store_in(&dir, &checks, None).unwrap();
         let head = git::head_commit(&dir).unwrap();
         assert_eq!(store.subjects.get("open").map(String::as_str), Some("main"));
         assert_eq!(store.subjects.get("closed"), Some(&head));
         assert_eq!(store.subjects.len(), 2);
-        let by_head = sourced_store(&dir, &[(&closed, &ReceiptKey::Head)], None).unwrap();
+        let by_head = sourced_store_in(&dir, &[(&closed, &ReceiptKey::Head)], None).unwrap();
         assert_eq!(by_head.subjects.get("closed"), Some(&head));
         std::fs::write(dir.join(".git/HEAD"), format!("{head}\n")).unwrap();
-        assert!(sourced_store(&dir, &checks, None).is_none());
+        assert!(sourced_store_in(&dir, &checks, None).is_none());
         assert_eq!(
-            sourced_store(&dir, &[(&closed, &ReceiptKey::Head)], None)
+            sourced_store_in(&dir, &[(&closed, &ReceiptKey::Head)], None)
                 .and_then(|store| store.subjects.get("closed").cloned()),
             Some(head)
         );
@@ -2556,12 +2561,7 @@ mod tests {
         // UNIQUE TO THIS RUN, so no record an earlier run left behind can
         // answer the read-back for this one.
         let name = format!("batten-unit-{}-{}", std::process::id(), crate::now_unix());
-        let store = sourced_store(
-            Path::new("."),
-            &[(&name, &ReceiptKey::Named)],
-            Some("CLOUD-1"),
-        )
-        .unwrap();
+        let store = sourced_store(&[(&name, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
         let _written = Removed(store.path(&name).unwrap());
         record_sourced(&name, ReceiptKey::Named, Some("CLOUD-1"), &sourced(5)).unwrap();
         assert_eq!(store.record(&name).map(|record| record.rows), Some(5));

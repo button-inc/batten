@@ -356,7 +356,13 @@ type Runner<'a> = &'a dyn Fn(&Path, &[String], Diagnostics) -> Option<(i32, Stri
 /// Run a program for its exit code, folding its output onto `err` when it fails.
 ///
 /// `Ok(true)` ran and exited 0; `Ok(false)` did not, and `err` says why.
-fn ran(dir: &Path, argv: &[String], err: &mut dyn Write, run: Runner<'_>) -> Result<bool> {
+#[cfg(test)]
+fn ran(dir: &Path, argv: &[String], err: &mut dyn Write) -> Result<bool> {
+    ran_with(dir, argv, err, &piped)
+}
+
+/// [`ran`] through `run`.
+fn ran_with(dir: &Path, argv: &[String], err: &mut dyn Write, run: Runner<'_>) -> Result<bool> {
     let program = argv.first().map_or("", String::as_str);
     let Some((code, log)) = run(dir, argv, Diagnostics::Keep) else {
         writeln!(err, "dist: could not start `{program}`")?;
@@ -479,7 +485,7 @@ fn build_and_stage(
         writeln!(out, "{stem}")?;
         return Ok(ExitCode::Success);
     };
-    if !ran(&package.root, &tool.argv(target, &package.bin), err, run)? {
+    if !ran_with(&package.root, &tool.argv(target, &package.bin), err, run)? {
         return Ok(ExitCode::Internal);
     }
     let Some((archive, built)) = stage(package, target, &stem, err, run)? else {
@@ -567,7 +573,7 @@ fn stage(
     } else {
         package.root.as_path()
     };
-    if !ran(dir, &argv, err, run)? || !archive.is_file() {
+    if !ran_with(dir, &argv, err, run)? || !archive.is_file() {
         writeln!(
             err,
             "dist: no archive at {}",
@@ -645,7 +651,13 @@ fn archiver_argv(
 ///   reason is not buried under the graph, and what it downloads the build
 ///   needs anyway;
 /// * the MSI template is written ([`CARGO_DIST_MSI_TEMPLATE`]).
-fn dist_preflight(
+#[cfg(test)]
+fn dist_preflight(root: &Path, outputs: &[&Path], err: &mut dyn Write) -> Result<bool> {
+    preflight_with(root, outputs, err, &piped)
+}
+
+/// [`dist_preflight`] through `run`.
+fn preflight_with(
     root: &Path,
     outputs: &[&Path],
     err: &mut dyn Write,
@@ -658,7 +670,7 @@ fn dist_preflight(
             Err(error) => return Err(error.into()),
         }
     }
-    if !ran(
+    if !ran_with(
         root,
         &["cargo", "fetch", "--locked"].map(str::to_owned),
         err,
@@ -666,7 +678,7 @@ fn dist_preflight(
     )? {
         return Ok(false);
     }
-    ran(root, &CARGO_DIST_MSI_TEMPLATE.map(str::to_owned), err, run)
+    ran_with(root, &CARGO_DIST_MSI_TEMPLATE.map(str::to_owned), err, run)
 }
 
 /// The leg, built by cargo-dist (CLOUD-2297): `dist build` for `target`, its
@@ -686,7 +698,7 @@ fn run_cargo_dist(
     let dist_archive = staged.join(dist_name);
     let manifest = staged.join(cargo_dist_manifest(target));
     let msi = staged.join(format!("{}-{target}.msi", package.name));
-    if !dist_preflight(
+    if !preflight_with(
         &package.root,
         &[
             dist_archive.as_path(),
@@ -878,18 +890,18 @@ mod tests {
         std::fs::write(&left, "stale").unwrap();
         let absent = package.root.join("absent");
         let (ready, calls) = scripted(GREEN, |run| {
-            dist_preflight(&package.root, &[&left, &absent], &mut Vec::new(), run).unwrap()
+            preflight_with(&package.root, &[&left, &absent], &mut Vec::new(), run).unwrap()
         });
         assert!(ready);
         assert!(!left.exists());
         assert_eq!(calls, vec!["cargo fetch", "dist generate"]);
         let (ready, calls) = scripted(Script { cargo: 1, ..GREEN }, |run| {
-            dist_preflight(&package.root, &[], &mut Vec::new(), run).unwrap()
+            preflight_with(&package.root, &[], &mut Vec::new(), run).unwrap()
         });
         assert!(!ready);
         assert_eq!(calls, vec!["cargo fetch"]);
         let (refused, _) = scripted(GREEN, |run| {
-            dist_preflight(&package.root, &[&package.root], &mut Vec::new(), run).is_err()
+            preflight_with(&package.root, &[&package.root], &mut Vec::new(), run).is_err()
         });
         assert!(refused, "a directory where an output was is not cleared");
     }
@@ -973,14 +985,13 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let mut err = Vec::new();
-        assert!(ran(&here, &argv(&["cargo", "--version"]), &mut err, &piped).unwrap());
+        assert!(ran(&here, &argv(&["cargo", "--version"]), &mut err).unwrap());
         assert!(err.is_empty());
         assert!(
             !ran(
                 &here,
                 &argv(&["cargo", "--no-such-flag-anywhere"]),
-                &mut err,
-                &piped
+                &mut err
             )
             .unwrap()
         );
@@ -990,15 +1001,7 @@ mod tests {
         assert!(said.contains("\ndist: `cargo` exited "), "{said}");
         assert!(!said.contains("\n\ndist:"), "{said}");
         let mut err = Vec::new();
-        assert!(
-            !ran(
-                &here,
-                &argv(&["batten-no-such-program-for-dist"]),
-                &mut err,
-                &piped
-            )
-            .unwrap()
-        );
+        assert!(!ran(&here, &argv(&["batten-no-such-program-for-dist"]), &mut err).unwrap());
         assert!(String::from_utf8(err).unwrap().contains("could not start"));
     }
 
@@ -1009,10 +1012,8 @@ mod tests {
         let dir = crate::scratch::scratch("dist-preflight");
         std::fs::create_dir_all(dir.join("a-directory")).unwrap();
         let mut err = Vec::new();
-        assert!(!dist_preflight(&dir, &[dir.join("absent").as_path()], &mut err, &piped).unwrap());
-        assert!(
-            dist_preflight(&dir, &[dir.join("a-directory").as_path()], &mut err, &piped).is_err()
-        );
+        assert!(!dist_preflight(&dir, &[dir.join("absent").as_path()], &mut err).unwrap());
+        assert!(dist_preflight(&dir, &[dir.join("a-directory").as_path()], &mut err).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

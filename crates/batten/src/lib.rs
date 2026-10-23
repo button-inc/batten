@@ -19035,8 +19035,8 @@ fn run_hook(
     // readers (CLOUD-859). A record is filed under the subject its receipt row's
     // `key` names, so the boundary resolves that subject here — `adjudicate` may
     // not look, and resolving it per reader would let the two disagree.
-    let subject = policy.named_receipt_subject(&envelope);
-    let sourced_store = receipt::sourced_store(Path::new("."), &sourced, subject.as_deref());
+    let sourced_store =
+        receipt::sourced_store(&sourced, policy.named_receipt_subject(&envelope).as_deref());
     let receipts: hook::ReceiptFacts = receipt_facts(
         &policy,
         &envelope,
