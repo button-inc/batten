@@ -1514,7 +1514,8 @@ fn the_recorded_instant_is_the_read_rather_than_a_later_transcription() {
     // only err earlier.
     assert!(
         (before..=written + 1).contains(&stamped),
-        "the receipt records the read, not a transcription: {stamped} outside {before}..={written}"
+        "the receipt records the read, not a transcription: {stamped} outside {before}..={}",
+        written + 1
     );
 }
 
