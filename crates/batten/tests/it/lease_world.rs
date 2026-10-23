@@ -228,10 +228,19 @@ fn stop_terminates_the_holder_it_names() {
         let _ = reaped.send(holder.wait());
     });
     batten::lease::stop(pid);
-    let status = exited
-        .recv_timeout(std::time::Duration::from_secs(30))
-        .expect("the holder exits once stopped")
-        .expect("the holder is reaped");
+    let Ok(reaped) = exited.recv_timeout(std::time::Duration::from_secs(30)) else {
+        // Nothing stopped it: kill it so the reaping thread ends, then fail.
+        #[expect(
+            clippy::disallowed_types,
+            reason = "stays, and test-only: the cleanup of the real child this case spawned, when the subject failed to signal it"
+        )]
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
+        let _ = exited.recv();
+        panic!("stop sent no signal: the holder was still running after 30s");
+    };
+    let status = reaped.expect("the holder is reaped");
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
