@@ -26655,7 +26655,7 @@ fn run_release_path(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let here = Path::new(".");
-    let (verdict, shaped) = release_path_verdict(here, sha, mode, overrides);
+    let (verdict, shaped) = release_path_verdict(here, sha, mode, overrides, seal.is_some());
     if let release_path::Verdict::CouldNotLook(why) = &verdict {
         writeln!(err, "batten: release path: could not look: {why}")?;
         return Ok(ExitCode::Internal);
@@ -26755,11 +26755,15 @@ fn post_release_path(
 
 /// G2's reads, then [`release_path::judge`] over them, with whether the head
 /// is release-shaped.
+///
+/// `sealing` is whether the caller is `--seal`, the one surface an uncut
+/// release is judged on (CLOUD-2518).
 fn release_path_verdict(
     here: &Path,
     sha: &str,
     mode: Mode,
     overrides: &Overrides,
+    sealing: bool,
 ) -> (release_path::Verdict, bool) {
     use release_path::Verdict::CouldNotLook;
     let trunk = match worktree::declared_trunk(here) {
@@ -26802,6 +26806,15 @@ fn release_path_verdict(
         (Some(release), release_verify::Verdict::Verified) => Ok(
             release_path::Published::Verified(release.tag_commit.unwrap_or(release.target)),
         ),
+        // AN UNCUT RELEASE IS A FAILURE ONLY UNDER THE SEAL. There it is the
+        // release PR's pre-cut head, whose cut has not run; anywhere else the
+        // release exists, so a release `release-land` just published reading as
+        // absent is lag, and a posted `failure` would outlive it.
+        (_, release_verify::Verdict::Refused(refused))
+            if !sealing && matches!(refused.as_slice(), [release_verify::Refusal::Absent(_)]) =>
+        {
+            Err(format!("{tag} is not cut yet"))
+        }
         (_, release_verify::Verdict::Refused(refused)) => Ok(release_path::Published::Refused(
             refused.iter().map(release_verify::Refusal::line).collect(),
         )),
