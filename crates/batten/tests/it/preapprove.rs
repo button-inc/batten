@@ -522,6 +522,20 @@ fn a_noun_first_mcp_list_or_get_is_preapproved() {
     }
 }
 
+/// A WRITE VERB FIRST IS STILL A WRITE (CLOUD-2519): the noun-first suffixes
+/// never read `create_list` or `mark_read` as a read.
+#[test]
+fn a_write_named_like_a_list_is_not_preapproved() {
+    for tool in [
+        "mcp__x__create_list",
+        "mcp__x__update_allow_list",
+        "mcp__x__mark_read",
+        "mcp__x__delete_get",
+    ] {
+        assert_not_granted(&envelope("default", tool, &serde_json::json!({})));
+    }
+}
+
 /// The widening reaches no write: a trigger is neither suffix.
 #[test]
 fn an_mcp_trigger_is_not_preapproved() {
