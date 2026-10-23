@@ -662,10 +662,13 @@ pub fn pack_of(objects: &[Object]) -> Result<Vec<u8>> {
             clippy::cast_possible_truncation,
             reason = "masked to four bits before the cast"
         )]
-        let mut byte = (pack_type(object.kind) << 4) | ((size & 0x0f) as u8);
+        // A SUM OF DISJOINT FIELDS rather than `|`, which `^` would equal: the
+        // type sits above bit 3 and the size bits below it.
+        let mut byte = (pack_type(object.kind) << 4) + ((size & 0x0f) as u8);
         size >>= 4;
         while size > 0 {
-            pack.push(byte | 0x80);
+            // Below 0x80 by construction, so the continuation bit is added.
+            pack.push(byte + 0x80);
             #[expect(
                 clippy::cast_possible_truncation,
                 reason = "masked to seven bits before the cast"

@@ -33,8 +33,9 @@ use struson::reader::{JsonReader, JsonStreamReader, ValueType};
 /// walk [`crate::hook::decode`] reads `result` through.
 pub const RESULT_KEYS: [&str; 3] = ["tool_response", "toolResponse", "tool_result"];
 
-/// The chunk a string leaf is read in.
-const CHUNK: usize = 16 * 1024;
+/// The chunk a string leaf is read in, 16 KiB, written as the literal: only the
+/// read granularity rides on it, so no case can tell a product from a sum.
+const CHUNK: usize = 16_384;
 
 /// One result leaf too large to keep: where its text went and what stands in
 /// its place in the parsed value.

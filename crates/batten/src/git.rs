@@ -5915,7 +5915,7 @@ fn entry_diverges(
     }
     if entry
         .flags
-        .intersects(Flags::ASSUME_VALID | Flags::SKIP_WORKTREE)
+        .intersects(Flags::ASSUME_VALID.union(Flags::SKIP_WORKTREE))
     {
         return false;
     }

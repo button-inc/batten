@@ -4266,9 +4266,12 @@ impl Policy {
         // discovering there was no keyed row to match. Cheap-when-irrelevant on
         // the hottest path in the binary (§4), and the same shape CLOUD-460
         // applied to the receipt lookup.
-        if !self.shapes.iter().any(|rule| {
-            rule.requires_key.is_some() && blocks(rule.severity(), self.fail_on_warning)
-        }) {
+        if !self
+            .shapes
+            .iter()
+            .filter(|rule| rule.requires_key.is_some())
+            .any(|rule| blocks(rule.severity(), self.fail_on_warning))
+        {
             return None;
         }
         // THE ADMITTED ROWS, which is the whole of the fix caught in review on
@@ -4904,10 +4907,9 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
     let ceiling = ceiling_rules(policy, envelope, &mut measured);
     // Published to the process counter here rather than inside the gate, so the
     // gate stays a pure function of its inputs and a test can read the count it
-    // produced without touching a global at all.
-    if measured > 0 {
-        CEILINGS_MEASURED.fetch_add(measured, Ordering::Relaxed);
-    }
+    // produced without touching a global at all. Unguarded: adding zero is the
+    // no-op a `> 0` test would only have spelled out.
+    CEILINGS_MEASURED.fetch_add(measured, Ordering::Relaxed);
     match ceiling {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
         Decision::Allow
@@ -6162,9 +6164,10 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
                     return disposed(rule, pipeline_refusal(rule, Discard::Piped));
                 }
             }
-            if matches!(segment.terminator, Some(Separator::Semi | Separator::Or))
-                && parsed.get(index + 1).is_some()
-            {
+            // No look for a NEXT element: `segments` never leaves a `;` or `||`
+            // on the last one (`a_trailing_separator_ends_no_segment`), so the
+            // separator alone says something follows.
+            if matches!(segment.terminator, Some(Separator::Semi | Separator::Or)) {
                 return disposed(rule, pipeline_refusal(rule, Discard::Trailing));
             }
             // A NEWLINE IS A `;` FOR THE STATUS, and the segment hides it (CLOUD-986).
@@ -9888,13 +9891,15 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
                 counted += line.words.len();
                 taken.push(line);
             }
-            if counted != wanted || taken.is_empty() {
+            if counted != wanted {
                 landed = false;
                 break;
             }
             assignment.push(taken);
         }
-        if landed && lines.next().is_none() {
+        // Every segment landed on its own count, and the counts sum to the
+        // line readings' (`joined_parse`), so no line is left over to check.
+        if landed {
             for (segment, taken) in out
                 .iter_mut()
                 .filter(|segment| !segment.nested)
@@ -10005,16 +10010,19 @@ fn covered(nodes: &[rable::Node], command: &str) -> bool {
     !tail.contains('"') && !tail.contains('\'')
 }
 
-/// Does this node, anywhere inside it, open a heredoc?
+/// Does this node open a heredoc whose body can lie past the node's own span?
+///
+/// **A GROUP IS NOT DESCENDED**, because its closing `)` or `}` follows the
+/// body, so the group's span already covers it and [`covered`] has no tail to
+/// excuse; and no joined reparse of a heredoc survives, since its delimiter
+/// needs a line of its own. A pipeline or a list ends with the heredoc's
+/// command, so its body is past the span and is what the exemption is for.
 fn opens_heredoc(node: &rable::Node) -> bool {
     match &node.kind {
         rable::NodeKind::HereDoc { .. } => true,
         rable::NodeKind::Command { redirects, .. } => redirects.iter().any(opens_heredoc),
         rable::NodeKind::Pipeline { commands, .. } => commands.iter().any(opens_heredoc),
         rable::NodeKind::List { items } => items.iter().any(|item| opens_heredoc(&item.command)),
-        rable::NodeKind::Subshell { body, .. } | rable::NodeKind::BraceGroup { body, .. } => {
-            opens_heredoc(body)
-        }
         _ => false,
     }
 }
@@ -10201,15 +10209,15 @@ fn flatten_in(
             }
         }
         rable::NodeKind::List { items } => {
-            for (index, item) in items.iter().enumerate() {
+            for item in items {
                 let follows = match item.operator {
                     Some(rable::ListOperator::And) => Some(Separator::And),
                     Some(rable::ListOperator::Or) => Some(Separator::Or),
                     Some(rable::ListOperator::Semi) => Some(Separator::Semi),
                     Some(rable::ListOperator::Background) => Some(Separator::Background),
-                    // The final element carries whatever followed the list.
-                    _ if index + 1 == items.len() => after,
-                    _ => None,
+                    // The final element carries whatever followed the list, and
+                    // it is the only one `rable` leaves without an operator.
+                    None => after,
                 };
                 flatten_in(&item.command, source, follows, construct, out);
             }
@@ -11474,6 +11482,44 @@ pub const PLAN_EXIT_TOOL: &str = "ExitPlanMode";
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    /// The last element of a list carries no `;` or `||` of its own, which is
+    /// what lets `pipeline_rules` read a sequence off the separator alone.
+    ///
+    /// Fails by: a trailing separator kept on the last segment, which would
+    /// refuse `mise run verify;` as a verdict with something after it.
+    #[test]
+    fn a_trailing_separator_ends_no_segment() {
+        for command in ["mise run verify;", "a ;", "a; b;", "a || b;"] {
+            let crate::facts::Look::Is(parsed) = super::segments(command) else {
+                panic!("{command:?} reads");
+            };
+            assert_eq!(
+                parsed.last().map(|segment| segment.terminator),
+                Some(None),
+                "{command:?}"
+            );
+        }
+    }
+
+    /// A heredoc a PIPELINE or a LIST ends with keeps its body past the
+    /// node's span, quotes and all, and is still read rather than abstained
+    /// on as a dropped tail.
+    ///
+    /// Fails by: `opens_heredoc` not descending a pipeline's stages or a list's
+    /// items, which reads the body's quote as an unbalanced one.
+    #[test]
+    fn a_heredoc_ending_a_pipeline_or_a_list_is_read() {
+        for command in [
+            "cat <<'EOF' | grep x\nhe said \"hi\"\nEOF",
+            "a && cat <<'EOF'\nsaid \"q\"\nEOF",
+        ] {
+            assert!(
+                matches!(super::segments(command), crate::facts::Look::Is(_)),
+                "{command:?}"
+            );
+        }
+    }
 
     /// CLOUD-2365: the host's background ceiling, mirrored case by case from
     /// Claude Code 2.1.301's `hPe`/`Gpe`.

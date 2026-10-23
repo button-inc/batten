@@ -762,10 +762,14 @@ fn tally_under(path: &Path, shape: RecordShape, cache: Option<&Path>) -> Option<
         .ok()?;
     let mut tail = Vec::new();
     file.read_to_end(&mut tail).ok()?;
-    let whole = tail
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .map_or(0, |at| at + 1);
+    // The partial line is what follows the last newline, measured as a piece
+    // rather than found as an index: the newline then stays with the complete
+    // half without a `+ 1` nothing could tell from `* 1`.
+    let unfinished = tail
+        .rsplit(|byte| *byte == b'\n')
+        .next()
+        .map_or(0, <[u8]>::len);
+    let whole = tail.len() - unfinished;
     let (complete, partial) = tail.as_slice().split_at(whole);
     parse(std::str::from_utf8(complete).ok()?, &label, shape)
         .ok()?

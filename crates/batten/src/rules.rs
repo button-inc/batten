@@ -9584,6 +9584,16 @@ fn forge_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, BTreeMap<
 /// name. A plan nobody could read and a plan with nothing wrong are otherwise
 /// identical on the decision surface, which is what this row exists to prevent.
 fn plan_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, Option<crate::hk::Planned>>> {
+    plan_facts_from(rules, root, crate::hk::acquire)
+}
+
+/// [`plan_facts`] over an injected plan runner, so the arm that KEEPS a taken
+/// plan is reachable without a real hk run.
+fn plan_facts_from(
+    rules: &[Rule],
+    root: &Path,
+    acquire: impl Fn(&Path, &crate::hk::PlanQuery) -> crate::facts::Look<crate::hk::Planned>,
+) -> Option<BTreeMap<String, Option<crate::hk::Planned>>> {
     let declared: Vec<crate::hk::PlanQuery> = rules
         .iter()
         .flat_map(|rule| rule.plan.iter().cloned())
@@ -9593,7 +9603,7 @@ fn plan_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, Option<cra
     }
     let mut acquired = BTreeMap::new();
     for query in &declared {
-        let taken = match crate::hk::acquire(root, query) {
+        let taken = match acquire(root, query) {
             crate::facts::Look::Is(planned) => Some(planned),
             _ => None,
         };
@@ -12250,6 +12260,36 @@ pub(crate) fn spawn_resolving<T>(
     program: &str,
     spawn: impl FnMut(&str, &[&str]) -> std::io::Result<T>,
 ) -> std::io::Result<T> {
+    spawn_resolving_pinned(&TOOLCHAIN, root, program, spawn)
+}
+
+/// Where [`spawn_resolving`] asks the toolchain pin: the cheap reading, the
+/// eager repair and the lazy re-ask, as [`crate::pinned`] answers them.
+///
+/// A table of functions rather than direct calls so a case can stand up a pin
+/// that answers each rung as it needs, which a real pin cannot be made to do on
+/// demand: a record that stops answering mid-session is the case both repairs
+/// exist for.
+struct Toolchain {
+    cached: fn(&Path) -> crate::pinned::PinnedFacts,
+    repaired: fn(&Path) -> crate::pinned::PinnedFacts,
+    re_resolved: fn(&Path) -> crate::pinned::PinnedFacts,
+}
+
+/// The pin [`spawn_resolving`] asks outside a case.
+const TOOLCHAIN: Toolchain = Toolchain {
+    cached: crate::pinned::cached,
+    repaired: crate::pinned::repaired,
+    re_resolved: crate::pinned::re_resolved,
+};
+
+/// [`spawn_resolving`] over the pin `toolchain` answers.
+fn spawn_resolving_pinned<T>(
+    toolchain: &Toolchain,
+    root: Option<&Path>,
+    program: &str,
+    spawn: impl FnMut(&str, &[&str]) -> std::io::Result<T>,
+) -> std::io::Result<T> {
     // THE PIN IS READ FIRST, AND ASKED ONLY WHERE THE READING CANNOT ANSWER.
     // `pinned::cached` is a file read with an honest could-not-look, so the
     // ordinary call pays a file read and nothing else.
@@ -12279,14 +12319,14 @@ pub(crate) fn spawn_resolving<T>(
     //
     // Bounded to ONCE PER ROOT PER PROCESS by `pinned::repaired`, and that bound
     // is not an optimisation — see its own doc for what an unbounded repair costs.
-    let read = root.map_or(crate::facts::Look::CouldNotLook, crate::pinned::cached);
+    let read = root.map_or(crate::facts::Look::CouldNotLook, toolchain.cached);
     // Kept as a bool rather than by cloning the set: the retry below asks only
     // whether the CHEAP reading could answer, and a clone here would copy every
     // pinned program's name on the ordinary path to serve one branch that rarely
     // runs.
     let unread = matches!(read, crate::facts::Look::CouldNotLook);
     let pinned = match (&read, root) {
-        (crate::facts::Look::CouldNotLook, Some(root)) => crate::pinned::repaired(root),
+        (crate::facts::Look::CouldNotLook, Some(root)) => (toolchain.repaired)(root),
         _ => read,
     };
     let path = std::env::var_os("PATH");
@@ -12327,7 +12367,7 @@ pub(crate) fn spawn_resolving<T>(
         && unread
         && let Some(root) = root
     {
-        let afresh = crate::pinned::re_resolved(root);
+        let afresh = (toolchain.re_resolved)(root);
         if matches!(&afresh, crate::facts::Look::Is(programs) if programs.contains(program)) {
             return spawn_resolving_on(
                 path.as_deref(),
@@ -18399,6 +18439,94 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A program only the pin provides, named so no `PATH` resolves it.
+    const PIN_ONLY: &str = "batten-pin-only-program";
+
+    /// The pin's answer naming [`PIN_ONLY`].
+    fn pins_it(_: &Path) -> crate::pinned::PinnedFacts {
+        crate::facts::Look::Is(std::iter::once(PIN_ONLY.to_owned()).collect())
+    }
+
+    /// The pin's answer when its record cannot be read.
+    fn unread(_: &Path) -> crate::pinned::PinnedFacts {
+        crate::facts::Look::CouldNotLook
+    }
+
+    /// Every program `spawn_resolving_pinned` tried, under a spawn that only
+    /// the mediator answers.
+    fn attempts_under(toolchain: &Toolchain) -> (bool, Vec<String>) {
+        let mut attempts = Vec::new();
+        let ran =
+            spawn_resolving_pinned(toolchain, Some(Path::new(".")), PIN_ONLY, |program, _| {
+                attempts.push(program.to_owned());
+                if program == crate::pinned::MEDIATOR {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+                }
+            });
+        (ran.is_ok(), attempts)
+    }
+
+    /// A pin record that stopped answering is repaired BEFORE the ladder, so the
+    /// pinned program reaches the mediator on the first spawn (CLOUD-1324).
+    ///
+    /// Fails by: the could-not-look-with-a-root arm dropped, which leaves the
+    /// unread record standing and spawns the bare name first.
+    #[test]
+    fn an_unread_pin_is_repaired_before_the_first_spawn() {
+        let (ran, attempts) = attempts_under(&Toolchain {
+            cached: unread,
+            repaired: pins_it,
+            re_resolved: unread,
+        });
+        assert!(ran, "{attempts:?}");
+        assert_eq!(attempts, [crate::pinned::MEDIATOR], "{attempts:?}");
+    }
+
+    /// A pin that only the LAZY re-ask finds is spawned through the mediator
+    /// once the ladder has failed `NotFound` (CLOUD-1371).
+    ///
+    /// Fails by: the retry taken on any error but `NotFound`, which skips the
+    /// re-ask on exactly the failure it exists for.
+    #[test]
+    fn a_pin_only_the_re_ask_finds_is_spawned_once_the_ladder_fails() {
+        let (ran, attempts) = attempts_under(&Toolchain {
+            cached: unread,
+            repaired: unread,
+            re_resolved: pins_it,
+        });
+        assert!(ran, "{attempts:?}");
+        assert_eq!(
+            attempts.first().map(String::as_str),
+            Some(PIN_ONLY),
+            "{attempts:?}"
+        );
+        assert_eq!(
+            attempts.last().map(String::as_str),
+            Some(crate::pinned::MEDIATOR),
+            "{attempts:?}"
+        );
+    }
+
+    /// An unread pin with no re-ask that finds the program leaves the ladder's
+    /// own `NotFound` standing.
+    #[test]
+    fn a_pin_nothing_finds_leaves_not_found_standing() {
+        let (ran, attempts) = attempts_under(&Toolchain {
+            cached: unread,
+            repaired: unread,
+            re_resolved: unread,
+        });
+        assert!(!ran, "{attempts:?}");
+        assert!(
+            !attempts
+                .iter()
+                .any(|program| program == crate::pinned::MEDIATOR),
+            "{attempts:?}"
+        );
+    }
+
     /// An unparseable `key_shape` is a LOAD error, never a per-call discard.
     ///
     /// The direction is what makes this worth a case: discarded per call, the
@@ -19897,6 +20025,50 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         });
         assert_eq!(taken, Some(vec![(String::from("q"), false)]));
         assert!(plan_facts(&[blank("p", RuleKind::Policy)], &dir).is_none());
+    }
+
+    /// A plan the runner DID take is kept under its id, whatever the runner
+    /// answered for the others.
+    ///
+    /// Fails by: the `Look::Is` arm dropped, which reads every taken plan as
+    /// one nobody could take.
+    #[test]
+    fn a_declared_plan_the_runner_took_is_kept() {
+        let dir = temp_dir("rules-plan-taken");
+        let query = |id: &str| crate::hk::PlanQuery {
+            id: String::from(id),
+            hook: String::from(id),
+            required: Vec::new(),
+            prohibited_profiles: Vec::new(),
+            profile: Vec::new(),
+        };
+        let row = Rule {
+            plan: vec![query("taken"), query("refused")],
+            ..blank("p", RuleKind::Policy)
+        };
+        let planned = |hook: &str| crate::hk::Planned {
+            hook: String::from(hook),
+            run_type: String::from("check"),
+            profiles: Vec::new(),
+            invocation: Vec::new(),
+            tool_version: String::from("1"),
+            contract_digest: None,
+            input_fingerprint: String::new(),
+            required: Vec::new(),
+            prohibited_profiles: Vec::new(),
+            steps: Vec::new(),
+        };
+        let taken = plan_facts_from(&[row], &dir, |_, query| {
+            if query.id == "taken" {
+                crate::facts::Look::Is(planned(&query.hook))
+            } else {
+                crate::facts::Look::IsNot
+            }
+        });
+        let mut expected = BTreeMap::new();
+        expected.insert(String::from("refused"), None);
+        expected.insert(String::from("taken"), Some(planned("taken")));
+        assert_eq!(taken, Some(expected));
     }
 
     /// A declared capture reduction is answered by the capture store's own

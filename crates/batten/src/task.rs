@@ -551,6 +551,17 @@ fn second(stamp: &str) -> Option<u64> {
 //MUTANT alive-deletes-a-corpse|s@^        lines.push(render_line(&entry, running, options.now));$@        lines.push(render_line(\&entry, running, options.now)); if !running { let _ = std::fs::remove_file(\&file); }@|a_record_whose_process_is_gone_reports_crashed_on_every_read
 #[must_use]
 pub fn alive(git_dir: &Path, options: Alive<'_>) -> Reading {
+    alive_reading(git_dir, options, |file| std::fs::read_to_string(file))
+}
+
+/// [`alive`] over an injected record reader: the step between listing an entry
+/// and reading it is where a deregistering task races this one, and only a
+/// reader that loses that race on demand can show the race is answered.
+fn alive_reading(
+    git_dir: &Path,
+    options: Alive<'_>,
+    read: impl Fn(&Path) -> std::io::Result<String>,
+) -> Reading {
     let dir = state_dir(git_dir);
     // Genuine ABSENCE is a real answer — "nothing is running" — and only genuine
     // absence may take this branch. Present-but-unreadable is the other one.
@@ -587,7 +598,7 @@ pub fn alive(git_dir: &Path, options: Alive<'_>) -> Reading {
         // every entry later in sort order, which is the same conflation running
         // the other way: the fix above must not buy its direction by inventing a
         // failure the tree does not have.
-        let body = match std::fs::read_to_string(&file) {
+        let body = match read(&file) {
             Ok(body) => body,
             Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => continue,
             Err(_) => return Reading::Unreadable(file.clone()),
@@ -845,6 +856,19 @@ pub fn singleton_acquire_at(
     recheck: std::time::Duration,
     attempts: usize,
 ) -> Claim {
+    acquire_pausing(lock, pid, recheck, attempts, PAUSE)
+}
+
+/// [`singleton_acquire_at`] over an injected pause, so a case can move the lock
+/// BETWEEN the two sightings, which is the interleaving every reclaim decision
+/// is about and one no real pause can be made to produce on demand.
+fn acquire_pausing(
+    lock: &Path,
+    pid: &str,
+    recheck: std::time::Duration,
+    attempts: usize,
+    mut pause: impl FnMut(std::time::Duration),
+) -> Claim {
     // A lock with no parent is not a lock: could-not-look, never "free".
     let Some(parent) = lock.parent() else {
         return Claim::CouldNotLook(lock.to_path_buf());
@@ -889,7 +913,7 @@ pub fn singleton_acquire_at(
         // one sighting. The bound is `--recheck-ms`, a single pause the caller
         // declares, and the interval IS the safety margin rather than a guess at how
         // long something takes.
-        sleep_once(recheck);
+        pause(recheck);
         if may_reclaim(holder.as_deref(), holder_of(lock).as_deref())
             && std::fs::remove_dir_all(lock).is_ok()
             && take(lock, pid)
@@ -929,13 +953,14 @@ pub fn singleton_acquire_at(
 /// between two asks for a lock somebody else holds. Neither is a poll standing
 /// in for an exit condition (CLOUD-1177) — the bound is `attempts`, a count the
 /// caller declares, exactly as `land` bounds its laps.
-fn sleep_once(interval: std::time::Duration) {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the module's one declared pause: it separates the two sightings a reclaim requires AND the two asks a queue makes, bounded by `attempts` rather than by a clock, so it is neither a poll nor a timer standing in for an exit condition"
-    )]
-    std::thread::sleep(interval);
-}
+///
+/// The thread's own sleep, named rather than wrapped: a wrapper's body is one
+/// call, so a mutant emptying it is a pause no case can tell from the real one.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the module's one declared pause: it separates the two sightings a reclaim requires AND the two asks a queue makes, bounded by `attempts` rather than by a clock, so it is neither a poll nor a timer standing in for an exit condition"
+)]
+const PAUSE: fn(std::time::Duration) = std::thread::sleep;
 
 /// Drop a lock at an explicit path, whether or not it was ever taken.
 pub fn singleton_release_at(lock: &Path) {
@@ -1530,6 +1555,55 @@ mod tests {
             matches!(&queued, Claim::Held { holder, .. } if *holder == own),
             "{queued:?}"
         );
+    }
+
+    /// Fails by: an entry deregistered between the listing and the read taken
+    /// for an unreadable registry, which hides every later entry behind a
+    /// failure the tree does not have.
+    #[test]
+    fn an_entry_gone_before_its_read_is_skipped() {
+        let dir = registry("alive-race");
+        register(&dir, "gone", NO_SUCH_PID, "stuck", 100);
+        register(&dir, "kept", &std::process::id().to_string(), "stuck", 100);
+        let options = Alive {
+            program_root: "",
+            now: 160,
+        };
+        let raced = alive_reading(&dir, options, |file| {
+            let body = std::fs::read_to_string(file)?;
+            if body.contains("gone") {
+                Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+            } else {
+                Ok(body)
+            }
+        });
+        let Reading::Lines(lines) = raced else {
+            panic!("the surviving entry reads: {raced:?}");
+        };
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].starts_with("kept "), "{lines:?}");
+    }
+
+    /// Fails by: a lock its live holder released DURING the pause reported as
+    /// reclaimed from that holder, rather than taken fresh on the next ask; or
+    /// the pause asked for any interval but the recheck.
+    #[test]
+    fn a_lock_released_between_the_sightings_is_taken_not_reclaimed() {
+        let dir = registry("singleton-released");
+        let lock = singleton_lock(&dir, "released");
+        let own = std::process::id().to_string();
+        assert!(matches!(
+            singleton_acquire_at(&lock, &own, std::time::Duration::ZERO, 1),
+            Claim::Taken
+        ));
+        let recheck = std::time::Duration::from_millis(7);
+        let mut paused = Vec::new();
+        let claim = acquire_pausing(&lock, "999", recheck, 2, |interval| {
+            paused.push(interval);
+            singleton_release_at(&lock);
+        });
+        assert!(matches!(claim, Claim::Taken), "{claim:?}");
+        assert_eq!(paused, [recheck], "one pause, of the recheck");
     }
 
     #[test]

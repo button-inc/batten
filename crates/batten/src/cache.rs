@@ -98,7 +98,7 @@ pub fn root_under(parent: &Path) -> Option<PathBuf> {
     if let Ok(meta) = std::fs::metadata(&mark)
         && meta.is_file()
     {
-        refresh_use(&own, &meta);
+        refresh_use(&own, &meta, std::time::SystemTime::now());
         return Some(own);
     }
     std::fs::create_dir_all(&own).ok()?;
@@ -133,14 +133,16 @@ const USE_REFRESH: std::time::Duration = std::time::Duration::from_mins(1);
 /// once no supported release ranks by the directory.
 //MUTANT partition-use-never-refreshed|s@^    if stale {$@    if false {@|a_partition_in_use_is_refreshed_and_survives_the_prune
 //MUTANT partition-directory-never-refreshed|s@^        let _ = touch(own, now);$@@|a_refresh_moves_the_partition_directory_too
-fn refresh_use(own: &Path, meta: &std::fs::Metadata) {
+///
+/// `now` is the caller's, so the bound itself is a case: a mark exactly one
+/// [`USE_REFRESH`] old is not yet stale.
+fn refresh_use(own: &Path, meta: &std::fs::Metadata, now: std::time::SystemTime) {
     let stale = meta
         .modified()
         .ok()
-        .and_then(|modified| modified.elapsed().ok())
+        .and_then(|modified| now.duration_since(modified).ok())
         .is_some_and(|age| age > USE_REFRESH);
     if stale {
-        let now = std::time::SystemTime::now();
         let _ = touch(&own.join(USE_MARK), now);
         let _ = touch(own, now);
     }
@@ -847,6 +849,27 @@ mod tests {
             .and_then(|meta| meta.modified())
             .expect("the directory's time");
         assert!(moved > stepped(1), "the directory reads as just used");
+    }
+
+    /// A mark exactly [`USE_REFRESH`] old is not yet stale, and one a second
+    /// older is: the bound is exclusive.
+    #[test]
+    fn a_mark_at_the_refresh_bound_is_left_alone() {
+        let dir = scratch("partition-bound");
+        let own = root_under(&dir).expect("own partition");
+        let mark = own.join(USE_MARK);
+        touch(&mark, stepped(1)).expect("age the mark");
+        let read = |path: &Path| {
+            std::fs::metadata(path)
+                .and_then(|meta| meta.modified())
+                .expect("the mark's time")
+        };
+        let meta = std::fs::metadata(&mark).expect("the mark");
+        refresh_use(&own, &meta, stepped(1) + USE_REFRESH);
+        assert_eq!(read(&mark), stepped(1), "at the bound, untouched");
+        let later = stepped(1) + USE_REFRESH + std::time::Duration::from_secs(1);
+        refresh_use(&own, &meta, later);
+        assert_eq!(read(&mark), later, "past it, refreshed to the caller's now");
     }
 
     /// `count` partition names, none of them this binary's.
