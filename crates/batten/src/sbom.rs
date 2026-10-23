@@ -107,7 +107,7 @@ pub struct Options {
 //MUTANT sbom-drift-reads-stable|s@^        stable_form.&spdx_one. == stable_form.&spdx_two.,$@        true,@|two_scans_that_differ_record_an_unstable_inventory
 //MUTANT-SUITE crates/batten/tests/it/sbom_binary.rs
 //MUTANT sbom-binary-counts-every-artifact|s@^    text.artifact, "type". == "rust-crate"$@    true@|the_count_is_filtered_to_rust_crate_so_a_self_artifact_cannot_pad_it
-//MUTANT sbom-binary-stale-record-survives|s@^                    Mode::Binary . .. . => crate::record::clear_named.VERB, BINARY_FAMILY..,$@                    Mode::Binary { .. } => {}@|a_scan_that_cannot_look_removes_the_previous_record
+//MUTANT sbom-binary-stale-record-survives|s@^        Mode::Binary . .. . => Some.BINARY_FAMILY.,$@        Mode::Binary { .. } => None,@|a_scan_that_cannot_look_removes_the_previous_record
 //MUTANT-SUITE crates/batten/tests/it/ntia.rs
 //MUTANT conformance-exit-code-dropped|s@^        let code = spawn_code@        let code = 0 * spawn_code@|a_nonconformant_document_fails
 // The five `[sbom]` keys that decide, as `config lint --config-from` compares

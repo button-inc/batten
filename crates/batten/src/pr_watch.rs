@@ -508,7 +508,7 @@ pub fn watch(
         roster,
         &Pacing {
             read: &read,
-            pause: &|seconds| pause_until(seconds, &std::sync::atomic::AtomicBool::new(false)),
+            pause: &pause,
         },
         out,
         err,
@@ -857,6 +857,16 @@ fn record(progress: &Progress, signal: &str, value: &str) {
     );
 }
 
+/// The wait between requests, with nothing to stop it: [`pause_until`] over a
+/// flag nobody raises, which sleeps the identical total.
+///
+/// PUBLIC FOR THE SAME REASON [`read`] IS (CLOUD-1338): a caller driving one
+/// poll at a time needs the interval the server asked for, and re-deriving the
+/// pause at the call site would put a second clock in the crate.
+pub fn pause(seconds: f64) {
+    pause_until(seconds, &std::sync::atomic::AtomicBool::new(false));
+}
+
 /// The longest a raced arm sleeps before it re-reads the stop flag.
 ///
 /// Not a second interval — the wait is still the server's, and this only bounds
@@ -864,16 +874,8 @@ fn record(progress: &Progress, signal: &str, value: &str) {
 /// cadence, so an arm that is NOT stopped behaves exactly as it did.
 const STOP_CHECK_SLICE: f64 = 1.0;
 
-/// The wait between requests, abandoned early when `stop` is raised. A real
-/// sleep, and the only clock in the crate.
-///
-/// PUBLIC FOR THE SAME REASON [`read`] IS (CLOUD-1338): a caller driving one
-/// poll at a time needs the interval the server asked for, and re-deriving the
-/// pause at the call site would put a second clock in the crate — the one thing
-/// `clippy.toml`'s timer ban exists to keep out. Named for a pause rather than
-/// a sleep on the public surface because what a caller is asking for is the
-/// interval BETWEEN asks, not a duration of its own choosing. A caller with
-/// nothing to stop it passes a flag nobody raises; the total is the same.
+/// [`pause`], abandoned early when `stop` is raised. A real sleep, and the
+/// only clock in the crate.
 ///
 /// **THE LOSER OF A RACE HELD THE WHOLE WAIT** (review of #848). Both arms of
 /// `land::wait` check their stop flag at the top of the loop and then sleep the
@@ -984,6 +986,23 @@ mod tests {
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         finished.recv().expect("the raised flag ends the pause");
         waiter.join().expect("the waiter exits");
+    }
+
+    /// The unstoppable pause holds its thread too. Nothing can end it, so the
+    /// waiter is left to the process's exit rather than joined.
+    #[test]
+    fn a_pause_with_no_flag_holds_its_thread() {
+        let (done, finished) = std::sync::mpsc::channel();
+        drop(std::thread::spawn(move || {
+            pause(600.0);
+            let _ = done.send(());
+        }));
+        assert!(
+            finished
+                .recv_timeout(std::time::Duration::from_millis(300))
+                .is_err(),
+            "a pause of ten minutes let its thread go at once"
+        );
     }
 
     fn config_for(repo: &str) -> Config {

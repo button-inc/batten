@@ -1932,12 +1932,13 @@ pub fn verify(
 ///
 /// The `tee` is `ExecConfig::DEFAULT`'s, inherited rather than restated, since
 /// a restated default is a field whose deletion changes nothing (CLOUD-2509);
-/// `verify_settings_manage_the_group_and_store_the_output` pins it here, so a
-/// default flipped for another caller cannot stream a gate log into the lap.
+/// the assertion below pins it at compile time, so a default flipped for
+/// another caller cannot stream a gate log into the lap.
 const VERIFY_SETTINGS: crate::exec::ExecConfig = crate::exec::ExecConfig {
     manage_process_group: true,
     ..crate::exec::ExecConfig::DEFAULT
 };
+const _: () = assert!(VERIFY_SETTINGS.manage_process_group && !VERIFY_SETTINGS.tee);
 
 /// What a gate that RAN said about `head`: its exit code first, then the
 /// declared patterns its output matched.
@@ -4393,12 +4394,6 @@ mod forge_tests {
             watching("land-watch-none", &[BASE], false),
             (None, Vec::new())
         );
-    }
-
-    #[test]
-    fn verify_settings_manage_the_group_and_store_the_output() {
-        assert!(VERIFY_SETTINGS.manage_process_group);
-        assert!(!VERIFY_SETTINGS.tee);
     }
 
     #[test]

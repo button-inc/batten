@@ -755,16 +755,25 @@ fn trunk(here: &std::path::Path) -> Result<(String, String), String> {
 }
 
 /// `batten release discard <tag>`: a draft and its tag deleted, nothing
-/// deleted for no release, a published release refused. `here` is the clone
-/// whose forge remote names the repository.
-///
-/// The deletions are [`perform_discard`]'s, the one loop `cut` shares, rather
-/// than a second copy of it (CLOUD-2509).
+/// deleted for no release, a published release refused.
 ///
 /// # Errors
 ///
 /// Only a failed write to `out` or `err`.
 pub fn run_discard(
+    tag: &str,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::ExitCode> {
+    run_discard_in(std::path::Path::new("."), tag, out, err)
+}
+
+/// [`run_discard`] in the clone at `here`, whose forge remote names the
+/// repository.
+///
+/// The deletions are [`perform_discard`]'s, the one loop `cut` shares, rather
+/// than a second copy of it (CLOUD-2509).
+fn run_discard_in(
     here: &std::path::Path,
     tag: &str,
     out: &mut dyn std::io::Write,
@@ -1222,6 +1231,17 @@ fn perform_discard(slug: &str, tag: &str, get: Get<'_>) -> Result<Result<usize, 
 ///
 /// Only a failed write to `out` or `err`.
 pub fn run_cut(
+    tag: &str,
+    sha: &str,
+    files: (&str, &str, Option<&str>),
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::ExitCode> {
+    run_cut_in(std::path::Path::new("."), (tag, sha), files, out, err)
+}
+
+/// [`run_cut`] in the clone at `here`.
+fn run_cut_in(
     here: &std::path::Path,
     (tag, sha): (&str, &str),
     (changelog, workflow, land_workflow): (&str, &str, Option<&str>),
@@ -1406,9 +1426,19 @@ pub const BOOTSTRAP_FILE: &str = "install.sh";
 ///
 /// Only a failed write to `out` or `err`.
 pub fn run_bake(
-    here: &std::path::Path,
     tag: &str,
-    (sha, branch): (Option<&str>, Option<&str>),
+    onto: (Option<&str>, Option<&str>),
+    write_only: bool,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::ExitCode> {
+    run_bake_in(std::path::Path::new("."), (tag, onto), write_only, out, err)
+}
+
+/// [`run_bake`] in the clone at `here`.
+fn run_bake_in(
+    here: &std::path::Path,
+    (tag, (sha, branch)): (&str, (Option<&str>, Option<&str>)),
     write_only: bool,
     out: &mut dyn std::io::Write,
     err: &mut dyn std::io::Write,
@@ -1681,7 +1711,7 @@ mod tests {
         let run = |fixture: &std::path::Path| {
             let (mut out, mut err) = (Vec::new(), Vec::new());
             let code = crate::rest::with_fixture(fixture, || {
-                run_discard(&dir, "v1", &mut out, &mut err).unwrap()
+                run_discard_in(&dir, "v1", &mut out, &mut err).unwrap()
             });
             (
                 code,
@@ -1839,7 +1869,7 @@ mod tests {
             );
             let (mut out, mut err) = (Vec::new(), Vec::new());
             let code = crate::rest::with_fixture(&fixture, || {
-                run_cut(
+                run_cut_in(
                     &dir,
                     ("v1.0.0", &shas[0]),
                     ("CHANGELOG.md", "ra.yml", None),
@@ -1914,7 +1944,7 @@ mod tests {
         );
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let code = crate::rest::with_fixture(&fixture, || {
-            run_cut(
+            run_cut_in(
                 &dir,
                 ("v1.0.0", &shas[1]),
                 ("CHANGELOG.md", "ra.yml", Some("rl.yml")),
@@ -1949,7 +1979,7 @@ mod tests {
         let fixture = published_with_sums("bake-write", &[]);
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let code = crate::rest::with_fixture(&fixture, || {
-            run_bake(&dir, "v1.0.0", (None, None), true, &mut out, &mut err).unwrap()
+            run_bake_in(&dir, ("v1.0.0", (None, None)), true, &mut out, &mut err).unwrap()
         });
         assert_eq!(code, crate::ExitCode::Success);
         assert_eq!(
@@ -1976,10 +2006,9 @@ mod tests {
         );
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let code = crate::rest::with_fixture(&fixture, || {
-            run_bake(
+            run_bake_in(
                 &dir,
-                "v1.0.0",
-                (Some(head), Some("rel")),
+                ("v1.0.0", (Some(head), Some("rel"))),
                 false,
                 &mut out,
                 &mut err,
