@@ -8320,10 +8320,11 @@ pub fn consumes_a_value(token: &str) -> bool {
                 ValueDecl::Bool | ValueDecl::Count | ValueDecl::Trailing
             )
         })
-        .any(|flag| {
-            flag.long.is_some_and(|long| token == format!("--{long}"))
-                || flag.short.is_some_and(|short| token == format!("-{short}"))
-        })
+        // THE LONG SPELLING ONLY: no value-taking flag declares a short one, so
+        // a short arm here would decide nothing.
+        // `no_value_taking_flag_declares_a_short_spelling` holds that true, and
+        // the flag that first breaks it brings the arm back with it.
+        .any(|flag| flag.long.is_some_and(|long| token == format!("--{long}")))
 }
 
 /// Resolve the declared effect for a full command path.
@@ -9522,6 +9523,26 @@ mod tests {
         assert!(!consumes_a_value("--fail-on-warning"));
         assert!(!consumes_a_value("-J"));
         assert!(!consumes_a_value("check"));
+    }
+
+    #[test]
+    fn no_value_taking_flag_declares_a_short_spelling() {
+        // `consumes_a_value` reads the long spelling alone; a short one on a
+        // value-taking flag would make `-x VALUE` read its value as a token.
+        for decl in std::iter::once(&ROOT).chain(SURFACE) {
+            for flag in decl.flags.iter().filter(|flag| !flag.positional) {
+                let takes_value = !matches!(
+                    flag.value,
+                    ValueDecl::Bool | ValueDecl::Count | ValueDecl::Trailing
+                );
+                assert!(
+                    !(takes_value && flag.short.is_some()),
+                    "{}: -{:?} takes a value; give `consumes_a_value` its short arm back",
+                    decl.path,
+                    flag.short
+                );
+            }
+        }
     }
 
     #[test]

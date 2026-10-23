@@ -741,6 +741,22 @@ mod tests {
     }
 
     #[test]
+    fn an_array_closer_is_searched_for_after_its_opening_line() {
+        // A key spelled `]` opens with a line that itself starts with `]`; a
+        // closer search that began AT the opener would end the array there.
+        let lines = ["] = [", "  \"a | b\",", "]"];
+        assert_eq!(manifest_lines(&lines, &keys(&["]"])), BTreeSet::from([1]));
+    }
+
+    #[test]
+    fn an_array_opening_line_is_never_one_of_its_entries() {
+        // `set` is a shell keyword, so the opener would read as shell syntax if
+        // the entry range began at it rather than after it.
+        let lines = ["set = [", "  \"a | b\",", "]"];
+        assert_eq!(manifest_lines(&lines, &keys(&["set"])), BTreeSet::from([1]));
+    }
+
+    #[test]
     fn a_second_key_is_read_on_the_same_terms() {
         let lines = ["check = \"x && y\"", "fix = \"z\"", "run = \"a | b\""];
         assert_eq!(

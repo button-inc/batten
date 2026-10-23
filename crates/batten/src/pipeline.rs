@@ -38,7 +38,8 @@
 //! The lease's own `expires` is the same idea already done right — a
 //! compensation that needs no live process to perform it, because the passage of
 //! time performs it. Every arm of [`Compensation`] is held to that standard, and
-//! [`Compensation::is_durable`] is where a future arm gets asked.
+//! [`Compensation::owed_on_attempt`]'s exhaustive match is where a future arm
+//! gets asked: it cannot compile until its author has read this.
 //!
 //! # The invariant the schema carries
 //!
@@ -86,29 +87,6 @@ pub enum Compensation {
 }
 
 impl Compensation {
-    /// Whether this undo lands outside the process that performs it.
-    ///
-    /// **The question a new arm must answer**, and the reason it is a method
-    /// rather than a comment: an arm added later gets asked by the compiler
-    /// rather than by a reviewer who remembers this file's header.
-    #[must_use]
-    pub const fn is_durable(self) -> bool {
-        // EVERY VARIANT NAMED, never a wildcard, and that is the mechanism this
-        // method is: `Compensation` is `#[non_exhaustive]`, so an arm added later
-        // fails to compile HERE and its author is asked the question by the
-        // compiler rather than by a reviewer who remembers this file's header.
-        //
-        // `Nothing` answers yes vacuously — there is no effect, so nothing could
-        // fail to survive — and the other three are writes to somebody else's
-        // server or ref. One arm rather than two because clippy is right that the
-        // bodies are identical today; the discrimination this buys is over the
-        // arm nobody has written yet, which is exactly what
-        // `Invalid::NotDurable` is the slot for.
-        match self {
-            Self::Nothing | Self::Redraft | Self::Abandon | Self::ReleaseLease => true,
-        }
-    }
-
     /// Whether this step actually undoes something.
     #[must_use]
     pub const fn undoes_something(self) -> bool {
@@ -141,8 +119,11 @@ impl Compensation {
     /// moment those runs can exist. A consumer who hangs `Abandon` off a
     /// different step inherits the same reading without declaring anything.
     ///
-    /// A `match` rather than a comparison, for [`Self::is_durable`]'s reason: an
-    /// arm nobody has written yet is a compile error rather than a default.
+    /// A `match` rather than a comparison, EVERY VARIANT NAMED: an arm nobody
+    /// has written yet is a compile error HERE rather than a default, and its
+    /// author is asked this module header's question — does the undo land
+    /// outside the process performing it? A durability predicate used to ask
+    /// it at runtime, and answered `true` for every arm it could ever see.
     #[must_use]
     pub const fn owed_on_attempt(self) -> bool {
         match self {
@@ -310,8 +291,6 @@ pub enum Invalid {
     /// The finding a consumer sees when their composition would spend and then
     /// abandon. Pointer-only: the step, never a rendering of the whole list.
     Uncompensated(Step),
-    /// A compensation that would not survive the process performing it.
-    NotDurable(Step),
     /// The commit point is missing, so nothing can ever land.
     NoCommitPoint,
     /// The commit point is not last, so a step would run after the irreversible
@@ -369,9 +348,6 @@ impl Pipeline {
         for row in &self.steps[..commit_at] {
             if row.effectful && !row.compensate.undoes_something() {
                 found.push(Invalid::Uncompensated(row.step));
-            }
-            if !row.compensate.is_durable() {
-                found.push(Invalid::NotDurable(row.step));
             }
         }
         found
@@ -923,23 +899,5 @@ mod tests {
             }],
         };
         assert!(pipeline.unwind(&[Step::Ready]).is_empty());
-    }
-
-    /// Every compensation this crate ships lands outside the process performing
-    /// it, which is the property the whole design rests on.
-    #[test]
-    fn every_shipped_compensation_is_durable() {
-        for compensation in [
-            Compensation::Nothing,
-            Compensation::Redraft,
-            Compensation::Abandon,
-            Compensation::ReleaseLease,
-        ] {
-            assert!(
-                compensation.is_durable(),
-                "{compensation:?} would not survive the container being killed, \
-                 which is the one case compensation exists for"
-            );
-        }
     }
 }

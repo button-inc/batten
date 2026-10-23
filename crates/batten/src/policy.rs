@@ -1559,10 +1559,9 @@ fn collect_strings(
                     }
                 }
             }
-            // Undefined is the ordinary shape of a package that has no rule of
-            // this name at all, which is entirely valid — an empty contribution,
-            // not an unreadable one.
-            regorus::Value::Undefined => {}
+            // NO `Undefined` ARM: a package with no rule of this name is ABSENT
+            // from both answers (`package_members` finds no member, and both
+            // evaluators drop an undefined entry), so the arm had no input.
             _ => return None,
         }
     }
@@ -1607,7 +1606,6 @@ fn collect_string_list(
                     }
                 }
             }
-            regorus::Value::Undefined => {}
             _ => return None,
         }
     }
@@ -1635,7 +1633,6 @@ fn collect_violations(answer: &Answer, packages: &BTreeSet<Vec<String>>) -> Opti
         let items: Vec<&regorus::Value> = match value {
             regorus::Value::Set(items) => items.iter().collect(),
             regorus::Value::Array(items) => items.iter().collect(),
-            regorus::Value::Undefined => continue,
             _ => return None,
         };
         for item in items {
@@ -2489,7 +2486,6 @@ pub fn rewrite(bundle: &Bundle, input: &str) -> Look<Vec<Rewrite>> {
         let items: Vec<regorus::Value> = match value {
             regorus::Value::Set(items) => items.iter().cloned().collect(),
             regorus::Value::Array(items) => items.iter().cloned().collect(),
-            regorus::Value::Undefined => continue,
             _ => return Look::CouldNotLook,
         };
         for item in items {

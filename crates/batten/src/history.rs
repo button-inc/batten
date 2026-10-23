@@ -89,8 +89,7 @@ pub fn rows(text: &str) -> Vec<Row> {
     }
     let mut rows: Vec<Row> = Vec::new();
     let mut kinds: Vec<Option<&'static str>> = Vec::new();
-    let mut last_content_end = 0;
-    for (index, &(offset, line)) in lines.iter().enumerate() {
+    for (index, &(_, line)) in lines.iter().enumerate() {
         let trimmed = line.trim();
         if trimmed.starts_with('[') {
             let header = trimmed.split('#').next().unwrap_or(trimmed).trim();
@@ -99,7 +98,7 @@ pub fn rows(text: &str) -> Vec<Row> {
                 opened => {
                     // THE COMMENT BLOCK ABOVE A HEADER IS THE ROW'S OWN: it starts
                     // after the last content line before the header.
-                    let start = comment_start(&lines, index, last_content_end);
+                    let start = comment_start(&lines, index);
                     if let Some(previous) = rows.last_mut() {
                         previous.end = start;
                     }
@@ -119,9 +118,6 @@ pub fn rows(text: &str) -> Vec<Row> {
                 }
             }
         }
-        if !trimmed.is_empty() && !trimmed.starts_with('#') {
-            last_content_end = offset + line.len();
-        }
     }
     if rows.first().is_none_or(|first| first.start > 0) {
         let end = rows.first().map_or(text.len(), |first| first.start);
@@ -138,10 +134,13 @@ pub fn rows(text: &str) -> Vec<Row> {
 }
 
 /// The first byte of the comment block directly above line `index`.
-fn comment_start(lines: &[(usize, &str)], index: usize, floor: usize) -> usize {
+///
+/// No floor at the last content line: the walk stops at the first line that is
+/// not a comment, and every content line, blank and header is such a line.
+fn comment_start(lines: &[(usize, &str)], index: usize) -> usize {
     let mut start = lines[index].0;
     for &(offset, line) in lines[..index].iter().rev() {
-        if offset < floor || !line.trim().starts_with('#') {
+        if !line.trim().starts_with('#') {
             break;
         }
         start = offset;
