@@ -26550,7 +26550,8 @@ fn run_release_verify(
 
 /// Whether the forge positively sighted that no release carries `tag`
 /// (CLOUD-2518): `release_state::read_found`'s `Found::Absent`, the tag read
-/// 404 and an answered list without it.
+/// 404 and an answered list without it. A function of its own so the guard
+/// that asks it fits the one line its `//MUTANT` rows rewrite.
 fn uncut(slug: &str, tag: &str, get: release::Get<'_>) -> bool {
     release_state::read_found(slug, tag, get) == Ok(release_state::Found::Absent)
 }

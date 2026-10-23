@@ -482,24 +482,31 @@ fn pinned_repo(name: &str) -> std::path::PathBuf {
     )
 }
 
-/// A RELEASE NOT CUT YET IS REFUSED, NEVER COULD-NOT-LOOK (CLOUD-2518): both
-/// reads answered, so its absence is a measurement and the verb exits 2.
-#[test]
-fn an_uncut_release_is_refused_not_could_not_look() {
-    let repo = pinned_repo("release-verify-uncut");
-    let forge = uncut_forge("release-verify-uncut-forge", &[]);
+/// The refusal `release verify` prints for the uncut tag `verify_uncut` asks.
+const ABSENT: &str = "no release is tagged v9.9.9";
+
+/// `release verify v9.9.9 <flags>` against `uncut_forge(.., extra)`: its exit
+/// code and its stderr.
+fn verify_uncut(name: &str, extra: &[(&str, &str, &str)], flags: &[&str]) -> (Option<i32>, String) {
+    let repo = pinned_repo(name);
+    let forge = uncut_forge(&format!("{name}-forge"), extra);
     let output = common::batten()
         .current_dir(&repo)
         .env("BATTEN_REST_FIXTURE", &forge)
         .args(["release", "verify", "v9.9.9"])
+        .args(flags)
         .output()
         .expect("run release verify");
-    assert_eq!(output.status.code(), Some(2), "{}", common::stderr(&output));
-    assert!(
-        common::stderr(&output).contains("no release is tagged v9.9.9"),
-        "{}",
-        common::stderr(&output)
-    );
+    (output.status.code(), common::stderr(&output))
+}
+
+/// A RELEASE NOT CUT YET IS REFUSED, NEVER COULD-NOT-LOOK (CLOUD-2518): both
+/// reads answered, so its absence is a measurement and the verb exits 2.
+#[test]
+fn an_uncut_release_is_refused_not_could_not_look() {
+    let (code, stderr) = verify_uncut("release-verify-uncut", &[], &[]);
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains(ABSENT), "{stderr}");
 }
 
 /// A DRAFT `land-state` SAW IS NEVER REFUSED AS ABSENT (CLOUD-2518). Its
@@ -507,20 +514,9 @@ fn an_uncut_release_is_refused_not_could_not_look() {
 /// so `--draft` keeps could-not-look and the land retries.
 #[test]
 fn an_uncut_draft_stays_could_not_look() {
-    let repo = pinned_repo("release-verify-uncut-draft");
-    let forge = uncut_forge("release-verify-uncut-draft-forge", &[]);
-    let output = common::batten()
-        .current_dir(&repo)
-        .env("BATTEN_REST_FIXTURE", &forge)
-        .args(["release", "verify", "v9.9.9", "--draft"])
-        .output()
-        .expect("run release verify --draft");
-    assert_eq!(output.status.code(), Some(3), "{}", common::stderr(&output));
-    assert!(
-        !common::stderr(&output).contains("no release is tagged"),
-        "{}",
-        common::stderr(&output)
-    );
+    let (code, stderr) = verify_uncut("release-verify-uncut-draft", &[], &["--draft"]);
+    assert_eq!(code, Some(3), "{stderr}");
+    assert!(!stderr.contains(ABSENT), "{stderr}");
 }
 
 /// ONLY A SIGHTING OF ABSENCE IS A REFUSAL (CLOUD-2518). A tag read the forge
@@ -528,27 +524,14 @@ fn an_uncut_draft_stays_could_not_look() {
 /// stays could-not-look and exits 3, whatever the list says.
 #[test]
 fn a_tag_read_that_failed_otherwise_stays_could_not_look() {
-    let repo = pinned_repo("release-verify-tag-500");
-    let forge = uncut_forge(
-        "release-verify-tag-500-forge",
-        &[(
-            "/releases/tags/",
-            "broken",
-            "HTTP/2 500\ncontent-type: application/json\n\n{\"message\":\"no\"}\n",
-        )],
+    let broken = (
+        "/releases/tags/",
+        "broken",
+        "HTTP/2 500\ncontent-type: application/json\n\n{\"message\":\"no\"}\n",
     );
-    let output = common::batten()
-        .current_dir(&repo)
-        .env("BATTEN_REST_FIXTURE", &forge)
-        .args(["release", "verify", "v9.9.9"])
-        .output()
-        .expect("run release verify");
-    assert_eq!(output.status.code(), Some(3), "{}", common::stderr(&output));
-    assert!(
-        !common::stderr(&output).contains("no release is tagged"),
-        "{}",
-        common::stderr(&output)
-    );
+    let (code, stderr) = verify_uncut("release-verify-tag-500", &[broken], &[]);
+    assert_eq!(code, Some(3), "{stderr}");
+    assert!(!stderr.contains(ABSENT), "{stderr}");
 }
 
 /// THE RELEASE PR'S PRE-CUT HEAD (CLOUD-2518). Its pin names the release its
