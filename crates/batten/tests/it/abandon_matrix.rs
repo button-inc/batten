@@ -128,10 +128,10 @@ fn an_empty_declaration_would_doom_the_fan_in_which_is_why_abandon_refuses_first
 
     // AND THE CALLER IS WHAT STOPS IT. `abandon` returns an empty report without
     // reading the forge at all when the declaration is unset — no request, no
-    // cancellation, no guess. A default report is three zeroes, which is what a
+    // cancellation, no guess. That report is three zeroes, which is what a
     // reader sees on the lap's own line.
     assert_eq!(
-        Abandoned::default(),
+        Abandoned::NONE,
         Abandoned {
             cancelled: 0,
             spared: 0,

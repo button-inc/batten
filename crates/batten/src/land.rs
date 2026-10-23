@@ -3539,7 +3539,11 @@ pub struct Spending {
 }
 
 /// What one abandon pass did. Counts, never a log line from a cancelled run.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+///
+/// **NO `Default`, DELIBERATELY** (CLOUD-2509): [`abandon`] reaches the forge and
+/// no case can drive it, so a pass that answers "did nothing" in its place must
+/// not type-check. [`Abandoned::NONE`] is that answer, spelled where it is meant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Abandoned {
     /// Runs this pass asked the forge to stop.
     pub cancelled: u32,
@@ -3547,6 +3551,15 @@ pub struct Abandoned {
     pub spared: u32,
     /// Cancellations the forge refused. Not a stop: those minutes bill out.
     pub refused: u32,
+}
+
+impl Abandoned {
+    /// A pass that cancelled, spared and was refused nothing.
+    pub const NONE: Self = Self {
+        cancelled: 0,
+        spared: 0,
+        refused: 0,
+    };
 }
 
 /// The fan-in's WORKFLOW PATH, which is not its check name.
@@ -3651,8 +3664,8 @@ pub fn spending(repo: &str, sha: &str) -> Option<Vec<Spending>> {
     )
 }
 
-/// The forge as [`abandon`] reaches it: the runs still spending on a head, and
-/// one cancellation.
+/// The forge as [`abandon_with`] reaches it: the runs still spending on a head,
+/// and one cancellation.
 pub type Forge = (
     fn(&str, &str) -> Option<Vec<Spending>>,
     fn(&str) -> crate::rest::Posted,
@@ -3667,12 +3680,16 @@ pub type Forge = (
 /// **NOT "cancelling somebody else's runs".** A head sha is one no other branch
 /// has, so the blast radius is one push's worth of runs by construction rather
 /// than by filtering — the same argument the lease guard's own cancel carries.
-///
-/// **THE FORGE IS HANDED IN** ([`spending`] and [`crate::rest::post`] in the one
-/// caller): which runs are cancelled, spared and refused is the counting this
-/// tests, and no forge a test can reach answers a cancellation on demand.
 #[must_use]
-pub fn abandon(repo: &str, sha: &str, fanin: &FanIn, (spent, post): Forge) -> Abandoned {
+pub fn abandon(repo: &str, sha: &str, fanin: &FanIn) -> Abandoned {
+    abandon_with(repo, sha, fanin, (spending, crate::rest::post))
+}
+
+/// [`abandon`] over a forge handed in: which runs are cancelled, spared and
+/// refused is the counting the suite tests, and no forge a test can reach
+/// answers a cancellation on demand.
+#[must_use]
+pub fn abandon_with(repo: &str, sha: &str, fanin: &FanIn, (spent, post): Forge) -> Abandoned {
     // AN UNSET FAN-IN CANCELS NOTHING RATHER THAN GUESSING, and this is the
     // guard whose absence would have been worst: with no name to spare, EVERY
     // run is doomed — including the one carrying the fan-in, whose cancelled
@@ -3680,15 +3697,15 @@ pub fn abandon(repo: &str, sha: &str, fanin: &FanIn, (spent, post): Forge) -> Ab
     // refuses to run at all without the declaration for exactly this reason, and
     // the first port of this dropped the arm.
     if !fanin.declared() {
-        return Abandoned::default();
+        return Abandoned::NONE;
     }
     let Some(in_flight) = spent(repo, sha) else {
-        return Abandoned::default();
+        return Abandoned::NONE;
     };
     let (doomed, spared) = worthless(&in_flight, fanin);
     let mut report = Abandoned {
         spared,
-        ..Abandoned::default()
+        ..Abandoned::NONE
     };
     for run in doomed {
         if matches!(
@@ -5530,7 +5547,7 @@ mod tests {
         };
         let declared = FanIn::from_workflow_path("the-fan-in.yml");
         assert_eq!(
-            abandon("o/r", "abc", &declared, (three, first_only)),
+            abandon_with("o/r", "abc", &declared, (three, first_only)),
             Abandoned {
                 cancelled: 1,
                 spared: 1,
@@ -5538,13 +5555,13 @@ mod tests {
             }
         );
         assert_eq!(
-            abandon(
+            abandon_with(
                 "o/r",
                 "abc",
                 &FanIn::from_workflow_path(""),
                 (three, first_only)
             ),
-            Abandoned::default(),
+            Abandoned::NONE,
             "an undeclared fan-in cancels nothing"
         );
     }
