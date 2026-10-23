@@ -2149,12 +2149,12 @@ pub fn verify_raced(
         }
         drop(scope.spawn(move || {
             let elapsed = || started.elapsed();
-            let watcher = Watcher {
+            let seam = Watcher {
                 read: &crate::main_watch::read,
                 elapsed: &elapsed,
                 pause: &crate::pr_watch::pause_until,
             };
-            watch_arm(owner, watched.as_ref(), &watcher, &arms);
+            watch_arm(owner, watched.as_ref(), &seam, &arms);
         }));
 
         drop(tx);
@@ -2457,7 +2457,7 @@ struct Watcher<'a> {
 fn watch_arm(
     root: &Path,
     watched: Option<&(&crate::main_watch::Config, String)>,
-    watcher: &Watcher<'_>,
+    seam: &Watcher<'_>,
     arms: &Arms<'_>,
 ) {
     let mut poll = crate::main_watch::Poll::default();
@@ -2467,8 +2467,8 @@ fn watch_arm(
     while !arms.stop.load(std::sync::atomic::Ordering::Relaxed) {
         let mut pause = f64::INFINITY;
         if let Some((trunk, replayed_onto)) = watched {
-            if (watcher.elapsed)() >= next_poll {
-                let answer = (watcher.read)(trunk, poll.etag());
+            if (seam.elapsed)() >= next_poll {
+                let answer = (seam.read)(trunk, poll.etag());
                 let interval = poll.absorb(answer.as_ref(), trunk.interval);
                 if let Some(base) = poll.moved(replayed_onto) {
                     // THE KILL IS THE POINT. Without it this arm wins the race
@@ -2490,14 +2490,14 @@ fn watch_arm(
                 } else {
                     0.0
                 };
-                next_poll = (watcher.elapsed)() + std::time::Duration::from_secs_f64(interval);
+                next_poll = (seam.elapsed)() + std::time::Duration::from_secs_f64(interval);
             }
-            pause = next_poll.saturating_sub((watcher.elapsed)()).as_secs_f64();
+            pause = next_poll.saturating_sub((seam.elapsed)()).as_secs_f64();
         }
         if !pause.is_finite() {
             return;
         }
-        (watcher.pause)(pause, arms.stop);
+        (seam.pause)(pause, arms.stop);
     }
 }
 

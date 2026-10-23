@@ -1866,21 +1866,22 @@ mod tests {
 
     /// A release whose `SHA256SUMS` lists every bootstrap archive of `tag`.
     fn sums_of(tag: &str) -> String {
-        crate::install::TARGETS
-            .iter()
-            .map(|target| {
-                format!(
-                    "{}  {}{}\n",
-                    "a".repeat(64),
-                    crate::dist::archive_stem(
-                        env!("CARGO_PKG_NAME"),
-                        tag.trim_start_matches('v'),
-                        target
-                    ),
-                    crate::dist::archive_ext(target)
-                )
-            })
-            .collect()
+        use std::fmt::Write as _;
+        let mut sums = String::new();
+        for target in crate::install::TARGETS {
+            let stem = crate::dist::archive_stem(
+                env!("CARGO_PKG_NAME"),
+                tag.trim_start_matches('v'),
+                target,
+            );
+            let _ = writeln!(
+                sums,
+                "{}  {stem}{}",
+                "a".repeat(64),
+                crate::dist::archive_ext(target)
+            );
+        }
+        sums
     }
 
     #[test]

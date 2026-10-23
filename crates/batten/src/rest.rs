@@ -851,13 +851,14 @@ pub fn fixture_get(dir: &std::path::Path, path: &str) -> Option<Answer> {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 pub(crate) fn routed(case: &str, routes: &[(&str, u16, &str)]) -> std::path::PathBuf {
+    use std::fmt::Write as _;
     let dir = crate::scratch::scratch(case);
     let mut table = String::new();
     for (n, (needle, status, body)) in routes.iter().enumerate() {
         let file = format!("route.{n}");
         std::fs::write(dir.join(&file), format!("HTTP/1.1 {status} X\n\n{body}"))
             .expect("a scratch dir takes a fixture");
-        table += &format!("{needle}\t{file}\n");
+        let _ = writeln!(table, "{needle}\t{file}");
     }
     std::fs::write(dir.join("routes"), table).expect("a scratch dir takes a fixture");
     dir
@@ -1502,7 +1503,7 @@ mod tests {
         assert_eq!(uncarried, None);
         assert_eq!(scoped(), None);
         assert_eq!(
-            with_fixture(&dir, || download("repos/o/r")).map(|(status, body)| (status, body)),
+            with_fixture(&dir, || download("repos/o/r")),
             Some((200, b"scoped".to_vec()))
         );
     }

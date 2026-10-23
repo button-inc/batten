@@ -2200,17 +2200,17 @@ mod tests {
             .write_blob(b"elsewhere")
             .unwrap_or_else(|err| panic!("blob: {err}"))
             .detach();
-        let refused = materialise(
+        let refused = match materialise(
             &repo,
             &mut pipeline,
             &dir,
             b"occupied",
             destination,
             gix::index::entry::Mode::SYMLINK,
-        )
-        .map(|_| ())
-        .expect_err("a non-empty directory does not unlink")
-        .to_string();
+        ) {
+            Ok(_) => panic!("a non-empty directory does not unlink"),
+            Err(err) => err.to_string(),
+        };
         assert!(refused.starts_with("gitwrite: occupied: "), "{refused}");
         assert!(!refused.contains("will not link"), "{refused}");
     }

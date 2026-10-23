@@ -875,7 +875,6 @@ const STOP_CHECK_SLICE: f64 = 1.0;
 /// interval BETWEEN asks, not a duration of its own choosing. A caller with
 /// nothing to stop it passes a flag nobody raises; the total is the same.
 ///
-
 /// **THE LOSER OF A RACE HELD THE WHOLE WAIT** (review of #848). Both arms of
 /// `land::wait` check their stop flag at the top of the loop and then sleep the
 /// full interval, and `thread::scope` joins them before the verdict can be acted
@@ -887,7 +886,7 @@ const STOP_CHECK_SLICE: f64 = 1.0;
 ///
 /// **One clock still, which is the constraint that shapes this.** `clippy.toml`
 /// bans timers precisely so a second arm cannot grow one, and the crate's single
-/// exemption lives on [`sleep`] below. So this does not add a wait — it serves
+/// exemption lives on the sleep below. So this does not add a wait — it serves
 /// the same one in slices, checking between them. An arm that is never stopped
 /// sleeps the identical total.
 pub fn pause_until(seconds: f64, stop: &std::sync::atomic::AtomicBool) {
