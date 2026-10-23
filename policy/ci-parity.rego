@@ -63,6 +63,8 @@
 #MUTANT final-ignores-unverified-pin|s@^\tnot final_sealed$@\tfalse@|final_fails_on_an_unverified_pin_before_b2
 #MUTANT publish-without-prerelease|s@^\tpublishes_bare(step_text(step))$@\tfalse@|a_publish_or_draft_without_its_flag_is_refused
 #MUTANT bump-push-unprivileged|s@^\tnot pushes_with_the_pat(step)$@\tfalse@|the_cut_pushes_the_bump_with_the_pat
+#MUTANT freeze-armed-one-release-early|s@^freeze_from := \[0, 0, 219\]$@freeze_from := [0, 0, 218]@|a_pin_one_release_past_the_cut_arms_no_freeze
+#MUTANT source-pin-arms-the-freeze|s@^\tnot input.tree.documents\["batten.toml"\].engine.source$@\ttrue@|a_source_pin_arms_no_freeze
 #MUTANT-SUITE crates/batten/tests/it/ci_parity.rs
 
 # METADATA
@@ -1349,14 +1351,29 @@ freeze_owed(path, name) if dispatches_build(path, name)
 # writing `main` runs the engine `main` pins, and `release in-flight` first
 # ships in the release this path cuts: demanding the step under an older pin
 # breaks every writer of `main`, which `engine-pin-check` refuses for exactly
-# that reason, and the two gates deadlocked the branch adopting the path. A
-# source pin builds the tree's own engine, which carries the verb. 0.0.217
-# because 0.0.216 was cut without the path (measured 2026-10-14: its
-# `engine gate` names `release in-flight` absent), and the first release cut
-# after it lands is the one that carries it.
-freeze_from := [0, 0, 217]
+# that reason, and the two gates deadlocked the branch adopting the path.
+#
+# TWO RELEASES PAST `main`, NEVER ONE (CLOUD-2515). 0.0.216 was cut without
+# the path (measured 2026-10-14: its `engine gate` names `release in-flight`
+# absent), so 0.0.217 is the first release to carry the verb. A threshold AT
+# 0.0.217 deadlocked that release itself: its PR's own pin move armed the arm
+# against landers a release-shaped head may not touch (`RELEASE_PATHS`), and
+# #1162 was red by construction. One past it is not enough either, because the
+# release rehearsal (`tests/it/release_rehearsal.rs`) moves EVERY head one
+# release ahead, the release PR's included, so 0.0.217's PR would rehearse
+# 0.0.218. At 0.0.219, the first head it arms is 0.0.218's release PR
+# rehearsing 0.0.219, by which point the landers must already carry the step;
+# their follow-up adds it and deletes this threshold.
+#
+# A SOURCE PIN ARMS NOTHING. It is `install:local`'s, never lands (`engine
+# gate`'s `source_never_lands`), and arming on it only made every cloud
+# session's local gates refuse a wire `main` cannot carry yet.
+freeze_from := [0, 0, 219]
 
-freeze_runnable if not input.tree.documents["batten.toml"].engine.release
+freeze_runnable if {
+	not input.tree.documents["batten.toml"].engine.release
+	not input.tree.documents["batten.toml"].engine.source
+}
 
 freeze_runnable if {
 	tag := input.tree.documents["batten.toml"].engine.release
@@ -1380,9 +1397,12 @@ older(a, b) if {
 
 test_the_freeze_waits_for_the_pin_that_carries_it if {
 	not freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"release": "v0.0.216"}}}}}
-	freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"release": "v0.0.217"}}}}}
+	not freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"release": "v0.0.217"}}}}}
+	not freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"release": "v0.0.218"}}}}}
+	freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"release": "v0.0.219"}}}}}
 	freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"release": "v0.1.0"}}}}}
-	freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"source": "abc"}}}}}
+	not freeze_runnable with input as {"tree": {"documents": {"batten.toml": {"engine": {"source": "abc"}}}}}
+	freeze_runnable with input as {"tree": {"documents": {"batten.toml": {}}}}
 }
 
 violation contains {
