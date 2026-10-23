@@ -126,9 +126,8 @@ fn reap_the_dead(root: &Path) {
 ///
 /// Off unix there is no `kill -0` in this closure at all — `rustix` is declared
 /// under `[target.'cfg(unix)'.dependencies]` — so nothing is reaped. That is the
-/// could-not-look direction, which never deletes a live run's scratch. One
-/// function with only the probe under `cfg`, not a `cfg` twin, so its mutants are
-/// compiled and judged on every leg (CLOUD-2509).
+/// could-not-look direction, which never deletes a live run's scratch. Only the
+/// probe is under `cfg` (CLOUD-2509).
 fn pid_is_live(pid: i32) -> bool {
     #[cfg(unix)]
     {

@@ -1444,10 +1444,8 @@ fn materialise(
 ///
 /// Off unix, the `core.symlinks=false` shape: the link's TARGET PATH as file
 /// content. Not `std::os::windows::fs::symlink_file`, which needs a privilege an
-/// ordinary account does not hold, so it would fail rather than degrade.
-///
-/// One function with each platform's call under `cfg`, not a `cfg` twin, so its
-/// mutants are compiled and judged on every leg (CLOUD-2509).
+/// ordinary account does not hold, so it would fail rather than degrade. Only
+/// each platform's call is under `cfg` (CLOUD-2509).
 pub(crate) fn link(destination: &str, target: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {

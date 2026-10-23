@@ -236,11 +236,8 @@ fn is_record(path: &Path) -> bool {
 /// the literal program `git`, but a spawn is still an inventory row
 /// (`clippy.toml`), and one per registration would be a cost the shell paid only
 /// because it had no alternative.
-///
-/// ONE FUNCTION ON EVERY PLATFORM, with only the syscall under `cfg`
-/// (CLOUD-2509): off unix there is no process group to read, so the read is
-/// `None` and the fallback below — the pid is the whole truth — is the same
-/// line every leg compiles and tests.
+/// Off unix there is no process group to read, so the pid is the whole truth;
+/// only the read is under `cfg` (CLOUD-2509).
 pub(crate) fn process_group(pid: &str) -> String {
     #[cfg(unix)]
     let group = pid
@@ -449,10 +446,8 @@ fn matches_cmdline(program_root: &str, task: &str, cmdline: &str) -> bool {
 /// wrongly CRASHED verdict is the expensive direction, because a successor
 /// session reads this to learn what was in flight. Answering "alive" makes the
 /// reader useless on Windows rather than wrong there, which is the side to be on.
-///
-/// ONE FUNCTION RATHER THAN A `cfg` TWIN (CLOUD-2509): the parse decides on
-/// every platform, so it is compiled, tested and mutated on every leg, and only
-/// the syscall sits under `cfg`.
+/// The parse decides on every platform; only the probe is under `cfg`
+/// (CLOUD-2509).
 fn pid_exists(pid: &str) -> bool {
     let Ok(raw) = pid.parse::<i32>() else {
         return false;

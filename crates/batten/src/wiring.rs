@@ -954,10 +954,8 @@ pub fn link_commit_gate(dir: &Path, body: &str) -> Result<usize> {
 //MUTANT gate-links-a-missing-body|s@^    if !source.is_file() {$@    if false {@|wiring_gate_refuses_a_body_the_repository_does_not_carry
 
 /// A symbolic link from `link` to `source`; off unix, the `core.symlinks=false`
-/// shape: the body's bytes, where no symlink exists.
-///
-/// One function with each platform's call under `cfg`, not a `cfg` twin, so its
-/// mutants are compiled and judged on every leg (CLOUD-2509).
+/// shape: the body's bytes, where no symlink exists. Only each platform's call is
+/// under `cfg` (CLOUD-2509).
 fn link_hook(source: &Path, link: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {

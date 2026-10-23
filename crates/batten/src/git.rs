@@ -5968,13 +5968,10 @@ fn mode_diverges(metadata: &std::fs::Metadata, recorded_executable: bool) -> boo
 /// Whether any execute bit stands on `meta`, or `None` where the platform has no
 /// such bit to read.
 ///
-/// THE ONLY `cfg` IN THE CRATE'S EXECUTABLE-BIT READERS (CLOUD-2509). Each reader
-/// — this module's index comparison, `gitwrite`'s blob kind, `prune`'s and
-/// `pinned`'s program tests — used to carry a `#[cfg(not(unix))]` twin, and a
-/// twin is code no unix leg compiles: its mutants "survived" every sweep because
-/// nothing could build them. Now the off-unix answer is each caller's reading of
-/// `None`, an ordinary line every leg compiles and tests, and the syscall is the
-/// one thing a platform owns.
+/// The one platform read behind every executable-bit reader (CLOUD-2509): each
+/// caller's off-unix answer is its reading of `None`, a line every leg compiles,
+/// tests and mutates, where a `#[cfg(not(unix))]` twin was code no unix sweep
+/// could build.
 #[cfg_attr(
     unix,
     expect(

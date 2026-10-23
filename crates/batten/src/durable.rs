@@ -434,13 +434,9 @@ fn sync_directory(directory: &Path) {
     let _ = directory;
 }
 
-/// What this thread asked the disk to sync, for a case to read (CLOUD-2509).
-///
-/// THE SEAM FOR A CALL WHOSE EFFECT IS ONLY VISIBLE AFTER POWER LOSS. A sync
-/// that was skipped leaves the same bytes in the page cache as one that ran, so
-/// no read of the file can tell them apart; the call is the observable, and a
-/// count of calls is what a case asserts. Test-only and per thread, so the
-/// production path carries nothing and parallel cases never see each other's.
+/// What this thread asked the disk to sync, for a case to read (CLOUD-2509): a
+/// skipped sync leaves the same bytes in the page cache as one that ran, so the
+/// call, counted, is the only observable before a power loss.
 #[cfg(test)]
 pub(crate) mod synced {
     use std::cell::Cell;

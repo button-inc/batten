@@ -12117,17 +12117,15 @@ pub(crate) fn on_path_verbatim(program: &str) -> Option<std::path::PathBuf> {
     lookup_verbatim(program, &std::env::var_os("PATH")?)
 }
 
-/// The executable extensions to try after the bare name, from a `PATHEXT` value.
+/// The executable extensions to try after the bare name, parsed from a
+/// `PATHEXT` value.
 ///
-/// Read from `PATHEXT` when it is set, because a host may add to it; the default
-/// is what Windows ships. Empty on Unix by construction — the variable is unset
+/// The callers pass the variable, because a host may add to it; the default is
+/// what Windows ships. Empty on Unix by construction — the variable is unset
 /// there, and the bare name is the only spelling — so this costs a lookup that
-/// finds what a direct spawn already would.
-///
-/// THE VALUE IS AN ARGUMENT, NOT A READ (CLOUD-2509). Reading the variable in
-/// here made this a Windows-only function in effect: no unix leg ever has it
-/// set, `set_var` is `unsafe`, and so every mutant of the split "survived" the
-/// sweep. Passed in, the Windows spelling is parsed on every leg.
+/// finds what a direct spawn already would. An argument rather than a read, so
+/// the Windows spelling is parsed on every leg (CLOUD-2509): `set_var` is
+/// `unsafe`, so no unix case could set it.
 fn executable_extensions(pathext: Option<&std::ffi::OsStr>) -> Vec<String> {
     let Some(raw) = pathext else {
         return Vec::new();
