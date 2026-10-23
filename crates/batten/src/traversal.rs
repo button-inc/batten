@@ -496,23 +496,9 @@ mod tests {
         assert!(validate(&[row("chain")]).is_ok());
     }
 
-    #[test]
-    fn a_register_stop_beside_either_half_of_a_key_stop_is_not_both() {
-        // EITHER half is the conflict, not only the pair: a register beside a
-        // lone `until_key` would otherwise fall through to the half-declared
-        // check below and be refused for the wrong reason.
-        for (key, value) in [(Some("registered"), None), (None, Some("true"))] {
-            let mut both = row("both");
-            both.until_register = Some("keyset".to_owned());
-            both.until_key = key.map(str::to_owned);
-            both.until_value = value.map(str::to_owned);
-            let refused = validate(&[both]).expect_err("two stop conditions are refused");
-            assert!(refused.to_string().contains("not both"), "{refused:#}");
-        }
-    }
-
     /// Fails by: a register stop admitted beside half of the key/value stop,
-    /// so one walk answers two stop conditions.
+    /// so one walk answers two stop conditions — or refused for the wrong
+    /// reason by the half-declared check further down.
     #[test]
     fn a_register_stop_beside_either_half_of_a_key_stop_is_refused() {
         for (key, value) in [(Some("registered"), None), (None, Some("true"))] {
@@ -520,7 +506,8 @@ mod tests {
             both.until_register = Some("keyset".to_owned());
             both.until_key = key.map(ToOwned::to_owned);
             both.until_value = value.map(ToOwned::to_owned);
-            assert!(validate(&[both]).is_err(), "{key:?} {value:?}");
+            let refused = validate(&[both]).expect_err("two stop conditions are refused");
+            assert!(refused.to_string().contains("not both"), "{refused:#}");
         }
     }
 

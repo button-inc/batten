@@ -3238,26 +3238,6 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
         assert!(validate(&[blank]).is_err(), "an empty url is refused");
     }
 
-    fn answered(status: u16) -> Result<crate::fetch::Response> {
-        Ok(crate::fetch::Response {
-            status,
-            body: Vec::new(),
-            headers: Vec::new(),
-        })
-    }
-
-    fn refuses_every_token(_: &str, _: &[(String, String)]) -> Result<crate::fetch::Response> {
-        answered(401)
-    }
-
-    fn accepts_every_token(_: &str, _: &[(String, String)]) -> Result<crate::fetch::Response> {
-        answered(200)
-    }
-
-    fn reaches_nothing(_: &str, _: &[(String, String)]) -> Result<crate::fetch::Response> {
-        anyhow::bail!("connection refused")
-    }
-
     /// The control arm's three answers, one transport each: a route that
     /// refuses the known-bad token honours credentials, one that accepts it
     /// substitutes its own, and one nothing reaches decides neither.
@@ -3265,18 +3245,18 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
     fn the_control_arm_reads_refused_substituted_and_unreachable_apart() {
         let real = Secret::new("tok_0123456789".to_owned());
         let probe = "https://forge.invalid/probe";
+        let refusing: DirectGet = |_, _| Ok(response(401));
+        let accepting: DirectGet = |_, _| Ok(response(200));
+        let unreachable: DirectGet = |_, _| anyhow::bail!("connection refused");
         assert_eq!(
-            route_honours_credentials(probe, &real, refuses_every_token),
+            route_honours_credentials(probe, &real, refusing),
             Some(true)
         );
         assert_eq!(
-            route_honours_credentials(probe, &real, accepts_every_token),
+            route_honours_credentials(probe, &real, accepting),
             Some(false)
         );
-        assert_eq!(
-            route_honours_credentials(probe, &real, reaches_nothing),
-            None
-        );
+        assert_eq!(route_honours_credentials(probe, &real, unreachable), None);
     }
 }
 

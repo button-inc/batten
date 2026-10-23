@@ -448,46 +448,14 @@ fn a_fixture_root_asks_the_pin_nothing_through_the_eager_door() {
 fn a_session_start_records_the_programs_the_pin_composes() {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = Fixture::new("pinned-session-start")
-        .config(
-            "version = 1\n\n\
-             [[pattern]]\n\
-             id = \"md-quoted-span\"\n\
-             regex = '\"[^\"]*\"'\n\n\
-             [[verdict]]\n\
-             id = \"tool reach absent\"\n\
-             gloss = \"a by-path invocation depends on a tool it will not get\"\n\
-             class = \"Every hook here fails open, so an absent tool allows silently.\"\n\n\
-             [[verdict.route]]\n\
-             id = \"prose read first\"\n\
-             kind = \"document\"\n\
-             target = \"AGENTS.md\"\n\n\
-             [[verdict]]\n\
-             id = \"tool list empty\"\n\
-             gloss = \"the manifest pins nothing, so the question cannot be asked\"\n\
-             class = \"With the pinned set empty every by-path hook passes vacuously.\"\n\n\
-             [[verdict.route]]\n\
-             id = \"prose read first\"\n\
-             kind = \"document\"\n\
-             target = \"AGENTS.md\"\n\n\
-             [[rule]]\n\
-             id = \"hook pin stale\"\n\
-             kind = \"policy\"\n\
-             scope = \"tree\"\n\
-             line_sources = [\"mise.toml\"]\n\
-             module = \"policy/hook-pin-check.rego\"\n\
-             severity = \"deny\"\n",
-        )
-        .file("AGENTS.md", "the consumer's own authority\n")
-        .file("mise.toml", "[tools]\njq = \"1.7\"\n")
-        .file(
-            "policy/hook-pin-check.rego",
-            &std::fs::read_to_string(common::at_root("policy/hook-pin-check.rego"))
-                .expect("the committed module is readable"),
-        )
-        .git()
-        .base_commit()
-        .build();
+    // The smallest committed tree carrying a policy row, which is what makes
+    // session start ask the pin at all.
+    let dir = crate::hook_pin_check::pin_repo(
+        "pinned-session-start",
+        &[],
+        "[tools]\njq = \"1.7\"\n",
+        &[],
+    );
     let executable = |path: &Path, body: &str| {
         std::fs::write(path, body).expect("the stub is written");
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))

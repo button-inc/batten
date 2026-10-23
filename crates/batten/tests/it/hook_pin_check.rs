@@ -45,7 +45,10 @@ use std::process::Output;
 use common::{Fixture, git_in, run, stderr, stdout};
 
 /// A repository declaring only this rule, so any finding is the one under test.
-fn pin_repo(
+///
+/// Also the smallest committed tree carrying a POLICY row, which is what
+/// `pinned_programs`' session-start case borrows it for.
+pub(crate) fn pin_repo(
     name: &str,
     registrations: &[&str],
     manifest: &str,
