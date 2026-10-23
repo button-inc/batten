@@ -2135,4 +2135,28 @@ mod spec_ref {
         let skipped = refs(&dir, &excluding, &payload());
         assert_eq!(code(&skipped), 0, "{}", text(&skipped));
     }
+
+    /// A CITATION NAMING NO CLAUSE IS NO CITATION. The tail is the consumer's
+    /// row, so nothing guarantees its clause group is mandatory: one spelled
+    /// `[0-9]*` matches a bare `§`, and judging that as a citation of clause
+    /// `""` would refuse a tree for a clause nobody named.
+    #[test]
+    fn a_citation_whose_clause_matched_empty_is_not_judged() {
+        let (dir, _) = tree("empty-clause", &[cite(420, " § and no number")]);
+        let optional = common::scratch("board-check-config-refs-optional-clause");
+        let patterns =
+            common::declared_patterns().replacen("§(?P<clause>[0-9]+)", "§(?P<clause>[0-9]*)", 1);
+        assert_ne!(
+            patterns,
+            common::declared_patterns(),
+            "the committed citation row is the one made optional"
+        );
+        common::write(
+            &optional,
+            "batten.toml",
+            &format!("version = 1\n{}\n{patterns}", common::declared_board()),
+        );
+        let output = refs(&dir, &optional, &payload());
+        assert_eq!(code(&output), 0, "{}", text(&output));
+    }
 }

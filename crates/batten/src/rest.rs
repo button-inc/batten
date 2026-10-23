@@ -936,6 +936,29 @@ fn method_of(body: Option<&[u8]>, chosen: Method) -> &'static str {
     }
 }
 
+/// What a live exchange puts on the wire beyond its URL and body: the headers,
+/// and whether the request goes out as a `PATCH` or a `DELETE`.
+#[derive(Debug, PartialEq, Eq)]
+struct Wire {
+    headers: Vec<(String, String)>,
+    patch: bool,
+    delete: bool,
+}
+
+/// [`exchange`]'s live request, decided apart from the transport.
+///
+/// **SPLIT SO IT IS REACHABLE.** Every suite answers from [`FIXTURE`], which is
+/// taken before the wire is built — so the `Content-Type` an empty body must not
+/// claim, and the method a body's default is overridden to, were read by no
+/// case at all.
+fn wire(etag: Option<&str>, body: Option<&[u8]>, chosen: Method) -> Wire {
+    Wire {
+        headers: headers(etag, body.is_some_and(|bytes| !bytes.is_empty())),
+        patch: chosen == Method::Patch,
+        delete: chosen == Method::Delete,
+    }
+}
+
 //MUTANT-SUITE crates/batten/tests/it/gh_preflight.rs
 fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method) -> Option<Answer> {
     let now = crate::now_unix();
@@ -952,13 +975,17 @@ fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method)
             now,
         );
     }
-    let headers = headers(etag, body.is_some_and(|bytes| !bytes.is_empty()));
+    let Wire {
+        headers,
+        patch,
+        delete,
+    } = wire(etag, body, chosen);
     let mut answers = fetch::spend(&[Call {
         url: &url,
         headers: &headers,
         body,
-        patch: chosen == Method::Patch,
-        delete: chosen == Method::Delete,
+        patch,
+        delete,
         // PROXIED, which is the ordinary path. `direct` exists so a credential
         // can be proved against the forge with the proxy out of the way
         // (`fetch::get_direct`); a forge REST call is not that question, and
@@ -1111,6 +1138,20 @@ mod tests {
     /// A leading slash produces a double one and a `404`, which every caller here
     /// reads as could-not-look — silent, and exactly the dead-gate class this
     /// crate exists to refuse.
+    /// Fails by: an empty body claimed as JSON, or the method override read
+    /// backwards — both invisible to every suite, which answers from the fixture.
+    #[test]
+    fn the_wire_claims_json_only_for_a_body_and_overrides_only_the_chosen_method() {
+        let json = |wire: &Wire| wire.headers.iter().any(|(name, _)| name == "Content-Type");
+        let posted = wire(None, Some(b"{}"), Method::ByBody);
+        assert!(json(&posted) && !posted.patch && !posted.delete);
+        assert!(!json(&wire(None, Some(&[]), Method::ByBody)));
+        let patched = wire(None, Some(b"{}"), Method::Patch);
+        assert!(json(&patched) && patched.patch && !patched.delete);
+        let deleted = wire(None, None, Method::Delete);
+        assert!(!json(&deleted) && deleted.delete && !deleted.patch);
+    }
+
     #[test]
     fn an_api_relative_path_keeps_the_forge_clients_own_spelling() {
         for path in [
@@ -1463,3 +1504,13 @@ mod tests {
         }
     }
 }
+
+// The suites that drive each verb above through `BATTEN_REST_FIXTURE` on the
+// spawned binary: a GET a poll reads, a DELETE and an asset download a release
+// check makes, a run cancelled by POST, a JSON POST and PATCH a bot lane
+// writes, and the credential an attestation must hold before it asks.
+//MUTANT-SUITE crates/batten/tests/it/pr_watch.rs
+//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
+//MUTANT-SUITE crates/batten/tests/it/checks_green.rs
+//MUTANT-SUITE crates/batten/tests/it/bot_lane.rs
+//MUTANT-SUITE crates/batten/tests/it/attestation.rs
