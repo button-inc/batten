@@ -6683,9 +6683,16 @@ fn followed_cd(
 /// says so: on Windows `Path::is_absolute("/tmp/x")` is false (no drive), so the
 /// operand was joined UNDER the call's directory and `cd /tmp/x && wc a/b` read
 /// as a repository path on the one CI leg that runs there.
+///
+/// `has_root` IS THAT RULE ON EVERY HOST, as one predicate (CLOUD-2509): on unix
+/// it is `is_absolute`, and on Windows it holds for `/tmp/x` and `C:\x` alike.
+/// The `starts_with('/') || is_absolute()` it replaces agreed everywhere but on
+/// a Windows word rooted by `\` without a drive, which it joined under the
+/// directory and this does not; its second operand only ever differed from the
+/// first on Windows, so no unix leg could tell `||` from `&&`.
 fn shell_resolved(word: &str, current: Option<&Path>) -> Option<std::path::PathBuf> {
     let path = Path::new(word);
-    if word.starts_with('/') || path.is_absolute() {
+    if path.has_root() {
         return Some(path.to_path_buf());
     }
     current.map(|here| here.join(path))

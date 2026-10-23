@@ -75,7 +75,11 @@ impl Persist {
     /// The I/O error a sync returns.
     pub fn sync(self, file: &std::fs::File) -> std::io::Result<()> {
         match self {
-            Persist::Synced => file.sync_all(),
+            Persist::Synced => {
+                #[cfg(test)]
+                synced::file();
+                file.sync_all()
+            }
             Persist::Atomic => Ok(()),
         }
     }
@@ -422,10 +426,42 @@ fn write_temp_as(
 fn sync_directory(directory: &Path) {
     #[cfg(unix)]
     if let Ok(handle) = std::fs::File::open(directory) {
+        #[cfg(test)]
+        synced::directory();
         let _ = handle.sync_all();
     }
     #[cfg(not(unix))]
     let _ = directory;
+}
+
+/// What this thread asked the disk to sync, for a case to read (CLOUD-2509).
+///
+/// THE SEAM FOR A CALL WHOSE EFFECT IS ONLY VISIBLE AFTER POWER LOSS. A sync
+/// that was skipped leaves the same bytes in the page cache as one that ran, so
+/// no read of the file can tell them apart; the call is the observable, and a
+/// count of calls is what a case asserts. Test-only and per thread, so the
+/// production path carries nothing and parallel cases never see each other's.
+#[cfg(test)]
+pub(crate) mod synced {
+    use std::cell::Cell;
+
+    thread_local! {
+        static FILES: Cell<u64> = const { Cell::new(0) };
+        static DIRECTORIES: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(super) fn file() {
+        FILES.with(|count| count.set(count.get() + 1));
+    }
+
+    pub(super) fn directory() {
+        DIRECTORIES.with(|count| count.set(count.get() + 1));
+    }
+
+    /// `(files, directories)` synced on this thread so far.
+    pub(crate) fn counts() -> (u64, u64) {
+        (FILES.with(Cell::get), DIRECTORIES.with(Cell::get))
+    }
 }
 
 #[cfg(test)]
@@ -442,6 +478,36 @@ mod tests {
         let dir = crate::scratch::scratch(&format!("durable-{name}"));
         assert!(dir.is_dir(), "scratch");
         dir
+    }
+
+    /// CLOUD-2509: the tier decides which syncs are ASKED FOR, which is all a
+    /// case can see of a sync — its effect shows only after power loss. Fails
+    /// by: `Synced` skipping the file's or the directory's sync, or `Atomic`
+    /// paying for either.
+    #[test]
+    fn only_the_synced_tier_asks_the_disk() {
+        let dir = scratch("tiers");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(dir.join("record"))
+            .expect("the record opens");
+        let before = synced::counts();
+        Persist::Atomic
+            .sync(&file)
+            .expect("an atomic sync is nothing");
+        Persist::Atomic.sync_dir(&dir);
+        assert_eq!(synced::counts(), before, "Atomic waits for no disk");
+        Persist::Synced.sync(&file).expect("the file syncs");
+        Persist::Synced.sync_dir(&dir);
+        // A directory has a handle to sync only on unix.
+        let directories = u64::from(cfg!(unix));
+        assert_eq!(
+            synced::counts(),
+            (before.0 + 1, before.1 + directories),
+            "Synced syncs the file and its directory"
+        );
     }
 
     /// THE GLUE CASE (CLOUD-843, round-2 review): a fragment a killed writer left

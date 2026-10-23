@@ -5959,17 +5959,41 @@ fn entry_diverges(
 }
 
 /// Whether the file's executable bit disagrees with what the index records.
-#[cfg(unix)]
+///
+/// Where the platform has no executable bit there is nothing to compare: git on
+/// such a platform runs with `core.fileMode = false` for the same reason.
 fn mode_diverges(metadata: &std::fs::Metadata, recorded_executable: bool) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    (metadata.permissions().mode() & 0o111 != 0) != recorded_executable
+    executable_bit(metadata).is_some_and(|bit| bit != recorded_executable)
 }
 
-/// No executable bit to read, so nothing to compare: git on such a platform runs
-/// with `core.fileMode = false` for the same reason.
-#[cfg(not(unix))]
-fn mode_diverges(_metadata: &std::fs::Metadata, _recorded_executable: bool) -> bool {
-    false
+/// Whether any execute bit stands on `meta`, or `None` where the platform has no
+/// such bit to read.
+///
+/// THE ONLY `cfg` IN THE CRATE'S EXECUTABLE-BIT READERS (CLOUD-2509). Each reader
+/// — this module's index comparison, `gitwrite`'s blob kind, `prune`'s and
+/// `pinned`'s program tests — used to carry a `#[cfg(not(unix))]` twin, and a
+/// twin is code no unix leg compiles: its mutants "survived" every sweep because
+/// nothing could build them. Now the off-unix answer is each caller's reading of
+/// `None`, an ordinary line every leg compiles and tests, and the syscall is the
+/// one thing a platform owns.
+#[cfg_attr(
+    unix,
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "`None` is the off-unix reading; unix always has the bit"
+    )
+)]
+pub(crate) fn executable_bit(meta: &std::fs::Metadata) -> Option<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        Some(meta.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        None
+    }
 }
 
 /// Whether a git pathspec — without magic — selects `path` (CLOUD-843).
@@ -6021,6 +6045,27 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    /// CLOUD-2509: the execute bit is read where the platform has one, and
+    /// `None` where it does not — the reading every caller's off-unix answer
+    /// rests on. Fails by: a constant reading, or a mask that sees a read or
+    /// write bit as an execute bit. A created file never carries an execute bit
+    /// (creation's mode is `0o666` under any umask), and this test binary does.
+    #[test]
+    fn the_execute_bit_is_read_where_the_platform_has_one() {
+        let plain = crate::scratch::scratch("git-execute-bit").join("plain");
+        crate::durable::replace(&plain, "text").unwrap();
+        let program = std::env::current_exe().unwrap();
+        let reading = |bit: bool| cfg!(unix).then_some(bit);
+        assert_eq!(
+            executable_bit(&fs::metadata(&plain).unwrap()),
+            reading(false)
+        );
+        assert_eq!(
+            executable_bit(&fs::metadata(&program).unwrap()),
+            reading(true)
+        );
+    }
 
     /// A hunk near the top carries its own start line (CLOUD-2507): line 7 of
     /// 12 changed is `@@ -4,7 +4,7 @@` over lines 4-10, as `git diff` writes it.

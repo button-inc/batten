@@ -715,17 +715,11 @@ fn split_artifact(name: &str) -> Option<(&str, &str, &str)> {
     }
 }
 
-#[cfg(unix)]
+/// Whether `meta` is an executable. Where the platform has no executable bit to
+/// read, every file is one: the stem grouping and the retention still hold, so
+/// the pass is correct there and merely wider than on unix.
 fn is_executable(meta: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    meta.permissions().mode() & 0o111 != 0
-}
-
-#[cfg(not(unix))]
-fn is_executable(_meta: &std::fs::Metadata) -> bool {
-    // No executable bit to read. The stem grouping and the retention still hold,
-    // so the pass is correct here and merely wider than on unix.
-    true
+    crate::git::executable_bit(meta).unwrap_or(true)
 }
 
 /// Free space for a reader that samples again and again (CLOUD-1937): the volume,

@@ -12127,15 +12127,19 @@ pub(crate) fn on_path_verbatim(program: &str) -> Option<std::path::PathBuf> {
     lookup_verbatim(program, &std::env::var_os("PATH")?)
 }
 
-/// The executable extensions to try after the bare name, lowercase and without
-/// the leading dot handling `PATHEXT` would need.
+/// The executable extensions to try after the bare name, from a `PATHEXT` value.
 ///
 /// Read from `PATHEXT` when it is set, because a host may add to it; the default
 /// is what Windows ships. Empty on Unix by construction — the variable is unset
 /// there, and the bare name is the only spelling — so this costs a lookup that
 /// finds what a direct spawn already would.
-fn executable_extensions() -> Vec<String> {
-    let Some(raw) = std::env::var_os("PATHEXT") else {
+///
+/// THE VALUE IS AN ARGUMENT, NOT A READ (CLOUD-2509). Reading the variable in
+/// here made this a Windows-only function in effect: no unix leg ever has it
+/// set, `set_var` is `unsafe`, and so every mutant of the split "survived" the
+/// sweep. Passed in, the Windows spelling is parsed on every leg.
+fn executable_extensions(pathext: Option<&std::ffi::OsStr>) -> Vec<String> {
+    let Some(raw) = pathext else {
         return Vec::new();
     };
     raw.to_string_lossy()
@@ -12154,7 +12158,11 @@ fn executable_extensions() -> Vec<String> {
 /// `markers::scannable` shape the Rust rules prescribe — test the decision, not
 /// a conclusion drawn over a precondition the suite cannot create.
 fn lookup_verbatim(program: &str, path: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
-    lookup_on(program, path, &executable_extensions())
+    lookup_on(
+        program,
+        path,
+        &executable_extensions(std::env::var_os("PATHEXT").as_deref()),
+    )
 }
 
 /// [`lookup_verbatim`] over a supplied extension list too, so the Windows
@@ -12330,7 +12338,7 @@ fn spawn_resolving_pinned<T>(
         _ => read,
     };
     let path = std::env::var_os("PATH");
-    let extensions = executable_extensions();
+    let extensions = executable_extensions(std::env::var_os("PATHEXT").as_deref());
     let mut spawn = spawn;
     let first = spawn_resolving_on(
         path.as_deref(),
@@ -18098,6 +18106,20 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         );
         // With no extensions — the Unix case — only the bare name is tried.
         assert_eq!(lookup_on("hk", &exe_path, &[]), None);
+    }
+
+    /// CLOUD-2509: `PATHEXT` is parsed on every leg, not only the one that sets
+    /// it. Fails by: an unset variable reading as extensions, a blank entry
+    /// surviving the split (a bare-name retry under another name), or the split
+    /// dropping the entries it was asked for.
+    #[test]
+    fn pathext_is_split_into_its_extensions() {
+        assert_eq!(executable_extensions(None), Vec::<String>::new());
+        assert_eq!(
+            executable_extensions(Some(std::ffi::OsStr::new(".COM; .EXE;;.CMD "))),
+            [".COM", ".EXE", ".CMD"],
+            "trimmed, in order, and no blank entry"
+        );
     }
 
     #[test]

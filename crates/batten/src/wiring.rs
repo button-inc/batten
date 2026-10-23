@@ -953,16 +953,20 @@ pub fn link_commit_gate(dir: &Path, body: &str) -> Result<usize> {
 //MUTANT gate-links-one-hook|s@^    for name in crate::doctor::COMMIT_HOOKS {$@    for name in crate::doctor::COMMIT_HOOKS.iter().take(1) {@|wiring_gate_links_both_commit_hooks_to_the_checked_in_body
 //MUTANT gate-links-a-missing-body|s@^    if !source.is_file() {$@    if false {@|wiring_gate_refuses_a_body_the_repository_does_not_carry
 
-/// A symbolic link from `link` to `source`.
-#[cfg(unix)]
+/// A symbolic link from `link` to `source`; off unix, the `core.symlinks=false`
+/// shape: the body's bytes, where no symlink exists.
+///
+/// One function with each platform's call under `cfg`, not a `cfg` twin, so its
+/// mutants are compiled and judged on every leg (CLOUD-2509).
 fn link_hook(source: &Path, link: &Path) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(source, link)
-}
-
-/// The `core.symlinks=false` shape: the body's bytes, where no symlink exists.
-#[cfg(not(unix))]
-fn link_hook(source: &Path, link: &Path) -> std::io::Result<()> {
-    crate::durable::replace(link, std::fs::read(source)?)
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(source, link)
+    }
+    #[cfg(not(unix))]
+    {
+        crate::durable::replace(link, std::fs::read(source)?)
+    }
 }
 
 #[cfg(test)]

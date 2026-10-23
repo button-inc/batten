@@ -211,25 +211,93 @@ fn program_name(path: &str) -> String {
 ///
 /// Linux and Android read `/proc/<pid>/exe` and field 22 of `/proc/<pid>/stat`,
 /// clock ticks since boot, against `/proc/stat`'s `btime`.
-#[cfg(any(target_os = "linux", target_os = "android"))]
+///
+/// macOS reads `kern.proc.all`: every process's start and its `p_comm`.
+/// BY NAME, AND NOTHING ELSE (measured on #1132's macOS run, which collected a
+/// running binary and read every unit live). XNU declares `kern.proc.all` and
+/// `kern.procargs2` with no format string (`bsd/kern/kern_sysctl.c`), and
+/// `sysctl.oidfmt` answers `ENOENT` for such an oid (`kern_newsysctl.c`); the
+/// `sysctl` crate asks `oidfmt` before every read by oid, so both reads failed
+/// and the table read as `None`. Its by-name read goes through `sysctlbyname`
+/// and asks nothing first, which reaches `kern.proc.all`. It cannot reach
+/// `kern.procargs2 <pid>`, the only path source: XNU's name lookup stops at a
+/// handler node, so the pid cannot be named (the crate's issue #51), and the
+/// FFI that would read it `unsafe_code = "forbid"` puts out of reach. So a
+/// process here is its `p_comm`, which [`Kept::Named`] keeps wide.
+///
+/// Windows asks PowerShell, which every supported Windows ships: `Get-Process`
+/// names each process's path and `StartTime`, printed as a UTC `FILETIME`. A
+/// spawn, a few hundred milliseconds, paid only when a collection runs, which
+/// is below `min_free_mb`; the Win32 calls themselves are FFI that
+/// `unsafe_code = "forbid"` puts out of reach, and the safe wrapper (`sysinfo`)
+/// adds eighteen crates to the lockfile for this one listing.
+///
+/// Elsewhere no process table is read.
+///
+/// ONE FUNCTION, EACH PLATFORM'S READ UNDER `cfg` AND NOTHING ELSE (CLOUD-2509).
+/// The layouts are [`darwin`]'s and [`windows_table`]'s pure parsers, which
+/// every leg tests; what stays per platform carries no operator, arm or guard
+/// for a sweep to mutate on a leg that cannot compile it.
 fn processes() -> Option<Vec<Process>> {
-    let (boot, ticks, pids) = proc_table()?;
-    let table = pids
-        .filter_map(|dir| {
-            let exe = std::fs::read_link(dir.join("exe")).ok()?;
-            let stat = std::fs::read_to_string(dir.join("stat")).ok()?;
-            let since_boot = proc_stat::start_ticks(&stat)?;
-            let started = SystemTime::UNIX_EPOCH
-                + std::time::Duration::from_secs(boot)
-                + std::time::Duration::from_millis(since_boot.saturating_mul(1000) / ticks);
-            Some(Process {
-                name: program_name(&exe.to_string_lossy()),
-                exe: Some(exe),
-                started,
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let (boot, ticks, pids) = proc_table()?;
+        let table = pids
+            .filter_map(|dir| {
+                let exe = std::fs::read_link(dir.join("exe")).ok()?;
+                let stat = std::fs::read_to_string(dir.join("stat")).ok()?;
+                let since_boot = proc_stat::start_ticks(&stat)?;
+                let started = SystemTime::UNIX_EPOCH
+                    + std::time::Duration::from_secs(boot)
+                    + std::time::Duration::from_millis(since_boot.saturating_mul(1000) / ticks);
+                Some(Process {
+                    name: program_name(&exe.to_string_lossy()),
+                    exe: Some(exe),
+                    started,
+                })
             })
-        })
+            .collect();
+        Some(table)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use sysctl::Sysctl as _;
+        let ctl = sysctl::Ctl::new_with_type("kern.proc.all", sysctl::CtlType::Node, "").ok()?;
+        let (sysctl::CtlValue::Node(raw) | sysctl::CtlValue::Struct(raw)) = ctl.value().ok()?
+        else {
+            return None;
+        };
+        Some(darwin::processes(&raw))
+    }
+    #[cfg(windows)]
+    {
+        let argv: Vec<String> = [
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            WINDOWS_PROCESSES,
+        ]
+        .iter()
+        .map(|word| (*word).to_owned())
         .collect();
-    Some(table)
+        let root = std::env::temp_dir();
+        let Some((0, listing)) =
+            crate::exec::piped_argv(&root, &argv, "", crate::exec::Diagnostics::Drop, &[])
+        else {
+            return None;
+        };
+        Some(windows_table::parse(&listing))
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        windows
+    )))]
+    {
+        None
+    }
 }
 
 /// The process table both readers walk: `/proc/stat`'s `btime`, the clock rate
@@ -352,14 +420,25 @@ mod proc_stat {
 /// pgid `exec` could not signal (unparseable, or not a positive `i32`), an
 /// unparseable registrant, and wherever `/proc` cannot be read: a reap may only
 /// proceed on proof.
+///
+/// Where there is no `/proc` to read a group's members from, none is ever proven
+/// the orphan's and nothing is reaped. One function with only the read under
+/// `cfg`, not a `cfg` twin, so its mutants are judged on every leg (CLOUD-2509).
 //MUTANT-SUITE crates/batten/tests/it/process_group.rs
-#[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn group_orphaned(pgid: &str, registrant: &str, alive_at: u64) -> bool {
-    let Some((boot, ticks, pids)) = proc_table() else {
-        return false;
-    };
-    let stats = pids.filter_map(|dir| std::fs::read_to_string(dir.join("stat")).ok());
-    orphaned_in(stats, pgid, registrant, boot, ticks, alive_at)
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let Some((boot, ticks, pids)) = proc_table() else {
+            return false;
+        };
+        let stats = pids.filter_map(|dir| std::fs::read_to_string(dir.join("stat")).ok());
+        orphaned_in(stats, pgid, registrant, boot, ticks, alive_at)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        let _ = (pgid, registrant, alive_at);
+        false
+    }
 }
 
 /// [`group_orphaned`], public so a suite can prove it over a REAL orphan.
@@ -398,38 +477,6 @@ fn orphaned_in<S: AsRef<str>>(
         ticks,
         alive_at,
     )
-}
-
-/// No `/proc` to read a group's members from, so none is ever proven the
-/// orphan's and nothing is reaped.
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-pub(crate) fn group_orphaned(_pgid: &str, _registrant: &str, _alive_at: u64) -> bool {
-    false
-}
-
-/// macOS reads `kern.proc.all`: every process's start and its `p_comm`.
-///
-/// BY NAME, AND NOTHING ELSE (measured on #1132's macOS run, which collected a
-/// running binary and read every unit live). XNU declares `kern.proc.all` and
-/// `kern.procargs2` with no format string (`bsd/kern/kern_sysctl.c`), and
-/// `sysctl.oidfmt` answers `ENOENT` for such an oid (`kern_newsysctl.c`); the
-/// `sysctl` crate asks `oidfmt` before every read by oid, so both reads failed
-/// and the table read as `None`. Its by-name read goes through `sysctlbyname`
-/// and asks nothing first, which reaches `kern.proc.all`. It cannot reach
-/// `kern.procargs2 <pid>`, the only path source: XNU's name lookup stops at a
-/// handler node, so the pid cannot be named (the crate's issue #51), and the
-/// FFI that would read it `unsafe_code = "forbid"` puts out of reach. So a
-/// process here is its `p_comm`, which [`Kept::Named`] keeps wide.
-#[cfg(target_os = "macos")]
-fn processes() -> Option<Vec<Process>> {
-    use sysctl::Sysctl as _;
-    let ctl = sysctl::Ctl::new_with_type("kern.proc.all", sysctl::CtlType::Node, "").ok()?;
-    match ctl.value() {
-        Ok(sysctl::CtlValue::Node(raw) | sysctl::CtlValue::Struct(raw)) => {
-            Some(darwin::processes(&raw))
-        }
-        _ => None,
-    }
 }
 
 /// The Darwin layout [`processes`] reads, as a pure function so every
@@ -487,31 +534,6 @@ mod darwin {
     }
 }
 
-/// Windows asks PowerShell, which every supported Windows ships: `Get-Process`
-/// names each process's path and `StartTime`, printed as a UTC `FILETIME`. A
-/// spawn, a few hundred milliseconds, paid only when a collection runs, which
-/// is below `min_free_mb`; the Win32 calls themselves are FFI that
-/// `unsafe_code = "forbid"` puts out of reach, and the safe wrapper (`sysinfo`)
-/// adds eighteen crates to the lockfile for this one listing.
-#[cfg(windows)]
-fn processes() -> Option<Vec<Process>> {
-    let argv: Vec<String> = [
-        "powershell",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        WINDOWS_PROCESSES,
-    ]
-    .iter()
-    .map(|word| (*word).to_owned())
-    .collect();
-    let root = std::env::temp_dir();
-    match crate::exec::piped_argv(&root, &argv, "", crate::exec::Diagnostics::Drop, &[]) {
-        Some((0, listing)) => Some(windows_table::parse(&listing)),
-        _ => None,
-    }
-}
-
 /// The listing [`processes`] asks PowerShell for: `<path>\t<FILETIME>`, one
 /// process per line. A process whose start this user may not read throws, and
 /// is skipped.
@@ -551,17 +573,6 @@ mod windows_table {
             })
             .collect()
     }
-}
-
-/// Elsewhere no process table is read.
-#[cfg(not(any(
-    target_os = "linux",
-    target_os = "android",
-    target_os = "macos",
-    windows
-)))]
-fn processes() -> Option<Vec<Process>> {
-    None
 }
 
 /// The programs whose process is a build: cargo and what it runs.
@@ -635,31 +646,35 @@ pub fn kept(paths: &[PathBuf]) -> Vec<Kept> {
     paths.iter().filter_map(|path| identity(path)).collect()
 }
 
-#[cfg(unix)]
+/// A file's `(dev, ino)`, which names it across its hardlinks.
+///
+/// On Windows, volume serial and file index: the same pair, which `std` keeps
+/// unstable there. One function with each platform's read under `cfg`, not a
+/// `cfg` twin, so its mutants are judged on every leg (CLOUD-2509).
 fn identity(path: &Path) -> Option<Kept> {
-    use std::os::unix::fs::MetadataExt as _;
-    let meta = std::fs::metadata(path).ok()?;
-    Some(Kept::File {
-        dev: meta.dev(),
-        ino: meta.ino(),
-    })
-}
-
-/// Volume serial and file index: Windows' `(dev, ino)`, which names a file
-/// across its hardlinks as the unix pair does. `std` keeps it unstable there.
-#[cfg(windows)]
-fn identity(path: &Path) -> Option<Kept> {
-    let file = std::fs::File::open(path).ok()?;
-    let info = winapi_util::file::information(&file).ok()?;
-    Some(Kept::File {
-        dev: info.volume_serial_number(),
-        ino: info.file_index(),
-    })
-}
-
-#[cfg(not(any(unix, windows)))]
-fn identity(_path: &Path) -> Option<Kept> {
-    None
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let meta = std::fs::metadata(path).ok()?;
+        Some(Kept::File {
+            dev: meta.dev(),
+            ino: meta.ino(),
+        })
+    }
+    #[cfg(windows)]
+    {
+        let file = std::fs::File::open(path).ok()?;
+        let info = winapi_util::file::information(&file).ok()?;
+        Some(Kept::File {
+            dev: info.volume_serial_number(),
+            ino: info.file_index(),
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        None
+    }
 }
 
 /// One cargo unit: its fingerprint directory, the artifacts that carry its hash,
@@ -997,29 +1012,35 @@ fn remove_counted(path: &Path) -> u64 {
     if links == 1 { allocated } else { 0 }
 }
 
-#[cfg(unix)]
-fn allocation(_path: &Path, meta: &std::fs::Metadata) -> (u64, u64) {
-    use std::os::unix::fs::MetadataExt as _;
-    (meta.nlink(), meta.blocks() * 512)
-}
-
-/// Windows' link count, from the same file information [`identity`] reads
-/// (`std` keeps it unstable there). Measured on #1132's `windows` job: read as
-/// a constant 1, a hardlinked file counted as freed and the pass stopped short.
-/// The handle is dropped before the caller removes the file, which Windows
-/// refuses while one is open; a count that cannot be read is the old 1.
-#[cfg(windows)]
+/// A file's link count and the bytes its removal frees once the count is one.
+///
+/// On Windows, the link count comes from the same file information [`identity`]
+/// reads (`std` keeps it unstable there). Measured on #1132's `windows` job:
+/// read as a constant 1, a hardlinked file counted as freed and the pass stopped
+/// short. The handle is dropped before the caller removes the file, which
+/// Windows refuses while one is open; a count that cannot be read is the old 1.
+/// One function with each platform's read under `cfg`, not a `cfg` twin, so its
+/// mutants are judged on every leg (CLOUD-2509).
 fn allocation(path: &Path, meta: &std::fs::Metadata) -> (u64, u64) {
-    let links = std::fs::File::open(path)
-        .ok()
-        .and_then(|file| winapi_util::file::information(&file).ok())
-        .map_or(1, |info| info.number_of_links());
-    (links, meta.len())
-}
-
-#[cfg(not(any(unix, windows)))]
-fn allocation(_path: &Path, meta: &std::fs::Metadata) -> (u64, u64) {
-    (1, meta.len())
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let _ = path;
+        (meta.nlink(), meta.blocks() * 512)
+    }
+    #[cfg(windows)]
+    {
+        let links = std::fs::File::open(path)
+            .ok()
+            .and_then(|file| winapi_util::file::information(&file).ok())
+            .map_or(1, |info| info.number_of_links());
+        (links, meta.len())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        (1, meta.len())
+    }
 }
 
 /// Whether `path` is one of the kept files: by device and inode, or by a
