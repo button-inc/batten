@@ -765,6 +765,21 @@ fn the_arm_watches_past_the_gate() {
     );
 }
 
+/// The hash of the least recently used unit a banded fixture carries.
+const STALE: &str = "eeeeeeeeeeeeeeee";
+
+/// A repository with one stale unit under a band of 10 to 11 MiB.
+fn banded(name: &str) -> (PathBuf, PathBuf, Prune) {
+    let repo = common::scratch(name);
+    common::init_repo(&repo);
+    let profile = repo.join("target/debug");
+    unit(&profile, "stale", STALE, 7200, 2 << 20);
+    let mut config = rules("target");
+    config.min_free_mb = Some(10);
+    config.max_free_mb = Some(11);
+    (repo, profile, config)
+}
+
 /// Watch `repo` under `config` with `free_mb` answering each sample by its
 /// count, until `done` holds over the samples taken and what is present.
 fn watched(
@@ -797,15 +812,11 @@ fn watched(
 /// its floor on every sample.
 #[test]
 fn a_sample_at_the_minimum_collects_nothing() {
-    let repo = common::scratch("prune-watch-at-the-minimum");
-    common::init_repo(&repo);
-    let profile = repo.join("target/debug");
-    unit(&profile, "stale", "eeeeeeeeeeeeeeee", 7200, 2 << 20);
-    let mut config = rules("target");
-    config.min_free_mb = Some(10);
-    config.max_free_mb = Some(11);
-    let lines = watched(&repo, &config, |_| 10, |taken| taken >= 2);
-    assert!(present(&profile, "stale", "eeeeeeeeeeeeeeee"), "{lines:?}");
+    let (repo, profile, config) = banded("prune-watch-at-the-minimum");
+    // ONE SAMPLE IS ENOUGH: the watcher decides on a sample before it next
+    // reads `stop`, and `around` joins any collection it started.
+    let lines = watched(&repo, &config, |_| 10, |taken| taken >= 1);
+    assert!(present(&profile, "stale", STALE), "{lines:?}");
     assert!(lines.is_empty(), "{lines:?}");
 }
 
@@ -817,22 +828,16 @@ fn a_sample_at_the_minimum_collects_nothing() {
 /// the minimum before any sample does.
 #[test]
 fn the_first_sample_below_the_minimum_collects() {
-    let repo = common::scratch("prune-watch-first-fall");
-    common::init_repo(&repo);
-    let profile = repo.join("target/debug");
-    unit(&profile, "stale", "eeeeeeeeeeeeeeee", 7200, 2 << 20);
+    let (repo, profile, config) = banded("prune-watch-first-fall");
     unit(&profile, "fresh", "ffffffffffffffff", 1, 1 << 20);
-    let mut config = rules("target");
-    config.min_free_mb = Some(10);
-    config.max_free_mb = Some(11);
     let gone = profile.clone();
     let lines = watched(
         &repo,
         &config,
         |taken| if taken == 0 { 9 } else { 50 },
-        move |taken| !present(&gone, "stale", "eeeeeeeeeeeeeeee") || taken >= 3,
+        move |taken| !present(&gone, "stale", STALE) || taken >= 3,
     );
-    assert!(!present(&profile, "stale", "eeeeeeeeeeeeeeee"), "{lines:?}");
+    assert!(!present(&profile, "stale", STALE), "{lines:?}");
     assert!(
         lines.iter().any(|line| line.starts_with("disk-collected ")),
         "{lines:?}"

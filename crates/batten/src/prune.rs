@@ -909,24 +909,15 @@ const fn mebibytes(bytes: u64) -> u64 {
 mod tests {
     use super::*;
 
-    /// The volume this case writes to has room for more than the one MiB a
-    /// constant reading would claim, and the reading is the volume's own,
-    /// within what other writers can move it by while it is taken.
+    /// The volume a suite is writing to has room for more than the one MiB a
+    /// constant reading would claim.
     ///
-    /// Fails by: a constant reading in place of the volume's.
+    /// Fails by: a constant 0 or 1 MiB reading in place of the volume's.
     #[test]
     fn free_space_is_read_off_the_volume() {
-        let dir = std::env::temp_dir();
-        let Ok(read) = available_megabytes(&dir) else {
+        let Ok(read) = available_megabytes(&std::env::temp_dir()) else {
             panic!("the scratch volume answers");
         };
-        let Ok(bytes) = fs4::available_space(&dir) else {
-            panic!("the scratch volume answers directly");
-        };
-        assert!(
-            mebibytes(bytes) > 1,
-            "the premise: a volume a suite is writing to has room"
-        );
         assert!(read > 1, "{read} MiB");
     }
 

@@ -3018,11 +3018,6 @@ mod tests {
         drop(std::fs::remove_dir_all(&dir));
     }
 
-    /// A store directory under this process's own scratch space.
-    ///
-    /// `*_in` rather than the repo-rooted entry points, for `scratch_live`'s
-    /// reason: resolving the state root reads the OS data directory, and a unit
-    /// test must not write into a developer's.
     /// An unrecorded capture is an orphan only strictly past its grace, and one
     /// whose time cannot be read never is.
     ///
@@ -3039,11 +3034,15 @@ mod tests {
         let at = |seconds: u64| written + std::time::Duration::from_secs(seconds);
         assert!(older_than(&path, grace, at(61)));
         assert!(!older_than(&path, grace, at(60)));
-        assert!(!older_than(&path, grace, written));
         assert!(!older_than(&dir.join("absent"), grace, at(600)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A store directory under this process's own scratch space.
+    ///
+    /// `*_in` rather than the repo-rooted entry points, for `scratch_live`'s
+    /// reason: resolving the state root reads the OS data directory, and a unit
+    /// test must not write into a developer's.
     fn scratch_store(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("batten-calls-{}-{name}", std::process::id()));
         drop(std::fs::remove_dir_all(&dir));

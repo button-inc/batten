@@ -386,7 +386,6 @@ fn a_write_inside_the_tree_is_selected() {
 /// Fails by: the mediator's name resolved on `PATH` like any other program.
 #[test]
 fn a_row_naming_the_engine_runs_the_running_image() {
-    use std::io::Write as _;
     use std::os::unix::fs::PermissionsExt as _;
 
     let dir = scratch("handler-running-image");
@@ -418,29 +417,18 @@ expires = "2027-03-31"
     )
     .unwrap();
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let path = format!(
-        "{}:{}",
-        stubs.display(),
-        std::env::var("PATH").unwrap_or_default()
+    let path = std::env::join_paths(
+        std::iter::once(stubs).chain(std::env::split_paths(&common::ambient_path())),
+    )
+    .unwrap();
+    let mut command = common::batten();
+    command.env("PATH", path);
+    let outcome = common::stdin_run(
+        &mut command,
+        &repo,
+        &["adjudicate", "--harness", "claude-code"],
+        r#"{"hook_event_name":"PostToolUse","tool_name":"Read","tool_input":{"file_path":"a"}}"#,
     );
-    let mut child = common::batten()
-        .current_dir(&repo)
-        .env("PATH", path)
-        .args(["adjudicate", "--harness", "claude-code"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("the binary runs");
-    child
-        .stdin
-        .take()
-        .expect("stdin is piped")
-        .write_all(
-            br#"{"hook_event_name":"PostToolUse","tool_name":"Read","tool_input":{"file_path":"a"}}"#,
-        )
-        .expect("write stdin");
-    let outcome = child.wait_with_output().expect("wait for batten");
     assert!(
         !ran.exists(),
         "the stub on PATH ran in place of the running image: {}",

@@ -55,6 +55,11 @@ fn newest(dir: &Path, path: &str, sha: &str) {
     );
 }
 
+/// No commit on `main` has touched `path`.
+fn untouched(dir: &Path, path: &str) {
+    route(dir, &format!("commits?sha=main&path={path}&"), 200, "[]");
+}
+
 /// The forge compares `base...head` as `status`.
 fn compares(dir: &Path, base: &str, head: &str, status: &str) {
     route(
@@ -91,45 +96,38 @@ fn lease(dir: &Path, args: &[&str]) -> Output {
         .expect("the compiled binary runs")
 }
 
-/// A head the forge says carries trunk's landing commit is current.
+/// The forge's four compare answers, each read as the verdict it is: a head
+/// that is `identical` to or `ahead` of trunk's landing commit is current, and
+/// one `behind` or `diverged` from it is stale, named by the commit it lacks.
 ///
 /// Fails by: the forge read, the newest-commit read or the compare read
-/// answering a constant; or `identical` and `ahead` not reading as carried.
+/// answering a constant; or either pair of answers read as the other's.
 #[test]
-fn a_head_carrying_the_landing_commit_is_current() {
-    for status in ["identical", "ahead"] {
-        let dir = fixture(&format!("lease-world-current-{status}"));
+fn each_compare_answer_reads_as_its_verdict() {
+    for (status, code) in [
+        ("identical", 0),
+        ("ahead", 0),
+        ("behind", 2),
+        ("diverged", 2),
+    ] {
+        let dir = fixture(&format!("lease-world-{status}"));
         newest(&dir, "a.sh", "aaaa");
-        route(&dir, "commits?sha=main&path=b.sh&", 200, "[]");
+        untouched(&dir, "b.sh");
         compares(&dir, "aaaa", HEAD, status);
-        let carried = lease(&dir, &["carries", HEAD]);
-        assert_eq!(carried.status.code(), Some(0), "{}", said(&carried));
+        let read = lease(&dir, &["carries", HEAD]);
+        assert_eq!(read.status.code(), Some(code), "{status}: {}", said(&read));
         assert!(
             asked(&dir).contains(&format!("repos/{REPO}/compare/aaaa...{HEAD}")),
             "{}",
             asked(&dir)
         );
-    }
-}
-
-/// A head the forge says does not carry it is stale, named by the commit it
-/// is missing.
-///
-/// Fails by: `behind` and `diverged` not reading as missing it.
-#[test]
-fn a_head_missing_the_landing_commit_is_stale() {
-    for status in ["behind", "diverged"] {
-        let dir = fixture(&format!("lease-world-stale-{status}"));
-        newest(&dir, "a.sh", "aaaa");
-        route(&dir, "commits?sha=main&path=b.sh&", 200, "[]");
-        compares(&dir, "aaaa", HEAD, status);
-        let stale = lease(&dir, &["carries", HEAD]);
-        assert_eq!(stale.status.code(), Some(2), "{}", said(&stale));
-        assert!(
-            said(&stale).contains("does not carry aaaa"),
-            "{}",
-            said(&stale)
-        );
+        if code == 2 {
+            assert!(
+                said(&read).contains("does not carry aaaa"),
+                "{}",
+                said(&read)
+            );
+        }
     }
 }
 
@@ -185,7 +183,7 @@ fn a_blank_head_asks_the_forge_nothing() {
 fn a_stale_guard_asks_to_cancel_and_runs_when_refused() {
     let dir = fixture("lease-world-cancel");
     newest(&dir, "a.sh", "aaaa");
-    route(&dir, "commits?sha=main&path=b.sh&", 200, "[]");
+    untouched(&dir, "b.sh");
     compares(&dir, "aaaa", HEAD, "behind");
     route(&dir, "actions/runs/77/cancel", 409, "{}");
     let guarded = lease(&dir, &["guard", HEAD, "topic", "77"]);

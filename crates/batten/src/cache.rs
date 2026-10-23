@@ -858,7 +858,7 @@ mod tests {
         let dir = scratch("partition-bound");
         let own = root_under(&dir).expect("own partition");
         let mark = own.join(USE_MARK);
-        touch(&mark, stepped(1)).expect("age the mark");
+        marked(&own, 1);
         let read = |path: &Path| {
             std::fs::metadata(path)
                 .and_then(|meta| meta.modified())

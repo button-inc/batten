@@ -1703,8 +1703,7 @@ pub fn terms_from_environment(lookup: impl Fn(&str) -> Option<String>) -> Option
     //
     // `None` is the documented fail-open and leaves such a consumer exactly
     // where it was, which is the honest answer: a reading nobody can take.
-    // [`remote_name`]'s reading, through the caller's lookup.
-    if lookup("LAND_LOCK_REMOTE").is_some_and(|name| name != "origin") {
+    if remote_name_from(&lookup) != "origin" {
         return None;
     }
     let slug = lookup("GITHUB_REPOSITORY").filter(|slug| !slug.trim().is_empty())?;
@@ -1764,7 +1763,13 @@ fn bound_the_relation(resolved: &mut Terms) {
 /// that reports a missing remote must agree on which name went missing.
 #[must_use]
 pub fn remote_name() -> String {
-    std::env::var("LAND_LOCK_REMOTE").unwrap_or_else(|_| String::from("origin"))
+    remote_name_from(&|name| std::env::var(name).ok())
+}
+
+/// [`remote_name`] through a caller's lookup, so the one default has one home
+/// whichever environment is asked.
+fn remote_name_from(lookup: &impl Fn(&str) -> Option<String>) -> String {
+    lookup("LAND_LOCK_REMOTE").unwrap_or_else(|| String::from("origin"))
 }
 
 /// A positive whole number of seconds from the environment, or `None`.
@@ -3925,17 +3930,12 @@ mod tests {
             asked: Vec::new(),
             sent: Vec::new(),
         }));
-        serving(&stand);
-        stand
-    }
-
-    /// Answer this thread's smart-HTTP calls from `stand`: an advertisement
-    /// for `info/refs`, `NAK` and a pack for upload-pack, and an applied report
-    /// for receive-pack.
-    fn serving(stand: &Shared) {
-        let stand = std::rc::Rc::clone(stand);
+        // It answers this thread's smart-HTTP calls: an advertisement for
+        // `info/refs`, `NAK` and a pack for upload-pack, and an applied report
+        // for receive-pack.
+        let answering = std::rc::Rc::clone(&stand);
         let remote: fetch::StandIn = Box::new(move |calls: &[Call<'_>]| {
-            let mut stand = stand.borrow_mut();
+            let mut stand = answering.borrow_mut();
             let mut answers = Vec::new();
             for call in calls {
                 stand.asked.push(call.url.to_owned());
@@ -3966,6 +3966,7 @@ mod tests {
             Ok(answers)
         });
         fetch::stand_in(remote);
+        stand
     }
 
     /// The remote every stand-in case names.
@@ -3990,11 +3991,7 @@ mod tests {
 
     /// A fresh repository at a scratch path whose lease remote is [`REMOTE`].
     fn leased_clone(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir()
-            .join("batten-lease-tests")
-            .join(format!("{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("scratch");
+        let dir = crate::scratch::scratch(&format!("lease-{name}"));
         crate::gitwrite::commit_paths(&dir, &[], "base").expect("a repository with a commit");
         let config = dir.join(".git").join("config");
         let text = std::fs::read_to_string(&config).expect("config");

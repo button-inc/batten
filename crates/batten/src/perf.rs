@@ -2388,21 +2388,7 @@ pub fn acquire(repo: &Path) -> Result<Sweep> {
         .canonicalize()
         .with_context(|| format!("perf-acquire: could not resolve {}", repo.display()))?;
 
-    // THE BINARY FIRST, THE INSTRUMENT SECOND: a missing build is this
-    // checkout's own fact and answers the same on every host, where a missing
-    // hyperfine is the host's (the `windows` job installs none).
-    let binary = repo.join(env_or(BIN_VAR, DEFAULT_BIN));
-    if !binary.is_file() {
-        bail!(
-            "perf-acquire: {} is missing — run `mise run build:release`. Nothing measured.",
-            binary.display()
-        );
-    }
-    if which("hyperfine").is_none() {
-        bail!(
-            "perf-acquire: hyperfine is not installed — run `mise install`; it is pinned in the manifest. Nothing measured."
-        );
-    }
+    let binary = release_binary(repo)?;
 
     let ns = declared_ns()?;
     let out = acquire_out_dir(repo)?;
@@ -2670,6 +2656,27 @@ fn acquire_out_dir(repo: &Path) -> Result<PathBuf> {
         .with_context(|| format!("perf-acquire: could not create {}", dir.display()))?;
     dir.canonicalize()
         .with_context(|| format!("perf-acquire: could not resolve {}", dir.display()))
+}
+
+/// The release binary the sweep times, once both of its preconditions hold.
+///
+/// THE BINARY FIRST, THE INSTRUMENT SECOND: a missing build is this checkout's
+/// own fact and answers the same on every host, where a missing hyperfine is
+/// the host's (the `windows` job installs none).
+fn release_binary(repo: &Path) -> Result<PathBuf> {
+    let binary = repo.join(env_or(BIN_VAR, DEFAULT_BIN));
+    if !binary.is_file() {
+        bail!(
+            "perf-acquire: {} is missing — run `mise run build:release`. Nothing measured.",
+            binary.display()
+        );
+    }
+    if which("hyperfine").is_none() {
+        bail!(
+            "perf-acquire: hyperfine is not installed — run `mise install`; it is pinned in the manifest. Nothing measured."
+        );
+    }
+    Ok(binary)
 }
 
 /// A repository with one policy row declaring `n` distinct documents.
@@ -3388,9 +3395,7 @@ mod tests {
             std::env::var(BIN_VAR).is_err(),
             "the premise: the default binary path is the one asked about"
         );
-        let repo = std::env::temp_dir().join(format!("batten-perf-acquire-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&repo);
-        std::fs::create_dir_all(&repo)?;
+        let repo = crate::scratch::scratch("perf-acquire");
         let refused = acquire(&repo)
             .err()
             .map(|err| err.to_string())
@@ -3398,12 +3403,13 @@ mod tests {
         assert!(refused.contains("is missing"), "{refused}");
         let binary = repo.join(DEFAULT_BIN);
         std::fs::create_dir_all(binary.parent().unwrap_or(&repo))?;
-        std::fs::write(&binary, b"not a program, so no arm can time it")?;
-        let past = acquire(&repo)
-            .err()
-            .map(|err| err.to_string())
-            .unwrap_or_default();
-        assert!(!past.contains("is missing"), "{past}");
+        std::fs::write(&binary, b"a release build")?;
+        let past = release_binary(&repo).map_err(|err| err.to_string());
+        assert!(
+            past.as_ref().is_ok_and(|found| *found == binary)
+                || past.as_ref().is_err_and(|why| !why.contains("is missing")),
+            "{past:?}"
+        );
         std::fs::remove_dir_all(&repo)?;
         Ok(())
     }

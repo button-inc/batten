@@ -395,8 +395,9 @@ fn is_sensitive(name: &str) -> bool {
 /// As [`get`]: a URL that will not parse is a [`UsageError`] (→ exit `1`), and
 /// everything else is could-not-complete (→ exit `3`).
 pub fn spend(calls: &[Call<'_>]) -> Result<Vec<Response>> {
-    // A CASE'S REMOTE ANSWERS FIRST, where one stands (CLOUD-2509). Nothing but
-    // `stand_in` writes it, and only a case calls that.
+    // A CASE'S REMOTE ANSWERS FIRST, where one stands (CLOUD-2509). Compiled
+    // for tests alone, so a release build goes straight to the network.
+    #[cfg(test)]
     if let Some(answers) = STAND_IN.with(|slot| slot.borrow().as_ref().map(|remote| remote(calls)))
     {
         return answers;
@@ -432,8 +433,10 @@ pub fn spend(calls: &[Call<'_>]) -> Result<Vec<Response>> {
 }
 
 /// A remote standing in for the network: what it answers a sequence of calls.
+#[cfg(test)]
 pub(crate) type StandIn = Box<dyn Fn(&[Call<'_>]) -> Result<Vec<Response>>>;
 
+#[cfg(test)]
 thread_local! {
     /// The remote a case stands up on its own thread, if any.
     static STAND_IN: std::cell::RefCell<Option<StandIn>> = const { std::cell::RefCell::new(None) };
@@ -445,7 +448,8 @@ thread_local! {
 /// exchange in the crate goes through [`spend`], and with the network as its
 /// only answerer the decisions over what came back (a status, an advertised
 /// ref, a session header, a refused notification) were reachable only against
-/// a live remote. A case is the only caller: this is compiled for tests alone.
+/// a live remote. It, the slot and the check in [`spend`] are compiled for
+/// tests alone.
 #[cfg(test)]
 pub(crate) fn stand_in(remote: StandIn) {
     STAND_IN.with(|slot| slot.replace(Some(remote)));

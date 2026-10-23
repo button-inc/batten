@@ -569,10 +569,8 @@ done
         std::fs::write(&stub, body).unwrap();
         make_executable(&stub);
     }
-    std::env::join_paths(
-        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
-    )
-    .unwrap()
+    std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&common::ambient_path())))
+        .unwrap()
 }
 
 /// Every argv the stubbed instruments were handed, in order.
@@ -615,45 +613,67 @@ fn measurable(name: &str) -> std::path::PathBuf {
     fixture.git().base_commit().build()
 }
 
-/// `batten perf <verb>` over the stubbed instruments.
-fn perf(repo: &std::path::Path, path: &std::ffi::OsStr, args: &[&str]) -> std::process::Output {
-    common::batten()
+/// `batten perf <verb>` over the stubbed instruments, with `env` beside the
+/// one-run sample.
+fn perf(
+    repo: &std::path::Path,
+    path: &std::ffi::OsStr,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> std::process::Output {
+    let mut command = common::batten();
+    command
         .arg("perf")
         .args(args)
         .current_dir(repo)
         .env("PATH", path)
         .env("BENCH_RUNS", "1")
-        .env("BENCH_WARMUP", "0")
-        .output()
-        .expect("run batten perf")
+        .env("BENCH_WARMUP", "0");
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    command.output().expect("run batten perf")
+}
+
+/// Commit a change to the crate source on top of the base, and answer with
+/// `(base, head)`.
+fn committed_head(repo: &std::path::Path) -> (String, String) {
+    let base = common::git_in(repo, &["rev-parse", "HEAD"]);
+    common::write(repo, "crates/batten/src/lib.rs", "// head\n");
+    common::git_in(repo, &["commit", "-qam", "head"]);
+    (base, common::git_in(repo, &["rev-parse", "HEAD"]))
+}
+
+/// What a run said on both streams, for a failure message.
+fn said(output: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        stdout(output),
+        String::from_utf8_lossy(&output.stderr)
+    )
 }
 
 /// The published measurement builds the release binary, finds it, and times
-/// every path it budgets.
+/// every path it budgets, emptying a store only for the arm that writes one.
 ///
 /// Fails by: a build that succeeded read as one that failed, a binary that is
-/// there read as missing, or the paths measured and their records dropped.
+/// there read as missing, the paths measured and their records dropped, or a
+/// prepare step on an arm that writes nothing.
 #[test]
 fn a_measurement_times_every_path_off_its_release_build() {
-    let repo = measurable("perf-measure-whole");
-    let path = instruments(&repo);
-    let measured = perf(&repo, &path, &["measure"]);
     if !cfg!(unix) {
         return;
     }
-    let said = stdout(&measured);
-    assert!(
-        measured.status.success(),
-        "{said}{}",
-        String::from_utf8_lossy(&measured.stderr)
-    );
+    let repo = measurable("perf-measure-whole");
+    let path = instruments(&repo);
+    let measured = perf(&repo, &path, &["measure"], &[]);
+    assert!(measured.status.success(), "{}", said(&measured));
+    let records = stdout(&measured);
     for id in ["noop", "check", "hook", "passthrough", "posttool", "wired"] {
-        assert!(said.contains(id), "the {id} path is recorded: {said}");
+        assert!(records.contains(id), "the {id} path is recorded: {records}");
     }
     let argv = instrumented(&repo);
     assert!(argv.contains("--profile release"), "{argv}");
-    // ONLY THE POST-TOOL ARM EMPTIES A STORE BETWEEN RUNS: it is the one whose
-    // binary writes, and a prepare step on any other would time the deletion.
     let timed: Vec<&str> = argv
         .lines()
         .filter(|line| line.starts_with("hyperfine "))
@@ -677,32 +697,16 @@ fn a_measurement_times_every_path_off_its_release_build() {
 /// identical, the records dropped, or a clean head not kept.
 #[test]
 fn a_pair_over_a_changed_head_measures_both_arms() {
-    let repo = measurable("perf-pair-whole");
-    let base = common::git_in(&repo, &["rev-parse", "HEAD"]);
-    common::write(&repo, "crates/batten/src/lib.rs", "// head\n");
-    common::git_in(&repo, &["commit", "-qam", "head"]);
-    let head = common::git_in(&repo, &["rev-parse", "HEAD"]);
-    let path = instruments(&repo);
-    let paired = common::batten()
-        .args(["perf", "pair"])
-        .current_dir(&repo)
-        .env("PATH", &path)
-        .env("BENCH_BASE_REF", &base)
-        .env("BENCH_RUNS", "1")
-        .env("BENCH_WARMUP", "0")
-        .output()
-        .expect("run batten perf pair");
     if !cfg!(unix) {
         return;
     }
-    let said = stdout(&paired);
-    assert!(
-        paired.status.success(),
-        "{said}{}",
-        String::from_utf8_lossy(&paired.stderr)
-    );
+    let repo = measurable("perf-pair-whole");
+    let (base, head) = committed_head(&repo);
+    let path = instruments(&repo);
+    let paired = perf(&repo, &path, &["pair"], &[("BENCH_BASE_REF", &base)]);
+    assert!(paired.status.success(), "{}", said(&paired));
     for arm in ["arm=base", "arm=head"] {
-        assert!(said.contains(arm), "{said}");
+        assert!(stdout(&paired).contains(arm), "{}", said(&paired));
     }
     let argv = instrumented(&repo);
     assert_eq!(argv.matches("cargo build").count(), 2, "{argv}");
@@ -720,31 +724,15 @@ fn a_pair_over_a_changed_head_measures_both_arms() {
 /// Fails by: the clean-tree half of the keep dropped.
 #[test]
 fn a_dirty_head_is_not_kept_as_a_base() {
-    let repo = measurable("perf-pair-dirty");
-    let base = common::git_in(&repo, &["rev-parse", "HEAD"]);
-    common::write(&repo, "crates/batten/src/lib.rs", "// head\n");
-    common::git_in(&repo, &["commit", "-qam", "head"]);
-    let head = common::git_in(&repo, &["rev-parse", "HEAD"]);
-    common::write(&repo, "crates/batten/src/lib.rs", "// dirty\n");
-    let path = instruments(&repo);
-    let paired = common::batten()
-        .args(["perf", "pair"])
-        .current_dir(&repo)
-        .env("PATH", &path)
-        .env("BENCH_BASE_REF", &base)
-        .env("BENCH_RUNS", "1")
-        .env("BENCH_WARMUP", "0")
-        .output()
-        .expect("run batten perf pair");
     if !cfg!(unix) {
         return;
     }
-    assert!(
-        paired.status.success(),
-        "{}{}",
-        stdout(&paired),
-        String::from_utf8_lossy(&paired.stderr)
-    );
+    let repo = measurable("perf-pair-dirty");
+    let (base, head) = committed_head(&repo);
+    common::write(&repo, "crates/batten/src/lib.rs", "// dirty\n");
+    let path = instruments(&repo);
+    let paired = perf(&repo, &path, &["pair"], &[("BENCH_BASE_REF", &base)]);
+    assert!(paired.status.success(), "{}", said(&paired));
     let head_key = batten::perf::base_key(&repo, &head).unwrap();
     assert!(
         !base_arm_is_built(&perf_dir(&repo), &head_key),

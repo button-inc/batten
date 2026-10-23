@@ -6164,10 +6164,13 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
                     return disposed(rule, pipeline_refusal(rule, Discard::Piped));
                 }
             }
-            // No look for a NEXT element: `segments` never leaves a `;` or `||`
-            // on the last one (`a_trailing_separator_ends_no_segment`), so the
-            // separator alone says something follows.
-            if matches!(segment.terminator, Some(Separator::Semi | Separator::Or)) {
+            // The element AFTER this one, by position rather than by `index + 1`:
+            // `segments` never leaves a `;` or `||` on the last element
+            // (`a_trailing_separator_ends_no_segment`), so an offset written as
+            // arithmetic has a `* 1` no case can tell from it.
+            if matches!(segment.terminator, Some(Separator::Semi | Separator::Or))
+                && parsed.iter().skip(index).nth(1).is_some()
+            {
                 return disposed(rule, pipeline_refusal(rule, Discard::Trailing));
             }
             // A NEWLINE IS A `;` FOR THE STATUS, and the segment hides it (CLOUD-986).
@@ -9891,15 +9894,21 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
                 counted += line.words.len();
                 taken.push(line);
             }
+            // TWO REFUSALS, KEPT APART: a segment that took no line and one whose
+            // count missed are each a reassignment that did not land, and neither
+            // is implied by the other where a word count can be zero.
+            if taken.is_empty() {
+                landed = false;
+                break;
+            }
             if counted != wanted {
                 landed = false;
                 break;
             }
             assignment.push(taken);
         }
-        // Every segment landed on its own count, and the counts sum to the
-        // line readings' (`joined_parse`), so no line is left over to check.
-        if landed {
+        // Applied only where every segment landed AND no line is left over.
+        if let (true, None) = (landed, lines.next()) {
             for (segment, taken) in out
                 .iter_mut()
                 .filter(|segment| !segment.nested)
@@ -10010,19 +10019,16 @@ fn covered(nodes: &[rable::Node], command: &str) -> bool {
     !tail.contains('"') && !tail.contains('\'')
 }
 
-/// Does this node open a heredoc whose body can lie past the node's own span?
-///
-/// **A GROUP IS NOT DESCENDED**, because its closing `)` or `}` follows the
-/// body, so the group's span already covers it and [`covered`] has no tail to
-/// excuse; and no joined reparse of a heredoc survives, since its delimiter
-/// needs a line of its own. A pipeline or a list ends with the heredoc's
-/// command, so its body is past the span and is what the exemption is for.
+/// Does this node, anywhere inside it, open a heredoc?
 fn opens_heredoc(node: &rable::Node) -> bool {
     match &node.kind {
         rable::NodeKind::HereDoc { .. } => true,
         rable::NodeKind::Command { redirects, .. } => redirects.iter().any(opens_heredoc),
         rable::NodeKind::Pipeline { commands, .. } => commands.iter().any(opens_heredoc),
         rable::NodeKind::List { items } => items.iter().any(|item| opens_heredoc(&item.command)),
+        rable::NodeKind::Subshell { body, .. } | rable::NodeKind::BraceGroup { body, .. } => {
+            opens_heredoc(body)
+        }
         _ => false,
     }
 }
@@ -11502,15 +11508,51 @@ mod tests {
         }
     }
 
-    /// A heredoc a PIPELINE or a LIST ends with keeps its body past the
-    /// node's span, quotes and all, and is still read rather than abstained
-    /// on as a dropped tail.
+    /// Only a list's LAST item comes without an operator, which is what lets
+    /// `flatten_in` give `after` to the item that has none.
     ///
-    /// Fails by: `opens_heredoc` not descending a pipeline's stages or a list's
-    /// items, which reads the body's quote as an unbalanced one.
+    /// Fails by: a non-final item parsed with no operator, which would then
+    /// inherit what follows the whole list.
     #[test]
-    fn a_heredoc_ending_a_pipeline_or_a_list_is_read() {
+    fn only_a_lists_last_item_has_no_operator() {
+        fn unoperated_early(node: &rable::Node) -> bool {
+            match &node.kind {
+                rable::NodeKind::List { items } => items.iter().enumerate().any(|(at, item)| {
+                    (item.operator.is_none() && at + 1 != items.len())
+                        || unoperated_early(&item.command)
+                }),
+                rable::NodeKind::Pipeline { commands, .. } => commands.iter().any(unoperated_early),
+                rable::NodeKind::Subshell { body, .. }
+                | rable::NodeKind::BraceGroup { body, .. } => unoperated_early(body),
+                _ => false,
+            }
+        }
         for command in [
+            "a; b; c",
+            "a && b || c &",
+            "{ a\nb; }",
+            "( a\nb )",
+            "{ a; b\nc; }",
+            "while x; do a\nb\ndone",
+            "a | b; c",
+        ] {
+            let nodes = rable::parse(command, false).expect("parses");
+            assert!(!nodes.iter().any(unoperated_early), "{command:?}");
+        }
+    }
+
+    /// A heredoc a PIPELINE, a LIST or a one-line GROUP opens keeps its body
+    /// past the node's span, quotes and all, and is still read rather than
+    /// abstained on as a dropped tail.
+    ///
+    /// Fails by: `opens_heredoc` not descending a pipeline's stages, a list's
+    /// items or a group's body, which reads the body's quote as an unbalanced
+    /// one.
+    #[test]
+    fn a_heredoc_ending_a_pipeline_a_list_or_a_group_is_read() {
+        for command in [
+            "(cat <<'EOF')\nhe said \"hi\"\nEOF",
+            "{ cat <<'EOF'; }\nhe said \"hi\"\nEOF",
             "cat <<'EOF' | grep x\nhe said \"hi\"\nEOF",
             "a && cat <<'EOF'\nsaid \"q\"\nEOF",
         ] {
