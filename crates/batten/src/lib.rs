@@ -14593,7 +14593,9 @@ fn run_lease_guard(
 /// green.
 ///
 /// `lease::terms_from_environment` is what closes it, and it carries the
-/// predecessor's own argument for why a clone was never actually needed. Where
+/// predecessor's own argument for why a clone was never actually needed. This
+/// call site hands it the process environment as its lookup, which keeps every
+/// branch of the reading a case its own suite can drive. Where
 /// the environment names no repository either, the answer is still `None` and
 /// the fail-open posture is exactly what it was.
 fn run_lease_guard_unleased(
