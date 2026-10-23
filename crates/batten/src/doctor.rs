@@ -1392,7 +1392,7 @@ fn is_runnable_hook(at: &Path) -> bool {
     if !meta.is_file() {
         return false;
     }
-    crate::git::executable_bit(&meta).unwrap_or(true)
+    crate::git::executable_bit_or(&meta, true)
 }
 
 /// The bare report's `config` check (CLOUD-1428), and `doctor config`'s whole

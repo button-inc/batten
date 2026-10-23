@@ -620,8 +620,7 @@ fn programs_in(dirs: &[PathBuf]) -> BTreeSet<String> {
 /// directory is the closest honest reading, and the alternative — an extension
 /// allowlist — is a second authority over what counts as a program.
 fn executable(path: &Path) -> bool {
-    std::fs::metadata(path)
-        .is_ok_and(|meta| crate::git::executable_bit(&meta).unwrap_or(meta.is_file()))
+    std::fs::metadata(path).is_ok_and(|meta| crate::git::executable_bit_or(&meta, meta.is_file()))
 }
 
 #[cfg(test)]

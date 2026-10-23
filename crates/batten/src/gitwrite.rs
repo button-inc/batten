@@ -1724,7 +1724,7 @@ fn tree_from_dir(repo: &gix::Repository, dir: &Path) -> Result<gix::ObjectId> {
 /// platform with no executable bit, every blob is a plain one — which is what git
 /// itself records there.
 fn executable_kind(meta: &std::fs::Metadata) -> gix::objs::tree::EntryKind {
-    if crate::git::executable_bit(meta).unwrap_or(false) {
+    if crate::git::executable_bit_or(meta, false) {
         gix::objs::tree::EntryKind::BlobExecutable
     } else {
         gix::objs::tree::EntryKind::Blob
