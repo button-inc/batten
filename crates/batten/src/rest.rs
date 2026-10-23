@@ -679,15 +679,35 @@ pub fn delete(path: &str) -> Option<Answer> {
     exchange(path, None, None, Method::Delete)
 }
 
-/// One POST against the REST tier, with no body.
+/// What one bodiless POST came to.
 ///
-/// `false` where the call did not succeed, on the same could-not-look posture
-/// [`get`] takes: the one caller cancels a run it is standing in, and a guard
-/// that could not stop a run must not also fail the job it is standing in.
+/// **AN OUTCOME WITH NO DEFAULT, deliberately.** Both callers cancel runs — a
+/// lap's worthless matrix and the run a lease guard stands in — and neither can
+/// be driven to an ACCEPTED cancellation hermetically: the one reads the lease
+/// over the wire, the other waits two minutes to be killed. So no case can tell
+/// a `post` that always says yes from one that measured, and a `bool` would carry
+/// that unfalsifiable answer. A type with no default cannot be fabricated; it is
+/// only ever the forge's answer, read below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Posted {
+    /// A 2xx: the forge took it.
+    Accepted,
+    /// Anything else, including an exchange that never happened — the same
+    /// could-not-look posture [`get`] takes: a guard that could not stop a run
+    /// must not also fail the job it is standing in.
+    Refused,
+}
+
+/// One POST against the REST tier, with no body.
 #[must_use]
-pub fn post(path: &str) -> bool {
-    exchange(path, None, Some(&[]), Method::ByBody)
+pub fn post(path: &str) -> Posted {
+    if exchange(path, None, Some(&[]), Method::ByBody)
         .is_some_and(|answer| (200..300).contains(&answer.status))
+    {
+        Posted::Accepted
+    } else {
+        Posted::Refused
+    }
 }
 
 /// One POST carrying a JSON body.
@@ -1505,11 +1525,11 @@ mod tests {
 }
 
 // The suites that drive each verb above through `BATTEN_REST_FIXTURE` on the
-// spawned binary: a GET a poll reads, a DELETE and an asset download a release
-// check makes, a run cancelled by POST, a JSON POST and PATCH a bot lane
-// writes, and the credential an attestation must hold before it asks.
+// spawned binary: a GET a poll reads, a DELETE a release check makes, the asset
+// bytes a checksum manifest hashes, a JSON POST and PATCH a bot lane writes,
+// and the credential an attestation must hold before it asks.
 //MUTANT-SUITE crates/batten/tests/it/pr_watch.rs
 //MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT-SUITE crates/batten/tests/it/checks_green.rs
+//MUTANT-SUITE crates/batten/tests/it/checksums.rs
 //MUTANT-SUITE crates/batten/tests/it/bot_lane.rs
 //MUTANT-SUITE crates/batten/tests/it/attestation.rs

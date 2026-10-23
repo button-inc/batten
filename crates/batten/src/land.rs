@@ -3680,7 +3680,10 @@ pub fn abandon(repo: &str, sha: &str, fanin: &FanIn) -> Abandoned {
         ..Abandoned::default()
     };
     for run in doomed {
-        if crate::rest::post(&format!("repos/{repo}/actions/runs/{}/cancel", run.id)) {
+        if matches!(
+            crate::rest::post(&format!("repos/{repo}/actions/runs/{}/cancel", run.id)),
+            crate::rest::Posted::Accepted
+        ) {
             report.cancelled += 1;
         } else {
             report.refused += 1;
