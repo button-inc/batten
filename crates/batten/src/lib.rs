@@ -14499,7 +14499,7 @@ fn report_guard(
         "::error::lease-precondition: this run is not authorised to spend a matrix; cancelling \
          run {run}"
     )?;
-    if !lease::cancel_run(repo, run) {
+    if matches!(lease::cancel_run(repo, run), rest::Posted::Refused) {
         writeln!(
             err,
             "lease-precondition: the cancellation was refused; running anyway"
