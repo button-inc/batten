@@ -443,10 +443,14 @@ fn a_fixture_root_asks_the_pin_nothing_through_the_eager_door() {
 /// the child's `PATH` and answers the two questions the module asks — the files
 /// configuring it, and a composed `PATH` one directory longer than the ambient —
 /// so the record a later call reads is the proof both answers arrived.
-#[cfg(unix)]
 #[test]
 fn a_session_start_records_the_programs_the_pin_composes() {
-    use std::os::unix::fs::PermissionsExt;
+    // THE STUB IS A `#!/bin/sh` SCRIPT, which is a program only where a shebang
+    // is honoured. Off unix the mediator cannot be stood in for, so the case
+    // states that and asserts nothing — compiled on every target all the same.
+    if !cfg!(unix) {
+        return;
+    }
 
     // The smallest committed tree carrying a policy row, which is what makes
     // session start ask the pin at all.
@@ -458,8 +462,12 @@ fn a_session_start_records_the_programs_the_pin_composes() {
     );
     let executable = |path: &Path, body: &str| {
         std::fs::write(path, body).expect("the stub is written");
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-            .expect("the stub is executable");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+                .expect("the stub is executable");
+        }
     };
     let tools = dir.join("pin-tools");
     std::fs::create_dir_all(&tools).expect("the pin's tool directory is created");
