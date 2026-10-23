@@ -695,12 +695,15 @@ fn carried_to(headers: Vec<(String, String)>, from: &str, next: &str) -> Vec<(St
 /// caller cannot ask for a GET carrying bytes or a POST carrying none — two
 /// shapes a server answers differently and neither of which any caller here
 /// wants.
+///
+/// Every case is an arm of its own rather than a guard, so no arm can be
+/// dropped without the match failing to compile (CLOUD-2509).
 fn method_for(body: Option<&[u8]>, (patch, delete): (bool, bool)) -> hyper::Method {
-    match body {
-        Some(_) if patch => hyper::Method::PATCH,
-        Some(_) => hyper::Method::POST,
-        None if delete => hyper::Method::DELETE,
-        None => hyper::Method::GET,
+    match (body.is_some(), patch, delete) {
+        (true, true, _) => hyper::Method::PATCH,
+        (true, false, _) => hyper::Method::POST,
+        (false, _, true) => hyper::Method::DELETE,
+        (false, _, false) => hyper::Method::GET,
     }
 }
 
