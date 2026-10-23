@@ -6679,9 +6679,10 @@ fn followed_cd(
 ///
 /// `has_root` IS THAT RULE ON EVERY HOST, as one predicate (CLOUD-2509): on unix
 /// it is `is_absolute`, and on Windows it holds for `/tmp/x` and `C:\x` alike.
-/// The `starts_with('/') || is_absolute()` it replaces agreed everywhere but on
-/// a Windows word rooted by `\` without a drive, which it joined under the
-/// directory and this does not; its second operand only ever differed from the
+/// The `starts_with('/') || is_absolute()` it replaces differed only on a
+/// Windows word rooted by `\` without a drive, and not in effect: joining a
+/// rooted word keeps only the directory's drive, so either way the result is
+/// rooted outside the directory. Its second operand only ever differed from the
 /// first on Windows, so no unix leg could tell `||` from `&&`.
 fn shell_resolved(word: &str, current: Option<&Path>) -> Option<std::path::PathBuf> {
     let path = Path::new(word);

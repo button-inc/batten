@@ -1574,11 +1574,14 @@ mod tests {
     #[test]
     fn an_orphan_in_the_table_is_reported() {
         let table = (1_700_000_000, 100, vec![stat_line("44", 42, 100)]);
-        assert!(super::process_table::with(table, || super::group_orphaned(
-            "42",
-            "43",
-            1_700_000_100
-        )));
+        let orphaned = |pgid, registrant| {
+            super::process_table::with(table.clone(), || {
+                super::group_orphaned(pgid, registrant, 1_700_000_100)
+            })
+        };
+        assert!(orphaned("42", "43"));
+        assert!(!orphaned("42", "44"), "its registrant is still a member");
+        assert!(!orphaned("41", "43"), "another group");
     }
 
     /// CLOUD-2509: a process began `since_boot` ticks after the boot second.
