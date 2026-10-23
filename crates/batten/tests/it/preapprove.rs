@@ -510,6 +510,51 @@ fn a_memory_write_is_preapproved_outside_plan_mode() {
     assert_not_granted(&envelope("default", "mcp__serena__delete_memory", &edit));
 }
 
+/// THE NOUN-FIRST READS (CLOUD-2519): GitHub names its pure reads
+/// `<noun>_list`, `<noun>_get` and `<noun>_read`, Miro `<noun>_read`, and plan
+/// mode refused the first two as writes.
+#[test]
+fn a_noun_first_mcp_read_is_preapproved() {
+    for tool in [
+        "mcp__github__actions_list",
+        "mcp__github__actions_get",
+        "mcp__github__pull_request_read",
+        "mcp__Miro__board_preview_read",
+    ] {
+        assert_granted_by(
+            &envelope("plan", tool, &serde_json::json!({})),
+            "call read now",
+        );
+    }
+}
+
+/// A WRITE NAMED LIKE A READ IS STILL A WRITE (CLOUD-2519): a noun-first read
+/// is one only on the servers measured to name reads that way, so
+/// `clear_list` or `mark_read` on any other server is not.
+#[test]
+fn a_write_named_like_a_list_is_not_preapproved() {
+    for tool in [
+        "mcp__x__create_list",
+        "mcp__x__clear_list",
+        "mcp__x__reset_get",
+        "mcp__x__mark_read",
+        "mcp__Claude_Docs__mark_as_read",
+    ] {
+        assert_not_granted(&envelope("default", tool, &serde_json::json!({})));
+    }
+}
+
+/// The widening reaches no write: a trigger is neither suffix.
+#[test]
+fn an_mcp_trigger_is_not_preapproved() {
+    let trigger = envelope(
+        "default",
+        "mcp__github__actions_run_trigger",
+        &serde_json::json!({}),
+    );
+    assert_not_granted(&trigger);
+}
+
 #[test]
 fn an_mcp_write_is_not_preapproved() {
     let write = envelope(

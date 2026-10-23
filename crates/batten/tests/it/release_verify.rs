@@ -425,6 +425,188 @@ fn release_path_reports_a_refused_post_rather_than_posting_it() {
     assert!(!common::stdout(&output).contains("posted"));
 }
 
+/// A forge that has never cut `tag`: its tag read answers 404 and the release
+/// list carries nothing, plus whatever `extra` routes a case adds first.
+fn uncut_forge(name: &str, extra: &[(&str, &str, &str)]) -> std::path::PathBuf {
+    use std::fmt::Write as _;
+    let forge = common::scratch(name);
+    let mut routes = String::new();
+    for (needle, file, body) in extra {
+        common::write(&forge, file, body);
+        writeln!(routes, "{needle}\t{file}").expect("a String takes a write");
+    }
+    common::write(
+        &forge,
+        "tag",
+        "HTTP/2 404\ncontent-type: application/json\n\n{\"message\":\"Not Found\"}\n",
+    );
+    common::write(
+        &forge,
+        "list",
+        "HTTP/2 200\ncontent-type: application/json\n\n[]\n",
+    );
+    routes.push_str("/releases/tags/\ttag\n/releases?per_page\tlist\n");
+    common::write(&forge, "routes", &routes);
+    forge
+}
+
+/// `repo` with the forge remote its slug is read from.
+fn with_origin(repo: std::path::PathBuf) -> std::path::PathBuf {
+    common::git_in(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    repo
+}
+
+/// A one-commit repository pinning the running version, so every load's
+/// engine check passes, with its forge remote.
+fn pinned_repo(name: &str) -> std::path::PathBuf {
+    let version = env!("CARGO_PKG_VERSION");
+    with_origin(
+        common::Fixture::new(name)
+            .config(&format!(
+                "version = 1\nengine = {{ release = \"v{version}\" }}\n"
+            ))
+            .file(
+                "Cargo.toml",
+                &format!("[workspace.package]\nversion = \"{version}\"\n"),
+            )
+            .base_commit()
+            .build(),
+    )
+}
+
+/// The refusal `release verify` prints for the uncut tag `verify_uncut` asks,
+/// worded apart from every could-not-look so a negative check discriminates.
+const ABSENT: &str = "release verify: v9.9.9 is not cut yet";
+
+/// `release verify v9.9.9 <flags>` against `uncut_forge(.., extra)`: its exit
+/// code and its stderr.
+fn verify_uncut(name: &str, extra: &[(&str, &str, &str)], flags: &[&str]) -> (Option<i32>, String) {
+    let repo = pinned_repo(name);
+    let forge = uncut_forge(&format!("{name}-forge"), extra);
+    let output = common::batten()
+        .current_dir(&repo)
+        .env("BATTEN_REST_FIXTURE", &forge)
+        .args(["release", "verify", "v9.9.9"])
+        .args(flags)
+        .output()
+        .expect("run release verify");
+    (output.status.code(), common::stderr(&output))
+}
+
+/// A RELEASE NOT CUT YET IS REFUSED, NEVER COULD-NOT-LOOK (CLOUD-2518): both
+/// reads answered, so its absence is a measurement and the verb exits 2.
+#[test]
+fn an_uncut_release_is_refused_not_could_not_look() {
+    let (code, stderr) = verify_uncut("release-verify-uncut", &[], &[]);
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains(ABSENT), "{stderr}");
+}
+
+/// A DRAFT `land-state` SAW IS NEVER REFUSED AS ABSENT (CLOUD-2518). Its
+/// absence from the list is lag, and `release-land` discards a refused draft,
+/// so `--draft` keeps could-not-look and the land retries.
+#[test]
+fn an_uncut_draft_stays_could_not_look() {
+    let (code, stderr) = verify_uncut("release-verify-uncut-draft", &[], &["--draft"]);
+    assert_eq!(code, Some(3), "{stderr}");
+    assert!(!stderr.contains(ABSENT), "{stderr}");
+}
+
+/// ONLY A SIGHTING OF ABSENCE IS A REFUSAL (CLOUD-2518). A tag read the forge
+/// failed some other way says nothing about whether the release exists, so it
+/// stays could-not-look and exits 3, whatever the list says.
+#[test]
+fn a_tag_read_that_failed_otherwise_stays_could_not_look() {
+    let broken = (
+        "/releases/tags/",
+        "broken",
+        "HTTP/2 500\ncontent-type: application/json\n\n{\"message\":\"no\"}\n",
+    );
+    let (code, stderr) = verify_uncut("release-verify-tag-500", &[broken], &[]);
+    assert_eq!(code, Some(3), "{stderr}");
+    assert!(!stderr.contains(ABSENT), "{stderr}");
+}
+
+/// `release path <head> <flags>` on a release-shaped head pinning a release no
+/// forge has cut, with the guard's settings job green: its exit, stdout, stderr.
+fn release_path_uncut(name: &str, flags: &[&str]) -> (Option<i32>, String, String) {
+    let version = env!("CARGO_PKG_VERSION");
+    let config = |pin: &str| {
+        format!("must_land_on = \"origin/main\"\nversion = 1\nengine = {{ release = \"{pin}\" }}\n")
+    };
+    let manifest = |at: &str| format!("[workspace.package]\nversion = \"{at}\"\n");
+    let repo = with_origin(
+        common::Fixture::new(name)
+            .config(&config("v0.0.1"))
+            .file("Cargo.toml", &manifest("0.0.1"))
+            .base_commit()
+            .config(&config(&format!("v{version}")))
+            .file("Cargo.toml", &manifest(version))
+            .work_commit()
+            .build(),
+    );
+    let head = common::git_in(&repo, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    let forge = uncut_forge(
+        &format!("{name}-forge"),
+        &[
+            (
+                "/actions/workflows/",
+                "runs",
+                "HTTP/2 200\ncontent-type: application/json\n\n{\"workflow_runs\":[{\"id\":7}]}\n",
+            ),
+            (
+                "/actions/runs/",
+                "jobs",
+                "HTTP/2 200\ncontent-type: application/json\n\n{\"jobs\":[{\"name\":\"settings\",\"status\":\"completed\",\"conclusion\":\"success\"}]}\n",
+            ),
+        ],
+    );
+    let output = common::batten()
+        .current_dir(&repo)
+        .env("BATTEN_REST_FIXTURE", &forge)
+        .args(["release", "path", &head])
+        .args(flags)
+        .output()
+        .expect("run release path");
+    (
+        output.status.code(),
+        common::stdout(&output),
+        common::stderr(&output),
+    )
+}
+
+/// THE RELEASE PR'S PRE-CUT HEAD (CLOUD-2518). Its pin names the release its
+/// own cut creates, so G1 refuses it; on a release-shaped head with the guard's
+/// settings green, the seal excuses that failure and `final` may pass, which is
+/// what lets the cut run at all. As could-not-look it exited 3.
+#[test]
+fn a_release_head_whose_release_is_not_cut_is_not_sealed_once_settings_are_green() {
+    let (code, stdout, stderr) =
+        release_path_uncut("release-path-uncut-head", &["--seal", "release-guard.yml"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stdout.contains("release path: failure"), "{stdout}");
+}
+
+/// AN UNCUT RELEASE FAILS ONLY UNDER THE SEAL (CLOUD-2518). Every other caller
+/// grades a release that exists, as `release-land` does the one it just
+/// published, so absence there is lag: could-not-look, exit 3, nothing posted.
+#[test]
+fn an_uncut_release_outside_the_seal_stays_could_not_look() {
+    let (code, stdout, stderr) = release_path_uncut("release-path-uncut-unsealed", &[]);
+    assert_eq!(code, Some(3), "{stderr}");
+    assert!(!stdout.contains("release path: failure"), "{stdout}");
+}
+
 /// The read, over the fixture forge: the release object's `draft`,
 /// `immutable` and `target_commitish`, and the tag's commit peeled.
 #[test]

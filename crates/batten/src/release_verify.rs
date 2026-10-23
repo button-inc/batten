@@ -71,6 +71,9 @@ pub enum Refusal {
     /// A committed `install.lock` line `SHA256SUMS` does not publish, or a lock
     /// naming another release or none (CLOUD-2287).
     LockDisagrees(String),
+    /// No release is tagged this, as both reads answered (CLOUD-2518): the
+    /// release PR's pin names a release the cut has not created yet.
+    Absent(String),
 }
 
 impl Refusal {
@@ -92,6 +95,7 @@ impl Refusal {
                 "release verify: {} disagrees with {SUMS}: {what}",
                 crate::install::LOCK_FILE
             ),
+            Self::Absent(tag) => format!("release verify: {tag} is not cut yet"),
         }
     }
 }

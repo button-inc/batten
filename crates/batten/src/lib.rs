@@ -26527,7 +26527,7 @@ fn run_release_verify(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    match release_verdict(tag, draft, mode, overrides).1 {
+    match release_verdict(tag, draft, !draft, mode, overrides).1 {
         release_verify::Verdict::Verified => {
             writeln!(
                 out,
@@ -26548,10 +26548,26 @@ fn run_release_verify(
     }
 }
 
+/// Whether the forge positively sighted that no release carries `tag`
+/// (CLOUD-2518): `release_state::read_found`'s `Found::Absent`, the tag read
+/// 404 and an answered list without it. A function of its own so the guard
+/// that asks it fits the one line its `//MUTANT` rows rewrite.
+fn uncut(slug: &str, tag: &str, get: release::Get<'_>) -> bool {
+    release_state::read_found(slug, tag, get) == Ok(release_state::Found::Absent)
+}
+
 /// G1 read and judged: the release as read, where it could be, and the verdict.
+///
+/// `absent_refuses` is whether a release the forge has positively not cut is a
+/// refusal on the caller's surface (CLOUD-2518), decided by the caller because
+/// only it knows whether the release must already exist there.
+//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
+//MUTANT uncut-release-could-not-look|s@^        Err(_) if absent_refuses \&\& uncut(\&slug, tag, \&get) => {$@        Err(_) if false => {@|an_uncut_release_is_refused_not_could_not_look
+//MUTANT uncut-refused-everywhere|s@^        Err(_) if absent_refuses \&\& uncut(\&slug, tag, \&get) => {$@        Err(_) if uncut(\&slug, tag, \&get) => {@|an_uncut_draft_stays_could_not_look
 fn release_verdict(
     tag: &str,
     draft: bool,
+    absent_refuses: bool,
     mode: Mode,
     overrides: &Overrides,
 ) -> (Option<release_verify::Release>, release_verify::Verdict) {
@@ -26563,9 +26579,38 @@ fn release_verdict(
             )),
         );
     };
-    let get = |path: &str| rest::get(path, None);
+    // ONE ANSWER PER PATH FOR THE LIFE OF THIS VERDICT: the read, its absence
+    // check and the release object each ask for the tag and the list, and a
+    // one-shot `rest::get` holds no cache.
+    let answered = std::cell::RefCell::new(std::collections::HashMap::new());
+    let get = |path: &str| {
+        answered
+            .borrow_mut()
+            .entry(path.to_owned())
+            .or_insert_with(|| rest::get(path, None))
+            .clone()
+    };
+    // A RELEASE NOT CUT YET IS A REFUSAL WHERE THE CALLER SAYS SO (CLOUD-2518).
+    // The release PR's head pins the release its own cut creates, so the read
+    // fails there by construction; as could-not-look it made `release path
+    // --seal` exit 3 and held the cut that would create it. Only a positive
+    // sighting of absence counts: any other failed read stays could-not-look.
+    //
+    // WHERE THE RELEASE MUST EXIST, absence is lag and stays could-not-look:
+    // `--draft` verifies a draft `land-state` has just seen, and `release-land`
+    // maps a refusal there to `release discard`; an unsealed `release path`
+    // grades a release `release-land` has just published, and a posted
+    // `failure` would outlive the lag.
     let release = match release_verify::read(&slug, tag, &get) {
         Ok(release) => release,
+        Err(_) if absent_refuses && uncut(&slug, tag, &get) => {
+            return (
+                None,
+                release_verify::Verdict::Refused(vec![release_verify::Refusal::Absent(
+                    tag.to_owned(),
+                )]),
+            );
+        }
         Err(why) => return (None, release_verify::Verdict::CouldNotLook(why)),
     };
     let missing = release_assets_missing(tag, mode, overrides);
@@ -26605,7 +26650,7 @@ fn release_verdict(
 /// `batten release path <sha> [--post] [--seal]` (CLOUD-2033 G2): the one
 /// predicate a write of `main` is graded by. Exit 0 when a verdict was printed
 /// (and posted, with `--post`), 3 when it could not look or could not post.
-/// With `--seal`, exit 1 when [`release_path::seals`] holds — the pre-B2 seal
+/// With `--seal`, exit 2 when [`release_path::seals`] holds — the pre-B2 seal
 /// `final` runs. See [`release_path`].
 fn run_release_path(
     sha: &str,
@@ -26616,7 +26661,7 @@ fn run_release_path(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let here = Path::new(".");
-    let (verdict, shaped) = release_path_verdict(here, sha, mode, overrides);
+    let (verdict, shaped) = release_path_verdict(here, sha, mode, overrides, seal.is_some());
     if let release_path::Verdict::CouldNotLook(why) = &verdict {
         writeln!(err, "batten: release path: could not look: {why}")?;
         return Ok(ExitCode::Internal);
@@ -26627,7 +26672,7 @@ fn run_release_path(
         "release path: {state} at {sha}: {}",
         verdict.description()
     )?;
-    // `--strict` is the landers' refusal: a failure verdict is exit 1.
+    // `--strict` is the landers' refusal: a failure verdict is `Violation`.
     let verdict_code = if strict && matches!(verdict, release_path::Verdict::Failure(_)) {
         ExitCode::Violation
     } else {
@@ -26716,11 +26761,15 @@ fn post_release_path(
 
 /// G2's reads, then [`release_path::judge`] over them, with whether the head
 /// is release-shaped.
+///
+/// `sealing` is whether the caller is `--seal`, the one surface an uncut
+/// release is judged on (CLOUD-2518).
 fn release_path_verdict(
     here: &Path,
     sha: &str,
     mode: Mode,
     overrides: &Overrides,
+    sealing: bool,
 ) -> (release_path::Verdict, bool) {
     use release_path::Verdict::CouldNotLook;
     let trunk = match worktree::declared_trunk(here) {
@@ -26759,7 +26808,7 @@ fn release_path_verdict(
     };
     let other_config_change =
         release_path::config_changed_beyond_engine(&base_config, &head_config);
-    let mut verify = |tag: &str| match release_verdict(tag, false, mode, overrides) {
+    let mut verify = |tag: &str| match release_verdict(tag, false, sealing, mode, overrides) {
         (Some(release), release_verify::Verdict::Verified) => Ok(
             release_path::Published::Verified(release.tag_commit.unwrap_or(release.target)),
         ),
