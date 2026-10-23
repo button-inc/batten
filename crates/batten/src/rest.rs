@@ -784,6 +784,49 @@ pub fn patch_json(path: &str, body: &serde_json::Value) -> Option<Answer> {
 /// themselves.
 const FIXTURE: &str = "BATTEN_REST_FIXTURE";
 
+thread_local! {
+    /// The fixture directory [`with_fixture`] scoped to this thread, if any.
+    static SCOPED: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `body` with every exchange on this thread answered from the fixture
+/// directory `dir`, as `BATTEN_REST_FIXTURE` naming `dir` would answer it.
+///
+/// **THE SAME SEAM, REACHABLE IN PROCESS** (CLOUD-2509). A library caller
+/// cannot set the environment (this crate forbids the `unsafe` `set_var`
+/// needs), so a verb's forge half was testable only from a spawned binary and
+/// its unit tier reached none of it. Thread-scoped rather than process-wide,
+/// so cases running side by side never answer from each other's directory; a
+/// thread the body spawns carries it only through [`scoped`] and [`within`].
+/// It opens nothing the environment variable does not: the answers are files
+/// the caller wrote.
+pub fn with_fixture<T>(dir: &std::path::Path, body: impl FnOnce() -> T) -> T {
+    within(Some(dir.to_path_buf()), body)
+}
+
+/// The fixture directory [`with_fixture`] scoped to this thread, for a thread
+/// it spawns to carry with [`within`].
+#[must_use]
+pub fn scoped() -> Option<std::path::PathBuf> {
+    SCOPED.with(|scoped| scoped.borrow().clone())
+}
+
+/// Run `body` under the scope [`scoped`] read on another thread: none answers
+/// from the environment as before.
+pub fn within<T>(dir: Option<std::path::PathBuf>, body: impl FnOnce() -> T) -> T {
+    let previous = SCOPED.with(|scoped| scoped.replace(dir));
+    let answered = body();
+    SCOPED.with(|scoped| scoped.replace(previous));
+    answered
+}
+
+/// The fixture directory this exchange answers from: [`with_fixture`]'s scope,
+/// else `BATTEN_REST_FIXTURE`.
+fn fixture_dir() -> Option<std::path::PathBuf> {
+    scoped().or_else(|| std::env::var_os(FIXTURE).map(std::path::PathBuf::from))
+}
+
 /// One GET of `path` answered from the fixture directory `dir`, as [`get`]
 /// answers it when `BATTEN_REST_FIXTURE` names `dir` — for a library caller
 /// that cannot set the environment (this crate forbids the `unsafe` that
@@ -800,6 +843,30 @@ pub fn fixture_get(dir: &std::path::Path, path: &str) -> Option<Answer> {
         None,
         crate::now_unix(),
     )
+}
+
+/// A fixture directory for [`with_fixture`] answering by endpoint: each
+/// `(needle, status, body)` answers the first request whose `<METHOD> <url>`
+/// contains `needle`, and a request no needle matches finds no answer.
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+pub(crate) fn routed(case: &str, routes: &[(&str, u16, &str)]) -> std::path::PathBuf {
+    let dir = crate::scratch::scratch(case);
+    let mut table = String::new();
+    for (n, (needle, status, body)) in routes.iter().enumerate() {
+        let file = format!("route.{n}");
+        std::fs::write(dir.join(&file), format!("HTTP/1.1 {status} X\n\n{body}"))
+            .expect("a scratch dir takes a fixture");
+        table += &format!("{needle}\t{file}\n");
+    }
+    std::fs::write(dir.join("routes"), table).expect("a scratch dir takes a fixture");
+    dir
+}
+
+/// What [`routed`]'s fixture was asked, one `<METHOD> <url>` per line.
+#[cfg(test)]
+pub(crate) fn asked(dir: &std::path::Path) -> String {
+    std::fs::read_to_string(dir.join("args")).unwrap_or_default()
 }
 
 /// One request as the fixture seam sees it.
@@ -940,9 +1007,9 @@ fn method_of(body: Option<&[u8]>, chosen: Method) -> &'static str {
 fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method) -> Option<Answer> {
     let now = crate::now_unix();
     let url = format!("{API}/{path}");
-    if let Some(dir) = std::env::var_os(FIXTURE) {
+    if let Some(dir) = fixture_dir() {
         return from_fixture(
-            std::path::Path::new(&dir),
+            &dir,
             &Request {
                 method: method_of(body, chosen),
                 url: &url,

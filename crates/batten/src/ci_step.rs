@@ -190,14 +190,18 @@ pub fn summary_section(title: &str, output: &str) -> String {
     section
 }
 
-/// Append `text` to the file the runner variable `var` names, if it names one.
+/// Append `text` to `named`, the file the runner variable `var` names, if it
+/// names one.
 ///
 /// Through [`crate::durable::append`] (CLOUD-1919): one write and a sync, so a
 /// crash leaves the runner's file with the lines whole or absent, never torn. An
 /// empty text writes nothing, because the durable append would supply a newline
 /// and put a blank line into a file the runner parses.
-fn append_to(var: &str, text: &str) -> Result<()> {
-    let Some(path) = std::env::var_os(var).filter(|path| !path.is_empty()) else {
+///
+/// `named` is the variable's value as the caller read it, so the decision tests
+/// without the `unsafe` a set environment needs (CLOUD-2509).
+fn append_to(named: Option<std::ffi::OsString>, var: &str, text: &str) -> Result<()> {
+    let Some(path) = named.filter(|path| !path.is_empty()) else {
         return Ok(());
     };
     if text.is_empty() {
@@ -267,19 +271,20 @@ pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> R
         crate::durable::replace(path, &stdout)
             .with_context(|| format!("ci step: --save {path}"))?;
     }
+    let runner = |var: &str, text: &str| append_to(std::env::var_os(var), var, text);
     if request.outputs {
         let mut lines = String::new();
         for line in stdout.lines().filter(|line| output_line(line)) {
             lines.push_str(line);
             lines.push('\n');
         }
-        append_to(OUTPUT_VAR, &lines)?;
+        runner(OUTPUT_VAR, &lines)?;
     }
     if let Some(ref key) = request.capture {
-        append_to(OUTPUT_VAR, &captured(key, &stdout))?;
+        runner(OUTPUT_VAR, &captured(key, &stdout))?;
     }
     if let Some(ref title) = request.summary {
-        append_to(
+        runner(
             SUMMARY_VAR,
             &summary_section(title, &format!("{stdout}{stderr}")),
         )?;
@@ -288,7 +293,7 @@ pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> R
         && let Some((_, value)) = map.iter().find(|(mapped, _)| *mapped == code)
     {
         writeln!(err, "ci step: exit {code} -> {key}={value}")?;
-        append_to(OUTPUT_VAR, &format!("{key}={value}\n"))?;
+        runner(OUTPUT_VAR, &format!("{key}={value}\n"))?;
         return Ok(ExitCode::Success);
     }
     if code == 0 {
@@ -307,6 +312,19 @@ pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> R
 //MUTANT capture-blank|s@        .find(\x7cline\x7c !line.is_empty())@        .next()@|a_capture_is_the_first_non_blank_line_or_empty
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_runner_file_takes_the_text_only_where_one_is_named() {
+        let dir = crate::scratch::scratch("ci-step-append");
+        let file = dir.join("output");
+        append_to(Some(file.clone().into_os_string()), OUTPUT_VAR, "k=v\n").unwrap();
+        append_to(Some(file.clone().into_os_string()), OUTPUT_VAR, "").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "k=v\n");
+        append_to(Some(std::ffi::OsString::new()), OUTPUT_VAR, "k=v\n").unwrap();
+        append_to(None, OUTPUT_VAR, "k=v\n").unwrap();
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        assert!(append_to(Some(dir.into_os_string()), OUTPUT_VAR, "k=v\n").is_err());
+    }
 
     #[test]
     fn only_a_key_value_line_is_an_output() {
