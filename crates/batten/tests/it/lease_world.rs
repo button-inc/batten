@@ -208,10 +208,10 @@ fn a_stale_guard_asks_to_cancel_and_runs_when_refused() {
 /// whole interval. Off unix there is no signal to send (`stop` is inert by
 /// construction there), so there is no subject to drive.
 #[test]
-#[cfg(unix)]
 fn stop_terminates_the_holder_it_names() {
-    use std::os::unix::process::ExitStatusExt;
-
+    if cfg!(not(unix)) {
+        return;
+    }
     #[expect(
         clippy::disallowed_types,
         reason = "stays, and test-only: the subject is a signal to ANOTHER process, so a real child is the only holder that can receive one"
@@ -241,7 +241,13 @@ fn stop_terminates_the_holder_it_names() {
         panic!("stop sent no signal: the holder was still running after 30s");
     };
     let status = reaped.expect("the holder is reaped");
-    assert_eq!(status.signal(), Some(15), "stopped by SIGTERM: {status:?}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(status.signal(), Some(15), "stopped by SIGTERM: {status:?}");
+    }
+    #[cfg(not(unix))]
+    let _ = status;
 }
 
 /// A discovery ceiling between a directory and its repository fences the walk,
