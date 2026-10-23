@@ -26966,9 +26966,17 @@ fn run_release_verify(
     }
 }
 
+/// Whether the forge positively sighted that no release carries `tag`
+/// (CLOUD-2518): `release_state::read_found`'s `Found::Absent`, the tag read
+/// 404 and an answered list without it.
+fn uncut(slug: &str, tag: &str, get: release::Get<'_>) -> bool {
+    release_state::read_found(slug, tag, get) == Ok(release_state::Found::Absent)
+}
+
 /// G1 read and judged: the release as read, where it could be, and the verdict.
 //MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT uncut-release-could-not-look|s@^        Err(_) if release_state::read_found(\&slug, tag, \&get) == Ok(release_state::Found::Absent) => {$@        Err(_) if false => {@|an_uncut_release_is_refused_not_could_not_look
+//MUTANT uncut-release-could-not-look|s@^        Err(_) if !draft \&\& uncut(\&slug, tag, \&get) => {$@        Err(_) if false => {@|an_uncut_release_is_refused_not_could_not_look
+//MUTANT uncut-draft-refused|s@^        Err(_) if !draft \&\& uncut(\&slug, tag, \&get) => {$@        Err(_) if uncut(\&slug, tag, \&get) => {@|an_uncut_draft_stays_could_not_look
 fn release_verdict(
     tag: &str,
     draft: bool,
@@ -26999,11 +27007,14 @@ fn release_verdict(
     // fails there by construction; as could-not-look it made `release path
     // --seal` exit 3 and held the cut that would create it. Only a positive
     // sighting of absence counts: any other failed read stays could-not-look.
+    //
+    // NEVER FOR `--draft`. That mode verifies a draft `land-state` has just
+    // seen, so its absence is a lagging list rather than a fact, and
+    // `release-land` maps a refusal there to `release discard`: a refusal would
+    // delete a good draft that a could-not-look leaves to be retried.
     let release = match release_verify::read(&slug, tag, &get) {
         Ok(release) => release,
-        Err(_)
-            if release_state::read_found(&slug, tag, &get) == Ok(release_state::Found::Absent) =>
-        {
+        Err(_) if !draft && uncut(&slug, tag, &get) => {
             return (
                 None,
                 release_verify::Verdict::Refused(vec![release_verify::Refusal::Absent(

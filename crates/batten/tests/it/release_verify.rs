@@ -502,6 +502,27 @@ fn an_uncut_release_is_refused_not_could_not_look() {
     );
 }
 
+/// A DRAFT `land-state` SAW IS NEVER REFUSED AS ABSENT (CLOUD-2518). Its
+/// absence from the list is lag, and `release-land` discards a refused draft,
+/// so `--draft` keeps could-not-look and the land retries.
+#[test]
+fn an_uncut_draft_stays_could_not_look() {
+    let repo = pinned_repo("release-verify-uncut-draft");
+    let forge = uncut_forge("release-verify-uncut-draft-forge", &[]);
+    let output = common::batten()
+        .current_dir(&repo)
+        .env("BATTEN_REST_FIXTURE", &forge)
+        .args(["release", "verify", "v9.9.9", "--draft"])
+        .output()
+        .expect("run release verify --draft");
+    assert_eq!(output.status.code(), Some(3), "{}", common::stderr(&output));
+    assert!(
+        !common::stderr(&output).contains("no release is tagged"),
+        "{}",
+        common::stderr(&output)
+    );
+}
+
 /// ONLY A SIGHTING OF ABSENCE IS A REFUSAL (CLOUD-2518). A tag read the forge
 /// failed some other way says nothing about whether the release exists, so it
 /// stays could-not-look and exits 3, whatever the list says.
