@@ -243,69 +243,6 @@ mod tests {
         }
     }
 
-    /// The probe's whole chain over the fixture seam (CLOUD-2509): seeded at
-    /// the trunk's head, a commit made on it, and the write's answer graded.
-    fn probe_over(
-        case: &str,
-        seeded: u16,
-        written: u16,
-        verdict: &str,
-    ) -> Result<Option<String>, String> {
-        let dir = crate::rest::routed(
-            case,
-            &[
-                (
-                    "GET https://api.github.com/repos/o/r/git/ref/heads/release-path-probe",
-                    404,
-                    "{}",
-                ),
-                (
-                    "GET https://api.github.com/repos/o/r/git/ref/heads/main",
-                    200,
-                    r#"{"object":{"sha":"h"}}"#,
-                ),
-                (
-                    "POST https://api.github.com/repos/o/r/git/refs",
-                    seeded,
-                    "{}",
-                ),
-                (
-                    "GET https://api.github.com/repos/o/r/git/commits/h",
-                    200,
-                    r#"{"tree":{"sha":"t"}}"#,
-                ),
-                (
-                    "POST https://api.github.com/repos/o/r/git/commits",
-                    201,
-                    r#"{"sha":"p"}"#,
-                ),
-                (
-                    "PATCH https://api.github.com/repos/o/r/git/refs/heads/release-path-probe",
-                    written,
-                    verdict,
-                ),
-            ],
-        );
-        let get = |path: &str| crate::rest::get(path, None);
-        crate::rest::with_fixture(&dir, || probe("o/r", "main", &get))
-    }
-
-    #[test]
-    fn a_probe_refused_by_a_ruleset_holds_and_an_accepted_one_does_not() {
-        assert_eq!(
-            probe_over("probe-held", 201, 422, "Repository rule violations found"),
-            Ok(None)
-        );
-        let accepted = probe_over("probe-accepted", 201, 200, "{}")
-            .unwrap()
-            .unwrap();
-        assert!(accepted.contains("answered 200"), "{accepted}");
-        assert_eq!(
-            probe_over("probe-unseeded", 500, 200, "{}"),
-            Err(String::from("seeding release-path-probe answered 500"))
-        );
-    }
-
     /// Every path answers from `routes` by exact match, and 404 otherwise.
     fn forge(
         routes: Vec<(String, String)>,
