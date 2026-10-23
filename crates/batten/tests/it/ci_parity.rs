@@ -1741,6 +1741,12 @@ fn a_pin_one_release_past_the_cut_arms_no_freeze() {
         "release-lander-pinned-218",
         "engine = { release = \"v0.0.218\" }",
     ));
+    // The control: the same tree at the threshold IS refused, so the pin the
+    // helper writes is read and the arm can fire through it.
+    assert!(unfrozen_lander_wire_wrong(
+        "release-lander-pinned-219",
+        "engine = { release = \"v0.0.219\" }",
+    ));
 }
 
 /// A source pin never lands, so it arms nothing (CLOUD-2515).

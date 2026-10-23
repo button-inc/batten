@@ -1,27 +1,29 @@
 //! THE RELEASE REHEARSAL (CLOUD-2515): the tree, one release ahead.
 //!
-//! The release PR changes two things no feature PR does: release-plz moves the
-//! workspace version, and its pin-move step (`release-plz.yml`, "Move the engine
-//! pin") moves `batten.toml`'s `engine` line to `v<version>`. A rule whose
-//! verdict depends on either is therefore evaluated, for the first time, on the
-//! release PR itself, and a head that may touch nothing but the release paths
+//! The release PR changes what no feature PR does: release-plz moves the
+//! workspace version through `Cargo.toml`, `Cargo.lock` and the changelog, and
+//! its pin-move step (`release-plz.yml`, "Move the engine pin") moves
+//! `batten.toml`'s `engine` line to `v<version>`. A rule whose verdict depends on
+//! any of those is therefore evaluated, for the first time, on the release PR
+//! itself, and a head that may touch nothing but the release paths
 //! (`release_path::RELEASE_PATHS`) can fix nothing it finds. That is how
 //! `ci-parity`'s freeze arm held v0.0.217 red by construction for nine days.
 //!
 //! This case makes that release PR's state an ordinary PR's question. It copies
-//! the tracked tree, applies exactly those two moves at the next patch release,
+//! the tracked tree, moves all four release paths to the next patch release
+//! through `release_state::bump` (the cut's own writer for exactly these four),
 //! and runs every row that could read them, so a rule only the release PR would
 //! trip fails here first, on the change that introduced it.
 //!
 //! # Which rows
 //!
-//! A `policy` row on the `tree` scope, with a `module`, no `base`, whose
-//! `sources` name `batten.toml` or `Cargo.toml` literally. Each exclusion is a
-//! property rather than an id:
+//! A `policy` row on the `tree` scope, with a `module`, no `base`, that names a
+//! moved path literally among its `sources`, `documents` or `line_sources`. Each
+//! exclusion is a property rather than an id:
 //!
 //! * a preset row has no `module`, and reads the binary's vendored text;
 //! * a `base` row asks git history, which a scratch copy does not carry and the
-//!   two moves do not change.
+//!   moves do not change.
 //!
 //! # Why `RunOverSelection`
 //!
@@ -30,53 +32,66 @@
 //! any rule ran. `RunOverSelection` is the narrowed caller's entitlement.
 
 use std::fs;
+use std::io::ErrorKind;
 use std::path::Path;
 
+use batten::release_state::{self, Files};
 use batten::rules::{self, RuleKind, RuleScope};
 
 use crate::common;
 
-/// The literal sources that carry the two moves.
-const MOVED: [&str; 2] = ["batten.toml", "Cargo.toml"];
+/// The four release paths `release_state::bump` moves.
+const MOVED: [&str; 4] = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "batten.toml",
+    "crates/batten/CHANGELOG.md",
+];
 
 /// Every tracked file of the checkout at `root`, copied under `scratch`.
 fn copy_tracked(root: &Path, scratch: &Path) {
     for path in common::git_in(root, &["ls-files"]).lines() {
         let to = scratch.join(path);
         fs::create_dir_all(to.parent().expect("a tracked file has a parent")).expect("scratch dir");
-        // A tracked path deleted in the working tree is not part of the tree a
-        // rule reads, so it is not part of the rehearsal either.
-        let _ = fs::copy(root.join(path), &to);
+        match fs::copy(root.join(path), &to) {
+            Ok(_) => {}
+            // A tracked path deleted in the working tree is not part of the
+            // tree a rule reads, so it is not part of the rehearsal either.
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => panic!("copy {path} into the rehearsal: {error}"),
+        }
     }
 }
 
-/// Apply the release PR's two moves to the copy, through the crate's own
-/// version step and pin writer, and return the version.
+/// Move the copy to the next patch release through the cut's own writer, and
+/// return the version.
 fn move_to_next_release(scratch: &Path) -> String {
-    let manifest = fs::read_to_string(scratch.join("Cargo.toml")).expect("Cargo.toml");
+    let read = |path: &str| fs::read_to_string(scratch.join(path)).expect("a release path");
+    let manifest = read(MOVED[0]);
     let current = batten::release_path::version_of(&manifest).expect("a workspace version");
-    let next = batten::release_state::next_version(&current).expect("a three-part version");
-    let moved = manifest.replacen(
-        &format!("version = \"{current}\""),
-        &format!("version = \"{next}\""),
-        1,
-    );
-    assert_eq!(
-        batten::release_path::version_of(&moved).as_deref(),
-        Some(next.as_str()),
-        "the version moved"
-    );
-    fs::write(scratch.join("Cargo.toml"), moved).expect("move the version");
-    let config = fs::read_to_string(scratch.join("batten.toml")).expect("batten.toml");
-    let pin = batten::engine::Pin {
-        release: Some(format!("v{next}")),
+    // `main` pins the release it carries; a working tree pinned to a source
+    // build (`install:local`) is put back to that before the move.
+    let pinned = batten::engine::Pin {
+        release: Some(format!("v{current}")),
         source: None,
     };
-    fs::write(
-        scratch.join("batten.toml"),
-        batten::engine::rewrite(&config, &pin),
-    )
-    .expect("move the pin");
+    let files = Files {
+        manifest,
+        lock: read(MOVED[1]),
+        config: batten::engine::rewrite(&read(MOVED[2]), &pinned),
+        changelog: read(MOVED[3]),
+    };
+    let packages = release_state::workspace_packages(&files.lock);
+    let (next, moved) = release_state::bump(&files, &current, &packages)
+        .unwrap_or_else(|why| panic!("the release paths move as the cut moves them: {why}"));
+    for (path, text) in MOVED.iter().zip([
+        &moved.manifest,
+        &moved.lock,
+        &moved.config,
+        &moved.changelog,
+    ]) {
+        fs::write(scratch.join(path), text).expect("write a moved release path");
+    }
     next
 }
 
@@ -98,6 +113,8 @@ fn the_release_rules_are_clean_one_release_ahead() {
                 && rule
                     .sources
                     .iter()
+                    .chain(&rule.documents)
+                    .chain(&rule.line_sources)
                     .any(|source| MOVED.contains(&source.as_str()))
         })
         .cloned()
