@@ -26967,6 +26967,8 @@ fn run_release_verify(
 }
 
 /// G1 read and judged: the release as read, where it could be, and the verdict.
+//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
+//MUTANT uncut-release-could-not-look|s@^        Err(_) if release::uncut(\&slug, tag, \&get) => {$@        Err(_) if false => {@|an_uncut_release_is_refused_not_could_not_look
 fn release_verdict(
     tag: &str,
     draft: bool,
@@ -26982,8 +26984,21 @@ fn release_verdict(
         );
     };
     let get = |path: &str| rest::get(path, None);
+    // A RELEASE NOT CUT YET IS A REFUSAL, NEVER A COULD-NOT-LOOK (CLOUD-2518).
+    // The release PR's head pins the release its own cut creates, so the read
+    // fails there by construction; as could-not-look it made `release path
+    // --seal` exit 3 and held the cut that would create it. Only a positive
+    // sighting of absence counts: any other failed read stays could-not-look.
     let release = match release_verify::read(&slug, tag, &get) {
         Ok(release) => release,
+        Err(_) if release::uncut(&slug, tag, &get) => {
+            return (
+                None,
+                release_verify::Verdict::Refused(vec![release_verify::Refusal::Absent(
+                    tag.to_owned(),
+                )]),
+            );
+        }
         Err(why) => return (None, release_verify::Verdict::CouldNotLook(why)),
     };
     let missing = release_assets_missing(tag, mode, overrides);
@@ -27023,7 +27038,7 @@ fn release_verdict(
 /// `batten release path <sha> [--post] [--seal]` (CLOUD-2033 G2): the one
 /// predicate a write of `main` is graded by. Exit 0 when a verdict was printed
 /// (and posted, with `--post`), 3 when it could not look or could not post.
-/// With `--seal`, exit 1 when [`release_path::seals`] holds — the pre-B2 seal
+/// With `--seal`, exit 2 when [`release_path::seals`] holds — the pre-B2 seal
 /// `final` runs. See [`release_path`].
 fn run_release_path(
     sha: &str,

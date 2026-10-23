@@ -425,6 +425,130 @@ fn release_path_reports_a_refused_post_rather_than_posting_it() {
     assert!(!common::stdout(&output).contains("posted"));
 }
 
+/// A forge that has never cut `tag`: its tag read answers 404 and the release
+/// list carries nothing, plus whatever `extra` routes a case adds first.
+fn uncut_forge(name: &str, extra: &[(&str, &str, &str)]) -> std::path::PathBuf {
+    use std::fmt::Write as _;
+    let forge = common::scratch(name);
+    let mut routes = String::new();
+    for (needle, file, body) in extra {
+        common::write(&forge, file, body);
+        writeln!(routes, "{needle}\t{file}").expect("a String takes a write");
+    }
+    common::write(
+        &forge,
+        "tag",
+        "HTTP/2 404\ncontent-type: application/json\n\n{\"message\":\"Not Found\"}\n",
+    );
+    common::write(
+        &forge,
+        "list",
+        "HTTP/2 200\ncontent-type: application/json\n\n[]\n",
+    );
+    routes.push_str("/releases/tags/\ttag\n/releases?per_page\tlist\n");
+    common::write(&forge, "routes", &routes);
+    forge
+}
+
+/// A RELEASE NOT CUT YET IS REFUSED, NEVER COULD-NOT-LOOK (CLOUD-2518): both
+/// reads answered, so its absence is a measurement and the verb exits 2.
+#[test]
+fn an_uncut_release_is_refused_not_could_not_look() {
+    let version = env!("CARGO_PKG_VERSION");
+    let repo = common::Fixture::new("release-verify-uncut")
+        .config(&format!(
+            "version = 1\nengine = {{ release = \"v{version}\" }}\n"
+        ))
+        .file(
+            "Cargo.toml",
+            &format!("[workspace.package]\nversion = \"{version}\"\n"),
+        )
+        .base_commit()
+        .build();
+    common::git_in(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    let forge = uncut_forge("release-verify-uncut-forge", &[]);
+    let output = common::batten()
+        .current_dir(&repo)
+        .env("BATTEN_REST_FIXTURE", &forge)
+        .args(["release", "verify", "v9.9.9"])
+        .output()
+        .expect("run release verify");
+    assert_eq!(output.status.code(), Some(2), "{}", common::stderr(&output));
+    assert!(
+        common::stderr(&output).contains("no release is tagged v9.9.9"),
+        "{}",
+        common::stderr(&output)
+    );
+}
+
+/// THE RELEASE PR'S PRE-CUT HEAD (CLOUD-2518). Its pin names the release its
+/// own cut creates, so G1 refuses it; on a release-shaped head with the guard's
+/// settings green, the seal excuses that failure and `final` may pass, which is
+/// what lets the cut run at all. As could-not-look it exited 3.
+#[test]
+fn a_release_head_whose_release_is_not_cut_is_not_sealed_once_settings_are_green() {
+    let version = env!("CARGO_PKG_VERSION");
+    let config = |pin: &str| {
+        format!("must_land_on = \"origin/main\"\nversion = 1\nengine = {{ release = \"{pin}\" }}\n")
+    };
+    let manifest = |at: &str| format!("[workspace.package]\nversion = \"{at}\"\n");
+    let repo = common::Fixture::new("release-path-uncut-head")
+        .config(&config("v0.0.1"))
+        .file("Cargo.toml", &manifest("0.0.1"))
+        .base_commit()
+        .config(&config(&format!("v{version}")))
+        .file("Cargo.toml", &manifest(version))
+        .work_commit()
+        .build();
+    common::git_in(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    let head = common::git_in(&repo, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+    let forge = uncut_forge(
+        "release-path-uncut-forge",
+        &[
+            (
+                "/actions/workflows/",
+                "runs",
+                "HTTP/2 200\ncontent-type: application/json\n\n{\"workflow_runs\":[{\"id\":7}]}\n",
+            ),
+            (
+                "/actions/runs/",
+                "jobs",
+                "HTTP/2 200\ncontent-type: application/json\n\n{\"jobs\":[{\"name\":\"settings\",\"status\":\"completed\",\"conclusion\":\"success\"}]}\n",
+            ),
+        ],
+    );
+    let output = common::batten()
+        .current_dir(&repo)
+        .env("BATTEN_REST_FIXTURE", &forge)
+        .args(["release", "path", &head, "--seal", "release-guard.yml"])
+        .output()
+        .expect("run release path");
+    assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
+    assert!(
+        common::stdout(&output).contains("release path: failure"),
+        "{}",
+        common::stdout(&output)
+    );
+}
+
 /// The read, over the fixture forge: the release object's `draft`,
 /// `immutable` and `target_commitish`, and the tag's commit peeled.
 #[test]
