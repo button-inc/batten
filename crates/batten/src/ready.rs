@@ -2042,17 +2042,6 @@ mod issue_key_tests {
     }
 
     #[test]
-    fn a_bounded_consumer_key_is_not_found_inside_a_longer_number() {
-        // The key expression is the CONSUMER'S row, so greed is not guaranteed:
-        // one bounded at three digits matches a prefix of a four-digit number,
-        // and only the trailing-digit boundary refuses that prefix.
-        let mut grammar = Grammar::committed();
-        grammar.key = regex::Regex::new("TEST-[0-9]{1,3}").expect("compiles");
-        assert!(grammar.keys_in("TEST-1234").is_empty());
-        assert_eq!(grammar.keys_in("TEST-123 done").len(), 1);
-    }
-
-    #[test]
     fn a_key_glued_to_a_leading_token_is_not_found() {
         // The other half of the boundary, and the half `\b` gets wrong: a word
         // boundary treats `-` as a separator, so it would find a key inside a
@@ -2095,6 +2084,17 @@ mod lint_tests {
         tokens_in, verdict_token, workspace_version,
     };
     use serde_json::{Value, json};
+
+    #[test]
+    fn a_bounded_consumer_key_is_not_found_inside_a_longer_number() {
+        // The key expression is the CONSUMER'S row, so greed is not guaranteed:
+        // one bounded at three digits matches a prefix of a four-digit number,
+        // and only the trailing-digit boundary refuses that prefix.
+        let mut grammar = Grammar::committed();
+        grammar.key = regex::Regex::new("TEST-[0-9]{1,3}").expect("compiles");
+        assert!(grammar.keys_in("TEST-1234").is_empty());
+        assert_eq!(grammar.keys_in("TEST-123 done").len(), 1);
+    }
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 

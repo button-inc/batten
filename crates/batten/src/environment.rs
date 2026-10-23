@@ -59,6 +59,7 @@ const DISPOSABLE: &str = "disposable";
 /// suite runs one bench declared disposable and one not, and each repairs only
 /// as its declaration licenses.
 //MUTANT-SUITE crates/batten/tests/it/wiring_reclaim.rs
+//MUTANT disposable-never-read|s@^    licenses(std::env::var(KEY).ok().as_deref())$@    licenses(None)@|the_repair_takes_the_siblings_and_leaves_battens_own_registration
 #[must_use]
 pub fn disposable() -> bool {
     licenses(std::env::var(KEY).ok().as_deref())

@@ -105,9 +105,20 @@ fn the_network_callers_are_the_declared_ones_and_nothing_else() {
         let Ok(source) = fs::read_to_string(&path) else {
             continue;
         };
-        // The call, not the word: `lib.rs` declares the module and `mem:core`'s
-        // map names it, and neither is a caller.
-        if source.contains("fetch::get(") || source.contains("fetch::spend(") {
+        // The code, not the prose: `lib.rs` declares the module and doc
+        // comments link it, and neither is a caller. A REFERENCE counts as well
+        // as a call: a transport seam is handed `fetch::spend` as a value and
+        // reaches the network exactly as a call does (CLOUD-2509), so a scan
+        // for `spend(` alone went blind to the module the moment it took one.
+        let code: String = source
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if ["fetch::get(", "fetch::get_direct", "fetch::spend"]
+            .iter()
+            .any(|adapter| code.contains(adapter))
+        {
             callers.push(
                 path.file_name()
                     .and_then(|name| name.to_str())

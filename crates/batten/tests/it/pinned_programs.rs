@@ -478,13 +478,16 @@ fn a_session_start_records_the_programs_the_pin_composes() {
             dir.join("mise.toml").display()
         ),
     );
-    let ambient = std::env::var("PATH").unwrap_or_default();
+    let ambient = std::env::var_os("PATH").unwrap_or_default();
+    let path =
+        std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&ambient)))
+            .expect("a joinable PATH");
     let payload = format!(
         "{{\"hook_event_name\":\"SessionStart\",\"session_id\":\"s-pin\",\"cwd\":{}}}",
         serde_json::to_string(&dir.display().to_string()).expect("a path is encodable")
     );
     let mut command = common::batten();
-    command.env("PATH", format!("{}:{ambient}", bin.display()));
+    command.env("PATH", path);
     let _ = common::stdin_run(
         &mut command,
         &dir,

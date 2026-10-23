@@ -539,20 +539,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn answering(body: &'static str) -> Result<Vec<crate::fetch::Response>> {
-        Ok(vec![crate::fetch::Response {
+    fn answering(body: &'static str) -> Vec<crate::fetch::Response> {
+        vec![crate::fetch::Response {
             status: 200,
             body: body.as_bytes().to_vec(),
             headers: Vec::new(),
-        }])
-    }
-
-    fn drops(_: &[crate::fetch::Call<'_>]) -> Result<Vec<crate::fetch::Response>> {
-        answering(r#"{"result":{"content":[]}}"#)
-    }
-
-    fn refuses(_: &[crate::fetch::Call<'_>]) -> Result<Vec<crate::fetch::Response>> {
-        answering(r#"{"result":{"isError":true}}"#)
+        }]
     }
 
     /// Fails by: an endpoint's refusal attested as a drop, or its acceptance
@@ -567,7 +559,9 @@ mod tests {
             family: "pr-unsubscribed".to_owned(),
             ..Host::default()
         };
-        for (spend, recorded) in [(drops as Spend, true), (refuses, false)] {
+        let drops: Spend = |_| Ok(answering(r#"{"result":{"content":[]}}"#));
+        let refuses: Spend = |_| Ok(answering(r#"{"result":{"isError":true}}"#));
+        for (spend, recorded) in [(drops, true), (refuses, false)] {
             let dir = crate::scratch::scratch(&format!("unsubscribe-ask-{recorded}"));
             let mut out = Vec::new();
             let code = ask_endpoint(
