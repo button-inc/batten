@@ -535,19 +535,16 @@ fn a_tag_read_that_failed_otherwise_stays_could_not_look() {
     assert!(!stderr.contains(ABSENT), "{stderr}");
 }
 
-/// THE RELEASE PR'S PRE-CUT HEAD (CLOUD-2518). Its pin names the release its
-/// own cut creates, so G1 refuses it; on a release-shaped head with the guard's
-/// settings green, the seal excuses that failure and `final` may pass, which is
-/// what lets the cut run at all. As could-not-look it exited 3.
-#[test]
-fn a_release_head_whose_release_is_not_cut_is_not_sealed_once_settings_are_green() {
+/// `release path <head> <flags>` on a release-shaped head pinning a release no
+/// forge has cut, with the guard's settings job green: its exit, stdout, stderr.
+fn release_path_uncut(name: &str, flags: &[&str]) -> (Option<i32>, String, String) {
     let version = env!("CARGO_PKG_VERSION");
     let config = |pin: &str| {
         format!("must_land_on = \"origin/main\"\nversion = 1\nengine = {{ release = \"{pin}\" }}\n")
     };
     let manifest = |at: &str| format!("[workspace.package]\nversion = \"{at}\"\n");
     let repo = with_origin(
-        common::Fixture::new("release-path-uncut-head")
+        common::Fixture::new(name)
             .config(&config("v0.0.1"))
             .file("Cargo.toml", &manifest("0.0.1"))
             .base_commit()
@@ -560,7 +557,7 @@ fn a_release_head_whose_release_is_not_cut_is_not_sealed_once_settings_are_green
         .trim()
         .to_owned();
     let forge = uncut_forge(
-        "release-path-uncut-forge",
+        &format!("{name}-forge"),
         &[
             (
                 "/actions/workflows/",
@@ -577,15 +574,37 @@ fn a_release_head_whose_release_is_not_cut_is_not_sealed_once_settings_are_green
     let output = common::batten()
         .current_dir(&repo)
         .env("BATTEN_REST_FIXTURE", &forge)
-        .args(["release", "path", &head, "--seal", "release-guard.yml"])
+        .args(["release", "path", &head])
+        .args(flags)
         .output()
         .expect("run release path");
-    assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
-    assert!(
-        common::stdout(&output).contains("release path: failure"),
-        "{}",
-        common::stdout(&output)
-    );
+    (
+        output.status.code(),
+        common::stdout(&output),
+        common::stderr(&output),
+    )
+}
+
+/// THE RELEASE PR'S PRE-CUT HEAD (CLOUD-2518). Its pin names the release its
+/// own cut creates, so G1 refuses it; on a release-shaped head with the guard's
+/// settings green, the seal excuses that failure and `final` may pass, which is
+/// what lets the cut run at all. As could-not-look it exited 3.
+#[test]
+fn a_release_head_whose_release_is_not_cut_is_not_sealed_once_settings_are_green() {
+    let (code, stdout, stderr) =
+        release_path_uncut("release-path-uncut-head", &["--seal", "release-guard.yml"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stdout.contains("release path: failure"), "{stdout}");
+}
+
+/// AN UNCUT RELEASE FAILS ONLY UNDER THE SEAL (CLOUD-2518). Every other caller
+/// grades a release that exists, as `release-land` does the one it just
+/// published, so absence there is lag: could-not-look, exit 3, nothing posted.
+#[test]
+fn an_uncut_release_outside_the_seal_stays_could_not_look() {
+    let (code, stdout, stderr) = release_path_uncut("release-path-uncut-unsealed", &[]);
+    assert_eq!(code, Some(3), "{stderr}");
+    assert!(!stdout.contains("release path: failure"), "{stdout}");
 }
 
 /// The read, over the fixture forge: the release object's `draft`,
