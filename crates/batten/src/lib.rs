@@ -9969,7 +9969,8 @@ fn run_override_spend(
 /// refusal names the subjects the scan did see, because a mismatch here is
 /// usually a spelling — a finding's pointer is the first path-bearing subject or
 /// the first subject rendered (CLOUD-1051), while a refusal line renders all of
-/// them joined by a space.
+/// them joined by a space. Each is named as a whole `override request` route
+/// under `class`, so the refusal is pasted rather than re-spelled (CLOUD-2303).
 ///
 /// **Ambiguity REFUSES rather than falling back**, and the asymmetry with the
 /// absent case is the point. Two findings sharing `(rule, path)` mean the pair
@@ -9983,6 +9984,7 @@ fn admission_anchor(
     root: &Path,
     config: &resolve::Resolved,
     rule: &str,
+    class: &str,
     subject: &str,
 ) -> Result<(admission::Anchor, String)> {
     // The HEAD is READ, never defaulted. `unwrap_or_default()` here would bind
@@ -10145,7 +10147,7 @@ fn admission_anchor(
     ) else {
         return head();
     };
-    anchor_among(&scan.findings, rule, subject, head)
+    anchor_among(&scan.findings, rule, class, subject, head)
 }
 
 /// Which one of `findings` a `(rule, subject)` pair addresses, and the subject
@@ -10153,6 +10155,7 @@ fn admission_anchor(
 fn anchor_among(
     findings: &[rules::Finding],
     rule: &str,
+    class: &str,
     subject: &str,
     head: impl FnOnce() -> Result<(admission::Anchor, String)>,
 ) -> Result<(admission::Anchor, String)> {
@@ -10229,7 +10232,7 @@ fn anchor_among(
                 "no finding for rule `{rule}` names subject `{subject}`, so an admission bound \
                  to it would suppress nothing; that rule names {} subject(s) here: {}",
                 named.len(),
-                named.join(", ")
+                per_subject_routes(rule, class, &named)
             )))
         }
         // AMBIGUITY REFUSES, because falling back here is a silent no-op. The
@@ -10250,6 +10253,20 @@ fn anchor_among(
                 .join(", ")
         ))),
     }
+}
+
+/// One whole `override request` route per subject, `; `-joined (CLOUD-2303).
+///
+/// A refusal line renders every subject joined by a space, so a remedy copied
+/// from it names a subject no single finding carries. Listing the subjects
+/// bare left the reader to re-spell the route; naming each as the command that
+/// binds it is a route this verb accepts as printed.
+fn per_subject_routes(rule: &str, class: &str, subjects: &[&str]) -> String {
+    subjects
+        .iter()
+        .map(|subject| refusal::override_route(rule, class, subject))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// `batten override request` — issue an admission for one situation
@@ -10324,7 +10341,8 @@ fn run_override_request(
         let listed = if bound.is_empty() {
             "none".to_owned()
         } else {
-            bound.join(", ")
+            let bound: Vec<&str> = bound.iter().map(String::as_str).collect();
+            per_subject_routes(rule, &resolved.id, &bound)
         };
         return Err(error::UsageError::raise(format!(
             "no `{rule}` refusal under `{}` binds subject `{subject}`, so an admission bound \
@@ -10346,7 +10364,7 @@ fn run_override_request(
     // The scan this pays for is the narrowed one (CLOUD-1571), so the
     // questions-only path costs one rule over one subject rather than the tree.
     // A fingerprint subject selects one finding; its PATH is what binds.
-    let (anchor, bound) = admission_anchor(root, &config, rule, subject)?;
+    let (anchor, bound) = admission_anchor(root, &config, rule, &resolved.id, subject)?;
     let subject = bound.as_str();
 
     let mut raw = String::new();
@@ -28106,6 +28124,9 @@ fn claimed_fork_point(here: &Path, overrides: &Overrides) -> Option<String> {
     git::merge_base(here, &target).ok()?
 }
 
+/// `batten config`'s verbs. `config lint`'s exact output is pinned over the
+/// compiled binary, so its suite judges a mutant here (CLOUD-2303).
+//MUTANT-SUITE crates/batten/tests/it/config_lint.rs
 fn run_config(
     command: &ConfigCommand,
     overrides: &Overrides,
@@ -28246,23 +28267,11 @@ fn run_config(
             let adjudicated = lint::admissions(&smells, &ledger);
             let refused = adjudicated
                 .iter()
-                .filter(|(_, admission)| *admission == lint::Admission::Refused)
+                .filter(|(_, admission)| admission.is_refused())
                 .count();
             if !*json {
-                for (smell, admission) in &adjudicated {
-                    if *admission != lint::Admission::Refused {
-                        // Pointer plus a verdict token, never the clause's prose:
-                        // a reader gets which pair was admitted and on what
-                        // evidence, and the reasoning stays in the groomed body
-                        // where a reviewer reads it in context.
-                        writeln!(
-                            out,
-                            "config-lint: admitted {} {} ({})",
-                            smell.id,
-                            smell.at,
-                            admission.as_str()
-                        )?;
-                    }
+                for line in lint::admission_lines(&adjudicated) {
+                    writeln!(out, "{line}")?;
                 }
             }
             Ok(ExitCode::verdict(refused != 0))

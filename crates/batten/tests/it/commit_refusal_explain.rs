@@ -5,6 +5,9 @@
 //! This tier pins what the hook actually prints: the line `report` writes is the
 //! one a reader sees, so a writer that went back to bare pointers would pass every
 //! unit case and fail here.
+//!
+//! The same holds for a refusal's remedy: the route `override request` prints
+//! when a subject binds nothing must be one the verb accepts (CLOUD-2303).
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -14,7 +17,7 @@ use crate::common;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, batten, stdout, write};
+use common::{Fixture, batten, stderr, stdout, write};
 
 /// Both engine tables, one version line: the commit convention from
 /// `commit.rs`'s fixture and the attribution policy from `attribution.rs`'s.
@@ -94,5 +97,74 @@ fn a_refused_commit_msg_line_names_a_class_policy_explain_resolves() {
             .expect("run batten");
         assert_eq!(explained.status.code(), Some(0), "{class}");
         assert!(!stdout(&explained).trim().is_empty(), "{class}");
+    }
+}
+
+/// One rule firing on two paths, and a class an `override request` can name.
+const TWO_SUBJECTS: &str = r#"version = 1
+
+[[rule]]
+id = "marker"
+kind = "forbid"
+glob = "**/*.txt"
+pattern = "MARK"
+severity = "deny"
+no_fix_reason = "class 3 (a fixture): nothing to fix"
+
+[[verdict]]
+id = "diff ship early"
+gloss = "a branch whose whole diff is comment lines buys a CI matrix that confirms nothing"
+class = "Every changed line is a comment and no test moved."
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "let the next change to these files carry it"
+
+[[verdict.route]]
+id = "path admit first"
+kind = "override"
+precondition = "the prose IS the deliverable and cannot wait for the next change"
+"#;
+
+/// A refusal line renders every subject joined by a space, and a remedy copied
+/// from it names a subject no single finding carries (CLOUD-2303). The verb's
+/// refusal must then print a route per subject, each one it accepts as printed.
+#[test]
+fn a_multi_subject_refusal_prints_a_route_per_subject() {
+    let dir = Fixture::new("multi-subject-route")
+        .config(TWO_SUBJECTS)
+        .files(&[("a.txt", "MARK\n"), ("b.txt", "MARK\n")])
+        .base_commit()
+        .build();
+    let request = |subject: &str| {
+        common::run(
+            &dir,
+            &[
+                "override",
+                "request",
+                "--rule",
+                "marker",
+                "--verdict",
+                "diff ship early",
+                "--subject",
+                subject,
+            ],
+        )
+    };
+
+    let joined = request("a.txt b.txt");
+    assert_ne!(joined.status.code(), Some(0));
+    let printed = format!("{}{}", stdout(&joined), stderr(&joined));
+    for subject in ["a.txt", "b.txt"] {
+        let route = batten::refusal::override_route("marker", "diff ship early", subject);
+        assert!(printed.contains(&route), "{subject}: {printed}");
+
+        // THE PRINTED ROUTE IS ACCEPTED: run with no answers, it asks its
+        // questions (exit 1) rather than refusing the subject.
+        let followed = request(subject);
+        let asked = format!("{}{}", stdout(&followed), stderr(&followed));
+        assert_eq!(followed.status.code(), Some(1), "{subject}: {asked}");
+        assert!(asked.contains("unanswered"), "{subject}: {asked}");
     }
 }
