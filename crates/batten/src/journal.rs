@@ -417,12 +417,11 @@ pub fn append(store_dir: &Path, shard: &str, entry: &Entry) -> Result<()> {
 /// same fail-to-the-front reading [`Entry::at`] gives a binary that predates the
 /// field. It is never an error: a journal append must not fail because the clock
 /// did.
+///
+/// Read through [`crate::cache::now`], whose clock a case can pin, so the case
+/// can hold this conversion to the reading (CLOUD-2509).
 fn now_nanos() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| {
-            u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)
-        })
+    u64::try_from(crate::cache::now().as_nanos()).unwrap_or(u64::MAX)
 }
 
 /// Append one already-encoded line to a shard, durably.
@@ -1060,6 +1059,20 @@ mod tests {
             presentation: Presentation::Shown,
             at: None,
         }
+    }
+
+    /// CLOUD-2509: an append's stamp is the pinned reading in nanoseconds,
+    /// saturating rather than wrapping. Fails by: a constant `0` or `1` in place
+    /// of the reading, which no unpinned case could tell from a real one.
+    #[test]
+    fn the_stamp_is_the_readings_nanoseconds() {
+        let epoch = std::time::UNIX_EPOCH;
+        assert_eq!(
+            crate::cache::pinned::at(epoch + std::time::Duration::from_nanos(4_242), now_nanos),
+            4_242
+        );
+        let beyond = epoch + std::time::Duration::from_secs(u64::MAX / 1_000_000_000 + 1);
+        assert_eq!(crate::cache::pinned::at(beyond, now_nanos), u64::MAX);
     }
 
     #[test]

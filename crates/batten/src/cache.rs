@@ -530,9 +530,47 @@ pub fn stamp(path: &Path) -> Option<Stamp> {
 /// Now, as a duration since the epoch, for an entry's write time.
 #[must_use]
 pub fn now() -> std::time::Duration {
-    std::time::SystemTime::now()
+    wall_clock()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
+}
+
+/// The wall clock, which a case may pin on its own thread (CLOUD-2509).
+///
+/// THE SEAM FOR A CLOCK LEAF. A case may not assert a reading of the real clock
+/// (`wall_clock.rs`: time is an input, never what a case asserts), so a leaf
+/// that only converts that reading had nothing a case could hold it to. Pinned,
+/// the reading is an input and the conversion is the subject. Test-only, so the
+/// production path is the plain read.
+fn wall_clock() -> std::time::SystemTime {
+    #[cfg(test)]
+    if let Some(pinned) = pinned::reading() {
+        return pinned;
+    }
+    std::time::SystemTime::now()
+}
+
+/// The instant [`wall_clock`] answers on this thread while a case holds it.
+#[cfg(test)]
+pub(crate) mod pinned {
+    use std::cell::Cell;
+    use std::time::SystemTime;
+
+    thread_local! {
+        static PINNED: Cell<Option<SystemTime>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn reading() -> Option<SystemTime> {
+        PINNED.with(Cell::get)
+    }
+
+    /// Run `body` with the wall clock reading `at` on this thread.
+    pub(crate) fn at<T>(at: SystemTime, body: impl FnOnce() -> T) -> T {
+        let previous = PINNED.with(|pinned| pinned.replace(Some(at)));
+        let out = body();
+        PINNED.with(|pinned| pinned.set(previous));
+        out
+    }
 }
 
 fn stat_identity(path: &Path) -> Option<String> {
@@ -559,6 +597,17 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         crate::scratch::scratch(&format!("cache-{name}"))
+    }
+
+    /// CLOUD-2509: `now` is the pinned reading's distance from the epoch, and a
+    /// reading before it is zero rather than an error. Fails by: a constant
+    /// in place of the reading.
+    #[test]
+    fn now_is_the_readings_distance_from_the_epoch() {
+        let epoch = std::time::UNIX_EPOCH;
+        let seven = std::time::Duration::from_secs(7);
+        assert_eq!(pinned::at(epoch + seven, now), seven);
+        assert_eq!(pinned::at(epoch - seven, now), std::time::Duration::ZERO);
     }
 
     /// An entry answers only its own key, and only with the bytes written.

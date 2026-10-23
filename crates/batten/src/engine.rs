@@ -504,12 +504,24 @@ fn stale_as(text: &str, stamp: impl FnOnce() -> Option<String>, local: bool) -> 
 /// "the release of ME".
 #[must_use]
 pub fn running_target() -> String {
-    let arch = std::env::consts::ARCH;
-    match std::env::consts::OS {
-        "linux" if cfg!(target_env = "musl") => format!("{arch}-unknown-linux-musl"),
+    target_triple(
+        std::env::consts::ARCH,
+        std::env::consts::OS,
+        cfg!(target_env = "musl"),
+        cfg!(target_env = "gnu"),
+    )
+}
+
+/// [`running_target`]'s decision over its build facts, so every arm — the
+/// Windows ones included — is compiled and tested on every leg (CLOUD-2509): read
+/// inline, a `cfg!` guard is a constant on the host, and its mutants survive any
+/// sweep run anywhere but the target it names.
+fn target_triple(arch: &str, os: &str, musl: bool, gnu: bool) -> String {
+    match os {
+        "linux" if musl => format!("{arch}-unknown-linux-musl"),
         "linux" => format!("{arch}-unknown-linux-gnu"),
         "macos" => format!("{arch}-apple-darwin"),
-        "windows" if cfg!(target_env = "gnu") => format!("{arch}-pc-windows-gnu"),
+        "windows" if gnu => format!("{arch}-pc-windows-gnu"),
         "windows" => format!("{arch}-pc-windows-msvc"),
         os => format!("{arch}-unknown-{os}"),
     }
@@ -1681,6 +1693,26 @@ mod tests {
         assert!(target.starts_with(std::env::consts::ARCH), "{target}");
         if cfg!(all(target_os = "linux", target_env = "gnu")) {
             assert!(target.ends_with("-unknown-linux-gnu"), "{target}");
+        }
+    }
+
+    /// CLOUD-2509: every arm, on every leg. Fails by: a `musl` or `gnu` guard
+    /// read as always or never, which the host's own `cfg!` cannot show.
+    #[test]
+    fn each_build_names_its_own_triple() {
+        for (os, musl, gnu, triple) in [
+            ("linux", true, false, "x-unknown-linux-musl"),
+            ("linux", false, true, "x-unknown-linux-gnu"),
+            ("macos", false, false, "x-apple-darwin"),
+            ("windows", false, true, "x-pc-windows-gnu"),
+            ("windows", false, false, "x-pc-windows-msvc"),
+            ("freebsd", false, false, "x-unknown-freebsd"),
+        ] {
+            assert_eq!(
+                target_triple("x", os, musl, gnu),
+                triple,
+                "{os} musl={musl} gnu={gnu}"
+            );
         }
     }
 
