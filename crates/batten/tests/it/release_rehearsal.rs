@@ -10,10 +10,16 @@
 //! `ci-parity`'s freeze arm held v0.0.217 red by construction for nine days.
 //!
 //! This case makes that release PR's state an ordinary PR's question. It copies
-//! the tracked tree, moves all four release paths to the next patch release
-//! through `release_state::bump` (the cut's own writer for exactly these four),
+//! the tracked tree, moves the manifest, the lock and the pin to the next patch
+//! release through `release_state::bump` (the crate's writer for those moves),
 //! and runs every row that could read them, so a rule only the release PR would
 //! trip fails here first, on the change that introduced it.
+//!
+//! THE CHANGELOG IS NOT MOVED, and that is a fidelity choice. `bump` renames
+//! the `## [X]` heading, where release-plz adds a `## [X+1]` section above it, so
+//! writing `bump`'s changelog would rehearse a tree no release PR has. No row
+//! names the changelog today; one that does owes this case a release-plz-shaped
+//! changelog move first.
 //!
 //! # Which rows
 //!
@@ -40,13 +46,8 @@ use batten::rules::{self, RuleKind, RuleScope};
 
 use crate::common;
 
-/// The four release paths `release_state::bump` moves.
-const MOVED: [&str; 4] = [
-    "Cargo.toml",
-    "Cargo.lock",
-    "batten.toml",
-    "crates/batten/CHANGELOG.md",
-];
+/// The release paths this case moves, as they appear in a row's declarations.
+const MOVED: [&str; 3] = ["Cargo.toml", "Cargo.lock", "batten.toml"];
 
 /// Every tracked file of the checkout at `root`, copied under `scratch`.
 fn copy_tracked(root: &Path, scratch: &Path) {
@@ -63,11 +64,14 @@ fn copy_tracked(root: &Path, scratch: &Path) {
     }
 }
 
-/// Move the copy to the next patch release through the cut's own writer, and
-/// return the version.
+/// Move the copy's manifest, lock and pin to the next patch release, and return
+/// the version.
 fn move_to_next_release(scratch: &Path) -> String {
     let read = |path: &str| fs::read_to_string(scratch.join(path)).expect("a release path");
-    let manifest = read(MOVED[0]);
+    let write = |path: &str, text: &str| {
+        fs::write(scratch.join(path), text).expect("write a moved release path");
+    };
+    let manifest = read("Cargo.toml");
     let current = batten::release_path::version_of(&manifest).expect("a workspace version");
     // `main` pins the release it carries; a working tree pinned to a source
     // build (`install:local`) is put back to that before the move.
@@ -77,21 +81,17 @@ fn move_to_next_release(scratch: &Path) -> String {
     };
     let files = Files {
         manifest,
-        lock: read(MOVED[1]),
-        config: batten::engine::rewrite(&read(MOVED[2]), &pinned),
-        changelog: read(MOVED[3]),
+        lock: read("Cargo.lock"),
+        config: batten::engine::rewrite(&read("batten.toml"), &pinned),
+        // Read because `bump` requires its heading; never written (above).
+        changelog: read("crates/batten/CHANGELOG.md"),
     };
     let packages = release_state::workspace_packages(&files.lock);
     let (next, moved) = release_state::bump(&files, &current, &packages)
-        .unwrap_or_else(|why| panic!("the release paths move as the cut moves them: {why}"));
-    for (path, text) in MOVED.iter().zip([
-        &moved.manifest,
-        &moved.lock,
-        &moved.config,
-        &moved.changelog,
-    ]) {
-        fs::write(scratch.join(path), text).expect("write a moved release path");
-    }
+        .unwrap_or_else(|why| panic!("the release paths move as a release moves them: {why}"));
+    write("Cargo.toml", &moved.manifest);
+    write("Cargo.lock", &moved.lock);
+    write("batten.toml", &moved.config);
     next
 }
 
