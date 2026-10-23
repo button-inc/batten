@@ -12133,7 +12133,7 @@ fn abandon_runs(repo: &str, sha: &str, what: &str, out: &mut dyn Write) -> Resul
     // counts with no subject cannot be told from another head's.
     let fanin =
         land::FanIn::from_workflow_path(std::env::var("CI_FANIN_WORKFLOW").unwrap_or_default());
-    let report = land::abandon(repo, sha, &fanin, (land::spending, rest::post));
+    let report = land::abandon(repo, sha, &fanin);
     writeln!(
         out,
         "land: {what} on {} — {} run(s) cancelled, {} spared, {} refused",
