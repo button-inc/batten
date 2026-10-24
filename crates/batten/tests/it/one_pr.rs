@@ -67,7 +67,7 @@ fn marker(dir: &Path) -> PathBuf {
         .expect("resolve the git dir");
     PathBuf::from(String::from_utf8(output.stdout).expect("utf-8").trim())
         .join("batten-receipts")
-        .join(format!("pr-open.{}", BRANCH.replace('/', "-")))
+        .join(format!("pr-open.{}", batten::receipt::branch_slug(BRANCH)))
 }
 
 fn envelope(event: &str, extra: &str) -> String {

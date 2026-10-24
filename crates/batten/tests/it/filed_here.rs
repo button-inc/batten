@@ -165,7 +165,7 @@ fn commit(root: &Path, message: &str, date: &str) {
 fn write_record(root: &Path, branch: &str, record: &str, lines: &[&str]) {
     let dir = root.join(".git/batten-receipts");
     fs::create_dir_all(&dir).expect("receipts dir");
-    let path = dir.join(format!("{record}.{}", branch.replace('/', "-")));
+    let path = dir.join(format!("{record}.{}", batten::receipt::branch_slug(branch)));
     fs::write(path, format!("{}\n", lines.join("\n"))).expect("write record");
 }
 

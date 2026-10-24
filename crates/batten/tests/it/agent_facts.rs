@@ -377,7 +377,8 @@ fn the_record_is_keyed_on_the_fact_and_on_its_rows_declared_subject() {
     // Neither component may escape the directory: a fact name may carry a `/` and
     // a branch name routinely does.
     assert!(
-        facts::sourced_path(git, "a/b", "claude/c").ends_with("batten-receipts/fact.a-b.claude-c")
+        facts::sourced_path(git, "a/b", "claude/c")
+            .ends_with("batten-receipts/fact.a%2Fb.claude%2Fc")
     );
 }
 

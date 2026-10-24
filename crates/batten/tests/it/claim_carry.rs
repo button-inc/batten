@@ -69,7 +69,7 @@ fn receipt(dir: &Path) -> Option<String> {
     let path = dir
         .join(".git")
         .join("batten-receipts")
-        .join("carry.sbom-actions-carry-probe");
+        .join("carry.sbom-actions%2Fcarry-probe");
     std::fs::read_to_string(path).ok()
 }
 

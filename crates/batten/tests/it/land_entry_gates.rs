@@ -236,7 +236,7 @@ fn retiring_a_landed_branch_drops_every_branch_keyed_receipt() {
     let store = dir.join(".git").join("batten-receipts");
     std::fs::create_dir_all(&store).expect("create the receipt store");
 
-    // A branch whose name carries the separator the store flattens, because a
+    // A branch whose name carries the separator the store percent-encodes, because a
     // sweep spelling the slug differently would delete nothing and report a clean
     // count — the silent-empty-answer shape, one layer down.
     let branch = "claude/some-work";
@@ -253,7 +253,7 @@ fn retiring_a_landed_branch_drops_every_branch_keyed_receipt() {
         "unlanded-nudged",
     ];
     for family in families {
-        std::fs::write(store.join(format!("{family}.claude-some-work")), "x\n")
+        std::fs::write(store.join(format!("{family}.claude%2Fsome-work")), "x\n")
             .expect("write a receipt");
     }
     // One store this sweep must NOT touch: a sha-keyed receipt dies with its sha
@@ -266,7 +266,7 @@ fn retiring_a_landed_branch_drops_every_branch_keyed_receipt() {
     assert_eq!(retired.receipts, families.len());
     for family in families {
         assert!(
-            !store.join(format!("{family}.claude-some-work")).exists(),
+            !store.join(format!("{family}.claude%2Fsome-work")).exists(),
             "{family} should have gone with the branch"
         );
     }
