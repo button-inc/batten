@@ -2525,12 +2525,9 @@ fn wait_bounded(
             // The wait itself failed, so whether the suite exited is unknown.
             // It is ended rather than left running, and the failure is the answer.
             kill_group(pid);
-            // `await_exit` reaps nothing, so only `ECHILD` — the leader reaped
-            // elsewhere — frees the group id; then a repeat could reach a
-            // stranger, and any other failure leaves the id reserved.
-            if rustix::io::Errno::from_io_error(&failed) != Some(rustix::io::Errno::CHILD) {
-                sweep_group(pid);
-            }
+            // Swept whatever the failure: a group id is not reused while the
+            // group has a member, and the first kill that finds none ends it.
+            sweep_group(pid);
             let _ = worker.join();
             let _ = child.wait();
             return Err(failed);
