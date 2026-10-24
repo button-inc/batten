@@ -35,7 +35,11 @@
 #MUTANT base-may-read-as-empty|s@\tbase := sites(base_lines_of(path))@\tbase := 0@|a_pre_existing_raw_writeln_survives_an_edit
 #MUTANT text-test-dropped|s@^\tregex.match(data.batten.patterns\["raw-literal-text"\], line)$@\ttrue@|a_placeholder_only_writeln_is_not_counted
 #MUTANT could-not-look-passes|s@^\tnot delta$@\tfalse@|a_missing_delta_is_reported_not_passed
-package batten
+#
+# ITS OWN PACKAGE, because `cfg-gated-test.rego` sits in `batten` with the same
+# `grew`, `touched` and `violation` partial rules: in one package the two sets
+# merge, and each ratchet would report the other's sites under its own verdict.
+package batten.raw_output_ratchet
 
 import rego.v1
 
