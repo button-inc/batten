@@ -767,6 +767,20 @@ fn the_arm_watches_past_the_gate() {
 
 /// How many 50 ms polls [`wait_for`] takes before giving up: four of the
 /// watcher's 5 s ticks, the longest a live watcher can take to act.
+///
+/// **HALVING THIS WAS A WRONG FIX AND IS RECORDED AS ONE (CLOUD-2376).** When
+/// `collect_toward_max -> None` made `the_arm_watches_past_the_gate` take a
+/// SIGTERM at 43.4s, this budget looked like the cost — it is spent in full
+/// exactly when the watcher never acts. Halving it moved the number by 2s,
+/// which is what proved it wrong: the bound WAS being reached, `wait_for` WAS
+/// panicking on schedule, and the case then hung anyway, past 100s when
+/// measured alone. [`batten::disk_watch::around`] skipped its `stop.store` on
+/// the unwind, so the scope's join waited on a watcher that could never stop.
+///
+/// Four ticks stands, because the real path genuinely needs one: this file's
+/// `the_arm_watches_past_the_gate` passes in a measured 6.018s. A failure budget
+/// is only a cost when a failure cannot terminate, and that is fixed where it
+/// was broken rather than here.
 const WAIT_POLLS: u32 = 400;
 
 /// Wait until `done`, counted rather than clocked: at most [`WAIT_POLLS`]
@@ -941,7 +955,18 @@ fn a_step_run_build_is_watched() {
     }
     let dir = hooked("step-run-watched", true);
     let profile = dir.join("target/debug");
-    let waits = "for i in $(seq 1 400); do \
+    // 200 x 0.05s = 10s, which is TWO full `disk_watch::TICK`s against a MEASURED
+    // 1.092s for the real path (nextest, this suite) — the watcher samples at
+    // startup rather than after a tick, so the collection lands in about a
+    // second. It was 400, which is 18x a path that takes one second, and the
+    // excess is spent only when the collection never comes.
+    //
+    // NOT WHY THE SWEEP TIMED OUT, stated because this comment first said it
+    // was and measurement refuted it. That was `disk_watch::around` skipping its
+    // stop on an unwind (CLOUD-2376), which hung the case outright rather than
+    // making it slow. This number is proportion to a measured path, nothing
+    // more.
+    let waits = "for i in $(seq 1 200); do \
                  [ -e target/debug/.fingerprint/aged-dddddddddddddddd ] || exit 0; \
                  sleep 0.05; done; exit 1";
     let ran = common::batten()
@@ -1178,14 +1203,45 @@ fn a_lap_below_the_floor_waits_for_its_own_background_build() {
     std::fs::create_dir_all(&singleton).unwrap();
     std::fs::write(singleton.join("pid"), std::process::id().to_string()).unwrap();
     let mut child = verify().spawn().expect("the binary runs");
-    let mut stderr = std::io::BufReader::new(child.stderr.take().unwrap());
+    let taken = child.stderr.take().unwrap();
+    // READ ON A THREAD, WITH A BOUND, BECAUSE THE CASE AND THE CHILD WAIT ON
+    // EACH OTHER (CLOUD-2376). The child blocks on the build lock this case
+    // holds, and this case only lets go once the first pass has REPORTED. When
+    // that line never comes the pair deadlocks — and mutating the collection
+    // away is exactly what stops it coming, so `collect_toward_max -> None` hung
+    // the suite instead of being caught: `cargo-mutants` reported
+    // `suite-timed-out`, which is could-not-look (CLOUD-1267), over a mutant
+    // this case does catch. Measured: it ran a full 300s bound where the
+    // baseline tests in 9s, which is what proved it a hang rather than a slow
+    // catch.
+    //
+    // THE BOUND MUST STAY UNDER THE SUITE'S MUTATION BUDGET, which is the
+    // non-obvious part: cargo-mutants derives a per-mutant bound from the
+    // unmutated baseline, so a wait long enough to exceed that just reproduces
+    // `suite-timed-out` by another route — and this is not the only case the
+    // mutation makes wait. `a_step_run_build_is_watched` polls four
+    // `disk_watch::TICK`s, 20s, for the same reason, and the two are summed
+    // against one bound.
+    //
+    // Five seconds against a MEASURED 0.188s for the real path (nextest, this
+    // suite) is ~26x margin and leaves the mutated suite near 34s against a
+    // bound derived at ~46s from a 9s baseline. Raising it buys nothing: the
+    // line either arrives in a fifth of a second or it is never coming.
+    let waited = Duration::from_secs(5);
+    let (lines, from_child) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut stderr = std::io::BufReader::new(taken);
+        let mut line = String::new();
+        while stderr.read_line(&mut line).unwrap_or(0) > 0 {
+            if lines.send(std::mem::take(&mut line)).is_err() {
+                break;
+            }
+        }
+    });
     let mut seen = String::new();
-    let mut line = String::new();
-    while stderr.read_line(&mut line).unwrap() > 0 {
+    while let Ok(line) = from_child.recv_timeout(waited) {
         seen.push_str(&line);
-        let first_pass = line.contains("land verify: disk-collected ");
-        line.clear();
-        if first_pass {
+        if line.contains("land verify: disk-collected ") {
             break;
         }
     }
@@ -1194,9 +1250,12 @@ fn a_lap_below_the_floor_waits_for_its_own_background_build() {
         "the first pass reported before the wait: {seen}"
     );
     drop(lock);
-    let mut rest = String::new();
-    std::io::Read::read_to_string(&mut stderr, &mut rest).unwrap();
-    seen.push_str(&rest);
+    // The rest arrives through the same bound: the child runs to completion once
+    // the lock is gone, closing stderr, which ends the reader and the channel.
+    while let Ok(line) = from_child.recv_timeout(waited) {
+        seen.push_str(&line);
+    }
+    let _ = reader.join();
     let _ = child.wait().unwrap();
     assert!(
         !seen.contains("min_free_mb 100"),

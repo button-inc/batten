@@ -1209,6 +1209,8 @@ pub fn diagnose_toolchain(manifest: &Path, probe: &str) -> Toolchain {
 ///
 /// Reads both files and hashes them; spawns nothing. Length is compared first
 /// only as a short-circuit — two files of different lengths cannot be identical.
+//MUTANT-SUITE crates/batten/tests/it/doctor.rs
+//MUTANT mediator-ignores-the-target-dir|s@^    let built = crate::engine::release_build(dir);$@    let built = dir.join("target").join("release").join(crate::surface::BINARY);@|the_mediator_is_compared_against_the_build_this_tree_actually_writes
 #[must_use]
 pub fn diagnose_mediator(dir: &Path) -> Mediator {
     // The tree builds a mediator iff it carries the crate that produces one.
@@ -1221,7 +1223,22 @@ pub fn diagnose_mediator(dir: &Path) -> Mediator {
     let Some(resolved) = crate::rules::on_path_verbatim("batten") else {
         return Mediator::Unresolvable;
     };
-    let built = dir.join("target/release/batten");
+    // THIS PROCESS'S NAMER, BECAUSE `dir` IS THIS PROCESS'S TREE (CLOUD-2376).
+    // The only production caller passes `Path::new(".")`, so the question is
+    // always "does the `batten` on PATH match what the checkout I am standing
+    // in builds" — and what it builds is wherever its own `CARGO_TARGET_DIR`
+    // sends cargo. `doctor` spawns no cargo, but the operator it tells to run
+    // `mise run build:release` does, and that build honours the variable.
+    //
+    // THIS READ `checkout_build` FOR ONE COMMIT AND THAT WAS A REGRESSION.
+    // Nine mutation-baseline cases went red under cargo-mutants, which sets
+    // the variable, and the conclusion drawn was that the verb was reading the
+    // wrong namer. It was the FIXTURES that were wrong: they write a literal
+    // `target/release/batten` and let the runner's redirect through, so they
+    // described a checkout that cannot exist. Under this repository's own
+    // documented worktree setup the verb then answered `Unbuilt` over a built
+    // tree and `BuildBehindSource` could never fire at all.
+    let built = crate::engine::release_build(dir);
     let (Ok(left), Ok(right)) = (std::fs::read(&resolved), std::fs::read(&built)) else {
         return Mediator::Unbuilt;
     };

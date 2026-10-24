@@ -371,15 +371,98 @@ pub(crate) fn runs_local() -> bool {
 /// `crates/`, and following only an exact stamp stranded the hook on every
 /// refresh until a release build finished. Whether the pin is current is
 /// `engine-pin:check`'s question. One `stat`, so the hook path can take it.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT source-pin-unfollowed|s@^    build.is_file().then_some(build)$@    None::<PathBuf>.filter(\x7c_\x7c build.is_file())@|a_source_pin_is_followed_to_the_checkouts_build
+///
+/// # IT READS NO `CARGO_TARGET_DIR`, BECAUSE `root` MAY NOT BE THIS TREE
+///
+/// `CARGO_TARGET_DIR` is a fact about where THIS process's cargo writes, so it
+/// speaks only for the tree this process would build. Both of this function's
+/// callers ask about another one: the hook's load-fault hand-off asks about the
+/// envelope's authority, a DIFFERENT checkout in exactly the case it exists for
+/// (CLOUD-2204), and `collect` asks so the pruner spares the binary the hook
+/// execs. Applying the variable to them would answer about a tree nobody asked
+/// about — the hook following a source pin into a stranger's engine.
+///
+/// So this is the conventional path and nothing else. A caller asking about the
+/// tree this process would run cargo in wants [`own_build`], which honours the
+/// redirect because for that caller it is true.
+///
+/// Containment was tried first — honour the redirect while it lands inside
+/// `root` — and it was wrong in BOTH directions, which is why the distinction
+/// is drawn by caller rather than by path shape: an absolute redirect out of
+/// the tree stopped `follow_pin` finding its own build, reinstating the drift
+/// CLOUD-2376 closed, while a RELATIVE one resolved under the authority and was
+/// honoured for a tree this process never built.
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT foreign-target-dir-read|s@^        .join("target")$@        .join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(\x7c\x7c "target".into()))@|the_handoff_reads_no_target_dir_of_this_process
 #[must_use]
 pub fn checkout_build(root: &Path) -> Option<PathBuf> {
     let build = root
         .join("target")
         .join("release")
         .join(crate::surface::BINARY);
+    existing(build)
+}
+
+/// A named build, or `None` where nothing is there.
+///
+/// **ONE LINE, BECAUSE TWO WERE INDISTINGUISHABLE.** Both lookups ended
+/// `build.is_file().then_some(build)`, and `source-pin-unfollowed` anchored on
+/// that text — but `mutate::substitute` applies a script per LINE across the
+/// whole file, so the row rewrote BOTH functions and isolated neither. The gate
+/// stayed green while proving less than it read as proving, which is the defect
+/// `hand_off` collapsed two hand-offs to fix. Same answer here: one existence
+/// rule, one line, one row over it.
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT build-presence-unchecked|s@^    build.is_file().then_some(build)$@    None::<PathBuf>.filter(\x7c_\x7c build.is_file())@|a_source_pin_is_followed_to_the_checkouts_build
+fn existing(build: PathBuf) -> Option<PathBuf> {
     build.is_file().then_some(build)
+}
+
+/// [`checkout_build`] for the tree THIS PROCESS would run cargo in, which is
+/// the one `CARGO_TARGET_DIR` speaks for (CLOUD-2376).
+///
+/// `follow_pin`'s source arm is the caller: it resolves its root from the
+/// working directory and is the sibling of `install_source`, which builds in
+/// that same root with this process's environment inherited. The two ends of
+/// one file therefore agree for every value of the variable, absolute or
+/// relative — which is the agreement this issue exists to restore.
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT own-build-ignores-the-target-dir|s@^    existing(release_build(root))$@    existing(root.join("target").join("release").join(crate::surface::BINARY))@|a_source_pin_is_followed_into_a_redirected_target_dir
+#[must_use]
+pub fn own_build(root: &Path) -> Option<PathBuf> {
+    existing(release_build(root))
+}
+
+/// Where this checkout's release build LIVES — the one place that names it
+/// (CLOUD-2376).
+///
+/// Two call sites spelled it: the lookup above and the install that produces
+/// it. The install honoured `CARGO_TARGET_DIR` and the lookup did not, so with
+/// that variable set a source pin was followed to a stale build at
+/// `target/release`, or to nothing at all, while the build `engine install`
+/// had just written sat somewhere else. A path two functions agree on only by
+/// coincidence is the drift this repository refuses everywhere else.
+///
+/// `CARGO_TARGET_DIR` is resolved AGAINST `root`, because that is how cargo
+/// resolves it: the build runs with `root` as its working directory, so a
+/// relative value names a directory inside the checkout. An absolute value is
+/// taken as it is, which is what [`Path::join`] already does.
+///
+/// It reads THIS PROCESS's environment, which the signature does not show, and
+/// that is right only for the tree this process would run cargo in — which is
+/// what `install_source` asks about, its cargo child inheriting the same
+/// value. Asking about ANOTHER tree is [`checkout_build`]'s question, which it
+/// answers by reading no environment at all; a caller that publishes a target
+/// directory to a child instead, as `replay`, `perf` and `mutate` each do for
+/// their own spawns, would have to pass it in.
+#[must_use]
+pub fn release_build(root: &Path) -> PathBuf {
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .filter(|dir| !dir.is_empty())
+        .unwrap_or_else(|| "target".into());
+    root.join(target)
+        .join("release")
+        .join(crate::surface::BINARY)
 }
 
 /// Refuse a config whose pin this engine does not satisfy.

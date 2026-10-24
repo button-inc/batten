@@ -274,13 +274,6 @@ pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 // `#[expect]` rather than `#[allow]` for `rules/rust.md`'s reason: it is
 // self-cleaning in both directions, so if the table ever shrinks back under the
 // ceiling this annotation goes red rather than quietly outliving its cause.
-//
-// The hook path's one exclusion (CLOUD-2062, narrowed under CLOUD-2059): it
-// follows a release pin but never BUILDS a source pin inline. Dropping the
-// `hook_path` term lets a hook run a cargo build, which the hook-path case
-// catches.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT hook-path-builds|s@^    let may_build = !hook_path;$@    let may_build = true;@|the_hook_path_never_builds_a_source_pin
 #[expect(
     clippy::too_many_lines,
     reason = "a dispatch table's length is its verb count; splitting it scatters the surface"
@@ -327,11 +320,22 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // surface, and the guard bounds a session to one hop per invocation.
     let hook_path = matches!(command, Some(Command::Hook { .. }));
     let own_surface = matches!(command, Some(Command::Engine { .. }));
-    let may_build = !hook_path;
     let may_follow = !own_surface && std::env::var_os(ENGINE_UPDATED).is_none();
-    if may_follow && let Some(code) = follow_pin(may_build)? {
-        return Ok(code);
-    }
+    let followed = if may_follow {
+        follow_pin(hook_path)?
+    } else {
+        Followed::Nothing
+    };
+    // A CRASHED FOLLOW IS NOT HANDED THE SAME BUILD AGAIN (CLOUD-2376). The
+    // hook's second handoff finds the same checkout build from the envelope's
+    // authority, so without this it would spawn the crashing child a second
+    // time to learn what this one already did. Exhaustive, so a fourth
+    // outcome cannot quietly read as "nothing was handed".
+    let pinned = match followed {
+        Followed::Answered(code) => return Ok(code),
+        Followed::Pinned(target) => Some(target),
+        Followed::Nothing => None,
+    };
     match command {
         // Unreachable in practice: `arg_required_else_help` has clap offer the
         // subcommand listing (a usage error, exit 1) before parse returns. Kept
@@ -388,6 +392,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             supplied_instant(instant.as_deref())?,
             mode,
             &overrides,
+            pinned.as_ref(),
             out,
             err,
         ),
@@ -655,15 +660,21 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
 const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 
 /// When this checkout pins an engine this binary is not, re-run this invocation
-/// under the pinned one; `None` when nothing was stale.
+/// under the pinned one; [`Followed::Nothing`] when nothing was stale.
 ///
 /// **A RELEASE PIN IS FOLLOWED, NEVER INSTALLED OVER THIS BINARY.** The pinned
 /// release is fetched and verified once into the per-tag cache
 /// ([`engine::pinned_release`]) and exec'd from there, so two checkouts pinning
 /// two releases each run their own and neither rewrites the other's — the
 /// installed binary flipping between branches was this function's old shape.
-/// A source pin is built over the running binary as before, and only where
-/// `may_build`: never on the hook path.
+/// A source pin is built over the running binary as before, and never on the
+/// hook path.
+///
+/// **IT WRITES NOTHING, on either branch.** Every non-hook verb is a
+/// transparent passthrough whose child inherits this process's own descriptors,
+/// so its bytes never travel through a writer here at all; and the hook branch
+/// no longer spawns, so it has no child's bytes to hold. [`follow_to_pinned`]
+/// does the holding, where the payload the child must be handed already is.
 ///
 /// Best-effort on the READ: outside a repository, or with no readable
 /// `batten.toml`, there is no pin to honour and the verb runs as it is. The
@@ -671,16 +682,26 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 /// running anyway would decide under the very engine the pin refuses.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT checkout-build-replaced|s@^    if exe.starts_with(\&root) {$@    if false {@|a_build_inside_the_checkout_is_never_replaced
-//MUTANT follow-pin-source-unfollowed|s@^            Some(build) => build,$@            Some(_) => return Ok(None),@|a_verb_is_followed_to_the_checkouts_build
-fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
+//MUTANT follow-pin-source-unfollowed|s@^            Some(build) => build,$@            Some(_) => return Ok(Followed::Nothing),@|a_verb_is_followed_to_the_checkouts_build
+//MUTANT hook-path-builds|s@^    let may_build = !hook_path;$@    let may_build = true;@|the_hook_path_never_builds_a_source_pin
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT follow-pin-passes-a-crash-through|s@^    if hook_path {$@    if false {@|a_crashing_followed_build_never_fails_the_hook_open
+//MUTANT fetch-failure-always-falls-through|s@^                Err(_) if !may_build => return Ok(Followed::Nothing),$@                Err(_) => return Ok(Followed::Nothing),@|a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path
+fn follow_pin(hook_path: bool) -> Result<Followed> {
+    // THE HOOK FOLLOWS A RELEASE PIN BUT NEVER BUILDS A SOURCE ONE (CLOUD-2062,
+    // narrowed under CLOUD-2059), and that is the same bit rather than a second
+    // one. Two parameters that are provably each other's negation can be passed
+    // inconsistently, and `(hook_path: true, may_build: true)` — a hook running
+    // a cargo build — is exactly the state this derivation forbids.
+    let may_build = !hook_path;
     let Ok(root) = git::worktree_root(Path::new(".")) else {
-        return Ok(None);
+        return Ok(Followed::Nothing);
     };
     let Ok(text) = config::read_text(&root.join(config::CONFIG_FILE)) else {
-        return Ok(None);
+        return Ok(Followed::Nothing);
     };
     let Some(pin) = engine::stale(&text, engine::running_stamp) else {
-        return Ok(None);
+        return Ok(Followed::Nothing);
     };
     // READ BEFORE THE SWAP. After the rename Linux reports the running image as
     // `<path> (deleted)`, which is not a program — measured: the re-exec failed
@@ -691,47 +712,83 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
     // it overwrote `target/debug/batten` with the pinned release under `verify`'s
     // own `cargo run`. Its staleness is the pre-parse refusal's to name.
     if exe.starts_with(&root) {
-        return Ok(None);
+        return Ok(Followed::Nothing);
     }
     let engine = match (pin.release.as_deref(), pin.source.as_deref()) {
         (Some(tag), None) => {
             let cache = state::repo_state_dir(&root)?;
-            match engine::pinned_release(&cache, env!("CARGO_PKG_REPOSITORY"), tag) {
+            // `releases_repository()`, NOT THE BAKED LITERAL (CLOUD-2376). Every
+            // other release fetch in this binary reads that seam; this one spelled
+            // the repository itself, so no fixture could point it anywhere and the
+            // guard below had no reachable failing fetch to be tested against.
+            // Measured: mutating `!may_build` to `true` survived the whole suite.
+            // The default is the same literal, so nothing moves but testability.
+            match engine::pinned_release(&cache, &releases_repository(), tag) {
                 Ok(path) => path,
                 // ON THE HOOK PATH A FETCH THAT FAILS FALLS THROUGH to the
                 // refusal floor, which still decides the call and admits the
                 // one repair verb (CLOUD-2116). An error here would end the
                 // hook before that floor answered: measured, the admitted
                 // repair (`batten engine install`) was refused at exit 1.
-                Err(_) if !may_build => return Ok(None),
-                Err(err) => return Err(err),
+                Err(_) if !may_build => return Ok(Followed::Nothing),
+                Err(why) => return Err(why),
             }
         }
         // A SOURCE PIN IS FOLLOWED TO THE CHECKOUT'S OWN BUILD (CLOUD-2232),
         // as a release pin is followed to its cache: the installed binary execs
-        // `target/release/batten` — on the hook path too, since nothing is
+        // the checkout's release build — on the hook path too, since nothing is
         // built. One `batten` on PATH dispatches; no second engine is
         // installed beside the one the branch built.
-        (None, Some(_)) => match engine::checkout_build(&root) {
+        // `own_build`, not `checkout_build`: `root` here is this process's own
+        // worktree, the one tree a `CARGO_TARGET_DIR` in this environment
+        // speaks for — and the one `install_source` builds in, inheriting the
+        // same value. The hook's load-fault hand-off asks about somebody
+        // else's checkout and so asks the other question.
+        (None, Some(digest)) => match engine::own_build(&root) {
             Some(build) => build,
             None if may_build => {
-                if let Some(digest) = pin.source.as_deref() {
-                    install_source(&root, digest, &mut std::io::sink())?;
-                }
+                install_source(&root, digest, &mut std::io::sink())?;
                 exe
             }
-            None => return Ok(None),
+            None => return Ok(Followed::Nothing),
         },
         // A source pin on the hook path, or a malformed pin: the pre-parse
         // refusal names it.
-        _ => return Ok(None),
+        _ => return Ok(Followed::Nothing),
     };
     let mut argv: Vec<String> = vec![engine.to_string_lossy().into_owned()];
     argv.extend(std::env::args().skip(1));
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
-    // TEED, because the pinned engine's output IS this invocation's output. The
-    // default captures it, which on the hook path drops the decision itself:
-    // measured, the followed engine ran and the caller read an empty stdout.
+    // ON THE HOOK VERB THE CHILD IS JUDGED BEFORE IT IS HEARD (CLOUD-2376).
+    // Teeing writes as the child writes, so a build that printed a line and
+    // then died put that line on the harness's stdout and its own raw code —
+    // a panic's `101`, a missing interpreter's `127` — on the hook's exit.
+    // Neither is a code `crate::exit` names, and every one of them is read as
+    // "the hook itself failed, run the call". So the bytes are held, the code
+    // is tested against the table, and only an answer the table names is
+    // passed on; anything else decided nothing and is dropped whole, leaving
+    // the refusal floor below to decide the call.
+    //
+    // STDIN IS NOT INHERITED ON THE HOOK PATH, and this comment said the
+    // opposite until `/code-review` caught it — a leftover from the
+    // intermediate shape where this function still spawned in place. The one
+    // reader of the real stdin is `read_payload`, so the hook's child is handed
+    // this call's bytes on a PIPE by `hand_off`; a child that inherited stdin
+    // would drain the envelope out from under the fall-through, which is the
+    // fail-open this whole change exists to close. Everywhere else the child
+    // does inherit, which is what makes `exec` a passthrough.
+    if hook_path {
+        // RESOLVED HERE, SPAWNED WHERE THE PAYLOAD IS. The child is handed this
+        // call's envelope, and the one reader of stdin is `read_payload` —
+        // which streams it, spills what is over the bound, and owns what a
+        // harness sent. Spawning before that read makes the child the reader
+        // instead, and a crash then leaves the fall-through nothing to judge.
+        return Ok(Followed::Pinned(FollowTarget { root, argv }));
+    }
+    // TEED EVERYWHERE ELSE, because the pinned engine's output IS this
+    // invocation's output, live. `batten exec -- cmd` keeps its child's bytes
+    // as they arrive and its child's own code, `101` included: that verb is a
+    // transparent passthrough and the code is not Batten's to re-table.
     let passthrough = exec::ExecConfig {
         tee: true,
         ..exec::ExecConfig::DEFAULT
@@ -744,7 +801,53 @@ fn follow_pin(may_build: bool) -> Result<Option<ExitCode>> {
         &published,
         &mut std::io::sink(),
     )
-    .map(Some)
+    .map(Followed::Answered)
+}
+
+/// What [`follow_pin`] did with this invocation (CLOUD-2376).
+///
+/// A third answer beside "ran it" and "nothing to do", because the hook's
+/// second handoff needs to tell them apart: a follow that crashed falls
+/// through to the refusal floor, and re-running the same crashing build from
+/// [`hand_to_checkout_build`] would spawn it twice to learn the same thing.
+/// Carried as a value rather than published into the environment, so no child
+/// of this process can inherit a mark about a run that is not its own.
+///
+/// **ON THE HOOK PATH THIS FUNCTION RESOLVES AND DOES NOT SPAWN**, and that is
+/// a correctness term rather than a tidy-up. The followed child is handed this
+/// call's envelope, so it must be handed the BYTES — a child that inherits
+/// stdin reads the stream to EOF, and a crash then left `run_hook`'s own
+/// `read_payload` with nothing. That is a could-not-look, and a could-not-look
+/// ALLOWS: measured, the hook answered `0` over a call nothing had judged, and
+/// the refusal floor the fall-through exists to reach was never reached.
+///
+/// Reading the payload HERE to replay it was the first fix and the wrong place
+/// for it: it holds whole what CLOUD-2224 streams and spills, it reads stdin
+/// twice over, and its own read error bypasses `read_payload`'s classification
+/// of what an unreadable stream means. So the hook path returns the target it
+/// resolved and `run_hook` spawns it once the envelope is in hand — which is
+/// also where the load-fault hand-off already lives, so the two are siblings in
+/// one place and "has this call been handed off" stops being a value threaded
+/// through the dispatch.
+#[derive(Debug, Clone)]
+enum Followed {
+    /// Nothing was stale, or there was nothing to follow to: run the verb.
+    Nothing,
+    /// The pinned engine ran and answered; its code is this invocation's.
+    /// Never produced on the hook path, which does not spawn here.
+    Answered(ExitCode),
+    /// The hook path resolved a pinned engine and left it unspawned: the root
+    /// it was resolved from, and the argv to run it with.
+    Pinned(FollowTarget),
+}
+
+/// A pinned engine the hook path resolved but has not run (CLOUD-2376).
+#[derive(Debug, Clone)]
+struct FollowTarget {
+    /// The worktree the pin was read from, which the spawn resolves against.
+    root: PathBuf,
+    /// The pinned engine followed by this invocation's own operands.
+    argv: Vec<String>,
 }
 
 /// `batten engine update` (CLOUD-2287, CLOUD-2279): bring every batten
@@ -1695,14 +1798,15 @@ fn install_source(root: &Path, want: &str, out: &mut dyn Write) -> Result<ExitCo
                 engine::REPAIR_PINNED,
             ))
         })?;
-        let target_dir = std::env::var_os("CARGO_TARGET_DIR")
-            .map_or_else(|| root.join("target"), std::path::PathBuf::from);
         // The digest is read first, so a tree naming no source installs nothing.
         let digest = engine::digest(root)?;
-        (
-            std::fs::read(target_dir.join("release").join("batten"))?,
-            digest,
-        )
+        // ONE PLACE NAMES THE ARTIFACT (CLOUD-2376). This read and
+        // `engine::own_build`'s lookup are the two ends of the same file, and
+        // they disagreed about `CARGO_TARGET_DIR`: the build landed where
+        // cargo was told to put it and the follow looked under `target/`.
+        // `checkout_build` is deliberately NOT the other end — it reads no
+        // environment, because its callers ask about somebody else's tree.
+        (std::fs::read(engine::release_build(root))?, digest)
     };
     for target in behind {
         durable::replace(&target, &bytes)?;
@@ -18504,6 +18608,58 @@ struct Recency<'a> {
     now: std::time::SystemTime,
 }
 
+/// Both halves of this call's receipt evidence, resolved at the boundary.
+///
+/// One unit rather than two because they are one question asked of one
+/// partition: the required checks split into the agent-sourced and the
+/// receipt-keyed, and everything below — the store, the bounds, the
+/// judgeability of a written path — is read once and consumed by both. Keeping
+/// them apart in `run_hook` meant seven locals living across the rest of a
+/// function none of them is used in.
+///
+/// Resolved HERE and not inside `adjudicate` for that function's standing
+/// reason: it is contractually pure, and this reads a file and two git refs.
+fn receipt_evidence(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    instant: std::time::SystemTime,
+) -> (hook::ReceiptFacts, hook::AgentFacts) {
+    let required = policy.required_checks_for(envelope);
+    let judgeable = envelope.writes.as_deref().is_none_or(receipt::judgeable);
+    // CLOUD-988's declared bounds, resolved beside the checks they qualify.
+    let max_ages = policy.max_age_for(envelope);
+    // An AGENT-SOURCED check is resolved from its own record rather than from the
+    // receipt store (CLOUD-776), so the two are split before either is read: a
+    // repository whose required checks are all agent-sourced must not pay
+    // `receipt::verdicts`'s git work for questions it is not asking.
+    let (sourced, receipted): (Vec<_>, Vec<_>) = required
+        .iter()
+        .partition(|(check, _)| policy.agent_fact(check).is_some());
+    let receipted: std::collections::BTreeMap<_, _> = receipted
+        .into_iter()
+        .map(|(check, key)| (check.clone(), *key))
+        .collect();
+    // Where each agent-sourced record lives on THIS call, resolved once for both
+    // readers (CLOUD-859). A record is filed under the subject its receipt row's
+    // `key` names, so the boundary resolves that subject here — `adjudicate` may
+    // not look, and resolving it per reader would let the two disagree.
+    let sourced_store =
+        receipt::sourced_store(&sourced, policy.named_receipt_subject(envelope).as_deref());
+    let receipts: hook::ReceiptFacts = receipt_facts(
+        policy,
+        envelope,
+        &sourced,
+        sourced_store.as_ref(),
+        &receipted,
+        &Recency {
+            max_ages: &max_ages,
+            now: instant,
+        },
+        judgeable,
+    );
+    (receipts, agent_records(&sourced, sourced_store.as_ref()))
+}
+
 fn receipt_facts(
     policy: &hook::Policy,
     envelope: &hook::Envelope,
@@ -18818,11 +18974,25 @@ fn run_hook(
     instant: std::time::SystemTime,
     mode: Mode,
     overrides: &Overrides,
+    // The pinned engine `follow_pin` resolved and deliberately did not spawn
+    // (CLOUD-2376): the envelope has to be read before a child can be handed it.
+    pinned: Option<&FollowTarget>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let _memos = hook_call_memos();
-    let Some((raw, mut envelope, spilled, _spool)) = read_envelope(harness, mode, err)? else {
+    let Some(payload) = read_payload(mode, err)? else {
+        return Ok(ExitCode::Success);
+    };
+    // THE FOLLOW, BEFORE THIS BUILD READS THE PAYLOAD FOR ITSELF. An answer the
+    // §7 table names is this invocation's; anything else decided nothing and
+    // falls through, over a stream this process has already taken.
+    let followed = follow_to_pinned(pinned, &payload, out)?;
+    if let Some(code) = followed.answer {
+        return Ok(code);
+    }
+    let Some((raw, mut envelope, spilled, _spool)) = decode_payload(harness, payload, mode, err)?
+    else {
         return Ok(ExitCode::Success);
     };
     // THE WRITE TARGET IS READ AS THE REPOSITORY READS IT (CLOUD-1133), and this
@@ -18985,7 +19155,10 @@ fn run_hook(
     // [`recoverable_without_rules`] carries the argument for which two shapes
     // pass and why every other one still refuses.
     let (policy, waivers, pruning) = if adjudicable {
-        match hook_config_or_floor(overrides, harness, &envelope, &raw, mode, out, err)? {
+        // Built in the arm that uses it: the handoff is the config load's input,
+        // and the other arm loads nothing.
+        let handoff = Handoff::new(&raw, followed.ran);
+        match hook_config_or_floor(overrides, harness, &envelope, handoff, mode, out, err)? {
             Ok(loaded) => loaded,
             Err(code) => return Ok(code),
         }
@@ -19016,40 +19189,7 @@ fn run_hook(
     // the same "nothing to answer" absence a failed lookup produces. The
     // `check-ignore` behind it runs only when a write-triggered row actually
     // selected, so a repository declaring none pays nothing for it.
-    let required = policy.required_checks_for(&envelope);
-    let judgeable = envelope.writes.as_deref().is_none_or(receipt::judgeable);
-    // CLOUD-988's declared bounds, resolved beside the checks they qualify.
-    let max_ages = policy.max_age_for(&envelope);
-    // An AGENT-SOURCED check is resolved from its own record rather than from the
-    // receipt store (CLOUD-776), so the two are split before either is read: a
-    // repository whose required checks are all agent-sourced must not pay
-    // `receipt::verdicts`'s git work for questions it is not asking.
-    let (sourced, receipted): (Vec<_>, Vec<_>) = required
-        .iter()
-        .partition(|(check, _)| policy.agent_fact(check).is_some());
-    let receipted: std::collections::BTreeMap<_, _> = receipted
-        .into_iter()
-        .map(|(check, key)| (check.clone(), *key))
-        .collect();
-    // Where each agent-sourced record lives on THIS call, resolved once for both
-    // readers (CLOUD-859). A record is filed under the subject its receipt row's
-    // `key` names, so the boundary resolves that subject here — `adjudicate` may
-    // not look, and resolving it per reader would let the two disagree.
-    let sourced_store =
-        receipt::sourced_store(&sourced, policy.named_receipt_subject(&envelope).as_deref());
-    let receipts: hook::ReceiptFacts = receipt_facts(
-        &policy,
-        &envelope,
-        &sourced,
-        sourced_store.as_ref(),
-        &receipted,
-        &Recency {
-            max_ages: &max_ages,
-            now: instant,
-        },
-        judgeable,
-    );
-    let agent_sourced = agent_records(&sourced, sourced_store.as_ref());
+    let (receipts, agent_sourced) = receipt_evidence(&policy, &envelope, instant);
     // The key evidence (CLOUD-446), resolved on the same terms and for the same
     // reason: two git queries a pure `adjudicate` cannot make, spent only when a
     // `requires_key` row has already selected this command. A repository
@@ -19356,32 +19496,25 @@ fn is_adjudicable(envelope: &hook::Envelope) -> bool {
         || (envelope.event == hook::Event::PreTool && !envelope.raw_tool.is_empty())
 }
 
-/// The mediated call on stdin, or `None` where the call must simply proceed.
+/// The mediated call's bytes off stdin, or `None` where the call must simply
+/// proceed.
 ///
-/// **THE TWO FAIL-OPEN BOUNDARIES, TOGETHER BECAUSE THEY ARE ONE ANSWER.** Stdin
-/// that will not read and a payload that will not decode are both "the engine
-/// does not know what this call IS", and neither may block it: a guard must never
-/// be the reason a session cannot proceed. That is the opposite side of
-/// a config that will not load, where the engine knows the call perfectly well
-/// and has been told it cannot enforce the rules over it.
+/// **THE FIRST OF TWO FAIL-OPEN BOUNDARIES**, the second being
+/// [`decode_payload`]'s. Stdin that will not read and a payload that will not
+/// decode are both "the engine does not know what this call IS", and neither
+/// may block it: a guard must never be the reason a session cannot proceed.
+/// That is the opposite side of a config that will not load, where the engine
+/// knows the call perfectly well and has been told it cannot enforce the rules
+/// over it. They answer alike and they are reached separately, because a build
+/// can be too old to decode a stream it can still read — see [`Payload`].
 ///
 /// **Loud, never silent** (CLOUD-43). A guard that cannot read its input is a gate
 /// that did not run, and the silent version of that is byte-identical to a clean
 /// allow — the false green this engine exists to catch, in the one place nobody
 /// would think to look.
-/// **The RAW bytes travel with the decoded value**, because `dispatch_handlers`
-/// hands a declared handler the payload as it arrived. Re-reading stdin for it is
-/// not an option — the stream is consumed — and re-serializing the envelope would
-/// hand a handler a document the host never sent.
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 //MUTANT spill-floor-restored|s@^    let bound = capture::DEFAULT_RESULT_MAX_TOKENS;$@    let bound = 1_000_000;@|a_result_over_the_bound_is_spilled_not_held
-//MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
-//MUTANT handler-bytes-reserialized|s@^    let raw = if streamed.spilled.is_empty() {$@    let raw = if false {@|a_handler_reads_the_payload_the_host_sent
-fn read_envelope(
-    harness: hook::Harness,
-    mode: Mode,
-    err: &mut dyn Write,
-) -> Result<Option<HookRead>> {
+fn read_payload(mode: Mode, err: &mut dyn Write) -> Result<Option<Payload>> {
     // STREAMED, NEVER HELD WHOLE (CLOUD-2224). Measured: reading a 50 MB payload
     // whole peaked at 150 MiB; streamed, at the process baseline. The bound is
     // the default one, because the configured bound lives under the authority
@@ -19413,8 +19546,57 @@ fn read_envelope(
         output::message(mode, Verbosity::Normal, err, said)?;
         return Ok(None);
     };
+    Ok(Some(Payload {
+        streamed,
+        spool: Spool(spool),
+    }))
+}
+
+/// The payload as it arrived, before anything version-specific has read it.
+///
+/// **THE SPLIT IS THE POINT, not a refactor.** DECODING a payload — reading an
+/// envelope's shape — is the half a build is most easily too old for, and being
+/// too old is the condition a pin exists to repair. Folding it in with the read
+/// meant a stale binary that could not decode an envelope answered `Success`
+/// for it, a fail-open in precisely the case the pin is for, because the pinned
+/// engine that could have decoded it was never consulted. So the hook reads,
+/// hands the bytes to the pin if there is one, and decodes for itself only once
+/// nothing else has answered.
+///
+/// **The split narrows that window; it does not close it.** [`read_payload`]
+/// parses, counts tokens and spills, so it is not a version-independent half —
+/// a payload this build's streaming parser rejects still returns `Success`
+/// without the pin being asked. Both builds run the same generic walk and the
+/// envelope is host-serialized, so there is no known shape that divides them;
+/// closing it properly means handing the child the spool before anything reads
+/// it, which is the file-rather-than-`String` change filed on the row.
+struct Payload {
+    streamed: stream_input::Streamed,
+    /// Removed when the call is answered on any path.
+    spool: Spool,
+}
+
+/// This build's own reading of a payload it has already taken off the stream.
+///
+/// The second fail-open boundary, on [`read_payload`]'s terms: a document this
+/// build cannot decode is one it does not know the shape of, and it allows
+/// rather than blocking. Reached only once nothing with a better claim — the
+/// pinned engine — has answered.
+///
+/// **The RAW bytes travel with the decoded value**, because `dispatch_handlers`
+/// hands a declared handler the payload as it arrived. Re-reading stdin for it is
+/// not an option — the stream is consumed — and re-serializing the envelope would
+/// hand a handler a document the host never sent.
+//MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
+//MUTANT handler-bytes-reserialized|s@^    let raw = if streamed.spilled.is_empty() {$@    let raw = if false {@|a_handler_reads_the_payload_the_host_sent
+fn decode_payload(
+    harness: hook::Harness,
+    payload: Payload,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<Option<HookRead>> {
+    let Payload { streamed, spool } = payload;
     let Some(envelope) = hook::decode_value(harness, &streamed.value) else {
-        let _ = std::fs::remove_dir_all(&spool);
         output::message(mode, Verbosity::Normal, err, UNDECODABLE_PAYLOAD)?;
         return Ok(None);
     };
@@ -19428,7 +19610,7 @@ fn read_envelope(
         serde_json::to_string(&streamed.value).unwrap_or_default()
     };
     let _ = std::fs::remove_file(&streamed.raw);
-    Ok(Some((raw, envelope, streamed.spilled, Spool(spool))))
+    Ok(Some((raw, envelope, streamed.spilled, spool)))
 }
 
 /// One hook payload, read streaming (CLOUD-2224): the document handlers read,
@@ -19680,7 +19862,7 @@ fn hook_config_or_floor(
     overrides: &Overrides,
     harness: hook::Harness,
     envelope: &hook::Envelope,
-    raw: &str,
+    handoff: Handoff<'_>,
     mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -19697,7 +19879,7 @@ fn hook_config_or_floor(
         // is registered to enforce did not load, so nothing judged the call;
         // the floor below still passes a read and the repair write.
         Err(unreadable) => {
-            if let Some(code) = hand_to_checkout_build(raw, out)? {
+            if let Some(code) = hand_to_checkout_build(handoff, out)? {
                 return Ok(Err(code));
             }
             if recoverable_without_rules(envelope) {
@@ -19719,6 +19901,189 @@ fn hook_config_or_floor(
     }
 }
 
+/// What the load-fault handoff needs that is not already in the envelope: the
+/// payload to replay on the child's stdin, and whether a follow has already
+/// spent this call's one hand-off (CLOUD-2376).
+///
+/// A pair rather than two parameters because they travel together through
+/// [`hook_config_or_floor`], which is at its argument budget, and because they
+/// answer one question between them: has this call been handed to the
+/// checkout's build yet, and with what.
+#[derive(Debug, Clone, Copy)]
+struct Handoff<'a> {
+    /// The document to replay on the child's stdin.
+    ///
+    /// **The host's own bytes ONLY while nothing spilled**, and the doc used to
+    /// claim "exactly as it arrived" without that clause. [`decode_payload`]
+    /// reads the spool back when `spilled` is empty and otherwise re-serializes
+    /// the parsed value, where every oversized leaf carries a marker in place of
+    /// its text — so on a spilled payload the child judges marker text, as every
+    /// in-process handler does (CLOUD-2224). That is consistent rather than
+    /// correct: [`follow_to_pinned`] replays the host's bytes because it runs
+    /// before the parse and has them. Closing the gap means handing the child the
+    /// spool FILE rather than a `String`, which is an `exec` change and is filed.
+    raw: &'a str,
+    /// The engine [`follow_pin`]'s target already ran for this call, if one
+    /// did. Threaded as a value, never published into the environment, so no
+    /// child of this process can inherit a mark about a run that is not its own.
+    ///
+    /// **A PATH, NOT A FLAG, because the question is identity.** This was a
+    /// bool meaning "a follow already happened", and the two hand-offs do not
+    /// necessarily resolve the same file: the follow reads the working
+    /// directory's worktree through [`engine::own_build`], which honours
+    /// `CARGO_TARGET_DIR`, while the hand-off below reads
+    /// [`hook_authority_root`] through [`engine::checkout_build`], which does
+    /// not — and a cwd that is a different checkout from the session authority
+    /// is precisely the case CLOUD-2204 added the second hand-off for. A
+    /// crashed follow into one engine therefore suppressed a hand-off to
+    /// another, and the call fell to the floor with a working engine
+    /// unconsulted. Recursion is not what this guards — `ENGINE_UPDATED` is —
+    /// so the honest predicate is the one the hand-off already applies against
+    /// `current_exe`: never spawn a binary this call has already run.
+    ran: Option<&'a Path>,
+}
+
+impl<'a> Handoff<'a> {
+    /// Both fields in one line at the call site.
+    ///
+    /// `run_hook` sits at its line budget and rustfmt spells the literal over
+    /// four lines, so this is what keeps a two-field value from costing three of
+    /// them. Nothing else about it is interesting.
+    const fn new(raw: &'a str, ran: Option<&'a Path>) -> Self {
+        Self { raw, ran }
+    }
+}
+
+/// Run the pinned engine [`follow_pin`] resolved, over the envelope this
+/// process has already read (CLOUD-2376).
+///
+/// The hook's FIRST hand-off, and the sibling of [`hand_to_checkout_build`]
+/// below — same spawn, same decide-before-write, same reason. It is here rather
+/// than in `follow_pin` because the child is handed `raw` on a pipe: stdin is
+/// read exactly once per process, by `read_payload`, and a child that read it
+/// instead left the fall-through nothing to judge.
+///
+/// No `answer` means this invocation still has to decide the call for itself —
+/// nothing was pinned, the spool would not read, the engine would not spawn, or
+/// it exited outside the §7 table and so decided nothing. In every one of those
+/// the payload is intact and the floor below answers over it.
+///
+/// # Errors
+///
+/// Only a write of the child's accepted answer to `out`.
+fn follow_to_pinned<'a>(
+    pinned: Option<&'a FollowTarget>,
+    payload: &Payload,
+    out: &mut dyn Write,
+) -> Result<Follow<'a>> {
+    let Some(target) = pinned else {
+        return Ok(Follow::NOTHING);
+    };
+    // THE HOST'S OWN BYTES, off the spool, and read only once a follow is
+    // actually pending. Not the re-serialized value `decode_payload` hands
+    // handlers: that one carries a marker in place of every spilled leaf, and
+    // the pinned engine would judge the marker text as the result. A spool that
+    // will not read hands the child nothing, so it falls through instead —
+    // a child answering `0` over an empty document is not an answer about this
+    // call, and NOTHING RAN, so the hand-off below is still owed its turn.
+    let Ok(raw) = std::fs::read_to_string(&payload.streamed.raw) else {
+        return Ok(Follow::NOTHING);
+    };
+    hand_off(&target.root, &target.argv, &raw, out)
+}
+
+/// What the follow did: the answer if the child decided one, and the engine it
+/// actually spawned (CLOUD-2376).
+///
+/// **BOTH, BECAUSE THEY ARE DIFFERENT QUESTIONS AND THE SECOND KEPT BEING
+/// GUESSED.** `ran` was first derived in `run_hook` from "a target was
+/// resolved", which is true on paths where no child was spawned at all — a
+/// spool that would not read, an engine that would not start. Moving it to
+/// `follow_to_pinned` fixed the first and not the second, because `hand_off`
+/// answers `None` for a program that would not start and for one that ran and
+/// decided nothing alike. So it is set in [`hand_off`], which is the only place
+/// that can tell those apart.
+///
+/// The load-fault hand-off reads it to avoid re-running a binary this call
+/// already ran, so a guess in that direction suppressed a hand-off to a
+/// possibly DIFFERENT engine over a run that never happened.
+struct Follow<'a> {
+    answer: Option<ExitCode>,
+    ran: Option<&'a Path>,
+}
+
+impl Follow<'_> {
+    /// Nothing was followed, so nothing ran and nothing was decided.
+    const NOTHING: Self = Self {
+        answer: None,
+        ran: None,
+    };
+}
+
+/// THE HAND-OFF ITSELF: spawn a resolved engine over this call's payload and
+/// take its answer, or `None` where it decided nothing (CLOUD-2376).
+///
+/// **One body, because there is one invariant.** Both hand-offs reached this
+/// same fifteen lines — publish the one-hop mark, pipe the payload, test the
+/// code against the §7 table, and write ONLY for an answer the table names —
+/// and each carried its own `//MUTANT` row over its own copy of the decide
+/// line. Those two rows were one mutant: `substitute` applies a script per line
+/// across the whole file, so either row mutated both copies, and neither proved
+/// its own site. A rule ships with ITS mechanism, and this is the mechanism.
+///
+/// What stays with each caller is its RESOLUTION, which is genuinely two
+/// questions: the follow is handed a target resolved from the working
+/// directory, and the load-fault hand-off resolves the authority's own checkout
+/// build and owns the guards that decide whether to look at all.
+///
+/// `None` means this invocation still has to decide the call for itself — the
+/// engine would not spawn, or it exited outside the table. The payload is
+/// intact either way, so the floor answers over it.
+///
+/// # Errors
+///
+/// Only a write of the child's accepted answer to `out`.
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT handoff-writes-before-deciding|s@^    let Some(decided) = ExitCode::decided(code) else {$@    let Some(decided) = Some(ExitCode::from_code(code).unwrap_or(ExitCode::Usage)) else {@|a_crashing_followed_build_never_fails_the_hook_open
+fn hand_off<'a>(
+    root: &Path,
+    argv: &'a [String],
+    raw: &str,
+    out: &mut dyn Write,
+) -> Result<Follow<'a>> {
+    let published = [(String::from(ENGINE_UPDATED), Some(String::from("1")))];
+    let Some((code, stdout)) =
+        exec::piped_argv(root, argv, raw, exec::Diagnostics::Pass, &published)
+    else {
+        return Ok(Follow::NOTHING);
+    };
+    // A CHILD RAN, WHATEVER IT SAID, and this is the nearest place that knows.
+    // A caller reading only the returned answer cannot tell "nothing was
+    // spawned" from "something was spawned and decided nothing", and those
+    // differ for the hand-off below: it must not re-run a binary this call
+    // already ran, and is still owed its turn when nothing ran at all.
+    //
+    // ONE CASE STILL READS AS A NON-SPAWN AND IS NOT: `piped_argv` answers
+    // `None` for a child that died on a SIGNAL, because there is no code to
+    // report — indistinguishable here from a program that would not start. So
+    // a segfaulting engine is handed off to a second time. That is the safe
+    // direction of the two: the alternative, claiming a run that did not
+    // happen, suppresses a hand-off to a possibly working engine, and the cost
+    // of this one is a second crash. Closing it means `piped_argv` saying
+    // whether it spawned, which is an `exec` change filed on the row.
+    let ran = argv.first().map(Path::new);
+    // DECIDE, THEN WRITE. Nothing of the child's has reached `out` yet, so a
+    // code the table does not name costs nothing to drop whole.
+    let Some(decided) = ExitCode::decided(code) else {
+        return Ok(Follow { answer: None, ran });
+    };
+    out.write_all(stdout.as_bytes())?;
+    Ok(Follow {
+        answer: Some(decided),
+        ran,
+    })
+}
+
 /// Hand a call this engine cannot judge to the hook authority's own checkout
 /// build, with the payload already read (CLOUD-2232).
 ///
@@ -19731,10 +20096,44 @@ fn hook_config_or_floor(
 ///
 /// `None` when there is nothing to hand to: no source pin, no checkout build,
 /// this IS that build, or this call was already handed once.
+///
+/// # The child is judged before it is heard (CLOUD-2376)
+///
+/// [`hand_off`] does that, and WHICH codes travel is
+/// [`ExitCode::decided`]'s to say — this used to re-derive the list here and
+/// the copy went stale the moment `decided` stopped admitting `3`, naming the
+/// very code whose adoption is the fail-open. The rule has one home; what is
+/// left when nothing travels is the refusal floor below, which still admits a
+/// read and the config repair.
+///
+/// [`ExitCode::decided`]: exit::ExitCode::decided
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT hook-handoff-skipped|s@^    let Some(build) = engine::checkout_build(root) else {$@    let Some(build) = None::<PathBuf> else {@|a_hook_outside_the_checkout_hands_off_to_the_authoritys_build
-fn hand_to_checkout_build(raw: &str, out: &mut dyn Write) -> Result<Option<ExitCode>> {
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT handoff-reruns-the-binary-already-run|s@^    if already_ran(handoff.ran, \&build)? {$@    if false {@|a_crashing_followed_build_never_fails_the_hook_open
+fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<Option<ExitCode>> {
     if std::env::var_os(ENGINE_UPDATED).is_some() {
+        return Ok(None);
+    }
+    // AN EMPTY DOCUMENT IS NOT THIS CALL, and handing one to a child is the
+    // fail-open this change exists to close, surviving on the other path.
+    // `decode_payload` answers `unwrap_or_default()` for a spool that will not
+    // read, so `raw` is empty exactly where the bytes were LOST — and a child
+    // given empty stdin decodes nothing, exits `0`, and `ExitCode::decided`
+    // carries that `0` back as an allow about a call the child never saw.
+    // `follow_to_pinned` falls through for precisely this reason and says so;
+    // the sibling did not, which is an asymmetry rather than a second rule.
+    //
+    // Falling through costs nothing: nothing ran, so the refusal floor below
+    // still decides the call over the envelope, which decoded fine.
+    //
+    // NO `//MUTANT` ROW, STATED RATHER THAN OMITTED. The case wants a spool that
+    // stops reading between `read_payload` writing it and `decode_payload`
+    // reading it, in one process, after `follow_to_pinned` already read it —
+    // which no fixture here can stage. The honest close is `decode_payload` not
+    // conflating "read failed" with "empty" at all, which changes what it
+    // returns and every handler that reads `raw`.
+    if handoff.raw.is_empty() {
         return Ok(None);
     }
     let root = hook_authority_root();
@@ -19747,24 +20146,34 @@ fn hand_to_checkout_build(raw: &str, out: &mut dyn Write) -> Result<Option<ExitC
     let Some(build) = engine::checkout_build(root) else {
         return Ok(None);
     };
-    if git::canonical(&std::env::current_exe()?) == git::canonical(&build) {
+    if already_ran(handoff.ran, &build)? {
         return Ok(None);
     }
     let mut argv = vec![build.to_string_lossy().into_owned()];
     argv.extend(std::env::args().skip(1));
-    let published = [(String::from(ENGINE_UPDATED), Some(String::from("1")))];
-    let Some((code, stdout)) =
-        exec::piped_argv(root, &argv, raw, exec::Diagnostics::Pass, &published)
-    else {
-        return Ok(None);
-    };
-    out.write_all(stdout.as_bytes())?;
-    Ok(Some(match code {
-        0 => ExitCode::Success,
-        2 => ExitCode::Violation,
-        3 => ExitCode::Internal,
-        _ => ExitCode::Usage,
-    }))
+    // Only the answer: this is the last hand-off, so nothing downstream asks
+    // what it ran.
+    Ok(hand_off(root, &argv, handoff.raw, out)?.answer)
+}
+
+/// Whether this call has already run `build` — as this process, or as an
+/// engine a follow already spawned for it (CLOUD-2376).
+///
+/// One predicate over both, because they are one question. The self-test was
+/// here first and the follow's was a separate bool, which meant a follow into
+/// one engine suppressed a hand-off to a different one; comparing canonical
+/// paths answers both at the resolution the question is actually asked at.
+///
+/// # Errors
+///
+/// Only resolving this process's own image.
+fn already_ran(ran: Option<&Path>, build: &Path) -> Result<bool> {
+    let build = git::canonical(build);
+    let mine = std::env::current_exe()?;
+    Ok([Some(mine.as_path()), ran]
+        .into_iter()
+        .flatten()
+        .any(|path| git::canonical(path) == build))
 }
 
 /// Refuse a call whose rules this build could not load (CLOUD-1677).

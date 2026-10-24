@@ -81,6 +81,70 @@ impl ExitCode {
         self as i32
     }
 
+    /// The inverse of [`code`]: the variant a raw exit names, or `None` where
+    /// the table has no row for it (CLOUD-2376).
+    ///
+    /// A child Batten hands a call to answers in integers, and the table is
+    /// total over four of them. Every other integer — a panic's `101`, a
+    /// missing binary's `127`, a signal's `128 + N` — is a code Batten did not
+    /// choose, so there is no variant to return and `None` is the honest
+    /// answer. Mapping the remainder onto [`Usage`] is what this function
+    /// exists to stop: `1` is non-blocking, so a crashing child read as
+    /// `Usage` makes the hook permit the call it could not judge.
+    ///
+    /// [`crate::judge::Verdict::of`] keeps its own match over the same
+    /// integers and is deliberately not folded in: it maps into a different
+    /// vocabulary (`Clean`/`Raised`/`Unresolved`), not into this table, so one
+    /// function answering both would be two meanings on one name.
+    ///
+    /// [`code`]: ExitCode::code
+    /// [`Usage`]: ExitCode::Usage
+    #[must_use]
+    pub const fn from_code(raw: i32) -> Option<Self> {
+        match raw {
+            0 => Some(ExitCode::Success),
+            1 => Some(ExitCode::Usage),
+            2 => Some(ExitCode::Violation),
+            3 => Some(ExitCode::Internal),
+            _ => None,
+        }
+    }
+
+    /// The code a child DECIDED with: [`from_code`] minus the two a failure of
+    /// Batten's own produces (CLOUD-2376).
+    ///
+    /// The rule a hand-off applies when it stands in front of a child whose
+    /// answer it is about to pass on as its own. `0` and `2` are answers ABOUT
+    /// THE REPOSITORY and travel; every other integer is a statement about the
+    /// invocation, or about nothing at all, and a caller standing in for a gate
+    /// must not report one as the gate's verdict.
+    ///
+    /// **BOTH [`Usage`] AND [`Internal`] are excluded, and the module header is
+    /// why**: they "are the only codes a failure of Batten's own can produce,
+    /// and neither blocks" — that is the sentence fail-open rests on. Every
+    /// harness reads either as "the hook itself failed, run the call", so
+    /// passing a child's `1` on is indistinguishable from permitting the call,
+    /// and passing its `3` on adopts the child's own breakage as this gate's
+    /// verdict while skipping the refusal floor that would have answered. `1`
+    /// was excluded here first and `3` was not, which made the hand-off treat
+    /// two codes [`meaning`] describes identically — "fail loud, do not block"
+    /// — as different kinds of answer.
+    ///
+    /// The exclusion lives here, beside the table that makes both non-blocking,
+    /// rather than being re-derived at each hand-off.
+    ///
+    /// [`from_code`]: ExitCode::from_code
+    /// [`Usage`]: ExitCode::Usage
+    /// [`Internal`]: ExitCode::Internal
+    /// [`meaning`]: ExitCode::meaning
+    #[must_use]
+    pub const fn decided(raw: i32) -> Option<Self> {
+        match Self::from_code(raw) {
+            Some(ExitCode::Usage | ExitCode::Internal) | None => None,
+            answer => answer,
+        }
+    }
+
     /// The code the checks/advisory pipeline returns for a run that did or did
     /// not find something blocking.
     ///
@@ -336,6 +400,70 @@ mod tests {
         // And the collision that makes the inversion dangerous rather than
         // merely different: the shell's could-not-look IS this table's violation.
         assert_eq!(ExitCode::Violation.code(), shell_could_not_look);
+    }
+
+    #[test]
+    fn an_exit_code_round_trips_and_nothing_else_is_one() {
+        // THE RANGE IS THE POINT (CLOUD-2376). `from_code` exists so a caller
+        // standing in front of a child's raw exit can ask "is this a code from
+        // this table" and be told no. A fold that answered `Usage` for the
+        // remainder would be structurally fail-open at the hook boundary: `1`
+        // is the code every harness reads as "the hook broke, run the call".
+        for code in ExitCode::ALL {
+            assert_eq!(
+                ExitCode::from_code(code.code()),
+                Some(code),
+                "{code:?} must round-trip through its own number"
+            );
+        }
+        // A negative code (no child), the first integer past the table, a
+        // panic's code, and a missing program's.
+        for outside in [-1, 4, 101, 127] {
+            assert_eq!(
+                ExitCode::from_code(outside),
+                None,
+                "{outside} is not a code this table names"
+            );
+        }
+    }
+
+    #[test]
+    fn only_an_answer_about_the_repository_is_handed_on() {
+        // THE BOUNDARY RULE, ASSERTED DIRECTLY (CLOUD-2376). The hand-off
+        // stands in front of a child and passes its code on as its own, and
+        // both hand-offs used to spell this predicate themselves. These two are
+        // what the end-to-end cases cannot make obvious: `1` and `3` are codes
+        // the table NAMES, so a reader checking only `from_code` passes them
+        // through — and the module header calls them "the only codes a failure
+        // of Batten's own can produce", which every harness reads as "the hook
+        // itself failed, run the call".
+        //
+        // `3` ASSERTED ALONGSIDE `1` BECAUSE IT WAS MISSED ONCE. This case read
+        // `Internal` as travelling, which let a pinned child's own breakage
+        // become the hook's verdict and skip the refusal floor — two codes
+        // `meaning` describes identically, treated as different kinds of
+        // answer.
+        for own in [ExitCode::Usage, ExitCode::Internal] {
+            assert_eq!(
+                ExitCode::decided(own.code()),
+                None,
+                "{own:?} is a failure of Batten's own and is never handed on"
+            );
+        }
+        for code in [ExitCode::Success, ExitCode::Violation] {
+            assert_eq!(
+                ExitCode::decided(code.code()),
+                Some(code),
+                "{code:?} is an answer about the repository and travels"
+            );
+        }
+        for outside in [-1, 4, 101, 127] {
+            assert_eq!(
+                ExitCode::decided(outside),
+                None,
+                "{outside} decided nothing"
+            );
+        }
     }
 
     #[test]

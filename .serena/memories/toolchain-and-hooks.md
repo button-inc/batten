@@ -41,6 +41,29 @@ tree: `target/` carries deliberately corrupt TOML the suite writes on purpose
 (`target/tmp/trust-corrupt-config/batten.toml` is `this is not = = toml`), so a
 bare `taplo lint` fails on its own test data.
 
+## Two pins decide which `batten` runs, and BOTH are gated
+
+Read before answering "do we still need `mise exec -- batten`?" or proposing a
+gate on `cargo run`. Two different rules, which is what gets missed:
+
+- **Toolchain** pin: `pin reach loose`, from the vendored `pinned-toolchain`
+  preset, fires on a bare `batten` off `PATH`.
+- **Engine** pin (`batten.toml`'s `engine =`, which says which batten
+  _adjudicates_): `cargo run loose` (`batten.toml:925`) — `pattern = "cargo"`,
+  **`require_via = "mise"`**. A bare `cargo run -p batten` from an agent's shell
+  is denied; `mise run land`'s own inner one is allowed because it arrives
+  through mise. That key IS the governed-task-vs-agent-shell distinction, so do
+  not hunt for a new predicate: CLOUD-2499 was filed claiming no gate existed and
+  cancelled on this. Remaining gap: `engine update`'s bare `cargo` from INSIDE
+  the engine, which no mediated-call rule reaches (CLOUD-2172).
+
+**`mise exec --` is not a bash-era leftover** — it is environment composition,
+measured in `pinned-program-via-the-pin.rego:10-17` (2026-08-23): a runner run
+directly, same binary and arguments, died on an unset variable instead of the
+assertion under test. Sixty runs measured nothing, three false claims published.
+A bare call cannot check that `PATH` resolves to the pinned build or that the
+environment is composed — which is what the pin is for.
+
 ## Keep the hooks fast — hk.pkl is living config
 
 The pre-commit hook runs on every commit, so its latency is a constant tax.

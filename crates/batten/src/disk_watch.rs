@@ -175,11 +175,47 @@ pub fn around<T>(watch: Option<DiskWatch<'_>>, body: impl FnOnce() -> T) -> (T, 
     let stop = AtomicBool::new(false);
     std::thread::scope(|scope| {
         let handle = self::watch(scope, watch, &stop);
-        let answer = body();
+        // TWO STATEMENTS, NOT ONE WITH A SPARE. The store is the normal
+        // completion point — the body returned, so the watcher's work is over
+        // before the join. [`Stop`] covers the OTHER way out, an unwind, which
+        // reaches neither this line nor anything after it.
+        //
+        // Folding the normal path into the guard was tried and is worse twice
+        // over: it makes a correct return depend on drop order, and it leaves
+        // the guard unprovable — emptying its `drop` then hangs every watched
+        // case at once, so the runner reports could-not-look instead of a
+        // catch. Separate, the guard's own unit test fails in 0.012s.
+        let answer = {
+            let _stop = Stop(&stop);
+            body()
+        };
         stop.store(true, Ordering::Relaxed);
         let lines = handle.join().unwrap_or_default();
         (answer, lines)
     })
+}
+
+/// Sets the stop flag when it drops, so the watcher ends on a panic too.
+///
+/// **A BARE `stop.store` AFTER `body()` IS SKIPPED BY A PANIC (CLOUD-2376),**
+/// and [`std::thread::scope`]'s join at unwind then waits on a thread looping
+/// `while !stop` — which no longer has any way to become true. The process hangs
+/// instead of propagating the panic, and nothing says why.
+///
+/// Measured on `prune_watch::the_arm_watches_past_the_gate` with the collection
+/// mutated away: its own `wait_for` reached its bound and panicked on schedule,
+/// and the case then ran past 100s without ever reporting the failure it had
+/// already found. `cargo-mutants` killed it and reported `suite-timed-out` —
+/// could-not-look (CLOUD-1267) — over a mutant 27 cases in that file do catch.
+/// So the bound was never the defect; the un-stoppable watcher was.
+///
+/// In production the same shape swallows any panic raised inside a watched step.
+struct Stop<'a>(&'a AtomicBool);
+
+impl Drop for Stop<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]
@@ -204,5 +240,31 @@ mod tests {
         assert!(printed.starts_with("DiskWatch {"), "{printed}");
         assert!(printed.contains("\"/repo\""), "{printed}");
         assert!(printed.contains("\"<reader>\""), "{printed}");
+    }
+
+    /// [`Stop`] sets the flag when it drops, which is what makes a panicking
+    /// body end the watcher instead of hanging the join (CLOUD-2376).
+    ///
+    /// **ASSERTED ON THE GUARD, NOT THROUGH [`around`], AND THAT IS THE POINT.**
+    /// A case that panics inside a watched body is the honest end-to-end shape,
+    /// and it is unrunnable as a gate: without the guard it does not fail, it
+    /// HANGS, so a runner reports could-not-look over the one mutation that
+    /// matters. Measured — `drop` replaced with `()` timed the suite out at 42s
+    /// rather than failing. The contract is one flag and one drop, so it is
+    /// asserted where it can fail fast.
+    ///
+    /// The end-to-end half is covered by what the fix changed:
+    /// `prune_watch::the_arm_watches_past_the_gate` under a mutated collection
+    /// went from past 100s and killed, to 21.1s and failed.
+    ///
+    /// Fails by: a `drop` that does not store, or stores `false`.
+    #[test]
+    fn the_watcher_is_stopped_however_the_body_leaves() {
+        let stop = AtomicBool::new(false);
+        drop(Stop(&stop));
+        assert!(
+            stop.load(Ordering::Relaxed),
+            "the guard's drop is what ends the watcher on an unwind"
+        );
     }
 }

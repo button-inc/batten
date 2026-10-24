@@ -1726,6 +1726,15 @@ fn source_args(
 
 /// One mutant's test bound in a sharded run, which skips the baseline that
 /// would otherwise measure it: the book's CI recipe's `--timeout 300`.
+///
+/// **Deliberately NOT extended to the unsharded run (CLOUD-2376).** It was, on
+/// the theory that a bound measured on the unmutated suite can be shorter than a
+/// slow catch. The measurement refuted it: with `--timeout 300` the
+/// `collect.rs:1319` mutant still ran the full 300s, where its baseline tests in
+/// 9s. It does not catch slowly — it HANGS, on a test deadlock the mutation
+/// opens, and a larger bound only buys a more expensive way to learn that. The
+/// unsharded run keeps the measured bound, which reports the same verdict five
+/// times sooner.
 const SHARD_MUTANT_TIMEOUT_SECS: u64 = 300;
 
 /// `$MUTANT_SHARD`'s `k/n`, or `None` where it is not one (`k < n`, `n > 0`).
