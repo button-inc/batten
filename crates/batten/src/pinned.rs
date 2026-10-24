@@ -164,6 +164,7 @@ pub(crate) type Stamps = Vec<(PathBuf, Option<String>)>;
 /// `crate::cache::Stamp::racily_clean`). A record with no stamps is believed
 /// by its key alone.
 //MUTANT stamped-record-believes-racy|s@^    if racy {$@    if false {@|a_record_stamped_in_its_racy_window_is_hashed
+//MUTANT stamped-record-unstampable-as-absent|s@^        None => path.symlink_metadata().is_ok(),$@        None => false,@|a_present_file_without_a_stamp_records_no_stamps
 pub(crate) fn stamped(configs: &[PathBuf], at: std::time::Duration) -> Stamps {
     // UNIX ONLY. Elsewhere a stamp carries no ctime (`crate::cache::stamp`), so
     // an in-place edit that keeps the length and restores the mtime — a
@@ -180,9 +181,12 @@ pub(crate) fn stamped(configs: &[PathBuf], at: std::time::Duration) -> Stamps {
             (path, stamp)
         })
         .collect();
-    let racy = now
-        .iter()
-        .any(|(_, stamp)| stamp.as_ref().is_some_and(|stamp| stamp.racily_clean(at)));
+    // A file that is there but yields no stamp (a pre-epoch mtime) would record
+    // as absent, and read as unchanged while it is edited: no stamps either.
+    let racy = now.iter().any(|(path, stamp)| match stamp {
+        Some(stamp) => stamp.racily_clean(at),
+        None => path.symlink_metadata().is_ok(),
+    });
     if racy {
         return Stamps::new();
     }
@@ -787,6 +791,32 @@ mod tests {
         assert!(
             !still_keyed(&configs, "not-the-key", &stamps),
             "racy stamps are not recorded, so the key decides"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file that is there but has no stamp — a pre-epoch mtime — is not
+    /// recorded as absent: no stamps are recorded, so the key decides.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "a fixture that cannot be written is a broken test"
+    )]
+    fn a_present_file_without_a_stamp_records_no_stamps() {
+        let (dir, configs, later) = manifest("pinned-stamped-unstampable");
+        std::fs::File::options()
+            .write(true)
+            .open(&configs[0])
+            .expect("manifest")
+            .set_modified(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .expect("pre-epoch mtime");
+        assert!(
+            crate::cache::stamp(&configs[0]).is_none(),
+            "the premise: the file yields no stamp"
+        );
+        assert!(
+            stamped(&configs, later).is_empty(),
+            "an unstampable present file withholds every stamp"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
