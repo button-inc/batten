@@ -318,9 +318,10 @@ pub fn drop_subscription(
         host,
         (&session, token),
         pr,
-        // A CALL, NOT THE FN BY NAME: `tests/it/narrow_adoption.rs` finds the
-        // network's callers by a text match on the qualified call, which a
-        // bare reference would not contain.
+        // A CALL, NOT THE FN BY NAME: `crates/batten/tests/it/narrow_adoption.rs`
+        // finds the network's callers by a text match on the qualified call,
+        // which neither a bare reference nor an imported, unqualified call
+        // would contain.
         (
             |calls: &[crate::fetch::Call<'_>]| crate::fetch::spend(calls),
             || {
