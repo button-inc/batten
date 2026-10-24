@@ -97,6 +97,11 @@ struct Record {
     configs: Vec<PathBuf>,
     /// The answer.
     tasks: BTreeMap<String, Option<Vec<String>>>,
+    /// The keyed files' stat identity when `key` was derived
+    /// ([`crate::pinned::stamped`]); absent from a record written before
+    /// CLOUD-2440, which is then believed only by its key.
+    #[serde(default)]
+    stamps: crate::pinned::Stamps,
 }
 
 /// Where the record lives for `root`'s checkout.
@@ -115,7 +120,9 @@ fn record_path(root: &Path) -> Option<PathBuf> {
 /// **It DIGESTS the declared manifest and never parses it**, and that distinction
 /// took a correction to state honestly: the key is recomputed here, so the
 /// manifest's bytes are read — what does not happen is a parse, a runner
-/// invocation, a binary probe or a tree walk.
+/// invocation, a binary probe or a tree walk. Where the record carries stamps
+/// that still match (CLOUD-2440, unix), even the read is replaced by a `stat`
+/// of each keyed file and a listing of their directories.
 /// `crates/batten/tests/it/task_receipt.rs`'s
 /// `the_mediated_call_digests_the_manifest_and_never_parses_it` is what
 /// discriminates the two: it records over a manifest that is not valid TOML, so a
@@ -143,8 +150,9 @@ pub fn cached(root: &Path) -> TaskFacts {
         return Look::CouldNotLook;
     }
     // Recomputed from the RECORDED configs, which is what keeps this function
-    // free of the parse its own doc says it may not make.
-    if crate::pinned::key(&record.configs).as_ref() != Some(&record.key) {
+    // free of the parse its own doc says it may not make — and believed by their
+    // stat identity where it is recorded and unchanged (CLOUD-2440).
+    if !crate::pinned::still_keyed(&record.configs, &record.key, &record.stamps) {
         return Look::CouldNotLook;
     }
     Look::Is(record.tasks)
@@ -210,7 +218,9 @@ pub fn record(
     configs: &[PathBuf],
     tasks: &BTreeMap<String, Option<Vec<String>>>,
 ) -> bool {
-    let (Some(key), Some(path)) = (crate::pinned::key(configs), record_path(root)) else {
+    let (Some((key, stamps)), Some(path)) =
+        (crate::pinned::stamped_key(configs), record_path(root))
+    else {
         return false;
     };
     let record = Record {
@@ -219,6 +229,7 @@ pub fn record(
         key,
         configs: configs.to_vec(),
         tasks: tasks.clone(),
+        stamps,
     };
     let Ok(body) = serde_json::to_string(&record) else {
         return false;
@@ -389,6 +400,9 @@ mod tests {
                 key: crate::pinned::key(configs).unwrap(),
                 configs: configs.to_vec(),
                 tasks: BTreeMap::from([(name, None)]),
+                // None: the caller's manifest yields no stamp, so `record` writes
+                // none either and the sized body is the one it writes.
+                stamps: crate::pinned::Stamps::new(),
             })
             .unwrap()
             .len()
@@ -413,7 +427,19 @@ mod tests {
         crate::gitwrite::init_on_main(&dir).unwrap();
         let manifest = dir.join("tasks.toml");
         std::fs::write(&manifest, "[tasks]\nlint = \"cargo clippy\"\n").unwrap();
+        // A pre-epoch mtime yields no stamp, so no record carries stamps whatever
+        // the clock does between `sized` and `record`: each body is the measured one.
+        std::fs::File::options()
+            .write(true)
+            .open(&manifest)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .unwrap();
         let configs = vec![manifest.clone()];
+        assert!(
+            crate::pinned::stamped(&configs, crate::cache::now()).is_empty(),
+            "the premise: the manifest yields no stamps"
+        );
         let small = sized(&configs, 1024);
         assert!(record(&dir, &configs, &small));
         assert!(matches!(cached(&dir), Look::Is(read) if read == small));
