@@ -2544,7 +2544,44 @@ fn wait_bounded(
     kill_group(pid);
     let _ = worker.join();
     let status = child.wait()?;
+    sweep_group(pid);
     Ok((status, timed_out))
+}
+
+/// How many more `SIGKILL`s [`sweep_group`] sends before it stops asking.
+#[cfg(unix)]
+const SWEEPS: usize = 1024;
+
+/// Kill `leader`'s group again until it no longer answers, at most [`SWEEPS`]
+/// times, after the leader itself is reaped.
+///
+/// **DARWIN'S FORK DOES NOT RESTART UNDER A GROUP SIGNAL** (CLOUD-2514). Linux
+/// restarts a `fork` that races a signal to the parent's group, so the child is
+/// either never made or signalled with it; Darwin lets the child join the group
+/// unsignalled. Measured on the `macos` runner: the group kill ended a suite's
+/// background subshell while it was forking `sleep`, and the `sleep` lived on in
+/// the reaped leader's group, reparented to init, holding what the suite held.
+///
+/// Repeating is safe for the same reason the first kill is: a pid is never
+/// reused while a group of that id has members, so while the group answers it
+/// is still this suite's. The first `ESRCH` ends the sweep, so a suite that left
+/// nothing behind costs one call.
+#[cfg(all(not(unix), test))]
+fn sweep_group(_leader: u32) {}
+
+#[cfg(unix)]
+fn sweep_group(leader: u32) {
+    let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default())
+    else {
+        return;
+    };
+    for _ in 0..SWEEPS {
+        let Ok(()) = rustix::process::kill_process_group(group, rustix::process::Signal::KILL)
+        else {
+            return;
+        };
+        std::thread::yield_now();
+    }
 }
 
 /// How long a timed-out runner has to end what it started before `SIGKILL`.
@@ -5829,6 +5866,57 @@ mod tests {
             "",
             "the job the suite left running is ended with it"
         );
+    }
+
+    /// Fails by: the sweep sending nothing, or stopping while the group still
+    /// answers. The suite leads a group holding a `sleep 30` and waits on it, so
+    /// only a sweep of that group returns it before the sleep would.
+    ///
+    /// Driven directly, because the interleaving that leaves a member behind is
+    /// Darwin's alone (CLOUD-2514): on Linux the first kill never misses one.
+    #[test]
+    fn a_sweep_ends_what_is_left_in_a_group() {
+        // Only unix has the group to sweep.
+        if !cfg!(unix) {
+            return;
+        }
+        let dir = crate::scratch::scratch("mutate-sweep");
+        let bound = std::time::Duration::from_secs(60);
+        let made = spawn(
+            &dir,
+            Program::Suite("mkfifo"),
+            &[String::from("ready")],
+            &[],
+            bound,
+        )
+        .expect("mkfifo runs");
+        assert_eq!(made.outcome, Outcome::Passed, "{}", made.output);
+        let (send, swept) = std::sync::mpsc::channel();
+        let suite = dir.clone();
+        std::thread::spawn(move || {
+            let _ = send.send(spawn(
+                &suite,
+                Program::Suite("sh"),
+                &[
+                    String::from("-c"),
+                    String::from("sleep 30 & echo $$ >ready; wait"),
+                ],
+                &[],
+                bound,
+            ));
+        });
+        // The fifo's open blocks until the suite writes, so the read is the wait.
+        let leader: u32 = std::fs::read_to_string(dir.join("ready"))
+            .expect("the suite names itself")
+            .trim()
+            .parse()
+            .expect("a pid");
+        sweep_group(leader);
+        let ran = swept
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("the swept suite returns before its sleep would")
+            .expect("the wait answers");
+        assert_ne!(ran.outcome, Outcome::Passed, "{}", ran.output);
     }
 
     /// What a group kill left behind in `dir`'s suite: the leader's and the job's
