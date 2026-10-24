@@ -2525,6 +2525,7 @@ fn wait_bounded(
             // The wait itself failed, so whether the suite exited is unknown.
             // It is ended rather than left running, and the failure is the answer.
             kill_group(pid);
+            sweep_group(pid);
             let _ = worker.join();
             let _ = child.wait();
             return Err(failed);
@@ -2542,9 +2543,9 @@ fn wait_bounded(
         let _ = exits.recv_timeout(TERMINATE_GRACE);
     }
     kill_group(pid);
+    sweep_group(pid);
     let _ = worker.join();
     let status = child.wait()?;
-    sweep_group(pid);
     Ok((status, timed_out))
 }
 
@@ -2552,23 +2553,26 @@ fn wait_bounded(
 #[cfg(unix)]
 const SWEEPS: usize = 1024;
 
-/// Kill `leader`'s group again until it no longer answers, at most [`SWEEPS`]
-/// times, after the leader itself is reaped.
+/// [`sweep_group`] where there are no process groups.
+#[cfg(all(not(unix), test))]
+fn sweep_group(_leader: u32) {}
+
+/// Kill `leader`'s group again, [`SWEEPS`] times with a yield between, after
+/// [`kill_group`] and BEFORE the leader is reaped.
 ///
 /// **DARWIN'S FORK DOES NOT RESTART UNDER A GROUP SIGNAL** (CLOUD-2514). Linux
 /// restarts a `fork` that races a signal to the parent's group, so the child is
 /// either never made or signalled with it; Darwin lets the child join the group
 /// unsignalled. Measured on the `macos` runner: the group kill ended a suite's
 /// background subshell while it was forking `sleep`, and the `sleep` lived on in
-/// the reaped leader's group, reparented to init, holding what the suite held.
+/// the leader's group, reparented to init, holding what the suite held.
 ///
-/// Repeating is safe for the same reason the first kill is: a pid is never
-/// reused while a group of that id has members, so while the group answers it
-/// is still this suite's. The first `ESRCH` ends the sweep, so a suite that left
-/// nothing behind costs one call.
-#[cfg(all(not(unix), test))]
-fn sweep_group(_leader: u32) {}
-
+/// **BEFORE THE REAP, FOR [`wait_bounded`]'S OWN REASON.** The leader is still an
+/// unreaped zombie, so its pid — which IS the group id — cannot be reused while
+/// the sweep signals it, and every `SIGKILL` reaches this suite's group or
+/// nobody. The zombie also keeps the group answering, so the sweep runs its full
+/// count rather than stopping at the first `ESRCH`: a bounded cost of microseconds
+/// per suite, against a build per mutant.
 #[cfg(unix)]
 fn sweep_group(leader: u32) {
     let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default())
@@ -5905,9 +5909,18 @@ mod tests {
                 bound,
             ));
         });
-        // The fifo's open blocks until the suite writes, so the read is the wait.
-        let leader: u32 = std::fs::read_to_string(dir.join("ready"))
+        // The fifo's open blocks until the suite writes, so the read is the wait,
+        // and it is taken on its own thread so a suite that never writes fails
+        // the case within a bound instead of holding it.
+        let (named, said) = std::sync::mpsc::channel();
+        let ready = dir.join("ready");
+        std::thread::spawn(move || {
+            let _ = named.send(std::fs::read_to_string(ready));
+        });
+        let leader: u32 = said
+            .recv_timeout(std::time::Duration::from_secs(20))
             .expect("the suite names itself")
+            .expect("read the fifo")
             .trim()
             .parse()
             .expect("a pid");
