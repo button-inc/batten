@@ -67,7 +67,13 @@ const STATE_DIR: &str = "batten-tasks";
 /// to insist the record parse. An entry missing a stamp renders without it — the
 /// byte-stability obligation for readers that predate the field — which a typed
 /// `u64` would have turned into an error.
+///
+/// `non_exhaustive` because the record grows: a field the next writer adds is
+/// absent from every older record and every outside struct literal alike, and
+/// only the second of those was a break (CLOUD-2456). Built outside the crate
+/// from [`Entry::parse`] or `Entry::default()`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Entry {
     /// The task name as the caller registered it.
     pub task: String,
