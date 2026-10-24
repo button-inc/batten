@@ -397,8 +397,9 @@ mod tests {
                 key: crate::pinned::key(configs).unwrap(),
                 configs: configs.to_vec(),
                 tasks: BTreeMap::from([(name, None)]),
-                // As `record` stamps them, so the sized body is the one it writes.
-                stamps: crate::pinned::stamped(configs, crate::cache::now()),
+                // None: the caller's manifest yields no stamp, so `record` writes
+                // none either and the sized body is the one it writes.
+                stamps: crate::pinned::Stamps::new(),
             })
             .unwrap()
             .len()
