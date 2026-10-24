@@ -146,7 +146,7 @@ pub struct Run {
 
 impl Run {
     /// Its state, classified from both fields (CLOUD-2243).
-    fn state(&self) -> crate::forge::RunState {
+    pub(crate) fn state(&self) -> crate::forge::RunState {
         crate::forge::RunState::of(Some(&self.status), Some(&self.conclusion))
     }
 
