@@ -35,18 +35,19 @@ fn repair() -> Vec<String> {
 /// The provenance mise verifies by reading api.github.com.
 const ATTESTATIONS: &str = "github-attestations";
 
-/// Push the path of every `provenance` under `value` that names [`ATTESTATIONS`],
-/// as a string or as a key of its own table.
+/// Push the path of every value or key under `value` that names [`ATTESTATIONS`],
+/// whichever key mise records it under and however the TOML spells it.
 fn attestations(value: &toml::Value, path: &str, found: &mut Vec<String>) {
     match value {
+        toml::Value::String(text) if text == ATTESTATIONS => found.push(path.to_owned()),
         toml::Value::Table(table) => {
             for (key, inner) in table {
-                let here = format!("{path}.{key:?}");
-                let names = inner.as_str() == Some(ATTESTATIONS)
-                    || inner
-                        .as_table()
-                        .is_some_and(|kinds| kinds.contains_key(ATTESTATIONS));
-                if key == "provenance" && names {
+                let here = if path.is_empty() {
+                    format!("{key:?}")
+                } else {
+                    format!("{path}.{key:?}")
+                };
+                if key == ATTESTATIONS {
                     found.push(here);
                 } else {
                     attestations(inner, &here, found);
@@ -60,6 +61,38 @@ fn attestations(value: &toml::Value, path: &str, found: &mut Vec<String>) {
         }
         _ => {}
     }
+}
+
+/// Fails by: a spelling of the provenance going unread, or another provenance
+/// being taken for it.
+#[test]
+fn every_spelling_of_the_attestation_provenance_is_named() {
+    let lock = r#"
+[[tools.jq]]
+version = "1.7"
+
+[tools.jq."platforms.macos-arm64"]
+provenance = 'github-attestations' # single-quoted, commented
+
+[tools.jq."platforms.linux-x64".provenance.github-attestations]
+
+[tools.jq."platforms.windows-x64"]
+provenance = ["slsa", "github-attestations"]
+
+[tools.jq."platforms.linux-arm64"]
+provenance = "slsa"
+"#;
+    let mut found = Vec::new();
+    attestations(&toml::from_str(lock).unwrap(), "", &mut found);
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            r#""tools"."jq"[0]."platforms.linux-x64"."provenance"."github-attestations""#,
+            r#""tools"."jq"[0]."platforms.macos-arm64"."provenance""#,
+            r#""tools"."jq"[0]."platforms.windows-x64"."provenance"[1]"#,
+        ]
+    );
 }
 
 #[test]
