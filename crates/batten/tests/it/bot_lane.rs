@@ -603,7 +603,7 @@ fn a_bot_branch_whose_facts_hold_earns_the_receipt() {
     let recorded = std::fs::read_to_string(
         repo.join(".git")
             .join("batten-receipts")
-            .join("bot.renovate-cargo"),
+            .join("bot.renovate%2Fcargo"),
     )
     .expect("the receipt is written");
     assert!(recorded.contains("CLOUD-700"), "{recorded}");

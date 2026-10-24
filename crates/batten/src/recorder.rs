@@ -1197,7 +1197,7 @@ pub fn append_all(
 /// of what the call produced.
 #[must_use]
 pub fn blocked_path(git_dir: &Path, branch: &str, claim: Option<&str>) -> std::path::PathBuf {
-    let branch = branch.replace('/', "-");
+    let branch = crate::receipt::branch_slug(branch);
     let name = match claim {
         Some(claim) => format!("recorder-blocked.{branch}.{claim}"),
         None => format!("recorder-blocked.{branch}"),
@@ -1207,9 +1207,10 @@ pub fn blocked_path(git_dir: &Path, branch: &str, claim: Option<&str>) -> std::p
 
 /// Where a branch-keyed record lives.
 ///
-/// The `/`→`-` fold is the one every other branch-keyed receipt here takes, and
-/// it must match byte for byte: a reader looking under a different spelling finds
-/// no file and passes everything, which is the silent direction.
+/// The branch is spelled through [`crate::receipt::branch_slug`], the one every
+/// other branch-keyed receipt takes, and it must match byte for byte: a reader
+/// looking under a different spelling finds no file and passes everything,
+/// which is the silent direction.
 ///
 /// **PARTITIONED BY THE BRANCH'S CLAIM, NOT BY THE BRANCH ALONE (CLOUD-1300).** A
 /// branch name outlives the branch it described, so keying on the name alone let
@@ -1229,7 +1230,7 @@ pub fn record_path(
     branch: &str,
     claim: Option<&str>,
 ) -> std::path::PathBuf {
-    let branch = branch.replace('/', "-");
+    let branch = crate::receipt::branch_slug(branch);
     let name = match claim {
         Some(claim) => format!("{record}.{branch}.{claim}"),
         None => format!("{record}.{branch}"),
@@ -1642,19 +1643,19 @@ mod outcome_tests {
         let receipts = git.join("batten-receipts");
         assert_eq!(
             record_path(git, "rec", "a/b", Some("c")),
-            receipts.join("rec.a-b.c")
+            receipts.join("rec.a%2Fb.c")
         );
         assert_eq!(
             record_path(git, "rec", "a/b", None),
-            receipts.join("rec.a-b")
+            receipts.join("rec.a%2Fb")
         );
         assert_eq!(
             blocked_path(git, "a/b", Some("c")),
-            receipts.join("recorder-blocked.a-b.c")
+            receipts.join("recorder-blocked.a%2Fb.c")
         );
         assert_eq!(
             blocked_path(git, "a/b", None),
-            receipts.join("recorder-blocked.a-b")
+            receipts.join("recorder-blocked.a%2Fb")
         );
     }
 

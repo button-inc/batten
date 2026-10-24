@@ -5528,7 +5528,7 @@ fn head_unpushed() -> bool {
 /// whether a receipt PROVES something; a marker carries no conclusion, so there is
 /// nothing here to be stale and no second opinion about receipts to drift from.
 ///
-/// The slug is `branch.replace('/', "-")`, which is the spelling
+/// The slug is [`crate::receipt::branch_slug`], which is the spelling
 /// [`crate::land::retire_branch`] sweeps and `unlanded_pointer` writes. One
 /// spelling, three readers — a second derivation here is the drift
 /// `BRANCH_KEYED_RECEIPTS`' own header records having already been caught once.
@@ -5552,7 +5552,7 @@ fn marker_present(marker: &str) -> bool {
 fn marker_path(git_dir: &std::path::Path, marker: &str, branch: &str) -> std::path::PathBuf {
     git_dir
         .join("batten-receipts")
-        .join(format!("{marker}.{}", branch.replace('/', "-")))
+        .join(format!("{marker}.{}", crate::receipt::branch_slug(branch)))
 }
 
 //MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
@@ -18544,7 +18544,7 @@ deny contains "refused by themodule" if {
     fn a_marker_path_slugs_the_branch_into_the_receipt_store() {
         assert_eq!(
             marker_path(Path::new("/g"), "punt", "feat/x"),
-            Path::new("/g/batten-receipts/punt.feat-x")
+            Path::new("/g/batten-receipts/punt.feat%2Fx")
         );
     }
 

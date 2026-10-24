@@ -1061,18 +1061,27 @@ fn own_commit_count(main: &str) -> Option<usize> {
     git::commit_count(Path::new("."), &format!("{main}..HEAD")).ok()
 }
 
-/// The filename a branch-keyed receipt takes: `<check>.<branch>`, with every
-/// path separator replaced.
+/// A branch as one receipt-name component: INJECTIVE (CLOUD-2353).
 ///
-/// **A crate↔task contract, not an internal detail.** `mise-tasks/claim-check.sh`
-/// mints this file and this reads it, so the two spellings must agree exactly or
-/// the gate silently reports a missing receipt for one that exists — a deny on a
-/// claim that was made. A slash is the one character a filename cannot carry and
-/// a branch name routinely does; nothing else in a branch name needs escaping
-/// here. `tests::the_branch_receipt_filename_matches_the_minting_task` is what
-/// stops the two halves drifting.
+/// `/` → `-` mapped `feature/a` and `feature-a` to one name, so a claim, a lap
+/// record or a `pr-open` marker of one branch answered for the other.
+/// Percent-encoding `%` and `/` keeps every branch its own name and every name a
+/// single path component. The ONE spelling every branch-keyed writer, reader and
+/// the `retire_branch` sweep use, so none of them can drift from another.
+#[must_use]
+pub fn branch_slug(branch: &str) -> String {
+    branch.replace('%', "%25").replace('/', "%2F")
+}
+
+/// The filename a branch-keyed receipt takes: `<check>.<branch_slug>`.
+///
+/// **A minter↔reader contract, not an internal detail.** `claim::mint` writes
+/// this file and this reads it, so the two spellings must agree exactly or the
+/// gate silently reports a missing receipt for one that exists — a deny on a
+/// claim that was made. `tests::the_branch_receipt_filename_matches_the_minting_task`
+/// is what stops the two halves drifting.
 fn branch_receipt_name(check: &str, branch: &str) -> String {
-    format!("{check}.{}", branch.replace('/', "-"))
+    format!("{check}.{}", branch_slug(branch))
 }
 
 /// Whether a receipt exists for `check` against the subject the call named
@@ -1100,7 +1109,7 @@ fn branch_receipt_name(check: &str, branch: &str) -> String {
 /// not a field of its body: nothing here parses the receipt, so there is no
 /// half-read line to mistake for a verdict.
 ///
-/// No `replace('/', "-")` twin to [`branch_receipt_name`]: a branch name
+/// No [`branch_slug`] twin to [`branch_receipt_name`]: a branch name
 /// legitimately contains separators and is rewritten, where a subject that
 /// contains one is refused by `safe_subject` before it reaches here. Rewriting
 /// would let two subjects collide onto one receipt.
@@ -2863,12 +2872,16 @@ mod tests {
         );
         assert_eq!(
             branch_receipt_name("claim", "user/cloud-444-slug"),
-            "claim.user-cloud-444-slug"
+            "claim.user%2Fcloud-444-slug"
         );
         // Every separator, not merely the first: a branch name may carry several.
-        assert_eq!(branch_receipt_name("claim", "a/b/c"), "claim.a-b-c");
+        assert_eq!(branch_receipt_name("claim", "a/b/c"), "claim.a%2Fb%2Fc");
         // A name needing no substitution is unchanged.
         assert_eq!(branch_receipt_name("claim", "main"), "claim.main");
+        // INJECTIVE (CLOUD-2353): a slash and a dash, or a literal escape, never
+        // meet on one name.
+        assert_ne!(branch_slug("feature/a"), branch_slug("feature-a"));
+        assert_ne!(branch_slug("a%2Fb"), branch_slug("a/b"));
     }
 
     /// A receipt body in the shape `mise-tasks/claim-check.sh` mints, so the reader
@@ -3343,7 +3356,7 @@ mod tests {
         );
         assert_eq!(
             receipt_file(&facts, "fmt", ReceiptKey::Branch, Some("a/b"), None, None),
-            Some(store.join("fmt.a-b"))
+            Some(store.join("fmt.a%2Fb"))
         );
         assert_eq!(
             receipt_file(
