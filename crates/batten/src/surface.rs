@@ -8311,19 +8311,21 @@ pub fn consumes_a_value(token: &str) -> bool {
     std::iter::once(&ROOT)
         .chain(SURFACE)
         .flat_map(|decl| decl.flags)
-        .filter(|flag| !flag.positional)
-        // `Trailing` consumes the whole tail rather than one token, and it is a
-        // positional besides, so the argv scan has nothing to skip for it.
-        .filter(|flag| {
-            !matches!(
-                flag.value,
-                ValueDecl::Bool | ValueDecl::Count | ValueDecl::Trailing
-            )
-        })
-        .any(|flag| {
-            flag.long.is_some_and(|long| token == format!("--{long}"))
-                || flag.short.is_some_and(|short| token == format!("-{short}"))
-        })
+        .filter(|flag| !flag.positional && takes_value(flag))
+        // Long spelling only: `no_value_taking_flag_declares_a_short_spelling`
+        // holds that no value-taking flag has a short one.
+        .any(|flag| flag.long.is_some_and(|long| token == format!("--{long}")))
+}
+
+/// Whether `flag` consumes the token after it.
+///
+/// `Trailing` consumes the whole tail rather than one token, and it is a
+/// positional besides, so an argv scan has nothing to skip for it.
+const fn takes_value(flag: &FlagDecl) -> bool {
+    !matches!(
+        flag.value,
+        ValueDecl::Bool | ValueDecl::Count | ValueDecl::Trailing
+    )
 }
 
 /// Resolve the declared effect for a full command path.
@@ -9522,6 +9524,22 @@ mod tests {
         assert!(!consumes_a_value("--fail-on-warning"));
         assert!(!consumes_a_value("-J"));
         assert!(!consumes_a_value("check"));
+    }
+
+    #[test]
+    fn no_value_taking_flag_declares_a_short_spelling() {
+        // `consumes_a_value` reads the long spelling alone; a short one on a
+        // value-taking flag would make `-x VALUE` read its value as a token.
+        for decl in std::iter::once(&ROOT).chain(SURFACE) {
+            for flag in decl.flags.iter().filter(|flag| !flag.positional) {
+                assert!(
+                    !(takes_value(flag) && flag.short.is_some()),
+                    "{}: -{:?} takes a value; give `consumes_a_value` its short arm back",
+                    decl.path,
+                    flag.short
+                );
+            }
+        }
     }
 
     #[test]

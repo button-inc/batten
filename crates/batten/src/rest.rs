@@ -679,15 +679,36 @@ pub fn delete(path: &str) -> Option<Answer> {
     exchange(path, None, None, Method::Delete)
 }
 
-/// One POST against the REST tier, with no body.
+/// What one bodiless POST came to.
 ///
-/// `false` where the call did not succeed, on the same could-not-look posture
-/// [`get`] takes: the one caller cancels a run it is standing in, and a guard
-/// that could not stop a run must not also fail the job it is standing in.
+/// **AN OUTCOME WITH NO DEFAULT, deliberately.** Its one caller,
+/// [`crate::lease::cancel_run`], cancels runs for two uses — a lap's worthless
+/// matrix and the run a lease guard stands in — and neither can
+/// be driven to an ACCEPTED cancellation hermetically: the one reads the lease
+/// over the wire, the other waits two minutes to be killed. So no case can tell
+/// a `post` that always says yes from one that measured, and a `bool` would carry
+/// that unfalsifiable answer. A type with no default cannot be fabricated; it is
+/// only ever the forge's answer, read below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Posted {
+    /// A 2xx: the forge took it.
+    Accepted,
+    /// Anything else, including an exchange that never happened — the same
+    /// could-not-look posture [`get`] takes: a guard that could not stop a run
+    /// must not also fail the job it is standing in.
+    Refused,
+}
+
+/// One POST against the REST tier, with no body.
 #[must_use]
-pub fn post(path: &str) -> bool {
-    exchange(path, None, Some(&[]), Method::ByBody)
+pub fn post(path: &str) -> Posted {
+    if exchange(path, None, Some(&[]), Method::ByBody)
         .is_some_and(|answer| (200..300).contains(&answer.status))
+    {
+        Posted::Accepted
+    } else {
+        Posted::Refused
+    }
 }
 
 /// One POST carrying a JSON body.
@@ -936,6 +957,28 @@ fn method_of(body: Option<&[u8]>, chosen: Method) -> &'static str {
     }
 }
 
+/// What a live exchange puts on the wire beyond its URL and body: the headers,
+/// and whether the request goes out as a `PATCH` or a `DELETE`.
+struct Wire {
+    headers: Vec<(String, String)>,
+    patch: bool,
+    delete: bool,
+}
+
+/// [`exchange`]'s live request, decided apart from the transport.
+///
+/// **SPLIT SO IT IS REACHABLE.** Every suite answers from [`FIXTURE`], which is
+/// taken before the wire is built — so the `Content-Type` an empty body must not
+/// claim, and the method a body's default is overridden to, were read by no
+/// case at all.
+fn wire(etag: Option<&str>, body: Option<&[u8]>, chosen: Method) -> Wire {
+    Wire {
+        headers: headers(etag, body.is_some_and(|bytes| !bytes.is_empty())),
+        patch: chosen == Method::Patch,
+        delete: chosen == Method::Delete,
+    }
+}
+
 //MUTANT-SUITE crates/batten/tests/it/gh_preflight.rs
 fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method) -> Option<Answer> {
     let now = crate::now_unix();
@@ -952,13 +995,17 @@ fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method)
             now,
         );
     }
-    let headers = headers(etag, body.is_some_and(|bytes| !bytes.is_empty()));
+    let Wire {
+        headers,
+        patch,
+        delete,
+    } = wire(etag, body, chosen);
     let mut answers = fetch::spend(&[Call {
         url: &url,
         headers: &headers,
         body,
-        patch: chosen == Method::Patch,
-        delete: chosen == Method::Delete,
+        patch,
+        delete,
         // PROXIED, which is the ordinary path. `direct` exists so a credential
         // can be proved against the forge with the proxy out of the way
         // (`fetch::get_direct`); a forge REST call is not that question, and
@@ -1104,6 +1151,20 @@ mod tests {
                 "{status} is the forge declining, not a reading"
             );
         }
+    }
+
+    /// Fails by: an empty body claimed as JSON, or the method override read
+    /// backwards — both invisible to every suite, which answers from the fixture.
+    #[test]
+    fn the_wire_claims_json_only_for_a_body_and_overrides_only_the_chosen_method() {
+        let json = |wire: &Wire| wire.headers.iter().any(|(name, _)| name == "Content-Type");
+        let posted = wire(None, Some(b"{}"), Method::ByBody);
+        assert!(json(&posted) && !posted.patch && !posted.delete);
+        assert!(!json(&wire(None, Some(&[]), Method::ByBody)));
+        let patched = wire(None, Some(b"{}"), Method::Patch);
+        assert!(json(&patched) && patched.patch && !patched.delete);
+        let deleted = wire(None, None, Method::Delete);
+        assert!(!json(&deleted) && deleted.delete && !deleted.patch);
     }
 
     /// Every endpoint a caller hands over is API-relative.
@@ -1463,3 +1524,13 @@ mod tests {
         }
     }
 }
+
+// The suites that drive each verb above through `BATTEN_REST_FIXTURE` on the
+// spawned binary: a GET a poll reads, a DELETE a release check makes, the asset
+// bytes a checksum manifest hashes, a JSON POST and PATCH a bot lane writes,
+// and the credential an attestation must hold before it asks.
+//MUTANT-SUITE crates/batten/tests/it/pr_watch.rs
+//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
+//MUTANT-SUITE crates/batten/tests/it/checksums.rs
+//MUTANT-SUITE crates/batten/tests/it/bot_lane.rs
+//MUTANT-SUITE crates/batten/tests/it/attestation.rs

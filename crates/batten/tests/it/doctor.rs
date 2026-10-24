@@ -173,6 +173,43 @@ fn a_mediator_built_from_this_tree_passes() {
     assert_eq!(stdout(&output), "mediator ok\n");
 }
 
+/// `doctor hooks` COUNTS THE MERGED SURFACES UNDER THE HOME IT RESOLVES. A home
+/// holding none of them is the ordinary developer's box: every declared surface
+/// is absent, and a report of all zeroes would be the "could not look" this
+/// count exists to tell apart.
+#[test]
+fn doctor_hooks_counts_each_merged_surface_under_the_resolved_home() {
+    use common::StateHome as _;
+
+    let dir = scratch("doctor-merged-home", true, Some("version = 1\n"));
+    let home = common::scratch_outside_tree("batten-doctor-e2e", "doctor-merged-home-empty");
+    let output = batten()
+        .current_dir(&dir)
+        .args(["doctor", "hooks", "-J"])
+        .at_home(&home)
+        .output()
+        .expect("run batten doctor hooks");
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("the report is JSON");
+    let rows = document["harnesses"]
+        .as_array()
+        .expect("harnesses is a list");
+    let count = |field: &str| -> u64 {
+        rows.iter()
+            .map(|row| {
+                row[field]
+                    .as_u64()
+                    .expect("every merged-surface count is a number")
+            })
+            .sum()
+    };
+    assert!(
+        count("merged_surfaces_absent") > 0,
+        "an empty home leaves every merged surface absent: {document}"
+    );
+    assert_eq!(count("merged_surfaces_unresolvable"), 0, "{document}");
+}
+
 #[test]
 fn equal_length_binaries_that_differ_are_still_refused() {
     // The length compare is a short-circuit, never the predicate. Two builds of

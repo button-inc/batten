@@ -426,6 +426,24 @@ fn replay(
     // to the spliced bodies that hold them; those alone are findings, and the
     // rest are rebuilt without them. An error no body holds keeps the old,
     // conservative answer: every remaining test is a finding.
+    judge(&tree, splices, &|still| run_union(&tree, still, &published))
+}
+
+/// One union run over the splices still standing: its exit code and output.
+type UnionRun<'a> = &'a dyn Fn(&BTreeMap<String, (String, Vec<Modified>)>) -> Option<(i32, String)>;
+
+/// Splice, run and charge until every modified test in `splices` is judged,
+/// each union run asked of `run` ([`run_union`] in every caller but the suite).
+///
+/// **THE SEAM THE CHARGING LOOP IS TESTED THROUGH.** A body that will not compile
+/// is charged to itself and the rest rebuilt without it — a sequence of runs a
+/// real `nextest` produces only over a real broken body, and a run handed in
+/// produces on demand.
+fn judge(
+    tree: &Path,
+    splices: &BTreeMap<String, (String, Vec<Modified>)>,
+    run: UnionRun<'_>,
+) -> Result<Vec<Finding>> {
     let mut splices = splices.clone();
     let mut findings = Vec::new();
     loop {
@@ -436,7 +454,7 @@ fn replay(
         if splices.values().all(|(_, modified)| modified.is_empty()) {
             return Ok(findings);
         }
-        let outcome = run_union(&tree, &splices, &published);
+        let outcome = run(&splices);
         if let Some((code, output)) = outcome.as_ref()
             && *code == BUILD_FAILED
             && output.contains(COMPILE_FAILED)
@@ -732,6 +750,8 @@ mod tests {
         let fail = "        FAIL [   0.010s] batten::it m::t\n";
         assert!(passes(said(0, pass).as_ref(), "t").unwrap());
         assert!(!passes(said(100, fail).as_ref(), "t").unwrap());
+        // A failure line under a clean exit is still measured, never could-not-look.
+        assert!(!passes(said(0, fail).as_ref(), "t").unwrap());
         // ONE RUN JUDGES EVERY TEST: another case failing in the same run is
         // not this one failing, and a SLOW line is not a result.
         let shared = "        SLOW [> 60s] batten::it m::t\n        PASS [  61.0s] batten::it m::t\n        FAIL [   0.010s] batten::it m::other\n";
@@ -751,6 +771,68 @@ mod tests {
         assert!(passes(said(101, "error: no such command: `nextest`").as_ref(), "t").is_err());
         assert!(passes(said(4, "").as_ref(), "t").is_err());
         assert!(passes(None, "t").is_err());
+    }
+
+    /// Fails by: a compile failure not charged, the charged body not the one
+    /// removed, or the rebuild not run without it — each leaves the passing
+    /// body charged too, or the charged one unjudged.
+    #[test]
+    fn a_body_that_will_not_compile_is_charged_and_the_rest_rebuilt_without_it() {
+        let base = BASE.replace(
+            "assert_eq!(1, 1);",
+            "assert_eq!(1, 1);\n        assert_eq!(2, 2);",
+        );
+        let head = base
+            .replace(
+                "assert_eq!(1, 1);\n        assert_eq!(2, 2);",
+                "assert_eq!(9, 9);",
+            )
+            .replace(
+                "assert_eq!(super::helper(), 1);",
+                "let _ = super::helper();",
+            );
+        let changed = compare(&base, &head);
+        let helper_line = splice(&head, &changed.modified)
+            .lines()
+            .position(|line| line.contains("super::helper(), 1"))
+            .expect("the base body is spliced")
+            + 1;
+        let tree = crate::scratch::scratch("replay-judge");
+        std::fs::create_dir_all(tree.join("src")).unwrap();
+        let mut splices = BTreeMap::new();
+        splices.insert(String::from("src/x.rs"), (head, changed.modified));
+        let runs = std::cell::Cell::new(0);
+        let run = |still: &BTreeMap<String, (String, Vec<Modified>)>| {
+            runs.set(runs.get() + 1);
+            if runs.get() == 1 {
+                return Some((
+                    BUILD_FAILED,
+                    format!(
+                        "error[E0425]: cannot find function `helper`\n   --> src/x.rs:{helper_line}:24\n\
+                         error: could not compile `x`\n"
+                    ),
+                ));
+            }
+            let left: Vec<&str> = still
+                .values()
+                .flat_map(|(_, modified)| modified.iter().map(|test| test.inner.as_str()))
+                .collect();
+            assert_eq!(
+                left,
+                ["tests::kept"],
+                "the rebuild runs without the charged body"
+            );
+            Some((
+                0,
+                String::from("        PASS [   0.010s] batten::it tests::kept\n"),
+            ))
+        };
+        let findings = judge(&tree, &splices, &run).unwrap();
+        assert_eq!(
+            findings.iter().map(|f| f.key.as_str()).collect::<Vec<_>>(),
+            ["src/x.rs::tests::narrowed"]
+        );
+        assert_eq!(runs.get(), 2);
     }
 
     #[test]

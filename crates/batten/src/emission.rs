@@ -249,10 +249,12 @@ pub fn assess(log: &[Entry], window: usize, percent: u32) -> Assessment {
 }
 
 fn health_of(window: &[(usize, Observation)], percent: u32) -> Health {
-    let raised: Vec<bool> = window
+    // Raised is `1`, clear is `0`: only the CHANGE between neighbours is read,
+    // so the clamp is the whole reading and no comparison can invert it.
+    let raised: Vec<_> = window
         .iter()
         .filter_map(|(_, observation)| observation.count())
-        .map(|count| count > 0)
+        .map(|count| count.min(1))
         .collect();
     let evaluations = raised.len();
     if evaluations < 2 {

@@ -1108,7 +1108,7 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
 // failure CLOUD-842 reversed: the five landed rows were silent, not warned.
 //MUTANT break-read-off-the-whole-line|s@^    let breaking = type_token.contains('!')@    let breaking = bump_line.contains('!')@|the_break_marker_is_read_off_the_type_token_and_never_off_the_line
 //MUTANT break-claim-refusal-dropped|s@^    if grammar.break_denial.is_match(bump_line) .*{$@    if false {@|a_negative_break_claim_must_name_the_surface_it_denies_about
-//MUTANT type-read-after-answer|s@^        .find(\x7cm\x7c m.start() < answer_at)$@        .next()@|a_type_named_after_a_none_answer_does_not_make_the_row_land_a_commit
+//MUTANT type-read-after-answer|s@^        .find(\x7cm\x7c (..answer_at).contains(\&m.start()))$@        .next()@|a_type_named_after_a_none_answer_does_not_make_the_row_land_a_commit
 /// §6: the commit type and the bump must agree, and a break denial must name a
 /// surface.
 fn check_bump(
@@ -1137,7 +1137,7 @@ fn check_bump(
     let type_token = grammar
         .commit_type
         .find_iter(bump_line)
-        .find(|m| m.start() < answer_at)
+        .find(|m| (..answer_at).contains(&m.start()))
         .map(|m| m.as_str().to_owned())
         .unwrap_or_default();
     let scope = compiled(SCOPE_SUFFIX);
@@ -1208,10 +1208,11 @@ fn check_bump(
     };
     report.emissions.push(format!("bump {emitted}"));
 
+    // NO EMPTY-TYPE ARM: an empty type is answered by `commit-type-missing`
+    // below, which never reads `expected`, so what it maps to decides nothing.
     let mut expected = match commit_type.as_str() {
         "feat" => "minor",
         "fix" => "patch",
-        "" => "",
         _ => "no bump",
     }
     .to_owned();
@@ -1226,7 +1227,7 @@ fn check_bump(
     // releases nothing at any version, so folding it into patch would demand a
     // bump the tool never produces, the same error in the other direction.
     let mut why = String::new();
-    if version.starts_with("0.0.") && !expected.is_empty() && expected != "no bump" {
+    if version.starts_with("0.0.") && expected != "no bump" {
         "patch".clone_into(&mut expected);
         " below 0.1.0".clone_into(&mut why);
     }
@@ -2087,6 +2088,20 @@ mod lint_tests {
     use std::path::{Path, PathBuf};
 
     use super::issue_key_tests::key;
+
+    /// Here rather than beside the other key cases because a consumer's own
+    /// expression has to be compiled, and this module is the one that may
+    /// `expect` that it does.
+    #[test]
+    fn a_bounded_consumer_key_is_not_found_inside_a_longer_number() {
+        // The key expression is the CONSUMER'S row, so greed is not guaranteed:
+        // one bounded at three digits matches a prefix of a four-digit number,
+        // and only the trailing-digit boundary refuses that prefix.
+        let mut grammar = Grammar::committed();
+        grammar.key = regex::Regex::new("TEST-[0-9]{1,3}").expect("compiles");
+        assert!(grammar.keys_in("TEST-1234").is_empty());
+        assert_eq!(grammar.keys_in("TEST-123 done").len(), 1);
+    }
 
     /// A tree whose workspace version is `version`, which is all §6 reads of it.
     fn versioned(name: &str, version: &str) -> PathBuf {

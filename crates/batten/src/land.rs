@@ -3539,7 +3539,11 @@ pub struct Spending {
 }
 
 /// What one abandon pass did. Counts, never a log line from a cancelled run.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+///
+/// **NO `Default`, DELIBERATELY** (CLOUD-2509): [`abandon`] reaches the forge and
+/// no case can drive it, so a pass that answers "did nothing" in its place must
+/// not type-check. [`Abandoned::NONE`] is that answer, spelled where it is meant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Abandoned {
     /// Runs this pass asked the forge to stop.
     pub cancelled: u32,
@@ -3547,6 +3551,15 @@ pub struct Abandoned {
     pub spared: u32,
     /// Cancellations the forge refused. Not a stop: those minutes bill out.
     pub refused: u32,
+}
+
+impl Abandoned {
+    /// A pass that cancelled, spared and was refused nothing.
+    pub const NONE: Self = Self {
+        cancelled: 0,
+        spared: 0,
+        refused: 0,
+    };
 }
 
 /// The fan-in's WORKFLOW PATH, which is not its check name.
@@ -3651,6 +3664,13 @@ pub fn spending(repo: &str, sha: &str) -> Option<Vec<Spending>> {
     )
 }
 
+/// The forge as [`abandon_with`] reaches it: the runs still spending on a head,
+/// and one run's cancellation — both `(repo, sha-or-run)`.
+pub type Forge = (
+    fn(&str, &str) -> Option<Vec<Spending>>,
+    fn(&str, &str) -> crate::rest::Posted,
+);
+
 /// Cancel every run a red verdict made worthless, sparing the fan-in's.
 ///
 /// **BEST-EFFORT THROUGHOUT AND NEVER A VERDICT.** A refused cancellation costs
@@ -3662,6 +3682,14 @@ pub fn spending(repo: &str, sha: &str) -> Option<Vec<Spending>> {
 /// than by filtering — the same argument the lease guard's own cancel carries.
 #[must_use]
 pub fn abandon(repo: &str, sha: &str, fanin: &FanIn) -> Abandoned {
+    abandon_with(repo, sha, fanin, (spending, crate::lease::cancel_run))
+}
+
+/// [`abandon`] over a forge handed in: which runs are cancelled, spared and
+/// refused is the counting the suite tests, and the REST fixture that could
+/// answer a cancellation is an environment variable this process may not set.
+#[must_use]
+pub fn abandon_with(repo: &str, sha: &str, fanin: &FanIn, (spent, cancel): Forge) -> Abandoned {
     // AN UNSET FAN-IN CANCELS NOTHING RATHER THAN GUESSING, and this is the
     // guard whose absence would have been worst: with no name to spare, EVERY
     // run is doomed — including the one carrying the fan-in, whose cancelled
@@ -3669,18 +3697,18 @@ pub fn abandon(repo: &str, sha: &str, fanin: &FanIn) -> Abandoned {
     // refuses to run at all without the declaration for exactly this reason, and
     // the first port of this dropped the arm.
     if !fanin.declared() {
-        return Abandoned::default();
+        return Abandoned::NONE;
     }
-    let Some(in_flight) = spending(repo, sha) else {
-        return Abandoned::default();
+    let Some(in_flight) = spent(repo, sha) else {
+        return Abandoned::NONE;
     };
     let (doomed, spared) = worthless(&in_flight, fanin);
     let mut report = Abandoned {
         spared,
-        ..Abandoned::default()
+        ..Abandoned::NONE
     };
     for run in doomed {
-        if crate::rest::post(&format!("repos/{repo}/actions/runs/{}/cancel", run.id)) {
+        if matches!(cancel(repo, &run.id), crate::rest::Posted::Accepted) {
             report.cancelled += 1;
         } else {
             report.refused += 1;
@@ -5493,6 +5521,49 @@ mod tests {
             doomed.len(),
             1,
             "which is why `abandon` refuses before ever calling this"
+        );
+    }
+
+    /// Fails by: a pass that reports nothing while cancelling, or counts a
+    /// refused cancellation as done, or acts at all with no fan-in declared.
+    #[test]
+    fn an_abandon_pass_counts_what_the_forge_answered() {
+        let three: fn(&str, &str) -> Option<Vec<Spending>> = |_, _| {
+            Some(vec![
+                run("1", "the-fan-in.yml"),
+                run("2", "a.yml"),
+                run("3", "b.yml"),
+            ])
+        };
+        let first_only: fn(&str, &str) -> crate::rest::Posted = |_, run| {
+            if run == "2" {
+                crate::rest::Posted::Accepted
+            } else {
+                crate::rest::Posted::Refused
+            }
+        };
+        // The refusal comes BEFORE the read: an undeclared pass that asked the
+        // forge and then cancelled nothing would still report three zeroes.
+        let unread: fn(&str, &str) -> Option<Vec<Spending>> =
+            |_, _| unreachable!("an undeclared fan-in reads no forge");
+        let declared = FanIn::from_workflow_path("the-fan-in.yml");
+        assert_eq!(
+            abandon_with("o/r", "abc", &declared, (three, first_only)),
+            Abandoned {
+                cancelled: 1,
+                spared: 1,
+                refused: 1,
+            }
+        );
+        assert_eq!(
+            abandon_with(
+                "o/r",
+                "abc",
+                &FanIn::from_workflow_path(""),
+                (unread, first_only)
+            ),
+            Abandoned::NONE,
+            "an undeclared fan-in cancels nothing"
         );
     }
 

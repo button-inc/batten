@@ -434,3 +434,84 @@ fn a_fixture_root_asks_the_pin_nothing_through_the_eager_door() {
          tree that simply has no record, which is every fixture in this suite"
     );
 }
+
+/// THE PIN IS ASKED AT SESSION START, AND ITS TWO ANSWERS BECOME THE RECORD.
+///
+/// The one case that reaches the mediator for real: `configs`, `composed_path`
+/// and the spawn under both are otherwise exercised only by a host that has the
+/// mediator installed, which is no fixture. A stub of that name stands first on
+/// the child's `PATH` and answers the two questions the module asks — the files
+/// configuring it, and a composed `PATH` one directory longer than the ambient —
+/// so the record a later call reads is the proof both answers arrived.
+#[test]
+fn a_session_start_records_the_programs_the_pin_composes() {
+    // THE STUB IS A `#!/bin/sh` SCRIPT, which is a program only where a shebang
+    // is honoured. Off unix the mediator cannot be stood in for, so the case
+    // states that and asserts nothing — compiled on every target all the same.
+    if !cfg!(unix) {
+        return;
+    }
+
+    // The smallest committed tree carrying a policy row, which is what makes
+    // session start ask the pin at all.
+    let dir = crate::hook_pin_check::pin_repo(
+        "pinned-session-start",
+        &[],
+        "[tools]\njq = \"1.7\"\n",
+        &[],
+    );
+    let executable = |path: &Path, body: &str| {
+        std::fs::write(path, body).expect("the stub is written");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+                .expect("the stub is executable");
+        }
+    };
+    let tools = dir.join("pin-tools");
+    std::fs::create_dir_all(&tools).expect("the pin's tool directory is created");
+    executable(&tools.join("pinnedtool"), "#!/bin/sh\n");
+    let bin = dir.join("stub-bin");
+    std::fs::create_dir_all(&bin).expect("the stub directory is created");
+    let (mediator, _) = pinned::mediated("anything");
+    executable(
+        &bin.join(mediator),
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in\n\
+             env) printf '{{\"PATH\":\"%s:%s\"}}\\n' '{}' \"$PATH\" ;;\n\
+             config) printf '[{{\"path\":\"%s\"}}]\\n' '{}' ;;\n\
+             esac\n",
+            tools.display(),
+            dir.join("mise.toml").display()
+        ),
+    );
+    // The masked ambient PATH (CLOUD-1951; `common::ambient_path`).
+    let path = std::env::join_paths(
+        std::iter::once(bin.clone()).chain(std::env::split_paths(&common::ambient_path())),
+    )
+    .expect("a joinable PATH");
+    let payload = format!(
+        "{{\"hook_event_name\":\"SessionStart\",\"session_id\":\"s-pin\",\"cwd\":{}}}",
+        serde_json::to_string(&dir.display().to_string()).expect("a path is encodable")
+    );
+    let mut command = common::batten();
+    command.env("PATH", path);
+    let _ = common::stdin_run(
+        &mut command,
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+
+    match pinned::cached(&dir) {
+        Look::Is(programs) => assert_eq!(
+            programs,
+            BTreeSet::from(["pinnedtool".to_owned()]),
+            "the record holds exactly what the composed PATH added"
+        ),
+        Look::IsNot | Look::CouldNotLook => {
+            panic!("session start recorded nothing the pin composed")
+        }
+    }
+}

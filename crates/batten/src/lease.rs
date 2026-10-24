@@ -3529,11 +3529,11 @@ pub fn guard(carries: &Carries, authority: Option<&Authority>) -> Guarded {
 
 /// Ask the forge to cancel `run`.
 ///
-/// `false` when the cancellation was refused, which the caller reports and then
-/// runs anyway: a guard that could not stop a run must not also fail the job it
-/// is standing in.
+/// [`crate::rest::Posted::Refused`] when the cancellation was refused, which the
+/// caller reports and then runs anyway: a guard that could not stop a run must
+/// not also fail the job it is standing in.
 #[must_use]
-pub fn cancel_run(repo: &str, run: &str) -> bool {
+pub fn cancel_run(repo: &str, run: &str) -> crate::rest::Posted {
     crate::rest::post(&format!("repos/{repo}/actions/runs/{run}/cancel"))
 }
 

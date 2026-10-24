@@ -859,7 +859,10 @@ fn read_claims(
             for found in scan.asserted.captures_iter(line) {
                 let key = found.name("key").map_or("", |m| m.as_str());
                 let range = found.name("span").map_or("", |m| m.as_str());
-                if !key.is_empty() && !range.is_empty() {
+                // THE KEY ALONE IS ASKED: `span` is [`CAPITALISED`], this
+                // crate's own expression, and it never matches empty. The key is
+                // the consumer's, so its emptiness is a real question.
+                if !key.is_empty() {
                     lines.push(format!(
                         "asserted\t{}\t{}\t{}",
                         field(&row.id),
@@ -1570,6 +1573,15 @@ mod tests {
     use serde_json::{Value, json};
     use std::collections::BTreeSet;
     use std::path::Path;
+
+    /// `read_claims` asks only the key's emptiness because the span is this
+    /// expression, and it never matches empty. Fails by: an edit that lets it.
+    #[test]
+    fn a_capitalised_span_is_never_empty() {
+        let span = regex::Regex::new(&format!("^(?:{})$", super::CAPITALISED)).unwrap();
+        assert!(!span.is_match(""));
+        assert!(span.is_match("In Review"));
+    }
 
     #[test]
     fn an_array_and_a_stream_are_one_set() {

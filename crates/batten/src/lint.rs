@@ -1387,6 +1387,94 @@ mod tests {
         assert_eq!(workspace_rust_version(&source.to_string_lossy()), None);
     }
 
+    /// Fails by: the located RULES left unpruned, so a dropped row's columns
+    /// are read as the next row's and its smell goes unreported.
+    #[test]
+    fn a_dropped_rule_row_does_not_lend_its_columns_to_the_next() {
+        let text = "version = 1\n\n[[rule]]\nid = \"gone\"\nkind = \"forbid\"\n\
+                    glob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\n\
+                    no_fix_reason = \"class 3 (x): y\"\nbogus = 1\n\n\
+                    [[rule]]\nid = \"kept\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\n\
+                    pattern = \"x\"\nseverity = \"deny\"\n";
+        let found = smells(text, "test", None, today(), &[]).unwrap();
+        let lines: Vec<String> = found.iter().map(Smell::line_text).collect();
+        assert!(
+            lines.contains(&"batten.toml:13 remedy-undeclared".to_owned()),
+            "the kept row owes its remedy at its own line: {lines:?}"
+        );
+    }
+
+    /// A consumer tree holding one policy row over a two-module bundle: one
+    /// module publishes the predicate id `filed-here`, the other is never entered.
+    fn bundle_tree(name: &str) -> (std::path::PathBuf, String) {
+        let dir = crate::scratch::scratch(name);
+        std::fs::create_dir_all(dir.join("policy/set")).unwrap();
+        std::fs::write(
+            dir.join("policy/set/a.rego"),
+            "package batten.waived\nimport rego.v1\n\nrules contains \"filed-here\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("policy/set/f.rego"),
+            "package batten.f\nimport rego.v1\n\nf(x) := x\n",
+        )
+        .unwrap();
+        let text = format!(
+            "version = 1\n\n[[rule]]\nid = \"waived row\"\nkind = \"policy\"\n\
+             scope = \"tree\"\nline_sources = [\"batten.toml\"]\nbundle = \"policy/set\"\n\
+             severity = \"deny\"\nno_fix_reason = \"class 3 (x): y\"\n{}",
+            waiver_row("filed-here", "2099-01-01")
+        );
+        (dir, text)
+    }
+
+    /// Fails by: a predicate id the bundle publishes refused as a typo; the
+    /// abstention over an unloaded bundle dropped; or the set analysis located
+    /// at a row that is not the bundle's own.
+    #[test]
+    fn a_bundles_published_id_is_waivable_and_its_dark_module_is_named_at_its_row() {
+        let (dir, text) = bundle_tree("lint-bundle-waiver");
+        let config = config::parse(&text, "test").unwrap();
+        let bundles = crate::policy::load(
+            &dir,
+            &config.rules,
+            crate::policy::Vocabulary::from(&config),
+            crate::policy::ModuleChecks::Run,
+            None,
+        )
+        .unwrap();
+        assert!(bundles[0].declared().contains("filed-here"));
+        let found = smells(&text, "test", None, today(), &bundles).unwrap();
+        let lines: Vec<String> = found.iter().map(Smell::line_text).collect();
+        assert_eq!(lines, ["batten.toml:4 policy-module-unswept"]);
+        // Judged away from its tree, nothing loads: the id cannot be told from
+        // a typo, so the waiver is not refused as one.
+        assert!(
+            smells(&text, "test", None, today(), &[])
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// Fails by: a deferral whose condition the tree now shows held, unreported.
+    #[test]
+    fn a_deferral_reached_by_the_manifest_beside_the_config_is_named() {
+        let dir = crate::scratch::scratch("lint-deferral-reached");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = []\n\n[workspace.package]\nrust-version = \"1.80\"\n",
+        )
+        .unwrap();
+        let text = "version = 1\n\n[[deferral]]\nissue = \"TEST-1\"\nfact = \"rust-version\"\n\
+                    reaches = \"1.80\"\nreason = \"waits on the pin\"\n";
+        let source = dir.join(config::CONFIG_FILE);
+        let found = smells(text, &source.to_string_lossy(), None, today(), &[]).unwrap();
+        assert_eq!(
+            found.iter().map(|smell| smell.id).collect::<Vec<_>>(),
+            [DEFERRAL_REVERSED]
+        );
+    }
+
     #[test]
     fn a_smells_data_line_is_its_line_text() {
         let found = smell(EMPTY_PROTECTED_SET, "protected");
@@ -1399,3 +1487,8 @@ mod tests {
         assert_eq!(Admission::Asked.as_str(), "asked");
     }
 }
+
+// `config lint` over the compiled binary: the host-rules payload a path names,
+// and the located view a dropped row must not shift.
+//MUTANT-SUITE crates/batten/tests/it/config_lint.rs
+//MUTANT host-rules-path-unread|s@^    let payload = if source == "-" {$@    let payload = if true {@|a_linear_history_rule_the_config_denies_is_drift

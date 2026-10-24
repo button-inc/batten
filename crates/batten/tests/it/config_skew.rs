@@ -117,6 +117,26 @@ fn an_unknown_key_names_the_rebuild() {
     );
 }
 
+/// A FLOOR ABOVE THIS BUILD IS REPORTED ON EVERY LOAD, and the run goes on: the
+/// config has said which release it needs, so the binary names the gap rather
+/// than refusing (CLOUD-1572). Best-effort stderr is the only channel it has.
+///
+/// Fails by: the report silenced, which reads as a build that enforces a rule
+/// set it cannot fully read and says nothing.
+#[test]
+fn a_floor_above_this_build_is_reported_on_load() {
+    let dir = scratch(
+        "floor-above",
+        "version = 1\nmin_batten_version = \"999.0.0\"\n",
+    );
+    let output = check(&dir);
+    let said = stderr(&output);
+    assert!(
+        said.contains("requires batten 999.0.0 or newer"),
+        "the floor is named on stderr: {said}"
+    );
+}
+
 /// And a genuinely malformed file says nothing about a rebuild.
 ///
 /// THE DISCRIMINATING MIRROR. Without it the case above is satisfied by a fix

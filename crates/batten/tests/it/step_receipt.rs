@@ -232,6 +232,25 @@ fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }
 
+/// A SUPERVISING TASK LEARNS WHICH STEP IT IS ON (CLOUD-425). The pid it
+/// exports names its registry record, and a check moves that record's phase to
+/// the step — the bookkeeping `task alive` reads to say where a lap stands.
+#[test]
+fn a_check_under_a_supervising_task_names_its_step_as_the_phase() {
+    let repo = Repo::new("announce");
+    let git_dir = repo.path(".git");
+    batten::task::register(&git_dir, "verify", "4242", "boot", 1);
+    assert_eq!(
+        repo.check_with(&["mystep"], &[("BATTEN_TASK_PID", "4242")]),
+        "miss"
+    );
+    assert_eq!(
+        batten::task::read_field(&git_dir, "4242", "phase").as_deref(),
+        Some("mystep"),
+        "the registered task's phase is the step being checked"
+    );
+}
+
 #[test]
 fn no_receipt_the_step_runs() {
     let repo = Repo::new("none");

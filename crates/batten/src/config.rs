@@ -3995,6 +3995,7 @@ fn drop_key(
     text: &str,
     current: &toml::Table,
     span: std::ops::Range<usize>,
+    blank: Blank,
 ) -> KeyDrop {
     let (at, end) = key_extent(source, span.start);
     // A span already blanked cannot be the cause of a new error, so seeing one
@@ -4134,8 +4135,25 @@ fn drop_key(
 /// trusting the scan, which `headers`' own doc refuses and which cost 646
 /// silently vanished sections the one time it was tried. Bring a number over
 /// the budget and this moves.
-//MUTANT dotted-section-read-as-a-key|s@        let Some(rows) = holder.get_mut(leaf).and_then(toml::Value::as_array_mut) else {@        let Some(rows) = holder.get_mut(section.as_str()).and_then(toml::Value::as_array_mut) else {@|an_unknown_key_in_a_dotted_row_costs_the_row_not_the_file
 fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str, behind: bool) -> Prune<T> {
+    prune_with(source, behind, blank)
+}
+
+/// How a prune blanks one unit: [`blank`], in every caller but the suite.
+///
+/// **THE SEAM THE EXACTNESS GUARDS ARE TESTED THROUGH.** Both guards exist for
+/// a scan that chose the wrong bytes, and no input this scanner reads produces
+/// one — so the only way to show a guard refusing is to hand the loop a blank
+/// that desynchronises, as the one that once truncated 646 sections did.
+type Blank = fn(&mut String, usize, usize);
+
+/// [`prune_unresolvable`], blanking with `blank`.
+//MUTANT dotted-section-read-as-a-key|s@        let Some(rows) = holder.get_mut(leaf).and_then(toml::Value::as_array_mut) else {@        let Some(rows) = holder.get_mut(section.as_str()).and_then(toml::Value::as_array_mut) else {@|an_unknown_key_in_a_dotted_row_costs_the_row_not_the_file
+fn prune_with<T: serde::de::DeserializeOwned>(
+    source: &str,
+    behind: bool,
+    blank: Blank,
+) -> Prune<T> {
     // The parser's own reading of the document, carried across the loop so each
     // blank can be checked against what removing the row SHOULD produce.
     let Ok(mut current) = toml::from_str::<toml::Table>(source) else {
@@ -4194,7 +4212,7 @@ fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str, behind: bool
         // say so. Dropping the whole `[capture]` table instead would switch off
         // a feature the file plainly wants, which is worse than the disease.
         if !variant && owning_row(source, span.start).is_none() {
-            match drop_key(source, &text, &current, span) {
+            match drop_key(source, &text, &current, span, blank) {
                 KeyDrop::Declined => break,
                 KeyDrop::Abandoned => return Prune::refused(source),
                 KeyDrop::Dropped {
@@ -4233,7 +4251,9 @@ fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str, behind: bool
         let shift = dropped
             .iter()
             .filter(|row: &&Unresolvable| {
-                row.section == section && row.row_index().is_some_and(|at| at < index)
+                // NEVER EQUAL: a dropped row is blanked and cannot fault
+                // again, so "before this one" is the whole question.
+                row.section == section && row.row_index().is_some_and(|at| (..index).contains(&at))
             })
             .count();
         let mut expected = current.clone();
@@ -4256,7 +4276,10 @@ fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str, behind: bool
         let Some(rows) = holder.get_mut(leaf).and_then(toml::Value::as_array_mut) else {
             break;
         };
-        let Some(position) = index.checked_sub(shift).filter(|at| *at < rows.len()) else {
+        let Some(position) = index
+            .checked_sub(shift)
+            .filter(|at| rows.get(*at).is_some())
+        else {
             break;
         };
         rows.remove(position);
@@ -5659,6 +5682,32 @@ mod tests {
             "the emptied `hook` goes with its row"
         );
         assert_eq!(husk.dropped.len(), 1);
+    }
+
+    /// A blank that TRUNCATES at the unit rather than blanking it: the
+    /// desynchronised scan the exactness guards exist for, which still leaves
+    /// valid TOML behind.
+    fn truncating(text: &mut String, at: usize, _end: usize) {
+        text.truncate(at);
+    }
+
+    #[test]
+    fn a_desynchronised_blank_abandons_the_prune_rather_than_trusting_it() {
+        let tail = "[[verdict]]\nid = \"x y z\"\ngloss = \"g\"\nclass = \"c\"\n\
+                    route = [{ id = \"x y z\", kind = \"command\", target = \"mise run x\" }]\n";
+        for unit in [
+            "[capture]\nno_such_key = 1\n",
+            "[[hook.handler]]\nbogus = 1\n",
+        ] {
+            let source = format!("version = 1\n{unit}{tail}");
+            assert!(
+                prune_with::<Config>(&source, false, blank).config.is_some(),
+                "{unit}: the honest blank drops the unit"
+            );
+            let pruned = prune_with::<Config>(&source, false, truncating);
+            assert!(pruned.config.is_none(), "{unit}: a truncation was trusted");
+            assert!(pruned.dropped.is_empty(), "{unit}");
+        }
     }
 
     /// A row's position in the live array is its ordinal less the drops before

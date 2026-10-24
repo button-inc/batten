@@ -140,10 +140,13 @@ impl Verbosity {
             .iter()
             .position(|rung| *rung == Verbosity::DEFAULT)
             .unwrap_or(2);
-        let index = if here < origin {
-            here.saturating_sub(steps)
-        } else {
-            (here + steps).min(Verbosity::ALL.len() - 1)
+        // `Equal` is unreachable (`DEFAULT` returned above), so it shares the
+        // upward arm.
+        let index = match here.cmp(&origin) {
+            std::cmp::Ordering::Less => here.saturating_sub(steps),
+            std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => {
+                (here + steps).min(Verbosity::ALL.len() - 1)
+            }
         };
         Verbosity::ALL.get(index).copied().unwrap_or(self)
     }
@@ -364,7 +367,8 @@ where
     let mut out = Vec::new();
     for raw in argv {
         let token = raw.as_ref().to_string_lossy().into_owned();
-        let clustered = token.len() > 2
+        // A bare `-` (stdin) is not a cluster; a lone `-v` expands to itself.
+        let clustered = token.len() > 1
             && token.starts_with('-')
             && !token.starts_with("--")
             && token
