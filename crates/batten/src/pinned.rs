@@ -744,11 +744,20 @@ mod tests {
     fn a_record_whose_configs_are_unchanged_is_believed_without_reading() {
         let (dir, configs, later) = manifest("pinned-stamped-hit");
         let stamps = stamped(&configs, later);
-        assert!(!stamps.is_empty(), "the premise: stamps were recorded");
-        assert!(
-            still_keyed(&configs, "not-the-key", &stamps),
-            "unchanged stamps are believed without recomputing the key"
-        );
+        // `cfg!`, not `#[cfg]`: the off-unix arm is what the windows leg runs,
+        // and it is the only thing that sees the unix-only guard removed.
+        if cfg!(unix) {
+            assert!(!stamps.is_empty(), "the premise: stamps were recorded");
+            assert!(
+                still_keyed(&configs, "not-the-key", &stamps),
+                "unchanged stamps are believed without recomputing the key"
+            );
+        } else {
+            assert!(
+                stamps.is_empty(),
+                "off unix a stamp has no ctime, so none is recorded"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
