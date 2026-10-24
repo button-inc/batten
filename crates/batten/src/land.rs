@@ -5302,28 +5302,32 @@ mod tests {
         ));
         let reading = super::RedReading {
             failed: vec![(101, String::from("windows"))],
-            running: vec![String::from("musl")],
+            running: vec![(102, String::from("musl"))],
         };
         super::record_red_head(&root, branch, "abc", &reading).unwrap();
         let crate::facts::Look::Is(record) = super::read_red_head(&root, branch) else {
             panic!("the record reads back");
         };
         assert_eq!(record.head, "abc");
+        // A run going at the stop is owed its own read (CLOUD-2443).
         assert_eq!(
             record.owed(),
             Some(vec![
                 String::from("windows job 101"),
+                String::from("musl job 102"),
                 String::from("musl still running")
             ])
         );
         let path = super::red_head_path(&root, branch).unwrap();
-        std::fs::write(
-            path.parent()
-                .unwrap()
-                .join(format!("{}.101", super::CHECK_LOG_READ)),
-            "read",
-        )
-        .unwrap();
+        for id in [101, 102] {
+            std::fs::write(
+                path.parent()
+                    .unwrap()
+                    .join(format!("{}.{id}", super::CHECK_LOG_READ)),
+                "read",
+            )
+            .unwrap();
+        }
         let crate::facts::Look::Is(paid) = super::read_red_head(&root, branch) else {
             panic!("the record reads back");
         };
