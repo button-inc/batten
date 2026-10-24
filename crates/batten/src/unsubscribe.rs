@@ -319,8 +319,8 @@ pub fn drop_subscription(
         (&session, token),
         pr,
         // A CALL, NOT THE FN BY NAME: `narrow_adoption`'s scan finds the
-        // network's callers by `fetch::spend(`, and a reference would hide
-        // this module from it.
+        // network's callers by the call's spelling, and a bare reference
+        // would hide this module from it.
         (
             |calls: &[crate::fetch::Call<'_>]| crate::fetch::spend(calls),
             || {
@@ -337,12 +337,13 @@ pub fn drop_subscription(
 /// every caller but the unit suite.
 type Spend = fn(&[crate::fetch::Call<'_>]) -> Result<Vec<crate::fetch::Response>>;
 
-/// This clone's owner/repo, read only when the arguments need it.
+/// This clone's owner/repo, read only once an endpoint, tool and template are
+/// declared.
 type Slug = fn() -> Option<(String, String)>;
 
 /// [`drop_subscription`] once the session and its credential are in hand: ask
 /// the endpoint through `spend`, and attest only an accepted answer. `slug` is
-/// this clone's owner/repo, asked only once the arguments need filling.
+/// this clone's owner/repo, asked only once the host declares what to fill.
 ///
 /// **THE SEAM THE ACCEPTANCE IS TESTED THROUGH.** Whether an answer is a drop
 /// or a refusal is the endpoint's to say, and no hermetic fixture is that

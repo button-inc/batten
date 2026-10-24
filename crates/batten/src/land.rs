@@ -5542,6 +5542,10 @@ mod tests {
                 crate::rest::Posted::Refused
             }
         };
+        // The refusal comes BEFORE the read: an undeclared pass that asked the
+        // forge and then cancelled nothing would still report three zeroes.
+        let unread: fn(&str, &str) -> Option<Vec<Spending>> =
+            |_, _| unreachable!("an undeclared fan-in reads no forge");
         let declared = FanIn::from_workflow_path("the-fan-in.yml");
         assert_eq!(
             abandon_with("o/r", "abc", &declared, (three, first_only)),
@@ -5556,7 +5560,7 @@ mod tests {
                 "o/r",
                 "abc",
                 &FanIn::from_workflow_path(""),
-                (three, first_only)
+                (unread, first_only)
             ),
             Abandoned::NONE,
             "an undeclared fan-in cancels nothing"
