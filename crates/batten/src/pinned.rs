@@ -787,6 +787,14 @@ mod tests {
     )]
     fn a_config_edited_after_the_record_is_a_miss() {
         let (dir, configs, later) = manifest("pinned-stamped-edited");
+        // Backdated, as the racy rule guarantees of any recorded file: on a
+        // coarse-clock kernel an edit in the creation's tick would share its mtime.
+        std::fs::File::options()
+            .write(true)
+            .open(&configs[0])
+            .expect("manifest")
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(10))
+            .expect("backdated mtime");
         let stamps = stamped(&configs, later);
         if cfg!(unix) {
             assert!(!stamps.is_empty(), "the premise: stamps were recorded");
