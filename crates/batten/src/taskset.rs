@@ -218,8 +218,9 @@ pub fn record(
     configs: &[PathBuf],
     tasks: &BTreeMap<String, Option<Vec<String>>>,
 ) -> bool {
-    let stamps = crate::pinned::stamped(configs, crate::cache::now());
-    let (Some(key), Some(path)) = (crate::pinned::key(configs), record_path(root)) else {
+    let (Some((key, stamps)), Some(path)) =
+        (crate::pinned::stamped_key(configs), record_path(root))
+    else {
         return false;
     };
     let record = Record {
@@ -435,6 +436,10 @@ mod tests {
             .set_modified(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
             .unwrap();
         let configs = vec![manifest.clone()];
+        assert!(
+            crate::pinned::stamped(&configs, crate::cache::now()).is_empty(),
+            "the premise: the manifest yields no stamps"
+        );
         let small = sized(&configs, 1024);
         assert!(record(&dir, &configs, &small));
         assert!(matches!(cached(&dir), Look::Is(read) if read == small));
