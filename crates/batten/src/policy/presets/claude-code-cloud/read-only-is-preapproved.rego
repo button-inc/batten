@@ -2,9 +2,10 @@
 #MUTANT redirect-unread|s@^\tnot some_output_redirect(call)$@\ttrue@|a_reader_redirected_into_a_file_is_not_preapproved
 #MUTANT mcp-verb-unread|s@^\tmcp_read_verb(call.tool)$@\tstartswith(call.tool, "mcp__")@|an_mcp_write_is_not_preapproved
 #MUTANT noun-first-list-unread|s@^mcp_read_verb(tool) if regex.match(`^mcp__github__@mcp_read_verb(tool) if regex.match(`^mcp__nothing__@|a_noun_first_mcp_read_is_preapproved
-#MUTANT noun-first-read-unread|s@^mcp_read_verb(tool) if regex.match(`^mcp__(github\x7cMiro)__@mcp_read_verb(tool) if regex.match(`^mcp__nothing__@|a_noun_first_mcp_read_is_preapproved
+#MUTANT noun-first-read-unread|s@^mcp_read_verb(tool) if regex.match(`^mcp__(github__(issue@mcp_read_verb(tool) if regex.match(`^mcp__(nothing__(issue@|a_noun_first_mcp_read_is_preapproved
+#MUTANT noun-first-read-any-method|s@`^mcp__(github__(issue\x7cpull_request)\x7cMiro__(board_preview\x7cprototype))_read\$`@`^mcp__(github\x7cMiro)__[a-z0-9_]+_read$`@|a_write_named_like_a_list_is_not_preapproved
 #MUTANT noun-first-unscoped|s@`^mcp__github__\[a-z0-9_\]+_(list@`^mcp__[^_].*__[a-z0-9_]+_(list@|a_write_named_like_a_list_is_not_preapproved
-#MUTANT noun-first-read-unscoped|s@`^mcp__(github\x7cMiro)__\[a-z0-9_\]+_read\$`@`^mcp__[^_].*__[a-z0-9_]+_read$`@|a_write_named_like_a_list_is_not_preapproved
+#MUTANT noun-first-read-unscoped|s@`^mcp__(github__(issue\x7cpull_request)\x7cMiro__(board_preview\x7cprototype))_read\$`@`^mcp__[^_].*__[a-z0-9_]+_read$`@|a_write_named_like_a_list_is_not_preapproved
 #MUTANT mcp-call-unread|s@^\tprogram.name == "batten"$@\tprogram.name == "none"@|a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not
 #MUTANT guide-not-read|s@"Explore", "Plan", "claude-code-guide"@"Explore", "Plan"@|a_plan_mode_guide_subagent_is_allowed
 #MUTANT printenv-not-read|s@"tree", "printenv", "ps",@"tree", "ps",@|a_plan_mode_printenv_is_allowed
@@ -68,7 +69,10 @@ mcp_read_verb(tool) if regex.match(`^mcp__[^_].*__(get|list|search|read|query|fe
 # SCOPED TO THE SERVERS MEASURED, NEVER GENERAL. A suffix alone admits a write
 # named like a read (`mark_read`, `clear_list`), and no verb list can name every
 # such write, so a noun-first read fails closed on every other server.
-mcp_read_verb(tool) if regex.match(`^mcp__(github|Miro)__[a-z0-9_]+_read$`, tool)
+#
+# `_read` NAMES ITS METHODS, because GitHub's own server ends a write in it
+# (`mark_all_notifications_read`); `_list` and `_get` end none of its writes.
+mcp_read_verb(tool) if regex.match(`^mcp__(github__(issue|pull_request)|Miro__(board_preview|prototype))_read$`, tool)
 
 mcp_read_verb(tool) if regex.match(`^mcp__github__[a-z0-9_]+_(list|get)$`, tool)
 

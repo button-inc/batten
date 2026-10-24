@@ -530,10 +530,12 @@ fn a_noun_first_mcp_read_is_preapproved() {
 
 /// A WRITE NAMED LIKE A READ IS STILL A WRITE (CLOUD-2519): a noun-first read
 /// is one only on the servers measured to name reads that way, so
-/// `clear_list` or `mark_read` on any other server is not.
+/// `clear_list` or `mark_read` on any other server is not, and a `_read` only
+/// for the methods measured: GitHub's own server ends a write in it.
 #[test]
 fn a_write_named_like_a_list_is_not_preapproved() {
     for tool in [
+        "mcp__github__mark_all_notifications_read",
         "mcp__x__create_list",
         "mcp__x__clear_list",
         "mcp__x__reset_get",
