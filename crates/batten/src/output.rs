@@ -614,8 +614,24 @@ pub(crate) enum Fact {
     Count(u64),
     /// Whether.
     Flag(bool),
-    /// A named thing: a sha, a branch, a state token. Never a sentence.
-    Pointer(String),
+    /// A named thing: a sha, a branch, a state token. Never a sentence, and the
+    /// type holds that: a [`Token`] cannot be built from text with whitespace.
+    Pointer(Token),
+}
+
+/// One word, the only text a [`Fact`] may carry (review of #1228). Built through
+/// [`Token::new`], which refuses whitespace, so "a full lap of lease occupancy"
+/// cannot reach a progress line as a pointer any more than as a count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Token(String);
+
+//MUTANT-SUITE crates/batten/src/output.rs
+//MUTANT token-admits-a-sentence|s@^        \(!word.is_empty\(\) && !word.contains\(char::is_whitespace\)\)$@        (true)@|a_pointer_is_one_word_or_none
+impl Token {
+    /// `None` for empty text or text with whitespace in it.
+    pub(crate) fn new(word: &str) -> Option<Token> {
+        (!word.is_empty() && !word.contains(char::is_whitespace)).then(|| Token(word.to_owned()))
+    }
 }
 
 impl Fact {
@@ -623,7 +639,7 @@ impl Fact {
         match self {
             Fact::Count(count) => count.to_string(),
             Fact::Flag(flag) => flag.to_string(),
-            Fact::Pointer(pointer) => pointer.clone(),
+            Fact::Pointer(Token(word)) => word.clone(),
         }
     }
 }
@@ -635,9 +651,10 @@ impl Fact {
 /// `&'static str`, so a fact's label is fixed at the call site and only its
 /// value varies; the value is a [`Fact`], so it is measured.
 ///
-/// It implements [`Line`], so on stdout it reaches [`line`]. A caller that owes
-/// it on stderr hands `.line()` to [`message`], which is the funnel that
-/// channel already has.
+/// It implements [`Line`], so on stdout it reaches [`line`]. On stderr a caller
+/// hands `.line()` to [`message`] when a quieter rung may drop it, or to
+/// [`verdict`] when it is part of a refusal and must never be dropped, which is
+/// what `land`'s cost line is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Progress {
     /// The verb speaking, e.g. `land`.
@@ -737,14 +754,25 @@ mod tests {
             subject: crate::verdict::artifact("a1b2c3d"),
             facts: vec![
                 ("matrices bought", Fact::Count(0)),
-                ("lease", Fact::Pointer("not taken".to_owned())),
-                ("speculating", Fact::Flag(false)),
+                ("lease taken", Fact::Flag(false)),
+                (
+                    "speculating on",
+                    Fact::Pointer(Token::new("e4f5a6b").unwrap()),
+                ),
             ],
         };
         assert_eq!(
             progress.line(),
-            "land: a1b2c3d — matrices bought 0; lease not taken; speculating false"
+            "land: a1b2c3d — matrices bought 0; lease taken false; speculating on e4f5a6b"
         );
+    }
+
+    /// A pointer is one word: a sentence has no constructor.
+    #[test]
+    fn a_pointer_is_one_word_or_none() {
+        assert!(Token::new("a1b2c3d").is_some());
+        assert!(Token::new("a full lap of lease occupancy").is_none());
+        assert!(Token::new("").is_none());
     }
 
     #[test]

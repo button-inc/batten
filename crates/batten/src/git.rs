@@ -2086,6 +2086,32 @@ pub fn head_on_a_remote(dir: &Path) -> Option<bool> {
         .map(|unpushed| unpushed.is_empty())
 }
 
+/// Whether `HEAD` holds a commit no remote-tracking ref reaches, for a clone
+/// that HAS somewhere to push (CLOUD-2489).
+///
+/// [`head_on_a_remote`]'s question with one difference, and it is the reason this
+/// is a second name: a clone with no `refs/remotes` at all answers `None` here,
+/// not "unpushed". A gate whose remedy is "push" must not fire where no push is
+/// possible, or it refuses every check in that clone forever.
+#[must_use]
+pub fn head_unpushed_to_a_remote(dir: &Path) -> Option<bool> {
+    let repo = open(dir).ok()?;
+    let has_remote = repo
+        .references()
+        .ok()?
+        .prefixed("refs/remotes")
+        .ok()?
+        .flatten()
+        .next()
+        .is_some();
+    if !has_remote {
+        return None;
+    }
+    unreachable_from_remotes(&repo, Vec::new(), 1)
+        .ok()
+        .map(|unpushed| !unpushed.is_empty())
+}
+
 /// The commits reachable from `HEAD` and from neither `hidden` nor any
 /// `refs/remotes` tip, newest first, at most `at_most` of them.
 fn unreachable_from_remotes(
