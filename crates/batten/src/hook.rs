@@ -6676,20 +6676,22 @@ fn followed_cd(
 /// says so: on Windows `Path::is_absolute("/tmp/x")` is false (no drive), so the
 /// operand was joined UNDER the call's directory and `cd /tmp/x && wc a/b` read
 /// as a repository path on the one CI leg that runs there.
-///
-/// `has_root` IS THAT RULE ON EVERY HOST, as one predicate (CLOUD-2509): on unix
-/// it is `is_absolute`, and on Windows it holds for `/tmp/x` and `C:\x` alike.
-/// The `starts_with('/') || is_absolute()` it replaces differed only on a
-/// Windows word rooted by `\` without a drive, and not in effect: joining a
-/// rooted word keeps only the directory's drive, so either way the result is
-/// rooted outside the directory. Its second operand only ever differed from the
-/// first on Windows, so no unix leg could tell `||` from `&&`.
 fn shell_resolved(word: &str, current: Option<&Path>) -> Option<std::path::PathBuf> {
     let path = Path::new(word);
-    if path.has_root() {
+    if shell_absolute(word, cfg!(windows)) {
         return Some(path.to_path_buf());
     }
     current.map(|here| here.join(path))
+}
+
+/// Whether a shell word is absolute: a leading `/` everywhere, and on Windows
+/// whatever the host also reads as absolute (`C:\x`, `\\server\share`).
+///
+/// THE HOST IS AN ARGUMENT (CLOUD-2509). Read inline, the Windows operand only
+/// ever differed from the `/` one on Windows, so no unix leg could tell `||`
+/// from `&&`; passed in, every arm is decided on every leg.
+fn shell_absolute(word: &str, windows: bool) -> bool {
+    word.starts_with('/') || (windows && Path::new(word).is_absolute())
 }
 
 /// Does this `substitutes` entry select this invocation?
@@ -11516,6 +11518,17 @@ mod tests {
         }
     }
     use super::*;
+
+    /// CLOUD-2509: a leading `/` is absolute on every host, and only a Windows
+    /// host widens it. Fails by: the two operands joined by `&&`, or the host
+    /// flag read as always true or ignored.
+    #[test]
+    fn a_leading_slash_is_absolute_on_every_host() {
+        for windows in [false, true] {
+            assert!(shell_absolute("/tmp/x", windows), "windows={windows}");
+            assert!(!shell_absolute("tmp/x", windows), "windows={windows}");
+        }
+    }
 
     /// A class declaring two `command` routes and one `override`, so a renderer
     /// that takes "the first one" and one that takes them all are distinguishable.
