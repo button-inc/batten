@@ -803,6 +803,12 @@ pub enum Fact {
     /// A file read and one stat per failed run under `$GIT_DIR`. `null` when no
     /// record exists — the branch owes no push a read.
     RedHead,
+    /// Whether `HEAD` carries a commit no remote-tracking ref reaches
+    /// (CLOUD-2489): committed work a reclaim would take, and a slow local check
+    /// run over it before the draft push that would have saved it.
+    ///
+    /// `null` when it could not look; the module decides nothing then.
+    HeadUnpushed,
 }
 
 /// [`Fact::Receipts`] — a file and two git refs (`hook.rs`'s receipt read).
@@ -1545,6 +1551,10 @@ pub const DISPATCH_CLEARED: Class = Class::new(Cost::Read, Surface::Hook);
 /// `$GIT_DIR` (CLOUD-2270). A read, asked of the mediated call it gates.
 pub const RED_HEAD: Class = Class::new(Cost::Read, Surface::Hook);
 
+/// [`Fact::HeadUnpushed`] — a rev-walk from `HEAD` hiding every `refs/remotes`
+/// tip (CLOUD-2489), bounded by the commits this clone alone holds. A read.
+pub const HEAD_UNPUSHED: Class = Class::new(Cost::Read, Surface::Hook);
+
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
@@ -1592,6 +1602,7 @@ impl Fact {
         Fact::Pinned,
         Fact::DispatchCleared,
         Fact::RedHead,
+        Fact::HeadUnpushed,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -1642,6 +1653,7 @@ impl Fact {
             Fact::Pinned => "pinned-programs",
             Fact::DispatchCleared => "dispatch-cleared",
             Fact::RedHead => "red-head",
+            Fact::HeadUnpushed => "head-unpushed",
         }
     }
 
@@ -1700,6 +1712,7 @@ impl Fact {
             Fact::Pinned => PINNED,
             Fact::DispatchCleared => DISPATCH_CLEARED,
             Fact::RedHead => RED_HEAD,
+            Fact::HeadUnpushed => HEAD_UNPUSHED,
         }
     }
 
@@ -1788,6 +1801,7 @@ impl Fact {
             | Fact::RecordsBlocked
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::HeadUnpushed
             | Fact::Instant => false,
         }
     }
@@ -1958,7 +1972,8 @@ impl Fact {
             | Fact::DispatchCleared
             // CLOUD-2270. Hook-only: what a push over this head owes is a
             // question about the call, and a tree walk has none.
-            | Fact::RedHead => None,
+            | Fact::RedHead
+            | Fact::HeadUnpushed => None,
         }
     }
 
@@ -2056,7 +2071,9 @@ impl Fact {
             // count, and it is the seam this function's own doc says to split
             // along. `Instant` arriving is what took it past its ceiling, exactly
             // as `Landing` did for the git family.
-            Fact::Instant | Fact::DispatchCleared => Self::scalar_schema_fragment(self),
+            Fact::Instant | Fact::DispatchCleared | Fact::HeadUnpushed => {
+                Self::scalar_schema_fragment(self)
+            }
             // The description-only family delegates, for the same reason and
             // along the same kind of seam as the git family below: every one of
             // these constrains nothing but its own prose, so a match arm each
@@ -2318,6 +2335,10 @@ impl Fact {
                 "type": ["boolean", "null"],
                 "description": "Fact::DispatchCleared (CLOUD-1978). TRUE when this call is a session-management method (`create_session`, `send_message`) whose prompt's SHA-256 has BOTH a passing `batten lint brief` receipt and the owner's approval receipt; FALSE for any other call or any prompt missing either receipt; NULL when the receipt store could not be located. Keyed by the prompt's own bytes, so a prompt edited after approval is false. A boolean and nothing else: no byte of the prompt reaches this document.",
             }),
+            Fact::HeadUnpushed => serde_json::json!({
+                "type": ["boolean", "null"],
+                "description": "Fact::HeadUnpushed (CLOUD-2489). TRUE when HEAD carries a commit no `refs/remotes` tip reaches -- committed work this clone alone holds; FALSE when every commit on HEAD is on some remote; NULL when it could not look (no repository, an unresolvable HEAD, a failed walk). A boolean and nothing else: no sha reaches this document.",
+            }),
             Fact::Instant => serde_json::json!({
                 "type": ["integer", "null"],
                 "description": "Fact::Instant (CLOUD-1170). The epoch second the CALLER supplied, as data -- never a clock the engine read. A module compares a recorded stamp against it and a fixture pins both, so the same instant yields byte-identical output, which is what a clock READ can never do. NULL when the caller supplied none: that is could-not-look, NOT the epoch, and a predicate over it must not hold.",
@@ -2458,6 +2479,7 @@ impl Fact {
             | Fact::Captured
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::HeadUnpushed
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
             }),
@@ -2646,6 +2668,7 @@ impl Fact {
             | Fact::Landing
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::HeadUnpushed
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact keyed_read_schema_fragment does not own",
             }),
@@ -2870,6 +2893,7 @@ impl Fact {
             | Fact::GitIndex
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::HeadUnpushed
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
@@ -2934,6 +2958,7 @@ impl Fact {
             | Fact::RecordsBlocked
             | Fact::Instant
             | Fact::RedHead
+            | Fact::HeadUnpushed
             | Fact::Pinned => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact repository_schema_fragment does not own",
             }),
@@ -5714,4 +5739,50 @@ pub fn validate_keying(facts: &[Declared], rules: &[crate::rules::Rule]) -> anyh
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `head-unpushed` is a hook read about a command (CLOUD-2489): its token, its
+    /// class, no tree key, not minted at session start, and a yes/no-or-null schema.
+    ///
+    /// Fails by: any of the five rows `Fact::HeadUnpushed` adds being mis-stated,
+    /// which is what a wildcard-free match makes compile but cannot make true.
+    #[test]
+    fn head_unpushed_is_a_nullable_hook_read() {
+        let fact = Fact::HeadUnpushed;
+        assert_eq!(fact.as_str(), "head-unpushed");
+        assert_eq!(Fact::from_token("head-unpushed"), Some(fact));
+        assert_eq!(fact.class(), Class::new(Cost::Read, Surface::Hook));
+        assert_eq!(fact.tree_key(), None);
+        assert!(!fact.minted_at_session_start());
+        assert_eq!(
+            fact.schema_fragment()["type"],
+            serde_json::json!(["boolean", "null"])
+        );
+        // The rows beside it answer for the facts they DO name, so an arm
+        // collapsed to its default is not passed by `head-unpushed`'s `false`.
+        assert!(Fact::Tasks.minted_at_session_start());
+        assert_eq!(Fact::GitHead.tree_key(), Some("git-head"));
+    }
+
+    /// EVERY FACT'S FRAGMENT IS ROUTED to a delegate that owns it: an object with
+    /// a description, never `null` and never the "unrouted" fallback.
+    ///
+    /// Fails by: a delegate returning its default, or a fact sent to a delegate
+    /// whose own match calls it unrouted.
+    #[test]
+    fn every_fact_has_a_routed_schema_fragment() {
+        for fact in Fact::ALL {
+            let fragment = fact.schema_fragment();
+            let description = fragment["description"].as_str().unwrap_or_default();
+            assert!(
+                !description.is_empty() && !description.starts_with("unrouted"),
+                "{}: {fragment}",
+                fact.as_str()
+            );
+        }
+    }
 }

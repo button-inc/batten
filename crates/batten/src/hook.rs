@@ -5372,6 +5372,9 @@ pub struct Facts<'a> {
     /// shape (CLOUD-2270). Anything but `Is` projects `null`, which a module
     /// reads as "no push over this head owes a read".
     pub red_head: &'a crate::facts::Look<serde_json::Value>,
+    /// Whether `HEAD` carries a commit no remote-tracking ref reaches
+    /// (CLOUD-2489). `Is` projects `true`, `IsNot` `false`, could-not-look `null`.
+    pub head_unpushed: &'a crate::facts::Look<()>,
 }
 
 impl<'a> Facts<'a> {
@@ -5424,6 +5427,9 @@ impl<'a> Facts<'a> {
             // Could-not-look, never "no red head": a caller that resolved
             // nothing has not read the branch's record.
             red_head: &crate::facts::Look::CouldNotLook,
+            // Could-not-look, never "pushed": a caller that resolved nothing has
+            // not walked the clone's refs.
+            head_unpushed: &crate::facts::Look::CouldNotLook,
         }
     }
 }
@@ -7632,6 +7638,17 @@ pub fn policy_rewrite(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -
     changed.then_some(Value::Object(updated))
 }
 
+/// A yes/no fact as the document carries it: `true`, `false`, or `null` for
+/// could-not-look — never collapsed, since a module reading `null` as `false`
+/// would decide over a question nobody answered.
+fn flag(look: crate::facts::Look<()>) -> Value {
+    match look {
+        crate::facts::Look::Is(()) => Value::Bool(true),
+        crate::facts::Look::IsNot => Value::Bool(false),
+        crate::facts::Look::CouldNotLook => Value::Null,
+    }
+}
+
 /// The input document a policy module decides over.
 ///
 /// **Neutral facts only.** Every field is the concept rather than the host's
@@ -7758,11 +7775,7 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // A BOOLEAN AND NOTHING ELSE (CLOUD-1978): `false` for a call that is
             // not a session-management method or whose prompt lacks a receipt,
             // `null` only when the store could not be located.
-            crate::facts::Fact::DispatchCleared => Some(match facts.dispatch {
-                crate::facts::Look::Is(()) => serde_json::Value::Bool(true),
-                crate::facts::Look::IsNot => serde_json::Value::Bool(false),
-                crate::facts::Look::CouldNotLook => serde_json::Value::Null,
-            }),
+            crate::facts::Fact::DispatchCleared => Some(flag(*facts.dispatch)),
             // THE RECORD OR `null` (CLOUD-2270): no record and a record nobody
             // could read both owe a push nothing a module can act on.
             crate::facts::Fact::RedHead => Some(match facts.red_head {
@@ -7771,6 +7784,9 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                     serde_json::Value::Null
                 }
             }),
+            // A BOOLEAN AND NOTHING ELSE (CLOUD-2489), `DispatchCleared`'s shape:
+            // no sha of the unpushed range reaches the document.
+            crate::facts::Fact::HeadUnpushed => Some(flag(*facts.head_unpushed)),
             crate::facts::Fact::AgentSourced => Some(facts.sourced.as_ref().map_or(
                 serde_json::Value::Null,
                 |records| {
@@ -11509,6 +11525,15 @@ mod tests {
     }
     use super::*;
 
+    /// A yes/no fact keeps all three answers: a module reading `null` as `false`
+    /// would decide over a question nobody answered (CLOUD-2489).
+    #[test]
+    fn a_flag_fact_projects_true_false_and_null() {
+        assert_eq!(flag(crate::facts::Look::Is(())), Value::Bool(true));
+        assert_eq!(flag(crate::facts::Look::IsNot), Value::Bool(false));
+        assert_eq!(flag(crate::facts::Look::CouldNotLook), Value::Null);
+    }
+
     /// A class declaring two `command` routes and one `override`, so a renderer
     /// that takes "the first one" and one that takes them all are distinguishable.
     fn two_route_class() -> Vec<crate::verdict::DeclaredVerdict> {
@@ -11671,6 +11696,7 @@ mod tests {
                 pinned: &crate::facts::Look::CouldNotLook,
                 dispatch: &crate::facts::Look::CouldNotLook,
                 red_head: &crate::facts::Look::CouldNotLook,
+                head_unpushed: &crate::facts::Look::CouldNotLook,
             },
         )
     }
