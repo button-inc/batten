@@ -62,35 +62,10 @@ fn row() -> Rule {
     .expect("the loader accepts the committed row's shape")
 }
 
-/// The three rows as the COMMITTED config declares them, read from it rather
-/// than re-typed, so a regex edited there is the regex tested here.
-fn patterns() -> Vec<batten::pattern::NamedPattern> {
-    let config: toml::Value = toml::from_str(
-        &fs::read_to_string(common::at_root("batten.toml")).expect("the committed config"),
-    )
-    .expect("the committed config parses");
-    let wanted = ["raw-writeln-inline", "raw-writeln-open", "raw-literal-text"];
-    let found: Vec<batten::pattern::NamedPattern> = config["pattern"]
-        .as_array()
-        .expect("[[pattern]] rows")
-        .iter()
-        .filter(|row| wanted.contains(&row["id"].as_str().unwrap_or("")))
-        .map(|row| batten::pattern::NamedPattern {
-            id: row["id"].as_str().unwrap().to_owned(),
-            regex: row["regex"].as_str().unwrap().to_owned(),
-        })
-        .collect();
-    assert_eq!(
-        found.len(),
-        wanted.len(),
-        "every row the module reads is declared"
-    );
-    found
-}
-
 fn classes(root: &Path) -> Vec<String> {
     let verdicts = common::verdicts_in(root);
-    let patterns = patterns();
+    // The COMMITTED table, so a regex edited there is the regex tested here.
+    let patterns = common::committed_patterns();
     let scanned = rules::run_static(
         &[row()],
         &[],
