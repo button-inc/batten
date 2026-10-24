@@ -1063,13 +1063,14 @@ mod tests {
 
     /// CLOUD-2509: an append's stamp is the pinned reading in nanoseconds,
     /// saturating rather than wrapping. Fails by: a constant `0` or `1` in place
-    /// of the reading, which no unpinned case could tell from a real one.
+    /// of the reading, which no unpinned case could tell from a real one. The
+    /// reading is a whole 100 ns because Windows' clock keeps no finer.
     #[test]
     fn the_stamp_is_the_readings_nanoseconds() {
         let epoch = std::time::UNIX_EPOCH;
         assert_eq!(
-            crate::cache::clock::at(epoch + std::time::Duration::from_nanos(4_242), now_nanos),
-            4_242
+            crate::cache::clock::at(epoch + std::time::Duration::from_nanos(4_200), now_nanos),
+            4_200
         );
         let beyond = epoch + std::time::Duration::from_secs(u64::MAX / 1_000_000_000 + 1);
         assert_eq!(crate::cache::clock::at(beyond, now_nanos), u64::MAX);
