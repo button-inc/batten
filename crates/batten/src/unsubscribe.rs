@@ -318,11 +318,14 @@ pub fn drop_subscription(
         host,
         (&session, token),
         pr,
-        (crate::fetch::spend, &|| {
-            crate::repo_slug(Path::new("."))
-                .as_deref()
-                .and_then(owner_repo)
-        }),
+        (
+            |calls: &[crate::fetch::Call<'_>]| crate::fetch::spend(calls),
+            &|| {
+                crate::repo_slug(Path::new("."))
+                    .as_deref()
+                    .and_then(owner_repo)
+            },
+        ),
         out,
     )
 }
