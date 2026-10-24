@@ -1156,7 +1156,9 @@ fn a_running_land_lets_the_stop_pass() {
             .status
             .code()
     };
-    if !common::CORPSE_IS_DETECTABLE {
+    // `cfg!` spelled out, as `silent_skip` reads the guard: the same answer as
+    // `common::CORPSE_IS_DETECTABLE`.
+    if !cfg!(unix) {
         crashed_land(&repo);
         assert_eq!(stop(), Some(0), "off unix a crash is never seen");
         return;
