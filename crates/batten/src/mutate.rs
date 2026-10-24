@@ -5843,11 +5843,22 @@ mod tests {
                 .to_owned()
         };
         let (leader, job) = (read("leader"), read("job"));
-        let group = leader
-            .parse::<i32>()
-            .ok()
-            .and_then(rustix::process::Pid::from_raw)
-            .map(|pgid| format!("{:?}", rustix::process::test_kill_process_group(pgid)));
+        // Through the module's own `spawn`, as the case's suites are, so the
+        // probe and the cleanup compile on every target the case is built for.
+        let kill = |args: &[&str]| {
+            spawn(
+                dir,
+                Program::Suite("kill"),
+                &args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
+                &[],
+                std::time::Duration::from_secs(10),
+            )
+            .map_or_else(
+                |err| format!("kill: {err}"),
+                |ran| format!("{:?}", ran.outcome),
+            )
+        };
+        let group = kill(&["-0", "--", &format!("-{leader}")]);
         let table = spawn(
             dir,
             Program::Suite("ps"),
@@ -5874,14 +5885,8 @@ mod tests {
                     .join(" / ")
             },
         );
-        if let Some(pid) = job
-            .parse::<i32>()
-            .ok()
-            .and_then(rustix::process::Pid::from_raw)
-        {
-            let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
-        }
-        format!("leader {leader}, job {job}, group probe {group:?}, ps [{table}]")
+        let _ = kill(&["-KILL", &job]);
+        format!("leader {leader}, job {job}, group probe {group}, ps [{table}]")
     }
 
     /// Fails by: a module's own case not judged at all, or a mutation that
