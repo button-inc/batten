@@ -18826,10 +18826,9 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
 //MUTANT-SUITE crates/batten/tests/it/push_before_check.rs
 //MUTANT head-unpushed-never-read|s@^        Some(true) => facts::Look::Is(()),$@        Some(true) => facts::Look::IsNot,@|an_unpushed_head_refuses_a_slow_check
 fn head_unpushed_for(policy: &hook::Policy, envelope: &hook::Envelope) -> facts::Look<()> {
-    if envelope.event != hook::Event::PreTool
-        || envelope.operation != hook::Operation::Execute
-        || !policy.reads_pinned(envelope)
-    {
+    if !asks_head_unpushed(envelope.event, &envelope.operation, || {
+        policy.reads_pinned(envelope)
+    }) {
         return facts::Look::CouldNotLook;
     }
     match git::head_unpushed_to_a_remote(hook_authority_root()) {
@@ -18837,6 +18836,17 @@ fn head_unpushed_for(policy: &hook::Policy, envelope: &hook::Envelope) -> facts:
         Some(false) => facts::Look::IsNot,
         None => facts::Look::CouldNotLook,
     }
+}
+
+/// Whether a call is one the `head-unpushed` walk is spent on: a shell command,
+/// before it runs, under a policy row. `reads` is asked last, so the cheap tests
+/// decide first.
+fn asks_head_unpushed(
+    event: hook::Event,
+    operation: &hook::Operation,
+    reads: impl FnOnce() -> bool,
+) -> bool {
+    event == hook::Event::PreTool && *operation == hook::Operation::Execute && reads()
 }
 
 /// The rows of the config authority this call's write touches that this
@@ -29418,6 +29428,67 @@ mod tests {
         let held = StopHeld::of(&[], &bet);
         let line = cost_line(&land::Ledger::default(), "feature", &held).line();
         assert!(line.ends_with("; speculating on a1b2c3d"), "got: {line}");
+    }
+
+    /// The cost line reaches the stream the stop speaks on.
+    #[test]
+    fn a_refusing_stop_writes_its_cost() {
+        let mut err = Vec::new();
+        let held = StopHeld::of(&[], &speculation::Bet::default());
+        say_the_cost("feature", &land::Ledger::default(), &held, &mut err).unwrap();
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            "land: feature — laps charged 0; matrices bought 0; lease taken false\n"
+        );
+    }
+
+    /// AN EXHAUSTED BOUND REFUSES, and its sentence no longer claims a spend it
+    /// cannot see (CLOUD-2417): the counts are `say_the_cost`'s.
+    #[test]
+    fn an_exhausted_bound_refuses_without_claiming_a_spend() {
+        let mut ledger = land::Ledger {
+            lease_waits: 10_000,
+            ..land::Ledger::default()
+        };
+        let mut err = Vec::new();
+        let refused = charge_or_refuse(
+            land::Step::Lease,
+            ExitCode::Violation,
+            land::Basis::of(false),
+            &mut ledger,
+            &mut err,
+        )
+        .unwrap();
+        assert_eq!(refused, Some(ExitCode::Internal));
+        let said = String::from_utf8(err).unwrap();
+        assert!(said.contains("gave up after LeaseWaits"), "{said}");
+        assert!(!said.contains("spent no CI"), "{said}");
+    }
+
+    /// The walk is spent only on a shell call before it runs, under a policy row.
+    #[test]
+    fn head_unpushed_is_asked_of_a_pre_tool_shell_call_alone() {
+        use hook::{Event, Operation};
+        assert!(asks_head_unpushed(
+            Event::PreTool,
+            &Operation::Execute,
+            || true
+        ));
+        assert!(!asks_head_unpushed(
+            Event::PostTool,
+            &Operation::Execute,
+            || true
+        ));
+        assert!(!asks_head_unpushed(
+            Event::PreTool,
+            &Operation::Write,
+            || true
+        ));
+        assert!(!asks_head_unpushed(
+            Event::PreTool,
+            &Operation::Execute,
+            || false
+        ));
     }
 
     /// The lease is what the driver ENTERED, not what a step was asked to do.

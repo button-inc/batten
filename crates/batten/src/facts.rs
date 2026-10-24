@@ -5740,3 +5740,27 @@ pub fn validate_keying(facts: &[Declared], rules: &[crate::rules::Rule]) -> anyh
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `head-unpushed` is a hook read about a command (CLOUD-2489): its token, its
+    /// class, no tree key, not minted at session start, and a yes/no-or-null schema.
+    ///
+    /// Fails by: any of the five rows `Fact::HeadUnpushed` adds being mis-stated,
+    /// which is what a wildcard-free match makes compile but cannot make true.
+    #[test]
+    fn head_unpushed_is_a_nullable_hook_read() {
+        let fact = Fact::HeadUnpushed;
+        assert_eq!(fact.as_str(), "head-unpushed");
+        assert_eq!(Fact::from_token("head-unpushed"), Some(fact));
+        assert_eq!(fact.class(), Class::new(Cost::Read, Surface::Hook));
+        assert_eq!(fact.tree_key(), None);
+        assert!(!fact.minted_at_session_start());
+        assert_eq!(
+            fact.schema_fragment()["type"],
+            serde_json::json!(["boolean", "null"])
+        );
+    }
+}

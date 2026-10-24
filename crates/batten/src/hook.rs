@@ -11525,6 +11525,15 @@ mod tests {
     }
     use super::*;
 
+    /// A yes/no fact keeps all three answers: a module reading `null` as `false`
+    /// would decide over a question nobody answered (CLOUD-2489).
+    #[test]
+    fn a_flag_fact_projects_true_false_and_null() {
+        assert_eq!(flag(crate::facts::Look::Is(())), Value::Bool(true));
+        assert_eq!(flag(crate::facts::Look::IsNot), Value::Bool(false));
+        assert_eq!(flag(crate::facts::Look::CouldNotLook), Value::Null);
+    }
+
     /// A class declaring two `command` routes and one `override`, so a renderer
     /// that takes "the first one" and one that takes them all are distinguishable.
     fn two_route_class() -> Vec<crate::verdict::DeclaredVerdict> {
