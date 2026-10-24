@@ -79,8 +79,17 @@ provenance = 'github-attestations' # single-quoted, commented
 [tools.jq."platforms.windows-x64"]
 provenance = ["slsa", "github-attestations"]
 
+[tools.jq."platforms.macos-x64"]
+provenance = { github-attestations = {} }
+
+[tools.jq."platforms.linux-arm64-musl"]
+verified_by = "github-attestations"
+
 [tools.jq."platforms.linux-arm64"]
 provenance = "slsa"
+
+[tools.jq."platforms.windows-arm64"]
+provenance = "github-attestations-v2"
 "#;
     let mut found = Vec::new();
     attestations(&toml::from_str(lock).unwrap(), "", &mut found);
@@ -88,8 +97,10 @@ provenance = "slsa"
     assert_eq!(
         found,
         [
+            r#""tools"."jq"[0]."platforms.linux-arm64-musl"."verified_by""#,
             r#""tools"."jq"[0]."platforms.linux-x64"."provenance"."github-attestations""#,
             r#""tools"."jq"[0]."platforms.macos-arm64"."provenance""#,
+            r#""tools"."jq"[0]."platforms.macos-x64"."provenance"."github-attestations""#,
             r#""tools"."jq"[0]."platforms.windows-x64"."provenance"[1]"#,
         ]
     );
