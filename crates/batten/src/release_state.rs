@@ -1208,11 +1208,8 @@ pub fn section(changelog: &str, version: &str) -> Option<String> {
     Some(body.join("\n").trim().to_owned())
 }
 
-/// Delete whatever `discard` says to for `tag`: `Nothing` when there was
-/// nothing to delete, `Deleted` when every step was made, `Refused` when
-/// `discard` refuses, `Unread` could-not-look, and `Undeleted` the first
-/// deletion the forge refused with the status it answered, `None` where it did
-/// not answer. A tag already gone counts as deleted.
+/// Delete whatever `discard` says to for `tag`, stopping at the first deletion
+/// the forge refuses.
 fn perform_discard(slug: &str, tag: &str, get: Get<'_>) -> Discarded {
     let steps = match read_found(slug, tag, get).map(|found| discard(&found)) {
         Ok(Ok(steps)) if steps.is_empty() => return Discarded::Nothing,
@@ -1235,14 +1232,21 @@ fn perform_discard(slug: &str, tag: &str, get: Get<'_>) -> Discarded {
     Discarded::Deleted
 }
 
-/// What [`perform_discard`] did, one case per line `discard` says; `cut` goes
-/// on past `Nothing` and `Deleted` alike.
+/// What [`perform_discard`] did. The `discard` verb says a line for each;
+/// `cut` goes on past `Nothing` and `Deleted`, refuses on `Refused`, and could
+/// not look on the other two.
 #[derive(Debug, PartialEq, Eq)]
 enum Discarded {
+    /// No release is tagged; nothing to delete.
     Nothing,
+    /// Every step was made; a tag already gone (404 or 422) counts as made.
     Deleted,
+    /// `discard` refused, naming why.
     Refused(String),
+    /// The release could not be read.
     Unread(String),
+    /// The first deletion the forge refused: its path and the status it
+    /// answered, `None` where it did not answer. A draft already gone is one.
     Undeleted(String, Option<u16>),
 }
 
