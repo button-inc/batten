@@ -85,7 +85,7 @@ fn mint_against(dir: &Path, branch: &str, base: &str) {
     let receipts = PathBuf::from(git_dir.trim()).join("batten-receipts");
     std::fs::create_dir_all(&receipts).expect("create the receipt store");
     std::fs::write(
-        receipts.join(format!("claim.{}", branch.replace('/', "-"))),
+        receipts.join(format!("claim.{}", batten::receipt::branch_slug(branch))),
         format!("CLOUD-444\nready-lint pass\nbase {base}\n"),
     )
     .expect("mint the receipt");
@@ -499,7 +499,7 @@ fn mint_kind(dir: &Path, kind: &str, branch: &str) {
     std::fs::create_dir_all(&receipts).expect("create the receipt store");
     let base = git_in(dir, &["rev-parse", "origin/main"]);
     std::fs::write(
-        receipts.join(format!("{kind}.{}", branch.replace('/', "-"))),
+        receipts.join(format!("{kind}.{}", batten::receipt::branch_slug(branch))),
         format!("CLOUD-1297\nready-lint pass\nbase {}\n", base.trim()),
     )
     .expect("mint the receipt");

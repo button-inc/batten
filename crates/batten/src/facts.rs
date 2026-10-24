@@ -4580,16 +4580,16 @@ impl Sourced {
 /// `receipt::verdicts` already resolves for the receipt store, resolved once at
 /// the boundary because `adjudicate` may not look.
 ///
-/// Both components are `/`-substituted: a branch name legitimately carries
-/// separators and a filename may not. The spelling matches
-/// `receipt::branch_receipt_name`'s for the same reason it does there — two
-/// spellings of one filename are two things to drift.
+/// Both components go through [`crate::receipt::branch_slug`]: a branch name
+/// legitimately carries separators and a filename may not, and the one
+/// injective spelling (CLOUD-2353) keeps `feature/a`'s fact from answering for
+/// `feature-a`. Two spellings of one filename are two things to drift.
 #[must_use]
 pub fn sourced_path(git_dir: &std::path::Path, name: &str, subject: &str) -> std::path::PathBuf {
     git_dir.join("batten-receipts").join(format!(
         "fact.{}.{}",
-        name.replace('/', "-"),
-        subject.replace('/', "-")
+        crate::receipt::branch_slug(name),
+        crate::receipt::branch_slug(subject)
     ))
 }
 

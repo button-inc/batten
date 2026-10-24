@@ -1303,23 +1303,16 @@ pub fn red_runs(
     }
 }
 
-/// A branch's red-head key, INJECTIVE where the shared branch-receipt slug is
-/// not (review of #1180): `/` → `-` maps `feature/a` and `feature-a` to one
-/// name, and a green stop on one would then clear the other's unread debt, a
-/// MISSED refusal. Percent-encoding `%` and `/` keeps every branch its own
-/// record and every name a single path component.
-// The record's writer, reader and clear are judged over the compiled binary and
-// the real post-tool mint, which only the integration tier runs (CLOUD-2270).
-//MUTANT-SUITE crates/batten/tests/it/head_push_unread.rs
-#[must_use]
-pub fn red_head_slug(branch: &str) -> String {
-    branch.replace('%', "%25").replace('/', "%2F")
-}
-
 /// Where a branch's red-head record lives under a receipt `store`: the ONE
 /// spelling the writer, the reader and the clear share, so they cannot drift.
+/// The branch is [`crate::receipt::branch_slug`], every receipt's own injective
+/// key (CLOUD-2353), so a green stop on `feature-a` never clears the unread
+/// debt of `feature/a`.
 fn red_head_file(store: &Path, branch: &str) -> std::path::PathBuf {
-    store.join(format!("{RED_HEAD}.{}", red_head_slug(branch)))
+    store.join(format!(
+        "{RED_HEAD}.{}",
+        crate::receipt::branch_slug(branch)
+    ))
 }
 
 /// Where a branch's red-head record lives, or `None` with no git dir.
@@ -3082,6 +3075,9 @@ pub(crate) const BRANCH_KEYED_RECEIPTS: &[&str] = &[
     // AGENTS.md's "one PR all of it" refuses. Landing sweeps it here, which is what
     // lets the NEXT branch open its one PR.
     "pr-open",
+    // The red-head record (CLOUD-2270): keyed by the shared slug since CLOUD-2353,
+    // so it is swept with the rest rather than through a spelling of its own.
+    RED_HEAD,
 ];
 
 /// Retire a branch whose pull request has merged.
@@ -3125,8 +3121,8 @@ pub fn retire_branch(root: &Path, remote: &str, branch: &str) -> Retired {
     let tracking_gone = crate::gitwrite::delete_ref(root, &tracking).is_ok();
 
     // THE SLUG IS THE STORE'S OWN SPELLING, not a second one. Every writer under
-    // `.git/batten-receipts` keys a branch as `branch.replace('/', "-")`, so a
-    // sweep spelling it differently would delete nothing and report a clean
+    // `.git/batten-receipts` keys a branch as `receipt::branch_slug` (CLOUD-2353),
+    // so a sweep spelling it differently would delete nothing and report a clean
     // count — the silent-empty-answer shape this repository refuses everywhere.
     // **AND THE CLAIM PARTITION, which the sweep did not carry** (review of
     // #848). `recorder::record_path` names a branch-keyed record
@@ -3141,7 +3137,7 @@ pub fn retire_branch(root: &Path, remote: &str, branch: &str) -> Retired {
     // A PREFIX SWEEP rather than a second spelling of the claim: the sweep must
     // not need to know which claim was live when each record was written, and
     // asking would be a second authority over a name `record_path` already owns.
-    let slug = branch.replace('/', "-");
+    let slug = crate::receipt::branch_slug(branch);
     let store = crate::git::git_dir(root).map(|dir| dir.join("batten-receipts"));
     let receipts = store.map_or(0, |dir| {
         let Ok(listing) = std::fs::read_dir(&dir) else {
@@ -3167,10 +3163,6 @@ pub fn retire_branch(root: &Path, remote: &str, branch: &str) -> Retired {
             .filter(|entry| std::fs::remove_file(entry.path()).is_ok())
             .count()
     });
-    // THE RED-HEAD RECORD IS KEYED ITS OWN WAY (`red_head_slug`, injective where
-    // the shared slug is not), so it is cleared through its own spelling rather
-    // than matched by the prefix sweep above.
-    let receipts = receipts + usize::from(clear_red_head(root, branch).unwrap_or(false));
 
     Retired {
         remote: remote_gone,
@@ -5108,9 +5100,11 @@ mod tests {
         let store = root.join(".git/batten-receipts");
         std::fs::create_dir_all(&store).unwrap();
         for name in [
+            "board-writes.work%2Fgone",
+            "board-writes.work%2Fgone.claim",
+            "board-writes.work%2Fgone-2",
+            // The SIBLING `work-gone` (CLOUD-2353): another branch, never swept.
             "board-writes.work-gone",
-            "board-writes.work-gone.claim",
-            "board-writes.work-gone-2",
         ] {
             std::fs::write(store.join(name), "x").unwrap();
         }
@@ -5122,16 +5116,15 @@ mod tests {
         let retired = super::retire_branch(&root, "", "work/gone");
         assert!(!retired.remote, "an unreachable remote deleted nothing");
         assert_eq!(retired.receipts, 3);
-        assert!(store.join("board-writes.work-gone-2").exists());
+        assert!(store.join("board-writes.work%2Fgone-2").exists());
+        assert!(store.join("board-writes.work-gone").exists());
     }
 
     #[test]
-    fn a_red_head_slug_is_injective_over_slash_and_percent() {
-        assert_eq!(super::red_head_slug("feature/a%b"), "feature%2Fa%25b");
-        assert_ne!(
-            super::red_head_slug("feature/a"),
-            super::red_head_slug("feature-a")
-        );
+    fn a_branch_slug_is_injective_over_slash_and_percent() {
+        let slug = crate::receipt::branch_slug;
+        assert_eq!(slug("feature/a%b"), "feature%2Fa%25b");
+        assert_ne!(slug("feature/a"), slug("feature-a"));
     }
 
     /// Only an all-digit id is asked whether it was read.

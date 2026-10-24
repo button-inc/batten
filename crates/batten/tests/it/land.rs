@@ -462,7 +462,7 @@ fn lap_record(repo: &Path, branch: &str) -> String {
     let path = repo
         .join(dir.trim())
         .join("batten-receipts")
-        .join(format!("lap.{}", branch.replace('/', "-")));
+        .join(format!("lap.{}", batten::receipt::branch_slug(branch)));
     std::fs::read_to_string(path).unwrap_or_default()
 }
 
@@ -1238,7 +1238,7 @@ fn a_replay_recorded_before_a_re_claim_still_admits_its_pre_rebase_head() {
     let after = commit_on(&repo, "ours, replayed");
     let receipts = repo.join(".git").join("batten-receipts");
     std::fs::create_dir_all(&receipts).expect("receipts dir");
-    let claim = receipts.join(format!("claim.{}", branch.replace('/', "-")));
+    let claim = receipts.join(format!("claim.{}", batten::receipt::branch_slug(&branch)));
     std::fs::write(&claim, "CLOUD-1\n").expect("write the first claim");
     land::record(
         &repo,

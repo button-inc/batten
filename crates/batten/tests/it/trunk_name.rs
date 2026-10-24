@@ -145,7 +145,7 @@ fn claim_check(dir: &Path) -> Output {
 }
 
 fn claim_receipt(dir: &Path) -> Option<String> {
-    std::fs::read_to_string(receipts(dir).join("claim.feature-claim")).ok()
+    std::fs::read_to_string(receipts(dir).join("claim.feature%2Fclaim")).ok()
 }
 
 /// `receipt verified` after recording both receipts it asks about.

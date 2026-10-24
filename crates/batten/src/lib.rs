@@ -1051,14 +1051,13 @@ fn notice_due(stamp: &Path, now: u64, tag: &str) -> bool {
 /// inside the day has no stamp of its own and is due, and a branch switched
 /// back to keeps the window it had. Every detached HEAD shares the key `HEAD`,
 /// which git refuses as a branch name, so a bisect leaves one file rather than
-/// one per step. The file name is the branch's injective slug, the one
-/// `land`'s red-head records use, shared on purpose so the encoding has one
-/// spelling.
+/// one per step. The file name is [`receipt::branch_slug`], every receipt's
+/// injective key, shared on purpose so the encoding has one spelling.
 fn notice_stamp(root: &Path, branch: Option<&str>) -> Result<std::path::PathBuf> {
     Ok(state::repo_state_dir(root)?
         .join("engine")
         .join("update-notice.d")
-        .join(land::red_head_slug(branch.unwrap_or("HEAD"))))
+        .join(receipt::branch_slug(branch.unwrap_or("HEAD"))))
 }
 
 /// Write the `engine-fresh` line into the record's family: stale when the pin
@@ -17019,7 +17018,7 @@ fn lease_receipt_path(root: &Path, branch: &str) -> Option<std::path::PathBuf> {
     Some(
         git_dir
             .join("batten-receipts")
-            .join(format!("lease.{}", branch.replace('/', "-"))),
+            .join(format!("lease.{}", receipt::branch_slug(branch))),
     )
 }
 
@@ -23644,7 +23643,7 @@ fn mint_receipts(
                 let Ok(Some(branch)) = git::current_branch(root) else {
                     continue;
                 };
-                branch.replace('/', "-")
+                receipt::branch_slug(&branch)
             }
             // KEYED TO THE CHANGE (CLOUD-1484).
             //
