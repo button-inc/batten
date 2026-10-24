@@ -90,6 +90,19 @@ test_a_cheap_program_is_not_a_check if {
 	count(violation) == 0 with input as call(true, [prog("cargo", ["fmt", "--all"])])
 }
 
+# A check in a LATER segment is judged as surely as one alone: every program the
+# boundary parsed out of the line is read, so `cargo fmt && cargo test` cannot
+# hide the test behind a cheap first word (CLOUD-857's `module-tested-bare-only`).
+test_a_later_segment_check_is_refused if {
+	count(violation) == 1 with input as {
+		"call": {
+			"command": "cargo fmt --all && cargo test -p batten",
+			"programs": [prog("cargo", ["fmt", "--all"]), prog("cargo", ["test", "-p", "batten"])],
+		},
+		"facts": {"head-unpushed": true},
+	}
+}
+
 test_could_not_look_decides_nothing if {
 	count(violation) == 0 with input as call(null, [prog("mise", ["run", "verify"])])
 }
