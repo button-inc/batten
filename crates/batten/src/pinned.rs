@@ -775,8 +775,8 @@ mod tests {
     )]
     fn manifest(name: &str) -> (PathBuf, Vec<PathBuf>, std::time::Duration) {
         let dir = crate::scratch::scratch(name);
-        std::fs::write(dir.join("mise.toml"), "[tools]\n").expect("manifest");
-        let configs = vec![dir.join("mise.toml")];
+        std::fs::write(dir.join("tools.toml"), "[tools]\n").expect("manifest");
+        let configs = vec![dir.join("tools.toml")];
         let later = crate::cache::now() + std::time::Duration::from_hours(1);
         (dir, configs, later)
     }
@@ -825,7 +825,7 @@ mod tests {
             assert!(!stamps.is_empty(), "the premise: stamps were recorded");
         }
         // The same length, so only the times tell the edit apart.
-        std::fs::write(dir.join("mise.toml"), "[tasks]\n").expect("edit");
+        std::fs::write(&configs[0], "[tasks]\n").expect("edit");
         assert!(
             !still_keyed(&configs, "not-the-key", &stamps),
             "an edited manifest falls through to the key, which refuses"
@@ -882,7 +882,7 @@ mod tests {
     /// passes disagreeing, and neither is recorded.
     #[test]
     fn stamps_that_moved_around_the_read_are_not_recorded() {
-        let lock = PathBuf::from("/x/mise.lock");
+        let lock = PathBuf::from("/x/tools.lock");
         let before: Stamps = vec![(lock.clone(), None)];
         let after: Stamps = vec![(lock.clone(), Some("stat:1".to_owned()))];
         assert!(settled(before.clone(), &after).is_empty(), "moved: none");
