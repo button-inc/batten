@@ -770,6 +770,23 @@ fn settle(
     }
 }
 
+/// The default window's start, a day before `now`, stamped and in seconds.
+///
+/// A CLOCK THAT DID NOT READ IS NOT AN INSTANT: `now_unix` answers 0 on
+/// failure, and a window measured back from the epoch is not the day, so `0`
+/// answers `None`. `now` is the caller's reading, so both arms test without a
+/// clock that fails (CLOUD-2509).
+fn day_before(now: u64) -> Option<(String, i64)> {
+    if now == 0 {
+        return None;
+    }
+    let at = i64::try_from(now).unwrap_or(i64::MAX).saturating_sub(DAY);
+    Some((
+        crate::receipt::rfc3339_utc(u64::try_from(at).unwrap_or(0)),
+        at,
+    ))
+}
+
 /// The repository slug and git directory, or the could-not-look a missing remote is.
 fn locate() -> Result<(Option<String>, std::path::PathBuf)> {
     let root = Path::new(".");
@@ -815,22 +832,15 @@ pub fn run_divergence(
         };
         (text.trim().to_owned(), at)
     } else {
-        // A CLOCK THAT DID NOT READ IS NOT AN INSTANT: `now_unix` answers 0 on
-        // failure, and a window measured back from the epoch is not the day.
-        let now = crate::now_unix();
-        if now == 0 {
+        let Some(window) = day_before(crate::now_unix()) else {
             crate::record::clear_named(DIVERGENCE, DIVERGENCE_FAMILY)?;
             writeln!(
                 err,
                 "batten: {DIVERGENCE}: could not look: the clock did not read, so the window has no start"
             )?;
             return Ok(ExitCode::Internal);
-        }
-        let at = i64::try_from(now).unwrap_or(i64::MAX).saturating_sub(DAY);
-        (
-            crate::receipt::rfc3339_utc(u64::try_from(at).unwrap_or(0)),
-            at,
-        )
+        };
+        window
     };
     let spec = Divergence {
         ci_workflow,
@@ -914,6 +924,16 @@ mod tests {
     use crate::rest::Answer;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn the_default_window_opens_a_day_back_and_not_from_a_failed_clock() {
+        assert_eq!(day_before(0), None);
+        let now = 1_000_000_000 + u64::try_from(DAY).unwrap();
+        assert_eq!(
+            day_before(now),
+            Some((String::from("2001-09-09T01:46:40Z"), 1_000_000_000))
+        );
+    }
 
     /// A transport answering by the longest route whose needle the URL contains.
     fn forge(routes: Vec<(&'static str, String)>) -> impl Fn(&str, Option<&str>) -> Option<Answer> {

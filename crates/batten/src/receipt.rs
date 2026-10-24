@@ -618,24 +618,35 @@ pub(crate) fn sourced_store(
     checks: &[(&String, &ReceiptKey)],
     named: Option<&str>,
 ) -> Option<SourcedStore> {
+    sourced_store_in(Path::new("."), checks, named)
+}
+
+/// [`sourced_store`] read from the checkout at `here`, so a case can hand it a
+/// branch or a detached HEAD rather than whichever the suite's own checkout
+/// happens to be (CLOUD-2475).
+fn sourced_store_in(
+    here: &Path,
+    checks: &[(&String, &ReceiptKey)],
+    named: Option<&str>,
+) -> Option<SourcedStore> {
     if checks.is_empty() {
         return Some(SourcedStore {
             git_dir: std::path::PathBuf::new(),
             subjects: BTreeMap::new(),
         });
     }
-    let git_dir = git::git_dir(Path::new(".")).ok()?;
+    let git_dir = git::git_dir(here).ok()?;
     // Resolved once, and only where a row asked — a head-keyed caller must not
     // pay a branch lookup for a question it never asks. `current_branch` rather
     // than `branch_facts`: that one also counts this branch's own commits, which
     // `branch_validity` needs and a record filed by name does not.
     let head = if checks.iter().any(|(_, key)| **key == ReceiptKey::Head) {
-        Some(git::head_commit(Path::new(".")).ok()?)
+        Some(git::head_commit(here).ok()?)
     } else {
         None
     };
     let branch = if checks.iter().any(|(_, key)| **key == ReceiptKey::Branch) {
-        Some(git::current_branch(Path::new(".")).ok()??)
+        Some(git::current_branch(here).ok()??)
     } else {
         None
     };
@@ -2506,6 +2517,32 @@ mod tests {
         );
         assert!(sourced_store(&[(&closed, &ReceiptKey::Named)], Some("../x")).is_none());
         assert!(sourced_store(&[(&closed, &ReceiptKey::Delta)], None).is_none());
+    }
+
+    /// A branch-keyed record files under the checkout's branch, and a detached
+    /// HEAD has none to file under (CLOUD-2475).
+    #[test]
+    fn a_branch_subject_is_the_branch_and_a_detached_head_has_none() {
+        let dir = crate::scratch::scratch("receipt-sourced-branch");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        std::fs::write(dir.join("a"), "1").unwrap();
+        crate::gitwrite::commit_paths(&dir, &[String::from("a")], "one").unwrap();
+        let (open, closed) = (String::from("open"), String::from("closed"));
+        let checks = [(&open, &ReceiptKey::Branch), (&closed, &ReceiptKey::Head)];
+        let store = sourced_store_in(&dir, &checks, None).unwrap();
+        let head = git::head_commit(&dir).unwrap();
+        assert_eq!(store.subjects.get("open").map(String::as_str), Some("main"));
+        assert_eq!(store.subjects.get("closed"), Some(&head));
+        assert_eq!(store.subjects.len(), 2);
+        let by_head = sourced_store_in(&dir, &[(&closed, &ReceiptKey::Head)], None).unwrap();
+        assert_eq!(by_head.subjects.get("closed"), Some(&head));
+        std::fs::write(dir.join(".git/HEAD"), format!("{head}\n")).unwrap();
+        assert!(sourced_store_in(&dir, &checks, None).is_none());
+        assert_eq!(
+            sourced_store_in(&dir, &[(&closed, &ReceiptKey::Head)], None)
+                .and_then(|store| store.subjects.get("closed").cloned()),
+            Some(head)
+        );
     }
 
     /// The write files the record exactly where the store reads it.

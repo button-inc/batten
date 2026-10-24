@@ -345,12 +345,26 @@ fn pointer(path: &Path, root: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// One program run in a directory for its exit code and stdout, or `None` where
+/// it could not start: [`exec::piped_argv`] in production, a script in a case.
+///
+/// **THE BUILD'S ONE EFFECT, HANDED IN** (CLOUD-2509). Every arm past the
+/// builder acted only when cargo-dist was installed and a release build had
+/// staged artifacts, so no case reached the refusals between the steps.
+type Runner<'a> = &'a dyn Fn(&Path, &[String], Diagnostics) -> Option<(i32, String)>;
+
 /// Run a program for its exit code, folding its output onto `err` when it fails.
 ///
 /// `Ok(true)` ran and exited 0; `Ok(false)` did not, and `err` says why.
+#[cfg(test)]
 fn ran(dir: &Path, argv: &[String], err: &mut dyn Write) -> Result<bool> {
+    ran_with(dir, argv, err, &piped)
+}
+
+/// [`ran`] through `run`.
+fn ran_with(dir: &Path, argv: &[String], err: &mut dyn Write, run: Runner<'_>) -> Result<bool> {
     let program = argv.first().map_or("", String::as_str);
-    let Some((code, log)) = exec::piped_argv(dir, argv, "", Diagnostics::Keep, &[]) else {
+    let Some((code, log)) = run(dir, argv, Diagnostics::Keep) else {
         writeln!(err, "dist: could not start `{program}`")?;
         return Ok(false);
     };
@@ -446,19 +460,35 @@ pub fn run(
     let Some(package) = read_package(err)? else {
         return Ok(ExitCode::Internal);
     };
+    build_and_stage(target, &package, (tool, by_dist), (out, err), &piped)
+}
 
+/// The [`Runner`] every real build goes through.
+fn piped(dir: &Path, argv: &[String], diagnostics: Diagnostics) -> Option<(i32, String)> {
+    exec::piped_argv(dir, argv, "", diagnostics, &[])
+}
+
+/// [`run`] past its reads: the stem, or the build `tool` (cargo-dist's when
+/// `by_dist`) through `run`, then the archive.
+fn build_and_stage(
+    target: &str,
+    package: &Package,
+    (tool, by_dist): (Option<BuildTool>, bool),
+    (out, err): (&mut dyn Write, &mut dyn Write),
+    run: Runner<'_>,
+) -> Result<ExitCode> {
     let stem = archive_stem(&package.name, &package.version, target);
     if by_dist {
-        return run_cargo_dist(target, &package, &stem, out, err);
+        return run_cargo_dist(target, package, &stem, (out, err), run);
     }
     let Some(tool) = tool else {
         writeln!(out, "{stem}")?;
         return Ok(ExitCode::Success);
     };
-    if !ran(&package.root, &tool.argv(target, &package.bin), err)? {
+    if !ran_with(&package.root, &tool.argv(target, &package.bin), err, run)? {
         return Ok(ExitCode::Internal);
     }
-    let Some((archive, built)) = stage(&package, target, &stem, err)? else {
+    let Some((archive, built)) = stage(package, target, &stem, err, run)? else {
         return Ok(ExitCode::Internal);
     };
     writeln!(out, "archive={}", pointer(&archive, &package.root))?;
@@ -507,6 +537,7 @@ fn stage(
     target: &str,
     stem: &str,
     err: &mut dyn Write,
+    run: Runner<'_>,
 ) -> Result<Option<(PathBuf, PathBuf)>> {
     let file = binary_file(&package.bin, target);
     let built_dir = package.target_dir.join(target).join(PROFILE);
@@ -542,7 +573,7 @@ fn stage(
     } else {
         package.root.as_path()
     };
-    if !ran(dir, &argv, err)? || !archive.is_file() {
+    if !ran_with(dir, &argv, err, run)? || !archive.is_file() {
         writeln!(
             err,
             "dist: no archive at {}",
@@ -620,7 +651,18 @@ fn archiver_argv(
 ///   reason is not buried under the graph, and what it downloads the build
 ///   needs anyway;
 /// * the MSI template is written ([`CARGO_DIST_MSI_TEMPLATE`]).
+#[cfg(test)]
 fn dist_preflight(root: &Path, outputs: &[&Path], err: &mut dyn Write) -> Result<bool> {
+    preflight_with(root, outputs, err, &piped)
+}
+
+/// [`dist_preflight`] through `run`.
+fn preflight_with(
+    root: &Path,
+    outputs: &[&Path],
+    err: &mut dyn Write,
+    run: Runner<'_>,
+) -> Result<bool> {
     for output in outputs {
         match std::fs::remove_file(output) {
             Ok(()) => {}
@@ -628,14 +670,15 @@ fn dist_preflight(root: &Path, outputs: &[&Path], err: &mut dyn Write) -> Result
             Err(error) => return Err(error.into()),
         }
     }
-    if !ran(
+    if !ran_with(
         root,
         &["cargo", "fetch", "--locked"].map(str::to_owned),
         err,
+        run,
     )? {
         return Ok(false);
     }
-    ran(root, &CARGO_DIST_MSI_TEMPLATE.map(str::to_owned), err)
+    ran_with(root, &CARGO_DIST_MSI_TEMPLATE.map(str::to_owned), err, run)
 }
 
 /// The leg, built by cargo-dist (CLOUD-2297): `dist build` for `target`, its
@@ -646,8 +689,8 @@ fn run_cargo_dist(
     target: &str,
     package: &Package,
     stem: &str,
-    out: &mut dyn Write,
-    err: &mut dyn Write,
+    (out, err): (&mut dyn Write, &mut dyn Write),
+    run: Runner<'_>,
 ) -> Result<ExitCode> {
     let staged = cargo_dist_staging(&package.root);
     let dist_name = cargo_dist_archive(&package.name, target);
@@ -655,7 +698,7 @@ fn run_cargo_dist(
     let dist_archive = staged.join(dist_name);
     let manifest = staged.join(cargo_dist_manifest(target));
     let msi = staged.join(format!("{}-{target}.msi", package.name));
-    if !dist_preflight(
+    if !preflight_with(
         &package.root,
         &[
             dist_archive.as_path(),
@@ -664,14 +707,14 @@ fn run_cargo_dist(
             msi.as_path(),
         ],
         err,
+        run,
     )? {
         return Ok(ExitCode::Internal);
     }
     let argv = cargo_dist_argv(target, &package.version);
     // stdout IS the manifest fragment; the build log stays on stderr, where a
     // failure's reason is the step's only evidence.
-    let Some((code, fragment)) = exec::piped_argv(&package.root, &argv, "", Diagnostics::Pass, &[])
-    else {
+    let Some((code, fragment)) = run(&package.root, &argv, Diagnostics::Pass) else {
         writeln!(err, "dist: could not start `dist`")?;
         return Ok(ExitCode::Internal);
     };
@@ -696,7 +739,7 @@ fn run_cargo_dist(
             return Ok(ExitCode::Internal);
         }
     }
-    let Some((archive, built)) = stage(package, target, stem, err)? else {
+    let Some((archive, built)) = stage(package, target, stem, err, run)? else {
         return Ok(ExitCode::Internal);
     };
     writeln!(out, "archive={}", pointer(&archive, &package.root))?;
@@ -723,6 +766,199 @@ fn run_cargo_dist(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    const TARGET: &str = "x86_64-unknown-linux-gnu";
+
+    /// A package rooted in a scratch directory, its binary built when `built`.
+    fn scratch_package(case: &str, built: bool) -> Package {
+        let root = crate::scratch::scratch(case);
+        let package = Package {
+            name: String::from("batten"),
+            version: String::from("1.0.0"),
+            bin: String::from("batten"),
+            target_dir: root.join("target"),
+            root,
+        };
+        if built {
+            let dir = package.target_dir.join(TARGET).join(PROFILE);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(binary_file(&package.bin, TARGET)), "bin").unwrap();
+        }
+        package
+    }
+
+    /// The exit codes a scripted build answers with, and what it writes.
+    #[derive(Clone, Copy)]
+    struct Script {
+        cargo: i32,
+        dist: i32,
+        dist_writes: bool,
+        tar: i32,
+        tar_writes: bool,
+    }
+
+    const GREEN: Script = Script {
+        cargo: 0,
+        dist: 0,
+        dist_writes: true,
+        tar: 0,
+        tar_writes: true,
+    };
+
+    /// Run `body` over a runner playing `script`, answering every call it was
+    /// asked, first word and second, in order.
+    fn scripted<T>(script: Script, body: impl FnOnce(Runner<'_>) -> T) -> (T, Vec<String>) {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let run = |dir: &Path, argv: &[String], _: Diagnostics| {
+            calls
+                .borrow_mut()
+                .push(argv.iter().take(2).cloned().collect::<Vec<_>>().join(" "));
+            match (argv[0].as_str(), argv.get(1).map(String::as_str)) {
+                ("cargo", _) => Some((script.cargo, String::new())),
+                ("dist", Some("build")) => {
+                    if script.dist_writes {
+                        let staged = cargo_dist_staging(dir);
+                        std::fs::create_dir_all(&staged).unwrap();
+                        let archive = cargo_dist_archive("batten", TARGET);
+                        std::fs::write(staged.join(cargo_dist_checksum(&archive)), "sum").unwrap();
+                        std::fs::write(staged.join(archive), "dist").unwrap();
+                    }
+                    Some((script.dist, String::from("{}")))
+                }
+                ("dist", _) => Some((0, String::new())),
+                ("tar", _) => {
+                    if script.tar_writes {
+                        std::fs::write(&argv[2], "tar").unwrap();
+                    }
+                    Some((script.tar, String::new()))
+                }
+                _ => None,
+            }
+        };
+        let answered = body(&run);
+        (answered, calls.into_inner())
+    }
+
+    #[test]
+    fn a_stage_archives_the_built_binary_or_says_what_is_missing() {
+        let package = scratch_package("dist-stage", true);
+        let stem = archive_stem("batten", "1.0.0", TARGET);
+        let staged = |script: Script| {
+            let mut err = Vec::new();
+            let (staged, _) = scripted(script, |run| {
+                stage(&package, TARGET, &stem, &mut err, run).unwrap()
+            });
+            (staged, String::from_utf8(err).unwrap())
+        };
+        let (archived, _) = staged(GREEN);
+        assert_eq!(
+            archived,
+            Some((
+                package.root.join(OUT_DIR).join(format!("{stem}.tar.gz")),
+                package.target_dir.join(TARGET).join(PROFILE).join("batten"),
+            ))
+        );
+        let (unwritten, err) = staged(Script {
+            tar_writes: false,
+            ..GREEN
+        });
+        assert_eq!(unwritten, None);
+        assert!(err.contains("no archive"), "{err}");
+        let (refused, _) = staged(Script {
+            tar: 1,
+            tar_writes: false,
+            ..GREEN
+        });
+        assert_eq!(refused, None);
+        let unbuilt = scratch_package("dist-stage-unbuilt", false);
+        let mut err = Vec::new();
+        let (missing, _) = scripted(GREEN, |run| {
+            stage(&unbuilt, TARGET, &stem, &mut err, run).unwrap()
+        });
+        assert_eq!(missing, None);
+        assert!(
+            String::from_utf8(err)
+                .unwrap()
+                .contains("expected a binary")
+        );
+    }
+
+    #[test]
+    fn a_preflight_clears_the_leg_s_outputs_and_stops_at_a_refused_fetch() {
+        let package = scratch_package("dist-preflight-scripted", false);
+        let left = package.root.join("left.tar.xz");
+        std::fs::write(&left, "stale").unwrap();
+        let absent = package.root.join("absent");
+        let (ready, calls) = scripted(GREEN, |run| {
+            preflight_with(&package.root, &[&left, &absent], &mut Vec::new(), run).unwrap()
+        });
+        assert!(ready);
+        assert!(!left.exists());
+        assert_eq!(calls, vec!["cargo fetch", "dist generate"]);
+        let (ready, calls) = scripted(Script { cargo: 1, ..GREEN }, |run| {
+            preflight_with(&package.root, &[], &mut Vec::new(), run).unwrap()
+        });
+        assert!(!ready);
+        assert_eq!(calls, vec!["cargo fetch"]);
+        let (refused, _) = scripted(GREEN, |run| {
+            preflight_with(&package.root, &[&package.root], &mut Vec::new(), run).is_err()
+        });
+        assert!(refused, "a directory where an output was is not cleared");
+    }
+
+    #[test]
+    fn a_cargo_dist_leg_reports_its_artifacts_only_when_each_step_held() {
+        let package = scratch_package("dist-cargo-dist", true);
+        let stem = archive_stem("batten", "1.0.0", TARGET);
+        let leg = |script: Script| {
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let (code, _) = scripted(script, |run| {
+                run_cargo_dist(TARGET, &package, &stem, (&mut out, &mut err), run).unwrap()
+            });
+            (code, String::from_utf8(out).unwrap())
+        };
+        let (code, out) = leg(GREEN);
+        assert_eq!(code, ExitCode::Success, "{out}");
+        assert!(
+            out.contains("dist_archive=") && out.contains("version=1.0.0\n"),
+            "{out}"
+        );
+        assert_eq!(leg(Script { dist: 2, ..GREEN }).0, ExitCode::Internal);
+        assert_eq!(
+            leg(Script {
+                dist_writes: false,
+                ..GREEN
+            })
+            .0,
+            ExitCode::Internal
+        );
+        assert_eq!(leg(Script { cargo: 1, ..GREEN }).0, ExitCode::Internal);
+    }
+
+    #[test]
+    fn a_build_that_held_is_staged_and_one_that_failed_is_not() {
+        let package = scratch_package("dist-build", true);
+        let build = |script: Script, tool: Option<BuildTool>| {
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let (code, _) = scripted(script, |run| {
+                build_and_stage(TARGET, &package, (tool, false), (&mut out, &mut err), run).unwrap()
+            });
+            (code, String::from_utf8(out).unwrap())
+        };
+        let (code, out) = build(GREEN, Some(BuildTool::Cargo));
+        assert_eq!(code, ExitCode::Success);
+        assert!(out.starts_with("archive=dist/"), "{out}");
+        let (code, out) = build(Script { cargo: 1, ..GREEN }, Some(BuildTool::Cargo));
+        assert_eq!((code, out.as_str()), (ExitCode::Internal, ""));
+        let (code, out) = build(GREEN, None);
+        assert_eq!(
+            (code, out.trim()),
+            (
+                ExitCode::Success,
+                archive_stem("batten", "1.0.0", TARGET).as_str()
+            )
+        );
+    }
 
     #[test]
     fn cargo_dist_s_own_names_are_spelled_once() {

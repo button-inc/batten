@@ -441,6 +441,7 @@ const MAX_REDIRECTS: u8 = 10;
 ///
 /// Lower case first, then upper, which is the order every other client in this
 /// class resolves them in.
+//MUTANT-SUITE crates/batten/tests/it/doctor.rs
 fn proxy_for(host: &str) -> Option<hyper::Uri> {
     let no_proxy = ["no_proxy", "NO_PROXY"]
         .into_iter()
@@ -663,14 +664,76 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
         let Some(next) = redirect_target(&target, answer.status, location.as_deref())? else {
             return Ok(answer);
         };
-        if !same_host(&target, &next) {
-            carried.retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
-        }
+        carried = carried_to(carried, &target, &next);
         target = next;
     }
     Err(anyhow::anyhow!(
         "fetch: more than {MAX_REDIRECTS} redirects"
     ))
+}
+
+/// The headers a hop from `from` to `next` carries: every one on the same
+/// host, and none but the credential's on another.
+///
+/// Apart from the exchange so the narrowing tests without a live HTTPS
+/// redirect, which the `https_only` transport gives a loopback no way to stage
+/// (CLOUD-2509).
+fn carried_to(headers: Vec<(String, String)>, from: &str, next: &str) -> Vec<(String, String)> {
+    if same_host(from, next) {
+        return headers;
+    }
+    headers
+        .into_iter()
+        .filter(|(name, _)| !name.eq_ignore_ascii_case("authorization"))
+        .collect()
+}
+
+/// The method a request goes out as: its body decides, unless `patch` (a body)
+/// or `delete` (none) overrides it.
+///
+/// The METHOD follows the body rather than being a second argument, so a
+/// caller cannot ask for a GET carrying bytes or a POST carrying none — two
+/// shapes a server answers differently and neither of which any caller here
+/// wants.
+///
+/// Every case is an arm of its own rather than a guard, so no arm can be
+/// dropped without the match failing to compile (CLOUD-2509).
+fn method_for(body: Option<&[u8]>, (patch, delete): (bool, bool)) -> hyper::Method {
+    match (body.is_some(), patch, delete) {
+        (true, true, _) => hyper::Method::PATCH,
+        (true, false, _) => hyper::Method::POST,
+        (false, _, true) => hyper::Method::DELETE,
+        (false, _, false) => hyper::Method::GET,
+    }
+}
+
+/// The headers a request is sent with: the caller's, after a default
+/// `User-Agent` unless the caller sent its own.
+///
+/// A DEFAULT `User-Agent`, BECAUSE SOME SERVERS REFUSE A REQUEST WITHOUT ONE
+/// AND SAY SO AS AN AUTHORIZATION FAILURE. Measured 2026-09-06 against
+/// `api.github.com`: a valid credential with no `User-Agent` answers **403**,
+/// byte-indistinguishable from a revoked token — so a caller probing a
+/// credential over this transport got a confident wrong answer about the
+/// credential rather than about its own request. The git-http endpoints
+/// `lease.rs` speaks to tolerate the omission, which is why nothing here had
+/// needed one before.
+///
+/// A caller's own header WINS: this is a floor, not a policy, and a consumer
+/// that must present a particular identity still can.
+fn sent_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
+    let mut sent = Vec::with_capacity(headers.len() + 1);
+    if !headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+    {
+        sent.push((
+            hyper::header::USER_AGENT.as_str().to_owned(),
+            concat!("batten/", env!("CARGO_PKG_VERSION")).to_owned(),
+        ));
+    }
+    sent.extend_from_slice(headers);
+    sent
 }
 
 /// Do two URLs name the same host, so a credential may follow?
@@ -785,38 +848,11 @@ async fn one_exchange(
     let client: Client<_, http_body_util::Full<hyper::body::Bytes>> =
         Client::builder(TokioExecutor::new()).build(https);
 
-    // The METHOD follows the body rather than being a second argument, so a
-    // caller cannot ask for a GET carrying bytes or a POST carrying none — two
-    // shapes a server answers differently and neither of which any caller here
-    // wants.
-    let mut request = hyper::Request::builder().uri(uri).method(match body {
-        Some(_) if patch => hyper::Method::PATCH,
-        Some(_) => hyper::Method::POST,
-        None if delete => hyper::Method::DELETE,
-        None => hyper::Method::GET,
-    });
-    // A DEFAULT `User-Agent`, BECAUSE SOME SERVERS REFUSE A REQUEST WITHOUT ONE
-    // AND SAY SO AS AN AUTHORIZATION FAILURE. Measured 2026-09-06 against
-    // `api.github.com`: a valid credential with no `User-Agent` answers **403**,
-    // byte-indistinguishable from a revoked token — so a caller probing a
-    // credential over this transport got a confident wrong answer about the
-    // credential rather than about its own request. The git-http endpoints
-    // `lease.rs` speaks to tolerate the omission, which is why nothing here had
-    // needed one before.
-    //
-    // A caller's own header WINS: this is a floor, not a policy, and a consumer
-    // that must present a particular identity still can.
-    if !headers
-        .iter()
-        .any(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
-    {
-        request = request.header(
-            hyper::header::USER_AGENT,
-            concat!("batten/", env!("CARGO_PKG_VERSION")),
-        );
-    }
-    for (name, value) in headers {
-        request = request.header(name.as_str(), value.as_str());
+    let mut request = hyper::Request::builder()
+        .uri(uri)
+        .method(method_for(body, (patch, delete)));
+    for (name, value) in sent_headers(headers) {
+        request = request.header(name, value);
     }
     let request = request
         .body(http_body_util::Full::new(
@@ -873,6 +909,51 @@ async fn one_exchange(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    fn pairs(raw: &[(&str, &str)]) -> Vec<(String, String)> {
+        raw.iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn a_credential_follows_a_redirect_only_on_the_same_host() {
+        let headers = pairs(&[("Authorization", "Bearer t"), ("Accept", "a")]);
+        assert_eq!(
+            carried_to(
+                headers.clone(),
+                "https://h.example/a",
+                "https://H.example/b"
+            ),
+            headers
+        );
+        assert_eq!(
+            carried_to(headers, "https://h.example/a", "https://cdn.example/b"),
+            pairs(&[("Accept", "a")])
+        );
+    }
+
+    #[test]
+    fn the_method_follows_the_body_unless_an_override_fits_it() {
+        let body: Option<&[u8]> = Some(b"{}");
+        assert_eq!(method_for(body, (true, false)), hyper::Method::PATCH);
+        assert_eq!(method_for(body, (false, true)), hyper::Method::POST);
+        assert_eq!(method_for(body, (false, false)), hyper::Method::POST);
+        assert_eq!(method_for(None, (false, true)), hyper::Method::DELETE);
+        assert_eq!(method_for(None, (true, false)), hyper::Method::GET);
+        assert_eq!(method_for(None, (false, false)), hyper::Method::GET);
+    }
+
+    #[test]
+    fn a_default_user_agent_is_sent_unless_the_caller_sent_one() {
+        let sent = sent_headers(&pairs(&[("Accept", "a")]));
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].0, "user-agent");
+        assert!(sent[0].1.starts_with("batten/"), "{sent:?}");
+        assert_eq!(sent[1], (String::from("Accept"), String::from("a")));
+        let own = pairs(&[("User-Agent", "mine/1")]);
+        assert_eq!(sent_headers(&own), own);
+    }
 
     #[test]
     fn the_vendored_provider_supports_the_default_protocol_versions() {

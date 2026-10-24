@@ -699,6 +699,133 @@ pub mod forge {
             assert!(!open_pulls_are_complete(&pulls(PAGE)));
             assert!(!open_pulls_are_complete(&pulls(PAGE + 1)));
         }
+
+        /// Each forge read over the fixture seam (CLOUD-2509): the wrapper's
+        /// own reading, not only the pure half beneath it.
+        #[test]
+        fn a_read_is_refused_unless_the_forge_answered_json() {
+            let dir = crate::rest::routed(
+                "bot-forge-get",
+                &[
+                    ("pulls/1", 200, r#"{"title":"t"}"#),
+                    ("pulls/2", 404, r#"{"title":"t"}"#),
+                    ("pulls/3", 200, "not json"),
+                ],
+            );
+            crate::rest::with_fixture(&dir, || {
+                assert_eq!(pull("o/r", "1").unwrap().title, "t");
+                assert!(pull("o/r", "2").is_err());
+                assert!(pull("o/r", "3").is_err());
+                assert!(pull("o/r", "4").is_err());
+            });
+        }
+
+        #[test]
+        fn the_listings_are_read_field_by_field() {
+            let dir = crate::rest::routed(
+                "bot-forge-listings",
+                &[
+                    (
+                        "pulls/7/files",
+                        200,
+                        r#"[{"filename":"a"},{"filename":""},{"other":1}]"#,
+                    ),
+                    (
+                        "pulls/7/commits",
+                        200,
+                        r#"[{"commit":{"message":"m1"}},{"commit":{"message":"m2"}}]"#,
+                    ),
+                    (
+                        "issues/9/comments",
+                        200,
+                        r#"[{"body":"x"},{"body":"synced CLOUD-1 here"}]"#,
+                    ),
+                    ("issues/8/comments", 200, r#"[{"body":"x"}]"#),
+                    (
+                        "issues?state=all",
+                        200,
+                        r#"[{"body":"none","number":1},
+                            {"pull_request":{},"body":"<!-- m7 -->","number":2},
+                            {"body":"<!-- m7 -->","number":3},
+                            {"body":"<!-- m6 -->"}]"#,
+                    ),
+                    (
+                        "pulls?state=open",
+                        200,
+                        r#"[{"number":4,"head":{"ref":"other","sha":"s4"},"title":"t4","body":"a"},
+                            {"number":5,"head":{"ref":"b","sha":"s5"},"title":"t5","body":"x\ty\nz"},
+                            {"head":{"ref":"nameless"}}]"#,
+                    ),
+                ],
+            );
+            crate::rest::with_fixture(&dir, || {
+                assert_eq!(files("o/r", "7").unwrap(), vec![String::from("a")]);
+                assert_eq!(commit_messages("o/r", "7").unwrap(), "m1\nm2");
+                assert_eq!(
+                    linkback("o/r", "9", "CLOUD-").unwrap(),
+                    "synced CLOUD-1 here"
+                );
+                assert_eq!(linkback("o/r", "8", "CLOUD-").unwrap(), "");
+                assert_eq!(mirror("o/r", "7", "<!-- m").unwrap().as_deref(), Some("3"));
+                assert_eq!(mirror("o/r", "6", "<!-- m").unwrap(), None);
+                assert_eq!(mirror("o/r", "5", "<!-- m").unwrap(), None);
+                assert_eq!(open_for("o/r", "b").unwrap().as_deref(), Some("5"));
+                assert_eq!(open_for("o/r", "nameless").unwrap(), None);
+                assert_eq!(open_for("o/r", "absent").unwrap(), None);
+                let open = open_pulls("o/r").unwrap();
+                assert_eq!(open.len(), 3);
+                assert_eq!(
+                    (
+                        open[1].number.as_str(),
+                        open[1].head_ref.as_str(),
+                        open[1].head_sha.as_str(),
+                        open[1].title.as_str(),
+                        open[1].body.as_str()
+                    ),
+                    ("5", "b", "s5", "t5", "x y z")
+                );
+            });
+        }
+
+        #[test]
+        fn a_write_answers_what_the_forge_accepted() {
+            let dir = crate::rest::routed(
+                "bot-forge-writes",
+                &[
+                    (
+                        "POST https://api.github.com/repos/o/r/issues",
+                        201,
+                        r#"{"number":42}"#,
+                    ),
+                    (
+                        "POST https://api.github.com/repos/o/blank/issues",
+                        201,
+                        "{}",
+                    ),
+                    (
+                        "POST https://api.github.com/repos/o/refused/issues",
+                        500,
+                        r#"{"number":1}"#,
+                    ),
+                    ("PATCH https://api.github.com/repos/o/r/pulls/7", 200, "{}"),
+                    (
+                        "PATCH https://api.github.com/repos/o/refused/pulls/7",
+                        422,
+                        "{}",
+                    ),
+                ],
+            );
+            crate::rest::with_fixture(&dir, || {
+                assert_eq!(open_issue("o/r", "t", "b").unwrap(), "42");
+                assert!(open_issue("o/blank", "t", "b").is_err());
+                assert!(open_issue("o/refused", "t", "b").is_err());
+                set_body("o/r", "7", "b").unwrap();
+                assert!(set_body("o/refused", "7", "b").is_err());
+            });
+            assert!(
+                crate::rest::asked(&dir).contains("PATCH https://api.github.com/repos/o/r/pulls/7")
+            );
+        }
     }
 }
 

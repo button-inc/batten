@@ -727,9 +727,14 @@ pub fn read_flight(
     })
 }
 
-/// The forge slug, or the could-not-look line printed and `None`.
-fn slug_or_say(verb: &str, err: &mut dyn std::io::Write) -> std::io::Result<Option<String>> {
-    let slug = crate::repo_slug(std::path::Path::new("."));
+/// The forge slug of the clone at `here`, or the could-not-look line printed
+/// and `None`.
+fn slug_or_say(
+    here: &std::path::Path,
+    verb: &str,
+    err: &mut dyn std::io::Write,
+) -> std::io::Result<Option<String>> {
+    let slug = crate::repo_slug(here);
     if slug.is_none() {
         writeln!(
             err,
@@ -739,9 +744,10 @@ fn slug_or_say(verb: &str, err: &mut dyn std::io::Write) -> std::io::Result<Opti
     Ok(slug)
 }
 
-/// The trunk's tracking ref and short name, or the could-not-look pointer.
-fn trunk() -> Result<(String, String), String> {
-    match crate::worktree::declared_trunk(std::path::Path::new(".")) {
+/// The trunk's tracking ref and short name in the clone at `here`, or the
+/// could-not-look pointer.
+fn trunk(here: &std::path::Path) -> Result<(String, String), String> {
+    match crate::worktree::declared_trunk(here) {
         Ok(Some(trunk)) => Ok((trunk.tracking, trunk.short)),
         Ok(None) => Err(crate::worktree::NO_TRUNK.to_owned()),
         Err(why) => Err(why.to_string()),
@@ -759,55 +765,56 @@ pub fn run_discard(
     out: &mut dyn std::io::Write,
     err: &mut dyn std::io::Write,
 ) -> anyhow::Result<crate::ExitCode> {
-    let Some(slug) = slug_or_say("discard", err)? else {
+    run_discard_in(std::path::Path::new("."), tag, out, err)
+}
+
+/// [`run_discard`] in the clone at `here`, whose forge remote names the
+/// repository.
+///
+/// The deletions are [`perform_discard`]'s, the one loop `cut` shares, rather
+/// than a second copy of it (CLOUD-2509).
+fn run_discard_in(
+    here: &std::path::Path,
+    tag: &str,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::ExitCode> {
+    let Some(slug) = slug_or_say(here, "discard", err)? else {
         return Ok(crate::ExitCode::Internal);
     };
     let get = |path: &str| crate::rest::get(path, None);
-    let found = match read_found(&slug, tag, &get) {
-        Ok(found) => found,
-        Err(why) => {
-            writeln!(err, "batten: release discard: could not look: {why}")?;
-            return Ok(crate::ExitCode::Internal);
+    match perform_discard(&slug, tag, &get) {
+        Discarded::Nothing => {
+            writeln!(
+                out,
+                "release discard: no release is tagged {tag}; nothing deleted"
+            )?;
+            Ok(crate::ExitCode::Success)
         }
-    };
-    let steps = match discard(&found) {
-        Ok(steps) => steps,
-        Err(why) => {
+        Discarded::Deleted => {
+            writeln!(out, "release discard: deleted the draft {tag} and its tag")?;
+            Ok(crate::ExitCode::Success)
+        }
+        Discarded::Refused(why) => {
             writeln!(err, "release discard: {tag}: {why}")?;
-            return Ok(crate::ExitCode::Violation);
+            Ok(crate::ExitCode::Violation)
         }
-    };
-    if steps.is_empty() {
-        writeln!(
-            out,
-            "release discard: no release is tagged {tag}; nothing deleted"
-        )?;
-        return Ok(crate::ExitCode::Success);
-    }
-    for step in steps {
-        let (path, gone_is_fine) = match step {
-            Step::DeleteRelease(id) => (format!("repos/{slug}/releases/{id}"), false),
-            Step::DeleteTag => (format!("repos/{slug}/git/refs/tags/{tag}"), true),
-        };
-        match crate::rest::delete(&path) {
-            Some(answer) if (200..300).contains(&answer.status) => {}
-            Some(answer) if gone_is_fine && matches!(answer.status, 404 | 422) => {}
-            Some(answer) => {
-                writeln!(
-                    err,
-                    "batten: release discard: could not delete {path}: the forge answered {}",
-                    answer.status
-                )?;
-                return Ok(crate::ExitCode::Internal);
-            }
-            None => {
-                writeln!(err, "batten: release discard: could not delete {path}")?;
-                return Ok(crate::ExitCode::Internal);
-            }
+        Discarded::Unread(why) => {
+            writeln!(err, "batten: release discard: could not look: {why}")?;
+            Ok(crate::ExitCode::Internal)
+        }
+        Discarded::Undeleted(path, Some(status)) => {
+            writeln!(
+                err,
+                "batten: release discard: could not delete {path}: the forge answered {status}"
+            )?;
+            Ok(crate::ExitCode::Internal)
+        }
+        Discarded::Undeleted(path, None) => {
+            writeln!(err, "batten: release discard: could not delete {path}")?;
+            Ok(crate::ExitCode::Internal)
         }
     }
-    writeln!(out, "release discard: deleted the draft {tag} and its tag")?;
-    Ok(crate::ExitCode::Success)
 }
 
 /// `batten release in-flight --workflow <file>...`: exit 0 when nothing is in
@@ -822,12 +829,13 @@ pub fn run_in_flight(
     out: &mut dyn std::io::Write,
     err: &mut dyn std::io::Write,
 ) -> anyhow::Result<crate::ExitCode> {
-    let Some(slug) = slug_or_say("in-flight", err)? else {
+    let here = std::path::Path::new(".");
+    let Some(slug) = slug_or_say(here, "in-flight", err)? else {
         return Ok(crate::ExitCode::Internal);
     };
     let get = |path: &str| crate::rest::get(path, None);
     let now = i64::try_from(crate::now_unix()).unwrap_or(i64::MAX);
-    let flight = trunk()
+    let flight = trunk(here)
         .and_then(|(_, short)| read_flight(&slug, (&short, workflows), now, LAND_HOLD_SECS, &get));
     match flight.map(|flight| in_flight(&flight)) {
         Ok(None) => {
@@ -846,9 +854,13 @@ pub fn run_in_flight(
 }
 
 /// `land`'s step (a) facts, read from the forge and the local clone.
-fn land_facts(slug: &str, tag: &str, sha: &str, get: Get<'_>) -> Result<LandFacts, String> {
-    let (tracking, _) = trunk()?;
-    let here = std::path::Path::new(".");
+fn land_facts(
+    here: &std::path::Path,
+    slug: &str,
+    (tag, sha): (&str, &str),
+    get: Get<'_>,
+) -> Result<LandFacts, String> {
+    let (tracking, _) = trunk(here)?;
     let read = read_release(slug, tag, get)?;
     let commit = match &read {
         Read::Absent => None,
@@ -904,11 +916,12 @@ pub fn run_land_state(
     out: &mut dyn std::io::Write,
     err: &mut dyn std::io::Write,
 ) -> anyhow::Result<crate::ExitCode> {
-    let Some(slug) = slug_or_say("land-state", err)? else {
+    let here = std::path::Path::new(".");
+    let Some(slug) = slug_or_say(here, "land-state", err)? else {
         return Ok(crate::ExitCode::Internal);
     };
     let get = |path: &str| crate::rest::get(path, None);
-    match land_facts(&slug, tag, sha, &get) {
+    match land_facts(here, &slug, (tag, sha), &get) {
         Ok(facts) => {
             writeln!(out, "{}", land_state(&facts).line())?;
             Ok(crate::ExitCode::Success)
@@ -945,7 +958,7 @@ pub fn run_guard(
     out: &mut dyn std::io::Write,
     err: &mut dyn std::io::Write,
 ) -> anyhow::Result<crate::ExitCode> {
-    let Some(slug) = slug_or_say("guard", err)? else {
+    let Some(slug) = slug_or_say(std::path::Path::new("."), "guard", err)? else {
         return Ok(crate::ExitCode::Internal);
     };
     let get = |path: &str| crate::rest::get(path, None);
@@ -999,13 +1012,18 @@ fn sha_in(answer: Option<crate::rest::Answer>, what: &str, key: &str) -> Result<
 }
 
 /// Whether vX is unusable, read from the forge and the local trunk.
-fn judge_unusable(slug: &str, tag: &str, get: Get<'_>) -> Result<Option<Unusable>, String> {
+fn judge_unusable(
+    here: &std::path::Path,
+    slug: &str,
+    tag: &str,
+    get: Get<'_>,
+) -> Result<Option<Unusable>, String> {
     let found = read_found(slug, tag, get)?;
     let reachable = match &found {
         Found::Published => {
-            let (tracking, _) = trunk()?;
+            let (tracking, _) = trunk(here)?;
             crate::release_verify::tag_commit(slug, tag, get).is_some_and(|commit| {
-                crate::git::is_ancestor(std::path::Path::new("."), &commit, &tracking)
+                crate::git::is_ancestor(here, &commit, &tracking)
                     .ok()
                     .flatten()
                     == Some(true)
@@ -1090,11 +1108,12 @@ pub fn run_bump_unusable(
     out: &mut dyn std::io::Write,
     err: &mut dyn std::io::Write,
 ) -> anyhow::Result<crate::ExitCode> {
-    let Some(slug) = slug_or_say("bump-unusable", err)? else {
+    let here = std::path::Path::new(".");
+    let Some(slug) = slug_or_say(here, "bump-unusable", err)? else {
         return Ok(crate::ExitCode::Internal);
     };
     let get = |path: &str| crate::rest::get(path, None);
-    let why = match judge_unusable(&slug, tag, &get) {
+    let why = match judge_unusable(here, &slug, tag, &get) {
         Ok(Some(why)) => why,
         Ok(None) => {
             writeln!(out, "usable {tag}")?;
@@ -1105,7 +1124,6 @@ pub fn run_bump_unusable(
             return Ok(crate::ExitCode::Internal);
         }
     };
-    let here = std::path::Path::new(".");
     let paths = ["Cargo.toml", "Cargo.lock", "batten.toml", changelog];
     let read = (|| -> Result<(String, Vec<String>), String> {
         let ref_path = format!("repos/{slug}/git/ref/heads/{branch}");
@@ -1190,14 +1208,15 @@ pub fn section(changelog: &str, version: &str) -> Option<String> {
     Some(body.join("\n").trim().to_owned())
 }
 
-/// Delete whatever `discard` says to for `tag`: `Ok(Ok(n))` deletions made,
-/// `Ok(Err(why))` a refusal, `Err` could-not-look.
-fn perform_discard(slug: &str, tag: &str, get: Get<'_>) -> Result<Result<usize, String>, String> {
-    let steps = match discard(&read_found(slug, tag, get)?) {
-        Ok(steps) => steps,
-        Err(why) => return Ok(Err(why)),
+/// Delete whatever `discard` says to for `tag`, stopping at the first deletion
+/// the forge refuses.
+fn perform_discard(slug: &str, tag: &str, get: Get<'_>) -> Discarded {
+    let steps = match read_found(slug, tag, get).map(|found| discard(&found)) {
+        Ok(Ok(steps)) if steps.is_empty() => return Discarded::Nothing,
+        Ok(Ok(steps)) => steps,
+        Ok(Err(why)) => return Discarded::Refused(why),
+        Err(why) => return Discarded::Unread(why),
     };
-    let made = steps.len();
     for step in steps {
         let (path, gone_is_fine) = match step {
             Step::DeleteRelease(id) => (format!("repos/{slug}/releases/{id}"), false),
@@ -1206,11 +1225,29 @@ fn perform_discard(slug: &str, tag: &str, get: Get<'_>) -> Result<Result<usize, 
         match crate::rest::delete(&path) {
             Some(answer) if (200..300).contains(&answer.status) => {}
             Some(answer) if gone_is_fine && matches!(answer.status, 404 | 422) => {}
-            Some(answer) => return Err(format!("{path} answered {}", answer.status)),
-            None => return Err(format!("{path} did not answer")),
+            Some(answer) => return Discarded::Undeleted(path, Some(answer.status)),
+            None => return Discarded::Undeleted(path, None),
         }
     }
-    Ok(Ok(made))
+    Discarded::Deleted
+}
+
+/// What [`perform_discard`] did. The `discard` verb says a line for each;
+/// `cut` goes on past `Nothing` and `Deleted`, refuses on `Refused`, and could
+/// not look on the other two.
+#[derive(Debug, PartialEq, Eq)]
+enum Discarded {
+    /// No release is tagged; nothing to delete.
+    Nothing,
+    /// Every step was made; a tag already gone (404 or 422) counts as made.
+    Deleted,
+    /// `discard` refused, naming why.
+    Refused(String),
+    /// The release could not be read.
+    Unread(String),
+    /// The first deletion the forge refused: its path and the status it
+    /// answered, `None` where it did not answer. A draft already gone is one.
+    Undeleted(String, Option<u16>),
 }
 
 /// `batten release cut <tag> --sha <sha> --changelog <path> --workflow <file>`
@@ -1226,11 +1263,22 @@ fn perform_discard(slug: &str, tag: &str, get: Get<'_>) -> Result<Result<usize, 
 pub fn run_cut(
     tag: &str,
     sha: &str,
+    files: (&str, &str, Option<&str>),
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::ExitCode> {
+    run_cut_in(std::path::Path::new("."), (tag, sha), files, out, err)
+}
+
+/// [`run_cut`] in the clone at `here`.
+fn run_cut_in(
+    here: &std::path::Path,
+    (tag, sha): (&str, &str),
     (changelog, workflow, land_workflow): (&str, &str, Option<&str>),
     out: &mut dyn std::io::Write,
     err: &mut dyn std::io::Write,
 ) -> anyhow::Result<crate::ExitCode> {
-    let Some(slug) = slug_or_say("cut", err)? else {
+    let Some(slug) = slug_or_say(here, "cut", err)? else {
         return Ok(crate::ExitCode::Internal);
     };
     let get = |path: &str| crate::rest::get(path, None);
@@ -1244,7 +1292,7 @@ pub fn run_cut(
         }
     };
     let cut = (|| -> Result<Result<Option<String>, String>, String> {
-        let (_, trunk) = trunk()?;
+        let (_, trunk) = trunk(here)?;
         // CUT OR LAND, BEFORE ANYTHING IS DISCARDED (CLOUD-2287): the bake's own
         // CI on the release branch brings this job back at B, and cutting B
         // again would discard the draft B was baked from, forever.
@@ -1253,17 +1301,22 @@ pub fn run_cut(
             && target != sha
             && let Ok(sums) = release_sums(&slug, tag, &get)?
         {
-            let head = read_head(std::path::Path::new("."), sha)?;
+            let head = read_head(here, sha)?;
             if cut_or_land(Some(&target), &head, tag, &sums) == CutOrLand::Land {
                 dispatch(land, &trunk)?;
                 return Ok(Ok(Some(land.to_owned())));
             }
         }
-        if let Err(why) = perform_discard(&slug, tag, &get)? {
-            return Ok(Err(why));
+        match perform_discard(&slug, tag, &get) {
+            Discarded::Nothing | Discarded::Deleted => {}
+            Discarded::Refused(why) => return Ok(Err(why)),
+            Discarded::Unread(why) => return Err(why),
+            Discarded::Undeleted(path, Some(status)) => {
+                return Err(format!("{path} answered {status}"));
+            }
+            Discarded::Undeleted(path, None) => return Err(format!("{path} did not answer")),
         }
-        let text = crate::git::show(std::path::Path::new("."), sha, changelog)
-            .map_err(|why| why.to_string())?;
+        let text = crate::git::show(here, sha, changelog).map_err(|why| why.to_string())?;
         let Some(notes) = section(&text, tag.trim_start_matches('v')) else {
             return Ok(Err(format!(
                 "{changelog} at {sha} has no section for {tag}"
@@ -1410,6 +1463,18 @@ pub const BOOTSTRAP_FILE: &str = "install.sh";
 /// Only a failed write to `out` or `err`.
 pub fn run_bake(
     tag: &str,
+    onto: (Option<&str>, Option<&str>),
+    write_only: bool,
+    out: &mut dyn std::io::Write,
+    err: &mut dyn std::io::Write,
+) -> anyhow::Result<crate::ExitCode> {
+    run_bake_in(std::path::Path::new("."), tag, onto, write_only, out, err)
+}
+
+/// [`run_bake`] in the clone at `here`.
+fn run_bake_in(
+    here: &std::path::Path,
+    tag: &str,
     (sha, branch): (Option<&str>, Option<&str>),
     write_only: bool,
     out: &mut dyn std::io::Write,
@@ -1425,7 +1490,7 @@ pub fn run_bake(
             )));
         }
     };
-    let Some(slug) = slug_or_say("bake", err)? else {
+    let Some(slug) = slug_or_say(here, "bake", err)? else {
         return Ok(crate::ExitCode::Internal);
     };
     let get = |path: &str| crate::rest::get(path, None);
@@ -1447,17 +1512,12 @@ pub fn run_bake(
         &lock,
     );
     let Some((sha, branch)) = onto else {
-        let root = crate::git::worktree_root(std::path::Path::new("."))?;
-        for (path, text) in [
-            (crate::install::LOCK_FILE, &locked),
-            (BOOTSTRAP_FILE, &script),
-        ] {
-            crate::durable::replace(root.join(path), text)?;
-            if path == BOOTSTRAP_FILE {
-                crate::engine::make_executable(&root.join(path))?;
-            }
-            writeln!(out, "{path}")?;
-        }
+        let root = crate::git::worktree_root(here)?;
+        crate::durable::replace(root.join(crate::install::LOCK_FILE), &locked)?;
+        writeln!(out, "{}", crate::install::LOCK_FILE)?;
+        crate::durable::replace(root.join(BOOTSTRAP_FILE), &script)?;
+        crate::engine::make_executable(&root.join(BOOTSTRAP_FILE))?;
+        writeln!(out, "{BOOTSTRAP_FILE}")?;
         return Ok(crate::ExitCode::Success);
     };
     let files = [
@@ -1552,6 +1612,468 @@ mod tests {
     }
 
     const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    /// The slug `GH_REPO` declares, which outranks any remote, so a runner
+    /// that sets it is answered too.
+    fn declared_repo() -> Option<String> {
+        std::env::var("GH_REPO")
+            .ok()
+            .filter(|declared| !declared.trim().is_empty())
+    }
+
+    /// A clone whose `origin` names `o/r` with `main` its default branch:
+    /// `commits` made in order, each adding its files to what the last one
+    /// tracked, and `origin/main` at commit `main_at`. Answers the clone and
+    /// each commit's sha (CLOUD-2509).
+    fn clone_of(
+        case: &str,
+        commits: &[&[(&str, &str)]],
+        main_at: usize,
+    ) -> (std::path::PathBuf, Vec<String>) {
+        let dir = crate::scratch::scratch(case);
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        let mut tracked: Vec<String> = Vec::new();
+        let mut shas = Vec::new();
+        for (n, files) in commits.iter().enumerate() {
+            for (path, text) in *files {
+                std::fs::write(dir.join(path), text).unwrap();
+                if !tracked.iter().any(|known| known == path) {
+                    tracked.push((*path).to_owned());
+                }
+            }
+            crate::gitwrite::commit_paths(&dir, &tracked, &format!("commit {n}")).unwrap();
+            shas.push(crate::git::resolve_ref(&dir, "HEAD").unwrap().unwrap());
+        }
+        for (key, value) in [
+            ("remote.origin.url", "https://github.com/o/r.git"),
+            ("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"),
+            ("user.name", "t"),
+            ("user.email", "t@example.com"),
+        ] {
+            crate::git::set_config_local(&dir, key, value).unwrap();
+        }
+        crate::gitwrite::set_ref(&dir, "refs/remotes/origin/main", &shas[main_at]).unwrap();
+        std::fs::write(
+            dir.join(".git/refs/remotes/origin/HEAD"),
+            "ref: refs/remotes/origin/main\n",
+        )
+        .unwrap();
+        (dir, shas)
+    }
+
+    fn rest_get(path: &str) -> Option<crate::rest::Answer> {
+        crate::rest::get(path, None)
+    }
+
+    #[test]
+    fn the_slug_and_the_trunk_are_the_clone_s_own() {
+        let (dir, _) = clone_of("release-state-clone", &[&[("a", "1")]], 0);
+        let mut err = Vec::new();
+        assert_eq!(
+            slug_or_say(&dir, "x", &mut err).unwrap(),
+            Some(declared_repo().unwrap_or_else(|| String::from("o/r")))
+        );
+        assert!(err.is_empty());
+        assert_eq!(
+            trunk(&dir),
+            Ok((
+                String::from("refs/remotes/origin/main"),
+                String::from("main")
+            ))
+        );
+        let bare = crate::scratch::scratch("release-state-no-clone");
+        let declared = declared_repo();
+        assert_eq!(slug_or_say(&bare, "x", &mut err).unwrap(), declared);
+        assert_eq!(
+            String::from_utf8(err)
+                .unwrap()
+                .contains("release x: could not look"),
+            declared.is_none()
+        );
+        assert!(trunk(&bare).is_err());
+    }
+
+    /// A draft `v1` (id 5), its release deleted with `release` and its tag
+    /// with `tag`.
+    fn discarding(case: &str, release: u16, tag: u16) -> std::path::PathBuf {
+        crate::rest::routed(
+            case,
+            &[
+                ("releases/tags/v1", 404, "{}"),
+                (
+                    "releases?per_page",
+                    200,
+                    r#"[{"tag_name":"v0","draft":true,"id":4},{"tag_name":"v1","draft":true,"id":5}]"#,
+                ),
+                ("/releases/5", release, ""),
+                ("/git/refs/tags/v1", tag, ""),
+            ],
+        )
+    }
+
+    #[test]
+    fn a_discard_deletes_the_draft_and_tolerates_only_a_tag_already_gone() {
+        let over = |case: &str, release: u16, tag: u16| {
+            crate::rest::with_fixture(&discarding(case, release, tag), || {
+                perform_discard("o/r", "v1", &rest_get)
+            })
+        };
+        assert_eq!(over("discard-gone-tag", 204, 422), Discarded::Deleted);
+        assert_eq!(over("discard-404-tag", 200, 404), Discarded::Deleted);
+        let undeleted = |found: Discarded| match found {
+            Discarded::Undeleted(path, status) => Some((path.contains("/tags/"), status)),
+            _ => None,
+        };
+        assert_eq!(
+            undeleted(over("discard-gone-release", 404, 204)),
+            Some((false, Some(404)))
+        );
+        assert_eq!(
+            undeleted(over("discard-refused-release", 500, 204)),
+            Some((false, Some(500)))
+        );
+        assert_eq!(
+            undeleted(over("discard-refused-tag", 204, 500)),
+            Some((true, Some(500)))
+        );
+        let absent = crate::rest::routed(
+            "discard-absent",
+            &[
+                ("releases/tags/v1", 404, "{}"),
+                ("releases?per_page", 200, "[]"),
+            ],
+        );
+        assert_eq!(
+            crate::rest::with_fixture(&absent, || perform_discard("o/r", "v1", &rest_get)),
+            Discarded::Nothing
+        );
+        let published =
+            crate::rest::routed("discard-published", &[("releases/tags/v1", 200, "{}")]);
+        assert!(matches!(
+            crate::rest::with_fixture(&published, || perform_discard("o/r", "v1", &rest_get)),
+            Discarded::Refused(_)
+        ));
+    }
+
+    #[test]
+    fn the_discard_verb_reports_each_outcome() {
+        let (dir, _) = clone_of("release-discard-clone", &[&[("a", "1")]], 0);
+        let run = |fixture: &std::path::Path| {
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let code = crate::rest::with_fixture(fixture, || {
+                run_discard_in(&dir, "v1", &mut out, &mut err).unwrap()
+            });
+            (
+                code,
+                String::from_utf8(out).unwrap(),
+                String::from_utf8(err).unwrap(),
+            )
+        };
+        let (code, out, _) = run(&discarding("discard-verb-draft", 204, 204));
+        assert_eq!(
+            (code, out.as_str()),
+            (
+                crate::ExitCode::Success,
+                "release discard: deleted the draft v1 and its tag\n"
+            )
+        );
+        let absent = crate::rest::routed(
+            "discard-verb-absent",
+            &[
+                ("releases/tags/v1", 404, "{}"),
+                ("releases?per_page", 200, "[]"),
+            ],
+        );
+        let (code, out, _) = run(&absent);
+        assert_eq!(code, crate::ExitCode::Success);
+        assert!(out.contains("nothing deleted"), "{out}");
+        let published =
+            crate::rest::routed("discard-verb-published", &[("releases/tags/v1", 200, "{}")]);
+        assert_eq!(run(&published).0, crate::ExitCode::Violation);
+        let (code, _, err) = run(&discarding("discard-verb-refused", 500, 204));
+        assert_eq!(code, crate::ExitCode::Internal);
+        assert!(
+            err.starts_with("batten: release discard: could not delete repos/"),
+            "{err}"
+        );
+        assert!(err.ends_with(": the forge answered 500\n"), "{err}");
+    }
+
+    #[test]
+    fn the_land_facts_relate_the_release_to_the_local_trunk() {
+        let (dir, shas) = clone_of(
+            "release-land-facts",
+            &[&[("CHANGELOG.md", "a")], &[("CHANGELOG.md", "b")]],
+            1,
+        );
+        let (a, b) = (shas[0].as_str(), shas[1].as_str());
+        let published = crate::rest::routed(
+            "land-facts-published",
+            &[
+                ("releases/tags/v1", 200, r#"{"tag_name":"v1"}"#),
+                (
+                    "git/ref/tags/v1",
+                    200,
+                    &format!(r#"{{"object":{{"sha":"{a}","type":"commit"}}}}"#),
+                ),
+            ],
+        );
+        let facts =
+            crate::rest::with_fixture(&published, || land_facts(&dir, "o/r", ("v1", b), &rest_get))
+                .unwrap();
+        assert_eq!(facts.relation, Relation::MainAhead);
+        assert_eq!(facts.head, None);
+        let listing = format!(
+            r#"[{{"tag_name":"v1","draft":true,"id":5,"target_commitish":"{a}",
+                 "assets":[{{"id":6,"name":"other"}},{{"id":7,"name":"SHA256SUMS"}}]}}]"#
+        );
+        let draft = crate::rest::routed(
+            "land-facts-draft",
+            &[
+                ("releases/tags/v1", 404, "{}"),
+                ("releases?per_page", 200, &listing),
+                ("releases/assets/7", 200, "sums"),
+            ],
+        );
+        let moved =
+            crate::rest::with_fixture(&draft, || land_facts(&dir, "o/r", ("v1", b), &rest_get))
+                .unwrap();
+        assert_eq!(moved.relation, Relation::MainAhead);
+        assert_eq!(moved.head.map(|head| head.parent), Some(Some(a.to_owned())));
+        assert_eq!(moved.draft_sums.as_deref(), Some("sums"));
+        let at_target =
+            crate::rest::with_fixture(&draft, || land_facts(&dir, "o/r", ("v1", a), &rest_get))
+                .unwrap();
+        assert_eq!((at_target.head, at_target.draft_sums), (None, None));
+    }
+
+    #[test]
+    fn a_published_release_is_burned_only_where_the_trunk_cannot_reach_its_tag() {
+        let (dir, shas) = clone_of(
+            "release-judge",
+            &[&[("a", "1")], &[("a", "2")], &[("a", "3")]],
+            1,
+        );
+        let judged = |case: &str, commit: &str| {
+            let tagged = format!(r#"{{"object":{{"sha":"{commit}","type":"commit"}}}}"#);
+            let fixture = crate::rest::routed(
+                case,
+                &[
+                    ("releases/tags/v1", 200, "{}"),
+                    ("git/ref/tags/v1", 200, &tagged),
+                ],
+            );
+            crate::rest::with_fixture(&fixture, || judge_unusable(&dir, "o/r", "v1", &rest_get))
+        };
+        assert_eq!(judged("judge-reached", &shas[0]), Ok(None));
+        assert_eq!(judged("judge-burned", &shas[2]), Ok(Some(Unusable::Burned)));
+    }
+
+    /// The forge's git-data API accepting every write onto `head`.
+    fn writing(case: &str, head: &str, moved: u16) -> std::path::PathBuf {
+        crate::rest::routed(
+            case,
+            &[
+                (
+                    &format!("git/commits/{head}"),
+                    200,
+                    r#"{"tree":{"sha":"t"}}"#,
+                ),
+                ("git/blobs", 201, r#"{"sha":"b"}"#),
+                ("git/trees", 201, r#"{"sha":"t2"}"#),
+                ("git/commits", 201, r#"{"sha":"c"}"#),
+                ("git/refs/heads/", moved, "{}"),
+            ],
+        )
+    }
+
+    #[test]
+    fn a_commit_onto_a_branch_answers_the_commit_the_forge_made() {
+        let files = [("x", "text", "100644")];
+        let made = |case: &str, moved: u16| {
+            crate::rest::with_fixture(&writing(case, "h", moved), || {
+                commit_onto("o/r", ("rel", "h"), &files, "m", &rest_get)
+            })
+        };
+        assert_eq!(made("commit-onto", 200), Ok(String::from("c")));
+        assert!(made("commit-onto-refused", 422).is_err());
+    }
+
+    #[test]
+    fn a_cut_drafts_at_the_head_and_dispatches_the_build() {
+        let (dir, shas) = clone_of(
+            "release-cut",
+            &[&[("CHANGELOG.md", "## [1.0.0]\nnotes\n## [0.9.0]\nold\n")]],
+            0,
+        );
+        let cut = |case: &str, dispatched: u16| {
+            let fixture = crate::rest::routed(
+                case,
+                &[
+                    ("releases/tags/v1.0.0", 404, "{}"),
+                    ("releases?per_page", 200, "[]"),
+                    ("actions/workflows/ra.yml/dispatches", dispatched, ""),
+                    (
+                        "POST https://api.github.com/repos/",
+                        201,
+                        r#"{"tag_name":"v1.0.0"}"#,
+                    ),
+                ],
+            );
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let code = crate::rest::with_fixture(&fixture, || {
+                run_cut_in(
+                    &dir,
+                    ("v1.0.0", &shas[0]),
+                    ("CHANGELOG.md", "ra.yml", None),
+                    &mut out,
+                    &mut err,
+                )
+                .unwrap()
+            });
+            (code, String::from_utf8(out).unwrap(), fixture)
+        };
+        let (code, out, fixture) = cut("cut-dispatched", 204);
+        assert_eq!(code, crate::ExitCode::Success, "{out}");
+        assert!(out.contains("v1.0.0 drafted at"), "{out}");
+        let drafted = std::fs::read_to_string(fixture.join("route.3.request")).unwrap();
+        assert!(
+            drafted.contains("notes") && !drafted.contains("old"),
+            "{drafted}"
+        );
+        assert_eq!(cut("cut-refused", 500).0, crate::ExitCode::Internal);
+    }
+
+    /// A release whose `SHA256SUMS` lists every bootstrap archive of `tag`.
+    fn sums_of(tag: &str) -> String {
+        use std::fmt::Write as _;
+        let mut sums = String::new();
+        for target in crate::install::TARGETS {
+            let stem = crate::dist::archive_stem(
+                env!("CARGO_PKG_NAME"),
+                tag.trim_start_matches('v'),
+                target,
+            );
+            let _ = writeln!(
+                sums,
+                "{}  {stem}{}",
+                "a".repeat(64),
+                crate::dist::archive_ext(target)
+            );
+        }
+        sums
+    }
+
+    #[test]
+    fn a_cut_of_the_draft_target_s_bake_lands_it_instead() {
+        let sums = sums_of("v1.0.0");
+        let lock = crate::install::Lock::from_sums(env!("CARGO_PKG_NAME"), "v1.0.0", &sums)
+            .unwrap()
+            .render();
+        let (dir, shas) = clone_of(
+            "release-cut-bake",
+            &[
+                &[("CHANGELOG.md", "## [1.0.0]\nnotes\n")],
+                &[
+                    (crate::install::LOCK_FILE, &lock),
+                    (BOOTSTRAP_FILE, "#!/bin/sh\n"),
+                ],
+            ],
+            0,
+        );
+        let listing = format!(
+            r#"[{{"tag_name":"v1.0.0","draft":true,"id":5,"target_commitish":"{}",
+                 "assets":[{{"id":7,"name":"SHA256SUMS"}}]}}]"#,
+            shas[0]
+        );
+        let fixture = crate::rest::routed(
+            "cut-bake",
+            &[
+                ("releases/tags/v1.0.0", 404, "{}"),
+                ("releases?per_page", 200, &listing),
+                ("releases/assets/7", 200, &sums),
+                ("actions/workflows/rl.yml/dispatches", 204, ""),
+            ],
+        );
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = crate::rest::with_fixture(&fixture, || {
+            run_cut_in(
+                &dir,
+                ("v1.0.0", &shas[1]),
+                ("CHANGELOG.md", "ra.yml", Some("rl.yml")),
+                &mut out,
+                &mut err,
+            )
+            .unwrap()
+        });
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(code, crate::ExitCode::Success, "{out}");
+        assert!(out.contains("rl.yml dispatched"), "{out}");
+    }
+
+    /// A published `v1.0.0` carrying `SHA256SUMS` for every bootstrap archive.
+    fn published_with_sums(case: &str, extra: &[(&str, u16, &str)]) -> std::path::PathBuf {
+        let sums = sums_of("v1.0.0");
+        let mut routes = vec![
+            (
+                "releases/tags/v1.0.0",
+                200,
+                r#"{"tag_name":"v1.0.0","draft":false,"assets":[{"id":7,"name":"SHA256SUMS"}]}"#,
+            ),
+            ("releases/download/v1.0.0/SHA256SUMS", 200, sums.as_str()),
+        ];
+        routes.extend_from_slice(extra);
+        crate::rest::routed(case, &routes)
+    }
+
+    #[test]
+    fn a_bake_writes_the_lock_and_an_executable_bootstrap_or_commits_them() {
+        let (dir, shas) = clone_of("release-bake", &[&[("a", "1")]], 0);
+        let fixture = published_with_sums("bake-write", &[]);
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = crate::rest::with_fixture(&fixture, || {
+            run_bake_in(&dir, "v1.0.0", (None, None), true, &mut out, &mut err).unwrap()
+        });
+        assert_eq!(code, crate::ExitCode::Success);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "install.lock\ninstall.sh\n"
+        );
+        assert!(
+            std::fs::read_to_string(dir.join(crate::install::LOCK_FILE))
+                .unwrap()
+                .contains("\ntag v1.0.0\n")
+        );
+        assert!(dir.join(BOOTSTRAP_FILE).is_file());
+        let head = shas[0].as_str();
+        let commits = format!("git/commits/{head}");
+        let fixture = published_with_sums(
+            "bake-commit",
+            &[
+                (&commits, 200, r#"{"tree":{"sha":"t"}}"#),
+                ("git/blobs", 201, r#"{"sha":"b"}"#),
+                ("git/trees", 201, r#"{"sha":"t2"}"#),
+                ("git/commits", 201, r#"{"sha":"c"}"#),
+                ("git/refs/heads/rel", 200, "{}"),
+            ],
+        );
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = crate::rest::with_fixture(&fixture, || {
+            run_bake_in(
+                &dir,
+                "v1.0.0",
+                (Some(head), Some("rel")),
+                false,
+                &mut out,
+                &mut err,
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            (code, String::from_utf8(out).unwrap().as_str()),
+            (crate::ExitCode::Success, "c\n")
+        );
+    }
 
     #[test]
     fn a_full_sha_is_forty_hex_digits() {

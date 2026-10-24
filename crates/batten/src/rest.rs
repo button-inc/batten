@@ -731,9 +731,9 @@ pub fn download(path: &str) -> Option<(u16, Vec<u8>)> {
     } else {
         format!("{API}/{path}")
     };
-    if let Some(dir) = std::env::var_os(FIXTURE) {
+    if let Some(dir) = fixture_dir() {
         let answer = from_fixture(
-            std::path::Path::new(&dir),
+            &dir,
             &Request {
                 method: "GET",
                 url: &url,
@@ -784,6 +784,46 @@ pub fn patch_json(path: &str, body: &serde_json::Value) -> Option<Answer> {
 /// themselves.
 const FIXTURE: &str = "BATTEN_REST_FIXTURE";
 
+thread_local! {
+    /// The fixture directory [`with_fixture`] scoped to this thread, if any.
+    static SCOPED: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `body` with every exchange on this thread answered from the fixture
+/// directory `dir`, as `BATTEN_REST_FIXTURE` naming `dir` would answer it.
+///
+/// **THE SAME SEAM, REACHABLE IN PROCESS** (CLOUD-2509). A library caller
+/// cannot set the environment (this crate forbids the `unsafe` `set_var`
+/// needs), so a verb's forge half was testable only from a spawned binary and
+/// its unit tier reached none of it. Thread-scoped rather than process-wide,
+/// so cases running side by side never answer from each other's directory; a
+/// thread the body spawns sees no fixture, which is why the threaded readers
+/// take their reads as an input instead (`land::Waiting`). It opens nothing
+/// the environment variable does not: the answers are files the caller wrote.
+///
+/// The previous scope is restored on the way out, unwinding included, so a
+/// case that panics leaves no fixture behind for the next one on the thread.
+pub fn with_fixture<T>(dir: &std::path::Path, body: impl FnOnce() -> T) -> T {
+    /// Puts the scope it replaced back when dropped.
+    struct Restore(Option<std::path::PathBuf>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SCOPED.with(|scoped| scoped.replace(self.0.take()));
+        }
+    }
+    let _restore = Restore(SCOPED.with(|scoped| scoped.replace(Some(dir.to_path_buf()))));
+    body()
+}
+
+/// The fixture directory this exchange answers from: [`with_fixture`]'s scope,
+/// else `BATTEN_REST_FIXTURE`.
+fn fixture_dir() -> Option<std::path::PathBuf> {
+    SCOPED
+        .with(|scoped| scoped.borrow().clone())
+        .or_else(|| std::env::var_os(FIXTURE).map(std::path::PathBuf::from))
+}
+
 /// One GET of `path` answered from the fixture directory `dir`, as [`get`]
 /// answers it when `BATTEN_REST_FIXTURE` names `dir` — for a library caller
 /// that cannot set the environment (this crate forbids the `unsafe` that
@@ -800,6 +840,31 @@ pub fn fixture_get(dir: &std::path::Path, path: &str) -> Option<Answer> {
         None,
         crate::now_unix(),
     )
+}
+
+/// A fixture directory for [`with_fixture`] answering by endpoint: each
+/// `(needle, status, body)` answers the first request whose `<METHOD> <url>`
+/// contains `needle`, and a request no needle matches finds no answer.
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+pub(crate) fn routed(case: &str, routes: &[(&str, u16, &str)]) -> std::path::PathBuf {
+    use std::fmt::Write as _;
+    let dir = crate::scratch::scratch(case);
+    let mut table = String::new();
+    for (n, (needle, status, body)) in routes.iter().enumerate() {
+        let file = format!("route.{n}");
+        std::fs::write(dir.join(&file), format!("HTTP/1.1 {status} X\n\n{body}"))
+            .expect("a scratch dir takes a fixture");
+        let _ = writeln!(table, "{needle}\t{file}");
+    }
+    std::fs::write(dir.join("routes"), table).expect("a scratch dir takes a fixture");
+    dir
+}
+
+/// What [`routed`]'s fixture was asked, one `<METHOD> <url>` per line.
+#[cfg(test)]
+pub(crate) fn asked(dir: &std::path::Path) -> String {
+    std::fs::read_to_string(dir.join("args")).unwrap_or_default()
 }
 
 /// One request as the fixture seam sees it.
@@ -940,9 +1005,9 @@ fn method_of(body: Option<&[u8]>, chosen: Method) -> &'static str {
 fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method) -> Option<Answer> {
     let now = crate::now_unix();
     let url = format!("{API}/{path}");
-    if let Some(dir) = std::env::var_os(FIXTURE) {
+    if let Some(dir) = fixture_dir() {
         return from_fixture(
-            std::path::Path::new(&dir),
+            &dir,
             &Request {
                 method: method_of(body, chosen),
                 url: &url,
@@ -1411,6 +1476,26 @@ mod tests {
         assert_eq!(method_of(None, Method::Delete), "DELETE");
         assert_eq!(method_of(None, Method::ByBody), "GET");
         assert_eq!(method_of(None, Method::Patch), "GET");
+    }
+
+    /// A scoped fixture answers this thread's exchanges, and nothing once its
+    /// scope has ended, by return or by panic (CLOUD-2509).
+    #[test]
+    fn a_scoped_fixture_answers_inside_its_scope_and_nowhere_after() {
+        let dir = routed("rest-scoped", &[("repos/o/r", 200, "scoped")]);
+        let scoped = || SCOPED.with(|scoped| scoped.borrow().clone());
+        assert_eq!(scoped(), None);
+        let inside = with_fixture(&dir, || get("repos/o/r", None).map(|answer| answer.body));
+        assert_eq!(inside.as_deref(), Some("scoped"));
+        assert_eq!(scoped(), None);
+        let unwound =
+            std::panic::catch_unwind(|| with_fixture(&dir, || -> u8 { panic!("mid-case") }));
+        assert!(unwound.is_err());
+        assert_eq!(scoped(), None);
+        assert_eq!(
+            with_fixture(&dir, || download("repos/o/r")),
+            Some((200, b"scoped".to_vec()))
+        );
     }
 
     #[test]
