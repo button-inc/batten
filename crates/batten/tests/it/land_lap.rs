@@ -549,14 +549,16 @@ reason = "dispatch the code-review skill"
     );
 }
 
-/// **ONLY A PUSH THAT BUYS A RUN OWES ITS REVIEWS** (CLOUD-2436).
+/// **A PUSH NEVER LANDS A NEW HEAD ON A READY PULL REQUEST** (CLOUD-1564,
+/// CLOUD-2436).
 ///
-/// Through `land_push_owes`, the question the Push row's precheck asks: a whole
+/// Through `land_push_gate`, the question the Push row's precheck asks: a whole
 /// lap needs a forge this tier does not stand up, so the forge read is handed
-/// in. On `main` the lap's push asked nothing, so a new head on an
-/// already-ready pull request started CI with no review on file.
+/// in. A ready pull request at another head is redrafted whatever receipts are
+/// on file, so the push buys no run and the Ready after it asks them. Only a
+/// forge that cannot say asks the receipts here.
 #[test]
-fn the_laps_push_is_refused_by_a_missing_review_receipt() {
+fn the_laps_push_redrafts_a_ready_pull_request_at_another_head() {
     let dir = common::Fixture::new("land-lap-push-receipt")
         .config(
             r#"version = 1
@@ -592,44 +594,56 @@ reason = "dispatch the code-review skill"
     std::env::set_current_dir(&dir).expect("enter the fixture");
     let now = std::time::UNIX_EPOCH;
     let local = "local-head";
-    let read = |draft: bool, head: &str| {
-        let head = head.to_owned();
-        move || {
-            Some(Some(batten::land::Readiness {
-                draft,
-                node: "PR_node".to_owned(),
-                head: head.clone(),
-            }))
-        }
+    let found = |draft: bool, head: &str| batten::PushRead::Found {
+        pr: "7".to_owned(),
+        readiness: batten::land::Readiness {
+            draft,
+            node: "PR_node".to_owned(),
+            head: head.to_owned(),
+        },
     };
-    let owes = |forge: &dyn Fn() -> Option<Option<batten::land::Readiness>>| {
-        batten::land_push_owes(&dir, now, Some(local), forge).expect("the authority resolves")
+    let gate = |read: batten::PushRead| {
+        batten::land_push_gate(&dir, now, Some(local), read).expect("the authority resolves")
     };
 
-    let refusal = owes(&read(false, "an-older-head"))
-        .expect("a new head on a ready pull request owes its review");
-    assert_eq!(refusal.rule(), "review ask missing");
     assert!(
-        owes(&|| None).is_some(),
-        "a forge that cannot say still asks"
+        matches!(
+            gate(found(false, "an-older-head")),
+            batten::PushGate::Redraft { pr, node } if pr == "7" && node == "PR_node"
+        ),
+        "a new head on a ready pull request is redrafted before the push"
     );
     assert!(
-        owes(&read(true, "an-older-head")).is_none(),
+        matches!(gate(found(true, "an-older-head")), batten::PushGate::Go),
         "a draft push buys no run"
     );
     assert!(
-        owes(&|| Some(None)).is_none(),
+        matches!(gate(found(false, local)), batten::PushGate::Go),
+        "a ready pull request already at this head buys nothing"
+    );
+    assert!(
+        matches!(gate(batten::PushRead::NoPullRequest), batten::PushGate::Go),
         "a branch with no pull request buys no run"
     );
     assert!(
-        owes(&read(false, local)).is_none(),
-        "a ready pull request already at this head buys nothing"
+        matches!(
+            gate(batten::PushRead::Unreadable),
+            batten::PushGate::Owed(refusal) if refusal.rule() == "review ask missing"
+        ),
+        "a forge that cannot say asks the receipts"
     );
 
     common::dispatch_skill(&dir, "code-review");
     assert!(
-        owes(&read(false, "an-older-head")).is_none(),
-        "a reviewed head owes the push nothing"
+        matches!(gate(batten::PushRead::Unreadable), batten::PushGate::Go),
+        "a reviewed head owes an unreadable forge's push nothing"
+    );
+    assert!(
+        matches!(
+            gate(found(false, "an-older-head")),
+            batten::PushGate::Redraft { .. }
+        ),
+        "and a ready pull request at another head is redrafted even so"
     );
 }
 
