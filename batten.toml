@@ -1790,6 +1790,12 @@ body = "{git:HEAD} {now}"
 # the temporary root: the root carries a session id and a per-checkout slug, so a
 # pattern spelling it would go stale on the next container and read as a gate
 # switched off rather than as a gate that moved.
+# CLOUD-2489's slow local checks: the program and its words as one line. `land`
+# is absent on purpose; it pushes before it verifies.
+[[pattern]]
+id = "slow-check"
+regex = '^(cargo (test|nextest|clippy)|mise run (verify|cross-check|mutate|test|lint)|batten mutate)([ :]|$)'
+
 [[pattern]]
 id = "raw-writeln-inline"
 regex = 'writeln!\([^,"]+,\s*"(?:[^"{\\]|\\.|\{[^{}]*\})*?[A-Za-z]'
@@ -7954,6 +7960,18 @@ base = "origin/main"
 delta_sources = ["**"]
 line_sources = ["crates/**/*.rs"]
 module = "policy/raw-output-ratchet.rego"
+severity = "deny"
+
+# CLOUD-2489. A slow local check run over committed work no remote holds spends
+# the minutes a reclaim can take, when a draft push is free and survives it. The
+# module reads `head-unpushed`; uncommitted edits are not refused, so edit-then-
+# test stays free. `mise run land` is the remedy, not the subject.
+[[rule]]
+id = "check run early"
+no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/push-before-check.rego"
 severity = "deny"
 
 # CLOUD-1916. A bare `run` string reading `$1` never receives it: mise appends a
@@ -18125,6 +18143,18 @@ The remedy is `output::Progress`: a verb, a subject and named counts, flags and 
 id = "module read first"
 kind = "document"
 target = "policy/raw-output-ratchet.rego"
+
+[[verdict]]
+id = "check run early"
+gloss = "a slow local check is starting while HEAD holds commits no remote has"
+class = """
+Push first, then run it. A push to a draft pull request starts no CI, so it costs nothing, and it is the only thing that survives a container reclaim; a check run first spends the minutes a reclaim can take. Do: `git push` the draft, then run the check; to land, `mise run land`, which pushes and runs `verify` itself. Don't: skip the check, or amend away the commit to clear the fact. Uncommitted edits are not this verdict's business: edit-then-test stays free. Measured on #1191, where three failures surfaced inside `land` that a pushed draft would have let start earlier.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/push-before-check.rego"
 
 [[verdict]]
 id = "task read dropped"
