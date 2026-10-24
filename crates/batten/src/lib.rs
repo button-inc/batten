@@ -15014,8 +15014,9 @@ fn spend_the_matrix(
     // `None`, which `buys_a_matrix` answers `Nothing` to — the same posture the
     // tap takes one direction over, and for the same reason.
     // **THE FORGE'S HEAD, NEVER THIS CLONE'S**: `Readiness::head` says why. A
-    // ready pull request's push that bought a run is asked its receipts by the
-    // Push row's precheck (CLOUD-2436), since this may then buy `Nothing`.
+    // ready pull request at another head was redrafted by the Push row's
+    // precheck (`land_push_gate`), so a new head always reaches here as a draft
+    // and is asked its receipts below.
     let reading = verdict_for(&repo, &head);
     let spend = land::buys_a_matrix(Some(is_draft), reading.as_ref());
     // THE RECEIPTS `gh pr ready` OWES, asked of this ready too (CLOUD-2293), and
@@ -15838,26 +15839,42 @@ fn asks_before_the_step(
             Ok(Answered::Lap)
         }
         // AND AN UNREVIEWED HEAD IS NOT PUBLISHABLE TO A READY PULL REQUEST
-        // (CLOUD-2436). The same row's question, "is this head fit to publish",
-        // for the second reason it can be no: there the push itself starts CI,
-        // and the Ready after it reads that run as in flight and asks nothing.
-        // `land_push_owes` says which pushes buy a run.
+        // (CLOUD-2436, CLOUD-1564). The same row's question, "is this head fit
+        // to publish", for the second reason it can be no: there the push itself
+        // starts CI, and the Ready after it reads that run as in flight and asks
+        // nothing. `land_push_gate` redrafts such a pull request first.
         //
-        // A RECEIPT ERROR STOPS THROUGH THE UNWIND rather than out past it with
-        // `?`, because the lease is held by now and only the unwind hands it back.
+        // EVERY STOP GOES THROUGH THE UNWIND rather than out past it with `?`,
+        // because the lease is held by now and only the unwind hands it back.
         Some(pipeline::Precheck::BetLive) => {
             let local = git::head_commit(root).ok();
-            let forge = || {
-                let repo = repo_or_placeholder(root);
-                match fast_forward::look_up_pull_request(&repo, branch) {
-                    fast_forward::Lookup::Found(pr) => land::draft_state(&repo, &pr).map(Some),
-                    fast_forward::Lookup::None => Some(None),
-                    fast_forward::Lookup::Unreadable(_) => None,
-                }
+            let repo = repo_or_placeholder(root);
+            let read = match fast_forward::look_up_pull_request(&repo, branch) {
+                fast_forward::Lookup::Found(pr) => match land::draft_state(&repo, &pr) {
+                    Some(readiness) => PushRead::Found { pr, readiness },
+                    None => PushRead::Unreadable,
+                },
+                fast_forward::Lookup::None => PushRead::NoPullRequest,
+                fast_forward::Lookup::Unreadable(_) => PushRead::Unreadable,
             };
-            match land_push_owes(root, std::time::SystemTime::now(), local.as_deref(), forge) {
-                Ok(None) => Ok(Answered::Go),
-                Ok(Some(owed)) => {
+            match land_push_gate(root, std::time::SystemTime::now(), local.as_deref(), read) {
+                Ok(PushGate::Go) => Ok(Answered::Go),
+                Ok(PushGate::Redraft { pr, node }) => {
+                    if land::redraft(&repo, &pr, &node) {
+                        writeln!(
+                            out,
+                            "land: #{pr} was ready at another head; it is a draft again, so this push buys no run"
+                        )?;
+                        Ok(Answered::Go)
+                    } else {
+                        writeln!(
+                            err,
+                            "::error:: land: #{pr} is ready at another head and would not go back to draft; not pushing an unreviewed head onto it"
+                        )?;
+                        Ok(Answered::Stop(exit::ExitCode::Internal))
+                    }
+                }
+                Ok(PushGate::Owed(owed)) => {
                     report_owed(err, &owed)?;
                     Ok(Answered::Stop(exit::ExitCode::Violation))
                 }
@@ -29134,47 +29151,86 @@ pub fn land_spent_refusal(laps: u32, ledger: &land::Ledger) -> crate::refusal::R
     )
 }
 
-/// The refusal a lap's PUSH draws, for the Push row's precheck to stop on
-/// (CLOUD-2436); `None` when nothing is owed.
+/// What the forge says about this branch's pull request, for [`land_push_gate`].
+#[derive(Debug, Clone)]
+pub enum PushRead {
+    /// The branch has no open pull request.
+    NoPullRequest,
+    /// The lookup or the draft state would not answer.
+    Unreadable,
+    /// The pull request's number and what one read of it says.
+    Found {
+        /// Its number.
+        pr: String,
+        /// Its draft state, node and forge head.
+        readiness: land::Readiness,
+    },
+}
+
+/// What a lap's push must do first, by [`land_push_gate`].
+#[derive(Debug)]
+pub enum PushGate {
+    /// Push.
+    Go,
+    /// Put this pull request back to draft, then push.
+    Redraft {
+        /// Its number.
+        pr: String,
+        /// Its GraphQL node id, which the mutation takes.
+        node: String,
+    },
+    /// Stop: the review receipts the ready would ask are not on file.
+    Owed(Box<refusal::Refusal>),
+}
+
+// CLOUD-1564: a ready pull request at another head must be redrafted before
+// the push, or the push buys a run no review covered.
+//MUTANT-SUITE crates/batten/tests/it/land_lap.rs
+//MUTANT non-draft-push-allowed|s@let buys_a_run = !readiness.draft@let buys_a_run = readiness.draft@|the_laps_push_redrafts_a_ready_pull_request_at_another_head
+
+/// The Push row's decision (CLOUD-1564, CLOUD-2436): **A PUSH NEVER LANDS A NEW
+/// HEAD ON A READY PULL REQUEST.**
 ///
-/// **ONLY A PUSH THAT BUYS A RUN OWES ITS REVIEWS.** The lap pushes before it
-/// readies, and a push buys a run only on a pull request already ready whose
-/// forge head is not this one:
+/// Such a push starts CI by itself, with no review asked, and the Ready after
+/// it then reads that run as in flight and asks nothing. So:
 ///
-/// * A DRAFT owes nothing here. Its push buys no run, the Ready after it asks
-///   [`land_ready_owes`] itself, and withholding it would leave the work
-///   unpublished for a reclaim to take.
-/// * A ready pull request already AT this head owes nothing. The push publishes
-///   nothing new and buys nothing, so a receipt that aged out since the run was
-///   graded must not stop a landing over a head the forge has answered.
-/// * A branch with NO open pull request owes nothing: there is no run to buy.
-/// * Anything else owes what `gh pr ready` would, and that includes a forge
-///   that could not say: an unreadable draft state asks, rather than letting an
-///   unreviewed push through to a pull request that may be ready.
+/// * a ready pull request at ANOTHER head is redrafted before the push. The
+///   Ready after it readies the draft and asks [`land_ready_owes`]'s receipts,
+///   buying the one matrix the push would have bought;
+/// * a DRAFT, NO open pull request, or a ready pull request already AT this
+///   head pushes as it is: the push buys nothing;
+/// * a forge that could not say asks [`land_ready_owes`] here, rather than let
+///   an unreviewed push through to a pull request that may be ready.
 ///
-/// `forge` is called only when something is owed, because it is a network read
-/// and the common lap owes nothing. It answers `None` when the forge could not
-/// say, `Some(None)` when the branch has no open pull request, and the
-/// pull request's [`land::Readiness`] otherwise.
+/// That is what lets the `Push` row declare no effect.
 ///
 /// # Errors
 ///
-/// As [`land_ready_owes`].
-pub fn land_push_owes(
+/// As [`land_ready_owes`], for an unreadable forge only.
+pub fn land_push_gate(
     root: &Path,
     now: std::time::SystemTime,
     local_head: Option<&str>,
-    forge: impl FnOnce() -> Option<Option<land::Readiness>>,
-) -> Result<Option<refusal::Refusal>> {
-    let Some(owed) = land_ready_owes(root, now)? else {
-        return Ok(None);
-    };
-    let buys_nothing = forge().is_some_and(|read| {
-        read.is_none_or(|readiness| {
-            readiness.draft || local_head.is_some_and(|local| local == readiness.head)
-        })
-    });
-    Ok((!buys_nothing).then_some(owed))
+    read: PushRead,
+) -> Result<PushGate> {
+    match read {
+        PushRead::NoPullRequest => Ok(PushGate::Go),
+        PushRead::Unreadable => {
+            Ok(land_ready_owes(root, now)?
+                .map_or(PushGate::Go, |owed| PushGate::Owed(Box::new(owed))))
+        }
+        PushRead::Found { pr, readiness } => {
+            let buys_a_run = !readiness.draft && local_head != Some(readiness.head.as_str());
+            Ok(if buys_a_run {
+                PushGate::Redraft {
+                    pr,
+                    node: readiness.node,
+                }
+            } else {
+                PushGate::Go
+            })
+        }
+    }
 }
 
 /// Write the receipt refusal `land` stops on, in the one shape both its ready
