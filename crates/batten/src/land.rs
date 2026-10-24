@@ -3665,10 +3665,10 @@ pub fn spending(repo: &str, sha: &str) -> Option<Vec<Spending>> {
 }
 
 /// The forge as [`abandon_with`] reaches it: the runs still spending on a head,
-/// and one cancellation.
+/// and one run's cancellation — both `(repo, sha-or-run)`.
 pub type Forge = (
     fn(&str, &str) -> Option<Vec<Spending>>,
-    fn(&str) -> crate::rest::Posted,
+    fn(&str, &str) -> crate::rest::Posted,
 );
 
 /// Cancel every run a red verdict made worthless, sparing the fan-in's.
@@ -3682,14 +3682,14 @@ pub type Forge = (
 /// than by filtering — the same argument the lease guard's own cancel carries.
 #[must_use]
 pub fn abandon(repo: &str, sha: &str, fanin: &FanIn) -> Abandoned {
-    abandon_with(repo, sha, fanin, (spending, crate::rest::post))
+    abandon_with(repo, sha, fanin, (spending, crate::lease::cancel_run))
 }
 
 /// [`abandon`] over a forge handed in: which runs are cancelled, spared and
-/// refused is the counting the suite tests, and no forge a test can reach
-/// answers a cancellation on demand.
+/// refused is the counting the suite tests, and the REST fixture that could
+/// answer a cancellation is an environment variable this process may not set.
 #[must_use]
-pub fn abandon_with(repo: &str, sha: &str, fanin: &FanIn, (spent, post): Forge) -> Abandoned {
+pub fn abandon_with(repo: &str, sha: &str, fanin: &FanIn, (spent, cancel): Forge) -> Abandoned {
     // AN UNSET FAN-IN CANCELS NOTHING RATHER THAN GUESSING, and this is the
     // guard whose absence would have been worst: with no name to spare, EVERY
     // run is doomed — including the one carrying the fan-in, whose cancelled
@@ -3708,10 +3708,7 @@ pub fn abandon_with(repo: &str, sha: &str, fanin: &FanIn, (spent, post): Forge) 
         ..Abandoned::NONE
     };
     for run in doomed {
-        if matches!(
-            post(&format!("repos/{repo}/actions/runs/{}/cancel", run.id)),
-            crate::rest::Posted::Accepted
-        ) {
+        if matches!(cancel(repo, &run.id), crate::rest::Posted::Accepted) {
             report.cancelled += 1;
         } else {
             report.refused += 1;
@@ -5538,8 +5535,8 @@ mod tests {
                 run("3", "b.yml"),
             ])
         };
-        let first_only: fn(&str) -> crate::rest::Posted = |path| {
-            if path.ends_with("/runs/2/cancel") {
+        let first_only: fn(&str, &str) -> crate::rest::Posted = |_, run| {
+            if run == "2" {
                 crate::rest::Posted::Accepted
             } else {
                 crate::rest::Posted::Refused

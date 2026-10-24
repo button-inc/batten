@@ -429,6 +429,9 @@ fn replay(
     judge(&tree, splices, &|still| run_union(&tree, still, &published))
 }
 
+/// One union run over the splices still standing: its exit code and output.
+type UnionRun<'a> = &'a dyn Fn(&BTreeMap<String, (String, Vec<Modified>)>) -> Option<(i32, String)>;
+
 /// Splice, run and charge until every modified test in `splices` is judged,
 /// each union run asked of `run` ([`run_union`] in every caller but the suite).
 ///
@@ -436,9 +439,6 @@ fn replay(
 /// is charged to itself and the rest rebuilt without it — a sequence of runs a
 /// real `nextest` produces only over a real broken body, and a run handed in
 /// produces on demand.
-/// One union run over the splices still standing: its exit code and output.
-type UnionRun<'a> = &'a dyn Fn(&BTreeMap<String, (String, Vec<Modified>)>) -> Option<(i32, String)>;
-
 fn judge(
     tree: &Path,
     splices: &BTreeMap<String, (String, Vec<Modified>)>,
