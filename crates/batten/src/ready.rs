@@ -2084,7 +2084,14 @@ mod lint_tests {
         tokens_in, verdict_token, workspace_version,
     };
     use serde_json::{Value, json};
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
 
+    use super::issue_key_tests::key;
+
+    /// Here rather than beside the other key cases because a consumer's own
+    /// expression has to be compiled, and this module is the one that may
+    /// `expect` that it does.
     #[test]
     fn a_bounded_consumer_key_is_not_found_inside_a_longer_number() {
         // The key expression is the CONSUMER'S row, so greed is not guaranteed:
@@ -2095,10 +2102,6 @@ mod lint_tests {
         assert!(grammar.keys_in("TEST-1234").is_empty());
         assert_eq!(grammar.keys_in("TEST-123 done").len(), 1);
     }
-    use std::collections::BTreeMap;
-    use std::path::{Path, PathBuf};
-
-    use super::issue_key_tests::key;
 
     /// A tree whose workspace version is `version`, which is all §6 reads of it.
     fn versioned(name: &str, version: &str) -> PathBuf {

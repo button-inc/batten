@@ -318,9 +318,12 @@ pub fn drop_subscription(
         host,
         (&session, token),
         pr,
+        // A CALL, NOT THE FN BY NAME: `narrow_adoption`'s scan finds the
+        // network's callers by `fetch::spend(`, and a reference would hide
+        // this module from it.
         (
             |calls: &[crate::fetch::Call<'_>]| crate::fetch::spend(calls),
-            &|| {
+            || {
                 crate::repo_slug(Path::new("."))
                     .as_deref()
                     .and_then(owner_repo)
@@ -334,6 +337,9 @@ pub fn drop_subscription(
 /// every caller but the unit suite.
 type Spend = fn(&[crate::fetch::Call<'_>]) -> Result<Vec<crate::fetch::Response>>;
 
+/// This clone's owner/repo, read only when the arguments need it.
+type Slug = fn() -> Option<(String, String)>;
+
 /// [`drop_subscription`] once the session and its credential are in hand: ask
 /// the endpoint through `spend`, and attest only an accepted answer. `slug` is
 /// this clone's owner/repo, asked only once the arguments need filling.
@@ -346,7 +352,7 @@ fn ask_endpoint(
     host: &Host,
     (session, token): (&str, &str),
     pr: u64,
-    (spend, slug): (Spend, &dyn Fn() -> Option<(String, String)>),
+    (spend, slug): (Spend, Slug),
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
     let (Some(endpoint), Some(tool), Some(template)) = (
@@ -572,7 +578,7 @@ mod tests {
                 &host,
                 ("cse_a", "t0ken"),
                 489,
-                (spend, &|| None),
+                (spend, || None),
                 &mut out,
             )
             .unwrap();

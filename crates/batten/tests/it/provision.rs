@@ -1441,8 +1441,8 @@ fn the_credential_table_carries_the_names_the_engine_dropped() {
     assert!(bare.names.is_empty());
 }
 
-/// The launcher's environment dump narrowed to the two variables these cases
-/// read, so a failure message never prints whatever else the host exported.
+/// The launcher's environment dump narrowed to the variables these cases read,
+/// so a failure message never prints whatever else the host exported.
 #[cfg(unix)]
 fn watched(stdout: &[u8]) -> String {
     String::from_utf8_lossy(stdout)
@@ -1481,10 +1481,6 @@ fn launch(env: &Env, dest: &Path, rows: &str, vars: &[(&str, &str)]) -> Output {
     command.output().expect("run the launcher")
 }
 
-/// The one `unset` row the credential cases share.
-#[cfg(unix)]
-const UNSET_ROW: &str = "\n[[provision.env]]\nname = \"DOOMED\"\nunset = true\n";
-
 /// An `unset` row behind a declared credential, applied, and the launcher run
 /// in the repository with `token` in the one declared name.
 #[cfg(unix)]
@@ -1492,7 +1488,7 @@ fn launch_unsetting(env: &Env, dest: &Path, token: &str) -> Output {
     launch(
         env,
         dest,
-        UNSET_ROW,
+        "\n[[provision.env]]\nname = \"DOOMED\"\nunset = true\n",
         &[("CRED_TOKEN", token), ("DOOMED", "present")],
     )
 }
