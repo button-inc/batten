@@ -2525,9 +2525,12 @@ fn wait_bounded(
             // The wait itself failed, so whether the suite exited is unknown.
             // It is ended rather than left running, and the failure is the answer.
             kill_group(pid);
-            // Swept whatever the failure: a group id is not reused while the
-            // group has a member, and the first kill that finds none ends it.
-            sweep_group(pid);
+            // `await_exit` reaps nothing, so only `ECHILD` — the leader reaped
+            // elsewhere — frees the group id; then a repeat could reach a
+            // stranger, and any other failure leaves the id reserved.
+            if rustix::io::Errno::from_io_error(&failed) != Some(rustix::io::Errno::CHILD) {
+                sweep_group(pid);
+            }
             let _ = worker.join();
             let _ = child.wait();
             return Err(failed);
@@ -2569,14 +2572,12 @@ fn sweep_group(_leader: u32) {}
 /// background subshell while it was forking `sleep`, and the `sleep` lived on in
 /// the leader's group, reparented to init, holding what the suite held.
 ///
-/// **WHAT KEEPS IT OFF A STRANGER.** A group id is not reused while the group has
-/// a member, and the sweep stops at the first kill that finds none. Before the
-/// reap the unreaped leader is that member, so on [`wait_bounded`]'s normal exit
-/// every `SIGKILL` reaches this suite's group, and the sweep runs its full count:
-/// microseconds per suite, against a build per mutant. Where the leader was reaped
-/// elsewhere (a failed wait's `ECHILD`), the remaining members hold the id, and
-/// the one gap is an emptied group's id being reissued between two kills a yield
-/// apart, which sequential pid allocation makes a wrap of the whole pid space.
+/// **BEFORE THE REAP, FOR [`wait_bounded`]'S OWN REASON.** The leader is still an
+/// unreaped zombie, so its pid — which IS the group id — cannot be reused while
+/// the sweep signals it, and every `SIGKILL` reaches this suite's group or
+/// nobody. The zombie also keeps the group answering, so the sweep runs its full
+/// count rather than stopping at the first `ESRCH`: a bounded cost of microseconds
+/// per suite, against a build per mutant.
 #[cfg(unix)]
 fn sweep_group(leader: u32) {
     let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default())
