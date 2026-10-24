@@ -681,8 +681,9 @@ pub fn delete(path: &str) -> Option<Answer> {
 
 /// What one bodiless POST came to.
 ///
-/// **AN OUTCOME WITH NO DEFAULT, deliberately.** Both callers cancel runs — a
-/// lap's worthless matrix and the run a lease guard stands in — and neither can
+/// **AN OUTCOME WITH NO DEFAULT, deliberately.** Its one caller,
+/// [`crate::lease::cancel_run`], cancels runs for two uses — a lap's worthless
+/// matrix and the run a lease guard stands in — and neither can
 /// be driven to an ACCEPTED cancellation hermetically: the one reads the lease
 /// over the wire, the other waits two minutes to be killed. So no case can tell
 /// a `post` that always says yes from one that measured, and a `bool` would carry

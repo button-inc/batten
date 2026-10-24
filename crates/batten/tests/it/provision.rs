@@ -1538,6 +1538,37 @@ fn a_reject_prefix_row_alone_is_gated_on_the_proven_credential() {
     );
 }
 
+/// AND UNPROVEN, THE REJECTION REMOVES NOTHING: with no receipt and a probe
+/// nothing answers, the row is a plain copy of its source, placeholder and all,
+/// where an ungated rejection would have cleared it.
+#[cfg(unix)]
+#[test]
+fn an_unproven_credential_leaves_a_reject_prefix_rows_variable_alone() {
+    let env = Env::new("provision-credential-reject-unproven");
+    let rows = "\n[[provision.env]]\nname = \"FORGE_TOKEN\"\n\
+                from_first_set = [\"MARKED_SRC\"]\nreject_prefix = \"placeholder_\"\n";
+    let ran = launch(
+        &env,
+        &env.repo.parent().unwrap().join("bin-reject-unproven"),
+        rows,
+        &[
+            ("CRED_TOKEN", "tok_unproven"),
+            ("MARKED_SRC", "placeholder_one"),
+            ("FORGE_TOKEN", "placeholder_two"),
+        ],
+    );
+    let seen = watched(&ran.stdout);
+    assert!(
+        seen.lines().any(|line| line == "CRED_TOKEN=tok_unproven"),
+        "the launcher ran its tool: {seen}"
+    );
+    assert!(
+        seen.lines()
+            .any(|line| line == "FORGE_TOKEN=placeholder_one"),
+        "an unproven credential rejects nothing: {seen}"
+    );
+}
+
 /// A CREDENTIAL PROVED RECENTLY AUTHORISES THE REMOVAL, from its receipt and
 /// with no network: the `unset` row is a removal, so it is the row that asks,
 /// and the declared name's non-empty value is the candidate the receipt proves.
