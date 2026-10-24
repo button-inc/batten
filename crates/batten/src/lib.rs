@@ -29334,6 +29334,41 @@ mod tests {
         assert_eq!(left, 0, "nothing abandoned is left behind");
     }
 
+    /// CLOUD-2456: a land that takes over a crash on its branch declares the
+    /// streak one longer than the dead run's, and forgets the dead run's record
+    /// once it holds the lock. Off unix no crash is found, so the streak starts
+    /// at zero; the record is forgotten either way, since the lock alone proves
+    /// it is not live.
+    #[test]
+    fn a_land_taking_over_a_crash_carries_its_streak_and_forgets_it() {
+        let root =
+            std::env::temp_dir().join(format!("batten-land-takeover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        gitwrite::init_on_main(&root).unwrap();
+        let git_dir = root.join(".git");
+        let dead = "4194305";
+        task::register(&git_dir, LAND_TASK, dead, "verify", 100);
+        task::declare_subject(&git_dir, dead, "work", 1);
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let guard = run_land_singleton(&root, "work", &mut out, &mut err)
+            .unwrap()
+            .expect("a free lock is taken");
+        let pid = std::process::id().to_string();
+        let field = |name: &str| task::read_field(&git_dir, &pid, name);
+        let (branch, recovers) = (field("branch"), field("recovers"));
+        let forgotten = task::read_field(&git_dir, dead, "task").is_none();
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(branch.as_deref(), Some("work"));
+        assert_eq!(
+            recovers.as_deref(),
+            Some(if cfg!(unix) { "2" } else { "0" }),
+            "one longer than the dead run's streak"
+        );
+        assert!(forgotten, "the crash it answered is forgotten");
+    }
+
     /// CLOUD-2366: the caller's own group is never reapable however its record
     /// spells the number, a group its registrant still runs in is not either,
     /// and a record with no stamp proves nothing.
