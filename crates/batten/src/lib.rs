@@ -12628,21 +12628,6 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
     Ok(ExitCode::Internal)
 }
 
-/// The exhaustion refusal, which has two readings and used to have one.
-///
-/// # A CONTENDED FLEET IS NOT A FAILING BRANCH
-///
-/// `Ledger::lease_waits` was charged by `charge_the_lap` and read by nothing
-/// here (review of #848), so on a contended fleet — where every lap exits
-/// `Lease → Violation → Lap` having spent no CI at all — this named only `laps`
-/// and `paid` and then asserted *"a conflict, a failed gate or red CI will lose
-/// again"* over a landing that bought nothing and failed nothing. That is the
-/// CLOUD-413 mis-diagnosis [`land::Bound::LeaseWaits`] exists to prevent,
-/// arriving through the ordinary exit rather than through the bound.
-///
-/// **CONDITIONAL RATHER THAN APPENDED**, because the two cases want opposite
-/// advice — run it again, versus go and read the failure — and printing both
-/// would be the hedge that leaves a reader no better off.
 /// Say what a refusing stop cost, as counts (CLOUD-2417).
 ///
 /// Before every undo, at every exit that refuses, because the undos are what
@@ -12659,6 +12644,21 @@ fn say_the_cost(
     Ok(())
 }
 
+/// The exhaustion refusal, which has two readings and used to have one.
+///
+/// # A CONTENDED FLEET IS NOT A FAILING BRANCH
+///
+/// `Ledger::lease_waits` was charged by `charge_the_lap` and read by nothing
+/// here (review of #848), so on a contended fleet — where every lap exits
+/// `Lease → Violation → Lap` having spent no CI at all — this named only `laps`
+/// and `paid` and then asserted *"a conflict, a failed gate or red CI will lose
+/// again"* over a landing that bought nothing and failed nothing. That is the
+/// CLOUD-413 mis-diagnosis [`land::Bound::LeaseWaits`] exists to prevent,
+/// arriving through the ordinary exit rather than through the bound.
+///
+/// **CONDITIONAL RATHER THAN APPENDED**, because the two cases want opposite
+/// advice — run it again, versus go and read the failure — and printing both
+/// would be the hedge that leaves a reader no better off.
 fn say_the_laps_are_spent(laps: u32, ledger: &land::Ledger, err: &mut dyn Write) -> Result<()> {
     // ONE CLASSED LINE (CLOUD-2078): `lane run spent`, its readings decided in
     // `land::spent_refusal`.

@@ -2062,7 +2062,7 @@ pub fn unpushed_in_range(dir: &Path, target: &str) -> Result<Vec<String>> {
     let repo = open(dir)?;
     let refused = || UsageError::raise("could not resolve the reset target".to_owned());
     let target_id = repo.rev_parse_single(target).map_err(|_| refused())?;
-    unreachable_from_remotes(&repo, vec![target_id.detach()])
+    unreachable_from_remotes(&repo, vec![target_id.detach()], usize::MAX)
 }
 
 /// Whether `HEAD` is reachable from some remote-tracking ref — committed
@@ -2075,19 +2075,24 @@ pub fn unpushed_in_range(dir: &Path, target: &str) -> Result<Vec<String>> {
 ///
 /// `None` when it could not look — no repository, an unresolvable `HEAD`, a walk
 /// that failed. The caller decides which direction that reads.
+///
+/// **ONE COMMIT DECIDES IT**, so the walk stops at the first (CLOUD-2489). This
+/// runs on shell calls through the `head-unpushed` fact, and a clone with no
+/// remote at all would otherwise walk its whole history to answer a yes/no.
 #[must_use]
 pub fn head_on_a_remote(dir: &Path) -> Option<bool> {
     let repo = open(dir).ok()?;
-    unreachable_from_remotes(&repo, Vec::new())
+    unreachable_from_remotes(&repo, Vec::new(), 1)
         .ok()
         .map(|unpushed| unpushed.is_empty())
 }
 
 /// The commits reachable from `HEAD` and from neither `hidden` nor any
-/// `refs/remotes` tip, newest first.
+/// `refs/remotes` tip, newest first, at most `at_most` of them.
 fn unreachable_from_remotes(
     repo: &gix::Repository,
     mut hidden: Vec<gix::ObjectId>,
+    at_most: usize,
 ) -> Result<Vec<String>> {
     let refused = || UsageError::raise("could not resolve the reset target".to_owned());
     let head = repo.rev_parse_single("HEAD").map_err(|_| refused())?;
@@ -2106,7 +2111,7 @@ fn unreachable_from_remotes(
         .all()
         .map_err(|_| refused())?;
     let mut out = Vec::new();
-    for step in walk {
+    for step in walk.take(at_most) {
         let info = step.map_err(|_| refused())?;
         out.push(info.id().to_hex_with_len(12).to_string());
     }

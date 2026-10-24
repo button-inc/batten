@@ -11,41 +11,30 @@ use std::path::{Path, PathBuf};
 
 use crate::common;
 
-/// The committed row's shape and its declared pattern, read from the committed
-/// config rather than re-typed, so a regex edited there is the one tested here.
+const MODULE: &str = "policy/push-before-check.rego";
+
+/// The committed row's shape plus the committed `[[pattern]]` table, read rather
+/// than re-typed, so a `slow-check` regex edited there is the one tested here.
 fn config() -> String {
-    let committed: toml::Value = toml::from_str(
-        &std::fs::read_to_string(common::at_root("batten.toml")).expect("the committed config"),
-    )
-    .expect("the committed config parses");
-    let regex = committed["pattern"]
-        .as_array()
-        .expect("[[pattern]] rows")
-        .iter()
-        .find(|row| row["id"].as_str() == Some("slow-check"))
-        .and_then(|row| row["regex"].as_str())
-        .expect("slow-check is declared")
-        .to_owned();
     format!(
         "version = 1\n\n[[rule]]\nid = \"check run early\"\nkind = \"policy\"\n\
-         scope = \"mediated_call\"\nmodule = \"policy/push-before-check.rego\"\n\
-         severity = \"deny\"\n\n[[pattern]]\nid = \"slow-check\"\nregex = '{regex}'\n"
+         scope = \"mediated_call\"\nmodule = \"{MODULE}\"\nseverity = \"deny\"\n\n{}",
+        common::declared_patterns()
+    )
+}
+
+/// A fixture carrying the config and the COMMITTED module, uncommitted.
+fn fixture(name: &str) -> common::Fixture {
+    common::Fixture::new(name).config(&config()).file(
+        MODULE,
+        &std::fs::read_to_string(common::at_root(MODULE)).expect("the committed module"),
     )
 }
 
 /// A repository whose HEAD carries one commit beyond its base; `pushed` pins
 /// `origin/main` to that head, so the walk finds nothing unpushed.
 fn repo(name: &str, pushed: bool) -> PathBuf {
-    let dir = common::Fixture::new(name)
-        .config(&config())
-        .base_commit()
-        .build();
-    let module = common::at_root("policy/push-before-check.rego");
-    std::fs::create_dir_all(dir.join("policy")).expect("scratch policy dir");
-    std::fs::copy(module, dir.join("policy/push-before-check.rego"))
-        .expect("install the committed module");
-    common::git_in(&dir, &["add", "-A"]);
-    common::git_in(&dir, &["commit", "--quiet", "-m", "work"]);
+    let dir = fixture(name).base_commit().work_commit().build();
     if pushed {
         common::pin_origin_main(&dir);
     }
@@ -94,13 +83,7 @@ fn a_pushed_head_runs_the_check() {
 /// failure's. `#MUTANT could-not-look-refuses` reddens here.
 #[test]
 fn a_head_that_could_not_be_read_decides_nothing() {
-    let dir = common::Fixture::new("push-before-check-unborn")
-        .config(&config())
-        .build();
-    let module = common::at_root("policy/push-before-check.rego");
-    std::fs::create_dir_all(dir.join("policy")).expect("scratch policy dir");
-    std::fs::copy(module, dir.join("policy/push-before-check.rego"))
-        .expect("install the committed module");
+    let dir = fixture("push-before-check-unborn").build();
     let out = decision(&dir, "mise run verify");
     assert!(!out.contains("check run early"), "{out}");
 }
