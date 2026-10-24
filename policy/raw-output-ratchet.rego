@@ -13,8 +13,15 @@
 # reason: a gate whose first run refuses hundreds of sites gets an exception
 # written for it, and the exception is what rots. The question is the DIRECTION:
 # did this branch add one. A new line has a typed home, `output::Progress`,
-# whose fields are counts, flags and pointers, so an estimate has nowhere to
-# live. Existing sites migrate one verb at a time.
+# whose fields are counts, flags and one-word pointers, so an estimate has
+# nowhere to live. Existing sites migrate one verb at a time.
+#
+# THE DIRECTION IS THE BRANCH'S TOTAL, NOT ONE FILE'S (review of #1228). This
+# repository splits files to stay under line ceilings, and a split moves sites
+# from an edited file into an added one: per file that reads as growth in the new
+# one over a tree whose count never rose. So the branch is refused only when the
+# touched files together carry more sites than their base did, and then each file
+# that grew is named.
 #
 # WHAT COUNTS AS A SITE. The engine hands one line at a time, and rustfmt puts
 # most calls over three — `writeln!(` / `out,` / `"text …",` — so a one-line
@@ -23,18 +30,22 @@
 # with no literal on its line (`raw-writeln-open`) whose FIRST string line within
 # `reach` carries text (`raw-literal-text`). "Carries text" means a letter
 # outside every `{…}` placeholder, so `writeln!(out, "{}", x)` is not a site —
-# `emission_census.rs`'s `bypasses` owns that shape.
+# `emission_census.rs`'s `bypasses` owns that shape. A raw string `r"…"` or
+# `r#"…"#` is a literal like any other.
 #
 # THE RESIDUE IS NAMED RATHER THAN SILENT: `write!` without `ln`, a literal
-# assembled by `concat!` or `format!` before the call, a `{{` escape, and a
-# format string more than three lines below its `writeln!(`.
+# assembled by `concat!` or `format!` before the call, a `{{` escape, a format
+# string more than three lines below its `writeln!(`, and a PURE RENAME — the
+# engine keeps no base side for a deleted path (`git.rs`, `base_lines`), so sites
+# moved by `git mv` alone read as added.
 #
 #MUTANT-SUITE crates/batten/tests/it/raw_output_ratchet.rs
 #MUTANT direction-may-invert|s@\tafter > base@\tafter < base@|a_branch_that_adds_a_raw_writeln_is_refused
 #MUTANT reach-may-be-empty|s@^reach := \[1, 2, 3\]$@reach := []@|a_multiline_raw_writeln_is_counted
-#MUTANT base-may-read-as-empty|s@\tbase := sites(base_lines_of(path))@\tbase := 0@|a_pre_existing_raw_writeln_survives_an_edit
+#MUTANT base-may-read-as-empty|s@^base_of\[path\] := sites(base_lines_of(path)) if {$@base_of[path] := 0 if {@|a_pre_existing_raw_writeln_survives_an_edit
 #MUTANT text-test-dropped|s@^\tregex.match(data.batten.patterns\["raw-literal-text"\], line)$@\ttrue@|a_placeholder_only_writeln_is_not_counted
 #MUTANT could-not-look-passes|s@^\tnot delta$@\tfalse@|a_missing_delta_is_reported_not_passed
+#MUTANT total-ignored|s@^\ttotal_after > total_base$@\ttrue@|a_split_that_moves_sites_into_a_new_file_passes
 #
 # ITS OWN PACKAGE, because `cfg-gated-test.rego` sits in `batten` with the same
 # `grew`, `touched` and `violation` partial rules: in one package the two sets
@@ -63,16 +74,21 @@ violation contains {
 	not delta
 }
 
+# `contains` first: a literal test that rejects nearly every line in a file is
+# cheaper than the regex behind it, and the engine evaluates the body in order.
 inline_site(line) if {
+	contains(line, "writeln!")
 	regex.match(data.batten.patterns["raw-writeln-inline"], line)
 }
 
 opens_bare(line) if {
+	contains(line, "writeln!")
 	regex.match(data.batten.patterns["raw-writeln-open"], line)
 }
 
+# A plain or raw string literal opens the line: `"…"`, `r"…"`, `r#"…"#`.
 string_line(line) if {
-	startswith(trim_space(line), "\"")
+	startswith(trim_left(trim_space(line), "r#"), "\"")
 }
 
 literal_has_text(line) if {
@@ -85,23 +101,12 @@ literal_has_text(line) if {
 # over two lines.
 reach := [1, 2, 3]
 
-# The format string is the FIRST string line below the open, so a later string
-# ARGUMENT (`writeln!(out, "{}", "x")` over three lines) is not mistaken for it.
-first_string_hop(lines, index) := hop if {
-	some hop in reach
-	string_line(lines[index + hop])
-	not earlier_string(lines, index, hop)
-}
-
-earlier_string(lines, index, hop) if {
-	some earlier in reach
-	earlier < hop
-	string_line(lines[index + earlier])
-}
-
 split_site(lines, index) if {
 	opens_bare(lines[index])
-	hop := first_string_hop(lines, index)
+
+	# The format string is the FIRST string line below the open, so a later string
+	# ARGUMENT (`writeln!(out, "{}", "x")` over three lines) is not mistaken for it.
+	hop := min({h | some h in reach; string_line(lines[index + h])})
 	literal_has_text(lines[index + hop])
 }
 
@@ -124,17 +129,31 @@ base_lines_of(path) := [] if {
 
 touched contains path if {
 	some path in delta.added
+	endswith(path, ".rs")
 }
 
 touched contains path if {
 	some path in delta.edited
+	endswith(path, ".rs")
 }
 
-grew contains [path, after] if {
+after_of[path] := sites(input.tree.lines[path]) if {
 	some path in touched
-	endswith(path, ".rs")
-	after := sites(input.tree.lines[path])
-	base := sites(base_lines_of(path))
+}
+
+base_of[path] := sites(base_lines_of(path)) if {
+	some path in touched
+}
+
+total_after := sum([n | some n in after_of])
+
+total_base := sum([n | some n in base_of])
+
+grew contains [path, after] if {
+	total_after > total_base
+	some path in touched
+	after := after_of[path]
+	base := base_of[path]
 	after > base
 }
 
@@ -165,6 +184,10 @@ test_an_added_inline_literal_is_refused if {
 	count(violation) == 1 with input as edited("crates/batten/src/a.rs", [], ["writeln!(out, \"land: lap {n}\")?;"])
 }
 
+test_an_added_raw_string_literal_is_refused if {
+	count(violation) == 1 with input as edited("crates/batten/src/a.rs", [], ["writeln!(err, r\"land: spent a lap\")?;"])
+}
+
 test_an_added_rustfmt_split_literal_is_refused if {
 	count(violation) == 1 with input as edited("crates/batten/src/a.rs", [], ["writeln!(", "    out,", "    \"land: lap {n}\",", ")?;"])
 }
@@ -183,6 +206,18 @@ test_a_pre_existing_site_survives_an_edit if {
 		["writeln!(out, \"land: lap\")?;"],
 		["writeln!(out, \"land: lap\")?;", "// a new comment"],
 	)
+}
+
+test_a_split_into_a_new_file_is_not_growth if {
+	count(violation) == 0 with input as {"tree": {
+		"lines": {"crates/batten/src/a.rs": [], "crates/batten/src/b.rs": ["writeln!(out, \"land: lap\")?;"]},
+		"base-delta": {
+			"added": ["crates/batten/src/b.rs"],
+			"edited": ["crates/batten/src/a.rs"],
+			"deleted": [],
+			"base-lines": {"crates/batten/src/a.rs": ["writeln!(out, \"land: lap\")?;"]},
+		},
+	}}
 }
 
 test_no_delta_is_reported_not_passed if {

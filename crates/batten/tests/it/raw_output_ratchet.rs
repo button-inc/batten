@@ -162,6 +162,22 @@ fn a_placeholder_only_writeln_is_not_counted() {
     assert!(classes(&root).is_empty(), "no letter outside a placeholder");
 }
 
+/// A SPLIT IS NOT GROWTH (review of #1228). Moving an existing site out of an
+/// edited file into an added one leaves the branch's total where it was, and a
+/// per-file reading would refuse every split this repository makes to stay under
+/// its line ceilings. `#MUTANT total-ignored` reddens here.
+#[test]
+fn a_split_that_moves_sites_into_a_new_file_passes() {
+    let site = "    writeln!(out, \"land: lap\")?;";
+    let root = repo("raw-output-split", &["fn a() {", site, "}"], &["fn a() {}"]);
+    fs::write(
+        root.join("crates/batten/src/split.rs"),
+        join(&["fn b() {", site, "}"]),
+    )
+    .expect("write the added half");
+    assert!(classes(&root).is_empty(), "the total did not go up");
+}
+
 /// COULD NOT LOOK IS REPORTED, NEVER PASSED. `#MUTANT could-not-look-passes`
 /// reddens here.
 #[test]

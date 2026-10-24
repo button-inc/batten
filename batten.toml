@@ -1794,11 +1794,11 @@ body = "{git:HEAD} {now}"
 # is absent on purpose; it pushes before it verifies.
 [[pattern]]
 id = "slow-check"
-regex = '^(cargo (test|nextest|clippy)|mise run (verify|cross-check|mutate|test|lint)|batten mutate)([ :]|$)'
+regex = '^(cargo( \+\S+)? (t|test|nextest|clippy)|mise( -\S+)*( (run|r|tasks run)( -\S+)*)? (verify|cross-check|mutate|test|lint)|batten mutate)([ :]|$)'
 
 [[pattern]]
 id = "raw-writeln-inline"
-regex = 'writeln!\([^,"]+,\s*"(?:[^"{\\]|\\.|\{[^{}]*\})*?[A-Za-z]'
+regex = 'writeln!\([^,"]+,\s*r?#*"(?:[^"{\\]|\\.|\{[^{}]*\})*?[A-Za-z]'
 
 [[pattern]]
 id = "raw-writeln-open"
@@ -1806,10 +1806,11 @@ regex = 'writeln!\([^"]*$'
 
 # CLOUD-2488's three halves of a raw output site, above. A letter OUTSIDE every
 # `{…}` placeholder is what makes a format string text; an escape is consumed
-# whole, so `\n` alone is not text.
+# whole, so `\n` alone is not text. `r?#*` admits a raw string, which carries
+# text as freely as a plain one.
 [[pattern]]
 id = "raw-literal-text"
-regex = '^\s*"(?:[^"{\\]|\\.|\{[^{}]*\})*?[A-Za-z]'
+regex = '^\s*r?#*"(?:[^"{\\]|\\.|\{[^{}]*\})*?[A-Za-z]'
 
 [[pattern]]
 id = "harness-task-output"
@@ -18136,7 +18137,7 @@ target = "policy/cfg-gated-test.rego"
 id = "output write loose"
 gloss = "this branch added a writeln! whose format string carries text, an output line no gate reads"
 class = """
-The remedy is `output::Progress`: a verb, a subject and named counts, flags and pointers, emitted through `output::line` on stdout or `output::message` on stderr. A literal has nowhere to refuse an estimate, and #1191 measured the cost: `land`'s stops printed nothing about spend and a reader wrote "a full lap of lease occupancy" over a run that had bought nothing. The rule is a ratchet over the diff, so the sites already in the tree stay until their verb migrates; a placeholder-only `writeln!(out, "{}", x.line())` is not a site. The could-not-look side is `diff read absent`, which this module raises rather than restating.
+The remedy is `output::Progress`: a verb, a subject and named counts, flags and one-word pointers, emitted through `output::line` on stdout, or on stderr through `output::message` (droppable by a quieter rung) or `output::verdict` (part of a refusal, never dropped). A literal has nowhere to refuse an estimate, and #1191 measured the cost: `land`'s stops printed nothing about spend and a reader wrote "a full lap of lease occupancy" over a run that had bought nothing. The rule is a ratchet over the diff, so the sites already in the tree stay until their verb migrates; a placeholder-only `writeln!(out, "{}", x.line())` is not a site. The could-not-look side is `diff read absent`, which this module raises rather than restating.
 """
 
 [[verdict.route]]

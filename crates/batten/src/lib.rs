@@ -12483,9 +12483,12 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
             // and can only lap, never land: it exists to spend nothing, and it
             // settles the bet before the replay that would otherwise build on
             // somebody else's commits.
+            // READ BEFORE THE ASK, which can settle or unwind the bet: a stop it
+            // causes reports the base the run was CARRYING, not what is left.
+            let held = land::LeaseHeld::of(&entered, &bet);
             let asked = asks_before_the_step(*row, this_lap, &mut trunk_poll, &mut bet, out, err)?;
             if let Answered::Stop(code) = asked {
-                say_the_cost(branch, &ledger, &land::LeaseHeld::of(&entered, &bet), err)?;
+                say_the_cost(branch, &ledger, &held, err)?;
                 unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                 return Ok(code);
             }
@@ -18974,10 +18977,17 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
 /// behind [`red_head_for`]'s narrowing and asked only of a shell call before it
 /// runs: the fact decides a command, so a read or a write opens nothing for it.
 ///
-/// The walk is bounded by the commits this clone alone holds, which is zero on a
-/// pushed branch. `head_on_a_remote`'s `None` is could-not-look, never "pushed".
+/// **PAID ON EVERY SHELL CALL UNDER A POLICY ROW, and that is a measured choice.**
+/// The cost is one ref scan and a walk that stops at the first unpushed commit,
+/// whose hidden frontier ends where `HEAD`'s line meets a remote tip — the same
+/// walk `turn mint ahead`'s `while_unpushed` pays on writes. Narrowing to the
+/// commands a module would refuse needs the module's own pattern, which is a
+/// consumer's vocabulary and not the engine's to name (non-negotiable rule 1).
+///
+/// `None` — no repository, no remote to push to — is could-not-look, never
+/// "unpushed": a remedy of "push" must not fire where no push is possible.
 //MUTANT-SUITE crates/batten/tests/it/push_before_check.rs
-//MUTANT head-unpushed-never-read|s@^        Some(false) => facts::Look::Is(()),$@        Some(false) => facts::Look::IsNot,@|an_unpushed_head_refuses_a_slow_check
+//MUTANT head-unpushed-never-read|s@^        Some(true) => facts::Look::Is(()),$@        Some(true) => facts::Look::IsNot,@|an_unpushed_head_refuses_a_slow_check
 fn head_unpushed_for(policy: &hook::Policy, envelope: &hook::Envelope) -> facts::Look<()> {
     if envelope.event != hook::Event::PreTool
         || envelope.operation != hook::Operation::Execute
@@ -18985,9 +18995,9 @@ fn head_unpushed_for(policy: &hook::Policy, envelope: &hook::Envelope) -> facts:
     {
         return facts::Look::CouldNotLook;
     }
-    match git::head_on_a_remote(hook_authority_root()) {
-        Some(false) => facts::Look::Is(()),
-        Some(true) => facts::Look::IsNot,
+    match git::head_unpushed_to_a_remote(hook_authority_root()) {
+        Some(true) => facts::Look::Is(()),
+        Some(false) => facts::Look::IsNot,
         None => facts::Look::CouldNotLook,
     }
 }

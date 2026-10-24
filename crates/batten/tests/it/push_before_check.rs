@@ -64,6 +64,18 @@ fn an_unpushed_head_refuses_a_slow_check() {
         out.contains("\"deny\"") && out.contains("check run early"),
         "{out}"
     );
+    // The same checks under the spellings a pinned toolchain and mise's own
+    // flags produce (review of #1228): a gate keyed to one spelling is evaded by
+    // the next.
+    for spelled in [
+        "cargo +nightly test -p batten",
+        "cargo t",
+        "mise run -q verify",
+        "mise r lint:clippy",
+    ] {
+        let out = decision(&dir, spelled);
+        assert!(out.contains("check run early"), "{spelled}: {out}");
+    }
     // ANTI-VACUITY: the same tree admits `land`, the push that is the remedy.
     let land = decision(&dir, "mise run land");
     assert!(!land.contains("check run early"), "{land}");
@@ -84,6 +96,16 @@ fn a_pushed_head_runs_the_check() {
 #[test]
 fn a_head_that_could_not_be_read_decides_nothing() {
     let dir = fixture("push-before-check-unborn").build();
+    let out = decision(&dir, "mise run verify");
+    assert!(!out.contains("check run early"), "{out}");
+}
+
+/// NOWHERE TO PUSH IS NOT "UNPUSHED" (review of #1228). A clone with no
+/// remote-tracking ref at all has every commit unpushed and no push that could
+/// change it, so reading it as `true` would refuse every check there for good.
+#[test]
+fn a_clone_with_no_remote_decides_nothing() {
+    let dir = fixture("push-before-check-no-remote").work_commit().build();
     let out = decision(&dir, "mise run verify");
     assert!(!out.contains("check run early"), "{out}");
 }
