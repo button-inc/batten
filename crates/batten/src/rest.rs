@@ -682,13 +682,13 @@ pub fn delete(path: &str) -> Option<Answer> {
 /// What one bodiless POST came to.
 ///
 /// **AN OUTCOME WITH NO DEFAULT, deliberately.** The one caller is
-/// [`crate::lease::cancel_run`], and no hermetic case drives a real POST of its
-/// to an ACCEPTED answer: a lap reads the lease over the wire, and a guard waits
-/// two minutes to be killed. A cancel handed to [`crate::land::abandon_with`]
-/// tests the counting above this, never this. So no case can tell a `post` that
-/// always says yes from one that measured, and a `bool` would carry that
-/// unfalsifiable answer. A type with no default cannot be fabricated; it is only
-/// ever the forge's answer, read below.
+/// [`crate::lease::cancel_run`], whose doc names the two paths that read
+/// `Refused`. No in-process case can answer a real POST, because the REST
+/// fixture is an environment variable such a case may not set, and a cancel
+/// handed to [`crate::land::abandon_with`] tests the counting above this, never
+/// this. So no case can tell a `post` that always says yes from one that
+/// measured, and a `bool` would carry that unfalsifiable answer. A type with no
+/// default cannot be fabricated; it is only ever the forge's answer, read below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Posted {
     /// A 2xx: the forge took it.

@@ -319,9 +319,9 @@ pub fn drop_subscription(
         (&session, token),
         pr,
         // A CALL, NOT THE FN BY NAME: `narrow_adoption`'s scan finds the
-        // network's callers by the full path `crate::fetch::spend` written
-        // directly before its argument list, so a bare reference, or a `use`
-        // and a short call, would hide this module from it.
+        // network's callers by `fetch::spend` written directly before its
+        // argument list, so a bare reference, or importing `spend` itself and
+        // calling it unqualified, would hide this module from it.
         (
             |calls: &[crate::fetch::Call<'_>]| crate::fetch::spend(calls),
             || {
