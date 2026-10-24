@@ -3542,7 +3542,8 @@ pub fn guard(carries: &Carries, authority: Option<&Authority>) -> Guarded {
     }
 }
 
-/// Ask the forge to cancel `run`.
+/// Ask the forge to cancel `run`: a lap's worthless matrix
+/// ([`crate::land::abandon`]) and the run a lease guard stands in.
 ///
 /// [`crate::rest::Posted::Refused`] when the cancellation was refused, which the
 /// caller reports and then runs anyway: a guard that could not stop a run must

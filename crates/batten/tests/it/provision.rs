@@ -1493,6 +1493,23 @@ fn launch_unsetting(env: &Env, dest: &Path, token: &str) -> Output {
     )
 }
 
+/// A `reject_prefix` row alone, applied, and the launcher run with `token` in
+/// the declared name and a placeholder in both the source and the target.
+#[cfg(unix)]
+fn launch_rejecting(env: &Env, dest: &Path, token: &str) -> Output {
+    launch(
+        env,
+        dest,
+        "\n[[provision.env]]\nname = \"FORGE_TOKEN\"\n\
+         from_first_set = [\"MARKED_SRC\"]\nreject_prefix = \"placeholder_\"\n",
+        &[
+            ("CRED_TOKEN", token),
+            ("MARKED_SRC", "placeholder_one"),
+            ("FORGE_TOKEN", "placeholder_two"),
+        ],
+    )
+}
+
 /// A credential receipt that proves `token` live, as a probe that answered
 /// minutes ago would have written it.
 #[cfg(unix)]
@@ -1515,17 +1532,10 @@ fn prove_live(env: &Env, token: &str) {
 fn a_reject_prefix_row_alone_is_gated_on_the_proven_credential() {
     let env = Env::new("provision-credential-reject");
     prove_live(&env, "tok_proven");
-    let rows = "\n[[provision.env]]\nname = \"FORGE_TOKEN\"\n\
-                from_first_set = [\"MARKED_SRC\"]\nreject_prefix = \"placeholder_\"\n";
-    let ran = launch(
+    let ran = launch_rejecting(
         &env,
         &env.repo.parent().unwrap().join("bin-reject"),
-        rows,
-        &[
-            ("CRED_TOKEN", "tok_proven"),
-            ("MARKED_SRC", "placeholder_one"),
-            ("FORGE_TOKEN", "placeholder_two"),
-        ],
+        "tok_proven",
     );
     let seen = watched(&ran.stdout);
     assert!(
@@ -1545,17 +1555,10 @@ fn a_reject_prefix_row_alone_is_gated_on_the_proven_credential() {
 #[test]
 fn an_unproven_credential_leaves_a_reject_prefix_rows_variable_alone() {
     let env = Env::new("provision-credential-reject-unproven");
-    let rows = "\n[[provision.env]]\nname = \"FORGE_TOKEN\"\n\
-                from_first_set = [\"MARKED_SRC\"]\nreject_prefix = \"placeholder_\"\n";
-    let ran = launch(
+    let ran = launch_rejecting(
         &env,
         &env.repo.parent().unwrap().join("bin-reject-unproven"),
-        rows,
-        &[
-            ("CRED_TOKEN", "tok_unproven"),
-            ("MARKED_SRC", "placeholder_one"),
-            ("FORGE_TOKEN", "placeholder_two"),
-        ],
+        "tok_unproven",
     );
     let seen = watched(&ran.stdout);
     assert!(

@@ -343,7 +343,7 @@ type Slug = fn() -> Option<(String, String)>;
 
 /// [`drop_subscription`] once the session and its credential are in hand: ask
 /// the endpoint through `spend`, and attest only an accepted answer. `slug` is
-/// this clone's owner/repo, asked only once the host declares what to fill.
+/// this clone's owner/repo, read as [`Slug`] says.
 ///
 /// **THE SEAM THE ACCEPTANCE IS TESTED THROUGH.** Whether an answer is a drop
 /// or a refusal is the endpoint's to say, and no hermetic fixture is that
