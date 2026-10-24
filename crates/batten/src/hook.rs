@@ -6696,7 +6696,10 @@ fn shell_resolved(word: &str, current: Option<&Path>) -> Option<std::path::PathB
 ///
 /// THE HOST IS AN ARGUMENT (CLOUD-2509). Read inline, the Windows operand only
 /// ever differed from the `/` one on Windows, so no unix leg could tell `||`
-/// from `&&`; passed in, every arm is decided on every leg.
+/// from `&&`; passed in, every operator is decided on every leg. What the host
+/// itself counts as absolute is still decided only on Windows. Not `has_root`,
+/// which also roots a drive-less `\x` there that this rule joins under the
+/// directory.
 fn shell_absolute(word: &str, windows: bool) -> bool {
     word.starts_with('/') || (windows && Path::new(word).is_absolute())
 }
@@ -11608,9 +11611,9 @@ mod tests {
     }
     use super::*;
 
-    /// CLOUD-2509: a leading `/` is absolute on every host, and only a Windows
-    /// host widens it. Fails by: the two operands joined by `&&`, or the host
-    /// flag read as always true or ignored.
+    /// CLOUD-2509: a leading `/` is absolute on every host, and the host flag
+    /// alone never makes a relative word absolute. Fails by: either operator
+    /// flipped between `||` and `&&`.
     #[test]
     fn a_leading_slash_is_absolute_on_every_host() {
         for windows in [false, true] {
