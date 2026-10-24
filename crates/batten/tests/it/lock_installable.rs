@@ -63,8 +63,8 @@ fn attestations(value: &toml::Value, path: &str, found: &mut Vec<String>) {
     }
 }
 
-/// Fails by: a spelling of the provenance going unread, or another provenance
-/// being taken for it.
+/// Fails by: a spelling of the provenance going unread, another provenance being
+/// taken for it, or one entry being counted twice.
 #[test]
 fn every_spelling_of_the_attestation_provenance_is_named() {
     let lock = r#"
@@ -74,8 +74,11 @@ version = "1.7"
 [tools.jq."platforms.macos-arm64"]
 provenance = 'github-attestations' # single-quoted, commented
 
-# a key, which an inline table parses to as well
+# a key, as a dotted header and as an inline table
 [tools.jq."platforms.linux-x64".provenance.github-attestations]
+
+[tools.jq."platforms.macos-x64"]
+provenance = { github-attestations = {} }
 
 # an array element
 [tools.jq."platforms.windows-x64"]
@@ -86,7 +89,7 @@ provenance = ["slsa", "github-attestations"]
 verified_by = "github-attestations"
 
 # a key naming it whose value names it again: one entry, not two
-[tools.jq."platforms.macos-x64".provenance]
+[tools.jq."platforms.linux-x64-musl".provenance]
 github-attestations = "github-attestations"
 
 # near misses, which must not match: another provenance, a longer value, a longer key
@@ -106,6 +109,7 @@ provenance = "github-attestations-v2"
         [
             r#""tools"."jq"[0]."platforms.linux-arm64-musl"."verified_by""#,
             r#""tools"."jq"[0]."platforms.linux-x64"."provenance"."github-attestations""#,
+            r#""tools"."jq"[0]."platforms.linux-x64-musl"."provenance"."github-attestations""#,
             r#""tools"."jq"[0]."platforms.macos-arm64"."provenance""#,
             r#""tools"."jq"[0]."platforms.macos-x64"."provenance"."github-attestations""#,
             r#""tools"."jq"[0]."platforms.windows-x64"."provenance"[1]"#,
