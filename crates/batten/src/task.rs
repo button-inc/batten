@@ -236,6 +236,7 @@ fn is_record(path: &Path) -> bool {
 /// the literal program `git`, but a spawn is still an inventory row
 /// (`clippy.toml`), and one per registration would be a cost the shell paid only
 /// because it had no alternative.
+///
 /// Off unix there is no process group to read, so the pid is the whole truth;
 /// only the read is under `cfg` (CLOUD-2509).
 pub(crate) fn process_group(pid: &str) -> String {

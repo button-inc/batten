@@ -11620,6 +11620,9 @@ mod tests {
             assert!(shell_absolute("/tmp/x", windows), "windows={windows}");
             assert!(!shell_absolute("tmp/x", windows), "windows={windows}");
         }
+        // The host's own absolute spellings, judged only where the host is one.
+        assert_eq!(shell_absolute(r"C:\x", true), cfg!(windows));
+        assert_eq!(shell_absolute(r"\\server\share", true), cfg!(windows));
     }
 
     /// A class declaring two `command` routes and one `override`, so a renderer
