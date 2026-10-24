@@ -36,13 +36,22 @@ fn repair() -> Vec<String> {
 fn the_lock_installs_without_an_attestation_read() {
     let lock =
         std::fs::read_to_string(common::at_root("mise.lock")).expect("mise.lock is readable");
-    let attested = lock
-        .lines()
-        .filter(|line| line.trim() == r#"provenance = "github-attestations""#)
-        .count();
-    assert_eq!(
-        attested, 0,
-        "mise.lock records github-attestations provenance on {attested} entr(ies); verifying it reads api.github.com, which a cloud session cannot"
+    // Each provenance line is named by the table it sits under, so a lock that
+    // gained one mid-run (CLOUD-2527) says which tool and platform it was.
+    let mut table = "";
+    let mut attested = Vec::new();
+    for line in lock.lines().map(str::trim) {
+        if line.starts_with('[') {
+            table = line;
+        } else if line == r#"provenance = "github-attestations""# {
+            attested.push(table);
+        }
+    }
+    assert!(
+        attested.is_empty(),
+        "mise.lock records github-attestations provenance on {} entr(ies); verifying it reads api.github.com, which a cloud session cannot: {}",
+        attested.len(),
+        attested.join(" ")
     );
 
     let argv = repair();
