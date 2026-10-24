@@ -165,6 +165,14 @@ pub(crate) type Stamps = Vec<(PathBuf, Option<String>)>;
 /// by its key alone.
 //MUTANT stamped-record-believes-racy|s@^    if racy {$@    if false {@|a_record_stamped_in_its_racy_window_is_hashed
 pub(crate) fn stamped(configs: &[PathBuf], at: std::time::Duration) -> Stamps {
+    // UNIX ONLY. Elsewhere a stamp carries no ctime (`crate::cache::stamp`), so
+    // an in-place edit that keeps the length and restores the mtime — a
+    // `touch -r`, a `cp -p`, a sync tool — would read as unchanged where the
+    // byte hash this shortcut skips would catch it (code review of CLOUD-2440).
+    // Off unix a record carries no stamps and is believed by its key, as before.
+    if !cfg!(unix) {
+        return Stamps::new();
+    }
     let now: Vec<(PathBuf, Option<crate::cache::Stamp>)> = keyed_paths(configs)
         .into_iter()
         .map(|path| {
