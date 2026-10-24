@@ -5802,23 +5802,86 @@ mod tests {
             let read = std::fs::read_to_string(&fifo);
             let _ = send.send(read);
         });
+        // The suite names its own pid and its job's, so a job that outlives the
+        // group kill can be described rather than only waited out (CLOUD-2514).
         let ran = spawn(
             &dir,
             Program::Suite("sh"),
             &[
                 String::from("-c"),
-                String::from("exec 3>held; (sleep 30; echo orphaned >&3) & exit 3"),
+                String::from(
+                    "echo $$ >leader; exec 3>held; (sleep 30; echo orphaned >&3) & echo $! >job; exit 3",
+                ),
             ],
             &[],
             bound,
         )
         .expect("the wait answers");
         assert_eq!(ran.outcome, Outcome::Failed(Some(3)), "{}", ran.output);
-        let said = said
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("the job the suite left running is ended with it, closing the fifo")
-            .expect("read the fifo to its end");
-        assert_eq!(said, "", "the job the suite left running is ended with it");
+        let Ok(read) = said.recv_timeout(std::time::Duration::from_secs(10)) else {
+            panic!(
+                "the job the suite left running outlived the group kill: {}",
+                survivors(&dir)
+            );
+        };
+        assert_eq!(
+            read.expect("read the fifo to its end"),
+            "",
+            "the job the suite left running is ended with it"
+        );
+    }
+
+    /// What a group kill left behind in `dir`'s suite: the leader's and the job's
+    /// pids as the suite wrote them, whether the leader's group still answers a
+    /// probe, and each survivor's pid, parent, group, state and name. The job is
+    /// then killed by pid, so a failing case does not leave it running.
+    fn survivors(dir: &std::path::Path) -> String {
+        let read = |name: &str| {
+            std::fs::read_to_string(dir.join(name))
+                .unwrap_or_default()
+                .trim()
+                .to_owned()
+        };
+        let (leader, job) = (read("leader"), read("job"));
+        let group = leader
+            .parse::<i32>()
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+            .map(|pgid| format!("{:?}", rustix::process::test_kill_process_group(pgid)));
+        let table = spawn(
+            dir,
+            Program::Suite("ps"),
+            &[
+                String::from("-A"),
+                String::from("-o"),
+                String::from("pid=,ppid=,pgid=,stat=,comm="),
+            ],
+            &[],
+            std::time::Duration::from_secs(10),
+        )
+        .map_or_else(
+            |err| format!("ps: {err}"),
+            |listed| {
+                listed
+                    .output
+                    .lines()
+                    .filter(|line| {
+                        line.split_whitespace()
+                            .take(3)
+                            .any(|field| field == leader || field == job)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            },
+        );
+        if let Some(pid) = job
+            .parse::<i32>()
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+        {
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+        }
+        format!("leader {leader}, job {job}, group probe {group:?}, ps [{table}]")
     }
 
     /// Fails by: a module's own case not judged at all, or a mutation that
