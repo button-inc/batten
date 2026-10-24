@@ -5762,5 +5762,27 @@ mod tests {
             fact.schema_fragment()["type"],
             serde_json::json!(["boolean", "null"])
         );
+        // The rows beside it answer for the facts they DO name, so an arm
+        // collapsed to its default is not passed by `head-unpushed`'s `false`.
+        assert!(Fact::Tasks.minted_at_session_start());
+        assert_eq!(Fact::GitHead.tree_key(), Some("git-head"));
+    }
+
+    /// EVERY FACT'S FRAGMENT IS ROUTED to a delegate that owns it: an object with
+    /// a description, never `null` and never the "unrouted" fallback.
+    ///
+    /// Fails by: a delegate returning its default, or a fact sent to a delegate
+    /// whose own match calls it unrouted.
+    #[test]
+    fn every_fact_has_a_routed_schema_fragment() {
+        for fact in Fact::ALL {
+            let fragment = fact.schema_fragment();
+            let description = fragment["description"].as_str().unwrap_or_default();
+            assert!(
+                !description.is_empty() && !description.starts_with("unrouted"),
+                "{}: {fragment}",
+                fact.as_str()
+            );
+        }
     }
 }
