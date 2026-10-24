@@ -120,7 +120,30 @@ impl Drop for Secret {
         // `read_volatile` denies the optimiser the "nothing reads this" premise
         // it would need to elide the loop.
         let bytes = unsafe_free_wipe(&mut self.0);
+        #[cfg(test)]
+        dropped::record(&self.0);
         std::hint::black_box(bytes);
+    }
+}
+
+/// The buffer this thread's last drop left, for a case to read (CLOUD-2509):
+/// freed memory cannot be read without `unsafe`, so the drop reports the buffer
+/// while it still owns it.
+#[cfg(test)]
+mod dropped {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static LAST: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn record(buffer: &str) {
+        LAST.with(|last| *last.borrow_mut() = Some(buffer.to_owned()));
+    }
+
+    /// The last buffer a drop on this thread left, taken.
+    pub(super) fn take() -> Option<String> {
+        LAST.with(|last| last.borrow_mut().take())
     }
 }
 
@@ -206,6 +229,16 @@ mod tests {
     #[test]
     fn expose_hands_back_the_value_unchanged() {
         assert_eq!(Secret::new(CANARY.to_owned()).expose(), CANARY);
+    }
+
+    /// CLOUD-2509: dropping a secret wipes it — the drop, not just the helper.
+    /// Fails by: a `drop` that leaves the buffer as it found it, which no read
+    /// after the drop could see.
+    #[test]
+    fn a_dropped_secret_leaves_its_buffer_wiped() {
+        let _ = dropped::take();
+        drop(Secret::new(CANARY.to_owned()));
+        assert_eq!(dropped::take(), Some(" ".repeat(CANARY.len())));
     }
 
     /// SHOWN ABLE TO FAIL (CLOUD-418): the wipe is asserted over the buffer the

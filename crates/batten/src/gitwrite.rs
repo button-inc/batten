@@ -1441,18 +1441,20 @@ fn materialise(
 // written to be obviously right rather than to be measured.
 
 /// Create a symbolic link, or the closest thing the platform has.
-#[cfg(unix)]
-pub(crate) fn link(destination: &str, target: &Path) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(destination, target)
-}
-
-/// The `core.symlinks=false` shape: the link's TARGET PATH as file content.
 ///
-/// Not `std::os::windows::fs::symlink_file`, which needs a privilege an ordinary
-/// account does not hold, so it would fail rather than degrade.
-#[cfg(not(unix))]
+/// Off unix, the `core.symlinks=false` shape: the link's TARGET PATH as file
+/// content. Not `std::os::windows::fs::symlink_file`, which needs a privilege an
+/// ordinary account does not hold, so it would fail rather than degrade. Only
+/// each platform's call is under `cfg` (CLOUD-2509).
 pub(crate) fn link(destination: &str, target: &Path) -> std::io::Result<()> {
-    crate::durable::replace(target, destination)
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(destination, target)
+    }
+    #[cfg(not(unix))]
+    {
+        crate::durable::replace(target, destination)
+    }
 }
 
 /// Set the executable bit.
@@ -1718,22 +1720,15 @@ fn tree_from_dir(repo: &gix::Repository, dir: &Path) -> Result<gix::ObjectId> {
         .detach())
 }
 
-/// A file's blob kind, which is its executable bit and nothing else.
-#[cfg(unix)]
+/// A file's blob kind, which is its executable bit and nothing else. On a
+/// platform with no executable bit, every blob is a plain one — which is what git
+/// itself records there.
 fn executable_kind(meta: &std::fs::Metadata) -> gix::objs::tree::EntryKind {
-    use std::os::unix::fs::PermissionsExt as _;
-    if meta.permissions().mode() & 0o111 == 0 {
-        gix::objs::tree::EntryKind::Blob
-    } else {
+    if crate::git::executable_bit_or(meta, false) {
         gix::objs::tree::EntryKind::BlobExecutable
+    } else {
+        gix::objs::tree::EntryKind::Blob
     }
-}
-
-/// On a platform with no executable bit, every blob is a plain one — which is
-/// what git itself records there.
-#[cfg(not(unix))]
-fn executable_kind(_meta: &std::fs::Metadata) -> gix::objs::tree::EntryKind {
-    gix::objs::tree::EntryKind::Blob
 }
 
 /// The conflict-marker width, as the merge driver takes it.

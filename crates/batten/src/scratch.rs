@@ -123,23 +123,27 @@ fn reap_the_dead(root: &Path) {
 /// which is LIFE — reading it as death is what would delete a live sibling's
 /// corpora mid-run. Only ESRCH is death. The same asymmetry
 /// [`crate::task`]'s own probe argues for, and for the same reason.
-#[cfg(unix)]
-fn pid_is_live(pid: i32) -> bool {
-    let Some(target) = rustix::process::Pid::from_raw(pid) else {
-        return true;
-    };
-    !matches!(
-        rustix::process::test_kill_process(target),
-        Err(rustix::io::Errno::SRCH)
-    )
-}
-
+///
 /// Off unix there is no `kill -0` in this closure at all — `rustix` is declared
 /// under `[target.'cfg(unix)'.dependencies]` — so nothing is reaped. That is the
-/// could-not-look direction, which never deletes a live run's scratch.
-#[cfg(not(unix))]
-fn pid_is_live(_pid: i32) -> bool {
-    true
+/// could-not-look direction, which never deletes a live run's scratch. Only the
+/// probe is under `cfg` (CLOUD-2509).
+fn pid_is_live(pid: i32) -> bool {
+    #[cfg(unix)]
+    {
+        let Some(target) = rustix::process::Pid::from_raw(pid) else {
+            return true;
+        };
+        !matches!(
+            rustix::process::test_kill_process(target),
+            Err(rustix::io::Errno::SRCH)
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
 }
 
 #[cfg(test)]

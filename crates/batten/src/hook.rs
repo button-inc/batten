@@ -6678,10 +6678,23 @@ fn followed_cd(
 /// as a repository path on the one CI leg that runs there.
 fn shell_resolved(word: &str, current: Option<&Path>) -> Option<std::path::PathBuf> {
     let path = Path::new(word);
-    if word.starts_with('/') || path.is_absolute() {
+    if shell_absolute(word, cfg!(windows)) {
         return Some(path.to_path_buf());
     }
     current.map(|here| here.join(path))
+}
+
+/// Whether a shell word is absolute: a leading `/` everywhere, and on Windows
+/// whatever the host also reads as absolute (`C:\x`, `\\server\share`).
+///
+/// THE HOST IS AN ARGUMENT (CLOUD-2509). Read inline, the Windows operand only
+/// ever differed from the `/` one on Windows, so no unix leg could tell `||`
+/// from `&&`; passed in, every operator is decided on every leg. What the host
+/// itself counts as absolute is still decided only on Windows. Not `has_root`,
+/// which also roots a drive-less `\x` there that this rule joins under the
+/// directory.
+fn shell_absolute(word: &str, windows: bool) -> bool {
+    word.starts_with('/') || (windows && Path::new(word).is_absolute())
 }
 
 /// Does this `substitutes` entry select this invocation?
@@ -11508,6 +11521,20 @@ mod tests {
         }
     }
     use super::*;
+
+    /// CLOUD-2509: a leading `/` is absolute on every host, and the host flag
+    /// alone never makes a relative word absolute. Fails by: either operator
+    /// flipped between `||` and `&&`.
+    #[test]
+    fn a_leading_slash_is_absolute_on_every_host() {
+        for windows in [false, true] {
+            assert!(shell_absolute("/tmp/x", windows), "windows={windows}");
+            assert!(!shell_absolute("tmp/x", windows), "windows={windows}");
+        }
+        // The host's own absolute spellings, judged only where the host is one.
+        assert_eq!(shell_absolute(r"C:\x", true), cfg!(windows));
+        assert_eq!(shell_absolute(r"\\server\share", true), cfg!(windows));
+    }
 
     /// A class declaring two `command` routes and one `override`, so a renderer
     /// that takes "the first one" and one that takes them all are distinguishable.

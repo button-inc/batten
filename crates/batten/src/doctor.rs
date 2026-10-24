@@ -1392,15 +1392,7 @@ fn is_runnable_hook(at: &Path) -> bool {
     if !meta.is_file() {
         return false;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        meta.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
+    crate::git::executable_bit_or(&meta, true)
 }
 
 /// The bare report's `config` check (CLOUD-1428), and `doctor config`'s whole

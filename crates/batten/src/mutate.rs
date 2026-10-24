@@ -2525,6 +2525,9 @@ fn wait_bounded(
             // The wait itself failed, so whether the suite exited is unknown.
             // It is ended rather than left running, and the failure is the answer.
             kill_group(pid);
+            // No sweep: with these flags and a valid pid `waitid` fails only with
+            // `ECHILD`, the leader reaped elsewhere, which frees the id a repeat
+            // would signal. The one kill above is CLOUD-2525's.
             let _ = worker.join();
             let _ = child.wait();
             return Err(failed);
@@ -2542,9 +2545,49 @@ fn wait_bounded(
         let _ = exits.recv_timeout(TERMINATE_GRACE);
     }
     kill_group(pid);
+    sweep_group(pid);
     let _ = worker.join();
     let status = child.wait()?;
     Ok((status, timed_out))
+}
+
+/// How many more `SIGKILL`s [`sweep_group`] sends before it stops asking.
+#[cfg(unix)]
+const SWEEPS: usize = 1024;
+
+/// [`sweep_group`] where there are no process groups.
+#[cfg(all(not(unix), test))]
+fn sweep_group(_leader: u32) {}
+
+/// Kill `leader`'s group again, [`SWEEPS`] times with a yield between, after
+/// [`kill_group`] and BEFORE the leader is reaped.
+///
+/// **DARWIN'S FORK DOES NOT RESTART UNDER A GROUP SIGNAL** (CLOUD-2514). Linux
+/// restarts a `fork` that races a signal to the parent's group, so the child is
+/// either never made or signalled with it; Darwin lets the child join the group
+/// unsignalled. Measured on the `macos` runner: the group kill ended a suite's
+/// background subshell while it was forking `sleep`, and the `sleep` lived on in
+/// the leader's group, reparented to init, holding what the suite held.
+///
+/// **BEFORE THE REAP, FOR [`wait_bounded`]'S OWN REASON.** The leader is still an
+/// unreaped zombie, so its pid — which IS the group id — cannot be reused while
+/// the sweep signals it, and every `SIGKILL` reaches this suite's group or
+/// nobody. The zombie also keeps the group answering, so the sweep runs its full
+/// count rather than stopping at the first `ESRCH`: a bounded cost of microseconds
+/// per suite, against a build per mutant.
+#[cfg(unix)]
+fn sweep_group(leader: u32) {
+    let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default())
+    else {
+        return;
+    };
+    for _ in 0..SWEEPS {
+        let Ok(()) = rustix::process::kill_process_group(group, rustix::process::Signal::KILL)
+        else {
+            return;
+        };
+        std::thread::yield_now();
+    }
 }
 
 /// How long a timed-out runner has to end what it started before `SIGKILL`.
@@ -5802,23 +5845,153 @@ mod tests {
             let read = std::fs::read_to_string(&fifo);
             let _ = send.send(read);
         });
+        // The suite names its own pid and its job's, so a job that outlives the
+        // group kill can be described rather than only waited out (CLOUD-2514).
         let ran = spawn(
             &dir,
             Program::Suite("sh"),
             &[
                 String::from("-c"),
-                String::from("exec 3>held; (sleep 30; echo orphaned >&3) & exit 3"),
+                String::from(
+                    "echo $$ >leader; exec 3>held; (sleep 30; echo orphaned >&3) & echo $! >job; exit 3",
+                ),
             ],
             &[],
             bound,
         )
         .expect("the wait answers");
         assert_eq!(ran.outcome, Outcome::Failed(Some(3)), "{}", ran.output);
-        let said = said
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("the job the suite left running is ended with it, closing the fifo")
-            .expect("read the fifo to its end");
-        assert_eq!(said, "", "the job the suite left running is ended with it");
+        let Ok(read) = said.recv_timeout(std::time::Duration::from_secs(10)) else {
+            panic!(
+                "the job the suite left running outlived the group kill: {}",
+                survivors(&dir)
+            );
+        };
+        assert_eq!(
+            read.expect("read the fifo to its end"),
+            "",
+            "the job the suite left running is ended with it"
+        );
+    }
+
+    /// Fails by: the sweep sending nothing. The suite leads a group holding a
+    /// `sleep 30` and waits on it, so only a sweep of that group returns it
+    /// before the sleep would.
+    ///
+    /// Driven directly, because the interleaving that leaves a member behind is
+    /// Darwin's alone (CLOUD-2514): on Linux the first kill never misses one.
+    #[test]
+    fn a_sweep_ends_what_is_left_in_a_group() {
+        // Only unix has the group to sweep.
+        if !cfg!(unix) {
+            return;
+        }
+        let dir = crate::scratch::scratch("mutate-sweep");
+        let bound = std::time::Duration::from_secs(60);
+        let made = spawn(
+            &dir,
+            Program::Suite("mkfifo"),
+            &[String::from("ready")],
+            &[],
+            bound,
+        )
+        .expect("mkfifo runs");
+        assert_eq!(made.outcome, Outcome::Passed, "{}", made.output);
+        let (send, swept) = std::sync::mpsc::channel();
+        let suite = dir.clone();
+        std::thread::spawn(move || {
+            let _ = send.send(spawn(
+                &suite,
+                Program::Suite("sh"),
+                &[
+                    String::from("-c"),
+                    String::from("sleep 30 & echo $$ >ready; wait"),
+                ],
+                &[],
+                bound,
+            ));
+        });
+        // The fifo's open blocks until the suite writes, so the read is the wait,
+        // and it is taken on its own thread so a suite that never writes fails
+        // the case within a bound instead of holding it.
+        let (named, said) = std::sync::mpsc::channel();
+        let ready = dir.join("ready");
+        std::thread::spawn(move || {
+            let _ = named.send(std::fs::read_to_string(ready));
+        });
+        let leader: u32 = said
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("the suite names itself")
+            .expect("read the fifo")
+            .trim()
+            .parse()
+            .expect("a pid");
+        sweep_group(leader);
+        let ran = swept
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("the swept suite returns before its sleep would")
+            .expect("the wait answers");
+        assert_ne!(ran.outcome, Outcome::Passed, "{}", ran.output);
+    }
+
+    /// What a group kill left behind in `dir`'s suite: the leader's and the job's
+    /// pids as the suite wrote them, whether the leader's group still answers a
+    /// probe, and each survivor's pid, parent, group, state and name.
+    ///
+    /// It signals nothing. A failing case's job is `sleep 30` and ends on its own,
+    /// while any pid read here may already have been reused by the time `kill`
+    /// would run, so a cleanup could only trade a bounded leak for a stranger.
+    fn survivors(dir: &std::path::Path) -> String {
+        let read = |name: &str| {
+            std::fs::read_to_string(dir.join(name))
+                .unwrap_or_default()
+                .trim()
+                .to_owned()
+        };
+        let (leader, job) = (read("leader"), read("job"));
+        // Through the module's own `spawn`, as the case's suites are, so the
+        // probe and the listing compile on every target the case is built for.
+        let kill = |args: &[&str]| {
+            spawn(
+                dir,
+                Program::Suite("kill"),
+                &args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
+                &[],
+                std::time::Duration::from_secs(10),
+            )
+            .map_or_else(
+                |err| format!("kill: {err}"),
+                |ran| format!("{:?}", ran.outcome),
+            )
+        };
+        // An empty pid would ask `kill` about nothing, or every row about "".
+        let named = |field: &str| !field.is_empty() && (field == leader || field == job);
+        let group = if leader.is_empty() {
+            String::from("no leader pid written")
+        } else {
+            kill(&["-0", "--", &format!("-{leader}")])
+        };
+        let rows = spawn(
+            dir,
+            Program::Suite("ps"),
+            &[
+                String::from("-A"),
+                String::from("-o"),
+                String::from("pid=,ppid=,pgid=,stat=,comm="),
+            ],
+            &[],
+            std::time::Duration::from_secs(10),
+        )
+        .map(|listed| {
+            listed
+                .output
+                .lines()
+                .filter(|line| line.split_whitespace().take(3).any(&named))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        });
+        let listing = rows.map_or_else(|err| format!("ps: {err}"), |rows| rows.join(" / "));
+        format!("leader {leader}, job {job}, group probe {group}, ps [{listing}]")
     }
 
     /// Fails by: a module's own case not judged at all, or a mutation that

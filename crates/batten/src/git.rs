@@ -5958,17 +5958,32 @@ fn entry_diverges(
 }
 
 /// Whether the file's executable bit disagrees with what the index records.
-#[cfg(unix)]
+///
+/// Where the platform has no executable bit there is nothing to compare: git on
+/// such a platform runs with `core.fileMode = false` for the same reason.
 fn mode_diverges(metadata: &std::fs::Metadata, recorded_executable: bool) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    (metadata.permissions().mode() & 0o111 != 0) != recorded_executable
+    executable_bit_or(metadata, recorded_executable) != recorded_executable
 }
 
-/// No executable bit to read, so nothing to compare: git on such a platform runs
-/// with `core.fileMode = false` for the same reason.
-#[cfg(not(unix))]
-fn mode_diverges(_metadata: &std::fs::Metadata, _recorded_executable: bool) -> bool {
-    false
+/// Whether any execute bit stands on `meta`, or `elsewhere` where the platform
+/// has no such bit to read.
+///
+/// The one platform read behind every executable-bit reader (CLOUD-2509): each
+/// caller states its off-unix answer as `elsewhere`, an argument every leg
+/// compiles and tests, where a `#[cfg(not(unix))]` twin was code no unix sweep
+/// could build.
+pub(crate) fn executable_bit_or(meta: &std::fs::Metadata, elsewhere: bool) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = elsewhere;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        elsewhere
+    }
 }
 
 /// Whether a git pathspec — without magic — selects `path` (CLOUD-843).
@@ -6020,6 +6035,30 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    /// CLOUD-2509: the execute bit is read where the platform has one, and the
+    /// caller's stated answer is returned where it does not. Fails by: a
+    /// constant reading, the fallback read on unix, or a mask that sees a read or
+    /// write bit as an execute bit. A created file never carries an execute bit
+    /// (creation's mode is `0o666` under any umask), and this test binary does.
+    #[test]
+    fn the_execute_bit_is_read_where_the_platform_has_one() {
+        let plain = crate::scratch::scratch("git-execute-bit").join("plain");
+        crate::durable::replace(&plain, "text").unwrap();
+        let program = std::env::current_exe().unwrap();
+        for (path, bit) in [(&plain, false), (&program, true)] {
+            let meta = fs::metadata(path).unwrap();
+            for elsewhere in [false, true] {
+                let reading = if cfg!(unix) { bit } else { elsewhere };
+                assert_eq!(
+                    executable_bit_or(&meta, elsewhere),
+                    reading,
+                    "{} elsewhere={elsewhere}",
+                    path.display()
+                );
+            }
+        }
+    }
 
     /// A hunk near the top carries its own start line (CLOUD-2507): line 7 of
     /// 12 changed is `@@ -4,7 +4,7 @@` over lines 4-10, as `git diff` writes it.

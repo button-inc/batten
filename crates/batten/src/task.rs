@@ -236,20 +236,20 @@ fn is_record(path: &Path) -> bool {
 /// the literal program `git`, but a spawn is still an inventory row
 /// (`clippy.toml`), and one per registration would be a cost the shell paid only
 /// because it had no alternative.
-#[cfg(unix)]
+///
+/// Off unix there is no process group to read, so the pid is the whole truth;
+/// only the read is under `cfg` (CLOUD-2509).
 pub(crate) fn process_group(pid: &str) -> String {
-    let Ok(raw) = pid.parse::<i32>() else {
-        return pid.to_owned();
-    };
-    rustix::process::Pid::from_raw(raw)
+    #[cfg(unix)]
+    let group = pid
+        .parse::<i32>()
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
         .and_then(|pid| rustix::process::getpgid(Some(pid)).ok())
-        .map_or_else(|| pid.to_owned(), |pgid| pgid.as_raw_nonzero().to_string())
-}
-
-/// Off unix there is no process group to read, so the pid is the whole truth.
-#[cfg(not(unix))]
-pub(crate) fn process_group(pid: &str) -> String {
-    pid.to_owned()
+        .map(|pgid| pgid.as_raw_nonzero().to_string());
+    #[cfg(not(unix))]
+    let group = None::<String>;
+    group.unwrap_or_else(|| pid.to_owned())
 }
 
 /// Register a task, replacing any record under the same pid.
@@ -436,7 +436,19 @@ fn matches_cmdline(program_root: &str, task: &str, cmdline: &str) -> bool {
 /// A pid that will not parse is not a process, which is the one direction this
 /// may answer `false` in without asking the kernel: an unparseable field is a
 /// malformed record rather than a dead task.
-#[cfg(unix)]
+///
+/// # Off unix
+///
+/// Nothing is ever reported dead — and nothing is ever REAPED. The same
+/// asymmetry [`task_alive`] argues for, applied to the only other place that can
+/// act on it. `rustix` is a `cfg(unix)` dependency (`Cargo.toml` declares it
+/// under `[target.'cfg(unix)'.dependencies]` precisely so a Windows build links
+/// neither it nor `signal-hook`), so there is no `kill -0` there at all — and a
+/// wrongly CRASHED verdict is the expensive direction, because a successor
+/// session reads this to learn what was in flight. Answering "alive" makes the
+/// reader useless on Windows rather than wrong there, which is the side to be on.
+/// The parse decides on every platform; only the probe is under `cfg`
+/// (CLOUD-2509).
 fn pid_exists(pid: &str) -> bool {
     let Ok(raw) = pid.parse::<i32>() else {
         return false;
@@ -455,8 +467,16 @@ fn pid_exists(pid: &str) -> bool {
     // `.claude/rules/rust.md` names — the sandbox cannot produce the failing
     // state, so the case asserted its conclusion over a premise root had already
     // satisfied.
-    rustix::process::Pid::from_raw(raw)
-        .is_some_and(|pid| lives(rustix::process::test_kill_process(pid)))
+    #[cfg(unix)]
+    {
+        rustix::process::Pid::from_raw(raw)
+            .is_some_and(|pid| lives(rustix::process::test_kill_process(pid)))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = raw;
+        true
+    }
 }
 
 /// Whether a `kill(pid, 0)` answer means the process is THERE.
@@ -476,25 +496,6 @@ fn pid_exists(pid: &str) -> bool {
 /// gate must not read as free, since a wrong answer here fails open.
 const fn lives(answer: Result<(), rustix::io::Errno>) -> bool {
     !matches!(answer, Err(rustix::io::Errno::SRCH))
-}
-
-/// Off unix there is no probe, so nothing is ever reported dead — and nothing is
-/// ever REAPED.
-///
-/// The same asymmetry [`task_alive`] argues for, applied to the only other place
-/// that can act on it. `rustix` is a `cfg(unix)` dependency (`Cargo.toml`
-/// declares it under `[target.'cfg(unix)'.dependencies]` precisely so a Windows
-/// build links neither it nor `signal-hook`), so there is no `kill -0` here at
-/// all — and a wrongly CRASHED verdict is the expensive direction, because a
-/// successor session reads this to learn what was in flight. Answering "alive"
-/// makes the reader useless on Windows rather than wrong there, which is the
-/// side to be on.
-///
-/// The parse still decides, for the reason above: a malformed record is not a
-/// process on any platform.
-#[cfg(not(unix))]
-fn pid_exists(pid: &str) -> bool {
-    pid.parse::<i32>().is_ok()
 }
 
 /// Render one entry's line.

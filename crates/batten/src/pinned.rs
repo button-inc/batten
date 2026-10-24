@@ -615,18 +615,12 @@ fn programs_in(dirs: &[PathBuf]) -> BTreeSet<String> {
 }
 
 /// Does any execute bit stand on this path?
-#[cfg(unix)]
+///
+/// Where the platform has no execute bit (Windows), a regular file on a `PATH`
+/// directory is the closest honest reading, and the alternative — an extension
+/// allowlist — is a second authority over what counts as a program.
 fn executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
-}
-
-/// Windows has no execute bit; a regular file on a `PATH` directory is the
-/// closest honest reading, and the alternative — an extension allowlist — is a
-/// second authority over what counts as a program.
-#[cfg(not(unix))]
-fn executable(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|meta| meta.is_file())
+    std::fs::metadata(path).is_ok_and(|meta| crate::git::executable_bit_or(&meta, meta.is_file()))
 }
 
 #[cfg(test)]
