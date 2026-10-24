@@ -197,6 +197,28 @@ pub(crate) fn stamped(configs: &[PathBuf], at: std::time::Duration) -> Stamps {
     stamps
 }
 
+/// The key over `configs` and the stamps to record beside it, stamped before
+/// the key's read and again after it. A keyed file that appeared, vanished or
+/// changed while the key was read would leave stamps about a different set of
+/// files than the key hashed, so stamps are recorded only where both passes
+/// agree (code review of CLOUD-2440).
+pub(crate) fn stamped_key(configs: &[PathBuf]) -> Option<(String, Stamps)> {
+    let before = stamped(configs, crate::cache::now());
+    let key = key(configs)?;
+    let after = stamped(configs, crate::cache::now());
+    Some((key, settled(before, &after)))
+}
+
+/// `before`, where nothing moved between it and `after`; otherwise no stamps.
+//MUTANT stamped-record-unsettled|s@^    if before == \*after {$@    if true {@|stamps_that_moved_around_the_read_are_not_recorded
+fn settled(before: Stamps, after: &Stamps) -> Stamps {
+    if before == *after {
+        before
+    } else {
+        Stamps::new()
+    }
+}
+
 /// Whether a record keyed `key` over `configs`, with `stamps`, is about the
 /// files as they stand (CLOUD-2440).
 ///
@@ -558,8 +580,7 @@ fn memoised(root: &Path, ask: impl FnOnce(&Path) -> PinnedFacts) -> PinnedFacts 
 /// should not have to infer it.
 #[must_use]
 pub fn record(root: &Path, configs: &[PathBuf], programs: &BTreeSet<String>) -> bool {
-    let stamps = stamped(configs, crate::cache::now());
-    let (Some(key), Some(path)) = (key(configs), record_path(root)) else {
+    let (Some((key, stamps)), Some(path)) = (stamped_key(configs), record_path(root)) else {
         return false;
     };
     let record = Record {
@@ -857,6 +878,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A sibling that appeared while the key was read leaves the two stamp
+    /// passes disagreeing, and neither is recorded.
+    #[test]
+    fn stamps_that_moved_around_the_read_are_not_recorded() {
+        let lock = PathBuf::from("/x/mise.lock");
+        let before: Stamps = vec![(lock.clone(), None)];
+        let after: Stamps = vec![(lock.clone(), Some("stat:1".to_owned()))];
+        assert!(settled(before.clone(), &after).is_empty(), "moved: none");
+        assert_eq!(settled(before.clone(), &before), before, "settled: kept");
+    }
+
     /// Stamps over configs that are all absent — recorded in a window where the
     /// manifest was briefly gone — answer nothing: the key over nothing is
     /// `None`, which refuses every record.
@@ -906,6 +938,10 @@ mod tests {
             .expect("manifest")
             .set_modified(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
             .expect("pre-epoch mtime");
+        assert!(
+            crate::cache::stamp(&overlay).is_none(),
+            "the premise: the overlay yields no stamp"
+        );
         assert!(
             !still_keyed(&configs, "not-the-key", &stamps),
             "a present file without a stamp is not the absent one recorded"
