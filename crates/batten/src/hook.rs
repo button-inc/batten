@@ -7641,7 +7641,7 @@ pub fn policy_rewrite(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -
 /// A yes/no fact as the document carries it: `true`, `false`, or `null` for
 /// could-not-look — never collapsed, since a module reading `null` as `false`
 /// would decide over a question nobody answered.
-fn flag(look: &crate::facts::Look<()>) -> Value {
+fn flag(look: crate::facts::Look<()>) -> Value {
     match look {
         crate::facts::Look::Is(()) => Value::Bool(true),
         crate::facts::Look::IsNot => Value::Bool(false),
@@ -7775,7 +7775,7 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // A BOOLEAN AND NOTHING ELSE (CLOUD-1978): `false` for a call that is
             // not a session-management method or whose prompt lacks a receipt,
             // `null` only when the store could not be located.
-            crate::facts::Fact::DispatchCleared => Some(flag(facts.dispatch)),
+            crate::facts::Fact::DispatchCleared => Some(flag(*facts.dispatch)),
             // THE RECORD OR `null` (CLOUD-2270): no record and a record nobody
             // could read both owe a push nothing a module can act on.
             crate::facts::Fact::RedHead => Some(match facts.red_head {
@@ -7786,7 +7786,7 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             }),
             // A BOOLEAN AND NOTHING ELSE (CLOUD-2489), `DispatchCleared`'s shape:
             // no sha of the unpushed range reaches the document.
-            crate::facts::Fact::HeadUnpushed => Some(flag(facts.head_unpushed)),
+            crate::facts::Fact::HeadUnpushed => Some(flag(*facts.head_unpushed)),
             crate::facts::Fact::AgentSourced => Some(facts.sourced.as_ref().map_or(
                 serde_json::Value::Null,
                 |records| {

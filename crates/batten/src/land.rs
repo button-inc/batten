@@ -3523,59 +3523,6 @@ impl Ledger {
     pub const fn spent(&self) -> u32 {
         self.paid
     }
-
-    /// The counted cost of a run that is stopping (CLOUD-2417).
-    ///
-    /// **EVERY FIELD IS READ, NONE IS SAID.** On #1191 `land`'s stop exits printed
-    /// nothing about spend, and the reader filled the silence with "a full lap of
-    /// lease occupancy" over a run whose `paid` was zero. One exit did speak and
-    /// hardcoded "this branch has spent no CI at all", which is false the moment a
-    /// matrix was bought before a refunded bound ran out. So the line is
-    /// [`crate::output::Progress`], whose fields are counts, flags and pointers
-    /// and nothing an estimate fits in.
-    pub(crate) fn cost(&self, branch: &str, held: &LeaseHeld) -> crate::output::Progress {
-        use crate::output::Fact;
-        let mut facts = vec![
-            ("laps charged", Fact::Count(u64::from(self.laps))),
-            ("matrices bought", Fact::Count(u64::from(self.paid))),
-            ("lease taken", Fact::Flag(held.taken)),
-        ];
-        if let Some(base) = held
-            .speculating_on
-            .as_deref()
-            .and_then(crate::output::Token::new)
-        {
-            facts.push(("speculating on", Fact::Pointer(base)));
-        }
-        crate::output::Progress {
-            verb: "land",
-            subject: crate::verdict::artifact(branch),
-            facts,
-        }
-    }
-}
-
-/// What a stopping run still holds, read from its own records rather than said.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LeaseHeld {
-    /// Whether [`Step::Lease`] was entered and not yet undone.
-    pub taken: bool,
-    /// The base borrowed from a holder ahead, while a bet is outstanding.
-    pub speculating_on: Option<String>,
-}
-
-//MUTANT-SUITE crates/batten/src/land.rs
-//MUTANT lease-taken-always-false|s@^            taken: entered.contains(&Step::Lease),$@            taken: false,@|a_taken_lease_reads_from_the_entered_steps
-//MUTANT speculation-never-named|s@^            speculating_on: bet.base.clone(),$@            speculating_on: None,@|a_speculating_stop_names_the_base_it_borrowed
-impl LeaseHeld {
-    /// Read from the driver's `entered` steps and its outstanding bet.
-    #[must_use]
-    pub fn of(entered: &[Step], bet: &crate::speculation::Bet) -> Self {
-        Self {
-            taken: entered.contains(&Step::Lease),
-            speculating_on: bet.base.clone(),
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4484,44 +4431,6 @@ mod lap_tests {
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-
-    /// THE STOP THAT BOUGHT NOTHING SAYS ZERO, as a count (CLOUD-2417). #1191's
-    /// reader supplied "a full lap of lease occupancy" where this line was absent.
-    #[test]
-    fn a_stop_before_the_ready_says_no_matrix_was_bought() {
-        use crate::output::Line as _;
-        let mut ledger = super::Ledger::default();
-        ledger.attempt();
-        let held =
-            super::LeaseHeld::of(&[super::Step::Replay], &crate::speculation::Bet::default());
-        assert_eq!(
-            ledger.cost("feature", &held).line(),
-            "land: feature — laps charged 1; matrices bought 0; lease taken false"
-        );
-    }
-
-    /// A stop over a borrowed base names that base, so the next reader knows
-    /// whose commits the branch was carrying.
-    #[test]
-    fn a_speculating_stop_names_the_base_it_borrowed() {
-        use crate::output::Line as _;
-        let bet = crate::speculation::Bet {
-            base: Some("a1b2c3d".to_owned()),
-            ..crate::speculation::Bet::default()
-        };
-        let line = super::Ledger::default()
-            .cost("feature", &super::LeaseHeld::of(&[], &bet))
-            .line();
-        assert!(line.ends_with("; speculating on a1b2c3d"), "got: {line}");
-    }
-
-    /// The lease is what the driver ENTERED, not what a step was asked to do.
-    #[test]
-    fn a_taken_lease_reads_from_the_entered_steps() {
-        let bet = crate::speculation::Bet::default();
-        assert!(super::LeaseHeld::of(&[super::Step::Replay, super::Step::Lease], &bet).taken);
-        assert!(!super::LeaseHeld::of(&[super::Step::Replay], &bet).taken);
-    }
 
     /// EVERY STEP HAS A DISTINCT, STABLE PHASE TOKEN.
     ///
