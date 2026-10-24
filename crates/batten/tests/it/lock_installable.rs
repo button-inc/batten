@@ -32,26 +32,54 @@ fn repair() -> Vec<String> {
         .expect("the row carries a repair")
 }
 
+/// The provenance mise verifies by reading api.github.com.
+const ATTESTATIONS: &str = "github-attestations";
+
+/// Push the path of every `provenance` under `value` that names [`ATTESTATIONS`],
+/// as a string or as a key of its own table.
+fn attestations(value: &toml::Value, path: &str, found: &mut Vec<String>) {
+    match value {
+        toml::Value::Table(table) => {
+            for (key, inner) in table {
+                let here = format!("{path}.{key:?}");
+                let names = inner.as_str() == Some(ATTESTATIONS)
+                    || inner
+                        .as_table()
+                        .is_some_and(|kinds| kinds.contains_key(ATTESTATIONS));
+                if key == "provenance" && names {
+                    found.push(here);
+                } else {
+                    attestations(inner, &here, found);
+                }
+            }
+        }
+        toml::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                attestations(item, &format!("{path}[{index}]"), found);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[test]
 fn the_lock_installs_without_an_attestation_read() {
     let lock =
         std::fs::read_to_string(common::at_root("mise.lock")).expect("mise.lock is readable");
-    // Each provenance line is named by the table it sits under, so a lock that
-    // gained one mid-run (CLOUD-2527) says which tool and platform it was.
-    let mut table = "";
+    // Parsed rather than matched by line, so every TOML spelling of the key is
+    // read, and each one is named by its path: a lock that gained one mid-run
+    // (CLOUD-2527) says which tool, version and platform it was.
     let mut attested = Vec::new();
-    for line in lock.lines().map(str::trim) {
-        if line.starts_with('[') {
-            table = line;
-        } else if line == r#"provenance = "github-attestations""# {
-            attested.push(table);
-        }
-    }
+    attestations(
+        &toml::from_str(&lock).expect("mise.lock is TOML"),
+        "",
+        &mut attested,
+    );
     assert!(
         attested.is_empty(),
         "mise.lock records github-attestations provenance on {} entr(ies); verifying it reads api.github.com, which a cloud session cannot: {}",
         attested.len(),
-        attested.join(" ")
+        attested.join(", ")
     );
 
     let argv = repair();
