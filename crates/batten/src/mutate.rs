@@ -5858,8 +5858,14 @@ mod tests {
                 |ran| format!("{:?}", ran.outcome),
             )
         };
-        let group = kill(&["-0", "--", &format!("-{leader}")]);
-        let table = spawn(
+        // An empty pid would ask `kill` about nothing, or every row about "".
+        let named = |field: &str| !field.is_empty() && (field == leader || field == job);
+        let group = if leader.is_empty() {
+            String::from("no leader pid written")
+        } else {
+            kill(&["-0", "--", &format!("-{leader}")])
+        };
+        let rows = spawn(
             dir,
             Program::Suite("ps"),
             &[
@@ -5871,22 +5877,30 @@ mod tests {
             std::time::Duration::from_secs(10),
         )
         .map_or_else(
-            |err| format!("ps: {err}"),
+            |err| vec![format!("ps: {err}")],
             |listed| {
                 listed
                     .output
                     .lines()
-                    .filter(|line| {
-                        line.split_whitespace()
-                            .take(3)
-                            .any(|field| field == leader || field == job)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" / ")
+                    .filter(|line| line.split_whitespace().take(3).any(&named))
+                    .map(str::to_owned)
+                    .collect()
             },
         );
-        let _ = kill(&["-KILL", &job]);
-        format!("leader {leader}, job {job}, group probe {group}, ps [{table}]")
+        // Every survivor by its own pid, the job's `sleep` included: the job's
+        // pid alone is its subshell, whose child would hold the fifo open.
+        let pids: Vec<&str> = rows
+            .iter()
+            .filter_map(|row| row.split_whitespace().next())
+            .filter(|pid| pid.parse::<u32>().is_ok())
+            .collect();
+        if !pids.is_empty() {
+            let _ = kill(&[&["-KILL"][..], &pids].concat());
+        }
+        format!(
+            "leader {leader}, job {job}, group probe {group}, ps [{}]",
+            rows.join(" / ")
+        )
     }
 
     /// Fails by: a module's own case not judged at all, or a mutation that
