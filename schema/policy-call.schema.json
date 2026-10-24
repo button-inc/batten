@@ -147,6 +147,13 @@
             "null"
           ]
         },
+        "head-unpushed": {
+          "description": "Fact::HeadUnpushed (CLOUD-2489). TRUE when HEAD carries a commit no `refs/remotes` tip reaches -- committed work this clone alone holds; FALSE when every commit on HEAD is on some remote; NULL when it could not look (no repository, an unresolvable HEAD, a failed walk). A boolean and nothing else: no sha reaches this document.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "keys": {
           "description": "Fact::Keys -- the tracker-key evidence, or null for could-not-look."
         },

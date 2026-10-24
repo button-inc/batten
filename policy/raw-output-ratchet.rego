@@ -50,6 +50,13 @@
 # ITS OWN PACKAGE, because `cfg-gated-test.rego` sits in `batten` with the same
 # `grew`, `touched` and `violation` partial rules: in one package the two sets
 # merge, and each ratchet would report the other's sites under its own verdict.
+# METADATA
+# description: |
+#   Bound to the tree surface: this module is `scope = "tree"`, so it reads
+#   `input.tree` and NOT the mediated call. The brackets are required: the schema
+#   file carries a hyphen, and the dotted form is a parse error.
+# schemas:
+#   - input: schema["policy-input.schema"]
 package batten.raw_output_ratchet
 
 import rego.v1
