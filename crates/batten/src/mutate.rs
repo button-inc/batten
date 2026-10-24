@@ -5873,9 +5873,9 @@ mod tests {
         );
     }
 
-    /// Fails by: the sweep sending nothing, or stopping while the group still
-    /// answers. The suite leads a group holding a `sleep 30` and waits on it, so
-    /// only a sweep of that group returns it before the sleep would.
+    /// Fails by: the sweep sending nothing. The suite leads a group holding a
+    /// `sleep 30` and waits on it, so only a sweep of that group returns it
+    /// before the sleep would.
     ///
     /// Driven directly, because the interleaving that leaves a member behind is
     /// Darwin's alone (CLOUD-2514): on Linux the first kill never misses one.
