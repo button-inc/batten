@@ -679,7 +679,7 @@ pub fn delete(path: &str) -> Option<Answer> {
     exchange(path, None, None, Method::Delete)
 }
 
-/// What one bodiless POST came to, as [`posted`] reads the forge's status.
+/// What one bodiless POST came to: the forge's 2xx, or anything else.
 ///
 /// **NO `Default`, deliberately**: an answer only the forge gives cannot be
 /// fabricated in its place.
@@ -702,7 +702,7 @@ pub fn post(path: &str) -> Posted {
 /// A POST's status read as its outcome: a 2xx is accepted, and anything else,
 /// an exchange that never happened included, is refused.
 fn posted(status: Option<u16>) -> Posted {
-    if status.is_some_and(|status| (200..300).contains(&status)) {
+    if matches!(status, Some(200..=299)) {
         Posted::Accepted
     } else {
         Posted::Refused
