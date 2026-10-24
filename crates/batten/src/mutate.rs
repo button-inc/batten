@@ -2569,12 +2569,14 @@ fn sweep_group(_leader: u32) {}
 /// background subshell while it was forking `sleep`, and the `sleep` lived on in
 /// the leader's group, reparented to init, holding what the suite held.
 ///
-/// **BEFORE THE REAP, FOR [`wait_bounded`]'S OWN REASON.** The leader is still an
-/// unreaped zombie, so its pid — which IS the group id — cannot be reused while
-/// the sweep signals it, and every `SIGKILL` reaches this suite's group or
-/// nobody. The zombie also keeps the group answering, so the sweep runs its full
-/// count rather than stopping at the first `ESRCH`: a bounded cost of microseconds
-/// per suite, against a build per mutant.
+/// **WHAT KEEPS IT OFF A STRANGER.** A group id is not reused while the group has
+/// a member, and the sweep stops at the first kill that finds none. Before the
+/// reap the unreaped leader is that member, so on [`wait_bounded`]'s normal exit
+/// every `SIGKILL` reaches this suite's group, and the sweep runs its full count:
+/// microseconds per suite, against a build per mutant. Where the leader was reaped
+/// elsewhere (a failed wait's `ECHILD`), the remaining members hold the id, and
+/// the one gap is an emptied group's id being reissued between two kills a yield
+/// apart, which sequential pid allocation makes a wrap of the whole pid space.
 #[cfg(unix)]
 fn sweep_group(leader: u32) {
     let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default())
