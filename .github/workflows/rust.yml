@@ -921,6 +921,11 @@ jobs:
       # that statement, so the two spellings can no longer drift apart silently.
       # `mise-tasks/no-doctests.sh` covers the half nextest does not run.
       - run: mise exec -- cargo nextest run --workspace
+      # `macos`'s check, for its reason (CLOUD-2527): this leg runs the same suite.
+      - name: the job leaves mise.lock as committed
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: git --no-pager diff --stat --exit-code -- mise.lock
 
   # THE SUITE HAS NEVER RUN ON DARWIN, and that is the whole argument for this
   # job rather than any defect it has already caught.
