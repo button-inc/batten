@@ -120,7 +120,9 @@ fn record_path(root: &Path) -> Option<PathBuf> {
 /// **It DIGESTS the declared manifest and never parses it**, and that distinction
 /// took a correction to state honestly: the key is recomputed here, so the
 /// manifest's bytes are read — what does not happen is a parse, a runner
-/// invocation, a binary probe or a tree walk.
+/// invocation, a binary probe or a tree walk. Where the record carries stamps
+/// that still match (CLOUD-2440, unix), even the read is replaced by a `stat`
+/// of each keyed file and a listing of their directories.
 /// `crates/batten/tests/it/task_receipt.rs`'s
 /// `the_mediated_call_digests_the_manifest_and_never_parses_it` is what
 /// discriminates the two: it records over a manifest that is not valid TOML, so a

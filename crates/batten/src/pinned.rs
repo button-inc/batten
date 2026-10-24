@@ -205,9 +205,10 @@ pub(crate) fn stamped(configs: &[PathBuf], at: std::time::Duration) -> Stamps {
 /// nothing had changed. Recorded stamps that equal the files' stamps now prove
 /// the same in a few `stat`s; anything else — no stamps, or any one moved — is
 /// today's answer, the key recomputed from the bytes.
-//MUTANT stamped-record-never-believed|s@^        if current == \*stamps \&\& !current.iter().any(unstampable) {$@        if false {@|a_record_whose_configs_are_unchanged_is_believed_without_reading
-//MUTANT stamped-record-ignores-stamps|s@^        if current == \*stamps \&\& !current.iter().any(unstampable) {$@        if !current.iter().any(unstampable) {@|a_config_edited_after_the_record_is_a_miss
-//MUTANT stamped-record-believes-unstampable|s@^        if current == \*stamps \&\& !current.iter().any(unstampable) {$@        if current == *stamps {@|a_config_reappearing_without_a_stamp_is_a_miss
+//MUTANT stamped-record-never-believed|s@^        if current == \*stamps \&\& !current.iter().any(unstampable) \&\& any_present {$@        if false {@|a_record_whose_configs_are_unchanged_is_believed_without_reading
+//MUTANT stamped-record-ignores-stamps|s@^        if current == \*stamps \&\& !current.iter().any(unstampable) \&\& any_present {$@        if !current.iter().any(unstampable) \&\& any_present {@|a_config_edited_after_the_record_is_a_miss
+//MUTANT stamped-record-believes-unstampable|s@^        if current == \*stamps \&\& !current.iter().any(unstampable) \&\& any_present {$@        if current == *stamps \&\& any_present {@|a_config_reappearing_without_a_stamp_is_a_miss
+//MUTANT stamped-record-believes-nothing-present|s@^        if current == \*stamps \&\& !current.iter().any(unstampable) \&\& any_present {$@        if current == *stamps \&\& !current.iter().any(unstampable) {@|a_record_over_only_absent_configs_is_a_miss
 pub(crate) fn still_keyed(configs: &[PathBuf], key: &str, stamps: &Stamps) -> bool {
     // A record with no stamps is believed by its key alone, so it pays no stats.
     if !stamps.is_empty() {
@@ -218,7 +219,10 @@ pub(crate) fn still_keyed(configs: &[PathBuf], key: &str, stamps: &Stamps) -> bo
                 (path, identity)
             })
             .collect();
-        if current == *stamps && !current.iter().any(unstampable) {
+        // Over nothing present the key is `None`, which never matched a record:
+        // stamps that say every file is absent must not answer where it refused.
+        let any_present = current.iter().any(|(_, identity)| identity.is_some());
+        if current == *stamps && !current.iter().any(unstampable) && any_present {
             return true;
         }
     }
@@ -853,6 +857,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Stamps over configs that are all absent — recorded in a window where the
+    /// manifest was briefly gone — answer nothing: the key over nothing is
+    /// `None`, which refuses every record.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "a fixture that cannot be written is a broken test"
+    )]
+    fn a_record_over_only_absent_configs_is_a_miss() {
+        let (dir, configs, later) = manifest("pinned-stamped-all-absent");
+        std::fs::remove_file(&configs[0]).expect("remove");
+        let stamps = stamped(&configs, later);
+        if cfg!(unix) {
+            assert_eq!(stamps, vec![(configs[0].clone(), None)], "the premise");
+        }
+        assert!(
+            !still_keyed(&configs, "not-the-key", &stamps),
+            "nothing present is never a hit"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A config recorded absent that comes back with no stamp reads exactly as
     /// it was recorded; it is still a miss, so the key decides.
     #[test]
@@ -861,13 +887,22 @@ mod tests {
         reason = "a fixture that cannot be written is a broken test"
     )]
     fn a_config_reappearing_without_a_stamp_is_a_miss() {
-        let (dir, configs, later) = manifest("pinned-stamped-reappearing");
-        std::fs::remove_file(&configs[0]).expect("remove");
+        let (dir, mut configs, later) = manifest("pinned-stamped-reappearing");
+        // A second config, absent when stamped; the first stays present, so it is
+        // not the nothing-present rule that refuses.
+        let overlay = dir.join("overlay.toml");
+        configs.push(overlay.clone());
         let stamps = stamped(&configs, later);
-        std::fs::write(&configs[0], "[tools]\n").expect("manifest");
+        if cfg!(unix) {
+            assert!(
+                stamps.contains(&(overlay.clone(), None)),
+                "the premise: the overlay was recorded absent"
+            );
+        }
+        std::fs::write(&overlay, "[tools]\n").expect("overlay");
         std::fs::File::options()
             .write(true)
-            .open(&configs[0])
+            .open(&overlay)
             .expect("manifest")
             .set_modified(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
             .expect("pre-epoch mtime");
