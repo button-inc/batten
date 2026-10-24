@@ -74,22 +74,29 @@ version = "1.7"
 [tools.jq."platforms.macos-arm64"]
 provenance = 'github-attestations' # single-quoted, commented
 
+# a key, which an inline table parses to as well
 [tools.jq."platforms.linux-x64".provenance.github-attestations]
 
+# an array element
 [tools.jq."platforms.windows-x64"]
 provenance = ["slsa", "github-attestations"]
 
-[tools.jq."platforms.macos-x64"]
-provenance = { github-attestations = {} }
-
+# a renamed field
 [tools.jq."platforms.linux-arm64-musl"]
 verified_by = "github-attestations"
 
+# a key naming it whose value names it again: one entry, not two
+[tools.jq."platforms.macos-x64".provenance]
+github-attestations = "github-attestations"
+
+# near misses, which must not match: another provenance, a longer value, a longer key
 [tools.jq."platforms.linux-arm64"]
 provenance = "slsa"
 
 [tools.jq."platforms.windows-arm64"]
 provenance = "github-attestations-v2"
+
+[tools.jq."platforms.freebsd-x64".provenance.github-attestations-v2]
 "#;
     let mut found = Vec::new();
     attestations(&toml::from_str(lock).unwrap(), "", &mut found);
