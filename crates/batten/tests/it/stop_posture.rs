@@ -1143,7 +1143,10 @@ fn work_landed_since_the_pointer_is_not_refused() {
 /// (CLOUD-2456). The live land is a process whose cmdline names `batten land `,
 /// the registry's corroboration; killed, its record is the crash; an orderly
 /// exit unregisters, which is no crash.
-#[cfg(unix)]
+///
+/// Off unix nothing is ever found dead, so the contract there is the fail-open
+/// one: even a killed land's record lets the turn end. Stated as a `cfg!` arm so
+/// both legs compile on every target.
 #[test]
 fn a_running_land_lets_the_stop_pass() {
     let (repo, home) = unlanded_fixture("stop-unlanded-landing");
@@ -1153,6 +1156,11 @@ fn a_running_land_lets_the_stop_pass() {
             .status
             .code()
     };
+    if !common::CORPSE_IS_DETECTABLE {
+        crashed_land(&repo);
+        assert_eq!(stop(), Some(0), "off unix a crash is never seen");
+        return;
+    }
     // `exec -a` names the process the way a running lap is named, which is
     // what the registry's corroboration reads in its cmdline.
     let mut lap = common::task_bash(&repo, "exec -a 'batten land lap' sleep 60")
