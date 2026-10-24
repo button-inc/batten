@@ -679,16 +679,10 @@ pub fn delete(path: &str) -> Option<Answer> {
     exchange(path, None, None, Method::Delete)
 }
 
-/// What one bodiless POST came to.
+/// What one bodiless POST came to, as [`posted`] reads the forge's status.
 ///
-/// **AN OUTCOME WITH NO DEFAULT, deliberately.** The one caller is
-/// [`crate::lease::cancel_run`], whose doc names the two paths that read
-/// `Refused`. No in-process case can answer a real POST, because the REST
-/// fixture is an environment variable such a case may not set, and a cancel
-/// handed to [`crate::land::abandon_with`] tests the counting above this, never
-/// this. So no case can tell a `post` that always says yes from one that
-/// measured, and a `bool` would carry that unfalsifiable answer. A type with no
-/// default cannot be fabricated; it is only ever the forge's answer, read below.
+/// **NO `Default`, deliberately**: an answer only the forge gives cannot be
+/// fabricated in its place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Posted {
     /// A 2xx: the forge took it.
@@ -702,9 +696,13 @@ pub enum Posted {
 /// One POST against the REST tier, with no body.
 #[must_use]
 pub fn post(path: &str) -> Posted {
-    if exchange(path, None, Some(&[]), Method::ByBody)
-        .is_some_and(|answer| (200..300).contains(&answer.status))
-    {
+    posted(exchange(path, None, Some(&[]), Method::ByBody).map(|answer| answer.status))
+}
+
+/// A POST's status read as its outcome: a 2xx is accepted, and anything else,
+/// an exchange that never happened included, is refused.
+fn posted(status: Option<u16>) -> Posted {
+    if status.is_some_and(|status| (200..300).contains(&status)) {
         Posted::Accepted
     } else {
         Posted::Refused
@@ -1120,6 +1118,19 @@ fn backoff_of(header: impl Fn(&str) -> Option<String>, now: u64) -> Option<u64> 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: a POST read as accepted outside the 2xx range, refused inside
+    /// it, or accepted when no exchange happened.
+    #[test]
+    fn only_a_two_hundred_class_status_accepts_a_post() {
+        for status in [200, 202, 299] {
+            assert_eq!(posted(Some(status)), Posted::Accepted, "{status}");
+        }
+        for status in [199, 300, 409] {
+            assert_eq!(posted(Some(status)), Posted::Refused, "{status}");
+        }
+        assert_eq!(posted(None), Posted::Refused);
+    }
 
     /// **A REFUSAL IS AN ANSWER THAT ARRIVED, AND IT IS NOT A READING.**
     ///

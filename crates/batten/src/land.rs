@@ -3685,9 +3685,8 @@ pub fn abandon(repo: &str, sha: &str, fanin: &FanIn) -> Abandoned {
     abandon_with(repo, sha, fanin, (spending, crate::lease::cancel_run))
 }
 
-/// [`abandon`] over a forge handed in: which runs are cancelled, spared and
-/// refused is the counting the suite tests, and the REST fixture that could
-/// answer a cancellation is an environment variable this process may not set.
+/// [`abandon`] over a forge handed in, so the suite tests which runs are
+/// cancelled, spared and refused without reaching the forge.
 #[must_use]
 pub fn abandon_with(repo: &str, sha: &str, fanin: &FanIn, (spent, cancel): Forge) -> Abandoned {
     // AN UNSET FAN-IN CANCELS NOTHING RATHER THAN GUESSING, and this is the

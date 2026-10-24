@@ -318,10 +318,9 @@ pub fn drop_subscription(
         host,
         (&session, token),
         pr,
-        // A CALL, NOT THE FN BY NAME: `narrow_adoption`'s scan finds the
-        // network's callers by `fetch::spend` written directly before its
-        // argument list, so a bare reference, or importing `spend` itself and
-        // calling it unqualified, would hide this module from it.
+        // A CALL, NOT THE FN BY NAME: `tests/it/narrow_adoption.rs` finds the
+        // network's callers by a text match on the qualified call, which a
+        // bare reference would not contain.
         (
             |calls: &[crate::fetch::Call<'_>]| crate::fetch::spend(calls),
             || {
