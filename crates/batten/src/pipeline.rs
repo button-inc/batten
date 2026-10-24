@@ -56,6 +56,12 @@
 //MUTANT-SUITE crates/batten/tests/it/land_speculation.rs
 //MUTANT live-bet-reaches-the-push|s@                    precheck: Some(Precheck::BetLive),@                    precheck: None,@|a_live_bet_is_refused_by_the_row_that_would_publish_it
 
+// CLOUD-1564: the push spends nothing only while it precedes the ready, and the
+// lease's undo is owed by `Lease` alone.
+//MUTANT-SUITE crates/batten/src/pipeline.rs
+//MUTANT push-after-ready-loads|s@            found.push(Invalid::PushAfterReady(Step::Push));@            let _ = ready;@|a_push_after_the_ready_does_not_load
+//MUTANT push-borrows-release-lease|s@compensate: Compensation::Nothing, // the lease@compensate: Compensation::ReleaseLease, // the lease@|the_push_owes_no_undo_of_its_own
+
 use crate::land::Step;
 
 /// A step's declared undo, run when a lap leaves without landing.
@@ -282,11 +288,12 @@ pub enum Precheck {
     /// where the bet failed to pay off — precisely where carrying the borrowed
     /// range is worthless AND harmful.
     ///
-    /// **AND THE SECOND REASON A HEAD IS NOT FIT TO PUBLISH** (CLOUD-2436): a
-    /// push that buys a run on a ready pull request owes the review receipts
-    /// its ready would — [`crate::land_push_owes`] says which pushes buy one.
-    /// One row, one slot, one question with two reasons; moving this variant
-    /// off the Push row drops both.
+    /// **AND THE SECOND REASON A HEAD IS NOT FIT TO PUBLISH** (CLOUD-2436,
+    /// CLOUD-1564): a push onto a ready pull request starts CI by itself, with
+    /// no review asked. [`crate::land_push_gate`] redrafts such a pull request
+    /// before the push, so the Ready after it asks the receipts. One row, one
+    /// slot, one question with two reasons; moving this variant off the Push
+    /// row drops both.
     ///
     /// [`Settle::Lost`]: crate::speculation::Settle::Lost
     /// [`Settle::Pending`]: crate::speculation::Settle::Pending
@@ -320,6 +327,10 @@ pub enum Invalid {
     /// One step declared twice. Which of the two an undo belongs to is then
     /// unanswerable.
     Duplicate(Step),
+    /// `Push` positioned after `Ready` (CLOUD-1564). A push onto a readied
+    /// head starts CI by itself, so the push would be a spend its row does not
+    /// declare. Names `Push`, the row that is out of place.
+    PushAfterReady(Step),
 }
 
 /// The step that commits, after which nothing is reversible.
@@ -356,6 +367,15 @@ impl Pipeline {
             seen.push(row.step);
         }
 
+        // THE PUSH SPENDS NOTHING ONLY WHILE IT PRECEDES THE READY (CLOUD-1564):
+        // the `Push` row declares no effect, and that holds for a draft alone.
+        let at = |step: Step| self.steps.iter().position(|row| row.step == step);
+        if let (Some(ready), Some(push)) = (at(Step::Ready), at(Step::Push))
+            && ready < push
+        {
+            found.push(Invalid::PushAfterReady(Step::Push));
+        }
+
         let Some(commit_at) = self.steps.iter().position(|row| row.step == COMMIT_POINT) else {
             found.push(Invalid::NoCommitPoint);
             return found;
@@ -389,11 +409,12 @@ impl Pipeline {
     /// the owed set from the composition alone would compensate effects nobody
     /// caused.
     /// **AT MOST ONCE EACH, because two steps may owe the SAME undo** (review of
-    /// #848). `Lease` and `Push` both declare [`Compensation::ReleaseLease`] —
-    /// one because it took the lease and one because it pushed under it — so a
-    /// lap entering both owed the hand-back twice and `lease_hand_back` ran, and
-    /// reported, twice per unwind. A compensation is a statement about what is
-    /// owed, not a count of who owes it.
+    /// #848). The default once had `Lease` and `Push` both declare
+    /// [`Compensation::ReleaseLease`], so a lap entering both owed the hand-back
+    /// twice and `lease_hand_back` ran, and reported, twice per unwind. `Push`
+    /// owes nothing now (CLOUD-1564), but a consumer may still compose two steps
+    /// that share an undo. A compensation is a statement about what is owed, not
+    /// a count of who owes it.
     ///
     /// Deduped on the way out rather than by forbidding a shared compensation at
     /// load: two steps owing one undo is a legitimate composition, and the
@@ -443,9 +464,11 @@ impl Default for Pipeline {
     /// a matrix."* That makes it the effectful step whose compensation the whole
     /// invariant exists for, and [`Compensation::Redraft`] is it.
     ///
-    /// `Push` is effectful too and its undo is the lease: a push that landed on a
-    /// remote ref cannot be un-pushed, but the lease it holds can be handed back
-    /// so the next branch does not wait out a TTL.
+    /// **`Push` is not effectful** (CLOUD-1564). A push moves a remote ref the
+    /// next lap force-with-leases over, and it spends only on a pull request
+    /// that is not a draft. Its precheck redrafts such a pull request first, and
+    /// [`Pipeline::validate`] refuses `Ready` before `Push`, so the push this
+    /// row declares free is free.
     fn default() -> Self {
         Self {
             steps: vec![
@@ -466,12 +489,11 @@ impl Default for Pipeline {
                     precheck: None,
                 },
                 // THE LEASE IS TAKEN BEFORE THE MATRIX IS BOUGHT, and the row
-                // exists because nothing took it at all until review of #848.
-                // `Push` below already declared `ReleaseLease`, so this
-                // composition asserted a lease was held that no step acquired —
-                // the compensation cluster was complete and its precondition was
-                // not. Effectful, because acquiring publishes a claim other
-                // clones read; its compensation is handing that claim back.
+                // exists because nothing took it at all until review of #848,
+                // while `Push` borrowed its `ReleaseLease`. Effectful, because
+                // acquiring publishes a claim other clones read; its
+                // compensation is handing that claim back, and it is the only
+                // row that owes it (CLOUD-1564).
                 StepRow {
                     step: Step::Lease,
                     effectful: true,
@@ -495,8 +517,11 @@ impl Default for Pipeline {
                 // first there is one head, one matrix, and `Abandon` reaches it.
                 StepRow {
                     step: Step::Push,
-                    effectful: true,
-                    compensate: Compensation::ReleaseLease,
+                    // A PUSH ONTO A DRAFT SPENDS NOTHING, and the precheck makes
+                    // the pull request a draft before it pushes a new head
+                    // (CLOUD-1564).
+                    effectful: false,
+                    compensate: Compensation::Nothing, // the lease's undo is `Lease`'s
                     // THE ROW THAT PUBLISHES IS THE ROW THAT ASKS (CLOUD-1681).
                     // `Replay` asks whether the bet is worth KEEPING; this asks
                     // whether it is fit to PUBLISH, and the two answers differ
@@ -803,7 +828,8 @@ mod tests {
     }
 
     /// **EVERY FINDING IS RETURNED, not just the first**, because an author
-    /// fixing one at a time pays a load cycle each.
+    /// fixing one at a time pays a load cycle each. Two uncompensated rows, and
+    /// `Push` after `Ready` as a third (CLOUD-1564).
     #[test]
     fn a_composition_with_two_faults_reports_both() {
         let two = Pipeline {
@@ -828,7 +854,66 @@ mod tests {
                 },
             ],
         };
-        assert_eq!(two.validate().len(), 2, "{:?}", two.validate());
+        assert_eq!(
+            two.validate(),
+            vec![
+                Invalid::PushAfterReady(Step::Push),
+                Invalid::Uncompensated(Step::Ready),
+                Invalid::Uncompensated(Step::Push),
+            ]
+        );
+    }
+
+    /// **A PUSH AFTER THE READY DOES NOT LOAD** (CLOUD-1564), and the mirror
+    /// with the two rows the other way round does: a validator refusing every
+    /// composition with both rows would pass the first half alone.
+    #[test]
+    fn a_push_after_the_ready_does_not_load() {
+        // `Ready` compensated and `Push` free, as the default declares them, so
+        // the order is the only fault either composition could carry.
+        let row = |step: Step| StepRow {
+            step,
+            effectful: step != Step::Push,
+            compensate: if step == Step::Ready {
+                Compensation::Redraft
+            } else {
+                Compensation::Nothing
+            },
+            precheck: None,
+        };
+        let composed = |first: Step, second: Step| Pipeline {
+            steps: vec![row(first), row(second), row(COMMIT_POINT)],
+        };
+        assert_eq!(
+            composed(Step::Ready, Step::Push).validate(),
+            vec![Invalid::PushAfterReady(Step::Push)],
+            "a push onto a readied head would spend, and its row says it does not"
+        );
+        assert!(composed(Step::Push, Step::Ready).validate().is_empty());
+    }
+
+    /// **THE PUSH OWES NO UNDO OF ITS OWN** (CLOUD-1564). It once borrowed the
+    /// lease's, which releasing does not un-push.
+    ///
+    /// The unwind over `[Push, Ready, Wait]` is the case that discriminates: with
+    /// no `Lease` entered, a `ReleaseLease` borrowed back onto `Push` would appear
+    /// in it. Over `[Lease, Push, Ready]` the dedup would hide it at `Lease`.
+    #[test]
+    fn the_push_owes_no_undo_of_its_own() {
+        let pipeline = Pipeline::default();
+        let push = pipeline.steps.iter().find(|row| row.step == Step::Push);
+        assert!(
+            push.is_some_and(|row| !row.effectful && row.compensate == Compensation::Nothing),
+            "{push:?}"
+        );
+        assert_eq!(
+            pipeline.unwind(&[Step::Push, Step::Ready, Step::Wait]),
+            vec![Compensation::Abandon, Compensation::Redraft]
+        );
+        assert_eq!(
+            pipeline.unwind(&[Step::Lease, Step::Push, Step::Ready]),
+            vec![Compensation::Redraft, Compensation::ReleaseLease]
+        );
     }
 
     /// **THE UNWIND IS OVER WHAT WAS ENTERED, never over the whole list.**
@@ -860,27 +945,40 @@ mod tests {
     fn the_unwind_runs_newest_first() {
         let pipeline = Pipeline::default();
         assert_eq!(
-            pipeline.unwind(&[Step::Ready, Step::Push, Step::Wait]),
+            pipeline.unwind(&[Step::Lease, Step::Push, Step::Ready, Step::Wait]),
             vec![
                 Compensation::Abandon,
-                Compensation::ReleaseLease,
                 Compensation::Redraft,
+                Compensation::ReleaseLease,
             ],
             "the reverse of the order they took effect in"
         );
     }
 
-    /// **THE LEASE IS RELEASED LAST WHEN THE LAP ACTUALLY TOOK IT**, which is the
-    /// case the one above cannot see: its entered set predates the `Lease` row.
+    /// A consumer composition where `Lease` and `Push` both owe
+    /// [`Compensation::ReleaseLease`], as the default once did before
+    /// CLOUD-1564: the shape the dedup exists for.
+    fn sharing_the_lease_undo() -> Pipeline {
+        let mut pipeline = Pipeline::default();
+        for row in &mut pipeline.steps {
+            if row.step == Step::Push {
+                row.effectful = true;
+                row.compensate = Compensation::ReleaseLease;
+            }
+        }
+        pipeline
+    }
+
+    /// **THE LEASE IS RELEASED LAST WHEN THE LAP ACTUALLY TOOK IT.**
     ///
-    /// `Lease` and `Push` share [`Compensation::ReleaseLease`], and deduping
+    /// With `Lease` and `Push` sharing [`Compensation::ReleaseLease`], deduping
     /// newest-first kept `Push`'s slot — so a full lap released the lease BEFORE
     /// re-drafting, the exact ordering the case above says must not happen. This
     /// is the mirror that makes that rationale enforced rather than merely
     /// written down.
     #[test]
     fn a_shared_undo_is_owed_at_the_earliest_owers_position() {
-        let pipeline = Pipeline::default();
+        let pipeline = sharing_the_lease_undo();
         assert_eq!(
             pipeline.unwind(&[Step::Lease, Step::Ready, Step::Push, Step::Wait]),
             vec![
@@ -898,7 +996,7 @@ mod tests {
     /// right one.
     #[test]
     fn a_shared_undo_is_owed_exactly_once() {
-        let pipeline = Pipeline::default();
+        let pipeline = sharing_the_lease_undo();
         let owed = pipeline.unwind(&[Step::Lease, Step::Ready, Step::Push, Step::Wait]);
         assert_eq!(
             owed.iter()
