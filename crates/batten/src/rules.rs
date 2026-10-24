@@ -12131,10 +12131,9 @@ pub(crate) fn on_path_verbatim(program: &str) -> Option<std::path::PathBuf> {
 /// `PATHEXT` value.
 ///
 /// The callers pass the variable, because a host may add to it; Windows sets it
-/// in every environment it starts. Empty where it is unset — on Unix by
-/// construction — the variable is unset
-/// there, and the bare name is the only spelling — so this costs a lookup that
-/// finds what a direct spawn already would. An argument rather than a read, so
+/// in every environment it starts. Empty where it is unset, which on Unix is by
+/// construction: the bare name is the only spelling there, so this costs a
+/// lookup that finds what a direct spawn already would. An argument rather than a read, so
 /// the Windows spelling is parsed on every leg (CLOUD-2509): `set_var` is
 /// `unsafe`, so no unix case could set it.
 fn executable_extensions(pathext: Option<&std::ffi::OsStr>) -> Vec<String> {

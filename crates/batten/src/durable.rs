@@ -76,9 +76,10 @@ impl Persist {
     pub fn sync(self, file: &std::fs::File) -> std::io::Result<()> {
         match self {
             Persist::Synced => {
+                let answer = file.sync_all();
                 #[cfg(test)]
                 synced::file();
-                file.sync_all()
+                answer
             }
             Persist::Atomic => Ok(()),
         }
@@ -426,9 +427,9 @@ fn write_temp_as(
 fn sync_directory(directory: &Path) {
     #[cfg(unix)]
     if let Ok(handle) = std::fs::File::open(directory) {
+        let _ = handle.sync_all();
         #[cfg(test)]
         synced::directory();
-        let _ = handle.sync_all();
     }
     #[cfg(not(unix))]
     let _ = directory;
