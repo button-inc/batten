@@ -423,6 +423,14 @@ mod tests {
         crate::gitwrite::init_on_main(&dir).unwrap();
         let manifest = dir.join("tasks.toml");
         std::fs::write(&manifest, "[tasks]\nlint = \"cargo clippy\"\n").unwrap();
+        // A pre-epoch mtime yields no stamp, so no record carries stamps whatever
+        // the clock does between `sized` and `record`: each body is the measured one.
+        std::fs::File::options()
+            .write(true)
+            .open(&manifest)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .unwrap();
         let configs = vec![manifest.clone()];
         let small = sized(&configs, 1024);
         assert!(record(&dir, &configs, &small));

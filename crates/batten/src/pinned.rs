@@ -164,7 +164,7 @@ pub(crate) type Stamps = Vec<(PathBuf, Option<String>)>;
 /// `crate::cache::Stamp::racily_clean`). A record with no stamps is believed
 /// by its key alone.
 //MUTANT stamped-record-believes-racy|s@^    if racy {$@    if false {@|a_record_stamped_in_its_racy_window_is_hashed
-//MUTANT stamped-record-unstampable-as-absent|s@^        None => path.symlink_metadata().is_ok(),$@        None => false,@|a_present_file_without_a_stamp_records_no_stamps
+//MUTANT stamped-record-unstampable-as-absent|s@^    if stamps.iter().any(unstampable) {$@    if false {@|a_present_file_without_a_stamp_records_no_stamps
 pub(crate) fn stamped(configs: &[PathBuf], at: std::time::Duration) -> Stamps {
     // UNIX ONLY. Elsewhere a stamp carries no ctime (`crate::cache::stamp`), so
     // an in-place edit that keeps the length and restores the mtime — a
@@ -181,18 +181,20 @@ pub(crate) fn stamped(configs: &[PathBuf], at: std::time::Duration) -> Stamps {
             (path, stamp)
         })
         .collect();
-    // A file that is there but yields no stamp (a pre-epoch mtime) would record
-    // as absent, and read as unchanged while it is edited: no stamps either.
-    let racy = now.iter().any(|(path, stamp)| match stamp {
-        Some(stamp) => stamp.racily_clean(at),
-        None => path.symlink_metadata().is_ok(),
-    });
+    let racy = now
+        .iter()
+        .any(|(_, stamp)| stamp.as_ref().is_some_and(|stamp| stamp.racily_clean(at)));
     if racy {
         return Stamps::new();
     }
-    now.into_iter()
+    let stamps: Stamps = now
+        .into_iter()
         .map(|(path, stamp)| (path, stamp.map(|stamp| stamp.fields)))
-        .collect()
+        .collect();
+    if stamps.iter().any(unstampable) {
+        return Stamps::new();
+    }
+    stamps
 }
 
 /// Whether a record keyed `key` over `configs`, with `stamps`, is about the
@@ -203,20 +205,32 @@ pub(crate) fn stamped(configs: &[PathBuf], at: std::time::Duration) -> Stamps {
 /// nothing had changed. Recorded stamps that equal the files' stamps now prove
 /// the same in a few `stat`s; anything else — no stamps, or any one moved — is
 /// today's answer, the key recomputed from the bytes.
-//MUTANT stamped-record-never-believed|s@^    if !stamps.is_empty() \&\& current == \*stamps {$@    if false {@|a_record_whose_configs_are_unchanged_is_believed_without_reading
-//MUTANT stamped-record-ignores-stamps|s@^    if !stamps.is_empty() \&\& current == \*stamps {$@    if !stamps.is_empty() {@|a_config_edited_after_the_record_is_a_miss
+//MUTANT stamped-record-never-believed|s@^        if current == \*stamps \&\& !current.iter().any(unstampable) {$@        if false {@|a_record_whose_configs_are_unchanged_is_believed_without_reading
+//MUTANT stamped-record-ignores-stamps|s@^        if current == \*stamps \&\& !current.iter().any(unstampable) {$@        if !current.iter().any(unstampable) {@|a_config_edited_after_the_record_is_a_miss
+//MUTANT stamped-record-believes-unstampable|s@^        if current == \*stamps \&\& !current.iter().any(unstampable) {$@        if current == *stamps {@|a_config_reappearing_without_a_stamp_is_a_miss
 pub(crate) fn still_keyed(configs: &[PathBuf], key: &str, stamps: &Stamps) -> bool {
-    let current: Stamps = keyed_paths(configs)
-        .into_iter()
-        .map(|path| {
-            let identity = crate::cache::stat_identity(&path);
-            (path, identity)
-        })
-        .collect();
-    if !stamps.is_empty() && current == *stamps {
-        return true;
+    // A record with no stamps is believed by its key alone, so it pays no stats.
+    if !stamps.is_empty() {
+        let current: Stamps = keyed_paths(configs)
+            .into_iter()
+            .map(|path| {
+                let identity = crate::cache::stat_identity(&path);
+                (path, identity)
+            })
+            .collect();
+        if current == *stamps && !current.iter().any(unstampable) {
+            return true;
+        }
     }
     self::key(configs).as_deref() == Some(key)
+}
+
+/// A file that is there but yields no stamp (a pre-epoch mtime): its stamp
+/// reads as an absent file's, and as unchanged while it is edited, so neither
+/// [`stamped`] nor [`still_keyed`] believes one. `exists` follows a link, as
+/// `crate::cache::stamp` does, so a dangling one is absent to both.
+fn unstampable((path, identity): &(PathBuf, Option<String>)) -> bool {
+    identity.is_none() && path.exists()
 }
 
 /// Every file that decides the key, given the configs the pin reported.
@@ -774,7 +788,11 @@ mod tests {
     fn a_config_edited_after_the_record_is_a_miss() {
         let (dir, configs, later) = manifest("pinned-stamped-edited");
         let stamps = stamped(&configs, later);
-        std::fs::write(dir.join("mise.toml"), "[tools]\nnode = \"22\"\n").expect("edit");
+        if cfg!(unix) {
+            assert!(!stamps.is_empty(), "the premise: stamps were recorded");
+        }
+        // The same length, so only the times tell the edit apart.
+        std::fs::write(dir.join("mise.toml"), "[tasks]\n").expect("edit");
         assert!(
             !still_keyed(&configs, "not-the-key", &stamps),
             "an edited manifest falls through to the key, which refuses"
@@ -785,9 +803,15 @@ mod tests {
     /// Stamps taken within a timestamp tick of the files' last change are not
     /// recorded: a second change in that tick would not show in them.
     #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "a fixture that cannot be stamped is a broken test"
+    )]
     fn a_record_stamped_in_its_racy_window_is_hashed() {
         let (dir, configs, _) = manifest("pinned-stamped-racy");
-        let stamps = stamped(&configs, crate::cache::now());
+        // The file's own change time, not the clock, so a slow runner stays racy.
+        let at = crate::cache::stamp(&configs[0]).expect("stamp").changed;
+        let stamps = stamped(&configs, at);
         assert!(
             !still_keyed(&configs, "not-the-key", &stamps),
             "racy stamps are not recorded, so the key decides"
@@ -817,6 +841,31 @@ mod tests {
         assert!(
             stamped(&configs, later).is_empty(),
             "an unstampable present file withholds every stamp"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A config recorded absent that comes back with no stamp reads exactly as
+    /// it was recorded; it is still a miss, so the key decides.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "a fixture that cannot be written is a broken test"
+    )]
+    fn a_config_reappearing_without_a_stamp_is_a_miss() {
+        let (dir, configs, later) = manifest("pinned-stamped-reappearing");
+        std::fs::remove_file(&configs[0]).expect("remove");
+        let stamps = stamped(&configs, later);
+        std::fs::write(&configs[0], "[tools]\n").expect("manifest");
+        std::fs::File::options()
+            .write(true)
+            .open(&configs[0])
+            .expect("manifest")
+            .set_modified(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1))
+            .expect("pre-epoch mtime");
+        assert!(
+            !still_keyed(&configs, "not-the-key", &stamps),
+            "a present file without a stamp is not the absent one recorded"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
