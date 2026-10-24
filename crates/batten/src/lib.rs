@@ -12456,6 +12456,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
         lap = lap.saturating_add(1);
         // Checked BEFORE `attempt`, so a lap that will not run is not charged.
         if let Some(from) = stood_down.take() {
+            say_the_cost(branch, &ledger, &land::LeaseHeld::of(&entered, &bet), err)?;
             return honour_the_notice(&from, root, branch, &pipeline, &mut entered, out, err);
         }
         ledger.attempt();
@@ -12484,6 +12485,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
             // somebody else's commits.
             let asked = asks_before_the_step(*row, this_lap, &mut trunk_poll, &mut bet, out, err)?;
             if let Answered::Stop(code) = asked {
+                say_the_cost(branch, &ledger, &land::LeaseHeld::of(&entered, &bet), err)?;
                 unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                 return Ok(code);
             }
@@ -12558,6 +12560,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
                     // what tells a reclaimed gate from a lease wait, so the
                     // charge needs it and a shadow would hide it (CLOUD-1586).
                     if let Some(refusal) = charge_or_refuse(step, code, basis, &mut ledger, err)? {
+                        say_the_cost(branch, &ledger, &land::LeaseHeld::of(&entered, &bet), err)?;
                         unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                         return Ok(refusal);
                     }
@@ -12581,6 +12584,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
                 // answer it would have got running that step by hand, which is
                 // what keeps the loop from becoming a second exit vocabulary.
                 land::Progress::Stop => {
+                    say_the_cost(branch, &ledger, &land::LeaseHeld::of(&entered, &bet), err)?;
                     unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                     return Ok(code);
                 }
@@ -12598,6 +12602,10 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
     // Unconditional rather than guarded on that arm: every other exit already
     // drained `entered`, so this is a no-op for them and the guard would be a
     // second statement of which paths compensate.
+    //
+    // What the run held is read BEFORE the undos clear it, so a stop below
+    // reports the lease and the bet it was carrying rather than none.
+    let held = land::LeaseHeld::of(&entered, &bet);
     unwind_lap(root, branch, &pipeline, &mut entered, None, out, err)?;
     // AND THE BORROWED RANGE COMES OFF THE BRANCH (CLOUD-2076). A bet is settled
     // by the NEXT lap's precheck, and on the last lap there is none — so a run
@@ -12607,6 +12615,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
     if bet.live()
         && let Some(code) = unwind_the_bet(root, url, branch, &mut bet, reference, out, err)?
     {
+        say_the_cost(branch, &ledger, &held, err)?;
         return Ok(code);
     }
     // NOT A VERDICT ABOUT THE BRANCH. Exhausting the count says the loop stopped
@@ -12634,6 +12643,22 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
 /// **CONDITIONAL RATHER THAN APPENDED**, because the two cases want opposite
 /// advice — run it again, versus go and read the failure — and printing both
 /// would be the hedge that leaves a reader no better off.
+/// Say what a refusing stop cost, as counts (CLOUD-2417).
+///
+/// Before every undo, at every exit that refuses, because the undos are what
+/// clear the lease and the bet the line reports. The spent-budget exit is not one
+/// of them: `lane run spent` already carries the same counts.
+fn say_the_cost(
+    branch: &str,
+    ledger: &land::Ledger,
+    held: &land::LeaseHeld,
+    err: &mut dyn Write,
+) -> Result<()> {
+    use output::Line as _;
+    output::verdict(err, &ledger.cost(branch, held).line())?;
+    Ok(())
+}
+
 fn say_the_laps_are_spent(laps: u32, ledger: &land::Ledger, err: &mut dyn Write) -> Result<()> {
     // ONE CLASSED LINE (CLOUD-2078): `lane run spent`, its readings decided in
     // `land::spent_refusal`.
@@ -12982,8 +13007,11 @@ fn bet_liveness(root: &Path, branch: &str, base: &str) -> speculation::Live {
 /// function's own header names the mis-diagnosis class it exists to prevent, and
 /// a hardcoded "the fleet is saturated" printed over a `GateReclaims` bound would
 /// BE that class: nothing about the fleet is saturated, the trunk is simply
-/// moving faster than this gate takes. Both arms have spent no CI, which is the
-/// half they share and the half worth repeating in either sentence.
+/// moving faster than this gate takes. What a run SPENT is not either arm's to
+/// say: it used to close every sentence with "this branch has spent no CI at
+/// all", which `Bound::LeaseWaits`'s own doc contradicts for every other bound,
+/// and the caller's `say_the_cost` now prints `Ledger::paid` beside it
+/// (CLOUD-2417).
 ///
 /// `Some(code)` is the refusal and the caller still owes its unwind: the undos
 /// are the driver's, and performing them here would put the compensation cluster
@@ -13022,10 +13050,7 @@ fn charge_or_refuse(
             "the gate kept refusing over a base borrowed from the branch ahead, and never over this branch on trunk — so the evidence points at that base rather than at this tree; re-run once the holder has landed or been evicted"
         }
     };
-    writeln!(
-        err,
-        "::error:: land: gave up after {bound:?} — {diagnosis}; this branch has spent no CI at all"
-    )?;
+    writeln!(err, "::error:: land: gave up after {bound:?} — {diagnosis}")?;
     Ok(Some(ExitCode::Internal))
 }
 
