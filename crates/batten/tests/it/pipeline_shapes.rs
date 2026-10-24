@@ -67,6 +67,13 @@ fn assert_allowed(command: &str) {
 /// These adjudicate against the LIVE root, so `task run blocked` reaches any case
 /// naming a `mise` call and refuses it with no fast list. A case whose subject is
 /// a DIFFERENT row has to state the posture or it measures that one instead.
+///
+/// AN ALLOW CASE NAMES NO SLOW CHECK (CLOUD-2489). `check run early` refuses
+/// `mise run verify` and `cargo test` while the live clone holds an unpushed
+/// commit, which is a property of the world rather than of this commit — and
+/// `verify` runs this suite from inside `land`, on a head it has replayed and
+/// not yet pushed. So the allow arms here use `mise run land` and `cargo check`,
+/// which carry a verdict the same way and are not slow checks.
 /// [`cause`], with the call's backgrounding STATED.
 ///
 /// A refusal renders one cause, so a case asserting WHICH class a shape renders

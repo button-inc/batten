@@ -3816,6 +3816,11 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
     // is unchanged and still worth pinning: `mise run` is not blanket-refused
     // here. A rule that denied it outright would take the backgrounded form too,
     // and this is where that would surface.
+    //
+    // NEITHER IS A SLOW CHECK (CLOUD-2489), for the lock's reason above: `check
+    // run early` refuses `cargo test` and `test:cargo` while the live clone holds
+    // an unpushed commit, which is exactly `land`'s replayed head when `verify`
+    // runs this case. `cargo check` and `alive` pin the same claim without it.
     for command in ["mise exec -- cargo check -p batten", "mise run alive"] {
         let output = run_hook_in(&root, "exit-code", &claude_payload_backgrounded(command));
         assert_eq!(
