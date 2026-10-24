@@ -5371,6 +5371,9 @@ pub struct Facts<'a> {
     /// shape (CLOUD-2270). Anything but `Is` projects `null`, which a module
     /// reads as "no push over this head owes a read".
     pub red_head: &'a crate::facts::Look<serde_json::Value>,
+    /// Whether `HEAD` carries a commit no remote-tracking ref reaches
+    /// (CLOUD-2489). `Is` projects `true`, `IsNot` `false`, could-not-look `null`.
+    pub head_unpushed: &'a crate::facts::Look<()>,
 }
 
 impl<'a> Facts<'a> {
@@ -5423,6 +5426,9 @@ impl<'a> Facts<'a> {
             // Could-not-look, never "no red head": a caller that resolved
             // nothing has not read the branch's record.
             red_head: &crate::facts::Look::CouldNotLook,
+            // Could-not-look, never "pushed": a caller that resolved nothing has
+            // not walked the clone's refs.
+            head_unpushed: &crate::facts::Look::CouldNotLook,
         }
     }
 }
@@ -7787,6 +7793,13 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                 crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
                     serde_json::Value::Null
                 }
+            }),
+            // A BOOLEAN AND NOTHING ELSE (CLOUD-2489), `DispatchCleared`'s shape:
+            // no sha of the unpushed range reaches the document.
+            crate::facts::Fact::HeadUnpushed => Some(match facts.head_unpushed {
+                crate::facts::Look::Is(()) => serde_json::Value::Bool(true),
+                crate::facts::Look::IsNot => serde_json::Value::Bool(false),
+                crate::facts::Look::CouldNotLook => serde_json::Value::Null,
             }),
             crate::facts::Fact::AgentSourced => Some(facts.sourced.as_ref().map_or(
                 serde_json::Value::Null,
@@ -11784,6 +11797,7 @@ mod tests {
                 pinned: &crate::facts::Look::CouldNotLook,
                 dispatch: &crate::facts::Look::CouldNotLook,
                 red_head: &crate::facts::Look::CouldNotLook,
+                head_unpushed: &crate::facts::Look::CouldNotLook,
             },
         )
     }

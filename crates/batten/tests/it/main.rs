@@ -342,6 +342,7 @@ mod provision;
 mod prune_watch;
 mod publish_credential;
 mod punt_receipt;
+mod push_before_check;
 mod ratchet;
 mod raw_output_ratchet;
 mod raw_tracker_read;

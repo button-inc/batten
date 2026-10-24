@@ -18954,6 +18954,7 @@ struct CallFacts {
     dispatch: facts::Look<()>,
     pinned: facts::Look<std::collections::BTreeSet<String>>,
     red_head: facts::Look<serde_json::Value>,
+    head_unpushed: facts::Look<()>,
 }
 
 fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
@@ -18965,6 +18966,29 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
         dispatch: dispatch_facts(envelope),
         pinned: pinned_for(policy, envelope),
         red_head: red_head_for(policy, envelope),
+        head_unpushed: head_unpushed_for(policy, envelope),
+    }
+}
+
+/// Whether `HEAD` holds a commit no remote-tracking ref reaches (CLOUD-2489),
+/// behind [`red_head_for`]'s narrowing and asked only of a shell call before it
+/// runs: the fact decides a command, so a read or a write opens nothing for it.
+///
+/// The walk is bounded by the commits this clone alone holds, which is zero on a
+/// pushed branch. `head_on_a_remote`'s `None` is could-not-look, never "pushed".
+//MUTANT-SUITE crates/batten/tests/it/push_before_check.rs
+//MUTANT head-unpushed-never-read|s@^        Some(false) => facts::Look::Is(()),$@        Some(false) => facts::Look::IsNot,@|an_unpushed_head_refuses_a_slow_check
+fn head_unpushed_for(policy: &hook::Policy, envelope: &hook::Envelope) -> facts::Look<()> {
+    if envelope.event != hook::Event::PreTool
+        || envelope.operation != hook::Operation::Execute
+        || !policy.reads_pinned(envelope)
+    {
+        return facts::Look::CouldNotLook;
+    }
+    match git::head_on_a_remote(hook_authority_root()) {
+        Some(false) => facts::Look::Is(()),
+        Some(true) => facts::Look::IsNot,
+        None => facts::Look::CouldNotLook,
     }
 }
 
@@ -19358,6 +19382,7 @@ fn run_hook(
         extracted: &extracted,
         dispatch: &call.dispatch,
         red_head: &call.red_head,
+        head_unpushed: &call.head_unpushed,
     };
     // THE DOOR (CLOUD-898). Declared handlers run here, under the contract in
     // `crate::handler`: bounded by the parent, fail-open on anything they break,
