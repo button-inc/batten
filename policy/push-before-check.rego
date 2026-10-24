@@ -25,6 +25,13 @@
 #MUTANT-SUITE crates/batten/tests/it/push_before_check.rs
 #MUTANT unpushed-ignored|s@^\tinput.facts\["head-unpushed"\] == true$@\tfalse@|an_unpushed_head_refuses_a_slow_check
 #MUTANT could-not-look-refuses|s@^\tinput.facts\["head-unpushed"\] == true$@\tinput.facts["head-unpushed"] != false@|a_head_that_could_not_be_read_decides_nothing
+# METADATA
+# description: |
+#   Bound to the mediated-call surface: this module is `scope = "mediated_call"`,
+#   so it reads `{call, facts}` and NOT the tree document. The brackets are
+#   required: the schema file carries a hyphen, and the dotted form is a parse error.
+# schemas:
+#   - input: schema["policy-call.schema"]
 package batten.push_before_check
 
 import rego.v1
