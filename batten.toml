@@ -7946,7 +7946,7 @@ severity = "deny"
 # RATCHET over the diff for `test cover missing`'s reason: the existing sites
 # migrate one verb at a time, and a new line's typed home is `output::Progress`.
 [[rule]]
-id = "output write missing"
+id = "output write unseen"
 no_fix_reason = "class 3 (review disposition): which typed line replaces the literal is a reading of the verb, so the refusal routes the reader to the site rather than editing it"
 kind = "policy"
 scope = "tree"

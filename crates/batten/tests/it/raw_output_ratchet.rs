@@ -50,7 +50,7 @@ fn join(lines: &[&str]) -> String {
 
 fn row() -> Rule {
     serde_json::from_value(serde_json::json!({
-        "id": "output write missing",
+        "id": "output write unseen",
         "kind": "policy",
         "scope": "tree",
         "base": "origin/main",
