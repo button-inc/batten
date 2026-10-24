@@ -428,10 +428,6 @@ mod proc_stat {
 /// the orphan's and nothing is reaped. Only the read is under `cfg` (CLOUD-2509).
 //MUTANT-SUITE crates/batten/tests/it/process_group.rs
 pub(crate) fn group_orphaned(pgid: &str, registrant: &str, alive_at: u64) -> bool {
-    #[cfg(test)]
-    if let Some((boot, ticks, stats)) = process_table::pinned() {
-        return orphaned_in(stats, pgid, registrant, boot, ticks, alive_at);
-    }
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         let Some((boot, ticks, pids)) = proc_table() else {
@@ -444,33 +440,6 @@ pub(crate) fn group_orphaned(pgid: &str, registrant: &str, alive_at: u64) -> boo
     {
         let _ = (pgid, registrant, alive_at);
         false
-    }
-}
-
-/// The process table [`group_orphaned`] reads on this thread while a case holds
-/// one (CLOUD-2509): an orphaned group is a state no case can make in the live
-/// `/proc` without spawning and abandoning one, so the table is the input.
-#[cfg(test)]
-mod process_table {
-    use std::cell::RefCell;
-
-    /// `(boot, ticks, stat lines)`, as `proc_table` reads them.
-    type Table = (u64, u64, Vec<String>);
-
-    thread_local! {
-        static PINNED: RefCell<Option<Table>> = const { RefCell::new(None) };
-    }
-
-    pub(super) fn pinned() -> Option<Table> {
-        PINNED.with(|pinned| pinned.borrow().clone())
-    }
-
-    /// Run `body` with `table` as this thread's process table.
-    pub(super) fn with<T>(table: Table, body: impl FnOnce() -> T) -> T {
-        let previous = PINNED.with(|pinned| pinned.replace(Some(table)));
-        let out = body();
-        PINNED.with(|pinned| *pinned.borrow_mut() = previous);
-        out
     }
 }
 
@@ -1578,22 +1547,6 @@ mod tests {
         for nonsense in ["0", "-42", "not-a-number"] {
             assert!(!orphaned(nonsense, "43"), "{nonsense}");
         }
-    }
-
-    /// CLOUD-2509: the orphan the process table proves is the orphan reported,
-    /// so a reap can proceed. Fails by: a `group_orphaned` that never proves
-    /// one, which no live table can show.
-    #[test]
-    fn an_orphan_in_the_table_is_reported() {
-        let table = (1_700_000_000, 100, vec![stat_line("44", 42, 100)]);
-        let orphaned = |pgid, registrant| {
-            super::process_table::with(table.clone(), || {
-                super::group_orphaned(pgid, registrant, 1_700_000_100)
-            })
-        };
-        assert!(orphaned("42", "43"));
-        assert!(!orphaned("42", "44"), "its registrant is still a member");
-        assert!(!orphaned("41", "43"), "another group");
     }
 
     /// CLOUD-2509: a process began `since_boot` ticks after the boot second.
