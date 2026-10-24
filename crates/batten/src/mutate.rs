@@ -5833,8 +5833,9 @@ mod tests {
 
     /// What a group kill left behind in `dir`'s suite: the leader's and the job's
     /// pids as the suite wrote them, whether the leader's group still answers a
-    /// probe, and each survivor's pid, parent, group, state and name. The job is
-    /// then killed by pid, so a failing case does not leave it running.
+    /// probe, and each survivor's pid, parent, group, state and name. The job and
+    /// its children are then killed by pid, so a failing case does not leave them
+    /// holding the fifo.
     fn survivors(dir: &std::path::Path) -> String {
         let read = |name: &str| {
             std::fs::read_to_string(dir.join(name))
@@ -5876,31 +5877,35 @@ mod tests {
             &[],
             std::time::Duration::from_secs(10),
         )
-        .map_or_else(
-            |err| vec![format!("ps: {err}")],
-            |listed| {
-                listed
-                    .output
-                    .lines()
-                    .filter(|line| line.split_whitespace().take(3).any(&named))
-                    .map(str::to_owned)
-                    .collect()
+        .map(|listed| {
+            listed
+                .output
+                .lines()
+                .filter(|line| line.split_whitespace().take(3).any(&named))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        });
+        // THE JOB AND ITS CHILDREN ONLY, the job's `sleep` among them: the job's
+        // pid is its subshell, whose child would hold the fifo open. Never by the
+        // leader's pid, which was reaped and may already name another process.
+        // The job itself is killed whether or not `ps` answered.
+        let children = rows.as_ref().map_or_else(
+            |_| Vec::new(),
+            |rows| {
+                rows.iter()
+                    .filter_map(|row| {
+                        let mut fields = row.split_whitespace();
+                        let pid = fields.next()?;
+                        (fields.next() == Some(job.as_str())).then_some(pid)
+                    })
+                    .collect::<Vec<_>>()
             },
         );
-        // Every survivor by its own pid, the job's `sleep` included: the job's
-        // pid alone is its subshell, whose child would hold the fifo open.
-        let pids: Vec<&str> = rows
-            .iter()
-            .filter_map(|row| row.split_whitespace().next())
-            .filter(|pid| pid.parse::<u32>().is_ok())
-            .collect();
-        if !pids.is_empty() {
-            let _ = kill(&[&["-KILL"][..], &pids].concat());
+        if !job.is_empty() {
+            let _ = kill(&[&["-KILL", job.as_str()][..], &children].concat());
         }
-        format!(
-            "leader {leader}, job {job}, group probe {group}, ps [{}]",
-            rows.join(" / ")
-        )
+        let listing = rows.map_or_else(|err| format!("ps: {err}"), |rows| rows.join(" / "));
+        format!("leader {leader}, job {job}, group probe {group}, ps [{listing}]")
     }
 
     /// Fails by: a module's own case not judged at all, or a mutation that
