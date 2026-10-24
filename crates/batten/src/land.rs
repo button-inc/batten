@@ -3633,8 +3633,12 @@ impl Ledger {
             ("matrices bought", Fact::Count(u64::from(self.paid))),
             ("lease taken", Fact::Flag(held.taken)),
         ];
-        if let Some(base) = &held.speculating_on {
-            facts.push(("speculating on", Fact::Pointer(base.clone())));
+        if let Some(base) = held
+            .speculating_on
+            .as_deref()
+            .and_then(crate::output::Token::new)
+        {
+            facts.push(("speculating on", Fact::Pointer(base)));
         }
         crate::output::Progress {
             verb: "land",
