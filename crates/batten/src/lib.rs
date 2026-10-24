@@ -12378,6 +12378,10 @@ fn reconcile_at_entry(root: &Path, branch: &str, out: &mut dyn Write) -> Result<
 /// # Errors
 ///
 /// Only for a stream that will not accept output.
+#[expect(
+    clippy::too_many_lines,
+    reason = "every refusing exit says its cost before its undo (CLOUD-2417); the pair cannot leave the loop without a nine-argument helper, which `too_many_arguments` refuses in turn"
+)]
 fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let Laps {
         root,
