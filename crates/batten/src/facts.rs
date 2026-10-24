@@ -5715,3 +5715,24 @@ pub fn validate_keying(facts: &[Declared], rules: &[crate::rules::Rule]) -> anyh
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    /// THE RED-HEAD FRAGMENT STATES THE RECORD `land` PROJECTS (CLOUD-2443):
+    /// `null` is a value, and the keys it requires are the record's own, so a
+    /// module type-checked against it walks no key the record lacks.
+    #[test]
+    fn the_red_head_fragment_states_the_projected_record() {
+        let fragment = super::Fact::red_head_schema_fragment();
+        assert_eq!(fragment["type"], serde_json::json!(["object", "null"]));
+        assert_eq!(
+            fragment["required"],
+            serde_json::json!(["head", "failed", "running"])
+        );
+        assert_eq!(
+            fragment["properties"]["failed"]["items"]["required"],
+            serde_json::json!(["id", "name", "read"])
+        );
+    }
+}

@@ -5289,6 +5289,26 @@ mod tests {
         assert!(!super::FanIn::from_workflow_path("").declared());
     }
 
+    /// A LANDED PUSH MOVES THE BRANCH'S TRACKING REF (CLOUD-2443): the
+    /// supersession check reads it, so a ref left behind would read as moved.
+    #[test]
+    fn a_landed_head_moves_its_tracking_ref() {
+        let root = crate::scratch::scratch("land-track-landed");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        // A reflog entry needs a committer, as a real clone has one.
+        let config = root.join(".git/config");
+        let mut text = std::fs::read_to_string(&config).unwrap();
+        text.push_str("[user]\n\tname = t\n\temail = t@example.invalid\n");
+        std::fs::write(&config, text).unwrap();
+        crate::gitwrite::commit_paths(&root, &[], "base").unwrap();
+        let head = crate::git::resolve_ref(&root, "HEAD").unwrap().unwrap();
+        super::track_landed(&root, "refs/heads/work/red", &head).unwrap();
+        assert_eq!(
+            crate::git::resolve_ref(&root, &super::tracking_ref("refs/heads/work/red")).unwrap(),
+            Some(head)
+        );
+    }
+
     /// The writer, the reader and the clear share one path per branch, and a
     /// read receipt pays its run.
     #[test]
@@ -6023,30 +6043,70 @@ mod tests {
         );
     }
 
-    /// A FAILED FAN-IN OWES ITS FAILED MEMBERS, and a run with no id is never
-    /// recorded (CLOUD-2443): the aggregator's log names no cause, and run `0`
-    /// is one no receipt can pay.
-    #[test]
-    fn a_failed_fan_in_owes_its_failed_members_and_an_id_less_run_owes_nothing() {
-        use crate::checks_green::{Finding, Roster, Run};
-        let run = |conclusion: &str, name: &str, id: u64| Run {
+    /// A completed run of `name`, as a reading carries it.
+    fn fan_in_run(conclusion: &str, name: &str, id: u64) -> crate::checks_green::Run {
+        crate::checks_green::Run {
             status: "completed".to_owned(),
             conclusion: conclusion.to_owned(),
             name: name.to_owned(),
             started_at: "2026-01-01T00:00:00Z".to_owned(),
             completed_at: String::new(),
             id,
-        };
-        let roster = Roster {
+        }
+    }
+
+    fn fan_in_finding(check: &str) -> crate::checks_green::Finding {
+        crate::checks_green::Finding {
+            check: check.to_owned(),
+            conclusion: "failure".to_owned(),
+        }
+    }
+
+    /// `final` fans in; `lint` is required beside it.
+    fn fan_in_roster() -> crate::checks_green::Roster {
+        crate::checks_green::Roster {
             required: vec!["final".to_owned(), "lint".to_owned()],
             absent_ok: Vec::new(),
             answered: vec!["success".to_owned(), "failure".to_owned()],
             fanin: Some("final".to_owned()),
+        }
+    }
+
+    /// A FAN-IN STILL GOING owes the members already failed, and is owed
+    /// itself only as running, never called failed (CLOUD-2443).
+    #[test]
+    fn a_running_fan_in_owes_its_failed_members_and_is_owed_as_running() {
+        let (run, finding, roster) = (fan_in_run, fan_in_finding, fan_in_roster());
+        let going_final = crate::checks_green::Run {
+            status: "in_progress".to_owned(),
+            ..run("", "final", 1)
         };
-        let finding = |check: &str| Finding {
-            check: check.to_owned(),
-            conclusion: "failure".to_owned(),
-        };
+        let going = vec![
+            going_final.clone(),
+            run("failure", "lint", 6),
+            run("failure", "windows", 2),
+        ];
+        let reading = red_runs(&going, &roster, &[finding("lint")]);
+        assert_eq!(
+            reading.failed,
+            vec![(2, "windows".to_owned()), (6, "lint".to_owned())]
+        );
+        assert_eq!(reading.running, vec![(1, "final".to_owned())]);
+
+        // With no failed member it is owed only as running.
+        let alone_going = vec![going_final, run("failure", "lint", 6)];
+        let quiet = red_runs(&alone_going, &roster, &[finding("lint")]);
+        assert_eq!(quiet.failed, vec![(6, "lint".to_owned())]);
+        assert_eq!(quiet.running, vec![(1, "final".to_owned())]);
+    }
+
+    /// A FAILED FAN-IN OWES ITS FAILED MEMBERS, and a run with no id is never
+    /// recorded (CLOUD-2443): the aggregator's log names no cause, and run `0`
+    /// is one no receipt can pay.
+    #[test]
+    fn a_failed_fan_in_owes_its_failed_members_and_an_id_less_run_owes_nothing() {
+        use crate::checks_green::Roster;
+        let (run, finding, roster) = (fan_in_run, fan_in_finding, fan_in_roster());
         let runs = vec![
             run("failure", "final", 1),
             run("failure", "windows", 2),
@@ -6085,33 +6145,6 @@ mod tests {
             vec![(2, "windows".to_owned()), (6, "lint".to_owned())]
         );
 
-        // A FAN-IN STILL GOING owes the members already failed.
-        let going = vec![
-            Run {
-                status: "in_progress".to_owned(),
-                ..run("", "final", 1)
-            },
-            run("failure", "lint", 6),
-            run("failure", "windows", 2),
-        ];
-        let reading = red_runs(&going, &roster, &[finding("lint")]);
-        assert_eq!(
-            reading.failed,
-            vec![(2, "windows".to_owned()), (6, "lint".to_owned())]
-        );
-        assert_eq!(reading.running, vec![(1, "final".to_owned())]);
-        // With no failed member it is owed only as running, never called failed.
-        let alone_going = vec![
-            Run {
-                status: "in_progress".to_owned(),
-                ..run("", "final", 1)
-            },
-            run("failure", "lint", 6),
-        ];
-        let quiet = red_runs(&alone_going, &roster, &[finding("lint")]);
-        assert_eq!(quiet.failed, vec![(6, "lint".to_owned())]);
-        assert_eq!(quiet.running, vec![(1, "final".to_owned())]);
-
         // A FAILED FAN-IN WITH NO FAILED MEMBER SEEN is owed itself, whatever
         // the verdict found: its own log is the only one holding that failure.
         let cancelled = vec![
@@ -6122,6 +6155,23 @@ mod tests {
         assert_eq!(
             red_runs(&cancelled, &roster, &[finding("lint")]).failed,
             vec![(1, "final".to_owned()), (6, "lint".to_owned())]
+        );
+
+        // ONLY THE FAN-IN is owed outside the verdict's findings: a required
+        // check whose conclusion is no answer (here `timed_out`, unanswered in
+        // this roster) is not the stop's finding and owes nothing.
+        let unanswered = vec![
+            run("success", "final", 1),
+            run("failure", "lint", 6),
+            run("timed_out", "build", 7),
+        ];
+        let answered_roster = Roster {
+            required: vec!["final".to_owned(), "lint".to_owned(), "build".to_owned()],
+            ..roster.clone()
+        };
+        assert_eq!(
+            red_runs(&unanswered, &answered_roster, &[finding("lint")]).failed,
+            vec![(6, "lint".to_owned())]
         );
 
         // And beside readable members: their reads never pay the id-less one's.
