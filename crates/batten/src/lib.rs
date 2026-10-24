@@ -11840,6 +11840,7 @@ fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
 /// Only for a stream that will not accept output.
 fn run_land_singleton(
     root: &Path,
+    branch: &str,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<Option<LandSingleton>> {
@@ -11851,6 +11852,13 @@ fn run_land_singleton(
         return Ok(None);
     };
     let pid = std::process::id().to_string();
+
+    // THE CRASH THIS RUN ANSWERS, read before the reap forgets it (CLOUD-2456):
+    // its streak, plus this run, is what the Stop refusal reads as a crash
+    // repeated. A live land is not abandoned, so it is never counted here.
+    let program_root = std::env::var("BATTEN_TASK_PROGRAM_ROOT").unwrap_or_default();
+    let recovers = task::crashed_on(&git_dir, &program_root, LAND_TASK, branch)
+        .map_or(0, |crash| crash.recovers.parse::<u32>().unwrap_or(0) + 1);
 
     // THE REAP, AND IT ABSTAINS WHERE THE CONSUMER HAS NOT SAID WHERE ITS
     // PROGRAMS LIVE (non-negotiable rule 1).
@@ -11920,6 +11928,11 @@ fn run_land_singleton(
     // a registration by a process that then loses the race is an entry naming a
     // lap that never ran.
     task::register(&git_dir, LAND_TASK, &pid, "lap", boundary_epoch());
+    task::declare_subject(&git_dir, &pid, branch, recovers);
+    // Holding the lock proves no other land is live, so every other land record
+    // is a crash this run answers: forgotten here whether or not the reap above
+    // could run, or a crash would outlive the land that re-ran it (CLOUD-2456).
+    task::forget_others(&git_dir, LAND_TASK, &pid);
     Ok(Some(LandSingleton { git_dir, pid }))
 }
 
@@ -11997,7 +12010,7 @@ fn run_land_lap(
     // And named WITHOUT the underscore since it gained `phase`: clippy refuses
     // using an underscore-prefixed binding, and rightly — the prefix is a promise
     // to the reader that nothing touches it.
-    let Some(guard) = run_land_singleton(root, out, err)? else {
+    let Some(guard) = run_land_singleton(root, branch, out, err)? else {
         return Ok(ExitCode::Violation);
     };
     // THE RECLAIM CENSUS'S WINDOW, opened and closed HERE and nowhere inside the
@@ -22470,9 +22483,7 @@ fn stop_nudges(
     }
     let mut rungs = Vec::new();
     if std::env::var_os(UNLANDED_BYPASS).is_none() {
-        // AFTER `record_state`, so it judges this Stop's verdict, and BEFORE the
-        // pointer, which writes this Stop's spoken receipt: the refusal is for
-        // a pointer an EARLIER Stop spoke (CLOUD-2441).
+        // AFTER `record_state`, so it judges this Stop's verdict (CLOUD-2441).
         *block = unlanded_stop_block();
         if let Some(pointer) = unlanded_pointer() {
             rungs.push(pointer);
@@ -22912,10 +22923,6 @@ fn rearm_unlanded(envelope: &hook::Envelope) {
     if let Ok(git_dir) = git::git_dir(Path::new(".")) {
         let marker = recorder::record_path(&git_dir, UNLANDED_SPOKEN, &branch, None);
         let _ = std::fs::remove_file(marker);
-        // The Stop refusal's bound re-arms with it (CLOUD-2441): one forced
-        // continuation per claim per operator prompt.
-        let refused = recorder::record_path(&git_dir, UNLANDED_REFUSED, &branch, None);
-        let _ = std::fs::remove_file(refused);
         let dispatched = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
         let _ = std::fs::remove_file(dispatched);
     }
@@ -22940,10 +22947,6 @@ fn refused_stop(
     Ok(true)
 }
 
-/// The receipt family recording that a Stop was refused over the claim
-/// (CLOUD-2441). Branch-keyed like its sibling, and re-armed with it.
-const UNLANDED_REFUSED: &str = "unlanded-refused";
-
 /// The receipt family recording that a call started `land` and no Stop has
 /// yet been excused by it (CLOUD-2441).
 const LAND_DISPATCHED: &str = "land-dispatched";
@@ -22954,9 +22957,10 @@ const LAND_DISPATCHED: &str = "land-dispatched";
 /// A backgrounded `mise run land` returns at once and the turn ends, while the
 /// land it started is still building and holds no lock yet; the lock alone
 /// would read that, the very answer the pointer asks for, as no land at all.
-/// The receipt excuses exactly one Stop that would otherwise be refused and is
-/// consumed by it, so a land that died before locking is refused at the Stop
-/// after. A count, not a clock.
+/// The receipt excuses every Stop until the land registers, which forgets the
+/// crash it answers (CLOUD-2456); a land that dies before registering leaves
+/// it standing, which is the instant crash's escape. An operator prompt
+/// re-arms it. A state, not a clock.
 ///
 /// AFTER the call, never before: a pre-tool receipt was earned by a `land` the
 /// engine itself then denied. The task is matched by the engine's own singleton
@@ -23019,36 +23023,47 @@ fn unlanded_claim() -> Option<UnlandedClaim> {
     })
 }
 
-/// The Stop to refuse: work that exists only here, already pointed at, and no
-/// `land` running to move it (CLOUD-2441).
+/// The Stop to refuse: work that exists only here, and a `land` on this branch
+/// that was started and killed (CLOUD-2441, scoped by CLOUD-2456).
 ///
 /// # The owner's ruling, and the decision it overrides
 ///
 /// Stopping a land is the catastrophic error, not lapping: a local lap is free,
 /// and committed work no lap carries is lost on reclaim. Measured twice on
-/// 2026-10-16: an agent read `commit ship missing` past four Stops on #1174,
-/// and this repository's own author ended a turn mid-landing on #1190 because a
-/// review skill said its reply was the report and nothing else.
+/// 2026-10-16: an agent read `commit ship missing` past four Stops on #1174
+/// after the host's two-hour cap killed its `land`, and this repository's own
+/// author ended a turn mid-landing on #1190.
 ///
 /// CLOUD-889 removed the Stop deny for two reasons, and neither reaches this
 /// predicate. Its `unlanded` held for a branch's whole life, so the deny looped;
-/// here a running `land` clears it, read from the landing lock itself
-/// ([`task::singleton_holder`], the non-taking read built for hooks). Its remedy,
-/// a push, could not clear it; this one's is the land it names.
+/// here only a CRASH refuses, so a branch that has not begun landing, or whose
+/// land is running or exited on a verdict, ends its turn. Its remedy, a push,
+/// could not clear it; this one's is the land it names.
 ///
-/// # The bound is a receipt, not the host's flag
+/// # The witness is the registry record, not the lock
 ///
-/// `stop_hook_active` resets whenever a system reminder lands between Stops
-/// (anthropics/claude-code#54360), which a session with background tasks does
-/// constantly, so it is honoured but cannot be what holds this. The receipt
-/// can: ONE refusal per claim, re-armed only by an operator prompt with the
-/// pointer it follows. And it follows the pointer: the first Stop on a claim is
-/// the advisory, which already resumes the model once (CLOUD-2332); the Stop
-/// after it, with still no land, is the pointer ignored, and only that one is
-/// refused.
-//MUTANT unlanded-stop-advises|s@^    if task::singleton_holder(\&git_dir, LAND_TASK).is_some() {$@    if true {@|an_ignored_unlanded_pointer_refuses_the_next_stop
-//MUTANT unlanded-stop-unbounded|s@ \x7c\x7c already_marked(Some(\&refused), \&key) {$@ {@|an_ignored_unlanded_pointer_refuses_the_next_stop
-//MUTANT land-dispatch-ignored|s@^    if std::fs::remove_file(\&dispatched).is_ok() {$@    if false {@|a_land_just_started_excuses_one_stop
+/// `land` registers after it takes its lock and pushes its phase and lap; its
+/// guard unregisters on every orderly exit, and a kill skips the guard. So a
+/// record [`task::crashed_on`] reads as abandoned is exactly a land killed
+/// mid-run: the host's background cap and a `TaskStop` (measured: the next land
+/// reclaimed the lock from the dead pid), and a worker restart, which is a
+/// reboot that keeps the disk and recycles pids. The lock alone cannot tell
+/// that last one from a live holder; the record's cmdline corroboration can.
+/// The record names its branch, so a corpse elsewhere refuses nothing here.
+///
+/// # The bound is the remedy, and the escape is a crash repeated
+///
+/// Every Stop while the crash stands is refused (2026-10-17): a once-per-claim
+/// receipt let a second crash pass. `stop_hook_active` resets whenever a
+/// reminder lands between Stops (anthropics/claude-code#54360), so it is
+/// honoured but holds nothing. What a re-run cannot cure must still be
+/// escapable: a land that was itself a recovery and died before finishing a
+/// lap is a fast crash repeated, so that Stop passes and the pointer speaks.
+/// One crash is always refused once, since one cannot tell a deterministic
+/// failure from a kill; a crash after laps never escapes, since a re-run gains.
+//MUTANT unlanded-stop-advises|s@^    let crash = task::crashed_on(\&git_dir, \&program_root, LAND_TASK, \&branch);$@    let crash: Option<task::Entry> = None;@|a_crashed_land_refuses_every_stop
+//MUTANT crash-repeat-trapped|s@^    if repeated_fast_crash(\&crash) {$@    if false {@|a_fast_crash_repeated_is_escapable
+//MUTANT land-dispatch-ignored|s@^    if dispatched.exists() {$@    if false {@|a_land_just_started_is_excused_until_it_registers
 ///
 /// Called only from [`stop_nudges`], past every guard it applies: the event,
 /// `stop_active`, both bypasses and plan mode.
@@ -23056,37 +23071,47 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
     let git_dir = git::git_dir(Path::new(".")).ok()?;
     let branch = git::current_branch(Path::new(".")).ok().flatten()?;
     // The dispatch excuse is cleared whenever it is no longer about a land
-    // waiting for its lock: no claim to excuse, or the land already holding it.
+    // waiting for its lock: no crash to answer, or no claim to excuse.
     let dispatched = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
-    let Some(UnlandedClaim { key, count, .. }) = unlanded_claim() else {
+    // The crash read first: one registry listing on almost every Stop, where the
+    // claim loads the whole findings store.
+    let program_root = std::env::var("BATTEN_TASK_PROGRAM_ROOT").unwrap_or_default();
+    let crash = task::crashed_on(&git_dir, &program_root, LAND_TASK, &branch);
+    let Some(crash) = crash else {
         let _ = std::fs::remove_file(&dispatched);
         return None;
     };
-    if task::singleton_holder(&git_dir, LAND_TASK).is_some() {
+    let Some(UnlandedClaim { count, .. }) = unlanded_claim() else {
         let _ = std::fs::remove_file(&dispatched);
         return None;
-    }
-    let spoken = recorder::record_path(&git_dir, UNLANDED_SPOKEN, &branch, None);
-    let refused = recorder::record_path(&git_dir, UNLANDED_REFUSED, &branch, None);
-    if !already_marked(Some(&spoken), &key) || already_marked(Some(&refused), &key) {
+    };
+    // A land started since the crash excuses every Stop until it registers,
+    // which forgets the crash; one that dies before registering never does,
+    // and that is the instant crash, escapable too.
+    if dispatched.exists() {
         return None;
     }
-    // Only now, where this Stop would be refused, does a land started since and
-    // not yet locked excuse it, and the receipt goes with it.
-    if std::fs::remove_file(&dispatched).is_ok() {
+    if repeated_fast_crash(&crash) {
         return None;
     }
-    // An unwritable receipt would refuse every Stop, which is CLOUD-889's loop:
-    // a refusal that cannot record itself is not issued.
-    crate::durable::append(&refused, &key).ok()?;
     Some(refusal::Refusal::engine(
         verdict::Native::CommitShipMissing,
         &[
             verdict::artifact(completion::RULE_ID),
             verdict::Subject::Count { count },
+            verdict::artifact("land crashed"),
         ],
-        refusal::Fix::None,
+        refusal::Fix::Run("mise run land".to_owned()),
     ))
+}
+
+/// Whether a crashed land was itself a recovery that died before finishing its
+/// first lap: a fast crash repeated, which a further re-run cannot cure
+/// (CLOUD-2456). The lap is the record's `tick`, empty before the first.
+fn repeated_fast_crash(crash: &task::Entry) -> bool {
+    let recovers = crash.recovers.parse::<u32>().unwrap_or(0);
+    let lap = crash.tick.parse::<u32>().unwrap_or(0);
+    recovers >= 1 && lap <= 1
 }
 
 /// Whether the claim `key` is already recorded in the marker at `seen`.
@@ -29307,6 +29332,41 @@ mod tests {
             "a dead, empty group is forgotten and never signalled"
         );
         assert_eq!(left, 0, "nothing abandoned is left behind");
+    }
+
+    /// CLOUD-2456: a land that takes over a crash on its branch declares the
+    /// streak one longer than the dead run's, and forgets the dead run's record
+    /// once it holds the lock. Off unix no crash is found, so the streak starts
+    /// at zero; the record is forgotten either way, since the lock alone proves
+    /// it is not live.
+    #[test]
+    fn a_land_taking_over_a_crash_carries_its_streak_and_forgets_it() {
+        let root =
+            std::env::temp_dir().join(format!("batten-land-takeover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        gitwrite::init_on_main(&root).unwrap();
+        let git_dir = root.join(".git");
+        let dead = "4194305";
+        task::register(&git_dir, LAND_TASK, dead, "verify", 100);
+        task::declare_subject(&git_dir, dead, "work", 1);
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let guard = run_land_singleton(&root, "work", &mut out, &mut err)
+            .unwrap()
+            .expect("a free lock is taken");
+        let pid = std::process::id().to_string();
+        let field = |name: &str| task::read_field(&git_dir, &pid, name);
+        let (branch, recovers) = (field("branch"), field("recovers"));
+        let forgotten = task::read_field(&git_dir, dead, "task").is_none();
+        drop(guard);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(branch.as_deref(), Some("work"));
+        assert_eq!(
+            recovers.as_deref(),
+            Some(if cfg!(unix) { "2" } else { "0" }),
+            "one longer than the dead run's streak"
+        );
+        assert!(forgotten, "the crash it answered is forgotten");
     }
 
     /// CLOUD-2366: the caller's own group is never reapable however its record

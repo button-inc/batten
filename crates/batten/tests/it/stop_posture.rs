@@ -1044,40 +1044,75 @@ fn an_operator_prompt_rearms_the_unlanded_pointer() {
     );
 }
 
-/// AN IGNORED POINTER REFUSES THE NEXT STOP (CLOUD-2441), once.
-///
-/// The first Stop on the claim is the advisory, exit 0, as before. The second,
-/// with still no `land` running, is the pointer ignored: refused with Claude
-/// Code's `2` and the class on stderr. The third passes, because one forced
-/// continuation is the bound, and `stop_hook_active: false` on every Stop is
-/// what the host sends when reminders interleave (anthropics/claude-code#54360).
+/// Leave in `repo` what a `land` the host killed leaves: its registry record,
+/// under a pid that cannot exist, carrying `branch`, the `recovers` streak it
+/// declared and the `lap` it reached. A kill skips the guard that unregisters.
+fn crashed_land_on(repo: &Path, branch: &str, recovers: u32, lap: u32) {
+    let git_dir = repo.join(".git");
+    let pid = common::unassignable_pid();
+    batten::task::register(&git_dir, "land", &pid, "lap", 100);
+    batten::task::declare_subject(&git_dir, &pid, branch, recovers);
+    batten::task::push(
+        &git_dir,
+        &pid,
+        batten::task::Signal::Tick,
+        &lap.to_string(),
+        101,
+    );
+}
+
+/// The crash every refusal case answers: a fresh land on the fixture's branch,
+/// killed three laps in.
+fn crashed_land(repo: &Path) {
+    crashed_land_on(repo, "work", 0, 3);
+}
+
+/// The exit a Stop over a [`crashed_land`] gets: Claude Code's refusal `2` where
+/// a corpse is detectable, and a pass where it is not
+/// ([`common::CORPSE_IS_DETECTABLE`]).
+const CRASHED_STOP_CODE: Option<i32> = Some(if common::CORPSE_IS_DETECTABLE { 2 } else { 0 });
+
+/// A CRASHED LAND REFUSES EVERY STOP (CLOUD-2456): the first included, with no
+/// once-per-claim bound, until `land` is re-run. `stop_hook_active: false` on
+/// every Stop is what the host sends when reminders interleave
+/// (anthropics/claude-code#54360).
 #[test]
-fn an_ignored_unlanded_pointer_refuses_the_next_stop() {
-    let (repo, home) = unlanded_fixture("stop-unlanded-refused");
-    let stop = || hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
-    let first = stop();
-    assert_eq!(
-        first.status.code(),
-        Some(0),
-        "the first Stop is the advisory"
-    );
-    assert!(unlanded_line(&stdout_of(&first)).is_some(), "and it speaks");
-    let second = stop();
-    let stderr = String::from_utf8_lossy(&second.stderr).into_owned();
-    assert_eq!(
-        second.status.code(),
-        Some(2),
-        "the Stop after an ignored pointer is refused: {stderr}"
-    );
-    assert!(
-        stderr.contains("commit ship missing"),
-        "naming the class whose remedy is the land: {stderr}"
-    );
-    assert_eq!(
-        stop().status.code(),
-        Some(0),
-        "one refusal per claim, so the next Stop passes"
-    );
+fn a_crashed_land_refuses_every_stop() {
+    let (repo, home) = unlanded_fixture("stop-crashed-land");
+    crashed_land(&repo);
+    for step in 0..3 {
+        let stopped = hook_in(&repo, &home, &stop_payload("Waiting.", false));
+        let stderr = String::from_utf8_lossy(&stopped.stderr).into_owned();
+        assert_eq!(
+            stopped.status.code(),
+            CRASHED_STOP_CODE,
+            "Stop {step}: {stderr}"
+        );
+        if !common::CORPSE_IS_DETECTABLE {
+            continue;
+        }
+        assert!(stderr.contains("commit ship missing"), "{stderr}");
+        assert!(
+            stderr.contains("mise run land"),
+            "the re-run is named: {stderr}"
+        );
+    }
+}
+
+/// NO LAND STARTED, NO REFUSAL (CLOUD-2456): a branch that has not begun landing
+/// is waiting on a build, a test or a review, which is the designed workflow.
+#[test]
+fn a_stop_before_any_land_is_not_refused() {
+    let (repo, home) = unlanded_fixture("stop-no-land-yet");
+    for _ in 0..3 {
+        let stopped = hook_in(&repo, &home, &stop_payload("Testing first.", false));
+        assert_eq!(
+            stopped.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&stopped.stderr)
+        );
+    }
 }
 
 /// WORK LANDED SINCE THE POINTER IS NOT REFUSED (CLOUD-2441): the Stop judges
@@ -1086,7 +1121,14 @@ fn an_ignored_unlanded_pointer_refuses_the_next_stop() {
 #[test]
 fn work_landed_since_the_pointer_is_not_refused() {
     let (repo, home) = unlanded_fixture("stop-unlanded-then-landed");
-    let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    crashed_land(&repo);
+    assert_eq!(
+        hook_in(&repo, &home, &stop_payload("Landed and pushed.", false))
+            .status
+            .code(),
+        CRASHED_STOP_CODE,
+        "the control: unlanded behind a crash is refused"
+    );
     common::git_in(&repo, &["branch", "-f", "main", "work"]);
     let second = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
     assert_eq!(
@@ -1097,43 +1139,59 @@ fn work_landed_since_the_pointer_is_not_refused() {
     );
 }
 
-/// A RUNNING `land` LETS THE TURN END (CLOUD-2441): the work is being moved, so
-/// the Stop that would otherwise be refused is the advisory's silence instead.
+/// A RUNNING `land` LETS THE TURN END, AND ONLY A KILL LEAVES A CRASH
+/// (CLOUD-2456). The live land is a process whose cmdline names `batten land `,
+/// the registry's corroboration; killed, its record is the crash; an orderly
+/// exit unregisters, which is no crash.
+///
+/// Off unix nothing is ever found dead, so the contract there is the fail-open
+/// one: even a killed land's record lets the turn end. Stated as a `cfg!` arm so
+/// both legs compile on every target.
 #[test]
 fn a_running_land_lets_the_stop_pass() {
     let (repo, home) = unlanded_fixture("stop-unlanded-landing");
-    let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
     let git_dir = repo.join(".git");
-    let pid = std::process::id().to_string();
-    let claim = batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO);
-    assert_eq!(
-        claim,
-        batten::task::Claim::Taken,
-        "the fixture holds the lock"
-    );
-    let second = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
-    batten::task::singleton_release(&git_dir, "land");
-    assert_eq!(
-        second.status.code(),
-        Some(0),
-        "a live land holding the lock is the remedy already running"
-    );
-    assert_eq!(
+    let stop = || {
         hook_in(&repo, &home, &stop_payload("Landed and pushed.", false))
             .status
-            .code(),
-        Some(2),
-        "and the excused Stop spent no refusal: once the land is gone, the next is refused"
+            .code()
+    };
+    // `cfg!` spelled out, as `silent_skip` reads the guard: the same answer as
+    // `common::CORPSE_IS_DETECTABLE`.
+    if !cfg!(unix) {
+        crashed_land(&repo);
+        assert_eq!(stop(), Some(0), "off unix a crash is never seen");
+        return;
+    }
+    // `exec -a` names the process the way a running lap is named, which is
+    // what the registry's corroboration reads in its cmdline.
+    let mut lap = common::task_bash(&repo, "exec -a 'batten land lap' sleep 60")
+        .spawn()
+        .expect("a stand-in land");
+    let pid = lap.id().to_string();
+    batten::task::register(&git_dir, "land", &pid, "lap", 100);
+    batten::task::declare_subject(&git_dir, &pid, "work", 0);
+    let running = stop();
+    let _ = lap.kill();
+    let _ = lap.wait();
+    assert_eq!(
+        running,
+        Some(0),
+        "a live land is the remedy already running"
     );
+    assert_eq!(stop(), Some(2), "the same land, killed, is a crash");
+    batten::task::unregister(&git_dir, &pid);
+    assert_eq!(stop(), Some(0), "an orderly exit unregisters: no crash");
 }
 
-/// A `land` JUST STARTED EXCUSES ONE STOP (CLOUD-2441): a backgrounded
-/// `mise run land` returns at once and holds no lock while it builds, so the Stop
-/// right after the call that started it passes, and only that one.
+/// A `land` JUST STARTED IS EXCUSED UNTIL IT REGISTERS (CLOUD-2456): a
+/// backgrounded `mise run land` returns at once and builds before it registers,
+/// so every Stop until then passes. Registering forgets the crash it answers,
+/// which retires the excuse with it, so the next crash is refused again.
 #[test]
-fn a_land_just_started_excuses_one_stop() {
+fn a_land_just_started_is_excused_until_it_registers() {
     let (repo, home) = unlanded_fixture("stop-unlanded-dispatched");
-    let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    crashed_land(&repo);
     let start = serde_json::json!({
         "hook_event_name": "PostToolUse",
         "session_id": "s-1",
@@ -1143,17 +1201,61 @@ fn a_land_just_started_excuses_one_stop() {
     })
     .to_string();
     let _ = hook_in(&repo, &home, &start);
-    let stop = || hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let stop = || {
+        hook_in(&repo, &home, &stop_payload("Landed and pushed.", false))
+            .status
+            .code()
+    };
+    assert_eq!(stop(), Some(0), "the Stop after the start passes");
+    assert_eq!(stop(), Some(0), "and so does every one while it builds");
+    batten::task::forget_others(&repo.join(".git"), "land", "the-re-run");
+    assert_eq!(stop(), Some(0), "registered, it forgot the crash");
+    crashed_land(&repo);
     assert_eq!(
-        stop().status.code(),
-        Some(0),
-        "the Stop after the start passes"
+        stop(),
+        CRASHED_STOP_CODE,
+        "the excuse went with the crash it answered"
     );
-    assert_eq!(
-        stop().status.code(),
-        Some(2),
-        "and the next, with still no land holding the lock, is refused"
-    );
+}
+
+/// A FAST CRASH REPEATED IS ESCAPABLE (CLOUD-2456): a land that was itself a
+/// recovery and died before finishing its first lap is a crash a re-run cannot
+/// cure. A first crash, however fast, and a recovery that died laps in, are
+/// still refused: one crash cannot tell a deterministic failure from a kill,
+/// and a re-run after laps gains ground.
+#[test]
+fn a_fast_crash_repeated_is_escapable() {
+    for (recovers, lap, code, why) in [
+        (1, 1, Some(0), "a recovery dead in its first lap escapes"),
+        (2, 0, Some(0), "so does one dead before its first lap"),
+        (
+            0,
+            1,
+            CRASHED_STOP_CODE,
+            "a first crash is refused, however fast",
+        ),
+        (
+            1,
+            3,
+            CRASHED_STOP_CODE,
+            "a recovery that made laps is refused",
+        ),
+    ] {
+        let (repo, home) = unlanded_fixture(&format!("stop-fast-crash-{recovers}-{lap}"));
+        crashed_land_on(&repo, "work", recovers, lap);
+        let stopped = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+        assert_eq!(stopped.status.code(), code, "{why}");
+    }
+}
+
+/// A CRASH ON ANOTHER BRANCH REFUSES NOTHING HERE (CLOUD-2456, CLOUD-2459): the
+/// record names the branch its land carried, and the remedy lands this one.
+#[test]
+fn a_crash_on_another_branch_refuses_nothing_here() {
+    let (repo, home) = unlanded_fixture("stop-crash-elsewhere");
+    crashed_land_on(&repo, "elsewhere", 0, 3);
+    let stopped = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    assert_eq!(stopped.status.code(), Some(0));
 }
 
 /// THE HOST'S OWN BOUND IS HONOURED TOO (CLOUD-2441): a Stop the host marks as
@@ -1161,7 +1263,7 @@ fn a_land_just_started_excuses_one_stop() {
 #[test]
 fn a_continued_stop_is_never_refused() {
     let (repo, home) = unlanded_fixture("stop-unlanded-continued");
-    let _ = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    crashed_land(&repo);
     let second = hook_in(&repo, &home, &stop_payload("Landed and pushed.", true));
     assert_eq!(
         second.status.code(),
@@ -1288,9 +1390,9 @@ fn the_recursion_bound_holds_for_every_rule() {
 
 /// THE GUARD NEVER EXITS NON-ZERO, so it cannot surface as a hook error. Every
 /// case above reads stdout; this one reads the status, over a rule that fired.
-/// The one exception is CLOUD-2441's refusal of an ignored unlanded pointer,
-/// bounded by its own receipt and pinned by
-/// `an_ignored_unlanded_pointer_refuses_the_next_stop`.
+/// The one exception is CLOUD-2456's refusal after a crashed `land`, which
+/// stands until `land` is re-run and is pinned by
+/// `a_crashed_land_refuses_every_stop`.
 // UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
 // Windows ladder's third rung resolves the interpreter a shebang names — which
 // `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for

@@ -67,7 +67,13 @@ const STATE_DIR: &str = "batten-tasks";
 /// to insist the record parse. An entry missing a stamp renders without it — the
 /// byte-stability obligation for readers that predate the field — which a typed
 /// `u64` would have turned into an error.
+///
+/// `non_exhaustive` because the record grows: a field the next writer adds is
+/// absent from every older record and every outside struct literal alike, and
+/// only the second of those was a break (CLOUD-2456). Built outside the crate
+/// from [`Entry::parse`] or `Entry::default()`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Entry {
     /// The task name as the caller registered it.
     pub task: String,
@@ -89,6 +95,11 @@ pub struct Entry {
     pub sig: String,
     /// When that token last CHANGED.
     pub sig_at: String,
+    /// The branch the task is carrying, where it declared one (CLOUD-2456).
+    pub branch: String,
+    /// How many consecutive crashed predecessors on that branch this run took
+    /// over: `0` for a fresh start (CLOUD-2456).
+    pub recovers: String,
 }
 
 impl Entry {
@@ -135,6 +146,8 @@ impl Entry {
             tick_at: Self::field(body, "tick_at"),
             sig: Self::field(body, "sig"),
             sig_at: Self::field(body, "sig_at"),
+            branch: Self::field(body, "branch"),
+            recovers: Self::field(body, "recovers"),
         }
     }
 
@@ -142,10 +155,11 @@ impl Entry {
     ///
     /// The order is part of the contract rather than cosmetic: a clone can carry
     /// an entry either half wrote during the migration, and a reader comparing
-    /// bytes needs one answer.
+    /// bytes needs one answer. The subject fields come last and only when set,
+    /// so a record from a writer that never declares one keeps its bytes.
     #[must_use]
     pub fn render(&self) -> String {
-        format!(
+        let mut body = format!(
             "task: {}\npid: {}\npgid: {}\nphase: {}\nstarted_at: {}\nphase_since: {}\ntick: {}\ntick_at: {}\nsig: {}\nsig_at: {}\n",
             self.task,
             self.pid,
@@ -157,7 +171,15 @@ impl Entry {
             self.tick_at,
             self.sig,
             self.sig_at,
-        )
+        );
+        for (name, value) in [("branch", &self.branch), ("recovers", &self.recovers)] {
+            if !value.is_empty() {
+                for piece in [name, ": ", value.as_str(), "\n"] {
+                    body.push_str(piece);
+                }
+            }
+        }
+        body
     }
 
     /// Whether this record is renderable at all.
@@ -333,6 +355,60 @@ pub fn read_field(git_dir: &Path, pid: &str, name: &str) -> Option<String> {
 /// than as absent. Removing what is not there is a no-op, never a failure.
 pub fn unregister(git_dir: &Path, pid: &str) {
     let _ = std::fs::remove_file(entry_path(git_dir, pid));
+}
+
+/// Declare what a registered task is carrying: the branch, and how many crashed
+/// predecessors on it this run took over (CLOUD-2456).
+///
+/// Written once, after [`register`], and kept by every push since a push
+/// rewrites the whole record from what it read. A pid that never registered
+/// gains nothing, for [`push`]'s reason.
+pub fn declare_subject(git_dir: &Path, pid: &str, branch: &str, recovers: u32) {
+    let Ok(body) = std::fs::read_to_string(entry_path(git_dir, pid)) else {
+        return;
+    };
+    let mut entry = Entry::parse(&body);
+    branch.clone_into(&mut entry.branch);
+    entry.recovers = recovers.to_string();
+    write_entry(git_dir, &entry);
+}
+
+/// Forget every record of `task` but `keep`'s (CLOUD-2456).
+///
+/// For the caller holding `task`'s singleton lock: the lock proves no other run
+/// of it is live, so each other record is a crash this run answers, and no
+/// cmdline needs reading to say so. Signals nothing; the reap does that.
+pub fn forget_others(git_dir: &Path, task: &str, keep: &str) {
+    let Ok(listing) = std::fs::read_dir(state_dir(git_dir)) else {
+        return;
+    };
+    for path in listing.filter_map(|found| found.ok().map(|found| found.path())) {
+        if !is_record(&path) {
+            continue;
+        }
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let entry = Entry::parse(&body);
+        if entry.task == task && entry.pid != keep {
+            unregister(git_dir, &entry.pid);
+        }
+    }
+}
+
+/// The crash a run of `task` on `branch` left, if one stands: the most recent
+/// [`abandoned`] record of `task` naming that branch, or naming none, which is
+/// a record from a writer that predates the field (CLOUD-2456).
+///
+/// A kill skips the exit path that unregisters, so the record outlives its run
+/// with the phase and lap it reached; an orderly exit leaves none. Liveness is
+/// [`abandoned`]'s, so a pid reused after a reboot is not mistaken for the run.
+#[must_use]
+pub fn crashed_on(git_dir: &Path, program_root: &str, task: &str, branch: &str) -> Option<Entry> {
+    abandoned(git_dir, program_root)
+        .into_iter()
+        .filter(|entry| entry.task == task && (entry.branch.is_empty() || entry.branch == branch))
+        .max_by_key(Entry::last_alive)
 }
 
 /// What [`alive`] found.
@@ -1061,6 +1137,70 @@ mod tests {
         assert!(
             !is_record(&temp),
             "a dot-prefixed temp is a write in flight"
+        );
+    }
+
+    /// A record that never declared a subject keeps its bytes; a declared one
+    /// round-trips, and a later push keeps it (CLOUD-2456).
+    #[test]
+    fn a_declared_subject_round_trips_and_an_undeclared_record_keeps_its_bytes() {
+        let dir = registry("declared-subject");
+        register(&dir, "land", NO_SUCH_PID, "lap", 100);
+        let read = || std::fs::read_to_string(entry_path(&dir, NO_SUCH_PID)).unwrap_or_default();
+        let bare = read();
+        assert!(!bare.contains("branch"), "{bare}");
+        declare_subject(&dir, NO_SUCH_PID, "work", 2);
+        push(&dir, NO_SUCH_PID, Signal::Tick, "3", 101);
+        let entry = Entry::parse(&read());
+        assert_eq!(
+            (
+                entry.branch.as_str(),
+                entry.recovers.as_str(),
+                entry.tick.as_str()
+            ),
+            ("work", "2", "3")
+        );
+    }
+
+    /// The crash a branch's Stop answers: only a dead record of the task, only
+    /// on that branch or on none (CLOUD-2456). Off unix nothing is found dead.
+    #[test]
+    fn crashed_on_reads_the_dead_record_of_this_task_on_this_branch() {
+        let dir = registry("crashed-on");
+        register(&dir, "land", NO_SUCH_PID, "verify", 100);
+        declare_subject(&dir, NO_SUCH_PID, "elsewhere", 0);
+        assert!(
+            crashed_on(&dir, "", "land", "work").is_none(),
+            "another branch"
+        );
+        declare_subject(&dir, NO_SUCH_PID, "work", 0);
+        assert!(
+            crashed_on(&dir, "", "verify", "work").is_none(),
+            "another task"
+        );
+        assert_eq!(
+            crashed_on(&dir, "", "land", "work").map(|crash| crash.pid),
+            cfg!(unix).then(|| NO_SUCH_PID.to_owned()),
+            "this branch's dead land"
+        );
+    }
+
+    /// The lock holder forgets every other record of its task, and only those
+    /// (CLOUD-2456).
+    #[test]
+    fn forget_others_keeps_the_holder_and_other_tasks() {
+        let dir = registry("forget-others");
+        // Past `pid_max`, as [`NO_SUCH_PID`] is: `register` reads each pid's
+        // process group, and a low pid can be a kernel thread's.
+        let (other, holder, verify) = ("4194306", "4194307", "4194308");
+        register(&dir, "land", other, "lap", 100);
+        register(&dir, "land", holder, "lap", 100);
+        register(&dir, "verify", verify, "lap", 100);
+        forget_others(&dir, "land", holder);
+        let left = |pid: &str| entry_path(&dir, pid).exists();
+        assert_eq!(
+            (left(other), left(holder), left(verify)),
+            (false, true, true)
         );
     }
 
