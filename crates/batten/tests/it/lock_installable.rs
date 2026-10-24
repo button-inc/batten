@@ -122,8 +122,7 @@ fn the_lock_installs_without_an_attestation_read() {
     let lock =
         std::fs::read_to_string(common::at_root("mise.lock")).expect("mise.lock is readable");
     // Parsed rather than matched by line, so every TOML spelling of the key is
-    // read, and each one is named by its path: a lock that gained one mid-run
-    // (CLOUD-2527) says which tool, version and platform it was.
+    // read, and each one is named by its path: tool, version and platform.
     let mut attested = Vec::new();
     attestations(
         &toml::from_str(&lock).expect("mise.lock is TOML"),
