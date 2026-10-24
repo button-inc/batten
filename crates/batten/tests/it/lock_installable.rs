@@ -119,18 +119,14 @@ provenance = "github-attestations-v2"
 
 #[test]
 fn the_lock_installs_without_an_attestation_read() {
-    // THE STAGED LOCK, NOT THE WORKING COPY (CLOUD-2527). CI's workflow-wide
-    // `MISE_LOCKFILE=true`, which `mise install --locked` requires, lets any mise
-    // call in a job write the checkout's lock: on the macos runner one filled
-    // zizmor's empty `linux-*-musl` tables with this provenance mid-suite, a write
-    // no commit carries. What a session installs from is what is committed, and
-    // the index is that plus whatever is about to be.
-    let lock = common::git_in(&common::at_root("."), &["show", ":mise.lock"]);
+    let lock =
+        std::fs::read_to_string(common::at_root("mise.lock")).expect("mise.lock is readable");
     // Parsed rather than matched by line, so every TOML spelling of the key is
-    // read, and each one is named by its path.
+    // read, and each one is named by its path: a lock that gained one mid-run
+    // (CLOUD-2527) says which tool, version and platform it was.
     let mut attested = Vec::new();
     attestations(
-        &toml::from_str(&lock).expect("the staged mise.lock is TOML"),
+        &toml::from_str(&lock).expect("mise.lock is TOML"),
         "",
         &mut attested,
     );
