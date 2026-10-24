@@ -1553,7 +1553,7 @@ fn a_reject_prefix_row_alone_is_gated_on_the_proven_credential() {
 /// where an ungated rejection would have cleared it.
 #[cfg(unix)]
 #[test]
-fn an_unproven_credential_leaves_a_reject_prefix_rows_variable_alone() {
+fn an_unproven_credential_lets_a_reject_prefix_row_reject_nothing() {
     let env = Env::new("provision-credential-reject-unproven");
     let ran = launch_rejecting(
         &env,

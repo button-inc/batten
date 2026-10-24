@@ -5546,6 +5546,8 @@ mod tests {
         // forge and then cancelled nothing would still report three zeroes.
         let unread: fn(&str, &str) -> Option<Vec<Spending>> =
             |_, _| unreachable!("an undeclared fan-in reads no forge");
+        let uncancelled: fn(&str, &str) -> crate::rest::Posted =
+            |_, _| unreachable!("an undeclared fan-in cancels nothing");
         let declared = FanIn::from_workflow_path("the-fan-in.yml");
         assert_eq!(
             abandon_with("o/r", "abc", &declared, (three, first_only)),
@@ -5560,7 +5562,7 @@ mod tests {
                 "o/r",
                 "abc",
                 &FanIn::from_workflow_path(""),
-                (unread, first_only)
+                (unread, uncancelled)
             ),
             Abandoned::NONE,
             "an undeclared fan-in cancels nothing"
