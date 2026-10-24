@@ -7232,7 +7232,22 @@ mod tests {
         );
         fixture_ref(&dir, "refs/remotes/origin/main", &third);
         assert_eq!(head_on_a_remote(&dir), Some(true));
+        assert_eq!(head_unpushed_to_a_remote(&dir), Some(false));
         assert!(unpushed_in_range(&dir, &third).unwrap().is_empty());
+    }
+
+    /// `head-unpushed`'s three answers (CLOUD-2489): a commit no remote tip
+    /// reaches is `Some(true)`, and a clone with NO remote-tracking ref is
+    /// `None`, never "unpushed" — a remedy of "push" has nowhere to go there.
+    ///
+    /// Fails by: the no-remote arm dropped (`None` reads `Some(true)`), or the
+    /// answer inverted.
+    #[test]
+    fn an_unpushed_head_is_true_and_a_remote_less_clone_is_unknown() {
+        let (dir, _) = history("head-unpushed");
+        assert_eq!(head_unpushed_to_a_remote(&dir), Some(true));
+        fs::remove_dir_all(dir.join(".git/refs/remotes")).expect("drop the remote refs");
+        assert_eq!(head_unpushed_to_a_remote(&dir), None);
     }
 
     /// Commit a merge of `parents` on `HEAD`, carrying the first parent's tree.
