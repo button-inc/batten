@@ -600,6 +600,72 @@ pub(crate) fn line(out: &mut dyn Write, item: &dyn Line) -> std::io::Result<()> 
     writeln!(out, "{}", item.line())
 }
 
+/// One measured fact on a [`Progress`] line.
+///
+/// **THERE IS NO FREE-TEXT VARIANT, AND THAT IS THE TYPE'S WHOLE JOB**
+/// (CLOUD-2488). A verb's progress line used to be a `writeln!` literal, and a
+/// literal can carry an estimate as easily as a count: `land`'s stop exits said
+/// nothing about what a run spent, a reader filled the silence with "a full lap
+/// of lease occupancy", and the run had spent nothing. A count, a flag or a
+/// pointer can be wrong, but none of them can be an opinion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Fact {
+    /// How many.
+    Count(u64),
+    /// Whether.
+    Flag(bool),
+    /// A named thing: a sha, a branch, a state token. Never a sentence.
+    Pointer(String),
+}
+
+impl Fact {
+    fn render(&self) -> String {
+        match self {
+            Fact::Count(count) => count.to_string(),
+            Fact::Flag(flag) => flag.to_string(),
+            Fact::Pointer(pointer) => pointer.clone(),
+        }
+    }
+}
+
+/// A verb's progress line, built from facts rather than written as prose
+/// (CLOUD-2488).
+///
+/// Renders `<verb>: <subject> — <name> <value>; <name> <value>…`. The names are
+/// `&'static str`, so a fact's label is fixed at the call site and only its
+/// value varies; the value is a [`Fact`], so it is measured.
+///
+/// It implements [`Line`], so on stdout it reaches [`line`]. A caller that owes
+/// it on stderr hands `.line()` to [`message`], which is the funnel that
+/// channel already has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Progress {
+    /// The verb speaking, e.g. `land`.
+    pub verb: &'static str,
+    /// What the line is about.
+    pub subject: crate::verdict::Subject,
+    /// The measured facts, in the order the caller gives.
+    pub facts: Vec<(&'static str, Fact)>,
+}
+
+//MUTANT-SUITE crates/batten/src/output.rs
+//MUTANT progress-drops-a-fact|s@^            .map(\x7c(name, fact)\x7c format!("{name} {}", fact.render()))$@            .map(\x7c(name, _)\x7c (*name).to_owned())@|a_progress_line_renders_its_counts_and_no_prose
+impl Line for Progress {
+    fn line(&self) -> String {
+        let facts: Vec<String> = self
+            .facts
+            .iter()
+            .map(|(name, fact)| format!("{name} {}", fact.render()))
+            .collect();
+        format!(
+            "{}: {} — {}",
+            self.verb,
+            self.subject.render(),
+            facts.join("; ")
+        )
+    }
+}
+
 /// Emit a sequence of lines on the data channel, in the order given.
 ///
 /// The order is the caller's and is never sorted here: several verbs emit in a
@@ -657,6 +723,28 @@ mod tests {
     fn mode(values: &[(&'static str, &'static str)], stderr_tty: bool) -> Mode {
         let env = Env::new(values);
         resolve_with(&Presentation::default(), false, stderr_tty, &env.reader()).unwrap()
+    }
+
+    /// A progress line carries every fact it was given, by name and value, and
+    /// nothing else: the shape has no slot a sentence could occupy.
+    ///
+    /// `progress-drops-a-fact` renders names without values, so the count this
+    /// asserts disappears.
+    #[test]
+    fn a_progress_line_renders_its_counts_and_no_prose() {
+        let progress = Progress {
+            verb: "land",
+            subject: crate::verdict::artifact("a1b2c3d"),
+            facts: vec![
+                ("matrices bought", Fact::Count(0)),
+                ("lease", Fact::Pointer("not taken".to_owned())),
+                ("speculating", Fact::Flag(false)),
+            ],
+        };
+        assert_eq!(
+            progress.line(),
+            "land: a1b2c3d — matrices bought 0; lease not taken; speculating false"
+        );
     }
 
     #[test]

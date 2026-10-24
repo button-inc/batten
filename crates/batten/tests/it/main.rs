@@ -340,6 +340,7 @@ mod prune_watch;
 mod publish_credential;
 mod punt_receipt;
 mod ratchet;
+mod raw_output_ratchet;
 mod raw_tracker_read;
 mod ready;
 mod ready_deferral;
