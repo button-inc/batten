@@ -5833,9 +5833,9 @@ mod tests {
 
     /// What a group kill left behind in `dir`'s suite: the leader's and the job's
     /// pids as the suite wrote them, whether the leader's group still answers a
-    /// probe, and each survivor's pid, parent, group, state and name. The job and
-    /// its children are then killed by pid, so a failing case does not leave them
-    /// holding the fifo.
+    /// probe, and each survivor's pid, parent, group, state and name. Each listed
+    /// survivor of the suite is then killed by pid, so a failing case does not
+    /// leave it holding the fifo, and the message says what was ended.
     fn survivors(dir: &std::path::Path) -> String {
         let read = |name: &str| {
             std::fs::read_to_string(dir.join(name))
@@ -5885,27 +5885,33 @@ mod tests {
                 .map(str::to_owned)
                 .collect::<Vec<_>>()
         });
-        // THE JOB AND ITS CHILDREN ONLY, the job's `sleep` among them: the job's
-        // pid is its subshell, whose child would hold the fifo open. Never by the
-        // leader's pid, which was reaped and may already name another process.
-        // The job itself is killed whether or not `ps` answered.
-        let children = rows.as_ref().map_or_else(
-            |_| Vec::new(),
-            |rows| {
-                rows.iter()
-                    .filter_map(|row| {
-                        let mut fields = row.split_whitespace();
-                        let pid = fields.next()?;
-                        (fields.next() == Some(job.as_str())).then_some(pid)
-                    })
-                    .collect::<Vec<_>>()
-            },
-        );
-        if !job.is_empty() {
-            let _ = kill(&[&["-KILL", job.as_str()][..], &children].concat());
-        }
-        let listing = rows.map_or_else(|err| format!("ps: {err}"), |rows| rows.join(" / "));
-        format!("leader {leader}, job {job}, group probe {group}, ps [{listing}]")
+        // ONLY WHAT THE LISTING SHOWED, by a match that cannot name a stranger:
+        // the job itself, its children, and members of the leader's group. A pid
+        // is never reused while a group of that id has members, so a pgid match
+        // is the original group; the leader's own pid and ppid are not matched,
+        // because the reaped leader's pid may already name another process.
+        // Nothing listed means nothing is signalled, so no reused pid is.
+        let doomed: Vec<&str> = rows
+            .iter()
+            .flatten()
+            .filter_map(|row| {
+                let mut fields = row.split_whitespace();
+                let (own, parent, group_id) = (fields.next()?, fields.next()?, fields.next()?);
+                let ours = own == job || parent == job || group_id == leader;
+                (ours && own.parse::<u32>().is_ok_and(|own| own > 1)).then_some(own)
+            })
+            .collect();
+        let ended = if doomed.is_empty() {
+            String::from("nothing listed to end")
+        } else {
+            kill(&[&["-KILL"][..], &doomed].concat())
+        };
+        let listing = rows
+            .as_ref()
+            .map_or_else(|err| format!("ps: {err}"), |rows| rows.join(" / "));
+        format!(
+            "leader {leader}, job {job}, group probe {group}, ps [{listing}], ended {doomed:?}: {ended}"
+        )
     }
 
     /// Fails by: a module's own case not judged at all, or a mutation that
