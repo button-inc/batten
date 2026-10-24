@@ -1055,6 +1055,13 @@ jobs:
       - name: pkl resolves on PATH, as install_args declares
         shell: bash
         run: pkl --version
+      # THE INSTALL LEAVES THE LOCK AS COMMITTED (CLOUD-2527). `MISE_LOCKFILE`
+      # is on for `--locked`, which also lets a mise call write the checkout's
+      # lock; a suite case judging the lock then reads the job's write rather
+      # than the commit. Failing here names the install as that writer.
+      - name: the install leaves mise.lock as committed
+        shell: bash
+        run: git --no-pager diff --stat --exit-code -- mise.lock
 
       # `mise exec`, matching `windows`, and here it is parity rather than the
       # workaround it is there: `[tasks."test:cargo"]`'s body is bash and macOS
