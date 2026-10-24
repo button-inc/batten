@@ -2524,9 +2524,10 @@ fn wait_bounded(
         Ok(Err(failed)) => {
             // The wait itself failed, so whether the suite exited is unknown.
             // It is ended rather than left running, and the failure is the answer.
-            // No sweep here: a failed wait does not prove the leader is still an
-            // unreaped zombie, so nothing reserves the group id for a repeat.
+            // The failed wait reaped nothing (`await_exit` never does), so the
+            // group id is still reserved and the sweep is as safe here.
             kill_group(pid);
+            sweep_group(pid);
             let _ = worker.join();
             let _ = child.wait();
             return Err(failed);
