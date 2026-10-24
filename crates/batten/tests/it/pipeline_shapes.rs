@@ -196,7 +196,7 @@ fn a_commit_followed_by_a_newline_has_its_status_replaced() {
 #[test]
 fn a_newline_after_a_query_or_before_a_verdict_is_not_a_discard() {
     // The verdict on the LAST line keeps its status: the compound exits with it.
-    assert_allowed_backgrounded("git status --short\nmise run verify");
+    assert_allowed_backgrounded("git status --short\nmise run land");
     // A bare status echo with no verdict before it.
     assert_allowed("echo \"exit=$?\"");
     assert_allowed("git log --oneline -1\necho \"exit=$?\"");
@@ -211,7 +211,7 @@ fn an_and_chain_is_allowed_because_it_cannot_manufacture_a_green() {
     // arithmetic rather than taste: `a && b` short-circuits, so a failure in `a`
     // still exits the list non-zero. There is no false green to stop, and
     // `verify`'s own body is built from guarded chains for that property.
-    assert_allowed_backgrounded("mise run fmt && mise run verify");
+    assert_allowed_backgrounded("mise run fmt && mise run land");
     // THE GIT-FAMILY ARM, AND ITS OPERAND MOVED (CLOUD-1351). This read
     // `git fetch origin main && git rebase origin/main`, and that command is now
     // DENIED — by `patch run loose`, for hand-stepping a step
@@ -226,7 +226,7 @@ fn an_and_chain_is_allowed_because_it_cannot_manufacture_a_green() {
     // edited to make a new deny pass is otherwise indistinguishable from a test
     // weakened to fit a change.
     assert_allowed("git fetch origin main && git fetch origin --tags");
-    assert_allowed_backgrounded("mise exec -- cargo build && mise exec -- cargo test");
+    assert_allowed_backgrounded("mise exec -- cargo build && mise exec -- cargo check");
 }
 
 #[test]
@@ -265,7 +265,7 @@ fn a_redirection_is_not_a_background_ampersand() {
 /// UNPIPED. All three rows agree on it, and it is what these cases pin.
 #[test]
 fn the_prescribed_form_is_backgrounded_and_keeps_its_own_output() {
-    assert_allowed_backgrounded("mise run verify");
+    assert_allowed_backgrounded("mise run land");
     // NOT `land`, and for CLOUD-438's reason rather than by preference: this
     // case adjudicates against the LIVE root, `land.sh` is the one task that
     // takes a singleton, and the singleton row refuses a second start while a
@@ -274,7 +274,7 @@ fn the_prescribed_form_is_backgrounded_and_keeps_its_own_output() {
     // this case is about. `gh_guard.rs` records the same swap after measuring
     // the failure.
     assert_allowed_backgrounded("mise run fmt");
-    assert_allowed_backgrounded("mise exec -- cargo test -p batten");
+    assert_allowed_backgrounded("mise exec -- cargo check -p batten");
 }
 
 #[test]
@@ -288,8 +288,8 @@ fn the_retired_redirect_form_is_refused_from_both_sides() {
 
 #[test]
 fn a_verdict_alone_in_the_call_is_the_prescribed_form() {
-    assert_allowed_backgrounded("mise run verify");
-    assert_allowed_backgrounded("mise exec -- cargo test -p batten");
+    assert_allowed_backgrounded("mise run land");
+    assert_allowed_backgrounded("mise exec -- cargo check -p batten");
     assert_allowed("git push origin branch");
     assert_allowed("bats tests/land.bats");
 }
@@ -328,7 +328,7 @@ fn a_pager_on_an_earlier_query_does_not_condemn_a_later_command() {
     // form both rows agree on — backgrounded, unredirected — and pinning THAT
     // here is the point: this case's subject is the per-segment judging, so it
     // must carry a second element that is genuinely correct today.
-    assert_allowed_backgrounded("git log --oneline | head -3 && mise run verify");
+    assert_allowed_backgrounded("git log --oneline | head -3 && mise run land");
     // And the direction that matters: a write must not be excused by a read.
     assert_denied("git log --oneline | head -3 && mise run verify | tail -2");
 }
