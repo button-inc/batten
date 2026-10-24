@@ -630,7 +630,7 @@ pub(crate) enum Fact {
 pub(crate) struct Token(String);
 
 //MUTANT-SUITE crates/batten/src/output.rs
-//MUTANT token-admits-a-sentence|s@^        \(!word.is_empty\(\) && !word.contains\(char::is_whitespace\)\)$@        (true)@|a_pointer_is_one_word_or_none
+//MUTANT token-admits-a-sentence|s@(!word.is_empty() && !word.contains(char::is_whitespace))@(true)@|a_pointer_is_one_word_or_none
 impl Token {
     /// `None` for empty text or text with whitespace in it.
     pub(crate) fn new(word: &str) -> Option<Token> {
