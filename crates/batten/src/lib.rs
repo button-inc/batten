@@ -15468,7 +15468,8 @@ fn run_land_wait(
     if let Err(problem) = kept {
         writeln!(err, "::warning:: land wait: {problem:#}")?;
     }
-    say_what_the_wait_saw(&waited, &red.running, &sha, reference, asks, out, err)?;
+    let running: Vec<String> = red.running.iter().map(|(_, name)| name.clone()).collect();
+    say_what_the_wait_saw(&waited, &running, &sha, reference, asks, out, err)?;
     // THE READING TRAVELS WITH THE CODE, because the exit table cannot carry it:
     // a stale base and an unanswered wait are both a lap, and only one of them
     // took a checks reading at all. Deriving the tap's verdict from the code in

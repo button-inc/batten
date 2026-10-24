@@ -2490,7 +2490,7 @@ impl Fact {
     fn red_head_schema_fragment() -> serde_json::Value {
         serde_json::json!({
             "type": ["object", "null"],
-            "description": "Fact::RedHead (CLOUD-2270) -- the current branch's red-head record, or null when none exists. `head` is the sha a lap's wait stopped red on; `failed` each failed required check's newest run, its id and name, and whether a check-log-read or check-run-read receipt keyed by that id exists; `running` each required check the stop abandoned unconcluded. Pointers only, never a log line.",
+            "description": "Fact::RedHead (CLOUD-2270) -- the current branch's red-head record, or null when none exists or its head is no longer the branch's remote head (CLOUD-2443). `head` is the sha a lap's wait stopped red on; `failed` each run a push over it owes a read -- each failed required check's newest run (a failed fan-in's failed members instead), and each required check's run the stop abandoned unconcluded -- its id and name, and whether a check-log-read or check-run-read receipt keyed by that id exists in any worktree's store; `running` the names of those abandoned runs still unread. Pointers only, never a log line.",
             "properties": {
                 "head": {"type": "string"},
                 "failed": {
@@ -5714,4 +5714,25 @@ pub fn validate_keying(facts: &[Declared], rules: &[crate::rules::Rule]) -> anyh
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    /// THE RED-HEAD FRAGMENT STATES THE RECORD `land` PROJECTS (CLOUD-2443):
+    /// `null` is a value, and the keys it requires are the record's own, so a
+    /// module type-checked against it walks no key the record lacks.
+    #[test]
+    fn the_red_head_fragment_states_the_projected_record() {
+        let fragment = super::Fact::red_head_schema_fragment();
+        assert_eq!(fragment["type"], serde_json::json!(["object", "null"]));
+        assert_eq!(
+            fragment["required"],
+            serde_json::json!(["head", "failed", "running"])
+        );
+        assert_eq!(
+            fragment["properties"]["failed"]["items"]["required"],
+            serde_json::json!(["id", "name", "read"])
+        );
+    }
 }
