@@ -158,17 +158,6 @@ struct Record {
 /// record was keyed over, as `crate::cache::stamp` sees it (CLOUD-2440).
 pub(crate) type Stamps = Vec<(PathBuf, Option<String>)>;
 
-/// The keyed files' stamps as they stand.
-fn stamps_now(configs: &[PathBuf]) -> Vec<(PathBuf, Option<crate::cache::Stamp>)> {
-    keyed_paths(configs)
-        .into_iter()
-        .map(|path| {
-            let stamp = crate::cache::stamp(&path);
-            (path, stamp)
-        })
-        .collect()
-}
-
 /// The stamps to record beside a key derived at `at`, taken BEFORE the key's
 /// read — or none, where a file changed too close to `at` for a later change in
 /// the same timestamp tick to show in its stamp (git's racy rule,
@@ -176,7 +165,13 @@ fn stamps_now(configs: &[PathBuf]) -> Vec<(PathBuf, Option<crate::cache::Stamp>)
 /// by its key alone.
 //MUTANT stamped-record-believes-racy|s@^    if racy {$@    if false {@|a_record_stamped_in_its_racy_window_is_hashed
 pub(crate) fn stamped(configs: &[PathBuf], at: std::time::Duration) -> Stamps {
-    let now = stamps_now(configs);
+    let now: Vec<(PathBuf, Option<crate::cache::Stamp>)> = keyed_paths(configs)
+        .into_iter()
+        .map(|path| {
+            let stamp = crate::cache::stamp(&path);
+            (path, stamp)
+        })
+        .collect();
     let racy = now
         .iter()
         .any(|(_, stamp)| stamp.as_ref().is_some_and(|stamp| stamp.racily_clean(at)));
@@ -196,18 +191,17 @@ pub(crate) fn stamped(configs: &[PathBuf], at: std::time::Duration) -> Stamps {
 /// nothing had changed. Recorded stamps that equal the files' stamps now prove
 /// the same in a few `stat`s; anything else — no stamps, or any one moved — is
 /// today's answer, the key recomputed from the bytes.
-//MUTANT stamped-record-never-believed|s@^    if !stamps.is_empty() \&\& current == stamps {$@    if false {@|a_record_whose_configs_are_unchanged_is_believed_without_reading
-//MUTANT stamped-record-ignores-stamps|s@^    if !stamps.is_empty() \&\& current == stamps {$@    if !stamps.is_empty() {@|a_config_edited_after_the_record_is_a_miss
-pub(crate) fn still_keyed(
-    configs: &[PathBuf],
-    key: &str,
-    stamps: &[(PathBuf, Option<String>)],
-) -> bool {
-    let current: Stamps = stamps_now(configs)
+//MUTANT stamped-record-never-believed|s@^    if !stamps.is_empty() \&\& current == \*stamps {$@    if false {@|a_record_whose_configs_are_unchanged_is_believed_without_reading
+//MUTANT stamped-record-ignores-stamps|s@^    if !stamps.is_empty() \&\& current == \*stamps {$@    if !stamps.is_empty() {@|a_config_edited_after_the_record_is_a_miss
+pub(crate) fn still_keyed(configs: &[PathBuf], key: &str, stamps: &Stamps) -> bool {
+    let current: Stamps = keyed_paths(configs)
         .into_iter()
-        .map(|(path, stamp)| (path, stamp.map(|stamp| stamp.fields)))
+        .map(|path| {
+            let identity = crate::cache::stat_identity(&path);
+            (path, identity)
+        })
         .collect();
-    if !stamps.is_empty() && current == stamps {
+    if !stamps.is_empty() && current == *stamps {
         return true;
     }
     self::key(configs).as_deref() == Some(key)

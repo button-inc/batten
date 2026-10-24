@@ -537,7 +537,8 @@ pub fn now() -> std::time::Duration {
         .unwrap_or_default()
 }
 
-fn stat_identity(path: &Path) -> Option<String> {
+/// `path`'s [`Stamp::fields`], or `None` when it cannot be stat'ed.
+pub(crate) fn stat_identity(path: &Path) -> Option<String> {
     stamp(path).map(|stamp| stamp.fields)
 }
 
