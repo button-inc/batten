@@ -76,14 +76,21 @@ pub fn exercise_hook_decode(data: &[u8]) {
             // default. The property was wrong, not the decoder — which is the
             // search earning its keep on the day it landed. Its input is kept
             // as a seed (`corpus/hook_decode/no-event-key-takes-the-default`).
-            let named = serde_json::from_str::<serde_json::Value>(raw)
-                .ok()
-                .and_then(|payload| {
-                    payload
-                        .get("hook_event_name")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned)
-                });
+            // Read the payload the way the decoder does — BOM stripped — or a
+            // BOM-prefixed payload reads as naming nothing here while the decoder
+            // reads its name. And an EMPTY name is no name (CLOUD-2139): both
+            // halves of that were found by the search on one input.
+            let named = serde_json::from_str::<serde_json::Value>(
+                raw.strip_prefix('\u{feff}').unwrap_or(raw),
+            )
+            .ok()
+            .and_then(|payload| {
+                payload
+                    .get("hook_event_name")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned)
+            });
             match named {
                 Some(named) => assert_eq!(
                     envelope.raw_event, named,
@@ -153,8 +160,16 @@ pub fn exercise_config_parse(data: &[u8]) {
             batten::config::emit(&config).expect("an accepted Config must be re-emittable");
         let reread = batten::config::parse(&emitted, "fuzz")
             .expect("an accepted Config must survive its own emitted form");
+        // EVERYTHING BUT `unresolvable` (CLOUD-2140). That field is `serde(skip)`
+        // by design — the loader's reading ABOUT the file (rows it dropped), not a
+        // key — so the emitted form cannot carry it and the re-read starts empty.
+        // The dropped rows themselves are absent from both sides, which is what
+        // this clause is about. Found by the search: a row this build could not
+        // resolve tripped it (`fuzz/artifacts/config_parse/crash-759a…`).
+        let mut as_read = config.clone();
+        as_read.unresolvable.clear();
         assert_eq!(
-            config, reread,
+            as_read, reread,
             "the loader accepted a value it does not read back: a silently-wrong parse"
         );
 
@@ -181,5 +196,93 @@ pub fn exercise_config_parse(data: &[u8]) {
             against_empty, sorted,
             "weakenings must be sorted, or two runs differ by ordering noise"
         );
+    }
+}
+
+/// Every property the git smart-HTTP decoders owe a caller, over one input
+/// (CLOUD-2135).
+///
+/// `lease` reads these bytes straight off a remote — or off whatever answered in
+/// its place, a proxy's error page included — and the readings decide the lease:
+/// an advertisement's ids are the `old` side of the next compare-and-set, and a
+/// report says whether a push applied. A wrong reading there is a wrong verdict
+/// about who holds the landing lock, which is the failure that matters.
+///
+/// # Panics
+///
+/// On any violated property, for the reason given above.
+pub fn exercise_lease_wire(data: &[u8]) {
+    use batten::lease::{Service, is_object_id, parse_advertisement, parse_body, parse_report};
+
+    for service in [Service::UploadPack, Service::ReceivePack] {
+        let first = parse_advertisement(data, service).map_err(|error| error.to_string());
+        // DETERMINISM: the lease is re-observed and compared, so a reading that
+        // varies on the same bytes makes every comparison noise.
+        assert_eq!(
+            first,
+            parse_advertisement(data, service).map_err(|error| error.to_string()),
+            "parse_advertisement is not a function of its input ({service:?})"
+        );
+        if let Ok(advertisement) = first {
+            // AN ACCEPTED ADVERTISEMENT CARRIES ONLY OBJECT IDS, because each is
+            // the `old` side of a CAS; and no name a later line could not echo
+            // back into a command (`Update::command` frames with space and NUL).
+            for (name, id) in &advertisement.refs {
+                assert!(is_object_id(id), "a ref read a non-object id ({service:?})");
+                assert!(
+                    !name.is_empty() && !name.contains(['\0', '\n']),
+                    "a ref name that cannot round-trip into a command ({service:?})"
+                );
+            }
+        }
+    }
+
+    let report = parse_report(data).map_err(|error| error.to_string());
+    assert_eq!(
+        report,
+        parse_report(data).map_err(|error| error.to_string()),
+        "parse_report is not a function of its input"
+    );
+
+    // `parse_body` is total by signature; the property is that it is a function.
+    assert_eq!(
+        parse_body(data),
+        parse_body(data),
+        "parse_body is not a function of its input"
+    );
+}
+
+/// Every property the transcript reader owes a caller, over one input
+/// (CLOUD-2136).
+///
+/// The transcript is written by the host, not by Batten, and `enforce` reads it
+/// for its turn findings — so these are bytes this engine did not produce
+/// deciding something.
+///
+/// # Panics
+///
+/// On any violated property, for the reason given above.
+pub fn exercise_transcript_parse(data: &[u8]) {
+    let Ok(body) = std::str::from_utf8(data) else {
+        return;
+    };
+    let shape = batten::hook::RecordShape::Jsonl;
+    let first = batten::transcript::parse(body, "fuzz.jsonl", shape).map_err(|e| e.to_string());
+    assert_eq!(
+        first,
+        batten::transcript::parse(body, "fuzz.jsonl", shape).map_err(|e| e.to_string()),
+        "transcript::parse is not a function of its input"
+    );
+    // NO PARTIAL STREAM. The module's contract is that a line which does not
+    // decode refuses the WHOLE stream — no caller ever receives a transcript
+    // with a line silently skipped, because a truncated stream presented as a
+    // clean one is the false green this engine exists to catch.
+    if first.is_ok() {
+        for line in body.lines().filter(|line| !line.trim().is_empty()) {
+            assert!(
+                serde_json::from_str::<serde_json::Value>(line).is_ok(),
+                "a stream was accepted around a line that is not JSON"
+            );
+        }
     }
 }

@@ -3288,9 +3288,14 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
 /// (CLOUD-2224), which never holds the payload as one string.
 #[must_use]
 pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
+    // AN EMPTY NAME IS NO NAME (CLOUD-2139). The spelling is echoed verbatim
+    // into the decision document, so `"hook_event_name": ""` came back as a blank
+    // event the host cannot route — the case the assumed default exists for.
+    // Found by the `hook_decode` search (`fuzz/artifacts/hook_decode/crash-6855…`).
     let raw_event = value
         .get("hook_event_name")
         .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
         .unwrap_or(ASSUMED_EVENT)
         .to_owned();
     let event = normalize_event(harness, &raw_event);
