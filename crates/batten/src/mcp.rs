@@ -2802,7 +2802,9 @@ mod tests {
         }
     }
 
-    /// A wiring entry whose `headersHelper` is `command`.
+    /// A wiring entry whose `headersHelper` is `command`: a `sh` command line,
+    /// so only the Unix cases build one.
+    #[cfg(unix)]
     fn helped_entry(command: &str) -> Node {
         Node::Map(std::collections::BTreeMap::from([(
             "headersHelper".to_owned(),
