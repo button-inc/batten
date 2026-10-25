@@ -280,6 +280,19 @@ pub struct Credential {
     /// name is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_from: Option<String>,
+    /// The NAME of a key in the server's own wiring entry whose value is a
+    /// command that prints the request headers as a JSON object.
+    ///
+    /// Claude Code's spelling is `headersHelper`: a local `~/.claude.json` entry
+    /// for an HTTP server authenticates by running it (measured 2026-10-25, the
+    /// GitHub server's helper prints `{"Authorization":"Bearer …"}` from `gh auth
+    /// token`), and carries no static `headers` at all, so a row with neither
+    /// `env` nor `file_from` dispatched unauthenticated and got a 401. The row
+    /// names the KEY, never the command: the command lives in the operator's
+    /// wiring, not in committed config, and only the `header` this row names
+    /// is taken from what it prints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub helper: Option<String>,
 }
 
 /// The default header a credential is sent in.
@@ -305,6 +318,94 @@ impl Credential {
             }),
         )
     }
+}
+
+/// The credential a wiring entry's helper prints, under the row's `header`.
+///
+/// The command is the entry's own value at `key`, run by the platform shell as
+/// Claude Code runs a `headersHelper`; its stdout is a JSON object of header
+/// names to values. Only the row's `header` is taken (compared without regard
+/// to case, as HTTP compares header names), with the row's `scheme` folded in.
+///
+/// # Errors
+///
+/// Every refusal names the source id and the KEY, never the command (the
+/// operator's wiring) and never a byte of what it printed: an absent or
+/// non-text key, a command that will not start or exits non-zero, output that
+/// is not a JSON object, and an object without the header or with it empty.
+fn helped(
+    row: &Credential,
+    id: &str,
+    key: &str,
+    entry: &Node,
+    root: &Path,
+) -> Result<(String, Secret)> {
+    let command = match entry.at(key) {
+        Look::Is(node) => node.scalar(),
+        Look::IsNot | Look::CouldNotLook => None,
+    }
+    .filter(|command| !command.trim().is_empty())
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "mcp: source {id} declares a credential helper at `{key}`, and its wiring entry \
+             carries no command there"
+        )
+    })?;
+    // THROUGH THE PLACED SPAWN (`policy/spawn-adapters.rego`), never a new
+    // `Command::new`: `exec::piped_argv` is the one site that runs a program and
+    // hands back its stdout, with stderr dropped so a helper's notices never
+    // reach a refusal. Its `None` is could-not-look, kept as one answer here.
+    let (code, stdout) = crate::exec::piped_argv(
+        root,
+        &shell(&command),
+        "",
+        crate::exec::Diagnostics::Drop,
+        &[],
+    )
+    .ok_or_else(|| {
+        anyhow::anyhow!("mcp: source {id}'s credential helper at `{key}` would not run")
+    })?;
+    if code != 0 {
+        return Err(anyhow::anyhow!(
+            "mcp: source {id}'s credential helper at `{key}` exited {code}"
+        ));
+    }
+    let printed: serde_json::Value = serde_json::from_str(&stdout).map_err(|_| {
+        anyhow::anyhow!(
+            "mcp: source {id}'s credential helper at `{key}` printed something that is not JSON"
+        )
+    })?;
+    let headers = printed.as_object().ok_or_else(|| {
+        anyhow::anyhow!(
+            "mcp: source {id}'s credential helper at `{key}` printed JSON that is not an object \
+             of headers"
+        )
+    })?;
+    let value = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(&row.header))
+        .and_then(|(_, value)| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "mcp: source {id}'s credential helper at `{key}` printed no `{}` header",
+                row.header
+            )
+        })?;
+    Ok(row.sent(value))
+}
+
+/// The argv that runs `command` in the platform shell: `sh -c` where there is
+/// one and `cmd /C` on Windows, as a wiring file's helper is written for its
+/// own host.
+fn shell(command: &str) -> Vec<String> {
+    let (program, flag) = if cfg!(windows) {
+        ("cmd", "/C")
+    } else {
+        ("sh", "-c")
+    };
+    vec![program.to_owned(), flag.to_owned(), command.to_owned()]
 }
 
 /// A resolved credential, with no route back to a string.
@@ -354,11 +455,14 @@ impl Secret {
 /// when the file it names will not read. **Every message names the VARIABLE and
 /// the source id and nothing else** — never the path it expanded to, which is a
 /// machine's home directory, and never a byte of the value.
-fn credential(source: &Source) -> Result<Option<(String, Secret)>> {
+fn credential(source: &Source, entry: &Node, root: &Path) -> Result<Option<(String, Secret)>> {
     let Some(row) = &source.credential else {
         return Ok(None);
     };
     let id = &source.id;
+    if let Some(key) = &row.helper {
+        return helped(row, id, key, entry, root).map(Some);
+    }
     if let Some(name) = &row.env {
         let value = std::env::var(name)
             .ok()
@@ -536,21 +640,25 @@ fn validate_credential(source: &Source) -> Result<()> {
              nowhere to go is a call that authenticates with nothing"
         )));
     }
-    match (&row.env, &row.file_from) {
-        (None, None) => Err(UsageError::raise(format!(
-            "mcp: source {id:?} declares a credential naming neither `env` nor `file_from`; a row \
-             that names no variable resolves to nothing and would dispatch unauthenticated"
+    let named: Vec<&String> = [&row.env, &row.file_from, &row.helper]
+        .into_iter()
+        .flatten()
+        .collect();
+    match named.as_slice() {
+        [] => Err(UsageError::raise(format!(
+            "mcp: source {id:?} declares a credential naming none of `env`, `file_from` or \
+             `helper`; a row that names nothing resolves to nothing and would dispatch \
+             unauthenticated"
         ))),
-        (Some(_), Some(_)) => Err(UsageError::raise(format!(
-            "mcp: source {id:?} declares a credential naming both `env` and `file_from`; one row \
-             names one variable, or which one the engine spends depends on the order it reads them"
+        [_, _, ..] => Err(UsageError::raise(format!(
+            "mcp: source {id:?} declares a credential naming more than one of `env`, `file_from` \
+             and `helper`; one row names one source, or which one the engine spends depends on \
+             the order it reads them"
         ))),
-        (Some(name), None) | (None, Some(name)) if name.trim().is_empty() => {
-            Err(UsageError::raise(format!(
-                "mcp: source {id:?} declares a credential naming an empty variable; it is the NAME \
-                 of an environment variable, never a value"
-            )))
-        }
+        [name] if name.trim().is_empty() => Err(UsageError::raise(format!(
+            "mcp: source {id:?} declares a credential naming an empty variable or key; it is a \
+             NAME, never a value"
+        ))),
         _ => Ok(()),
     }
 }
@@ -1180,9 +1288,11 @@ pub fn wiring(
             // next source would answer this server's question with another
             // harness's wiring, and dispatching without the credential would send
             // a call the row said must be authenticated.
-            credential: credential(source).map_err(|err| Unresolved::CredentialUnusable {
-                source: source.id.clone(),
-                why: err.to_string(),
+            credential: credential(source, &entry, repo_root).map_err(|err| {
+                Unresolved::CredentialUnusable {
+                    source: source.id.clone(),
+                    why: err.to_string(),
+                }
             })?,
             headers: match entry.at(HEADER_KEY) {
                 Look::Is(Node::Map(entries)) => entries
@@ -2666,7 +2776,37 @@ mod tests {
             scheme: scheme.to_owned(),
             env: env.map(str::to_owned),
             file_from: file_from.map(str::to_owned),
+            helper: None,
         }
+    }
+
+    /// A directory a helper runs from: any one does, the command is absolute.
+    fn here() -> std::path::PathBuf {
+        std::env::temp_dir()
+    }
+
+    /// A wiring entry with nothing in it, for a credential that reads none.
+    fn no_entry() -> Node {
+        Node::Map(std::collections::BTreeMap::new())
+    }
+
+    /// A row spending the helper at `headersHelper`, under `header`.
+    fn helper_row(header: &str) -> Credential {
+        Credential {
+            header: header.to_owned(),
+            scheme: String::new(),
+            env: None,
+            file_from: None,
+            helper: Some("headersHelper".to_owned()),
+        }
+    }
+
+    /// A wiring entry whose `headersHelper` is `command`.
+    fn helped_entry(command: &str) -> Node {
+        Node::Map(std::collections::BTreeMap::from([(
+            "headersHelper".to_owned(),
+            Node::Text(command.to_owned()),
+        )]))
     }
 
     // --- the refusal line's message relay (CLOUD-1403) --------------------
@@ -2809,7 +2949,10 @@ mod tests {
         // The byte-identical arm. Without it, adding this key would change what
         // every source that does not use it sends — the silent behaviour change
         // CLOUD-1261's acceptance refuses by name.
-        assert_eq!(credential(&source_with(None)).unwrap(), None);
+        assert_eq!(
+            credential(&source_with(None), &no_entry(), &here()).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -2817,7 +2960,8 @@ mod tests {
         let err = validate_credential(&source_with(Some(declared(None, None, ""))))
             .expect_err("a row naming no variable resolves to nothing and must not load");
         assert!(
-            err.to_string().contains("neither `env` nor `file_from`"),
+            err.to_string()
+                .contains("none of `env`, `file_from` or `helper`"),
             "the refusal names which keys are missing: {err}"
         );
     }
@@ -2829,7 +2973,8 @@ mod tests {
         let err = validate_credential(&source_with(Some(declared(Some("A"), Some("B"), ""))))
             .expect_err("a row naming two variables has no single meaning");
         assert!(
-            err.to_string().contains("both `env` and `file_from`"),
+            err.to_string()
+                .contains("more than one of `env`, `file_from` and `helper`"),
             "the refusal names the conflict: {err}"
         );
     }
@@ -2847,8 +2992,12 @@ mod tests {
             std::env::var_os(name).is_none(),
             "this case needs {name} unset to mean anything"
         );
-        let err = credential(&source_with(Some(declared(Some(name), None, ""))))
-            .expect_err("a declared credential that will not resolve must not dispatch");
+        let err = credential(
+            &source_with(Some(declared(Some(name), None, ""))),
+            &no_entry(),
+            &here(),
+        )
+        .expect_err("a declared credential that will not resolve must not dispatch");
         assert!(
             err.to_string().contains(name),
             "the refusal names the VARIABLE to fix: {err}"
@@ -2912,6 +3061,7 @@ mod tests {
             scheme: String::new(),
             env: Some("A".to_owned()),
             file_from: None,
+            helper: None,
         };
         assert_eq!(row.sent("tok").0, "X-Session-Token");
     }
@@ -3336,15 +3486,119 @@ mod tests {
     #[test]
     fn a_set_credential_variable_resolves_on_either_route() {
         let path = path_var();
-        let (header, secret) = credential(&source_with(Some(declared(Some("PATH"), None, ""))))
-            .unwrap()
-            .unwrap();
+        let (header, secret) = credential(
+            &source_with(Some(declared(Some("PATH"), None, ""))),
+            &no_entry(),
+            &here(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(header, "Authorization");
         assert_eq!(secret.spend(), path.trim());
         // A variable naming no readable file is "will not read", never "unset".
-        let err = credential(&source_with(Some(declared(None, Some("PATH"), ""))))
-            .expect_err("PATH names no credential file");
+        let err = credential(
+            &source_with(Some(declared(None, Some("PATH"), ""))),
+            &no_entry(),
+            &here(),
+        )
+        .expect_err("PATH names no credential file");
         assert!(err.to_string().contains("will not read"), "{err}");
+    }
+
+    // --- the wiring entry's own helper (Claude Code's `headersHelper`) ------
+
+    /// Fails by: the helper's printed header not being the one sent.
+    #[cfg(unix)]
+    #[test]
+    fn a_helper_s_printed_header_is_the_credential_sent() {
+        let entry = helped_entry(r#"printf '{"Authorization":"Bearer tok","X-Other":"o"}'"#);
+        let (header, secret) = credential(
+            &source_with(Some(helper_row("Authorization"))),
+            &entry,
+            &here(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(header, "Authorization");
+        assert_eq!(secret.spend(), "Bearer tok");
+    }
+
+    /// Fails by: a header name compared with its case, which HTTP ignores.
+    #[cfg(unix)]
+    #[test]
+    fn a_helper_s_header_is_found_whatever_its_case() {
+        let entry = helped_entry(r#"printf '{"authorization":"Bearer tok"}'"#);
+        let (header, secret) = credential(
+            &source_with(Some(helper_row("Authorization"))),
+            &entry,
+            &here(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(header, "Authorization");
+        assert_eq!(secret.spend(), "Bearer tok");
+    }
+
+    /// Fails by: a scheme the row declares not folded onto the printed value.
+    #[cfg(unix)]
+    #[test]
+    fn a_helper_value_takes_the_row_s_scheme() {
+        let mut row = helper_row("X-Token");
+        row.scheme = "Token".to_owned();
+        let entry = helped_entry(r#"printf '{"X-Token":"abc"}'"#);
+        let (_, secret) = credential(&source_with(Some(row)), &entry, &here())
+            .unwrap()
+            .unwrap();
+        assert_eq!(secret.spend(), "Token abc");
+    }
+
+    /// Fails by: any helper failure dispatching unauthenticated, or its refusal
+    /// carrying what the helper printed.
+    #[cfg(unix)]
+    #[test]
+    fn a_helper_that_cannot_answer_is_refused_naming_only_the_key() {
+        let source = source_with(Some(helper_row("Authorization")));
+        for (entry, why) in [
+            (no_entry(), "carries no command there"),
+            (helped_entry("  "), "carries no command there"),
+            (helped_entry("exit 7"), "exited 7"),
+            (helped_entry("printf 'SECRET-not-json'"), "is not JSON"),
+            (helped_entry(r#"printf '["SECRET"]'"#), "not an object"),
+            (
+                helped_entry(r#"printf '{"X-Other":"SECRET"}'"#),
+                "printed no `Authorization` header",
+            ),
+            (
+                helped_entry(r#"printf '{"Authorization":"  "}'"#),
+                "printed no `Authorization` header",
+            ),
+            (
+                helped_entry(r#"printf '{"Authorization":7}'"#),
+                "printed no `Authorization` header",
+            ),
+        ] {
+            let err = credential(&source, &entry, &here())
+                .expect_err(why)
+                .to_string();
+            assert!(err.contains(why), "{why}: {err}");
+            assert!(err.contains("`headersHelper`"), "names the key: {err}");
+            assert!(!err.contains("SECRET"), "never what it printed: {err}");
+            assert!(!err.contains("printf"), "never the command: {err}");
+        }
+    }
+
+    /// Fails by: a helper row loading beside another source, or with a blank key.
+    #[test]
+    fn a_helper_row_is_one_source_with_a_named_key() {
+        assert!(validate_credential(&source_with(Some(helper_row("Authorization")))).is_ok());
+        let mut both = helper_row("Authorization");
+        both.env = Some("A".to_owned());
+        let err = validate_credential(&source_with(Some(both))).unwrap_err();
+        assert!(err.to_string().contains("more than one"), "{err}");
+        let mut blank = helper_row("Authorization");
+        blank.helper = Some(" ".to_owned());
+        let err = validate_credential(&source_with(Some(blank))).unwrap_err();
+        assert!(err.to_string().contains("empty variable or key"), "{err}");
     }
 
     /// Fails by: a credential row naming a blank variable loading.
@@ -3355,7 +3609,7 @@ mod tests {
             declared(None, Some(" "), ""),
         ] {
             let err = validate_credential(&source_with(Some(row))).unwrap_err();
-            assert!(err.to_string().contains("empty variable"), "{err}");
+            assert!(err.to_string().contains("empty variable or key"), "{err}");
         }
         assert!(validate_credential(&source_with(Some(declared(Some("A"), None, "")))).is_ok());
     }
