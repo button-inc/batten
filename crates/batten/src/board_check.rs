@@ -1589,27 +1589,35 @@ mod tests {
     /// `""` would refuse a tree for a clause nobody named.
     #[test]
     fn a_citation_whose_clause_matched_empty_is_not_a_hit() {
+        // THE COMMITTED TAIL, MADE OPTIONAL: the premise is that it required a
+        // clause, so the edit is asserted to have changed it.
+        let committed = declared_row(&committed_patterns(), super::CLAUSE_CITATION).unwrap();
+        let tail = committed
+            .as_str()
+            .replacen("(?P<clause>[0-9]+)", "(?P<clause>[0-9]*)", 1);
+        assert_ne!(
+            tail,
+            committed.as_str(),
+            "the committed row required a clause"
+        );
+        // Spelled from parts, so this tracked file carries no citation of its own.
+        let key = ["TE", "ST"].concat();
         let dir = crate::scratch::scratch("board-check-refs-empty-clause");
         crate::gitwrite::init_on_main(&dir).unwrap();
         std::fs::write(
             dir.join("notes.md"),
-            "TEST-420 § and no number\nTEST-7 §3\n",
+            format!("{key}-420 § and no number\n{key}-7 §3\n"),
         )
         .unwrap();
         crate::gitwrite::commit_paths(&dir, &["notes.md".to_owned()], "chore: seed").unwrap();
         let refs = super::Refs {
-            citation: regex::Regex::new(r"(?P<key>TEST-[0-9]+)(?: §(?P<clause>[0-9]*))").unwrap(),
+            citation: regex::Regex::new(&format!("(?P<key>{key}-[0-9]+)(?:{tail})")).unwrap(),
             tag: regex::Regex::new("unused").unwrap(),
             exclude: Vec::new(),
         };
         assert_eq!(
             refs.hits(&dir).unwrap(),
-            BTreeSet::from([(
-                "notes.md".to_owned(),
-                2,
-                "TEST-7".to_owned(),
-                "3".to_owned()
-            )])
+            BTreeSet::from([("notes.md".to_owned(), 2, format!("{key}-7"), "3".to_owned())])
         );
     }
 
