@@ -57,6 +57,17 @@
 //! digests the whole body before [`install`] touches the cache. That is what
 //! makes an interrupted fetch leave the cache byte-identical, and it is the
 //! property the obvious streaming idiom destroys silently.
+//!
+//! ## The CA-bundle match reads no clock, and that is decided (CLOUD-1488)
+//!
+//! [`organisation_of`] answers ONE question — is this bundle the proxy's CA —
+//! from the subject's `O =`, and never reads the certificate's
+//! `not_before`/`not_after`. Validity is enforced by rustls at connection time
+//! in [`crate::fetch`], where the boundary's clock belongs. Checking it here
+//! would be a second authority over validity, deciding from a clock this
+//! predicate has no business reading (CLOUD-1170), so that option is refused
+//! rather than merely absent. A compiled case pins it: an EXPIRED root still
+//! names its organisation.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -1200,6 +1211,8 @@ const PEM_FOOTER: &str = "-----END CERTIFICATE-----";
 /// Public so the compiled-binary tier can build a one-certificate bundle out of
 /// the host's own and assert both arms against a real authority, rather than
 /// against a literal whose shape its author imagined.
+//MUTANT-SUITE crates/batten/tests/it/provision.rs
+//MUTANT refuse-on-not-after|s@^        .ok()?$@        .ok().filter({ fn alive(certificate: \&x509_cert::Certificate) -> bool { certificate.tbs_certificate.validity.not_after.to_unix_duration().as_secs() > 1_900_000_000 } alive })?@|an_expired_certificate_still_names_its_organisation
 #[must_use]
 pub fn organisation_of(pem: &str) -> Option<String> {
     use x509_cert::der::DecodePem as _;
