@@ -333,6 +333,7 @@ impl Credential {
 /// operator's wiring) and never a byte of what it printed: an absent or
 /// non-text key, a command that will not start or exits non-zero, output that
 /// is not a JSON object, and an object without the header or with it empty.
+//MUTANT helper-exit-unread|s@^    if code != 0 {$@    if code == 0 {@|a_helper_s_printed_header_is_the_credential_sent
 fn helped(
     row: &Credential,
     id: &str,
