@@ -1583,6 +1583,36 @@ mod tests {
         assert!(span.is_match("In Review"));
     }
 
+    /// A CITATION NAMING NO CLAUSE IS NO CITATION. The tail is the consumer's
+    /// row, so nothing guarantees its clause group is mandatory: one spelled
+    /// `[0-9]*` matches a bare `§`, and judging that as a citation of clause
+    /// `""` would refuse a tree for a clause nobody named.
+    #[test]
+    fn a_citation_whose_clause_matched_empty_is_not_a_hit() {
+        let dir = crate::scratch::scratch("board-check-refs-empty-clause");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        std::fs::write(
+            dir.join("notes.md"),
+            "TEST-420 § and no number\nTEST-7 §3\n",
+        )
+        .unwrap();
+        crate::gitwrite::commit_paths(&dir, &["notes.md".to_owned()], "chore: seed").unwrap();
+        let refs = super::Refs {
+            citation: regex::Regex::new(r"(?P<key>TEST-[0-9]+)(?: §(?P<clause>[0-9]*))").unwrap(),
+            tag: regex::Regex::new("unused").unwrap(),
+            exclude: Vec::new(),
+        };
+        assert_eq!(
+            refs.hits(&dir).unwrap(),
+            BTreeSet::from([(
+                "notes.md".to_owned(),
+                2,
+                "TEST-7".to_owned(),
+                "3".to_owned()
+            )])
+        );
+    }
+
     #[test]
     fn an_array_and_a_stream_are_one_set() {
         let array = payload_set(r#"[{"id":"A-1"},{"id":"A-2"}]"#).unwrap_or_default();
