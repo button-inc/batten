@@ -1,0 +1,7 @@
+metric=wall-clock runner=ubuntu-latest
+path=noop p50=2.95 p95=3.13 mean=2.97 runs=300
+path=check p50=4.62 p95=4.99 mean=4.67 runs=300
+path=hook p50=14.94 p95=15.57 mean=15.03 runs=300
+path=passthrough p50=11.33 p95=12.02 mean=11.43 runs=300
+path=posttool p50=35.25 p95=36.01 mean=35.25 runs=300
+path=wired p50=16.16 p95=16.67 mean=16.23 runs=300
