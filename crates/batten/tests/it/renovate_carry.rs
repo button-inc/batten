@@ -88,6 +88,44 @@ fn renovate_runs_the_carry_on_every_action_bump_and_the_allowlist_admits_it() {
     );
 }
 
+/// CLOUD-2538: the `cargo` group re-seeds the fuzz lock once per branch, and
+/// the allowlist admits exactly that command. Fails by: the rule or the
+/// pattern drifting, which Renovate answers by skipping the task and pushing a
+/// bump the fuzz-lock test refuses.
+#[test]
+fn renovate_carries_the_fuzz_lock_on_every_cargo_branch_and_the_allowlist_admits_it() {
+    let text = std::fs::read_to_string(at_root("renovate.json5")).expect("read renovate.json5");
+    let config: serde_json::Value = json5::from_str(&text).expect("renovate.json5 parses");
+    let rules = config["packageRules"].as_array().expect("packageRules");
+    let tasks: Vec<&serde_json::Value> = rules
+        .iter()
+        .filter(|rule| rule["matchManagers"] == serde_json::json!(["cargo"]))
+        .filter_map(|rule| rule.get("postUpgradeTasks"))
+        .collect();
+    assert_eq!(tasks.len(), 1, "one cargo rule carries the fuzz lock");
+    assert_eq!(
+        tasks[0],
+        &serde_json::json!({
+            "commands": ["node .github/renovate/fuzz-lock-carry.mjs"],
+            "fileFilters": ["fuzz/Cargo.lock"],
+            "executionMode": "branch",
+        })
+    );
+    let patterns = allowed();
+    assert!(
+        patterns
+            .iter()
+            .any(|pattern| pattern.is_match("node .github/renovate/fuzz-lock-carry.mjs")),
+        "the fuzz-lock carry is admitted"
+    );
+    assert!(
+        !patterns
+            .iter()
+            .any(|pattern| pattern.is_match("node .github/renovate/fuzz-lock-carry.mjs; sh")),
+        "the fuzz-lock carry's pattern admits nothing beside it"
+    );
+}
+
 #[test]
 fn the_allowlist_admits_nothing_beside_the_carry() {
     let patterns = allowed();

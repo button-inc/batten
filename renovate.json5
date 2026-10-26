@@ -261,6 +261,16 @@
       // a draft PR that bought no matrix, rather than on a Ready head that
       // bought one.
       groupName: "cargo",
+      // THE FUZZ LOCK TRAVELS WITH THE BUMP (CLOUD-2538). The fuzz workspace is
+      // detached, so a root bump never re-resolves it and the fuzz-lock test
+      // refuses the pin it left behind. Once per branch, after every update in
+      // the group is written, the carry re-seeds it from the root lock. Admitted
+      // by its own anchored pattern in `.github/workflows/renovate.yml`.
+      postUpgradeTasks: {
+        commands: ["node .github/renovate/fuzz-lock-carry.mjs"],
+        fileFilters: ["fuzz/Cargo.lock"],
+        executionMode: "branch",
+      },
     },
     {
       // What `groups: actions: patterns: ["*"]` bought on this lane, kept across

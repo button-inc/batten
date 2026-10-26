@@ -76,7 +76,7 @@ jobs:
           RENOVATE_REPOSITORIES: ${{ github.repository }}
           RENOVATE_ONBOARDING: "false"
           RENOVATE_REQUIRE_CONFIG: required
-          RENOVATE_ALLOWED_COMMANDS: '["^node \\.github/renovate/sbom-carry\\.mjs [A-Za-z0-9._/-]+ ?[0-9a-f]{0,40} ?[0-9a-f]{0,40}$"]'
+          RENOVATE_ALLOWED_COMMANDS: '["^node \\.github/renovate/sbom-carry\\.mjs [A-Za-z0-9._/-]+ ?[0-9a-f]{0,40} ?[0-9a-f]{0,40}$", "^node \\.github/renovate/fuzz-lock-carry\\.mjs$"]'
           # Renovate filters a post-upgrade command's environment, so the carry's
           # two tree reads would go out unauthenticated and share a runner IP's
           # 60-an-hour anonymous limit. `customEnvVariables` is the declared way

@@ -1,12 +1,14 @@
 //! `fuzz/Cargo.lock` pins nothing the root lock has not judged, except the
 //! fuzz harness's own crates (CLOUD-2538).
 //!
-//! The fuzz workspace is detached, so nothing in the landing path re-resolves
-//! it and `cargo deny check` never reads it. THIS CASE IS HOW `deny` REACHES
-//! THE CRATES THE TWO LOCKS SHARE: each may pin only a version, from a source,
-//! the root lock carries, and every such pin is one `deny` already judged. The
-//! harness's own crates are named in [`HARNESS`] and judged by no gate
-//! (CLOUD-2539); any other name the root lock lacks is a stale pin.
+//! The fuzz workspace is detached: a root bump never re-resolves it (Renovate
+//! re-seeds it, `.github/renovate/fuzz-lock-carry.mjs`), the fuzz search
+//! re-resolves it only in its own unlocked build, and `cargo deny check` never
+//! reads it. THIS CASE IS HOW `deny` REACHES THE CRATES THE TWO LOCKS SHARE:
+//! each may pin only a version, source and checksum the root lock carries, and
+//! every such pin is one `deny` already judged. The harness's own crates are
+//! named in [`HARNESS`] and judged by no gate (CLOUD-2539); any other name the
+//! root lock lacks is a stale pin.
 //!
 //! A SUBSET, NOT AN EQUALITY: the fuzz lock prunes what its harness does not
 //! reach, so only a pin the root lock does not carry is drift.
@@ -28,8 +30,8 @@ use crate::common;
 /// alone depends on.
 const HARNESS: [&str; 3] = ["arbitrary", "jobserver", "libfuzzer-sys"];
 
-/// Every sourced package in the lock at `path`, with the `version source`
-/// pins it carries.
+/// Every sourced package in the lock at `path`, with the `version source
+/// checksum` pins it carries.
 fn pinned(path: &str) -> BTreeMap<String, BTreeSet<String>> {
     let text = std::fs::read_to_string(common::at_root(path)).expect("the lock reads");
     let lock: toml::Value = toml::from_str(&text).expect("the lock is TOML");
@@ -46,9 +48,10 @@ fn pinned(path: &str) -> BTreeMap<String, BTreeSet<String>> {
         let (name, version) = field("name")
             .zip(field("version"))
             .expect("a package carries a name and a version");
+        let checksum = field("checksum").unwrap_or_default();
         out.entry(name.to_owned())
             .or_default()
-            .insert(format!("{version} {source}"));
+            .insert(format!("{version} {source} {checksum}"));
     }
     out
 }
@@ -63,6 +66,12 @@ fn the_fuzz_lock_resolves_shared_crates_as_the_root_does() {
         fuzz.keys().any(|name| root.contains_key(name)),
         "the premise: the two locks share crates"
     );
+    for name in HARNESS {
+        assert!(
+            fuzz.contains_key(name) && !root.contains_key(name),
+            "{name} is in HARNESS but is not a fuzz-only crate: drop it from the list"
+        );
+    }
     let drifted: Vec<String> = fuzz
         .iter()
         .filter_map(|(name, pins)| {
@@ -76,6 +85,7 @@ fn the_fuzz_lock_resolves_shared_crates_as_the_root_does() {
         .collect();
     assert!(
         drifted.is_empty(),
-        "fuzz/Cargo.lock pins what Cargo.lock does not: {drifted:?}"
+        "fuzz/Cargo.lock pins what Cargo.lock does not: {drifted:?}; \
+         re-seed it with `node .github/renovate/fuzz-lock-carry.mjs`"
     );
 }
