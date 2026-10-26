@@ -706,7 +706,17 @@ fn follow_pin(hook_path: bool) -> Result<Followed> {
     // READ BEFORE THE SWAP. After the rename Linux reports the running image as
     // `<path> (deleted)`, which is not a program — measured: the re-exec failed
     // with "cannot run `…/target/debug/batten (deleted)`".
-    let exe = std::env::current_exe()?;
+    //
+    // ON THE HOOK PATH AN UNREADABLE IMAGE IS NOTHING TO FOLLOW, never an error
+    // (CLOUD-2376), for `already_ran`'s reason: a `?` here left the hook before
+    // anything judged the call (no `/proc` in a sandbox), and a Batten error is
+    // the one answer every harness reads as "run it". This binary then judges
+    // the call itself. A verb still reports it, as it always did.
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(_) if hook_path => return Ok(Followed::Nothing),
+        Err(error) => return Err(error.into()),
+    };
     // A BUILD OF THIS CHECKOUT IS NEVER REPLACED (CLOUD-2063). A binary inside
     // the tree it judges is `cargo`'s output, not an installed engine: swapping
     // it overwrote `target/debug/batten` with the pinned release under `verify`'s
@@ -716,7 +726,13 @@ fn follow_pin(hook_path: bool) -> Result<Followed> {
     }
     let engine = match (pin.release.as_deref(), pin.source.as_deref()) {
         (Some(tag), None) => {
-            let cache = state::repo_state_dir(&root)?;
+            // The same rule as the image above: a state dir the hook cannot
+            // resolve leaves this binary to judge, rather than no judge at all.
+            let cache = match state::repo_state_dir(&root) {
+                Ok(cache) => cache,
+                Err(_) if hook_path => return Ok(Followed::Nothing),
+                Err(error) => return Err(error),
+            };
             // `releases_repository()`, NOT THE BAKED LITERAL (CLOUD-2376). Every
             // other release fetch in this binary reads that seam; this one spelled
             // the repository itself, so no fixture could point it anywhere and the
