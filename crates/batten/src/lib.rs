@@ -274,8 +274,8 @@ pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 // `#[expect]` rather than `#[allow]` for `rules/rust.md`'s reason: it is
 // self-cleaning in both directions, so if the table ever shrinks back under the
 // ceiling this annotation goes red rather than quietly outliving its cause.
-//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
-//MUTANT hook-follow-error-escapes|s@^        Some(Err(why)) if hook_path => {$@        Some(Err(why)) if false => {@|the_engine_repair_verb_reaches_a_skewed_pin
+//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
+//MUTANT hook-follow-error-escapes|s@^        Some(Err(why)) if hook_path => {$@        Some(Err(why)) if false => {@|a_release_pin_the_hook_cannot_fetch_falls_through_and_says_so
 #[expect(
     clippy::too_many_lines,
     reason = "a dispatch table's length is its verb count; splitting it scatters the surface"

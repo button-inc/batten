@@ -500,18 +500,19 @@ fn a_followed_builds_decision_reaches_the_harness_whole() {
 /// (CLOUD-2376).
 ///
 /// Only the hook path falls through to the refusal floor on a failed fetch
-/// (CLOUD-2116), and `run` decides that, because the floor still decides the
+/// (CLOUD-2116, decided once in `run`), because the floor still decides the
 /// call and admits the one repair verb. Every other verb must report: running
 /// anyway decides under the very engine the pin refuses, which is what
-/// `follow_pin`'s own doc says the fetch is not best-effort for.
+/// `follow_pin`'s own doc says the fetch is not best-effort for. The hook's
+/// half is `a_release_pin_the_hook_cannot_fetch_falls_through_and_says_so`.
 ///
-/// Nothing tested that, and the reason was in the production code rather than
-/// in the suite: `follow_pin` spelled the release repository as a baked
-/// literal, so no fixture could point the fetch anywhere and no case could make
-/// one fail. Swallowing the fetch's error on every path therefore survived. It reads
-/// `releases_repository()` now, like every other fetch in the binary, and
-/// `localhost:1` is this suite's established unreachable host — no network is
-/// touched either way.
+/// Nothing tested that split, and the reason was in the production code rather
+/// than in the suite: `follow_pin` spelled the release repository as a baked
+/// literal, so no fixture could point the fetch anywhere and no case could
+/// make one fail. Swallowing the fetch's error everywhere therefore survived.
+/// It reads `releases_repository()` now, like every other fetch in the binary,
+/// and `localhost:1` is this suite's established unreachable host — no network
+/// is touched either way.
 #[test]
 fn a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path() {
     let (dir, _installed, binary) = case_tree("unreachable-release");
@@ -555,6 +556,49 @@ fn a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path() {
         !common::stderr(&output).contains("install the pin with"),
         "the follow reported the fetch, not the staleness refusal it would \
          have fallen through to: {}",
+        text(&output)
+    );
+}
+
+/// ON THE HOOK A RELEASE PIN THAT CANNOT BE FETCHED FALLS THROUGH, LOUDLY
+/// (CLOUD-2376), the other half of the case above.
+///
+/// `run` turns the follow's error into nothing to follow, so the refusal floor
+/// decides the call. Without that, the error ends the hook as a Batten error,
+/// which every harness reads as "run it": the fail-open this row closes. The
+/// stderr line is asserted too, since a fall-through that says nothing reads
+/// exactly like a pin that is current (CLOUD-43).
+#[test]
+fn a_release_pin_the_hook_cannot_fetch_falls_through_and_says_so() {
+    let (dir, _installed, binary) = case_tree("unreachable-release-hook");
+    common::write(
+        &dir,
+        "batten.toml",
+        "version = 1\nengine = { release = \"v9.9.9\" }\n",
+    );
+
+    let output = run_from(
+        &binary,
+        &dir,
+        &dir,
+        &ADJUDICATE,
+        &bash_envelope("hook-unreachable", "echo hi"),
+        &[(
+            "BATTEN_RELEASES",
+            Path::new("https://localhost:1/example/pkg"),
+        )],
+    );
+    // THE DENY DOCUMENT, NOT THE CODE, is the floor's signature: it answers `3`
+    // beside a deny, and a Batten error out of `run` is a `3` with no document
+    // at all. Measured, asserting the code alone passed over the escape.
+    assert!(
+        common::stdout(&output).contains(r#""permissionDecision":"deny""#),
+        "the floor decided the call, refusing a command it cannot judge: {}",
+        text(&output)
+    );
+    assert!(
+        common::stderr(&output).contains("the engine pin could not be followed"),
+        "and the hook said the pin was not followed: {}",
         text(&output)
     );
 }
