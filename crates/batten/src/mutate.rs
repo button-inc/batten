@@ -273,7 +273,7 @@ fn task_names(lines: &[String]) -> Vec<String> {
 //MUTANT registered-rows-swept-by-hand|s@^                if !gate.rows.is_empty() \&\& !gate.rows.iter().any(\x7crow\x7c registry.declares(row)) {$@                if false {@|a_change_to_a_rust_gate_is_judged_by_its_registered_runner
 //MUTANT registered-row-judged-twice|s@^                .filter(\x7crow\x7c registry.declares(row))$@                .filter(\x7c_\x7c true)@|a_registered_runners_rows_are_never_swept_by_the_declared_runner
 //MUTANT shard-slices-unsorted|s@^    sorted.sort();$@@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
-//MUTANT shard-takes-every-gate|s@^        .filter(\x7c(index, _)\x7c shard_owns_row(\*index, Some(parsed)))$@        .filter(\x7c_\x7c true)@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
+//MUTANT shard-takes-every-gate|s@^        .filter(\x7c(_, owned)\x7c \*owned)$@        .filter(\x7c_\x7c true)@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
 //MUTANT every-gate-touched|s@^        \.filter(\x7cname\x7c {$@        .filter(\x7cname\x7c { true \x7c\x7c@|a_change_touching_no_gate_sweeps_nothing
 fn declaring_lines(root: &Path, name: &str, source: &str) -> Option<Vec<String>> {
     declaring_in(name, source, lines_of(root, source)?)
@@ -1167,14 +1167,23 @@ pub const SHARD: &str = "MUTANT_SHARD";
 pub fn shard_of(names: &[String], shard: &str) -> Result<Vec<String>, String> {
     let parsed = parse_shard(shard)
         .ok_or_else(|| format!("{SHARD}={shard} is not `k/n` with 0 <= k < n"))?;
-    let mut sorted = names.to_vec();
+    Ok(by_shard(names, Some(parsed))
+        .into_iter()
+        .filter(|(_, owned)| *owned)
+        .map(|(name, _)| name.clone())
+        .collect())
+}
+
+/// Every name, sorted, with whether `shard` owns it: the one order every shard
+/// of a run numbers the gates in, so [`shard_of`] and [`sweep_shard`] agree.
+fn by_shard(names: &[String], shard: Option<(usize, usize)>) -> Vec<(&String, bool)> {
+    let mut sorted: Vec<&String> = names.iter().collect();
     sorted.sort();
-    Ok(sorted
+    sorted
         .into_iter()
         .enumerate()
-        .filter(|(index, _)| shard_owns_row(*index, Some(parsed)))
-        .map(|(_, name)| name)
-        .collect())
+        .map(|(index, name)| (name, shard_owns_row(index, shard)))
+        .collect()
 }
 
 /// Whether the declared row numbered `index` (counted across the sorted gates,
@@ -1247,7 +1256,7 @@ impl RunnerKind {
 //MUTANT later-unrecognized-costs-the-gate|s@^                None if index == 0 => unrunnable@                None if true => unrunnable@|a_later_unrecognized_suite_costs_only_the_rows_under_it
 //MUTANT suite-first-only|s@^            Some(_) => row.resolved.as_ref(),$@            Some(_) => self.suite.as_ref(),@|each_preset_module_row_runs_under_its_own_declared_suite
 //MUTANT every-row-on-every-shard|s@^    shard.is_none_or(\x7c(k, n)\x7c index % n == k)$@    true@|a_large_gates_rows_spread_across_every_shard
-//MUTANT gate-finding-on-every-shard|s@^            (Some((verdict, owner)), _) if shard_owns_row(position, shard) => {$@            (Some((verdict, owner)), _) => {@|a_sharded_sweep_judges_each_row_and_reports_each_gate_once
+//MUTANT gate-finding-on-every-shard|s@^        if reports {$@        if true {@|a_sharded_sweep_judges_each_row_and_reports_each_gate_once
 //MUTANT nextest-profile-unpinned|s@^        (String::from("NEXTEST_PROFILE"), String::from("default")),$@        (String::from("NEXTEST_PROFILE"), String::from("ci")),@|every_runner_runs_the_default_nextest_profile
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT later-suites-unread|s@^                    own.push(resolved);$@                    if own.is_empty() { own.push(resolved); }@|a_change_to_a_sources_second_suite_sweeps_its_gate
@@ -3997,33 +4006,30 @@ pub fn sweep_shard(
     shard: Option<(usize, usize)>,
     progress: &mut dyn std::io::Write,
 ) -> Result<Sweep> {
-    // SORTED, as `shard_of` sorts, so every shard numbers the same gates and
-    // rows in the same order whatever order its caller listed them in.
-    let mut sorted = names.to_vec();
-    sorted.sort();
+    // SORTED, so every shard numbers the same gates and rows in the same order
+    // whatever order its caller listed them in.
     let mut findings = Vec::new();
     let mut runnable = Vec::new();
-    let mut held = std::collections::BTreeSet::new();
-    for (position, name) in sorted.iter().enumerate() {
-        let gate = resolve(root, name);
-        let stopped = match &gate {
-            None => Some((Verdict::NoSuchGate, None)),
-            Some(gate) => gate_stopped(root, gate).map(|verdict| (verdict, gate.owner.clone())),
+    for (name, reports) in by_shard(names, shard) {
+        let (verdict, owner) = match resolve(root, name) {
+            None => (Verdict::NoSuchGate, None),
+            Some(gate) => match gate_stopped(root, &gate) {
+                Some(verdict) => (verdict, gate.owner.clone()),
+                None => {
+                    runnable.push((name, gate));
+                    continue;
+                }
+            },
         };
-        match (stopped, gate) {
-            // A GATE-LEVEL finding is reported by the one shard `shard_of`
-            // gives the gate, so a sharded run reports it once.
-            (Some((verdict, owner)), _) if shard_owns_row(position, shard) => {
-                held.insert(name);
-                findings.push(Finding {
-                    gate: name.clone(),
-                    slug: None,
-                    verdict,
-                    owner,
-                });
-            }
-            (None, Some(gate)) => runnable.push((name, gate)),
-            _ => {}
+        // A GATE-LEVEL finding is reported by the one shard `shard_of` gives
+        // the gate, so a sharded run reports it once.
+        if reports {
+            findings.push(Finding {
+                gate: name.clone(),
+                slug: None,
+                verdict,
+                owner,
+            });
         }
     }
     // THE SHARD'S ROWS, numbered across the runnable gates in sorted order, so
@@ -4040,14 +4046,16 @@ pub fn sweep_shard(
         .filter(|(number, _)| shard_owns_row(*number, shard))
         .map(|(_, row)| row)
         .collect();
-    held.extend(mine.iter().map(|(name, _, _)| *name));
+    // The gates holding a row of this shard's: only they can owe it a build.
+    let mut holding: Vec<String> = mine.iter().map(|(name, _, _)| (*name).clone()).collect();
+    holding.dedup();
+    // Disjoint from the gates reported above, which are never runnable.
+    let gates = findings.len() + holding.len();
     let total = mine.len();
     let _ = writeln!(
         progress,
-        "mutate sweep: {total} row(s) across {} gate(s)",
-        held.len()
+        "mutate sweep: {total} row(s) across {gates} gate(s)"
     );
-    let gates = held.len();
     if mine.is_empty() {
         // Nothing to judge, so nothing to stage or build.
         return Ok(Sweep {
@@ -4059,9 +4067,6 @@ pub fn sweep_shard(
     let record = work.join(CAUGHT_RECORD);
     let caught = recorded_caught(&record);
     let mut staged = Staged::new(root, work)?;
-    // Only the gates holding a row of this shard's can owe it a build.
-    let mut holding: Vec<String> = mine.iter().map(|(name, _, _)| (*name).clone()).collect();
-    holding.dedup();
     build_if_owed(root, &holding, registry, &caught, &staged, progress);
     let mut declared = 0;
     for (name, gate, row) in mine {
