@@ -453,26 +453,32 @@ fn the_committed_workflows_and_manifest_agree() {
 /// filtered or not (`cargo [flags] test|t|nextest run|llvm-cov` other than
 /// `llvm-cov report`, not `--no-run`); `hk check|run` outside the `!slow`
 /// profile (hk's `test` step is `mise run test:cargo`); `mutate sweep`; whatever
-/// a script in the tree runs; and text the parse cannot read.
+/// a script in the tree runs; and text the parse cannot read. A template is read
+/// once per branch it can render (CLOUD-2450), so one branch's flags never
+/// reach another's command.
 fn suite_facts(run: &str) -> (bool, Vec<String>) {
-    // A text that is only comments parses to nothing, which is not unreadable.
-    let code: String = rendered(run)
-        .lines()
-        .filter(|line| !line.trim_start().starts_with('#'))
-        .collect::<Vec<_>>()
-        .join("\n");
-    if code.trim().is_empty() {
-        return (false, Vec::new());
-    }
-    let Some(commands) = batten::testing::shell_commands(&code) else {
+    let Some(texts) = renderings(run) else {
         return (true, Vec::new());
     };
     let mut direct = false;
     let mut tasks = Vec::new();
-    for (words, stdin) in commands {
-        let (inner, more) = command_facts(&words, &stdin);
-        direct |= inner;
-        tasks.extend(more);
+    for text in texts {
+        // A text that is only comments parses to nothing, which is not
+        // unreadable; any other text is parsed as written.
+        if text
+            .lines()
+            .all(|line| line.trim().is_empty() || line.trim_start().starts_with('#'))
+        {
+            continue;
+        }
+        let Some(commands) = batten::testing::shell_commands(&text) else {
+            return (true, Vec::new());
+        };
+        for (words, stdin) in commands {
+            let (inner, more) = command_facts(&words, &stdin);
+            direct |= inner;
+            tasks.extend(more);
+        }
     }
     (direct, tasks)
 }
@@ -481,72 +487,143 @@ fn suite_facts(run: &str) -> (bool, Vec<String>) {
 /// or a mise `{{ … }}` expression. A task named by one is held as a suite task.
 const UNRENDERED: &str = "__unrendered__";
 
-/// `run` with its templates resolved as far as a reader can: a Tera `{% else %}`
-/// or `{% elif %}` is ` ::: ` and any other `{% … %}` a space, so every branch
-/// of an `if` is read and a command around one stays one command; `{{vars.X}}`
-/// is `X` (`{{vars.batten}}` is the batten program); any other `{{ … }}` or
+/// The most texts one `run` may render to before it is held as the suite
+/// unread (CLOUD-2450).
+const RENDERINGS: usize = 16;
+
+/// One piece of a template: text, or a Tera `{% … %}` tag by its keyword.
+enum Piece {
+    Text(String),
+    Tag(String),
+}
+
+/// `run` cut into text and Tera tags. In text, `{{vars.X}}` is `X`
+/// (`{{vars.batten}}` is the batten program) and any other `{{ … }}` or
 /// `${{ … }}` is [`UNRENDERED`].
-fn rendered(run: &str) -> String {
-    let mut out = String::with_capacity(run.len());
+fn pieces(run: &str) -> Vec<Piece> {
+    let mut pieces = Vec::new();
+    let mut text = String::new();
     let mut rest = run;
     while let Some(open) = rest.find(['{', '$']) {
         let (head, tail) = rest.split_at(open);
-        out.push_str(head);
-        let (close, replacement) = if let Some(body) = tail.strip_prefix("{%") {
-            // An `else`/`elif` starts another branch, which `:::` keeps a
-            // separate task to `mise run`; any other tag joins its text.
-            let tag = body.trim_start();
-            let branch = tag.starts_with("else") || tag.starts_with("elif");
-            (
-                body.find("%}").map(|end| end + 4),
-                if branch { " ::: " } else { " " }.to_owned(),
-            )
-        } else if let Some(body) = tail.strip_prefix("${{").or_else(|| tail.strip_prefix("{{")) {
-            let skip = tail.len() - body.len();
-            body.find("}}").map_or((None, String::new()), |end| {
-                let inner = body[..end].trim();
-                let word = inner
+        text.push_str(head);
+        if let Some(body) = tail.strip_prefix("{%")
+            && let Some(end) = body.find("%}")
+        {
+            let keyword = body[..end]
+                .trim_matches(|c: char| c == '-' || c.is_whitespace())
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            pieces.push(Piece::Text(std::mem::take(&mut text)));
+            pieces.push(Piece::Tag(keyword));
+            rest = &body[end + 2..];
+        } else if let Some(body) = tail.strip_prefix("${{").or_else(|| tail.strip_prefix("{{"))
+            && let Some(end) = body.find("}}")
+        {
+            let inner = body[..end].trim();
+            text.push_str(
+                &inner
                     .strip_prefix("vars.")
                     .filter(|name| name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-                    .map_or_else(|| UNRENDERED.to_owned(), str::to_owned);
-                (Some(skip + end + 2), word)
-            })
+                    .map_or_else(|| UNRENDERED.to_owned(), str::to_owned),
+            );
+            rest = &body[end + 2..];
         } else {
-            (None, String::new())
-        };
-        if let Some(close) = close {
-            out.push_str(&replacement);
-            rest = &tail[close..];
-        } else {
-            out.push_str(&tail[..1]);
+            text.push_str(&tail[..1]);
             rest = &tail[1..];
         }
     }
-    out.push_str(rest);
-    out
+    text.push_str(rest);
+    pieces.push(Piece::Text(text));
+    pieces
 }
 
-/// The words after `at` that are not flags, a value-taking flag's value
-/// skipped with it: a subcommand and its operands.
-fn operands<'a>(
-    words: &'a [String],
-    at: usize,
-    valued: &'a [&'a str],
-) -> impl Iterator<Item = &'a str> {
-    operand_at(words, at, valued).map(|(_, word)| word)
+/// Every text `run` can render to (CLOUD-2450): an `{% if %}` group renders
+/// each of its `if`, `elif` and `else` branches, or the empty text when it has
+/// no `else`; successive and nested groups multiply; a `{% for %}` body is read
+/// once; any other tag is a space. `None` past [`RENDERINGS`] texts, or where a
+/// closing tag has no group to close.
+//MUTANT template-branches-joined|s@^    sequence(&pieces, &mut at).filter(@    sequence(\&pieces, \&mut at).map(\x7ctexts\x7c vec![texts.join(" ::: ")]).filter(@|a_suite_step_is_a_suite_task_or_a_suite_command
+fn renderings(run: &str) -> Option<Vec<String>> {
+    let pieces = pieces(run);
+    let mut at = 0;
+    sequence(&pieces, &mut at).filter(|_| at == pieces.len())
 }
 
-/// [`operands`], each with its index in `words`.
+/// The texts `pieces[*at..]` renders to, up to a tag that closes or divides
+/// the enclosing group, which is left for the caller.
+fn sequence(pieces: &[Piece], at: &mut usize) -> Option<Vec<String>> {
+    let mut texts = vec![String::new()];
+    while let Some(piece) = pieces.get(*at) {
+        let branches = match piece {
+            Piece::Text(text) => {
+                *at += 1;
+                vec![text.clone()]
+            }
+            Piece::Tag(tag) => match tag.as_str() {
+                "elif" | "else" | "endif" | "endfor" => break,
+                "if" => {
+                    *at += 1;
+                    let mut branches = sequence(pieces, at)?;
+                    let mut has_else = false;
+                    while let Some(Piece::Tag(tag)) = pieces.get(*at) {
+                        match tag.as_str() {
+                            "elif" | "else" => {
+                                has_else |= tag == "else";
+                                *at += 1;
+                                branches.extend(sequence(pieces, at)?);
+                            }
+                            "endif" => {
+                                *at += 1;
+                                break;
+                            }
+                            _ => return None,
+                        }
+                    }
+                    if !has_else {
+                        branches.push(String::new());
+                    }
+                    branches
+                }
+                "for" => {
+                    *at += 1;
+                    let body = sequence(pieces, at)?;
+                    if matches!(pieces.get(*at), Some(Piece::Tag(tag)) if tag == "endfor") {
+                        *at += 1;
+                    }
+                    body
+                }
+                _ => {
+                    *at += 1;
+                    vec![" ".to_owned()]
+                }
+            },
+        };
+        if texts.len() * branches.len() > RENDERINGS {
+            return None;
+        }
+        texts = texts
+            .iter()
+            .flat_map(|head| branches.iter().map(move |tail| format!("{head}{tail}")))
+            .collect();
+    }
+    Some(texts)
+}
+
+/// The words of `words` from index `from` on that are operands, each with its
+/// index: not a flag, not a value-taking flag's value, not a redirection.
 fn operand_at<'a>(
     words: &'a [String],
-    at: usize,
+    from: usize,
     valued: &'a [&'a str],
 ) -> impl Iterator<Item = (usize, &'a str)> {
     let mut operand = is_operand(valued);
     words
         .iter()
         .enumerate()
-        .skip(at + 1)
+        .skip(from)
         .map(|(index, word)| (index, word.as_str()))
         .filter(move |(_, word)| operand(word))
 }
@@ -554,13 +631,10 @@ fn operand_at<'a>(
 /// The tasks `mise run` names after `words[at]`: the first word that is not a
 /// flag, and the first after each `:::`. The rest are those tasks' arguments.
 fn tasks_after(words: &[String], at: usize) -> Vec<String> {
-    let end = words[at + 1..]
-        .iter()
-        .position(|word| word == "--")
-        .map_or(words.len(), |offset| at + 1 + offset);
+    let end = own_end(words, at);
     let mut tasks = Vec::new();
     let mut expecting = true;
-    for (index, word) in operand_at(words, at, MISE_VALUED) {
+    for (index, word) in operand_at(words, at + 1, MISE_VALUED) {
         if index >= end {
             break;
         }
@@ -573,17 +647,28 @@ fn tasks_after(words: &[String], at: usize) -> Vec<String> {
     tasks
 }
 
+/// Where the program at `words[at]` stops owning words: its first `--` after
+/// it, or the end of the command. A flag past it is another program's.
+fn own_end(words: &[String], at: usize) -> usize {
+    words[at + 1..]
+        .iter()
+        .position(|word| word == "--")
+        .map_or(words.len(), |offset| at + 1 + offset)
+}
+
 /// Whether batten, given `args`, runs cases, and the mise tasks it runs:
 /// `mutate sweep` runs the suites its rows name, `test replay` every modified
-/// case through nextest, `land lap` runs `verify`, and `enforce`, or `check`,
-/// runs `batten.toml`'s `[[rule]] check` commands (only the `--rule` named).
+/// case through nextest, `land lap` runs `verify`, and `enforce` runs
+/// `batten.toml`'s `[[rule]] check` commands (only the `--rule` named).
+/// `check` is the read-effect verb and refuses a command rule (`hk.pkl`), so it
+/// runs no case (CLOUD-2450).
 fn batten_facts(args: &[String]) -> (bool, Vec<String>) {
-    let mut next = operands_of(args, BATTEN_VALUED);
+    let mut next = operand_at(args, 0, BATTEN_VALUED).map(|(_, word)| word);
     match (next.next(), next.next()) {
         (Some("mutate"), Some("sweep"))
         | (Some("test"), Some("replay"))
         | (Some("land"), Some("lap")) => (true, Vec::new()),
-        (Some("enforce" | "check"), _) => {
+        (Some("enforce"), _) => {
             // `--rule` repeats, and is spelled `--rule X` or `--rule=X`.
             let only: Vec<&str> = args
                 .iter()
@@ -651,14 +736,6 @@ fn rule_checks() -> &'static [(String, Facts)] {
             })
             .collect()
     })
-}
-
-/// [`operands`] over a whole argument list.
-fn operands_of<'a>(args: &'a [String], valued: &'a [&'a str]) -> impl Iterator<Item = &'a str> {
-    let mut operand = is_operand(valued);
-    args.iter()
-        .map(String::as_str)
-        .filter(move |word| operand(word))
 }
 
 /// The one rule for what is an operand: not a flag (`-x`, `+toolchain`), not a
@@ -752,6 +829,7 @@ const SHELL_VALUED: &[&str] = &["-o", "-O", "+o", "+O", "--rcfile", "--init-file
 /// Every word is tried as a program, so a suite run that is another program's
 /// operand (`ci step -- mise run coverage`) is read too: over-reading only
 /// over-requires.
+//MUTANT no-run-whole-command|s@^                let scope = own;$@                let scope = words;@|a_suite_step_is_a_suite_task_or_a_suite_command
 //MUTANT suite-via-hk-unseen|s@^            "hk" => @            "hk-unread" => @|every_suite_job_installs_the_pinned_tools_its_cases_require
 fn command_facts(words: &[String], stdin: &[String]) -> (bool, Vec<String>) {
     let mut direct = false;
@@ -764,44 +842,71 @@ fn command_facts(words: &[String], stdin: &[String]) -> (bool, Vec<String>) {
         let program = word.rsplit('/').next().unwrap_or(word);
         match program {
             "cargo" => {
-                let mut next = operands(words, at, CARGO_VALUED);
+                // Cargo's own words run to its own `--`; past it they are the
+                // test binary's or the program's (CLOUD-2450).
+                let end = own_end(words, at);
+                let own = &words[at + 1..end];
+                let mut next = operand_at(own, 0, CARGO_VALUED).map(|(_, word)| word);
                 let runner = match next.next() {
                     Some("test" | "t") => true,
                     Some("nextest") => matches!(next.next(), Some("run" | "r")),
                     Some("llvm-cov") => next.next() != Some("report"),
                     _ => false,
                 };
-                take((runner && !words.iter().any(|w| w == "--no-run"), Vec::new()));
+                let scope = own;
+                take((runner && !scope.iter().any(|w| w == "--no-run"), Vec::new()));
                 // `cargo run --package=batten -- <verb>` is batten itself.
-                let names_batten = words
+                let names_batten = own
                     .iter()
                     .any(|w| matches!(w.as_str(), "--package=batten" | "--bin=batten"))
-                    || words.windows(2).any(|w| {
+                    || own.windows(2).any(|w| {
                         matches!(w[0].as_str(), "-p" | "--package" | "--bin") && w[1] == "batten"
                     });
-                if names_batten && let Some(split) = words.iter().position(|w| w == "--") {
-                    take(batten_facts(&words[split + 1..]));
+                if names_batten && end < words.len() {
+                    take(batten_facts(&words[end + 1..]));
                 }
             }
-            "hk" => take((
-                matches!(operands(words, at, &[]).next(), Some("check" | "run"))
-                    && !words.iter().any(|w| w.contains("!slow")),
-                Vec::new(),
-            )),
+            "hk" => {
+                // `!slow` counts only as its own profile's value (CLOUD-2450).
+                let own = &words[at + 1..own_end(words, at)];
+                let slow = own.iter().enumerate().any(|(index, word)| {
+                    word.strip_prefix("--profile=")
+                        .or_else(|| {
+                            matches!(word.as_str(), "--profile" | "-P")
+                                .then(|| own.get(index + 1).map(String::as_str))
+                                .flatten()
+                        })
+                        .is_some_and(|profile| profile.contains("!slow"))
+                });
+                let mut next = operand_at(own, 0, &["--profile", "-P"]).map(|(_, word)| word);
+                take((
+                    matches!(next.next(), Some("check" | "run")) && !slow,
+                    Vec::new(),
+                ));
+            }
             "batten" => take(batten_facts(&words[at + 1..])),
             "bash" | "sh" => {
                 // `-c`, alone or in a cluster (`-ec`), takes the next word as
                 // the script; with neither a script nor a file, stdin is it.
-                // Only among the shell's own flags: after its script operand,
-                // a `-c` is the script's argument.
-                let inline = words[at + 1..]
-                    .iter()
-                    .take_while(|w| w.starts_with('-') || w.starts_with('+'))
-                    .position(|w| w.starts_with('-') && !w.starts_with("--") && w.contains('c'))
-                    .and_then(|flag| words.get(at + 2 + flag));
+                // Only among the shell's own flags, a flag's value skipped with
+                // it (`-o pipefail`): after its script operand, a `-c` is the
+                // script's argument.
+                let mut operand = is_operand(SHELL_VALUED);
+                let mut inline = None;
+                let mut file = None;
+                for (index, word) in words.iter().enumerate().skip(at + 1) {
+                    if operand(word) {
+                        file = Some(word);
+                        break;
+                    }
+                    if word.starts_with('-') && !word.starts_with("--") && word.contains('c') {
+                        inline = words.get(index + 1);
+                        break;
+                    }
+                }
                 if let Some(script) = inline {
                     take(suite_facts(script));
-                } else if let Some(file) = operands(words, at, SHELL_VALUED).next() {
+                } else if let Some(file) = file {
                     take(script_facts(file));
                 } else {
                     for text in stdin {
@@ -818,7 +923,7 @@ fn command_facts(words: &[String], stdin: &[String]) -> (bool, Vec<String>) {
                 take(script_facts(word));
             }
             "mise" => {
-                let mut next = operand_at(words, at, MISE_VALUED);
+                let mut next = operand_at(words, at + 1, MISE_VALUED);
                 let named: Vec<String> = match next.next() {
                     // `mise watch <task>` runs it on every change.
                     Some((sub, "run" | "r" | "watch" | "w")) => tasks_after(words, sub),
@@ -1312,6 +1417,18 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "mise run batten -- enforce",
         "mise run --output prefix ci",
         "mise watch ci",
+        // Each template branch is its own command; one branch's flag never
+        // reaches another's runner (CLOUD-2450).
+        "{% if b %}cargo nextest run --workspace{% else %}cargo nextest run --no-run{% endif %}",
+        "{% if b %}cargo nextest run --no-run{% else %}cargo nextest run --workspace{% endif %}",
+        "hk check {% if x %}--profile '!slow'{% endif %} --all",
+        // A flag counts only among its own program's words.
+        "ci step --summary \"hooks (!slow skipped)\" -- hk check --all",
+        "ci step --summary --no-run -- cargo nextest run --workspace",
+        "cargo run --package=batten -- step run x -- cargo run --package=batten -- mutate sweep",
+        "bash -o pipefail -c \"cargo nextest run --workspace\"",
+        // A closing tag with no group to close is unreadable.
+        "{% endif %}mise run lint",
     ] {
         assert!(runs_suite(run, &suite), "{run}");
     }
@@ -1332,6 +1449,10 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "mise exec -- cargo llvm-cov report --summary-only",
         "./install.sh",
         "sh target/distrib/batten-installer.sh",
+        // `check` refuses a command rule, so it runs no rule's check.
+        "batten check --rule 'config retire unnamed'",
+        "hk check --profile '!slow' --all",
+        "hk check -P=x -P '!slow'",
     ] {
         assert!(!runs_suite(run, &suite), "{run}");
     }
