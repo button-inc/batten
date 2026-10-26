@@ -1085,8 +1085,10 @@ jobs:
   # THE CHANGED DIFF'S MUTANTS, SHARDED (CLOUD-1746). `verify` runs
   # `mutant:changed` whole, and it runs there first. This job confirms it as the
   # cargo-mutants book's PR recipe does: `--in-diff`, split across a matrix.
-  # `MUTANT_SHARD` slices the cargo-mutants mutants and the declared gates alike
-  # (`run_mutate_sweep`), and a shard skips the baseline the unsharded local run
+  # `MUTANT_SHARD` slices the cargo-mutants mutants and the declared rows alike
+  # (`run_mutate_sweep`; by row, not by gate, since CLOUD-2533 measured one
+  # 45-row gate holding a shard past this job's bound), and a shard skips the
+  # baseline the unsharded local run
   # already took. Measured locally on #1209: 22 mutants plus 3 declared rows in
   # 32m41s serially, so four shards bring CI's share to about a quarter of that
   # on top of each shard's warm build. The #1132 matrix this replaces in spirit

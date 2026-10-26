@@ -271,9 +271,9 @@ fn task_names(lines: &[String]) -> Vec<String> {
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT task-block-unscoped|s@        Some(task) if task_manifest().as_deref() == Some(source) => task_block(&lines, task),@        Some(_) if task_manifest().as_deref() == Some(source) => Some(lines),@|a_task_gate_sweeps_only_its_own_block
 //MUTANT registered-rows-swept-by-hand|s@^                if !gate.rows.is_empty() \&\& !gate.rows.iter().any(\x7crow\x7c registry.declares(row)) {$@                if false {@|a_change_to_a_rust_gate_is_judged_by_its_registered_runner
-//MUTANT registered-row-judged-twice|s@^        for row in gate.rows.iter().filter(\x7crow\x7c registry.declares(row)) {$@        for row in \&gate.rows {@|a_registered_runners_rows_are_never_swept_by_the_declared_runner
+//MUTANT registered-row-judged-twice|s@^            .filter(\x7crow\x7c registry.declares(row))$@            .filter(\x7c_\x7c true)@|a_registered_runners_rows_are_never_swept_by_the_declared_runner
 //MUTANT shard-slices-unsorted|s@^    sorted.sort();$@@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
-//MUTANT shard-takes-every-gate|s@^        .filter(\x7c(index, _)\x7c index % n == k)$@        .filter(\x7c_\x7c true)@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
+//MUTANT shard-takes-every-gate|s@^        .filter(\x7c(index, _)\x7c shard_owns_row(\*index, Some(parsed)))$@        .filter(\x7c_\x7c true)@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
 //MUTANT every-gate-touched|s@^        \.filter(\x7cname\x7c {$@        .filter(\x7cname\x7c { true \x7c\x7c@|a_change_touching_no_gate_sweeps_nothing
 fn declaring_lines(root: &Path, name: &str, source: &str) -> Option<Vec<String>> {
     declaring_in(name, source, lines_of(root, source)?)
@@ -1150,31 +1150,43 @@ pub const RUNNERS: &str = "MUTANT_RUNNERS";
 pub const RUNNER: &str = "MUTANT_RUNNER";
 
 /// The shard this invocation takes, as `k/n` with `k` counted from zero: slice
-/// `k` of the declared runner's gates, and the registered runner's own shard `k`.
+/// `k` of the declared runner's rows ([`shard_owns_row`]), and the registered
+/// runner's own shard `k`.
 pub const SHARD: &str = "MUTANT_SHARD";
 
-/// The gates one `$MUTANT_SHARD` of `k/n` sweeps: every `n`-th of the sorted
-/// set, starting at `k`.
+/// The gates whose GATE-LEVEL findings one `$MUTANT_SHARD` of `k/n` reports:
+/// every `n`-th of the sorted set, starting at `k`, so each is reported once.
 ///
-/// BY GATE, NOT BY ROW, because a gate's rows share one staged tree and one
-/// suite build: splitting a gate across shards would pay its build twice. Sorted
-/// first, so every shard of one run slices the same order and the slices
-/// partition the set.
+/// Rows are sliced finer, by [`shard_owns_row`] (CLOUD-2533): slicing by gate put
+/// a 45-row gate on one shard, past the `mutants` job's bound. Sorted first, so
+/// every shard of one run slices the same order and the slices partition the set.
 ///
 /// # Errors
 ///
 /// A value that is not `k/n` with `n > 0` and `k < n`.
 pub fn shard_of(names: &[String], shard: &str) -> Result<Vec<String>, String> {
-    let (k, n) = parse_shard(shard)
+    let parsed = parse_shard(shard)
         .ok_or_else(|| format!("{SHARD}={shard} is not `k/n` with 0 <= k < n"))?;
     let mut sorted = names.to_vec();
     sorted.sort();
     Ok(sorted
         .into_iter()
         .enumerate()
-        .filter(|(index, _)| index % n == k)
+        .filter(|(index, _)| shard_owns_row(*index, Some(parsed)))
         .map(|(_, name)| name)
         .collect())
+}
+
+/// Whether the declared row numbered `index` (counted across the sorted gates,
+/// each gate's rows as declared) is this shard's to judge: every row when
+/// unsharded, else every `n`-th starting at `k`.
+///
+/// BY ROW, NOT BY GATE (CLOUD-2533). A gate's rows share one staged tree and one
+/// suite build, so a gate split across shards pays that build on each; that is
+/// one warm build against a shard that cannot finish at all.
+#[must_use]
+pub fn shard_owns_row(index: usize, shard: Option<(usize, usize)>) -> bool {
+    shard.is_none_or(|(k, n)| index % n == k)
 }
 
 /// A mutation runner the registry can name.
@@ -1234,6 +1246,7 @@ impl RunnerKind {
 //MUTANT row-judged-under-first-suite|s@^            above = Some(suite);$@            above = first.clone().or(Some(suite));@|a_row_is_judged_under_the_suite_above_it
 //MUTANT later-unrecognized-costs-the-gate|s@^                None if index == 0 => unrunnable@                None if true => unrunnable@|a_later_unrecognized_suite_costs_only_the_rows_under_it
 //MUTANT suite-first-only|s@^            Some(_) => row.resolved.as_ref(),$@            Some(_) => self.suite.as_ref(),@|each_preset_module_row_runs_under_its_own_declared_suite
+//MUTANT every-row-on-every-shard|s@^    shard.is_none_or(\x7c(k, n)\x7c index % n == k)$@    true@|a_large_gates_rows_spread_across_every_shard
 //MUTANT nextest-profile-unpinned|s@^        (String::from("NEXTEST_PROFILE"), String::from("default")),$@        (String::from("NEXTEST_PROFILE"), String::from("ci")),@|every_runner_runs_the_default_nextest_profile
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT later-suites-unread|s@^                    own.push(resolved);$@                    if own.is_empty() { own.push(resolved); }@|a_change_to_a_sources_second_suite_sweeps_its_gate
@@ -3938,16 +3951,86 @@ pub fn sweep_owned(
     registry: &Registry,
     progress: &mut dyn std::io::Write,
 ) -> Result<Sweep> {
-    let total: usize = names
+    sweep_shard(root, names, work, registry, None, progress)
+}
+
+/// How many of `gate`'s rows the declared runner owns under `registry`.
+fn declared_rows(gate: &Gate, registry: &Registry) -> usize {
+    gate.rows
         .iter()
-        .filter_map(|name| resolve(root, name))
-        .map(|gate| {
-            gate.rows
-                .iter()
-                .filter(|row| registry.declares(row))
-                .count()
-        })
-        .sum();
+        .filter(|row| registry.declares(row))
+        .count()
+}
+
+/// How many declared rows `shard` judges, numbered across `names` in order
+/// exactly as [`sweep_shard`] numbers them.
+fn rows_on_shard(
+    root: &Path,
+    names: &[String],
+    registry: &Registry,
+    shard: Option<(usize, usize)>,
+) -> usize {
+    let mut numbered = 0;
+    let mut owned = 0;
+    for gate in names.iter().filter_map(|name| resolve(root, name)) {
+        let rows = declared_rows(&gate, registry);
+        owned += (numbered..numbered + rows)
+            .filter(|index| shard_owns_row(*index, shard))
+            .count();
+        numbered += rows;
+    }
+    owned
+}
+
+/// The gate-level finding that stops every row of `gate` before any runs, if
+/// there is one.
+fn gate_stopped(root: &Path, gate: &Gate) -> Option<Verdict> {
+    // EVERY suite the gate's rows run under must be declared, runnable and
+    // present, not only the first: a later module's declaration naming a
+    // missing file is as much a could-not-look as the first one's. Checked
+    // before any row, so a gate that fails here invokes no runner at all.
+    let unrunnable = gate
+        .unrunnable
+        .clone()
+        .or_else(|| gate.suite.is_none().then(|| String::from(UNDECLARED)))
+        .or_else(|| {
+            gate.suites()
+                .into_iter()
+                .find(|suite| !root.join(suite.path()).is_file())
+                .map(|missing| missing.path().to_owned())
+        });
+    if let Some(suite) = unrunnable {
+        return Some(Verdict::NoSuite { suite });
+    }
+    // THE ANTI-VACUITY TERM, AND IT IS THE WHOLE DESIGN. A listed gate with
+    // no declaration is a failure, not a skip. Without this the sweep
+    // reports success over a set it never touched.
+    gate.rows.is_empty().then_some(Verdict::NoMutantDeclared)
+}
+
+/// [`sweep_owned`] over one `$MUTANT_SHARD`'s slice: the rows
+/// [`shard_owns_row`] gives it, numbered across the sorted gates, and the
+/// gate-level findings of the gates [`shard_of`] gives it. `None` is every row.
+///
+/// # Errors
+///
+/// [`sweep`]'s.
+pub fn sweep_shard(
+    root: &Path,
+    names: &[String],
+    work: PathBuf,
+    registry: &Registry,
+    shard: Option<(usize, usize)>,
+    progress: &mut dyn std::io::Write,
+) -> Result<Sweep> {
+    // ONE ORDER ON EVERY SHARD, so the slices partition the rows.
+    let mut ordered = names.to_vec();
+    if shard.is_some() {
+        ordered.sort();
+    }
+    let names = ordered.as_slice();
+    let declared_rows = |gate: &Gate| declared_rows(gate, registry);
+    let total = rows_on_shard(root, names, registry, shard);
     let _ = writeln!(
         progress,
         "mutate sweep: {total} row(s) across {} gate(s)",
@@ -3959,52 +4042,45 @@ pub fn sweep_owned(
     build_if_owed(root, names, registry, &caught, &staged, progress);
     let mut findings = Vec::new();
     let mut declared = 0;
-    for name in names {
+    let mut next = 0;
+    for (index, name) in names.iter().enumerate() {
+        // A GATE-LEVEL finding is reported by the one shard `shard_of` gives
+        // the gate, so a sharded run reports it once, not once per shard.
+        let reports_gate = shard_owns_row(index, shard);
         let Some(gate) = resolve(root, name) else {
-            findings.push(Finding {
-                gate: name.clone(),
-                slug: None,
-                verdict: Verdict::NoSuchGate,
-                owner: None,
-            });
+            if reports_gate {
+                findings.push(Finding {
+                    gate: name.clone(),
+                    slug: None,
+                    verdict: Verdict::NoSuchGate,
+                    owner: None,
+                });
+            }
             continue;
         };
-        // EVERY suite the gate's rows run under must be declared, runnable and
-        // present, not only the first: a later module's declaration naming a
-        // missing file is as much a could-not-look as the first one's. Checked
-        // before any row, so a gate that fails here invokes no runner at all.
-        let unrunnable = gate
-            .unrunnable
-            .clone()
-            .or_else(|| gate.suite.is_none().then(|| String::from(UNDECLARED)))
-            .or_else(|| {
-                gate.suites()
-                    .into_iter()
-                    .find(|suite| !root.join(suite.path()).is_file())
-                    .map(|missing| missing.path().to_owned())
-            });
-        if let Some(suite) = unrunnable {
-            findings.push(Finding {
-                gate: name.clone(),
-                slug: None,
-                verdict: Verdict::NoSuite { suite },
-                owner: gate.owner.clone(),
-            });
+        // Numbered before the gate-level checks, exactly as `total` counted.
+        let first = next;
+        next += declared_rows(&gate);
+        if let Some(verdict) = gate_stopped(root, &gate) {
+            if reports_gate {
+                findings.push(Finding {
+                    gate: name.clone(),
+                    slug: None,
+                    verdict,
+                    owner: gate.owner.clone(),
+                });
+            }
             continue;
         }
-        // THE ANTI-VACUITY TERM, AND IT IS THE WHOLE DESIGN. A listed gate with
-        // no declaration is a failure, not a skip. Without this the sweep
-        // reports success over a set it never touched.
-        if gate.rows.is_empty() {
-            findings.push(Finding {
-                gate: name.clone(),
-                slug: None,
-                verdict: Verdict::NoMutantDeclared,
-                owner: gate.owner.clone(),
-            });
-            continue;
-        }
-        for row in gate.rows.iter().filter(|row| registry.declares(row)) {
+        for (offset, row) in gate
+            .rows
+            .iter()
+            .filter(|row| registry.declares(row))
+            .enumerate()
+        {
+            if !shard_owns_row(first + offset, shard) {
+                continue;
+            }
             declared += 1;
             let key = row_key(root, &gate, row);
             if caught.contains(&key) {
@@ -4630,6 +4706,32 @@ mod tests {
         for bad in ["2/2", "0/0", "1", "x/2"] {
             assert!(shard_of(&names, bad).is_err(), "{bad} is not a shard");
         }
+    }
+
+    /// CLOUD-2533: a gate's rows are spread across the shards, not stacked on
+    /// the one its name falls to. Fails by: a filter that hands every shard
+    /// every row, or one shard all of them.
+    #[test]
+    fn a_large_gates_rows_spread_across_every_shard() {
+        let slices: Vec<std::collections::BTreeSet<usize>> = (0..4)
+            .map(|k| {
+                (0..45)
+                    .filter(|index| shard_owns_row(*index, Some((k, 4))))
+                    .collect()
+            })
+            .collect();
+        let union: std::collections::BTreeSet<usize> = slices.iter().flatten().copied().collect();
+        assert_eq!(union, (0..45).collect(), "every row is some shard's");
+        assert_eq!(
+            slices
+                .iter()
+                .map(std::collections::BTreeSet::len)
+                .sum::<usize>(),
+            45,
+            "and no row is two shards'"
+        );
+        assert!(slices.iter().all(|slice| slice.len() <= 12), "{slices:?}");
+        assert!((0..45).all(|index| shard_owns_row(index, None)));
     }
 
     #[test]

@@ -17320,19 +17320,19 @@ fn run_mutate_sweep(
     // ONE SHARD IS A SLICE OF BOTH HALVES (CLOUD-1746). The declared runner's
     // gates cost a suite build per mutant, and 94 of them across 14 touched gates
     // ran the `ci` job past its 87-minute bound on #1132; so `$MUTANT_SHARD`
-    // slices them by gate exactly as it slices the registered runner's mutants.
-    let shard = std::env::var(mutate::SHARD)
+    // slices them as it slices the registered runner's mutants. BY ROW
+    // (CLOUD-2533): by gate, a 45-row gate held one shard past its own bound.
+    let value = std::env::var(mutate::SHARD)
         .ok()
         .filter(|shard| !shard.trim().is_empty());
-    let mut narrowed = narrowed;
-    if let Some(shard) = &shard {
-        narrowed.names = match mutate::shard_of(&narrowed.names, shard) {
-            Ok(names) => names,
-            Err(reason) => {
-                writeln!(err, "::error:: mutate: {reason}")?;
-                return Ok(ExitCode::Usage);
-            }
-        };
+    let shard = value.as_deref().and_then(mutate::parse_shard);
+    if let (Some(value), None) = (&value, shard) {
+        writeln!(
+            err,
+            "::error:: mutate: {}={value} is not `k/n` with 0 <= k < n",
+            mutate::SHARD
+        )?;
+        return Ok(ExitCode::Usage);
     }
     let runner = std::env::var(mutate::RUNNER)
         .ok()
@@ -17350,8 +17350,7 @@ fn run_mutate_sweep(
     let (swept, lines) = disk_watch::around(
         disk_watcher(root, prune_rules.as_ref()),
         || -> Result<ExitCode> {
-            let declared =
-                run_declared_sweep(root, narrowed, &registry, shard.as_deref(), out, err)?;
+            let declared = run_declared_sweep(root, narrowed, &registry, shard, out, err)?;
             let Some(id) = runner else {
                 return Ok(declared);
             };
@@ -17480,7 +17479,7 @@ fn run_declared_sweep(
     root: &Path,
     narrowed: Narrowed,
     registry: &mutate::Registry,
-    shard: Option<&str>,
+    shard: Option<(usize, usize)>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -17509,16 +17508,10 @@ fn run_declared_sweep(
             .as_ref()
             .map(|(base, _)| base.as_str())
             .unwrap_or_default();
-        match shard {
-            Some(shard) => writeln!(
-                out,
-                "mutate sweep: shard {shard} holds none of the gates changed since {base}"
-            )?,
-            None => writeln!(
-                out,
-                "mutate sweep: no enforced gate's source or suite changed since {base}"
-            )?,
-        }
+        writeln!(
+            out,
+            "mutate sweep: no enforced gate's source or suite changed since {base}"
+        )?;
         return Ok(ExitCode::Success);
     }
     let names = narrowed.names;
@@ -17531,7 +17524,7 @@ fn run_declared_sweep(
     // still carries exactly the tracked bytes.
     let work = root.join("target").join("mutate");
     std::fs::create_dir_all(&work)?;
-    let sweep = match mutate::sweep_owned(root, &names, work, registry, err) {
+    let sweep = match mutate::sweep_shard(root, &names, work, registry, shard, err) {
         Ok(sweep) => sweep,
         Err(reason) => {
             writeln!(err, "::error:: mutate: {reason}")?;
