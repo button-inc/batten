@@ -508,7 +508,7 @@ pub fn watch(
         roster,
         &Pacing {
             read: &read,
-            pause: &sleep,
+            pause: &pause,
         },
         out,
         err,
@@ -857,16 +857,14 @@ fn record(progress: &Progress, signal: &str, value: &str) {
     );
 }
 
-/// The wait between requests. A real sleep, and the only clock in the module.
+/// The wait between requests, with nothing to stop it: [`pause_until`] over a
+/// flag nobody raises, which sleeps the identical total.
 ///
 /// PUBLIC FOR THE SAME REASON [`read`] IS (CLOUD-1338): a caller driving one
 /// poll at a time needs the interval the server asked for, and re-deriving the
-/// pause at the call site would put a second clock in the crate — the one thing
-/// `clippy.toml`'s timer ban exists to keep out. Named `pause` rather than
-/// `sleep` on the public surface because what a caller is asking for is the
-/// interval BETWEEN asks, not a duration of its own choosing.
+/// pause at the call site would put a second clock in the crate.
 pub fn pause(seconds: f64) {
-    sleep(seconds);
+    pause_until(seconds, &std::sync::atomic::AtomicBool::new(false));
 }
 
 /// The longest a raced arm sleeps before it re-reads the stop flag.
@@ -876,7 +874,8 @@ pub fn pause(seconds: f64) {
 /// cadence, so an arm that is NOT stopped behaves exactly as it did.
 const STOP_CHECK_SLICE: f64 = 1.0;
 
-/// [`pause`], abandoned early when `stop` is raised.
+/// [`pause`], abandoned early when `stop` is raised. A real sleep, and the
+/// only clock in the crate.
 ///
 /// **THE LOSER OF A RACE HELD THE WHOLE WAIT** (review of #848). Both arms of
 /// `land::wait` check their stop flag at the top of the loop and then sleep the
@@ -889,11 +888,32 @@ const STOP_CHECK_SLICE: f64 = 1.0;
 ///
 /// **One clock still, which is the constraint that shapes this.** `clippy.toml`
 /// bans timers precisely so a second arm cannot grow one, and the crate's single
-/// exemption lives on [`sleep`] below. So this does not add a wait — it serves
+/// exemption lives on the sleep below. So this does not add a wait — it serves
 /// the same one in slices, checking between them. An arm that is never stopped
 /// sleeps the identical total.
 pub fn pause_until(seconds: f64, stop: &std::sync::atomic::AtomicBool) {
-    if !seconds.is_finite() || seconds <= 0.0 {
+    sliced(seconds, stop, &|slice| {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval between conditional requests, and the interval is the SERVER'S: \
+                      `interval_for` raises it to whatever `X-Poll-Interval` asked for and never \
+                      lowers it. The loop exits on the required set reaching a verdict — \
+                      `Verdict::Green`, `Verdict::Red` and `Verdict::DeadEnd` all return — never \
+                      on a clock (CLOUD-1177, CLOUD-497)"
+        )]
+        std::thread::sleep(std::time::Duration::from_secs_f64(slice));
+    });
+}
+
+/// [`pause_until`]'s slicing over `sleep`, which is handed each slice: every
+/// one positive, finite and at most [`STOP_CHECK_SLICE`].
+///
+/// **APART FROM THE SLEEP SO THE SLICES ARE COUNTED, NEVER TIMED**
+/// (CLOUD-2509). The wait's whole effect was how long it took, which a case
+/// could only assert as elapsed time — the thing the clock census refuses. A
+/// wait that is not finite is none; one at or below zero never enters the loop.
+fn sliced(seconds: f64, stop: &std::sync::atomic::AtomicBool, sleep: &dyn Fn(f64)) {
+    if !seconds.is_finite() {
         return;
     }
     let mut left = seconds;
@@ -907,26 +927,83 @@ pub fn pause_until(seconds: f64, stop: &std::sync::atomic::AtomicBool) {
     }
 }
 
-fn sleep(seconds: f64) {
-    if seconds > 0.0 && seconds.is_finite() {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval between conditional requests, and the interval is the SERVER'S: \
-                      `interval_for` raises it to whatever `X-Poll-Interval` asked for and never \
-                      lowers it. The loop exits on the required set reaching a verdict — \
-                      `Verdict::Green`, `Verdict::Red` and `Verdict::DeadEnd` all return — never \
-                      on a clock (CLOUD-1177, CLOUD-497)"
-        )]
-        std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
-    }
-}
-
 #[cfg(test)]
 // Panicking on a failed assertion is how a test fails loudly; these are the
 // module's own cases, not a reachable path.
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// The slices one wait of `seconds` asks the sleeper for, the flag raised
+    /// at slice `stop_after` so a wait that never ends still returns.
+    fn slices(seconds: f64, stop_after: usize) -> Vec<f64> {
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let slept = std::cell::RefCell::new(Vec::new());
+        sliced(seconds, &stop, &|slice| {
+            slept.borrow_mut().push(slice);
+            if slept.borrow().len() >= stop_after {
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+        slept.into_inner()
+    }
+
+    #[test]
+    fn a_wait_is_served_in_slices_that_sum_to_it() {
+        assert_eq!(slices(2.5, 6), vec![1.0, 1.0, 0.5]);
+        assert_eq!(slices(0.25, 6), vec![0.25]);
+    }
+
+    #[test]
+    fn a_wait_that_is_not_a_positive_finite_interval_sleeps_nothing() {
+        for seconds in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(slices(seconds, 6), Vec::<f64>::new(), "{seconds}");
+        }
+    }
+
+    #[test]
+    fn a_raised_flag_ends_the_wait_at_the_next_slice() {
+        assert_eq!(slices(5.0, 2), vec![1.0, 1.0]);
+    }
+
+    /// The real pause holds its thread until the flag is raised, and then
+    /// lets it go: the outcome the wait stands in for, not its length.
+    #[test]
+    fn a_pause_holds_until_its_flag_is_raised() {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (done, finished) = std::sync::mpsc::channel();
+        let held = std::sync::Arc::clone(&stop);
+        let waiter = std::thread::spawn(move || {
+            pause_until(600.0, &held);
+            let _ = done.send(());
+        });
+        assert!(
+            finished
+                .recv_timeout(std::time::Duration::from_millis(300))
+                .is_err(),
+            "a pause of ten minutes let its thread go at once"
+        );
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        finished.recv().expect("the raised flag ends the pause");
+        waiter.join().expect("the waiter exits");
+    }
+
+    /// The unstoppable pause holds its thread too. Nothing can end it, so the
+    /// waiter is left to the process's exit rather than joined.
+    #[test]
+    fn a_pause_with_no_flag_holds_its_thread() {
+        let (done, finished) = std::sync::mpsc::channel();
+        drop(std::thread::spawn(move || {
+            pause(600.0);
+            let _ = done.send(());
+        }));
+        assert!(
+            finished
+                .recv_timeout(std::time::Duration::from_millis(300))
+                .is_err(),
+            "a pause of ten minutes let its thread go at once"
+        );
+    }
 
     fn config_for(repo: &str) -> Config {
         Config {

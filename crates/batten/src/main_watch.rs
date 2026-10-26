@@ -244,6 +244,31 @@ mod tests {
         }
     }
 
+    /// The read asks for the configured trunk ref, conditionally, through the
+    /// fixture seam (CLOUD-2509).
+    #[test]
+    fn a_read_asks_for_the_trunk_ref_and_carries_its_answer() {
+        let dir = crate::rest::routed(
+            "main-watch-read",
+            &[(
+                "repos/o/r/git/ref/heads/main",
+                200,
+                r#"{"object":{"sha":"abc"}}"#,
+            )],
+        );
+        let config = Config {
+            repo: String::from("o/r"),
+            branch: String::from("main"),
+            base: String::from(BASE),
+            interval: 1,
+        };
+        let answer = crate::rest::with_fixture(&dir, || read(&config, None)).expect("answered");
+        assert_eq!(
+            (answer.status, answer.body.as_str()),
+            (200, r#"{"object":{"sha":"abc"}}"#)
+        );
+    }
+
     /// **The discriminating pair: an unmoved trunk is not movement and a moved
     /// one is.**
     #[test]

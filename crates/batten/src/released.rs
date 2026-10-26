@@ -190,14 +190,7 @@ pub fn reading(
         return Ok(record);
     }
 
-    let set = crate::board_check::payload_set(stdin)
-        .filter(|set| {
-            set.iter()
-                .all(|issue| issue.get("id").is_some() && issue.get("status").is_some())
-        })
-        .ok_or_else(|| {
-            refuse("stdin is not a set of get_issue payloads (need id and status per issue)")
-        })?;
+    let set = payloads(stdin)?;
     let review = board
         .and_then(|board| board.review.as_deref())
         .ok_or_else(|| {
@@ -239,6 +232,23 @@ pub fn reading(
     record.push_str(&rows);
     writeln!(record, "census\tissues={judged}")?;
     Ok(record)
+}
+
+/// The piped `get_issue` payloads, each carrying an `id` and a `status`, or
+/// the refusal naming what stdin is not.
+///
+/// Apart from [`reading`] so the shape is a case of its own rather than one a
+/// case reaches only past a tagged repository and the committed grammar
+/// (CLOUD-2509).
+fn payloads(stdin: &str) -> Result<Vec<Value>> {
+    crate::board_check::payload_set(stdin)
+        .filter(|set| {
+            set.iter()
+                .all(|issue| issue.get("id").is_some() && issue.get("status").is_some())
+        })
+        .ok_or_else(|| {
+            refuse("stdin is not a set of get_issue payloads (need id and status per issue)")
+        })
 }
 
 /// Refuse a review-column payload missing a key the board gate decides on —
@@ -300,7 +310,33 @@ fn held_by(patterns: &[NamedPattern], inputs: &BTreeMap<String, String>) -> Resu
 
 #[cfg(test)]
 mod tests {
-    use super::{only, ordinal, rule_for};
+    use super::{only, ordinal, payloads, rule_for};
+
+    #[test]
+    fn a_payload_set_needs_an_id_and_a_status_on_every_issue() {
+        assert_eq!(
+            payloads(r#"[{"id":"A-1","status":"Done"},{"id":"A-2","status":""}]"#)
+                .map(|set| set.len())
+                .ok(),
+            Some(2)
+        );
+        for malformed in [
+            r#"[{"id":"A-1"}]"#,
+            r#"[{"status":"Done"}]"#,
+            r#"[{"id":"A-1","status":"Done"},{"id":"A-2"}]"#,
+        ] {
+            let refused = payloads(malformed)
+                .map(|_| ())
+                .err()
+                .map(|err| err.to_string());
+            assert!(
+                refused
+                    .as_deref()
+                    .is_some_and(|why| why.contains("not a set of get_issue payloads")),
+                "{malformed}: {refused:?}"
+            );
+        }
+    }
 
     #[test]
     fn only_the_tag_and_hold_inputs_are_read() {

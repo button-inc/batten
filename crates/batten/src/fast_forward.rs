@@ -738,6 +738,41 @@ mod tests {
         }
     }
 
+    /// The wrappers over the forge, through the fixture seam (CLOUD-2509).
+    #[test]
+    fn the_open_pull_request_and_the_last_refusal_are_read_off_the_forge() {
+        let dir = crate::rest::routed(
+            "fast-forward-forge",
+            &[
+                ("head=o:b&state=open", 200, r#"[{"number": 12}]"#),
+                ("head=o:none&state=open", 200, "[]"),
+                (
+                    "issues/12/comments",
+                    200,
+                    r#"[{"body":"Refusing to fast-forward #12: first."},
+                        {"body":"Refusing to fast-forward #12: second.\nremedy"},
+                        {"body":"/fast-forward"}]"#,
+                ),
+                ("issues/13/comments", 200, r#"[{"body":"/fast-forward"}]"#),
+            ],
+        );
+        crate::rest::with_fixture(&dir, || {
+            assert_eq!(open_pull_request("o/r", "b").as_deref(), Some("12"));
+            assert_eq!(open_pull_request("o/r", "none"), None);
+            let ask = |pr: &str| Ask {
+                repo: String::from("o/r"),
+                pr: pr.to_owned(),
+                workflow: String::from("ff.yml"),
+            };
+            assert_eq!(
+                refusal(&ask("12")).as_deref(),
+                Some("Refusing to fast-forward #12: second.")
+            );
+            assert_eq!(refusal(&ask("13")), None);
+            assert_eq!(refusal(&ask("14")), None);
+        });
+    }
+
     #[test]
     fn a_lookup_is_found_none_or_could_not_look() {
         assert_eq!(look_up_of(None), Lookup::Unreadable(0));

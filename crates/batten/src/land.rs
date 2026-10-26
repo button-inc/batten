@@ -1024,6 +1024,51 @@ pub fn wait_reading(
     heartbeat: &(dyn Fn(u64) + Sync),
     out: &mut dyn std::io::Write,
 ) -> Result<(Waited, RedReading)> {
+    raced(
+        (config, roster, trunk),
+        (asks, fresh_ready),
+        heartbeat,
+        out,
+        &Waiting {
+            checks: &|etag| crate::pr_watch::read(config, etag),
+            trunk: &|etag| crate::main_watch::read(trunk, etag),
+            pause: &crate::pr_watch::pause_until,
+        },
+    )
+}
+
+/// One conditional read: the validator in, the answer or could-not-look out.
+type Reader<'a> = &'a (dyn Fn(Option<&str>) -> Option<crate::rest::Answer> + Sync);
+
+/// Where [`wait_reading`] reads and how it pauses: the forge and the crate's
+/// one clock in production, canned answers and a recorder in a case.
+///
+/// **THE SEAM IS THE RACE'S OWN INPUTS** (CLOUD-2509). Both arms run on
+/// threads the race spawns, so a thread-scoped fixture never reached them, and
+/// the pause was observable only as elapsed time, which the clock census
+/// refuses to assert. Handed in, each read is an answer a case chose and each
+/// pause an interval it can count.
+struct Waiting<'a> {
+    /// The checks arm's read.
+    checks: Reader<'a>,
+    /// The staleness arm's read.
+    trunk: Reader<'a>,
+    /// The wait between asks, abandoned when the flag is raised.
+    pause: &'a (dyn Fn(f64, &std::sync::atomic::AtomicBool) + Sync),
+}
+
+/// [`wait_reading`] over the reads and pause `waiting` names.
+fn raced(
+    (config, roster, trunk): (
+        &crate::pr_watch::Config,
+        &crate::checks_green::Roster,
+        &crate::main_watch::Config,
+    ),
+    (asks, fresh_ready): (u32, bool),
+    heartbeat: &(dyn Fn(u64) + Sync),
+    out: &mut dyn std::io::Write,
+    waiting: &Waiting<'_>,
+) -> Result<(Waited, RedReading)> {
     writeln!(
         out,
         "land: waiting on {} — green or stale, whichever answers first",
@@ -1057,7 +1102,7 @@ pub fn wait_reading(
                 // The conditional read is `pr_watch`'s, so the argv, the client
                 // and the empty-string-on-failure posture stay its business and
                 // this arm only decides when to ask.
-                let raw = crate::pr_watch::read(config, poll.etag());
+                let raw = (waiting.checks)(poll.etag());
                 let interval = poll.absorb(raw.as_ref(), config.interval);
                 // THE HOLDER'S HEARTBEAT, AND THIS LOOP IS THE ONLY PLACE THAT
                 // SPENDS REAL TIME (review of #848). A lap acquires its lease
@@ -1152,7 +1197,7 @@ pub fn wait_reading(
                 // for, and a rate-limit backoff measured in minutes would hold
                 // an unanswered race that long (CLOUD-2113's test hang).
                 if ask < asks {
-                    crate::pr_watch::pause_until(interval, stop);
+                    (waiting.pause)(interval, stop);
                 }
             }
         }));
@@ -1164,7 +1209,7 @@ pub fn wait_reading(
                 if stop.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
                 }
-                let raw = crate::main_watch::read(trunk, poll.etag());
+                let raw = (waiting.trunk)(poll.etag());
                 let interval = poll.absorb(raw.as_ref(), trunk.interval);
                 if let Some(moved) = poll.moved(&trunk.base) {
                     stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1185,7 +1230,7 @@ pub fn wait_reading(
                 // for, and a rate-limit backoff measured in minutes would hold
                 // an unanswered race that long (CLOUD-2113's test hang).
                 if ask < asks {
-                    crate::pr_watch::pause_until(interval, stop);
+                    (waiting.pause)(interval, stop);
                 }
             }
         }));
@@ -1855,12 +1900,9 @@ pub fn verify(
     // the caller's window: measured on #1132, 57,764 tokens of which two lines
     // were the verdict. The bytes are still sealed in the capture store, and the
     // driver prints the one line that points at them (`verify_log`), so the
-    // reason a gate refused is one `batten capture show` away, not lost.
-    let settings = crate::exec::ExecConfig {
-        tee: false,
-        manage_process_group: true,
-        ..crate::exec::ExecConfig::DEFAULT
-    };
+    // reason a gate refused is one `batten capture show` away, not lost. Both
+    // halves are `VERIFY_SETTINGS`.
+    //
     // CLASSIFIED, NEVER PROMOTED. `run_in_with_env` scans patterns only on a
     // `0`, because its question is whether a green run is lying; the question
     // here is what kind of failure a red one was, and `classify_in_env` is the
@@ -1868,14 +1910,48 @@ pub fn verify(
     // opposite verdicts over identical bytes.
     let mut log = Vec::new();
     let classified =
-        crate::exec::classify_in_env(&started, command, environment, &settings, published).map(
-            |(code, found, handles)| {
+        crate::exec::classify_in_env(&started, command, environment, &VERIFY_SETTINGS, published)
+            .map(|(code, found, handles)| {
                 log = handles;
                 (code, found)
-            },
-        );
+            });
     let verified = match classified {
-        Ok((0, _)) => Verified::Clean(head),
+        Ok(ran) => gate_said(head, ran, environment),
+        Err(problem) => return Err(problem.context("land: run the configured verify command")),
+    };
+    let mut lines = vec![verified.line()];
+    if !log.is_empty() {
+        lines.push(format!("{VERIFY_LOG} {} {}", verified.sha(), log.join(" ")));
+    }
+    append(root, branch, &lines)?;
+    Ok(verified)
+}
+
+/// How [`verify`] runs the gate: its process group managed, so the race can
+/// cancel it, and its output stored, never teed.
+///
+/// The `tee` is `ExecConfig::DEFAULT`'s, inherited rather than restated, since
+/// a restated default is a field whose deletion changes nothing (CLOUD-2509);
+/// the assertion below pins it at compile time, so a default flipped for
+/// another caller cannot stream a gate log into the lap.
+const VERIFY_SETTINGS: crate::exec::ExecConfig = crate::exec::ExecConfig {
+    manage_process_group: true,
+    ..crate::exec::ExecConfig::DEFAULT
+};
+const _: () = assert!(VERIFY_SETTINGS.manage_process_group && !VERIFY_SETTINGS.tee);
+
+/// What a gate that RAN said about `head`: its exit code first, then the
+/// declared patterns its output matched.
+///
+/// Apart from [`verify`] so each code is a case rather than a gate a case
+/// must stage under a process group (CLOUD-2509).
+fn gate_said(
+    head: String,
+    ran: (i32, Vec<crate::outputs::Hit>),
+    environment: &[crate::outputs::OutputPattern],
+) -> Verified {
+    match ran {
+        (0, _) => Verified::Clean(head),
         // **THE EXIT CODE IS READ BEFORE THE PATTERNS, and it was not read at
         // all** (review of #848). Every non-zero became `Refusal::Tree`
         // unless a declared `[[verify_environment_pattern]]` happened to
@@ -1898,11 +1974,11 @@ pub fn verify(
         // the self-healing class became the loop's hardest stop. A consumer
         // cannot be asked to write a pattern for it either — the remedy is a lap,
         // not a message.
-        Ok((2, _)) => Verified::Refused {
+        (2, _) => Verified::Refused {
             sha: head,
             cause: Refusal::Moved,
         },
-        Ok((code, _)) if matches!(code, 3 | 126 | 127) => Verified::Refused {
+        (code, _) if matches!(code, 3 | 126 | 127) => Verified::Refused {
             sha: head,
             cause: Refusal::Environment {
                 remedy: format!(
@@ -1910,7 +1986,7 @@ pub fn verify(
                 ),
             },
         },
-        Ok((_, found)) => Verified::Refused {
+        (_, found) => Verified::Refused {
             sha: head,
             // THE FIRST DECLARED ROW THAT MATCHED, in declaration order, and one
             // remedy rather than a concatenation: `outputs::reasons` already
@@ -1925,14 +2001,7 @@ pub fn verify(
                 },
             ),
         },
-        Err(problem) => return Err(problem.context("land: run the configured verify command")),
-    };
-    let mut lines = vec![verified.line()];
-    if !log.is_empty() {
-        lines.push(format!("{VERIFY_LOG} {} {}", verified.sha(), log.join(" ")));
     }
-    append(root, branch, &lines)?;
-    Ok(verified)
 }
 
 /// The lap record's pointer to a gate's stored output (CLOUD-2223): `verify-log
@@ -2085,7 +2154,15 @@ pub fn verify_raced(
             let stalls = arms.clone();
             drop(scope.spawn(move || stall_arm(owner, stall, seed, &stalls)));
         }
-        drop(scope.spawn(move || watch_arm(owner, watched.as_ref(), started, &arms)));
+        drop(scope.spawn(move || {
+            let elapsed = || started.elapsed();
+            let seam = Watcher {
+                read: &crate::main_watch::read,
+                elapsed: &elapsed,
+                pause: &crate::pr_watch::pause_until,
+            };
+            watch_arm(owner, watched.as_ref(), &seam, &arms);
+        }));
 
         drop(tx);
         rx.recv().ok()
@@ -2364,6 +2441,22 @@ struct Arms<'a> {
     stop: &'a std::sync::atomic::AtomicBool,
 }
 
+/// The watcher arm's read, its clock and its pause: the forge, the time since
+/// the gate started and the crate's one sanctioned delay in production.
+///
+/// **HANDED IN SO A CASE CAN COUNT WHAT A RUN ONLY SPENDS** (CLOUD-2509). The
+/// arm's whole effect was when it asked and how long it paused, which no case
+/// could observe without asserting elapsed time — the thing the clock census
+/// refuses.
+struct Watcher<'a> {
+    /// One conditional read of the trunk ref.
+    read: &'a dyn Fn(&crate::main_watch::Config, Option<&str>) -> Option<crate::rest::Answer>,
+    /// The time since the gate started.
+    elapsed: &'a dyn Fn() -> std::time::Duration,
+    /// The wait before the next read, abandoned when the flag is raised.
+    pause: &'a dyn Fn(f64, &std::sync::atomic::AtomicBool),
+}
+
 /// The watcher arm of [`verify_raced`]: the trunk, on the server's interval.
 ///
 /// Lifted out whole for `clippy::too_many_lines`, the remedy `lib.rs` takes for
@@ -2371,7 +2464,7 @@ struct Arms<'a> {
 fn watch_arm(
     root: &Path,
     watched: Option<&(&crate::main_watch::Config, String)>,
-    started: std::time::Instant,
+    seam: &Watcher<'_>,
     arms: &Arms<'_>,
 ) {
     let mut poll = crate::main_watch::Poll::default();
@@ -2381,8 +2474,8 @@ fn watch_arm(
     while !arms.stop.load(std::sync::atomic::Ordering::Relaxed) {
         let mut pause = f64::INFINITY;
         if let Some((trunk, replayed_onto)) = watched {
-            if started.elapsed() >= next_poll {
-                let answer = crate::main_watch::read(trunk, poll.etag());
+            if (seam.elapsed)() >= next_poll {
+                let answer = (seam.read)(trunk, poll.etag());
                 let interval = poll.absorb(answer.as_ref(), trunk.interval);
                 if let Some(base) = poll.moved(replayed_onto) {
                     // THE KILL IS THE POINT. Without it this arm wins the race
@@ -2404,14 +2497,14 @@ fn watch_arm(
                 } else {
                     0.0
                 };
-                next_poll = started.elapsed() + std::time::Duration::from_secs_f64(interval);
+                next_poll = (seam.elapsed)() + std::time::Duration::from_secs_f64(interval);
             }
-            pause = next_poll.saturating_sub(started.elapsed()).as_secs_f64();
+            pause = next_poll.saturating_sub((seam.elapsed)()).as_secs_f64();
         }
         if !pause.is_finite() {
             return;
         }
-        crate::pr_watch::pause_until(pause, arms.stop);
+        (seam.pause)(pause, arms.stop);
     }
 }
 
@@ -4038,7 +4131,7 @@ mod mutate_tests {
     use super::graphql_took;
     use crate::rest::Answer;
 
-    fn answer(status: u16, body: &str) -> Answer {
+    pub(super) fn answer(status: u16, body: &str) -> Answer {
         Answer {
             status,
             etag: None,
@@ -4064,6 +4157,368 @@ mod mutate_tests {
         let refusal = r#"{"message":"GitHub GraphQL is not available from Claude Code sessions"}"#;
         assert!(!graphql_took(Some(&answer(403, refusal))));
         assert!(!graphql_took(None));
+    }
+}
+
+/// The lap's forge reads and writes through the fixture seam (CLOUD-2509).
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod forge_tests {
+    use super::*;
+
+    #[test]
+    fn a_draft_state_mutation_takes_by_graphql_or_else_by_the_proxy_route() {
+        let took =
+            crate::rest::routed("land-mutate-graphql", &[("graphql", 200, r#"{"data":{}}"#)]);
+        crate::rest::with_fixture(&took, || {
+            assert!(redraft("o/r", "7", "N"));
+            assert!(mark_ready("o/r", "7", "N"));
+        });
+        assert!(crate::rest::asked(&took).contains("graphql"));
+        let routed = crate::rest::routed(
+            "land-mutate-route",
+            &[
+                ("graphql", 403, "{}"),
+                ("pulls/7/ccr/convert_to_draft", 200, "{}"),
+                ("pulls/7/ccr/ready_for_review", 500, "{}"),
+            ],
+        );
+        crate::rest::with_fixture(&routed, || {
+            assert!(redraft("o/r", "7", "N"));
+            assert!(!mark_ready("o/r", "7", "N"));
+        });
+        let refused = crate::rest::routed("land-mutate-refused", &[("graphql", 403, "{}")]);
+        crate::rest::with_fixture(&refused, || {
+            assert!(!redraft("o/r", "7", "N"));
+        });
+    }
+
+    #[test]
+    fn a_draft_state_is_read_with_its_node_and_head_from_one_answer() {
+        let dir = crate::rest::routed(
+            "land-draft-state",
+            &[
+                (
+                    "pulls/7",
+                    200,
+                    r#"{"draft":true,"node_id":"N","head":{"sha":"h"}}"#,
+                ),
+                ("pulls/8", 200, r#"{"draft":true}"#),
+            ],
+        );
+        crate::rest::with_fixture(&dir, || {
+            assert_eq!(
+                draft_state("o/r", "7"),
+                Some(Readiness {
+                    draft: true,
+                    node: String::from("N"),
+                    head: String::from("h"),
+                })
+            );
+            assert_eq!(draft_state("o/r", "8"), None);
+        });
+    }
+
+    #[test]
+    fn a_red_verdict_cancels_every_run_in_flight_but_the_fan_in_s() {
+        let dir = crate::rest::routed(
+            "land-abandon",
+            &[
+                (
+                    "actions/runs?head_sha=s",
+                    200,
+                    r#"{"workflow_runs":[
+                        {"id":11,"path":"ci.yml","status":"in_progress"},
+                        {"id":"12","path":"lint.yml","status":"queued"},
+                        {"id":13,"path":"final.yml","status":"in_progress"},
+                        {"id":14,"path":"done.yml","status":"completed","conclusion":"success"}
+                    ]}"#,
+                ),
+                ("runs/11/cancel", 202, ""),
+                ("runs/12/cancel", 409, ""),
+            ],
+        );
+        crate::rest::with_fixture(&dir, || {
+            let running = spending("o/r", "s").expect("a listing");
+            assert_eq!(
+                running
+                    .iter()
+                    .map(|run| (run.id.as_str(), run.path.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![("11", "ci.yml"), ("12", "lint.yml"), ("13", "final.yml")]
+            );
+            assert_eq!(
+                abandon("o/r", "s", &FanIn::from_workflow_path("final.yml")),
+                Abandoned {
+                    cancelled: 1,
+                    spared: 1,
+                    refused: 1,
+                }
+            );
+            assert_eq!(
+                abandon("o/r", "s", &FanIn::from_workflow_path("")),
+                Abandoned::NONE
+            );
+        });
+        assert!(!crate::rest::asked(&dir).contains("runs/13/cancel"));
+    }
+
+    const BASE: &str = "1111111111111111111111111111111111111111";
+
+    fn reading(body: &str) -> crate::rest::Answer {
+        super::mutate_tests::answer(200, body)
+    }
+
+    /// The trunk `main` of `o/r`, replayed onto [`BASE`], polled every
+    /// `interval` seconds.
+    fn trunk_at(interval: u64) -> crate::main_watch::Config {
+        crate::main_watch::Config {
+            repo: String::from("o/r"),
+            branch: String::from("main"),
+            base: String::from(BASE),
+            interval,
+        }
+    }
+
+    fn check(conclusion: &str, id: u64) -> String {
+        let status = if conclusion.is_empty() {
+            "in_progress"
+        } else {
+            "completed"
+        };
+        format!(
+            r#"{{"check_runs":[{{"status":"{status}","conclusion":"{conclusion}","name":"ci","id":{id}}}]}}"#
+        )
+    }
+
+    /// One race over `answers` (the checks arm's reads, the last repeating), a
+    /// trunk that never moves, and a pause that only records: the verdict, the
+    /// red reading, and every pause asked for, the checks arm's at 7s and the
+    /// trunk arm's at 9s.
+    fn race(answers: &[String], asks: u32, fresh_ready: bool) -> (Waited, RedReading, Vec<f64>) {
+        let config = crate::pr_watch::Config {
+            sha: String::from("s"),
+            repo: String::from("o/r"),
+            interval: 7,
+            progress: None,
+        };
+        let trunk = trunk_at(9);
+        let roster = crate::checks_green::Roster {
+            required: vec![String::from("ci")],
+            absent_ok: Vec::new(),
+            answered: vec![String::from("success"), String::from("failure")],
+            fanin: None,
+        };
+        let asked = std::sync::atomic::AtomicUsize::new(0);
+        let paused = std::sync::Mutex::new(Vec::new());
+        let checks = |_: Option<&str>| {
+            let n = asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Some(reading(&answers[n.min(answers.len() - 1)]))
+        };
+        let trunk_read =
+            |_: Option<&str>| Some(reading(&format!(r#"{{"object":{{"sha":"{BASE}"}}}}"#)));
+        let pause = |seconds: f64, _: &std::sync::atomic::AtomicBool| {
+            paused.lock().unwrap().push(seconds);
+        };
+        let (waited, red) = raced(
+            (&config, &roster, &trunk),
+            (asks, fresh_ready),
+            &|_| {},
+            &mut Vec::new(),
+            &Waiting {
+                checks: &checks,
+                trunk: &trunk_read,
+                pause: &pause,
+            },
+        )
+        .unwrap();
+        let mut paused = paused.into_inner().unwrap();
+        paused.sort_by(f64::total_cmp);
+        (waited, red, paused)
+    }
+
+    #[test]
+    fn each_arm_pauses_between_its_asks_and_never_after_the_last() {
+        let (waited, _, paused) = race(&[check("", 1)], 3, false);
+        assert_eq!(waited, Waited::Unanswered);
+        assert_eq!(paused, vec![7.0, 7.0, 9.0, 9.0]);
+    }
+
+    #[test]
+    fn a_red_verdict_carries_the_failed_run_it_was_read_over() {
+        let (waited, red, _) = race(&[check("failure", 5)], 3, false);
+        assert!(matches!(waited, Waited::Red { .. }), "{waited:?}");
+        assert_eq!(red.failed, vec![(5, String::from("ci"))]);
+    }
+
+    #[test]
+    fn a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_run() {
+        let (waited, _, _) = race(&[check("skipped", 1)], 2, false);
+        assert!(matches!(waited, Waited::DeadEnd { .. }), "{waited:?}");
+        let (waited, _, _) = race(&[check("skipped", 1)], 2, true);
+        assert_eq!(waited, Waited::Unanswered);
+        let (waited, _, _) = race(&[check("skipped", 1), check("skipped", 2)], 3, true);
+        assert!(matches!(waited, Waited::DeadEnd { .. }), "{waited:?}");
+    }
+
+    /// The watcher arm over `trunks` (the trunk ref's reads, the last
+    /// repeating) on a clock only its pauses advance: the base it reported
+    /// moving to, and every pause it asked for. The fifth pause raises the
+    /// flag, so an arm that never answers still ends.
+    fn watching(case: &str, trunks: &[&str], watched: bool) -> (Option<String>, Vec<f64>) {
+        let trunk = trunk_at(9);
+        let asked = std::cell::Cell::new(0_usize);
+        let read = |_: &crate::main_watch::Config, _: Option<&str>| {
+            let sha = trunks[asked.get().min(trunks.len() - 1)];
+            asked.set(asked.get() + 1);
+            Some(reading(&format!(r#"{{"object":{{"sha":"{sha}"}}}}"#)))
+        };
+        let clock = std::cell::Cell::new(0.0_f64);
+        let elapsed = || std::time::Duration::from_secs_f64(clock.get());
+        let paused = std::cell::RefCell::new(Vec::new());
+        let pause = |seconds: f64, stop: &std::sync::atomic::AtomicBool| {
+            paused.borrow_mut().push(seconds);
+            clock.set(clock.get() + seconds);
+            if paused.borrow().len() >= 5 {
+                stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        };
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        let (raced, won) = std::sync::mpsc::channel();
+        let (cancelled, _reclaimed) = std::sync::mpsc::channel();
+        let arms = Arms {
+            raced,
+            cancelled,
+            stop: &stop,
+        };
+        let pair = (&trunk, String::from(BASE));
+        watch_arm(
+            &crate::scratch::scratch(case),
+            watched.then_some(&pair),
+            &Watcher {
+                read: &read,
+                elapsed: &elapsed,
+                pause: &pause,
+            },
+            &arms,
+        );
+        drop(arms);
+        let moved = won.try_iter().find_map(|answer| match answer {
+            Raced::Moved(base) => Some(base),
+            Raced::Gate(_) | Raced::Stalled(_) => None,
+        });
+        (moved, paused.into_inner())
+    }
+
+    #[test]
+    fn the_watcher_reads_the_trunk_on_its_interval_until_it_moves() {
+        let moved = "2222222222222222222222222222222222222222";
+        assert_eq!(
+            watching("land-watch-moved", &[BASE, moved], true),
+            (Some(String::from(moved)), vec![9.0])
+        );
+        assert_eq!(
+            watching("land-watch-none", &[BASE], false),
+            (None, Vec::new())
+        );
+    }
+
+    #[test]
+    fn a_gate_that_could_not_judge_is_an_environment_refusal_and_not_the_tree_s() {
+        let said = |code: i32| gate_said(String::from("h"), (code, Vec::new()), &[]);
+        assert!(matches!(said(0), Verified::Clean(_)));
+        assert!(matches!(
+            said(2),
+            Verified::Refused {
+                cause: Refusal::Moved,
+                ..
+            }
+        ));
+        for code in [3, 126, 127] {
+            assert!(
+                matches!(
+                    said(code),
+                    Verified::Refused {
+                        cause: Refusal::Environment { .. },
+                        ..
+                    }
+                ),
+                "{code}"
+            );
+        }
+        assert!(matches!(
+            said(1),
+            Verified::Refused {
+                cause: Refusal::Tree,
+                ..
+            }
+        ));
+    }
+
+    /// A clone of one commit, its tracking refs `tracking` all naming it.
+    fn tracked(case: &str, tracking: &[&str]) -> (std::path::PathBuf, String) {
+        let dir = crate::scratch::scratch(case);
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        std::fs::write(dir.join("a"), "1").unwrap();
+        crate::gitwrite::commit_paths(&dir, &[String::from("a")], "one").unwrap();
+        let head = crate::git::resolve_ref(&dir, "HEAD").unwrap().unwrap();
+        crate::git::set_config_local(&dir, "user.name", "t").unwrap();
+        crate::git::set_config_local(&dir, "user.email", "t@example.com").unwrap();
+        for name in tracking {
+            crate::gitwrite::set_ref(&dir, &format!("refs/remotes/origin/{name}"), &head).unwrap();
+        }
+        (dir, head)
+    }
+
+    #[test]
+    fn a_prune_deletes_only_the_tracking_refs_the_remote_stopped_advertising() {
+        let (dir, _) = tracked("land-prune", &["main", "gone"]);
+        prune(&dir, &[String::from("refs/heads/main")]);
+        let refs = crate::git::refs(&dir).unwrap();
+        assert!(
+            refs.iter().any(|name| name == "refs/remotes/origin/main"),
+            "{refs:?}"
+        );
+        assert!(
+            !refs.iter().any(|name| name == "refs/remotes/origin/gone"),
+            "{refs:?}"
+        );
+    }
+
+    #[test]
+    fn a_trunk_past_the_replayed_base_is_stale() {
+        let (dir, head) = tracked("land-stale", &["main"]);
+        let moved = "2222222222222222222222222222222222222222";
+        let fixture = crate::rest::routed(
+            "land-stale-forge",
+            &[(
+                "git/ref/heads/main",
+                200,
+                &format!(r#"{{"object":{{"sha":"{moved}"}}}}"#),
+            )],
+        );
+        let trunk = crate::main_watch::Config {
+            repo: String::from("o/r"),
+            branch: String::from("main"),
+            base: head.clone(),
+            interval: 1,
+        };
+        let mut poll = crate::main_watch::Poll::default();
+        let found = crate::rest::with_fixture(&fixture, || stale(&dir, &mut poll, &trunk, "main"));
+        assert_eq!(found.as_deref(), Some(moved));
+        let unmoved = crate::rest::routed(
+            "land-stale-unmoved",
+            &[(
+                "git/ref/heads/main",
+                200,
+                &format!(r#"{{"object":{{"sha":"{head}"}}}}"#),
+            )],
+        );
+        let mut poll = crate::main_watch::Poll::default();
+        assert_eq!(
+            crate::rest::with_fixture(&unmoved, || stale(&dir, &mut poll, &trunk, "main")),
+            None
+        );
     }
 }
 

@@ -327,9 +327,7 @@ pub fn against_rustdoc(
     reason = "stays: asking the active compiler its version is how the pin is READ rather than restated, and it is the same delegated toolchain the two comparisons below invoke (CLOUD-1050)"
 )]
 pub fn toolchain(root: &Path) -> Option<String> {
-    if let Ok(named) = std::env::var("SEMVER_TOOLCHAIN")
-        && !named.is_empty()
-    {
+    if let Some(named) = named_toolchain(std::env::var("SEMVER_TOOLCHAIN").ok()) {
         return Some(named);
     }
     // Through the ladder (CLOUD-1494), and this one is the site where bypassing it
@@ -350,6 +348,13 @@ pub fn toolchain(root: &Path) -> Option<String> {
     let text = String::from_utf8_lossy(&output.stdout).into_owned();
     let version = text.split_whitespace().nth(1)?;
     (!version.is_empty()).then(|| version.to_owned())
+}
+
+/// The toolchain `SEMVER_TOOLCHAIN` names, as [`toolchain`] read it: set and
+/// empty names none, so the active compiler answers instead. Apart from the
+/// read so the decision tests without setting the environment (CLOUD-2509).
+fn named_toolchain(value: Option<String>) -> Option<String> {
+    value.filter(|named| !named.is_empty())
 }
 
 /// Ready a lock-route scratch directory for the next build, KEEPING its target
@@ -1089,6 +1094,16 @@ mod tests {
                 && version.contains('.'),
             "{version}"
         );
+    }
+
+    #[test]
+    fn an_empty_toolchain_override_names_none() {
+        assert_eq!(
+            named_toolchain(Some(String::from("1.90.0"))).as_deref(),
+            Some("1.90.0")
+        );
+        assert_eq!(named_toolchain(Some(String::new())), None);
+        assert_eq!(named_toolchain(None), None);
     }
 
     /// A toolchain no installation has. The comparison and the doc builds are
