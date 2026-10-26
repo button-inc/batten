@@ -1098,10 +1098,27 @@ mod tests {
             .collect()
     }
 
-    fn smell(id: SmellId, key: &str) -> Smell {
+    fn smell(id: impl Into<SmellId>, key: &str) -> Smell {
         Smell {
             at: Where::Key(key.to_owned()),
-            id,
+            id: id.into(),
+        }
+    }
+
+    // CASES WRITTEN AGAINST THE STRING IDS KEEP THEIR BODIES, for the reason
+    // the token consts below give: these two let a case compare a smell's id
+    // to a token, and hand `smell` a token, exactly as it did when the id was a
+    // `&str`. Test-only, so no caller outside a case can trade the type for a
+    // string again.
+    impl PartialEq<&str> for SmellId {
+        fn eq(&self, token: &&str) -> bool {
+            self.as_str() == *token
+        }
+    }
+
+    impl From<&str> for SmellId {
+        fn from(token: &str) -> Self {
+            SmellId::parse(token).expect("a case names a token the vocabulary holds")
         }
     }
 
@@ -1128,6 +1145,9 @@ mod tests {
     const WAIVER_NAMES_NO_RULE: &str = SmellId::WaiverNamesNoRule.as_str();
     const WAIVER_EXPIRED: &str = SmellId::WaiverExpired.as_str();
     const WAIVER_UNREACHABLE_KIND: &str = SmellId::WaiverUnreachableKind.as_str();
+    const REMEDY_UNDECLARED: &str = SmellId::RemedyUndeclared.as_str();
+    const REASON_UNCLASSED: &str = SmellId::ReasonUnclassed.as_str();
+    const DEFERRAL_REVERSED: &str = SmellId::DeferralReversed.as_str();
 
     /// A ledger holding one answer to a question naming `pair`.
     fn answered(pair: &str, answer: &str) -> crate::asked::Ledger {
