@@ -12026,9 +12026,48 @@ fn run_land_lap(
         // lock and inside the window, so its forge writes read as in flight
         // (CLOUD-2371): `unwind_lap` is the fast path on a normal return.
         reconcile_at_entry(root, branch, out)?;
-        // AFTER THE RECONCILE, which may have made a stale ready pull request a
-        // draft again, and before any lap's `verify` (CLOUD-1353).
-        push_at_entry(root, url, branch, out)?;
+        // EVERY COMMIT ON THE REMOTE BEFORE ANY LAP VERIFIES (CLOUD-1353): after
+        // the reconcile, which may have made a stale ready pull request a draft
+        // again. The decisions are `land_entry_push` and `lease_rival`, which the
+        // suite drives; this is only their shell, since the push itself needs a
+        // smart-HTTP remote this tier does not stand up. It NEVER STOPS THE
+        // LANDING: a lost race or a transport error is one line.
+        //
+        // No repository slug is no forge to ask, which `reconcile_at_entry` stops
+        // on too.
+        if let Some(repo) = repo_slug(root) {
+            // A ref store that will not answer is read as a bet: skipping is the
+            // safe direction, since HEAD may carry borrowed commits.
+            let mut recorded = speculation::Bet::default();
+            let bet_live = speculation::recover(root, &mut recorded).unwrap_or(true);
+            let local = git::head_commit(root).ok();
+            let read = push_read(&repo, branch);
+            let rival = || {
+                let reading = lease_reading(root);
+                lease_rival(
+                    reading
+                        .as_ref()
+                        .map(|(observed, holder, now)| (observed, holder.as_str(), *now)),
+                    branch,
+                )
+            };
+            match land_entry_push(bet_live, local.as_deref(), &read, rival) {
+                EntryPush::Skip(reason) => writeln!(out, "land: entry push skipped — {reason}")?,
+                EntryPush::Push => match land::push(root, url, branch) {
+                    Ok(land::Pushed::Landed(head)) => {
+                        writeln!(out, "land: entry — {branch} on the remote now reads {head}")?;
+                    }
+                    Ok(land::Pushed::Raced) => writeln!(
+                        out,
+                        "land: entry — {branch} moved on the remote; this clone's commits are still only local"
+                    )?,
+                    Err(error) => writeln!(
+                        out,
+                        "land: entry — the push did not reach the remote, so this clone's commits are still only local: {error:#}"
+                    )?,
+                },
+            }
+        }
         let (ended, lines) = disk_watch::around(disk_watcher(root, prune_rules.as_ref()), || {
             run_land_laps(run, out, err)
         });
@@ -15824,7 +15863,13 @@ fn asks_before_the_step(
         //
         // `unwind_the_bet` is the same drop `Settle::Lost` already takes, so
         // this is a second caller for an existing arm rather than new machinery.
-        Some(pipeline::Precheck::BetLive) if bet.live() => {
+        //
+        // ONE ARM FOR BOTH OF THE ROW'S REASONS, so the question cannot lose one
+        // of them alone.
+        Some(pipeline::Precheck::BetLive) => {
+            if !bet.live() {
+                return push_gate_answer(root, branch, out, err);
+            }
             writeln!(
                 out,
                 "land: a speculation is still outstanding, so this head is not publishable — unwinding and lapping onto real trunk"
@@ -15842,49 +15887,55 @@ fn asks_before_the_step(
             bet.declined = true;
             Ok(Answered::Lap)
         }
-        // AND AN UNREVIEWED HEAD IS NOT PUBLISHABLE TO A READY PULL REQUEST
-        // (CLOUD-2436, CLOUD-1564). The same row's question, "is this head fit
-        // to publish", for the second reason it can be no: there the push itself
-        // starts CI, and the Ready after it reads that run as in flight and asks
-        // nothing. `land_push_gate` redrafts such a pull request first.
-        //
-        // EVERY STOP GOES THROUGH THE UNWIND rather than out past it with `?`,
-        // because the lease is held by now and only the unwind hands it back.
-        Some(pipeline::Precheck::BetLive) => {
-            let local = git::head_commit(root).ok();
-            let repo = repo_or_placeholder(root);
-            let read = push_read(&repo, branch);
-            match land_push_gate(root, std::time::SystemTime::now(), local.as_deref(), read) {
-                Ok(PushGate::Go) => Ok(Answered::Go),
-                Ok(PushGate::Redraft { pr, node }) => {
-                    if land::redraft(&repo, &pr, &node) {
-                        writeln!(
-                            out,
-                            "land: #{pr} was ready at another head; it is a draft again, so this push buys no run"
-                        )?;
-                        Ok(Answered::Go)
-                    } else {
-                        writeln!(
-                            err,
-                            "::error:: land: #{pr} is ready at another head and would not go back to draft; not pushing an unreviewed head onto it"
-                        )?;
-                        Ok(Answered::Stop(exit::ExitCode::Internal))
-                    }
-                }
-                Ok(PushGate::Owed(owed)) => {
-                    report_owed(err, &owed)?;
-                    Ok(Answered::Stop(exit::ExitCode::Violation))
-                }
-                Err(error) => {
-                    writeln!(
-                        err,
-                        "::error:: land: the push's review receipts could not be asked: {error:#}"
-                    )?;
-                    Ok(Answered::Stop(exit::ExitCode::Internal))
-                }
+        _ => Ok(Answered::Go),
+    }
+}
+
+/// The Push row's second question, asked when no bet is live:
+/// **AN UNREVIEWED HEAD IS NOT PUBLISHABLE TO A READY PULL REQUEST**
+/// (CLOUD-2436, CLOUD-1564). The push itself would start CI there, and the
+/// Ready after it reads that run as in flight and asks nothing.
+/// [`land_push_gate`] redrafts such a pull request first.
+///
+/// EVERY STOP GOES THROUGH THE UNWIND rather than out past it with `?`, because
+/// the lease is held by now and only the unwind hands it back.
+fn push_gate_answer(
+    root: &Path,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Answered> {
+    let local = git::head_commit(root).ok();
+    let repo = repo_or_placeholder(root);
+    let read = push_read(&repo, branch);
+    match land_push_gate(root, std::time::SystemTime::now(), local.as_deref(), read) {
+        Ok(PushGate::Go) => Ok(Answered::Go),
+        Ok(PushGate::Redraft { pr, node }) => {
+            if land::redraft(&repo, &pr, &node) {
+                writeln!(
+                    out,
+                    "land: #{pr} was ready at another head; it is a draft again, so this push buys no run"
+                )?;
+                Ok(Answered::Go)
+            } else {
+                writeln!(
+                    err,
+                    "::error:: land: #{pr} is ready at another head and would not go back to draft; not pushing an unreviewed head onto it"
+                )?;
+                Ok(Answered::Stop(exit::ExitCode::Internal))
             }
         }
-        _ => Ok(Answered::Go),
+        Ok(PushGate::Owed(owed)) => {
+            report_owed(err, &owed)?;
+            Ok(Answered::Stop(exit::ExitCode::Violation))
+        }
+        Err(error) => {
+            writeln!(
+                err,
+                "::error:: land: the push's review receipts could not be asked: {error:#}"
+            )?;
+            Ok(Answered::Stop(exit::ExitCode::Internal))
+        }
     }
 }
 
@@ -29209,7 +29260,7 @@ pub enum EntryPush {
 /// * a recorded SPECULATION skips, because HEAD may carry borrowed commits;
 /// * ANOTHER CLONE LANDING THIS BRANCH skips, so its pull request's head is not
 ///   moved under it. `rival_on_branch` is asked last, only for a push, because
-///   it is a round trip to the remote ([`rival_on_branch`]);
+///   it is a round trip to the remote ([`lease_rival`]);
 /// * NO pull request pushes, since no workflow runs on a branch push;
 /// * a DRAFT pushes when its head is not this one. Its jobs are draft-gated;
 /// * a READY pull request skips at either head. At another head the push would
@@ -29245,22 +29296,24 @@ pub fn land_entry_push(
     decided
 }
 
-/// Is another clone landing `branch` under a lease it holds now?
+/// Is another clone landing `branch` under a lease it holds now? `reading` is
+/// the lease as `lease_reading` returns it, with `None` for one that will not
+/// read.
 ///
-/// [`lease::authorises_this_clone`]'s reading, narrowed to the lease's
-/// (advisory) `branch`: absent, expired or released is nobody's. A lease that
-/// will not parse, or will not read at all, counts as a rival, the closed
-/// direction for a write that is only durability.
-fn rival_on_branch(root: &Path, branch: &str) -> bool {
-    let Some((observed, holder, now)) = lease_reading(root) else {
-        return true;
-    };
-    // Garbage has no body, so `live()` is `None` and it stays a rival.
-    !lease::authorises_this_clone(&observed, &holder, now)
-        && observed
-            .state(now)
-            .live()
-            .is_none_or(|body| body.branch == branch)
+/// [`lease::authorises_this_clone`] narrowed to the lease's (advisory)
+/// `branch`: absent, expired, released or this clone's own is nobody else's. A
+/// lease that will not parse, or will not read at all, counts as a rival, the
+/// closed direction for a write that is only durability.
+#[must_use]
+pub fn lease_rival(reading: Option<(&lease::Observed, &str, i64)>, branch: &str) -> bool {
+    reading.is_none_or(|(observed, holder, now)| {
+        // Garbage has no body, so `live()` is `None` and it stays a rival.
+        !lease::authorises_this_clone(observed, holder, now)
+            && observed
+                .state(now)
+                .live()
+                .is_none_or(|body| body.branch == branch)
+    })
 }
 
 /// This branch's pull request, as [`land_push_gate`] and [`land_entry_push`]
@@ -29274,43 +29327,6 @@ fn push_read(repo: &str, branch: &str) -> PushRead {
         fast_forward::Lookup::None => PushRead::NoPullRequest,
         fast_forward::Lookup::Unreadable(_) => PushRead::Unreadable,
     }
-}
-
-/// Push this clone's commits at landing entry, if [`land_entry_push`] says so.
-///
-/// **IT NEVER STOPS THE LANDING.** A lost race or a transport error is one line
-/// saying the work is still only local, and the laps run as before.
-fn push_at_entry(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> Result<()> {
-    // No repository slug is no forge to ask, so no pull request this push could
-    // be judged against: `reconcile_at_entry` stops on the same answer.
-    let Some(repo) = repo_slug(root) else {
-        return Ok(());
-    };
-    let mut recorded = speculation::Bet::default();
-    // A ref store that will not answer is read as a bet: skipping is the safe
-    // direction, since HEAD may carry borrowed commits.
-    let bet_live = speculation::recover(root, &mut recorded).unwrap_or(true);
-    let local = git::head_commit(root).ok();
-    let read = push_read(&repo, branch);
-    match land_entry_push(bet_live, local.as_deref(), &read, || {
-        rival_on_branch(root, branch)
-    }) {
-        EntryPush::Skip(reason) => writeln!(out, "land: entry push skipped — {reason}")?,
-        EntryPush::Push => match land::push(root, url, branch) {
-            Ok(land::Pushed::Landed(head)) => {
-                writeln!(out, "land: entry — {branch} on the remote now reads {head}")?;
-            }
-            Ok(land::Pushed::Raced) => writeln!(
-                out,
-                "land: entry — {branch} moved on the remote; this clone's commits are still only local"
-            )?,
-            Err(error) => writeln!(
-                out,
-                "land: entry — the push did not reach the remote, so this clone's commits are still only local: {error:#}"
-            )?,
-        },
-    }
-    Ok(())
 }
 
 // CLOUD-1564: a ready pull request at another head must be redrafted before

@@ -706,6 +706,57 @@ fn a_landing_pushes_its_own_commits_before_any_lap_verifies() {
     );
 }
 
+/// **A RIVAL IS ANOTHER CLONE HOLDING A LIVE LEASE FOR THIS BRANCH** (CLOUD-1353),
+/// and a lease that will not read or parse is one, so the entry push skips.
+///
+/// Every state of the lease, because each half of `lease_rival` can go wrong
+/// alone: the holder (this clone's own lease is not a rival), the branch (a
+/// rival on another branch moves no head of ours), and liveness (an expired or
+/// released lease is nobody's).
+#[test]
+fn a_rival_is_another_holder_live_on_this_branch() {
+    use batten::lease::{Body, Observed};
+    let now = 1_000;
+    let held = |holder: &str, expires: i64, branch: &str| Observed::Held {
+        sha: "lease-sha".to_owned(),
+        body: Body {
+            holder: holder.to_owned(),
+            expires,
+            branch: branch.to_owned(),
+            ..Body::default()
+        },
+    };
+    let rival = |observed: &Observed| batten::lease_rival(Some((observed, "me", now)), "topic");
+
+    assert!(
+        rival(&held("them", now + 60, "topic")),
+        "another clone, live, on this branch"
+    );
+    assert!(
+        rival(&Observed::Garbage {
+            sha: "lease-sha".to_owned(),
+            why: "no body".to_owned(),
+        }),
+        "a lease that will not parse"
+    );
+    assert!(
+        batten::lease_rival(None, "topic"),
+        "a lease that will not read"
+    );
+    for (observed, why) in [
+        (
+            held("them", now + 60, "other"),
+            "another clone on another branch",
+        ),
+        (held("me", now + 60, "topic"), "this clone's own lease"),
+        (held("them", now - 1, "topic"), "an expired lease"),
+        (held("them", 0, "topic"), "a released lease"),
+        (Observed::Absent, "no lease"),
+    ] {
+        assert!(!rival(&observed), "{why} is no rival");
+    }
+}
+
 /// **A LAP NEVER RUNS FROM THE TRUNK.**
 ///
 /// Over the compiled binary, because this is the one property in the file whose
