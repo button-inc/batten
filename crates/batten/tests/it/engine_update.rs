@@ -500,15 +500,15 @@ fn a_followed_builds_decision_reaches_the_harness_whole() {
 /// (CLOUD-2376).
 ///
 /// Only the hook path falls through to the refusal floor on a failed fetch
-/// (CLOUD-2116), because the floor still decides the call and admits the one
-/// repair verb. Every other verb must report: running anyway decides under the
-/// very engine the pin refuses, which is what `follow_pin`'s own doc says the
-/// fetch is not best-effort for.
+/// (CLOUD-2116), and `run` decides that, because the floor still decides the
+/// call and admits the one repair verb. Every other verb must report: running
+/// anyway decides under the very engine the pin refuses, which is what
+/// `follow_pin`'s own doc says the fetch is not best-effort for.
 ///
-/// Nothing tested that guard, and the reason was in the production code rather
-/// than in the suite: `follow_pin` spelled the release repository as a baked
+/// Nothing tested that, and the reason was in the production code rather than
+/// in the suite: `follow_pin` spelled the release repository as a baked
 /// literal, so no fixture could point the fetch anywhere and no case could make
-/// one fail. Mutating `!may_build` to `true` therefore survived. It reads
+/// one fail. Swallowing the fetch's error on every path therefore survived. It reads
 /// `releases_repository()` now, like every other fetch in the binary, and
 /// `localhost:1` is this suite's established unreachable host — no network is
 /// touched either way.
