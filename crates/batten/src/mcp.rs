@@ -2803,8 +2803,8 @@ mod tests {
     }
 
     /// A wiring entry whose `headersHelper` is `command`: a `sh` command line,
-    /// so only the Unix cases build one.
-    #[cfg(unix)]
+    /// so the cases spending one assert only where `shell` runs `sh`, and stay
+    /// compiled everywhere: `cfg!`, never `#[cfg]` (`policy/cfg-gated-test.rego`).
     fn helped_entry(command: &str) -> Node {
         Node::Map(std::collections::BTreeMap::from([(
             "headersHelper".to_owned(),
@@ -3511,9 +3511,11 @@ mod tests {
     // --- the wiring entry's own helper (Claude Code's `headersHelper`) ------
 
     /// Fails by: the helper's printed header not being the one sent.
-    #[cfg(unix)]
     #[test]
     fn a_helper_s_printed_header_is_the_credential_sent() {
+        if !cfg!(unix) {
+            return;
+        }
         let entry = helped_entry(r#"printf '{"Authorization":"Bearer tok","X-Other":"o"}'"#);
         let (header, secret) = credential(
             &source_with(Some(helper_row("Authorization"))),
@@ -3527,9 +3529,11 @@ mod tests {
     }
 
     /// Fails by: a header name compared with its case, which HTTP ignores.
-    #[cfg(unix)]
     #[test]
     fn a_helper_s_header_is_found_whatever_its_case() {
+        if !cfg!(unix) {
+            return;
+        }
         let entry = helped_entry(r#"printf '{"authorization":"Bearer tok"}'"#);
         let (header, secret) = credential(
             &source_with(Some(helper_row("Authorization"))),
@@ -3543,9 +3547,11 @@ mod tests {
     }
 
     /// Fails by: a scheme the row declares not folded onto the printed value.
-    #[cfg(unix)]
     #[test]
     fn a_helper_value_takes_the_row_s_scheme() {
+        if !cfg!(unix) {
+            return;
+        }
         let mut row = helper_row("X-Token");
         row.scheme = "Token".to_owned();
         let entry = helped_entry(r#"printf '{"X-Token":"abc"}'"#);
@@ -3557,9 +3563,11 @@ mod tests {
 
     /// Fails by: any helper failure dispatching unauthenticated, or its refusal
     /// carrying what the helper printed.
-    #[cfg(unix)]
     #[test]
     fn a_helper_that_cannot_answer_is_refused_naming_only_the_key() {
+        if !cfg!(unix) {
+            return;
+        }
         let source = source_with(Some(helper_row("Authorization")));
         for (entry, why) in [
             (no_entry(), "carries no command there"),
