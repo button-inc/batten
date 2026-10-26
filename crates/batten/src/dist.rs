@@ -807,13 +807,20 @@ mod tests {
 
     /// Run `body` over a runner playing `script`, answering every call it was
     /// asked, first word and second, in order.
+    ///
+    /// A program is matched by its file stem: a Windows host archives with
+    /// bsdtar named by its full `System32\tar.exe` path (`archiver_argv`).
     fn scripted<T>(script: Script, body: impl FnOnce(Runner<'_>) -> T) -> (T, Vec<String>) {
         let calls = std::cell::RefCell::new(Vec::new());
         let run = |dir: &Path, argv: &[String], _: Diagnostics| {
             calls
                 .borrow_mut()
                 .push(argv.iter().take(2).cloned().collect::<Vec<_>>().join(" "));
-            match (argv[0].as_str(), argv.get(1).map(String::as_str)) {
+            let program = Path::new(&argv[0])
+                .file_stem()
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap_or_default();
+            match (program, argv.get(1).map(String::as_str)) {
                 ("cargo", _) => Some((script.cargo, String::new())),
                 ("dist", Some("build")) => {
                     if script.dist_writes {
