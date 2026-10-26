@@ -65,16 +65,13 @@ fn the_fuzz_lock_resolves_shared_crates_as_the_root_does() {
     );
     let drifted: Vec<String> = fuzz
         .iter()
-        .filter_map(|(name, pins)| match root.get(name) {
-            Some(carried) if pins.is_subset(carried) => None,
-            None if HARNESS.contains(&name.as_str()) => None,
-            carried => {
-                let stray: Vec<&String> = carried.map_or_else(
-                    || pins.iter().collect(),
-                    |carried| pins.difference(carried).collect(),
-                );
-                Some(format!("{name} {stray:?}"))
-            }
+        .filter_map(|(name, pins)| {
+            let stray: Vec<&String> = match root.get(name) {
+                Some(carried) => pins.difference(carried).collect(),
+                None if HARNESS.contains(&name.as_str()) => return None,
+                None => pins.iter().collect(),
+            };
+            (!stray.is_empty()).then(|| format!("{name} {stray:?}"))
         })
         .collect();
     assert!(
