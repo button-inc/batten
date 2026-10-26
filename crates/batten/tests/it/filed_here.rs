@@ -288,7 +288,11 @@ const LEFT_OPEN: &str = "issue file held";
 #[test]
 fn a_branch_that_filed_nothing_passes_untouched() {
     let root = repo("filed-nothing", "work", &["src/a.rs"], &[], &[]);
-    fs::remove_file(root.join(".git/batten-receipts/board-writes.work")).expect("no record");
+    fs::remove_file(root.join(format!(
+        ".git/batten-receipts/board-writes.{}",
+        batten::receipt::branch_slug("work")
+    )))
+    .expect("no record");
     assert!(verdicts(&root).is_empty(), "no record is no answer");
 }
 

@@ -51,7 +51,8 @@ fn red_repo(name: &str) -> PathBuf {
 /// THE KEY IS INJECTIVE (review of #1180): `work/red` and `work-red` are two
 /// branches and two records, so neither's debt is read, or cleared, as the
 /// other's. Under the old `/` → `-` slug both named one file; every receipt now
-/// takes the injective one (CLOUD-2353).
+/// hashes the branch (CLOUD-2353), and case is part of the name, so `feature/A`
+/// and `feature/a` are two records too.
 #[test]
 fn a_sibling_branchs_red_head_is_not_this_branchs() {
     assert_ne!(
@@ -59,8 +60,8 @@ fn a_sibling_branchs_red_head_is_not_this_branchs() {
         batten::receipt::branch_slug("work-red")
     );
     assert_ne!(
-        batten::receipt::branch_slug("a%2Fb"),
-        batten::receipt::branch_slug("a/b")
+        batten::receipt::branch_slug("feature/A"),
+        batten::receipt::branch_slug("feature/a")
     );
 }
 

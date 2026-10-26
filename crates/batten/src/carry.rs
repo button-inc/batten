@@ -374,7 +374,10 @@ tool/runner-action@aaa\tMIT\tCopyright (c) 2018 A Holder and contributors\n";
     fn the_receipt_filename_replaces_every_slash() {
         assert_eq!(
             receipt_name("sbom-actions/carry-20260901T110320Z"),
-            "carry.sbom-actions%2Fcarry-20260901T110320Z"
+            format!(
+                "carry.{}",
+                crate::receipt::branch_slug("sbom-actions/carry-20260901T110320Z")
+            )
         );
     }
 
@@ -402,7 +405,10 @@ tool/runner-action@aaa\tMIT\tCopyright (c) 2018 A Holder and contributors\n";
     fn mint_writes_the_pointer_only_receipt_where_it_says() {
         let receipts = crate::scratch::scratch("carry-mint");
         let path = mint(&receipts, "a/b", 2, None, "2026-10-19T00:00:00Z").unwrap();
-        assert_eq!(path, receipts.join("carry.a%2Fb"));
+        assert_eq!(
+            path,
+            receipts.join(format!("carry.{}", crate::receipt::branch_slug("a/b")))
+        );
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             format!("carry 2 row(s)\ntable {TABLE}\nderived-at 2026-10-19T00:00:00Z\nbase -\n")

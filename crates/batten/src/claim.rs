@@ -1333,7 +1333,10 @@ mod tests {
     #[test]
     fn a_claimed_token_is_the_sorted_keys_of_the_receipts_first_line() {
         let receipts = scratch("token");
-        assert_eq!(receipt_name("user/branch"), "claim.user%2Fbranch");
+        assert_eq!(
+            receipt_name("user/branch"),
+            format!("claim.{}", crate::receipt::branch_slug("user/branch"))
+        );
         assert_eq!(claimed_token(&receipts, "user/branch"), None);
         std::fs::write(
             receipts.join(receipt_name("user/branch")),
