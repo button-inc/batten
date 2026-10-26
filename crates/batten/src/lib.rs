@@ -3289,6 +3289,11 @@ const DRAIN_MARKER: &str = "BATTEN_STATE_DRAIN";
 /// store it guards.
 const DRAIN_LOCK: &str = "batten-state-record.lock";
 
+/// The lock a drain holds across its tree scan, under `$GIT_DIR` beside
+/// [`DRAIN_LOCK`], so at most one drain per checkout scans at a time
+/// (CLOUD-2536).
+const DRAIN_SCAN_LOCK: &str = "batten-state-scan.lock";
+
 /// Take the store's write lock, answering whether this caller may write.
 ///
 /// # Who may block, and getting it wrong cost 100s
@@ -3419,7 +3424,32 @@ fn run_state_record(
     // for. A drain nobody awaits exits clean — the work is already being done by
     // whoever holds the lock. The VERB waits, because a human ran it and a
     // record it did not write must not be reported as one.
-    let lock_path = git::git_dir(&repo)?.join(DRAIN_LOCK);
+    let git_dir = git::git_dir(&repo)?;
+    // ONE DRAIN SCANNING AT A TIME (CLOUD-2536). The write lock below is taken
+    // after the scan, so it never stopped two drains scanning at once — and a
+    // scan resolves the `Cost::Effect` facts, which is a whole-workspace
+    // compiler run holding the build lock. Every end of turn detached another,
+    // and an agent's own build waited behind three of them. A drain that finds
+    // one already scanning exits: the end of turn that spawned it already ran
+    // its transcript detectors in process, and the drain holding this lock is
+    // recording the tree. Only drains take it, so neither the mediated path nor
+    // the verb a human ran can lose a record to it.
+    let _scanning = if scan_tree && std::env::var_os(DRAIN_MARKER).is_some() {
+        let scan_lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(git_dir.join(DRAIN_SCAN_LOCK))?;
+        //MUTANT-SUITE crates/batten/tests/it/hook_latency.rs
+        //MUTANT drains-scan-concurrently|s@^        if fs4::FileExt::try_lock(\&scan_lock).is_err() {$@        if false {@|a_drain_finding_another_scanning_does_not_scan
+        if fs4::FileExt::try_lock(&scan_lock).is_err() {
+            return Ok(ExitCode::Success);
+        }
+        Some(scan_lock)
+    } else {
+        None
+    };
+    let lock_path = git_dir.join(DRAIN_LOCK);
     let lock = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)

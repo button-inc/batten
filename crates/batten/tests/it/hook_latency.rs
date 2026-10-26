@@ -149,6 +149,69 @@ fn run(repo: &Path, shims: &Path, home: &Path, args: &[&str], payload: &str) -> 
     pid
 }
 
+/// `batten state record` in `repo` as a detached drain runs it, or as the verb
+/// when `drain` is false; returns the pid it ran as.
+#[cfg(unix)]
+fn record(repo: &Path, shims: &Path, home: &Path, drain: bool) -> u32 {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let mut dirs = vec![shims.to_path_buf()];
+    dirs.extend(std::env::split_paths(&path));
+    let mut command = common::batten();
+    common::state_home(&mut command, home);
+    command
+        .current_dir(repo)
+        .args(["state", "record"])
+        .env("PATH", std::env::join_paths(dirs).expect("a joinable PATH"))
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if drain {
+        command.env("BATTEN_STATE_DRAIN", "1");
+    } else {
+        command.env_remove("BATTEN_STATE_DRAIN");
+    }
+    let mut child = command.spawn().expect("spawn batten state record");
+    let pid = child.id();
+    child.wait().expect("run batten state record");
+    pid
+}
+
+/// A drain that finds another drain scanning exits without resolving the
+/// analyser fact, while the verb under the same lock and a drain with the lock
+/// free both resolve it.
+///
+/// Fails by: drains scanning concurrently, which is how three ends of turn
+/// left three workspace compiler runs holding the build lock (CLOUD-2536).
+#[cfg(unix)]
+#[test]
+fn a_drain_finding_another_scanning_does_not_scan() {
+    let (repo, shims, home) = fixture("hook-latency-drain");
+    let held = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(repo.join(".git/batten-state-scan.lock"))
+        .expect("open the scan lock");
+    held.try_lock().expect("take the scan lock");
+    let drain = record(&repo, &shims, &home, true);
+    assert!(
+        !spawners(&repo).contains(&drain),
+        "a drain scanned while another drain held the scan lock"
+    );
+    let verb = record(&repo, &shims, &home, false);
+    assert!(
+        spawners(&repo).contains(&verb),
+        "the verb a human ran waits for no drain and scans"
+    );
+    held.unlock().expect("release the scan lock");
+    let free = record(&repo, &shims, &home, true);
+    assert!(
+        spawners(&repo).contains(&free),
+        "the control: a drain with the lock free resolves the fact"
+    );
+}
+
 /// The parent pids the shim recorded.
 #[cfg(unix)]
 fn spawners(repo: &Path) -> Vec<u32> {
