@@ -66,10 +66,10 @@ fn carry(dir: &Path) -> (Option<i32>, String, String) {
 
 /// Whether the receipt the verb writes is on disk under the branch's name.
 fn receipt(dir: &Path) -> Option<String> {
-    let path = dir
-        .join(".git")
-        .join("batten-receipts")
-        .join("carry.sbom-actions%2Fcarry-probe");
+    let path = dir.join(".git").join("batten-receipts").join(format!(
+        "carry.{}",
+        batten::receipt::branch_slug("sbom-actions/carry-probe")
+    ));
     std::fs::read_to_string(path).ok()
 }
 

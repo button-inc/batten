@@ -169,7 +169,11 @@ fn git(dir: &Path, args: &[&str]) {
 
 /// The record this branch accumulated, or the empty string when none was written.
 fn record(dir: &Path) -> String {
-    fs::read_to_string(dir.join(".git/batten-receipts/board-writes.work")).unwrap_or_default()
+    fs::read_to_string(dir.join(format!(
+        ".git/batten-receipts/board-writes.{}",
+        batten::receipt::branch_slug("work")
+    )))
+    .unwrap_or_default()
 }
 
 /// Mint a claim receipt naming `ids`, the way `claim check` does on its pullable
@@ -181,7 +185,7 @@ fn claim(dir: &Path, ids: &str) {
     let receipts = dir.join(".git/batten-receipts");
     fs::create_dir_all(&receipts).expect("receipts dir");
     fs::write(
-        receipts.join("claim.work"),
+        receipts.join(format!("claim.{}", batten::receipt::branch_slug("work"))),
         format!("{ids}\nready-lint pass\nclaimed-at 2026-09-01T00:00:00Z\n"),
     )
     .expect("write claim");
@@ -189,8 +193,11 @@ fn claim(dir: &Path, ids: &str) {
 
 /// The record filed under one claim's partition.
 fn record_under(dir: &Path, claim: &str) -> String {
-    fs::read_to_string(dir.join(format!(".git/batten-receipts/board-writes.work.{claim}")))
-        .unwrap_or_default()
+    fs::read_to_string(dir.join(format!(
+        ".git/batten-receipts/board-writes.{}.{claim}",
+        batten::receipt::branch_slug("work")
+    )))
+    .unwrap_or_default()
 }
 
 /// A `PostToolUse` envelope carrying an MCP content-block response.

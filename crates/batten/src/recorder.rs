@@ -1641,21 +1641,22 @@ mod outcome_tests {
     fn record_and_blocked_paths_fold_the_branch_and_partition_by_claim() {
         let git = Path::new("g");
         let receipts = git.join("batten-receipts");
+        let slug = crate::receipt::branch_slug("a/b");
         assert_eq!(
             record_path(git, "rec", "a/b", Some("c")),
-            receipts.join("rec.a%2Fb.c")
+            receipts.join(format!("rec.{slug}.c"))
         );
         assert_eq!(
             record_path(git, "rec", "a/b", None),
-            receipts.join("rec.a%2Fb")
+            receipts.join(format!("rec.{slug}"))
         );
         assert_eq!(
             blocked_path(git, "a/b", Some("c")),
-            receipts.join("recorder-blocked.a%2Fb.c")
+            receipts.join(format!("recorder-blocked.{slug}.c"))
         );
         assert_eq!(
             blocked_path(git, "a/b", None),
-            receipts.join("recorder-blocked.a%2Fb")
+            receipts.join(format!("recorder-blocked.{slug}"))
         );
     }
 

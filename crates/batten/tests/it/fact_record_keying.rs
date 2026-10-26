@@ -237,12 +237,13 @@ fn head_and_branch_keyings_file_the_record_under_different_names() {
 
     assert_ne!(head_named, branch_named);
     // The branch-keyed one names the branch; the head-keyed one does not.
+    let main = batten::receipt::branch_slug("main");
     assert!(
-        branch_named.iter().any(|name| name.contains("main")),
+        branch_named.iter().any(|name| name.contains(&main)),
         "{branch_named:?}"
     );
     assert!(
-        !head_named.iter().any(|name| name.contains("main")),
+        !head_named.iter().any(|name| name.contains(&main)),
         "{head_named:?}"
     );
 }

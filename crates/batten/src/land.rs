@@ -5099,12 +5099,16 @@ mod tests {
         crate::gitwrite::init_on_main(&root).unwrap();
         let store = root.join(".git/batten-receipts");
         std::fs::create_dir_all(&store).unwrap();
+        let slug = crate::receipt::branch_slug;
+        let extended = format!("board-writes.{}", slug("work/gone-2"));
+        let sibling = format!("board-writes.{}", slug("work-gone"));
         for name in [
-            "board-writes.work%2Fgone",
-            "board-writes.work%2Fgone.claim",
-            "board-writes.work%2Fgone-2",
+            format!("board-writes.{}", slug("work/gone")),
+            format!("board-writes.{}.claim", slug("work/gone")),
+            // `work/gone-2`: another branch whose name only extends this one.
+            extended.clone(),
             // The SIBLING `work-gone` (CLOUD-2353): another branch, never swept.
-            "board-writes.work-gone",
+            sibling.clone(),
         ] {
             std::fs::write(store.join(name), "x").unwrap();
         }
@@ -5116,15 +5120,26 @@ mod tests {
         let retired = super::retire_branch(&root, "", "work/gone");
         assert!(!retired.remote, "an unreachable remote deleted nothing");
         assert_eq!(retired.receipts, 3);
-        assert!(store.join("board-writes.work%2Fgone-2").exists());
-        assert!(store.join("board-writes.work-gone").exists());
+        assert!(store.join(&extended).exists());
+        assert!(store.join(&sibling).exists());
     }
 
+    /// A receipt name hashes the branch: `/` and `-` stay apart, case is kept,
+    /// and every slug is a 64-char lowercase hex digest.
     #[test]
     fn a_branch_slug_is_injective_over_slash_and_percent() {
         let slug = crate::receipt::branch_slug;
-        assert_eq!(slug("feature/a%b"), "feature%2Fa%25b");
         assert_ne!(slug("feature/a"), slug("feature-a"));
+        assert_ne!(slug("feature/A"), slug("feature/a"));
+        for branch in ["feature/a", "feature-a", "feature/A", "feature/a%b"] {
+            let hex = slug(branch);
+            assert_eq!(hex.len(), 64, "{hex}");
+            assert!(
+                hex.chars()
+                    .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+                "{hex}"
+            );
+        }
     }
 
     /// Only an all-digit id is asked whether it was read.

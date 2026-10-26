@@ -18544,7 +18544,8 @@ deny contains "refused by themodule" if {
     fn a_marker_path_slugs_the_branch_into_the_receipt_store() {
         assert_eq!(
             marker_path(Path::new("/g"), "punt", "feat/x"),
-            Path::new("/g/batten-receipts/punt.feat%2Fx")
+            Path::new("/g/batten-receipts")
+                .join(format!("punt.{}", crate::receipt::branch_slug("feat/x")))
         );
     }
 

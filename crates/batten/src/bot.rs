@@ -813,7 +813,7 @@ mod tests {
     fn the_receipt_is_named_for_the_branch_with_its_slashes_spelled_out() {
         assert_eq!(
             receipt_name("renovate/cargo-1.x"),
-            "bot.renovate%2Fcargo-1.x"
+            format!("bot.{}", crate::receipt::branch_slug("renovate/cargo-1.x"))
         );
     }
 
@@ -833,7 +833,10 @@ mod tests {
             "2026-01-01T00:00:00Z",
         )
         .unwrap();
-        assert_eq!(path, receipts.join("bot.renovate%2Fx"));
+        assert_eq!(
+            path,
+            receipts.join(format!("bot.{}", crate::receipt::branch_slug("renovate/x")))
+        );
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "CLOUD-700\nbot renovate[bot]\npr 7\nderived-at 2026-01-01T00:00:00Z\nbase -\n"

@@ -236,10 +236,12 @@ fn retiring_a_landed_branch_drops_every_branch_keyed_receipt() {
     let store = dir.join(".git").join("batten-receipts");
     std::fs::create_dir_all(&store).expect("create the receipt store");
 
-    // A branch whose name carries the separator the store percent-encodes, because a
-    // sweep spelling the slug differently would delete nothing and report a clean
-    // count — the silent-empty-answer shape, one layer down.
+    // A branch whose name carries a separator, and whose receipts are keyed by the
+    // store's hash of the branch, because a sweep spelling the slug differently
+    // would delete nothing and report a clean count — the silent-empty-answer
+    // shape, one layer down.
     let branch = "claude/some-work";
+    let slug = batten::receipt::branch_slug(branch);
     // `unlanded-nudged` is the fourth and was missing from the sweep (CLOUD-1390).
     // It is the one whose survival costs most: the nudge is once-per-claim
     // because the agent cannot clear `¬landed` inside the turn it is asked to, so
@@ -253,8 +255,7 @@ fn retiring_a_landed_branch_drops_every_branch_keyed_receipt() {
         "unlanded-nudged",
     ];
     for family in families {
-        std::fs::write(store.join(format!("{family}.claude%2Fsome-work")), "x\n")
-            .expect("write a receipt");
+        std::fs::write(store.join(format!("{family}.{slug}")), "x\n").expect("write a receipt");
     }
     // One store this sweep must NOT touch: a sha-keyed receipt dies with its sha
     // and belongs to no branch. Without it, a sweep that removed the whole
@@ -266,7 +267,7 @@ fn retiring_a_landed_branch_drops_every_branch_keyed_receipt() {
     assert_eq!(retired.receipts, families.len());
     for family in families {
         assert!(
-            !store.join(format!("{family}.claude%2Fsome-work")).exists(),
+            !store.join(format!("{family}.{slug}")).exists(),
             "{family} should have gone with the branch"
         );
     }

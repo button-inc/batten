@@ -19722,10 +19722,11 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let git_dir = temp_dir("rules-recorder-records");
         let receipts = git_dir.join("batten-receipts");
         fs::create_dir_all(&receipts).expect("mkdir");
-        fs::write(receipts.join("claim.b"), "CLOUD-1\n").expect("claim");
-        fs::write(receipts.join("plan.b.CLOUD-1"), "x\ny\n").expect("partitioned");
-        fs::write(receipts.join("plan.b"), "stale\n").expect("unpartitioned");
-        fs::write(receipts.join("claim.b.CLOUD-1"), "wrong\n").expect("decoy");
+        let b = crate::receipt::branch_slug("b");
+        fs::write(receipts.join(format!("claim.{b}")), "CLOUD-1\n").expect("claim");
+        fs::write(receipts.join(format!("plan.{b}.CLOUD-1")), "x\ny\n").expect("partitioned");
+        fs::write(receipts.join(format!("plan.{b}")), "stale\n").expect("unpartitioned");
+        fs::write(receipts.join(format!("claim.{b}.CLOUD-1")), "wrong\n").expect("decoy");
         assert_eq!(
             recorder_records(&git_dir, "b", &[], &[], &["claim", "plan", "absent"]),
             BTreeMap::from([
