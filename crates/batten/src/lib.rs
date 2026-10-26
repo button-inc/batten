@@ -29207,7 +29207,8 @@ pub enum EntryPush {
 ///
 /// * a recorded SPECULATION skips, because HEAD may carry borrowed commits;
 /// * ANOTHER CLONE LANDING THIS BRANCH skips, so its pull request's head is not
-///   moved under it. `rival_on_branch` is `true` for a lease that will not read;
+///   moved under it. `rival_on_branch` is asked last, only for a push, because
+///   it is a round trip to the remote ([`rival_on_branch`]);
 /// * NO pull request pushes, since no workflow runs on a branch push;
 /// * a DRAFT pushes when its head is not this one. Its jobs are draft-gated;
 /// * a READY pull request skips at either head. At another head the push would
@@ -29217,17 +29218,14 @@ pub enum EntryPush {
 #[must_use]
 pub fn land_entry_push(
     bet_live: bool,
-    rival_on_branch: bool,
     local_head: Option<&str>,
     read: &PushRead,
+    rival_on_branch: impl FnOnce() -> bool,
 ) -> EntryPush {
     if bet_live {
         return EntryPush::Skip("a speculation is recorded on this head");
     }
-    if rival_on_branch {
-        return EntryPush::Skip("another clone may be landing this branch");
-    }
-    match read {
+    let decided = match read {
         PushRead::NoPullRequest => EntryPush::Push,
         PushRead::Unreadable => EntryPush::Skip("the pull request could not be read"),
         PushRead::Found { readiness, .. } => {
@@ -29239,6 +29237,29 @@ pub fn land_entry_push(
                 EntryPush::Skip("the pull request is ready; the lap's push redrafts it first")
             }
         }
+    };
+    if decided == EntryPush::Push && rival_on_branch() {
+        return EntryPush::Skip("another clone may be landing this branch");
+    }
+    decided
+}
+
+/// Is another clone landing `branch` under a lease it holds now?
+///
+/// [`lease::authorises_this_clone`]'s reading, narrowed to the lease's
+/// (advisory) `branch`: absent, expired or released is nobody's. A lease that
+/// will not parse, or will not read at all, counts as a rival, the closed
+/// direction for a write that is only durability.
+fn rival_on_branch(root: &Path, branch: &str) -> bool {
+    let Some((observed, holder, now)) = lease_reading(root) else {
+        return true;
+    };
+    match observed.state(now) {
+        lease::Lease::Absent | lease::Lease::Expired { .. } | lease::Lease::Released { .. } => {
+            false
+        }
+        lease::Lease::Garbage { .. } => true,
+        lease::Lease::Live { body, .. } => body.holder != holder && body.branch == branch,
     }
 }
 
@@ -29260,17 +29281,18 @@ fn push_read(repo: &str, branch: &str) -> PushRead {
 /// **IT NEVER STOPS THE LANDING.** A lost race or a transport error is one line
 /// saying the work is still only local, and the laps run as before.
 fn push_at_entry(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> Result<()> {
+    // No repository slug is no forge to ask, so no pull request this push could
+    // be judged against: `reconcile_at_entry` stops on the same answer.
+    let Some(repo) = repo_slug(root) else {
+        return Ok(());
+    };
     let mut recorded = speculation::Bet::default();
     let bet_live = speculation::recover(root, &mut recorded).unwrap_or(false);
-    let rival_on_branch = lease_reading(root).is_none_or(|(observed, holder, now)| {
-        observed
-            .state(now)
-            .live()
-            .is_some_and(|body| body.holder != holder && body.branch == branch)
-    });
     let local = git::head_commit(root).ok();
-    let read = push_read(&repo_or_placeholder(root), branch);
-    match land_entry_push(bet_live, rival_on_branch, local.as_deref(), &read) {
+    let read = push_read(&repo, branch);
+    match land_entry_push(bet_live, local.as_deref(), &read, || {
+        rival_on_branch(root, branch)
+    }) {
         EntryPush::Skip(reason) => writeln!(out, "land: entry push skipped — {reason}")?,
         EntryPush::Push => match land::push(root, url, branch) {
             Ok(land::Pushed::Landed(head)) => {

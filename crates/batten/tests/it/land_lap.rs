@@ -549,6 +549,18 @@ reason = "dispatch the code-review skill"
     );
 }
 
+/// A pull request #7 read as `draft` at forge `head`, for the two push cases.
+fn found(draft: bool, head: &str) -> batten::PushRead {
+    batten::PushRead::Found {
+        pr: "7".to_owned(),
+        readiness: batten::land::Readiness {
+            draft,
+            node: "PR_node".to_owned(),
+            head: head.to_owned(),
+        },
+    }
+}
+
 /// **A PUSH NEVER LANDS A NEW HEAD ON A READY PULL REQUEST** (CLOUD-1564,
 /// CLOUD-2436).
 ///
@@ -594,14 +606,6 @@ reason = "dispatch the code-review skill"
     std::env::set_current_dir(&dir).expect("enter the fixture");
     let now = std::time::UNIX_EPOCH;
     let local = "local-head";
-    let found = |draft: bool, head: &str| batten::PushRead::Found {
-        pr: "7".to_owned(),
-        readiness: batten::land::Readiness {
-            draft,
-            node: "PR_node".to_owned(),
-            head: head.to_owned(),
-        },
-    };
     let gate = |read: batten::PushRead| {
         batten::land_push_gate(&dir, now, Some(local), read).expect("the authority resolves")
     };
@@ -657,15 +661,7 @@ reason = "dispatch the code-review skill"
 fn a_landing_pushes_its_own_commits_before_any_lap_verifies() {
     use batten::{EntryPush, PushRead, land_entry_push};
     let local = Some("local-head");
-    let found = |draft: bool, head: &str| PushRead::Found {
-        pr: "7".to_owned(),
-        readiness: batten::land::Readiness {
-            draft,
-            node: "PR_node".to_owned(),
-            head: head.to_owned(),
-        },
-    };
-    let decide = |read: &PushRead| land_entry_push(false, false, local, read);
+    let decide = |read: &PushRead| land_entry_push(false, local, read, || false);
 
     assert_eq!(
         decide(&found(true, "an-older-head")),
@@ -696,14 +692,14 @@ fn a_landing_pushes_its_own_commits_before_any_lap_verifies() {
     }
     assert!(
         matches!(
-            land_entry_push(true, false, local, &found(true, "an-older-head")),
+            land_entry_push(true, local, &found(true, "an-older-head"), || false),
             EntryPush::Skip(_)
         ),
         "a recorded speculation may carry another branch's commits"
     );
     assert!(
         matches!(
-            land_entry_push(false, true, local, &found(true, "an-older-head")),
+            land_entry_push(false, local, &found(true, "an-older-head"), || true),
             EntryPush::Skip(_)
         ),
         "another clone landing this branch keeps its head"
