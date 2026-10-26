@@ -288,9 +288,11 @@ pub struct Credential {
     /// GitHub server's helper prints `{"Authorization":"Bearer …"}` from `gh auth
     /// token`), and carries no static `headers` at all, so a row with neither
     /// `env` nor `file_from` dispatched unauthenticated and got a 401. The row
-    /// names the KEY, never the command: the command lives in the operator's
-    /// wiring, not in committed config, and only the `header` this row names
-    /// is taken from what it prints.
+    /// names the KEY, never the command: the command lives in the wiring file
+    /// the source names (the operator's own, for a home-rooted source; a
+    /// repo-relative source trusts that file as much as this config), and only
+    /// the `header` this row names is taken from what it prints. That value is
+    /// usually finished (`Bearer …`), so `scheme` stays empty for such a helper.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helper: Option<String>,
 }
@@ -382,12 +384,14 @@ fn helped(
              of headers"
         )
     })?;
+    // THE FIRST USABLE SPELLING, not the first spelling: names differing only in
+    // case are one header to HTTP, and an empty one sorting first must not hide
+    // a good one behind it.
     let value = headers
         .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case(&row.header))
-        .and_then(|(_, value)| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|(name, _)| name.eq_ignore_ascii_case(&row.header))
+        .filter_map(|(_, value)| value.as_str().map(str::trim))
+        .find(|value| !value.is_empty())
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "mcp: source {id}'s credential helper at `{key}` printed no `{}` header",
@@ -3547,6 +3551,7 @@ mod tests {
         for printed in [
             r#"printf '{"Authorization":"Bearer tok","X-Other":"o"}'"#,
             r#"printf '{"authorization":"Bearer tok"}'"#,
+            r#"printf '{"AUTHORIZATION":null,"Authorization":"Bearer tok"}'"#,
         ] {
             let (header, secret) = credential(
                 &source_with(Some(helper_row("Authorization"))),
