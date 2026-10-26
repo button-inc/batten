@@ -2771,7 +2771,17 @@ description = "cargo-deny: licenses, advisories, sources"
 # The advisory DB is a property of the world, and worlds change on a clock, not
 # on this branch: CI still runs the full check on every PR, which is the same
 # split lock-currency already made.
-run = "cargo run --quiet -p batten -- step run deny -- cargo deny check"
+#
+# THE FUZZ WORKSPACE'S LOCK IS JUDGED TOO, for advisories alone (CLOUD-2538). It
+# is a detached workspace, so the root check never read it: measured 2026-10-26,
+# `fuzz/Cargo.lock` still pinned batten 0.0.125 and five crates (tokio, rustls,
+# rustls-webpki, webpki-roots, ctutils) behind the root lock's versions.
+# Advisories only: its licences and sources are the root graph's plus the fuzz
+# harness crates, which `deny.toml` was never written to judge.
+run = [
+  "cargo run --quiet -p batten -- step run deny -- cargo deny check",
+  "cargo run --quiet -p batten -- step run deny-fuzz -- cargo deny --manifest-path fuzz/Cargo.toml check advisories",
+]
 
 [tasks."build:release"]
 description = "Build the release binary the hook registrations execute"

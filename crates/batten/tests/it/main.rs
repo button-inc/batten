@@ -198,6 +198,7 @@ mod forge_read_first;
 mod forge_window;
 mod frontmatter_gates;
 mod fuzz_corpus;
+mod fuzz_lock;
 mod gh_guard;
 #[cfg(unix)]
 mod gh_preflight;
