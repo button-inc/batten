@@ -17325,13 +17325,16 @@ fn run_mutate_sweep(
     let shard = std::env::var(mutate::SHARD)
         .ok()
         .filter(|shard| !shard.trim().is_empty());
-    if let Some(Err(reason)) = shard
-        .as_deref()
-        .map(|shard| mutate::shard_of(&narrowed.names, shard))
-    {
-        writeln!(err, "::error:: mutate: {reason}")?;
-        return Ok(ExitCode::Usage);
-    }
+    let parsed = match shard.as_deref() {
+        None => None,
+        Some(raw) => match mutate::shard_of(&narrowed.names, raw) {
+            Ok(_) => mutate::parse_shard(raw),
+            Err(reason) => {
+                writeln!(err, "::error:: mutate: {reason}")?;
+                return Ok(ExitCode::Usage);
+            }
+        },
+    };
     let runner = std::env::var(mutate::RUNNER)
         .ok()
         .map(|id| id.trim().to_owned())
@@ -17348,8 +17351,7 @@ fn run_mutate_sweep(
     let (swept, lines) = disk_watch::around(
         disk_watcher(root, prune_rules.as_ref()),
         || -> Result<ExitCode> {
-            let declared =
-                run_declared_sweep(root, narrowed, &registry, shard.as_deref(), out, err)?;
+            let declared = run_declared_sweep(root, narrowed, &registry, parsed, out, err)?;
             let Some(id) = runner else {
                 return Ok(declared);
             };
@@ -17478,7 +17480,7 @@ fn run_declared_sweep(
     root: &Path,
     narrowed: Narrowed,
     registry: &mutate::Registry,
-    shard: Option<&str>,
+    shard: Option<(usize, usize)>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -17523,7 +17525,6 @@ fn run_declared_sweep(
     // still carries exactly the tracked bytes.
     let work = root.join("target").join("mutate");
     std::fs::create_dir_all(&work)?;
-    let shard = shard.and_then(mutate::parse_shard);
     let sweep = match mutate::sweep_shard(root, &names, work, registry, shard, err) {
         Ok(sweep) => sweep,
         Err(reason) => {

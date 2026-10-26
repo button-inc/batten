@@ -665,11 +665,13 @@ impl fmt::Display for Finding {
 /// What a whole sweep answered.
 #[derive(Debug, Clone)]
 pub struct Sweep {
-    /// Every finding, in gate then row order.
+    /// Every finding: the gate-level ones, then the rows', each in sorted gate
+    /// order.
     pub findings: Vec<Finding>,
-    /// How many mutations were declared across the enforced set.
+    /// How many declared mutations this sweep judged.
     pub declared: usize,
-    /// How many gates the set named.
+    /// How many gates this sweep answered for: a gate-level finding reported,
+    /// or a row judged ([`sweep_shard`]).
     pub gates: usize,
 }
 
@@ -1174,11 +1176,13 @@ pub fn shard_of(names: &[String], shard: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// Every name, sorted, with whether `shard` owns it: the one order every shard
-/// of a run numbers the gates in, so [`shard_of`] and [`sweep_shard`] agree.
+/// Every name once, sorted, with whether `shard` owns it: the one order every
+/// shard of a run numbers the gates in, so [`shard_of`] and [`sweep_shard`]
+/// agree. Gates are dealt by the same rule as rows, [`shard_owns_row`].
 fn by_shard(names: &[String], shard: Option<(usize, usize)>) -> Vec<(&String, bool)> {
     let mut sorted: Vec<&String> = names.iter().collect();
     sorted.sort();
+    sorted.dedup();
     sorted
         .into_iter()
         .enumerate()
@@ -1257,6 +1261,8 @@ impl RunnerKind {
 //MUTANT suite-first-only|s@^            Some(_) => row.resolved.as_ref(),$@            Some(_) => self.suite.as_ref(),@|each_preset_module_row_runs_under_its_own_declared_suite
 //MUTANT every-row-on-every-shard|s@^    shard.is_none_or(\x7c(k, n)\x7c index % n == k)$@    true@|a_large_gates_rows_spread_across_every_shard
 //MUTANT gate-finding-on-every-shard|s@^        if reports {$@        if true {@|a_sharded_sweep_judges_each_row_and_reports_each_gate_once
+//MUTANT gate-named-twice-swept-twice|s@^    sorted.dedup();$@@|a_sharded_sweep_judges_each_row_and_reports_each_gate_once
+//MUTANT empty-shard-staged|s@^    if mine.is_empty() {$@    if false {@|a_shard_owning_no_row_stages_nothing
 //MUTANT nextest-profile-unpinned|s@^        (String::from("NEXTEST_PROFILE"), String::from("default")),$@        (String::from("NEXTEST_PROFILE"), String::from("ci")),@|every_runner_runs_the_default_nextest_profile
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT later-suites-unread|s@^                    own.push(resolved);$@                    if own.is_empty() { own.push(resolved); }@|a_change_to_a_sources_second_suite_sweeps_its_gate
@@ -5802,7 +5808,8 @@ mod tests {
     /// CLOUD-2533: one gate's rows are judged across the shards, each by one,
     /// and a gate-level finding is reported by one shard. Every row is recorded
     /// caught, so no suite runs. Fails by: a sweep that ignores its shard for
-    /// rows or for gate-level findings, or numbers the gates unsorted.
+    /// rows or for gate-level findings, numbers the gates unsorted, numbers a
+    /// stopped gate's rows, or sweeps a gate named twice twice.
     #[test]
     fn a_sharded_sweep_judges_each_row_and_reports_each_gate_once() {
         let root = fixture("sweep-shard");
@@ -5816,10 +5823,16 @@ mod tests {
             &format!("#{SUITE}crates/k/tests/it/a.rs\n{rows}"),
         );
         put(&root, "crates/k/tests/it/a.rs", "\n");
+        put(
+            &root,
+            "policy/mm-nosuite.rego",
+            &format!("#{SUITE}crates/k/tests/it/absent.rs\n#{ROW}m0|s/x/y/|case_m\n"),
+        );
         crate::gitwrite::commit_paths(
             &root,
             &[
                 String::from("policy/probe.rego"),
+                String::from("policy/mm-nosuite.rego"),
                 String::from("crates/k/tests/it/a.rs"),
             ],
             "fixture",
@@ -5835,7 +5848,15 @@ mod tests {
             .map(|row| format!("{}\n", row_key(&root, &gate, row)))
             .collect();
         fs::write(work.join(CAUGHT_RECORD), keys).expect("record every row caught");
-        let names = ["zz-missing", "probe", "bb-missing", "aa-missing"].map(String::from);
+        let names = [
+            "zz-missing",
+            "probe",
+            "bb-missing",
+            "aa-missing",
+            "mm-nosuite",
+            "probe",
+        ]
+        .map(String::from);
         let mut judged = Vec::new();
         let mut reported = Vec::new();
         for k in 0..2 {
@@ -5850,11 +5871,12 @@ mod tests {
             )
             .expect("the sweep stages");
             let said = String::from_utf8(progress).expect("utf-8");
-            judged.extend(
+            judged.push(
                 said.lines()
                     .filter_map(|line| line.split(" probe ").nth(1))
                     .filter_map(|rest| rest.split(' ').next())
-                    .map(str::to_owned),
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>(),
             );
             reported.push(
                 sweep
@@ -5864,16 +5886,43 @@ mod tests {
                     .collect::<Vec<_>>(),
             );
         }
-        judged.sort();
-        assert_eq!(judged, ["r0", "r1", "r2", "r3", "r4"], "each row once");
+        assert_eq!(
+            judged,
+            [vec!["r0", "r2", "r4"], vec!["r1", "r3"]],
+            "each row once, numbered past the gate a missing suite stopped"
+        );
         assert_eq!(
             reported,
             [
-                vec![String::from("aa-missing")],
-                vec![String::from("bb-missing"), String::from("zz-missing")]
+                vec![
+                    String::from("aa-missing"),
+                    String::from("mm-nosuite"),
+                    String::from("zz-missing")
+                ],
+                vec![String::from("bb-missing")]
             ],
             "each gate-level finding once, by its sorted position"
         );
+    }
+
+    /// CLOUD-2533: a shard that owns no row stages nothing, so it pays no copy
+    /// of the tree and no build. Fails by: the empty shard staged anyway.
+    #[test]
+    fn a_shard_owning_no_row_stages_nothing() {
+        let root = fixture("sweep-empty-shard");
+        let work = fixture("sweep-empty-shard-work");
+        let sweep = sweep_shard(
+            &root,
+            &[String::from("aa-missing")],
+            work.clone(),
+            &Registry::default(),
+            Some((1, 2)),
+            &mut std::io::sink(),
+        )
+        .expect("nothing to stage");
+        assert!(sweep.findings.is_empty(), "shard 0 reports the gate");
+        assert_eq!((sweep.declared, sweep.gates), (0, 0));
+        assert!(!work.join(".git").exists(), "the tree was never staged");
     }
 
     /// Fails by: the staged copy left without a repository, a path the
