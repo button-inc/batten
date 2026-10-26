@@ -3978,16 +3978,117 @@ fn blob_side(
 /// outright.
 fn patch_id_index(dir: &Path, window: Window, range: &str) -> Result<BTreeMap<PatchId, String>> {
     let repo = open(dir)?;
+    let mut memo = IdentityMemo::load(dir);
     let mut index = BTreeMap::new();
     for commit in rev_list(dir, window, range)? {
         let id = gix::ObjectId::from_hex(commit.as_bytes())
             .map_err(|_| UsageError::raise(format!("cannot read commits for {range:?}")))?;
-        let mut changes = commit_changes(&repo, &id)?;
-        if let Some(hex) = crate::patch::identity(&mut changes) {
+        if let Some(hex) = memo.identity(&repo, &commit, &id)? {
             index.insert(PatchId::parse(&hex)?, commit);
         }
     }
+    memo.save();
     Ok(index)
+}
+
+/// The format of an [`IdentityMemo`] entry, through [`crate::cache::key`]: bump
+/// it when the body's encoding changes. The identity's own algorithm needs no
+/// bump — the key already carries the running binary.
+const IDENTITY_MEMO_FORMAT: &str = "patch-identity-memo-1";
+
+/// The most commits an [`IdentityMemo`] keeps. Past it, a save keeps only the
+/// commits this process asked about, so the entry stays the size of one window.
+const IDENTITY_MEMO_BOUND: usize = 20_000;
+
+/// Each commit's patch identity, remembered across processes (CLOUD-1480).
+///
+/// An identity is a pure function of the commit, which an oid names immutably,
+/// and of the binary computing it, which the cache key carries — so a remembered
+/// answer is the computed one, never an approximation of it. Recomputing it for
+/// every commit in the target's window was 71% of a Stop's instructions in this
+/// repository. Only computed answers are remembered: a commit that will not read
+/// raises as it did, and is asked again next time.
+struct IdentityMemo {
+    entry: Option<(PathBuf, String)>,
+    known: std::collections::HashMap<String, Option<String>>,
+    asked: std::collections::HashSet<String>,
+    grown: bool,
+}
+
+/// The spelling of a commit that changes nothing, which has no identity.
+const NO_IDENTITY: &str = "-";
+
+impl IdentityMemo {
+    /// The memo for the repository at `dir`, empty where none is stored or the
+    /// state directory cannot be named.
+    fn load(dir: &Path) -> Self {
+        let entry = crate::state::repo_state_dir(&canonical(dir))
+            .ok()
+            .and_then(|state| crate::cache::root_under(&state))
+            .map(|root| {
+                (
+                    root.join("patch-identity"),
+                    crate::cache::key(IDENTITY_MEMO_FORMAT, &[]),
+                )
+            });
+        let mut known = std::collections::HashMap::new();
+        if let Some(body) = entry
+            .as_ref()
+            .and_then(|(path, key)| crate::cache::read(path, key))
+            && let Ok(body) = String::from_utf8(body)
+        {
+            for line in body.lines() {
+                if let Some((oid, identity)) = line.split_once(' ') {
+                    let identity = (identity != NO_IDENTITY).then(|| identity.to_owned());
+                    known.insert(oid.to_owned(), identity);
+                }
+            }
+        }
+        Self {
+            entry,
+            known,
+            asked: std::collections::HashSet::new(),
+            grown: false,
+        }
+    }
+
+    /// `commit`'s identity, remembered or computed.
+    //MUTANT identity-memo-never-served|s@^        if let Some(identity) = self.known.get(commit) {$@        if let Some(identity) = self.known.get(commit).filter(\x7c_\x7c false) {@|a_remembered_identity_is_served_in_place_of_a_recomputation
+    fn identity(
+        &mut self,
+        repo: &gix::Repository,
+        commit: &str,
+        id: &gix::ObjectId,
+    ) -> Result<Option<String>> {
+        self.asked.insert(commit.to_owned());
+        if let Some(identity) = self.known.get(commit) {
+            return Ok(identity.clone());
+        }
+        let mut changes = commit_changes(repo, id)?;
+        let identity = crate::patch::identity(&mut changes);
+        self.known.insert(commit.to_owned(), identity.clone());
+        self.grown = true;
+        Ok(identity)
+    }
+
+    /// Store what was learned, where anything was. Best-effort: a failed write
+    /// costs the next process a recomputation, never a wrong answer.
+    fn save(mut self) {
+        let Some((path, key)) = self.entry.take().filter(|_| self.grown) else {
+            return;
+        };
+        if self.known.len() > IDENTITY_MEMO_BOUND {
+            self.known.retain(|commit, _| self.asked.contains(commit));
+        }
+        let mut body = String::new();
+        for (commit, identity) in &self.known {
+            body.push_str(commit);
+            body.push(' ');
+            body.push_str(identity.as_deref().unwrap_or(NO_IDENTITY));
+            body.push('\n');
+        }
+        crate::cache::write(&path, &key, body.as_bytes());
+    }
 }
 
 /// One commit's patch identity, or `None` where it changes nothing.
@@ -4025,14 +4126,17 @@ pub(crate) fn patch_identities(
     range: &str,
 ) -> Result<std::collections::BTreeSet<String>> {
     let repo = open(dir)?;
+    let mut memo = IdentityMemo::load(dir);
     let mut found = std::collections::BTreeSet::new();
     for commit in rev_list(dir, window, range)? {
         let id = gix::ObjectId::from_hex(commit.as_bytes())
             .map_err(|_| UsageError::raise(format!("cannot read commits for {range:?}")))?;
-        if let Some(hex) = commit_identity(&repo, &id) {
+        // As [`commit_identity`]: a commit that will not read has no identity.
+        if let Ok(Some(hex)) = memo.identity(&repo, &commit, &id) {
             found.insert(hex);
         }
     }
+    memo.save();
     Ok(found)
 }
 
@@ -6583,6 +6687,27 @@ mod tests {
                 .unwrap()
                 .is_landed()
         );
+    }
+
+    /// Fails by: a remembered identity never served, so every Stop recomputes
+    /// the target's whole window (CLOUD-1480) — or a remembered "changes
+    /// nothing" read back as an identity.
+    #[test]
+    fn a_remembered_identity_is_served_in_place_of_a_recomputation() {
+        let (dir, [first, second, third]) = history("identity-memo");
+        crate::testing::contain_state(&dir.join(".git").join("batten-state"));
+        let range = format!("{first}..{third}");
+        let computed = patch_identities(&dir, Window::DEFAULT, &range).unwrap();
+        assert_eq!(computed.len(), 2);
+        let mut memo = IdentityMemo::load(&dir);
+        assert_eq!(memo.known.len(), 2, "both commits were remembered");
+        let forged = "0".repeat(40);
+        memo.known.insert(third, Some(forged.clone()));
+        memo.known.insert(second, None);
+        memo.grown = true;
+        memo.save();
+        let served = patch_identities(&dir, Window::DEFAULT, &range).unwrap();
+        assert_eq!(served, BTreeSet::from([forged]));
     }
 
     /// Fails by: a remote whose url or name is blank listed as though it named

@@ -193,7 +193,7 @@ input = "subject.bin"
 }
 
 /// A README table publishing `budget` for every path the module gates.
-fn agreeing_readme() -> String {
+pub(crate) fn agreeing_readme() -> String {
     "| path | what it does | p50 | p95 | budget |\n\
      | ---- | ------------ | --- | --- | ------ |\n\
      | `noop` | process start | 2.1 ms | 2.4 ms | ≤ 100 ms |\n\
@@ -201,19 +201,20 @@ fn agreeing_readme() -> String {
      | `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 100 ms |\n\
      | `passthrough` | a call no rule selects | — | — | ≤ 100 ms |\n\
      | `posttool` | a PostToolUse call | — | — | ≤ 100 ms |\n\
+     | `stop` | an end of turn | — | — | ≤ 100 ms |\n\
      | `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 100 ms |\n"
         .to_owned()
 }
 
 /// Every budgeted path measured comfortably inside its ceiling, as the producer
 /// takes them: `<name> <token>` per line.
-fn clean_record() -> String {
-    "noop 2.4\ncheck 2.7\nhook 3.0\npassthrough 2.2\nposttool 2.3\nwired 8.4\n".to_owned()
+pub(crate) fn clean_record() -> String {
+    "noop 2.4\ncheck 2.7\nhook 3.0\npassthrough 2.2\nposttool 2.3\nstop 2.6\nwired 8.4\n".to_owned()
 }
 
 /// A scratch repository carrying the fixture config, the COMMITTED module, and
 /// `readme` as its README.
-fn repo(name: &str, readme: Option<&str>) -> PathBuf {
+pub(crate) fn repo(name: &str, readme: Option<&str>) -> PathBuf {
     let dir = scratch(&format!("perf-assert-{name}"));
     write(&dir, "batten.toml", &config());
     write(&dir, "subject.bin", SUBJECT);
@@ -229,7 +230,7 @@ fn repo(name: &str, readme: Option<&str>) -> PathBuf {
 
 /// Run the producer, handing it the records on stdin — the real writer, so the
 /// key under test is the one the engine will look for.
-fn record(dir: &Path, records: &str) {
+pub(crate) fn record(dir: &Path, records: &str) {
     let outcome = run_with_stdin(dir, &["record", "tool", "perf-p95"], records);
     assert!(
         outcome.status.success(),
@@ -238,7 +239,7 @@ fn record(dir: &Path, records: &str) {
     );
 }
 
-fn findings(dir: &Path) -> String {
+pub(crate) fn findings(dir: &Path) -> String {
     let mut command = batten();
     command.current_dir(dir).arg("check");
     let outcome = command.output().expect("run batten check");
@@ -422,6 +423,7 @@ fn measured() -> String {
         ("hook", "3.0"),
         ("passthrough", "2.2"),
         ("posttool", "2.3"),
+        ("stop", "2.6"),
         ("wired", "8.4"),
     ]
     .iter()

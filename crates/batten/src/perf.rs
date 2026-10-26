@@ -1341,14 +1341,15 @@ fn stage(repo: &Path, out: &Path) -> Result<(PathBuf, PathBuf)> {
 /// apart is what lets the decision run on every commit while the measurement
 /// runs where it can be trusted.
 ///
-/// # THE SIX PATHS, and why each is here
+/// # THE SEVEN PATHS, and why each is here
 ///
 /// `noop` is the floor — process start, clap tree, render, no config and no git
 /// — so a regression there is a regression in every path at once. `check` adds
 /// config load, trust resolution and a tree walk. `hook` is the path that runs
 /// per mediated call. `passthrough` is the call no rule selects, which under
 /// match-all is the COMMON case and must cost what looking costs and nothing
-/// more. `posttool` prices the per-call capture write. `wired` is what the
+/// more. `posttool` prices the per-call capture write. `stop` is the end of
+/// turn, which a turn cannot close until it returns. `wired` is what the
 /// settings file actually invokes, launcher and all.
 ///
 /// # Errors
@@ -1430,6 +1431,15 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
             Some(hooks.join("claude-code-posttool.json")),
             hook_argv(),
             repo.as_path(),
+        ),
+        // THE END OF TURN (CLOUD-1480), in the staged fixture: the drain each
+        // Stop detaches records the tree it runs in, so the fixture keeps the
+        // drains of a hundred iterations from competing with the measurement.
+        (
+            "stop",
+            Some(hooks.join("claude-code-stop.json")),
+            hook_argv(),
+            check_repo.as_path(),
         ),
         (
             "wired",
@@ -1616,6 +1626,13 @@ fn arms(
         (
             "posttool",
             Some(hooks.join("claude-code-posttool.json")),
+            hook_argv(&base, &base_verb),
+            hook_argv(&head, &head_verb),
+        ),
+        // THE END OF TURN (CLOUD-1480): a turn cannot close until this returns.
+        (
+            "stop",
+            Some(hooks.join("claude-code-stop.json")),
             hook_argv(&base, &base_verb),
             hook_argv(&head, &head_verb),
         ),
