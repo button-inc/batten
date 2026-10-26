@@ -17323,8 +17323,8 @@ fn run_mutate_sweep(
     let shard = mutate::shard_set(std::env::var(mutate::SHARD).ok());
     let parsed = match shard.as_deref() {
         None => None,
-        Some(raw) => match mutate::shard_of(&narrowed.names, raw) {
-            Ok(_) => mutate::parse_shard(raw),
+        Some(raw) => match mutate::shard_parsed(raw) {
+            Ok(parsed) => Some(parsed),
             Err(reason) => {
                 writeln!(err, "::error:: mutate: {reason}")?;
                 return Ok(ExitCode::Usage);

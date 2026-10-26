@@ -1167,9 +1167,7 @@ pub const SHARD: &str = "MUTANT_SHARD";
 ///
 /// A value that is not `k/n` with `n > 0` and `k < n`.
 pub fn shard_of(names: &[String], shard: &str) -> Result<Vec<String>, String> {
-    let parsed = parse_shard(shard)
-        .ok_or_else(|| format!("{SHARD}={shard} is not `k/n` with 0 <= k < n"))?;
-    Ok(by_shard(names, Some(parsed))
+    Ok(by_shard(names, Some(shard_parsed(shard)?))
         .into_iter()
         .filter(|(_, owned)| *owned)
         .map(|(name, _)| name.clone())
@@ -1762,6 +1760,15 @@ const SHARD_MUTANT_TIMEOUT_SECS: u64 = 300;
 #[must_use]
 pub fn shard_set(value: Option<String>) -> Option<String> {
     value.filter(|shard| !shard.trim().is_empty())
+}
+
+/// `$MUTANT_SHARD`'s `k/n`, or the usage error that refuses it.
+///
+/// # Errors
+///
+/// A value that is not `k/n` with `n > 0` and `k < n`.
+pub fn shard_parsed(shard: &str) -> Result<(usize, usize), String> {
+    parse_shard(shard).ok_or_else(|| format!("{SHARD}={shard} is not `k/n` with 0 <= k < n"))
 }
 
 /// `$MUTANT_SHARD`'s `k/n`, or `None` where it is not one (`k < n`, `n > 0`).
