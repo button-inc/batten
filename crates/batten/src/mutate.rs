@@ -4019,13 +4019,13 @@ pub fn sweep_shard(
     for (name, reports) in by_shard(names, shard) {
         let (verdict, owner) = match resolve(root, name) {
             None => (Verdict::NoSuchGate, None),
-            Some(gate) => match gate_stopped(root, &gate) {
-                Some(verdict) => (verdict, gate.owner.clone()),
-                None => {
+            Some(gate) => {
+                let Some(verdict) = gate_stopped(root, &gate) else {
                     runnable.push((name, gate));
                     continue;
-                }
-            },
+                };
+                (verdict, gate.owner.clone())
+            }
         };
         // A GATE-LEVEL finding is reported by the one shard `shard_of` gives
         // the gate, so a sharded run reports it once.
@@ -5814,9 +5814,10 @@ mod tests {
     fn a_sharded_sweep_judges_each_row_and_reports_each_gate_once() {
         let root = fixture("sweep-shard");
         crate::gitwrite::init_on_main(&root).expect("a repository");
-        let rows: String = (0..5)
+        let rows = (0..5)
             .map(|row| format!("#{ROW}r{row}|s/x/y/|case_{row}\n"))
-            .collect();
+            .collect::<Vec<_>>()
+            .concat();
         put(
             &root,
             "policy/probe.rego",
@@ -5842,12 +5843,12 @@ mod tests {
             panic!("the module resolves to a gate");
         };
         let work = fixture("sweep-shard-work");
-        let keys: String = gate
+        let keys: Vec<String> = gate
             .rows
             .iter()
-            .map(|row| format!("{}\n", row_key(&root, &gate, row)))
+            .map(|row| row_key(&root, &gate, row))
             .collect();
-        fs::write(work.join(CAUGHT_RECORD), keys).expect("record every row caught");
+        fs::write(work.join(CAUGHT_RECORD), keys.join("\n")).expect("record every row caught");
         let names = [
             "zz-missing",
             "probe",

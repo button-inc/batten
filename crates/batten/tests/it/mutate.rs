@@ -283,6 +283,25 @@ fn census(root: &Path, gates: &str) -> (i32, String, String) {
 // The sweep's decision table.
 // ---------------------------------------------------------------------------
 
+/// A `$MUTANT_SHARD` that is not `k/n` is a usage error before any gate is
+/// read, never a sweep of every row (CLOUD-2533). Fails by: a set shard read as
+/// unset, which sweeps the named gate and answers for it instead.
+#[test]
+fn a_malformed_shard_is_refused_before_the_sweep() {
+    let root = toy("shard-malformed");
+    let answer = common::batten()
+        .args(["mutate", "sweep"])
+        .current_dir(&root)
+        .env("MUTANT_GATES", "nope")
+        .env("MUTANT_TASKS", "mise.toml")
+        .env(batten::mutate::SHARD, "two/four")
+        .output()
+        .expect("run batten mutate");
+    let err = stderr(&answer);
+    assert_eq!(answer.status.code(), Some(1), "the usage code: {err}");
+    assert!(err.contains("MUTANT_SHARD=two/four"), "{err}");
+}
+
 /// ANTI-VACUITY FOR THE SWEEP'S OWN WATCHDOG (CLOUD-1726).
 ///
 /// The bound moved out of `BATS_TEST_TIMEOUT` and into the sweep, because the
