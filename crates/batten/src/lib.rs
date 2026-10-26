@@ -20168,8 +20168,7 @@ fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<O
 /// or falls to the floor like any other.
 fn already_ran(ran: Option<&Path>, build: &Path) -> bool {
     let build = git::canonical(build);
-    let mine = std::env::current_exe().ok();
-    mine.is_some_and(|mine| git::canonical(&mine) == build)
+    std::env::current_exe().is_ok_and(|mine| git::canonical(&mine) == build)
         || ran.is_some_and(|path| git::canonical(path) == build)
 }
 

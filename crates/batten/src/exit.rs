@@ -291,9 +291,9 @@ mod tests {
     ];
 
     /// Integers this table does not name: a negative code (no child), the first
-    /// integer past the table, a panic's code, a missing program's, and the
-    /// three that a `u8` fold would wrap onto a named code (256 to `Success`,
-    /// 258 to `Violation`) or that sit at the ends of the range.
+    /// integer past the table, a panic's code, a missing program's, those a
+    /// `u8` fold would wrap onto a named code (256 and `i32::MIN` to `Success`,
+    /// 258 to `Violation`), and `i32::MAX`, the top of the range.
     const OUTSIDE: [i32; 8] = [-1, 4, 101, 127, 256, 258, i32::MAX, i32::MIN];
 
     #[test]
