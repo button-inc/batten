@@ -119,7 +119,7 @@ fn renovate_carries_the_fuzz_lock_on_every_cargo_branch_and_the_allowlist_admits
 }
 
 #[test]
-fn the_allowlist_admits_nothing_beside_the_carries() {
+fn the_allowlist_admits_nothing_beside_the_carry() {
     let patterns = allowed();
     let old = "a".repeat(40);
     let new = "b".repeat(40);
@@ -145,7 +145,7 @@ fn the_allowlist_admits_nothing_beside_the_carries() {
     reason = "stays, and test-only: the carry scripts are Node, run by Renovate rather than by this engine, so their suites are spawned as the program they are"
 )]
 #[test]
-fn the_carry_scripts_pass_their_own_suites() {
+fn the_carry_script_passes_its_own_suite() {
     let output = std::process::Command::new(crate::common::require_tool("node"))
         .args([
             "--test",
