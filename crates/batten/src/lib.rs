@@ -17322,16 +17322,14 @@ fn run_mutate_sweep(
     // ran the `ci` job past its 87-minute bound on #1132; so `$MUTANT_SHARD`
     // slices them as it slices the registered runner's mutants. BY ROW
     // (CLOUD-2533): by gate, a 45-row gate held one shard past its own bound.
-    let value = std::env::var(mutate::SHARD)
+    let shard = std::env::var(mutate::SHARD)
         .ok()
         .filter(|shard| !shard.trim().is_empty());
-    let shard = value.as_deref().and_then(mutate::parse_shard);
-    if let (Some(value), None) = (&value, shard) {
-        writeln!(
-            err,
-            "::error:: mutate: {}={value} is not `k/n` with 0 <= k < n",
-            mutate::SHARD
-        )?;
+    if let Some(Err(reason)) = shard
+        .as_deref()
+        .map(|shard| mutate::shard_of(&narrowed.names, shard))
+    {
+        writeln!(err, "::error:: mutate: {reason}")?;
         return Ok(ExitCode::Usage);
     }
     let runner = std::env::var(mutate::RUNNER)
@@ -17350,7 +17348,8 @@ fn run_mutate_sweep(
     let (swept, lines) = disk_watch::around(
         disk_watcher(root, prune_rules.as_ref()),
         || -> Result<ExitCode> {
-            let declared = run_declared_sweep(root, narrowed, &registry, shard, out, err)?;
+            let declared =
+                run_declared_sweep(root, narrowed, &registry, shard.as_deref(), out, err)?;
             let Some(id) = runner else {
                 return Ok(declared);
             };
@@ -17479,7 +17478,7 @@ fn run_declared_sweep(
     root: &Path,
     narrowed: Narrowed,
     registry: &mutate::Registry,
-    shard: Option<(usize, usize)>,
+    shard: Option<&str>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
