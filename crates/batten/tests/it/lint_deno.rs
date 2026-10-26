@@ -45,16 +45,10 @@ const CORRUPT: &str = "{ this is not json,,,";
 const COVERED: &str = "lint-deno-probe.json";
 const EXCLUDED: &str = "crates/batten/tests/fixtures/hooks/lint-deno-probe.json";
 
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: git is the task's selection, so the scratch repository is built with it"
-)]
+/// Through [`common::git_command`], so a contributor's global git config, a
+/// global hook among it, never reaches the scratch repository.
 fn git(dir: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .status()
-        .expect("git");
+    let status = common::git_command(dir, args).status().expect("git");
     assert!(status.success(), "git {args:?}");
 }
 

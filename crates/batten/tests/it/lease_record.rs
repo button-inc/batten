@@ -71,16 +71,10 @@ fn write_program(dir: &Path, name: &str, exit: i32, stdout: &str) {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod stub");
 }
 
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays — a fixture repository needs real git history for the branch key the \
-              recorder files under, and `board_record.rs` is the precedent. Test-only, so no \
-              shipped path spawns here."
-)]
+/// Through [`common::git_command`], as `board_record.rs` builds its fixture: a
+/// contributor's global git config, a global hook among it, must not reach one.
 fn git(dir: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
+    let status = common::git_command(dir, args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()

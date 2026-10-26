@@ -307,20 +307,11 @@ fn repo(name: &str, declared: &Declared, declare_the_classes: bool) -> PathBuf {
     dir
 }
 
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays — the fixture needs real git history for the head the record is keyed to, and \
-              `board_record.rs`'s fixture is the precedent. Test-only, so no shipped path spawns \
-              here."
-)]
+/// Through [`common::git_command`]: a contributor's own git settings must not
+/// be able to move a verdict here (CLOUD-282), and that builder is the one
+/// place the hermetic set is kept.
 fn git(dir: &Path, args: &[&str]) {
-    let status = std::process::Command::new("git")
-        .args(args)
-        // A contributor's own git settings must not be able to move a verdict
-        // here (CLOUD-282).
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .current_dir(dir)
+    let status = common::git_command(dir, args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
