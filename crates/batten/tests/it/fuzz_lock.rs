@@ -86,6 +86,7 @@ fn the_fuzz_lock_resolves_shared_crates_as_the_root_does() {
     assert!(
         drifted.is_empty(),
         "fuzz/Cargo.lock pins what Cargo.lock does not: {drifted:?}; \
-         re-seed it with `node .github/renovate/fuzz-lock-carry.mjs`"
+         re-seed it with `node .github/renovate/fuzz-lock-carry.mjs`, or, for a \
+         crate only the harness reaches, add it to HARNESS"
     );
 }
