@@ -353,9 +353,13 @@ impl Pipeline {
 
         // THE PUSH SPENDS NOTHING ONLY WHILE IT PRECEDES THE READY (CLOUD-1564):
         // the `Push` row declares no effect, and that holds for a draft alone.
-        let at = |step: Step| self.steps.iter().position(|row| row.step == step);
-        if let (Some(ready), Some(push)) = (at(Step::Ready), at(Step::Push))
-            && ready < push
+        // A `Push` anywhere after the `Ready` row, read as a scan rather than
+        // two indices compared: there is no order to get off by one.
+        if self
+            .steps
+            .iter()
+            .skip_while(|row| row.step != Step::Ready)
+            .any(|row| row.step == Step::Push)
         {
             found.push(Invalid::PushAfterReady);
         }
@@ -365,7 +369,7 @@ impl Pipeline {
             found.push(Invalid::UngatedPush);
         }
 
-        let Some(commit_at) = at(COMMIT_POINT) else {
+        let Some(commit_at) = self.steps.iter().position(|row| row.step == COMMIT_POINT) else {
             found.push(Invalid::NoCommitPoint);
             return found;
         };
