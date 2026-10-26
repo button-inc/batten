@@ -290,6 +290,10 @@ mod tests {
         (ExitCode::Internal, 3),
     ];
 
+    /// Integers this table does not name: a negative code (no child), the first
+    /// integer past the table, a panic's code, and a missing program's.
+    const OUTSIDE: [i32; 4] = [-1, 4, 101, 127];
+
     #[test]
     fn codes_match_the_documented_contract() {
         // The numeric values are public interface: a reorder or renumber must be
@@ -416,9 +420,7 @@ mod tests {
                 "{code:?} must round-trip through its own number"
             );
         }
-        // A negative code (no child), the first integer past the table, a
-        // panic's code, and a missing program's.
-        for outside in [-1, 4, 101, 127] {
+        for outside in OUTSIDE {
             assert_eq!(
                 ExitCode::from_code(outside),
                 None,
@@ -457,7 +459,7 @@ mod tests {
                 "{code:?} is an answer about the repository and travels"
             );
         }
-        for outside in [-1, 4, 101, 127] {
+        for outside in OUTSIDE {
             assert_eq!(
                 ExitCode::decided(outside),
                 None,

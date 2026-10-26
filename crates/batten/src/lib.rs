@@ -829,7 +829,7 @@ fn follow_pin(hook_path: bool) -> Result<Followed> {
 /// also where the load-fault hand-off already lives, so the two are siblings in
 /// one place and "has this call been handed off" stops being a value threaded
 /// through the dispatch.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum Followed {
     /// Nothing was stale, or there was nothing to follow to: run the verb.
     Nothing,
@@ -842,7 +842,7 @@ enum Followed {
 }
 
 /// A pinned engine the hook path resolved but has not run (CLOUD-2376).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct FollowTarget {
     /// The worktree the pin was read from, which the spawn resolves against.
     root: PathBuf,
@@ -20166,10 +20166,7 @@ fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<O
 fn already_ran(ran: Option<&Path>, build: &Path) -> Result<bool> {
     let build = git::canonical(build);
     let mine = std::env::current_exe()?;
-    Ok([Some(mine.as_path()), ran]
-        .into_iter()
-        .flatten()
-        .any(|path| git::canonical(path) == build))
+    Ok(git::canonical(&mine) == build || ran.is_some_and(|path| git::canonical(path) == build))
 }
 
 /// Refuse a call whose rules this build could not load (CLOUD-1677).

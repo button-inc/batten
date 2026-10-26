@@ -115,6 +115,11 @@ fn built() -> String {
     "2".repeat(64)
 }
 
+/// The release directory a checkout builds into when nothing redirects it.
+fn conventional_release(dir: &Path) -> PathBuf {
+    dir.join("target").join("release")
+}
+
 /// A checkout build that records every run, says one line, and dies of a code
 /// the §7 table does not name.
 ///
@@ -122,7 +127,7 @@ fn built() -> String {
 /// actually exits with, which is the shape this defect was found in.
 fn crashing_build(dir: &Path, stamp: &str) {
     stub_build(
-        &dir.join("target").join("release"),
+        &conventional_release(dir),
         stamp,
         &format!(
             // DRAINS STDIN, because a real engine does. The hand-off inherits
@@ -304,10 +309,10 @@ fn bash_envelope(session: &str, command: &str) -> String {
 /// the harness's stdout and a non-blocking code on the hook's exit, which is
 /// an unjudged tool call.
 ///
-/// What must hold afterwards: the exit is neither `1` nor `101`, the build's
-/// line is not on stdout, and the build ran ONCE per call — the two handoffs
-/// find the same file, so a fall-through that forgot the first would spawn the
-/// crash twice to learn the same thing.
+/// What must hold afterwards is [`a_crash_decided_nothing`]'s: the floor's `3`
+/// and its deny, the build's line absent from stdout, and the build run ONCE —
+/// the two handoffs find the same file, so a fall-through that forgot the first
+/// would spawn the crash twice to learn the same thing.
 ///
 /// The two arms are separate cases, and the split is about the mutation sweep
 /// rather than taste: `mutate` replays a Rust suite as `cargo test -- <case>`,
@@ -416,7 +421,7 @@ fn the_floor_still_decides_over_rules_that_will_not_load() {
 fn a_followed_exec_still_passes_its_childs_code_and_bytes_through() {
     let (dir, _installed, binary) = case_tree("exec-passthrough");
     pin_source(&dir, &pinned());
-    let build = private_build(&dir.join("target").join("release").join("batten"));
+    let build = private_build(&conventional_release(&dir).join("batten"));
     stamp(&build, &built());
 
     // `--tee` because capturing is `exec`'s default since CLOUD-429; the claim
@@ -460,7 +465,7 @@ fn a_followed_builds_decision_reaches_the_harness_whole() {
     let (dir, _installed, binary) = case_tree("hook-answer");
     pin_source(&dir, &pinned());
     stub_build(
-        &dir.join("target").join("release"),
+        &conventional_release(&dir),
         &built(),
         &format!("#!/bin/sh\necho \"{DECIDED}\"\necho \"{EXPLAINED}\" >&2\nexit 2\n"),
     );
@@ -572,7 +577,7 @@ fn a_source_pin_with_no_build_is_built_off_the_hook_path() {
     let (dir, _installed, binary) = case_tree("source-pin-builds");
     pin_source(&dir, &pinned());
     assert!(
-        !dir.join("target").join("release").join("batten").exists(),
+        !conventional_release(&dir).join("batten").exists(),
         "the arm under test is the one with no build to follow"
     );
 
@@ -614,7 +619,7 @@ fn a_source_pin_is_followed_into_a_redirected_target_dir() {
     let elsewhere = common::scratch_outside_tree("engine-2376", "redirected-target-dir");
     speaking_build(&elsewhere.join("release"), &built());
     assert!(
-        !dir.join("target").join("release").join("batten").exists(),
+        !conventional_release(&dir).join("batten").exists(),
         "the only build is the redirected one"
     );
 
@@ -663,7 +668,7 @@ fn the_handoff_reads_no_target_dir_of_this_process() {
     // reachable only by reading this process's variable.
     speaking_build(&dir.join("elsewhere").join("release"), &built());
     assert!(
-        !dir.join("target").join("release").join("batten").exists(),
+        !conventional_release(&dir).join("batten").exists(),
         "the only build is the redirected one"
     );
 
