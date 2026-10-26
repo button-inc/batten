@@ -309,7 +309,7 @@ jobs:
           # rather than letting them return, passing, over nothing.
           # cargo-dist is `install_web.rs`'s: the Linux-only tamper case runs the
           # pinned `dist` to generate the installer it refuses (CLOUD-2297).
-          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa pkl aqua:axodotdev/cargo-dist node
+          install_args: rust hk aqua:cli/cli aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl aqua:axodotdev/cargo-dist node npm:renovate
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A DISTINCT FAMILY, because this target dir holds musl artifacts the
@@ -781,7 +781,7 @@ jobs:
           # `ci-tools-check` keeps these names honest against mise.toml but
           # cannot know which a job needs; that is what this comment and the
           # `windows` job's own red run are for. See the ci job for the rest.
-          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa pkl aqua:axodotdev/cargo-dist node
+          install_args: rust hk aqua:cli/cli aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl aqua:axodotdev/cargo-dist node npm:renovate
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A DISTINCT KEY, because this job's target dir is built by a different
@@ -1014,7 +1014,7 @@ jobs:
           # config cannot evaluate ANY rule without hk. `jq` is read at runtime
           # by the mise tasks three more command rules invoke. Neither is about
           # the OS, which is why both belong on every leg that runs the suite.
-          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa pkl aqua:axodotdev/cargo-dist node
+          install_args: rust hk aqua:cli/cli aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl aqua:axodotdev/cargo-dist node npm:renovate
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A DISTINCT FAMILY, for `windows`'s reason rather than by analogy:

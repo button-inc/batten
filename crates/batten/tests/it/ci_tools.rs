@@ -47,14 +47,14 @@
 
 use crate::common;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use common::{Fixture, git_in, run, stderr, stdout};
 
 /// A repository declaring only this rule, so any finding is the one under test.
-fn tools_repo(name: &str, manifest: &str, policy: &str, workflows: &[(&str, &str)]) -> PathBuf {
+fn tools_repo(name: &str, manifest: &str, workflows: &[(&str, &str)]) -> PathBuf {
     let mut fixture = Fixture::new(name).config(
         "version = 1\n\n\
          [[pattern]]\n\
@@ -69,9 +69,6 @@ fn tools_repo(name: &str, manifest: &str, policy: &str, workflows: &[(&str, &str
          [[pattern]]\n\
          id = \"mise-exec-auto-install-off\"\n\
          regex = '^[ \\t]*MISE_EXEC_AUTO_INSTALL:[ \\t]*\"?false\"?[ \\t]*$'\n\n\
-         [[pattern]]\n\
-         id = \"mise-exec-spawn\"\n\
-         regex = 'mise exec -- [a-z][a-z0-9._-]*'\n\n\
          [[verdict]]\n\
          id = \"tool name unknown\"\n\
          gloss = \"an install list names a tool the manifest does not declare\"\n\
@@ -97,14 +94,6 @@ fn tools_repo(name: &str, manifest: &str, policy: &str, workflows: &[(&str, &str
          kind = \"document\"\n\
          target = \"AGENTS.md\"\n\n\
          [[verdict]]\n\
-         id = \"spawn reach absent\"\n\
-         gloss = \"a policy row spawns a declared tool no install list installs\"\n\
-         class = \"With auto-install off the row fails CLOSED in CI while passing locally.\"\n\n\
-         [[verdict.route]]\n\
-         id = \"prose read first\"\n\
-         kind = \"document\"\n\
-         target = \"AGENTS.md\"\n\n\
-         [[verdict]]\n\
          id = \"tool list empty\"\n\
          gloss = \"the manifest declares no tools, so the question cannot be asked\"\n\
          class = \"With the declared set empty every install list resolves vacuously.\"\n\n\
@@ -116,7 +105,7 @@ fn tools_repo(name: &str, manifest: &str, policy: &str, workflows: &[(&str, &str
          id = \"tool pin wrong\"\n\
          kind = \"policy\"\n\
          scope = \"tree\"\n\
-         line_sources = [\"mise.toml\", \"batten.toml\", \".github/workflows/*.yml\"]\n\
+         line_sources = [\"mise.toml\", \".github/workflows/*.yml\"]\n\
          module = \"policy/ci-tools.rego\"\n\
          severity = \"deny\"\n\n",
     );
@@ -127,15 +116,6 @@ fn tools_repo(name: &str, manifest: &str, policy: &str, workflows: &[(&str, &str
         fixture = fixture.file(path, body);
     }
     let dir = fixture.git().build();
-    // The spawns the third direction reads live in the fixture's own config,
-    // which is the file the rule names — so they are appended to it rather than
-    // written beside it. They go on a COMMENT line: the module is a line scan, so
-    // where in the file the text sits does not change the predicate, and a bare
-    // key appended after the rule tables would attach to the last one and be a
-    // load error rather than the verdict these cases are about.
-    let config_path = dir.join("batten.toml");
-    let existing = std::fs::read_to_string(&config_path).unwrap();
-    std::fs::write(&config_path, format!("{existing}\n# {policy}")).unwrap();
     common::write(
         &dir,
         "policy/ci-tools.rego",
@@ -152,8 +132,6 @@ fn check(dir: &Path) -> Output {
 
 const MANIFEST: &str = "[tools]\nrust = \"1.97\"\n\"aqua:open-policy-agent/opa\" = \"1.0\"\nzig = \"0.13\"\n\n[env]\nX = \"1\"\n";
 
-const NO_SPAWNS: &str = "this config spawns nothing\n";
-
 /// A pull-request workflow running the installer once, with `entries` inside the
 /// step and the auto-install variables bound.
 fn pr_flow(entries: &str) -> String {
@@ -167,7 +145,6 @@ fn every_requested_tool_declared_is_a_pass() {
     let dir = tools_repo(
         "tools-clean",
         MANIFEST,
-        NO_SPAWNS,
         &[(
             ".github/workflows/ci.yml",
             &pr_flow("        install_args: rust aqua:open-policy-agent/opa\n"),
@@ -188,7 +165,6 @@ fn a_renamed_tool_leaves_the_list_naming_something_undeclared() {
     let dir = tools_repo(
         "tools-renamed",
         MANIFEST,
-        NO_SPAWNS,
         &[(
             ".github/workflows/ci.yml",
             &pr_flow("        install_args: rust zigg\n"),
@@ -211,7 +187,6 @@ fn a_tool_declared_but_never_installed_is_not_a_failure() {
     let dir = tools_repo(
         "tools-declared-unused",
         MANIFEST,
-        NO_SPAWNS,
         &[(
             ".github/workflows/ci.yml",
             &pr_flow("        install_args: rust\n"),
@@ -226,7 +201,6 @@ fn a_key_from_another_table_does_not_count_as_declared() {
     let dir = tools_repo(
         "tools-other-table",
         "[tools]\nrust = \"1.97\"\n\n[env]\nzig = \"decoy\"\n",
-        NO_SPAWNS,
         &[(
             ".github/workflows/ci.yml",
             &pr_flow("        install_args: rust zig\n"),
@@ -241,7 +215,6 @@ fn a_manifest_with_no_tools_table_is_not_a_pass() {
     let dir = tools_repo(
         "tools-no-table",
         "[env]\nX = \"1\"\n",
-        NO_SPAWNS,
         &[(
             ".github/workflows/ci.yml",
             &pr_flow("        install_args: rust\n"),
@@ -259,7 +232,6 @@ fn a_pull_request_workflow_with_no_list_is_refused() {
     let dir = tools_repo(
         "tools-no-list",
         MANIFEST,
-        NO_SPAWNS,
         &[
             (
                 ".github/workflows/ci.yml",
@@ -284,7 +256,6 @@ fn a_list_without_the_auto_install_variables_is_refused() {
     let dir = tools_repo(
         "tools-nonbinding",
         MANIFEST,
-        NO_SPAWNS,
         &[(
             ".github/workflows/ci.yml",
             "on:\n  pull_request:\njobs:\n  ci:\n    steps:\n      - uses: jdx/mise-action@abc\n        install_args: rust\n",
@@ -300,7 +271,6 @@ fn a_variable_set_true_is_not_binding_either() {
     let dir = tools_repo(
         "tools-true",
         MANIFEST,
-        NO_SPAWNS,
         &[(
             ".github/workflows/ci.yml",
             "on:\n  pull_request:\njobs:\n  ci:\n    steps:\n      - uses: jdx/mise-action@abc\n        install_args: rust\n      env:\n        MISE_TASK_RUN_AUTO_INSTALL: \"true\"\n        MISE_EXEC_AUTO_INSTALL: \"false\"\n",
@@ -315,7 +285,6 @@ fn a_workflow_with_no_pull_request_trigger_is_out_of_scope() {
     let dir = tools_repo(
         "tools-scheduled",
         MANIFEST,
-        NO_SPAWNS,
         &[
             (
                 ".github/workflows/ci.yml",
@@ -336,7 +305,6 @@ fn a_pull_request_workflow_that_never_runs_the_installer_is_out_of_scope() {
     let dir = tools_repo(
         "tools-no-action",
         MANIFEST,
-        NO_SPAWNS,
         &[
             (
                 ".github/workflows/ci.yml",
@@ -353,69 +321,10 @@ fn a_pull_request_workflow_that_never_runs_the_installer_is_out_of_scope() {
 }
 
 #[test]
-fn a_spawned_tool_the_list_omits_is_refused() {
-    // THE DEFECT that cost two CI runs: with auto-install off the row does not
-    // run slowly, it fails CLOSED — green locally, red in CI, with nothing
-    // naming the cause.
-    let dir = tools_repo(
-        "tools-spawn-omitted",
-        MANIFEST,
-        "check = mise exec -- opa check -s schema/ policy/\n",
-        &[(
-            ".github/workflows/ci.yml",
-            &pr_flow("        install_args: rust\n"),
-        )],
-    );
-    let output = check(&dir);
-    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
-    assert!(
-        stdout(&output).contains("opa"),
-        "the finding names the spawned tool: {:?}",
-        stdout(&output)
-    );
-}
-
-#[test]
-fn a_spawned_tool_the_manifest_does_not_own_is_out_of_scope() {
-    // A binary can arrive bundled, pre-installed or vendored, and all three came
-    // back as findings on the first run of that block. The question narrows to
-    // what the manifest declares rather than carrying a second exemption list.
-    let dir = tools_repo(
-        "tools-spawn-unowned",
-        MANIFEST,
-        "check = mise exec -- gh pr view\n",
-        &[(
-            ".github/workflows/ci.yml",
-            &pr_flow("        install_args: rust aqua:open-policy-agent/opa\n"),
-        )],
-    );
-    let output = check(&dir);
-    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
-}
-
-#[test]
-fn a_spawned_tool_the_list_installs_by_backend_name_resolves() {
-    // Basename matching on both sides: the list holds a backend-qualified key
-    // and the spawn names a binary.
-    let dir = tools_repo(
-        "tools-spawn-backend",
-        MANIFEST,
-        "check = mise exec -- opa check\n",
-        &[(
-            ".github/workflows/ci.yml",
-            &pr_flow("        install_args: rust aqua:open-policy-agent/opa\n"),
-        )],
-    );
-    let output = check(&dir);
-    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
-}
-
-#[test]
 fn output_is_pointer_only() {
     let dir = tools_repo(
         "tools-pointer-only",
         MANIFEST,
-        NO_SPAWNS,
         &[(
             ".github/workflows/ci.yml",
             &pr_flow("        install_args: rust zigg\n        name: a-distinctive-step\n"),
@@ -977,6 +886,224 @@ fn script_facts(path: &str) -> (bool, Vec<String>) {
     facts
 }
 
+/// The programs a `run` text spawns, each by its file name, and the mise tasks
+/// it runs (CLOUD-2446): each command's effective program through the hooks'
+/// own wrapper look-through (`env`, `nohup`, `mise exec`), and the one after
+/// each `--`; a shell's `-c` script and its stdin are read in turn. `None` when
+/// a rendering is unreadable, which names no program.
+fn spawned_programs(run: &str) -> Option<(BTreeSet<String>, Vec<String>)> {
+    let mut programs = BTreeSet::new();
+    let mut tasks = Vec::new();
+    for text in renderings(run)? {
+        for (words, stdin) in batten::testing::shell_commands(&text)? {
+            tasks.extend(command_facts(&words, &stdin).1);
+            let starts = std::iter::once(0).chain(
+                words
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, word)| *word == "--")
+                    .map(|(at, _)| at + 1),
+            );
+            for start in starts {
+                let Some(program) = batten::testing::effective_program(&words[start..]) else {
+                    continue;
+                };
+                if matches!(program.as_str(), "bash" | "sh") {
+                    let script = words[start..]
+                        .iter()
+                        .position(|w| w.starts_with('-') && !w.starts_with("--") && w.contains('c'))
+                        .and_then(|flag| words.get(start + flag + 1));
+                    for text in script.into_iter().chain(&stdin) {
+                        let (more, also) = spawned_programs(text)?;
+                        programs.extend(more);
+                        tasks.extend(also);
+                    }
+                }
+                programs.insert(program);
+            }
+        }
+    }
+    Some((programs, tasks))
+}
+
+/// A task's `run` texts: its one body, or each entry of an array, which mise
+/// runs as a command of its own, so each renders its templates alone.
+fn task_runs(task: &toml::Value) -> Vec<String> {
+    match task.get("run") {
+        Some(toml::Value::String(line)) => vec![line.clone()],
+        Some(toml::Value::Array(lines)) => lines
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The tasks a task runs by reference rather than by a command in its body:
+/// `depends`, `depends_post`, `wait_for` and `run = { task = … }`.
+fn task_deps(task: &toml::Value, names: &[&String]) -> Vec<String> {
+    let mut targets = Vec::new();
+    for key in ["depends", "depends_post", "wait_for"] {
+        targets.extend(task_refs(task.get(key), names));
+    }
+    match task.get("run") {
+        Some(toml::Value::Array(entries)) => targets.extend(task_refs(
+            Some(&toml::Value::Array(
+                entries.iter().filter(|e| e.is_table()).cloned().collect(),
+            )),
+            names,
+        )),
+        Some(table @ toml::Value::Table(_)) => targets.extend(task_refs(Some(table), names)),
+        _ => {}
+    }
+    targets
+}
+
+/// Each mise task's programs, closed over every task it runs (CLOUD-2446): a
+/// `mise run t` in a config row reaches what `t`'s body and its dependencies
+/// spawn. A body the parse cannot read is refused, naming the task.
+//MUTANT task-programs-unread|s@^        graph.insert(name.clone(), (programs, targets));$@        graph.insert(name.clone(), (programs.into_iter().take(0).collect(), targets));@|a_config_row_s_programs_are_read_through_its_tasks
+fn task_programs(manifest: &toml::Value) -> BTreeMap<String, BTreeSet<String>> {
+    let tasks = manifest["tasks"].as_table().expect("[tasks]");
+    let names: Vec<&String> = tasks.keys().collect();
+    let mut graph: BTreeMap<String, (BTreeSet<String>, Vec<String>)> = BTreeMap::new();
+    for (name, task) in tasks {
+        let mut programs = BTreeSet::new();
+        let mut targets = task_deps(task, &names);
+        for run in task_runs(task) {
+            let (more, also) = spawned_programs(&run)
+                .unwrap_or_else(|| panic!("task {name}: a body whose programs no parse reads"));
+            programs.extend(more);
+            targets.extend(also);
+        }
+        graph.insert(name.clone(), (programs, targets));
+    }
+    loop {
+        let mut grew = false;
+        for name in graph.keys().cloned().collect::<Vec<_>>() {
+            let reached: BTreeSet<String> = graph[&name]
+                .1
+                .iter()
+                .filter_map(|target| graph.get(target))
+                .flat_map(|(programs, _)| programs.iter().cloned())
+                .collect();
+            let own = &mut graph.get_mut(&name).unwrap().0;
+            let before = own.len();
+            own.extend(reached);
+            grew |= own.len() != before;
+        }
+        if !grew {
+            return graph
+                .into_iter()
+                .map(|(name, (programs, _))| (name, programs))
+                .collect();
+        }
+    }
+}
+
+/// The keys whose value a `batten.toml` runs as a command, at any depth:
+/// `[[rule]]` `check`/`fix`/`repair`, `[[rule.tools]]` and `[[hook.handler]]`
+/// `run`, `[perf.latency]` `command`.
+const COMMAND_KEYS: &[&str] = &["check", "fix", "repair", "run", "command"];
+
+/// Every program a `batten.toml` can run (CLOUD-2446): each [`COMMAND_KEYS`]
+/// value, a string read as a command line and an array of strings as one argv,
+/// with the programs of every mise task one runs through `manifest`'s graph.
+/// Walked generically, so a new command-bearing table is read without a schema
+/// path to keep current. A command the parse cannot read is refused.
+//MUTANT config-programs-unread|s@^const COMMAND_KEYS: &\[&str\] = &\[.*\];$@const COMMAND_KEYS: \&[\&str] = \&[];@|every_suite_job_installs_the_pinned_tools_its_cases_require
+fn config_programs(config: &toml::Value, manifest: &toml::Value) -> BTreeSet<String> {
+    fn commands(value: &toml::Value, found: &mut Vec<String>) {
+        match value {
+            toml::Value::Table(table) => {
+                for (key, value) in table {
+                    let command = COMMAND_KEYS.contains(&key.as_str());
+                    match value {
+                        toml::Value::String(line) if command => found.push(line.clone()),
+                        toml::Value::Array(argv)
+                            if command
+                                && !argv.is_empty()
+                                && argv.iter().all(toml::Value::is_str) =>
+                        {
+                            found.push(
+                                argv.iter()
+                                    .filter_map(toml::Value::as_str)
+                                    .map(|word| format!("'{}'", word.replace('\'', r"'\''")))
+                                    .collect::<Vec<_>>()
+                                    .join(" "),
+                            );
+                        }
+                        other => commands(other, found),
+                    }
+                }
+            }
+            toml::Value::Array(items) => {
+                for item in items {
+                    commands(item, found);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    commands(config, &mut found);
+    let by_task = task_programs(manifest);
+    let mut programs = BTreeSet::new();
+    for command in found {
+        let (own, tasks) = spawned_programs(&command)
+            .unwrap_or_else(|| panic!("a batten.toml command no parse reads: {command}"));
+        programs.extend(own);
+        for task in tasks {
+            programs.extend(by_task.get(&task).into_iter().flatten().cloned());
+        }
+    }
+    programs
+}
+
+/// The pinned tools the committed config's rows reach (CLOUD-2446): a case
+/// that runs batten over the committed config runs its rows, and a row reaches
+/// its programs through `PATH`. A program no pinned tool provides (git, env,
+/// cargo) is no install's to make.
+fn config_tools(manifest: &toml::Value, pinned: &BTreeSet<String>) -> BTreeSet<String> {
+    let config: toml::Value =
+        toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap()).unwrap();
+    let reached = config_programs(&config, manifest);
+    let tools: BTreeSet<String> = pinned
+        .iter()
+        .filter(|tool| {
+            tool_programs(tool)
+                .iter()
+                .any(|program| reached.contains(*program))
+        })
+        .cloned()
+        .collect();
+    for floor in ["hk", "cli", "pkl", "opa", "regal", "renovate"] {
+        assert!(
+            tools.contains(floor),
+            "the committed config's {floor} spawn went unread: {tools:?}"
+        );
+    }
+    tools
+}
+
+/// The programs a pinned tool provides, where they are not the tool's name:
+/// `aqua:mvdan/sh` is shfmt, never the shell; `rust` is every job's first
+/// install, so it provides none a job could omit.
+fn tool_programs(tool: &str) -> Vec<&str> {
+    match tool {
+        "sh" => vec!["shfmt"],
+        "cargo-dist" => vec!["dist"],
+        "cli" => vec!["gh"],
+        "nextest" => vec!["cargo-nextest"],
+        "node" => vec!["node", "npm", "npx"],
+        "serena-agent" => vec!["serena"],
+        "renovate" => vec!["renovate", "renovate-config-validator"],
+        "rust" => Vec::new(),
+        other => vec![other],
+    }
+}
+
 /// Whether a `run` text runs the suite, given the mise tasks known to.
 fn runs_suite(run: &str, suite: &BTreeSet<String>) -> bool {
     let (direct, tasks) = suite_facts(run);
@@ -1075,28 +1202,12 @@ fn suite_tasks(manifest: &toml::Value) -> BTreeSet<String> {
     let mut suite = BTreeSet::new();
     let mut edges: Vec<(&String, Vec<String>)> = Vec::new();
     for (name, task) in tasks {
-        let body = match task.get("run") {
-            Some(toml::Value::String(line)) => line.clone(),
-            Some(toml::Value::Array(lines)) => lines
-                .iter()
-                .filter_map(toml::Value::as_str)
-                .collect::<Vec<_>>()
-                .join("\n"),
-            _ => String::new(),
-        };
-        let (direct, mut targets) = suite_facts(&body);
-        for key in ["depends", "depends_post", "wait_for"] {
-            targets.extend(task_refs(task.get(key), &names));
-        }
-        match task.get("run") {
-            Some(toml::Value::Array(entries)) => targets.extend(task_refs(
-                Some(&toml::Value::Array(
-                    entries.iter().filter(|e| e.is_table()).cloned().collect(),
-                )),
-                &names,
-            )),
-            Some(table @ toml::Value::Table(_)) => targets.extend(task_refs(Some(table), &names)),
-            _ => {}
+        let mut direct = false;
+        let mut targets = task_deps(task, &names);
+        for run in task_runs(task) {
+            let (inner, more) = suite_facts(&run);
+            direct |= inner;
+            targets.extend(more);
         }
         if direct {
             suite.insert(name.clone());
@@ -1128,11 +1239,13 @@ fn tool_name(key: &str) -> String {
 /// call's first argument, a string literal naming the `[tools]` entry's last
 /// segment. Outside the resolver itself, a call whose first argument is not a
 /// literal, or a `"which"` literal (a `mise which` of a case's own), is refused:
-/// either is a requirement this census cannot read.
+/// either is a requirement this census cannot read. Also the count of fixtures
+/// that carry the committed `batten.toml` (CLOUD-2446).
 //MUTANT require-call-unread|s@^        required.extend(found.tools);$@@|every_suite_job_installs_the_pinned_tools_its_cases_require
-fn required_tools() -> (BTreeSet<String>, Vec<(String, PathBuf)>) {
+fn required_tools() -> (BTreeSet<String>, Vec<(String, PathBuf)>, usize) {
     let mut required = BTreeSet::new();
     let mut spawned = Vec::new();
+    let mut committed_config = 0;
     for path in common::rust_sources() {
         let source = std::fs::read_to_string(&path).unwrap();
         let found = batten::testing::require_census(
@@ -1156,6 +1269,7 @@ fn required_tools() -> (BTreeSet<String>, Vec<(String, PathBuf)>) {
             );
         }
         required.extend(found.tools);
+        committed_config += found.committed_config;
         spawned.extend(
             found
                 .spawned
@@ -1163,7 +1277,7 @@ fn required_tools() -> (BTreeSet<String>, Vec<(String, PathBuf)>) {
                 .map(|program| (program, path.clone())),
         );
     }
-    (required, spawned)
+    (required, spawned, committed_config)
 }
 
 /// The required tools a job's steps do not install. A mise-action step with no
@@ -1249,7 +1363,7 @@ fn a_job_installs_what_its_mise_steps_say() {
 #[test]
 fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
     use yaml_rust2::YamlLoader;
-    let (required, spawned) = required_tools();
+    let (mut required, spawned, committed_config) = required_tools();
     for floor in ["cargo-dist", "pkl", "node", "jq"] {
         assert!(
             required.contains(floor),
@@ -1272,22 +1386,7 @@ fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
     );
     // A pinned tool spawned by name is reached around the resolver: whatever
     // `PATH` holds answers, and no job is held to installing it.
-    // The program each pinned tool provides, where it is not the tool's name:
-    // `aqua:mvdan/sh` is shfmt, never the shell; `rust` is every job's first
-    // install, so a bare `cargo` reaches the pin wherever the suite runs.
-    let programs: BTreeSet<&str> = pinned
-        .iter()
-        .flat_map(|tool| match tool.as_str() {
-            "sh" => vec!["shfmt"],
-            "cargo-dist" => vec!["dist"],
-            "cli" => vec!["gh"],
-            "nextest" => vec!["cargo-nextest"],
-            "node" => vec!["node", "npm", "npx"],
-            "serena-agent" => vec!["serena"],
-            "rust" => Vec::new(),
-            other => vec![other],
-        })
-        .collect();
+    let programs: BTreeSet<&str> = pinned.iter().flat_map(|tool| tool_programs(tool)).collect();
     let around: Vec<String> = spawned
         .iter()
         .filter(|(program, _)| programs.contains(program.as_str()))
@@ -1297,6 +1396,11 @@ fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
         around.is_empty(),
         "a case spawns a pinned tool by name; resolve it with common::require_tool: {around:?}"
     );
+    assert!(
+        committed_config > 0,
+        "no fixture carries the committed batten.toml, so its rows are no requirement"
+    );
+    required.extend(config_tools(&manifest, &pinned));
 
     let suite = suite_tasks(&manifest);
     let mut suite_jobs = Vec::new();
@@ -1352,6 +1456,25 @@ fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
     );
 }
 
+/// A config row's programs are read through the wrappers that run them and
+/// the mise tasks they name (CLOUD-2446).
+#[test]
+fn a_config_row_s_programs_are_read_through_its_tasks() {
+    let manifest: toml::Value =
+        toml::from_str("[tasks.t]\nrun = \"zz-tool --x\"\n\n[tasks.u]\ndepends = [\"t\"]\n")
+            .unwrap();
+    let config: toml::Value = toml::from_str(
+        "[[hook.handler]]\nrun = [\"mise\", \"run\", \"u\"]\n\n\
+         [[rule]]\ncheck = \"mise exec -- gh --version\"\n\n\
+         [[rule.tools]]\nrun = [\"pkl\", \"eval\", \"x\"]\n",
+    )
+    .unwrap();
+    let programs = config_programs(&config, &manifest);
+    for program in ["zz-tool", "gh", "pkl"] {
+        assert!(programs.contains(program), "{program}: {programs:?}");
+    }
+}
+
 /// The suite predicate counts what runs the suite, through any wrapper task,
 /// and nothing that only looks like it.
 #[test]
@@ -1370,6 +1493,9 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
     ] {
         assert!(suite.contains(task), "{task} runs the suite: {suite:?}");
     }
+    // Each entry of an argv-array `run` renders alone: three three-branch
+    // templates joined would pass the rendering cap and read as the suite.
+    assert!(!suite.contains("install:local"), "{suite:?}");
     // hk's own test step is what makes `hk check --all` a suite run.
     let hk = std::fs::read_to_string(common::at_root("hk.pkl")).unwrap();
     assert!(hk.contains(r#"check = "mise run test:cargo""#));

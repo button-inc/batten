@@ -414,6 +414,17 @@ pub fn shell_commands(text: &str) -> Option<Vec<(Vec<String>, Vec<String>)>> {
     crate::hook::shell_commands(text)
 }
 
+/// The program `words` runs once the hooks look through its wrappers (`env`,
+/// `nohup`, `mise exec`), by its file name (CLOUD-2446); `None` when the words
+/// are only grammar or assignments.
+#[doc(hidden)]
+#[must_use]
+pub fn effective_program(words: &[String]) -> Option<String> {
+    let tokens: Vec<&str> = words.iter().map(String::as_str).collect();
+    let program = crate::hook::program_token(tokens[crate::hook::effective_program(&tokens)?]);
+    Some(program.rsplit('/').next().unwrap_or(program).to_owned())
+}
+
 /// What a source's `require_tool`/`require_bin` calls declare (CLOUD-2388).
 #[doc(hidden)]
 #[derive(Debug, Default)]
@@ -428,6 +439,9 @@ pub struct RequireCensus {
     /// Each `Command::new("<literal>")` program: a pinned tool among them is
     /// reached around the resolver, so no reader sees it required.
     pub spawned: Vec<String>,
+    /// `include_str!`s of a `batten.toml`: a fixture carrying the committed
+    /// config, whose rows spawn their programs through `PATH` (CLOUD-2446).
+    pub committed_config: usize,
 }
 
 /// Whether `path` names the resolver: its last segment is `require_tool` or
@@ -535,6 +549,12 @@ pub fn require_census(file: &syn::File) -> RequireCensus {
             }
         }
         fn visit_macro(&mut self, mac: &'a syn::Macro) {
+            if mac.path.is_ident("include_str")
+                && let Ok(path) = mac.parse_body::<syn::LitStr>()
+                && (path.value() == "batten.toml" || path.value().ends_with("/batten.toml"))
+            {
+                self.0.committed_config += 1;
+            }
             if let Ok(args) = mac.parse_body_with(
                 syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
             ) {
