@@ -2,10 +2,9 @@
 //! root does (CLOUD-2538).
 //!
 //! The fuzz workspace is detached, so nothing in the landing path re-resolves
-//! it: measured 2026-10-26, it still pinned `batten 0.0.125` and five crates
-//! behind the root lock's versions. `deny` now reads its advisories, which
-//! catches a known-bad pin; this case catches the drift that precedes one,
-//! offline and on every leg.
+//! it and `cargo deny check` never reads it. THIS CASE IS HOW `deny` REACHES
+//! IT: a shared registry crate may pin only a version the root lock carries,
+//! and every such version is one `deny` already judged.
 //!
 //! A SUBSET, NOT AN EQUALITY: the fuzz lock prunes what its harness does not
 //! reach and adds the harness's own crates, so only a version the root lock
@@ -13,7 +12,9 @@
 //!
 //! REGISTRY CRATES ONLY: a release bumps `batten` in the root lock alone
 //! (`release-plz release-pr`), and the fuzz build re-resolves that path crate
-//! itself, so a path entry's version is not drift.
+//! itself, so a path entry's version is not drift. That re-resolution is also
+//! why `deny` is not pointed at `fuzz/Cargo.toml` directly: unlocked it
+//! rewrites the tracked lock after every release, and `--locked` refuses it.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -32,7 +33,11 @@ fn pinned(path: &str) -> BTreeMap<String, BTreeSet<String>> {
         .and_then(toml::Value::as_array)
         .expect("the lock lists packages")
     {
-        if package.get("source").is_none() {
+        let registry = package
+            .get("source")
+            .and_then(toml::Value::as_str)
+            .is_some_and(|source| source.starts_with("registry+"));
+        if !registry {
             continue;
         }
         let field = |key: &str| {
@@ -49,8 +54,8 @@ fn pinned(path: &str) -> BTreeMap<String, BTreeSet<String>> {
     out
 }
 
-/// Fails by: a fuzz lock left behind the root's resolution, which is how it
-/// came to carry tokio 1.53.1 after the root took 1.53.3.
+/// Fails by: a fuzz lock left behind the root's resolution, still pinning a
+/// version the root lock moved past.
 #[test]
 fn the_fuzz_lock_resolves_shared_crates_as_the_root_does() {
     let root = pinned("Cargo.lock");
