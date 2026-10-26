@@ -32,6 +32,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const NAME = /^name = "([^"]+)"$/m;
+const nameOf = (block) => block.match(NAME)?.[1];
 
 // A lock's header and its `[[package]]` blocks, in order.
 function blocks(text) {
@@ -43,9 +44,9 @@ function blocks(text) {
 // entries for every name the root lock does not carry.
 export function seed(rootText, fuzzText) {
   const root = blocks(rootText);
-  const carried = new Set(root.packages.map((block) => block.match(NAME)?.[1]));
+  const carried = new Set(root.packages.map(nameOf));
   const kept = blocks(fuzzText).packages.filter(
-    (block) => /^source = /m.test(block) && !carried.has(block.match(NAME)?.[1]),
+    (block) => /^source = /m.test(block) && !carried.has(nameOf(block)),
   );
   return `${[root.header.trimEnd(), ...root.packages, ...kept].join("\n\n")}\n`;
 }
@@ -58,7 +59,7 @@ function cargoMetadata(dir) {
   );
 }
 
-export function carry(dir = ".", resolve = cargoMetadata) {
+export function carry({ dir = ".", resolve = cargoMetadata } = {}) {
   const lock = join(dir, "fuzz/Cargo.lock");
   const before = readFileSync(lock, "utf8");
   writeFileSync(lock, seed(readFileSync(join(dir, "Cargo.lock"), "utf8"), before));

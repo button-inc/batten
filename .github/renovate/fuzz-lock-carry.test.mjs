@@ -35,25 +35,27 @@ test("the seed is the root lock, plus the harness pins the root lacks", () => {
   assert.ok(seeded.startsWith(HEADER), "the root's header leads");
 });
 
-test("a failed resolve puts the old fuzz lock back", () => {
+// A checkout holding a root lock and a fuzz lock.
+function checkout(root, fuzz) {
   const dir = mkdtempSync(join(tmpdir(), "fuzz-lock-carry-"));
   mkdirSync(join(dir, "fuzz"));
+  writeFileSync(join(dir, "Cargo.lock"), root);
+  writeFileSync(join(dir, "fuzz/Cargo.lock"), fuzz);
+  return dir;
+}
+
+test("a failed resolve puts the old fuzz lock back", () => {
   const before = lock(pkg("tokio", "1.53.1"));
-  writeFileSync(join(dir, "Cargo.lock"), lock(pkg("tokio", "1.53.3")));
-  writeFileSync(join(dir, "fuzz/Cargo.lock"), before);
-  assert.throws(() =>
-    carry(dir, () => {
-      throw new Error("index unreachable");
-    }),
-  );
+  const dir = checkout(lock(pkg("tokio", "1.53.3")), before);
+  const resolve = () => {
+    throw new Error("index unreachable");
+  };
+  assert.throws(() => carry({ dir, resolve }));
   assert.equal(readFileSync(join(dir, "fuzz/Cargo.lock"), "utf8"), before);
 });
 
 test("a resolve that succeeds keeps the seed", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fuzz-lock-carry-"));
-  mkdirSync(join(dir, "fuzz"));
-  writeFileSync(join(dir, "Cargo.lock"), lock(pkg("tokio", "1.53.3")));
-  writeFileSync(join(dir, "fuzz/Cargo.lock"), lock(pkg("tokio", "1.53.1")));
-  carry(dir, () => {});
+  const dir = checkout(lock(pkg("tokio", "1.53.3")), lock(pkg("tokio", "1.53.1")));
+  carry({ dir, resolve: () => {} });
   assert.match(readFileSync(join(dir, "fuzz/Cargo.lock"), "utf8"), /1\.53\.3/);
 });
