@@ -113,7 +113,19 @@ fn the_committed_clone_is_pushed_and_carries_no_session_state() {
         head
     );
     assert_eq!(batten::git::head_unpushed_to_a_remote(&clone), Some(false));
-    assert!(!clone.join(".git/batten-receipts").exists());
+    // Other cases' adjudications write receipts here, since the clone is shared;
+    // what must never be in it is a session's marker, which only a Stop writes.
+    let carries_a_marker = std::fs::read_dir(clone.join(".git/batten-receipts"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .contains("unlanded-nudged")
+        });
+    assert!(!carries_a_marker);
 }
 
 /// NOWHERE TO PUSH IS NOT "UNPUSHED" (review of #1228). A clone with no
