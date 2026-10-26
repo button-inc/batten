@@ -307,16 +307,11 @@ fn repo(name: &str, declared: &Declared, declare_the_classes: bool) -> PathBuf {
     dir
 }
 
-/// Through [`common::git_command`]: a contributor's own git settings must not
-/// be able to move a verdict here (CLOUD-282), and that builder is the one
-/// place the hermetic set is kept.
+/// Through [`common::git_in`]: a contributor's own git settings must not be
+/// able to move a verdict here (CLOUD-282), and its builder is the one place
+/// the hermetic set is kept.
 fn git(dir: &Path, args: &[&str]) {
-    let status = common::git_command(dir, args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .expect("run git");
-    assert!(status.success(), "git {args:?} failed");
+    common::git_in(dir, args);
 }
 
 /// One review thread as the tool reports one, carrying the member the `where`

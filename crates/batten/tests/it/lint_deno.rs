@@ -45,11 +45,10 @@ const CORRUPT: &str = "{ this is not json,,,";
 const COVERED: &str = "lint-deno-probe.json";
 const EXCLUDED: &str = "crates/batten/tests/fixtures/hooks/lint-deno-probe.json";
 
-/// Through [`common::git_command`], so a contributor's global git config, a
-/// global hook among it, never reaches the scratch repository.
+/// Through [`common::git_in`], so a contributor's global git config, a global
+/// hook among it, never reaches the scratch repository.
 fn git(dir: &Path, args: &[&str]) {
-    let status = common::git_command(dir, args).status().expect("git");
-    assert!(status.success(), "git {args:?}");
+    common::git_in(dir, args);
 }
 
 struct Repo {

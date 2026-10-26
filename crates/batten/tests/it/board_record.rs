@@ -150,17 +150,12 @@ fn write_program(dir: &Path, name: &str, exit: i32, stdout: &str) {
     }
 }
 
-/// Through [`common::git_command`], the hermetic fixture builder: a
-/// contributor's global git config, a global hook among it, must not reach a
-/// fixture. A global `hook.hk-pre-commit` in `~/.gitconfig` hung this one's
-/// seed commit for two hours (measured 2026-10-25).
+/// Through [`common::git_in`], the hermetic fixture builder: a contributor's
+/// global git config, a global hook among it, must not reach a fixture. A
+/// global `hook.hk-pre-commit` in `~/.gitconfig` hung this one's seed commit
+/// for two hours (measured 2026-10-25).
 fn git(dir: &Path, args: &[&str]) {
-    let status = common::git_command(dir, args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .expect("run git");
-    assert!(status.success(), "git {args:?} failed");
+    common::git_in(dir, args);
 }
 
 /// The record this branch accumulated, or the empty string when none was written.

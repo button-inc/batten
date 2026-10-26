@@ -1269,6 +1269,54 @@ pub fn wiring(
     repo_root: &Path,
     server: &str,
 ) -> std::result::Result<Wiring, Unresolved> {
+    let (source, entry, endpoint) = located(config, repo_root, server)?;
+    Ok(Wiring {
+        source: source.id.clone(),
+        endpoint,
+        // A DECLARED CREDENTIAL THAT WILL NOT RESOLVE STOPS THE SEARCH, and
+        // it is not `Unresolved`: the row was found, so falling through to the
+        // next source would answer this server's question with another
+        // harness's wiring, and dispatching without the credential would send
+        // a call the row said must be authenticated.
+        credential: credential(source, &entry, repo_root).map_err(|err| {
+            Unresolved::CredentialUnusable {
+                source: source.id.clone(),
+                why: err.to_string(),
+            }
+        })?,
+        headers: match entry.at(HEADER_KEY) {
+            Look::Is(Node::Map(entries)) => entries
+                .iter()
+                .filter_map(|(name, value)| value.scalar().map(|value| (name.clone(), value)))
+                .collect(),
+            _ => Vec::new(),
+        },
+    })
+}
+
+/// Whether some declared source answers `server`: [`wiring`]'s answer short of
+/// the credential, which the hook-load reachability probe never spends.
+///
+/// **No credential is resolved**, because a `helper` row resolves by spawning
+/// the wiring entry's command — on every mediated call, for a token the probe
+/// would discard. A credential that will not resolve was reachable to
+/// [`wiring`] too (`CredentialUnusable` is not `NotFound`), so the two agree.
+#[must_use]
+pub fn answers(config: &McpConfig, repo_root: &Path, server: &str) -> bool {
+    !matches!(
+        located(config, repo_root, server),
+        Err(Unresolved::NotFound { .. } | Unresolved::Undeclared)
+    )
+}
+
+/// The first declared source carrying `server` with an endpoint: the row, its
+/// entry and the endpoint. Shared by [`wiring`] and [`answers`] so declaration
+/// order is decided in one place.
+fn located<'a>(
+    config: &'a McpConfig,
+    repo_root: &Path,
+    server: &str,
+) -> std::result::Result<(&'a Source, Node, String), Unresolved> {
     if config.sources.is_empty() {
         return Err(Unresolved::Undeclared);
     }
@@ -1281,28 +1329,7 @@ pub fn wiring(
         let Some(endpoint) = endpoint_of(&entry) else {
             continue;
         };
-        return Ok(Wiring {
-            source: source.id.clone(),
-            endpoint,
-            // A DECLARED CREDENTIAL THAT WILL NOT RESOLVE STOPS THE SEARCH, and
-            // it is not `Unresolved`: the row was found, so falling through to the
-            // next source would answer this server's question with another
-            // harness's wiring, and dispatching without the credential would send
-            // a call the row said must be authenticated.
-            credential: credential(source, &entry, repo_root).map_err(|err| {
-                Unresolved::CredentialUnusable {
-                    source: source.id.clone(),
-                    why: err.to_string(),
-                }
-            })?,
-            headers: match entry.at(HEADER_KEY) {
-                Look::Is(Node::Map(entries)) => entries
-                    .iter()
-                    .filter_map(|(name, value)| value.scalar().map(|value| (name.clone(), value)))
-                    .collect(),
-                _ => Vec::new(),
-            },
-        });
+        return Ok((source, entry, endpoint));
     }
     Err(Unresolved::NotFound { tried })
 }
@@ -3510,40 +3537,27 @@ mod tests {
 
     // --- the wiring entry's own helper (Claude Code's `headersHelper`) ------
 
-    /// Fails by: the helper's printed header not being the one sent.
+    /// Fails by: the helper's printed header not being the one sent, or its name
+    /// compared with its case, which HTTP ignores.
     #[test]
     fn a_helper_s_printed_header_is_the_credential_sent() {
         if !cfg!(unix) {
             return;
         }
-        let entry = helped_entry(r#"printf '{"Authorization":"Bearer tok","X-Other":"o"}'"#);
-        let (header, secret) = credential(
-            &source_with(Some(helper_row("Authorization"))),
-            &entry,
-            &here(),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(header, "Authorization");
-        assert_eq!(secret.spend(), "Bearer tok");
-    }
-
-    /// Fails by: a header name compared with its case, which HTTP ignores.
-    #[test]
-    fn a_helper_s_header_is_found_whatever_its_case() {
-        if !cfg!(unix) {
-            return;
+        for printed in [
+            r#"printf '{"Authorization":"Bearer tok","X-Other":"o"}'"#,
+            r#"printf '{"authorization":"Bearer tok"}'"#,
+        ] {
+            let (header, secret) = credential(
+                &source_with(Some(helper_row("Authorization"))),
+                &helped_entry(printed),
+                &here(),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(header, "Authorization", "{printed}");
+            assert_eq!(secret.spend(), "Bearer tok", "{printed}");
         }
-        let entry = helped_entry(r#"printf '{"authorization":"Bearer tok"}'"#);
-        let (header, secret) = credential(
-            &source_with(Some(helper_row("Authorization"))),
-            &entry,
-            &here(),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(header, "Authorization");
-        assert_eq!(secret.spend(), "Bearer tok");
     }
 
     /// Fails by: a scheme the row declares not folded onto the printed value.
@@ -3696,6 +3710,42 @@ mod tests {
         let wired = wiring(&config, &dir, "srv").unwrap();
         assert_eq!(wired.endpoint, "https://x.invalid/mcp");
         assert_eq!(wired.headers, vec![("X-A".to_owned(), "1".to_owned())]);
+    }
+
+    /// Fails by: the reachability probe spending the credential, which for a
+    /// `helper` row spawns its command on every mediated call; or answering
+    /// otherwise than [`wiring`] does.
+    #[test]
+    fn a_server_answers_without_its_helper_being_run() {
+        assert!(!answers(&McpConfig::default(), Path::new("."), "srv"));
+        let dir = scratch("answers-no-helper");
+        let ran = dir.join("ran");
+        std::fs::write(
+            dir.join("w.json"),
+            serde_json::json!({"srv": {
+                "url": "https://x.invalid/mcp",
+                "headersHelper": format!("touch '{}'; exit 7", ran.display()),
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let mut config = McpConfig::default();
+        config
+            .sources
+            .push(source_with(Some(helper_row("Authorization"))));
+        assert!(answers(&config, &dir, "srv"), "a found row answers");
+        assert!(
+            !answers(&config, &dir, "elsewhere"),
+            "an absent server does not"
+        );
+        assert!(!ran.exists(), "answering never runs the helper");
+        if cfg!(unix) {
+            assert!(matches!(
+                wiring(&config, &dir, "srv"),
+                Err(Unresolved::CredentialUnusable { .. })
+            ));
+            assert!(ran.exists(), "dispatch is what runs it");
+        }
     }
 
     /// Fails by: a set root variable read as unset.

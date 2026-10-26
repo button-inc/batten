@@ -71,15 +71,10 @@ fn write_program(dir: &Path, name: &str, exit: i32, stdout: &str) {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod stub");
 }
 
-/// Through [`common::git_command`], as `board_record.rs` builds its fixture: a
+/// Through [`common::git_in`], as `board_record.rs` builds its fixture: a
 /// contributor's global git config, a global hook among it, must not reach one.
 fn git(dir: &Path, args: &[&str]) {
-    let status = common::git_command(dir, args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .expect("run git");
-    assert!(status.success(), "git {args:?} failed");
+    common::git_in(dir, args);
 }
 
 /// The record this branch accumulated, or the empty string when none was written.

@@ -3795,7 +3795,7 @@ impl Policy {
             // a server no declared source answers clears it: a source that
             // resolves and will not read is could-not-look, and keeps the refusal.
             //
-            // ONCE PER SERVER, NOT ONCE PER ROW (CLOUD-2315): `wiring` reads and
+            // ONCE PER SERVER, NOT ONCE PER ROW (CLOUD-2315): `answers` reads and
             // parses a source's wiring file, and several rows naming one server
             // re-read the same file within one load.
             redirects: {
@@ -3805,13 +3805,10 @@ impl Policy {
                     if let Some(known) = answered.borrow().get(server) {
                         return *known;
                     }
-                    let reachable = resolved.mcp.as_ref().is_some_and(|mcp| {
-                        !matches!(
-                            crate::mcp::wiring(mcp, root, server),
-                            Err(crate::mcp::Unresolved::NotFound { .. }
-                                | crate::mcp::Unresolved::Undeclared)
-                        )
-                    });
+                    let reachable = resolved
+                        .mcp
+                        .as_ref()
+                        .is_some_and(|mcp| crate::mcp::answers(mcp, root, server));
                     answered.borrow_mut().insert(server.to_owned(), reachable);
                     reachable
                 })
