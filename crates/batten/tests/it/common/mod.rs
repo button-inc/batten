@@ -1796,6 +1796,13 @@ pub(crate) fn scratch_repo(name: &str) -> PathBuf {
 //MUTANT fixed-world-unpinned|s@^    git_in(&building, &\["update-ref", "refs/remotes/origin/fixed-world", &head\]);$@@|the_committed_clone_is_pushed_and_carries_no_session_state
 #[must_use]
 pub(crate) fn committed_clone() -> PathBuf {
+    // ONE BUILDER PER PROCESS as well: under `cargo test` the cases are threads
+    // sharing one pid, so the pid-suffixed name alone would collide.
+    static CLONE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    CLONE.get_or_init(build_committed_clone).clone()
+}
+
+fn build_committed_clone() -> PathBuf {
     let root = at_root("");
     let head = git_in(&root, &["rev-parse", "HEAD"]);
     let clone = target_tmp().join(format!("committed-{}", &head[..12]));
