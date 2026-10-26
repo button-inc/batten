@@ -61,6 +61,7 @@
 // lease's undo is owed by `Lease` alone.
 //MUTANT-SUITE crates/batten/src/pipeline.rs
 //MUTANT push-after-ready-loads|s@            found.push(Invalid::PushAfterReady);@            let _ = ready;@|a_push_after_the_ready_does_not_load
+//MUTANT push-ungated-loads|s@            found.push(Invalid::UngatedPush);@            let _ = ();@|a_free_push_without_its_redraft_does_not_load
 //MUTANT push-borrows-release-lease|s@compensate: Compensation::Nothing, // the lease@compensate: Compensation::ReleaseLease, // the lease@|the_push_owes_no_undo_of_its_own
 
 use crate::land::Step;
@@ -309,6 +310,11 @@ pub enum Invalid {
     /// head starts CI by itself, so the push would be a spend its row does not
     /// declare. `Push` is the row out of place, so the variant names nothing.
     PushAfterReady,
+    /// A `Push` row that declares no effect without the precheck that makes it
+    /// free (CLOUD-1564). [`Precheck::BetLive`] redrafts a ready pull request
+    /// before the push; without it, the push onto a ready head buys a run its
+    /// row does not declare.
+    UngatedPush,
 }
 
 /// The step that commits, after which nothing is reversible.
@@ -352,6 +358,11 @@ impl Pipeline {
             && ready < push
         {
             found.push(Invalid::PushAfterReady);
+        }
+        if self.steps.iter().any(|row| {
+            row.step == Step::Push && !row.effectful && row.precheck != Some(Precheck::BetLive)
+        }) {
+            found.push(Invalid::UngatedPush);
         }
 
         let Some(commit_at) = at(COMMIT_POINT) else {
@@ -854,7 +865,7 @@ mod tests {
             } else {
                 Compensation::Nothing
             },
-            precheck: None,
+            precheck: (step == Step::Push).then_some(Precheck::BetLive),
         };
         let composed = |first: Step, second: Step| Pipeline {
             steps: vec![row(first), row(second), row(COMMIT_POINT)],
@@ -865,6 +876,21 @@ mod tests {
             "a push onto a readied head would spend, and its row says it does not"
         );
         assert!(composed(Step::Push, Step::Ready).validate().is_empty());
+    }
+
+    /// **A FREE PUSH CARRIES THE PRECHECK THAT MAKES IT FREE** (CLOUD-1564), and
+    /// the default, which carries it, loads: a validator refusing every free
+    /// `Push` would pass the first half alone.
+    #[test]
+    fn a_free_push_without_its_redraft_does_not_load() {
+        let mut ungated = Pipeline::default();
+        for row in &mut ungated.steps {
+            if row.step == Step::Push {
+                row.precheck = None;
+            }
+        }
+        assert_eq!(ungated.validate(), vec![Invalid::UngatedPush]);
+        assert!(Pipeline::default().validate().is_empty());
     }
 
     /// **THE PUSH OWES NO UNDO OF ITS OWN** (CLOUD-1564). It once borrowed the
