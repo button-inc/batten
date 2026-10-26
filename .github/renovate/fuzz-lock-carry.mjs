@@ -51,15 +51,15 @@ export function seed(rootText, fuzzText) {
   return `${[root.header.trimEnd(), ...root.packages, ...kept].join("\n\n")}\n`;
 }
 
-function cargoMetadata(dir) {
+function cargoResolve(dir) {
   execFileSync(
     "cargo",
-    ["metadata", "--manifest-path", "fuzz/Cargo.toml", "--format-version", "1"],
+    ["update", "--workspace", "--manifest-path", "fuzz/Cargo.toml"],
     { cwd: dir, stdio: ["ignore", "ignore", "inherit"] },
   );
 }
 
-export function carry({ dir = ".", resolve = cargoMetadata } = {}) {
+export function carry({ dir = ".", resolve = cargoResolve } = {}) {
   const lock = join(dir, "fuzz/Cargo.lock");
   const before = readFileSync(lock, "utf8");
   writeFileSync(lock, seed(readFileSync(join(dir, "Cargo.lock"), "utf8"), before));
