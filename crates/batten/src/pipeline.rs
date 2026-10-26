@@ -60,7 +60,7 @@
 // CLOUD-1564: the push spends nothing only while it precedes the ready, and the
 // lease's undo is owed by `Lease` alone.
 //MUTANT-SUITE crates/batten/src/pipeline.rs
-//MUTANT push-after-ready-loads|s@            found.push(Invalid::PushAfterReady(Step::Push));@            let _ = ready;@|a_push_after_the_ready_does_not_load
+//MUTANT push-after-ready-loads|s@            found.push(Invalid::PushAfterReady);@            let _ = ready;@|a_push_after_the_ready_does_not_load
 //MUTANT push-borrows-release-lease|s@compensate: Compensation::Nothing, // the lease@compensate: Compensation::ReleaseLease, // the lease@|the_push_owes_no_undo_of_its_own
 
 use crate::land::Step;
@@ -307,8 +307,8 @@ pub enum Invalid {
     Duplicate(Step),
     /// `Push` positioned after `Ready` (CLOUD-1564). A push onto a readied
     /// head starts CI by itself, so the push would be a spend its row does not
-    /// declare. Names `Push`, the row that is out of place.
-    PushAfterReady(Step),
+    /// declare. `Push` is the row out of place, so the variant names nothing.
+    PushAfterReady,
 }
 
 /// The step that commits, after which nothing is reversible.
@@ -351,10 +351,10 @@ impl Pipeline {
         if let (Some(ready), Some(push)) = (at(Step::Ready), at(Step::Push))
             && ready < push
         {
-            found.push(Invalid::PushAfterReady(Step::Push));
+            found.push(Invalid::PushAfterReady);
         }
 
-        let Some(commit_at) = self.steps.iter().position(|row| row.step == COMMIT_POINT) else {
+        let Some(commit_at) = at(COMMIT_POINT) else {
             found.push(Invalid::NoCommitPoint);
             return found;
         };
@@ -832,7 +832,7 @@ mod tests {
         assert_eq!(
             two.validate(),
             vec![
-                Invalid::PushAfterReady(Step::Push),
+                Invalid::PushAfterReady,
                 Invalid::Uncompensated(Step::Ready),
                 Invalid::Uncompensated(Step::Push),
             ]
@@ -861,7 +861,7 @@ mod tests {
         };
         assert_eq!(
             composed(Step::Ready, Step::Push).validate(),
-            vec![Invalid::PushAfterReady(Step::Push)],
+            vec![Invalid::PushAfterReady],
             "a push onto a readied head would spend, and its row says it does not"
         );
         assert!(composed(Step::Push, Step::Ready).validate().is_empty());
