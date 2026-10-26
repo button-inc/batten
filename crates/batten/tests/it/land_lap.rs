@@ -743,6 +743,10 @@ fn a_rival_is_another_holder_live_on_this_branch() {
         batten::lease_rival(None, "topic"),
         "a lease that will not read"
     );
+    assert!(
+        rival(&held("them", now + 60, "")),
+        "another clone, live, naming no branch"
+    );
     for (observed, why) in [
         (
             held("them", now + 60, "other"),

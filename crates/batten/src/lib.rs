@@ -29308,12 +29308,13 @@ pub fn land_entry_push(
 #[must_use]
 pub fn lease_rival(reading: Option<(&lease::Observed, &str, i64)>, branch: &str) -> bool {
     reading.is_none_or(|(observed, holder, now)| {
-        // Garbage has no body, so `live()` is `None` and it stays a rival.
+        // Garbage has no body, so `live()` is `None` and it stays a rival; so
+        // does a live hold naming no branch, which cannot say it is not ours.
         !lease::authorises_this_clone(observed, holder, now)
             && observed
                 .state(now)
                 .live()
-                .is_none_or(|body| body.branch == branch)
+                .is_none_or(|body| body.branch.is_empty() || body.branch == branch)
     })
 }
 
