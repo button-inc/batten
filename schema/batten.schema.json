@@ -1553,7 +1553,7 @@
           "maxLength": 1536
         },
         "helper": {
-          "description": "The NAME of a key in the server's own wiring entry whose value is a\ncommand that prints the request headers as a JSON object.\n\nClaude Code's spelling is `headersHelper`: a local `~/.claude.json` entry\nfor an HTTP server authenticates by running it (measured 2026-10-25, the\nGitHub server's helper prints `{\"Authorization\":\"Bearer …\"}` from `gh auth\ntoken`), and carries no static `headers` at all, so a row with neither\n`env` nor `file_from` dispatched unauthenticated and got a 401. The row\nnames the KEY, never the command: the command lives in the operator's\nwiring, not in committed config, and only the `header` this row names\nis taken from what it prints.",
+          "description": "The NAME of a key in the server's own wiring entry whose value is a\ncommand that prints the request headers as a JSON object.\n\nClaude Code's spelling is `headersHelper`: a local `~/.claude.json` entry\nfor an HTTP server authenticates by running it (measured 2026-10-25, the\nGitHub server's helper prints `{\"Authorization\":\"Bearer …\"}` from `gh auth\ntoken`), and carries no static `headers` at all, so a row with neither\n`env` nor `file_from` dispatched unauthenticated and got a 401. The row\nnames the KEY, never the command: the command lives in the wiring file\nthe source names (the operator's own, for a home-rooted source; a\nrepo-relative source trusts that file as much as this config), and only\nthe `header` this row names is taken from what it prints. That value is\nusually finished (`Bearer …`), so `scheme` stays empty for such a helper.",
           "type": [
             "string",
             "null"
