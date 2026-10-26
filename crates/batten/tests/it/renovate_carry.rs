@@ -1,7 +1,8 @@
-//! Renovate carries an action's licence row in its own bump (CLOUD-2300).
+//! Renovate carries an action's licence row in its own bump (CLOUD-2300), and
+//! the root lock's resolution into the fuzz lock in its cargo bump (CLOUD-2538).
 //!
 //! Three pieces must agree, and each case pins one seam: the carry script
-//! decides correctly, `renovate.json5` runs it on every `github-actions` update,
+//! decides correctly, `renovate.json5` runs it on every update of its manager,
 //! and the allowlist in `.github/workflows/renovate.yml` admits exactly that
 //! command and nothing beside it. A wrong allowlist fails silently in the field —
 //! Renovate skips a task that matches no pattern and still pushes the bump — so
@@ -17,27 +18,33 @@ fn templated(command: &str, dep: &str, old: &str, new: &str) -> String {
         .replace("{{{newDigest}}}", new)
 }
 
-/// The `github-actions` rule's single post-upgrade command.
-fn carry_command() -> String {
+/// The single `postUpgradeTasks` block on the rule for `manager`.
+fn post_upgrade_task(manager: &str) -> serde_json::Value {
     let text = std::fs::read_to_string(at_root("renovate.json5")).expect("read renovate.json5");
     let config: serde_json::Value = json5::from_str(&text).expect("renovate.json5 parses");
     let rules = config["packageRules"].as_array().expect("packageRules");
     let tasks: Vec<&serde_json::Value> = rules
         .iter()
-        .filter(|rule| rule["matchManagers"] == serde_json::json!(["github-actions"]))
+        .filter(|rule| rule["matchManagers"] == serde_json::json!([manager]))
         .filter_map(|rule| rule.get("postUpgradeTasks"))
         .collect();
     assert_eq!(
         tasks.len(),
         1,
-        "one github-actions rule carries the post-upgrade task"
+        "one {manager} rule carries the post-upgrade task"
     );
+    tasks[0].clone()
+}
+
+/// The `github-actions` rule's single post-upgrade command.
+fn carry_command() -> String {
+    let task = post_upgrade_task("github-actions");
     assert_eq!(
-        tasks[0]["fileFilters"],
+        task["fileFilters"],
         serde_json::json!(["mise-tasks/sbom-actions.tsv"]),
         "Renovate commits the licence table and nothing else the task touches"
     );
-    let commands = tasks[0]["commands"].as_array().expect("commands");
+    let commands = task["commands"].as_array().expect("commands");
     assert_eq!(commands.len(), 1, "exactly one command");
     commands[0].as_str().expect("a command string").to_owned()
 }
@@ -94,35 +101,19 @@ fn renovate_runs_the_carry_on_every_action_bump_and_the_allowlist_admits_it() {
 /// bump the fuzz-lock test refuses.
 #[test]
 fn renovate_carries_the_fuzz_lock_on_every_cargo_branch_and_the_allowlist_admits_it() {
-    let text = std::fs::read_to_string(at_root("renovate.json5")).expect("read renovate.json5");
-    let config: serde_json::Value = json5::from_str(&text).expect("renovate.json5 parses");
-    let rules = config["packageRules"].as_array().expect("packageRules");
-    let tasks: Vec<&serde_json::Value> = rules
-        .iter()
-        .filter(|rule| rule["matchManagers"] == serde_json::json!(["cargo"]))
-        .filter_map(|rule| rule.get("postUpgradeTasks"))
-        .collect();
-    assert_eq!(tasks.len(), 1, "one cargo rule carries the fuzz lock");
     assert_eq!(
-        tasks[0],
-        &serde_json::json!({
+        post_upgrade_task("cargo"),
+        serde_json::json!({
             "commands": ["node .github/renovate/fuzz-lock-carry.mjs"],
             "fileFilters": ["fuzz/Cargo.lock"],
             "executionMode": "branch",
         })
     );
-    let patterns = allowed();
     assert!(
-        patterns
+        allowed()
             .iter()
             .any(|pattern| pattern.is_match("node .github/renovate/fuzz-lock-carry.mjs")),
         "the fuzz-lock carry is admitted"
-    );
-    assert!(
-        !patterns
-            .iter()
-            .any(|pattern| pattern.is_match("node .github/renovate/fuzz-lock-carry.mjs; sh")),
-        "the fuzz-lock carry's pattern admits nothing beside it"
     );
 }
 
@@ -136,6 +127,9 @@ fn the_allowlist_admits_nothing_beside_the_carry() {
         format!("node .github/renovate/sbom-carry.mjs actions/checkout {old} {new} && sh"),
         format!("node .github/renovate/other.mjs actions/checkout {old} {new}"),
         format!("node .github/renovate/sbom-carry.mjs $(id) {old} {new}"),
+        "node .github/renovate/fuzz-lock-carry.mjs; curl evil".to_owned(),
+        "node .github/renovate/fuzz-lock-carry.mjs && sh".to_owned(),
+        "node .github/renovate/fuzz-lock-carry.mjs $(id)".to_owned(),
         "sh -c true".to_owned(),
     ] {
         assert!(
