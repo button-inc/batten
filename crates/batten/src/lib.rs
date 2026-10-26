@@ -701,7 +701,7 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 //MUTANT hook-path-builds|s@^    let may_build = !hook_path;$@    let may_build = true;@|the_hook_path_never_builds_a_source_pin
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT follow-pin-passes-a-crash-through|s@^    if hook_path {$@    if false {@|a_crashing_followed_build_never_fails_the_hook_open
-//MUTANT fetch-failure-always-falls-through|s@^                Err(_) if !may_build => return Ok(Followed::Nothing),$@                Err(_) => return Ok(Followed::Nothing),@|a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path
+//MUTANT fetch-failure-always-falls-through|s@^            engine::pinned_release(&cache, &releases_repository(), tag)?$@            match engine::pinned_release(\&cache, \&releases_repository(), tag) { Ok(path) => path, Err(_) => return Ok(Followed::Nothing) }@|a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path
 fn follow_pin(hook_path: bool) -> Result<Followed> {
     // THE HOOK FOLLOWS A RELEASE PIN BUT NEVER BUILDS A SOURCE ONE (CLOUD-2062,
     // narrowed under CLOUD-2059), and that is the same bit rather than a second
@@ -735,19 +735,15 @@ fn follow_pin(hook_path: bool) -> Result<Followed> {
             // `releases_repository()`, NOT THE BAKED LITERAL (CLOUD-2376). Every
             // other release fetch in this binary reads that seam; this one spelled
             // the repository itself, so no fixture could point it anywhere and the
-            // guard below had no reachable failing fetch to be tested against.
-            // Measured: mutating `!may_build` to `true` survived the whole suite.
-            // The default is the same literal, so nothing moves but testability.
-            match engine::pinned_release(&cache, &releases_repository(), tag) {
-                Ok(path) => path,
-                // ON THE HOOK PATH A FETCH THAT FAILS FALLS THROUGH to the
-                // refusal floor, which still decides the call and admits the
-                // one repair verb (CLOUD-2116). An error here would end the
-                // hook before that floor answered: measured, the admitted
-                // repair (`batten engine install`) was refused at exit 1.
-                Err(_) if !may_build => return Ok(Followed::Nothing),
-                Err(why) => return Err(why),
-            }
+            // fetch's failure had no reachable case to be tested against. The
+            // default is the same literal, so nothing moves but testability.
+            //
+            // A FAILED FETCH IS AN ERROR HERE ON EVERY PATH. On the hook path
+            // `run` turns it into nothing to follow, so the refusal floor still
+            // decides the call and admits the one repair verb (CLOUD-2116);
+            // a second fall-through here was that rule spelled twice, and it
+            // made `run`'s copy unreachable by any case.
+            engine::pinned_release(&cache, &releases_repository(), tag)?
         }
         // A SOURCE PIN IS FOLLOWED TO THE CHECKOUT'S OWN BUILD (CLOUD-2232),
         // as a release pin is followed to its cache: the installed binary execs
