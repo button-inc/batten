@@ -825,7 +825,8 @@ thread_local! {
 ///
 /// The previous scope is restored on the way out, unwinding included, so a
 /// case that panics leaves no fixture behind for the next one on the thread.
-pub fn with_fixture<T>(dir: &std::path::Path, body: impl FnOnce() -> T) -> T {
+#[cfg(test)]
+pub(crate) fn with_fixture<T>(dir: &std::path::Path, body: impl FnOnce() -> T) -> T {
     /// Puts the scope it replaced back when dropped.
     struct Restore(Option<std::path::PathBuf>);
     impl Drop for Restore {

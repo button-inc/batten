@@ -703,7 +703,7 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
 }
 
 /// The headers a hop from `from` to `next` carries: every one on the same
-/// host, and none but the credential's on another.
+/// host, and every one but the credential (`Authorization`) on another.
 ///
 /// Apart from the exchange so the narrowing tests without a live HTTPS
 /// redirect, which the `https_only` transport gives a loopback no way to stage
