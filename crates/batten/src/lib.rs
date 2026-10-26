@@ -15018,8 +15018,9 @@ fn spend_the_matrix(
     // tap takes one direction over, and for the same reason.
     // **THE FORGE'S HEAD, NEVER THIS CLONE'S**: `Readiness::head` says why. A
     // ready pull request at another head was redrafted by the Push row's
-    // precheck (`land_push_gate`), so a new head always reaches here as a draft
-    // and is asked its receipts below.
+    // precheck (`land_push_gate`), so a new head reaches here as a draft and is
+    // asked its receipts below, unless that precheck could not read the forge
+    // and found the receipts already on file.
     let reading = verdict_for(&repo, &head);
     let spend = land::buys_a_matrix(Some(is_draft), reading.as_ref());
     // THE RECEIPTS `gh pr ready` OWES, asked of this ready too (CLOUD-2293), and
@@ -29254,13 +29255,12 @@ fn rival_on_branch(root: &Path, branch: &str) -> bool {
     let Some((observed, holder, now)) = lease_reading(root) else {
         return true;
     };
-    match observed.state(now) {
-        lease::Lease::Absent | lease::Lease::Expired { .. } | lease::Lease::Released { .. } => {
-            false
-        }
-        lease::Lease::Garbage { .. } => true,
-        lease::Lease::Live { body, .. } => body.holder != holder && body.branch == branch,
-    }
+    // Garbage has no body, so `live()` is `None` and it stays a rival.
+    !lease::authorises_this_clone(&observed, &holder, now)
+        && observed
+            .state(now)
+            .live()
+            .is_none_or(|body| body.branch == branch)
 }
 
 /// This branch's pull request, as [`land_push_gate`] and [`land_entry_push`]
@@ -29287,7 +29287,9 @@ fn push_at_entry(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> R
         return Ok(());
     };
     let mut recorded = speculation::Bet::default();
-    let bet_live = speculation::recover(root, &mut recorded).unwrap_or(false);
+    // A ref store that will not answer is read as a bet: skipping is the safe
+    // direction, since HEAD may carry borrowed commits.
+    let bet_live = speculation::recover(root, &mut recorded).unwrap_or(true);
     let local = git::head_commit(root).ok();
     let read = push_read(&repo, branch);
     match land_entry_push(bet_live, local.as_deref(), &read, || {
@@ -29330,7 +29332,11 @@ fn push_at_entry(root: &Path, url: &str, branch: &str, out: &mut dyn Write) -> R
 /// * a forge that could not say asks [`land_ready_owes`] here, rather than let
 ///   an unreviewed push through to a pull request that may be ready.
 ///
-/// That is what lets the `Push` row declare no effect.
+/// That is what lets the `Push` row declare no effect, with ONE EXCEPTION,
+/// stated rather than hidden: a forge that could not say, over receipts already
+/// on file, pushes. If the pull request was in fact ready, that push buys a run
+/// the row does not declare. The run is over a reviewed head, and stopping the
+/// landing on every unanswered read would cost more than it.
 ///
 /// # Errors
 ///
