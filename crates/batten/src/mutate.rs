@@ -1664,8 +1664,7 @@ fn shard_plan(
     let Some(raw) = shard else {
         return Ok(vec![Place::Unsharded; sources.len()]);
     };
-    let (k, n) = parse_shard(raw)
-        .ok_or_else(|| anyhow::anyhow!("mutate: {SHARD} `{raw}` is not `<k>/<n>`"))?;
+    let (k, n) = shard_parsed(raw).map_err(|reason| anyhow::anyhow!("mutate: {reason}"))?;
     let mut list = vec![
         String::from("mutants"),
         String::from("--list"),
@@ -4010,10 +4009,9 @@ fn gate_stopped(root: &Path, gate: &Gate) -> Option<Verdict> {
     gate.rows.is_empty().then_some(Verdict::NoMutantDeclared)
 }
 
-/// [`sweep_owned`] over one `$MUTANT_SHARD`'s slice: the declared rows
-/// [`shard_owns_row`] gives it, and the gate-level findings of the gates
-/// [`shard_of`] gives it, as [`parse_shard`] reads `$MUTANT_SHARD`. `None` is
-/// every row and every gate.
+/// [`sweep_owned`] over one parsed `$MUTANT_SHARD`'s slice ([`shard_parsed`]):
+/// the declared rows [`shard_owns_row`] gives it, and the gate-level findings
+/// of the gates `by_shard` gives it. `None` is every row and every gate.
 ///
 /// # Errors
 ///
@@ -4041,7 +4039,7 @@ pub fn sweep_shard(
                 (verdict, gate.owner.clone())
             }
         };
-        // A GATE-LEVEL finding is reported by the one shard `shard_of` gives
+        // A GATE-LEVEL finding is reported by the one shard `by_shard` gives
         // the gate, so a sharded run reports it once.
         if reports {
             findings.push(Finding {

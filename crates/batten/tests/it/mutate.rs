@@ -283,8 +283,8 @@ fn census(root: &Path, gates: &str) -> (i32, String, String) {
 // The sweep's decision table.
 // ---------------------------------------------------------------------------
 
-/// A `$MUTANT_SHARD` that is not `k/n` is a usage error before any gate is
-/// read, never a sweep of every row (CLOUD-2533). Fails by: a set shard read as
+/// A `$MUTANT_SHARD` that is not `k/n` is a usage error before any row is
+/// judged, never a sweep of every row (CLOUD-2533). Fails by: a set shard read as
 /// unset, which sweeps the named gate and answers for it instead.
 #[test]
 fn a_malformed_shard_is_refused_before_the_sweep() {
