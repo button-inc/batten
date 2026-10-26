@@ -17127,9 +17127,7 @@ fn run_registered_runner(
         }
         return Ok(ExitCode::Internal);
     }
-    let shard = std::env::var(mutate::SHARD)
-        .ok()
-        .filter(|shard| !shard.trim().is_empty());
+    let shard = mutate::shard_set(std::env::var(mutate::SHARD).ok());
     let work = root.join("target").join("mutate");
     std::fs::create_dir_all(&work)?;
     let site = mutate::Site {
@@ -17322,9 +17320,7 @@ fn run_mutate_sweep(
     // ran the `ci` job past its 87-minute bound on #1132; so `$MUTANT_SHARD`
     // slices them as it slices the registered runner's mutants. BY ROW
     // (CLOUD-2533): by gate, a 45-row gate held one shard past its own bound.
-    let shard = std::env::var(mutate::SHARD)
-        .ok()
-        .filter(|shard| !shard.trim().is_empty());
+    let shard = mutate::shard_set(std::env::var(mutate::SHARD).ok());
     let parsed = match shard.as_deref() {
         None => None,
         Some(raw) => match mutate::shard_of(&narrowed.names, raw) {

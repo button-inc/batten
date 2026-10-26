@@ -1757,6 +1757,13 @@ fn source_args(
 /// would otherwise measure it: the book's CI recipe's `--timeout 300`.
 const SHARD_MUTANT_TIMEOUT_SECS: u64 = 300;
 
+/// The shard a `$MUTANT_SHARD` of `value` asks for: none when it is unset or
+/// blank, else its raw text for [`parse_shard`] to read or refuse.
+#[must_use]
+pub fn shard_set(value: Option<String>) -> Option<String> {
+    value.filter(|shard| !shard.trim().is_empty())
+}
+
 /// `$MUTANT_SHARD`'s `k/n`, or `None` where it is not one (`k < n`, `n > 0`).
 #[must_use]
 pub fn parse_shard(shard: &str) -> Option<(usize, usize)> {
@@ -4804,6 +4811,18 @@ mod tests {
         for bad in ["16/16", "0/0", "3", "x/16"] {
             assert_eq!(parse_shard(bad), None, "{bad}");
         }
+    }
+
+    /// Fails by: a set `$MUTANT_SHARD` read as unset, which sweeps every row on
+    /// every shard, or a blank one read as a shard to refuse.
+    #[test]
+    fn a_blank_shard_is_no_shard_and_a_set_one_is_kept() {
+        assert_eq!(shard_set(None), None);
+        assert_eq!(shard_set(Some(String::from("  "))), None);
+        assert_eq!(
+            shard_set(Some(String::from("1/4"))),
+            Some(String::from("1/4"))
+        );
     }
 
     #[test]
