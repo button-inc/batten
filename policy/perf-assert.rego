@@ -62,6 +62,8 @@
 #MUTANT over-budget-passes|s@to_number(measured) > budgets\[id\]@false@|an_over_budget_path_is_refused
 #MUTANT readme-budget-disagreement-passes|s@published\[id\] != budgets\[id\]@false@|a_readme_publishing_a_different_budget_is_refused
 #MUTANT absent-budgeted-path-passes|s@not id in object.keys(judged)@false@|a_budgeted_path_absent_from_a_present_record_is_refused
+#MUTANT-SUITE crates/batten/tests/it/hook_latency.rs
+#MUTANT stop-budget-unenforced|s@"stop": 100,@@|a_stop_over_its_budget_is_refused
 
 # METADATA
 # description: |
@@ -98,6 +100,9 @@ budgets := {
 	"noop": 100,
 	"passthrough": 100,
 	"posttool": 100,
+	# CLOUD-1480: an end of turn waits on the mediated verb exactly as a tool
+	# call does, and it cost ~110 s while no arm measured it.
+	"stop": 100,
 	"hook": 100,
 	"wired": 100,
 	"check": 100,

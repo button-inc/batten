@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "sess-stop-bench",
+  "cwd": "/repo",
+  "stop_hook_active": false,
+  "last_assistant_message": "The change is committed and pushed; land is running in the background."
+}

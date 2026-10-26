@@ -225,6 +225,7 @@ mod hk_observation;
 mod hk_plan;
 mod hk_selection;
 mod hook_cost;
+mod hook_latency;
 mod hook_pin_check;
 mod hook_profile;
 mod hook_skip_local;

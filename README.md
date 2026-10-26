@@ -213,6 +213,7 @@ the launcher's own share is attributable.
 | `hook`        | + envelope decode, adjudication, decision write        | 2.8 ms | 3.0 ms | ≤ 100 ms |
 | `passthrough` | a call no rule selects — decode, allow, no config load | —      | —      | ≤ 100 ms |
 | `posttool`    | a PostToolUse call — decode, capture the response      | —      | —      | ≤ 100 ms |
+| `stop`        | an end of turn — decode, state record, drain detached  | —      | —      | ≤ 100 ms |
 | `wired`       | the hook as `.claude/settings.json` invokes it         | 8.0 ms | 8.4 ms | ≤ 100 ms |
 
 `posttool` is the same envelope decode plus the response capture, and its cells

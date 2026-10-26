@@ -9717,6 +9717,8 @@ fn captured_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, serde_
 /// ask, so [`crate::facts::Look::CouldNotLook`] is the arm. Both project `null`
 /// today, which is exactly why the distinction has to be right here rather than
 /// in whichever arm happens to render the same.
+//MUTANT-SUITE crates/batten/tests/it/hook_latency.rs
+//MUTANT mediated-spawn-permitted|s@^    let admitted = \x7cclass: crate::facts::Class\x7c class.resolvable_on(surface);$@    let admitted = \x7cclass: crate::facts::Class\x7c { let _ = (class, surface); true };@|the_mediated_verb_spawns_nothing_on_any_event
 fn effect_facts(
     rules: &[Rule],
     root: &Path,
