@@ -1247,6 +1247,7 @@ impl RunnerKind {
 //MUTANT later-unrecognized-costs-the-gate|s@^                None if index == 0 => unrunnable@                None if true => unrunnable@|a_later_unrecognized_suite_costs_only_the_rows_under_it
 //MUTANT suite-first-only|s@^            Some(_) => row.resolved.as_ref(),$@            Some(_) => self.suite.as_ref(),@|each_preset_module_row_runs_under_its_own_declared_suite
 //MUTANT every-row-on-every-shard|s@^    shard.is_none_or(\x7c(k, n)\x7c index % n == k)$@    true@|a_large_gates_rows_spread_across_every_shard
+//MUTANT gate-finding-on-every-shard|s@^            (Some((verdict, owner)), _) if shard_owns_row(position, shard) => {$@            (Some((verdict, owner)), _) => {@|a_sharded_sweep_judges_each_row_and_reports_each_gate_once
 //MUTANT nextest-profile-unpinned|s@^        (String::from("NEXTEST_PROFILE"), String::from("default")),$@        (String::from("NEXTEST_PROFILE"), String::from("ci")),@|every_runner_runs_the_default_nextest_profile
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT later-suites-unread|s@^                    own.push(resolved);$@                    if own.is_empty() { own.push(resolved); }@|a_change_to_a_sources_second_suite_sweeps_its_gate
@@ -3982,8 +3983,8 @@ fn gate_stopped(root: &Path, gate: &Gate) -> Option<Verdict> {
 
 /// [`sweep_owned`] over one `$MUTANT_SHARD`'s slice: the declared rows
 /// [`shard_owns_row`] gives it, and the gate-level findings of the gates
-/// [`shard_of`] gives it. `None` is every row; a malformed shard is the
-/// caller's to refuse and reads here as unsharded.
+/// [`shard_of`] gives it, as [`parse_shard`] reads `$MUTANT_SHARD`. `None` is
+/// every row and every gate.
 ///
 /// # Errors
 ///
@@ -3993,112 +3994,112 @@ pub fn sweep_shard(
     names: &[String],
     work: PathBuf,
     registry: &Registry,
-    shard: Option<&str>,
+    shard: Option<(usize, usize)>,
     progress: &mut dyn std::io::Write,
 ) -> Result<Sweep> {
-    let parsed = shard.and_then(parse_shard);
-    let reporting = shard.and_then(|shard| shard_of(names, shard).ok());
-    let gates: Vec<(&String, Option<Gate>)> = names
-        .iter()
-        .map(|name| (name, resolve(root, name)))
-        .collect();
-    // THE SHARD'S ROWS, numbered across the named gates in order. Every shard
-    // is handed the same names, so one numbering partitions the rows.
-    let mine: Vec<(usize, &Row)> = gates
-        .iter()
-        .enumerate()
-        .filter_map(|(index, (_, gate))| gate.as_ref().map(|gate| (index, gate)))
-        .flat_map(|(index, gate)| {
-            gate.rows
-                .iter()
-                .filter(|row| registry.declares(row))
-                .map(move |row| (index, row))
-        })
-        .enumerate()
-        .filter(|(number, _)| shard_owns_row(*number, parsed))
-        .map(|(_, row)| row)
-        .collect();
-    let total = mine.len();
-    let _ = writeln!(
-        progress,
-        "mutate sweep: {total} row(s) across {} gate(s)",
-        names.len()
-    );
-    let record = work.join(CAUGHT_RECORD);
-    let caught = recorded_caught(&record);
-    let mut staged = Staged::new(root, work)?;
-    // Only the gates holding a row of this shard's can owe it a build.
-    let holding: Vec<String> = gates
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| mine.iter().any(|(at, _)| at == index))
-        .map(|(_, (name, _))| (*name).clone())
-        .collect();
-    build_if_owed(root, &holding, registry, &caught, &staged, progress);
+    // SORTED, as `shard_of` sorts, so every shard numbers the same gates and
+    // rows in the same order whatever order its caller listed them in.
+    let mut sorted = names.to_vec();
+    sorted.sort();
     let mut findings = Vec::new();
-    let mut declared = 0;
-    for (index, (name, gate)) in gates.iter().enumerate() {
-        let stopped = match gate {
+    let mut runnable = Vec::new();
+    let mut held = std::collections::BTreeSet::new();
+    for (position, name) in sorted.iter().enumerate() {
+        let gate = resolve(root, name);
+        let stopped = match &gate {
             None => Some((Verdict::NoSuchGate, None)),
             Some(gate) => gate_stopped(root, gate).map(|verdict| (verdict, gate.owner.clone())),
         };
-        if let Some((verdict, owner)) = stopped {
+        match (stopped, gate) {
             // A GATE-LEVEL finding is reported by the one shard `shard_of`
             // gives the gate, so a sharded run reports it once.
-            if reporting.as_ref().is_none_or(|held| held.contains(name)) {
+            (Some((verdict, owner)), _) if shard_owns_row(position, shard) => {
+                held.insert(name);
                 findings.push(Finding {
-                    gate: (*name).clone(),
+                    gate: name.clone(),
                     slug: None,
                     verdict,
                     owner,
                 });
             }
-            continue;
+            (None, Some(gate)) => runnable.push((name, gate)),
+            _ => {}
         }
-        let Some(gate) = gate else {
-            continue;
-        };
-        for row in mine
-            .iter()
-            .filter(|(at, _)| *at == index)
-            .map(|(_, row)| *row)
-        {
-            declared += 1;
-            let key = row_key(root, gate, row);
-            if caught.contains(&key) {
-                let _ = writeln!(
-                    progress,
-                    "mutate sweep: row {declared}/{total} {name} {} caught (recorded) 0s",
-                    row.slug
-                );
-                continue;
-            }
-            let started = std::time::Instant::now();
-            let verdict = judge_row(root, &mut staged, gate, row)?;
-            if verdict == Verdict::Caught {
-                record_caught(&record, &key);
-            }
+    }
+    // THE SHARD'S ROWS, numbered across the runnable gates in sorted order, so
+    // one numbering partitions the rows between the shards.
+    let mine: Vec<(&String, &Gate, &Row)> = runnable
+        .iter()
+        .flat_map(|(name, gate)| {
+            gate.rows
+                .iter()
+                .filter(|row| registry.declares(row))
+                .map(move |row| (*name, gate, row))
+        })
+        .enumerate()
+        .filter(|(number, _)| shard_owns_row(*number, shard))
+        .map(|(_, row)| row)
+        .collect();
+    held.extend(mine.iter().map(|(name, _, _)| *name));
+    let total = mine.len();
+    let _ = writeln!(
+        progress,
+        "mutate sweep: {total} row(s) across {} gate(s)",
+        held.len()
+    );
+    let gates = held.len();
+    if mine.is_empty() {
+        // Nothing to judge, so nothing to stage or build.
+        return Ok(Sweep {
+            findings,
+            declared: 0,
+            gates,
+        });
+    }
+    let record = work.join(CAUGHT_RECORD);
+    let caught = recorded_caught(&record);
+    let mut staged = Staged::new(root, work)?;
+    // Only the gates holding a row of this shard's can owe it a build.
+    let mut holding: Vec<String> = mine.iter().map(|(name, _, _)| (*name).clone()).collect();
+    holding.dedup();
+    build_if_owed(root, &holding, registry, &caught, &staged, progress);
+    let mut declared = 0;
+    for (name, gate, row) in mine {
+        declared += 1;
+        let key = row_key(root, gate, row);
+        if caught.contains(&key) {
             let _ = writeln!(
                 progress,
-                "mutate sweep: row {declared}/{total} {name} {} {verdict} {}s",
-                row.slug,
-                started.elapsed().as_secs()
+                "mutate sweep: row {declared}/{total} {name} {} caught (recorded) 0s",
+                row.slug
             );
-            if verdict.is_finding() {
-                findings.push(Finding {
-                    gate: (*name).clone(),
-                    slug: Some(row.slug.clone()),
-                    verdict,
-                    owner: gate.owner.clone(),
-                });
-            }
+            continue;
+        }
+        let started = std::time::Instant::now();
+        let verdict = judge_row(root, &mut staged, gate, row)?;
+        if verdict == Verdict::Caught {
+            record_caught(&record, &key);
+        }
+        let _ = writeln!(
+            progress,
+            "mutate sweep: row {declared}/{total} {name} {} {verdict} {}s",
+            row.slug,
+            started.elapsed().as_secs()
+        );
+        if verdict.is_finding() {
+            findings.push(Finding {
+                gate: name.clone(),
+                slug: Some(row.slug.clone()),
+                verdict,
+                owner: gate.owner.clone(),
+            });
         }
     }
     staged.restore(root)?;
     Ok(Sweep {
         findings,
         declared,
-        gates: names.len(),
+        gates,
     })
 }
 
@@ -5791,6 +5792,83 @@ mod tests {
         );
         let owed = said(&Registry::default(), &none);
         assert!(owed.contains("building the cargo suites"), "{owed}");
+    }
+
+    /// CLOUD-2533: one gate's rows are judged across the shards, each by one,
+    /// and a gate-level finding is reported by one shard. Every row is recorded
+    /// caught, so no suite runs. Fails by: a sweep that ignores its shard for
+    /// rows or for gate-level findings, or numbers the gates unsorted.
+    #[test]
+    fn a_sharded_sweep_judges_each_row_and_reports_each_gate_once() {
+        let root = fixture("sweep-shard");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        let rows: String = (0..5)
+            .map(|row| format!("#{ROW}r{row}|s/x/y/|case_{row}\n"))
+            .collect();
+        put(
+            &root,
+            "policy/probe.rego",
+            &format!("#{SUITE}crates/k/tests/it/a.rs\n{rows}"),
+        );
+        put(&root, "crates/k/tests/it/a.rs", "\n");
+        crate::gitwrite::commit_paths(
+            &root,
+            &[
+                String::from("policy/probe.rego"),
+                String::from("crates/k/tests/it/a.rs"),
+            ],
+            "fixture",
+        )
+        .expect("commit");
+        let Some(gate) = resolve(&root, "probe") else {
+            panic!("the module resolves to a gate");
+        };
+        let work = fixture("sweep-shard-work");
+        let keys: String = gate
+            .rows
+            .iter()
+            .map(|row| format!("{}\n", row_key(&root, &gate, row)))
+            .collect();
+        fs::write(work.join(CAUGHT_RECORD), keys).expect("record every row caught");
+        let names = ["zz-missing", "probe", "bb-missing", "aa-missing"].map(String::from);
+        let mut judged = Vec::new();
+        let mut reported = Vec::new();
+        for k in 0..2 {
+            let mut progress = Vec::new();
+            let sweep = sweep_shard(
+                &root,
+                &names,
+                work.clone(),
+                &Registry::default(),
+                Some((k, 2)),
+                &mut progress,
+            )
+            .expect("the sweep stages");
+            let said = String::from_utf8(progress).expect("utf-8");
+            judged.extend(
+                said.lines()
+                    .filter_map(|line| line.split(" probe ").nth(1))
+                    .filter_map(|rest| rest.split(' ').next())
+                    .map(str::to_owned),
+            );
+            reported.push(
+                sweep
+                    .findings
+                    .iter()
+                    .map(|finding| finding.gate.clone())
+                    .collect::<Vec<_>>(),
+            );
+        }
+        judged.sort();
+        assert_eq!(judged, ["r0", "r1", "r2", "r3", "r4"], "each row once");
+        assert_eq!(
+            reported,
+            [
+                vec![String::from("aa-missing")],
+                vec![String::from("bb-missing"), String::from("zz-missing")]
+            ],
+            "each gate-level finding once, by its sorted position"
+        );
     }
 
     /// Fails by: the staged copy left without a repository, a path the

@@ -17523,6 +17523,7 @@ fn run_declared_sweep(
     // still carries exactly the tracked bytes.
     let work = root.join("target").join("mutate");
     std::fs::create_dir_all(&work)?;
+    let shard = shard.and_then(mutate::parse_shard);
     let sweep = match mutate::sweep_shard(root, &names, work, registry, shard, err) {
         Ok(sweep) => sweep,
         Err(reason) => {
