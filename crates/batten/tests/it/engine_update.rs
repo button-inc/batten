@@ -115,7 +115,9 @@ fn built() -> String {
     "2".repeat(64)
 }
 
-/// The release directory a checkout builds into when nothing redirects it.
+/// The release directory every case's build lives in: the default layout, and
+/// also where `run_from`'s `CARGO_TARGET_DIR=dir/target` redirect points, which
+/// is why one path serves both.
 fn conventional_release(dir: &Path) -> PathBuf {
     dir.join("target").join("release")
 }

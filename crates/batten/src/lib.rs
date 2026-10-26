@@ -20106,7 +20106,7 @@ fn hand_off<'a>(
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT hook-handoff-skipped|s@^    let Some(build) = engine::checkout_build(root) else {$@    let Some(build) = None::<PathBuf> else {@|a_hook_outside_the_checkout_hands_off_to_the_authoritys_build
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT handoff-reruns-the-binary-already-run|s@^    if already_ran(handoff.ran, \&build)? {$@    if false {@|a_crashing_followed_build_never_fails_the_hook_open
+//MUTANT handoff-reruns-the-binary-already-run|s@^    if already_ran(handoff.ran, \&build) {$@    if false {@|a_crashing_followed_build_never_fails_the_hook_open
 fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<Option<ExitCode>> {
     if std::env::var_os(ENGINE_UPDATED).is_some() {
         return Ok(None);
@@ -20142,7 +20142,7 @@ fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<O
     let Some(build) = engine::checkout_build(root) else {
         return Ok(None);
     };
-    if already_ran(handoff.ran, &build)? {
+    if already_ran(handoff.ran, &build) {
         return Ok(None);
     }
     let mut argv = vec![build.to_string_lossy().into_owned()];
@@ -20160,13 +20160,17 @@ fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<O
 /// one engine suppressed a hand-off to a different one; comparing canonical
 /// paths answers both at the resolution the question is actually asked at.
 ///
-/// # Errors
-///
-/// Only resolving this process's own image.
-fn already_ran(ran: Option<&Path>, build: &Path) -> Result<bool> {
+/// **An unreadable own image is "not this one", never an error.** This runs on
+/// the load-fault arm, ahead of the refusal floor, so a `?` here let a failed
+/// `current_exe` (no `/proc` in a sandbox) leave the hook before the floor
+/// decided anything — the fail-open this issue exists to close. Answering
+/// `false` costs at most one hand-off to this same binary, which then decides
+/// or falls to the floor like any other.
+fn already_ran(ran: Option<&Path>, build: &Path) -> bool {
     let build = git::canonical(build);
-    let mine = std::env::current_exe()?;
-    Ok(git::canonical(&mine) == build || ran.is_some_and(|path| git::canonical(path) == build))
+    let mine = std::env::current_exe().ok();
+    mine.is_some_and(|mine| git::canonical(&mine) == build)
+        || ran.is_some_and(|path| git::canonical(path) == build)
 }
 
 /// Refuse a call whose rules this build could not load (CLOUD-1677).
