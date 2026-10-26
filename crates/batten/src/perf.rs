@@ -2242,6 +2242,12 @@ const NS_VAR: &str = "BENCH_NS";
 const NULL_PAIRS_VAR: &str = "BENCH_NULL_PAIRS";
 const BIN_VAR: &str = "BENCH_BIN";
 
+/// The conventional build path, which only a test still spells: the sweep reads
+/// `engine::release_build` (CLOUD-2376), and the case below writes its scratch
+/// build here, inside the scratch repository by construction.
+#[cfg(test)]
+const DEFAULT_BIN: &str = "target/release/batten";
+
 /// The sweep, and its FIRST entry is the ratio base.
 ///
 /// ONE, NOT ZERO, and that correction is the difference between measuring
@@ -3420,7 +3426,7 @@ mod tests {
         assert!(refused.contains("is missing"), "{refused}");
         // Inside the scratch repository by construction: a path the runner's
         // `BENCH_BIN` named could be a real build this case must never write.
-        let binary = repo.join("target/release/batten");
+        let binary = repo.join(DEFAULT_BIN);
         assert!(
             release_binary_at(binary.clone())
                 .err()
