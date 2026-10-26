@@ -647,6 +647,69 @@ reason = "dispatch the code-review skill"
     );
 }
 
+/// **EVERY COMMIT IS ON THE REMOTE BEFORE ANY LAP VERIFIES** (CLOUD-1353).
+///
+/// Through `land_entry_push`, the decision a landing takes at entry: the push it
+/// makes needs a smart-HTTP remote, which this tier does not stand up, so the
+/// forge read is handed in. On `main` nothing pushed before the first lap's
+/// `verify`, so a reclaim during it took every commit this clone had not pushed.
+#[test]
+fn a_landing_pushes_its_own_commits_before_any_lap_verifies() {
+    use batten::{EntryPush, PushRead, land_entry_push};
+    let local = Some("local-head");
+    let found = |draft: bool, head: &str| PushRead::Found {
+        pr: "7".to_owned(),
+        readiness: batten::land::Readiness {
+            draft,
+            node: "PR_node".to_owned(),
+            head: head.to_owned(),
+        },
+    };
+    let decide = |read: &PushRead| land_entry_push(false, false, local, read);
+
+    assert_eq!(
+        decide(&found(true, "an-older-head")),
+        EntryPush::Push,
+        "a draft behind this clone is pushed: its jobs are draft-gated"
+    );
+    assert_eq!(
+        decide(&PushRead::NoPullRequest),
+        EntryPush::Push,
+        "no pull request, no run"
+    );
+    for (read, why) in [
+        (found(true, "local-head"), "a draft already at this head"),
+        (
+            found(false, "an-older-head"),
+            "a ready pull request would buy a run",
+        ),
+        (
+            found(false, "local-head"),
+            "a ready pull request already at this head",
+        ),
+        (PushRead::Unreadable, "a forge that could not say"),
+    ] {
+        assert!(
+            matches!(decide(&read), EntryPush::Skip(_)),
+            "{why} is not pushed at entry"
+        );
+    }
+    assert!(
+        matches!(
+            land_entry_push(true, false, local, &found(true, "an-older-head")),
+            EntryPush::Skip(_)
+        ),
+        "a recorded speculation may carry another branch's commits"
+    );
+    assert!(
+        matches!(
+            land_entry_push(false, true, local, &found(true, "an-older-head")),
+            EntryPush::Skip(_)
+        ),
+        "another clone landing this branch keeps its head"
+    );
+}
+
 /// **A LAP NEVER RUNS FROM THE TRUNK.**
 ///
 /// Over the compiled binary, because this is the one property in the file whose
