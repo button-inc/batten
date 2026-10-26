@@ -29491,6 +29491,53 @@ pub fn land_ready_owes(
 mod tests {
     use super::*;
 
+    /// CLOUD-1564: the Push row's one question has two reasons, and a LIVE BET
+    /// IS UNWOUND AND LAPPED, never published. Through `asks_before_the_step`
+    /// itself, because the arm is the subject: dropping it, or asking the push
+    /// gate first, answers `Go` and pushes another branch's commits.
+    #[test]
+    fn the_push_rows_question_unwinds_a_live_bet_rather_than_publish_it() {
+        let root = crate::scratch::scratch("asks-before-push-live-bet");
+        gitwrite::init_on_main(&root).unwrap();
+        std::fs::write(root.join("a"), "a\n").unwrap();
+        gitwrite::commit_paths(&root, &["a".to_owned()], "seed").unwrap();
+        let head = git::head_commit(&root).unwrap();
+        let row = pipeline::Pipeline::default()
+            .steps
+            .into_iter()
+            .find(|row| row.step == land::Step::Push)
+            .unwrap();
+        // The undo point is HEAD itself, so the unwind's reset moves nothing and
+        // the bet was never pushed, so nothing is owed to a remote.
+        let mut bet = speculation::Bet {
+            base: Some(head.clone()),
+            undo: Some(head),
+            ..speculation::Bet::default()
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let asked = asks_before_the_step(
+            row,
+            Asked {
+                root: &root,
+                url: "no-remote",
+                reference: "refs/heads/main",
+                branch: "main",
+                lap: 1,
+            },
+            &mut main_watch::Poll::default(),
+            &mut bet,
+            &mut out,
+            &mut err,
+        );
+        assert!(
+            matches!(asked, Ok(Answered::Lap)),
+            "{asked:?}: {}{}",
+            String::from_utf8_lossy(&out),
+            String::from_utf8_lossy(&err)
+        );
+        assert!(bet.declined, "and this landing does not bet again");
+    }
+
     /// CLOUD-2372: the next landing's reap, not a reader, forgets a dead
     /// registrant. A pid past every platform's `pid_max` is dead wherever a
     /// corpse can be found; off unix nothing is found dead and nothing is reaped.
