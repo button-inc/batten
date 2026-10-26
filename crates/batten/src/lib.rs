@@ -15962,8 +15962,9 @@ fn still_holds_lease(root: &Path) -> bool {
 
 /// The lease as observed now, this clone's holder name, and the instant: the
 /// one lookup [`still_holds_lease`] and [`no_rival_holds_lease`] ask their
-/// complementary questions of. `None` is could-not-look, which both read as
-/// `false`.
+/// complementary questions of, and the entry push asks [`lease_rival`] of.
+/// `None` is could-not-look: the first two read it as `false`, and
+/// [`lease_rival`] as a rival, each the closed direction for what it guards.
 fn lease_reading(root: &Path) -> Option<(lease::Observed, String, i64)> {
     let terms = lease::terms(root).ok()?;
     let (_, holder) = lease_identity(root).ok()?;
@@ -29259,7 +29260,7 @@ pub enum EntryPush {
 ///
 /// * a recorded SPECULATION skips, because HEAD may carry borrowed commits;
 /// * ANOTHER CLONE LANDING THIS BRANCH skips, so its pull request's head is not
-///   moved under it. `rival_on_branch` is asked last, only for a push, because
+///   moved under it. `rival` is asked last, only for a push, because
 ///   it is a round trip to the remote ([`lease_rival`]);
 /// * NO pull request pushes, since no workflow runs on a branch push;
 /// * a DRAFT pushes when its head is not this one. Its jobs are draft-gated;
@@ -29272,7 +29273,7 @@ pub fn land_entry_push(
     bet_live: bool,
     local_head: Option<&str>,
     read: &PushRead,
-    rival_on_branch: impl FnOnce() -> bool,
+    rival: impl FnOnce() -> bool,
 ) -> EntryPush {
     if bet_live {
         return EntryPush::Skip("a speculation is recorded on this head");
@@ -29290,7 +29291,7 @@ pub fn land_entry_push(
             }
         }
     };
-    if decided == EntryPush::Push && rival_on_branch() {
+    if decided == EntryPush::Push && rival() {
         return EntryPush::Skip("another clone may be landing this branch");
     }
     decided
