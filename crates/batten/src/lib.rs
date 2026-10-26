@@ -321,10 +321,17 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     let hook_path = matches!(command, Some(Command::Hook { .. }));
     let own_surface = matches!(command, Some(Command::Engine { .. }));
     let may_follow = !own_surface && std::env::var_os(ENGINE_UPDATED).is_none();
-    let followed = if may_follow {
-        follow_pin(hook_path)?
-    } else {
-        Followed::Nothing
+    // ON THE HOOK PATH A FOLLOW THAT ERRS IS NOTHING TO FOLLOW (CLOUD-2376), and
+    // it is decided here, once, rather than at each fallible call inside. A
+    // Batten error is the one answer every harness reads as "run it", so a `?`
+    // out of `follow_pin` — an unreadable own image with no `/proc`, a state dir
+    // that will not resolve — left the hook before anything judged the call.
+    // This binary judges it instead. A verb still reports the error.
+    let followed = match may_follow.then(|| follow_pin(hook_path)) {
+        None => Followed::Nothing,
+        Some(Ok(followed)) => followed,
+        Some(Err(_)) if hook_path => Followed::Nothing,
+        Some(Err(error)) => return Err(error),
     };
     // A CRASHED FOLLOW IS NOT HANDED THE SAME BUILD AGAIN (CLOUD-2376). The
     // hook's second handoff finds the same checkout build from the envelope's
@@ -706,17 +713,7 @@ fn follow_pin(hook_path: bool) -> Result<Followed> {
     // READ BEFORE THE SWAP. After the rename Linux reports the running image as
     // `<path> (deleted)`, which is not a program — measured: the re-exec failed
     // with "cannot run `…/target/debug/batten (deleted)`".
-    //
-    // ON THE HOOK PATH AN UNREADABLE IMAGE IS NOTHING TO FOLLOW, never an error
-    // (CLOUD-2376), for `already_ran`'s reason: a `?` here left the hook before
-    // anything judged the call (no `/proc` in a sandbox), and a Batten error is
-    // the one answer every harness reads as "run it". This binary then judges
-    // the call itself. A verb still reports it, as it always did.
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(_) if hook_path => return Ok(Followed::Nothing),
-        Err(error) => return Err(error.into()),
-    };
+    let exe = std::env::current_exe()?;
     // A BUILD OF THIS CHECKOUT IS NEVER REPLACED (CLOUD-2063). A binary inside
     // the tree it judges is `cargo`'s output, not an installed engine: swapping
     // it overwrote `target/debug/batten` with the pinned release under `verify`'s
@@ -726,13 +723,7 @@ fn follow_pin(hook_path: bool) -> Result<Followed> {
     }
     let engine = match (pin.release.as_deref(), pin.source.as_deref()) {
         (Some(tag), None) => {
-            // The same rule as the image above: a state dir the hook cannot
-            // resolve leaves this binary to judge, rather than no judge at all.
-            let cache = match state::repo_state_dir(&root) {
-                Ok(cache) => cache,
-                Err(_) if hook_path => return Ok(Followed::Nothing),
-                Err(error) => return Err(error),
-            };
+            let cache = state::repo_state_dir(&root)?;
             // `releases_repository()`, NOT THE BAKED LITERAL (CLOUD-2376). Every
             // other release fetch in this binary reads that seam; this one spelled
             // the repository itself, so no fixture could point it anywhere and the
