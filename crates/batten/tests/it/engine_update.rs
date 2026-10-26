@@ -496,6 +496,13 @@ fn a_followed_builds_decision_reaches_the_harness_whole() {
     );
 }
 
+/// A config pinning a release no fixture serves, for the two unreachable cases.
+const PINS_UNFETCHABLE: &str = "version = 1\nengine = { release = \"v9.9.9\" }\n";
+
+/// This suite's established unreachable host, which both of those cases point
+/// the release fetch at.
+const UNREACHABLE_RELEASES: &str = "https://localhost:1/example/pkg";
+
 /// A RELEASE PIN THIS BINARY CANNOT FETCH IS A REFUSAL, NOT A SHRUG
 /// (CLOUD-2376).
 ///
@@ -516,11 +523,7 @@ fn a_followed_builds_decision_reaches_the_harness_whole() {
 #[test]
 fn a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path() {
     let (dir, _installed, binary) = case_tree("unreachable-release");
-    common::write(
-        &dir,
-        "batten.toml",
-        "version = 1\nengine = { release = \"v9.9.9\" }\n",
-    );
+    common::write(&dir, "batten.toml", PINS_UNFETCHABLE);
 
     let output = run_from(
         &binary,
@@ -528,10 +531,7 @@ fn a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path() {
         &dir,
         &["config", "show"],
         "",
-        &[(
-            "BATTEN_RELEASES",
-            Path::new("https://localhost:1/example/pkg"),
-        )],
+        &[("BATTEN_RELEASES", Path::new(UNREACHABLE_RELEASES))],
     );
     // A NON-ZERO CODE PROVES NOTHING ON ITS OWN, and asserting it alone is how
     // the first version of this case passed over the very mutation it was
@@ -561,7 +561,7 @@ fn a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path() {
 }
 
 /// ON THE HOOK A RELEASE PIN THAT CANNOT BE FETCHED FALLS THROUGH, LOUDLY
-/// (CLOUD-2376), the other half of the case above.
+/// (CLOUD-2376).
 ///
 /// `run` turns the follow's error into nothing to follow, so the refusal floor
 /// decides the call. Without that, the error ends the hook as a Batten error,
@@ -571,11 +571,7 @@ fn a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path() {
 #[test]
 fn a_release_pin_the_hook_cannot_fetch_falls_through_and_says_so() {
     let (dir, _installed, binary) = case_tree("unreachable-release-hook");
-    common::write(
-        &dir,
-        "batten.toml",
-        "version = 1\nengine = { release = \"v9.9.9\" }\n",
-    );
+    common::write(&dir, "batten.toml", PINS_UNFETCHABLE);
 
     let output = run_from(
         &binary,
@@ -583,10 +579,7 @@ fn a_release_pin_the_hook_cannot_fetch_falls_through_and_says_so() {
         &dir,
         &ADJUDICATE,
         &bash_envelope("hook-unreachable", "echo hi"),
-        &[(
-            "BATTEN_RELEASES",
-            Path::new("https://localhost:1/example/pkg"),
-        )],
+        &[("BATTEN_RELEASES", Path::new(UNREACHABLE_RELEASES))],
     );
     // THE DENY DOCUMENT, NOT THE CODE, is the floor's signature: it answers `3`
     // beside a deny, and a Batten error out of `run` is a `3` with no document
