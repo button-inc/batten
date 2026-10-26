@@ -326,18 +326,26 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // Batten error is the one answer every harness reads as "run it", so a `?`
     // out of `follow_pin` — an unreadable own image with no `/proc`, a state dir
     // that will not resolve — left the hook before anything judged the call.
-    // This binary judges it instead. A verb still reports the error.
+    // This binary judges it instead, and says so: a pin that could not be
+    // followed must not read like a pin that is current (CLOUD-43, loud and
+    // never silent). A verb still reports the error.
     let followed = match may_follow.then(|| follow_pin(hook_path)) {
         None => Followed::Nothing,
         Some(Ok(followed)) => followed,
-        Some(Err(_)) if hook_path => Followed::Nothing,
+        Some(Err(why)) if hook_path => {
+            let _ = writeln!(
+                err,
+                "batten: the engine pin could not be followed ({why:#}); this build judges the call"
+            );
+            Followed::Nothing
+        }
         Some(Err(error)) => return Err(error),
     };
-    // A CRASHED FOLLOW IS NOT HANDED THE SAME BUILD AGAIN (CLOUD-2376). The
-    // hook's second handoff finds the same checkout build from the envelope's
-    // authority, so without this it would spawn the crashing child a second
-    // time to learn what this one already did. Exhaustive, so a fourth
-    // outcome cannot quietly read as "nothing was handed".
+    // THE FOLLOW'S TARGET TRAVELS INTO THE HOOK rather than being spawned here
+    // (CLOUD-2376): `run_hook` reads the payload first and spawns it there, and
+    // the path it ran is what keeps the second hand-off (`already_ran`) from
+    // spawning the same crashing build again. Exhaustive, so a fourth outcome
+    // cannot quietly read as "nothing was handed".
     let pinned = match followed {
         Followed::Answered(code) => return Ok(code),
         Followed::Pinned(target) => Some(target),
