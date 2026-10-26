@@ -68,8 +68,13 @@ fn the_fuzz_lock_resolves_shared_crates_as_the_root_does() {
     );
     for name in HARNESS {
         assert!(
-            fuzz.contains_key(name) && !root.contains_key(name),
-            "{name} is in HARNESS but is not a fuzz-only crate: drop it from the list"
+            fuzz.contains_key(name),
+            "{name} is in HARNESS but the fuzz lock no longer pins it: drop it from the list"
+        );
+        assert!(
+            !root.contains_key(name),
+            "{name} is in HARNESS but the root lock now carries it, so `deny` judges it \
+             there: drop it from the list and re-seed the fuzz lock"
         );
     }
     let drifted: Vec<String> = fuzz
