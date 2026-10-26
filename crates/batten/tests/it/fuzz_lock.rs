@@ -10,6 +10,10 @@
 //! A SUBSET, NOT AN EQUALITY: the fuzz lock prunes what its harness does not
 //! reach and adds the harness's own crates, so only a version the root lock
 //! does not carry is drift.
+//!
+//! REGISTRY CRATES ONLY: a release bumps `batten` in the root lock alone
+//! (`release-plz release-pr`), and the fuzz build re-resolves that path crate
+//! itself, so a path entry's version is not drift.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -18,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::common;
 
-/// Every package name in the lock at `path`, with the versions it pins.
+/// Every registry package in the lock at `path`, with the versions it pins.
 fn pinned(path: &str) -> BTreeMap<String, BTreeSet<String>> {
     let text = std::fs::read_to_string(common::at_root(path)).expect("the lock reads");
     let lock: toml::Value = toml::from_str(&text).expect("the lock is TOML");
@@ -28,6 +32,9 @@ fn pinned(path: &str) -> BTreeMap<String, BTreeSet<String>> {
         .and_then(toml::Value::as_array)
         .expect("the lock lists packages")
     {
+        if package.get("source").is_none() {
+            continue;
+        }
         let field = |key: &str| {
             package
                 .get(key)
@@ -48,14 +55,22 @@ fn pinned(path: &str) -> BTreeMap<String, BTreeSet<String>> {
 fn the_fuzz_lock_resolves_shared_crates_as_the_root_does() {
     let root = pinned("Cargo.lock");
     let fuzz = pinned("fuzz/Cargo.lock");
-    let shared = fuzz.keys().filter(|name| root.contains_key(*name)).count();
-    assert!(shared > 0, "the premise: the two locks share crates");
-    let drifted: Vec<String> = fuzz
+    let shared: Vec<_> = fuzz
         .iter()
-        .filter_map(|(name, versions)| {
-            let carried = root.get(name)?;
-            let stray: Vec<&String> = versions.difference(carried).collect();
-            (!stray.is_empty()).then(|| format!("{name} {stray:?}"))
+        .filter_map(|(name, versions)| Some((name, versions, root.get(name)?)))
+        .collect();
+    assert!(
+        !shared.is_empty(),
+        "the premise: the two locks share crates"
+    );
+    let drifted: Vec<String> = shared
+        .into_iter()
+        .filter(|(_, versions, carried)| !versions.is_subset(carried))
+        .map(|(name, versions, carried)| {
+            format!(
+                "{name} {:?}",
+                versions.difference(carried).collect::<Vec<_>>()
+            )
         })
         .collect();
     assert!(
