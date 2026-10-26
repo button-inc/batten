@@ -107,6 +107,7 @@ fn renovate_carries_the_fuzz_lock_on_every_cargo_branch_and_the_allowlist_admits
             "commands": ["node .github/renovate/fuzz-lock-carry.mjs"],
             "fileFilters": ["fuzz/Cargo.lock"],
             "executionMode": "branch",
+            "installTools": { "rust": {} },
         })
     );
     assert!(
@@ -118,7 +119,7 @@ fn renovate_carries_the_fuzz_lock_on_every_cargo_branch_and_the_allowlist_admits
 }
 
 #[test]
-fn the_allowlist_admits_nothing_beside_the_carry() {
+fn the_allowlist_admits_nothing_beside_the_carries() {
     let patterns = allowed();
     let old = "a".repeat(40);
     let new = "b".repeat(40);
@@ -134,19 +135,23 @@ fn the_allowlist_admits_nothing_beside_the_carry() {
     ] {
         assert!(
             !patterns.iter().any(|pattern| pattern.is_match(&refused)),
-            "an allowlist entry admits more than the carry: {refused}"
+            "an allowlist entry admits more than its carry: {refused}"
         );
     }
 }
 
 #[expect(
     clippy::disallowed_types,
-    reason = "stays, and test-only: the carry script is Node, run by Renovate rather than by this engine, so its suite is spawned as the program it is"
+    reason = "stays, and test-only: the carry scripts are Node, run by Renovate rather than by this engine, so their suites are spawned as the program they are"
 )]
 #[test]
-fn the_carry_script_passes_its_own_suite() {
+fn the_carry_scripts_pass_their_own_suites() {
     let output = std::process::Command::new(crate::common::require_tool("node"))
-        .args(["--test", ".github/renovate/sbom-carry.test.mjs"])
+        .args([
+            "--test",
+            ".github/renovate/sbom-carry.test.mjs",
+            ".github/renovate/fuzz-lock-carry.test.mjs",
+        ])
         .current_dir(at_root(""))
         .output()
         .expect("run node");

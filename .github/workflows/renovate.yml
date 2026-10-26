@@ -17,8 +17,9 @@ name: renovate
 # CLOUD-655 chose the hosted app over this in 2026-08 as "the cleaner of the two",
 # before any bump needed a derived file; nothing revisited it until now.
 #
-# THE ALLOWLIST IS ONE ANCHORED PATTERN for the one command, matched after
-# templating: `node .github/renovate/sbom-carry.mjs <depName> <old> <new>`. Never
+# THE ALLOWLIST IS ONE ANCHORED PATTERN PER COMMAND, matched after templating:
+# `node .github/renovate/sbom-carry.mjs <depName> <old> <new>`, and the
+# argument-free `node .github/renovate/fuzz-lock-carry.mjs` (CLOUD-2538). Never
 # a wildcard — a broad pattern lets any config this run reads execute anything.
 #
 # Mend's app must be removed from this repository when this goes live, or two

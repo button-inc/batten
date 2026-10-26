@@ -737,9 +737,13 @@ local gate = new Mapping<String, Step> {
         "**/*.rs",
         "**/Cargo.toml",
         "Cargo.lock",
-        // Read by `tests/it/fuzz_lock.rs` (CLOUD-2538), so a fuzz-lock-only
-        // commit changes what this step measures.
+        // Read by `tests/it/fuzz_lock.rs` and `tests/it/renovate_carry.rs`
+        // (CLOUD-2538, CLOUD-2300), so a commit touching only these changes
+        // what this step measures.
         "fuzz/Cargo.lock",
+        "renovate.json5",
+        ".github/workflows/renovate.yml",
+        ".github/renovate/**",
         "crates/batten/tests/fixtures/**",
         "batten.toml",
       )

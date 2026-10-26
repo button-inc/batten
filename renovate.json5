@@ -266,10 +266,13 @@
       // refuses the pin it left behind. Once per branch, after every update in
       // the group is written, the carry re-seeds it from the root lock. Admitted
       // by its own anchored pattern in `.github/workflows/renovate.yml`.
+      // `installTools` puts cargo on the command's PATH: the cargo manager's own
+      // toolchain is installed for its artifact update, not for this.
       postUpgradeTasks: {
         commands: ["node .github/renovate/fuzz-lock-carry.mjs"],
         fileFilters: ["fuzz/Cargo.lock"],
         executionMode: "branch",
+        installTools: { rust: {} },
       },
     },
     {
