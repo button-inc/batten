@@ -7968,19 +7968,20 @@ severity = "deny"
 # module reads `head-unpushed`; uncommitted edits are not refused, so edit-then-
 # test stays free. `mise run land` is the remedy, not the subject.
 #
-# `warn` FIRST, by CLOUD-320's discipline: a predicate lands reporting before it
-# is promoted. And measured, not only prescribed — as a deny it refused the live-
-# root cases of `pipeline_shapes.rs` and `cli.rs` inside `land`, whose `verify`
-# runs on a replayed head not yet pushed, so those cases' verdict became a
-# property of the clone rather than of the commit (`cli.rs` records the same
-# class for the land lock). Promotion owes those cases a fixed world first.
+# A DENY, AND THE TESTS IT REFUSED NOW READ A FIXED WORLD (CLOUD-2528). As a deny
+# it refused the live-root cases of `pipeline_shapes.rs` and `cli.rs` inside
+# `land`, whose `verify` runs on a replayed head not yet pushed: those cases'
+# verdict was a property of the clone rather than of the commit, the class
+# `cli.rs` records for the land lock. They adjudicate `common::committed_clone()`
+# now — the committed tree with HEAD on a remote ref and no receipt store. Replay:
+# 4343 trunk commits, fired 0 times, since every one is on `origin/main`.
 [[rule]]
 id = "check run early"
 no_fix_reason = "class 3 (a call rewrite): the subject is a tool call refused before it runs, so nothing persists for a command to repair; the refusal's remedy text is the route"
 kind = "policy"
 scope = "mediated_call"
 module = "policy/push-before-check.rego"
-severity = "warn"
+severity = "deny"
 
 # CLOUD-1916. A bare `run` string reading `$1` never receives it: mise appends a
 # task's arguments to the string. `darwin-link`'s x86_64 required check linked

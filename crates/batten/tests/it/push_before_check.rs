@@ -100,6 +100,22 @@ fn a_head_that_could_not_be_read_decides_nothing() {
     assert!(!out.contains("check run early"), "{out}");
 }
 
+/// THE FIXED WORLD THE LIVE-ROOT CASES READ (CLOUD-2528): the committed tree,
+/// HEAD pinned to a remote-tracking ref so this fact reads `false` there, and no
+/// receipt store for a session's marker to sit in. `#MUTANT fixed-world-unpinned`
+/// reddens here.
+#[test]
+fn the_committed_clone_is_pushed_and_carries_no_session_state() {
+    let clone = common::committed_clone();
+    let head = common::git_in(&clone, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        common::git_in(&clone, &["rev-parse", "refs/remotes/origin/fixed-world"]),
+        head
+    );
+    assert_eq!(batten::git::head_unpushed_to_a_remote(&clone), Some(false));
+    assert!(!clone.join(".git/batten-receipts").exists());
+}
+
 /// NOWHERE TO PUSH IS NOT "UNPUSHED" (review of #1228). A clone with no
 /// remote-tracking ref at all has every commit unpushed and no push that could
 /// change it, so reading it as `true` would refuse every check there for good.
