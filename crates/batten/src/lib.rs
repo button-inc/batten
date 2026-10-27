@@ -684,8 +684,9 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 /// There the tree is the change under review, and its pin is part of that
 /// change: the release PR's names the release its own cut creates, which no
 /// forge serves yet, so following it failed the run before the verb. A branch
-/// never chooses the engine that judges it (CLOUD-31), and a stale binary still
-/// follows the pin the ref names.
+/// does not choose the RELEASE that judges it (CLOUD-31), and a stale binary
+/// still follows the release the ref names. A source pin, the ref's as the
+/// tree's, is still followed to this checkout's own build, as it was before.
 //MUTANT-SUITE crates/batten/tests/it/release_verify.rs
 //MUTANT ref-run-follows-tree-pin|s@^    if let Some(judging_ref) = overrides.config_from.as_deref() {$@    if let Some(judging_ref) = None::<\&str> {@|a_release_head_pinning_the_next_release_is_graded_under_config_from
 fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
