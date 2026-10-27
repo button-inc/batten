@@ -274,8 +274,6 @@ pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 // `#[expect]` rather than `#[allow]` for `rules/rust.md`'s reason: it is
 // self-cleaning in both directions, so if the table ever shrinks back under the
 // ceiling this annotation goes red rather than quietly outliving its cause.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT ref-run-follows-tree-pin|s@^    let judged_by_a_ref = overrides.config_from.is_some();$@    let judged_by_a_ref = false;@|a_release_head_pinning_the_next_release_is_graded_under_config_from
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT hook-follow-error-escapes|s@^        Some(Err(why)) if hook_path => {$@        Some(Err(why)) if false => {@|a_release_pin_the_hook_cannot_fetch_falls_through_and_says_so
 #[expect(
@@ -324,13 +322,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // surface, and the guard bounds a session to one hop per invocation.
     let hook_path = matches!(command, Some(Command::Hook { .. }));
     let own_surface = matches!(command, Some(Command::Engine { .. }));
-    // A RUN JUDGED BY A REF FOLLOWS NO WORKING-TREE PIN (CLOUD-2549). Under
-    // `--config-from` the tree is the change under review, and its pin is part of
-    // that change: the release PR's names the release its own cut creates, which
-    // no forge serves yet. The caller chose this engine and the ref's policy, and
-    // a branch never chooses the engine that judges it (CLOUD-31).
-    let judged_by_a_ref = overrides.config_from.is_some();
-    let may_follow = !own_surface && !judged_by_a_ref && std::env::var_os(ENGINE_UPDATED).is_none();
+    let may_follow = !own_surface && std::env::var_os(ENGINE_UPDATED).is_none();
     // ON THE HOOK PATH A FOLLOW THAT ERRS IS NOTHING TO FOLLOW (CLOUD-2376), and
     // it is decided here, once, rather than at each fallible call inside. A
     // Batten error is the one answer every harness reads as "run it", so a `?`
@@ -339,7 +331,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // This binary judges it instead, and says so: a pin that could not be
     // followed must not read like a pin that is current (CLOUD-43, loud and
     // never silent). A verb still reports the error.
-    let followed = match may_follow.then(|| follow_pin(hook_path)) {
+    let followed = match may_follow.then(|| follow_pin(hook_path, &overrides)) {
         None => Followed::Nothing,
         Some(Ok(followed)) => followed,
         Some(Err(why)) if hook_path => {
@@ -684,6 +676,29 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
 /// again in the same invocation (CLOUD-2062).
 const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 
+/// The `batten.toml` whose pin this run follows: the authority the run is
+/// judged by, so the ref under `--config-from`, the named directory's under
+/// `--config-in`, else the working tree's. `None` where there is none to read.
+///
+/// THE REF'S PIN, NEVER THE WORKING TREE'S, UNDER `--config-from` (CLOUD-2549).
+/// There the tree is the change under review, and its pin is part of that
+/// change: the release PR's names the release its own cut creates, which no
+/// forge serves yet, so following it failed the run before the verb. A branch
+/// never chooses the engine that judges it (CLOUD-31), and a stale binary still
+/// follows the pin the ref names.
+//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
+//MUTANT ref-run-follows-tree-pin|s@^    if let Some(reference) = overrides.config_from.as_deref() {$@    if let Some(reference) = None::<\&str> {@|a_release_head_pinning_the_next_release_is_graded_under_config_from
+fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
+    if let Some(reference) = overrides.config_from.as_deref() {
+        let dir = overrides.config_in.as_deref().map_or(root, Path::new);
+        return git::show(dir, reference, config::CONFIG_FILE).ok();
+    }
+    let dir = overrides.config_in.as_deref().map_or(root, Path::new);
+    config::read_text(&dir.join(config::CONFIG_FILE))
+        .ok()
+        .map(|text| String::clone(&text))
+}
+
 /// When this checkout pins an engine this binary is not, re-run this invocation
 /// under the pinned one; [`Followed::Nothing`] when nothing was stale.
 ///
@@ -712,7 +727,7 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT follow-pin-passes-a-crash-through|s@^    if hook_path {$@    if false {@|a_crashing_followed_build_never_fails_the_hook_open
 //MUTANT fetch-failure-always-falls-through|s@^            engine::pinned_release(&cache, &releases_repository(), tag)?$@            match engine::pinned_release(\&cache, \&releases_repository(), tag) { Ok(path) => path, Err(_) => return Ok(Followed::Nothing) }@|a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path
-fn follow_pin(hook_path: bool) -> Result<Followed> {
+fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
     // THE HOOK FOLLOWS A RELEASE PIN BUT NEVER BUILDS A SOURCE ONE (CLOUD-2062,
     // narrowed under CLOUD-2059), and that is the same bit rather than a second
     // one. Two parameters that are provably each other's negation can be passed
@@ -722,7 +737,7 @@ fn follow_pin(hook_path: bool) -> Result<Followed> {
     let Ok(root) = git::worktree_root(Path::new(".")) else {
         return Ok(Followed::Nothing);
     };
-    let Ok(text) = config::read_text(&root.join(config::CONFIG_FILE)) else {
+    let Some(text) = pin_text(&root, overrides) else {
         return Ok(Followed::Nothing);
     };
     let Some(pin) = engine::stale(&text, engine::running_stamp) else {
