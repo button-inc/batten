@@ -98,8 +98,9 @@ pub struct Entry {
     pub sig_at: String,
     /// The branch the task is carrying, where it declared one (CLOUD-2456).
     pub branch: String,
-    /// How many consecutive crashed predecessors on that branch this run took
-    /// over: `0` for a fresh start (CLOUD-2456).
+    /// How many consecutive predecessors on that branch died before any lap
+    /// began, ending with the one this run took over: `0` for a fresh start or
+    /// after a death inside a lap (CLOUD-2456).
     pub recovers: String,
 }
 
@@ -394,15 +395,13 @@ pub fn declare_subject(git_dir: &Path, pid: &str, branch: &str, recovers: u32) {
     });
 }
 
-/// The phase a reaped record is left in when it is kept rather than forgotten:
-/// a dead land's crash witness (CLOUD-2456).
-pub const REAPED: &str = "reaped";
-
-/// Mark `pid`'s record as reaped, so no later reap signals its group again: a
-/// kept record's recorded group outlives the process, and the kernel reuses
-/// group numbers. Written without a stamp, since a reap is no sign of life.
-pub fn mark_reaped(git_dir: &Path, pid: &str) {
-    modify(git_dir, pid, |entry| REAPED.clone_into(&mut entry.phase));
+/// Forget the process group `pid`'s record names, once it has been signalled,
+/// so no later reap signals that number again (CLOUD-2456): a record kept past
+/// its process keeps a group number the kernel reuses. Every other field, the
+/// phase it died in among them, is kept, and no stamp moves, since this is no
+/// sign of life.
+pub fn disown_group(git_dir: &Path, pid: &str) {
+    modify(git_dir, pid, |entry| entry.pgid.clear());
 }
 
 /// Forget every record of `task` on `branch` but `keep`'s, with its hold
@@ -416,6 +415,17 @@ pub fn forget_others(git_dir: &Path, task: &str, keep: &str, branch: &str) {
     for entry in records(git_dir) {
         if entry.task == task && entry.pid != keep && entry.branch == branch {
             unregister(git_dir, &entry.pid);
+        }
+    }
+    // A dead hold with no record is a run that died after taking its hold and
+    // before registering: it proves nothing, so it goes here, at a run's entry,
+    // rather than in a reader, which deletes nothing (CLOUD-2372).
+    let Ok(listing) = std::fs::read_dir(state_dir(git_dir).join("held")) else {
+        return;
+    };
+    for pid in listing.filter_map(|found| found.ok()?.file_name().into_string().ok()) {
+        if pid != keep && !entry_path(git_dir, &pid).exists() && died(git_dir, &pid) == Some(true) {
+            let _ = std::fs::remove_file(held_path(git_dir, &pid));
         }
     }
 }
@@ -542,23 +552,10 @@ pub fn crashed_on(git_dir: &Path, task: &str, branch: &str) -> Option<Entry> {
     listing
         .filter_map(|found| found.ok()?.file_name().into_string().ok())
         .filter(|pid| died(git_dir, pid) == Some(true))
-        .filter_map(|pid| record_of_a_death(git_dir, &pid))
+        .filter_map(|pid| std::fs::read_to_string(entry_path(git_dir, &pid)).ok())
+        .map(|body| Entry::parse(&body))
         .filter(|entry| entry.task == task && entry.branch == branch)
         .max_by_key(Entry::last_alive)
-}
-
-/// The record a dead hold stands for, or `None`. A dead hold whose record is
-/// gone is a run that died after taking its hold and before registering: it
-/// proves nothing, so it is removed here rather than probed by every Stop after.
-fn record_of_a_death(git_dir: &Path, pid: &str) -> Option<Entry> {
-    match std::fs::read_to_string(entry_path(git_dir, pid)) {
-        Ok(body) => Some(Entry::parse(&body)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let _ = std::fs::remove_file(held_path(git_dir, pid));
-            None
-        }
-        Err(_) => None,
-    }
 }
 
 /// What [`alive`] found.
@@ -1348,14 +1345,32 @@ mod tests {
         );
     }
 
-    /// A dead hold with no record proves nothing, and the Stop that finds it
-    /// removes it rather than probing it on every turn after.
+    /// A dead hold with no record proves nothing. The Stop's reader leaves it,
+    /// since readers delete nothing, and the next run's entry removes it.
     #[test]
-    fn a_dead_hold_with_no_record_is_removed() {
+    fn a_dead_hold_with_no_record_is_removed_at_a_runs_entry() {
         let dir = registry("orphan-hold");
         taken(&dir, NO_SUCH_PID).release_as_a_death_would();
         assert!(crashed_on(&dir, "land", "work").is_none());
-        assert!(!held_path(&dir, NO_SUCH_PID).exists());
+        assert!(
+            held_path(&dir, NO_SUCH_PID).exists(),
+            "the reader removed nothing"
+        );
+        forget_others(&dir, "land", "4194306", "work");
+        assert!(!held_path(&dir, NO_SUCH_PID).exists(), "the entry did");
+    }
+
+    /// A disowned record keeps every field but its group, so the phase it died
+    /// in survives the reap that signalled it.
+    #[test]
+    fn disowning_a_group_keeps_the_rest_of_the_record() {
+        let dir = registry("disown");
+        register(&dir, "land", NO_SUCH_PID, "verify", 100);
+        disown_group(&dir, NO_SUCH_PID);
+        let entry = Entry::parse(
+            &std::fs::read_to_string(entry_path(&dir, NO_SUCH_PID)).unwrap_or_default(),
+        );
+        assert_eq!((entry.pgid.as_str(), entry.phase.as_str()), ("", "verify"));
     }
 
     /// An orderly exit drops the hold, which removes it: no crash is left.
