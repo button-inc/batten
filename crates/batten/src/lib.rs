@@ -11972,6 +11972,7 @@ struct Reaped {
 /// second pass is the observation that tells the two apart.
 //MUTANT-SUITE crates/batten/src/lib.rs
 //MUTANT reap-leaves-the-headstone|s@^        task::unregister(git_dir, &entry.pid);$@@|reap_abandoned_unregisters_a_dead_registrant
+//MUTANT reap-keeps-an-answered-crash|s@^            task::unregister(git_dir, &entry.pid);$@@|the_reap_keeps_every_dead_lands_witness
 fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
     // A record an earlier reap kept is not signalled twice: its group was
     // signalled then and disowned, since the number may belong to another since.
@@ -11980,10 +11981,13 @@ fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
             .into_iter()
             .partition(|entry| entry.pgid.is_empty());
     let mut reaped = Reaped::default();
-    // It was kept only as its branch's crash witness, so it is forgotten once
-    // that branch's land has answered it, which takes the hold.
+    // A disowned land was kept only as its branch's crash witness, so it is
+    // forgotten once that branch's land has answered it, which removes the
+    // hold. The FILE is read, never the lock: a Stop's probe holding it, or a
+    // lock that answers neither way, is no answer. Any other record with no
+    // group and no hold is a dead one the reap forgets as it always did.
     for entry in &disowned {
-        if task::died(git_dir, &entry.pid) != Some(true) {
+        if !task::held_path(git_dir, &entry.pid).exists() {
             task::unregister(git_dir, &entry.pid);
             reaped.unregistered += 1;
         }
@@ -12008,7 +12012,7 @@ fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
         // other, once: its group is disowned so no later reap signals the
         // number again, and the rest of the record, where it died among it,
         // stays.
-        if entry.task == LAND_TASK && task::died(git_dir, &entry.pid) == Some(true) {
+        if entry.task == LAND_TASK && task::held_path(git_dir, &entry.pid).exists() {
             task::disown_group(git_dir, &entry.pid);
             continue;
         }
