@@ -1183,7 +1183,13 @@ fn a_land_just_started_is_excused_until_it_registers() {
     };
     assert_eq!(stop(), Some(0), "the Stop after the start passes");
     assert_eq!(stop(), Some(0), "and so does every one while it builds");
-    batten::task::forget_others(&repo.join(".git"), "land", "the-re-run");
+    let _ = hook_in(&repo, &home, &prompt_payload("how is the landing going?"));
+    assert_eq!(
+        stop(),
+        Some(0),
+        "an operator message while it builds does not re-arm the refusal"
+    );
+    batten::task::forget_others(&repo.join(".git"), "land", "the-re-run", "work");
     assert_eq!(stop(), Some(0), "registered, it forgot the crash");
     crashed_land(&repo);
     assert_eq!(
@@ -1194,16 +1200,27 @@ fn a_land_just_started_is_excused_until_it_registers() {
 }
 
 /// A FAST CRASH REPEATED IS ESCAPABLE (CLOUD-2456): a land that was itself a
-/// recovery and died before finishing its first lap is a crash a re-run cannot
-/// cure. A first crash, however fast, and a recovery that died laps in, are
-/// still refused: one crash cannot tell a deterministic failure from a kill,
-/// and a re-run after laps gains ground.
+/// recovery and died before its first lap began is a crash a re-run cannot
+/// cure. A first crash, however fast, and a recovery that died inside a lap,
+/// are still refused: one crash cannot tell a deterministic failure from a
+/// kill, and a death mid-lap is the host time cap's shape, which a re-run beats.
 #[test]
 fn a_fast_crash_repeated_is_escapable() {
     for (recovers, lap, code, why) in [
-        (1, 1, Some(0), "a recovery dead in its first lap escapes"),
-        (2, 0, Some(0), "so does one dead before its first lap"),
-        (0, 1, Some(2), "a first crash is refused, however fast"),
+        (
+            1,
+            0,
+            Some(0),
+            "a recovery dead before its first lap escapes",
+        ),
+        (2, 0, Some(0), "and so does a longer streak of them"),
+        (0, 0, Some(2), "a first crash is refused, however fast"),
+        (
+            1,
+            1,
+            Some(2),
+            "a recovery the cap killed inside lap one is refused",
+        ),
         (1, 3, Some(2), "a recovery that made laps is refused"),
     ] {
         let (repo, home) = unlanded_fixture(&format!("stop-fast-crash-{recovers}-{lap}"));
