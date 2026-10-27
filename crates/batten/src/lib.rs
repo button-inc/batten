@@ -29954,7 +29954,7 @@ mod tests {
         // `work`'s land answers its crash; the next reap forgets that record,
         // and only that one.
         task::answer_crashes(&git_dir, LAND_TASK, "4194305", "work");
-        let _ = reap_abandoned(&git_dir, "programs");
+        let second = reap_abandoned(&git_dir, "programs");
         let (answered, unanswered) = (kept("4194306"), kept("4194307"));
         let probed_kept = kept(probed);
         probe.release_as_a_death_would();
@@ -29962,6 +29962,7 @@ mod tests {
         assert!(own && other, "both crash witnesses are kept");
         assert!(probed_kept, "a probe holding the lock is not an answer");
         assert!(!answered, "an answered crash is forgotten by the next reap");
+        assert_eq!(second.unregistered, 1, "and counted");
         assert!(
             unanswered,
             "another branch's is still that branch's to answer"

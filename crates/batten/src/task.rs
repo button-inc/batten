@@ -1353,12 +1353,13 @@ mod tests {
         push(&dir, NO_SUCH_PID, Signal::Tick, "3", 101);
         let entry = Entry::parse(&read());
         assert_eq!(
-            (
-                entry.branch.as_str(),
-                entry.recovers.as_str(),
-                entry.tick.as_str()
-            ),
-            ("work", "2", "3")
+            (entry.branch.as_str(), entry.streak(), entry.lap()),
+            ("work", 2, 3)
+        );
+        assert_eq!(
+            (Entry::default().streak(), Entry::default().lap()),
+            (0, 0),
+            "an undeclared streak and an unticked lap read as zero"
         );
     }
 
@@ -1417,6 +1418,20 @@ mod tests {
             &std::fs::read_to_string(entry_path(&dir, NO_SUCH_PID)).unwrap_or_default(),
         );
         assert_eq!((entry.pgid.as_str(), entry.phase.as_str()), ("", "verify"));
+    }
+
+    /// A hold stands while its file does, whoever holds its lock, and no
+    /// longer once it is removed (CLOUD-2456).
+    #[test]
+    fn a_hold_stands_while_its_file_does() {
+        let dir = registry("hold-stands");
+        assert!(!hold_stands(&dir, NO_SUCH_PID), "none taken");
+        let held = taken(&dir, NO_SUCH_PID);
+        assert!(hold_stands(&dir, NO_SUCH_PID), "held");
+        held.release_as_a_death_would();
+        assert!(hold_stands(&dir, NO_SUCH_PID), "released by a death");
+        unregister(&dir, NO_SUCH_PID);
+        assert!(!hold_stands(&dir, NO_SUCH_PID), "forgotten");
     }
 
     /// An orderly exit drops the hold, which removes it: no crash is left.
