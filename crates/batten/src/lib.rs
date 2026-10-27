@@ -11983,11 +11983,10 @@ fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
     let mut reaped = Reaped::default();
     // A disowned land was kept only as its branch's crash witness, so it is
     // forgotten once that branch's land has answered it, which removes the
-    // hold. The FILE is read, never the lock: a Stop's probe holding it, or a
-    // lock that answers neither way, is no answer. Any other record with no
-    // group and no hold is a dead one the reap forgets as it always did.
+    // hold. Any other record with no group and no hold is a dead one the reap
+    // forgets as it always did.
     for entry in &disowned {
-        if !task::held_path(git_dir, &entry.pid).exists() {
+        if !task::hold_stands(git_dir, &entry.pid) {
             task::unregister(git_dir, &entry.pid);
             reaped.unregistered += 1;
         }
@@ -12006,13 +12005,13 @@ fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
         // for the group to empty never ends for a group just KILLed (zombies
         // count) or a reused pgid.
         //
-        // Except a dead land: its record and hold are its branch's crash
+        // Except a dead land whose hold stands: its record and hold are its branch's crash
         // witness, which only that branch's land answers, through
         // `task::answer_crashes` at its entry (CLOUD-2456). Signalled like any
         // other, once: its group is disowned so no later reap signals the
         // number again, and the rest of the record, where it died among it,
         // stays.
-        if entry.task == LAND_TASK && task::held_path(git_dir, &entry.pid).exists() {
+        if entry.task == LAND_TASK && task::hold_stands(git_dir, &entry.pid) {
             task::disown_group(git_dir, &entry.pid);
             continue;
         }
@@ -29944,6 +29943,11 @@ mod tests {
                 .expect("a hold is taken")
                 .release_as_a_death_would();
         }
+        // A dead land whose hold a Stop's probe is locking as the reap passes:
+        // the lock says alive, and the witness is kept all the same.
+        let probed = "4194308";
+        task::register_as(&git_dir, LAND_TASK, probed, "verify", 100, "elsewhere", 0);
+        let probe = task::hold(&git_dir, probed).expect("a hold is taken");
         let _ = reap_abandoned(&git_dir, "programs");
         let kept = |pid: &str| task::read_field(&git_dir, pid, "task").is_some();
         let (own, other) = (kept("4194306"), kept("4194307"));
@@ -29952,8 +29956,11 @@ mod tests {
         task::answer_crashes(&git_dir, LAND_TASK, "4194305", "work");
         let _ = reap_abandoned(&git_dir, "programs");
         let (answered, unanswered) = (kept("4194306"), kept("4194307"));
+        let probed_kept = kept(probed);
+        probe.release_as_a_death_would();
         let _ = std::fs::remove_dir_all(&git_dir);
         assert!(own && other, "both crash witnesses are kept");
+        assert!(probed_kept, "a probe holding the lock is not an answer");
         assert!(!answered, "an answered crash is forgotten by the next reap");
         assert!(
             unanswered,
@@ -29986,7 +29993,7 @@ mod tests {
         let pid = std::process::id().to_string();
         let field = |name: &str| task::read_field(&git_dir, &pid, name);
         let (branch, recovers) = (field("branch"), field("recovers"));
-        let answered = !task::held_path(&git_dir, dead).exists();
+        let answered = !task::hold_stands(&git_dir, dead);
         let kept = task::read_field(&git_dir, dead, "task").is_some();
         let alive = task::died(&git_dir, &pid);
         drop(guard);

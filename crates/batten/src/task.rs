@@ -423,42 +423,44 @@ pub fn disown_group(git_dir: &Path, pid: &str) {
 /// witness a Stop reads, and keep its record (CLOUD-2456).
 ///
 /// For the caller holding `task`'s singleton lock: the lock proves no other run
-/// of it is live, so each dead hold on its branch is a crash this run answers.
-/// Another branch's is that branch's to answer, so it stays. The record is the
-/// reap's, as it always was: forgetting it here would hide from `alive` a dead
-/// run whose children the reap has not looked at. Signals nothing.
+/// of it is live, so every other hold on its branch is a crash this run
+/// answers, WHATEVER ITS LOCK SAYS. A Stop's probe may hold it for a moment and
+/// a lock may answer neither way; neither is a live run, and a hold left to
+/// either would outlive every land that could answer it. Another branch's is
+/// that branch's to answer, so it stays. The record is the reap's, as it always
+/// was: forgetting it here would hide from `alive` a dead run whose children
+/// the reap has not looked at. Signals nothing.
 ///
-/// A dead hold with no record is a run that died after taking its hold and
-/// before registering: it proves nothing, so it goes too, here at a run's
-/// entry rather than in a reader, which deletes nothing (CLOUD-2372).
+/// A hold with no record is a run that died after taking its hold and before
+/// registering: it proves nothing, so it goes too, here at a run's entry
+/// rather than in a reader, which deletes nothing (CLOUD-2372).
 pub fn answer_crashes(git_dir: &Path, task: &str, keep: &str, branch: &str) {
-    for (pid, record) in dead_holds(git_dir) {
-        let answered = match record {
+    for pid in holds(git_dir).filter(|pid| pid != keep) {
+        let answered = match held_record(git_dir, &pid) {
             Ok(entry) => entry.is_run_of(task, branch),
             Err(error) => error.kind() == std::io::ErrorKind::NotFound,
         };
-        if answered && pid != keep {
+        if answered {
             let _ = std::fs::remove_file(held_path(git_dir, &pid));
         }
     }
 }
 
-/// Every hold nobody holds, with the read of its record: the one listing both
-/// [`crashed_on`] and [`answer_crashes`] judge, so the crash a Stop refuses on
-/// is always one a land's entry answers. `durable`'s writes in flight are not
-/// holds.
-fn dead_holds(git_dir: &Path) -> impl Iterator<Item = (String, std::io::Result<Entry>)> + '_ {
+/// Every hold's pid: the one listing both [`crashed_on`] and
+/// [`answer_crashes`] judge, through [`Entry::is_run_of`], so the crash a Stop
+/// refuses on is always one a land's entry answers. `durable`'s writes in
+/// flight are not holds.
+fn holds(git_dir: &Path) -> impl Iterator<Item = String> {
     std::fs::read_dir(state_dir(git_dir).join("held"))
         .into_iter()
         .flatten()
         .filter_map(|found| found.ok()?.file_name().into_string().ok())
         .filter(|name| !crate::durable::is_temp(name))
-        .filter(move |pid| died(git_dir, pid) == Some(true))
-        .map(move |pid| {
-            let record =
-                std::fs::read_to_string(entry_path(git_dir, &pid)).map(|body| Entry::parse(&body));
-            (pid, record)
-        })
+}
+
+/// The record a hold's pid names.
+fn held_record(git_dir: &Path, pid: &str) -> std::io::Result<Entry> {
+    std::fs::read_to_string(entry_path(git_dir, pid)).map(|body| Entry::parse(&body))
 }
 
 /// Every complete record in the registry, sorted by path for the byte-stability
@@ -482,9 +484,19 @@ fn records(git_dir: &Path) -> Vec<Entry> {
 
 /// Where a run's hold lives: a directory beside the records, which every record
 /// reader skips because `is_record` reads only files (CLOUD-2456).
-#[must_use]
-pub fn held_path(git_dir: &Path, pid: &str) -> PathBuf {
+fn held_path(git_dir: &Path, pid: &str) -> PathBuf {
     state_dir(git_dir).join("held").join(pid)
+}
+
+/// Whether `pid`'s hold still stands, whatever its lock says: the crash
+/// witness the reap keeps a land's record for until its branch's land answers
+/// it, which removes the file (CLOUD-2456). The file is read, never the lock:
+/// a Stop's probe may hold it for a moment, and a lock may answer neither way.
+/// A file whose presence cannot be read stands, so no unanswered crash is
+/// forgotten on an error.
+#[must_use]
+pub fn hold_stands(git_dir: &Path, pid: &str) -> bool {
+    held_path(git_dir, pid).try_exists().unwrap_or(true)
 }
 
 /// A run's proof of life: an OS lock on a file of its own, held for the run's
@@ -536,12 +548,18 @@ pub fn hold(git_dir: &Path, pid: &str) -> Option<Held> {
     // the file holds nothing, so no write is ever made through the handle, and
     // neither `flock` nor `LockFileEx` needs one.
     crate::durable::replace(&path, "").ok()?;
-    let file = std::fs::File::open(&path).ok()?;
     // BLOCKING, not `try_lock`: a Stop's probe of this hold takes the lock for
     // the length of one call, and a `try_lock` that met it would leave this run
     // without a witness for its whole life. Nothing else can hold it: no two
     // live processes share a pid, and a dead one's lock the kernel has freed.
-    file.lock().ok()?;
+    // A file that cannot be locked goes: no lock on it could ever report a death.
+    let Some(file) = std::fs::File::open(&path)
+        .ok()
+        .filter(|file| file.lock().is_ok())
+    else {
+        let _ = std::fs::remove_file(&path);
+        return None;
+    };
     Some(Held {
         file,
         path,
@@ -580,8 +598,9 @@ pub fn died(git_dir: &Path, pid: &str) -> Option<bool> {
 /// live land; only a hold nobody holds costs a record read.
 #[must_use]
 pub fn crashed_on(git_dir: &Path, task: &str, branch: &str) -> Option<Entry> {
-    dead_holds(git_dir)
-        .filter_map(|(_, record)| record.ok())
+    holds(git_dir)
+        .filter(|pid| died(git_dir, pid) == Some(true))
+        .filter_map(|pid| held_record(git_dir, &pid).ok())
         .filter(|entry| entry.is_run_of(task, branch))
         .max_by_key(Entry::last_alive)
 }
@@ -1426,9 +1445,17 @@ mod tests {
             taken(&dir, pid).release_as_a_death_would();
         }
         let _own = taken(&dir, holder);
+        // A crash on this branch whose lock a Stop's probe holds right now is
+        // answered all the same: the singleton lock proves it is no live run.
+        let probed = "4194310";
+        register_as(&dir, "land", probed, "lap", 100, "work", 0);
+        let probe = taken(&dir, probed);
         answer_crashes(&dir, "land", holder, "work");
         let held = |pid: &str| held_path(&dir, pid).exists();
+        let probed_answered = !held(probed);
+        probe.release_as_a_death_would();
         assert!(!held(dead), "this branch's crash is answered");
+        assert!(probed_answered, "whatever its lock says");
         assert!(
             entry_path(&dir, dead).exists(),
             "and its record is the reap's"
