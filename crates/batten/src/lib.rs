@@ -11996,7 +11996,7 @@ fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
         //
         // Except a dead land: its record and hold are its branch's crash
         // witness, which only that branch's land answers, through
-        // `task::forget_others` at its entry (CLOUD-2456). Signalled like any
+        // `task::answer_crashes` at its entry (CLOUD-2456). Signalled like any
         // other, once: its group is disowned so no later reap signals the
         // number again, and the rest of the record, where it died among it,
         // stays.
@@ -12124,15 +12124,24 @@ fn run_land_singleton(
     // THE REGISTRATION, so `alive` can answer. After the lock rather than before:
     // a registration by a process that then loses the race is an entry naming a
     // lap that never ran.
-    task::register(&git_dir, LAND_TASK, &pid, "lap", boundary_epoch());
-    task::declare_subject(&git_dir, &pid, branch, recovers);
-    // Holding the lock proves no other land is live, so every other land record
-    // on this branch is a crash this run answers: forgotten here whether or not
+    // One write, so no kill between two can leave a branchless record.
+    task::register_as(
+        &git_dir,
+        LAND_TASK,
+        &pid,
+        "lap",
+        boundary_epoch(),
+        branch,
+        recovers,
+    );
+    // Holding the lock proves no other land is live, so every other land hold
+    // on this branch is a crash this run answers: answered here whether or not
     // the reap above could run, or a crash would outlive the land that re-ran
-    // it (CLOUD-2456). Forgotten EVEN WHEN this run's own hold failed: keeping
-    // the old crash then would refuse every Stop for good, since no re-run
-    // could ever clear it, which is CLOUD-889's loop. The cost is said instead.
-    task::forget_others(&git_dir, LAND_TASK, &pid, branch);
+    // it (CLOUD-2456). Only the hold goes; the record stays for the reap and
+    // `alive`. Answered EVEN WHEN this run's own hold failed: keeping the old
+    // crash then would refuse every Stop for good, since no re-run could ever
+    // clear it, which is CLOUD-889's loop. The cost is said instead.
+    task::answer_crashes(&git_dir, LAND_TASK, &pid, branch);
     if held.is_none() {
         writeln!(
             err,
@@ -29910,7 +29919,7 @@ mod tests {
 
     /// CLOUD-2456: the reap keeps every dead land's record and hold, on any
     /// branch: each is its branch's crash witness, and only that branch's land
-    /// forgets it, through `task::forget_others` at its entry.
+    /// answers it, through `task::answer_crashes` at its entry.
     #[test]
     fn the_reap_keeps_every_dead_lands_witness() {
         let git_dir =
@@ -29932,8 +29941,9 @@ mod tests {
     }
 
     /// CLOUD-2456: a land that takes over a crash on its branch declares the
-    /// streak one longer than the dead run's, forgets the dead run's record once
-    /// it holds the lock, and takes a hold of its own. The crash is a released
+    /// streak one longer than the dead run's, answers the dead run's hold once
+    /// it holds the lock, leaving its record to the reap, and takes a hold of
+    /// its own. The crash is a released
     /// hold, which the kernel answers the same way on every platform.
     #[test]
     fn a_land_taking_over_a_crash_carries_its_streak_and_forgets_it() {
@@ -29956,7 +29966,8 @@ mod tests {
         let pid = std::process::id().to_string();
         let field = |name: &str| task::read_field(&git_dir, &pid, name);
         let (branch, recovers) = (field("branch"), field("recovers"));
-        let forgotten = task::read_field(&git_dir, dead, "task").is_none();
+        let answered = task::died(&git_dir, dead).is_none();
+        let kept = task::read_field(&git_dir, dead, "task").is_some();
         let alive = task::died(&git_dir, &pid);
         drop(guard);
         let after = task::died(&git_dir, &pid);
@@ -29967,7 +29978,8 @@ mod tests {
             Some("2"),
             "one longer than the dead run's streak"
         );
-        assert!(forgotten, "the crash it answered is forgotten");
+        assert!(answered, "the crash it answered loses its hold");
+        assert!(kept, "and keeps its record for the reap");
         assert_eq!(
             alive,
             Some(false),
