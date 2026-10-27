@@ -30244,8 +30244,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&git_dir);
         std::fs::create_dir_all(&git_dir).unwrap();
         for (pid, branch) in [("4194306", "work"), ("4194307", "elsewhere")] {
-            task::register(&git_dir, LAND_TASK, pid, "verify", 100);
-            task::declare_subject(&git_dir, pid, branch, 0);
+            task::register_as(&git_dir, LAND_TASK, pid, "verify", 100, branch, 0);
             task::hold(&git_dir, pid)
                 .expect("a hold is taken")
                 .release_as_a_death_would();
@@ -30263,7 +30262,7 @@ mod tests {
     /// its own. The crash is a released
     /// hold, which the kernel answers the same way on every platform.
     #[test]
-    fn a_land_taking_over_a_crash_carries_its_streak_and_forgets_it() {
+    fn a_land_taking_over_a_crash_carries_its_streak_and_answers_it() {
         let root =
             std::env::temp_dir().join(format!("batten-land-takeover-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -30271,8 +30270,7 @@ mod tests {
         gitwrite::init_on_main(&root).unwrap();
         let git_dir = root.join(".git");
         let dead = "4194305";
-        task::register(&git_dir, LAND_TASK, dead, "verify", 100);
-        task::declare_subject(&git_dir, dead, "work", 1);
+        task::register_as(&git_dir, LAND_TASK, dead, "verify", 100, "work", 1);
         task::hold(&git_dir, dead)
             .expect("a hold is taken")
             .release_as_a_death_would();
@@ -30316,8 +30314,7 @@ mod tests {
         gitwrite::init_on_main(&root).unwrap();
         let git_dir = root.join(".git");
         let dead = "4194305";
-        task::register(&git_dir, LAND_TASK, dead, "verify", 100);
-        task::declare_subject(&git_dir, dead, "work", 3);
+        task::register_as(&git_dir, LAND_TASK, dead, "verify", 100, "work", 3);
         task::push(&git_dir, dead, task::Signal::Tick, "2", 101);
         task::hold(&git_dir, dead)
             .expect("a hold is taken")
