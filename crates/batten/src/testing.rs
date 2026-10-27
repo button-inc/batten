@@ -231,6 +231,39 @@ pub fn assert_distinct_nonempty(what: &str, items: &[&str]) {
     }
 }
 
+/// The cases holding [`assert_distinct_nonempty`] itself (CLOUD-2379).
+///
+/// Its callers only ever hand it vocabularies that already pass, so a helper
+/// that checked nothing, or refused every list, would leave all of them green;
+/// `mutate` measured both surviving. Each refusal and the clean pass are
+/// therefore asserted here, over lists built to discriminate.
+#[cfg(test)]
+mod distinct_nonempty_tests {
+    use super::assert_distinct_nonempty;
+
+    /// Fails by: a helper that refuses lists it should accept, which is what
+    /// comparing neighbours with `!=` does to every list of two or more.
+    #[test]
+    fn a_distinct_nonempty_list_passes() {
+        assert_distinct_nonempty("sample", &["a", "b", "c"]);
+    }
+
+    /// Fails by: a helper that checks nothing.
+    #[test]
+    #[should_panic(expected = "sample: entry 1 is empty")]
+    fn an_empty_entry_is_refused_by_position() {
+        assert_distinct_nonempty("sample", &["a", "", "c"]);
+    }
+
+    /// Fails by: a helper that checks nothing, or misses a repeat the sort
+    /// brings together from either end of the list.
+    #[test]
+    #[should_panic(expected = "sample: two entries are \"a\"")]
+    fn a_repeated_entry_is_refused_by_value() {
+        assert_distinct_nonempty("sample", &["a", "b", "a"]);
+    }
+}
+
 /// The cases holding [`declared_variants`] itself (CLOUD-2379).
 ///
 /// **It is the one authority on what a declared variant is, and it had none.**
