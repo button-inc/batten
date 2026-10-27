@@ -687,13 +687,12 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 /// never chooses the engine that judges it (CLOUD-31), and a stale binary still
 /// follows the pin the ref names.
 //MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT ref-run-follows-tree-pin|s@^    if let Some(reference) = overrides.config_from.as_deref() {$@    if let Some(reference) = None::<\&str> {@|a_release_head_pinning_the_next_release_is_graded_under_config_from
+//MUTANT ref-run-follows-tree-pin|s@^    if let Some(judging_ref) = overrides.config_from.as_deref() {$@    if let Some(judging_ref) = None::<\&str> {@|a_release_head_pinning_the_next_release_is_graded_under_config_from
 fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
-    if let Some(reference) = overrides.config_from.as_deref() {
-        let dir = overrides.config_in.as_deref().map_or(root, Path::new);
-        return git::show(dir, reference, config::CONFIG_FILE).ok();
-    }
     let dir = overrides.config_in.as_deref().map_or(root, Path::new);
+    if let Some(judging_ref) = overrides.config_from.as_deref() {
+        return git::show(dir, judging_ref, config::CONFIG_FILE).ok();
+    }
     config::read_text(&dir.join(config::CONFIG_FILE))
         .ok()
         .map(|text| String::clone(&text))
