@@ -11973,14 +11973,22 @@ struct Reaped {
 //MUTANT-SUITE crates/batten/src/lib.rs
 //MUTANT reap-leaves-the-headstone|s@^        task::unregister(git_dir, &entry.pid);$@@|reap_abandoned_unregisters_a_dead_registrant
 fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
-    // A record an earlier reap kept is not reaped twice: its group was
+    // A record an earlier reap kept is not signalled twice: its group was
     // signalled then and disowned, since the number may belong to another since.
-    let abandoned: Vec<task::Entry> = task::abandoned(git_dir, program_root)
-        .into_iter()
-        .filter(|entry| !entry.pgid.is_empty())
-        .collect();
-    let own_group = task::process_group(&std::process::id().to_string());
+    let (disowned, abandoned): (Vec<task::Entry>, Vec<task::Entry>) =
+        task::abandoned(git_dir, program_root)
+            .into_iter()
+            .partition(|entry| entry.pgid.is_empty());
     let mut reaped = Reaped::default();
+    // It was kept only as its branch's crash witness, so it is forgotten once
+    // that branch's land has answered it, which takes the hold.
+    for entry in &disowned {
+        if task::died(git_dir, &entry.pid) != Some(true) {
+            task::unregister(git_dir, &entry.pid);
+            reaped.unregistered += 1;
+        }
+    }
+    let own_group = task::process_group(&std::process::id().to_string());
     for entry in &abandoned {
         if reapable(entry, &own_group) && exec::terminate_group(&entry.pgid) {
             reaped.terminated += 1;
@@ -29935,8 +29943,18 @@ mod tests {
         let _ = reap_abandoned(&git_dir, "programs");
         let kept = |pid: &str| task::read_field(&git_dir, pid, "task").is_some();
         let (own, other) = (kept("4194306"), kept("4194307"));
+        // `work`'s land answers its crash; the next reap forgets that record,
+        // and only that one.
+        task::answer_crashes(&git_dir, LAND_TASK, "4194305", "work");
+        let _ = reap_abandoned(&git_dir, "programs");
+        let (answered, unanswered) = (kept("4194306"), kept("4194307"));
         let _ = std::fs::remove_dir_all(&git_dir);
         assert!(own && other, "both crash witnesses are kept");
+        assert!(!answered, "an answered crash is forgotten by the next reap");
+        assert!(
+            unanswered,
+            "another branch's is still that branch's to answer"
+        );
     }
 
     /// CLOUD-2456: a land that takes over a crash on its branch declares the
@@ -29964,11 +29982,14 @@ mod tests {
         let pid = std::process::id().to_string();
         let field = |name: &str| task::read_field(&git_dir, &pid, name);
         let (branch, recovers) = (field("branch"), field("recovers"));
-        let answered = task::died(&git_dir, dead).is_none();
+        let answered = !task::held_path(&git_dir, dead).exists();
         let kept = task::read_field(&git_dir, dead, "task").is_some();
         let alive = task::died(&git_dir, &pid);
         drop(guard);
         let after = task::died(&git_dir, &pid);
+        // The reap the run could not do (no program root here) forgets it next.
+        let _ = reap_abandoned(&git_dir, "programs");
+        let reaped = task::read_field(&git_dir, dead, "task").is_none();
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(branch.as_deref(), Some("work"));
         assert_eq!(
@@ -29978,6 +29999,7 @@ mod tests {
         );
         assert!(answered, "the crash it answered loses its hold");
         assert!(kept, "and keeps its record for the reap");
+        assert!(reaped, "which forgets it once answered");
         assert_eq!(
             alive,
             Some(false),

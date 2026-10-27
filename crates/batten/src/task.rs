@@ -132,6 +132,11 @@ impl Entry {
         self.tick.parse().unwrap_or(0)
     }
 
+    /// Whether this is a run of `task` on exactly `branch` (CLOUD-2456).
+    fn is_run_of(&self, task: &str, branch: &str) -> bool {
+        self.task == task && self.branch == branch
+    }
+
     /// The latest second the registrant stamped, so the latest it is known to
     /// have been alive, or `None` where no stamp parses.
     #[must_use]
@@ -397,7 +402,8 @@ pub fn read_field(git_dir: &Path, pid: &str, name: &str) -> Option<String> {
 /// `SIGKILL`ed — that is exactly the case [`alive`] reports as crashed rather
 /// than as absent. Every path that forgets a run (the exit and the reap)
 /// comes through here, so neither can leave a hold with no record behind;
-/// [`answer_crashes`] removes a hold alone and leaves its record to the reap.
+/// [`answer_crashes`] removes a hold alone and leaves its record to the reap,
+/// which forgets a dead land's record only once its hold is gone.
 /// Removing what is not there is a no-op, never a failure.
 pub fn unregister(git_dir: &Path, pid: &str) {
     let _ = std::fs::remove_file(entry_path(git_dir, pid));
@@ -426,32 +432,33 @@ pub fn disown_group(git_dir: &Path, pid: &str) {
 /// before registering: it proves nothing, so it goes too, here at a run's
 /// entry rather than in a reader, which deletes nothing (CLOUD-2372).
 pub fn answer_crashes(git_dir: &Path, task: &str, keep: &str, branch: &str) {
-    for pid in held_pids(git_dir) {
-        if pid == keep || died(git_dir, &pid) != Some(true) {
-            continue;
-        }
-        let answered = match std::fs::read_to_string(entry_path(git_dir, &pid)) {
-            Ok(body) => {
-                let entry = Entry::parse(&body);
-                entry.task == task && entry.branch == branch
-            }
+    for (pid, record) in dead_holds(git_dir) {
+        let answered = match record {
+            Ok(entry) => entry.is_run_of(task, branch),
             Err(error) => error.kind() == std::io::ErrorKind::NotFound,
         };
-        if answered {
+        if answered && pid != keep {
             let _ = std::fs::remove_file(held_path(git_dir, &pid));
         }
     }
 }
 
-/// The pids holding a hold, live or dead, without `durable`'s writes in flight.
-fn held_pids(git_dir: &Path) -> Vec<String> {
-    let Ok(listing) = std::fs::read_dir(state_dir(git_dir).join("held")) else {
-        return Vec::new();
-    };
-    listing
+/// Every hold nobody holds, with the read of its record: the one listing both
+/// [`crashed_on`] and [`answer_crashes`] judge, so the crash a Stop refuses on
+/// is always one a land's entry answers. `durable`'s writes in flight are not
+/// holds.
+fn dead_holds(git_dir: &Path) -> impl Iterator<Item = (String, std::io::Result<Entry>)> + '_ {
+    std::fs::read_dir(state_dir(git_dir).join("held"))
+        .into_iter()
+        .flatten()
         .filter_map(|found| found.ok()?.file_name().into_string().ok())
         .filter(|name| !crate::durable::is_temp(name))
-        .collect()
+        .filter(move |pid| died(git_dir, pid) == Some(true))
+        .map(move |pid| {
+            let record =
+                std::fs::read_to_string(entry_path(git_dir, &pid)).map(|body| Entry::parse(&body));
+            (pid, record)
+        })
 }
 
 /// Every complete record in the registry, sorted by path for the byte-stability
@@ -475,7 +482,8 @@ fn records(git_dir: &Path) -> Vec<Entry> {
 
 /// Where a run's hold lives: a directory beside the records, which every record
 /// reader skips because `is_record` reads only files (CLOUD-2456).
-fn held_path(git_dir: &Path, pid: &str) -> PathBuf {
+#[must_use]
+pub fn held_path(git_dir: &Path, pid: &str) -> PathBuf {
     state_dir(git_dir).join("held").join(pid)
 }
 
@@ -572,12 +580,9 @@ pub fn died(git_dir: &Path, pid: &str) -> Option<bool> {
 /// live land; only a hold nobody holds costs a record read.
 #[must_use]
 pub fn crashed_on(git_dir: &Path, task: &str, branch: &str) -> Option<Entry> {
-    held_pids(git_dir)
-        .into_iter()
-        .filter(|pid| died(git_dir, pid) == Some(true))
-        .filter_map(|pid| std::fs::read_to_string(entry_path(git_dir, &pid)).ok())
-        .map(|body| Entry::parse(&body))
-        .filter(|entry| entry.task == task && entry.branch == branch)
+    dead_holds(git_dir)
+        .filter_map(|(_, record)| record.ok())
+        .filter(|entry| entry.is_run_of(task, branch))
         .max_by_key(Entry::last_alive)
 }
 
