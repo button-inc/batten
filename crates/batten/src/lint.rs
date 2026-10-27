@@ -361,12 +361,13 @@ impl SmellId {
             .chain(crate::ci::DriftId::ALL.iter().copied().map(SmellId::Drift))
     }
 
-    /// The inverse of [`SmellId::as_str`], over [`SmellId::all`].
+    /// The inverse of [`SmellId::as_str`], over [`SmellId::all`]; named as the
+    /// crate's other token lookups are (`Fact::from_token`, `Effect::from_token`).
     ///
     /// Resolved through `all` rather than through a second `match`, which is
     /// what keeps the two directions from disagreeing.
     #[must_use]
-    pub fn parse(name: &str) -> Option<SmellId> {
+    pub fn from_token(name: &str) -> Option<SmellId> {
         Self::all().find(|id| id.as_str() == name)
     }
 }
@@ -1118,7 +1119,7 @@ mod tests {
 
     impl From<&str> for SmellId {
         fn from(token: &str) -> Self {
-            SmellId::parse(token).expect("a case names a token the vocabulary holds")
+            SmellId::from_token(token).expect("a case names a token the vocabulary holds")
         }
     }
 
@@ -1174,7 +1175,11 @@ mod tests {
     #[test]
     fn every_smell_id_round_trips_and_all_is_whole() {
         for id in SmellId::all() {
-            assert_eq!(SmellId::parse(id.as_str()), Some(id), "{id} round-trips");
+            assert_eq!(
+                SmellId::from_token(id.as_str()),
+                Some(id),
+                "{id} round-trips"
+            );
         }
 
         // THE UNIT HALF IS DERIVED FROM THE DECLARATION rather than re-typed:
@@ -1231,11 +1236,8 @@ mod tests {
             "`Ord` is `as_str` order, not declaration order"
         );
 
-        let mut tokens: Vec<&str> = SmellId::all().map(SmellId::as_str).collect();
-        let count = tokens.len();
-        tokens.sort_unstable();
-        tokens.dedup();
-        assert_eq!(tokens.len(), count, "two ids share one token");
+        let tokens: Vec<&str> = SmellId::all().map(SmellId::as_str).collect();
+        crate::testing::assert_distinct_nonempty("smell id tokens", &tokens);
 
         // AND EVERY ID EXPLAINS SOMETHING. `policy explain` exits 0 on a
         // section it printed, so the census over the binary passes just as
@@ -1244,14 +1246,8 @@ mod tests {
         // `SmellId::definition` replaced with `""` and with `"xyzzy"` both
         // survived until this. Distinct, because one constant sentence for
         // every id is non-empty and explains no more than none.
-        let mut definitions: Vec<&str> = SmellId::all().map(SmellId::definition).collect();
-        for id in SmellId::all() {
-            assert!(!id.definition().is_empty(), "{id} has a definition");
-        }
-        let defined = definitions.len();
-        definitions.sort_unstable();
-        definitions.dedup();
-        assert_eq!(definitions.len(), defined, "two ids share one definition");
+        let definitions: Vec<&str> = SmellId::all().map(SmellId::definition).collect();
+        crate::testing::assert_distinct_nonempty("smell id definitions", &definitions);
     }
 
     /// A rule declaring neither remedy key, and one whose reason names no class

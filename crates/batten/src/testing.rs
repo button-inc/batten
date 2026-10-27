@@ -196,18 +196,39 @@ pub fn declared_variants(source: &str, name: &str) -> Option<DeclaredVariants> {
         syn::Item::Enum(declared) if declared.ident == name => Some(declared),
         _ => None,
     })?;
-    let mut counts = DeclaredVariants {
-        unit: 0,
-        delegated: 0,
-    };
-    for variant in &declared.variants {
-        if matches!(variant.fields, syn::Fields::Unit) {
-            counts.unit += 1;
-        } else {
-            counts.delegated += 1;
-        }
+    let unit = declared
+        .variants
+        .iter()
+        .filter(|variant| matches!(variant.fields, syn::Fields::Unit))
+        .count();
+    Some(DeclaredVariants {
+        unit,
+        delegated: declared.variants.len() - unit,
+    })
+}
+
+/// Panics unless every one of `items` is non-empty and no two are equal, naming
+/// `what` they are (CLOUD-2379).
+///
+/// The check each id vocabulary holds over its tokens and its definitions:
+/// non-empty kills a `""` arm, and distinct kills a constant one, which a mere
+/// non-empty check passes. Each vocabulary still calls it from its own file,
+/// since `mutate` judges a source by the cases beside it.
+///
+/// # Panics
+///
+/// On an empty entry or a repeated one, which is the assertion.
+#[doc(hidden)]
+#[track_caller]
+pub fn assert_distinct_nonempty(what: &str, items: &[&str]) {
+    if let Some(index) = items.iter().position(|item| item.is_empty()) {
+        panic!("{what}: entry {index} is empty");
     }
-    Some(counts)
+    let mut sorted = items.to_vec();
+    sorted.sort_unstable();
+    if let Some([repeated, ..]) = sorted.windows(2).find(|pair| pair[0] == pair[1]) {
+        panic!("{what}: two entries are {repeated:?}");
+    }
 }
 
 /// The cases holding [`declared_variants`] itself (CLOUD-2379).

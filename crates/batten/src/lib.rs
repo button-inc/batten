@@ -9628,7 +9628,7 @@ fn explain_name(
     // AFTER THE NATIVE ARM, and the order costs nothing: no smell id starts
     // with a `NATIVE_RULE_PREFIXES` prefix, so no name can print two
     // engine-style sections.
-    if let Some(smell) = lint::SmellId::parse(name) {
+    if let Some(smell) = lint::SmellId::from_token(name) {
         sections.push(flat_section(name, "smell", "smell", smell.definition()));
     }
     Ok(sections)

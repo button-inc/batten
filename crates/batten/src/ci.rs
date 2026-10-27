@@ -747,21 +747,8 @@ mod tests {
         let tokens: Vec<&str> = DriftId::ALL.iter().map(|id| id.as_str()).collect();
         let definitions: Vec<&str> = DriftId::ALL.iter().map(|id| id.definition()).collect();
 
-        // Non-empty kills the `""` arm; distinct kills the constant arm, which
-        // a mere non-empty check would pass.
-        for (id, token) in DriftId::ALL.iter().zip(&tokens) {
-            assert!(!token.is_empty(), "{id:?} has a token");
-        }
-        for (id, definition) in DriftId::ALL.iter().zip(&definitions) {
-            assert!(!definition.is_empty(), "{id:?} has a definition");
-        }
-        for list in [&tokens, &definitions] {
-            let mut sorted = (*list).clone();
-            let count = sorted.len();
-            sorted.sort_unstable();
-            sorted.dedup();
-            assert_eq!(sorted.len(), count, "two ids answer alike: {list:?}");
-        }
+        crate::testing::assert_distinct_nonempty("drift id tokens", &tokens);
+        crate::testing::assert_distinct_nonempty("drift id definitions", &definitions);
 
         // Anti-vacuity: the tokens are the ones the retired constants carried,
         // so a rename is a finding rather than a silently renamed smell id.

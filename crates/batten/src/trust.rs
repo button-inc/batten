@@ -4857,17 +4857,10 @@ mod tests {
     /// coat — the id resolves, and explains nothing.
     #[test]
     fn every_kind_has_its_own_definition() {
+        // Distinct as well as non-empty: one constant sentence for all 76 kinds
+        // is non-empty and says nothing.
         let definitions: Vec<&str> = WeakeningKind::ALL.iter().map(|k| k.definition()).collect();
-        for (kind, definition) in WeakeningKind::ALL.iter().zip(&definitions) {
-            assert!(!definition.is_empty(), "{} has a definition", kind.as_str());
-        }
-        // Distinct, which the `""` check alone does not buy: one constant
-        // sentence for all 76 kinds is non-empty and says nothing.
-        let mut sorted = definitions.clone();
-        let count = sorted.len();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), count, "two kinds share one definition");
+        crate::testing::assert_distinct_nonempty("weakening kind definitions", &definitions);
     }
 
     // --- CLOUD-721: one both-directions case per newly compared key ----------
