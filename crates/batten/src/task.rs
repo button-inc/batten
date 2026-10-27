@@ -397,23 +397,11 @@ pub fn read_field(git_dir: &Path, pid: &str, name: &str) -> Option<String> {
 /// `SIGKILL`ed — that is exactly the case [`alive`] reports as crashed rather
 /// than as absent. Every path that forgets a run (the exit and the reap)
 /// comes through here, so neither can leave a hold with no record behind;
-/// [`answer_crashes`] removes a hold alone and leaves its record to the reap. Removing what is not there is a no-op, never a failure.
+/// [`answer_crashes`] removes a hold alone and leaves its record to the reap.
+/// Removing what is not there is a no-op, never a failure.
 pub fn unregister(git_dir: &Path, pid: &str) {
     let _ = std::fs::remove_file(entry_path(git_dir, pid));
     let _ = std::fs::remove_file(held_path(git_dir, pid));
-}
-
-/// Declare what a registered task is carrying: the branch, and how many crashed
-/// predecessors on it this run took over (CLOUD-2456).
-///
-/// Written once, after [`register`], and kept by every push since a push
-/// rewrites the whole record from what it read. A pid that never registered
-/// gains nothing, for [`push`]'s reason.
-pub fn declare_subject(git_dir: &Path, pid: &str, branch: &str, recovers: u32) {
-    modify(git_dir, pid, |entry| {
-        branch.clone_into(&mut entry.branch);
-        entry.recovers = recovers.to_string();
-    });
 }
 
 /// Forget the process group `pid`'s record names, once it has been signalled,
@@ -1328,8 +1316,8 @@ mod tests {
         );
     }
 
-    /// A record that never declared a subject keeps its bytes; a declared one
-    /// round-trips, and a later push keeps it (CLOUD-2456).
+    /// A record registered with no subject keeps its bytes; one registered with
+    /// a subject round-trips, and a later push keeps it (CLOUD-2456).
     #[test]
     fn a_declared_subject_round_trips_and_an_undeclared_record_keeps_its_bytes() {
         let dir = registry("declared-subject");
@@ -1337,7 +1325,7 @@ mod tests {
         let read = || std::fs::read_to_string(entry_path(&dir, NO_SUCH_PID)).unwrap_or_default();
         let bare = read();
         assert!(!bare.contains("branch"), "{bare}");
-        declare_subject(&dir, NO_SUCH_PID, "work", 2);
+        register_as(&dir, "land", NO_SUCH_PID, "lap", 100, "work", 2);
         push(&dir, NO_SUCH_PID, Signal::Tick, "3", 101);
         let entry = Entry::parse(&read());
         assert_eq!(
@@ -1356,8 +1344,7 @@ mod tests {
     #[test]
     fn crashed_on_reads_a_record_whose_hold_nobody_holds() {
         let dir = registry("crashed-on");
-        register(&dir, "land", NO_SUCH_PID, "verify", 100);
-        declare_subject(&dir, NO_SUCH_PID, "work", 0);
+        register_as(&dir, "land", NO_SUCH_PID, "verify", 100, "work", 0);
         assert!(
             crashed_on(&dir, "land", "work").is_none(),
             "no hold, no proof"
@@ -1371,9 +1358,9 @@ mod tests {
             "released without its exit: a death"
         );
         assert!(crashed_on(&dir, "verify", "work").is_none(), "another task");
-        declare_subject(&dir, NO_SUCH_PID, "elsewhere", 0);
+        register_as(&dir, "land", NO_SUCH_PID, "verify", 100, "elsewhere", 0);
         assert!(crashed_on(&dir, "land", "work").is_none(), "another branch");
-        declare_subject(&dir, NO_SUCH_PID, "", 0);
+        register(&dir, "land", NO_SUCH_PID, "verify", 100);
         assert!(
             crashed_on(&dir, "land", "work").is_none(),
             "no branch is no match"
@@ -1447,18 +1434,6 @@ mod tests {
         );
         assert!(held(verify), "another task's hold is not this task's");
         assert!(held(holder), "and the holder's own stands");
-    }
-
-    /// One write registers a task and its subject, so no kill between two
-    /// writes can leave a branchless record (CLOUD-2456).
-    #[test]
-    fn register_as_writes_the_subject_with_the_record() {
-        let dir = registry("register-as");
-        register_as(&dir, "land", NO_SUCH_PID, "lap", 100, "work", 2);
-        let entry = Entry::parse(
-            &std::fs::read_to_string(entry_path(&dir, NO_SUCH_PID)).unwrap_or_default(),
-        );
-        assert_eq!((entry.branch.as_str(), entry.streak()), ("work", 2));
     }
 
     /// `pid`'s hold, which a scratch registry always grants.
