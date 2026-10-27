@@ -11971,7 +11971,15 @@ struct Reaped {
 /// second pass is the observation that tells the two apart.
 //MUTANT-SUITE crates/batten/src/lib.rs
 //MUTANT reap-leaves-the-headstone|s@^        task::unregister(git_dir, &entry.pid);$@@|reap_abandoned_unregisters_a_dead_registrant
-fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
+/// Whether `entry` is a land that died on a branch other than `branch`: the
+/// crash witness `unlanded_stop_block` reads for that branch (CLOUD-2456).
+fn another_branchs_crash(git_dir: &Path, entry: &task::Entry, branch: &str) -> bool {
+    entry.task == LAND_TASK
+        && entry.branch != branch
+        && task::died(git_dir, &entry.pid) == Some(true)
+}
+
+fn reap_abandoned(git_dir: &Path, program_root: &str, branch: &str) -> Reaped {
     let abandoned = task::abandoned(git_dir, program_root);
     let own_group = task::process_group(&std::process::id().to_string());
     let mut reaped = Reaped::default();
@@ -11987,6 +11995,13 @@ fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
         // Forgotten only now, so both passes read its group. ONE LOOK: waiting
         // for the group to empty never ends for a group just KILLed (zombies
         // count) or a reused pgid.
+        //
+        // Except another branch's dead land: its record and hold are that
+        // branch's crash witness, which only a land of that branch may answer
+        // (CLOUD-2456). Signalled like any other, never forgotten from here.
+        if another_branchs_crash(git_dir, entry, branch) {
+            continue;
+        }
         task::unregister(git_dir, &entry.pid);
         reaped.unregistered += 1;
     }
@@ -12055,7 +12070,7 @@ fn run_land_singleton(
     // concurrent-lands defect the lock exists to stop — a strictly worse bargain
     // than reaping nothing.
     let reaped = std::env::var("BATTEN_TASK_PROGRAM_ROOT")
-        .map(|root| reap_abandoned(&git_dir, &root))
+        .map(|root| reap_abandoned(&git_dir, &root, branch))
         .unwrap_or_default();
     if reaped.terminated > 0 {
         // COUNTS AND NOTHING ELSE (rule 4). What was reaped is somebody's command
@@ -12096,17 +12111,26 @@ fn run_land_singleton(
         }
     }
 
+    // THE HOLD, BEFORE THE RECORD (CLOUD-2456). A Stop reads a crash only for a
+    // hold whose record it can read, so a hold already locked when the record
+    // appears is never mistaken for a death, and a run killed anywhere after
+    // this line leaves a crash a Stop sees.
+    let held = task::hold(&git_dir, &pid);
     // THE REGISTRATION, so `alive` can answer. After the lock rather than before:
     // a registration by a process that then loses the race is an entry naming a
     // lap that never ran.
     task::register(&git_dir, LAND_TASK, &pid, "lap", boundary_epoch());
     task::declare_subject(&git_dir, &pid, branch, recovers);
     // Holding the lock proves no other land is live, so every other land record
-    // is a crash this run answers: forgotten here whether or not the reap above
-    // could run, or a crash would outlive the land that re-ran it (CLOUD-2456).
-    task::forget_others(&git_dir, LAND_TASK, &pid);
+    // on this branch is a crash this run answers: forgotten here whether or not
+    // the reap above could run, or a crash would outlive the land that re-ran
+    // it. Only once this run holds its own witness, or a run that cannot be
+    // seen to die would erase the one that could (CLOUD-2456).
+    if held.is_some() {
+        task::forget_others(&git_dir, LAND_TASK, &pid, branch);
+    }
     Ok(Some(LandSingleton {
-        _held: task::hold(&git_dir, &pid),
+        _held: held,
         git_dir,
         pid,
     }))
@@ -23396,8 +23420,6 @@ fn rearm_unlanded(envelope: &hook::Envelope) {
     if let Ok(git_dir) = git::git_dir(Path::new(".")) {
         let marker = recorder::record_path(&git_dir, UNLANDED_SPOKEN, &branch, None);
         let _ = std::fs::remove_file(marker);
-        let dispatched = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
-        let _ = std::fs::remove_file(dispatched);
     }
 }
 
@@ -23432,8 +23454,9 @@ const LAND_DISPATCHED: &str = "land-dispatched";
 /// was started to answer would still read as standing, though the very answer
 /// the refusal asks for is under way. The receipt excuses every Stop until the land registers, which forgets the
 /// crash it answers (CLOUD-2456); a land that dies before registering leaves
-/// it standing, which is the instant crash's escape. An operator prompt
-/// re-arms it. A state, not a clock.
+/// it standing, which is the instant crash's escape. An operator prompt does
+/// not clear it: a message typed while the land builds would otherwise refuse
+/// the Stop into starting a second one. A state, not a clock.
 ///
 /// AFTER the call, never before: a pre-tool receipt was earned by a `land` the
 /// engine itself then denied. The task is matched by the engine's own singleton
@@ -23532,10 +23555,11 @@ fn unlanded_claim() -> Option<UnlandedClaim> {
 /// receipt let a second crash pass. `stop_hook_active` resets whenever a
 /// reminder lands between Stops (anthropics/claude-code#54360), so it is
 /// honoured but holds nothing. What a re-run cannot cure must still be
-/// escapable: a land that was itself a recovery and died before finishing a
-/// lap is a fast crash repeated, so that Stop passes and the pointer speaks.
+/// escapable: a land that was itself a recovery and died before its first lap
+/// began is a fast crash repeated, so that Stop passes and the pointer speaks.
 /// One crash is always refused once, since one cannot tell a deterministic
-/// failure from a kill; a crash after laps never escapes, since a re-run gains.
+/// failure from a kill; a crash once a lap is under way never escapes, since
+/// the host's time cap kills a land mid-lap and a re-run gains ground.
 //MUTANT unlanded-stop-advises|s@^    let crash = task::crashed_on(\&git_dir, LAND_TASK, \&branch);$@    let crash: Option<task::Entry> = None;@|a_crashed_land_refuses_every_stop
 //MUTANT crash-repeat-trapped|s@^    if repeated_fast_crash(\&crash) {$@    if false {@|a_fast_crash_repeated_is_escapable
 //MUTANT land-dispatch-ignored|s@^    if dispatched.exists() {$@    if false {@|a_land_just_started_is_excused_until_it_registers
@@ -23563,7 +23587,10 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
     if repeated_fast_crash(&crash) {
         return None;
     }
-    let UnlandedClaim { count, .. } = unlanded_claim()?;
+    let Some(UnlandedClaim { count, .. }) = unlanded_claim() else {
+        let _ = std::fs::remove_file(&dispatched);
+        return None;
+    };
     Some(refusal::Refusal::engine(
         verdict::Native::CommitShipMissing,
         &[
@@ -23575,11 +23602,12 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
     ))
 }
 
-/// Whether a crashed land was itself a recovery that died before finishing its
-/// first lap: a fast crash repeated, which a further re-run cannot cure
-/// (CLOUD-2456). The lap is the record's `tick`, empty before the first.
+/// Whether a crashed land was itself a recovery that died before its first lap
+/// began: a fast crash repeated, which a further re-run cannot cure
+/// (CLOUD-2456). The lap is the record's `tick`, empty until the first begins;
+/// a death inside a lap is the time cap's shape, and never escapes.
 fn repeated_fast_crash(crash: &task::Entry) -> bool {
-    crash.streak() >= 1 && crash.lap() <= 1
+    crash.streak() >= 1 && crash.lap() == 0
 }
 
 /// Whether the claim `key` is already recorded in the marker at `seen`.
@@ -29837,7 +29865,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&git_dir);
         std::fs::create_dir_all(&git_dir).unwrap();
         task::register(&git_dir, "land", "4194305", "verify", 100);
-        let reaped = reap_abandoned(&git_dir, "programs");
+        let reaped = reap_abandoned(&git_dir, "programs", "work");
         let left = task::abandoned(&git_dir, "programs").len();
         let _ = std::fs::remove_dir_all(&git_dir);
         let found_dead = usize::from(cfg!(unix));
@@ -29851,6 +29879,30 @@ mod tests {
             "a dead, empty group is forgotten and never signalled"
         );
         assert_eq!(left, 0, "nothing abandoned is left behind");
+    }
+
+    /// CLOUD-2456: the reap forgets a dead land on its own branch but keeps one
+    /// that died on another, whose record and hold are that branch's witness.
+    #[test]
+    fn the_reap_keeps_another_branchs_crash() {
+        let git_dir =
+            std::env::temp_dir().join(format!("batten-reap-branches-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&git_dir);
+        std::fs::create_dir_all(&git_dir).unwrap();
+        for (pid, branch) in [("4194306", "work"), ("4194307", "elsewhere")] {
+            task::register(&git_dir, LAND_TASK, pid, "verify", 100);
+            task::declare_subject(&git_dir, pid, branch, 0);
+            task::hold(&git_dir, pid)
+                .expect("a hold is taken")
+                .release_as_a_death_would();
+        }
+        let _ = reap_abandoned(&git_dir, "programs", "work");
+        let kept = |pid: &str| task::read_field(&git_dir, pid, "task").is_some();
+        let (own, other) = (kept("4194306"), kept("4194307"));
+        let _ = std::fs::remove_dir_all(&git_dir);
+        // Off unix `abandoned` finds nothing dead, so nothing is forgotten.
+        assert_eq!(own, !cfg!(unix), "its own branch's corpse is forgotten");
+        assert!(other, "another branch's crash is kept");
     }
 
     /// CLOUD-2456: a land that takes over a crash on its branch declares the

@@ -46,6 +46,7 @@
 //! `document_facts::no_artifact_name_reaches_the_core` refuses a manifest name in
 //! this crate.
 
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -187,9 +188,7 @@ impl Entry {
         );
         for (name, value) in [("branch", &self.branch), ("recovers", &self.recovers)] {
             if !value.is_empty() {
-                for piece in [name, ": ", value.as_str(), "\n"] {
-                    body.push_str(piece);
-                }
+                let _ = writeln!(body, "{name}: {value}");
             }
         }
         body
@@ -395,14 +394,16 @@ pub fn declare_subject(git_dir: &Path, pid: &str, branch: &str, recovers: u32) {
     });
 }
 
-/// Forget every record of `task` but `keep`'s, with its hold (CLOUD-2456).
+/// Forget every record of `task` on `branch` but `keep`'s, with its hold
+/// (CLOUD-2456).
 ///
 /// For the caller holding `task`'s singleton lock: the lock proves no other run
-/// of it is live, so each other record is a crash this run answers. Signals
+/// of it is live, so each other record on its branch is a crash this run
+/// answers. Another branch's is that branch's to answer, so it stays. Signals
 /// nothing; the reap does that.
-pub fn forget_others(git_dir: &Path, task: &str, keep: &str) {
+pub fn forget_others(git_dir: &Path, task: &str, keep: &str, branch: &str) {
     for entry in records(git_dir) {
-        if entry.task == task && entry.pid != keep {
+        if entry.task == task && entry.pid != keep && entry.branch == branch {
             unregister(git_dir, &entry.pid);
         }
     }
@@ -483,7 +484,11 @@ pub fn hold(git_dir: &Path, pid: &str) -> Option<Held> {
     // neither `flock` nor `LockFileEx` needs one.
     crate::durable::replace(&path, "").ok()?;
     let file = std::fs::File::open(&path).ok()?;
-    file.try_lock().ok()?;
+    // BLOCKING, not `try_lock`: a Stop's probe of this hold takes the lock for
+    // the length of one call, and a `try_lock` that met it would leave this run
+    // without a witness for its whole life. Nothing else can hold it: no two
+    // live processes share a pid, and a dead one's lock the kernel has freed.
+    file.lock().ok()?;
     Some(Held {
         file,
         path,
@@ -508,8 +513,9 @@ pub fn died(git_dir: &Path, pid: &str) -> Option<bool> {
 }
 
 /// The crash a run of `task` on `branch` left, if one stands: the most recent
-/// record of `task` naming that branch (or none, from a writer that predates the
-/// field) whose hold nobody holds (CLOUD-2456).
+/// record of `task` naming exactly that branch whose hold nobody holds
+/// (CLOUD-2456). A writer that predates the field never took a hold either, so
+/// no branchless record is ever listed here to match every branch.
 ///
 /// A kill skips the exit path that unregisters, so the record outlives its run
 /// with the phase and lap it reached; an orderly exit leaves none. Death is the
@@ -527,7 +533,7 @@ pub fn crashed_on(git_dir: &Path, task: &str, branch: &str) -> Option<Entry> {
         .filter(|pid| died(git_dir, pid) == Some(true))
         .filter_map(|pid| std::fs::read_to_string(entry_path(git_dir, &pid)).ok())
         .map(|body| Entry::parse(&body))
-        .filter(|entry| entry.task == task && (entry.branch.is_empty() || entry.branch == branch))
+        .filter(|entry| entry.task == task && entry.branch == branch)
         .max_by_key(Entry::last_alive)
 }
 
@@ -1335,13 +1341,20 @@ mod tests {
         register(&dir, "land", holder, "lap", 100);
         register(&dir, "verify", verify, "lap", 100);
         taken(&dir, other).release_as_a_death_would();
-        forget_others(&dir, "land", holder);
+        let elsewhere = "4194309";
+        register(&dir, "land", elsewhere, "lap", 100);
+        declare_subject(&dir, elsewhere, "elsewhere", 0);
+        forget_others(&dir, "land", holder, "");
         let left = |pid: &str| entry_path(&dir, pid).exists();
         assert_eq!(
             (left(other), left(holder), left(verify)),
             (false, true, true)
         );
         assert!(!held_path(&dir, other).exists(), "its hold goes with it");
+        assert!(
+            left(elsewhere),
+            "another branch's crash is that branch's to answer"
+        );
     }
 
     /// `pid`'s hold, which a scratch registry always grants.
