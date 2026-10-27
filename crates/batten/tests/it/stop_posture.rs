@@ -1044,21 +1044,28 @@ fn an_operator_prompt_rearms_the_unlanded_pointer() {
     );
 }
 
-/// Leave in `repo` what a `land` the host killed leaves: its registry record,
-/// under a pid that cannot exist, carrying `branch`, the `recovers` streak it
-/// declared and the `lap` it reached. A kill skips the guard that unregisters.
-fn crashed_land_on(repo: &Path, branch: &str, recovers: u32, lap: u32) {
+/// Register a `land` run in `repo` under `pid`, carrying `branch`, the
+/// `recovers` streak it declared and the `lap` it reached, and take its hold.
+fn land_run(repo: &Path, pid: &str, branch: &str, recovers: u32, lap: u32) -> batten::task::Held {
     let git_dir = repo.join(".git");
-    let pid = common::unassignable_pid();
-    batten::task::register(&git_dir, "land", &pid, "lap", 100);
-    batten::task::declare_subject(&git_dir, &pid, branch, recovers);
+    batten::task::register(&git_dir, "land", pid, "lap", 100);
+    batten::task::declare_subject(&git_dir, pid, branch, recovers);
     batten::task::push(
         &git_dir,
-        &pid,
+        pid,
         batten::task::Signal::Tick,
         &lap.to_string(),
         101,
     );
+    batten::task::hold(&git_dir, pid).expect("a hold is taken")
+}
+
+/// Leave in `repo` what a `land` the host killed leaves: its record, and its
+/// hold with nobody's lock on it. A kill skips the guard that unregisters, and
+/// the kernel releases the lock, which is all
+/// [`batten::task::Held::release_as_a_death_would`] does.
+fn crashed_land_on(repo: &Path, branch: &str, recovers: u32, lap: u32) {
+    land_run(repo, &common::unassignable_pid(), branch, recovers, lap).release_as_a_death_would();
 }
 
 /// The crash every refusal case answers: a fresh land on the fixture's branch,
@@ -1067,10 +1074,9 @@ fn crashed_land(repo: &Path) {
     crashed_land_on(repo, "work", 0, 3);
 }
 
-/// The exit a Stop over a [`crashed_land`] gets: Claude Code's refusal `2` where
-/// a corpse is detectable, and a pass where it is not
-/// ([`common::CORPSE_IS_DETECTABLE`]).
-const CRASHED_STOP_CODE: Option<i32> = Some(if common::CORPSE_IS_DETECTABLE { 2 } else { 0 });
+/// The exit a Stop over a [`crashed_land`] gets: Claude Code's refusal `2`, on
+/// every platform, since the kernel's lock is the witness.
+const CRASHED_STOP_CODE: Option<i32> = Some(2);
 
 /// A CRASHED LAND REFUSES EVERY STOP (CLOUD-2456): the first included, with no
 /// once-per-claim bound, until `land` is re-run. `stop_hook_active: false` on
@@ -1088,9 +1094,6 @@ fn a_crashed_land_refuses_every_stop() {
             CRASHED_STOP_CODE,
             "Stop {step}: {stderr}"
         );
-        if !common::CORPSE_IS_DETECTABLE {
-            continue;
-        }
         assert!(stderr.contains("commit ship missing"), "{stderr}");
         assert!(
             stderr.contains("mise run land"),
@@ -1139,14 +1142,11 @@ fn work_landed_since_the_pointer_is_not_refused() {
     );
 }
 
-/// A RUNNING `land` LETS THE TURN END, AND ONLY A KILL LEAVES A CRASH
-/// (CLOUD-2456). The live land is a process whose cmdline names `batten land `,
-/// the registry's corroboration; killed, its record is the crash; an orderly
-/// exit unregisters, which is no crash.
-///
-/// Off unix nothing is ever found dead, so the contract there is the fail-open
-/// one: even a killed land's record lets the turn end. Stated as a `cfg!` arm so
-/// both legs compile on every target.
+/// A RUNNING `land` LETS THE TURN END, AND ONLY A DEATH LEAVES A CRASH
+/// (CLOUD-2456). The live land is a hold this process keeps locked while the
+/// hook, another process, reads it; released as a death releases it, the same
+/// record is the crash; an orderly exit drops the hold and unregisters, which
+/// leaves none. One contract on every platform: the kernel's lock decides.
 #[test]
 fn a_running_land_lets_the_stop_pass() {
     let (repo, home) = unlanded_fixture("stop-unlanded-landing");
@@ -1156,32 +1156,15 @@ fn a_running_land_lets_the_stop_pass() {
             .status
             .code()
     };
-    // `cfg!` spelled out, as `silent_skip` reads the guard: the same answer as
-    // `common::CORPSE_IS_DETECTABLE`.
-    if !cfg!(unix) {
-        crashed_land(&repo);
-        assert_eq!(stop(), Some(0), "off unix a crash is never seen");
-        return;
-    }
-    // `exec -a` names the process the way a running lap is named, which is
-    // what the registry's corroboration reads in its cmdline.
-    let mut lap = common::task_bash(&repo, "exec -a 'batten land lap' sleep 60")
-        .spawn()
-        .expect("a stand-in land");
-    let pid = lap.id().to_string();
-    batten::task::register(&git_dir, "land", &pid, "lap", 100);
-    batten::task::declare_subject(&git_dir, &pid, "work", 0);
-    let running = stop();
-    let _ = lap.kill();
-    let _ = lap.wait();
-    assert_eq!(
-        running,
-        Some(0),
-        "a live land is the remedy already running"
-    );
-    assert_eq!(stop(), Some(2), "the same land, killed, is a crash");
+    let pid = common::unassignable_pid();
+    let running = land_run(&repo, &pid, "work", 0, 3);
+    assert_eq!(stop(), Some(0), "a live land is the remedy already running");
+    running.release_as_a_death_would();
+    assert_eq!(stop(), Some(2), "the same land, dead, is a crash");
+    let orderly = land_run(&repo, &pid, "work", 0, 3);
+    drop(orderly);
     batten::task::unregister(&git_dir, &pid);
-    assert_eq!(stop(), Some(0), "an orderly exit unregisters: no crash");
+    assert_eq!(stop(), Some(0), "an orderly exit leaves no crash");
 }
 
 /// A `land` JUST STARTED IS EXCUSED UNTIL IT REGISTERS (CLOUD-2456): a

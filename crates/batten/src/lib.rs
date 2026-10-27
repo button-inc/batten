@@ -11870,6 +11870,11 @@ const LAPS: u32 = 2;
 struct LandSingleton {
     git_dir: PathBuf,
     pid: String,
+    /// The run's kernel-held proof of life, released by any death and removed
+    /// by the orderly one: what the Stop refusal reads (CLOUD-2456). Dropped
+    /// after `Drop` below unregisters, so a reader never sees a hold with no
+    /// record and reads it as nothing. Never read: holding it is its job.
+    _held: Option<task::Held>,
 }
 
 impl LandSingleton {
@@ -12024,8 +12029,7 @@ fn run_land_singleton(
     // THE CRASH THIS RUN ANSWERS, read before the reap forgets it (CLOUD-2456):
     // its streak, plus this run, is what the Stop refusal reads as a crash
     // repeated. A live land is not abandoned, so it is never counted here.
-    let program_root = std::env::var("BATTEN_TASK_PROGRAM_ROOT").unwrap_or_default();
-    let recovers = task::crashed_on(&git_dir, &program_root, LAND_TASK, branch)
+    let recovers = task::crashed_on(&git_dir, LAND_TASK, branch)
         .map_or(0, |crash| crash.recovers.parse::<u32>().unwrap_or(0) + 1);
 
     // THE REAP, AND IT ABSTAINS WHERE THE CONSUMER HAS NOT SAID WHERE ITS
@@ -12101,7 +12105,11 @@ fn run_land_singleton(
     // is a crash this run answers: forgotten here whether or not the reap above
     // could run, or a crash would outlive the land that re-ran it (CLOUD-2456).
     task::forget_others(&git_dir, LAND_TASK, &pid);
-    Ok(Some(LandSingleton { git_dir, pid }))
+    Ok(Some(LandSingleton {
+        _held: task::hold(&git_dir, &pid),
+        git_dir,
+        pid,
+    }))
 }
 
 /// The pause between the two sightings a singleton reclaim requires.
@@ -23505,15 +23513,17 @@ fn unlanded_claim() -> Option<UnlandedClaim> {
 /// land is running or exited on a verdict, ends its turn. Its remedy, a push,
 /// could not clear it; this one's is the land it names.
 ///
-/// # The witness is the registry record, not the lock
+/// # The witness is the kernel's, not a pid
 ///
-/// `land` registers after it takes its lock and pushes its phase and lap; its
-/// guard unregisters on every orderly exit, and a kill skips the guard. So a
-/// record [`task::crashed_on`] reads as abandoned is exactly a land killed
-/// mid-run: the host's background cap and a `TaskStop` (measured: the next land
-/// reclaimed the lock from the dead pid), and a worker restart, which is a
-/// reboot that keeps the disk and recycles pids. The lock alone cannot tell
-/// that last one from a live holder; the record's cmdline corroboration can.
+/// `land` registers after it takes its lock, pushes its phase and lap, and holds
+/// an OS file lock for its whole life ([`task::Held`]). Its guard unregisters
+/// and drops the hold on every orderly exit; a death skips the guard, and the
+/// kernel releases the lock whatever the death was. So a record whose hold
+/// nobody holds ([`task::crashed_on`]) is exactly a land killed mid-run: the
+/// host's background cap and a `TaskStop` (measured: the next land reclaimed
+/// the lock from the dead pid), and a worker restart, which is a reboot that
+/// keeps the disk and recycles pids. No pid is probed, so none can be recycled
+/// into a false "alive", and the answer is the same on Linux, macOS and Windows.
 /// The record names its branch, so a corpse elsewhere refuses nothing here.
 ///
 /// # The bound is the remedy, and the escape is a crash repeated
@@ -23526,7 +23536,7 @@ fn unlanded_claim() -> Option<UnlandedClaim> {
 /// lap is a fast crash repeated, so that Stop passes and the pointer speaks.
 /// One crash is always refused once, since one cannot tell a deterministic
 /// failure from a kill; a crash after laps never escapes, since a re-run gains.
-//MUTANT unlanded-stop-advises|s@^    let crash = task::crashed_on(\&git_dir, \&program_root, LAND_TASK, \&branch);$@    let crash: Option<task::Entry> = None;@|a_crashed_land_refuses_every_stop
+//MUTANT unlanded-stop-advises|s@^    let crash = task::crashed_on(\&git_dir, LAND_TASK, \&branch);$@    let crash: Option<task::Entry> = None;@|a_crashed_land_refuses_every_stop
 //MUTANT crash-repeat-trapped|s@^    if repeated_fast_crash(\&crash) {$@    if false {@|a_fast_crash_repeated_is_escapable
 //MUTANT land-dispatch-ignored|s@^    if dispatched.exists() {$@    if false {@|a_land_just_started_is_excused_until_it_registers
 ///
@@ -23540,8 +23550,7 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
     let dispatched = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
     // The crash read first: one registry listing on almost every Stop, where the
     // claim loads the whole findings store.
-    let program_root = std::env::var("BATTEN_TASK_PROGRAM_ROOT").unwrap_or_default();
-    let crash = task::crashed_on(&git_dir, &program_root, LAND_TASK, &branch);
+    let crash = task::crashed_on(&git_dir, LAND_TASK, &branch);
     let Some(crash) = crash else {
         let _ = std::fs::remove_file(&dispatched);
         return None;
@@ -29851,10 +29860,9 @@ mod tests {
     }
 
     /// CLOUD-2456: a land that takes over a crash on its branch declares the
-    /// streak one longer than the dead run's, and forgets the dead run's record
-    /// once it holds the lock. Off unix no crash is found, so the streak starts
-    /// at zero; the record is forgotten either way, since the lock alone proves
-    /// it is not live.
+    /// streak one longer than the dead run's, forgets the dead run's record once
+    /// it holds the lock, and takes a hold of its own. The crash is a released
+    /// hold, which the kernel answers the same way on every platform.
     #[test]
     fn a_land_taking_over_a_crash_carries_its_streak_and_forgets_it() {
         let root =
@@ -29866,6 +29874,9 @@ mod tests {
         let dead = "4194305";
         task::register(&git_dir, LAND_TASK, dead, "verify", 100);
         task::declare_subject(&git_dir, dead, "work", 1);
+        task::hold(&git_dir, dead)
+            .expect("a hold is taken")
+            .release_as_a_death_would();
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let guard = run_land_singleton(&root, "work", &mut out, &mut err)
             .unwrap()
@@ -29874,15 +29885,23 @@ mod tests {
         let field = |name: &str| task::read_field(&git_dir, &pid, name);
         let (branch, recovers) = (field("branch"), field("recovers"));
         let forgotten = task::read_field(&git_dir, dead, "task").is_none();
+        let alive = task::died(&git_dir, &pid);
         drop(guard);
+        let after = task::died(&git_dir, &pid);
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(branch.as_deref(), Some("work"));
         assert_eq!(
             recovers.as_deref(),
-            Some(if cfg!(unix) { "2" } else { "0" }),
+            Some("2"),
             "one longer than the dead run's streak"
         );
         assert!(forgotten, "the crash it answered is forgotten");
+        assert_eq!(
+            alive,
+            Some(false),
+            "its own hold reads as alive while it runs"
+        );
+        assert_eq!(after, None, "and its orderly exit leaves no hold behind");
     }
 
     /// CLOUD-2366: the caller's own group is never reapable however its record
