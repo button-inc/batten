@@ -1074,10 +1074,6 @@ fn crashed_land(repo: &Path) {
     crashed_land_on(repo, "work", 0, 3);
 }
 
-/// The exit a Stop over a [`crashed_land`] gets: Claude Code's refusal `2`, on
-/// every platform, since the kernel's lock is the witness.
-const CRASHED_STOP_CODE: Option<i32> = Some(2);
-
 /// A CRASHED LAND REFUSES EVERY STOP (CLOUD-2456): the first included, with no
 /// once-per-claim bound, until `land` is re-run. `stop_hook_active: false` on
 /// every Stop is what the host sends when reminders interleave
@@ -1089,11 +1085,7 @@ fn a_crashed_land_refuses_every_stop() {
     for step in 0..3 {
         let stopped = hook_in(&repo, &home, &stop_payload("Waiting.", false));
         let stderr = String::from_utf8_lossy(&stopped.stderr).into_owned();
-        assert_eq!(
-            stopped.status.code(),
-            CRASHED_STOP_CODE,
-            "Stop {step}: {stderr}"
-        );
+        assert_eq!(stopped.status.code(), Some(2), "Stop {step}: {stderr}");
         assert!(stderr.contains("commit ship missing"), "{stderr}");
         assert!(
             stderr.contains("mise run land"),
@@ -1129,7 +1121,7 @@ fn work_landed_since_the_pointer_is_not_refused() {
         hook_in(&repo, &home, &stop_payload("Landed and pushed.", false))
             .status
             .code(),
-        CRASHED_STOP_CODE,
+        Some(2),
         "the control: unlanded behind a crash is refused"
     );
     common::git_in(&repo, &["branch", "-f", "main", "work"]);
@@ -1196,7 +1188,7 @@ fn a_land_just_started_is_excused_until_it_registers() {
     crashed_land(&repo);
     assert_eq!(
         stop(),
-        CRASHED_STOP_CODE,
+        Some(2),
         "the excuse went with the crash it answered"
     );
 }
@@ -1211,18 +1203,8 @@ fn a_fast_crash_repeated_is_escapable() {
     for (recovers, lap, code, why) in [
         (1, 1, Some(0), "a recovery dead in its first lap escapes"),
         (2, 0, Some(0), "so does one dead before its first lap"),
-        (
-            0,
-            1,
-            CRASHED_STOP_CODE,
-            "a first crash is refused, however fast",
-        ),
-        (
-            1,
-            3,
-            CRASHED_STOP_CODE,
-            "a recovery that made laps is refused",
-        ),
+        (0, 1, Some(2), "a first crash is refused, however fast"),
+        (1, 3, Some(2), "a recovery that made laps is refused"),
     ] {
         let (repo, home) = unlanded_fixture(&format!("stop-fast-crash-{recovers}-{lap}"));
         crashed_land_on(&repo, "work", recovers, lap);
