@@ -452,7 +452,11 @@ impl Drop for Held {
 pub fn hold(git_dir: &Path, pid: &str) -> Option<Held> {
     let path = held_path(git_dir, pid);
     std::fs::create_dir_all(path.parent()?).ok()?;
-    let file = std::fs::File::create(&path).ok()?;
+    // Made through `durable` like every write, then opened read-only to lock:
+    // the file holds nothing, so no write is ever made through the handle, and
+    // neither `flock` nor `LockFileEx` needs one.
+    crate::durable::replace(&path, "").ok()?;
+    let file = std::fs::File::open(&path).ok()?;
     file.try_lock().ok()?;
     Some(Held {
         file,
