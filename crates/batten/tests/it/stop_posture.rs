@@ -1048,8 +1048,7 @@ fn an_operator_prompt_rearms_the_unlanded_pointer() {
 /// `recovers` streak it declared and the `lap` it reached, and take its hold.
 fn land_run(repo: &Path, pid: &str, branch: &str, recovers: u32, lap: u32) -> batten::task::Held {
     let git_dir = repo.join(".git");
-    batten::task::register(&git_dir, "land", pid, "lap", 100);
-    batten::task::declare_subject(&git_dir, pid, branch, recovers);
+    batten::task::register_as(&git_dir, "land", pid, "lap", 100, branch, recovers);
     batten::task::push(
         &git_dir,
         pid,
@@ -1195,7 +1194,7 @@ fn a_land_just_started_is_excused_until_it_registers() {
     assert_eq!(stop(), Some(0), "the Stop after the start passes");
     assert_eq!(stop(), Some(0), "and so does every one while it builds");
     let rerun = another_unassignable_pid();
-    batten::task::forget_others(&repo.join(".git"), "land", &rerun, "work");
+    batten::task::answer_crashes(&repo.join(".git"), "land", &rerun, "work");
     land_run(&repo, &rerun, "work", 0, 2).release_as_a_death_would();
     assert_eq!(
         stop(),
