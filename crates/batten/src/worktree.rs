@@ -317,6 +317,8 @@ pub fn declared_trunk(root: &Path) -> Result<Option<Trunk>> {
 /// # Errors
 ///
 /// As [`declared_trunk`], and [`crate::resolve::committed`]'s for a ref.
+//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
+//MUTANT committed-trunk-ignores-ref|s@^    if overrides.config_from.is_none() \&\& overrides.config_in.is_none() {$@    if true {@|a_release_head_pinning_the_next_release_is_graded_under_config_from
 pub fn committed_trunk(
     root: &Path,
     overrides: &crate::resolve::Overrides,
