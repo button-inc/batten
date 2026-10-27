@@ -1159,23 +1159,34 @@ fn a_running_land_lets_the_stop_pass() {
     assert_eq!(stop(), Some(0), "an orderly exit leaves no crash");
 }
 
-/// A `land` JUST STARTED IS EXCUSED UNTIL IT REGISTERS (CLOUD-2456): a
-/// backgrounded `mise run land` returns at once and builds before it registers,
-/// so every Stop until then passes. Registering forgets the crash it answers,
-/// which retires the excuse with it, so the next crash is refused again.
-#[test]
-fn a_land_just_started_is_excused_until_it_registers() {
-    let (repo, home) = unlanded_fixture("stop-unlanded-dispatched");
-    crashed_land(&repo);
-    let start = serde_json::json!({
+/// The call that starts a backgrounded `mise run land`, as the host reports it.
+fn land_started() -> String {
+    serde_json::json!({
         "hook_event_name": "PostToolUse",
         "session_id": "s-1",
         "tool_name": "Bash",
         "tool_input": {"command": "mise run land", "run_in_background": true},
         "tool_response": {"backgroundTaskId": "b-1"},
     })
-    .to_string();
-    let _ = hook_in(&repo, &home, &start);
+    .to_string()
+}
+
+/// A second pid no process can hold, beside [`common::unassignable_pid`].
+fn another_unassignable_pid() -> String {
+    let first: u64 = common::unassignable_pid().parse().expect("a pid");
+    (first + 1).to_string()
+}
+
+/// A `land` JUST STARTED IS EXCUSED UNTIL IT REGISTERS (CLOUD-2456): a
+/// backgrounded `mise run land` returns at once and builds before it registers,
+/// so every Stop over the crash it was started against passes. The excuse names
+/// that crash, so the re-run's own death, with no Stop between its registering
+/// and its kill, is refused like any first crash.
+#[test]
+fn a_land_just_started_is_excused_until_it_registers() {
+    let (repo, home) = unlanded_fixture("stop-unlanded-dispatched");
+    crashed_land(&repo);
+    let _ = hook_in(&repo, &home, &land_started());
     let stop = || {
         hook_in(&repo, &home, &stop_payload("Landed and pushed.", false))
             .status
@@ -1183,20 +1194,39 @@ fn a_land_just_started_is_excused_until_it_registers() {
     };
     assert_eq!(stop(), Some(0), "the Stop after the start passes");
     assert_eq!(stop(), Some(0), "and so does every one while it builds");
-    let _ = hook_in(&repo, &home, &prompt_payload("how is the landing going?"));
-    assert_eq!(
-        stop(),
-        Some(0),
-        "an operator message while it builds does not re-arm the refusal"
-    );
-    batten::task::forget_others(&repo.join(".git"), "land", "the-re-run", "work");
-    assert_eq!(stop(), Some(0), "registered, it forgot the crash");
-    crashed_land(&repo);
+    let rerun = another_unassignable_pid();
+    batten::task::forget_others(&repo.join(".git"), "land", &rerun, "work");
+    land_run(&repo, &rerun, "work", 0, 2).release_as_a_death_would();
     assert_eq!(
         stop(),
         Some(2),
-        "the excuse went with the crash it answered"
+        "the re-run, registered and then killed, is a crash the excuse never named"
     );
+}
+
+/// AN OPERATOR PROMPT RE-ARMS THE REFUSAL (CLOUD-2456): the excuse a dispatch
+/// wrote does not outlive the operator's next message, so a land that died
+/// before registering is not excused across every prompt after. Dispatching
+/// again restores it at once.
+#[test]
+fn an_operator_prompt_re_arms_a_dispatched_crash() {
+    let (repo, home) = unlanded_fixture("stop-unlanded-dispatch-prompt");
+    crashed_land(&repo);
+    let stop = || {
+        hook_in(&repo, &home, &stop_payload("Landed and pushed.", false))
+            .status
+            .code()
+    };
+    let _ = hook_in(&repo, &home, &land_started());
+    assert_eq!(stop(), Some(0), "excused while it builds");
+    let _ = hook_in(&repo, &home, &prompt_payload("how is the landing going?"));
+    assert_eq!(
+        stop(),
+        Some(2),
+        "the operator's message re-arms the refusal"
+    );
+    let _ = hook_in(&repo, &home, &land_started());
+    assert_eq!(stop(), Some(0), "and a new dispatch excuses it again");
 }
 
 /// A FAST CRASH REPEATED IS ESCAPABLE (CLOUD-2456): a land that was itself a
