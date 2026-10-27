@@ -274,6 +274,8 @@ pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 // `#[expect]` rather than `#[allow]` for `rules/rust.md`'s reason: it is
 // self-cleaning in both directions, so if the table ever shrinks back under the
 // ceiling this annotation goes red rather than quietly outliving its cause.
+//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
+//MUTANT ref-run-follows-tree-pin|s@^    let judged_by_a_ref = overrides.config_from.is_some();$@    let judged_by_a_ref = false;@|a_release_head_pinning_the_next_release_is_graded_under_config_from
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT hook-follow-error-escapes|s@^        Some(Err(why)) if hook_path => {$@        Some(Err(why)) if false => {@|a_release_pin_the_hook_cannot_fetch_falls_through_and_says_so
 #[expect(
@@ -322,7 +324,13 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // surface, and the guard bounds a session to one hop per invocation.
     let hook_path = matches!(command, Some(Command::Hook { .. }));
     let own_surface = matches!(command, Some(Command::Engine { .. }));
-    let may_follow = !own_surface && std::env::var_os(ENGINE_UPDATED).is_none();
+    // A RUN JUDGED BY A REF FOLLOWS NO WORKING-TREE PIN (CLOUD-2549). Under
+    // `--config-from` the tree is the change under review, and its pin is part of
+    // that change: the release PR's names the release its own cut creates, which
+    // no forge serves yet. The caller chose this engine and the ref's policy, and
+    // a branch never chooses the engine that judges it (CLOUD-31).
+    let judged_by_a_ref = overrides.config_from.is_some();
+    let may_follow = !own_surface && !judged_by_a_ref && std::env::var_os(ENGINE_UPDATED).is_none();
     // ON THE HOOK PATH A FOLLOW THAT ERRS IS NOTHING TO FOLLOW (CLOUD-2376), and
     // it is decided here, once, rather than at each fallible call inside. A
     // Batten error is the one answer every harness reads as "run it", so a `?`
@@ -27141,7 +27149,7 @@ fn run_release_path(
         return Ok(verdict_code);
     };
     let get = |path: &str| rest::get(path, None);
-    let settings = worktree::declared_trunk(here)
+    let settings = worktree::committed_trunk(here, overrides)
         .map_err(|why| why.to_string())
         .and_then(|trunk| trunk.ok_or_else(|| worktree::NO_TRUNK.to_owned()))
         .and_then(|trunk| release_state::settings_green(&slug, &trunk.short, guard, &get));
@@ -27210,6 +27218,8 @@ fn post_release_path(
 ///
 /// `sealing` is whether the caller is `--seal`, the one surface an uncut
 /// release is judged on (CLOUD-2518).
+//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
+//MUTANT trunk-read-from-head|s@^    let trunk = match worktree::committed_trunk(here, overrides) {$@    let trunk = match worktree::declared_trunk(here) {@|a_release_head_pinning_the_next_release_is_graded_under_config_from
 fn release_path_verdict(
     here: &Path,
     sha: &str,
@@ -27218,7 +27228,7 @@ fn release_path_verdict(
     sealing: bool,
 ) -> (release_path::Verdict, bool) {
     use release_path::Verdict::CouldNotLook;
-    let trunk = match worktree::declared_trunk(here) {
+    let trunk = match worktree::committed_trunk(here, overrides) {
         Ok(Some(trunk)) => trunk.tracking,
         Ok(None) => return (CouldNotLook(worktree::NO_TRUNK.to_owned()), false),
         Err(why) => return (CouldNotLook(why.to_string()), false),

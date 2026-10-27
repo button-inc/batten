@@ -539,23 +539,41 @@ fn a_tag_read_that_failed_otherwise_stays_could_not_look() {
 /// forge has cut, with the guard's settings job green: its exit, stdout, stderr.
 fn release_path_uncut(name: &str, flags: &[&str]) -> (Option<i32>, String, String) {
     let version = env!("CARGO_PKG_VERSION");
+    release_path_uncut_at(name, ("0.0.1", version), &[], flags)
+}
+
+/// [`release_path_uncut`] with the base and head versions given, and `global`
+/// flags before the verb. `{base}` in a global flag names the base commit.
+fn release_path_uncut_at(
+    name: &str,
+    (base_version, head_version): (&str, &str),
+    global: &[&str],
+    flags: &[&str],
+) -> (Option<i32>, String, String) {
     let config = |pin: &str| {
         format!("must_land_on = \"origin/main\"\nversion = 1\nengine = {{ release = \"{pin}\" }}\n")
     };
     let manifest = |at: &str| format!("[workspace.package]\nversion = \"{at}\"\n");
     let repo = with_origin(
         common::Fixture::new(name)
-            .config(&config("v0.0.1"))
-            .file("Cargo.toml", &manifest("0.0.1"))
+            .config(&config(&format!("v{base_version}")))
+            .file("Cargo.toml", &manifest(base_version))
             .base_commit()
-            .config(&config(&format!("v{version}")))
-            .file("Cargo.toml", &manifest(version))
+            .config(&config(&format!("v{head_version}")))
+            .file("Cargo.toml", &manifest(head_version))
             .work_commit()
             .build(),
     );
     let head = common::git_in(&repo, &["rev-parse", "HEAD"])
         .trim()
         .to_owned();
+    let base = common::git_in(&repo, &["rev-parse", "HEAD~1"])
+        .trim()
+        .to_owned();
+    let global: Vec<String> = global
+        .iter()
+        .map(|flag| flag.replace("{base}", &base))
+        .collect();
     let forge = uncut_forge(
         &format!("{name}-forge"),
         &[
@@ -574,6 +592,7 @@ fn release_path_uncut(name: &str, flags: &[&str]) -> (Option<i32>, String, Strin
     let output = common::batten()
         .current_dir(&repo)
         .env("BATTEN_REST_FIXTURE", &forge)
+        .args(&global)
         .args(["release", "path", &head])
         .args(flags)
         .output()
@@ -595,6 +614,24 @@ fn a_release_head_whose_release_is_not_cut_is_not_sealed_once_settings_are_green
         release_path_uncut("release-path-uncut-head", &["--seal", "release-guard.yml"]);
     assert_eq!(code, Some(0), "{stderr}");
     assert!(stdout.contains("release path: failure"), "{stdout}");
+}
+
+/// THE RELEASE PR AS CI GRADES IT (CLOUD-2549): the trunk's engine, judged by
+/// the trunk's config through `--config-from`, over a head whose own
+/// `batten.toml` pins the NEXT release. Reading the trunk from that file
+/// refused the pin before anything was graded, and exited 3.
+#[test]
+fn a_release_head_pinning_the_next_release_is_graded_under_config_from() {
+    let version = env!("CARGO_PKG_VERSION");
+    let (code, stdout, stderr) = release_path_uncut_at(
+        "release-path-next-pin",
+        (version, "9.9.9"),
+        &["--config-from", "{base}"],
+        &["--seal", "release-guard.yml"],
+    );
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stdout.contains("release path: failure"), "{stdout}");
+    assert!(!stderr.contains("could not look"), "{stderr}");
 }
 
 /// AN UNCUT RELEASE FAILS ONLY UNDER THE SEAL (CLOUD-2518). Every other caller

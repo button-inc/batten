@@ -306,6 +306,28 @@ pub fn declared_trunk(root: &Path) -> Result<Option<Trunk>> {
     land_trunk(root, declared.as_deref())
 }
 
+/// [`declared_trunk`], read from the authority the run's overrides name.
+///
+/// UNDER `--config-from`, THE REF'S `must_land_on`, NEVER THE WORKING TREE'S
+/// (CLOUD-2549). The release predicate runs the trunk's engine over a release
+/// head whose `batten.toml` pins the release its own cut creates, and loading
+/// that file refuses the pin before anything is graded. The ref is the policy
+/// the run asked to be judged by, and it pins the engine that is running.
+///
+/// # Errors
+///
+/// As [`declared_trunk`], and [`crate::resolve::committed`]'s for a ref.
+pub fn committed_trunk(
+    root: &Path,
+    overrides: &crate::resolve::Overrides,
+) -> Result<Option<Trunk>> {
+    if overrides.config_from.is_none() && overrides.config_in.is_none() {
+        return declared_trunk(root);
+    }
+    let declared = crate::resolve::committed(root, overrides)?.must_land_on;
+    land_trunk(root, declared.as_deref())
+}
+
 /// One spelling of a trunk, in any of the four forms a consumer writes, as a
 /// [`Trunk`].
 ///
