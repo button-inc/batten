@@ -117,6 +117,19 @@ impl Entry {
             .to_owned()
     }
 
+    /// The crash streak this run declared, `0` where it declared none
+    /// (CLOUD-2456).
+    #[must_use]
+    pub fn streak(&self) -> u32 {
+        self.recovers.parse().unwrap_or(0)
+    }
+
+    /// The lap this run reached, `0` before its first (CLOUD-2456).
+    #[must_use]
+    pub fn lap(&self) -> u32 {
+        self.tick.parse().unwrap_or(0)
+    }
+
     /// The latest second the registrant stamped, so the latest it is known to
     /// have been alive, or `None` where no stamp parses.
     #[must_use]
@@ -319,11 +332,7 @@ pub enum Signal {
 /// entry: the registry records what registered, and inventing a record here
 /// would let a half-wired task look fully wired.
 pub fn push(git_dir: &Path, pid: &str, signal: Signal, value: &str, now: u64) {
-    let Ok(body) = std::fs::read_to_string(entry_path(git_dir, pid)) else {
-        return;
-    };
-    let mut entry = Entry::parse(&body);
-    match signal {
+    modify(git_dir, pid, |entry| match signal {
         Signal::Phase => {
             entry.phase_since = stamp_for(value, &entry.phase, &entry.phase_since, now);
             value.clone_into(&mut entry.phase);
@@ -336,7 +345,20 @@ pub fn push(git_dir: &Path, pid: &str, signal: Signal, value: &str, now: u64) {
             entry.sig_at = stamp_for(value, &entry.sig, &entry.sig_at, now);
             value.clone_into(&mut entry.sig);
         }
-    }
+    });
+}
+
+/// Rewrite `pid`'s record through `change`, keeping every field it leaves.
+///
+/// A pid that never registered is a no-op, never a fabricated entry: the
+/// registry records what registered, and inventing a record would let a
+/// half-wired task look fully wired.
+fn modify(git_dir: &Path, pid: &str, change: impl FnOnce(&mut Entry)) {
+    let Ok(body) = std::fs::read_to_string(entry_path(git_dir, pid)) else {
+        return;
+    };
+    let mut entry = Entry::parse(&body);
+    change(&mut entry);
     write_entry(git_dir, &entry);
 }
 
@@ -348,13 +370,16 @@ pub fn read_field(git_dir: &Path, pid: &str, name: &str) -> Option<String> {
         .map(|body| Entry::field(&body, name))
 }
 
-/// Drop a record.
+/// Drop a record, and its hold with it (CLOUD-2456).
 ///
 /// Called from the task's exit path, which does not run for a task that was
 /// `SIGKILL`ed — that is exactly the case [`alive`] reports as crashed rather
-/// than as absent. Removing what is not there is a no-op, never a failure.
+/// than as absent. Every path that forgets a run (the exit, the reap,
+/// [`forget_others`]) comes through here, so none can leave a hold with no
+/// record behind. Removing what is not there is a no-op, never a failure.
 pub fn unregister(git_dir: &Path, pid: &str) {
     let _ = std::fs::remove_file(entry_path(git_dir, pid));
+    let _ = std::fs::remove_file(held_path(git_dir, pid));
 }
 
 /// Declare what a registered task is carrying: the branch, and how many crashed
@@ -364,13 +389,10 @@ pub fn unregister(git_dir: &Path, pid: &str) {
 /// rewrites the whole record from what it read. A pid that never registered
 /// gains nothing, for [`push`]'s reason.
 pub fn declare_subject(git_dir: &Path, pid: &str, branch: &str, recovers: u32) {
-    let Ok(body) = std::fs::read_to_string(entry_path(git_dir, pid)) else {
-        return;
-    };
-    let mut entry = Entry::parse(&body);
-    branch.clone_into(&mut entry.branch);
-    entry.recovers = recovers.to_string();
-    write_entry(git_dir, &entry);
+    modify(git_dir, pid, |entry| {
+        branch.clone_into(&mut entry.branch);
+        entry.recovers = recovers.to_string();
+    });
 }
 
 /// Forget every record of `task` but `keep`'s, with its hold (CLOUD-2456).
@@ -382,20 +404,24 @@ pub fn forget_others(git_dir: &Path, task: &str, keep: &str) {
     for entry in records(git_dir) {
         if entry.task == task && entry.pid != keep {
             unregister(git_dir, &entry.pid);
-            let _ = std::fs::remove_file(held_path(git_dir, &entry.pid));
         }
     }
 }
 
-/// Every complete record in the registry, in no promised order.
+/// Every complete record in the registry, sorted by path for the byte-stability
+/// obligation every reader here carries.
 fn records(git_dir: &Path) -> Vec<Entry> {
     let Ok(listing) = std::fs::read_dir(state_dir(git_dir)) else {
         return Vec::new();
     };
-    listing
+    let mut files: Vec<PathBuf> = listing
         .filter_map(|found| found.ok().map(|found| found.path()))
         .filter(|path| is_record(path))
-        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .collect();
+    files.sort();
+    files
+        .iter()
+        .filter_map(|file| std::fs::read_to_string(file).ok())
         .map(|body| Entry::parse(&body))
         .filter(Entry::is_complete)
         .collect()
@@ -489,12 +515,19 @@ pub fn died(git_dir: &Path, pid: &str) -> Option<bool> {
 /// with the phase and lap it reached; an orderly exit leaves none. Death is the
 /// kernel's answer through [`Held`], the same on every platform; a record with
 /// no hold to read is no crash this can prove, so it is not one.
+///
+/// THE HOLDS ARE LISTED, NOT THE RECORDS. This runs on every Stop, and an
+/// orderly exit removes its hold, so the directory holds nothing or the one
+/// live land; only a hold nobody holds costs a record read.
 #[must_use]
 pub fn crashed_on(git_dir: &Path, task: &str, branch: &str) -> Option<Entry> {
-    records(git_dir)
-        .into_iter()
+    let listing = std::fs::read_dir(state_dir(git_dir).join("held")).ok()?;
+    listing
+        .filter_map(|found| found.ok()?.file_name().into_string().ok())
+        .filter(|pid| died(git_dir, pid) == Some(true))
+        .filter_map(|pid| std::fs::read_to_string(entry_path(git_dir, &pid)).ok())
+        .map(|body| Entry::parse(&body))
         .filter(|entry| entry.task == task && (entry.branch.is_empty() || entry.branch == branch))
-        .filter(|entry| died(git_dir, &entry.pid) == Some(true))
         .max_by_key(Entry::last_alive)
 }
 
@@ -814,23 +847,11 @@ fn alive_reading(
 /// kill while the registrant stays in its recorded group.
 #[must_use]
 pub fn abandoned(git_dir: &Path, program_root: &str) -> Vec<Entry> {
-    let dir = state_dir(git_dir);
-    let Ok(listing) = std::fs::read_dir(&dir) else {
-        // Could-not-look reaps nothing, which is the safe direction: a registry
-        // that cannot be read must never license signalling a group it guessed at.
-        return Vec::new();
-    };
-    let mut files: Vec<PathBuf> = listing
-        .filter_map(|found| found.ok().map(|found| found.path()))
-        .filter(|path| is_record(path))
-        .collect();
-    // Sorted for the byte-stability obligation every reader here carries.
-    files.sort();
-    files
-        .iter()
-        .filter_map(|file| std::fs::read_to_string(file).ok())
-        .map(|body| Entry::parse(&body))
-        .filter(Entry::is_complete)
+    // A registry that cannot be read lists nothing, so could-not-look reaps
+    // nothing, which is the safe direction: it must never license signalling a
+    // group it guessed at.
+    records(git_dir)
+        .into_iter()
         .filter(|entry| !task_alive(program_root, &entry.pid, &entry.task))
         .collect()
 }

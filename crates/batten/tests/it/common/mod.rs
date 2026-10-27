@@ -83,23 +83,6 @@ pub(crate) fn unassignable_pid() -> String {
         .map_or_else(|| "4194304".to_owned(), |max| max.to_string())
 }
 
-/// Whether a record under [`unassignable_pid`] can read as a corpse on this target.
-///
-/// `pid_exists` has **no probe off unix** — its `#[cfg(not(unix))]` arm answers
-/// `true` for every parseable pid, deliberately, so nothing is ever reported dead
-/// and nothing is ever reaped. The helper above compounds it: there is no
-/// `/proc/sys/kernel/pid_max` to read there either, so it falls back to a literal
-/// that is parseable and therefore "alive". A corpse is unreachable off unix, and
-/// every row whose subject is the crashed verdict has to say so.
-///
-/// STATED ONCE, AND AS A `cfg!` RATHER THAN AN ATTRIBUTE. Several rows need it
-/// and each spelling it inline is how the first two drifted apart. `cfg!` keeps
-/// BOTH arms compiled on every target, so `cross-check` type-checks the
-/// off-unix branch instead of skipping over it unparsed — which matters here more
-/// than usual, since the whole class was discovered by CI compiling what no local
-/// gate runs.
-pub(crate) const CORPSE_IS_DETECTABLE: bool = cfg!(unix);
-
 /// The scratch root inside this crate's `target/`, where fixtures that *are*
 /// repositories live.
 #[must_use]
