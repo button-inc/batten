@@ -12041,7 +12041,8 @@ struct Reaped {
 }
 
 /// Reap every abandoned registry entry: signal the groups `reapable` proves the
-/// orphan's, then forget every record (CLOUD-2366, CLOUD-2372).
+/// orphan's, then forget every record but a dead land's crash witness
+/// (CLOUD-2366, CLOUD-2372, CLOUD-2456).
 ///
 /// The registry's ONE tidy-up, at the next run's entry where crash-only puts it:
 /// `task::alive` reads and deletes nothing, so a crash stays visible until a
@@ -12060,15 +12061,7 @@ struct Reaped {
 /// second pass is the observation that tells the two apart.
 //MUTANT-SUITE crates/batten/src/lib.rs
 //MUTANT reap-leaves-the-headstone|s@^        task::unregister(git_dir, &entry.pid);$@@|reap_abandoned_unregisters_a_dead_registrant
-/// Whether `entry` is a land that died on a branch other than `branch`: the
-/// crash witness `unlanded_stop_block` reads for that branch (CLOUD-2456).
-fn another_branchs_crash(git_dir: &Path, entry: &task::Entry, branch: &str) -> bool {
-    entry.task == LAND_TASK
-        && entry.branch != branch
-        && task::died(git_dir, &entry.pid) == Some(true)
-}
-
-fn reap_abandoned(git_dir: &Path, program_root: &str, branch: &str) -> Reaped {
+fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
     let abandoned = task::abandoned(git_dir, program_root);
     let own_group = task::process_group(&std::process::id().to_string());
     let mut reaped = Reaped::default();
@@ -12085,10 +12078,11 @@ fn reap_abandoned(git_dir: &Path, program_root: &str, branch: &str) -> Reaped {
         // for the group to empty never ends for a group just KILLed (zombies
         // count) or a reused pgid.
         //
-        // Except another branch's dead land: its record and hold are that
-        // branch's crash witness, which only a land of that branch may answer
+        // Except a dead land: its record and hold are its branch's crash
+        // witness, which only that branch's land answers, through
+        // `task::forget_others` once it holds a witness of its own
         // (CLOUD-2456). Signalled like any other, never forgotten from here.
-        if another_branchs_crash(git_dir, entry, branch) {
+        if entry.task == LAND_TASK && task::died(git_dir, &entry.pid) == Some(true) {
             continue;
         }
         task::unregister(git_dir, &entry.pid);
@@ -12169,7 +12163,7 @@ fn run_land_singleton(
                 .ok()
                 .filter(|root| task::normalized_root(root).is_some())
         })
-        .map(|root| reap_abandoned(&git_dir, &root, branch))
+        .map(|root| reap_abandoned(&git_dir, &root))
         .unwrap_or_default();
     if reaped.terminated > 0 {
         // COUNTS AND NOTHING ELSE (rule 4). What was reaped is somebody's command
@@ -23726,10 +23720,7 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
     if repeated_fast_crash(&crash) {
         return None;
     }
-    let Some(UnlandedClaim { count, .. }) = unlanded_claim() else {
-        let _ = std::fs::remove_file(&dispatched);
-        return None;
-    };
+    let UnlandedClaim { count, .. } = unlanded_claim()?;
     Some(refusal::Refusal::engine(
         verdict::Native::CommitShipMissing,
         &[
@@ -30183,7 +30174,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&git_dir);
         std::fs::create_dir_all(&git_dir).unwrap();
         task::register(&git_dir, "land", "4194305", "verify", 100);
-        let reaped = reap_abandoned(&git_dir, "programs", "work");
+        let reaped = reap_abandoned(&git_dir, "programs");
         let left = task::abandoned(&git_dir, "programs").len();
         let _ = std::fs::remove_dir_all(&git_dir);
         let found_dead = usize::from(cfg!(unix));
@@ -30199,10 +30190,11 @@ mod tests {
         assert_eq!(left, 0, "nothing abandoned is left behind");
     }
 
-    /// CLOUD-2456: the reap forgets a dead land on its own branch but keeps one
-    /// that died on another, whose record and hold are that branch's witness.
+    /// CLOUD-2456: the reap keeps every dead land's record and hold, on any
+    /// branch: each is its branch's crash witness, and only that branch's land
+    /// forgets it, through `task::forget_others` once it holds its own.
     #[test]
-    fn the_reap_keeps_another_branchs_crash() {
+    fn the_reap_keeps_every_dead_lands_witness() {
         let git_dir =
             std::env::temp_dir().join(format!("batten-reap-branches-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&git_dir);
@@ -30214,13 +30206,11 @@ mod tests {
                 .expect("a hold is taken")
                 .release_as_a_death_would();
         }
-        let _ = reap_abandoned(&git_dir, "programs", "work");
+        let _ = reap_abandoned(&git_dir, "programs");
         let kept = |pid: &str| task::read_field(&git_dir, pid, "task").is_some();
         let (own, other) = (kept("4194306"), kept("4194307"));
         let _ = std::fs::remove_dir_all(&git_dir);
-        // Off unix `abandoned` finds nothing dead, so nothing is forgotten.
-        assert_eq!(own, !cfg!(unix), "its own branch's corpse is forgotten");
-        assert!(other, "another branch's crash is kept");
+        assert!(own && other, "both crash witnesses are kept");
     }
 
     /// CLOUD-2456: a land that takes over a crash on its branch declares the
