@@ -394,6 +394,17 @@ pub fn declare_subject(git_dir: &Path, pid: &str, branch: &str, recovers: u32) {
     });
 }
 
+/// The phase a reaped record is left in when it is kept rather than forgotten:
+/// a dead land's crash witness (CLOUD-2456).
+pub const REAPED: &str = "reaped";
+
+/// Mark `pid`'s record as reaped, so no later reap signals its group again: a
+/// kept record's recorded group outlives the process, and the kernel reuses
+/// group numbers. Written without a stamp, since a reap is no sign of life.
+pub fn mark_reaped(git_dir: &Path, pid: &str) {
+    modify(git_dir, pid, |entry| REAPED.clone_into(&mut entry.phase));
+}
+
 /// Forget every record of `task` on `branch` but `keep`'s, with its hold
 /// (CLOUD-2456).
 ///
@@ -531,10 +542,23 @@ pub fn crashed_on(git_dir: &Path, task: &str, branch: &str) -> Option<Entry> {
     listing
         .filter_map(|found| found.ok()?.file_name().into_string().ok())
         .filter(|pid| died(git_dir, pid) == Some(true))
-        .filter_map(|pid| std::fs::read_to_string(entry_path(git_dir, &pid)).ok())
-        .map(|body| Entry::parse(&body))
+        .filter_map(|pid| record_of_a_death(git_dir, &pid))
         .filter(|entry| entry.task == task && entry.branch == branch)
         .max_by_key(Entry::last_alive)
+}
+
+/// The record a dead hold stands for, or `None`. A dead hold whose record is
+/// gone is a run that died after taking its hold and before registering: it
+/// proves nothing, so it is removed here rather than probed by every Stop after.
+fn record_of_a_death(git_dir: &Path, pid: &str) -> Option<Entry> {
+    match std::fs::read_to_string(entry_path(git_dir, pid)) {
+        Ok(body) => Some(Entry::parse(&body)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let _ = std::fs::remove_file(held_path(git_dir, pid));
+            None
+        }
+        Err(_) => None,
+    }
 }
 
 /// What [`alive`] found.
@@ -1294,9 +1318,9 @@ mod tests {
         );
     }
 
-    /// The crash a branch's Stop answers: a record of the task, on that branch
-    /// or on none, whose hold nobody holds (CLOUD-2456). The kernel's lock is
-    /// the witness, so every platform gives the same answer.
+    /// The crash a branch's Stop answers: a record of the task, on exactly that
+    /// branch, whose hold nobody holds (CLOUD-2456). The kernel's lock is the
+    /// witness, so every platform gives the same answer.
     #[test]
     fn crashed_on_reads_a_record_whose_hold_nobody_holds() {
         let dir = registry("crashed-on");
@@ -1317,6 +1341,21 @@ mod tests {
         assert!(crashed_on(&dir, "verify", "work").is_none(), "another task");
         declare_subject(&dir, NO_SUCH_PID, "elsewhere", 0);
         assert!(crashed_on(&dir, "land", "work").is_none(), "another branch");
+        declare_subject(&dir, NO_SUCH_PID, "", 0);
+        assert!(
+            crashed_on(&dir, "land", "work").is_none(),
+            "no branch is no match"
+        );
+    }
+
+    /// A dead hold with no record proves nothing, and the Stop that finds it
+    /// removes it rather than probing it on every turn after.
+    #[test]
+    fn a_dead_hold_with_no_record_is_removed() {
+        let dir = registry("orphan-hold");
+        taken(&dir, NO_SUCH_PID).release_as_a_death_would();
+        assert!(crashed_on(&dir, "land", "work").is_none());
+        assert!(!held_path(&dir, NO_SUCH_PID).exists());
     }
 
     /// An orderly exit drops the hold, which removes it: no crash is left.
