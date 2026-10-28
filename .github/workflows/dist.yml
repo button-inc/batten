@@ -6,16 +6,16 @@ name: dist
 
 # THE ONE PATH TO PRODUCTION (CLOUD-2554). This is the release build: every
 # leg's toolchain install, build, archive, packages, binary inventory and its
-# check. `release-artifacts.yml` calls it with `upload: true` to fill a draft;
-# `rust.yml` calls it on every pull request with `upload: false`, so a release
-# runs exactly the steps, install lists and runners a pull request went green
-# on. Until this file, the release's dist job was a second definition no pull
+# check. `release-artifacts.yml` calls it with the draft's `tag` to fill it;
+# `rust.yml` calls it on every pull request with none, so a release runs
+# exactly the steps, install lists and runners a pull request went green on. Until this file, the release's dist job was a second definition no pull
 # request ran, and v0.0.217's Windows and macOS legs met their steps for the
 # first time at the cut, after `main` already pinned it.
 #
-# ONLY THE WRITES ARE GATED: the release guard, every `gh release upload` and
-# the attestation run under `inputs.upload`; everything that builds or judges
-# the bytes runs on both paths.
+# ONLY THE WRITES ARE GATED, ON THE TAG: the release guard, every `gh release
+# upload` and the attestation run when a `tag` names a draft; everything that
+# builds or judges the bytes runs on both paths. One input, so a caller cannot
+# ask to upload with no draft to upload into.
 
 on:
   workflow_call:
@@ -25,15 +25,10 @@ on:
         required: true
         type: string
       tag:
-        description: The draft release the upload steps fill; empty on a pull request
+        description: The draft release the upload steps fill and attest; empty on a pull request, which builds and judges without writing
         required: false
         type: string
         default: ""
-      upload:
-        description: Upload to the draft and attest; false builds and judges without writing
-        required: false
-        type: boolean
-        default: false
 
 # A CALLER'S `env:` DOES NOT REACH A CALLED WORKFLOW, so the binding is
 # declared here (CLOUD-2553): each leg installs its list and nothing else.
@@ -146,7 +141,7 @@ jobs:
       # binary ahead of the checkout's own for every later step in the job.
       - name: Landing lease precondition
         # A pull request's run only: a release is no branch's to lease.
-        if: ${{ !inputs.upload }}
+        if: ${{ inputs.tag == '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -268,14 +263,14 @@ jobs:
       # workflows, and `land` watches a PR's checks. `release-assets-check`,
       # scheduled, is the signal that was missing.
       - name: Refuse to upload into anything but a draft of this sha
-        if: inputs.upload
+        if: inputs.tag != ''
         env:
           BATTEN_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
           SHA: ${{ inputs.sha }}
         run: mise run batten -- ci step --arg-env SHA --arg-env TAG -- mise run batten -- release guard --sha
       - name: Upload to the release
-        if: inputs.upload
+        if: inputs.tag != ''
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -313,7 +308,7 @@ jobs:
           PACKAGE: target/distrib/batten-${{ matrix.target }}.apk
         run: mise run batten -- ci step --arg-env PACKAGE -- mise exec -- nfpm package --config nfpm.yaml --packager apk --target
       - name: Upload the .deb and .rpm to the release
-        if: inputs.upload && endsWith(matrix.target, 'linux-gnu')
+        if: inputs.tag != '' && endsWith(matrix.target, 'linux-gnu')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
@@ -321,7 +316,7 @@ jobs:
           RPM: target/distrib/batten-${{ matrix.target }}.rpm
         run: mise run batten -- ci step --arg-env TAG --arg-env DEB --arg-env RPM -- gh release upload --clobber
       - name: Upload the .apk to the release
-        if: inputs.upload && endsWith(matrix.target, 'linux-musl')
+        if: inputs.tag != '' && endsWith(matrix.target, 'linux-musl')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
@@ -335,7 +330,7 @@ jobs:
           VERSION: ${{ steps.dist.outputs.version }}
         run: mise run batten -- ci step --arg-env VERSION -- choco pack packaging/chocolatey/batten.nuspec --outdir target/distrib --version
       - name: Upload the MSI and the Chocolatey package to the release
-        if: inputs.upload && steps.dist.outputs.msi != ''
+        if: inputs.tag != '' && steps.dist.outputs.msi != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
@@ -350,6 +345,9 @@ jobs:
           name: dist-manifest-${{ matrix.target }}
           path: ${{ steps.dist.outputs.manifest }}
           if-no-files-found: error
+          # A pull request's copy has no reader; it is kept only to prove the
+          # leg wrote one.
+          retention-days: ${{ inputs.tag != '' && 90 || 1 }}
       # The binary-level inventory (CLOUD-263), AFTER the upload for CLOUD-258's
       # reason: the archive is already published, so nothing this step does can
       # suppress a binary. It is a step rather than a job — a job costs a billed
@@ -376,14 +374,14 @@ jobs:
         shell: bash
         run: mise run sbom-binary-check
       - name: Refuse to upload the SBOM into anything but a draft of this sha
-        if: inputs.upload && matrix.build-tool != 'cross'
+        if: inputs.tag != '' && matrix.build-tool != 'cross'
         env:
           BATTEN_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
           SHA: ${{ inputs.sha }}
         run: mise run batten -- ci step --arg-env SHA --arg-env TAG -- mise run batten -- release guard --sha
       - name: Upload the binary SBOM to the release
-        if: inputs.upload && matrix.build-tool != 'cross'
+        if: inputs.tag != '' && matrix.build-tool != 'cross'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -401,7 +399,7 @@ jobs:
       # only thing failing it. The claim is deferred, not dropped: an unattested
       # release is worse than an attested one and far better than none.
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        if: inputs.upload
+        if: inputs.tag != ''
         continue-on-error: true
         with:
           subject-path: ${{ steps.dist.outputs.binary }}
