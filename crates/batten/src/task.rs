@@ -427,21 +427,29 @@ pub fn disown_group(git_dir: &Path, pid: &str) {
 /// answers, WHATEVER ITS LOCK SAYS. A Stop's probe may hold it for a moment and
 /// a lock may answer neither way; neither is a live run, and a hold left to
 /// either would outlive every land that could answer it. Another branch's is
-/// that branch's to answer, so it stays. The record is the reap's, as it always
-/// was: forgetting it here would hide from `alive` a dead run whose children
-/// the reap has not looked at. Signals nothing.
+/// that branch's to answer, so it stays. The record is the reap's until its
+/// group has been signalled: forgetting it sooner would hide from `alive` a
+/// dead run whose children the reap has not looked at. One already signalled
+/// and disowned goes with its hold. Signals nothing.
 ///
 /// A hold with no record is a run that died after taking its hold and before
 /// registering: it proves nothing, so it goes too, here at a run's entry
 /// rather than in a reader, which deletes nothing (CLOUD-2372).
 pub fn answer_crashes(git_dir: &Path, task: &str, keep: &str, branch: &str) {
     for pid in holds(git_dir).filter(|pid| pid != keep) {
-        let answered = match held_record(git_dir, &pid) {
-            Ok(entry) => entry.is_run_of(task, branch),
-            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
-        };
-        if answered {
-            let _ = std::fs::remove_file(held_path(git_dir, &pid));
+        match held_record(git_dir, &pid) {
+            // Its group already signalled and disowned: nothing is left for
+            // the reap to do, so the record goes with the hold.
+            Ok(entry) if entry.is_run_of(task, branch) && entry.pgid.is_empty() => {
+                unregister(git_dir, &pid);
+            }
+            Ok(entry) if entry.is_run_of(task, branch) => {
+                let _ = std::fs::remove_file(held_path(git_dir, &pid));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let _ = std::fs::remove_file(held_path(git_dir, &pid));
+            }
+            _ => {}
         }
     }
 }

@@ -1087,8 +1087,8 @@ fn a_crashed_land_refuses_every_stop() {
         assert_eq!(stopped.status.code(), Some(2), "Stop {step}: {stderr}");
         assert!(stderr.contains("commit ship missing"), "{stderr}");
         assert!(
-            stderr.contains("mise run land"),
-            "the re-run is named: {stderr}"
+            stderr.contains("`batten land lap`"),
+            "the re-run is named, by the engine's own verb: {stderr}"
         );
     }
 }

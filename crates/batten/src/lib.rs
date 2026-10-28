@@ -11872,8 +11872,9 @@ struct LandSingleton {
     pid: String,
     /// The run's kernel-held proof of life, released by any death and removed
     /// by the orderly one: what the Stop refusal reads (CLOUD-2456). Dropped
-    /// after `Drop` below unregisters, so a reader never sees a hold with no
-    /// record and reads it as nothing. Never read: holding it is its job.
+    /// after `Drop` below unregisters, so its lock is let go last: a reader that
+    /// finds the hold while its record is being forgotten finds it locked, a
+    /// live run, never a death. Never read: holding it is its job.
     _held: Option<task::Held>,
 }
 
@@ -11998,8 +11999,10 @@ fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
         // (CLOUD-2456). Signalled like any other, once: its group is disowned
         // so no later reap signals the number again, and the rest of the
         // record, where it died among it, stays until the answer.
+        // Disowned only once SIGNALLED: a group `reapable` could not yet prove
+        // the orphan's keeps its number for the next reap to ask again.
         if task::hold_stands(git_dir, &entry.pid) {
-            if !entry.pgid.is_empty() {
+            if signallable(entry) {
                 task::disown_group(git_dir, &entry.pid);
             }
             continue;
@@ -23634,7 +23637,9 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
             verdict::Subject::Count { count },
             verdict::artifact("land crashed"),
         ],
-        refusal::Fix::Run("mise run land".to_owned()),
+        // The engine's own verb, never a consumer's task spelling: the core
+        // names no repository's tooling (CLAUDE.md rule 1).
+        refusal::Fix::Run("batten land lap".to_owned()),
     ))
 }
 
@@ -29940,24 +29945,31 @@ mod tests {
         let _ = reap_abandoned(&git_dir, "programs");
         let kept = |pid: &str| task::read_field(&git_dir, pid, "task").is_some();
         let (own, other) = (kept("4194306"), kept("4194307"));
-        let disowned = task::read_field(&git_dir, "4194307", "pgid");
-        // `work`'s land answers its crash; the next reap forgets that record,
-        // and only that one.
+        // No group here is provably an orphan, so none was signalled, and a
+        // group not signalled keeps its number for the next reap to ask again.
+        let unsignalled = task::read_field(&git_dir, "4194307", "pgid");
+        // `work`'s land answers its crash, whose group a reap signalled (stood
+        // in for by the disowning), so the record goes with the hold; the next
+        // reap keeps every other.
+        task::disown_group(&git_dir, "4194306");
         task::answer_crashes(&git_dir, LAND_TASK, "4194305", "work");
-        let second = reap_abandoned(&git_dir, "programs");
-        let (answered, unanswered) = (kept("4194306"), kept("4194307"));
+        let answered = kept("4194306");
+        let _ = reap_abandoned(&git_dir, "programs");
+        let unanswered = kept("4194307");
         let probed_kept = kept(probed);
         probe.release_as_a_death_would();
         let _ = std::fs::remove_dir_all(&git_dir);
         assert!(own && other, "both crash witnesses are kept");
         assert_eq!(
-            disowned.as_deref(),
-            Some(""),
-            "and a kept witness's group is disowned once signalled"
+            unsignalled.as_deref(),
+            Some("4194307"),
+            "a kept witness's group is disowned only once signalled"
         );
         assert!(probed_kept, "a probe holding the lock is not an answer");
-        assert!(!answered, "an answered crash is forgotten by the next reap");
-        assert_eq!(second.unregistered, 1, "and counted");
+        assert!(
+            !answered,
+            "an answered, signalled crash is forgotten at once"
+        );
         assert!(
             unanswered,
             "another branch's is still that branch's to answer"
