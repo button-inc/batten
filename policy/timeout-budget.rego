@@ -332,15 +332,17 @@ test_a_job_calling_a_reusable_workflow_needs_no_timer if {
 }
 
 # The exemption is the CALL, not the job: a sibling without one is still judged.
+# The sibling comes FIRST, so the calling job's `uses:` lies below its key, the
+# line an exemption not bound to its own job would wrongly read.
 test_a_sibling_of_a_calling_job_is_still_judged if {
 	some v in violation with input as flow([
-		"  dist:",
-		"    uses: ./.github/workflows/dist.yml",
 		"  build:",
 		"    runs-on: ubuntu-latest",
+		"  dist:",
+		"    uses: ./.github/workflows/dist.yml",
 	])
 	v.verdict == "timer declare missing"
-	v.subjects == [{"artifact": ".github/workflows/ci.yml:5 build"}]
+	v.subjects == [{"artifact": ".github/workflows/ci.yml:3 build"}]
 }
 
 test_a_timeout_with_no_budget_comment_is_refused if {
