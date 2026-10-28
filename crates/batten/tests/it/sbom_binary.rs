@@ -392,7 +392,9 @@ fn the_binary_task_produces_and_its_check_task_decides() {
     // `cargo list other` is the module's own rule, not a config row.
     let decide = run("sbom-binary-check");
     assert!(
-        decide.ends_with("check --rule 'commit grade unsafe'"),
+        // Double quotes: the Windows dist leg runs this body without a POSIX
+        // shell, where single quotes split the id (CLOUD-2553).
+        decide.ends_with("check --rule \"commit grade unsafe\""),
         "{decide}"
     );
 }
@@ -404,8 +406,9 @@ fn the_release_workflow_uploads_the_binary_sbom_only_after_the_task_passes() {
     // release is the WORKFLOW — the upload is a later step of the same job, it
     // reads the task's own output, and neither step lets a failure through.
     use yaml_rust2::{Yaml, YamlLoader};
-    let text = fs::read_to_string(at_root(".github/workflows/release-artifacts.yml"))
-        .expect("the release workflow");
+    // The release legs are `dist.yml`'s since CLOUD-2554, called by the release.
+    let text = fs::read_to_string(at_root(".github/workflows/dist.yml"))
+        .expect("the release legs' workflow");
     let docs = YamlLoader::load_from_str(&text).expect("the workflow parses as YAML");
     let field = |step: &Yaml, key: &str| step[key].as_str().unwrap_or_default().to_owned();
     let mut judged = 0;

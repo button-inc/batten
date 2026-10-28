@@ -107,14 +107,25 @@ tag := name if {
 # with `with`, although the constant compares equal to the literal — so every
 # expectation below was undefined and every case over a fixture failed. The
 # literal index reads the same document. `workflow_path` stays for the pointers.
-workflow := document if {
+#
+# TWO DOCUMENTS SINCE CLOUD-2554: `dist.yml` carries the legs and every upload a
+# leg makes, and `release-artifacts.yml` calls it and carries the installers',
+# schema's and checksums' uploads. The expectations are the union of both.
+workflows contains document if {
 	path := ".github/workflows/release-artifacts.yml"
 	document := input.tree.documents[path]
+	is_object(document.jobs)
 }
 
-# Every matrix leg carrying a target, across every job.
+workflows contains document if {
+	path := ".github/workflows/dist.yml"
+	document := input.tree.documents[path]
+	is_object(document.jobs)
+}
+
+# Every matrix leg carrying a target, across every job of either document.
 legs contains leg if {
-	is_object(workflow.jobs)
+	some workflow in workflows
 	some job in workflow.jobs
 	some leg in job.strategy.matrix.include
 	is_string(leg.target)
@@ -136,6 +147,7 @@ composed := {leg.target |
 # argv (CLOUD-843, Phase 4), and a `run:`-only read would find the command and
 # none of its files.
 upload_operand contains token if {
+	some workflow in workflows
 	some job in workflow.jobs
 	some upload_step in job.steps
 	is_string(upload_step.run)
@@ -144,6 +156,7 @@ upload_operand contains token if {
 }
 
 upload_operand contains value if {
+	some workflow in workflows
 	some job in workflow.jobs
 	some upload_step in job.steps
 	is_string(upload_step.run)
@@ -163,7 +176,7 @@ literal contains name if {
 reference := input.tree.documents["mise.toml"].env.BATTEN_CLI_REFERENCE
 
 expectations_readable if {
-	is_object(workflow)
+	count(workflows) > 0
 	count(targets) > 0
 	count(literal) > 0
 	is_string(reference)
@@ -287,6 +300,37 @@ test_a_cross_leg_publishes_no_binary_sbom if {
 		"batten-v1.2.3-x86_64-unknown-linux-gnu.spdx.json",
 		"batten.spdx.json",
 	}
+}
+
+# THE LEGS IN ONE DOCUMENT, THE REST IN THE OTHER (CLOUD-2554): `dist.yml`
+# builds and uploads per target, `release-artifacts.yml` uploads the rest, and
+# a release missing either side's asset is refused.
+split_fixture(record) := {"tree": {
+	"records": {"release-assets": record},
+	"documents": {
+		".github/workflows/dist.yml": {"jobs": {"dist": {
+			"strategy": {"matrix": {"include": [
+				{"target": "x86_64-unknown-linux-gnu", "build-tool": "cargo"},
+				{"target": "aarch64-unknown-linux-gnu", "build-tool": "cross"},
+			]}},
+			"steps": [{"run": `gh release upload "$TAG" "$SPDX" --clobber`}],
+		}}},
+		".github/workflows/release-artifacts.yml": {"jobs": {"schema": {"steps": [{"run": `gh release upload "$TAG" schema/batten.schema.json setup.sh --clobber`}]}}},
+		"mise.toml": {"env": {"BATTEN_CLI_REFERENCE": "ref.md"}},
+	},
+	"lines": {},
+}}
+
+test_the_legs_and_the_rest_are_read_from_both_documents if {
+	count(violation) == 0 with input as split_fixture(complete)
+		with data.batten.patterns as patterns
+	found := violation with input as split_fixture([line |
+		some line in complete
+		line != "release-asset\tsetup.sh"
+		not endswith(line, "aarch64-unknown-linux-gnu.tar.gz")
+	])
+		with data.batten.patterns as patterns
+	{entry.subjects[0].artifact | some entry in found} == {"setup.sh", "aarch64-unknown-linux-gnu"}
 }
 
 test_no_upload_line_is_partial if {

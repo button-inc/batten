@@ -72,7 +72,7 @@ declared_gap := {
 # full of the word, so binding either document makes this file look clean and
 # decide nothing.
 published contains target if {
-	some _, job in input.tree.documents[".github/workflows/release-artifacts.yml"].jobs
+	some _, job in input.tree.documents[".github/workflows/dist.yml"].jobs
 	some entry in job.strategy.matrix.include
 	target := entry.target
 }
@@ -224,7 +224,7 @@ violation contains {
 # reads above exist for.
 tree(targets, platforms) := {"tree": {
 	"documents": {
-		".github/workflows/release-artifacts.yml": {"jobs": {"dist": {"strategy": {"matrix": {"include": [{"target": t} | some t in targets]}}}}},
+		".github/workflows/dist.yml": {"jobs": {"dist": {"strategy": {"matrix": {"include": [{"target": t} | some t in targets]}}}}},
 		"batten.toml": {"provision": [{
 			"name": "scanner",
 			"platforms": platforms,
@@ -271,7 +271,7 @@ test_an_unmapped_target_is_refused if {
 
 # The could-not-look channel speaks rather than abstaining.
 test_an_unparsed_source_is_reported if {
-	blind := {"tree": {"documents": {}, "missing": {".github/workflows/release-artifacts.yml": "unparsed"}}}
+	blind := {"tree": {"documents": {}, "missing": {".github/workflows/dist.yml": "unparsed"}}}
 	found := violation with input as blind
 	some f in found
 	f.verdict == "workflow read unread"
@@ -284,7 +284,7 @@ test_an_unparsed_source_is_reported if {
 # fixture serving both would make each case's subject ambiguous.
 rungs(targets, cross_run, darwin_targets) := {"tree": {
 	"documents": {
-		".github/workflows/release-artifacts.yml": {"jobs": {"dist": {"strategy": {"matrix": {"include": [{"target": t} | some t in targets]}}}}},
+		".github/workflows/dist.yml": {"jobs": {"dist": {"strategy": {"matrix": {"include": [{"target": t} | some t in targets]}}}}},
 		".github/workflows/rust.yml": {"jobs": {"darwin-link": {"strategy": {"matrix": {"target": darwin_targets}}}}},
 		"mise.toml": {"tasks": {"cross-check": {"run": cross_run}}},
 		"batten.toml": {"provision": [{"name": "scanner", "platforms": {

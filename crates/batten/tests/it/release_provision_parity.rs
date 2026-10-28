@@ -57,7 +57,7 @@ fn row() -> Rule {
         "id": "release check partial",
         "kind": "policy",
         "scope": "tree",
-        "sources": [".github/workflows/release-artifacts.yml", "batten.toml"],
+        "sources": [".github/workflows/dist.yml", "batten.toml"],
         "module": "policy/release-provision-parity.rego",
         "severity": "deny",
         "no_fix_reason": "a platform a provisioned tool cannot reach is not fixable in this tree: either the upstream artifact exists and the row should pin it, or it does not and the gap is declared with its consequence — and which of the two is a supply-chain decision, not a rewrite",
@@ -79,7 +79,7 @@ fn tree(name: &str, targets: &[&str], platforms: &[&str]) -> PathBuf {
     }
     common::write(
         &root,
-        ".github/workflows/release-artifacts.yml",
+        ".github/workflows/dist.yml",
         &format!(
             "name: release-artifacts\non:\n  workflow_dispatch:\njobs:\n  dist:\n    runs-on: ubuntu-latest\n    strategy:\n      matrix:\n        include:\n{matrix}"
         ),
@@ -222,7 +222,7 @@ fn an_unparsed_release_workflow_is_reported() {
     let root = common::scratch("release-provision-parity-unparsed");
     common::write(
         &root,
-        ".github/workflows/release-artifacts.yml",
+        ".github/workflows/dist.yml",
         "name: [unterminated\n  - : :\n",
     );
     install_module(&root);

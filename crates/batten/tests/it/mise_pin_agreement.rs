@@ -379,9 +379,16 @@ fn the_committed_launch_is_fronted_scoped_and_pinned() {
     let manifest =
         fs::read_to_string(common::at_root(".mcp.json")).expect("the committed manifest");
     let pins = fs::read_to_string(common::at_root("mise.toml")).expect("the committed pins");
+    // Serena's pin is the agent toolchain's since CLOUD-2553.
+    let agent =
+        fs::read_to_string(common::at_root("mise.agent.toml")).expect("the agent toolchain");
     let root = fixture(
         "committed",
-        &[(".mcp.json", &manifest), ("mise.toml", &pins)],
+        &[
+            (".mcp.json", &manifest),
+            ("mise.toml", &pins),
+            ("mise.agent.toml", &agent),
+        ],
     );
     clean(&root);
 }
