@@ -1072,18 +1072,37 @@ fn own_commit_count(main: &str) -> Option<usize> {
     git::commit_count(Path::new("."), &format!("{main}..HEAD")).ok()
 }
 
-/// The filename a branch-keyed receipt takes: `<check>.<branch>`, with every
-/// path separator replaced.
+/// A branch as one receipt-name component: its BLAKE3 digest, as hex
+/// (CLOUD-2353).
 ///
-/// **A crate↔task contract, not an internal detail.** `mise-tasks/claim-check.sh`
-/// mints this file and this reads it, so the two spellings must agree exactly or
-/// the gate silently reports a missing receipt for one that exists — a deny on a
-/// claim that was made. A slash is the one character a filename cannot carry and
-/// a branch name routinely does; nothing else in a branch name needs escaping
-/// here. `tests::the_branch_receipt_filename_matches_the_minting_task` is what
-/// stops the two halves drifting.
+/// `/` → `-` mapped `feature/a` and `feature-a` to one name, so a claim, a lap
+/// record or a `pr-open` marker of one branch answered for the other. Escaping
+/// only the separator would still collide on a case-insensitive filesystem
+/// (`feature/A`, `feature/a`) and still write names Windows refuses (`:`, `?`,
+/// a trailing `.`, `CON`). A digest is lowercase hex of one length, so it is a
+/// legal, distinct filename on every platform for every branch git accepts.
+///
+/// BLAKE3, as the crate's other internal content-addressed names are
+/// (`policy`'s compiled-module cache, `transcript`'s labels), and not
+/// [`hex_sha256`], which exists for digests an outside tool must reproduce.
+/// Nothing reads these names but code that recomputes this from the branch, and
+/// a receipt a person needs to attribute already records its branch in its
+/// body. The ONE spelling every branch-keyed writer, reader and the
+/// `retire_branch` sweep use, so none of them can drift from another.
+#[must_use]
+pub fn branch_slug(branch: &str) -> String {
+    blake3::hash(branch.as_bytes()).to_hex().to_string()
+}
+
+/// The filename a branch-keyed receipt takes: `<check>.<branch_slug>`.
+///
+/// **A minter↔reader contract, not an internal detail.** `claim::mint` writes
+/// this file and this reads it, so the two spellings must agree exactly or the
+/// gate silently reports a missing receipt for one that exists — a deny on a
+/// claim that was made. `tests::the_branch_receipt_filename_matches_the_minting_task`
+/// is what stops the two halves drifting.
 fn branch_receipt_name(check: &str, branch: &str) -> String {
-    format!("{check}.{}", branch.replace('/', "-"))
+    format!("{check}.{}", branch_slug(branch))
 }
 
 /// Whether a receipt exists for `check` against the subject the call named
@@ -1111,7 +1130,7 @@ fn branch_receipt_name(check: &str, branch: &str) -> String {
 /// not a field of its body: nothing here parses the receipt, so there is no
 /// half-read line to mistake for a verdict.
 ///
-/// No `replace('/', "-")` twin to [`branch_receipt_name`]: a branch name
+/// No [`branch_slug`] twin to [`branch_receipt_name`]: a branch name
 /// legitimately contains separators and is rewritten, where a subject that
 /// contains one is refused by `safe_subject` before it reaches here. Rewriting
 /// would let two subjects collide onto one receipt.
@@ -2899,13 +2918,23 @@ mod tests {
             "the minter no longer writes the filename this module reads"
         );
         assert_eq!(
-            branch_receipt_name("claim", "user/cloud-444-slug"),
-            "claim.user-cloud-444-slug"
+            branch_receipt_name("claim", "main"),
+            format!("claim.{}", blake3::hash(b"main").to_hex())
         );
-        // Every separator, not merely the first: a branch name may carry several.
-        assert_eq!(branch_receipt_name("claim", "a/b/c"), "claim.a-b-c");
-        // A name needing no substitution is unchanged.
-        assert_eq!(branch_receipt_name("claim", "main"), "claim.main");
+        // INJECTIVE AND PORTABLE (CLOUD-2353): a slash and a dash, or two cases
+        // of one letter, never meet on one name, and every name is lowercase hex
+        // of one length, whatever the branch carries.
+        assert_ne!(branch_slug("feature/a"), branch_slug("feature-a"));
+        assert_ne!(branch_slug("feature/A"), branch_slug("feature/a"));
+        for branch in ["a/b/c", "x:y?z", "CON", "trailing.", "main"] {
+            let slug = branch_slug(branch);
+            assert_eq!(slug.len(), 64, "{branch}");
+            assert!(
+                slug.bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                "{branch}"
+            );
+        }
     }
 
     /// A receipt body in the shape `mise-tasks/claim-check.sh` mints, so the reader
@@ -2938,7 +2967,7 @@ mod tests {
         let dir = tempdir(case);
         let receipts = dir.join("batten-receipts");
         std::fs::create_dir_all(&receipts).expect("create the store");
-        std::fs::write(receipts.join("claim.branch"), body).expect("mint");
+        std::fs::write(receipts.join(branch_receipt_name("claim", "branch")), body).expect("mint");
         branch_validity_with(
             dir.to_str().expect("utf-8 scratch path"),
             "claim",
@@ -2953,7 +2982,7 @@ mod tests {
         let dir = tempdir(case);
         let receipts = dir.join("batten-receipts");
         std::fs::create_dir_all(&receipts).expect("create the store");
-        std::fs::write(receipts.join("claim.branch"), body).expect("mint");
+        std::fs::write(receipts.join(branch_receipt_name("claim", "branch")), body).expect("mint");
         branch_validity(
             dir.to_str().expect("utf-8 scratch path"),
             "claim",
@@ -3140,7 +3169,7 @@ mod tests {
         // The state a merged branch is in after one re-mint: a stale base from
         // before the merge, then the base the fresh search recorded.
         std::fs::write(
-            receipts.join("issue-search.feature"),
+            receipts.join(branch_receipt_name("issue-search", "feature")),
             "CLOUD-1\nbase stale\nCLOUD-1\nbase head\n",
         )
         .expect("mint twice");
@@ -3154,7 +3183,7 @@ mod tests {
         // after a merge carries a receipt whose NEWEST base predates the restart, so
         // there is nothing recent to vouch for it.
         std::fs::write(
-            receipts.join("issue-search.restarted"),
+            receipts.join(branch_receipt_name("issue-search", "restarted")),
             "CLOUD-1\nbase older\nCLOUD-1\nbase stale\n",
         )
         .expect("mint twice, both before the restart");
@@ -3250,7 +3279,11 @@ mod tests {
         );
         let receipts = dir.join("batten-receipts");
         std::fs::create_dir_all(&receipts).expect("create the store");
-        std::fs::write(receipts.join("claim.feature"), "CLOUD-444\nbase aaa\n").expect("mint");
+        std::fs::write(
+            receipts.join(branch_receipt_name("claim", "feature")),
+            "CLOUD-444\nbase aaa\n",
+        )
+        .expect("mint");
         assert_eq!(
             branch_validity(git_dir, "claim", "feature", "aaa", 0),
             Validity::Valid
@@ -3274,7 +3307,8 @@ mod tests {
         // A directory at the path is not a receipt: reading it fails, which is
         // what makes the store's own parent unable to answer for a check called
         // nothing.
-        std::fs::create_dir_all(receipts.join("claim.dir")).expect("create a directory");
+        std::fs::create_dir_all(receipts.join(branch_receipt_name("claim", "dir")))
+            .expect("create a directory");
         assert_eq!(
             branch_validity(git_dir, "claim", "dir", "aaa", 0),
             Validity::Missing
@@ -3380,7 +3414,7 @@ mod tests {
         );
         assert_eq!(
             receipt_file(&facts, "fmt", ReceiptKey::Branch, Some("a/b"), None, None),
-            Some(store.join("fmt.a-b"))
+            Some(store.join(format!("fmt.{}", branch_slug("a/b"))))
         );
         assert_eq!(
             receipt_file(

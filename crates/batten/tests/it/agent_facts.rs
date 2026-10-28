@@ -364,8 +364,11 @@ fn the_record_is_keyed_on_the_fact_and_on_its_rows_declared_subject() {
     // the subject is the other component of the filename.
     let git = std::path::Path::new("/repo/.git");
     assert!(
-        facts::sourced_path(git, "claimed-key", "CLOUD-776")
-            .ends_with("batten-receipts/fact.claimed-key.CLOUD-776")
+        facts::sourced_path(git, "claimed-key", "CLOUD-776").ends_with(format!(
+            "batten-receipts/fact.{}.{}",
+            batten::receipt::branch_slug("claimed-key"),
+            batten::receipt::branch_slug("CLOUD-776")
+        ))
     );
     // TWO KEYINGS, TWO FILES, which is the whole of what "the key is read" means
     // here: a record minted under one subject is simply absent under another, and
@@ -377,7 +380,11 @@ fn the_record_is_keyed_on_the_fact_and_on_its_rows_declared_subject() {
     // Neither component may escape the directory: a fact name may carry a `/` and
     // a branch name routinely does.
     assert!(
-        facts::sourced_path(git, "a/b", "claude/c").ends_with("batten-receipts/fact.a-b.claude-c")
+        facts::sourced_path(git, "a/b", "claude/c").ends_with(format!(
+            "batten-receipts/fact.{}.{}",
+            batten::receipt::branch_slug("a/b"),
+            batten::receipt::branch_slug("claude/c")
+        ))
     );
 }
 

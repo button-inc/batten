@@ -571,13 +571,13 @@ fn is_ready(
 
 /// The filename a claim receipt takes for `branch`.
 ///
-/// A slash is the one character a filename cannot carry and a branch name
-/// routinely does. The spelling must match `receipt`'s own — the mediated
-/// `claim-needs-receipt` row reads what this writes, and two spellings of one
-/// filename mean the gate reports a missing receipt for one that exists.
+/// The branch through [`crate::receipt::branch_slug`], `receipt`'s own spelling
+/// — the mediated `claim-needs-receipt` row reads what this writes, and two
+/// spellings of one filename mean the gate reports a missing receipt for one
+/// that exists.
 #[must_use]
 pub fn receipt_name(branch: &str) -> String {
-    format!("claim.{}", branch.replace('/', "-"))
+    format!("claim.{}", crate::receipt::branch_slug(branch))
 }
 
 /// The ids an existing receipt for this branch still speaks for.
@@ -1333,7 +1333,10 @@ mod tests {
     #[test]
     fn a_claimed_token_is_the_sorted_keys_of_the_receipts_first_line() {
         let receipts = scratch("token");
-        assert_eq!(receipt_name("user/branch"), "claim.user-branch");
+        assert_eq!(
+            receipt_name("user/branch"),
+            format!("claim.{}", crate::receipt::branch_slug("user/branch"))
+        );
         assert_eq!(claimed_token(&receipts, "user/branch"), None);
         std::fs::write(
             receipts.join(receipt_name("user/branch")),

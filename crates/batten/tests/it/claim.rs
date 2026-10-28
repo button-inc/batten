@@ -251,7 +251,11 @@ fn code(output: &Output) -> i32 {
 
 /// The claim receipt this branch's pull would mint.
 fn claim_receipt(dir: &Path) -> Option<String> {
-    std::fs::read_to_string(receipts(dir).join("claim.feature-claim")).ok()
+    std::fs::read_to_string(receipts(dir).join(format!(
+        "claim.{}",
+        batten::receipt::branch_slug("feature/claim")
+    )))
+    .ok()
 }
 
 /// A repository whose session stamp and read baseline both agree with the body —
@@ -844,7 +848,7 @@ fn strand(dir: &Path, branch: &str) {
     let store = receipts(dir);
     std::fs::create_dir_all(&store).expect("the receipt store");
     std::fs::write(
-        store.join(format!("claim.{}", branch.replace('/', "-"))),
+        store.join(format!("claim.{}", batten::receipt::branch_slug(branch))),
         format!(
             "CLOUD-1\nready-lint pass\nclaimed-at 2026-08-01T00:00:00Z\nbase -\nbranch {branch}\n"
         ),
@@ -884,7 +888,12 @@ fn a_renamed_branch_recovers_its_claim_and_the_recovery_is_recorded() {
     );
     assert_eq!(receipt.lines().next(), Some("CLOUD-1"), "line 1 survives");
     assert!(
-        !receipts(&dir).join("claim.feature-old-name").exists(),
+        !receipts(&dir)
+            .join(format!(
+                "claim.{}",
+                batten::receipt::branch_slug("feature/old-name")
+            ))
+            .exists(),
         "the stray is moved rather than copied"
     );
 }
@@ -906,7 +915,12 @@ fn without_the_flag_the_rename_stays_unrecovered() {
     let receipt = claim_receipt(&dir).expect("a fresh receipt");
     assert!(!receipt.contains("adopted-from"), "{receipt}");
     assert!(
-        receipts(&dir).join("claim.feature-old-name").exists(),
+        receipts(&dir)
+            .join(format!(
+                "claim.{}",
+                batten::receipt::branch_slug("feature/old-name")
+            ))
+            .exists(),
         "the stray is untouched"
     );
 }
@@ -975,7 +989,12 @@ fn two_orphans_refuse_and_adopt_from_picks_one() {
     let receipt = claim_receipt(&dir).expect("a receipt");
     assert!(receipt.contains("adopted-from feature/two"), "{receipt}");
     assert!(
-        receipts(&dir).join("claim.feature-one").exists(),
+        receipts(&dir)
+            .join(format!(
+                "claim.{}",
+                batten::receipt::branch_slug("feature/one")
+            ))
+            .exists(),
         "the one that was not named is untouched"
     );
 }

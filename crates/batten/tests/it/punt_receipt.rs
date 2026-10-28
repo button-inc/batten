@@ -101,7 +101,10 @@ fn punt(dir: &Path) {
     let receipts = PathBuf::from(git_dir.trim()).join("batten-receipts");
     std::fs::create_dir_all(&receipts).expect("create the receipt store");
     std::fs::write(
-        receipts.join(format!("unlanded-nudged.{}", BRANCH.replace('/', "-"))),
+        receipts.join(format!(
+            "unlanded-nudged.{}",
+            batten::receipt::branch_slug(BRANCH)
+        )),
         "",
     )
     .expect("write the marker");

@@ -3673,10 +3673,14 @@ fn marked_committed_config_fixture(name: &str) -> PathBuf {
         .expect("a Marked case names a row carrying `while_marker`");
     let dir = keyless_committed_config_fixture(name);
     // `Fixture` pins the branch to `main`, and a branch-keyed marker is
-    // `<family>.<branch with / as ->` under the receipts directory.
+    // `<family>.<hash of the branch>` under the receipts directory.
     let receipts = dir.join(".git/batten-receipts");
     fs::create_dir_all(&receipts).expect("create the receipts directory");
-    fs::write(receipts.join(format!("{family}.main")), "planted\n").expect("plant the marker");
+    fs::write(
+        receipts.join(format!("{family}.{}", batten::receipt::branch_slug("main"))),
+        "planted\n",
+    )
+    .expect("plant the marker");
     dir
 }
 

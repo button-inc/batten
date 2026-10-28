@@ -600,11 +600,9 @@ fn a_bot_branch_whose_facts_hold_earns_the_receipt() {
     crate::common::git_in(&repo, &["checkout", "-q", "-b", "renovate/cargo"]);
     let (code, _, err) = lane_run(&repo, &["claim", "bot"]);
     assert_eq!(code, Some(0), "{err}");
-    let recorded = std::fs::read_to_string(
-        repo.join(".git")
-            .join("batten-receipts")
-            .join("bot.renovate-cargo"),
-    )
+    let recorded = std::fs::read_to_string(repo.join(".git").join("batten-receipts").join(
+        format!("bot.{}", batten::receipt::branch_slug("renovate/cargo")),
+    ))
     .expect("the receipt is written");
     assert!(recorded.contains("CLOUD-700"), "{recorded}");
     assert!(recorded.contains("bot renovate[bot]"), "{recorded}");

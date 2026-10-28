@@ -79,7 +79,11 @@ fn git(dir: &Path, args: &[&str]) {
 
 /// The record this branch accumulated, or the empty string when none was written.
 fn record(dir: &Path) -> String {
-    fs::read_to_string(dir.join(".git/batten-receipts/landing-lease.work")).unwrap_or_default()
+    fs::read_to_string(dir.join(format!(
+        ".git/batten-receipts/landing-lease.{}",
+        batten::receipt::branch_slug("work")
+    )))
+    .unwrap_or_default()
 }
 
 /// The columns of the one line the record carries.
