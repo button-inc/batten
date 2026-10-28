@@ -12487,10 +12487,10 @@ fn spawn_resolving_on_image<T>(
     // `batten` the pin provides and `PATH` cannot see would otherwise be spawned
     // through the mediator — the pinned release, not this image.
     //
-    // AN IMAGE THAT CANNOT BE SPAWNED FALLS THROUGH, AND IS NOT RETRIED. After
+    // AN IMAGE THE RUNG DECLINES FALLS THROUGH, AND IS NOT RETRIED. After
     // `engine update` replaces the file, Linux resolves `/proc/self/exe` to a
-    // path marked `… (deleted)` and the spawn fails `NotFound` — and the ladder
-    // then reaches the release the operator just installed, which is the right
+    // path marked `… (deleted)`, which the stem check below declines, and the
+    // ladder then reaches the release the operator just installed — the right
     // answer rather than a consolation. CLOUD-1371's re-resolve branch therefore
     // sees only the ladder's own result. (The unreadable case is decided at the
     // `.ok()` in `spawn_resolving`, where the image is read.)
@@ -12502,8 +12502,7 @@ fn spawn_resolving_on_image<T>(
     // `config` in parallel, each able to spawn it again. Measured: two full
     // `verify` runs on this change each ended with the container at a load
     // above 7000 and out of memory. A comment saying no such case existed was
-    // the only guard; the stem is the mechanism. A `… (deleted)` image fails it
-    // too, and so goes straight to the ladder below.
+    // the only guard; the stem is the mechanism.
     //
     // ONLY `NotFound` FALLS THROUGH. Any other error — `EAGAIN` from a fork
     // under pressure, `ETXTBSY` mid-rebuild, or a closure's failure after the
@@ -18794,9 +18793,8 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             "the image is reached before the pin, not after it"
         );
 
-        // 5. AN UNSPAWNABLE IMAGE FALLS THROUGH, and is not retried. After
-        //    `engine update` replaces the file, `/proc/self/exe` reads
-        //    `… (deleted)` and this is the live case, not a hypothetical.
+        // 5. AN IMAGE WHOSE SPAWN FINDS NOTHING FALLS THROUGH, and is not
+        //    retried.
         let (_, walked) = attempts("", Some(image.as_path()), crate::surface::BINARY, None);
         assert_eq!(
             walked.first().map(String::as_str),
@@ -18817,23 +18815,38 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             "the image is tried once and never retried: {walked:?}"
         );
 
-        // 6. AN IMAGE NOT NAMED `batten` IS NEVER SPAWNED — under `cargo test`
-        //    it is the harness, and spawning it ran the suite recursively.
-        let harness = dir.join("image").join("it-0123456789abcdef");
-        let harness_name = harness.display().to_string();
-        let (_, walked) = attempts(
-            on_path,
-            Some(harness.as_path()),
-            crate::surface::BINARY,
-            None,
-        );
-        assert!(
-            !walked.contains(&harness_name),
-            "a test harness is not this engine and is never spawned as it: {walked:?}"
-        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
-        // 7. ANY ERROR BUT `NotFound` IS THE IMAGE'S ANSWER, and the ladder is
-        //    not walked on it.
+    /// Rung -1 spawns only an image named `batten`, and answers with any spawn
+    /// error but `NotFound` rather than walking the ladder on it.
+    ///
+    /// Split from the case above for length; these are the two guards whose
+    /// absence ran the suite recursively (CLOUD-2386).
+    #[test]
+    fn rung_minus_one_declines_a_foreign_image_and_keeps_its_own_error() {
+        let (dir, image) = rung_minus_one_fixture();
+        let image_name = image.display().to_string();
+        let on_path = dir.to_str().expect("the temp path is UTF-8");
+        let attempts = ladder_walk;
+
+        // AN IMAGE NOT NAMED `batten` IS NEVER SPAWNED — under `cargo test`
+        // it is the harness, and spawning it ran the suite recursively. After
+        // `engine update`, `/proc/self/exe` reads `batten (deleted)`, which is
+        // declined the same way and goes straight to the ladder.
+        for declined in ["it-0123456789abcdef", "batten (deleted)"] {
+            let other = dir.join("image").join(declined);
+            let other_name = other.display().to_string();
+            let (_, walked) =
+                attempts(on_path, Some(other.as_path()), crate::surface::BINARY, None);
+            assert!(
+                !walked.contains(&other_name),
+                "`{declined}` is not this engine and is never spawned as it: {walked:?}"
+            );
+        }
+
+        // ANY ERROR BUT `NotFound` IS THE IMAGE'S ANSWER, and the ladder is not
+        // walked on it.
         let mut tried = Vec::new();
         let pinned = crate::facts::Look::Is(std::iter::once("hk".to_owned()).collect());
         let out = spawn_resolving_on_image(
