@@ -819,6 +819,92 @@ fn a_lap_over_a_clone_with_no_remote_stops_rather_than_lapping_toward_nothing() 
     );
 }
 
+/// **A dead land's kept crash witness whose group is provably an orphan is
+/// signalled at the next lap's entry, and only then disowned**, so no later
+/// reap signals the number again; its record and hold stay for its branch's
+/// own land (CLOUD-2456). Only a real spawn leaves an orphaned group, and only
+/// a `/proc` reader proves one.
+///
+/// Fails by: the reap disowning a group it never signalled, or never
+/// disowning one it did, or forgetting the witness it signalled.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: an orphaned group is a property of processes this one is not, so only a real spawn can leave one"
+)]
+fn a_signalled_witness_is_disowned_and_kept() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    // No preset, so no entry gate reads the forge before the singleton.
+    let repo = Fixture::new("land-lap-orphaned-witness")
+        .config("version = 1\n")
+        .git()
+        .base_commit()
+        .build();
+    // A remote the entry gate finds and the replay cannot fetch: the lap
+    // takes the singleton, reaps, and stops at its first step.
+    let unfetchable = repo.join("no-such-origin");
+    common::git_in(
+        &repo,
+        &["remote", "add", "origin", &unfetchable.to_string_lossy()],
+    );
+    let git_dir = repo.join(".git");
+    let note = repo.join("group");
+    // The inner shell leads a group of its own, leaves a member in it, and
+    // exits: the orphan a dead land's verify leaves behind.
+    let status = std::process::Command::new("setsid")
+        .args([
+            "-w",
+            "sh",
+            "-c",
+            "sleep 600 & printf '%s' \"$$\" > \"$NOTE\"",
+        ])
+        .env("NOTE", &note)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("setsid runs");
+    assert!(status.success());
+    let group = std::fs::read_to_string(&note).expect("the group is noted");
+    // Another branch's crash, so this lap's entry does not answer it.
+    batten::task::register_as(&git_dir, "land", &group, "verify", 100, "elsewhere", 0);
+    // A stamp every live member predates, fixed rather than read off the
+    // clock: 2100-01-01.
+    batten::task::push(
+        &git_dir,
+        &group,
+        batten::task::Signal::Tick,
+        "1",
+        4_102_444_800,
+    );
+    batten::task::hold(&git_dir, &group)
+        .expect("a hold is taken")
+        .release_as_a_death_would();
+    let output = batten()
+        .args(["land", "lap", "refs/heads/main"])
+        .env("LAND_MAX_LAPS", "1")
+        .env("LAND_VERIFY", "true")
+        .env("LAND_WORKFLOW", "fast-forward.yml")
+        // No entry gate, whose forge read would stop the lap before the reap.
+        .env("LAND_ENTRY_GATES", "")
+        // Set after `batten()`, which clears it: this case wants the reap.
+        .env("BATTEN_TASK_PROGRAM_ROOT", "mise-tasks")
+        .current_dir(&repo)
+        .output()
+        .expect("run batten land lap");
+    let pgid = batten::task::read_field(&git_dir, &group, "pgid");
+    let held = batten::task::hold_stands(&git_dir, &group);
+    assert_eq!(
+        pgid.as_deref(),
+        Some(""),
+        "the orphan's group is signalled and disowned: {}",
+        stderr(&output)
+    );
+    assert!(held, "its witness stays for its branch's land");
+}
+
 /// `batten land fast-forward`, with the workflow named in the environment.
 fn land_fast_forward(repo: &Path, workflow: &str) -> (i32, String, String) {
     let output = batten()
