@@ -332,6 +332,20 @@ fn a_complete_release_with_a_valid_manifest_is_clean() {
     assert_eq!(code, Some(0), "{text}");
 }
 
+/// A `cross` leg is never demanded a binary SBOM (CLOUD-263): a release whose
+/// `cross` leg ships none is complete. The real matrix has no `cross` leg, so
+/// only a fixture can tell this arm from one that demands every leg's SBOM.
+#[test]
+fn a_cross_leg_is_never_demanded_a_binary_sbom() {
+    let workflow = WORKFLOW.replace("build-tool: zigbuild", "build-tool: cross");
+    let dir = repo("cross-leg", Some(&workflow));
+    let mut assets = complete(&[]);
+    assets.retain(|a| !a.ends_with("aarch64-apple-darwin.spdx.json"));
+    let forge = forge("cross-leg", &assets, Some(&manifest_over(&assets, None)));
+    let (code, text) = decide(&dir, &forge);
+    assert_eq!(code, Some(0), "{text}");
+}
+
 #[test]
 fn a_release_with_only_the_schema_is_refused() {
     // v0.0.36 exactly: the schema shipped and every dist leg died.

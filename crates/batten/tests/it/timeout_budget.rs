@@ -213,6 +213,8 @@ fn a_job_calling_a_reusable_workflow_needs_no_timer() {
 }
 
 /// The exemption is the call, never the file: a sibling without one is judged.
+/// The sibling comes FIRST, so the calling job's `uses:` lies below its key,
+/// which is the line an exemption not bound to its own job would wrongly read.
 #[test]
 fn a_sibling_of_a_calling_job_is_still_judged() {
     let dir = budget_repo(
@@ -220,7 +222,7 @@ fn a_sibling_of_a_calling_job_is_still_judged() {
         &[(
             ".github/workflows/ci.yml",
             &flow(
-                "  dist:\n    uses: ./.github/workflows/dist.yml\n  build:\n    runs-on: ubuntu-latest\n",
+                "  build:\n    runs-on: ubuntu-latest\n  dist:\n    uses: ./.github/workflows/dist.yml\n",
             ),
         )],
     );
