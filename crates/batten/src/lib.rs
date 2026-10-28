@@ -12013,6 +12013,17 @@ fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
     reaped
 }
 
+/// [`reap_abandoned`], public so a suite can prove it over a REAL orphan
+/// (CLOUD-2456), as [`collect::is_orphaned_group`] is: only a separate process
+/// leaves a group whose leader and registrant are gone, and a spawn belongs in
+/// `tests/it`, never in engine source (`spawn add other`). Answers the groups
+/// terminated, the groups escalated, and the records forgotten.
+#[must_use]
+pub fn reap_abandoned_tasks(git_dir: &Path, program_root: &str) -> (usize, usize, usize) {
+    let reaped = reap_abandoned(git_dir, program_root);
+    (reaped.terminated, reaped.escalated, reaped.unregistered)
+}
+
 /// Reap what a dead lap left running, then take the lock, then register.
 ///
 /// **In that order, and the order is the design.** Reaping first is what makes
