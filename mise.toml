@@ -2008,10 +2008,13 @@ run = "cargo run --quiet -p batten -- sbom --binary {{usage.binary}} --target {{
 
 [tasks.sbom-binary-check]
 description = "Gate: refuse a binary inventory that catalogs nothing, or crates the lockfile does not hold — over `sbom-binary`'s record"
-# DOUBLE quotes, because this body runs on the Windows release leg, under `cmd`,
-# where single quotes group nothing: `'commit grade unsafe'` reached batten as
-# three arguments and was refused (run 40704918587, CLOUD-2556).
-run = 'cargo run --quiet -p batten -- check --rule "commit grade unsafe"'
+# `bash`, DECLARED, because this body runs on the Windows release leg, where an
+# undeclared inline shell is `cmd` and single quotes group nothing:
+# `'commit grade unsafe'` reached batten as three arguments and was refused (run
+# 40704918587, CLOUD-2556). The step launches it from `shell: bash`, so Git
+# bash is on PATH there; elsewhere this is the `sh` the body already assumed.
+shell = "bash -c"
+run = "cargo run --quiet -p batten -- check --rule 'commit grade unsafe'"
 
 # CLOUD-266's measurement half: three declared forge reads, in order, because
 # each fans out over the family the one before it recorded (CLOUD-843). The
