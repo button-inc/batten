@@ -12449,6 +12449,17 @@ fn names_this_engine(image: &Path) -> bool {
         .is_some_and(|stem| stem == crate::surface::BINARY)
 }
 
+/// Whether a spawn of the running image failed because the FILE could not be
+/// executed, rather than with an answer of the image's own.
+fn image_unusable(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::ExecutableFileBusy
+            | std::io::ErrorKind::PermissionDenied
+    )
+}
+
 /// [`spawn_resolving_on`], plus the image that asked — the full ladder, rung -1
 /// included.
 fn spawn_resolving_on_image<T>(
@@ -12492,8 +12503,8 @@ fn spawn_resolving_on_image<T>(
     // path marked `… (deleted)`, which the stem check below declines, and the
     // ladder then reaches the release the operator just installed — the right
     // answer rather than a consolation. CLOUD-1371's re-resolve branch therefore
-    // sees only the ladder's own result. (The unreadable case is decided at the
-    // `.ok()` in `spawn_resolving`, where the image is read.)
+    // sees only the ladder's own result. (The unreadable case is decided in
+    // `spawn_resolving_pinned`, where the image is read.)
     //
     // ONLY AN IMAGE NAMED `batten` IS THIS ENGINE. Under `cargo test`,
     // `current_exe` is the TEST HARNESS, and libtest reads the declared verb's
@@ -12504,20 +12515,22 @@ fn spawn_resolving_on_image<T>(
     // above 7000 and out of memory. A comment saying no such case existed was
     // the only guard; the stem is the mechanism.
     //
-    // ONLY `NotFound` FALLS THROUGH. Any other error — `EAGAIN` from a fork
-    // under pressure, `ETXTBSY` mid-rebuild, or a closure's failure after the
-    // child already ran — is the image's answer, and walking the ladder on it
-    // would add spawns while forking fails, or run a side-effecting row twice on
-    // a different engine.
+    // ONLY AN IMAGE THAT COULD NOT BE EXECUTED FALLS THROUGH: gone (`NotFound`),
+    // mid-rebuild (`ExecutableFileBusy`), or not executable
+    // (`PermissionDenied`). Those are facts about the file, and the release on
+    // `PATH` can still answer; a handler handed one of them would otherwise
+    // allow unjudged. Any other error — `EAGAIN` from a fork under pressure, or
+    // a closure's failure after the child already ran — is the image's answer,
+    // and walking the ladder on it would add spawns while forking fails, or run
+    // a side-effecting row twice on a different engine.
     if is_own_image(program)
         && let Some(image) = running
             .filter(|image| names_this_engine(image))
             .and_then(Path::to_str)
     {
         match spawn(image, &[]) {
-            Ok(ok) => return Ok(ok),
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
-            Err(_) => {}
+            Err(error) if image_unusable(&error) => {}
+            other => return other,
         }
     }
 
@@ -18729,8 +18742,9 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     ///
     /// Five arms, because each is a way the rung can be written wrong: deleting
     /// it, matching on any program, ordering it after the pin, dropping the
-    /// `running = None` case, or returning the image's own spawn error rather
-    /// than falling through.
+    /// `running = None` case, or returning a `NotFound` image's error rather than
+    /// falling through. Which errors fall through, and which images are declined,
+    /// is the case below.
     #[test]
     fn a_declared_batten_resolves_to_the_running_image_before_the_pin() {
         let (dir, image) = rung_minus_one_fixture();
@@ -18831,10 +18845,15 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let attempts = ladder_walk;
 
         // AN IMAGE NOT NAMED `batten` IS NEVER SPAWNED — under `cargo test`
-        // it is the harness, and spawning it ran the suite recursively. After
-        // `engine update`, `/proc/self/exe` reads `batten (deleted)`, which is
-        // declined the same way and goes straight to the ladder.
-        for declined in ["it-0123456789abcdef", "batten (deleted)"] {
+        // it is the harness, and spawning it ran the suite recursively. The
+        // library's own harness is `batten-<hash>`, so a prefix match would
+        // still spawn it. After `engine update`, `/proc/self/exe` reads
+        // `batten (deleted)`, which is declined the same way.
+        for declined in [
+            "batten-0123456789abcdef",
+            "it-0123456789abcdef",
+            "batten (deleted)",
+        ] {
             let other = dir.join("image").join(declined);
             let other_name = other.display().to_string();
             let (_, walked) =
@@ -18845,24 +18864,29 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             );
         }
 
-        // ANY ERROR BUT `NotFound` IS THE IMAGE'S ANSWER, and the ladder is not
-        // walked on it.
-        let mut tried = Vec::new();
+        // AN IMAGE THAT COULD NOT BE EXECUTED FALLS THROUGH; ANY OTHER ERROR IS
+        // ITS ANSWER, and the ladder is not walked on it. Every spawn fails with
+        // `kind` here, so the route is the whole answer.
         let pinned = crate::facts::Look::Is(std::iter::once("hk".to_owned()).collect());
-        let out = spawn_resolving_on_image(
-            Some(std::ffi::OsStr::new(on_path)),
-            None,
-            Some(image.as_path()),
-            crate::surface::BINARY,
-            &[".EXE".to_owned()],
-            &pinned,
-            |program: &str, _extra: &[&str]| -> std::io::Result<()> {
-                tried.push(program.to_owned());
-                Err(std::io::Error::from(std::io::ErrorKind::WouldBlock))
-            },
-        );
+        let walk = |kind: std::io::ErrorKind| {
+            let mut tried = Vec::new();
+            let out = spawn_resolving_on_image(
+                Some(std::ffi::OsStr::new(on_path)),
+                None,
+                Some(image.as_path()),
+                crate::surface::BINARY,
+                &[".EXE".to_owned()],
+                &pinned,
+                |program: &str, _extra: &[&str]| -> std::io::Result<()> {
+                    tried.push(program.to_owned());
+                    Err(std::io::Error::from(kind))
+                },
+            );
+            (out.map_err(|error| error.kind()), tried)
+        };
+        let (out, tried) = walk(std::io::ErrorKind::WouldBlock);
         assert_eq!(
-            out.map_err(|error| error.kind()),
+            out,
             Err(std::io::ErrorKind::WouldBlock),
             "the image's own error is returned"
         );
@@ -18871,6 +18895,13 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             vec![image_name.clone()],
             "and nothing else is spawned"
         );
+        let (_, tried) = walk(std::io::ErrorKind::ExecutableFileBusy);
+        assert_eq!(
+            tried.first(),
+            Some(&image_name),
+            "the busy image is tried first"
+        );
+        assert!(tried.len() > 1, "and the ladder is walked on it: {tried:?}");
 
         std::fs::remove_dir_all(&dir).ok();
     }
