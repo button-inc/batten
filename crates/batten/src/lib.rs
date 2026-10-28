@@ -30018,7 +30018,10 @@ mod tests {
         );
         assert!(answered, "the crash it answered loses its hold");
         assert!(kept, "and keeps its record for the reap");
-        assert!(reaped, "which forgets it once answered");
+        // Off unix no pid is ever found dead, so nothing is abandoned and the
+        // reap forgets nothing, as `reap_abandoned_unregisters_a_dead_registrant`
+        // pins.
+        assert_eq!(reaped, cfg!(unix), "which forgets it once answered");
         assert_eq!(
             alive,
             Some(false),
