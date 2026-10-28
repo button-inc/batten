@@ -1471,10 +1471,26 @@ mod tests {
         let probed = "4194310";
         register_as(&dir, "land", probed, "lap", 100, "work", 0);
         let probe = taken(&dir, probed);
+        // One a reap already signalled and disowned goes whole: nothing is
+        // left for the reap to do.
+        let reaped = "4194311";
+        register_as(&dir, "land", reaped, "lap", 100, "work", 0);
+        disown_group(&dir, reaped);
+        taken(&dir, reaped).release_as_a_death_would();
+        // A hold whose record cannot be read, for a reason other than its
+        // absence, proves nothing either way, so it stays.
+        let unreadable = "4194312";
+        assert!(std::fs::create_dir_all(entry_path(&dir, unreadable)).is_ok());
+        taken(&dir, unreadable).release_as_a_death_would();
         answer_crashes(&dir, "land", holder, "work");
         let held = |pid: &str| held_path(&dir, pid).exists();
         let probed_answered = !held(probed);
         probe.release_as_a_death_would();
+        assert!(
+            !held(reaped) && !entry_path(&dir, reaped).exists(),
+            "a reaped crash's record goes with its hold"
+        );
+        assert!(held(unreadable), "an unreadable record's hold stays");
         assert!(!held(dead), "this branch's crash is answered");
         assert!(probed_answered, "whatever its lock says");
         assert!(
