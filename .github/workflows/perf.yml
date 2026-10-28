@@ -59,6 +59,9 @@ env:
   # workflow using mise-action must set this; `mise run lock-complete` fails if
   # one does not.
   MISE_LOCKFILE: "true"
+  # Make the `install_args` list binding (`tool pin loose`, CLOUD-2556).
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
 
 jobs:
   perf:

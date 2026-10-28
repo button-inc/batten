@@ -139,6 +139,9 @@ env:
   # should install locked, and its checkout is disposable, so a write here
   # costs nothing; the clone being protected is a developer's.
   MISE_LOCKFILE: "true"
+  # Make the `install_args` lists binding (`tool pin loose`, CLOUD-2556).
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
 
 jobs:
   fast-forward-release-pr:

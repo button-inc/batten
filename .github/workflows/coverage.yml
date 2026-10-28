@@ -43,6 +43,9 @@ env:
   # workflow using mise-action must set this; `mise run lock-complete` fails if
   # one does not.
   MISE_LOCKFILE: "true"
+  # Make the `install_args` list binding (`tool pin loose`, CLOUD-2556).
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
 
 jobs:
   coverage:
@@ -61,14 +64,15 @@ jobs:
           # digest above pins the ACTION; this pins the MISE it installs, which
           # is a separate resolution the digest does not reach.
           version: 2026.9.1
-          # cargo-llvm-cov drives cargo; rust supplies the compiler and the
-          # rustup that fetches llvm-tools-preview. The workspace suite also
-          # resolves two pinned instruments through `mise which`, and fails
-          # rather than skips without them: hk (`hk_selection.rs`, the retired
-          # hk-selection bats suite) and opa (`lint_rego.rs`), so both are
-          # installed here as on rust.yml's legs (CLOUD-843).
+          # cargo-llvm-cov drives nextest over the workspace suite; rust
+          # supplies the compiler and the rustup that fetches
+          # llvm-tools-preview. The suite resolves pinned instruments through
+          # `mise which` and fails rather than skips without them (hk in
+          # `hk_selection.rs`, opa in `lint_rego.rs`, CLOUD-843), so this is
+          # `ci.yml`'s test list plus cargo-llvm-cov. Binding since CLOUD-2556:
+          # before it, auto-install filled whatever this list left out.
           # `mise run ci-tools-check` fails if a name here drifts from mise.toml.
-          install_args: rust aqua:taiki-e/cargo-llvm-cov hk aqua:open-policy-agent/opa pkl aqua:axodotdev/cargo-dist aqua:jqlang/jq node
+          install_args: rust aqua:taiki-e/cargo-llvm-cov hk aqua:cli/cli github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker aqua:axodotdev/cargo-dist
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # Instrumented builds are a different profile from every other job's,

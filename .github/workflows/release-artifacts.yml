@@ -110,6 +110,12 @@ env:
   # should install locked, and its checkout is disposable, so a write here
   # costs nothing; the clone being protected is a developer's.
   MISE_LOCKFILE: "true"
+  # Make each job's `install_args` binding, as `ci.yml` does. On, the first
+  # `mise run` re-installed every `[tools]` entry the list left out: on run
+  # 40704918587 both Darwin legs died in "Add the Rust target" building
+  # `pipx:serena-agent`'s pydantic-core against Python 3.15, a tool no leg uses.
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
 
 jobs:
   # CARGO-DIST BUILDS EVERY LEG (CLOUD-2297). `dist build --artifacts=local`

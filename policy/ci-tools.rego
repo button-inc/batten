@@ -56,9 +56,10 @@
 #   catch a mismatch, never invent one — and the precise mapping is the installer's
 #   business rather than something restated here.
 #
-#   SCHEDULED WORKFLOWS ARE OUT OF SCOPE deliberately: they are not on the
-#   pull-request path, and widening to them would be a different decision with a
-#   different cost argument.
+#   SCHEDULED AND DISPATCHED WORKFLOWS NEED NO LIST: they are not on the
+#   pull-request path, and requiring one there would be a different decision
+#   with a different cost argument. A list they DO declare must still bind, on
+#   any trigger, since a decorative list is decorative wherever it sits.
 #
 #   POINTER, NEVER PAYLOAD (rule 4): the tool name and the file it is missing from.
 #   Never the tool set, never a log line.
@@ -215,6 +216,22 @@ violation contains {
 	not both_auto_installs_bound(path)
 }
 
+# A DECLARED LIST BINDS ON ANY TRIGGER. Requiring a list is argued for the
+# pull-request path, but a list that IS declared and binds nothing is decorative
+# wherever it sits: `release-artifacts`, dispatched rather than on a pull request,
+# narrowed its lists and its first `mise run` re-installed the whole toolchain,
+# where both Darwin legs died building a Python tool no leg uses.
+violation contains {
+	"rule": "tool pin wrong",
+	"verdict": "tool pin loose",
+	"subjects": [{"path": path}],
+} if {
+	some path in workflow_paths
+	not path in pr_workflow
+	list_count(path) > 0
+	not both_auto_installs_bound(path)
+}
+
 both_auto_installs_bound(path) if {
 	binds(path, "mise-task-auto-install-off")
 	binds(path, "mise-exec-auto-install-off")
@@ -349,6 +366,27 @@ test_a_scheduled_workflow_is_out_of_scope if {
 	})
 }
 
+# A declared list binds whatever the trigger: the dispatched release build
+# narrowed its lists and re-installed everything at its first `mise run`.
+test_a_dispatched_workflow_with_a_decorative_list_is_refused if {
+	some v in violation with input as tree({
+		"mise.toml": manifest,
+		"batten.toml": ["nothing spawned"],
+		".github/workflows/ci.yml": pr_flow(["        install_args: rust"]),
+		".github/workflows/release.yml": [
+			"on:",
+			"  workflow_dispatch:",
+			"jobs:",
+			"  x:",
+			"    steps:",
+			"      - uses: jdx/mise-action@abc",
+			"        install_args: rust",
+		],
+	})
+	v.verdict == "tool pin loose"
+	v.subjects == [{"path": ".github/workflows/release.yml"}]
+}
+
 # THE THIRD DIRECTION: a row's spawn that the list does not install fails CLOSED
 # in CI while passing locally.
 test_a_spawned_tool_the_list_omits_is_refused if {
@@ -384,4 +422,5 @@ test_a_manifest_declaring_no_tools_is_could_not_look if {
 #MUTANT unknown-tool-name-passes|s@^\tnot row.tool in declared$@\tfalse@|a_name_no_tools_entry_declares_is_refused
 #MUTANT pr-workflow-may-omit-install-args|s@^\tlist_count(path) != action_uses(path)$@\tfalse@|a_pull_request_workflow_with_no_list_is_refused
 #MUTANT pr-workflow-list-may-be-nonbinding|s@^\tnot both_auto_installs_bound(path)$@\tfalse@|a_list_without_the_auto_install_variables_is_refused
+#MUTANT dispatched-workflow-list-may-be-nonbinding|s@^\tlist_count(path) > 0$@\tfalse@|a_dispatched_workflow_with_a_decorative_list_is_refused
 #MUTANT spawned-tool-need-not-be-installed|s@^\tnot tool in installed_basenames$@\tfalse@|a_spawned_tool_the_list_omits_is_refused
