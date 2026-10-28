@@ -1270,6 +1270,85 @@ fn a_job_that_starts_without_asking_the_lease_is_refused() {
     );
 }
 
+/// A reusable workflow `ci.yml`'s `dist` job calls, as `rust.yml` calls the
+/// release legs (CLOUD-2554). `lease` decides whether its job opens with the
+/// landing-lease precondition.
+fn called_workflow(lease: bool) -> String {
+    let first = if lease {
+        "      - name: Landing lease precondition\n        run: |\n          \"$RUNNER_TEMP/batten-bin/batten\" lease guard \\\n            \"$LEASE_HEAD_SHA\" \"$LEASE_HEAD_REF\" \"$LEASE_RUN_ID\" || exit 0\n"
+    } else {
+        ""
+    };
+    format!(
+        "name: dist\non:\n  workflow_call:\njobs:\n  dist:\n    name: dist (${{{{ matrix.target }}}})\n    runs-on: ubuntu-latest\n    steps:\n{first}      - run: build\n"
+    )
+}
+
+/// The sound tree plus a pull-request job calling `called_workflow(lease)`, with
+/// the callee's check on the roster when `rostered`.
+fn calling(name: &str, lease: bool, rostered: bool) -> PathBuf {
+    let root = sound(name);
+    common::write(
+        &root,
+        ".github/workflows/ci.yml",
+        &WORKFLOW.replace(
+            "  final:",
+            "  dist:\n    uses: ./.github/workflows/dist.yml\n  final:",
+        ),
+    );
+    common::write(&root, ".github/workflows/dist.yml", &called_workflow(lease));
+    if rostered {
+        common::write(
+            &root,
+            "mise.toml",
+            &manifest_with(
+                "CI_REQUIRED_CHECKS = \"ci,musl,final\"",
+                "CI_REQUIRED_CHECKS = \"ci,musl,final,dist / dist (x86_64-unknown-linux-gnu)\"",
+            ),
+        );
+    }
+    root
+}
+
+/// A JOB CALLING A REUSABLE WORKFLOW HAS NO STEPS OF ITS OWN (CLOUD-2554): its
+/// lease is the called job's first step, and its checks are named
+/// `<caller> / <callee job>`, which is what the roster carries.
+#[test]
+fn a_job_calling_a_workflow_that_asks_the_lease_is_clean() {
+    let root = calling("calls-leased", true, true);
+    let raised = verdicts_raised(&root);
+    for verdict in [
+        "lease guard absent",
+        "job list missing",
+        "check name unknown",
+    ] {
+        assert!(
+            !raised.iter().any(|v| v == verdict),
+            "{verdict} over a caller whose callee asks the lease and is rostered: {raised:?}"
+        );
+    }
+}
+
+#[test]
+fn a_called_workflow_that_skips_the_lease_is_refused() {
+    let root = calling("calls-unleased", false, true);
+    let raised = verdicts_raised(&root);
+    assert!(
+        raised.iter().any(|v| v == "lease guard absent"),
+        "a caller whose callee spends before asking the lease should be refused: {raised:?}"
+    );
+}
+
+#[test]
+fn a_calling_job_off_the_roster_is_refused() {
+    let root = calling("calls-unrostered", true, false);
+    let raised = verdicts_raised(&root);
+    assert!(
+        raised.iter().any(|v| v == "job list missing"),
+        "the callee's check off the roster should be refused: {raised:?}"
+    );
+}
+
 #[test]
 fn a_precondition_invoked_without_the_tolerant_suffix_is_refused() {
     // The presence clause matches the step's NAME, so a copy that reds its own

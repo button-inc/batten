@@ -1,5 +1,9 @@
 name: dist
 
+# workflow-shell: CLOUD-2554 the release's dist job moved here verbatim, and a
+# pull request's run takes the landing-lease step every pull-request job starts
+# with; that lease step is the one step the count gains.
+
 # THE ONE PATH TO PRODUCTION (CLOUD-2554). This is the release build: every
 # leg's toolchain install, build, archive, packages, binary inventory and its
 # check. `release-artifacts.yml` calls it with `upload: true` to fill a draft;
