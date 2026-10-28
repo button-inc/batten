@@ -46,6 +46,7 @@
 //! `document_facts::no_artifact_name_reaches_the_core` refuses a manifest name in
 //! this crate.
 
+use std::fmt::Write as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -67,7 +68,13 @@ const STATE_DIR: &str = "batten-tasks";
 /// to insist the record parse. An entry missing a stamp renders without it — the
 /// byte-stability obligation for readers that predate the field — which a typed
 /// `u64` would have turned into an error.
+///
+/// `non_exhaustive` because the record grows: a field the next writer adds is
+/// absent from every older record and every outside struct literal alike, and
+/// only the second of those was a break (CLOUD-2456). Built outside the crate
+/// from [`Entry::parse`] or `Entry::default()`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Entry {
     /// The task name as the caller registered it.
     pub task: String,
@@ -89,6 +96,12 @@ pub struct Entry {
     pub sig: String,
     /// When that token last CHANGED.
     pub sig_at: String,
+    /// The branch the task is carrying, where it declared one (CLOUD-2456).
+    pub branch: String,
+    /// How many consecutive predecessors on that branch died before any lap
+    /// began, ending with the one this run took over: `0` for a fresh start or
+    /// after a death inside a lap (CLOUD-2456).
+    pub recovers: String,
 }
 
 impl Entry {
@@ -104,6 +117,24 @@ impl Entry {
             .find_map(|line| line.strip_prefix(prefix.as_str()))
             .unwrap_or_default()
             .to_owned()
+    }
+
+    /// The crash streak this run declared, `0` where it declared none
+    /// (CLOUD-2456).
+    #[must_use]
+    pub fn streak(&self) -> u32 {
+        self.recovers.parse().unwrap_or(0)
+    }
+
+    /// The lap this run reached, `0` before its first (CLOUD-2456).
+    #[must_use]
+    pub fn lap(&self) -> u32 {
+        self.tick.parse().unwrap_or(0)
+    }
+
+    /// Whether this is a run of `task` on exactly `branch` (CLOUD-2456).
+    fn is_run_of(&self, task: &str, branch: &str) -> bool {
+        self.task == task && self.branch == branch
     }
 
     /// The latest second the registrant stamped, so the latest it is known to
@@ -135,6 +166,8 @@ impl Entry {
             tick_at: Self::field(body, "tick_at"),
             sig: Self::field(body, "sig"),
             sig_at: Self::field(body, "sig_at"),
+            branch: Self::field(body, "branch"),
+            recovers: Self::field(body, "recovers"),
         }
     }
 
@@ -142,10 +175,11 @@ impl Entry {
     ///
     /// The order is part of the contract rather than cosmetic: a clone can carry
     /// an entry either half wrote during the migration, and a reader comparing
-    /// bytes needs one answer.
+    /// bytes needs one answer. The subject fields come last and only when set,
+    /// so a record from a writer that never declares one keeps its bytes.
     #[must_use]
     pub fn render(&self) -> String {
-        format!(
+        let mut body = format!(
             "task: {}\npid: {}\npgid: {}\nphase: {}\nstarted_at: {}\nphase_since: {}\ntick: {}\ntick_at: {}\nsig: {}\nsig_at: {}\n",
             self.task,
             self.pid,
@@ -157,7 +191,13 @@ impl Entry {
             self.tick_at,
             self.sig,
             self.sig_at,
-        )
+        );
+        for (name, value) in [("branch", &self.branch), ("recovers", &self.recovers)] {
+            if !value.is_empty() {
+                let _ = writeln!(body, "{name}: {value}");
+            }
+        }
+        body
     }
 
     /// Whether this record is renderable at all.
@@ -258,19 +298,40 @@ pub(crate) fn process_group(pid: &str) -> String {
 /// not ticked has not ticked, and seeding them would let a stall detector read
 /// registration as progress.
 pub fn register(git_dir: &Path, task: &str, pid: &str, phase: &str, now: u64) {
+    write_entry(git_dir, &registered(task, pid, phase, now));
+}
+
+/// Register a task carrying `branch` and the crash streak it took over, in ONE
+/// write (CLOUD-2456): a run killed between a registration and a second write
+/// declaring its subject would leave a record with no branch, which no branch's
+/// land could ever answer.
+pub fn register_as(
+    git_dir: &Path,
+    task: &str,
+    pid: &str,
+    phase: &str,
+    now: u64,
+    branch: &str,
+    recovers: u32,
+) {
+    let mut entry = registered(task, pid, phase, now);
+    branch.clone_into(&mut entry.branch);
+    entry.recovers = recovers.to_string();
+    write_entry(git_dir, &entry);
+}
+
+/// The record a registration writes, before any subject.
+fn registered(task: &str, pid: &str, phase: &str, now: u64) -> Entry {
     let started = now.to_string();
-    write_entry(
-        git_dir,
-        &Entry {
-            task: task.to_owned(),
-            pid: pid.to_owned(),
-            pgid: process_group(pid),
-            phase: phase.to_owned(),
-            phase_since: started.clone(),
-            started_at: started,
-            ..Entry::default()
-        },
-    );
+    Entry {
+        task: task.to_owned(),
+        pid: pid.to_owned(),
+        pgid: process_group(pid),
+        phase: phase.to_owned(),
+        phase_since: started.clone(),
+        started_at: started,
+        ..Entry::default()
+    }
 }
 
 /// Which of the three per-value fields a push is aimed at.
@@ -297,11 +358,7 @@ pub enum Signal {
 /// entry: the registry records what registered, and inventing a record here
 /// would let a half-wired task look fully wired.
 pub fn push(git_dir: &Path, pid: &str, signal: Signal, value: &str, now: u64) {
-    let Ok(body) = std::fs::read_to_string(entry_path(git_dir, pid)) else {
-        return;
-    };
-    let mut entry = Entry::parse(&body);
-    match signal {
+    modify(git_dir, pid, |entry| match signal {
         Signal::Phase => {
             entry.phase_since = stamp_for(value, &entry.phase, &entry.phase_since, now);
             value.clone_into(&mut entry.phase);
@@ -314,7 +371,20 @@ pub fn push(git_dir: &Path, pid: &str, signal: Signal, value: &str, now: u64) {
             entry.sig_at = stamp_for(value, &entry.sig, &entry.sig_at, now);
             value.clone_into(&mut entry.sig);
         }
-    }
+    });
+}
+
+/// Rewrite `pid`'s record through `change`, keeping every field it leaves.
+///
+/// A pid that never registered is a no-op, never a fabricated entry: the
+/// registry records what registered, and inventing a record would let a
+/// half-wired task look fully wired.
+fn modify(git_dir: &Path, pid: &str, change: impl FnOnce(&mut Entry)) {
+    let Ok(body) = std::fs::read_to_string(entry_path(git_dir, pid)) else {
+        return;
+    };
+    let mut entry = Entry::parse(&body);
+    change(&mut entry);
     write_entry(git_dir, &entry);
 }
 
@@ -326,13 +396,226 @@ pub fn read_field(git_dir: &Path, pid: &str, name: &str) -> Option<String> {
         .map(|body| Entry::field(&body, name))
 }
 
-/// Drop a record.
+/// Drop a record, and its hold with it (CLOUD-2456).
 ///
 /// Called from the task's exit path, which does not run for a task that was
 /// `SIGKILL`ed — that is exactly the case [`alive`] reports as crashed rather
-/// than as absent. Removing what is not there is a no-op, never a failure.
+/// than as absent. Every path that forgets a run (the exit and the reap)
+/// comes through here, so neither can leave a hold with no record behind;
+/// [`answer_crashes`] removes a hold alone and leaves its record to the reap,
+/// which forgets a dead land's record only once its hold is gone.
+/// Removing what is not there is a no-op, never a failure.
 pub fn unregister(git_dir: &Path, pid: &str) {
     let _ = std::fs::remove_file(entry_path(git_dir, pid));
+    let _ = std::fs::remove_file(held_path(git_dir, pid));
+}
+
+/// Forget the process group `pid`'s record names, once it has been signalled,
+/// so no later reap signals that number again (CLOUD-2456): a record kept past
+/// its process keeps a group number the kernel reuses. Every other field, the
+/// phase it died in among them, is kept, and no stamp moves, since this is no
+/// sign of life.
+pub fn disown_group(git_dir: &Path, pid: &str) {
+    modify(git_dir, pid, |entry| entry.pgid.clear());
+}
+
+/// Answer every crash of `task` on `branch` but `keep`'s: remove its hold, the
+/// witness a Stop reads, and keep its record (CLOUD-2456).
+///
+/// For the caller holding `task`'s singleton lock: the lock proves no other run
+/// of it is live, so every other hold on its branch is a crash this run
+/// answers, WHATEVER ITS LOCK SAYS. A Stop's probe may hold it for a moment and
+/// a lock may answer neither way; neither is a live run, and a hold left to
+/// either would outlive every land that could answer it. Another branch's is
+/// that branch's to answer, so it stays. The record is the reap's until its
+/// group has been signalled: forgetting it sooner would hide from `alive` a
+/// dead run whose children the reap has not looked at. One already signalled
+/// and disowned goes with its hold. Signals nothing.
+///
+/// A hold with no record is a run that died after taking its hold and before
+/// registering: it proves nothing, so it goes too, here at a run's entry
+/// rather than in a reader, which deletes nothing (CLOUD-2372).
+pub fn answer_crashes(git_dir: &Path, task: &str, keep: &str, branch: &str) {
+    for pid in holds(git_dir).filter(|pid| pid != keep) {
+        match held_record(git_dir, &pid) {
+            // Its group already signalled and disowned: nothing is left for
+            // the reap to do, so the record goes with the hold.
+            Ok(entry) if entry.is_run_of(task, branch) && entry.pgid.is_empty() => {
+                unregister(git_dir, &pid);
+            }
+            Ok(entry) if entry.is_run_of(task, branch) => {
+                let _ = std::fs::remove_file(held_path(git_dir, &pid));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let _ = std::fs::remove_file(held_path(git_dir, &pid));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Every hold's pid: the one listing both [`crashed_on`] and
+/// [`answer_crashes`] judge, through [`Entry::is_run_of`], so the crash a Stop
+/// refuses on is always one a land's entry answers. `durable`'s writes in
+/// flight are not holds.
+fn holds(git_dir: &Path) -> impl Iterator<Item = String> {
+    std::fs::read_dir(state_dir(git_dir).join("held"))
+        .into_iter()
+        .flatten()
+        .filter_map(|found| found.ok()?.file_name().into_string().ok())
+        .filter(|name| !crate::durable::is_temp(name))
+}
+
+/// The record a hold's pid names.
+fn held_record(git_dir: &Path, pid: &str) -> std::io::Result<Entry> {
+    std::fs::read_to_string(entry_path(git_dir, pid)).map(|body| Entry::parse(&body))
+}
+
+/// Every complete record in the registry, sorted by path for the byte-stability
+/// obligation every reader here carries.
+fn records(git_dir: &Path) -> Vec<Entry> {
+    record_files(&state_dir(git_dir))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|file| std::fs::read_to_string(file).ok())
+        .map(|body| Entry::parse(&body))
+        .filter(Entry::is_complete)
+        .collect()
+}
+
+/// Every record file under `dir`, sorted, so every reader's output is
+/// byte-stable across runs for one registry state (non-negotiable rule 5)
+/// rather than dependent on readdir order.
+fn record_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(|found| found.ok().map(|found| found.path()))
+        .filter(|path| is_record(path))
+        .collect();
+    files.sort();
+    Ok(files)
+}
+
+/// Where a run's hold lives: a directory beside the records, which every record
+/// reader skips because `is_record` reads only files (CLOUD-2456).
+fn held_path(git_dir: &Path, pid: &str) -> PathBuf {
+    state_dir(git_dir).join("held").join(pid)
+}
+
+/// Whether `pid`'s hold still stands, whatever its lock says: the crash
+/// witness the reap keeps a land's record for until its branch's land answers
+/// it, which removes the file (CLOUD-2456). The file is read, never the lock:
+/// a Stop's probe may hold it for a moment, and a lock may answer neither way.
+/// A file whose presence cannot be read stands, so no unanswered crash is
+/// forgotten on an error.
+#[must_use]
+pub fn hold_stands(git_dir: &Path, pid: &str) -> bool {
+    held_path(git_dir, pid).try_exists().unwrap_or(true)
+}
+
+/// A run's proof of life: an OS lock on a file of its own, held for the run's
+/// whole life (CLOUD-2456).
+///
+/// **THE KERNEL ANSWERS, NOT A PID.** std's `File::try_lock` (`flock` on unix,
+/// `LockFileEx` on Windows, the call `prune::claim` already makes) is released
+/// on every death a process can suffer: a kill, a crash, an OOM, a reboot. So a
+/// hold whose lock can be taken is a run that died without its orderly exit, on
+/// every platform alike, with no pid to recycle and no cmdline to corroborate.
+/// std opens the file not inheritable, so a child the run spawned holds nothing
+/// once the run itself is gone.
+///
+/// Dropped on the orderly exit, which removes the file; a death leaves the file
+/// with nobody's lock on it, which is what [`crashed_on`] reads.
+#[derive(Debug)]
+pub struct Held {
+    file: std::fs::File,
+    path: PathBuf,
+    /// Whether dropping removes the file: false only for
+    /// [`Held::release_as_a_death_would`].
+    orderly: bool,
+}
+
+impl Held {
+    /// Let go of the lock and keep the file, which is all a death does: what a
+    /// case plants to stand in for a run the host killed.
+    pub fn release_as_a_death_would(mut self) {
+        self.orderly = false;
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        if self.orderly {
+            let _ = std::fs::remove_file(&self.path);
+        }
+        let _ = self.file.unlock();
+    }
+}
+
+/// Take `pid`'s hold, or `None` where its file cannot be made or locked: a run
+/// with no hold is one no Stop will ever read as crashed, the fail-open side.
+#[must_use]
+pub fn hold(git_dir: &Path, pid: &str) -> Option<Held> {
+    let path = held_path(git_dir, pid);
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    // Made through `durable` like every write, then opened read-only to lock:
+    // the file holds nothing, so no write is ever made through the handle, and
+    // neither `flock` nor `LockFileEx` needs one.
+    crate::durable::replace(&path, "").ok()?;
+    // BLOCKING, not `try_lock`: a Stop's probe of this hold takes the lock for
+    // the length of one call, and a `try_lock` that met it would leave this run
+    // without a witness for its whole life. Nothing else can hold it: no two
+    // live processes share a pid, and a dead one's lock the kernel has freed.
+    // A file that cannot be locked goes: no lock on it could ever report a death.
+    let Some(file) = std::fs::File::open(&path)
+        .ok()
+        .filter(|file| file.lock().is_ok())
+    else {
+        let _ = std::fs::remove_file(&path);
+        return None;
+    };
+    Some(Held {
+        file,
+        path,
+        orderly: true,
+    })
+}
+
+/// Whether `pid`'s hold stands with nobody's lock on it. `None` is no hold to
+/// read (a writer that predates it, or an orderly exit) or one whose lock
+/// answers neither way, and no death is claimed on either.
+#[must_use]
+pub fn died(git_dir: &Path, pid: &str) -> Option<bool> {
+    let file = std::fs::File::open(held_path(git_dir, pid)).ok()?;
+    match file.try_lock() {
+        Ok(()) => {
+            let _ = file.unlock();
+            Some(true)
+        }
+        Err(std::fs::TryLockError::WouldBlock) => Some(false),
+        Err(std::fs::TryLockError::Error(_)) => None,
+    }
+}
+
+/// The crash a run of `task` on `branch` left, if one stands: the most recent
+/// record of `task` naming exactly that branch whose hold nobody holds
+/// (CLOUD-2456). A writer that predates the field never took a hold either, so
+/// no branchless record is ever listed here to match every branch.
+///
+/// A kill skips the exit path that unregisters, so the record outlives its run
+/// with the phase and lap it reached; an orderly exit leaves none. Death is the
+/// kernel's answer through [`Held`], the same on every platform; a record with
+/// no hold to read is no crash this can prove, so it is not one.
+///
+/// THE HOLDS ARE LISTED, NOT THE RECORDS. This runs on every Stop, and an
+/// orderly exit removes its hold, so the directory holds nothing or the one
+/// live land; only a hold nobody holds costs a record read.
+#[must_use]
+pub fn crashed_on(git_dir: &Path, task: &str, branch: &str) -> Option<Entry> {
+    holds(git_dir)
+        .filter(|pid| died(git_dir, pid) == Some(true))
+        .filter_map(|pid| held_record(git_dir, &pid).ok())
+        .filter(|entry| entry.is_run_of(task, branch))
+        .max_by_key(Entry::last_alive)
 }
 
 /// What [`alive`] found.
@@ -569,16 +852,9 @@ fn alive_reading(
     if !dir.exists() {
         return Reading::Nothing;
     }
-    let Ok(listing) = std::fs::read_dir(&dir) else {
+    let Ok(files) = record_files(&dir) else {
         return Reading::Unreadable(dir);
     };
-    let mut files: Vec<PathBuf> = listing
-        .filter_map(|found| found.ok().map(|found| found.path()))
-        .filter(|path| is_record(path))
-        .collect();
-    // Sorted, so the output is byte-stable across runs for one registry state
-    // (non-negotiable rule 5) rather than dependent on readdir order.
-    files.sort();
 
     let mut lines = Vec::new();
     for file in files {
@@ -651,23 +927,11 @@ fn alive_reading(
 /// kill while the registrant stays in its recorded group.
 #[must_use]
 pub fn abandoned(git_dir: &Path, program_root: &str) -> Vec<Entry> {
-    let dir = state_dir(git_dir);
-    let Ok(listing) = std::fs::read_dir(&dir) else {
-        // Could-not-look reaps nothing, which is the safe direction: a registry
-        // that cannot be read must never license signalling a group it guessed at.
-        return Vec::new();
-    };
-    let mut files: Vec<PathBuf> = listing
-        .filter_map(|found| found.ok().map(|found| found.path()))
-        .filter(|path| is_record(path))
-        .collect();
-    // Sorted for the byte-stability obligation every reader here carries.
-    files.sort();
-    files
-        .iter()
-        .filter_map(|file| std::fs::read_to_string(file).ok())
-        .map(|body| Entry::parse(&body))
-        .filter(Entry::is_complete)
+    // A registry that cannot be read lists nothing, so could-not-look reaps
+    // nothing, which is the safe direction: it must never license signalling a
+    // group it guessed at.
+    records(git_dir)
+        .into_iter()
         .filter(|entry| !task_alive(program_root, &entry.pid, &entry.task))
         .collect()
 }
@@ -1080,6 +1344,173 @@ mod tests {
             !is_record(&temp),
             "a dot-prefixed temp is a write in flight"
         );
+    }
+
+    /// A record registered with no subject keeps its bytes; one registered with
+    /// a subject round-trips, and a later push keeps it (CLOUD-2456).
+    #[test]
+    fn a_declared_subject_round_trips_and_an_undeclared_record_keeps_its_bytes() {
+        let dir = registry("declared-subject");
+        register(&dir, "land", NO_SUCH_PID, "lap", 100);
+        let read = || std::fs::read_to_string(entry_path(&dir, NO_SUCH_PID)).unwrap_or_default();
+        let bare = read();
+        assert!(!bare.contains("branch"), "{bare}");
+        register_as(&dir, "land", NO_SUCH_PID, "lap", 100, "work", 2);
+        push(&dir, NO_SUCH_PID, Signal::Tick, "3", 101);
+        let entry = Entry::parse(&read());
+        assert_eq!(
+            (entry.branch.as_str(), entry.streak(), entry.lap()),
+            ("work", 2, 3)
+        );
+        assert_eq!(
+            (Entry::default().streak(), Entry::default().lap()),
+            (0, 0),
+            "an undeclared streak and an unticked lap read as zero"
+        );
+    }
+
+    /// The crash a branch's Stop answers: a record of the task, on exactly that
+    /// branch, whose hold nobody holds (CLOUD-2456). The kernel's lock is the
+    /// witness, so every platform gives the same answer.
+    #[test]
+    fn crashed_on_reads_a_record_whose_hold_nobody_holds() {
+        let dir = registry("crashed-on");
+        register_as(&dir, "land", NO_SUCH_PID, "verify", 100, "work", 0);
+        assert!(
+            crashed_on(&dir, "land", "work").is_none(),
+            "no hold, no proof"
+        );
+        let held = taken(&dir, NO_SUCH_PID);
+        assert!(crashed_on(&dir, "land", "work").is_none(), "held: alive");
+        held.release_as_a_death_would();
+        assert_eq!(
+            crashed_on(&dir, "land", "work").map(|crash| crash.pid),
+            Some(NO_SUCH_PID.to_owned()),
+            "released without its exit: a death"
+        );
+        assert!(crashed_on(&dir, "verify", "work").is_none(), "another task");
+        register_as(&dir, "land", NO_SUCH_PID, "verify", 100, "elsewhere", 0);
+        assert!(crashed_on(&dir, "land", "work").is_none(), "another branch");
+        register(&dir, "land", NO_SUCH_PID, "verify", 100);
+        assert!(
+            crashed_on(&dir, "land", "work").is_none(),
+            "no branch is no match"
+        );
+    }
+
+    /// A dead hold with no record proves nothing. The Stop's reader leaves it,
+    /// since readers delete nothing, and the next run's entry removes it.
+    #[test]
+    fn a_dead_hold_with_no_record_is_removed_at_a_runs_entry() {
+        let dir = registry("orphan-hold");
+        taken(&dir, NO_SUCH_PID).release_as_a_death_would();
+        assert!(crashed_on(&dir, "land", "work").is_none());
+        assert!(
+            held_path(&dir, NO_SUCH_PID).exists(),
+            "the reader removed nothing"
+        );
+        answer_crashes(&dir, "land", "4194306", "work");
+        assert!(!held_path(&dir, NO_SUCH_PID).exists(), "the entry did");
+    }
+
+    /// A disowned record keeps every field but its group, so the phase it died
+    /// in survives the reap that signalled it.
+    #[test]
+    fn disowning_a_group_keeps_the_rest_of_the_record() {
+        let dir = registry("disown");
+        register(&dir, "land", NO_SUCH_PID, "verify", 100);
+        disown_group(&dir, NO_SUCH_PID);
+        let entry = Entry::parse(
+            &std::fs::read_to_string(entry_path(&dir, NO_SUCH_PID)).unwrap_or_default(),
+        );
+        assert_eq!((entry.pgid.as_str(), entry.phase.as_str()), ("", "verify"));
+    }
+
+    /// A hold stands while its file does, whoever holds its lock, and no
+    /// longer once it is removed (CLOUD-2456).
+    #[test]
+    fn a_hold_stands_while_its_file_does() {
+        let dir = registry("hold-stands");
+        assert!(!hold_stands(&dir, NO_SUCH_PID), "none taken");
+        let held = taken(&dir, NO_SUCH_PID);
+        assert!(hold_stands(&dir, NO_SUCH_PID), "held");
+        held.release_as_a_death_would();
+        assert!(hold_stands(&dir, NO_SUCH_PID), "released by a death");
+        unregister(&dir, NO_SUCH_PID);
+        assert!(!hold_stands(&dir, NO_SUCH_PID), "forgotten");
+    }
+
+    /// An orderly exit drops the hold, which removes it: no crash is left.
+    #[test]
+    fn an_orderly_exit_leaves_no_hold() {
+        let dir = registry("orderly-exit");
+        register(&dir, "land", NO_SUCH_PID, "verify", 100);
+        drop(taken(&dir, NO_SUCH_PID));
+        assert!(!held_path(&dir, NO_SUCH_PID).exists());
+        assert!(crashed_on(&dir, "land", "").is_none());
+    }
+
+    /// The lock holder answers every dead hold of its task on its branch: the
+    /// hold goes, the record stays for the reap, and nothing else is touched
+    /// (CLOUD-2456).
+    #[test]
+    fn answer_crashes_removes_this_branchs_dead_holds_only() {
+        let dir = registry("answer-crashes");
+        // Past `pid_max`, as [`NO_SUCH_PID`] is: `register` reads each pid's
+        // process group, and a low pid can be a kernel thread's.
+        let (dead, holder, verify, elsewhere) = ("4194306", "4194307", "4194308", "4194309");
+        register_as(&dir, "land", dead, "lap", 100, "work", 0);
+        register_as(&dir, "land", elsewhere, "lap", 100, "elsewhere", 0);
+        register(&dir, "verify", verify, "lap", 100);
+        for pid in [dead, elsewhere, verify] {
+            taken(&dir, pid).release_as_a_death_would();
+        }
+        let _own = taken(&dir, holder);
+        // A crash on this branch whose lock a Stop's probe holds right now is
+        // answered all the same: the singleton lock proves it is no live run.
+        let probed = "4194310";
+        register_as(&dir, "land", probed, "lap", 100, "work", 0);
+        let probe = taken(&dir, probed);
+        // One a reap already signalled and disowned goes whole: nothing is
+        // left for the reap to do.
+        let reaped = "4194311";
+        register_as(&dir, "land", reaped, "lap", 100, "work", 0);
+        disown_group(&dir, reaped);
+        taken(&dir, reaped).release_as_a_death_would();
+        // A hold whose record cannot be read, for a reason other than its
+        // absence, proves nothing either way, so it stays.
+        let unreadable = "4194312";
+        assert!(std::fs::create_dir_all(entry_path(&dir, unreadable)).is_ok());
+        taken(&dir, unreadable).release_as_a_death_would();
+        answer_crashes(&dir, "land", holder, "work");
+        let held = |pid: &str| held_path(&dir, pid).exists();
+        let probed_answered = !held(probed);
+        probe.release_as_a_death_would();
+        assert!(
+            !held(reaped) && !entry_path(&dir, reaped).exists(),
+            "a reaped crash's record goes with its hold"
+        );
+        assert!(held(unreadable), "an unreadable record's hold stays");
+        assert!(!held(dead), "this branch's crash is answered");
+        assert!(probed_answered, "whatever its lock says");
+        assert!(
+            entry_path(&dir, dead).exists(),
+            "and its record is the reap's"
+        );
+        assert!(
+            held(elsewhere),
+            "another branch's crash is that branch's to answer"
+        );
+        assert!(held(verify), "another task's hold is not this task's");
+        assert!(held(holder), "and the holder's own stands");
+    }
+
+    /// `pid`'s hold, which a scratch registry always grants.
+    fn taken(dir: &Path, pid: &str) -> Held {
+        let Some(held) = hold(dir, pid) else {
+            panic!("a hold is taken in a scratch registry");
+        };
+        held
     }
 
     /// A scratch registry. `CARGO_TARGET_TMPDIR` is only defined for integration
