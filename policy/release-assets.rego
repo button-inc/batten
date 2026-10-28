@@ -45,7 +45,7 @@
 #MUTANT missing-archive-passes|s@^\tnot archived(target)$@\tfalse@|a_release_with_only_the_schema_is_refused
 #MUTANT missing-extra-passes|s@^\tnot name in assets$@\tfalse@|every_non_target_asset_is_demanded_from_both_sources
 #MUTANT unreadable-list-passes|s@^\tnot expectations_readable$@\tfalse@|a_list_that_cannot_be_derived_is_partial_never_complete
-#MUTANT cross-leg-sbom-demanded|s@^\tleg\["build-tool"\] != "cross"$@\ttrue@|the_real_matrix_is_readable_by_the_module
+#MUTANT cross-leg-sbom-demanded|s@^\tleg\["build-tool"\] != "cross"$@\ttrue@|a_cross_leg_is_never_demanded_a_binary_sbom
 #MUTANT sbom-document-name-drifts|s@^sbom_documents := {"batten.spdx.json", @sbom_documents := {"batten.sbom.json", @|the_names_the_module_demands_are_the_names_the_producers_write
 #MUTANT stem-binary-drifts|s@^binary := "batten"$@binary := "batten-cli"@|the_names_the_module_demands_are_the_names_the_producers_write
 #MUTANT sbom-suffix-drifts|s@sprintf("%s-%s-%s.spdx.json", @sprintf("%s-%s-%s.sbom.json", @|the_names_the_module_demands_are_the_names_the_producers_write
