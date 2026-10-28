@@ -37,8 +37,11 @@ use std::path::PathBuf;
 
 use common::{StateHome as _, stdout};
 
+/// The committed tree in a fixed world (CLOUD-2528): HEAD pushed, an empty
+/// receipt store. On the live checkout `turn mint ahead` refuses an Edit while a
+/// session's `unlanded-nudged` marker sits there and HEAD is unpushed.
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    common::committed_clone()
 }
 
 fn envelope(mode: &str, tool: &str, input: &serde_json::Value) -> String {

@@ -1775,6 +1775,67 @@ pub(crate) fn scratch_repo(name: &str) -> PathBuf {
     Fixture::new(name).build()
 }
 
+/// A clone of this checkout's COMMITTED tree, in a world the case does not
+/// inherit (CLOUD-2528): `HEAD` is on a remote-tracking ref and the receipt store
+/// is empty.
+///
+/// **FOR THE CASES THAT ADJUDICATE "THE COMMITTED POLICY".** They used to run
+/// against the live checkout, so their verdict was a property of that clone
+/// rather than of the commit. `check run early` refuses a slow check while HEAD is
+/// unpushed, and `land`'s `verify` runs on a replayed head it has not pushed yet;
+/// `turn mint ahead` refuses an Edit while a session's `unlanded-nudged` marker
+/// sits in the live store. `cli.rs` records the land lock as the same class. Here
+/// the push state and the store are written by construction.
+///
+/// ONE CLONE PER COMMIT, SHARED ACROSS PROCESSES. nextest runs each case in its
+/// own process, so a per-process memo would clone once per case. The directory is
+/// keyed by `HEAD`'s sha, built under a pid-suffixed name and renamed into place,
+/// so a concurrent first caller never observes a half-built clone. `--shared`
+/// borrows the checkout's objects, so the clone costs a checkout and no copy.
+//MUTANT-SUITE crates/batten/tests/it/push_before_check.rs
+//MUTANT fixed-world-unpinned|s@^    git_in(&building, &\["update-ref", "refs/remotes/origin/fixed-world", &head\]);$@@|the_committed_clone_is_pushed_and_carries_no_session_state
+#[must_use]
+pub(crate) fn committed_clone() -> PathBuf {
+    // ONE BUILDER PER PROCESS as well: under `cargo test` the cases are threads
+    // sharing one pid, so the pid-suffixed name alone would collide.
+    static CLONE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    CLONE.get_or_init(build_committed_clone).clone()
+}
+
+fn build_committed_clone() -> PathBuf {
+    let root = at_root("");
+    let head = git_in(&root, &["rev-parse", "HEAD"]);
+    let clone = target_tmp().join(format!("committed-{}", &head[..12]));
+    if clone.join(".git").is_dir() {
+        return clone;
+    }
+    let building = target_tmp().join(format!("committed-{}.{}", &head[..12], std::process::id()));
+    let _ = fs::remove_dir_all(&building);
+    git_in(
+        &target_tmp(),
+        &[
+            "clone",
+            "--quiet",
+            "--shared",
+            "--no-checkout",
+            &root.to_string_lossy(),
+            &building.to_string_lossy(),
+        ],
+    );
+    git_in(&building, &["checkout", "--quiet", "--detach", &head]);
+    // PUSHED BY CONSTRUCTION, whatever the checkout's own branch state: a
+    // detached or replayed live HEAD has no `origin/*` ref of its own here.
+    git_in(
+        &building,
+        &["update-ref", "refs/remotes/origin/fixed-world", &head],
+    );
+    if fs::rename(&building, &clone).is_err() {
+        // Another process built the same commit first; theirs is the one used.
+        let _ = fs::remove_dir_all(&building);
+    }
+    clone
+}
+
 /// An empty scratch directory **outside** this repository's tree, wiped first.
 ///
 /// For the one fixture shape that cannot live under `target/`: a directory that

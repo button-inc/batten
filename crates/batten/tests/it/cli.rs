@@ -3701,7 +3701,10 @@ const MANIFEST_ARTIFACTS: &[&str] = &["one.txt", "two.txt", "three.txt", "four.t
 
 #[test]
 fn the_committed_shape_rules_fire_on_every_banned_shape() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // THE COMMITTED TREE IN A FIXED WORLD (CLOUD-2528), not the live checkout: a
+    // `cargo test` here is refused by `check run early` whenever the live HEAD is
+    // unpushed, which `land`'s replayed head always is.
+    let root = common::committed_clone();
     // THE ARM IS READ OFF THE ROW, never written into the case — the same
     // discipline `census_gaps` already applies to the SITE, and for the same
     // reason: a case naming its own arm would keep passing after the authority

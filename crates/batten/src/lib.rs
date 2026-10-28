@@ -12378,6 +12378,10 @@ fn reconcile_at_entry(root: &Path, branch: &str, out: &mut dyn Write) -> Result<
 /// # Errors
 ///
 /// Only for a stream that will not accept output.
+#[expect(
+    clippy::too_many_lines,
+    reason = "every refusing exit says its cost before its undo (CLOUD-2417); the pair cannot leave the loop without a nine-argument helper, which `too_many_arguments` refuses in turn"
+)]
 fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let Laps {
         root,
@@ -12456,6 +12460,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
         lap = lap.saturating_add(1);
         // Checked BEFORE `attempt`, so a lap that will not run is not charged.
         if let Some(from) = stood_down.take() {
+            say_the_cost(branch, &ledger, &StopHeld::of(&entered, &bet), err)?;
             return honour_the_notice(&from, root, branch, &pipeline, &mut entered, out, err);
         }
         ledger.attempt();
@@ -12482,8 +12487,10 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
             // and can only lap, never land: it exists to spend nothing, and it
             // settles the bet before the replay that would otherwise build on
             // somebody else's commits.
+            let held = StopHeld::of(&entered, &bet); // before the ask moves the bet
             let asked = asks_before_the_step(*row, this_lap, &mut trunk_poll, &mut bet, out, err)?;
             if let Answered::Stop(code) = asked {
+                say_the_cost(branch, &ledger, &held, err)?;
                 unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                 return Ok(code);
             }
@@ -12558,6 +12565,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
                     // what tells a reclaimed gate from a lease wait, so the
                     // charge needs it and a shadow would hide it (CLOUD-1586).
                     if let Some(refusal) = charge_or_refuse(step, code, basis, &mut ledger, err)? {
+                        say_the_cost(branch, &ledger, &StopHeld::of(&entered, &bet), err)?;
                         unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                         return Ok(refusal);
                     }
@@ -12581,6 +12589,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
                 // answer it would have got running that step by hand, which is
                 // what keeps the loop from becoming a second exit vocabulary.
                 land::Progress::Stop => {
+                    say_the_cost(branch, &ledger, &StopHeld::of(&entered, &bet), err)?;
                     unwind_lap(root, branch, &pipeline, &mut entered, seen, out, err)?;
                     return Ok(code);
                 }
@@ -12598,6 +12607,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
     // Unconditional rather than guarded on that arm: every other exit already
     // drained `entered`, so this is a no-op for them and the guard would be a
     // second statement of which paths compensate.
+    let held = StopHeld::of(&entered, &bet); // before the undos clear it
     unwind_lap(root, branch, &pipeline, &mut entered, None, out, err)?;
     // AND THE BORROWED RANGE COMES OFF THE BRANCH (CLOUD-2076). A bet is settled
     // by the NEXT lap's precheck, and on the last lap there is none — so a run
@@ -12607,6 +12617,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
     if bet.live()
         && let Some(code) = unwind_the_bet(root, url, branch, &mut bet, reference, out, err)?
     {
+        say_the_cost(branch, &ledger, &held, err)?;
         return Ok(code);
     }
     // NOT A VERDICT ABOUT THE BRANCH. Exhausting the count says the loop stopped
@@ -12617,6 +12628,72 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
     // nothing, so reporting laps as spend states a cost that was never paid.
     say_the_laps_are_spent(laps, &ledger, err)?;
     Ok(ExitCode::Internal)
+}
+
+/// What a stopping `land` run still holds, read from its own records rather
+/// than said (CLOUD-2417).
+///
+/// HERE AND NOT IN `land`, which is plumbing: `module_closure.rs` holds its
+/// closure under nine modules, and reading the bet and rendering a progress line
+/// would pull `speculation`, `output` and `verdict` into it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StopHeld {
+    /// Whether `land::Step::Lease` was entered and not yet undone.
+    taken: bool,
+    /// The base borrowed from a holder ahead, while a bet is outstanding.
+    speculating_on: Option<String>,
+}
+
+//MUTANT-SUITE crates/batten/src/lib.rs
+//MUTANT lease-taken-always-false|s@^            taken: entered.contains(&land::Step::Lease),$@            taken: false,@|tests::a_taken_lease_reads_from_the_entered_steps
+//MUTANT speculation-never-named|s@^            speculating_on: bet.base.clone(),$@            speculating_on: None,@|tests::a_speculating_stop_names_the_base_it_borrowed
+impl StopHeld {
+    fn of(entered: &[land::Step], bet: &speculation::Bet) -> Self {
+        Self {
+            taken: entered.contains(&land::Step::Lease),
+            speculating_on: bet.base.clone(),
+        }
+    }
+}
+
+/// The counted cost of a run that is stopping (CLOUD-2417).
+///
+/// **EVERY FIELD IS READ, NONE IS SAID.** On #1191 `land`'s stop exits printed
+/// nothing about spend, and the reader filled the silence with "a full lap of
+/// lease occupancy" over a run whose `paid` was zero. One exit did speak and
+/// hardcoded "this branch has spent no CI at all", which is false the moment a
+/// matrix was bought before a refunded bound ran out.
+fn cost_line(ledger: &land::Ledger, branch: &str, held: &StopHeld) -> output::Progress {
+    use output::Fact;
+    let mut facts = vec![
+        ("laps charged", Fact::Count(u64::from(ledger.laps))),
+        ("matrices bought", Fact::Count(u64::from(ledger.paid))),
+        ("lease taken", Fact::Flag(held.taken)),
+    ];
+    if let Some(base) = held.speculating_on.as_deref().and_then(output::Token::new) {
+        facts.push(("speculating on", Fact::Pointer(base)));
+    }
+    output::Progress {
+        verb: "land",
+        subject: verdict::artifact(branch),
+        facts,
+    }
+}
+
+/// Say what a refusing stop cost, as counts (CLOUD-2417).
+///
+/// Before every undo, at every exit that refuses, because the undos are what
+/// clear the lease and the bet the line reports. The spent-budget exit is not one
+/// of them: `lane run spent` already carries the same counts.
+fn say_the_cost(
+    branch: &str,
+    ledger: &land::Ledger,
+    held: &StopHeld,
+    err: &mut dyn Write,
+) -> Result<()> {
+    use output::Line as _;
+    output::verdict(err, &cost_line(ledger, branch, held).line())?;
+    Ok(())
 }
 
 /// The exhaustion refusal, which has two readings and used to have one.
@@ -12982,8 +13059,11 @@ fn bet_liveness(root: &Path, branch: &str, base: &str) -> speculation::Live {
 /// function's own header names the mis-diagnosis class it exists to prevent, and
 /// a hardcoded "the fleet is saturated" printed over a `GateReclaims` bound would
 /// BE that class: nothing about the fleet is saturated, the trunk is simply
-/// moving faster than this gate takes. Both arms have spent no CI, which is the
-/// half they share and the half worth repeating in either sentence.
+/// moving faster than this gate takes. What a run SPENT is not either arm's to
+/// say: it used to close every sentence with "this branch has spent no CI at
+/// all", which `Bound::LeaseWaits`'s own doc contradicts for every other bound,
+/// and the caller's `say_the_cost` now prints `Ledger::paid` beside it
+/// (CLOUD-2417).
 ///
 /// `Some(code)` is the refusal and the caller still owes its unwind: the undos
 /// are the driver's, and performing them here would put the compensation cluster
@@ -13022,10 +13102,7 @@ fn charge_or_refuse(
             "the gate kept refusing over a base borrowed from the branch ahead, and never over this branch on trunk — so the evidence points at that base rather than at this tree; re-run once the holder has landed or been evicted"
         }
     };
-    writeln!(
-        err,
-        "::error:: land: gave up after {bound:?} — {diagnosis}; this branch has spent no CI at all"
-    )?;
+    writeln!(err, "::error:: land: gave up after {bound:?} — {diagnosis}")?;
     Ok(Some(ExitCode::Internal))
 }
 
@@ -18929,6 +19006,7 @@ struct CallFacts {
     dispatch: facts::Look<()>,
     pinned: facts::Look<std::collections::BTreeSet<String>>,
     red_head: facts::Look<serde_json::Value>,
+    head_unpushed: facts::Look<()>,
 }
 
 fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
@@ -18940,7 +19018,47 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
         dispatch: dispatch_facts(envelope),
         pinned: pinned_for(policy, envelope),
         red_head: red_head_for(policy, envelope),
+        head_unpushed: head_unpushed_for(policy, envelope),
     }
+}
+
+/// Whether `HEAD` holds a commit no remote-tracking ref reaches (CLOUD-2489),
+/// behind [`red_head_for`]'s narrowing and asked only of a shell call before it
+/// runs: the fact decides a command, so a read or a write opens nothing for it.
+///
+/// **PAID ON EVERY SHELL CALL UNDER A POLICY ROW, and that is a measured choice.**
+/// The cost is one ref scan and a walk that stops at the first unpushed commit,
+/// whose hidden frontier ends where `HEAD`'s line meets a remote tip — the same
+/// walk `turn mint ahead`'s `while_unpushed` pays on writes. Narrowing to the
+/// commands a module would refuse needs the module's own pattern, which is a
+/// consumer's vocabulary and not the engine's to name (non-negotiable rule 1).
+///
+/// `None` — no repository, no remote to push to — is could-not-look, never
+/// "unpushed": a remedy of "push" must not fire where no push is possible.
+//MUTANT-SUITE crates/batten/tests/it/push_before_check.rs
+//MUTANT head-unpushed-never-read|s@^        Some(true) => facts::Look::Is(()),$@        Some(true) => facts::Look::IsNot,@|an_unpushed_head_refuses_a_slow_check
+fn head_unpushed_for(policy: &hook::Policy, envelope: &hook::Envelope) -> facts::Look<()> {
+    if !asks_head_unpushed(envelope.event, &envelope.operation, || {
+        policy.reads_pinned(envelope)
+    }) {
+        return facts::Look::CouldNotLook;
+    }
+    match git::head_unpushed_to_a_remote(hook_authority_root()) {
+        Some(true) => facts::Look::Is(()),
+        Some(false) => facts::Look::IsNot,
+        None => facts::Look::CouldNotLook,
+    }
+}
+
+/// Whether a call is one the `head-unpushed` walk is spent on: a shell command,
+/// before it runs, under a policy row. `reads` is asked last, so the cheap tests
+/// decide first.
+fn asks_head_unpushed(
+    event: hook::Event,
+    operation: &hook::Operation,
+    reads: impl FnOnce() -> bool,
+) -> bool {
+    event == hook::Event::PreTool && *operation == hook::Operation::Execute && reads()
 }
 
 /// The rows of the config authority this call's write touches that this
@@ -19333,6 +19451,7 @@ fn run_hook(
         extracted: &extracted,
         dispatch: &call.dispatch,
         red_head: &call.red_head,
+        head_unpushed: &call.head_unpushed,
     };
     // THE DOOR (CLOUD-898). Declared handlers run here, under the contract in
     // `crate::handler`: bounded by the parent, fail-open on anything they break,
@@ -29798,6 +29917,103 @@ pub fn land_ready_owes(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// THE STOP THAT BOUGHT NOTHING SAYS ZERO, as a count (CLOUD-2417). #1191's
+    /// reader supplied "a full lap of lease occupancy" where this line was absent.
+    #[test]
+    fn a_stop_before_the_ready_says_no_matrix_was_bought() {
+        use output::Line as _;
+        let mut ledger = land::Ledger::default();
+        ledger.attempt();
+        let held = StopHeld::of(&[land::Step::Replay], &speculation::Bet::default());
+        assert_eq!(
+            cost_line(&ledger, "feature", &held).line(),
+            "land: feature — laps charged 1; matrices bought 0; lease taken false"
+        );
+    }
+
+    /// A stop over a borrowed base names that base, so the next reader knows
+    /// whose commits the branch was carrying.
+    #[test]
+    fn a_speculating_stop_names_the_base_it_borrowed() {
+        use output::Line as _;
+        let bet = speculation::Bet {
+            base: Some("a1b2c3d".to_owned()),
+            ..speculation::Bet::default()
+        };
+        let held = StopHeld::of(&[], &bet);
+        let line = cost_line(&land::Ledger::default(), "feature", &held).line();
+        assert!(line.ends_with("; speculating on a1b2c3d"), "got: {line}");
+    }
+
+    /// The cost line reaches the stream the stop speaks on.
+    #[test]
+    fn a_refusing_stop_writes_its_cost() {
+        let mut err = Vec::new();
+        let held = StopHeld::of(&[], &speculation::Bet::default());
+        say_the_cost("feature", &land::Ledger::default(), &held, &mut err).unwrap();
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            "land: feature — laps charged 0; matrices bought 0; lease taken false\n"
+        );
+    }
+
+    /// AN EXHAUSTED BOUND REFUSES, and its sentence no longer claims a spend it
+    /// cannot see (CLOUD-2417): the counts are `say_the_cost`'s.
+    #[test]
+    fn an_exhausted_bound_refuses_without_claiming_a_spend() {
+        let mut ledger = land::Ledger {
+            lease_waits: 10_000,
+            ..land::Ledger::default()
+        };
+        let mut err = Vec::new();
+        let refused = charge_or_refuse(
+            land::Step::Lease,
+            ExitCode::Violation,
+            land::Basis::of(false),
+            &mut ledger,
+            &mut err,
+        )
+        .unwrap();
+        assert_eq!(refused, Some(ExitCode::Internal));
+        let said = String::from_utf8(err).unwrap();
+        assert!(said.contains("gave up after LeaseWaits"), "{said}");
+        assert!(!said.contains("spent no CI"), "{said}");
+    }
+
+    /// The walk is spent only on a shell call before it runs, under a policy row.
+    #[test]
+    fn head_unpushed_is_asked_of_a_pre_tool_shell_call_alone() {
+        use hook::{Event, Operation};
+        assert!(asks_head_unpushed(
+            Event::PreTool,
+            &Operation::Execute,
+            || true
+        ));
+        assert!(!asks_head_unpushed(
+            Event::PostTool,
+            &Operation::Execute,
+            || true
+        ));
+        assert!(!asks_head_unpushed(
+            Event::PreTool,
+            &Operation::Write,
+            || true
+        ));
+        assert!(!asks_head_unpushed(
+            Event::PreTool,
+            &Operation::Execute,
+            || false
+        ));
+    }
+
+    /// The lease is what the driver ENTERED, not what a step was asked to do.
+    #[test]
+    fn a_taken_lease_reads_from_the_entered_steps() {
+        let bet = speculation::Bet::default();
+        assert!(StopHeld::of(&[land::Step::Replay, land::Step::Lease], &bet).taken);
+        assert!(!StopHeld::of(&[land::Step::Replay], &bet).taken);
+    }
 
     /// CLOUD-2372: the next landing's reap, not a reader, forgets a dead
     /// registrant. A pid past every platform's `pid_max` is dead wherever a

@@ -2062,7 +2062,7 @@ pub fn unpushed_in_range(dir: &Path, target: &str) -> Result<Vec<String>> {
     let repo = open(dir)?;
     let refused = || UsageError::raise("could not resolve the reset target".to_owned());
     let target_id = repo.rev_parse_single(target).map_err(|_| refused())?;
-    unreachable_from_remotes(&repo, vec![target_id.detach()])
+    unreachable_from_remotes(&repo, vec![target_id.detach()], usize::MAX)
 }
 
 /// Whether `HEAD` is reachable from some remote-tracking ref — committed
@@ -2075,19 +2075,50 @@ pub fn unpushed_in_range(dir: &Path, target: &str) -> Result<Vec<String>> {
 ///
 /// `None` when it could not look — no repository, an unresolvable `HEAD`, a walk
 /// that failed. The caller decides which direction that reads.
+///
+/// **ONE COMMIT DECIDES IT**, so the walk stops at the first (CLOUD-2489). This
+/// runs on shell calls through the `head-unpushed` fact, and a clone with no
+/// remote at all would otherwise walk its whole history to answer a yes/no.
 #[must_use]
 pub fn head_on_a_remote(dir: &Path) -> Option<bool> {
     let repo = open(dir).ok()?;
-    unreachable_from_remotes(&repo, Vec::new())
+    unreachable_from_remotes(&repo, Vec::new(), 1)
         .ok()
         .map(|unpushed| unpushed.is_empty())
 }
 
+/// Whether `HEAD` holds a commit no remote-tracking ref reaches, for a clone
+/// that HAS somewhere to push (CLOUD-2489).
+///
+/// [`head_on_a_remote`]'s question with one difference, and it is the reason this
+/// is a second name: a clone with no `refs/remotes` at all answers `None` here,
+/// not "unpushed". A gate whose remedy is "push" must not fire where no push is
+/// possible, or it refuses every check in that clone forever.
+#[must_use]
+pub fn head_unpushed_to_a_remote(dir: &Path) -> Option<bool> {
+    let repo = open(dir).ok()?;
+    let has_remote = repo
+        .references()
+        .ok()?
+        .prefixed("refs/remotes")
+        .ok()?
+        .flatten()
+        .next()
+        .is_some();
+    if !has_remote {
+        return None;
+    }
+    unreachable_from_remotes(&repo, Vec::new(), 1)
+        .ok()
+        .map(|unpushed| !unpushed.is_empty())
+}
+
 /// The commits reachable from `HEAD` and from neither `hidden` nor any
-/// `refs/remotes` tip, newest first.
+/// `refs/remotes` tip, newest first, at most `at_most` of them.
 fn unreachable_from_remotes(
     repo: &gix::Repository,
     mut hidden: Vec<gix::ObjectId>,
+    at_most: usize,
 ) -> Result<Vec<String>> {
     let refused = || UsageError::raise("could not resolve the reset target".to_owned());
     let head = repo.rev_parse_single("HEAD").map_err(|_| refused())?;
@@ -2106,7 +2137,7 @@ fn unreachable_from_remotes(
         .all()
         .map_err(|_| refused())?;
     let mut out = Vec::new();
-    for step in walk {
+    for step in walk.take(at_most) {
         let info = step.map_err(|_| refused())?;
         out.push(info.id().to_hex_with_len(12).to_string());
     }
@@ -7201,7 +7232,22 @@ mod tests {
         );
         fixture_ref(&dir, "refs/remotes/origin/main", &third);
         assert_eq!(head_on_a_remote(&dir), Some(true));
+        assert_eq!(head_unpushed_to_a_remote(&dir), Some(false));
         assert!(unpushed_in_range(&dir, &third).unwrap().is_empty());
+    }
+
+    /// `head-unpushed`'s three answers (CLOUD-2489): a commit no remote tip
+    /// reaches is `Some(true)`, and a clone with NO remote-tracking ref is
+    /// `None`, never "unpushed" — a remedy of "push" has nowhere to go there.
+    ///
+    /// Fails by: the no-remote arm dropped (`None` reads `Some(true)`), or the
+    /// answer inverted.
+    #[test]
+    fn an_unpushed_head_is_true_and_a_remote_less_clone_is_unknown() {
+        let (dir, _) = history("head-unpushed");
+        assert_eq!(head_unpushed_to_a_remote(&dir), Some(true));
+        fs::remove_dir_all(dir.join(".git/refs/remotes")).expect("drop the remote refs");
+        assert_eq!(head_unpushed_to_a_remote(&dir), None);
     }
 
     /// Commit a merge of `parents` on `HEAD`, carrying the first parent's tree.
