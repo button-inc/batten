@@ -11952,8 +11952,8 @@ struct Reaped {
 }
 
 /// Reap every abandoned registry entry: signal the groups `reapable` proves the
-/// orphan's, then forget every record but a dead land's crash witness
-/// (CLOUD-2366, CLOUD-2372, CLOUD-2456).
+/// orphan's, then forget every record but a crash witness, one whose hold
+/// stands (CLOUD-2366, CLOUD-2372, CLOUD-2456).
 ///
 /// The registry's ONE tidy-up, at the next run's entry where crash-only puts it:
 /// `task::alive` reads and deletes nothing, so a crash stays visible until a
@@ -11972,47 +11972,36 @@ struct Reaped {
 /// second pass is the observation that tells the two apart.
 //MUTANT-SUITE crates/batten/src/lib.rs
 //MUTANT reap-leaves-the-headstone|s@^        task::unregister(git_dir, &entry.pid);$@@|reap_abandoned_unregisters_a_dead_registrant
-//MUTANT reap-keeps-an-answered-crash|s@^            task::unregister(git_dir, &entry.pid);$@@|the_reap_keeps_every_dead_lands_witness
 fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
+    let abandoned = task::abandoned(git_dir, program_root);
+    let own_group = task::process_group(&std::process::id().to_string());
     // A record an earlier reap kept is not signalled twice: its group was
     // signalled then and disowned, since the number may belong to another since.
-    let (disowned, abandoned): (Vec<task::Entry>, Vec<task::Entry>) =
-        task::abandoned(git_dir, program_root)
-            .into_iter()
-            .partition(|entry| entry.pgid.is_empty());
+    let signallable = |entry: &task::Entry| !entry.pgid.is_empty() && reapable(entry, &own_group);
     let mut reaped = Reaped::default();
-    // A disowned land was kept only as its branch's crash witness, so it is
-    // forgotten once that branch's land has answered it, which removes the
-    // hold. Any other record with no group and no hold is a dead one the reap
-    // forgets as it always did.
-    for entry in &disowned {
-        if !task::hold_stands(git_dir, &entry.pid) {
-            task::unregister(git_dir, &entry.pid);
-            reaped.unregistered += 1;
-        }
-    }
-    let own_group = task::process_group(&std::process::id().to_string());
     for entry in &abandoned {
-        if reapable(entry, &own_group) && exec::terminate_group(&entry.pgid) {
+        if signallable(entry) && exec::terminate_group(&entry.pgid) {
             reaped.terminated += 1;
         }
     }
     for entry in &abandoned {
-        if reapable(entry, &own_group) && exec::escalate_group(&entry.pgid) {
+        if signallable(entry) && exec::escalate_group(&entry.pgid) {
             reaped.escalated += 1;
         }
         // Forgotten only now, so both passes read its group. ONE LOOK: waiting
         // for the group to empty never ends for a group just KILLed (zombies
         // count) or a reused pgid.
         //
-        // Except a dead land whose hold stands: its record and hold are its branch's crash
-        // witness, which only that branch's land answers, through
-        // `task::answer_crashes` at its entry (CLOUD-2456). Signalled like any
-        // other, once: its group is disowned so no later reap signals the
-        // number again, and the rest of the record, where it died among it,
-        // stays.
-        if entry.task == LAND_TASK && task::hold_stands(git_dir, &entry.pid) {
-            task::disown_group(git_dir, &entry.pid);
+        // Except a run whose hold stands: its record and hold are its branch's
+        // crash witness, which only that branch's land answers, through
+        // `task::answer_crashes` at its entry, which removes the hold
+        // (CLOUD-2456). Signalled like any other, once: its group is disowned
+        // so no later reap signals the number again, and the rest of the
+        // record, where it died among it, stays until the answer.
+        if task::hold_stands(git_dir, &entry.pid) {
+            if !entry.pgid.is_empty() {
+                task::disown_group(git_dir, &entry.pid);
+            }
             continue;
         }
         task::unregister(git_dir, &entry.pid);
@@ -29951,6 +29940,7 @@ mod tests {
         let _ = reap_abandoned(&git_dir, "programs");
         let kept = |pid: &str| task::read_field(&git_dir, pid, "task").is_some();
         let (own, other) = (kept("4194306"), kept("4194307"));
+        let disowned = task::read_field(&git_dir, "4194307", "pgid");
         // `work`'s land answers its crash; the next reap forgets that record,
         // and only that one.
         task::answer_crashes(&git_dir, LAND_TASK, "4194305", "work");
@@ -29960,6 +29950,11 @@ mod tests {
         probe.release_as_a_death_would();
         let _ = std::fs::remove_dir_all(&git_dir);
         assert!(own && other, "both crash witnesses are kept");
+        assert_eq!(
+            disowned.as_deref(),
+            Some(""),
+            "and a kept witness's group is disowned once signalled"
+        );
         assert!(probed_kept, "a probe holding the lock is not an answer");
         assert!(!answered, "an answered crash is forgotten by the next reap");
         assert_eq!(second.unregistered, 1, "and counted");

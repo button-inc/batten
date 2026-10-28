@@ -466,20 +466,25 @@ fn held_record(git_dir: &Path, pid: &str) -> std::io::Result<Entry> {
 /// Every complete record in the registry, sorted by path for the byte-stability
 /// obligation every reader here carries.
 fn records(git_dir: &Path) -> Vec<Entry> {
-    let Ok(listing) = std::fs::read_dir(state_dir(git_dir)) else {
-        return Vec::new();
-    };
-    let mut files: Vec<PathBuf> = listing
-        .filter_map(|found| found.ok().map(|found| found.path()))
-        .filter(|path| is_record(path))
-        .collect();
-    files.sort();
-    files
+    record_files(&state_dir(git_dir))
+        .unwrap_or_default()
         .iter()
         .filter_map(|file| std::fs::read_to_string(file).ok())
         .map(|body| Entry::parse(&body))
         .filter(Entry::is_complete)
         .collect()
+}
+
+/// Every record file under `dir`, sorted, so every reader's output is
+/// byte-stable across runs for one registry state (non-negotiable rule 5)
+/// rather than dependent on readdir order.
+fn record_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(|found| found.ok().map(|found| found.path()))
+        .filter(|path| is_record(path))
+        .collect();
+    files.sort();
+    Ok(files)
 }
 
 /// Where a run's hold lives: a directory beside the records, which every record
@@ -839,16 +844,9 @@ fn alive_reading(
     if !dir.exists() {
         return Reading::Nothing;
     }
-    let Ok(listing) = std::fs::read_dir(&dir) else {
+    let Ok(files) = record_files(&dir) else {
         return Reading::Unreadable(dir);
     };
-    let mut files: Vec<PathBuf> = listing
-        .filter_map(|found| found.ok().map(|found| found.path()))
-        .filter(|path| is_record(path))
-        .collect();
-    // Sorted, so the output is byte-stable across runs for one registry state
-    // (non-negotiable rule 5) rather than dependent on readdir order.
-    files.sort();
 
     let mut lines = Vec::new();
     for file in files {
