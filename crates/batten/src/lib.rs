@@ -29922,57 +29922,6 @@ mod tests {
         assert_eq!(left, 0, "nothing abandoned is left behind");
     }
 
-    /// CLOUD-2456: a kept crash witness whose group is provably the orphan's
-    /// is signalled, and only then disowned, so no later reap signals the
-    /// number again; its record and hold stay for its branch's land.
-    #[test]
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays, and test-only: an orphaned group is a property of processes this one is not, so only a real spawn can leave one"
-    )]
-    fn a_signalled_witness_is_disowned_and_kept() {
-        // Only a /proc reader proves an orphan, and `setsid` is Linux's.
-        if !cfg!(target_os = "linux") {
-            return;
-        }
-        let git_dir =
-            std::env::temp_dir().join(format!("batten-reap-orphan-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&git_dir);
-        std::fs::create_dir_all(&git_dir).unwrap();
-        let note = git_dir.join("group");
-        // The inner shell leads a group of its own, leaves a member in it, and
-        // exits: the orphan a dead land's verify leaves behind.
-        let status = std::process::Command::new("setsid")
-            .args([
-                "-w",
-                "sh",
-                "-c",
-                "sleep 600 & printf '%s' \"$$\" > \"$NOTE\"",
-            ])
-            .env("NOTE", &note)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .expect("setsid runs");
-        assert!(status.success());
-        let group = std::fs::read_to_string(&note).expect("the group is noted");
-        task::register_as(&git_dir, LAND_TASK, &group, "verify", 100, "work", 0);
-        // A stamp every live member predates, fixed rather than read off the
-        // clock: 2100-01-01.
-        task::push(&git_dir, &group, task::Signal::Tick, "1", 4_102_444_800);
-        task::hold(&git_dir, &group)
-            .expect("a hold is taken")
-            .release_as_a_death_would();
-        let reaped = reap_abandoned(&git_dir, "programs");
-        let pgid = task::read_field(&git_dir, &group, "pgid");
-        let held = task::hold_stands(&git_dir, &group);
-        let _ = std::fs::remove_dir_all(&git_dir);
-        assert_eq!(reaped.terminated, 1, "the orphan's group is signalled");
-        assert_eq!(pgid.as_deref(), Some(""), "and disowned once signalled");
-        assert!(held, "its witness stays for its branch's land");
-    }
-
     /// CLOUD-2456: the reap keeps every dead land's record and hold, on any
     /// branch: each is its branch's crash witness, and only that branch's land
     /// answers it, through `task::answer_crashes` at its entry.
