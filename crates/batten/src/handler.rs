@@ -1048,12 +1048,6 @@ fn run_one(root: &Path, handler: &Handler, payload: &Payload) -> Outcome {
     let Some((program, args)) = handler.run.split_first() else {
         return Outcome::Broke(Violation::NotSpawnable);
     };
-    // A ROW NAMING `batten` GETS THE RUNNING IMAGE, NEVER A `PATH` LOOKUP — in
-    // `rules::spawn_resolving`'s rung -1 now, not here (CLOUD-1326, CLOUD-2386).
-    // It was this site's special case while this was the only spawn that needed
-    // it; every declared argv reaches that resolver, so one predicate covers
-    // them all, this one included.
-    //
     // A RELATIVE PATH IN A ROW IS THE REPOSITORY'S (CLOUD-2050). The host's
     // shell can stand anywhere — a sibling checkout, `$HOME` — and a row's
     // `scripts/guard.py` read from there names a file that does not exist, which

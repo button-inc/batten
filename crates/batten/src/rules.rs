@@ -12471,6 +12471,8 @@ fn spawn_resolving_on_image<T>(
     // or after `engine update`, each of those children ran a different engine
     // from the one that spawned it. Every caller of this resolver is covered now,
     // the operator-typed `batten exec -- batten …` included, and that is intended.
+    // `mutate::spawn_as` is not a caller: it spawns its declared runner directly,
+    // so a `[mutate]` row naming `batten` still resolves on `PATH`.
     //
     // BEFORE THE PIN, which is what makes it a rung rather than a preference. The
     // pin rung below fires only where `PATH` cannot resolve the program, so a

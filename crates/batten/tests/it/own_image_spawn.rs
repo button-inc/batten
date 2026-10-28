@@ -45,14 +45,24 @@ use common::{Fixture, StateHome, batten, scratch};
 /// itself returns for `--version`, so a passing run cannot be the decoy's.
 const DECOY_CODE: i32 = 17;
 
-/// A `PATH` carrying the system directories and NO `batten` of any kind.
-///
-/// This is what the unit tier cannot build: under `cargo test` the checkout's
-/// own build is on `PATH`, so `doctor`'s `on_path` arm answers for `batten` and
-/// its image arm cannot be told apart from it.
-fn path_without_batten() -> std::ffi::OsString {
-    std::env::join_paths([Path::new("/usr/bin"), Path::new("/bin")])
-        .expect("the system PATH composes")
+/// A repository with one `command` row naming the bare word `batten`, and a
+/// state home beside it.
+fn self_image_repo(root: &Path) -> (PathBuf, PathBuf) {
+    let repo = Fixture::at(root.join("repo"))
+        .config(
+            "version = 1\n\n\
+             [[rule]]\n\
+             id = \"self-image\"\n\
+             kind = \"command\"\n\
+             glob = \"**/*.rs\"\n\
+             check = \"batten --version\"\n\
+             severity = \"deny\"\n",
+        )
+        .file("lib.rs", "fine\n")
+        .git()
+        .base_commit()
+        .build();
+    (repo, Fixture::at(root.join("home")).build())
 }
 
 /// A directory whose only `batten` is a script that exits [`DECOY_CODE`].
@@ -81,30 +91,13 @@ fn decoy_dir(root: &Path) -> PathBuf {
 fn a_command_row_naming_batten_runs_the_image_and_not_the_one_on_path() {
     let root = scratch("own-image-spawn");
     let decoy = decoy_dir(&root);
-    let repo = Fixture::at(root.join("repo"))
-        .config(
-            "version = 1\n\n\
-             [[rule]]\n\
-             id = \"self-image\"\n\
-             kind = \"command\"\n\
-             glob = \"**/*.rs\"\n\
-             check = \"batten --version\"\n\
-             severity = \"deny\"\n",
-        )
-        .file("lib.rs", "fine\n")
-        .git()
-        .base_commit()
-        .build();
-    let home = Fixture::at(root.join("home")).build();
+    let (repo, home) = self_image_repo(&root);
 
-    // The decoy first, then the system directories the decoy's own `#!/bin/sh`
-    // needs. Nothing else: an ambient `batten` on the developer's `PATH` would
-    // make the decoy unreachable and the case vacuous.
-    //
-    // `join_paths` rather than an interpolated `:` — `primitives.rs`'s own gate,
-    // and the separator this would otherwise hard-code is the one that made
-    // seven `judge_kind` cases report a missing program instead of their verdict.
-    let path = std::env::join_paths([decoy.as_path(), Path::new("/usr/bin"), Path::new("/bin")])
+    // The decoy first, then `common::ambient_path`: the ambient `PATH` with every
+    // `batten` shadowed out, so no real `batten` sits behind the decoy and makes
+    // the case vacuous. `join_paths`, never an interpolated `:` (`primitives.rs`).
+    let ambient = common::ambient_path();
+    let path = std::env::join_paths(std::iter::once(decoy).chain(std::env::split_paths(&ambient)))
         .expect("the decoy PATH composes");
     let output = batten()
         .state_home(&home)
@@ -141,27 +134,13 @@ fn a_command_row_naming_batten_runs_the_image_and_not_the_one_on_path() {
 #[test]
 fn doctor_reads_a_command_row_naming_batten_as_reachable_without_it_on_path() {
     let root = scratch("own-image-doctor");
-    let repo = Fixture::at(root.join("repo"))
-        .config(
-            "version = 1\n\n\
-             [[rule]]\n\
-             id = \"self-image\"\n\
-             kind = \"command\"\n\
-             glob = \"**/*.rs\"\n\
-             check = \"batten --version\"\n\
-             severity = \"deny\"\n",
-        )
-        .file("lib.rs", "fine\n")
-        .git()
-        .base_commit()
-        .build();
-    let home = Fixture::at(root.join("home")).build();
+    let (repo, home) = self_image_repo(&root);
 
     let output = batten()
         .state_home(&home)
         .args(["doctor"])
         .current_dir(&repo)
-        .env("PATH", path_without_batten())
+        .env("PATH", common::ambient_path())
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
         .expect("run batten doctor");

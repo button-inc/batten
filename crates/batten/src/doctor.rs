@@ -1613,6 +1613,21 @@ fn provided_by_pin(dir: &Path, program: &str) -> bool {
     )
 }
 
+/// Whether a `command` row's program is reachable THE WAY THE SPAWN REACHES IT:
+/// the running image, `PATH`, or the pin (CLOUD-1324, CLOUD-2386).
+///
+/// Named rather than inline in [`diagnose`] so each arm is falsifiable on its
+/// own — inline, all three survived `cargo mutants`, because no case reaches
+/// this walk without building a whole repository fixture first.
+///
+/// * **The image**, for the reason [`handler_program_resolves`] gives.
+/// * **The pin**, because nothing a toolchain manager provides is on bare
+///   `PATH` — nor should it be — and without this arm every pinned program
+///   reads as missing and the whole check is noise.
+fn command_program_resolves(dir: &Path, program: &str) -> bool {
+    crate::rules::is_own_image(program) || on_path(program) || provided_by_pin(dir, program)
+}
+
 /// Whether a handler's declared program is something that could be spawned.
 ///
 /// **Resolved the way the DISPATCH resolves it, never a second guess.** A probe
@@ -1632,30 +1647,11 @@ fn provided_by_pin(dir: &Path, program: &str) -> bool {
 ///
 /// **A row naming the mediator resolves, because the dispatch never looks it up**
 /// (CLOUD-843). `spawn_resolving`'s rung -1 spawns the RUNNING IMAGE for
-/// `run = ["batten", ...]` (CLOUD-1326, CLOUD-2386 — it was `handler::run_one`'s
-/// own case until the predicate moved into the resolver), so a `PATH` probe for
-/// that name asked a question the spawn does not: on a CI runner with no
-/// `batten` on `PATH` it failed a row the dispatch would have run, and pushed
-/// rows into a one-line task wrapper purely to satisfy this probe. The doctor
-/// asking is itself that image.
-/// Whether a `command` row's program is reachable THE WAY THE SPAWN REACHES IT:
-/// the running image, `PATH`, or the pin (CLOUD-1324, CLOUD-2386).
-///
-/// Named rather than inline in [`diagnose`] so each arm is falsifiable on its
-/// own — inline, all three survived `cargo mutants`, because no case reaches
-/// this walk without building a whole repository fixture first.
-///
-/// * **The image**, because `spawn_resolving`'s rung -1 runs it for that name
-///   and never looks it up, so a `PATH` probe would ask a question the spawn
-///   does not — [`handler_program_resolves`] below refuses the same for the
-///   handler surface, and the doctor asking is itself that image.
-/// * **The pin**, because nothing a toolchain manager provides is on bare
-///   `PATH` — nor should it be — and without this arm every pinned program
-///   reads as missing and the whole check is noise.
-fn command_program_resolves(dir: &Path, program: &str) -> bool {
-    crate::rules::is_own_image(program) || on_path(program) || provided_by_pin(dir, program)
-}
-
+/// `run = ["batten", ...]` (CLOUD-1326, CLOUD-2386), so a `PATH` probe for that
+/// name asked a question the spawn does not: on a CI runner with no `batten` on
+/// `PATH` it failed a row the dispatch would have run, and pushed rows into a
+/// one-line task wrapper purely to satisfy this probe. The doctor asking is
+/// itself that image.
 fn handler_program_resolves(dir: &Path, program: &str) -> bool {
     if crate::rules::is_own_image(program) {
         return true;
@@ -1697,15 +1693,6 @@ pub fn diagnose(dir: &Path) -> Report {
     // names turns the same walk into a diagnosis a reader can fix, and they are
     // this consumer's own declared tokens rather than anything the check read
     // out of a file.
-    // REACHABLE MEANS REACHABLE THE WAY THE SPAWN REACHES IT, which is the
-    // RUNNING IMAGE, `PATH`, OR the pin (CLOUD-1324, CLOUD-2386). Nothing a
-    // toolchain manager provides is on bare `PATH` — nor should it be — so
-    // without the pin arm every pinned program reads as missing and the whole
-    // check is noise.
-    //
-    // AND A ROW NAMING `batten` RESOLVES, BECAUSE THE SPAWN NEVER LOOKS IT UP —
-    // `spawn_resolving`'s rung -1 runs the running image (CLOUD-2386), the same
-    // reason `handler_program_resolves` gives below.
     let unreachable: Vec<String> = rules
         .iter()
         .filter_map(Rule::program)
