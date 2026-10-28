@@ -1,0 +1,14 @@
+# THE AGENT TOOLCHAIN (CLOUD-2553): tools only an agent session runs, loaded on
+# top of `mise.toml` when, and only when, `MISE_ENV=agent`. `.mcp.json` sets it
+# on the server it launches and `session:install` sets it on the provisioning it
+# runs; no CI or release workflow sets it, so no build can install what is here.
+#
+# Locked into `mise.agent.lock`, which mise pairs with this file as it pairs
+# `mise.lock` with `mise.toml`.
+
+[tools]
+# Serena's LSP-backed semantic code tools (see .mcp.json). Pinned here — not in
+# .mcp.json — so its version lives with the other tool pins and is locked;
+# `mise-pin-agreement` holds .mcp.json's reference to it. The pipx backend
+# installs it with `uv`, which `mise.toml` declares.
+"pipx:serena-agent" = "1.7.0"

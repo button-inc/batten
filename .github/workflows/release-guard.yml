@@ -35,6 +35,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # Each job installs its own list and nothing else (CLOUD-2553), as in
+  # `release-artifacts.yml`.
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
   # Restores locked installs, which `[settings] lockfile = false` turns off
   # along with the install-time write it exists to deny (CLOUD-223).
   MISE_LOCKFILE: "true"

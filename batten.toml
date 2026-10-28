@@ -10040,10 +10040,10 @@ id = "pin declare wrong"
 no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
-documents = [".mcp.json", "mise.toml"]
+documents = [".mcp.json", "mise.toml", "mise.agent.toml"]
 module = "policy/mise-pin-agreement.rego"
 severity = "deny"
-reason = "mise.toml owns the pin: move the version there and repeat it in .mcp.json's scoped `mise exec`, never the other way round, and name the tool before `--` so the launch provisions only it."
+reason = "mise.toml (mise.agent.toml for agent tools) owns the pin: move the version there and repeat it in .mcp.json's scoped `mise exec`, never the other way round, and name the tool before `--` so the launch provisions only it."
 
 # THREE TASK BODIES THAT WERE GATES, RETIRED ONTO MODULES (CLOUD-1991). `hk-version`,
 # `no-docs-tree` and `no-armed-ripcord` were each a `grep`/`git ls-files` pipeline
