@@ -63,6 +63,12 @@ on:
       - "mise.toml"
       - "mise.lock"
       - ".github/workflows/rust.yml"
+      # `dist`'s own inputs (CLOUD-2554): the called workflow, cargo-dist's
+      # config, and the package channels it builds.
+      - ".github/workflows/dist.yml"
+      - "dist-workspace.toml"
+      - "nfpm.yaml"
+      - "packaging/**"
 
 concurrency:
   group: rust-${{ github.ref }}-${{ github.event.pull_request.draft }}
@@ -1097,3 +1103,19 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: git --no-pager diff --stat --exit-code -- mise.lock
+
+  # THE RELEASE BUILD, ON EVERY PULL REQUEST (CLOUD-2554). `dist.yml` is the one
+  # definition of every release leg, and `release-artifacts.yml` calls it with
+  # uploads on; here it runs without them, so a release only ever takes steps,
+  # install lists and runners some pull request already went green on.
+  # v0.0.217's Windows and macOS legs failed at the cut on defects any pull
+  # request would have shown. `actions: write` is the landing lease's, as on
+  # every job here.
+  dist:
+    if: ${{ github.event.pull_request.draft == false }}
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/dist.yml
+    with:
+      sha: ${{ github.event.pull_request.head.sha }}
