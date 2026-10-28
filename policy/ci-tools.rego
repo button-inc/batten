@@ -1,8 +1,7 @@
 # METADATA
 # description: |
-#   The per-job install lists name real declared tools, every pull-request
-#   workflow carries a BINDING one, and every tool a policy row spawns is on the
-#   list — CLOUD-180, CLOUD-812 and CLOUD-480, ported from
+#   The per-job install lists name real declared tools and every pull-request
+#   workflow carries a BINDING one — CLOUD-180 and CLOUD-812, ported from
 #   `mise-tasks/ci-tools-check.sh` under CLOUD-843.
 #
 #   CI installs a NARROW tool set per job, which is the largest single speed-up
@@ -35,26 +34,10 @@
 #   variable matters, and would pass one setting it true, which is the same hole
 #   wearing a fix's clothing.
 #
-#   THE THIRD DIRECTION COST TWO CI RUNS (CLOUD-480). Neither direction above can
-#   see a tool a POLICY ROW spawns. Two rows ran declared tools that no install
-#   list named; with auto-install off making the list binding, they did not run
-#   slowly — they failed CLOSED, at deny, while passing locally where the tools are
-#   installed. The landing loop refuses that as a verify/CI disagreement and is
-#   right to, but nothing named the cause.
-#
-#   SCOPED TO WHAT THE MANIFEST OWNS, derived rather than allowlisted. A spawned
-#   binary can arrive three other ways — bundled with a bigger tool, pre-installed
-#   on the runner, or vendored — and all three came back as findings on the first
-#   run of that block. Rather than carry a second list of exemptions, the drifting
-#   authority this exists to refuse, the question narrows to tools the manifest
-#   DECLARES: if it owns the tool, the install list must name it; if it does not,
-#   the installer was never going to install it anyway.
-#
-#   BASENAME MATCHING ON BOTH SIDES, deliberately: the manifest and the list hold
-#   backend-qualified keys and a spawn names a binary, so the comparison is over
-#   the last path component. Approximate in the SAFE direction — it can fail to
-#   catch a mismatch, never invent one — and the precise mapping is the installer's
-#   business rather than something restated here.
+#   A TOOL A ROW OR A CASE SPAWNS (CLOUD-480's third direction) is held by
+#   `crates/batten/tests/it/ci_tools.rs`, which parses each `batten.toml` command
+#   and each suite job's steps; the line scan it replaced never saw `gh`, and any
+#   install list in any workflow satisfied it (CLOUD-2446).
 #
 #   SCHEDULED WORKFLOWS ARE OUT OF SCOPE deliberately: they are not on the
 #   pull-request path, and widening to them would be a different decision with a
@@ -72,8 +55,6 @@ import rego.v1
 
 manifest_path := "mise.toml"
 
-policy_path := "batten.toml"
-
 rules contains "tool pin wrong"
 
 manifest_lines := lines if {
@@ -83,10 +64,6 @@ manifest_lines := lines if {
 workflow_paths contains path if {
 	some path, _ in input.tree.lines
 	startswith(path, ".github/workflows/")
-}
-
-basename(name) := parts[count(parts) - 1] if {
-	parts := split(replace(name, ":", "/"), "/")
 }
 
 # --- what the manifest declares ----------------------------------------------
@@ -124,10 +101,6 @@ declared contains key if {
 	contains(line, "=")
 	key := replace(trim_space(substring(line, 0, indexof(line, "="))), "\"", "")
 	key != ""
-}
-
-owned contains basename(key) if {
-	some key in declared
 }
 
 # --- what a workflow asks to install -----------------------------------------
@@ -218,29 +191,6 @@ violation contains {
 both_auto_installs_bound(path) if {
 	binds(path, "mise-task-auto-install-off")
 	binds(path, "mise-exec-auto-install-off")
-}
-
-# --- direction 3: a spawned tool the manifest owns is on the list ------------
-
-spawned contains tool if {
-	some line in input.tree.lines[policy_path]
-	some hit in regex.find_n(data.batten.patterns["mise-exec-spawn"], line, -1)
-	tool := split(hit, " ")[count(split(hit, " ")) - 1]
-	tool in owned
-}
-
-installed_basenames contains basename(row.tool) if {
-	some row in requested
-}
-
-violation contains {
-	"rule": "tool pin wrong",
-	"verdict": "spawn reach absent",
-	"subjects": [{"artifact": tool}],
-} if {
-	count(requested) > 0
-	some tool in spawned
-	not tool in installed_basenames
 }
 
 # --- the load-time tier ------------------------------------------------------
@@ -349,28 +299,6 @@ test_a_scheduled_workflow_is_out_of_scope if {
 	})
 }
 
-# THE THIRD DIRECTION: a row's spawn that the list does not install fails CLOSED
-# in CI while passing locally.
-test_a_spawned_tool_the_list_omits_is_refused if {
-	some v in violation with input as tree({
-		"mise.toml": manifest,
-		"batten.toml": ["check = \"mise exec -- opa check -s schema/ policy/\""],
-		".github/workflows/ci.yml": pr_flow(["        install_args: rust"]),
-	})
-	v.verdict == "spawn reach absent"
-}
-
-# Scoped to what the manifest OWNS: a binary that arrives bundled, pre-installed
-# or vendored does not belong in an install list, and all three came back as
-# findings on the first run of that block.
-test_a_spawn_the_manifest_does_not_own_is_not_a_finding if {
-	count(violation) == 0 with input as tree({
-		"mise.toml": manifest,
-		"batten.toml": ["check = \"mise exec -- gh pr view\""],
-		".github/workflows/ci.yml": pr_flow(["        install_args: rust aqua:open-policy-agent/opa"]),
-	})
-}
-
 test_a_manifest_declaring_no_tools_is_could_not_look if {
 	some v in violation with input as tree({
 		"mise.toml": ["[env]", "X = \"1\""],
@@ -384,4 +312,3 @@ test_a_manifest_declaring_no_tools_is_could_not_look if {
 #MUTANT unknown-tool-name-passes|s@^\tnot row.tool in declared$@\tfalse@|a_name_no_tools_entry_declares_is_refused
 #MUTANT pr-workflow-may-omit-install-args|s@^\tlist_count(path) != action_uses(path)$@\tfalse@|a_pull_request_workflow_with_no_list_is_refused
 #MUTANT pr-workflow-list-may-be-nonbinding|s@^\tnot both_auto_installs_bound(path)$@\tfalse@|a_list_without_the_auto_install_variables_is_refused
-#MUTANT spawned-tool-need-not-be-installed|s@^\tnot tool in installed_basenames$@\tfalse@|a_spawned_tool_the_list_omits_is_refused

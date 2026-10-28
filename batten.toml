@@ -1920,12 +1920,6 @@ regex = '^[ \t]*MISE_TASK_RUN_AUTO_INSTALL:[ \t]*"?false"?[ \t]*$'
 id = "mise-exec-auto-install-off"
 regex = '^[ \t]*MISE_EXEC_AUTO_INSTALL:[ \t]*"?false"?[ \t]*$'
 
-# A tool a rule's own check spawns, which no install list reads and no `[tools]`
-# scan can see.
-[[pattern]]
-id = "mise-exec-spawn"
-regex = 'mise exec -- [a-z][a-z0-9._-]*'
-
 # CLOUD-1717's four consumer facts, moved out of two `.py` siblings and NOT into
 # `crates/batten/src`. Non-negotiable rule 1: the core stays repo-agnostic, and a
 # `const IO_CRATES` in the engine would be a consumer identifier in it. The walk
@@ -9123,12 +9117,13 @@ severity = "deny"
 # capability, and rule 1 holds because the arithmetic is this consumer's.
 # CLOUD-180, CLOUD-812 and CLOUD-480, ported from `mise-tasks/ci-tools-check.sh`
 # under CLOUD-843. Narrowing the per-job install set is the largest CI speed-up
-# here, and its cost is a SECOND place tool names are written down. Three
-# directions, because each of the first two is blind to the next: names in a list
-# can be judged, a workflow with NO list has no names to judge (CLOUD-812 measured
-# two such workflows installing everything on every push, with nothing red), and
-# neither can see a tool a `[[rule]]` row itself spawns — which with auto-install
-# off fails CLOSED in CI while passing locally (CLOUD-480, two runs).
+# here, and its cost is a SECOND place tool names are written down. Two
+# directions, because the first is blind to the second: names in a list can be
+# judged, and a workflow with NO list has no names to judge (CLOUD-812 measured
+# two such workflows installing everything on every push, with nothing red). A
+# tool a `[[rule]]` row itself spawns (CLOUD-480) is held by the suite-job install
+# gate in `crates/batten/tests/it/ci_tools.rs`, which parses each row's command
+# where this module scanned lines (CLOUD-2446).
 [[rule]]
 id = "tool pin wrong"
 no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
@@ -9143,7 +9138,6 @@ scope = "tree"
 # the retiring gate had been pointed at one file that happened to be compliant.
 line_sources = [
   "mise.toml",
-  "batten.toml",
   ".github/workflows/*.yml",
   ".github/workflows/*.yaml",
 ]
@@ -16971,18 +16965,6 @@ id = "tool pin loose"
 gloss = "an install list is declared without the variables that make it bind"
 class = """
 The runner re-installs the missing tools at task time, so the list decides nothing: one job installed a single tool in 13s and then rebuilt the whole toolchain inside the work step. Set both auto-install variables to false, in the same workflow as the list.
-"""
-
-[[verdict.route]]
-id = "config read first"
-kind = "document"
-target = "batten.toml"
-
-[[verdict]]
-id = "spawn reach absent"
-gloss = "a policy row spawns a declared tool no install list installs"
-class = """
-With auto-install off making the list binding, such a row does not run slowly — it fails CLOSED, at deny, while passing locally where the tool is installed, and the landing loop reads that as a verify/CI disagreement with nothing naming the cause. Add the tool to the list of the job that runs the row.
 """
 
 [[verdict.route]]
