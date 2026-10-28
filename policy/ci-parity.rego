@@ -65,6 +65,8 @@
 #MUTANT bump-push-unprivileged|s@^\tnot pushes_with_the_pat(step)$@\tfalse@|the_cut_pushes_the_bump_with_the_pat
 #MUTANT freeze-armed-one-release-early|s@^freeze_from := \[0, 0, 219\]$@freeze_from := [0, 0, 218]@|a_pin_one_release_past_the_cut_arms_no_freeze
 #MUTANT source-pin-arms-the-freeze|s@^\tnot input.tree.documents\["batten.toml"\].engine.source$@\ttrue@|a_source_pin_arms_no_freeze
+#MUTANT callee-lease-unread|s@^\t\tjob.steps\[0\].name == lease_step_name$@\t\ttrue@|a_called_workflow_that_skips_the_lease_is_refused
+#MUTANT caller-named-as-its-own-check|s@^\tnot calls(path, key)$@\ttrue@|a_job_calling_a_workflow_that_asks_the_lease_is_clean
 #MUTANT-SUITE crates/batten/tests/it/ci_parity.rs
 
 # METADATA
@@ -177,6 +179,15 @@ on_pull_request(path) if _ := triggers(path).pull_request
 # the BASE name — enough to catch a job added, removed or renamed, which is what
 # rots a hand-maintained list.
 base_name(name) := trim_space(split(name, "(")[0])
+
+# The workflow a job calls with a job-level `uses: ./<path>`, as the key its
+# document is held under (CLOUD-2554). Such a job has no steps of its own: its
+# runs are the called workflow's jobs, named `<caller> / <callee job>`.
+calls(path, name) := callee if {
+	ref := workflow[path].jobs[name].uses
+	startswith(ref, "./")
+	callee := substring(ref, 2, -1)
+}
 
 # --- every task CI runs is one `verify` runs (header property 3) --------------
 #
@@ -504,7 +515,21 @@ job_display_names contains base_name(name) if {
 	some path, _ in workflow
 	on_pull_request(path)
 	some key, job in workflow[path].jobs
+	not calls(path, key)
 	name := object.get(job, "name", key)
+}
+
+# A CALLING JOB CREATES ITS CALLEE'S CHECKS, NOT ONE OF ITS OWN (CLOUD-2554):
+# GitHub names each `<caller> / <callee job>`, so that is the name the roster must
+# carry and the one compared here.
+job_display_names contains base_name(sprintf("%s / %s", [caller, called])) if {
+	some path, _ in workflow
+	on_pull_request(path)
+	some key, job in workflow[path].jobs
+	callee := calls(path, key)
+	caller := object.get(job, "name", key)
+	some ckey, cjob in workflow[callee].jobs
+	called := object.get(cjob, "name", ckey)
 }
 
 # THE DECLARED RETIRING SET (CLOUD-2301). `fast-forward.yml` judges a head
@@ -848,6 +873,16 @@ lease_step_name := "Landing lease precondition"
 
 starts_with_the_lease(path, name) if {
 	workflow[path].jobs[name].steps[0].name == lease_step_name
+}
+
+# A CALLING JOB SPENDS THROUGH ITS CALLEE (CLOUD-2554), so the lease must open
+# every job the called workflow runs; a caller has no steps of its own to carry it.
+starts_with_the_lease(path, name) if {
+	callee := calls(path, name)
+	count(workflow[callee].jobs) > 0
+	every _, job in workflow[callee].jobs {
+		job.steps[0].name == lease_step_name
+	}
 }
 
 violation contains {
