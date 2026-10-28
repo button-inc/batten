@@ -518,8 +518,14 @@ fn the_retired_program_is_gone_and_its_task_name_survives() {
 #[test]
 fn every_declared_channel_names_its_generator() {
     let dist_config = crate::common::dist_config();
-    let release = std::fs::read_to_string(at_root(".github/workflows/release-artifacts.yml"))
-        .expect("release-artifacts.yml");
+    // The release is two files since CLOUD-2554: `dist.yml`'s legs and the
+    // global steps `release-artifacts.yml` runs after calling it.
+    let release = [
+        ".github/workflows/release-artifacts.yml",
+        ".github/workflows/dist.yml",
+    ]
+    .map(|path| std::fs::read_to_string(at_root(path)).expect(path))
+    .concat();
     let installers: Vec<&str> = dist_config["dist"]["installers"]
         .as_array()
         .expect("dist-workspace.toml declares its installers")

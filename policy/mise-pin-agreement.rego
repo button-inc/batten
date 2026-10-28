@@ -296,9 +296,7 @@ test_a_tool_the_authority_does_not_carry_is_refused if {
 # lives in `mise.agent.toml`, and `.mcp.json`'s reference is held to it.
 agent_tree(version) := {"tree": {
 	"documents": {
-		".mcp.json": {"mcpServers": {"serena": {"args": [
-			"mise", "exec", sprintf("pipx:serena-agent@%s", [version]), "--", "serena",
-		]}}},
+		".mcp.json": {"mcpServers": {"serena": {"args": ["mise", "exec", sprintf("pipx:serena-agent@%s", [version]), "--", "serena"]}}},
 		"mise.toml": {"tools": {"uv": "0.8"}},
 		"mise.agent.toml": {"tools": {"pipx:serena-agent": "1.6.1"}},
 	},

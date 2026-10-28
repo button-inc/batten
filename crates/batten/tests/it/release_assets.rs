@@ -74,6 +74,10 @@ const TAGGED: &str = "0123456789abcdef0123456789abcdef01234567";
 /// Where the rule row reads the expected list from.
 const WORKFLOW_PATH: &str = ".github/workflows/release-artifacts.yml";
 
+/// The release legs' own workflow since CLOUD-2554: the matrix and every upload
+/// a leg makes, called by `WORKFLOW_PATH` and by every pull request.
+const LEGS_PATH: &str = ".github/workflows/dist.yml";
+
 const WORKFLOW: &str = r#"name: release-artifacts
 on: workflow_dispatch
 jobs:
@@ -125,8 +129,8 @@ fn repo(name: &str, workflow: Option<&str>) -> PathBuf {
              regex = '^\"?[A-Za-z0-9_./-]+[.](json|sh)\"?$'\n\n{}{}\
              [[rule]]\nid = \"release grade other\"\nkind = \"policy\"\nscope = \"tree\"\n\
              module = \"policy/release-assets.rego\"\n\
-             documents = [\"{WORKFLOW_PATH}\", \"mise.toml\"]\n\
-             line_sources = [\"{WORKFLOW_PATH}\"]\nseverity = \"deny\"\n\n\
+             documents = [\"{WORKFLOW_PATH}\", \"{LEGS_PATH}\", \"mise.toml\"]\n\
+             line_sources = [\"{WORKFLOW_PATH}\", \"{LEGS_PATH}\"]\nseverity = \"deny\"\n\n\
              [[rule]]\nid = \"release pin other\"\nkind = \"policy\"\nscope = \"tree\"\n\
              preset = \"release-hygiene\"\nseverity = \"deny\"\n\n\
              [[record]]\nrecord = \"release-assets\"\nwriter = \"batten record release\"\n",
@@ -656,7 +660,9 @@ fn the_committed_tasks_are_argv_and_the_committed_row_reads_the_real_workflow() 
     assert!(record.contains("record release"), "{record}");
     let authority = committed("batten.toml");
     assert!(
-        authority.contains(&format!("documents = [\"{WORKFLOW_PATH}\", \"mise.toml\"]")),
+        authority.contains(&format!(
+            "documents = [\"{WORKFLOW_PATH}\", \"{LEGS_PATH}\", \"mise.toml\"]"
+        )),
         "the row declares the workflow this tier writes"
     );
     // EVERY RULE THE CHECK TASK NAMES IS A COMMITTED ROW, and the manifest half is
@@ -733,7 +739,7 @@ fn the_manifest_job_runs_after_everything_that_uploads_an_asset() {
 /// comparing the two catches the module misreading the real shape.
 fn committed_legs() -> Vec<(String, String)> {
     let mut legs: Vec<(String, String)> = Vec::new();
-    for line in committed(WORKFLOW_PATH).lines().map(str::trim_start) {
+    for line in committed(LEGS_PATH).lines().map(str::trim_start) {
         if let Some(target) = line.strip_prefix("- target:") {
             legs.push((target.trim().to_owned(), String::new()));
         } else if let Some(tool) = line.strip_prefix("build-tool:")
@@ -754,7 +760,11 @@ fn committed_legs() -> Vec<(String, String)> {
 /// A fixture repository carrying the COMMITTED build workflow, not the fixture.
 fn real_repo(name: &str) -> PathBuf {
     let workflow = committed(WORKFLOW_PATH);
-    repo(name, Some(workflow.as_str()))
+    let dir = repo(name, Some(workflow.as_str()));
+    write(&dir, LEGS_PATH, &committed(LEGS_PATH));
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-qm", "the release legs"]);
+    dir
 }
 
 /// Record `assets` as release `TAG`, then run `release grade other` alone.
@@ -909,7 +919,7 @@ fn the_names_the_module_demands_are_the_names_the_producers_write() {
 
 #[test]
 fn upload_precedes_attestation_and_attestation_cannot_fail_the_leg() {
-    let workflow = committed(WORKFLOW_PATH);
+    let workflow = committed(LEGS_PATH);
     let upload = workflow
         .find("name: Upload to the release")
         .expect("upload step");

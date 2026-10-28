@@ -151,9 +151,12 @@ fn install_sh_is_the_released_dist_installer() {
     let workflow =
         std::fs::read_to_string(common::at_root(".github/workflows/release-artifacts.yml"))
             .expect("read release-artifacts.yml");
+    // The matrix is `dist.yml`'s since CLOUD-2554; the global steps stay here.
+    let legs = std::fs::read_to_string(common::at_root(".github/workflows/dist.yml"))
+        .expect("read dist.yml");
     assert_eq!(
         listed("targets"),
-        batten::install::matrix_targets(&workflow),
+        batten::install::matrix_targets(&legs),
         "dist's targets are the release matrix's, no more and no fewer"
     );
     for needle in [
