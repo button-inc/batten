@@ -29933,6 +29933,25 @@ mod tests {
         assert_eq!(left, 0, "nothing abandoned is left behind");
     }
 
+    /// CLOUD-2456: the public seam answers the reap's own counts, in order.
+    #[test]
+    fn the_public_reap_answers_the_reaps_counts() {
+        let git_dir =
+            std::env::temp_dir().join(format!("batten-reap-public-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&git_dir);
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let empty = reap_abandoned_tasks(&git_dir, "programs");
+        task::register(&git_dir, "land", "4194305", "verify", 100);
+        let one = reap_abandoned_tasks(&git_dir, "programs");
+        let _ = std::fs::remove_dir_all(&git_dir);
+        assert_eq!(empty, (0, 0, 0), "an empty registry reaps nothing");
+        assert_eq!(
+            one,
+            (0, 0, usize::from(cfg!(unix))),
+            "a dead, empty group is forgotten and never signalled"
+        );
+    }
+
     /// CLOUD-2456: the reap keeps every dead land's record and hold, on any
     /// branch: each is its branch's crash witness, and only that branch's land
     /// answers it, through `task::answer_crashes` at its entry.
