@@ -12441,6 +12441,14 @@ pub(crate) fn is_own_image(program: &str) -> bool {
     program == crate::surface::BINARY
 }
 
+/// Whether a running image's file is this engine's binary, and not a test
+/// harness or a replaced file that only shares its path.
+fn names_this_engine(image: &Path) -> bool {
+    image
+        .file_stem()
+        .is_some_and(|stem| stem == crate::surface::BINARY)
+}
+
 /// [`spawn_resolving_on`], plus the image that asked — the full ladder, rung -1
 /// included.
 fn spawn_resolving_on_image<T>(
@@ -12487,15 +12495,31 @@ fn spawn_resolving_on_image<T>(
     // sees only the ladder's own result. (The unreadable case is decided at the
     // `.ok()` in `spawn_resolving`, where the image is read.)
     //
-    // UNDER `cargo test`, `current_exe` IS THE TEST BINARY, so a library unit
-    // test sending a bare `batten` through the real resolver would spawn libtest.
-    // No such test exists; the integration tests spawn `CARGO_BIN_EXE_batten`,
-    // whose `current_exe` is batten.
+    // ONLY AN IMAGE NAMED `batten` IS THIS ENGINE. Under `cargo test`,
+    // `current_exe` is the TEST HARNESS, and libtest reads the declared verb's
+    // words as test-name filters: an in-process case reaching this resolver
+    // spawned the harness, which ran every case matching `board`, `check` or
+    // `config` in parallel, each able to spawn it again. Measured: two full
+    // `verify` runs on this change each ended with the container at a load
+    // above 7000 and out of memory. A comment saying no such case existed was
+    // the only guard; the stem is the mechanism. A `… (deleted)` image fails it
+    // too, and so goes straight to the ladder below.
+    //
+    // ONLY `NotFound` FALLS THROUGH. Any other error — `EAGAIN` from a fork
+    // under pressure, `ETXTBSY` mid-rebuild, or a closure's failure after the
+    // child already ran — is the image's answer, and walking the ladder on it
+    // would add spawns while forking fails, or run a side-effecting row twice on
+    // a different engine.
     if is_own_image(program)
-        && let Some(image) = running.and_then(Path::to_str)
-        && let Ok(ok) = spawn(image, &[])
+        && let Some(image) = running
+            .filter(|image| names_this_engine(image))
+            .and_then(Path::to_str)
     {
-        return Ok(ok);
+        match spawn(image, &[]) {
+            Ok(ok) => return Ok(ok),
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+            Err(_) => {}
+        }
     }
 
     // RUNG 0: THE PIN, AND IT IS FIRST RATHER THAN A FALLBACK (CLOUD-1324).
@@ -18791,6 +18815,48 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
                 .count(),
             1,
             "the image is tried once and never retried: {walked:?}"
+        );
+
+        // 6. AN IMAGE NOT NAMED `batten` IS NEVER SPAWNED — under `cargo test`
+        //    it is the harness, and spawning it ran the suite recursively.
+        let harness = dir.join("image").join("it-0123456789abcdef");
+        let harness_name = harness.display().to_string();
+        let (_, walked) = attempts(
+            on_path,
+            Some(harness.as_path()),
+            crate::surface::BINARY,
+            None,
+        );
+        assert!(
+            !walked.contains(&harness_name),
+            "a test harness is not this engine and is never spawned as it: {walked:?}"
+        );
+
+        // 7. ANY ERROR BUT `NotFound` IS THE IMAGE'S ANSWER, and the ladder is
+        //    not walked on it.
+        let mut tried = Vec::new();
+        let pinned = crate::facts::Look::Is(std::iter::once("hk".to_owned()).collect());
+        let out = spawn_resolving_on_image(
+            Some(std::ffi::OsStr::new(on_path)),
+            None,
+            Some(image.as_path()),
+            crate::surface::BINARY,
+            &[".EXE".to_owned()],
+            &pinned,
+            |program: &str, _extra: &[&str]| -> std::io::Result<()> {
+                tried.push(program.to_owned());
+                Err(std::io::Error::from(std::io::ErrorKind::WouldBlock))
+            },
+        );
+        assert_eq!(
+            out.map_err(|error| error.kind()),
+            Err(std::io::ErrorKind::WouldBlock),
+            "the image's own error is returned"
+        );
+        assert_eq!(
+            tried,
+            vec![image_name.clone()],
+            "and nothing else is spawned"
         );
 
         std::fs::remove_dir_all(&dir).ok();
