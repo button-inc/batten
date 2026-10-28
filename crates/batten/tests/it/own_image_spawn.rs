@@ -165,11 +165,10 @@ fn doctor_reads_a_command_row_naming_batten_as_reachable_without_it_on_path() {
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
         .expect("run batten doctor");
-    let report = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    // Concatenated rather than `format!`ed: `every_path_override_is_composed_with_join_paths`
+    // reads a `format!` beside a `PATH` override as a separator spelled by hand.
+    let mut report = String::from_utf8_lossy(&output.stdout).into_owned();
+    report.push_str(&String::from_utf8_lossy(&output.stderr));
 
     assert!(
         !report.contains("program-not-on-path"),
