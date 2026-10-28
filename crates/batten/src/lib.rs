@@ -12194,6 +12194,48 @@ fn run_land_lap(
         // lock and inside the window, so its forge writes read as in flight
         // (CLOUD-2371): `unwind_lap` is the fast path on a normal return.
         reconcile_at_entry(root, branch, out)?;
+        // EVERY COMMIT ON THE REMOTE BEFORE ANY LAP VERIFIES (CLOUD-1353): after
+        // the reconcile, which may have made a stale ready pull request a draft
+        // again. The decisions are `land_entry_push` and `lease_rival`, which the
+        // suite drives; this is only their shell, since the push itself needs a
+        // smart-HTTP remote this tier does not stand up. It NEVER STOPS THE
+        // LANDING: a lost race or a transport error is one line.
+        //
+        // No repository slug is no forge to ask, which `reconcile_at_entry` stops
+        // on too.
+        if let Some(repo) = repo_slug(root) {
+            // A ref store that will not answer is read as a bet: skipping is the
+            // safe direction, since HEAD may carry borrowed commits.
+            let mut recorded = speculation::Bet::default();
+            let bet_live = speculation::recover(root, &mut recorded).unwrap_or(true);
+            let local = git::head_commit(root).ok();
+            let read = push_read(&repo, branch);
+            let rival = || {
+                let reading = lease_reading(root);
+                lease_rival(
+                    reading
+                        .as_ref()
+                        .map(|(observed, holder, now)| (observed, holder.as_str(), *now)),
+                    branch,
+                )
+            };
+            match land_entry_push(bet_live, local.as_deref(), &read, rival) {
+                EntryPush::Skip(reason) => writeln!(out, "land: entry push skipped — {reason}")?,
+                EntryPush::Push => match land::push(root, url, branch) {
+                    Ok(land::Pushed::Landed(head)) => {
+                        writeln!(out, "land: entry — {branch} on the remote now reads {head}")?;
+                    }
+                    Ok(land::Pushed::Raced) => writeln!(
+                        out,
+                        "land: entry — {branch} moved on the remote; this clone's commits are still only local"
+                    )?,
+                    Err(error) => writeln!(
+                        out,
+                        "land: entry — the push did not reach the remote, so this clone's commits are still only local: {error:#}"
+                    )?,
+                },
+            }
+        }
         let (ended, lines) = disk_watch::around(disk_watcher(root, prune_rules.as_ref()), || {
             run_land_laps(run, out, err)
         });
@@ -15182,8 +15224,10 @@ fn spend_the_matrix(
     // `None`, which `buys_a_matrix` answers `Nothing` to — the same posture the
     // tap takes one direction over, and for the same reason.
     // **THE FORGE'S HEAD, NEVER THIS CLONE'S**: `Readiness::head` says why. A
-    // ready pull request's push that bought a run is asked its receipts by the
-    // Push row's precheck (CLOUD-2436), since this may then buy `Nothing`.
+    // ready pull request at another head was redrafted by the Push row's
+    // precheck (`land_push_gate`), so a new head reaches here as a draft and is
+    // asked its receipts below, unless that precheck could not read the forge
+    // and found the receipts already on file.
     let reading = verdict_for(&repo, &head);
     let spend = land::buys_a_matrix(Some(is_draft), reading.as_ref());
     // THE RECEIPTS `gh pr ready` OWES, asked of this ready too (CLOUD-2293), and
@@ -15987,7 +16031,13 @@ fn asks_before_the_step(
         //
         // `unwind_the_bet` is the same drop `Settle::Lost` already takes, so
         // this is a second caller for an existing arm rather than new machinery.
-        Some(pipeline::Precheck::BetLive) if bet.live() => {
+        //
+        // ONE ARM FOR BOTH OF THE ROW'S REASONS, so the question cannot lose one
+        // of them alone.
+        Some(pipeline::Precheck::BetLive) => {
+            if !bet.live() {
+                return push_gate_answer(root, branch, out, err);
+            }
             writeln!(
                 out,
                 "land: a speculation is still outstanding, so this head is not publishable — unwinding and lapping onto real trunk"
@@ -16005,40 +16055,55 @@ fn asks_before_the_step(
             bet.declined = true;
             Ok(Answered::Lap)
         }
-        // AND AN UNREVIEWED HEAD IS NOT PUBLISHABLE TO A READY PULL REQUEST
-        // (CLOUD-2436). The same row's question, "is this head fit to publish",
-        // for the second reason it can be no: there the push itself starts CI,
-        // and the Ready after it reads that run as in flight and asks nothing.
-        // `land_push_owes` says which pushes buy a run.
-        //
-        // A RECEIPT ERROR STOPS THROUGH THE UNWIND rather than out past it with
-        // `?`, because the lease is held by now and only the unwind hands it back.
-        Some(pipeline::Precheck::BetLive) => {
-            let local = git::head_commit(root).ok();
-            let forge = || {
-                let repo = repo_or_placeholder(root);
-                match fast_forward::look_up_pull_request(&repo, branch) {
-                    fast_forward::Lookup::Found(pr) => land::draft_state(&repo, &pr).map(Some),
-                    fast_forward::Lookup::None => Some(None),
-                    fast_forward::Lookup::Unreadable(_) => None,
-                }
-            };
-            match land_push_owes(root, std::time::SystemTime::now(), local.as_deref(), forge) {
-                Ok(None) => Ok(Answered::Go),
-                Ok(Some(owed)) => {
-                    report_owed(err, &owed)?;
-                    Ok(Answered::Stop(exit::ExitCode::Violation))
-                }
-                Err(error) => {
-                    writeln!(
-                        err,
-                        "::error:: land: the push's review receipts could not be asked: {error:#}"
-                    )?;
-                    Ok(Answered::Stop(exit::ExitCode::Internal))
-                }
+        _ => Ok(Answered::Go),
+    }
+}
+
+/// The Push row's second question, asked when no bet is live:
+/// **AN UNREVIEWED HEAD IS NOT PUBLISHABLE TO A READY PULL REQUEST**
+/// (CLOUD-2436, CLOUD-1564). The push itself would start CI there, and the
+/// Ready after it reads that run as in flight and asks nothing.
+/// [`land_push_gate`] redrafts such a pull request first.
+///
+/// EVERY STOP GOES THROUGH THE UNWIND rather than out past it with `?`, because
+/// the lease is held by now and only the unwind hands it back.
+fn push_gate_answer(
+    root: &Path,
+    branch: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Answered> {
+    let local = git::head_commit(root).ok();
+    let repo = repo_or_placeholder(root);
+    let read = push_read(&repo, branch);
+    match land_push_gate(root, std::time::SystemTime::now(), local.as_deref(), read) {
+        Ok(PushGate::Go) => Ok(Answered::Go),
+        Ok(PushGate::Redraft { pr, node }) => {
+            if land::redraft(&repo, &pr, &node) {
+                writeln!(
+                    out,
+                    "land: #{pr} was ready at another head; it is a draft again, so this push buys no run"
+                )?;
+                Ok(Answered::Go)
+            } else {
+                writeln!(
+                    err,
+                    "::error:: land: #{pr} is ready at another head and would not go back to draft; not pushing an unreviewed head onto it"
+                )?;
+                Ok(Answered::Stop(exit::ExitCode::Internal))
             }
         }
-        _ => Ok(Answered::Go),
+        Ok(PushGate::Owed(owed)) => {
+            report_owed(err, &owed)?;
+            Ok(Answered::Stop(exit::ExitCode::Violation))
+        }
+        Err(error) => {
+            writeln!(
+                err,
+                "::error:: land: the push's review receipts could not be asked: {error:#}"
+            )?;
+            Ok(Answered::Stop(exit::ExitCode::Internal))
+        }
     }
 }
 
@@ -16065,8 +16130,9 @@ fn still_holds_lease(root: &Path) -> bool {
 
 /// The lease as observed now, this clone's holder name, and the instant: the
 /// one lookup [`still_holds_lease`] and [`no_rival_holds_lease`] ask their
-/// complementary questions of. `None` is could-not-look, which both read as
-/// `false`.
+/// complementary questions of, and the entry push asks [`lease_rival`] of.
+/// `None` is could-not-look: the first two read it as `false`, and
+/// [`lease_rival`] as a rival, each the closed direction for what it guards.
 fn lease_reading(root: &Path) -> Option<(lease::Observed, String, i64)> {
     let terms = lease::terms(root).ok()?;
     let (_, holder) = lease_identity(root).ok()?;
@@ -29648,47 +29714,189 @@ pub fn land_spent_refusal(laps: u32, ledger: &land::Ledger) -> crate::refusal::R
     )
 }
 
-/// The refusal a lap's PUSH draws, for the Push row's precheck to stop on
-/// (CLOUD-2436); `None` when nothing is owed.
+/// What the forge says about this branch's pull request, for [`land_push_gate`].
+#[derive(Debug, Clone)]
+pub enum PushRead {
+    /// The branch has no open pull request.
+    NoPullRequest,
+    /// The lookup or the draft state would not answer.
+    Unreadable,
+    /// The pull request's number and what one read of it says.
+    Found {
+        /// Its number.
+        pr: String,
+        /// Its draft state, node and forge head.
+        readiness: land::Readiness,
+    },
+}
+
+/// What a lap's push must do first, by [`land_push_gate`].
+#[derive(Debug)]
+pub enum PushGate {
+    /// Push.
+    Go,
+    /// Put this pull request back to draft, then push.
+    Redraft {
+        /// Its number.
+        pr: String,
+        /// Its GraphQL node id, which the mutation takes.
+        node: String,
+    },
+    /// Stop: the review receipts the ready would ask are not on file.
+    Owed(Box<refusal::Refusal>),
+}
+
+/// What a landing does at ENTRY with this clone's own commits, by
+/// [`land_entry_push`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryPush {
+    /// Push HEAD to the branch now.
+    Push,
+    /// Leave the remote as it is, for the reason given (a pointer line).
+    Skip(&'static str),
+}
+
+// CLOUD-1353: a draft at another head is what the entry push exists for.
+//MUTANT-SUITE crates/batten/tests/it/land_lap.rs
+//MUTANT entry-push-skips-a-draft|s@if readiness.draft {@if !readiness.draft {@|a_landing_pushes_its_own_commits_before_any_lap_verifies
+
+/// Whether a landing pushes this clone's commits before its first lap
+/// (CLOUD-1353): **EVERY COMMIT ON THE REMOTE BEFORE ANY LAP VERIFIES.**
 ///
-/// **ONLY A PUSH THAT BUYS A RUN OWES ITS REVIEWS.** The lap pushes before it
-/// readies, and a push buys a run only on a pull request already ready whose
-/// forge head is not this one:
+/// A reclaim during `verify` takes whatever is only local. A replay is
+/// recomputable, but a commit this clone never pushed is not, so the push the
+/// lap makes after `verify` comes too late for it. The lap's own `Push` cannot
+/// move earlier: the bet is placed before the replay, and the head it builds
+/// carries the holder's commits until `verify` lets the bet settle.
 ///
-/// * A DRAFT owes nothing here. Its push buys no run, the Ready after it asks
-///   [`land_ready_owes`] itself, and withholding it would leave the work
-///   unpublished for a reclaim to take.
-/// * A ready pull request already AT this head owes nothing. The push publishes
-///   nothing new and buys nothing, so a receipt that aged out since the run was
-///   graded must not stop a landing over a head the forge has answered.
-/// * A branch with NO open pull request owes nothing: there is no run to buy.
-/// * Anything else owes what `gh pr ready` would, and that includes a forge
-///   that could not say: an unreadable draft state asks, rather than letting an
-///   unreviewed push through to a pull request that may be ready.
+/// So the entry push goes only where it spends nothing and moves nobody's
+/// landing:
 ///
-/// `forge` is called only when something is owed, because it is a network read
-/// and the common lap owes nothing. It answers `None` when the forge could not
-/// say, `Some(None)` when the branch has no open pull request, and the
-/// pull request's [`land::Readiness`] otherwise.
+/// * a recorded SPECULATION skips, because HEAD may carry borrowed commits;
+/// * ANOTHER CLONE LANDING THIS BRANCH skips, so its pull request's head is not
+///   moved under it. `rival` is asked last, only for a push, because
+///   it is a round trip to the remote ([`lease_rival`]);
+/// * NO pull request pushes, since no workflow runs on a branch push;
+/// * a DRAFT pushes when its head is not this one. Its jobs are draft-gated;
+/// * a READY pull request skips at either head. At another head the push would
+///   buy a run nobody reviewed, and the lap's own Push redrafts it first
+///   ([`land_push_gate`]);
+/// * a forge that could not say skips.
+#[must_use]
+pub fn land_entry_push(
+    bet_live: bool,
+    local_head: Option<&str>,
+    read: &PushRead,
+    rival: impl FnOnce() -> bool,
+) -> EntryPush {
+    if bet_live {
+        return EntryPush::Skip("a speculation is recorded on this head");
+    }
+    let decided = match read {
+        PushRead::NoPullRequest => EntryPush::Push,
+        PushRead::Unreadable => EntryPush::Skip("the pull request could not be read"),
+        PushRead::Found { readiness, .. } => {
+            if local_head == Some(readiness.head.as_str()) {
+                EntryPush::Skip("the remote already reads this head")
+            } else if readiness.draft {
+                EntryPush::Push
+            } else {
+                EntryPush::Skip("the pull request is ready; the lap's push redrafts it first")
+            }
+        }
+    };
+    if decided == EntryPush::Push && rival() {
+        return EntryPush::Skip("another clone may be landing this branch");
+    }
+    decided
+}
+
+/// Is another clone landing `branch` under a lease it holds now? `reading` is
+/// the lease as `lease_reading` returns it, with `None` for one that will not
+/// read.
+///
+/// [`lease::authorises_this_clone`] narrowed to the lease's (advisory)
+/// `branch`: absent, expired, released or this clone's own is nobody else's. A
+/// lease that will not parse, or will not read at all, counts as a rival, the
+/// closed direction for a write that is only durability.
+#[must_use]
+pub fn lease_rival(reading: Option<(&lease::Observed, &str, i64)>, branch: &str) -> bool {
+    reading.is_none_or(|(observed, holder, now)| {
+        // Garbage has no body, so `live()` is `None` and it stays a rival; so
+        // does a live hold naming no branch, which cannot say it is not ours.
+        !lease::authorises_this_clone(observed, holder, now)
+            && observed
+                .state(now)
+                .live()
+                .is_none_or(|body| body.branch.is_empty() || body.branch == branch)
+    })
+}
+
+/// This branch's pull request, as [`land_push_gate`] and [`land_entry_push`]
+/// read it: the lookup, then one draft-state read.
+fn push_read(repo: &str, branch: &str) -> PushRead {
+    match fast_forward::look_up_pull_request(repo, branch) {
+        fast_forward::Lookup::Found(pr) => match land::draft_state(repo, &pr) {
+            Some(readiness) => PushRead::Found { pr, readiness },
+            None => PushRead::Unreadable,
+        },
+        fast_forward::Lookup::None => PushRead::NoPullRequest,
+        fast_forward::Lookup::Unreadable(_) => PushRead::Unreadable,
+    }
+}
+
+// CLOUD-1564: a ready pull request at another head must be redrafted before
+// the push, or the push buys a run no review covered.
+//MUTANT-SUITE crates/batten/tests/it/land_lap.rs
+//MUTANT non-draft-push-allowed|s@let buys_a_run = !readiness.draft@let buys_a_run = readiness.draft@|the_laps_push_redrafts_a_ready_pull_request_at_another_head
+
+/// The Push row's decision (CLOUD-1564, CLOUD-2436): **A PUSH NEVER LANDS A NEW
+/// HEAD ON A READY PULL REQUEST.**
+///
+/// Such a push starts CI by itself, with no review asked, and the Ready after
+/// it then reads that run as in flight and asks nothing. So:
+///
+/// * a ready pull request at ANOTHER head is redrafted before the push. The
+///   Ready after it readies the draft and asks [`land_ready_owes`]'s receipts,
+///   buying the one matrix the push would have bought;
+/// * a DRAFT, NO open pull request, or a ready pull request already AT this
+///   head pushes as it is: the push buys nothing;
+/// * a forge that could not say asks [`land_ready_owes`] here, rather than let
+///   an unreviewed push through to a pull request that may be ready.
+///
+/// That is what lets the `Push` row declare no effect, with ONE EXCEPTION,
+/// stated rather than hidden: a forge that could not say, over receipts already
+/// on file, pushes. If the pull request was in fact ready, that push buys a run
+/// the row does not declare. The run is over a reviewed head, and stopping the
+/// landing on every unanswered read would cost more than it.
 ///
 /// # Errors
 ///
-/// As [`land_ready_owes`].
-pub fn land_push_owes(
+/// As [`land_ready_owes`], for an unreadable forge only.
+pub fn land_push_gate(
     root: &Path,
     now: std::time::SystemTime,
     local_head: Option<&str>,
-    forge: impl FnOnce() -> Option<Option<land::Readiness>>,
-) -> Result<Option<refusal::Refusal>> {
-    let Some(owed) = land_ready_owes(root, now)? else {
-        return Ok(None);
-    };
-    let buys_nothing = forge().is_some_and(|read| {
-        read.is_none_or(|readiness| {
-            readiness.draft || local_head.is_some_and(|local| local == readiness.head)
-        })
-    });
-    Ok((!buys_nothing).then_some(owed))
+    read: PushRead,
+) -> Result<PushGate> {
+    match read {
+        PushRead::NoPullRequest => Ok(PushGate::Go),
+        PushRead::Unreadable => {
+            Ok(land_ready_owes(root, now)?
+                .map_or(PushGate::Go, |owed| PushGate::Owed(Box::new(owed))))
+        }
+        PushRead::Found { pr, readiness } => {
+            let buys_a_run = !readiness.draft && local_head != Some(readiness.head.as_str());
+            Ok(if buys_a_run {
+                PushGate::Redraft {
+                    pr,
+                    node: readiness.node,
+                }
+            } else {
+                PushGate::Go
+            })
+        }
+    }
 }
 
 /// Write the receipt refusal `land` stops on, in the one shape both its ready
@@ -29798,6 +30006,53 @@ pub fn land_ready_owes(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// CLOUD-1564: the Push row's one question has two reasons, and a LIVE BET
+    /// IS UNWOUND AND LAPPED, never published. Through `asks_before_the_step`
+    /// itself, because the arm is the subject: dropping it, or asking the push
+    /// gate first, answers `Go` and pushes another branch's commits.
+    #[test]
+    fn the_push_rows_question_unwinds_a_live_bet_rather_than_publish_it() {
+        let root = crate::scratch::scratch("asks-before-push-live-bet");
+        gitwrite::init_on_main(&root).unwrap();
+        std::fs::write(root.join("a"), "a\n").unwrap();
+        gitwrite::commit_paths(&root, &["a".to_owned()], "seed").unwrap();
+        let head = git::head_commit(&root).unwrap();
+        let row = pipeline::Pipeline::default()
+            .steps
+            .into_iter()
+            .find(|row| row.step == land::Step::Push)
+            .unwrap();
+        // The undo point is HEAD itself, so the unwind's reset moves nothing and
+        // the bet was never pushed, so nothing is owed to a remote.
+        let mut bet = speculation::Bet {
+            base: Some(head.clone()),
+            undo: Some(head),
+            ..speculation::Bet::default()
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let asked = asks_before_the_step(
+            row,
+            Asked {
+                root: &root,
+                url: "no-remote",
+                reference: "refs/heads/main",
+                branch: "main",
+                lap: 1,
+            },
+            &mut main_watch::Poll::default(),
+            &mut bet,
+            &mut out,
+            &mut err,
+        );
+        assert!(
+            matches!(asked, Ok(Answered::Lap)),
+            "{asked:?}: {}{}",
+            String::from_utf8_lossy(&out),
+            String::from_utf8_lossy(&err)
+        );
+        assert!(bet.declined, "and this landing does not bet again");
+    }
 
     /// CLOUD-2372: the next landing's reap, not a reader, forgets a dead
     /// registrant. A pid past every platform's `pid_max` is dead wherever a
