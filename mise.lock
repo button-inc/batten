@@ -884,10 +884,6 @@ trust_policy_excludes = '["@yarnpkg/core@4.4.4", "@yarnpkg/libzip@3.2.2", "fastq
 version = "5.0.3"
 backend = "pipx:ntia-conformance-checker"
 
-[[tools."pipx:serena-agent"]]
-version = "1.7.0"
-backend = "pipx:serena-agent"
-
 [[tools.pkl]]
 version = "0.32.1"
 backend = "aqua:apple/pkl"

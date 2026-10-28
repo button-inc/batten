@@ -134,6 +134,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # Each job installs its own list and nothing else (CLOUD-2553), as in
+  # `release-artifacts.yml`.
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
   # Restores locked installs, which `[settings] lockfile = false` turns off
   # along with the install-time write it exists to deny (CLOUD-223). A runner
   # should install locked, and its checkout is disposable, so a write here
@@ -245,6 +249,9 @@ jobs:
           # digest above pins the ACTION; this pins the MISE it installs, which
           # is a separate resolution the digest does not reach.
           version: 2026.9.1
+          # `release-due` builds the engine; `checks-green` and the ready steps
+          # call `gh`.
+          install_args: rust aqua:cli/cli
         if: steps.target.outputs.num != ''
       # THE LANE NEEDS THE ENGINE NOW, AND NOTHING WAS PROVIDING IT (CLOUD-1143's
       # consequence). `checks-green` was retired onto the engine, so `mise.toml`'s

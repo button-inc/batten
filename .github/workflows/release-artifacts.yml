@@ -105,6 +105,12 @@ permissions:
   contents: read
 
 env:
+  # EACH JOB INSTALLS ITS OWN LIST AND NOTHING ELSE (CLOUD-2553), `ci.yml`'s
+  # binding. Unbound, `mise run` auto-installed the whole manifest on every leg,
+  # and v0.0.217's macOS legs died building the agent toolchain's `tiktoken`
+  # for a tool no step here runs. `ci-tools` holds every use to a list now.
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
   # Restores locked installs, which `[settings] lockfile = false` turns off
   # along with the install-time write it exists to deny (CLOUD-223). A runner
   # should install locked, and its checkout is disposable, so a write here
@@ -492,6 +498,8 @@ jobs:
           # 11s on v0.0.152 and the release published with zero binaries.
           version: 2026.9.1
           cache: false
+          # `batten sbom` spawns syft; `gh` uploads.
+          install_args: rust aqua:anchore/syft aqua:cli/cli
       - name: Derive both schemas from the tagged config types
         run: mise run schema
       # The SBOM rides this job rather than a new one (CLOUD-262). GitHub rounds
@@ -581,6 +589,7 @@ jobs:
           # 11s on v0.0.152 and the release published with zero binaries.
           version: 2026.9.1
           cache: false
+          install_args: rust aqua:cli/cli
       # `checksums` emits a sums= KEY=VALUE line, so the asset path is decided in
       # that one file and never re-derived in YAML.
       - name: Derive the manifest from the release's own assets
