@@ -721,9 +721,10 @@ jobs:
       # and its body is bash — `if [ "$(cargo run … step check …)" …`
       # — so under cmd the task dies before cargo is ever reached.
       #
-      # Set per workflow rather than in mise.toml, which would change every
-      # developer's Windows shell too; `release-artifacts.yml` sets it for its
-      # Windows leg the same way (CLOUD-2556). The class fix is CLOUD-2557.
+      # Set on this job rather than in mise.toml, which would change every
+      # developer's Windows shell too. The release leg's one bash-bodied task,
+      # `sbom-binary-check`, declares its shell on the task instead
+      # (CLOUD-2556); the class fix is CLOUD-2557.
       MISE_WINDOWS_DEFAULT_INLINE_SHELL_ARGS: bash -c
       # And the FILE-task shell, which is a separate setting with the same
       # `cmd /c` default. `batten.toml`'s command rules spawn `mise run
