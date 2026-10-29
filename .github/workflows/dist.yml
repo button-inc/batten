@@ -137,6 +137,10 @@ jobs:
       - name: Landing lease precondition
         # A pull request's run only: a release is no branch's to lease.
         if: ${{ inputs.tag == '' }}
+        # EXPLICIT, as at `rust.yml`'s Windows leg: with no `shell:` the Windows
+        # leg hands this bash body to PowerShell, which refuses the `\`
+        # continuation and reds the leg's first step.
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
