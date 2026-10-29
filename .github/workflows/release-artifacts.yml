@@ -113,6 +113,10 @@ env:
   # Make the `install_args` lists binding (`tool pin loose`, CLOUD-2556).
   MISE_TASK_RUN_AUTO_INSTALL: "false"
   MISE_EXEC_AUTO_INSTALL: "false"
+  # mise's Windows inline-task shell defaults to `cmd /c`, which split
+  # `sbom-binary-check`'s single-quoted rule id (CLOUD-2556). The same setting
+  # rust.yml's `windows` job runs every task under; inert off Windows.
+  MISE_WINDOWS_DEFAULT_INLINE_SHELL_ARGS: bash -c
 
 jobs:
   # CARGO-DIST BUILDS EVERY LEG (CLOUD-2297). `dist build --artifacts=local`
