@@ -2008,10 +2008,12 @@ run = "cargo run --quiet -p batten -- sbom --binary {{usage.binary}} --target {{
 
 [tasks.sbom-binary-check]
 description = "Gate: refuse a binary inventory that catalogs nothing, or crates the lockfile does not hold — over `sbom-binary`'s record"
-# DOUBLE quotes: the Windows release leg runs this body under `cmd`, where single
-# quotes group nothing and the rule id split into three arguments (CLOUD-2556).
-# Double quotes group in `cmd` and `sh` alike, so no shell override is needed.
-run = 'cargo run --quiet -p batten -- check --rule "commit grade unsafe"'
+# `bash`, declared on this task alone: on the Windows release leg the inline
+# default is `cmd`, which splits the single-quoted rule id (CLOUD-2556). Not the
+# leg-wide setting, which puts every task's tools through MSYS's PATH rewrite
+# (rust.yml's `windows` job measured that). The class fix is CLOUD-2557.
+shell = "bash -c"
+run = "cargo run --quiet -p batten -- check --rule 'commit grade unsafe'"
 
 # CLOUD-266's measurement half: three declared forge reads, in order, because
 # each fans out over the family the one before it recorded (CLOUD-843). The
