@@ -721,10 +721,10 @@ jobs:
       # and its body is bash — `if [ "$(cargo run … step check …)" …`
       # — so under cmd the task dies before cargo is ever reached.
       #
-      # Set here rather than in mise.toml because this is the only job in the
-      # repository that runs a mise task on Windows, so the narrower placement
-      # covers the whole exposure. The one-authority alternative, if a second
-      # Windows caller ever appears, is `shell = "bash -c"` on the task itself.
+      # Set here rather than in mise.toml because this job runs whole suites of
+      # tasks on Windows. The release leg's one Windows task declares
+      # `shell = "bash -c"` on the task itself instead (CLOUD-2556); the class
+      # fix for every task body is CLOUD-2557.
       MISE_WINDOWS_DEFAULT_INLINE_SHELL_ARGS: bash -c
       # And the FILE-task shell, which is a separate setting with the same
       # `cmd /c` default. `batten.toml`'s command rules spawn `mise run

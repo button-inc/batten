@@ -2008,10 +2008,10 @@ run = "cargo run --quiet -p batten -- sbom --binary {{usage.binary}} --target {{
 
 [tasks.sbom-binary-check]
 description = "Gate: refuse a binary inventory that catalogs nothing, or crates the lockfile does not hold — over `sbom-binary`'s record"
-# `sh`, declared: on the Windows release leg the inline default is `cmd`, which
-# splits the single-quoted rule id (CLOUD-2556). Not `bash`: Windows resolves
-# System32 before PATH, where `bash.exe` is the WSL launcher, not Git's.
-shell = "sh -c"
+# `bash`, declared: on the Windows release leg the inline default is `cmd`, which
+# splits the single-quoted rule id (CLOUD-2556). Bare `bash` reaches Git's on
+# that runner, as rust.yml's `windows` job already relies on.
+shell = "bash -c"
 run = "cargo run --quiet -p batten -- check --rule 'commit grade unsafe'"
 
 # CLOUD-266's measurement half: three declared forge reads, in order, because
