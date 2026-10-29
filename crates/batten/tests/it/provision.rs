@@ -183,7 +183,7 @@ fn apply_installs_out_of_tree_and_leaves_the_repository_untouched() {
     // Installed where `state.rs` resolves, which is outside the repository by
     // construction — the acceptance's "never committed" as a property rather
     // than a promise.
-    let installed = env.state_dir().join("provision/demo/1.2.3/bin/demo");
+    let installed = env.state_dir().join(exe("provision/demo/1.2.3/bin/demo"));
     assert!(
         installed.is_file(),
         "the binary is cached at the version-encoded path"
@@ -242,7 +242,7 @@ fn a_reinstall_replaces_the_cached_binary_rather_than_writing_through_it() {
     env.config(&manifest(&url, &sha));
     assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
 
-    let installed = env.state_dir().join("provision/demo/1.2.3/bin/demo");
+    let installed = env.state_dir().join(exe("provision/demo/1.2.3/bin/demo"));
     let mut held = fs::File::open(&installed).expect("hold the installed binary open");
 
     let (next_url, next_sha) = env.artifact("demo2", SECOND);
@@ -476,7 +476,7 @@ fn a_tar_gz_artifact_yields_the_named_binary_from_a_nested_path() {
     // that directory — which would pin the version in two places.
     let env = Env::new("provision-targz");
     let tarball = tar_gz(&[
-        ("demo-1.2.3/bin/demo", BINARY),
+        (&exe("demo-1.2.3/bin/demo"), BINARY),
         ("demo-1.2.3/README", b"docs"),
     ]);
     let (url, sha) = env.artifact("demo.tar.gz", &tarball);
@@ -490,9 +490,98 @@ fn a_tar_gz_artifact_yields_the_named_binary_from_a_nested_path() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        fs::read(env.state_dir().join("provision/demo/1.2.3/bin/demo")).unwrap(),
+        fs::read(env.state_dir().join(exe("provision/demo/1.2.3/bin/demo"))).unwrap(),
         BINARY
     );
+}
+
+#[test]
+fn a_zip_artifact_yields_the_named_binary_from_a_nested_path() {
+    // The Windows builds of uv, zizmor and actionlint are published only as
+    // zips, so a five-platform pin needs this unpack.
+    let env = Env::new("provision-zip");
+    let archive = zip(&[
+        (&exe("demo-1.2.3/bin/demo"), BINARY),
+        ("demo-1.2.3/README", b"docs"),
+    ]);
+    let (url, sha) = env.artifact("demo.zip", &archive);
+    env.config(&format!("{}unpack = \"zip\"\n", manifest(&url, &sha)));
+
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read(env.state_dir().join(exe("provision/demo/1.2.3/bin/demo"))).unwrap(),
+        BINARY
+    );
+}
+
+#[test]
+fn a_platform_row_names_its_own_unpack() {
+    // A tarball for every Unix target and a zip for Windows is the common
+    // release shape; the entry says `tar_gz` and this host's row overrides it.
+    let env = Env::new("provision-platform-unpack");
+    let archive = zip(&[(&exe("demo"), BINARY)]);
+    let (url, sha) = env.artifact("demo.zip", &archive);
+    let host = batten::provision::platform_key();
+    env.config(&format!(
+        "version = 1\n\n[[provision]]\nname = \"demo\"\nversion = \"1.2.3\"\n\
+         binary = \"demo\"\nunpack = \"tar_gz\"\n\n[provision.platforms.{host}]\n\
+         url = '{url}'\nsha256 = \"{sha}\"\nunpack = \"zip\"\n"
+    ));
+
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read(env.state_dir().join(exe("provision/demo/1.2.3/bin/demo"))).unwrap(),
+        BINARY
+    );
+}
+
+#[test]
+fn a_zip_without_the_binary_is_refused_by_name() {
+    let env = Env::new("provision-zip-missing");
+    let archive = zip(&[("demo-1.2.3/README", b"docs")]);
+    let (url, sha) = env.artifact("demo.zip", &archive);
+    env.config(&format!("{}unpack = \"zip\"\n", manifest(&url, &sha)));
+
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(&format!(
+            "the artifact contains no entry named {}",
+            exe("demo")
+        )),
+        "{:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// `name` as this platform names a program: `.exe` on Windows, bare elsewhere.
+fn exe(name: &str) -> String {
+    format!("{name}{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// Build a zip in memory from `(path, bytes)` pairs, deflated.
+fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o755);
+    for (path, bytes) in entries {
+        writer.start_file(*path, options).unwrap();
+        std::io::Write::write_all(&mut writer, bytes).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
 }
 
 /// Build a gzipped tarball in memory from `(path, bytes)` pairs.
@@ -818,7 +907,7 @@ fn host_ca_configuration_reaches_the_fetch() {
         String::from_utf8_lossy(&trusted.stderr)
     );
     assert_eq!(
-        fs::read(env.state_dir().join("provision/demo/1.2.3/bin/demo")).unwrap(),
+        fs::read(env.state_dir().join(exe("provision/demo/1.2.3/bin/demo"))).unwrap(),
         BINARY,
         "the artifact fetched over https is what was installed"
     );
@@ -881,7 +970,7 @@ fn an_entry_declaring_no_environment_is_still_a_plain_copy() {
     let out = env.run(&["provision", "apply"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert_eq!(
-        fs::read(dest.join("demo")).unwrap(),
+        fs::read(dest.join(exe("demo"))).unwrap(),
         b"#not-a-launcher\n",
         "an entry with no `env` rows must be linked byte-for-byte, as it always was"
     );
@@ -905,7 +994,7 @@ fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
     let out = env.run(&["provision", "apply"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
 
-    let linked = dest.join("demo");
+    let linked = dest.join(exe("demo"));
     let text = fs::read_to_string(&linked).unwrap();
     assert!(
         text.starts_with("#!") && text.lines().next().unwrap().ends_with(" provision-exec"),
@@ -972,7 +1061,7 @@ fn a_launcher_reached_through_a_symlink_hands_the_tool_that_name() {
     assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
 
     let shim = dest.join("named-shim");
-    std::os::unix::fs::symlink(dest.join("demo"), &shim).expect("link a shim to the launcher");
+    std::os::unix::fs::symlink(dest.join(exe("demo")), &shim).expect("link a shim to the launcher");
     #[expect(
         clippy::disallowed_types,
         reason = "stays: as above, the launcher must be spawned to be exercised (CLOUD-320)"
@@ -1017,7 +1106,7 @@ fn the_prepend_adds_nothing_it_already_carries() {
         clippy::disallowed_types,
         reason = "stays: as above, the launcher must be spawned to be exercised (CLOUD-320)"
     )]
-    let ran = std::process::Command::new(dest.join("demo"))
+    let ran = std::process::Command::new(dest.join(exe("demo")))
         .env("NO_PROXY", "api.example.invalid,localhost")
         .output()
         .expect("run the launcher");
@@ -1048,7 +1137,7 @@ fn a_credential_no_source_carries_is_left_unset() {
         clippy::disallowed_types,
         reason = "stays: as above, the launcher must be spawned to be exercised (CLOUD-320)"
     )]
-    let ran = std::process::Command::new(dest.join("demo"))
+    let ran = std::process::Command::new(dest.join(exe("demo")))
         .env_remove("DEMO_PRIMARY")
         .env_remove("DEMO_FALLBACK")
         .env_remove("DEMO_TOKEN")
@@ -1081,7 +1170,7 @@ fn a_launcher_naming_a_missing_interpreter_is_reported_as_missing() {
     );
 
     fs::write(
-        dest.join("demo"),
+        dest.join(exe("demo")),
         "#!/nowhere/at/all/batten provision-exec\n{}\n",
     )
     .unwrap();
@@ -1221,7 +1310,7 @@ fn a_conditioned_row_applies_only_where_the_trust_bundle_names_that_authority() 
             clippy::disallowed_types,
             reason = "stays: the launcher must be spawned for the condition to be exercised (CLOUD-320)"
         )]
-        let ran = std::process::Command::new(dest.join("demo"))
+        let ran = std::process::Command::new(dest.join(exe("demo")))
             .env("SSL_CERT_FILE", &bundle)
             .env_remove("CURL_CA_BUNDLE")
             .env_remove("REQUESTS_CA_BUNDLE")
@@ -1271,7 +1360,7 @@ fn an_unreadable_trust_bundle_does_not_apply_the_bypass() {
         clippy::disallowed_types,
         reason = "stays: as above, the launcher must be spawned (CLOUD-320)"
     )]
-    let ran = std::process::Command::new(dest.join("demo"))
+    let ran = std::process::Command::new(dest.join(exe("demo")))
         .env(
             "SSL_CERT_FILE",
             env.repo.parent().unwrap().join("nowhere.pem"),
