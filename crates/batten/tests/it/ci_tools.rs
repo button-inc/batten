@@ -332,6 +332,57 @@ fn a_workflow_with_no_pull_request_trigger_is_out_of_scope() {
 }
 
 #[test]
+fn a_dispatched_workflow_with_a_decorative_list_is_refused() {
+    // CLOUD-2556: a list NEED not exist off the pull-request path, but one that
+    // does must bind — `release-artifacts` declared lists that bound nothing.
+    let dir = tools_repo(
+        "tools-dispatched-loose",
+        MANIFEST,
+        NO_SPAWNS,
+        &[
+            (
+                ".github/workflows/ci.yml",
+                &pr_flow("        install_args: rust\n"),
+            ),
+            (
+                ".github/workflows/release.yml",
+                "on:\n  workflow_dispatch:\njobs:\n  x:\n    steps:\n      - uses: jdx/mise-action@abc\n        install_args: rust\n",
+            ),
+        ],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("release.yml"),
+        "the finding names the dispatched workflow: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_dispatched_workflow_with_a_binding_list_passes() {
+    // The other half: the arm refuses the unbound list, not every list off the
+    // pull-request path.
+    let dir = tools_repo(
+        "tools-dispatched-bound",
+        MANIFEST,
+        NO_SPAWNS,
+        &[
+            (
+                ".github/workflows/ci.yml",
+                &pr_flow("        install_args: rust\n"),
+            ),
+            (
+                ".github/workflows/release.yml",
+                "on:\n  workflow_dispatch:\nenv:\n  MISE_TASK_RUN_AUTO_INSTALL: \"false\"\n  MISE_EXEC_AUTO_INSTALL: \"false\"\njobs:\n  x:\n    steps:\n      - uses: jdx/mise-action@abc\n        install_args: rust\n",
+            ),
+        ],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+#[test]
 fn a_pull_request_workflow_that_never_runs_the_installer_is_out_of_scope() {
     let dir = tools_repo(
         "tools-no-action",
