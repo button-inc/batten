@@ -56,9 +56,13 @@
 #   catch a mismatch, never invent one — and the precise mapping is the installer's
 #   business rather than something restated here.
 #
-#   SCHEDULED WORKFLOWS ARE OUT OF SCOPE deliberately: they are not on the
-#   pull-request path, and widening to them would be a different decision with a
-#   different cost argument.
+#   OFF THE PULL-REQUEST PATH, A WORKFLOW IS HELD ONLY TO THE BINDING IT CLAIMS
+#   (CLOUD-2553). One that turns either auto-install variable off must list every
+#   use and bind both: a listless use or half a pair installs the whole manifest,
+#   and an unrelated tool's install failure then fails a job that never runs it.
+#   That is how v0.0.217's macOS dist legs died, building the agent toolchain in
+#   a dispatch workflow. A workflow claiming no binding stays out of scope, a cost
+#   decision CLOUD-2555 carries.
 #
 #   POINTER, NEVER PAYLOAD (rule 4): the tool name and the file it is missing from.
 #   Never the tool set, never a log line.
@@ -177,6 +181,19 @@ pr_workflow contains path if {
 	regex.match(data.batten.patterns["workflow-pull-request-trigger"], line)
 }
 
+# A WORKFLOW THAT TURNS EITHER AUTO-INSTALL OFF CLAIMS A BINDING LIST, whatever
+# triggers it (CLOUD-2553). A use with no list installs the whole manifest
+# anyway, and half the pair lets the task run do it; either way a tool the job
+# never runs can fail it. v0.0.217's macOS dist legs died installing the agent
+# toolchain in a dispatch workflow the pull-request scope did not reach.
+bound_workflow contains path if {
+	some path in workflow_paths
+	some pattern_id in ["mise-task-auto-install-off", "mise-exec-auto-install-off"]
+	binds(path, pattern_id)
+}
+
+listed_workflow := union({pr_workflow, bound_workflow})
+
 action_uses(path) := count([1 |
 	some line in input.tree.lines[path]
 	contains(line, "uses: jdx/mise-action")
@@ -194,7 +211,7 @@ violation contains {
 	"verdict": "tool select missing",
 	"subjects": [{"path": path}],
 } if {
-	some path in pr_workflow
+	some path in listed_workflow
 	action_uses(path) > 0
 	list_count(path) != action_uses(path)
 }
@@ -209,7 +226,7 @@ violation contains {
 	"verdict": "tool pin loose",
 	"subjects": [{"path": path}],
 } if {
-	some path in pr_workflow
+	some path in listed_workflow
 	action_uses(path) > 0
 	list_count(path) == action_uses(path)
 	not both_auto_installs_bound(path)
@@ -349,6 +366,33 @@ test_a_scheduled_workflow_is_out_of_scope if {
 	})
 }
 
+# Unless it turns auto-install off: then it claims a binding list, and a use
+# with none installs the whole manifest anyway (CLOUD-2553).
+test_a_bound_workflow_off_the_pull_request_path_lists_every_use if {
+	some v in violation with input as tree({
+		"mise.toml": manifest,
+		"batten.toml": ["nothing spawned"],
+		".github/workflows/ci.yml": pr_flow(["        install_args: rust"]),
+		".github/workflows/release.yml": [
+			"on:",
+			"  workflow_dispatch:",
+			"env:",
+			"  MISE_TASK_RUN_AUTO_INSTALL: \"false\"",
+			"  MISE_EXEC_AUTO_INSTALL: \"false\"",
+			"jobs:",
+			"  x:",
+			"    steps:",
+			"      - uses: jdx/mise-action@abc",
+			"        install_args: rust",
+			"  y:",
+			"    steps:",
+			"      - uses: jdx/mise-action@abc",
+		],
+	})
+	v.verdict == "tool select missing"
+	v.subjects == [{"path": ".github/workflows/release.yml"}]
+}
+
 # THE THIRD DIRECTION: a row's spawn that the list does not install fails CLOSED
 # in CI while passing locally.
 test_a_spawned_tool_the_list_omits_is_refused if {
@@ -384,4 +428,5 @@ test_a_manifest_declaring_no_tools_is_could_not_look if {
 #MUTANT unknown-tool-name-passes|s@^\tnot row.tool in declared$@\tfalse@|a_name_no_tools_entry_declares_is_refused
 #MUTANT pr-workflow-may-omit-install-args|s@^\tlist_count(path) != action_uses(path)$@\tfalse@|a_pull_request_workflow_with_no_list_is_refused
 #MUTANT pr-workflow-list-may-be-nonbinding|s@^\tnot both_auto_installs_bound(path)$@\tfalse@|a_list_without_the_auto_install_variables_is_refused
+#MUTANT bound-workflow-out-of-scope|s@^listed_workflow := union({pr_workflow, bound_workflow})$@listed_workflow := pr_workflow@|a_workflow_binding_auto_install_lists_every_use
 #MUTANT spawned-tool-need-not-be-installed|s@^\tnot tool in installed_basenames$@\tfalse@|a_spawned_tool_the_list_omits_is_refused

@@ -201,6 +201,18 @@ violation contains {
 } if {
 	some k in job_key
 	not job_has_timeout(k)
+	not job_calls_workflow(k)
+}
+
+# A JOB THAT CALLS A REUSABLE WORKFLOW CARRIES NO TIMER, AND CANNOT (CLOUD-2554).
+# GitHub refuses `timeout-minutes` beside a job-level `uses:`; the bound belongs
+# to the called workflow's own jobs, which this module judges where they are
+# written. Demanding one here demanded a key the runner rejects.
+job_calls_workflow(k) if {
+	some i, line in lines_of(k.path)
+	i > k.line
+	startswith(line, "    uses: ./.github/workflows/")
+	owning_job(k.path, i).line == k.line
 }
 
 job_has_timeout(k) if {
@@ -311,6 +323,28 @@ test_a_job_with_no_timeout_is_refused if {
 	v.verdict == "timer declare missing"
 }
 
+# The called workflow's jobs carry the bound; its caller cannot (CLOUD-2554).
+test_a_job_calling_a_reusable_workflow_needs_no_timer if {
+	count(violation) == 0 with input as flow([
+		"  dist:",
+		"    uses: ./.github/workflows/dist.yml",
+	])
+}
+
+# The exemption is the CALL, not the job: a sibling without one is still judged.
+# The sibling comes FIRST, so the calling job's `uses:` lies below its key, the
+# line an exemption not bound to its own job would wrongly read.
+test_a_sibling_of_a_calling_job_is_still_judged if {
+	some v in violation with input as flow([
+		"  build:",
+		"    runs-on: ubuntu-latest",
+		"  dist:",
+		"    uses: ./.github/workflows/dist.yml",
+	])
+	v.verdict == "timer declare missing"
+	v.subjects == [{"artifact": ".github/workflows/ci.yml:3 build"}]
+}
+
 test_a_timeout_with_no_budget_comment_is_refused if {
 	some v in violation with input as flow(["  build:", "    timeout-minutes: 15"])
 	v.verdict == "timer carry unnamed"
@@ -380,5 +414,6 @@ test_a_jobs_block_with_no_job_keys_is_could_not_look if {
 
 #MUTANT-SUITE crates/batten/tests/it/timeout_budget.rs
 #MUTANT budgetless-timeout-passes|s@^\tnot job_has_timeout(k)$@\tfalse@|a_job_with_no_timeout_is_refused
+#MUTANT calling-job-exempts-its-siblings|s@^\towning_job(k.path, i).line == k.line$@\ttrue@|a_sibling_of_a_calling_job_is_still_judged
 #MUTANT unbudgeted-timeout-passes|s@^\trow.comment == ""$@\tfalse@|a_timeout_with_no_budget_comment_is_refused
 #MUTANT arithmetic-unchecked|s@^\trow.declared != expected_minutes(to_number(groups(row)\[1\]), budget_multiplier)$@\tfalse@|arithmetic_that_disagrees_with_its_own_p95_is_refused

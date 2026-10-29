@@ -285,11 +285,11 @@ zig = "0.16" # the linker for the macOS release build and the darwin-link gate: 
 # .deb and no binary `[tools]` can pin (`no-source-built-tool` forbids the build).
 "aqua:goreleaser/nfpm" = "2.48.0"
 zizmor = "1.30.0"                 # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
-uv = "0.12.5"                     # fast Rust installer the pipx: backend uses to fetch Serena
-# Serena's LSP-backed semantic code tools (see .mcp.json). Pinned here — not in
-# .mcp.json — so its version lives with every other tool and lands in mise.lock.
-# The pipx backend installs it with `uv` (present above), keeping the fast resolver.
-"pipx:serena-agent" = "1.7.0"
+uv = "0.12.5"                     # the installer the pipx: backend runs; ntia-conformance-checker below, and mise.agent.toml's Serena
+# NO AGENT TOOLING HERE (CLOUD-2553). This file is the build, test and release
+# toolchain; what only an agent session runs (Serena, see .mcp.json) is pinned
+# in `mise.agent.toml`, which mise loads only under `MISE_ENV=agent`. A release
+# job that auto-installed this manifest died building Serena's `tiktoken`.
 # The SBOM conformance checker the `sbom-ntia-*` rows in batten.toml run
 # (CLOUD-580, adopted by CLOUD-279 verdict 1). It answers the question
 # `mise run sbom-check` cannot: that gate asks whether the inventory describes
@@ -421,7 +421,7 @@ RUSTC_WRAPPER = "{% if os() != 'windows' %}{{ exec(command='{ ' ~ config_root ~ 
 # alone — the fan-in. This roster is what `ci-wait` WAITS ON before landing, and
 # waiting only on `final` would strand every landing on a check that fans in from
 # eighteen. Two sets, two purposes; neither derives the other.
-CI_REQUIRED_CHECKS = "ci,batten-check,mutants (0),mutants (1),mutants (2),mutants (3),cross,musl,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_REQUIRED_CHECKS = "ci,batten-check,mutants (0),mutants (1),mutants (2),mutants (3),cross,musl,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final,dist / dist (x86_64-unknown-linux-gnu),dist / dist (aarch64-unknown-linux-gnu),dist / dist (x86_64-unknown-linux-musl),dist / dist (aarch64-unknown-linux-musl),dist / dist (x86_64-pc-windows-gnu),dist / dist (aarch64-apple-darwin),dist / dist (x86_64-apple-darwin)"
 
 # JOBS LEAVING THE ROSTER, and only while they still run (CLOUD-2301). The
 # fast-forward bot judges a head against TRUNK's roster, so a job is retired in
@@ -575,7 +575,7 @@ LEASE_BEAT_NOTE = "batten record census note h"
 # that one success as the whole roster, and `land` posted /fast-forward into a
 # branch protection still listing the other six as expected. The bot was
 # rejected. A stall is recoverable; a false green is not (CLOUD-337).
-CI_ABSENT_OK_CHECKS = "zizmor,cross,musl,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,windows,macos,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_ABSENT_OK_CHECKS = "zizmor,cross,musl,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,windows,macos,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final,dist / dist (x86_64-unknown-linux-gnu),dist / dist (aarch64-unknown-linux-gnu),dist / dist (x86_64-unknown-linux-musl),dist / dist (aarch64-unknown-linux-musl),dist / dist (x86_64-pc-windows-gnu),dist / dist (aarch64-apple-darwin),dist / dist (x86_64-apple-darwin)"
 # The conclusions that CONSTITUTE AN ANSWER about a required check, written once
 # and read by `checks-green` and by `land`'s `graded_runs` — for exactly the
 # reason CI_REQUIRED_CHECKS is written once (CLOUD-327), and against exactly the
@@ -2008,7 +2008,10 @@ run = "cargo run --quiet -p batten -- sbom --binary {{usage.binary}} --target {{
 
 [tasks.sbom-binary-check]
 description = "Gate: refuse a binary inventory that catalogs nothing, or crates the lockfile does not hold — over `sbom-binary`'s record"
-run = "cargo run --quiet -p batten -- check --rule 'commit grade unsafe'"
+# DOUBLE QUOTES, because this runs on the Windows dist leg (CLOUD-2553): mise
+# runs a Windows task body without a POSIX shell, where single quotes are
+# literal and the rule id split into three arguments. Both shells honour these.
+run = "cargo run --quiet -p batten -- check --rule \"commit grade unsafe\""
 
 # CLOUD-266's measurement half: three declared forge reads, in order, because
 # each fans out over the family the one before it recorded (CLOUD-843). The
@@ -3255,7 +3258,10 @@ description = "Session start: provision the mise toolchain, purely — the step 
 # own rather than a flattened `1`.
 quiet = true
 silent = "stdout"
-env = { MISE_LOCKFILE = "false" }
+# `MISE_ENV = "agent"` provisions `mise.agent.toml` on top of the manifest, and
+# holds `toolchain-check` to it: Serena lives there now, out of every build's
+# reach (CLOUD-2553), and a session is the one place that launches it.
+env = { MISE_LOCKFILE = "false", MISE_ENV = "agent" }
 run = ["mise install", "mise run toolchain-check"]
 
 [tasks."toolchain-check"]

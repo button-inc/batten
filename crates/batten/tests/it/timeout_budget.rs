@@ -196,6 +196,45 @@ fn a_job_with_no_timeout_is_refused_and_the_pointer_names_the_job() {
     );
 }
 
+/// A JOB THAT CALLS A REUSABLE WORKFLOW CANNOT CARRY A TIMER (CLOUD-2554):
+/// GitHub refuses `timeout-minutes` beside a job-level `uses:`, and the called
+/// workflow's jobs carry the bound.
+#[test]
+fn a_job_calling_a_reusable_workflow_needs_no_timer() {
+    let dir = budget_repo(
+        "budget-calls-workflow",
+        &[(
+            ".github/workflows/ci.yml",
+            &flow("  dist:\n    uses: ./.github/workflows/dist.yml\n"),
+        )],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+/// The exemption is the call, never the file: a sibling without one is judged.
+/// The sibling comes FIRST, so the calling job's `uses:` lies below its key,
+/// which is the line an exemption not bound to its own job would wrongly read.
+#[test]
+fn a_sibling_of_a_calling_job_is_still_judged() {
+    let dir = budget_repo(
+        "budget-calls-workflow-sibling",
+        &[(
+            ".github/workflows/ci.yml",
+            &flow(
+                "  build:\n    runs-on: ubuntu-latest\n  dist:\n    uses: ./.github/workflows/dist.yml\n",
+            ),
+        )],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("build"),
+        "the finding names the sibling: {:?}",
+        stdout(&output)
+    );
+}
+
 #[test]
 fn a_timeout_with_no_budget_comment_is_refused() {
     let dir = budget_repo(

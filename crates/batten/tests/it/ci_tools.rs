@@ -331,6 +331,37 @@ fn a_workflow_with_no_pull_request_trigger_is_out_of_scope() {
     assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
 }
 
+/// A WORKFLOW THAT TURNS AUTO-INSTALL OFF CLAIMS A BINDING LIST, whatever
+/// triggers it (CLOUD-2553). `release-artifacts.yml` is dispatched, so the
+/// pull-request scope never reached it, and a use with no list installs the
+/// whole manifest: v0.0.217's macOS dist legs died building the agent
+/// toolchain there.
+#[test]
+fn a_workflow_binding_auto_install_lists_every_use() {
+    let dir = tools_repo(
+        "tools-bound-dispatch",
+        MANIFEST,
+        NO_SPAWNS,
+        &[
+            (
+                ".github/workflows/ci.yml",
+                &pr_flow("        install_args: rust\n"),
+            ),
+            (
+                ".github/workflows/release.yml",
+                "on:\n  workflow_dispatch:\nenv:\n  MISE_TASK_RUN_AUTO_INSTALL: \"false\"\n  MISE_EXEC_AUTO_INSTALL: \"false\"\njobs:\n  x:\n    steps:\n      - uses: jdx/mise-action@abc\n        install_args: rust\n  y:\n    steps:\n      - uses: jdx/mise-action@abc\n",
+            ),
+        ],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("release.yml"),
+        "the finding names the listless workflow: {:?}",
+        stdout(&output)
+    );
+}
+
 #[test]
 fn a_pull_request_workflow_that_never_runs_the_installer_is_out_of_scope() {
     let dir = tools_repo(
@@ -1178,7 +1209,6 @@ fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
             "cli" => vec!["gh"],
             "nextest" => vec!["cargo-nextest"],
             "node" => vec!["node", "npm", "npx"],
-            "serena-agent" => vec!["serena"],
             "rust" => Vec::new(),
             other => vec![other],
         })

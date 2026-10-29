@@ -7828,8 +7828,8 @@ no_fix_reason = "class 3 (a board, forge or history action): the subject is stat
 kind = "policy"
 scope = "tree"
 module = "policy/release-assets.rego"
-documents = [".github/workflows/release-artifacts.yml", "mise.toml"]
-line_sources = [".github/workflows/release-artifacts.yml"]
+documents = [".github/workflows/release-artifacts.yml", ".github/workflows/dist.yml", "mise.toml"]
+line_sources = [".github/workflows/release-artifacts.yml", ".github/workflows/dist.yml"]
 severity = "deny"
 
 # CLOUD-278's half of the same record, moved into the `release-hygiene` preset
@@ -9714,7 +9714,7 @@ severity = "deny"
 id = "release check partial"
 kind = "policy"
 scope = "tree"
-sources = [".github/workflows/release-artifacts.yml", "batten.toml"]
+sources = [".github/workflows/dist.yml", "batten.toml"]
 module = "policy/release-provision-parity.rego"
 severity = "deny"
 no_fix_reason = "class 3 (an upstream artifact): a platform a provisioned tool cannot reach is not fixable in this tree: either the upstream artifact exists and the row should pin it, or it does not and the gap is declared with its consequence — and which of the two is a supply-chain decision, not a rewrite"
@@ -10040,10 +10040,10 @@ id = "pin declare wrong"
 no_fix_reason = "class 1 (a fix verb over config_edit): config_edit writes the TOML, but no verb exposes it as a command a row's `fix` can name, and the value to write is the judgement the finding asks for"
 kind = "policy"
 scope = "tree"
-documents = [".mcp.json", "mise.toml"]
+documents = [".mcp.json", "mise.toml", "mise.agent.toml"]
 module = "policy/mise-pin-agreement.rego"
 severity = "deny"
-reason = "mise.toml owns the pin: move the version there and repeat it in .mcp.json's scoped `mise exec`, never the other way round, and name the tool before `--` so the launch provisions only it."
+reason = "mise.toml (mise.agent.toml for agent tools) owns the pin: move the version there and repeat it in .mcp.json's scoped `mise exec`, never the other way round, and name the tool before `--` so the launch provisions only it."
 
 # THREE TASK BODIES THAT WERE GATES, RETIRED ONTO MODULES (CLOUD-1991). `hk-version`,
 # `no-docs-tree` and `no-armed-ripcord` were each a `grep`/`git ls-files` pipeline
@@ -10527,7 +10527,7 @@ slow_inert = [".serena/memories/", ".coderabbit.yaml"]
 #
 # ABSENT IS COULD-NOT-LOOK, never a guess: a guessed path that does not exist
 # reads as "no matrix", and a gate that checks nothing must not report green.
-release_workflow = ".github/workflows/release-artifacts.yml"
+release_workflow = ".github/workflows/dist.yml"
 
 # The repository settings this tree projects (CLOUD-380). `[ci]` above projects
 # the BRANCH ruleset; this projects the repository object, and the two are the
@@ -15391,7 +15391,7 @@ second one here would be a second authority.
 [[verdict.route]]
 id = "workflow read first"
 kind = "document"
-target = ".github/workflows/release-artifacts.yml"
+target = ".github/workflows/dist.yml"
 
 [[verdict]]
 id = "job list missing"
@@ -16138,8 +16138,8 @@ target = "mise run release-assets-record"
 id = "release read partial"
 gloss = "the list of assets a release must carry could not be derived from the build workflow"
 class = """
-The expected list is read off `release-artifacts.yml`'s matrix and upload lines \
-and `mise.toml`'s reference name. A workflow that did not parse, a matrix naming \
+The expected list is read off `dist.yml`'s matrix, the upload lines of it and \
+`release-artifacts.yml`, and `mise.toml`'s reference name. A workflow that did not parse, a matrix naming \
 no target, no upload line, or a record carrying no tag leaves that list unknown, \
 and a gate over an unknown list must not report a complete release.
 """

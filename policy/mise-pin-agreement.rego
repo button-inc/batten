@@ -65,6 +65,7 @@
 #MUTANT pin-disagreement-passes|s@have != entry.want@false@|a_version_the_authority_pins_differently_is_refused
 #MUTANT unpinned-tool-passes|s@not is_string(pins\[tool\])@false@|a_tool_the_authority_does_not_carry_is_refused
 #MUTANT unscoped-exec-passes|s@scoped_operands(args, at) == 0@false@|a_bare_exec_is_refused_even_though_it_names_no_version
+#MUTANT agent-pins-unread|s@^pins := object.union(tools, agent_pins) if {$@pins := tools if {@|a_pin_in_the_agent_config_is_held_to_mcp_json
 #MUTANT fronted-exec-unseen|s@^\targs\[i - 1\] == "mise"$@\tfalse@|a_launcher_fronted_bare_exec_is_still_refused
 # NO `#MUTANT` ROW FOR THE COULD-NOT-LOOK CLAUSE, and that is a measurement
 # rather than an oversight. `input.tree.missing` is never populated on the tree
@@ -102,8 +103,19 @@ manifest := doc if {
 	is_object(doc)
 }
 
-pins := tools if {
+pins := object.union(tools, agent_pins) if {
 	tools := input.tree.documents["mise.toml"].tools
+	is_object(tools)
+}
+
+# THE AGENT TOOLCHAIN'S PINS (CLOUD-2553): `mise.agent.toml`, loaded only under
+# `MISE_ENV=agent`, carries what only an agent session runs, Serena among them,
+# so a reference `.mcp.json` makes to one is held to that file. Absent, it adds
+# nothing: a consumer with no agent toolchain is judged on `mise.toml` alone.
+default agent_pins := {}
+
+agent_pins := tools if {
+	tools := input.tree.documents["mise.agent.toml"].tools
 	is_object(tools)
 }
 
@@ -278,6 +290,30 @@ test_a_tool_the_authority_does_not_carry_is_refused if {
 	count(found) == 1
 	some finding in found
 	finding.verdict == "pin declare missing"
+}
+
+# THE AGENT TOOLCHAIN'S PIN IS AN AUTHORITY TOO (CLOUD-2553): Serena's pin
+# lives in `mise.agent.toml`, and `.mcp.json`'s reference is held to it.
+agent_tree(version) := {"tree": {
+	"documents": {
+		".mcp.json": {"mcpServers": {"serena": {"args": ["mise", "exec", sprintf("pipx:serena-agent@%s", [version]), "--", "serena"]}}},
+		"mise.toml": {"tools": {"uv": "0.8"}},
+		"mise.agent.toml": {"tools": {"pipx:serena-agent": "1.6.1"}},
+	},
+	"missing": {},
+}}
+
+test_a_pin_in_the_agent_config_agrees if {
+	count(violation) == 0 with input as agent_tree("1.6.1")
+		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
+}
+
+test_a_pin_in_the_agent_config_is_held_to_mcp_json if {
+	found := violation with input as agent_tree("1.6.0")
+		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
+	count(found) == 1
+	some finding in found
+	finding.verdict == "pin declare other"
 }
 
 # THE REGRESSION. A bare exec names no version to compare, and must not pass.

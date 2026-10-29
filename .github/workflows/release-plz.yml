@@ -621,6 +621,8 @@ jobs:
           # release, so leaving it resolving latest is what published v0.0.152
           # with no binaries.
           version: 2026.9.1
+          # The engine, `release-plz release-pr`, and `gh pr list` (CLOUD-2553).
+          install_args: rust aqua:release-plz/release-plz aqua:cli/cli
       # release-plz clones the repo into a temp dir; `git fetch origin main` there
       # has no credentials (actions/checkout's auth lives only on the main clone),
       # so it cannot rebase the release branch onto main — the PR is then re-opened

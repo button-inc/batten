@@ -77,7 +77,7 @@ regex = '^[a-z0-9]+:.+@.+$'
 id = "pin declare wrong"
 kind = "policy"
 scope = "tree"
-documents = [".mcp.json", "mise.toml"]
+documents = [".mcp.json", "mise.toml", "mise.agent.toml"]
 module = "policy/mise-pin-agreement.rego"
 severity = "deny"
 reason = "mise.toml owns the pin and .mcp.json's copy is a reference to it."
@@ -267,6 +267,43 @@ fn a_tool_the_authority_does_not_carry_is_refused() {
     denied(&root);
 }
 
+/// THE AGENT TOOLCHAIN'S PIN IS HELD TOO (CLOUD-2553). Serena's pin moved to
+/// `mise.agent.toml`, which only `MISE_ENV=agent` loads, so the release build
+/// never installs it; `.mcp.json`'s reference must still agree with it.
+#[test]
+fn a_pin_in_the_agent_config_is_held_to_mcp_json() {
+    let root = fixture(
+        "agent-disagrees",
+        &[
+            (".mcp.json", &scoped("1.6.0")),
+            ("mise.toml", "[tools]\nuv = \"0.8\"\n"),
+            (
+                "mise.agent.toml",
+                "[tools]\n\"pipx:serena-agent\" = \"1.6.1\"\n",
+            ),
+        ],
+    );
+    denied(&root);
+}
+
+/// The positive arm of the case above: without it, a module refusing every
+/// agent pin would pass it.
+#[test]
+fn a_pin_in_the_agent_config_agrees() {
+    let root = fixture(
+        "agent-agrees",
+        &[
+            (".mcp.json", &scoped("1.6.1")),
+            ("mise.toml", "[tools]\nuv = \"0.8\"\n"),
+            (
+                "mise.agent.toml",
+                "[tools]\n\"pipx:serena-agent\" = \"1.6.1\"\n",
+            ),
+        ],
+    );
+    clean(&root);
+}
+
 // THE REGRESSION THE GATE EXISTS FOR. It must not read as "nothing to check":
 // reverting to a bare exec removes every version reference, so a version-only
 // predicate would pass the defect it was written for.
@@ -342,9 +379,16 @@ fn the_committed_launch_is_fronted_scoped_and_pinned() {
     let manifest =
         fs::read_to_string(common::at_root(".mcp.json")).expect("the committed manifest");
     let pins = fs::read_to_string(common::at_root("mise.toml")).expect("the committed pins");
+    // Serena's pin is the agent toolchain's since CLOUD-2553.
+    let agent =
+        fs::read_to_string(common::at_root("mise.agent.toml")).expect("the agent toolchain");
     let root = fixture(
         "committed",
-        &[(".mcp.json", &manifest), ("mise.toml", &pins)],
+        &[
+            (".mcp.json", &manifest),
+            ("mise.toml", &pins),
+            ("mise.agent.toml", &agent),
+        ],
     );
     clean(&root);
 }
