@@ -15391,7 +15391,7 @@ second one here would be a second authority.
 [[verdict.route]]
 id = "workflow read first"
 kind = "document"
-target = ".github/workflows/release-artifacts.yml"
+target = ".github/workflows/dist.yml"
 
 [[verdict]]
 id = "job list missing"
@@ -16138,8 +16138,8 @@ target = "mise run release-assets-record"
 id = "release read partial"
 gloss = "the list of assets a release must carry could not be derived from the build workflow"
 class = """
-The expected list is read off `release-artifacts.yml`'s matrix and upload lines \
-and `mise.toml`'s reference name. A workflow that did not parse, a matrix naming \
+The expected list is read off `dist.yml`'s matrix, the upload lines of it and \
+`release-artifacts.yml`, and `mise.toml`'s reference name. A workflow that did not parse, a matrix naming \
 no target, no upload line, or a record carrying no tag leaves that list unknown, \
 and a gate over an unknown list must not report a complete release.
 """

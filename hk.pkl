@@ -399,6 +399,8 @@ local gate = new Mapping<String, Step> {
         "crates/batten/Cargo.toml",
         "Cargo.toml",
         ".github/workflows/release-artifacts.yml",
+        // The release matrix lives here since CLOUD-2554 (`[ci] release_workflow`).
+        ".github/workflows/dist.yml",
       )
     check = "mise run install-check"
   }
