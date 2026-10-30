@@ -1364,14 +1364,16 @@ fn derive_binary(
     Ok(recovered.len())
 }
 
-/// syft's `file:` source for `binary`, absolute but NOT canonical (CLOUD-2563).
-/// `fs::canonicalize` on Windows returns a verbatim `\\?\D:\…` path, which syft
-/// accepted, exited 0 over, and cataloged nothing from: the Windows release leg
-/// shipped a 0-crate inventory while the same binary layout scanned to 286 on
-/// Linux. `path::absolute` adds no prefix, as `policy.rs` already relies on.
+/// syft's `file:` source for `binary`, in [`crate::git::canonical`]'s plain
+/// spelling (CLOUD-2563). A bare `fs::canonicalize` answers `\\?\D:\…` on
+/// Windows, which syft accepted, exited 0 over, and cataloged nothing from: the
+/// Windows release leg shipped a 0-crate inventory while the same binary layout
+/// scanned to 286 on Linux.
 fn binary_source(binary: &str) -> String {
-    let path = std::path::absolute(binary).unwrap_or_else(|_| PathBuf::from(binary));
-    format!("file:{}", path.display())
+    format!(
+        "file:{}",
+        crate::git::canonical(Path::new(binary)).display()
+    )
 }
 
 /// `<name> <version>` for every `rust-crate` artifact, in scan order. The type
@@ -1703,11 +1705,11 @@ mod tests {
     /// nothing from it. Runs on the `windows` PR leg, where the prefix would appear.
     #[test]
     fn the_binary_source_is_absolute_and_never_verbatim() {
-        let source = binary_source("target/dist/batten.exe");
+        let exe = std::env::current_exe().expect("the test binary");
+        let source = binary_source(&exe.to_string_lossy());
         let path = source.strip_prefix("file:").expect("a syft file source");
         assert!(Path::new(path).is_absolute(), "{source}");
         assert!(!path.starts_with(r"\\?\"), "{source}");
-        assert!(path.ends_with("batten.exe"), "{source}");
     }
 
     /// An action is unset when either its license or its copyright is, and a
