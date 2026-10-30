@@ -1328,10 +1328,9 @@ fn derive_binary(
     }
     let scratch = Scratch::new("binary")?;
     let scan = scratch.0.join("scan.json");
-    let binary_path = std::fs::canonicalize(binary).unwrap_or_else(|_| PathBuf::from(binary));
     let args = [
         "scan".to_owned(),
-        format!("file:{}", binary_path.display()),
+        binary_source(binary),
         "--source-name".to_owned(),
         declared.subject.clone(),
         "--source-version".to_owned(),
@@ -1363,6 +1362,16 @@ fn derive_binary(
     }
     crate::record::store_named(VERB, BINARY_FAMILY, &body)?;
     Ok(recovered.len())
+}
+
+/// syft's `file:` source for `binary`, absolute but NOT canonical (CLOUD-2563).
+/// `fs::canonicalize` on Windows returns a verbatim `\\?\D:\…` path, which syft
+/// accepted, exited 0 over, and cataloged nothing from: the Windows release leg
+/// shipped a 0-crate inventory while the same binary layout scanned to 286 on
+/// Linux. `path::absolute` adds no prefix, as `policy.rs` already relies on.
+fn binary_source(binary: &str) -> String {
+    let path = std::path::absolute(binary).unwrap_or_else(|_| PathBuf::from(binary));
+    format!("file:{}", path.display())
 }
 
 /// `<name> <version>` for every `rust-crate` artifact, in scan order. The type
@@ -1688,6 +1697,18 @@ fn spawn_code(program: &str, args: &[&str], root: &Path) -> i32 {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// The binary reaches syft absolute and never verbatim (CLOUD-2563): a
+    /// `\\?\` prefix is what `canonicalize` returns on Windows, and syft scanned
+    /// nothing from it. Runs on the `windows` PR leg, where the prefix would appear.
+    #[test]
+    fn the_binary_source_is_absolute_and_never_verbatim() {
+        let source = binary_source("target/dist/batten.exe");
+        let path = source.strip_prefix("file:").expect("a syft file source");
+        assert!(Path::new(path).is_absolute(), "{source}");
+        assert!(!path.starts_with(r"\\?\"), "{source}");
+        assert!(path.ends_with("batten.exe"), "{source}");
+    }
 
     /// An action is unset when either its license or its copyright is, and a
     /// fully stated one is not.
