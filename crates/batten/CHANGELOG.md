@@ -7,6 +7,974 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.217](https://github.com/button-inc/batten/compare/v0.0.216...v0.0.217) - 2026-10-30
+
+### Added
+
+- *(mcp)* [**breaking**] spend a wiring entry's own headers helper
+- *(mutate)* [**breaking**] the changed diff's mutants run at admission, cargo-mutants included, sharded in CI
+- *(preset)* [**breaking**] refuse a session's first plan once, with the operator's correction
+- *(hook)* [**breaking**] refuse an interpreter running a script outside the repository
+- *(engine)* [**breaking**] tell a consumer its pin is behind, and move every copy with it
+- *(doctor)* count what plan mode refused, by program
+- *(red-head)* [**breaking**] a push may not supersede a red head whose failed checks are unread
+- *(dist)* Chocolatey and nix channels, and the channel test (CLOUD-2298)
+- *(dist)* release and prove the package channels (CLOUD-2298)
+- *(dist)* generate the Homebrew, MSI, npm, deb, rpm and apk channels (CLOUD-2298)
+- *(dist)* cargo-dist builds each release leg and generates the installers (CLOUD-2297)
+- *(rules)* the reset, singleton and history gates are native rows
+- *(engine)* [**breaking**] engine install follows the pin; install.sh bakes the latest release
+- *(ready)* a feat row's claims carry the prior-art search it ran
+- *(mint)* a mint keys from the call's input, held to a declared shape; no row is born in Todo
+- *(land)* readying owes simplify and both reviews, on both ready routes
+- *(preset)* except a preset's modules and eject them into policy/
+- *(trunk-based)* [**breaking**] refuse a merge at the call and hold land linear to the trunk's ruleset
+- *(mutate)* a row seen caught is not run again until its inputs change
+- *(mutate)* the sweep prints its row count and each row's verdict and time
+- *(policy)* a turn that defers work names the row holding it
+- *(collect)* every compile unit passes the disk collector, as RUSTC_WRAPPER
+- *(disk)* one watcher spans the run; the prune floor model retires
+- *(release)* [**breaking**] main pins only a published, immutable, verified release
+- *(land)* collect toward max_free_mb in the lap and the sweep
+- *(hook)* collect disk before admitting under the declared band
+- *(collect)* collect superseded, then least-recently-used, cargo units under disk pressure
+- *(o200k)* the pre-tokenizer as a build-time DFA, read in place
+- *(o200k)* the o200k vocabulary as a compile-time table in every binary
+- *(capture)* a streamed store and a streaming hook-input reader
+- *(capture)* store every tool result, and bound what the model reads in o200k tokens
+- *(mutate)* a command runner, its argv committed and its exit the contract
+- *(hook)* judge by the session repo, register its root, point at views
+- *(mutate)* [**breaking**] one runner registry, the declared runner and cargo-mutants registered beside it (WIP)
+- *(refusal)* every line a pointer the legend resolves — routes, subjects and heads where they were missing
+- *(refusal)* remedy lines are headed remedy, the legend is one sentence, the drain speaks its rule's own word
+- *(refusal)* one finding format for check, waiver and repair lines
+- *(refusal)* [**breaking**] batten <severity> <class> heads every finding, and the repeat keeps its routes
+- *(refusal)* [**breaking**] a repeat is the address, and a finding names its gate once
+- *(drain)* a per-rule delta small by shape, the budget a relief valve
+- *(drain)* cut the response at the token budget and journal the cut
+- *(refusal)* class every agent-facing emitter through the finding grammar
+- *(verdict)* every live class carries its interaction doc, and none may land without one
+- *(config)* a rule's reason is a remedy of at most 240 characters, and 188 rows carry docs
+- *(history)* one --history call walks the authority once and prints a shared commit once
+- *(verdict)* every vendored class carries its interaction doc
+- *(verdict)* a first sighting carries the class's doc, and a config row needs its history read before it changes
+- *(preset)* a backgrounded call that names no timeout runs with the host's maximum
+- *(policy)* [**breaking**] one explain resolves every name a finding prints, and the line names it once
+- *(mint)* [**breaking**] mint the review receipt on completion, and let land ask for it
+
+### Fixed
+
+- *(sbom)* hand syft an absolute binary path, never a verbatim one
+- *(mise)* sbom-binary-check double-quotes its rule id instead of overriding the shell
+- *(mise)* sbom-binary-check declares sh, and the dispatched-list arm gets its engine tier
+- *(mise)* sbom-binary-check declares bash, so the Windows leg keeps its rule id whole
+- *(rules)* a busy or unexecutable image falls through too, and the harness decoy is the real one
+- *(rules)* rung -1 spawns only an image named `batten`, and falls through only on NotFound
+- *(tests)* the doctor own-image case reports without `format!`
+- *(tests)* compose the decoy PATH with join_paths
+- *(tests)* clippy on the own-image case — hoist the import, drop a borrow
+- *(tests)* the own-image case is Unix-only, and registered that way
+- *(rules)* a declared `batten` argv runs the image that spawned it
+- *(release)* follow the ref's pin under `--config-from`, not none
+- *(release)* judge the release head by the ref `--config-from` names
+- [**breaking**] one typed smell id, so an id nothing explains cannot be emitted
+- *(preset)* name the noun-first `_read` methods rather than trust the suffix
+- *(release)* an uncut release is a failure only under the seal
+- *(release)* word the uncut refusal apart from every could-not-look
+- *(preset)* scope the noun-first `_read` reads to the servers measured, too
+- *(preset)* scope the `_list`/`_get` reads to the GitHub server
+- *(preset)* a write verb first is still a write, whatever its suffix
+- *(release)* never refuse a draft as absent, and give the guard one line
+- *(preset)* read a noun-first `_list` or `_get` MCP method as a read
+- *(release)* [**breaking**] refuse a release not cut yet, rather than could-not-look
+- *(ci)* arm the freeze two releases past main, and rehearse the next release on every PR
+- *(mutants)* with_fixture is test-only, carried_to's doc says what it keeps (CLOUD-2509)
+- *(mcp)* take the first usable spelling of the helper's header
+- *(mcp)* gate the helper cases with cfg!, not #[cfg(unix)]
+- *(mcp)* build the helper fixture on Unix only
+- *(engine)* a hook that cannot follow its pin says so
+- *(engine)* the hook's follow never leaves before anything judged
+- *(engine)* an unreadable own image never skips the refusal floor
+- *(perf)* keep the sweep's missing-build case byte-identical to main
+- *(disk-watch)* the normal exit and the unwind are two statements, not one with a spare
+- *(disk-watch)* a panic inside a watched body hangs the process
+- *(prune)* the watcher wait's failure budget was four ticks and hid the catch
+- *(prune)* a failure budget wide enough to hide the catch is not margin
+- *(hook)* a redirected target dir let the source pin resolve to the running binary
+- *(hook)* the load-fault hand-off could still give a child an empty document
+- *(mutate)* a bound measured on the unmutated suite can kill the catch it is bounding
+- *(engine)* two gate rows that proved nothing, and two docs that overclaimed
+- *(hook)* only the spawn knows whether a child ran, so it is what says
+- *(exit)* a child's own breakage is not a verdict about the repository
+- *(hook)* only the follow knows whether anything ran
+- *(hook)* the pin is followed before this build reads the payload for itself
+- *(doctor)* the mediator is compared against the build this tree writes
+- *(hook)* one hand-off body, and the guard asks which binary ran
+- *(hook)* a crashed follow kept the payload, so the floor can decide
+- *(doctor)* the observed tree's build is not this process's
+- *(exec)* the code and the bytes come off the same outcome
+- *(engine)* which tree is asking, not where the path lands
+- *(engine)* a build outside the checkout is not the checkout's own
+- *(engine)* the hook's two handoffs decide before they write
+- *(mutate)* one shard refusal for both runners, docs that match
+- *(mutate)* read a blank $MUTANT_SHARD as no shard in one tested place
+- *(mutate)* clippy-clean sweep_shard, pin the malformed-shard refusal
+- *(mutate)* parse the shard once, sweep a gate named twice once
+- *(mutate)* one sorted row plan per shard, no stage for an empty shard
+- *(mutate)* shard the declared runner's rows, not its gates
+- *(deps)* regenerate the fuzz lock with the carry, keeping main's harness pins
+- *(deps)* run the rust jobs on a change to any file their carry tests read
+- *(deps)* keep the harness pins across a fuzz-lock carry, and roll back a failed one
+- *(deps)* carry the root resolution into the fuzz lock on every cargo bump
+- *(deps)* refuse a fuzz pin the root lock dropped, and key pins by source
+- *(deps)* let the subset test carry deny to the fuzz lock, not a second deny run
+- *(deps)* bring fuzz/Cargo.lock to the root's resolution and gate it
+- *(mutants)* answer the third code review — test names, cancel stub, doc reasons
+- *(mutants)* answer the code review — gate order, unproven rejection, honest docs
+- *(hook)* keep the shell's absolute-word rule exact, with the host as an argument
+- *(durable)* gate the directory-sync counter to the platform that syncs one
+- *(pinned)* /code-review — record stamps only where they held across the key's read
+- *(pinned)* /code-review — stamps over only absent configs answer nothing
+- *(pinned)* /code-review — an unstampable file is a miss on read too, and the stamp cases are clock-free
+- *(pinned)* a present file with no stamp withholds every stamp
+- *(pinned)* /code-review — record stamps on unix only, where a stamp carries ctime
+- *(test)* a receipt's mtime may trail its stamp by the coarse clock's second
+- *(mutants)* an empty piece counts the rest whole, a sweep case writes only its scratch build
+- *(lock)* judge the staged mise.lock, not a checkout a CI job may write
+- *(mutate)* no sweep on the failed wait, whose one reachable failure is ECHILD
+- *(mutate)* keep the sweep off a failed wait whose leader was reaped elsewhere
+- *(mutate)* sweep a failed wait's group whatever the failure
+- *(mutate)* no sweep after a failed wait that says the leader was reaped
+- *(mutate)* sweep the failed wait's exit too, since only the final wait reaps
+- *(mutate)* no repeat kill where a failed wait leaves the group id unreserved
+- *(mutate)* sweep before the leader is reaped, on both of the wait's exits
+- *(mutate)* sweep a suite's group until it no longer answers
+- *(git)* /code-review — no memo work outside a hook call, every write opens fresh, and the common config and nested scope are gated
+- *(git)* /code-review — a write opens fresh, the hit path is tested, and a nested scope keeps the outer memo
+- *(git)* scope the repository-open memo to one hook call, so a long-lived process never reads a shared snapshot stale
+- *(git)* believe a remembered open by its config files' bytes, so a first call's cost does not depend on the clock
+- *(release)* [**breaking**] retire release settings --probe with the ruleset it proved
+- *(mutate)* carry the hunk-header row at column 0, where mutate reads it
+- *(mutate)* group the in-diff hunks with chunk_by and pin the grouping
+- *(mutate)* write the in-diff hunks from the ranges they print
+- *(release)* owe no release-path ruleset, so the guard can go green
+- *(ci)* map the refusal of every wrapped release verb, and simplify
+- *(perf)* accept identical arms when the head was built clean
+- *(provision)* install the locked toolchain with no attestation read
+- *(ci)* map the release gate's not-green exit 2, not 1
+- *(tokens)* name each arm's own byte-stability in the not-measured line
+- *(policy)* state what a step is, instead of excluding one shape at a time
+- *(policy)* an empty string is not a step, so arm E stops accusing one
+- *(policy)* arm E accused a manifest whose fetch task yields no step
+- *(toolchain)* the fix-selection gate resolves the package too, so it fetches first
+- *(policy)* arm E counted the union, so a floating fragment stayed clean
+- *(policy)* arm A2 was masking arm A, and arm D had no "names none"
+- *(policy)* keep arm B's reach, and never commit a source engine pin
+- *(policy)* read the tag half of hk.pkl's URL too, and spell the CA selection once
+- *(policy)* read both halves of the fetch URL, and factor what the tiers repeat
+- *(toolchain)* fetch the pkl package before the validator runs
+- *(verdict)* token_enum! refuses a duplicate token at compile time
+- *(capture)* call the keeping seam directly, so no wrapper's count goes unread
+- *(capture)* a call never evicts the response it just stored
+- keep the network wrappers' bodies and the lint inventory as main has them
+- *(mutate)* the MUTANT-SUITE line after the profile row is its own line again
+- *(mutate)* the profile pin's comments claim only what it does, and a unit case asserts it
+- *(mutate)* the sweep runs nextest's default profile again, never the caller's
+- *(mutate)* keep an inherited nextest profile the staged tree declares, else default
+- *(mutate)* the sweep's Cargo arm runs nextest's default profile, whatever the caller selected
+- *(mutate)* a nextest result line counts only when it names a case; TERMINAL's doc says what mutate adds
+- *(replay)* every attempt decides replay; only the mutate count dedupes cases
+- *(replay)* a retried case's result is read, and counted once
+- *(replay)* a result line's status word is its first, and the case count stops at the summary
+- *(mutate)* kill_group keeps the direct group signal suite-reap-leader-only mutates
+- *(mutate)* /code-review — nextest's LEAK and retried lines count, both shard numbers come from strategy
+- *(mutate)* the pinned cargo-mutants is applied for every registered runner
+- *(mutate)* declared Cargo rows run under nextest, and a timed-out runner is asked before it is killed
+- *(engine)* engine update leaves a digest the gate accepts
+- *(engine)* /code-review round 3 of CLOUD-2418
+- *(engine)* stamp-trusted-when-absent targets check's source arm again
+- *(engine)* /code-review of CLOUD-2418 after the rebase
+- *(policy)* /security-review of CLOUD-2418 — every spelling of git grep's pager
+- *(engine)* source-pin-admitted targets the gate's source arm again
+- *(engine)* /code-review of CLOUD-2418
+- *(policy)* /security-review of CLOUD-2418 — a git read form never writes
+- *(engine)* /simplify over CLOUD-2418 — git's program-running options are never reads
+- *(engine)* close the findings CLOUD-2279 left, and read git's global options
+- *(land)* name no consumer in the CLOUD-2189 case (CLOUD-2189)
+- *(land)* a dead end is confirmed only by the masked names' own new runs (CLOUD-2189)
+- *(claim-race)* a body closing an unrelated key settles nothing, so read its commits
+- *(claim-race)* a speculative lap judges this branch on its own commits
+- *(claim-race)* an unconfirmed collision refuses and says so, rather than declining
+- *(claim-race)* a competitor whose body closes the key is settled, not distrusted
+- *(claim-race)* decline the unconfirmed race, not the confirmed one beside it
+- *(claim-race)* a race nobody could confirm is not a refusal, and two arms owed a case
+- *(claim-race)* a competitor that could refuse this branch is worth the round trip
+- *(claim-race)* the guard asks its question once, above the match
+- *(claim-race)* a claim set short of its own commits cannot report a clean board
+- *(claim-race)* a closing body answers without the log, so only a silent one is could-not-look
+- *(claim-race)* the branch's own log read owes the same `.ok()` as the competitors'
+- *(claim-race)* a read that failed is not a competitor that claims nothing
+- *(claim-race)* judge before declining to judge, and price the fan-out on a reproduced count
+- *(claim-race)* an unanswered competitor exits Internal, not clean
+- *(claim-race)* a fill that lost a worker is could-not-look, not a verdict
+- *(claim-race)* a panicked worker costs one fetch, and the skip names the source it is unsound for
+- *(closes)* a cleared body and a created body are closing sets too
+- *(closes)* one reading of pr-closes, and an edited body is recorded
+- *(ci)* name the mise action by its own name, not its owner's (CLOUD-2388)
+- *(ci)* the suite census reads every --rule, argv checks and mise's value flags (CLOUD-2388)
+- *(ci)* a pinned tool spawned by name is refused; node and jq are required where cases reach them (CLOUD-2388)
+- *(ci)* batten enforce runs the rules' checks, and batten-check installs cargo-dist (CLOUD-2388)
+- *(ci)* batten test replay and land lap run cases; one reading of mise run's flags (CLOUD-2388)
+- *(ci)* the suite gate reads templates, flag values, here-docs and resolver bodies (CLOUD-2388)
+- *(ci)* the suite gate reads cargo, mise, hk and scripts as their CLIs do (CLOUD-2388)
+- *(ci)* the suite gate reads every resolving call and parses commands, not lines (CLOUD-2388)
+- *(ci)* the suite-job gate reads require_tool calls, and cache-warm-musl installs pkl (CLOUD-2388)
+- *(land)* a raced gate's cancel reads the group note where verify wrote it
+- *(land)* the stall watches the registration this run made, never an unregistered pid
+- *(land)* the entry reconcile defers to a live lease; the gate claims the race too; alive is a read
+- *(land)* the stall arm wins once, before its cancel, and sees a same-second step
+- *(land)* a gate that never reports is no evidence of a stall
+- *(land)* a lap that never returned has its ready head's runs reconciled at the next entry
+- *(land)* a verify whose task stops advancing cancels its gate and stops the landing
+- *(task)* alive reads the registry and deletes nothing; the next land forgets the dead
+- *(stop)* excuse only a backgrounded land, and re-arm the excuse with the rest
+- *(stop)* earn the land excuse after the call, spend it only where it excuses
+- *(stop)* excuse the Stop after a land is started, and sweep the new receipts
+- *(stop)* judge the Stop refusal on this Stop's own verdict
+- *(stop)* refuse the Stop after an ignored unlanded pointer while no land runs
+- *(land)* a branch the lookup finds no pull request for still asks at push
+- *(land)* a branch with no pull request buys no run, so its push owes nothing
+- *(land)* only a push that buys a run owes its reviews
+- *(land)* a ready pull request's push owes the reviews its ready did
+- *(receipt)* a subject one row cannot read is could-not-look for that row alone
+- *(hook)* leave an absolute path as sent; strip only a drive in the case
+- *(hook)* resolve a rooted path without a drive at the boundary
+- *(handler)* a tree_only row skips a rooted path, not only an absolute one
+- *(hook)* follow a dangling link in relative_to's tail replay
+- *(hook)* walk from the path itself so relative_to stays at its canonicalize ceiling
+- *(hook)* canonicalize a tail component that resolves after a `..`
+- *(hook)* resolve a tail `..` against the canonical base, not lexically
+- *(hook)* resolve `..` before relativising a path through a missing directory
+- *(handler)* keep dispatch's six-argument form and add dispatch_writing
+- *(preset)* enroll claude-code-plan where every shipped preset is named
+- *(preset)* [**breaking**] ship the first-plan refusal as its own preset, claude-code-plan
+- *(preset)* give the plan-mode row a neutral id and the new class its doc
+- *(handler)* [**breaking**] let a row except the paths that are not its subject
+- *(hook)* attached values, --opt=value and versioned interpreters read right
+- *(hook)* a bundle's valued option and trailing inline options read right
+- *(hook)* read each interpreter family's own option grammar
+- *(preset)* a Serena memory write is pre-approved outside plan mode
+- *(mcp)* the connector guard applies a committed rule under the literal name too
+- *(filed-here)* parse the trimmed line the filter measured, and pin both guards at load time
+- *(filed-here)* a blocked fetch never outranks a measured one, and every guard has its mutant
+- *(filed-here)* a measured nothing carries no key, and the unread filter has its mutant
+- *(filed-here)* exempt only rows the newest measured PR body closes
+- *(engine)* the update's failed install is the install's own error
+- *(engine)* fifth /code-review of CLOUD-2279 — a failed install says the write stood
+- *(engine)* fourth /code-review of CLOUD-2279 — an update never puts the pin back
+- *(engine)* an update's doc says it rolls back, and a failed restore is said
+- *(engine)* third /code-review of CLOUD-2279 — failures leave nothing half done
+- *(engine)* second /code-review of CLOUD-2279 — the notice fails open
+- *(engine)* /code-review of CLOUD-2279 — the gate's remedies clear it
+- *(land)* keep a declined record while its group lives; refuse a member whose pid cannot be read
+- *(land)* a group is an orphan only with its leader and registrant gone
+- *(land)* the reaper's own group is excluded by number, not by spelling
+- *(land)* date an abandoned group against its record instead of probing its leader
+- *(land)* signal only leaderless groups when reaping abandoned tasks
+- *(preset)* clamp the host maximum rather than max-then-min
+- *(preset)* pin a backgrounded call to the host's real maximum, not two hours
+- *(toolchain)* declare the program root once, so land's reap of abandoned groups runs
+- *(preset)* plan mode reads the guide subagent, printenv and ps
+- *(test)* session_drain's transcript cases state their platform with cfg!
+- *(doctor)* the sessionless-template mutant row parses
+- *(doctor)* a tail torn inside a character is still torn
+- *(test)* the transcript fixtures are unix-only, like every test that reads them
+- *(doctor)* a torn transcript tail never falls back to a zero
+- *(doctor)* re-check the store after reading the transcript
+- *(hook)* the TodoWrite mutant keeps hook.rs's other rows on their suites
+- *(doctor)* every task call counts, and a relative link resolves against the link
+- *(doctor)* only a hook denial unwrites a task call, and TodoWrite is a task tool
+- *(doctor)* a half-written or refused task call never decides the zero
+- *(doctor)* the transcript speaks only for its own session, over an absent store, from complete lines
+- *(doctor)* an absent task store reads zero when the transcript shows no task call
+- *(capture)* /code-review — an advisory overflow takes no row, and the grace is a minute
+- *(capture)* /code-review — a fresh row-less record is not an orphan, and a part of a result is ranked, never selected
+- *(capture)* every hook-side store records its row, and a row-less record is evicted first
+- *(durable)* /code-review — the use mark is made in durable, the one place this crate mutates a file
+- *(cache)* /code-review — touch through collect's open_handle, so a refresh moves the directory on Windows too; cover the refresh and the no-prune rule
+- *(cache)* /code-review — the mark needs no hard link, refreshes the directory too, and touches read-only first
+- *(cache)* mark a partition used through a file, so every platform ranks by last use
+- *(doctor)* gaps prints no empty pointer and absorb keeps counted apart
+- *(obligations-bound)* a newest unread fetch keeps the earlier reading
+- *(obligations-bound)* judge only the newest PR-body fetch
+- *(red-head)* the hand-driven `land push` owes the same read
+- *(red-head)* the landing owes the same read, and a check with no job has its own
+- /code-review of #1189 — the suite comment and CI bullet say only what holds
+- /code-review of #1189 — restore what the neutral comment and the CI bullet dropped
+- /code-review findings on #1189
+- *(ci)* find suite jobs through mise's task graph and install cargo-dist for coverage (CLOUD-2381)
+- *(ci)* mutant rows at column 0 and archiver_argv without Option<Option> (CLOUD-2381)
+- *(dist)* zip the Windows archive with bsdtar on a Windows host (CLOUD-2297)
+- *(dist)* refuse a stale lockfile and stale outputs before dist builds (CLOUD-2297)
+- *(dist)* read dist's staging under the workspace target and widen the proof's paths (CLOUD-2298)
+- *(dist)* keep the build-tool refusal's wording and name cargo-dist after it (CLOUD-2297)
+- *(dist)* generate the MSI template before each dist build (CLOUD-2298)
+- *(dist)* clear verify's refusals over the channel bundle (CLOUD-2298)
+- *(dist)* meet the gates the release wiring tripped (CLOUD-2297)
+- *(dist)* keep the dist API patch-compatible and lock cargo-dist (CLOUD-2297)
+- /code-review — the eviction-order row targets its line, and the Windows rank is named exactly
+- /code-review — the partition bound's docs say what it guarantees, and mutants pin it
+- /code-review — the partition bound is one least-recently-used count
+- /code-review of the partition bound, the answer memo and the epoch's state
+- /code-review of the caches — a missing cache is a whole read, a partition in use is never the oldest
+- address /code-review of this branch's caches and memos
+- *(clippy)* name the cited-patterns parameter of check_loaded
+- clear verify's refusals of this branch — a lint escape, a cfg-gated test, an unplaced module
+- *(build)* link mimalloc on Linux glibc only
+- *(clippy)* clear this branch's 15 lint refusals; hold the authority by reference in the parse memo
+- *(mutate)* every Rust mutation row is three fields and changes its own source
+- *(build)* link mimalloc on Linux only, without transparent huge pages
+- *(cache)* put this branch's mutation rows where `mutate` reads them, and enforce them
+- *(cache)* partition the cache directory by binary, so two binaries stop evicting each other
+- *(exec)* a forwarder leaves the count before it stops answering signals
+- *(land)* a signal unwinds only the tree the bet left
+- *(land)* the signal unwind keeps its record when it cannot finish, and leaves a published bet to the lap
+- *(hook)* a remedy names an action, never words in the turn
+- *(land)* a terminating signal unwinds a live speculation
+- *(hook)* the unlanded pointer speaks once per claim until the operator speaks
+- *(ci)* the required fan-in can never be skipped, so a draft run no longer satisfies protect-main
+- *(hook)* the strongest native row for a gate decides, and removing one lowers nothing
+- *(hook)* a native gate with no row stays at deny
+- *(rules)* the native kind has its README row and fixture, and the chain its budget
+- *(mcp)* a failure record is its last field, and unix ledger cases skip nothing
+- /code-review findings on the second simplification
+- /code-review findings on the mutation-runner bundle
+- *(mutate)* suite_for hands back a reference again; each row carries its resolved suite
+- *(mutate)* the census refuses rows that cannot apply, and the dead rows are repaired
+- *(mutate)* [**breaking**] judge each row under the MUTANT-SUITE above it, and sweep on every one
+- *(mutate)* [**breaking**] the census refuses a row whose script changes nothing
+- *(mcp)* spawn provisions a launch program PATH lacks; posture reads a failed exec
+- *(surface)* engine install is reached now, by session:batten and deps-install
+- *(release)* grade the land where it now runs, and the bake where it now ends
+- *(exec)* the reaper KILLs and waits only a child not yet waited
+- *(exec)* the reaper waits for the child it signalled
+- *(mint)* a key_shape is judged as a rule's is, compiled and nothing more
+- *(mint)* a padded key_shape loads; a stray one is told to go first
+- *(mint)* a key_shape that narrows nothing or admits nothing is refused
+- *(mint)* a blank key_shape is refused at load
+- *(land)* an asked receipt stops the unattended lap; a verdict reads like commit_type
+- *(land)* a fact in a receipt row withholds only itself from the lap
+- prior art owed from a declared cutover; land asks receipts only when it readies
+- *(preset)* preset eject's census row, class doc, pages and completions
+- *(preset)* preset eject is declared unreached, and the golden schema carries it
+- *(verify)* run perf-gate alone and last, after every other step has exited
+- *(collect)* the singleton wait bound is spelled in minutes
+- *(collect)* rank the staged copy and every build tree's scratch, and wait out batten's own background build
+- *(preset)* ReadNotifications is a read in plan mode
+- *(preset)* a batten mcp call whose method only reads is read-only in plan mode
+- *(mutate)* touched() calls changed_by again, as before the rebase onto main
+- *(land)* linear-check refuses a merge commit, and a resolution keeps its mode
+- *(land)* a replay merges a `merge=union` path as the union of both sides
+- *(collect)* keep the profiles a lap builds, take unreachable artifacts first
+- *(land)* flatten a merge-carrying branch, never merge the trunk into it
+- *(mutate)* the cargo-mutants globs own each crate's tests again
+- *(mutate)* stream cargo-mutants' output as it is written
+- *(mutate)* shard the change's mutants evenly, not each source's
+- *(release)* verify reads the asset module's report as it is written
+- *(collect)* count Windows hardlinks before calling a removal freed
+- *(collect)* open trees and stamp times the way Windows allows
+- *(land)* the red-head undo says what it did, not what will happen
+- *(collect)* read macOS processes by name, as XNU allows
+- *(replay)* a body that will not compile is charged to itself, never to the union
+- *(mutate)* the sweep writes through durable; this branch's tests pass the tree gates
+- *(policy)* the runner glob is split on its double star, not swapped for a sentinel
+- *(engine)* a release pin is repaired by the release, never by a build
+- *(test)* gate the state-home import with the Linux-only cases that use it
+- *(hook)* the post-tool recorders read a spilled response, not its marker
+- *(verify)* the lap's findings after the main merge
+- *(install)* merge origin/main; the generated bootstrap installs the pin
+- *(exec)* the branch adds no spawn escape the inventory does not already hold
+- *(exec)* an error or an unwind never abandons the supervised child
+- *(mutate)* a spawned step's outcome is one enum; a sed timeout is not the row's refusal
+- *(mutate)* re-anchor the rows whose target line moved
+- *(forge)* a pull request's state is parsed once, unknown never closed
+- *(capture)* a held response is as old as its latest call row
+- *(policy)* a descriptor duplication is not a file write
+- *(release)* how a commit relates to main is one Relation from both producers
+- *(verify)* clear the lap's own clippy, spelling and census findings
+- *(collect)* the compiler is spawned through exec, the placed boundary
+- *(collect)* cargo's lock roots compile inputs; the clock roots only what a run reads
+- *(collect)* every `step run` build runs under the disk watcher
+- *(collect)* the collector arms at its default band when none is declared
+- *(pipeline)* a commit's status is a verdict a trailing line replaces
+- *(policy)* the bytecode cache is hit on the live hook path
+- *(release)* land on the released engine; the gate sees wrapped released calls
+- *(hook)* spill at the result bound; handlers read the host's own bytes
+- *(install)* stamp the installed engine, and test follow_pin on its own
+- *(collect)* a live build is the root, never a 10-minute window
+- *(engine)* the floor's repair replaces the stale copy; the hook hands off from its own root
+- *(layering)* place this branch's eight modules; durable or marked writes
+- *(collect)* name what held a pass back, and never rank scratch units
+- *(collect)* each platform's own answer to "is this binary running"
+- *(collect)* see running programs and file identity on every shipped target
+- *(engine)* a test run uses the engine it built — BATTEN_ENGINE=local
+- *(disk)* the collector reaches incremental caches and test scratch
+- *(engine)* a branch's own build is the engine its source pin names
+- *(release)* load the release-path modules and close the suite on CLOUD-2033
+- name held roots, keep an unread wait's head, point at the gate's log
+- five defects measured on this PR, each with its test and mutant
+- *(recorder)* follow a backgrounded call to its output instead of recording its placeholder
+- clear verify's five failures and restore the collector band
+- *(collect)* index each profile's artifacts once, not once per unit
+- *(handler)* pass the unit tests' payloads as handler::Payload
+- *(prune)* take a basis-moving root only when its drop can reach the cold floor
+- *(capture)* evict built-in tool results before tracker reads
+- *(stop)* look a filed row's status up under the root the writer stored it
+- *(semver)* balance the backticks in cause_line's doc
+- *(prune)* read a profile without its build scripts as cold
+- *(semver)* report the build's first error, not cargo's summary line
+- *(engine)* tell a stale build of the checkout to rebuild, not update
+- *(cli)* end quietly when the reader closes stdout
+- *(engine)* name and admit the engine repair rooted at the judged authority
+- *(handler)* run every hook handler from the declaring repository's root
+- enforce the three new mutation sources, and clear clippy over the bundle
+- *(hook)* collapse only the output of a call that ran the engine
+- *(recorder)* a row can refuse a result by path
+- *(check)* a policy finding's other subjects ride its line
+- *(policy)* claim mint absent selects its row by id and names it
+- *(durable)* name each temp by a per-process sequence, not the clock alone
+- *(test)* build the replay under the checkout's target, where the prune reaches it
+- *(prune)* declare the `build` root basis-moving
+- *(mutate)* shard the declared sweep beside the registered runner, off the ci job
+- *(mutate)* pass the runner's work directory by reference at its one caller
+- *(mutate)* install cargo-mutants in CI the way its publisher does, resolve it only where it runs
+- *(mutate)* pin cargo-mutants from crates.io, and keep the runner cases unix-only
+- *(stop)* restore the publisher filter a mutation run left in 38acade5
+- *(stop)* the filed-row rung scans over its selection, so registry equality no longer silences it
+- *(hook)* settle a filed row before the next edit, and find the Stop rung's row by what it publishes
+- [**breaking**] retire spawn count wrong, which refused splits and never bounded the fan-out it was filed for
+- clear clippy, and make CLOUD-2185's mutant and cases discriminate what the row says
+- *(hook)* a silent repair's record opens its window's legend like any first finding
+- *(hook)* a silent repair's record reaches the model, and a could-not-look lint says its gap once
+- clear clippy on the address change
+- *(drain)* no line is exempt from the budget, the first included
+- *(advisory)* an undeclared ceiling leaves the boundary's order alone
+- *(drain)* the told total is two counts, never a list of rules
+- clear verify after the replay onto main
+- *(cli)* a usage refusal carries no backtrace
+- clear verify on the gate-prose branch
+- *(hookcost)* a refusal is followed when the next call takes a route its own line printed
+- clippy, a history cap that starved long rows, engine update's toolchain, the probed rewrite
+- what the full suite caught on this branch's earlier commits
+- *(refusal)* the delivery-marks-on-emit mutant names a line rustfmt keeps whole
+- *(refusal)* once-per-window delivery is lazy, delivery-marked, atomic, with a legend
+- *(history)* a message the cap cut is not pointed at, and one too long to fit still lists its subject
+- *(verdict)* register the doc and history modules, and regenerate what the new field and flag move
+- *(hook)* the grant's rewrite stays inside run_hook's line budget, and the new tests pass clippy
+- *(mint)* run writer rows first, and let exclusive selectors share a prerequisite
+- *(mint)* refuse a prerequisite this call wrote, and return a claim a failed write could not spend
+- *(mint)* claim the prerequisite, judge it against the store before the call
+- *(mint)* spend the dispatch on its completion, and refuse what the review found
+- *(mint)* split the after check out of validate, and regenerate the surface
+- *(mutate)* a Kyverno case's verdict is a function of its set, and generated results are told apart by their shape
+
+### Other
+
+- *(sbom)* spell the binary source through git::canonical
+- *(mise)* sbom-binary-check goes back to its task-level bash
+- *(sbom)* pin the double-quoted rule id the Windows leg needs
+- *(rules)* rung -1's comments and cases say what the stem check does
+- *(rules)* the simplify pass over rung -1
+- *(doctor)* the command-program probe is a named predicate its arms can falsify
+- *(rules)* pin the wiring that hands rung -1 the running image
+- *(rules)* /simplify of the rung — one own-image predicate, less prose
+- *(rules)* rung -1 takes the image on its own arity, leaving the seam alone
+- *(rules)* the rung -1 case lends its fixture and ladder walk to helpers
+- *(release)* put committed_trunk in front of the CLI case that kills its mutants
+- *(release)* say pin_text keeps the branch from choosing its release, not its source build
+- *(release)* give the ref-pin mutant a line of its own
+- *(lint)* the distinctness helper is held by cases of its own
+- *(lint)* one distinctness check, and the token lookup takes its house name
+- *(lint)* main's newer cases keep their bodies under the typed id
+- *(scratch)* seed the reaper's corpse where no sibling process can reap it
+- *(release)* decide once, at the caller, whether an uncut release refuses
+- *(ci)* read the rehearsal's tracked paths NUL-separated
+- *(preset)* a mutant per noun-first clause, and a case named for what it reads
+- *(release)* one helper for the uncut-verify cases, and say why `uncut` is a function
+- *(ci)* rehearse only the release moves `bump` reproduces faithfully
+- *(ci)* rehearse all four release paths through the cut's own bump
+- *(release)* ask the existing absence read, once per path, and rehearse through the crate's own writers
+- *(release)* a tag read failed otherwise stays could-not-look
+- *(mutants)* the scripted dist runner matches a program by its stem (CLOUD-2509)
+- *(mutants)* close G3's historical cargo-mutants residue (CLOUD-2509)
+- *(mcp)* answer reachability without spending the credential
+- *(fixtures)* build every fixture repo hermetically
+- *(mcp)* declare the helper's exit-check mutant
+- *(engine)* the unreachable-release twins share their fixture
+- *(engine)* the hook's half of an unreachable release pin, on purpose
+- *(engine)* pin the hook's follow-error guard to the case that catches it
+- *(engine)* a failed release fetch falls through in one place
+- *(engine)* decide the hook's follow error once, at its caller
+- *(engine)* the second simplify pass over the handoff change
+- *(engine)* the simplify pass over the handoff change
+- *(prune)* a comment that named a cause measurement had refuted
+- *(disk-watch)* the stop guard's contract, asserted where it can fail fast
+- *(mutate)* a doc link in a line comment resolves to nothing, so say it plainly
+- *(engine)* the arm that builds a source pin is asserted from its own side
+- *(hook)* the follow resolves where it stood, and spawns where the payload is
+- *(perf)* the acquire arm reads the namer its own build obeys
+- *(engine)* the case asserted a code both readings return
+- *(engine)* the two gaps the sweep found, and the literal that hid one
+- *(hook)* the handoff is built where it is used
+- *(engine)* a second pass, and the fixtures stop copying 137 MiB five times
+- *(engine)* the boundary rule gets a name, and three copies collapse
+- *(engine)* the handoff's two inputs travel as one value
+- *(engine)* the handoff cases are unix, because their subject is
+- *(mutate)* parse $MUTANT_SHARD once, with one refusal
+- *(mutate)* one sorted shard order for shard_of and sweep_shard
+- *(mutate)* one row plan per shard, shard_of decides gate-level findings
+- *(deps)* keep the renovate carry cases' names, which test replay holds
+- *(deps)* share the renovate post-upgrade task reader across carries
+- *(deps)* compute the fuzz lock's stray pins in one pass
+- *(deps)* judge only registry crates in the fuzz lock comparison
+- *(board_check)* build the empty-clause case from the committed citation row
+- *(board_check)* pin the empty-clause guard beside the code, not in a preset suite
+- *(unsubscribe)* cite the scan's real path and both ways to escape it
+- *(rest)* match the 2xx range in posted and unlink the private fn
+- *(rest)* read a POST's status through posted and test its 2xx boundary
+- *(mutants)* state the real reasons in the Posted and unsubscribe comments
+- *(mutants)* apply the third simplify pass
+- *(mutants)* apply the second simplify pass
+- *(unsubscribe)* spend through a call so the network scan stays main's
+- *(land)* [**breaking**] keep abandon's signature and test its counting through abandon_with
+- *(pinned)* compile the session-start pin case on every target
+- *(land)* [**breaking**] hand abandon its forge so the cancellation count is tested
+- *(mutants)* wire the new declared rows into the census and settle verify's clippy findings
+- *(rest)* [**breaking**] a bodiless POST answers a Posted outcome rather than a bool
+- *(mutants)* a reject_prefix row alone is gated on the proven credential
+- *(pipeline)* [**breaking**] remove the durability predicate that could never refuse
+- *(pipeline)* set the durability removal aside, so it lands under the breaking-change commit that declares it
+- *(mutants)* the unsubscribe seam takes the clone's slug lazily, so its suite reads no clone
+- *(mutants)* a missing merged count fails, and launcher dumps are narrowed before printing
+- *(mutants)* apply simplify review — shared takes_value, reused fixtures, lighter suite declarations
+- *(mutants)* close the remaining G6 residue rows in lint, replay, rest, session, unsubscribe and board_check
+- *(mutants)* close G4/G6 residue rows in config, policy, provision, pinned, doctor and the long tail
+- *(collect)* retire the pinned process table, which main's real-orphan suite supersedes
+- *(journal)* pin a reading Windows' clock can hold
+- *(hook)* pin shell_absolute's host spellings on the leg that has them
+- *(hook)* say exactly what shell_absolute's case decides, and reflow PATHEXT's
+- *(git)* state each caller's off-unix answer instead of wrapping the bit
+- *(residue)* cover the triple's guard combinations and an orphan's negatives
+- *(residue)* apply review cleanups and kill collect.rs in-diff survivors
+- *(mutants)* fold cfg twins into one function and seam fsync, clock and drop
+- *(pinned)* the stamp fixtures name no consumer artifact
+- *(pinned)* /code-review — the edited-config case holds on a coarse-clock kernel
+- *(pinned)* /code-review — the stamped-hit case asserts the off-unix guard on the windows leg
+- *(pinned)* /simplify — a record's current stamps come from cache::stat_identity
+- *(pinned)* believe a toolchain record by its manifests' stat identity before re-hashing them
+- *(mutants)* the receipt case's message names the bound it checks
+- *(mutants)* keep the stop case's runtime cfg arm, which cfg-gated-test prefers
+- *(mutants)* the stop case is unix-only by attribute, not by an early return
+- *(mutants)* an unhung pack header, the base's own pause waiver, a fixed orphan stamp
+- *(lease)* [**breaking**] terms_from_environment reads through the caller's lookup
+- *(mutants)* an idempotent seed unguarded, one clean-tree read in measure
+- *(mutants)* kill an unstopped holder before failing
+- *(mutants)* bound the stop wait, isolate inherited env, quote stub paths
+- *(mutants)* a range of asks and an unnegated rest, so no mutant hangs
+- *(mutants)* review fixes over the residue seams
+- *(mutants)* restore guards in operator-free form, share test fixtures
+- *(mutants)* clippy over the residue seams and suites
+- *(mutants)* perf rows over stubbed instruments, acquire checks the build first
+- *(mutants)* stand-in transport, lease and mcp seams, forge and orphan suites
+- *(mutants)* close G1/G2 residue rows in hook, rules, task, cache, transcript, pack
+- *(rust)* scope MISE_LOCKFILE to the install steps, and check the lock after the suite
+- *(lock)* read the working-copy lock again
+- *(lock)* keep the inline spelling as a row, and give the doubled name its own
+- *(lock)* label each fixture spelling and add the near-miss key and the doubled name
+- *(lock)* the fixture shows the inline, renamed and near-miss spellings
+- *(lock)* name github-attestations wherever the lock records it, and show it
+- *(lock)* read attestation provenance from the parsed lock, every spelling
+- *(lock)* name each lock table that carries attestation provenance
+- *(mutate)* the sweep's safety rests on group membership, on both exits
+- *(mutate)* the sweep case claims only the miss it can see
+- *(mutate)* the survivor diagnostic signals nothing
+- *(mutate)* end only listed survivors, by matches no reused pid can make
+- *(mutate)* end only the job and its children, whatever ps answers
+- *(mutate)* end every survivor the listing names, and skip an unwritten pid
+- *(mutate)* probe and end the surviving job through the module's own spawn
+- *(mutate)* name what outlives the group kill when the suite's job survives
+- *(git)* /simplify — a repository without a commondir reads its config once
+- *(git)* /simplify — the memo holds the thread-local handle and its stamps whole
+- *(git)* open a repository once per thread while its config files are unchanged
+- *(git)* build the hunk fixture without format-collect
+- *(git)* pin unified_hunks' near-top header in its own module
+- *(release)* read a ruleset's rules in place, and point at owed
+- *(release)* G4 no longer runs --probe, so say what it does check
+- *(mutate)* print the in-diff hunks with gix-diff's unified printer
+- *(store)* the blocked-store case is its own, and says Windows reads it as absent
+- the watch wait keeps its exact count, and the clock census names its closure blind spot
+- only a local bound to a closure escapes the clock census, and the waits keep their margins
+- a closure is not a clock reading, and the new cases share their helpers
+- *(perf)* a refusal that closes stdin first is not a failed write
+- *(record)* an unknown family is refused before any config is read
+- *(recorder)* the declared-program case says off unix there is no sh
+- the new cases pass verify's gates and fail fast under their mutants
+- *(tokens)* keep Arm's public accessors and the case that pins them
+- *(exec)* the off-unix dead-code expectation excludes the test build
+- no new spawn, a premise checked before the signal, a budget boundary that discriminates
+- share the scratch and executable helpers in the new mutant cases
+- kill historical mutants in mutate and testing
+- kill historical mutants in mcp and collect
+- kill historical mutants in capture, store and the recorders
+- kill historical mutants in exec and drain
+- kill historical mutants in perf, tokens, budget and o200k
+- *(background)* kill the stale-bound and task-id charset survivors
+- read the declared forge without declaring one
+- say which half of the forge case another case can see
+- name the default the forge case expects
+- read the winning forge's list off its own field
+- declare a graded list the default cannot answer
+- pin the declared path to the default it reads
+- drop the forge case's order-dependent inequality
+- hold the declared-forge readers to whichever forge won
+- keep the replay fixture and environment out of the lint allowance
+- clear the gates over G6's sweep cases
+- hold claim's readiness to the ready lint's own answer
+- hold every repeatable flag to keeping each occurrence
+- kill the survivors the first measurement left
+- state each case's platform and keep its fixture undated
+- declare the one forge every case in the binary declares
+- keep the hot path's own spelling and share the test helpers
+- kill historical mutants in G6's ready and doctor modules
+- kill historical mutants in G6's board, hk, engine, surface, history and rest
+- kill historical mutants in G6's reclaim, lint, output, claim and verdict
+- kill historical mutants in G6's store and ledger modules
+- kill historical mutants in G6's small modules
+- *(rules)* name a non-NotFound spawn failure every platform produces
+- *(rules)* keep the non-executable spawn case to Unix
+- *(rules)* build the history queries once and append the fingerprint newline directly
+- satisfy clippy, the canonical spelling ceiling and the core vocabulary in the sweep cases
+- *(rules)* refuse an edge naming an undeclared register
+- *(rules)* kill the verification-run survivors in selectors, history dedup and the recorded partition
+- *(hook)* drop a read route no declared source resolves
+- *(hook)* fix vacuous protected-gate cases and remove two equivalent mutants
+- keep the exact census and ceiling derivation the review asked back
+- share the scratch fixture and tighten census reads in the sweep cases
+- *(hook)* kill sweep survivors in the shell parse walk
+- *(hook)* kill sweep survivors in verdict discard and interpreter grammar
+- *(hook)* kill precedence survivors in the receipt command walk
+- *(rules)* kill sweep survivors in ratchets, conservation, references and fact projections
+- *(hook)* kill sweep survivors in receipt keying and declared tables
+- *(hook)* kill sweep survivors in shell classification and protected operands
+- kill sweep survivors in hook policy gates and rules fact families
+- kill sweep survivors in rules validators, entry points and hook receipt selection
+- *(hook)* kill sweep survivors in policy accessors, native gates and edit spans
+- *(hook)* kill sweep survivors in host tables, decode and relativize
+- *(test)* finish the correction on the mutant's Rust twin
+- *(policy)* drop three figures and an attribution that do not hold
+- *(test)* package_manifest serves the no-version family, not the no-URL one
+- *(policy)* declare the mutation the array-blank case was standing in for
+- *(policy)* the blank case was named for the spelling it does not use
+- *(policy)* one home per claim in the arm E block
+- *(toolchain)* the fix-selection `depends` does not buy what the validator's does
+- *(policy)* reflow two comments, and stop the array `run` undercutting its own claim
+- *(policy)* correct four statements, and give the package builder the task body
+- *(policy)* declare the merge defect as a mutation, and record the tag-half gap
+- *(rules)* build NativeGate's expected token once
+- *(rules)* NativeGate's token parses back to its gate
+- *(verdict)* fold token_enum!'s @impl arm into the plain arm
+- *(verdict)* token_enum!'s serde arm delegates to the plain one
+- *(verdict)* assert_unique compares each token with the earlier ones
+- *(verdict)* show token_enum's duplicate guard can fail
+- *(verdict)* drop the runtime duplicate-token checks the build now makes
+- *(verdict)* one token_enum! macro serves every tokened enum
+- *(verdict)* declare each native class and native gate once
+- *(capture)* /simplify — the keeping seam is crate-private and borrows the row's digest
+- assert the unresolved captured root addresses another store
+- resolve the captured root on every platform, and scratch prune's missing path
+- hand reduce the unresolved root, and name prune's case for its platform
+- canonicalise the captured fixture's root and state the volume read off unix
+- name which gix ref edit needs an identity, in the fixture's comment
+- write the git fixture's refs as loose files, needing no identity
+- check the epoch entry against the contained root itself
+- check the epoch entry is contained, and say which platform pins the inode
+- skip a nameless remote before reading it, and share the fixture helpers
+- state the off-unix contract in place of two platform-gated cases
+- satisfy the gate: lints, consumer-neutral fixture names, a live hookcost row
+- rewrite the head-probe session in place, so only its first line differs
+- assert nothing on the clock and keep the blank-name remote out
+- state each off-unix outcome and drop the live free-space premise
+- pin the lease terms to the configured remote
+- pin the size bounds as spelled, the recheck pause and the session boundary
+- pin git's index divergence, signatures, worktrees and materialised trees
+- pin lease re-mints, successor slot, delta lengths and prune's executables
+- pin lease capabilities, pack kinds and the band-width refusal
+- pin git's upstream and a HEAD its remote carries
+- kill historical mutants in the task registry, the singleton lock, prune's reclaim and disk_watch
+- kill historical mutants across git's reads and lease's pure helpers
+- kill historical mutants in refusal, and drop parse_labelled's unreachable arm
+- kill historical mutants in journal and transcript, and pin captured's containment order
+- close the remaining unit-scope survivors in eleven G2 modules
+- kill historical mutants in cache, handler and lease's delta reader
+- kill historical mutants in ten small G2 modules
+- drop the released suite case no mutant needs
+- take the sourced record's clock from now_unix
+- name the sourced record uniquely rather than sweep for it
+- match the swept record's name with its delimiter
+- sweep the sourced record by name before and after its case
+- read the sourced record through the store it was located by
+- remove the sourced record even when its case fails
+- tighten the second sweep's cases after review
+- kill the remaining landed and sbom survivors
+- kill the landing and CI-signal mutants the second sweep found
+- kill the mutants the second sweep found surviving
+- drop interval_for cases the floor suite already pins
+- tighten the mutant-killing cases after review
+- kill historical mutants in the landing's records and pure readers
+- kill historical mutants in the check-run poll and the git writer
+- kill historical mutants in release state, receipts and producers
+- kill historical mutants in release, receipt and land
+- kill historical mutants in the forge, CI and trunk readers
+- *(g4)* drop the mediator case rather than narrow it to unix
+- *(g4)* cite only the issue on the unix-only mediator case
+- *(g4)* lift the unix-only gate on a fix, not a diagnosis
+- *(g4)* say why the mediator case is unix-only, correctly
+- *(g4)* name the Windows provisioning gap the unix-only case waits on
+- *(g4)* ask the mediator only where the runner provides one
+- *(g4)* leave the rules doc check's scope as it was
+- *(g4)* apply the code review of the simplify pass
+- *(g4)* apply the second simplify review
+- *(g4)* pin which trust bundle the host's tools read
+- *(g4)* satisfy clippy and keep a consumer's file name out of the core
+- *(g4)* pin a bytecode bundle's empty description and a helper's coverage
+- *(g4)* cover config's prune, parse-cache, text-memo and load-site survivors
+- *(g4)* cover the policy, config and lane-C survivors the lib tier still missed
+- *(g4)* contain the new state-store cases and correct three claims
+- *(g4)* apply the simplify review to the new cases
+- *(g4)* give the new filesystem fixtures a per-process directory
+- *(g4)* cover provision, preset, config and policy survivors
+- *(g4)* kill historical cargo-mutants survivors across config, policy and trust helpers
+- *(mutate)* one row binds the profile pin; the helper comment names no subset
+- *(mutate)* a second row drops the profile pin; the case claims only what it checks
+- *(mutate)* a row binds the profile pin to its case, which reads the last entry
+- *(mutate)* /simplify — nextest_profile parses the config with toml, not a line scan
+- *(mutate)* /simplify — the default nextest profile lives in suite_env, for both runners that run nextest
+- *(mutate)* judge LEAK and SLOW lines alone, so their misreadings cannot cancel
+- *(replay)* replay is back as main had it; mutate counts its own cases off the shared word list
+- *(replay)* one result-line parser returns the word and the case; each case is judged by its last attempt
+- *(replay)* one parser of a nextest result line, shared by replay and the mutate count
+- *(mutate)* /simplify — one list of nextest's status words, one group signal, one shard count
+- *(engine)* /simplify of CLOUD-2418's review fixes
+- *(engine)* /simplify of CLOUD-2418 after the rebase
+- *(engine)* second /simplify over CLOUD-2418
+- *(land)* pin each masked name, not one, as the dead end's confirmation (CLOUD-2189)
+- *(claim-race)* "only the unconfirmed one" is a count, and asserting the first line never checked it
+- *(claim-race)* two figures that never matched anything, and the count that made one of them
+- *(claim-race)* the mutation section was a heading rustdoc never saw
+- *(claim-race)* one spelling of collision, and the case that tells `any` from `first`
+- *(claim-race)* the predicate gets a case, and the fixture stops holding its invariant by string identity
+- *(claim-race)* the speculative case pins the read it names, not only the one it refuses
+- *(claim-race)* which commits speak for this branch is its own function
+- *(claim-race)* the unconfirmed mark goes on the row it qualifies
+- *(claim-race)* the unconfirmed mark is read off its own line, not the whole stream
+- *(claim-race)* the judge-first rationale argued from an invariant that stopped being true
+- *(claim-race)* the fixture-seam rule outlived its own census too
+- *(claim-race)* a conditional rule keeps where a census of call sites does not
+- *(claim-race)* each item owns its own summary, and the helper says what it converted
+- *(claim-race)* source 1 over one text gets a name, and the filter factors
+- *(claim-race)* the filter states one predicate, and the case asserts the fix rather than its ingredients
+- *(claim-race)* the skip's misjudgement runs both ways, and the worse way is a false refusal
+- *(claim-race)* the self read's two halves become the Option the module already spells
+- *(claim-race)* a missing self log inverts precedence rather than shortening the claim
+- *(claim-race)* the Internal exit buys less at the gate than the comment claimed
+- *(claim-race)* the case keeps its own rationale, the helper keeps the fixture's
+- *(claim-race)* the listing the concurrency case drives is its own function
+- *(claim-race)* the panic bound and the fixture seam both said less than they cost
+- *(claim-race)* a channel carries the answers, and the case reads the width it asserts
+- *(claim-race)* each fetch carries its destination, and the doc stops asserting a law
+- *(claim-race)* fetch the competitors' logs concurrently, bounded at eight
+- *(closes)* a cleared body supersedes a set, and the any-body selector has its mutant
+- *(ci)* the suite gate reads shell with the hooks' parser and calls with syn (CLOUD-2388)
+- *(land)* resolve the cancel's root once, for both arms
+- *(land)* [**breaking**] verify_raced names its stall terms
+- *(land)* anchor the entry-reconcile mutants on the guard
+- *(spec)* the task noun has five writers beside its two readers
+- *(land)* one lease reading; the entry asks it last; durable owns its temp mark
+- *(task)* write_entry is durable::replace, whose temp is already per writer
+- *(land)* reconcile inside the census window, docs follow the stall
+- *(land)* a verify stall is its own signal; the arms win one way; one abandon helper
+- *(stop)* word the dispatch excuse without the term source-name-other bans
+- *(stop)* read the land call's background flag through Field::RunInBackground
+- *(land)* a branch with no pull request owes its push nothing again
+- *(land)* the push asks its receipts with no forge read
+- *(test)* restore the link cases' cfg! early return off unix
+- *(hook)* run the link cases on Windows too, without an early return
+- *(test)* say the link cases' platform contract once, in the module doc
+- *(hook)* enter the dangling loop through an ungoverned link
+- *(hook)* state the link cases' platform contract inside each case
+- *(test)* park the session_drain link through common::link_dir
+- *(test)* make the portable link helpers common
+- *(hook)* run the link cases on every platform, not only unix
+- *(hook)* pin an absolute dangling target and a dangling loop
+- *(hook)* hold relative_to's pending tail as a reversed stack
+- *(hook)* say the tail replay's symlink invariant covers only its first component
+- *(hook)* replay a missing tail through receipt::lexically_normal
+- *(handler)* [**breaking**] a handler's subject is the tree, said by `tree_only` rather than a path regex
+- *(hook)* one version rule for interpreter membership and grammar
+- *(hook)* one decisive-option reading for both bundle walkers
+- *(hook)* one interpreter grammar for both readers of a program
+- *(preset)* the memory-write grant reads a consumer's pattern row
+- *(preset)* opa fmt over the memory-write arm
+- *(engine)* the fixture filters this build's target out of one platform list
+- *(engine)* the fixture's provision platforms are never this build's
+- *(engine)* --record clears on every run with no distance to give
+- *(engine)* the notice asks git whether HEAD is detached
+- *(engine)* the notice stamp reuses the one branch slug
+- *(engine)* the notice stamp is per branch, like the record it guards
+- *(engine)* one predicate decides when the notice looks again
+- *(engine)* the notice stamp carries its pin; one ahead-of-pin rule
+- *(engine)* one tag parser, one key reader, one manifest cache
+- *(land)* the one-look comment names the row that owns records
+- *(land)* the one-look comment names its mechanics and the rows that own the gap
+- *(land)* one look at an abandoned record, stated as the design
+- *(land)* one stat-line test builder; the keep rule said once
+- *(land)* the orphan predicate's reasons live once, beside it
+- *(land)* one /proc walk and one stamp reading behind the reap guard
+- *(land)* the reap guard reads collect's /proc parsers; the caller's group is the reaper's call
+- *(land)* the reap guard lives in a /proc leaf, not in exec
+- *(preset)* the host's adapter reports the background ceiling, not the core
+- long-run guidance matches the measured host and the tree
+- *(test)* session_drain's header names the transcript cases' platform contract
+- *(doctor)* one config resolution per `doctor session`
+- *(durable)* /code-review — the scratch helper fails where the fixture fails, and its doc claims only what the reaper does
+- *(durable)* /code-review — durable's cases take the crate's reaped scratch, not a /tmp directory per run
+- *(durable)* /code-review — create_empty's AlreadyExists is pinned in durable's own suite; the no-prune mutant keeps the mark
+- *(durable)* /simplify — create_empty returns the error, not a bool no caller reads
+- *(durable)* /simplify — the module doc points at open_handle rather than restating it
+- *(durable)* /simplify — the module doc names its third mutation, the handle opened for a lock or times
+- *(durable)* /code-review — the file-or-directory opener lives in durable, the crate's std::fs leaf, not a new unplaced module
+- *(handle)* /simplify — the file-or-directory handle lives in its own module, not in collect
+- *(cache)* /code-review — a refresh writes two times, and an own partition lacks a mark only when marking failed
+- *(cache)* /code-review — the bound case's off-unix note blames std, not Windows, and the mark step counts the list it walks
+- *(cache)* /code-review — the bound case says it tells the rankings apart on unix only, and counts creation once
+- *(cache)* /simplify — the step helper is `stepped`, not shadowed by a test's `at` closure
+- *(cache)* /simplify — one step-to-time helper, and the test ages directories through `touch`
+- *(cache)* /code-review — age the partition directories against their marks, so the directory-ranking mutant dies on any clock
+- *(cache)* /simplify — the mark is one `File::create_new`, and the directory shim says when it can go
+- *(cache)* /simplify — the use mark is written durably, and a partition that cannot be marked does not prune
+- *(doctor)* [**breaking**] the rule opts into counting, not the engine
+- *(red-head)* the job-log read names `return_content`, and `land push` keeps its doc
+- *(red-head)* one typed record for the fact and the landing
+- *(red-head)* one record path, a push-only lookup, and a reading passed whole
+- /simplify of #1189 — name the checks-green task, and a neutral suite comment
+- *(mcp)* the spawn rows name their own suite, and the failure reader has rows
+- *(ci)* read the suite's requirements through rust_sources and hold them to [tools] (CLOUD-2381)
+- *(ci)* gate suite-job tool installs, host libc and the Windows archiver locally (CLOUD-2381)
+- *(dist)* stage the archive dist's installer picks for this host (CLOUD-2297)
+- *(dist)* give the archive-name case its doc comment back (CLOUD-2297)
+- *(dist)* check the lock with cargo fetch and pin the MSI's WiX table (CLOUD-2297)
+- *(dist)* name dist's checksum and staging once, read its config once (CLOUD-2297)
+- *(dist)* one home for the MSI template and dist's file names (CLOUD-2297)
+- *(dist)* regenerate the CLI surface for --build-tool cargo-dist (CLOUD-2297)
+- *(dist)* run cargo-dist's generator in a scratch workspace (CLOUD-2297)
+- *(cache)* state the Windows ranking once, without claiming more than the filesystem keeps
+- /simplify — each input holds its own answers; the parse cache is switched by argument
+- /simplify — a partition in use is kept past the bound, the epoch retires from the state it already holds
+- /simplify — one VM per bundle per input, a stamp that names its file everywhere
+- simplify this branch's caches and memos per /simplify
+- perf(pinned): digest the toolchain manifest once per process
+- *(config)* read the authority once per process while it is unchanged
+- *(pinned)* digest the toolchain manifest once per process while nothing moved
+- *(hook)* one shared resolve per call, for the handler table too
+- *(policy)* key each bundle by the pattern table's digest, taken once per load
+- link mimalloc as the global allocator
+- *(policy)* serialise the pattern table and resolve the cache directory once per load
+- *(rules)* compile a glob's matcher at its first match, not at load
+- *(cli)* build the command tree in one move per node, without a backward search per row
+- *(hook)* build only the invoked verb's command subtree
+- *(hook)* policy load parses its data document once and builds no check-only tables
+- *(hook)* one authority decode per call, one input parse, BLAKE3 cache keys
+- *(hook)* tally the session transcript incrementally, not whole per call
+- *(hook)* evaluate each policy bundle once per call, not once per question
+- *(cache)* the epoch cache and the pinned key onto the shared construction
+- *(hook)* one cache module, and the validated authority cached on it
+- *(hook)* one config load per hook call, and no fsync on its per-call records
+- *(exec)* the forwarder count field states both release points
+- *(land)* the bet head comes from the replay, and the closure derives its ref
+- *(land)* a pushed bet is disarmed, not flagged
+- one marker path, one re-raise, one signal set
+- *(land)* the signal child fails when nobody spawned it, rather than passing over nothing
+- *(hook)* run_hook hands PostTool to its own function, so it fits its line budget
+- *(renovate)* Renovate carries an action's licence row in its own bump
+- *(rules)* NativeGate::ALL is every gate, and its tokens are the parser's
+- *(rules)* one native grade function, compared per gate by the weakening diff
+- *(hook)* each native gate's predicate is written once
+- *(mcp)* pin the failure marker to the last field
+- *(mcp)* one predicate names a failure record — is_exec_failure
+- *(mcp)* the ledger cases count launch records, not a refused exec's record
+- *(mcp)* the exec-failure row sits at column 0, above its impl
+- /simplify — optional target selectors, the spawn record carried to its failure
+- /simplify — one scope read per source, one provisioning site, a ledger record for a failed exec
+- *(mcp)* compose the provisioned-launch case's PATH with join_paths
+- *(mutate)* mutants build without debug info, and a later suite's rule is pinned
+- *(mutate)* build the targets fixture without an indented suite marker
+- *(mutate)* build only the test targets that cover a mutated file
+- *(exec)* the Reaper's doc passes doc_markdown
+- *(exec)* the Reaper's doc names the direct-child KILL and reap
+- *(review)* the existing cases keep main's `status` call; the owner admits two replayed bodies
+- *(census)* plan file loose owes a case; validate's subject columns are one helper
+- *(mint)* the optional-shape case names no consumer key; both stray rows stay
+- *(mint)* [**breaking**] a tight optional key_shape loads; a stray one on a branch row is refused
+- *(mint)* the named-row refusals read as their siblings, branch and blank cases included
+- *(mint)* a named row takes one subject source and a shape that compiles
+- *(ready)* one reading of a cutover, for all three ratchets
+- read the fact table in place; the prior-art doc names who decides presence
+- one reading of each claim, shape and fact set across the bundle
+- *(land)* the lap's ready case asserts at a fixed instant, not the clock
+- *(verify)* answer the base-test replay and four tree-pure hk steps from their receipts
+- a declared retiring set lets `bats` leave the roster while it still runs
+- *(mutate)* take mutation admission off until it runs fast locally first
+- *(mutate)* a sharded cargo-mutants run skips the baseline
+- *(collect)* read the host's own process table, step by step
+- *(merge)* carry origin/main into claude/admiring-shannon-zxyn81
+- *(mutate)* every changed row's case discriminates; a module's own test judges its row
+- *(action)* the action installs its ref's pin, the case its mutation row names
+- *(mutate)* the in-diff patch is written in process; a spawn is never admitted by its own reason
+- *(mutate)* a row is applied in process, and a runner-owned file names its runner
+- *(lease)* a lease is in exactly one state, decided once
+- *(forge)* a run's state is classified once, from both fields
+- *(git)* a landing fact carries its verdict, not a string and a bool
+- *(agents)* land is the one step after pushing
+- *(policy)* cache each mediated bundle as RVM bytecode
+- template-copy fixture repos; a cfg! guard, never a cfg attribute, on new cases
+- *(stream_input)* a tee that drops the host's bytes is caught
+- *(prune)* run the two POSIX-executable cases on unix only
+- *(mise)* retire the lap's reclaim step and the build's prune edge
+- *(engine)* the staleness decision takes BATTEN_ENGINE=local as an argument
+- *(hook)* bench the compile-time o200k table's cold start
+- *(hook)* time the o200k pre-tokenizer regex alone in hook-read-bench
+- *(hook)* bench bpe-openai's o200k load against tiktoken-rs
+- *(hook)* measure the longest o200k token in hook-read-bench
+- *(hook)* measure the o200k table load in hook-read-bench
+- *(hook)* bench reading a hook payload buffered vs streamed
+- *(capture)* run the --field cases on every platform
+- build the wiring fixture from the template, and let released read carried subjects
+- *(mutate)* scrub the sweep's selection from every case, and kill this branch's surviving mutants
+- *(replay)* replay every modified test in one nextest run, judged by its own result lines
+- build the Stop-rung case with init_repo, and pin the runner-absent case to a PATH without cargo-mutants
+- *(mutate)* clear clippy over the runner registry
+- *(mutate)* a whole sweep with a runner registered leaves that runner's rows alone
+- *(stop)* show the hook's stderr when the filed-row rung stays silent
+- *(mutate)* restore drain-cut-unreported on the line that now renders the cut
+- *(mutate)* four rows the touched-gate sweep proved dead now discriminate
+- *(refusal)* make every finding-grammar mutant row apply and die
+- *(refusal)* route every agent-facing writer through the finding grammar (wip)
+- *(config)* withhold the declared class docs until a release reads `doc`
+- *(mutate)* keep generate_sweep, so the two generating cases read as they did
+- *(mutate)* declare the fixture constants before the statements
+- *(mint)* hold the cross-row refusals in one helper
+- *(mutate)* baseline recordings for the hand-made Kyverno fixtures
+
 ## [0.0.216](https://github.com/button-inc/batten/compare/v0.0.215...v0.0.216) - 2026-10-13
 
 ### Fixed
