@@ -12,3 +12,10 @@ path=hook p50=18.87 p95=20.06 mean=18.95 runs=300
 path=passthrough p50=14.33 p95=15.75 mean=14.53 runs=300
 path=posttool p50=44.23 p95=45.51 mean=44.34 runs=300
 path=wired p50=21.5 p95=22.85 mean=21.6 runs=300
+metric=wall-clock runner=ubuntu-latest
+path=noop p50=4.09 p95=4.34 mean=4.15 runs=300
+path=check p50=6.39 p95=6.73 mean=6.41 runs=300
+path=hook p50=21.17 p95=21.83 mean=21.17 runs=300
+path=passthrough p50=16.47 p95=17.43 mean=16.53 runs=300
+path=posttool p50=48.2 p95=48.94 mean=48.25 runs=300
+path=wired p50=23.7 p95=24.24 mean=23.72 runs=300
