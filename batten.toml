@@ -11474,7 +11474,11 @@ select = ["commit.committer.date"]
 [[forge.query]]
 id = "release-due-latest"
 endpoint = "repos/{owner}/{repo}/releases"
-per_page = 1
+# TEN ROWS (CLOUD-2565): the list carries the cut's own DRAFT first, whose
+# `published_at` is null. The engine now skips a present null rather than
+# reading it as could-not-look, which held the debounce, and so `release-land`,
+# forever; ten rows reach the newest PUBLISHED release past it.
+per_page = 10
 max_pages = 1
 since = { field = "published_at", seconds = 86400 }
 select = ["published_at"]

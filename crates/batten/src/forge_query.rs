@@ -425,6 +425,7 @@ enum Encoding {
 // defect this split was written to close, and only a template carrying an
 // operator can see it.
 //MUTANT-SUITE crates/batten/src/forge_query.rs
+//MUTANT since-null-not-skipped|s@^            if field.row, &since.field..is_some_and.serde_json::Value::is_null. {$@            if false {@|a_null_instant_is_skipped_and_an_absent_one_is_still_could_not_look
 //MUTANT param-literal-unencoded|s@^        Encoding::Whole => encode(.out),$@        Encoding::Whole => out,@|binding_resolves_the_slug_the_inputs_and_encodes_every_value
 //MUTANT fan-out-member-untagged|s@^            map.insert(key.to_owned(), value.clone());$@@|a_fan_out_walks_each_recorded_member_and_tags_its_rows
 //MUTANT span-never-measured|s@^            map.insert(span.name.clone(), measured(row, span, now));$@@|a_fan_out_walks_each_recorded_member_and_tags_its_rows
@@ -685,6 +686,16 @@ fn compose(
             // misspelled `since.field` would otherwise drop every row and record
             // an empty window over a collection that was full — the vacuous pass
             // CLOUD-251 names, arriving from the declaration side.
+            //
+            // A PRESENT `null` is the one exception (CLOUD-2565): the field is
+            // spelled right and the row is not dated YET — a draft release's
+            // `published_at` — so it is outside the window, never a lost
+            // reading. Unconditional rather than a `since` key, because the
+            // pinned engine must still load this config, and an absent field
+            // keeps CLOUD-251's refusal.
+            if field(row, &since.field).is_some_and(serde_json::Value::is_null) {
+                continue;
+            }
             let Some(at) = dated(row, &since.field) else {
                 return Err(Refusal::CouldNotLook(format!(
                     "row {} carries no RFC 3339 instant at `{}`",
@@ -1581,6 +1592,54 @@ mod tests {
             "row\t{\"conclusion\":null,\"id\":1}\n\
              window\tstate=whole\tread=2\tkept=1\tsince=2026-08-29T10:39:00Z\n"
         );
+    }
+
+    #[test]
+    fn a_null_instant_is_skipped_and_an_absent_one_is_still_could_not_look() {
+        // CLOUD-2565: the release debounce read `/releases`, whose newest row was
+        // the cut's own DRAFT with `published_at: null`, and deadlocked on it.
+        let row = Query {
+            max_pages: 1,
+            since: Some(Since {
+                field: String::from("created_at"),
+                seconds: 60,
+                stop: false,
+            }),
+            ..query("repos/x/runs")
+        };
+        let draft_first = [
+            r#"{"total_count": 2, "workflow_runs": [{"id": 1, "created_at": null}, {"id": 2, "created_at": "2026-08-29T10:39:30Z"}]}"#,
+        ];
+        let asked = std::cell::RefCell::new(Vec::new());
+        let body = recorded(
+            produce(
+                &row,
+                &BTreeMap::new(),
+                None,
+                1_788_000_000,
+                &scratch("since-null-skipped"),
+                &served(&draft_first, &asked),
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            body,
+            "row\t{\"conclusion\":null,\"id\":2}\n\
+             window\tstate=whole\tread=2\tkept=1\tsince=2026-08-29T10:39:00Z\n"
+        );
+        // An ABSENT field (a misspelling) is still could-not-look.
+        let missing = [r#"{"workflow_runs": [{"id": 1, "created": "2026-08-29T10:39:30Z"}]}"#];
+        let asked = std::cell::RefCell::new(Vec::new());
+        let absent = produce(
+            &row,
+            &BTreeMap::new(),
+            None,
+            1_788_000_000,
+            &scratch("since-null-absent"),
+            &served(&missing, &asked),
+        )
+        .unwrap();
+        assert!(matches!(absent, Produced::CouldNotLook(_)), "{absent:?}");
     }
 
     #[test]
