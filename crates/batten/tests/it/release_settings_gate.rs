@@ -73,3 +73,37 @@ fn the_release_settings_gate_maps_its_violation_exit() {
         );
     }
 }
+
+/// No workflow finds a pull request through the SEARCH INDEX (CLOUD-2566).
+///
+/// `gh pr list --search` reads GitHub's search index, which lags a PR's
+/// creation by seconds. release-plz opened #1245 at 02:19:35 and its own pin
+/// step searched for it at 02:19:39, read nothing, and skipped the pin move, so
+/// the release PR refused its own config on every leg. The pull-request list
+/// without `--search` is read from the repository and is consistent on creation.
+#[test]
+fn no_workflow_finds_a_pull_request_through_the_search_index() {
+    let dir = common::at_root(".github/workflows");
+    let mut release_branch_lookups = 0;
+    for entry in std::fs::read_dir(&dir).expect("the workflows directory is readable") {
+        let path = entry.expect("a workflow entry is readable").path();
+        let text = std::fs::read_to_string(&path).expect("the workflow is readable");
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        for line in text
+            .lines()
+            .filter(|line| line.contains("gh pr list") && !line.trim_start().starts_with('#'))
+        {
+            assert!(
+                !line.contains("--search"),
+                "{name}: `gh pr list --search` reads the search index, which misses a PR opened seconds ago"
+            );
+            if name == "release-plz.yml" && line.contains("release-plz-") {
+                release_branch_lookups += 1;
+            }
+        }
+    }
+    assert_eq!(
+        release_branch_lookups, 1,
+        "release-plz.yml names the release PR's branch with one `gh pr list`; this case reads nothing without it"
+    );
+}

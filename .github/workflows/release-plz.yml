@@ -1,6 +1,7 @@
 name: release-plz
 #MUTANT-SUITE crates/batten/tests/it/release_settings_gate.rs
 #MUTANT settings-gate-maps-usage|s@--on 2=false -- mise run batten -- release settings@--on 1=false -- mise run batten -- release settings@|the_release_settings_gate_maps_its_violation_exit
+#MUTANT release-pr-found-by-search|s@gh pr list --state open --limit 100 --json headRefName@gh pr list --state open --search head:release-plz- --json headRefName@|no_workflow_finds_a_pull_request_through_the_search_index
 
 # workflow-shell: CLOUD-2063 the step count rises by the seven single-command
 # steps that move the engine pin onto the release PR; each is plain argv, and
@@ -671,10 +672,13 @@ jobs:
         id: release-branch
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
-        # `head:` matches a branch PREFIX. A fork's PR whose branch shares it names
-        # a branch origin does not have, so the fetch below refuses and nothing is
-        # pushed; no filter here needs a shell to spell.
-        run: mise run batten -- ci step --capture branch -- gh pr list --state open --search head:release-plz- --json headRefName --jq '.[0].headRefName // empty'
+        # THE PULL-REQUEST LIST, NEVER `--search` (CLOUD-2566): the search index
+        # lags a PR's creation by seconds, and this step runs seconds after
+        # `release-pr` opens one, so it read nothing for #1245 and the pin never
+        # moved. `startswith` matches a branch PREFIX. A fork's PR whose branch
+        # shares it names a branch origin does not have, so the fetch below
+        # refuses and nothing is pushed; no filter here needs a shell to spell.
+        run: mise run batten -- ci step --capture branch -- gh pr list --state open --limit 100 --json headRefName --jq '[.[].headRefName | select(startswith("release-plz-"))][0] // empty'
       - name: Fetch the release PR's head
         if: steps.release-branch.outputs.branch != ''
         env:
