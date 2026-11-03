@@ -1404,6 +1404,10 @@ impl WeakeningKind {
          reported could-not-look now records nothing graded and exits clean.";
     const MUTATE_GATE_REMOVED: &'static str = "An entry the base ref's `[mutate].gates` declared is gone, so `batten mutate` stops \
          holding that gate to a mutation its suite catches.";
+    const TASK_RELAUNCH_REMOVED: &'static str = "A task the base ref's `[task].relaunch` declared is gone, so a crash of it no longer \
+         refuses the Stop that would idle over the lost work.";
+    const TASK_LIFETIME_FLOOR_RAISED: &'static str = "`[task].min_lifetime_secs` rose while both refs relaunch a task, so a crash must have \
+         lived longer before it forces a relaunch.";
     const ADVISORY_CEILING_RAISED: &'static str =
         "The `[advisory]` channel ceiling rose, or stopped being declared.";
     const HOOK_OUTPUT_CEILING_RAISED: &'static str =
@@ -1504,6 +1508,8 @@ impl WeakeningKind {
             WeakeningKind::ForgeCredentialsRemoved => Self::FORGE_CREDENTIALS_REMOVED,
             WeakeningKind::ForgeNothingGradedWidened => Self::FORGE_NOTHING_GRADED_WIDENED,
             WeakeningKind::MutateGateRemoved => Self::MUTATE_GATE_REMOVED,
+            WeakeningKind::TaskRelaunchRemoved => Self::TASK_RELAUNCH_REMOVED,
+            WeakeningKind::TaskLifetimeFloorRaised => Self::TASK_LIFETIME_FLOOR_RAISED,
             WeakeningKind::AdvisoryCeilingRaised => Self::ADVISORY_CEILING_RAISED,
             WeakeningKind::HookOutputCeilingRaised => Self::HOOK_OUTPUT_CEILING_RAISED,
             WeakeningKind::HookRepeatsRaised => Self::HOOK_REPEATS_RAISED,
