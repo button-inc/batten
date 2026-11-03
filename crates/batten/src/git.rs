@@ -4002,8 +4002,10 @@ fn patch_id_index(
 /// bump — the key already carries the running binary.
 const IDENTITY_MEMO_FORMAT: &str = "patch-identity-memo-1";
 
-/// The most commits an [`IdentityMemo`] keeps. Past it, a landing's save keeps
-/// only the commits it asked about, so the entry stays the size of one window.
+/// The most commits an [`IdentityMemo`] keeps after a landing. Past it, a
+/// landing's save keeps only the commits it asked about, which is one window.
+/// A replay's save never prunes, so replays alone can carry the entry past
+/// this until the next landing cuts it back.
 const IDENTITY_MEMO_BOUND: usize = 20_000;
 
 /// Each commit's patch identity, remembered across processes (CLOUD-1480).
