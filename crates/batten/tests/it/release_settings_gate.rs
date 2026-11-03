@@ -16,14 +16,24 @@
 
 use crate::common;
 
+/// Every committed workflow as `(file name, text)`.
+fn workflows() -> Vec<(String, String)> {
+    let dir = common::at_root(".github/workflows");
+    std::fs::read_dir(&dir)
+        .expect("the workflows directory is readable")
+        .map(|entry| {
+            let path = entry.expect("a workflow entry is readable").path();
+            let text = std::fs::read_to_string(&path).expect("the workflow is readable");
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            (name, text)
+        })
+        .collect()
+}
+
 /// Every `(workflow, verb, --on pairs)` for a `ci step` wrapping `batten release`.
 fn tables() -> Vec<(String, String, Vec<String>)> {
-    let dir = common::at_root(".github/workflows");
     let mut found = Vec::new();
-    for entry in std::fs::read_dir(&dir).expect("the workflows directory is readable") {
-        let path = entry.expect("a workflow entry is readable").path();
-        let text = std::fs::read_to_string(&path).expect("the workflow is readable");
-        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+    for (name, text) in workflows() {
         for line in text.lines().filter(|line| line.contains("ci step")) {
             let words: Vec<&str> = line.split_whitespace().collect();
             // `batten -- release <verb>` through mise, or `batten release <verb>`.
@@ -83,12 +93,8 @@ fn the_release_settings_gate_maps_its_violation_exit() {
 /// without `--search` is read from the repository and is consistent on creation.
 #[test]
 fn no_workflow_finds_a_pull_request_through_the_search_index() {
-    let dir = common::at_root(".github/workflows");
     let mut release_branch_lookups = 0;
-    for entry in std::fs::read_dir(&dir).expect("the workflows directory is readable") {
-        let path = entry.expect("a workflow entry is readable").path();
-        let text = std::fs::read_to_string(&path).expect("the workflow is readable");
-        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+    for (name, text) in workflows() {
         for line in text
             .lines()
             .filter(|line| line.contains("gh pr list") && !line.trim_start().starts_with('#'))
