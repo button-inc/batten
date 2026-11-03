@@ -559,17 +559,19 @@ fn sequence(pieces: &[Piece], at: &mut usize) -> Option<Vec<String>> {
                     *at += 1;
                     let mut branches = sequence(pieces, at)?;
                     let mut has_else = false;
-                    while let Some(Piece::Tag(tag)) = pieces.get(*at) {
-                        match tag.as_str() {
-                            "elif" | "else" => {
+                    loop {
+                        match pieces.get(*at) {
+                            Some(Piece::Tag(tag)) if tag == "elif" || tag == "else" => {
                                 has_else |= tag == "else";
                                 *at += 1;
                                 branches.extend(sequence(pieces, at)?);
                             }
-                            "endif" => {
+                            Some(Piece::Tag(tag)) if tag == "endif" => {
                                 *at += 1;
                                 break;
                             }
+                            // An `if` its text never closes, or one an
+                            // `endfor` closes, is a template no renderer reads.
                             _ => return None,
                         }
                     }
@@ -581,9 +583,10 @@ fn sequence(pieces: &[Piece], at: &mut usize) -> Option<Vec<String>> {
                 "for" => {
                     *at += 1;
                     let body = sequence(pieces, at)?;
-                    if matches!(pieces.get(*at), Some(Piece::Tag(tag)) if tag == "endfor") {
-                        *at += 1;
+                    if !matches!(pieces.get(*at), Some(Piece::Tag(tag)) if tag == "endfor") {
+                        return None;
                     }
+                    *at += 1;
                     body
                 }
                 _ => {
@@ -952,6 +955,13 @@ fn command_facts(words: &[String], stdin: &[String]) -> (bool, Vec<String>) {
 /// target/distrib/batten-installer.sh`), which runs no case, whatever an
 /// earlier local build left at that path.
 fn script_facts(path: &str) -> (bool, Vec<String>) {
+    with_script(path, suite_facts).unwrap_or_default()
+}
+
+/// `read` over a script file's text when git tracks it; `None` when it does
+/// not, or is already being read (a script that runs itself), which is nothing
+/// a census can read further.
+fn with_script<T>(path: &str, read: impl FnOnce(&str) -> T) -> Option<T> {
     static TRACKED: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
     thread_local! {
         static READING: std::cell::RefCell<BTreeSet<String>> = const {
@@ -971,12 +981,13 @@ fn script_facts(path: &str) -> (bool, Vec<String>) {
     if !tracked.contains(relative)
         || !READING.with(|reading| reading.borrow_mut().insert(relative.to_owned()))
     {
-        return (false, Vec::new());
+        return None;
     }
-    let facts = std::fs::read_to_string(root.join(relative))
-        .map_or_else(|_| (false, Vec::new()), |text| suite_facts(&text));
+    let found = std::fs::read_to_string(root.join(relative))
+        .ok()
+        .map(|text| read(&text));
     READING.with(|reading| reading.borrow_mut().remove(relative));
-    facts
+    found
 }
 
 /// The programs a `run` text spawns, each by its file name, and the mise tasks
@@ -1001,22 +1012,44 @@ fn spawned_programs(run: &str) -> Option<(BTreeSet<String>, Vec<String>)> {
                 let Some(program) = batten::testing::effective_program(&words[start..]) else {
                     continue;
                 };
+                // The shell's own word, as the hooks normalise it: a grouping
+                // `(` or `{` is not part of the program's name.
                 if matches!(program.as_str(), "bash" | "sh")
-                    && let Some(shell) = (start..words.len())
-                        .find(|&at| words[at].rsplit('/').next() == Some(program.as_str()))
+                    && let Some(shell) = (start..words.len()).find(|&at| {
+                        let word = words[at].trim_start_matches(['(', '{']);
+                        word.rsplit('/').next() == Some(program.as_str())
+                    })
                 {
-                    let texts: Vec<&str> = match shell_input(&words, shell) {
-                        ShellInput::Inline(script) => vec![script],
-                        ShellInput::File(_) => Vec::new(),
-                        ShellInput::Stdin => stdin.iter().map(String::as_str).collect(),
-                    };
-                    for text in texts {
-                        let (more, also) = spawned_programs(text)?;
+                    let found: Vec<Option<(BTreeSet<String>, Vec<String>)>> =
+                        match shell_input(&words, shell) {
+                            ShellInput::Inline(script) => vec![spawned_programs(script)],
+                            ShellInput::File(file) => {
+                                with_script(file, spawned_programs).into_iter().collect()
+                            }
+                            ShellInput::Stdin => {
+                                stdin.iter().map(|text| spawned_programs(text)).collect()
+                            }
+                        };
+                    for (more, also) in found.into_iter().collect::<Option<Vec<_>>>()? {
                         programs.extend(more);
                         tasks.extend(also);
                     }
                 }
                 programs.insert(program);
+            }
+            // A tracked script, run by its path or as a shell's operand, spawns
+            // what its text does; it is read under the guard that stops a
+            // script that runs itself.
+            for word in words.iter().filter(|word| {
+                Path::new(word.as_str())
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("sh"))
+            }) {
+                if let Some(found) = with_script(word, spawned_programs) {
+                    let (more, also) = found?;
+                    programs.extend(more);
+                    tasks.extend(also);
+                }
             }
         }
     }
@@ -1559,11 +1592,14 @@ fn a_config_row_s_programs_are_read_through_its_tasks() {
     let config: toml::Value = toml::from_str(
         "[[hook.handler]]\nrun = [\"mise\", \"run\", \"u\"]\n\n\
          [[rule]]\ncheck = \"mise exec -- gh --version\"\n\n\
-         [[rule.tools]]\nrun = [\"pkl\", \"eval\", \"x\"]\n",
+         [[rule.tools]]\nrun = [\"pkl\", \"eval\", \"x\"]\n\n\
+         [[rule]]\ncheck = \"(sh -c 'zz-grouped --x')\"\n\n\
+         [[rule]]\ncheck = \"bash .claude/hooks/git-hook.sh\"\n",
     )
     .unwrap();
     let programs = config_programs(&config, &manifest);
-    for program in ["zz-tool", "gh", "pkl"] {
+    // `hk` is what the tracked git hook runs, through `mise exec`.
+    for program in ["zz-tool", "gh", "pkl", "zz-grouped", "hk"] {
         assert!(programs.contains(program), "{program}: {programs:?}");
     }
 }
@@ -1646,8 +1682,11 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "ci step --summary --no-run -- cargo nextest run --workspace",
         "cargo run --package=batten -- step run x -- cargo run --package=batten -- mutate sweep",
         "bash -o pipefail -c \"cargo nextest run --workspace\"",
-        // A closing tag with no group to close is unreadable.
+        // A closing tag with no group to close, or a group never closed, is
+        // unreadable.
         "{% endif %}mise run lint",
+        "{% if x %}mise run lint",
+        "{% for x in y %}mise run lint",
     ] {
         assert!(runs_suite(run, &suite), "{run}");
     }
