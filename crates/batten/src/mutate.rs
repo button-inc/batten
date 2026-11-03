@@ -1285,7 +1285,7 @@ impl RunnerKind {
 //MUTANT retries-unpinned|s@^    "--retries=0",$@    "--retries=3",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
 //MUTANT default-filter-kept|s@^    "--ignore-default-filter",$@    "--color=never",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
 //MUTANT status-level-unpinned|s@^    "--status-level=pass",$@    "--status-level=fail",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
-//MUTANT nextest-unprobed|s@^    let nextest_absent = mine.iter().any(runs_nextest) \&\& !cargo_answers(root, "nextest", None);$@    let nextest_absent = false;@|a_declared_cargo_row_without_nextest_reads_one_runner_absent
+//MUTANT nextest-unprobed|s@^    let absent = mine.iter().any(runs_nextest) \&\& !cargo_answers(root, "nextest", None);$@    let absent = false;@|a_declared_cargo_row_without_nextest_reads_one_runner_absent
 //MUTANT malformed-shard-unrefused|s@^    parse_shard(shard).ok_or_else(\x7c\x7c format!("{SHARD}={shard} is not `k/n` with 0 <= k < n"))$@    Ok(parse_shard(shard).unwrap_or((0, 1)))@|a_malformed_shard_is_refused_before_the_registered_runner
 //MUTANT declared-profile-dropped|s@^    if let Some(profile) = declared_profile(staged, std::env::var("NEXTEST_PROFILE").ok()) {$@    if let Some(profile) = None::<String> {@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
 /// Which registered runner owns which sources.
@@ -4389,6 +4389,30 @@ fn gate_stopped(root: &Path, gate: &Gate) -> Option<Verdict> {
     gate.rows.is_empty().then_some(Verdict::NoMutantDeclared)
 }
 
+/// One shard's rows of one gate, as [`sweep_shard`] numbers them.
+type ShardRow<'a> = (&'a String, &'a Gate, &'a Row);
+
+/// `mine` less the rows that run under nextest where `cargo nextest` does not
+/// answer, and whether it did not.
+///
+/// ONE `runner-absent` FOR A CONSUMER WITHOUT NEXTEST (CLOUD-2466 item 4),
+/// probed once before anything is staged, where every Cargo row used to read
+/// `suite-did-not-run` on its own. Those rows are not judged; the rest are. A
+/// row its own module judges in process needs no nextest.
+fn without_absent_nextest<'a>(root: &Path, mine: Vec<ShardRow<'a>>) -> (Vec<ShardRow<'a>>, bool) {
+    let runs_nextest = |(_, gate, row): &ShardRow<'_>| {
+        !declares_own_case(root, row) && matches!(gate.suite_for(row), Some(Suite::Cargo { .. }))
+    };
+    let absent = mine.iter().any(runs_nextest) && !cargo_answers(root, "nextest", None);
+    if !absent {
+        return (mine, false);
+    }
+    (
+        mine.into_iter().filter(|row| !runs_nextest(row)).collect(),
+        true,
+    )
+}
+
 /// [`sweep_owned`] over one parsed `$MUTANT_SHARD`'s slice ([`shard_parsed`]):
 /// the declared rows [`shard_owns_row`] gives it, and the gate-level findings
 /// of the gates `by_shard` gives it. `None` is every row and every gate.
@@ -4444,18 +4468,7 @@ pub fn sweep_shard(
         .filter(|(number, _)| shard_owns_row(*number, shard))
         .map(|(_, row)| row)
         .collect();
-    // ONE `runner-absent` FOR A CONSUMER WITHOUT NEXTEST (CLOUD-2466 item 4),
-    // probed once before anything is staged, where every Cargo row used to read
-    // `suite-did-not-run` on its own. Those rows are not judged; the rest are.
-    let runs_nextest = |(_, gate, row): &(&String, &Gate, &Row)| {
-        !declares_own_case(root, row) && matches!(gate.suite_for(row), Some(Suite::Cargo { .. }))
-    };
-    let nextest_absent = mine.iter().any(runs_nextest) && !cargo_answers(root, "nextest", None);
-    let mine: Vec<_> = if nextest_absent {
-        mine.into_iter().filter(|row| !runs_nextest(row)).collect()
-    } else {
-        mine
-    };
+    let (mine, nextest_absent) = without_absent_nextest(root, mine);
     // The gates holding a row of this shard's: only they can owe it a build.
     let mut holding: Vec<String> = mine.iter().map(|(name, _, _)| (*name).clone()).collect();
     holding.dedup();
