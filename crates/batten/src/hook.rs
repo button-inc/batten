@@ -6753,7 +6753,7 @@ const IMPLICIT_FIND_START: &[&str] = &["./"];
 /// list. With no start point at all, `find` searches `.`, so the answer is
 /// [`IMPLICIT_FIND_START`] rather than nothing. `operands` carry no redirection
 /// ([`SegmentLine::redirections`]).
-//MUTANT redirection-read-as-operand|s@^        let arguments = tokens.len\(\) - line.redirections;$@        let arguments = tokens.len();@|the_three_allow_clauses_survive_the_per_line_walk
+//MUTANT redirection-read-as-operand|s@^        let arguments = tokens.len.. - line.redirections;$@        let arguments = tokens.len();@|the_three_allow_clauses_survive_the_per_line_walk
 //MUTANT find-expression-read-as-target|s@^    &rest\[\.\.end\]$@    rest@|a_find_expression_operand_is_never_a_target
 //MUTANT find-implicit-start-unread|s@^        return IMPLICIT_FIND_START;$@        return \&rest[..0];@|a_find_expression_operand_is_never_a_target
 //MUTANT find-informational-run-searched|s@^    if end == 0 && searches_cwd .$@    if end == 0 {@|a_find_expression_operand_is_never_a_target
