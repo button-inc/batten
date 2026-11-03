@@ -89,8 +89,7 @@ fn workflow(file: &str) -> String {
     workflows()
         .into_iter()
         .find(|(name, _)| name == file)
-        .map(|(_, text)| text)
-        .unwrap_or_else(|| panic!("{file} is committed"))
+        .map_or_else(|| panic!("{file} is committed"), |(_, text)| text)
 }
 
 /// The lines of the job whose body contains `marker`: from its two-space-indented
