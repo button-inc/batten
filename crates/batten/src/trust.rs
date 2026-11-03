@@ -1127,6 +1127,12 @@ pub enum WeakeningKind {
     /// to apply, which is a tightening. Appended, for the `Ord` reason its
     /// neighbours give.
     LeaseEntryGateRemoved,
+    /// `[lease] census` went from `true` to `false` (CLOUD-2387), so a landing
+    /// stops writing its beat and its chosen stop, and the reclaim census can no
+    /// longer tell a stop a holder chose from a container that died under it
+    /// (CLOUD-451, CLOUD-491). Turning it on is the census starting to apply.
+    /// Appended, for the `Ord` reason its neighbours give.
+    LeaseCensusDisabled,
 }
 
 impl WeakeningKind {
@@ -1174,6 +1180,7 @@ impl WeakeningKind {
         WeakeningKind::CiLinearHistoryDropped,
         WeakeningKind::LeaseBodyGateRemoved,
         WeakeningKind::LeaseEntryGateRemoved,
+        WeakeningKind::LeaseCensusDisabled,
         WeakeningKind::AttributionDenyRemoved,
         WeakeningKind::AttributionAllowAdded,
         WeakeningKind::DefectsLedgerRemoved,
@@ -1277,6 +1284,7 @@ impl WeakeningKind {
             WeakeningKind::CiLinearHistoryDropped => "ci-linear-history-dropped",
             WeakeningKind::LeaseBodyGateRemoved => "lease-body-gate-removed",
             WeakeningKind::LeaseEntryGateRemoved => "lease-entry-gate-removed",
+            WeakeningKind::LeaseCensusDisabled => "lease-census-disabled",
             WeakeningKind::AttributionDenyRemoved => "attribution-deny-removed",
             WeakeningKind::AttributionAllowAdded => "attribution-allow-added",
             WeakeningKind::DefectsLedgerRemoved => "defects-ledger-removed",
@@ -1415,6 +1423,8 @@ impl WeakeningKind {
          body one gate fewer before it readies.";
     const LEASE_ENTRY_GATE_REMOVED: &'static str = "`[lease.unsubscribed]` is gone or changed, so a landing no longer asks the entry gate \
          the base declared before its first lap.";
+    const LEASE_CENSUS_DISABLED: &'static str = "`[lease] census` went off, so a landing stops writing its beat and its chosen stop, and \
+         the reclaim census cannot tell a chosen stop from a container that died.";
     const CI_LINEAR_HISTORY_DROPPED: &'static str = "`ci.required_linear_history` was turned off, so `land linear` stops counting the merge \
          commits a branch carries.";
     const ATTRIBUTION_DENY_REMOVED: &'static str = "A pattern is gone from one of `[attribution]`'s deny lists, so a spelling it refused is \
@@ -1532,6 +1542,7 @@ impl WeakeningKind {
             WeakeningKind::CiLinearHistoryDropped => Self::CI_LINEAR_HISTORY_DROPPED,
             WeakeningKind::LeaseBodyGateRemoved => Self::LEASE_BODY_GATE_REMOVED,
             WeakeningKind::LeaseEntryGateRemoved => Self::LEASE_ENTRY_GATE_REMOVED,
+            WeakeningKind::LeaseCensusDisabled => Self::LEASE_CENSUS_DISABLED,
             WeakeningKind::AttributionDenyRemoved => Self::ATTRIBUTION_DENY_REMOVED,
             WeakeningKind::AttributionAllowAdded => Self::ATTRIBUTION_ALLOW_ADDED,
             WeakeningKind::DefectsLedgerRemoved => Self::DEFECTS_LEDGER_REMOVED,
@@ -1716,6 +1727,7 @@ pub const CENSUS: &[FieldCoverage] = &[
             WeakeningKind::FastForwardLaneAdded,
             WeakeningKind::LeaseBodyGateRemoved,
             WeakeningKind::LeaseEntryGateRemoved,
+            WeakeningKind::LeaseCensusDisabled,
         ]),
     },
     FieldCoverage {
@@ -3378,27 +3390,30 @@ fn lease_gate_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         &lease_entry_gate(working),
         "lease.unsubscribed",
     ));
+    let census = |config: &Config| config.lease.as_ref().is_some_and(|lease| lease.census);
+    if census(base) && !census(working) {
+        found.push(Weakening::new(
+            WeakeningKind::LeaseCensusDisabled,
+            "lease.census",
+            "true",
+            "false",
+        ));
+    }
     found
 }
 
-/// The `[[lease.body_gate]]` rows, each spelled whole as `derive → rule` with
-/// its inputs, so a changed row compares as a removed one.
+/// The `[[lease.body_gate]]` rows, each spelled whole as `derive inputs → rule`
+/// with every field quoted, so a changed row compares as a removed one and no
+/// field's text can move into its neighbour and spell the same key.
 fn lease_body_gates(config: &Config) -> Vec<String> {
     config.lease.as_ref().map_or_else(Vec::new, |lease| {
         lease
             .body_gate
             .iter()
             .map(|gate| {
-                let inputs: Vec<String> = gate
-                    .inputs
-                    .iter()
-                    .map(|(key, value)| format!("{key}={value}"))
-                    .collect();
                 format!(
-                    "{} [{}] \u{2192} {}",
-                    gate.derive,
-                    inputs.join(" "),
-                    gate.rule
+                    "{:?} {:?} \u{2192} {:?}",
+                    gate.derive, gate.inputs, gate.rule
                 )
             })
             .collect()
@@ -3410,21 +3425,20 @@ fn lease_body_gates(config: &Config) -> Vec<String> {
 /// EVERY FIELD, because every field decides the gate: the drop mints the
 /// receipt the decision reads whenever its endpoint answers `200` with a body,
 /// so the endpoint, tool, arguments and credential move the verdict as surely
-/// as the rule does. An unset optional field is spelled `-`.
+/// as the rule does. Every field is quoted, so none can spell another's text.
 fn lease_entry_gate(config: &Config) -> Vec<String> {
     config
         .lease
         .as_ref()
         .and_then(|lease| lease.unsubscribed.as_ref())
         .map_or_else(Vec::new, |gate| {
-            let or_dash = |field: &Option<String>| field.clone().unwrap_or_else(|| "-".to_owned());
             vec![format!(
-                "{} {} {} {} {} {} \u{2192} {}",
+                "{:?} {:?} {:?} {:?} {:?} {:?} \u{2192} {:?}",
                 gate.session_env,
-                or_dash(&gate.token_env),
-                or_dash(&gate.endpoint),
-                or_dash(&gate.tool),
-                or_dash(&gate.arguments),
+                gate.token_env,
+                gate.endpoint,
+                gate.tool,
+                gate.arguments,
                 gate.family,
                 gate.rule
             )]
@@ -5645,7 +5659,7 @@ mod tests {
             weakenings(&base, &dropped),
             vec![Weakening::new(
                 WeakeningKind::LeaseBodyGateRemoved,
-                "lease.body_gate[closing-key [base=origin/main] \u{2192} r]",
+                "lease.body_gate[\"closing-key\" {\"base\": \"origin/main\"} \u{2192} \"r\"]",
                 "present",
                 "absent",
             )]
@@ -5687,7 +5701,7 @@ mod tests {
             weakenings(&base, &gone),
             vec![Weakening::new(
                 WeakeningKind::LeaseEntryGateRemoved,
-                "lease.unsubscribed[S - https://a - - pr-unsubscribed \u{2192} r]",
+                "lease.unsubscribed[\"S\" None Some(\"https://a\") None None \"pr-unsubscribed\" \u{2192} \"r\"]",
                 "present",
                 "absent",
             )]
@@ -5709,6 +5723,45 @@ mod tests {
             "an endpoint that answers 200 passes the gate, so moving it weakens"
         );
         assert!(weakenings(&gone, &base).is_empty());
+    }
+
+    /// Two different input sets never spell one key: a value carrying the text
+    /// of a second input is its own row, so replacing two inputs with one that
+    /// reads like both is a removal (code review of #1248).
+    #[test]
+    fn a_body_gate_key_cannot_be_spelled_by_another_row() {
+        let base = config(
+            "[[lease.body_gate]]\nderive = \"d\"\ninputs = { a = \"x\", b = \"y\" }\nrule = \"r\"\n",
+        );
+        let working = config(
+            "[[lease.body_gate]]\nderive = \"d\"\ninputs = { a = \"x b=y\" }\nrule = \"r\"\n",
+        );
+        assert_eq!(
+            weakenings(&base, &working)
+                .iter()
+                .map(|found| found.kind)
+                .collect::<Vec<_>>(),
+            vec![WeakeningKind::LeaseBodyGateRemoved]
+        );
+    }
+
+    /// Turning the census off weakens; turning it on, or leaving it off, does
+    /// not.
+    #[test]
+    fn turning_the_census_off_is_a_weakening_and_on_is_not() {
+        let on = config("[lease]\ncensus = true\n");
+        let off = config("[lease]\ncensus = false\n");
+        assert_eq!(
+            weakenings(&on, &off),
+            vec![Weakening::new(
+                WeakeningKind::LeaseCensusDisabled,
+                "lease.census",
+                "true",
+                "false",
+            )]
+        );
+        assert!(weakenings(&off, &on).is_empty());
+        assert!(weakenings(&off, &config("")).is_empty());
     }
 
     /// Dropping a required check shrinks the evidence `verified` demands.

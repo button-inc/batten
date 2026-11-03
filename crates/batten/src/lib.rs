@@ -12285,7 +12285,7 @@ fn run_land_lap(
     // singleton, because the census store is this worktree's and the singleton is
     // what makes this the one landing in it: a second land refused above wrote
     // nothing, so it cannot mask a live one.
-    let census = census_kept(root);
+    let census = census_kept(root, deciding.overrides);
     let run = Laps {
         root,
         url,
@@ -14982,16 +14982,26 @@ fn lease_config(root: &Path, overrides: &resolve::Overrides) -> Option<config::L
     // again, by the third route this function's own doc records.
     //
     // Only where `--config-in` names none: that flag is the runner's answer and
-    // it must keep winning, which is the paragraph above.
+    // it must keep winning, which is the paragraph above. Both halves live in
+    // `lease_declared`, which this folds.
+    lease_declared(root, overrides).ok().flatten()
+}
+
+/// [`lease_config`] without the fold: `Err` is could-not-look and `Ok(None)` a
+/// config that loaded and declares no `[lease]`.
+///
+/// THE LANDING'S GATES NEED THE TWO APART (code review of #1248). Folded, a
+/// `batten.toml` that will not load reads as one declaring no gates, which is
+/// the undeclared-is-a-pass arm — so every declared gate went silently unasked
+/// over a broken config, where the spawned gates it replaced had refused.
+fn lease_declared(root: &Path, overrides: &resolve::Overrides) -> Result<Option<config::Lease>> {
     let anchored = if overrides.config_in.is_some() {
         root.to_path_buf()
     } else {
         crate::git::worktree_root(root).unwrap_or_else(|_| root.to_path_buf())
     };
     let site = config::authority_site(&anchored, overrides.config_in.as_deref().map(Path::new));
-    config::load_site(&site)
-        .ok()
-        .and_then(|(loaded, _)| loaded.lease)
+    config::load_site(&site).map(|(loaded, _)| loaded.lease)
 }
 
 /// The staleness reading, over the declared landing paths.
@@ -15165,9 +15175,15 @@ fn run_land_ready(
         Ok(pr) => pr,
         Err(code) => return Ok(code),
     };
-    let gates = lease_config(root, deciding.overrides)
-        .map(|lease| lease.body_gate)
-        .unwrap_or_default();
+    let Ok(lease) = lease_declared(root, deciding.overrides) else {
+        writeln!(
+            err,
+            "::error:: land: the config will not load, so whether this landing declares body \
+             gates is unknown rather than none"
+        )?;
+        return Ok(ExitCode::Violation);
+    };
+    let gates = lease.map(|lease| lease.body_gate).unwrap_or_default();
     // AN UNDECLARED GATE SET IS A PASS AND NOT AN EARLY RETURN, which is the
     // correction this step needed most: returning here skipped the ready itself,
     // so a consumer declaring no body gates got a lap that pushed and then waited
@@ -15223,24 +15239,37 @@ fn ask_the_body_gates(
 ) -> Result<Option<ExitCode>> {
     for gate in gates {
         let named = format!("{} \u{2192} {}", gate.derive, gate.rule);
-        if record::derive_and_store(
+        // THE CAUSE IS THE GATE'S OWN WORDS (CLOUD-407): an undeclared pattern,
+        // a missing input or an unknown family each names its remedy, and a
+        // stop that dropped it would leave the operator nowhere to look.
+        if let Err(cause) = record::derive_and_store(
             &gate.derive,
             &gate.inputs,
             deciding.overrides,
             Some(body),
             bet.published(),
             &mut std::io::sink(),
-        )
-        .is_err()
-        {
+        ) {
             writeln!(
                 err,
-                "::error:: land: the body gate {named} will not derive, so its verdict is \
-                 unknown rather than clean"
+                "::error:: land: the body gate {named} will not derive ({cause}), so its \
+                 verdict is unknown rather than clean"
             )?;
             return Ok(Some(ExitCode::Violation));
         }
-        let (decided, said) = decide_rule(&gate.rule, deciding)?;
+        // A DECISION THAT ERRS IS A STOP, NOT AN ESCAPE: `?` here left the lap
+        // loop with no line and no unwind (code review of #1248).
+        let (decided, said) = match decide_rule(&gate.rule, deciding) {
+            Ok(decided) => decided,
+            Err(cause) => {
+                writeln!(
+                    err,
+                    "::error:: land: the body gate {named} could not be decided ({cause}), so \
+                     its verdict is unknown rather than clean"
+                )?;
+                return Ok(Some(ExitCode::Violation));
+            }
+        };
         if decided == ExitCode::Success {
             continue;
         }
@@ -15472,7 +15501,15 @@ fn run_land_entry_gates(
     if let Some(refused) = refuse_unread_red_head(root, branch, err)? {
         return Ok(Some(refused));
     }
-    let Some(declared) = lease_config(root, deciding.overrides).and_then(|l| l.unsubscribed) else {
+    let Ok(lease) = lease_declared(root, deciding.overrides) else {
+        writeln!(
+            err,
+            "::error:: land: the config will not load, so whether this landing declares an \
+             entry gate is unknown rather than none"
+        )?;
+        return Ok(Some(ExitCode::Internal));
+    };
+    let Some(declared) = lease.and_then(|lease| lease.unsubscribed) else {
         return Ok(None);
     };
     let repo = repo_or_placeholder(root);
@@ -16983,7 +17020,7 @@ fn run_lease_hold(
         std::env::var("LAND_LOCK_HOLDER_MARKER").unwrap_or_else(|_| String::from("batten land"));
     // Whether this repository keeps a reclaim census, read once: see
     // `lease_renewed` and `lease_hold_bail`.
-    let census = census_kept(root);
+    let census = census_kept(root, &resolve::Overrides::default());
     let mut misses = 0_u32;
     loop {
         // The interval is the lease's own `beat`, and the loop's exit condition is
@@ -17208,7 +17245,11 @@ fn lease_bail_reason(git_dir: &Path, why: &str) {
 /// Silent and best-effort in every direction. A census note that could not be
 /// written is not a reason to fail a release that already succeeded.
 fn note_release(root: &Path) {
-    note_census(root, census_kept(root), CensusNote::Stop);
+    note_census(
+        root,
+        census_kept(root, &resolve::Overrides::default()),
+        CensusNote::Stop,
+    );
 }
 
 /// Which reclaim-census record a landing writes.
@@ -17221,8 +17262,8 @@ enum CensusNote {
 }
 
 /// Whether `root`'s committed `[lease]` declares a reclaim census.
-fn census_kept(root: &Path) -> bool {
-    lease_config(root, &resolve::Overrides::default()).is_some_and(|lease| lease.census)
+fn census_kept(root: &Path, overrides: &resolve::Overrides) -> bool {
+    lease_config(root, overrides).is_some_and(|lease| lease.census)
 }
 
 /// Write `note` into `root`'s reclaim census when it keeps one, silently and
