@@ -10408,12 +10408,13 @@ fn anchor_among(
         // `apply_admissions` looks up a `Finding` anchor, so a `Call` one stored
         // for a tree finding is queried by nothing. A refusal that says why beats
         // an override that appears to work.
-        // AND IT NAMES THE WAY THROUGH (CLOUD-2126): each candidate's fingerprint,
-        // which `--subject` accepts, so the refusal is a route rather than a wall.
+        // AND IT NAMES THE WAY THROUGH (CLOUD-2126): one whole route per
+        // candidate, its fingerprint as `--subject` (CLOUD-2303), so the refusal
+        // is a command to run rather than a wall.
         count => Err(UsageError::raise(format!(
             "{count} findings for rule `{rule}` name subject `{subject}`, so the pair does not \
              address one finding and an admission bound to it would suppress none of them; \
-             name one by its fingerprint as the subject: {}",
+             run one route, each binding one finding by its fingerprint: {}",
             per_subject_routes(
                 rule,
                 class,
