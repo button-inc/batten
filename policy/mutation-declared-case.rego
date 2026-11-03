@@ -121,6 +121,19 @@ resolves(entry) if {
 	contains(line, needle(entry))
 }
 
+# OR WHETHER THE MODULE ITSELF DECLARES IT (CLOUD-2255, taught here in CLOUD-2341).
+# The sweep judges a `.rego` row by a `test_<case>` rule in the mutated module
+# BEFORE it looks at any suite (`mutate.rs`'s `declares_own_case`), so a row
+# naming one is resolved wherever its file's `#MUTANT-SUITE` points. Spelled as
+# that function spells it — a line opening `test_<case> ` — so this reader and
+# the runner cannot disagree about which rows the module answers for.
+#MUTANT own-case-unread|s@^\tstartswith(line, sprintf("test_%v ", \[entry.case\]))$@\tfalse@|a_declaration_naming_its_own_modules_case_is_silent
+resolves(entry) if {
+	endswith(entry.path, ".rego")
+	some line in lines[entry.path]
+	startswith(line, sprintf("test_%v ", [entry.case]))
+}
+
 # A declaration whose suite was read and does not carry its case.
 #
 # ONE FINDING PER DECLARATION, so a reviewer sees which promise is unresolvable

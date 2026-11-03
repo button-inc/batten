@@ -157,6 +157,33 @@ fn a_declaration_naming_a_case_its_suite_lacks_is_refused() {
     assert_eq!(verdicts(&root), vec![UNDEFINED.to_owned()]);
 }
 
+/// A `.rego` row whose case is a `test_` rule of its own module (CLOUD-2255) is
+/// resolved, whatever its file's `#MUTANT-SUITE` names: the sweep judges it by
+/// the module before any suite, so refusing it here would refuse a row the
+/// runner reaches (CLOUD-2341).
+#[test]
+fn a_declaration_naming_its_own_modules_case_is_silent() {
+    let module = format!(
+        "{}package subject\n\ntest_a_rule_case if {{\n\ttrue\n}}\n",
+        declaring("crates/batten/tests/it/subject.rs", "a_rule_case")
+    );
+    let root = repo(
+        "mutation-case-own-module",
+        &[
+            ("policy/subject.rego", &module),
+            (
+                "crates/batten/tests/it/subject.rs",
+                "#[test]\nfn a_case_that_exists() {}\n",
+            ),
+        ],
+    );
+    assert!(
+        verdicts(&root).is_empty(),
+        "the module carries the `test_` rule the row names: {:?}",
+        verdicts(&root)
+    );
+}
+
 /// The bats spelling over the engine, and it is not the case above repeated: a
 /// `.bats` suite matched with the Rust needle would pass vacuously, so the two
 /// needles need one live case each.
