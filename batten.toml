@@ -11898,14 +11898,14 @@ rule = "issue state other"
 # decision does not, so off the harness nothing is minted, the decision refuses,
 # and `mise run pr-unsubscribed record` is still the way through (CLOUD-790).
 # These are the `pr-unsubscribed` task's own flags, which were `LAND_ENTRY_GATES`.
-#PARK[lease.unsubscribed]
-#PARKsession_env = "CLAUDE_CODE_REMOTE_SESSION_ID"
-#PARKtoken_env = "CLAUDE_SESSION_INGRESS_TOKEN_FILE"
-#PARKendpoint = "https://api.anthropic.com/v2/ccr-sessions/{session}/github/mcp"
-#PARKtool = "unsubscribe_pr_activity"
-#PARKarguments = '{"owner":"{owner}","repo":"{repo}","pullNumber":"{pr}"}'
-#PARKfamily = "pr-unsubscribed"
-#PARKrule = "event watch other"
+[lease.unsubscribed]
+session_env = "CLAUDE_CODE_REMOTE_SESSION_ID"
+token_env = "CLAUDE_SESSION_INGRESS_TOKEN_FILE"
+endpoint = "https://api.anthropic.com/v2/ccr-sessions/{session}/github/mcp"
+tool = "unsubscribe_pr_activity"
+arguments = '{"owner":"{owner}","repo":"{repo}","pullNumber":"{pr}"}'
+family = "pr-unsubscribed"
+rule = "event watch other"
 
 # WHICH RECEIPTS A HEAD MUST CARRY TO BE CALLED VERIFIED (CLOUD-1338).
 #
