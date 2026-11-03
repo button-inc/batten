@@ -4002,8 +4002,8 @@ fn patch_id_index(
 /// bump — the key already carries the running binary.
 const IDENTITY_MEMO_FORMAT: &str = "patch-identity-memo-1";
 
-/// The most commits an [`IdentityMemo`] keeps. Past it, a save keeps only the
-/// commits this process asked about, so the entry stays the size of one window.
+/// The most commits an [`IdentityMemo`] keeps. Past it, a landing's save keeps
+/// only the commits it asked about, so the entry stays the size of one window.
 const IDENTITY_MEMO_BOUND: usize = 20_000;
 
 /// Each commit's patch identity, remembered across processes (CLOUD-1480).
@@ -4083,13 +4083,27 @@ impl IdentityMemo {
         Ok(identity)
     }
 
-    /// Store what was learned, where anything was. Best-effort: a failed write
-    /// costs the next process a recomputation, never a wrong answer.
-    fn save(mut self) {
+    /// Store what was learned, where anything was, pruned to what this process
+    /// asked once past [`IDENTITY_MEMO_BOUND`]. Only a caller that asked a whole
+    /// window may prune: one that asked a narrow range would cut the memo to
+    /// that range, and the next Stop recomputes the window it dropped.
+    /// Best-effort: a failed write costs the next process a recomputation,
+    /// never a wrong answer.
+    fn save(self) {
+        self.write(true);
+    }
+
+    /// [`IdentityMemo::save`] without the prune, for a caller that asked only a
+    /// narrow range.
+    fn save_unpruned(self) {
+        self.write(false);
+    }
+
+    fn write(mut self, prune: bool) {
         let Some((path, key)) = self.entry.take().filter(|_| self.grown) else {
             return;
         };
-        if self.known.len() > IDENTITY_MEMO_BOUND {
+        if prune && self.known.len() > IDENTITY_MEMO_BOUND {
             self.known.retain(|commit, _| self.asked.contains(commit));
         }
         let mut body = String::new();
@@ -4148,7 +4162,8 @@ pub(crate) fn patch_identities(
             found.insert(hex);
         }
     }
-    memo.save();
+    // A replay asks one range, never the target's window, so it may not prune.
+    memo.save_unpruned();
     Ok(found)
 }
 
@@ -6740,6 +6755,22 @@ mod tests {
             patch_id_index(&dir, &mut IdentityMemo::load(&dir), Window::DEFAULT, &range).unwrap();
         let served: BTreeSet<String> = index.keys().map(|id| id.as_str().to_owned()).collect();
         assert_eq!(served, computed);
+    }
+
+    /// Fails by: a replay's narrow range pruning a full memo to that range, so
+    /// the next Stop recomputes the target's whole window (CLOUD-1480).
+    #[test]
+    fn a_narrow_range_never_prunes_a_full_memo() {
+        let (dir, [first, _, third]) = history("identity-memo-narrow");
+        crate::testing::contain_state(&dir.join(".git").join("batten-state"));
+        let mut memo = IdentityMemo::load(&dir);
+        memo.known = (0..=IDENTITY_MEMO_BOUND)
+            .map(|n| (format!("{n:040x}"), None))
+            .collect();
+        memo.grown = true;
+        memo.save_unpruned();
+        patch_identities(&dir, Window::DEFAULT, &format!("{first}..{third}")).unwrap();
+        assert!(IdentityMemo::load(&dir).known.len() > IDENTITY_MEMO_BOUND);
     }
 
     /// Fails by: the memo pruned at its bound rather than past it, or never

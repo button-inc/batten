@@ -3545,13 +3545,15 @@ fn collect_dead_refs(repo: &Path, store_dir: &Path) -> Result<usize> {
 /// The drain scan lock, now held, or `None` where another drain holds it
 /// (CLOUD-2536).
 //MUTANT-SUITE crates/batten/tests/it/hook_latency.rs
-//MUTANT drains-scan-concurrently|s@^    if fs4::FileExt::try_lock(\&scan_lock).is_err() {$@    if false {@|a_drain_finding_another_scanning_does_not_scan
+//MUTANT drains-scan-concurrently|s@^        Err(fs4::TryLockError::WouldBlock) => Ok(None),$@        Err(fs4::TryLockError::WouldBlock) => Ok(Some(scan_lock)),@|a_drain_finding_another_scanning_does_not_scan
 fn take_drain_scan_lock(git_dir: &Path) -> std::io::Result<Option<std::fs::File>> {
     let scan_lock = open_drain_lock(&git_dir.join(DRAIN_SCAN_LOCK))?;
-    if fs4::FileExt::try_lock(&scan_lock).is_err() {
-        return Ok(None);
+    match fs4::FileExt::try_lock(&scan_lock) {
+        // A LOCK THE PLATFORM REFUSES IS NOT ANOTHER DRAIN'S: only contention
+        // skips the scan, or a filesystem without `flock` would never record.
+        Ok(()) | Err(fs4::TryLockError::Error(_)) => Ok(Some(scan_lock)),
+        Err(fs4::TryLockError::WouldBlock) => Ok(None),
     }
-    Ok(Some(scan_lock))
 }
 
 //MUTANT drain-lock-taken-by-the-verb|s@^    let _scanning = if scan_tree \&\& std::env::var_os(DRAIN_MARKER).is_some() {$@    let _scanning = if scan_tree {@|a_drain_finding_another_scanning_does_not_scan
