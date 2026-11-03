@@ -14118,7 +14118,7 @@ fn run_land_fast_forward(
                 fast_forward::Answer::Refused => {
                     // THE BOT'S OWN SENTENCE, or none at all. Nothing here maps a
                     // refusal to a remedy: the bot is the authority on its own,
-                    // which is `land::Admitted::Refused`'s rule at a second site,
+                    // which is the landing entry gate's rule at a second site,
                     // and a table from its rows to advice would put one consumer's
                     // tracker keys in this crate as matched data (rule 1).
                     //
@@ -15323,7 +15323,7 @@ fn spend_the_matrix(
         draft: is_draft,
         node,
         head,
-    }) = land::draft_state(&repo, &pr)
+    }) = land::draft_state(repo, pr)
     else {
         writeln!(
             err,
@@ -15338,7 +15338,7 @@ fn spend_the_matrix(
     // **THE FORGE'S HEAD, NEVER THIS CLONE'S**: `Readiness::head` says why. A
     // ready pull request's push that bought a run is asked its receipts by the
     // Push row's precheck (CLOUD-2436), since this may then buy `Nothing`.
-    let reading = verdict_for(&repo, &head);
+    let reading = verdict_for(repo, &head);
     let spend = land::buys_a_matrix(Some(is_draft), reading.as_ref());
     // THE RECEIPTS `gh pr ready` OWES, asked of this ready too (CLOUD-2293), and
     // only when a ready will actually fire: a lap that readies nothing — the
@@ -15358,12 +15358,12 @@ fn spend_the_matrix(
             )?;
             Ok(ExitCode::Success)
         }
-        land::Spend::Ready => fired(land::mark_ready(&repo, &pr, &node), ledger, out, err),
+        land::Spend::Ready => fired(land::mark_ready(repo, pr, &node), ledger, out, err),
         land::Spend::Refire => {
             // DRAFT FIRST, and a draft that will not happen is a stop: readying an
             // already-ready pull request is a no-op the forge reports as success,
             // so proceeding would report a matrix it never bought.
-            if !land::redraft(&repo, &pr, &node) {
+            if !land::redraft(repo, pr, &node) {
                 writeln!(
                     err,
                     "::error:: land: {branch} is ready over a head that can never grade, and it \
@@ -15375,7 +15375,7 @@ fn spend_the_matrix(
                 out,
                 "land: {branch} carried no answer and no run in flight; re-firing its ready"
             )?;
-            fired(land::mark_ready(&repo, &pr, &node), ledger, out, err)
+            fired(land::mark_ready(repo, pr, &node), ledger, out, err)
         }
     }
 }
