@@ -12,8 +12,15 @@ fn done_pr_record(pull: &str) -> String {
     let stdin = format!(
         r#"[{{"id":"A-1","attachments":[{{"url":"https://f.example/o/r/pull/7"}}],"pulls":[{pull}]}}]"#
     );
-    batten::tracker_reading::reading("done-pr", &BTreeMap::new(), &[], Path::new("."), &stdin)
-        .expect("the reading accepts a well-formed set")
+    batten::tracker_reading::reading(
+        "done-pr",
+        &BTreeMap::new(),
+        &[],
+        Path::new("."),
+        &stdin,
+        None,
+    )
+    .expect("the reading accepts a well-formed set")
 }
 
 /// A pull request's token on the record.

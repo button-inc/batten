@@ -251,8 +251,14 @@ pub fn authored_log(dir: &std::path::Path, base: &str) -> String {
 }
 
 /// [`authored_log`] over the published-as value read from the environment, so
-/// a case can drive both arms without setting a variable.
-fn authored_log_from(dir: &std::path::Path, base: &str, published: Option<String>) -> String {
+/// a case can drive both arms without setting a variable — and so an in-process
+/// caller that holds the bet itself (the landing's body gates, CLOUD-2387) can
+/// hand it over without exporting one.
+pub(crate) fn authored_log_from(
+    dir: &std::path::Path,
+    base: &str,
+    published: Option<String>,
+) -> String {
     let speculated = published.filter(|value| !value.trim().is_empty());
     if let Some(spec_base) = speculated {
         // ANCESTOR OF HEAD, spelled as "the merge base with HEAD is the base

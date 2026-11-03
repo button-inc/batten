@@ -383,7 +383,28 @@ fn the_task_is_the_verb_and_land_still_names_it() {
         template,
         serde_json::json!({"owner":"{owner}","repo":"{repo}","pullNumber":"{pr}"})
     );
-    let gates = common::task_env("LAND_ENTRY_GATES");
-    assert!(gates.contains("mise run pr-unsubscribed drop"), "{gates}");
-    assert!(gates.contains("mise run pr-unsubscribed check"), "{gates}");
+    // THE LANDING ASKS THE SAME HOST IN-PROCESS (CLOUD-2387): `[lease.unsubscribed]`
+    // carries the task's own flags, so the two cannot name different hosts.
+    let text = std::fs::read_to_string(at_root("batten.toml")).expect("the config");
+    let parsed: toml::Value = toml::from_str(&text).expect("batten.toml parses");
+    let table = &parsed["lease"]["unsubscribed"];
+    for (flag, key) in [
+        ("--session-env", "session_env"),
+        ("--token-env", "token_env"),
+        ("--endpoint", "endpoint"),
+        ("--tool", "tool"),
+        ("--arguments", "arguments"),
+        ("--family", "family"),
+        ("--rule", "rule"),
+    ] {
+        let at = argv
+            .iter()
+            .position(|word| word == flag)
+            .unwrap_or_else(|| panic!("the task declares {flag}"));
+        assert_eq!(
+            table[key].as_str(),
+            Some(argv[at + 1].as_str()),
+            "[lease.unsubscribed] {key} disagrees with the task's {flag}"
+        );
+    }
 }

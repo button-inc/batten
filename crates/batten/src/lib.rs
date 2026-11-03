@@ -465,7 +465,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // and the worktree through `gitwrite`, so the same two edges are
         // forbidden — transitively, which the layering table states rather than
         // leaves to follow.
-        Some(Command::Land { command }) => run_land(&command, out, err),
+        Some(Command::Land { command }) => run_land(&command, mode, out, err),
         Some(Command::Wiring { command }) => run_wiring(&command, mode, &overrides, err),
         // The refinement gate and the pull-time claim (CLOUD-1121). Both read
         // the payload the caller supplies — or, under `--issue`, the one the
@@ -11452,6 +11452,7 @@ fn run_lease(
 /// what a conflict consists of and exactly what a report must not carry.
 fn run_land(
     command: &cli::LandCommand,
+    mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -11540,7 +11541,7 @@ fn run_land(
             let Some(reference) = land_reference(root, reference.as_deref(), err)? else {
                 return Ok(ExitCode::Internal);
             };
-            run_land_lap(root, &url, &reference, &branch, out, err)
+            run_land_lap(root, &url, &reference, &branch, mode, out, err)
         }
         cli::LandCommand::Linear { reference } => {
             let Some(url) = land_remote(root, err)? else {
@@ -12205,6 +12206,7 @@ fn run_land_lap(
     url: &str,
     reference: &str,
     branch: &str,
+    mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -12242,7 +12244,7 @@ fn run_land_lap(
     //
     // BEFORE the lease and the singleton, which is where the predecessor put it
     // and for its reason: a refusal here has spent nothing at all.
-    if let Some(code) = run_land_entry_gates(root, branch, out, err)? {
+    if let Some(code) = run_land_entry_gates(root, branch, mode, out, err)? {
         return Ok(code);
     }
 
@@ -12284,6 +12286,7 @@ fn run_land_lap(
         budget: laps,
         pipeline,
         guard: &guard,
+        mode,
     };
     // ONE DISK WATCHER FOR THE WHOLE LANDING (CLOUD-2197): replay, verify, push
     // and the CI wait, every lap. It ends with the landing, on its stop flag.
@@ -12365,6 +12368,8 @@ struct Laps<'run> {
     pipeline: pipeline::Pipeline,
     /// Held by the caller for the whole landing; each step publishes its phase.
     guard: &'run LandSingleton,
+    /// The invocation's output mode, which the in-process body gates decide in.
+    mode: Mode,
 }
 
 /// Cancel `sha`'s runs, sparing the fan-in, and say how many in one line;
@@ -12490,6 +12495,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
         budget: laps,
         pipeline,
         guard,
+        mode,
     } = run;
     // ONE POLL FOR THE WHOLE LANDING, held outside the lap loop so lap 2 onward
     // send the validator lap 1 was given. Rebuilt per lap it was a fresh
@@ -12577,6 +12583,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
             reference,
             branch,
             lap,
+            mode,
         };
         for row in &pipeline.steps {
             let step = row.step;
@@ -13156,6 +13163,7 @@ fn run_the_step(
         url,
         reference,
         branch,
+        mode,
         ..
     } = asked;
     let code = match step {
@@ -13187,7 +13195,7 @@ fn run_the_step(
             return Ok((code, None, None, stalled));
         }
         land::Step::Lease => run_land_lease(root, branch, out, err)?,
-        land::Step::Ready => run_land_ready(root, branch, bet, ledger, out, err)?,
+        land::Step::Ready => run_land_ready(root, branch, bet, ledger, mode, out, err)?,
         land::Step::Push => run_land_push(root, url, branch, out)?,
         land::Step::Wait => {
             let fresh_ready = ledger.take_fresh_ready();
@@ -15112,14 +15120,15 @@ fn trunk_watch(reference: &str, base: &str, repo: &str, interval: u64) -> main_w
 
 /// The lap's READY phase: the gates that read the pull request's body.
 ///
-/// # Both the body source and the gates are the consumer's
+/// # The engine reads the body, and the consumer names the gates
 ///
-/// `LAND_BODY_SOURCE` is the argv that prints the body, and `LAND_BODY_GATES` is
-/// a `|`-separated list of gate argvs. Neither is defaulted, for
-/// `run_land_fast_forward`'s reason at its own site: a default compiled in here
-/// would be a consumer's vocabulary inside `crates/batten`, which is
-/// non-negotiable rule 1's plainest violation — and the failure a default buys is
-/// the quiet one, a fleet whose gates silently do not run.
+/// The body is the forge's, read in-process ([`bot::forge::pull`]); the gates are
+/// `[[lease.body_gate]]` rows (CLOUD-2387), each a family derived over that body
+/// and a rule decided over the record it leaves — what `LAND_BODY_SOURCE` and
+/// `LAND_BODY_GATES` spelled as argvs, through a `gh` spawn and two `batten`
+/// spawns per gate. Neither is defaulted, for `run_land_fast_forward`'s reason at
+/// its own site: a default compiled in here would be a consumer's vocabulary
+/// inside `crates/batten`, which is non-negotiable rule 1's plainest violation.
 ///
 /// **An UNDECLARED gate set is a pass, and a DECLARED one that cannot run is
 /// not.** The asymmetry is the point: a consumer that names no body gates has
@@ -15139,11 +15148,18 @@ fn run_land_ready(
     branch: &str,
     bet: &speculation::Bet,
     ledger: &mut land::Ledger,
+    mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let declared = std::env::var("LAND_BODY_GATES").unwrap_or_default();
-    let gates = land::body_gates(&declared);
+    let repo = repo_or_placeholder(root);
+    let pr = match ready_pull_request(&repo, branch, err)? {
+        Ok(pr) => pr,
+        Err(code) => return Ok(code),
+    };
+    let gates = lease_config(root, &Overrides::default())
+        .map(|lease| lease.body_gate)
+        .unwrap_or_default();
     // AN UNDECLARED GATE SET IS A PASS AND NOT AN EARLY RETURN, which is the
     // correction this step needed most: returning here skipped the ready itself,
     // so a consumer declaring no body gates got a lap that pushed and then waited
@@ -15153,73 +15169,126 @@ fn run_land_ready(
     } else {
         // FAIL OPEN ON THE FETCH, and only on the fetch. A body this never saw is
         // not evidence about what the author wrote, which is the predecessor's
-        // posture spelled `[[ -n "$body" ]] &&`. An unreadable source therefore
-        // yields an empty body and `land::ready` treats that as clear.
-        let source = std::env::var("LAND_BODY_SOURCE").unwrap_or_default();
-        let body = land::body_gates(&source)
-            .first()
-            // `Drop`: this string is PARSED as the body, so a client's notice
-            // on stderr would become text the author never wrote. The gates
-            // below take `Keep`, because their stderr IS their reason.
-            // NO BET PUBLISHED TO THE FETCH, deliberately. This call reads the
-            // pull request's BODY; the bet is a fact about the commit RANGE, and
-            // handing it to a client that does not read one would be a variable
-            // in an environment for no reader.
-            .and_then(|argv| exec::piped_argv(root, argv, "", exec::Diagnostics::Drop, &[]))
-            .filter(|(code, _)| *code == 0)
-            .map(|(_, body)| body)
+        // posture spelled `[[ -n "$body" ]] &&`, so an unreadable body and an
+        // empty one both ask nothing.
+        let body = bot::forge::pull(&repo, &pr)
+            .map(|pull| pull.body)
             .unwrap_or_default();
-
-        // THE SAME PUBLICATION `run_land_verify` MAKES, and for the same reason
-        // one step later (CLOUD-1770). `Bet::published` is `None` with no bet
-        // outstanding, so the variable is simply absent from a non-speculative
-        // lap's gates — the publication stays a function of the bet rather than a
-        // side effect kept in step with it.
-        // ONE ENTRY ALWAYS, and its VALUE is the bet. An empty list would leave
-        // an inherited `BATTEN_SPEC_BASE` in place — and this lap's own gates run
-        // as children of a `verify` that exports it, so "no bet" has to be said
-        // out loud rather than left unsaid (measured: the case for this asserted
-        // the mirror and read an outer process's bet).
-        let published: Vec<(String, Option<String>)> = vec![(
-            speculation::PUBLISHED_AS.to_owned(),
-            bet.published().map(str::to_owned),
-        )];
-        match land::ready(root, &gates, &body, &published) {
-            land::Readied::Clear => {
-                writeln!(out, "land: {} body gate(s) clear", gates.len())?;
-            }
-            land::Readied::Refused { gate, detail } => {
-                writeln!(
-                    err,
-                    "::error:: land: {gate} refused this pull request's body"
-                )?;
-                if !detail.is_empty() {
-                    writeln!(err, "{detail}")?;
-                }
-                return Ok(ExitCode::Violation);
-            }
-            // INTERNAL RATHER THAN A VIOLATION, because the subject differs: a
-            // refusal is about the body and this is about the clone.
-            // `land::progress` stops on both for this step, so the lap behaves
-            // identically — what the split buys is a reader who can tell "the
-            // author must fix this" from "this checkout cannot ask".
-            land::Readied::Unrunnable { gate } => {
-                writeln!(
-                    err,
-                    "::error:: land: {gate} is declared in LAND_BODY_GATES and will not run, so \
-                     its verdict is unknown rather than clean"
-                )?;
-                // `Violation` rather than `Internal`, and the lap is UNCHANGED:
-                // `land::progress` stops on both arms for this step before and
-                // after. What the code now says is which KIND of stop it is —
-                // this one is the author's to fix, and `Internal` is reserved for
-                // a forge read that did not answer, which laps (review of #848).
-                return Ok(ExitCode::Violation);
-            }
+        if body.trim().is_empty() {
+            writeln!(
+                out,
+                "land: the pull request carries no body; nothing to ask"
+            )?;
+        } else if let Some(code) = ask_the_body_gates(&gates, &body, bet, mode, err)? {
+            return Ok(code);
+        } else {
+            writeln!(out, "land: {} body gate(s) clear", gates.len())?;
         }
     }
 
-    spend_the_matrix(root, branch, ledger, out, err)
+    spend_the_matrix(&repo, &pr, branch, ledger, root, out, err)
+}
+
+/// Each `[[lease.body_gate]]` row over `body`, in order: `Some` is the first
+/// stop, `None` every row clear.
+///
+/// THE BET IS HANDED OVER, NOT EXPORTED (CLOUD-1770). A row reading the
+/// branch's commit range — `closing-key` does — cannot otherwise tell a commit
+/// this branch authored from one the speculation adopted, and would count the
+/// holder's keys as this branch's stranded ones. `Bet::published` is `None`
+/// with no bet outstanding, so "no bet" is said rather than left to whatever an
+/// outer process exported.
+///
+/// THE DECISION'S OWN WORDS REACH THE OPERATOR ON A REFUSAL, and only then: the
+/// rule is the authority on its own remedy, and a clear row says nothing.
+///
+/// Every stop is `Violation` rather than `Internal`: `land::progress` stops on
+/// both for this step, and each of these is the author's to fix, where
+/// `Internal` is reserved for a forge read that did not answer, which laps
+/// (review of #848).
+fn ask_the_body_gates(
+    gates: &[config::BodyGate],
+    body: &str,
+    bet: &speculation::Bet,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let overrides = Overrides::default();
+    for gate in gates {
+        let named = format!("{} \u{2192} {}", gate.derive, gate.rule);
+        if record::derive_and_store(
+            &gate.derive,
+            &gate.inputs,
+            &overrides,
+            Some(body),
+            bet.published(),
+            &mut std::io::sink(),
+        )
+        .is_err()
+        {
+            writeln!(
+                err,
+                "::error:: land: the body gate {named} will not derive, so its verdict is \
+                 unknown rather than clean"
+            )?;
+            return Ok(Some(ExitCode::Violation));
+        }
+        let flags = cli::CheckFlags {
+            rule: vec![gate.rule.clone()],
+            ..cli::CheckFlags::default()
+        };
+        let mut said = Vec::new();
+        let mut also = Vec::new();
+        let decided = run_check(&flags, mode, &overrides, &mut said, &mut also)?;
+        if decided == ExitCode::Success {
+            continue;
+        }
+        if decided == ExitCode::Violation {
+            writeln!(
+                err,
+                "::error:: land: {named} refused this pull request's body"
+            )?;
+        } else {
+            writeln!(
+                err,
+                "::error:: land: the body gate {named} could not be decided, so its verdict \
+                 is unknown rather than clean"
+            )?;
+        }
+        err.write_all(&said)?;
+        err.write_all(&also)?;
+        return Ok(Some(ExitCode::Violation));
+    }
+    Ok(None)
+}
+
+/// The open pull request a ready step readies, or the stop its absence is.
+///
+/// A BRANCH WITH NO PULL REQUEST IS A STATE, NOT A FAILED READ, so it stops
+/// rather than lapping: no number of laps opens one. An unreadable lookup is the
+/// environment's, and laps.
+fn ready_pull_request(
+    repo: &str,
+    branch: &str,
+    err: &mut dyn Write,
+) -> Result<std::result::Result<String, ExitCode>> {
+    match fast_forward::look_up_pull_request(repo, branch) {
+        fast_forward::Lookup::Found(pr) => Ok(Ok(pr)),
+        fast_forward::Lookup::None => {
+            writeln!(
+                err,
+                "::error:: land: no open pull request for {branch}, so there is nothing to ready and no run to buy"
+            )?;
+            Ok(Err(ExitCode::Violation))
+        }
+        fast_forward::Lookup::Unreadable(status) => {
+            writeln!(
+                err,
+                "::error:: land: could not read {repo}'s pull requests ({status}), so nothing is readied — this is the environment, not the branch"
+            )?;
+            Ok(Err(ExitCode::Internal))
+        }
+    }
 }
 
 /// Fire the ready, which is the event that starts CI.
@@ -15242,32 +15311,14 @@ fn run_land_ready(
 /// while this lap's own run is still in flight leaves it alone — cancelling the
 /// matrix it had just bought is the failure that arm exists to refuse.
 fn spend_the_matrix(
-    root: &Path,
+    repo: &str,
+    pr: &str,
     branch: &str,
     ledger: &mut land::Ledger,
+    root: &Path,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let repo = repo_or_placeholder(root);
-    let pr = match fast_forward::look_up_pull_request(&repo, branch) {
-        fast_forward::Lookup::Found(pr) => pr,
-        // A BRANCH WITH NO PULL REQUEST IS A STATE, NOT A FAILED READ, so it
-        // stops rather than lapping: no number of laps opens one.
-        fast_forward::Lookup::None => {
-            writeln!(
-                err,
-                "::error:: land: no open pull request for {branch}, so there is nothing to ready and no run to buy"
-            )?;
-            return Ok(ExitCode::Violation);
-        }
-        fast_forward::Lookup::Unreadable(status) => {
-            writeln!(
-                err,
-                "::error:: land: could not read {repo}'s pull requests ({status}), so nothing is readied — this is the environment, not the branch"
-            )?;
-            return Ok(ExitCode::Internal);
-        }
-    };
     let Some(land::Readiness {
         draft: is_draft,
         node,
@@ -15370,15 +15421,17 @@ fn fired(
     Ok(ExitCode::Violation)
 }
 
-/// Run `$LAND_ENTRY_GATES` over this landing's pull request, once.
+/// Ask `[lease.unsubscribed]` of this landing's pull request, once.
 ///
 /// `Some(code)` stops the landing; `None` lets it proceed.
 ///
-/// # The consumer names the gate and the engine supplies the pull request
+/// # The consumer names the host and the engine supplies the pull request
 ///
-/// `LAND_ENTRY_GATES` is a `|`-separated list of argvs, each run with the pull
-/// request number appended. Undeclared is a pass and declared-but-unrunnable is a
-/// refusal, which is [`run_land_ready`]'s asymmetry and is stated there.
+/// The table is `pr unsubscribed`'s own flags (CLOUD-2387), which
+/// `LAND_ENTRY_GATES` spelled as two `mise run` argvs with the number appended:
+/// an advisory drop, then the decision. Both now run in-process. Undeclared is a
+/// pass and declared-but-undecidable is a refusal, which is [`run_land_ready`]'s
+/// asymmetry and is stated there.
 ///
 /// # A pull request that will not resolve is a REFUSAL rather than a pass
 ///
@@ -15391,25 +15444,24 @@ fn fired(
 fn run_land_entry_gates(
     root: &Path,
     branch: &str,
+    mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
     if let Some(refused) = refuse_unread_red_head(root, branch, err)? {
         return Ok(Some(refused));
     }
-    let declared = std::env::var("LAND_ENTRY_GATES").unwrap_or_default();
-    let gates = land::body_gates(&declared);
-    if gates.is_empty() {
+    let Some(declared) = lease_config(root, &Overrides::default()).and_then(|l| l.unsubscribed)
+    else {
         return Ok(None);
-    }
+    };
     let repo = repo_or_placeholder(root);
     let pr = match fast_forward::look_up_pull_request(&repo, branch) {
         fast_forward::Lookup::Found(pr) => pr,
         fast_forward::Lookup::None => {
             writeln!(
                 err,
-                "::error:: land: {} entry gate(s) are declared and no open pull request for {branch} will resolve, so they cannot be asked",
-                gates.len()
+                "::error:: land: an entry gate is declared and no open pull request for {branch} will resolve, so it cannot be asked"
             )?;
             return Ok(Some(ExitCode::Internal));
         }
@@ -15423,8 +15475,7 @@ fn run_land_entry_gates(
         fast_forward::Lookup::Unreadable(status) => {
             writeln!(
                 err,
-                "::error:: land: {} entry gate(s) are declared and {repo}'s pull requests could not be read ({status}), so they cannot be asked{}",
-                gates.len(),
+                "::error:: land: an entry gate is declared and {repo}'s pull requests could not be read ({status}), so it cannot be asked{}",
                 if crate::rest::declared_credential().is_some() {
                     ""
                 } else {
@@ -15434,34 +15485,80 @@ fn run_land_entry_gates(
             return Ok(Some(ExitCode::Internal));
         }
     };
-    match land::admits_the_landing(root, &gates, &pr) {
-        land::Admitted::Clear => {
-            writeln!(out, "land: {} entry gate(s) clear", gates.len())?;
+    match ask_unsubscribed(&declared, &pr, mode) {
+        Ok((ExitCode::Success, _)) => {
+            writeln!(out, "land: the entry gate `{}` is clear", declared.rule)?;
             Ok(None)
         }
-        land::Admitted::Refused { gate, detail } => {
-            // THE GATE'S OWN WORDS REACH THE OPERATOR (CLOUD-407). The
-            // predecessor's `die` added only the landing's context, because the
-            // gate is the authority on its own remedy and a summary here would be
-            // a second, staler copy of it.
-            writeln!(err, "::error:: land: {gate} refused this landing")?;
-            if !detail.is_empty() {
-                writeln!(err, "{detail}")?;
-            }
+        Ok((ExitCode::Violation, said)) => {
+            // THE GATE'S OWN WORDS REACH THE OPERATOR (CLOUD-407): the rule is
+            // the authority on its own remedy, and a summary here would be a
+            // second, staler copy of it.
+            writeln!(
+                err,
+                "::error:: land: the entry gate `{}` refused this landing",
+                declared.rule
+            )?;
+            err.write_all(&said)?;
             writeln!(
                 err,
                 "::error:: nothing has been spent — the refusal above says how to clear it, then run the landing again"
             )?;
             Ok(Some(ExitCode::Violation))
         }
-        land::Admitted::Unrunnable { gate } => {
+        Ok((_, said)) => {
             writeln!(
                 err,
-                "::error:: land: the declared entry gate {gate} will not run, so this landing's precondition is unasked rather than met"
+                "::error:: land: the entry gate `{}` could not be decided, so this landing's precondition is unasked rather than met",
+                declared.rule
+            )?;
+            err.write_all(&said)?;
+            Ok(Some(ExitCode::Internal))
+        }
+        Err(cause) => {
+            writeln!(
+                err,
+                "::error:: land: the entry gate `{}` will not run ({cause}), so this landing's precondition is unasked rather than met",
+                declared.rule
             )?;
             Ok(Some(ExitCode::Internal))
         }
     }
+}
+
+/// `pr unsubscribed drop`, then `check`, over `pr`, in-process: the code the
+/// decision answered and everything it said.
+///
+/// THE DROP IS ADVISORY and its answer is discarded, the `?` the argv carried:
+/// a drop that answers not-dropped or could-not-look must not stop a landing
+/// before the decision whose refusal names `record` as the way through.
+fn ask_unsubscribed(
+    declared: &config::EntryUnsubscribed,
+    pr: &str,
+    mode: Mode,
+) -> Result<(ExitCode, Vec<u8>)> {
+    let pr = unsubscribe::pr_number(pr)?;
+    let host = unsubscribe::Host {
+        session_env: declared.session_env.clone(),
+        token_env: declared.token_env.clone(),
+        endpoint: declared.endpoint.clone(),
+        tool: declared.tool.clone(),
+        arguments: declared.arguments.clone(),
+        family: record::safe_component("family", &declared.family)?,
+    };
+    let git_dir = git::git_dir(Path::new("."))?;
+    let _ = unsubscribe::drop_subscription(&git_dir, &host, pr, &mut std::io::sink());
+    let reading = unsubscribe::reading(&git_dir, &host, pr);
+    record::store_named("land", &host.family, &reading)?;
+    let flags = cli::CheckFlags {
+        rule: vec![declared.rule.clone()],
+        ..cli::CheckFlags::default()
+    };
+    let mut said = Vec::new();
+    let mut also = Vec::new();
+    let code = run_check(&flags, mode, &Overrides::default(), &mut said, &mut also)?;
+    said.extend(also);
+    Ok((code, said))
 }
 
 /// Hand the landing lease back, best-effort, on the path that landed.
@@ -16017,6 +16114,8 @@ struct Asked<'lap> {
     reference: &'lap str,
     branch: &'lap str,
     lap: u32,
+    /// The invocation's output mode, for the steps that decide in-process.
+    mode: Mode,
 }
 
 /// The two prechecks a row can carry that end a lap before it spends.
@@ -16051,6 +16150,7 @@ fn asks_before_the_step(
         reference,
         branch,
         lap,
+        ..
     } = asked;
     match row.precheck {
         // THE BET IS SETTLED BEFORE ANYTHING IS SPENT, and before the replay that
