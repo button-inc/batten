@@ -12069,12 +12069,19 @@ fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
     let abandoned = task::abandoned(git_dir, program_root);
     let own_group = task::process_group(&std::process::id().to_string());
     let mut reaped = Reaped::default();
-    for entry in &abandoned {
-        if reapable(entry, &own_group) && exec::terminate_group(&entry.pgid) {
+    // Which records the first pass proved the orphan's, read once: the KILL
+    // may empty a group, and an empty group is no orphan, so asking again
+    // after the signals would keep a signalled number for the next reap.
+    let signalled: Vec<bool> = abandoned
+        .iter()
+        .map(|entry| reapable(entry, &own_group))
+        .collect();
+    for (entry, _) in abandoned.iter().zip(&signalled).filter(|(_, s)| **s) {
+        if exec::terminate_group(&entry.pgid) {
             reaped.terminated += 1;
         }
     }
-    for entry in &abandoned {
+    for (entry, was_signalled) in abandoned.iter().zip(&signalled) {
         if reapable(entry, &own_group) && exec::escalate_group(&entry.pgid) {
             reaped.escalated += 1;
         }
@@ -12091,7 +12098,7 @@ fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
         // Disowned only once SIGNALLED: a group `reapable` could not yet prove
         // the orphan's keeps its number for the next reap to ask again.
         if task::hold_stands(git_dir, &entry.pid) {
-            if reapable(entry, &own_group) {
+            if *was_signalled {
                 task::disown_group(git_dir, &entry.pid);
             }
             continue;
