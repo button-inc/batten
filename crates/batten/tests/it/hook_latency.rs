@@ -97,9 +97,7 @@ fn fixture(name: &str) -> (PathBuf, PathBuf, PathBuf) {
     fs::write(repo.join("batten.toml"), CONFIG).expect("write config");
     fs::copy(common::at_root(MODULE), repo.join(MODULE)).expect("install committed module");
     common::write(&repo, "src/a.rs", "fn main() {}\n");
-    common::git_in(&repo, &["init", "-q", "-b", "main", "."]);
-    common::git_in(&repo, &["config", "user.name", "Fixture Author"]);
-    common::git_in(&repo, &["config", "user.email", "fixture@example.com"]);
+    common::init_repo(&repo);
     common::git_in(&repo, &["add", "-A"]);
     common::git_in(&repo, &["commit", "-q", "-m", "chore: base"]);
     let shims = root.join("shims");
