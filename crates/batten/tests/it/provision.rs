@@ -832,10 +832,11 @@ fn host_ca_configuration_reaches_the_fetch() {
 // through a proxy 403s no matter what the manifest says. The environment has to
 // be supplied by whatever LAUNCHES the runner, which is what a launcher is.
 //
-// The installed "binary" here is a copy of `env(1)`, which prints the
-// environment it was given and nothing else. That is the whole reason it is the
-// fixture: asserting on what the CHILD saw is the only way to catch a launcher
-// that writes a plausible file and passes nothing on, and it needs no shell.
+// The installed "binary" here execs `env(1)`, which prints the environment it
+// was given and nothing else. That is the whole reason it is the fixture:
+// asserting on what the CHILD saw is the only way to catch a launcher that
+// writes a plausible file and passes nothing on. `env_tool` says why it is a
+// script rather than a byte copy.
 
 /// Where this host keeps `env(1)`.
 ///
@@ -848,6 +849,17 @@ fn env_binary() -> PathBuf {
         .map(PathBuf::from)
         .find(|path| path.is_file())
         .expect("`env(1)` is at /usr/bin/env or /bin/env on every unix host")
+}
+
+/// The installed tool: a script that execs `env(1)` BY ITS OWN PATH.
+///
+/// A byte copy of the binary is not `env` everywhere. Ubuntu 26.04 ships
+/// uutils' multicall `coreutils`, which picks the utility from `argv[0]`, so a
+/// copy linked as `demo` ran no utility, printed no environment, and failed
+/// seven cases on CI's runner image with nothing changed in the launcher.
+#[cfg(unix)]
+fn env_tool() -> Vec<u8> {
+    format!("#!/bin/sh\nexec '{}' \"$@\"\n", env_binary().display()).into_bytes()
 }
 
 /// A manifest whose one entry links, and optionally declares an environment.
@@ -895,10 +907,9 @@ fn an_entry_declaring_no_environment_is_still_a_plain_copy() {
 #[cfg(unix)]
 #[test]
 fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
-    let system_env = env_binary();
     let env = Env::new("provision-launcher-env");
     let dest = env.repo.parent().unwrap().join("bin-launcher");
-    let bytes = fs::read(&system_env).unwrap();
+    let bytes = env_tool();
     let (url, sha) = env.artifact("demo.bin", &bytes);
     env.config(&linking_manifest(&url, &sha, &dest, ENV_ROWS));
 
@@ -1005,10 +1016,9 @@ fn a_launcher_reached_through_a_symlink_hands_the_tool_that_name() {
 #[cfg(unix)]
 #[test]
 fn the_prepend_adds_nothing_it_already_carries() {
-    let system_env = env_binary();
     let env = Env::new("provision-launcher-idempotent");
     let dest = env.repo.parent().unwrap().join("bin-idem");
-    let bytes = fs::read(&system_env).unwrap();
+    let bytes = env_tool();
     let (url, sha) = env.artifact("demo.bin", &bytes);
     env.config(&linking_manifest(&url, &sha, &dest, ENV_ROWS));
     assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
@@ -1036,10 +1046,9 @@ fn the_prepend_adds_nothing_it_already_carries() {
 #[cfg(unix)]
 #[test]
 fn a_credential_no_source_carries_is_left_unset() {
-    let system_env = env_binary();
     let env = Env::new("provision-launcher-no-token");
     let dest = env.repo.parent().unwrap().join("bin-no-token");
-    let bytes = fs::read(&system_env).unwrap();
+    let bytes = env_tool();
     let (url, sha) = env.artifact("demo.bin", &bytes);
     env.config(&linking_manifest(&url, &sha, &dest, ENV_ROWS));
     assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
@@ -1207,11 +1216,10 @@ fn one_certificate_bundle(into: &Path) -> String {
 #[cfg(unix)]
 #[test]
 fn a_conditioned_row_applies_only_where_the_trust_bundle_names_that_authority() {
-    let system_env = env_binary();
     let env = Env::new("provision-trust-condition");
     let bundle = env.repo.parent().unwrap().join("one-ca.pem");
     let present_org = one_certificate_bundle(&bundle);
-    let bytes = fs::read(&system_env).unwrap();
+    let bytes = env_tool();
 
     let run = |org: &str, dest: &Path| -> String {
         let (url, sha) = env.artifact("demo.bin", &bytes);
@@ -1254,10 +1262,9 @@ fn a_conditioned_row_applies_only_where_the_trust_bundle_names_that_authority() 
 #[cfg(unix)]
 #[test]
 fn an_unreadable_trust_bundle_does_not_apply_the_bypass() {
-    let system_env = env_binary();
     let env = Env::new("provision-trust-unreadable");
     let dest = env.repo.parent().unwrap().join("bin-unreadable");
-    let bytes = fs::read(&system_env).unwrap();
+    let bytes = env_tool();
     let (url, sha) = env.artifact("demo.bin", &bytes);
     env.config(&linking_manifest(
         &url,
@@ -1460,7 +1467,7 @@ fn watched(stdout: &[u8]) -> String {
 /// repository with `vars` set.
 #[cfg(unix)]
 fn launch(env: &Env, dest: &Path, rows: &str, vars: &[(&str, &str)]) -> Output {
-    let bytes = fs::read(env_binary()).unwrap();
+    let bytes = env_tool();
     let (url, sha) = env.artifact("demo.bin", &bytes);
     // `.invalid` never resolves (RFC 2606), so nothing can answer the probe.
     let rows = format!(
