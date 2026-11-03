@@ -2267,7 +2267,9 @@ fn a_declared_rust_suite_is_reddened_by_a_mutation_on_the_module() {
 /// item 9). The toy declares the profile the caller names, `ci`, with every
 /// setting that used to reach a verdict, and a setup script its case needs; the
 /// caller also exports `NEXTEST_RETRIES` and `NEXTEST_STATUS_LEVEL`. The case
-/// fails under the mutation on its FIRST attempt only, so a retry would pass it.
+/// fails under the mutation on its FIRST attempt only, so a retry would pass it:
+/// it leaves a marker keyed by `NEXTEST_RUN_ID`, which every attempt of one run
+/// shares (cargo-nextest 0.9.104 sets no attempt number).
 ///
 /// Fails by: `--retries=0` dropped (retries pass the flaky catch: SURVIVED),
 /// `--ignore-default-filter` dropped (the default filter empties `-E`:
@@ -2284,7 +2286,9 @@ fn a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings()
          Ok(\"1\"), \"the ci profile's setup script ran\");\n    let text = \
          std::fs::read_to_string(std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"\
          policy/toy.rego\")).unwrap();\n    let live = text.lines().any(|line| line == \"limit := \
-         10\");\n    let retried = std::env::var(\"NEXTEST_ATTEMPT\").is_ok_and(|n| n != \"1\");\n    \
+         10\");\n    let run = std::env::var(\"NEXTEST_RUN_ID\").unwrap_or_default();\n    let \
+         marker = std::env::temp_dir().join(format!(\"toy-attempt-{run}\"));\n    let retried = \
+         !run.is_empty() && marker.exists();\n    let _ = std::fs::write(&marker, \"\");\n    \
          assert!(live || retried, \"{text}\");\n}\n\n#[test]\nfn \
          a_second_case_keeps_the_filter_honest() {}\n",
     );
