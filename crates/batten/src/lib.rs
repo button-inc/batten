@@ -17209,7 +17209,7 @@ fn lease_receipt_path(root: &Path, branch: &str) -> Option<std::path::PathBuf> {
     Some(
         git_dir
             .join("batten-receipts")
-            .join(format!("lease.{}", receipt::branch_slug(branch))),
+            .join(receipt::branch_receipt_name("lease", branch)),
     )
 }
 

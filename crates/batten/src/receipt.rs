@@ -1101,7 +1101,8 @@ pub fn branch_slug(branch: &str) -> String {
 /// gate silently reports a missing receipt for one that exists — a deny on a
 /// claim that was made. `tests::the_branch_receipt_filename_matches_the_minter`
 /// is what stops the two halves drifting.
-fn branch_receipt_name(check: &str, branch: &str) -> String {
+#[must_use]
+pub fn branch_receipt_name(check: &str, branch: &str) -> String {
     format!("{check}.{}", branch_slug(branch))
 }
 

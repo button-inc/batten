@@ -5551,7 +5551,7 @@ fn marker_present(marker: &str) -> bool {
 fn marker_path(git_dir: &std::path::Path, marker: &str, branch: &str) -> std::path::PathBuf {
     git_dir
         .join("batten-receipts")
-        .join(format!("{marker}.{}", crate::receipt::branch_slug(branch)))
+        .join(crate::receipt::branch_receipt_name(marker, branch))
 }
 
 //MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs

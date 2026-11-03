@@ -1197,12 +1197,7 @@ pub fn append_all(
 /// of what the call produced.
 #[must_use]
 pub fn blocked_path(git_dir: &Path, branch: &str, claim: Option<&str>) -> std::path::PathBuf {
-    let branch = crate::receipt::branch_slug(branch);
-    let name = match claim {
-        Some(claim) => format!("recorder-blocked.{branch}.{claim}"),
-        None => format!("recorder-blocked.{branch}"),
-    };
-    git_dir.join("batten-receipts").join(name)
+    record_path(git_dir, "recorder-blocked", branch, claim)
 }
 
 /// Where a branch-keyed record lives.

@@ -577,7 +577,7 @@ fn is_ready(
 /// that exists.
 #[must_use]
 pub fn receipt_name(branch: &str) -> String {
-    format!("claim.{}", crate::receipt::branch_slug(branch))
+    crate::receipt::branch_receipt_name("claim", branch)
 }
 
 /// The ids an existing receipt for this branch still speaks for.

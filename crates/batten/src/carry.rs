@@ -186,7 +186,7 @@ pub fn judge(base: &str, head: &str, other: &[String]) -> std::result::Result<us
 /// if the two drift: `verify` reports a missing receipt for one that exists.
 #[must_use]
 pub fn receipt_name(branch: &str) -> String {
-    format!("carry.{}", crate::receipt::branch_slug(branch))
+    crate::receipt::branch_receipt_name("carry", branch)
 }
 
 /// Write the carry receipt.

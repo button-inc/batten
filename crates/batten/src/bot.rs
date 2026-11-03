@@ -260,7 +260,7 @@ pub fn render(template: &str, values: &[(&str, String)]) -> Result<String> {
 /// is spelled through [`crate::receipt::branch_slug`], every receipt's own.
 #[must_use]
 pub fn receipt_name(branch: &str) -> String {
-    format!("bot.{}", crate::receipt::branch_slug(branch))
+    crate::receipt::branch_receipt_name("bot", branch)
 }
 
 /// Write the bot receipt.
