@@ -1279,8 +1279,15 @@ impl RunnerKind {
 //MUTANT gate-named-twice-swept-twice|s@^    sorted.dedup();$@@|a_sharded_sweep_judges_each_row_and_reports_each_gate_once
 //MUTANT empty-shard-staged|s@^    if mine.is_empty() {$@    if false {@|a_shard_owning_no_row_stages_nothing
 //MUTANT nextest-profile-unpinned|s@^        (String::from("NEXTEST_PROFILE"), String::from("default")),$@        (String::from("NEXTEST_PROFILE"), String::from("ci")),@|every_runner_runs_the_default_nextest_profile
+//MUTANT nextest-env-inherited|s@^        .filter(\x7ckey\x7c key.starts_with("NEXTEST_") \&\& @        .filter(\x7ckey\x7c key.is_empty() \&\& @|an_env_naming_nextest_scrubs_every_inherited_nextest_variable
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT later-suites-unread|s@^                    own.push(resolved);$@                    if own.is_empty() { own.push(resolved); }@|a_change_to_a_sources_second_suite_sweeps_its_gate
+//MUTANT retries-unpinned|s@^    "--retries=0",$@    "--retries=3",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
+//MUTANT default-filter-kept|s@^    "--ignore-default-filter",$@    "--color=never",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
+//MUTANT status-level-unpinned|s@^    "--status-level=pass",$@    "--status-level=fail",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
+//MUTANT nextest-unprobed|s@^    let nextest_absent = mine.iter().any(runs_nextest) \&\& !cargo_answers(root, "nextest", None);$@    let nextest_absent = false;@|a_declared_cargo_row_without_nextest_reads_one_runner_absent
+//MUTANT malformed-shard-unrefused|s@^    parse_shard(shard).ok_or_else(\x7c\x7c format!("{SHARD}={shard} is not `k/n` with 0 <= k < n"))$@    Ok(parse_shard(shard).unwrap_or((0, 1)))@|a_malformed_shard_is_refused_before_the_registered_runner
+//MUTANT declared-profile-dropped|s@^    if let Some(profile) = declared_profile(staged, std::env::var("NEXTEST_PROFILE").ok()) {$@    if let Some(profile) = None::<String> {@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
 /// Which registered runner owns which sources.
 ///
 /// Every source has exactly one owner: the first registered runner whose glob
@@ -1292,6 +1299,9 @@ pub struct Registry {
     owns: Vec<(RunnerKind, String)>,
     /// The `command` runner's argv, from committed `[mutate] command`.
     command: Vec<String>,
+    /// The directory a committed `[[provision]]` row installed a registered
+    /// runner's program into ([`Registry::with_provisioned`]).
+    provisioned: Option<PathBuf>,
 }
 
 impl Registry {
@@ -1334,8 +1344,21 @@ impl Registry {
         }
         Ok(Self {
             owns,
-            command: Vec::new(),
+            ..Self::default()
         })
+    }
+
+    /// Run every registered runner's program from `dir` first: the pinned
+    /// cargo-mutants a `[[provision]]` row ships, which a CI runner holds nowhere
+    /// on its `PATH` (CLOUD-2345). `None` leaves the inherited `PATH` deciding.
+    ///
+    /// A VALUE ON THE REGISTRY, NOT A PROCESS-WIDE CELL (CLOUD-2466 item 6): the
+    /// `OnceLock` this replaces kept only its first value, so a second registry in
+    /// one process ran the first one's directory.
+    #[must_use]
+    pub fn with_provisioned(mut self, dir: Option<PathBuf>) -> Self {
+        self.provisioned = dir;
+        self
     }
 
     /// Attach the `command` runner's committed argv (CLOUD-2211).
@@ -1441,42 +1464,58 @@ pub fn owned_changes(
 ///
 /// Checked before a registered runner is run (`$MUTANT_RUNNER`), so a runner
 /// that is not installed reads as could-not-look rather than as a clean sweep.
+///
+/// CARGO-MUTANTS RUNS NEXTEST (`--test-tool nextest`), so nextest is probed
+/// beside it and reported as its own [`NEXTEST`] finding (CLOUD-2466 item 4).
 #[must_use]
 pub fn unresolvable(root: &Path, registry: &Registry) -> Vec<Finding> {
-    registry
-        .registered()
-        .into_iter()
-        .filter(|kind| {
-            let args: Vec<String> = match kind {
-                RunnerKind::Declared => return false,
-                RunnerKind::CargoMutants => {
-                    vec![String::from("mutants"), String::from("--version")]
-                }
-                // A LOOKUP, NEVER A PROBE RUN: the consumer's program has no
-                // `--version` contract, and running it would be the sweep itself.
-                RunnerKind::Command => {
-                    return !registry
-                        .command
-                        .first()
-                        .is_some_and(|program| resolves(root, program));
-                }
-            };
-            !spawn(
-                root,
-                Program::Cargo,
-                &args,
-                &runner_path(),
-                HOUSEKEEPING_BOUND,
-            )
-            .is_ok_and(|ran| ran.passed())
-        })
-        .map(|kind| Finding {
-            gate: kind.id().to_owned(),
-            slug: None,
-            verdict: Verdict::RunnerAbsent,
-            owner: None,
-        })
-        .collect()
+    let provisioned = registry.provisioned.as_deref();
+    let mut absent = Vec::new();
+    for kind in registry.registered() {
+        let answers = match kind {
+            RunnerKind::Declared => true,
+            RunnerKind::CargoMutants => cargo_answers(root, "mutants", provisioned),
+            // A LOOKUP, NEVER A PROBE RUN: the consumer's program has no
+            // `--version` contract, and running it would be the sweep itself.
+            RunnerKind::Command => registry
+                .command
+                .first()
+                .is_some_and(|program| resolves(root, program)),
+        };
+        if !answers {
+            absent.push(kind.id());
+        }
+        if kind == RunnerKind::CargoMutants && !cargo_answers(root, "nextest", provisioned) {
+            absent.push(NEXTEST);
+        }
+    }
+    absent.into_iter().map(runner_absent).collect()
+}
+
+/// The runner every Cargo suite runs under, as its `runner-absent` names it.
+pub const NEXTEST: &str = "cargo-nextest";
+
+/// `cargo <subcommand> --version` answers from `root`, on `provisioned`'s `PATH`.
+fn cargo_answers(root: &Path, subcommand: &str, provisioned: Option<&Path>) -> bool {
+    let args = [subcommand, "--version"].map(String::from);
+    spawn(
+        root,
+        Program::Cargo,
+        &args,
+        &runner_path(provisioned),
+        HOUSEKEEPING_BOUND,
+    )
+    .is_ok_and(|ran| ran.passed())
+}
+
+/// The could-not-look finding for a runner whose program does not answer.
+fn runner_absent(runner: &str) -> Finding {
+    Finding {
+        gate: runner.to_owned(),
+        slug: None,
+        verdict: Verdict::RunnerAbsent,
+        owner: None,
+    }
 }
 
 /// Whether `program` names something runnable from `root`: a path (any name
@@ -1553,7 +1592,7 @@ pub fn run_registered(
     site: &Site<'_>,
     changed: &std::collections::BTreeSet<String>,
     kind: RunnerKind,
-    shard: Option<&str>,
+    shard: Option<(usize, usize)>,
     progress: &mut dyn std::io::Write,
 ) -> Result<Registered> {
     let Site {
@@ -1595,7 +1634,8 @@ pub fn run_registered(
     let patch = runs.join("change.diff");
     crate::durable::replace(&patch, diff)
         .with_context(|| format!("mutate: could not write {}", patch.display()))?;
-    let shards = shard_plan(root, staged.dir(), &patch, &sources, shard)?;
+    let env = nextest_env(root, staged.dir(), registry.provisioned.as_deref());
+    let shards = shard_plan(staged.dir(), &patch, &sources, shard, &env)?;
     let assigned = shards.iter().filter(|on| **on != Place::Off).count();
     let mut position = 0usize;
     for (index, (source, on)) in sources.iter().zip(shards).enumerate() {
@@ -1603,7 +1643,7 @@ pub fn run_registered(
         // build, no suite, no finding, which another shard carries.
         let local = match on {
             Place::Off => continue,
-            Place::On(local) => shard.and_then(parse_shard).map(|(_, n)| (local, n)),
+            Place::On(local) => shard.map(|(_, n)| (local, n)),
             Place::Unsharded => None,
         };
         position += 1;
@@ -1633,7 +1673,7 @@ pub fn run_registered(
             staged.dir(),
             Program::Cargo,
             &args,
-            &suite_env(root),
+            &env,
             runner_bound(),
             Said::Streamed,
         )?;
@@ -1672,16 +1712,15 @@ enum Place {
 /// Each source's [`Place`] on `shard`: [`Place::Unsharded`] where the sweep is
 /// not sharded, else [`source_shards`] over the change's listed mutants.
 fn shard_plan(
-    root: &Path,
     staged: &Path,
     patch: &Path,
     sources: &[String],
-    shard: Option<&str>,
+    shard: Option<(usize, usize)>,
+    env: &[(String, String)],
 ) -> Result<Vec<Place>> {
-    let Some(raw) = shard else {
+    let Some((k, n)) = shard else {
         return Ok(vec![Place::Unsharded; sources.len()]);
     };
-    let (k, n) = shard_parsed(raw).map_err(|reason| anyhow::anyhow!("mutate: {reason}"))?;
     let mut list = vec![
         String::from("mutants"),
         String::from("--list"),
@@ -1692,13 +1731,7 @@ fn shard_plan(
     for source in sources {
         list.extend([String::from("--file"), source.clone()]);
     }
-    let listed = spawn(
-        staged,
-        Program::Cargo,
-        &list,
-        &suite_env(root),
-        build_bound(),
-    )?;
+    let listed = spawn(staged, Program::Cargo, &list, env, build_bound())?;
     if !listed.passed() {
         bail!("mutate: cargo-mutants could not list the change's mutants");
     }
@@ -1757,15 +1790,30 @@ fn source_args(
         ]);
     }
     // `-v`: a line per mutant as it is judged, caught ones included, so the
-    // log says how far a run got against what it was given.
-    args.extend([
-        String::from("-v"),
-        String::from("--"),
-        String::from("-E"),
-        terms_of(scope),
-    ]);
+    // log says how far a run got against what it was given. The arguments after
+    // `--` reach only the test phase's `cargo nextest run`, which is where the
+    // verdict flags belong: `--cargo-arg` would hand them to the build as well.
+    args.extend([String::from("-v"), String::from("--")]);
+    args.extend(NEXTEST_VERDICT_FLAGS.map(String::from));
+    args.extend([String::from("-E"), terms_of(scope)]);
     args
 }
+
+/// The nextest settings that decide a verdict, chosen by the sweep on BOTH of
+/// its nextest runners (the declared Cargo arm and cargo-mutants) so no profile
+/// or inherited variable does (CLOUD-2466 item 9). `retries` turns a killing
+/// case's flaky pass into a survivor; a profile's `default-filter` intersects
+/// with `-E` and empties the selection; a `status-level` below `pass` hides the
+/// lines the declared arm counts, so its clean run names no case.
+///
+/// THE TIMEOUT IS NOT HERE, because cargo-nextest 0.9.104 has no flag for it
+/// (`cargo nextest run --help`): a profile's `terminate-after` still bounds a
+/// case inside the sweep's own bound (CLOUD-2590).
+const NEXTEST_VERDICT_FLAGS: [&str; 3] = [
+    "--retries=0",
+    "--ignore-default-filter",
+    "--status-level=pass",
+];
 
 /// One mutant's test bound in a sharded run, which skips the baseline that
 /// would otherwise measure it: the book's CI recipe's `--timeout 300`.
@@ -2450,6 +2498,12 @@ fn spawn_as(
     )]
     let mut command = std::process::Command::new(program);
     command.args(args).current_dir(dir);
+    for key in scrubbed(
+        std::env::vars_os().filter_map(|(key, _)| key.into_string().ok()),
+        env,
+    ) {
+        command.env_remove(key);
+    }
     for (key, value) in env {
         command.env(key, value);
     }
@@ -2898,8 +2952,7 @@ const SUITE_TARGET: &str = "target/mutate-cargo";
 /// sweep and a concurrent local `cargo test` would resolve the same scratch
 /// PATHS. That says nothing about the artifact cache above it.
 fn suite_env(root: &Path) -> Vec<(String, String)> {
-    let mut env = runner_path();
-    env.extend([
+    vec![
         (
             String::from("CARGO_TARGET_DIR"),
             root.join(SUITE_TARGET).to_string_lossy().into_owned(),
@@ -2921,38 +2974,71 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
         // CLOUD-2588; a consumer's still may)
         // names a profile the staged tree may not declare, a fixture's or a
         // consumer's, and nextest then exits before selecting a case: every
-        // declared Cargo row read `suite-did-not-run` in CI alone. A declared
-        // non-default profile is not kept either, so its settings cannot reach
-        // a verdict; `[profile.default]`'s own settings and the other inherited
-        // `NEXTEST_*` variables still do (CLOUD-2466 item 9).
+        // declared Cargo row read `suite-did-not-run` in CI alone. A profile
+        // the staged tree DOES declare is kept by [`nextest_env`], for its
+        // setup scripts; its verdict settings are overridden by
+        // [`NEXTEST_VERDICT_FLAGS`] (CLOUD-2466 item 9).
         (String::from("NEXTEST_PROFILE"), String::from("default")),
-    ]);
+    ]
+}
+
+/// The environment a nextest run in `staged` carries: [`suite_env`], with the
+/// inherited `NEXTEST_PROFILE` kept where `staged` declares that profile
+/// ([`declared_profile`]), and `PATH` led by `provisioned` ([`runner_path`]).
+///
+/// [`spawn_as`] scrubs every OTHER inherited `NEXTEST_*` variable from a child
+/// this env reaches, because it names nextest's profile ([`scrubbed`]).
+fn nextest_env(root: &Path, staged: &Path, provisioned: Option<&Path>) -> Vec<(String, String)> {
+    let mut env = suite_env(root);
+    if let Some(profile) = declared_profile(staged, std::env::var("NEXTEST_PROFILE").ok()) {
+        for (key, value) in &mut env {
+            if key == "NEXTEST_PROFILE" {
+                value.clone_from(&profile);
+            }
+        }
+    }
+    env.extend(runner_path(provisioned));
     env
 }
 
-/// The directory a committed `[[provision]]` row installed a registered
-/// runner's program into, set once by the verb before it runs ([`use_provisioned`]).
+/// `profile` where `staged`'s `.config/nextest.toml` declares `[profile.<it>]`,
+/// else `None`: an undeclared profile stops nextest before it selects a case.
 ///
-/// PROCESS-WIDE, AND THAT IS A CHOICE AGAINST TWO BREAKS: a field on `Registry`
-/// fails the existing struct-literal case that `test-replay` replays, and a new
-/// parameter on `run_registered` or `unresolvable` is a semver break of both.
-static PROVISIONED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-
-/// Run every registered runner's program from `dir` first: the pinned
-/// cargo-mutants a `[[provision]]` row ships, which a CI runner holds nowhere
-/// on its `PATH` (CLOUD-2345). Only the first call takes effect.
-pub fn use_provisioned(dir: PathBuf) {
-    let _ = PROVISIONED.set(dir);
+/// READ FROM THE STAGED COPY, never the live tree, which is what the reverted
+/// 035fd4ea variant got wrong: the staged tree is the one nextest runs in.
+fn declared_profile(staged: &Path, profile: Option<String>) -> Option<String> {
+    let profile = profile.filter(|name| !name.trim().is_empty())?;
+    let text = fs::read_to_string(staged.join(".config/nextest.toml")).ok()?;
+    let config: toml::Table = text.parse().ok()?;
+    config
+        .get("profile")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|profiles| profiles.contains_key(&profile))
+        .then_some(profile)
 }
 
-/// `PATH` with [`use_provisioned`]'s directory ahead of the inherited one, or
-/// nothing where none was set, so the inherited `PATH` passes through unchanged.
-fn runner_path() -> Vec<(String, String)> {
-    let Some(dir) = PROVISIONED.get() else {
+/// The inherited variables to remove from a child whose `env` names nextest's
+/// profile: every `NEXTEST_*` the env does not set itself (CLOUD-2466 item 9).
+/// `NEXTEST_RETRIES`, `NEXTEST_STATUS_LEVEL` and the rest otherwise reach the
+/// run, and a verdict with them. Nothing, for an env that names no profile.
+fn scrubbed(inherited: impl IntoIterator<Item = String>, env: &[(String, String)]) -> Vec<String> {
+    if !env.iter().any(|(key, _)| key == "NEXTEST_PROFILE") {
+        return Vec::new();
+    }
+    inherited
+        .into_iter()
+        .filter(|key| key.starts_with("NEXTEST_") && !env.iter().any(|(set, _)| set == key))
+        .collect()
+}
+
+/// `PATH` with `provisioned` ahead of the inherited one, or nothing where it is
+/// `None`, so the inherited `PATH` passes through unchanged.
+fn runner_path(provisioned: Option<&Path>) -> Vec<(String, String)> {
+    let Some(dir) = provisioned else {
         return Vec::new();
     };
     let inherited = std::env::var_os("PATH").unwrap_or_default();
-    let paths = std::iter::once(dir.clone()).chain(std::env::split_paths(&inherited));
+    let paths = std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&inherited));
     std::env::join_paths(paths).map_or_else(
         |_| Vec::new(),
         |joined| vec![(String::from("PATH"), joined.to_string_lossy().into_owned())],
@@ -3042,8 +3128,8 @@ fn spawn_arm(
 /// program used to end the whole sweep with an error naming nothing about the
 /// gates it never reached.
 fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selection {
-    let env = suite_env(root);
     let dir = staged.dir();
+    let env = nextest_env(root, dir, None);
     // Where a `JUnit` report lands for the one arm whose verdict is a file
     // rather than a stream. Beside the captures, never inside the tree under
     // judgement.
@@ -3221,19 +3307,17 @@ fn invocation(dir: &Path, suite: &Suite, want: &str, junit: &Path) -> (PathBuf, 
         // to `names-no-case` rather than to nextest's own error.
         Suite::Cargo { .. } => {
             let filter = format!("test({want})");
-            (
-                dir.to_path_buf(),
-                argv(&[
-                    "cargo",
-                    "nextest",
-                    "run",
-                    "--no-fail-fast",
-                    "--no-tests=pass",
-                    "--color=never",
-                    "-E",
-                    &filter,
-                ]),
-            )
+            let mut words = vec![
+                "cargo",
+                "nextest",
+                "run",
+                "--no-fail-fast",
+                "--no-tests=pass",
+                "--color=never",
+            ];
+            words.extend(NEXTEST_VERDICT_FLAGS);
+            words.extend(["-E", &filter]);
+            (dir.to_path_buf(), argv(&words))
         }
         // `tofu test` runs in the module's root, and a test file lives there or
         // in its `tests/` directory — so the root is read off the path and
@@ -4238,7 +4322,7 @@ fn build_if_owed(
             staged.dir(),
             Program::Cargo,
             &args,
-            &suite_env(root),
+            &nextest_env(root, staged.dir(), None),
             build_bound(),
         );
     }
@@ -4360,11 +4444,26 @@ pub fn sweep_shard(
         .filter(|(number, _)| shard_owns_row(*number, shard))
         .map(|(_, row)| row)
         .collect();
+    // ONE `runner-absent` FOR A CONSUMER WITHOUT NEXTEST (CLOUD-2466 item 4),
+    // probed once before anything is staged, where every Cargo row used to read
+    // `suite-did-not-run` on its own. Those rows are not judged; the rest are.
+    let runs_nextest = |(_, gate, row): &(&String, &Gate, &Row)| {
+        !declares_own_case(root, row) && matches!(gate.suite_for(row), Some(Suite::Cargo { .. }))
+    };
+    let nextest_absent = mine.iter().any(runs_nextest) && !cargo_answers(root, "nextest", None);
+    let mine: Vec<_> = if nextest_absent {
+        mine.into_iter().filter(|row| !runs_nextest(row)).collect()
+    } else {
+        mine
+    };
     // The gates holding a row of this shard's: only they can owe it a build.
     let mut holding: Vec<String> = mine.iter().map(|(name, _, _)| (*name).clone()).collect();
     holding.dedup();
     // Disjoint from the gates reported above, which are never runnable.
     let gates = findings.len() + holding.len();
+    if nextest_absent {
+        findings.push(runner_absent(NEXTEST));
+    }
     let total = mine.len();
     let _ = writeln!(
         progress,
@@ -4875,13 +4974,17 @@ mod tests {
 
     /// Fails by: the provisioned runner's directory dropped, or put after the
     /// inherited `PATH`, so a CI runner with no cargo-mutants reads
-    /// `runner-absent` and a host's own version runs instead of the pin. The
-    /// one test that sets the process-wide directory.
+    /// `runner-absent` and a host's own version runs instead of the pin; or a
+    /// registry without one changing `PATH` at all.
     #[test]
     fn a_provisioned_runner_directory_leads_every_runner_path() {
         let dir = PathBuf::from("/provisioned/cargo-mutants");
-        use_provisioned(dir.clone());
-        let env = suite_env(Path::new("/repo"));
+        let registry = Registry::default().with_provisioned(Some(dir.clone()));
+        let env = nextest_env(
+            Path::new("/repo"),
+            Path::new("/staged"),
+            registry.provisioned.as_deref(),
+        );
         let path = env
             .iter()
             .find(|(key, _)| key == "PATH")
@@ -4892,7 +4995,62 @@ mod tests {
             Some(dir),
             "the provisioned directory must come first: {path}"
         );
-        assert_eq!(runner_path().len(), 1, "unresolvable reads the same PATH");
+        assert_eq!(
+            runner_path(registry.provisioned.as_deref()).len(),
+            1,
+            "unresolvable reads the same PATH"
+        );
+        assert!(
+            runner_path(Registry::default().provisioned.as_deref()).is_empty(),
+            "a registry with no provisioned directory leaves PATH inherited"
+        );
+    }
+
+    /// Fails by: an inherited `NEXTEST_*` variable left on a nextest child, so
+    /// `NEXTEST_RETRIES` reads a killing case's flaky pass as a survivor; one the
+    /// env sets itself removed; or a child that names no profile (the consumer's
+    /// own `command` runner) scrubbed.
+    #[test]
+    fn an_env_naming_nextest_scrubs_every_inherited_nextest_variable() {
+        let inherited = [
+            "NEXTEST_RETRIES",
+            "NEXTEST_PROFILE",
+            "PATH",
+            "NEXTEST_STATUS_LEVEL",
+        ]
+        .map(String::from);
+        let env = suite_env(Path::new("/repo"));
+        assert_eq!(
+            scrubbed(inherited.clone(), &env),
+            ["NEXTEST_RETRIES", "NEXTEST_STATUS_LEVEL"]
+        );
+        assert!(scrubbed(inherited, &[]).is_empty());
+    }
+
+    /// Fails by: an inherited profile kept that the staged tree does not
+    /// declare (nextest then exits before selecting a case), a declared one
+    /// dropped (its setup scripts never run), or the live tree read in place of
+    /// the staged copy.
+    #[test]
+    fn a_declared_profile_is_kept_and_an_undeclared_one_is_not() {
+        let staged = std::env::temp_dir().join(format!("batten-profile-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&staged);
+        fs::create_dir_all(staged.join(".config")).expect("dirs");
+        fs::write(
+            staged.join(".config/nextest.toml"),
+            "[profile.ci]\nretries = 3\n\n[profile.ci.junit]\npath = \"j.xml\"\n",
+        )
+        .expect("config");
+        let kept = |profile: &str| declared_profile(&staged, Some(profile.to_owned()));
+        assert_eq!(kept("ci"), Some(String::from("ci")));
+        assert_eq!(kept("narrow"), None);
+        assert_eq!(kept(" "), None);
+        assert_eq!(declared_profile(&staged, None), None);
+        assert_eq!(
+            declared_profile(Path::new("/no/such/tree"), Some(String::from("ci"))),
+            None
+        );
+        let _ = fs::remove_dir_all(&staged);
     }
 
     /// Fails by: the pinned profile dropped or changed, so an inherited
@@ -5225,7 +5383,7 @@ mod tests {
                 (RunnerKind::CargoMutants, String::from("**/*.rs")),
                 (RunnerKind::Declared, String::from("crates/**")),
             ],
-            command: Vec::new(),
+            ..Registry::default()
         };
         assert!(registry.owner("crates/a/src/lib.rs").is_err());
         assert!(registry.declares(&row_from("crates/a/src/lib.rs")));
@@ -6373,16 +6531,17 @@ mod tests {
             .expect("commit");
         put(&root, "elsewhere/x.rs", "fn f() {\n    let _ = 1;\n}\n");
         let changed = std::collections::BTreeSet::from([String::from("elsewhere/x.rs")]);
-        let run = |registry: &Registry, kind: RunnerKind, shard: Option<&str>, name: &str| {
-            let work = fixture(name);
-            let site = Site {
-                root: &root,
-                base: "HEAD",
-                registry,
-                work: &work,
+        let run =
+            |registry: &Registry, kind: RunnerKind, shard: Option<(usize, usize)>, name: &str| {
+                let work = fixture(name);
+                let site = Site {
+                    root: &root,
+                    base: "HEAD",
+                    registry,
+                    work: &work,
+                };
+                run_registered(&site, &changed, kind, shard, &mut std::io::sink())
             };
-            run_registered(&site, &changed, kind, shard, &mut std::io::sink())
-        };
         let declared = run(
             &Registry::default(),
             RunnerKind::Declared,
@@ -6414,7 +6573,7 @@ mod tests {
             run(
                 &owned,
                 RunnerKind::CargoMutants,
-                Some("0/1"),
+                Some((0, 1)),
                 "registered-sharded",
             )
             .is_err(),

@@ -17352,12 +17352,15 @@ fn narrow_to_change(
 }
 
 /// `MUTANT_RUNNER=<id>`: run that registered runner over its half of the change,
-/// optionally one `$MUTANT_SHARD` of it, and report as the sweep does.
+/// optionally the `$MUTANT_SHARD` [`run_mutate_sweep`] parsed, and report as the
+/// sweep does. The shard arrives parsed (CLOUD-2541): a bad value is that verb's
+/// usage error, never a second refusal or a silent unsharded run here.
 fn run_registered_runner(
     root: &Path,
     id: &str,
     registry: &mutate::Registry,
     change: Option<(String, std::collections::BTreeSet<String>)>,
+    shard: Option<(usize, usize)>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -17385,11 +17388,10 @@ fn run_registered_runner(
     // every registered runner rather than gated on the kind: the directory only
     // answers `cargo mutants`, so another runner is unaffected by it. Where no row
     // ships it, the inherited `PATH` decides and `unresolvable` reports absence.
-    if let Some(dir) = provisioned_binary("cargo-mutants", &Overrides::default())
-        .and_then(|binary| binary.parent().map(Path::to_path_buf))
-    {
-        mutate::use_provisioned(dir);
-    }
+    let registry = &registry.clone().with_provisioned(
+        provisioned_binary("cargo-mutants", &Overrides::default())
+            .and_then(|binary| binary.parent().map(Path::to_path_buf)),
+    );
     let absent = mutate::unresolvable(root, registry);
     if !absent.is_empty() {
         for finding in &absent {
@@ -17397,7 +17399,6 @@ fn run_registered_runner(
         }
         return Ok(ExitCode::Internal);
     }
-    let shard = mutate::shard_set(std::env::var(mutate::SHARD).ok());
     let work = mutate::work_dir(root);
     std::fs::create_dir_all(&work)?;
     let site = mutate::Site {
@@ -17406,7 +17407,7 @@ fn run_registered_runner(
         registry,
         work: &work,
     };
-    let run = match mutate::run_registered(&site, &changed, kind, shard.as_deref(), err) {
+    let run = match mutate::run_registered(&site, &changed, kind, shard, err) {
         Ok(run) => run,
         Err(reason) => {
             writeln!(err, "::error:: mutate: {reason}")?;
@@ -17423,7 +17424,7 @@ fn run_registered_runner(
     };
     let code = sweep.code();
     let shard = shard
-        .map(|shard| format!(" (shard {shard})"))
+        .map(|(k, n)| format!(" (shard {k}/{n})"))
         .unwrap_or_default();
     if code == ExitCode::Success && kind == mutate::RunnerKind::Command {
         // A command runner reports no count, so none is printed (CLOUD-2211).
@@ -17634,7 +17635,7 @@ fn run_mutate_sweep(
             };
             // BOTH HALVES RUN, AND THE FIRST REFUSAL IS THE VERDICT: a declared
             // finding must not hide behind a clean registered run, nor the reverse.
-            let registered = run_registered_runner(root, &id, &registry, change, out, err)?;
+            let registered = run_registered_runner(root, &id, &registry, change, parsed, out, err)?;
             Ok(if declared == ExitCode::Success {
                 registered
             } else {

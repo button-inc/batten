@@ -303,6 +303,31 @@ fn a_malformed_shard_is_refused_before_the_sweep() {
     assert!(err.contains("MUTANT_SHARD=two/four"), "{err}");
 }
 
+/// The registered runner takes the shard the sweep already parsed (CLOUD-2541),
+/// so a malformed `$MUTANT_SHARD` under `MUTANT_RUNNER=cargo-mutants` is the one
+/// usage error, never `shard_plan`'s second refusal (`mutate: mutate: ...`, exit
+/// 3) nor an unsharded run. Fails by: the sweep's refusal dropped, which leaves
+/// nothing downstream able to refuse the value.
+#[test]
+fn a_malformed_shard_is_refused_before_the_registered_runner() {
+    let root = toy("shard-malformed-registered");
+    let answer = common::batten()
+        .args(["mutate", "sweep"])
+        .current_dir(&root)
+        .env("MUTANT_GATES", "nope")
+        .env("MUTANT_TASKS", "mise.toml")
+        .env("MUTANT_RUNNERS", "cargo-mutants=crates/**/*.rs")
+        .env("MUTANT_RUNNER", "cargo-mutants")
+        .env("MUTANT_CHANGED_SINCE", "HEAD")
+        .env(batten::mutate::SHARD, "two/four")
+        .output()
+        .expect("run batten mutate");
+    let err = stderr(&answer);
+    assert_eq!(answer.status.code(), Some(1), "the usage code: {err}");
+    assert_eq!(err.matches("MUTANT_SHARD=two/four").count(), 1, "{err}");
+    assert!(!err.contains("mutate: mutate:"), "{err}");
+}
+
 /// ANTI-VACUITY FOR THE SWEEP'S OWN WATCHDOG (CLOUD-1726).
 ///
 /// The bound moved out of `BATS_TEST_TIMEOUT` and into the sweep, because the
@@ -2236,6 +2261,86 @@ fn a_declared_rust_suite_is_reddened_by_a_mutation_on_the_module() {
     let (code, out, err) = sweep(&root, "toy");
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("every one caught"), "{out}");
+}
+
+/// NO NEXTEST SETTING THE SWEEP DID NOT CHOOSE DECIDES A VERDICT (CLOUD-2466
+/// item 9). The toy declares the profile the caller names, `ci`, with every
+/// setting that used to reach a verdict, and a setup script its case needs; the
+/// caller also exports `NEXTEST_RETRIES` and `NEXTEST_STATUS_LEVEL`. The case
+/// fails under the mutation on its FIRST attempt only, so a retry would pass it.
+///
+/// Fails by: `--retries=0` dropped (retries pass the flaky catch: SURVIVED),
+/// `--ignore-default-filter` dropped (the default filter empties `-E`:
+/// `names-no-case`), `--status-level=pass` dropped (no PASS line is printed:
+/// `names-no-case`), the declared profile not kept (its setup script never runs:
+/// `case-already-red`), or the inherited variables reaching nextest.
+#[test]
+fn a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings() {
+    let root = rust_tier_repo("rust-tier-ci-profile", "limit := 10");
+    write(
+        &root,
+        "tests/tier.rs",
+        "#[test]\nfn the_limit_is_ten() {\n    assert_eq!(std::env::var(\"TOY_READY\").as_deref(), \
+         Ok(\"1\"), \"the ci profile's setup script ran\");\n    let text = \
+         std::fs::read_to_string(std::path::Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"\
+         policy/toy.rego\")).unwrap();\n    let live = text.lines().any(|line| line == \"limit := \
+         10\");\n    let retried = std::env::var(\"NEXTEST_ATTEMPT\").is_ok_and(|n| n != \"1\");\n    \
+         assert!(live || retried, \"{text}\");\n}\n\n#[test]\nfn \
+         a_second_case_keeps_the_filter_honest() {}\n",
+    );
+    write(
+        &root,
+        ".config/nextest.toml",
+        "experimental = [\"setup-scripts\"]\n\n[scripts.setup.ready]\ncommand = \"sh -c 'echo \
+         TOY_READY=1 >> \\\"$NEXTEST_ENV\\\"'\"\n\n[profile.ci]\nretries = 3\ndefault-filter = \
+         \"not test(the_limit_is_ten)\"\nstatus-level = \"fail\"\n\n[[profile.ci.scripts]]\nfilter \
+         = \"all()\"\nsetup = \"ready\"\n",
+    );
+    track(&root);
+    let answer = common::batten()
+        .args(["mutate", "sweep"])
+        .current_dir(&root)
+        .env("MUTANT_GATES", "toy")
+        .env("MUTANT_TASKS", "mise.toml")
+        .env("NEXTEST_PROFILE", "ci")
+        .env("NEXTEST_RETRIES", "3")
+        .env("NEXTEST_STATUS_LEVEL", "none")
+        .output()
+        .expect("run batten mutate");
+    let (out, err) = (stdout(&answer), stderr(&answer));
+    assert_eq!(answer.status.code(), Some(0), "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}{err}");
+}
+
+/// A consumer without cargo-nextest reads ONE `runner-absent` (CLOUD-2466 item
+/// 4), never `suite-did-not-run` on every declared Cargo row. `PATH` holds only
+/// the directory of the `cargo` running this suite, which carries no nextest.
+/// Fails by: the probe dropped, so each row runs and reads `suite-did-not-run`.
+#[test]
+fn a_declared_cargo_row_without_nextest_reads_one_runner_absent() {
+    let root = rust_tier_repo("rust-tier-no-nextest", "limit := 10");
+    let cargo = PathBuf::from(env!("CARGO"));
+    let only_cargo = cargo.parent().expect("cargo lives in a directory");
+    assert!(
+        !only_cargo.join("cargo-nextest").exists(),
+        "this case needs a cargo directory without nextest"
+    );
+    let answer = common::batten()
+        .args(["mutate", "sweep"])
+        .current_dir(&root)
+        .env("PATH", only_cargo)
+        .env("MUTANT_GATES", "toy")
+        .env("MUTANT_TASKS", "mise.toml")
+        .output()
+        .expect("run batten mutate");
+    let (out, err) = (stdout(&answer), stderr(&answer));
+    assert_eq!(answer.status.code(), Some(3), "{out}{err}");
+    assert_eq!(
+        out.matches("cargo-nextest runner-absent").count(),
+        1,
+        "{out}{err}"
+    );
+    assert!(!out.contains("suite-did-not-run"), "{out}{err}");
 }
 
 #[test]
