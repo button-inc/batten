@@ -3434,6 +3434,16 @@ const DRAIN_LOCK: &str = "batten-state-record.lock";
 /// (CLOUD-2536).
 const DRAIN_SCAN_LOCK: &str = "batten-state-scan.lock";
 
+/// A drain lock file, created where absent and never truncated, so a holder's
+/// lock survives the next opener.
+fn open_drain_lock(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+}
+
 /// Take the store's write lock, answering whether this caller may write.
 ///
 /// # Who may block, and getting it wrong cost 100s
@@ -3578,11 +3588,7 @@ fn run_state_record(
     // recording the tree. Only drains take it, so neither the mediated path nor
     // the verb a human ran can lose a record to it.
     let _scanning = if scan_tree && std::env::var_os(DRAIN_MARKER).is_some() {
-        let scan_lock = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(git_dir.join(DRAIN_SCAN_LOCK))?;
+        let scan_lock = open_drain_lock(&git_dir.join(DRAIN_SCAN_LOCK))?;
         if fs4::FileExt::try_lock(&scan_lock).is_err() {
             return Ok(ExitCode::Success);
         }
@@ -3591,11 +3597,7 @@ fn run_state_record(
         None
     };
     let lock_path = git_dir.join(DRAIN_LOCK);
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_path)?;
+    let lock = open_drain_lock(&lock_path)?;
     // **The ref comes from HERE, not from `repo`.** `repo_root` answers with the
     // MAIN worktree's root — which is exactly what makes every linked worktree
     // share one store — so asking it for the branch would report the main

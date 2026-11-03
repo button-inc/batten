@@ -118,10 +118,10 @@ fn fixture(name: &str) -> (PathBuf, PathBuf, PathBuf) {
     (repo, shims, home)
 }
 
-/// `args` run in `repo` with the shims first on `PATH`, `payload` on stdin;
-/// returns the pid it ran as.
+/// `args` in `repo` with the shims first on `PATH` and `home` as the state
+/// home, output discarded.
 #[cfg(unix)]
-fn run(repo: &Path, shims: &Path, home: &Path, args: &[&str], payload: &str) -> u32 {
+fn shimmed(repo: &Path, shims: &Path, home: &Path, args: &[&str]) -> common::Batten {
     let path = std::env::var_os("PATH").unwrap_or_default();
     let mut dirs = vec![shims.to_path_buf()];
     dirs.extend(std::env::split_paths(&path));
@@ -132,9 +132,17 @@ fn run(repo: &Path, shims: &Path, home: &Path, args: &[&str], payload: &str) -> 
         .args(args)
         .env("PATH", std::env::join_paths(dirs).expect("a joinable PATH"))
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
-        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    command
+}
+
+/// `args` run in `repo` with the shims first on `PATH`, `payload` on stdin;
+/// returns the pid it ran as.
+#[cfg(unix)]
+fn run(repo: &Path, shims: &Path, home: &Path, args: &[&str], payload: &str) -> u32 {
+    let mut command = shimmed(repo, shims, home, args);
+    command.stdin(Stdio::piped());
     let mut child = command.spawn().expect("spawn batten");
     let pid = child.id();
     child
@@ -151,19 +159,8 @@ fn run(repo: &Path, shims: &Path, home: &Path, args: &[&str], payload: &str) -> 
 /// when `drain` is false; returns the pid it ran as.
 #[cfg(unix)]
 fn record(repo: &Path, shims: &Path, home: &Path, drain: bool) -> u32 {
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let mut dirs = vec![shims.to_path_buf()];
-    dirs.extend(std::env::split_paths(&path));
-    let mut command = common::batten();
-    common::state_home(&mut command, home);
-    command
-        .current_dir(repo)
-        .args(["state", "record"])
-        .env("PATH", std::env::join_paths(dirs).expect("a joinable PATH"))
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    let mut command = shimmed(repo, shims, home, &["state", "record"]);
+    command.stdin(Stdio::null());
     if drain {
         command.env("BATTEN_STATE_DRAIN", "1");
     } else {

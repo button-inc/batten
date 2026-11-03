@@ -3976,9 +3976,16 @@ fn blob_side(
 /// flags this used to pin existed solely to stop the user's `git config` shaping
 /// the diff, and [`open`]'s isolated handle declines that configuration
 /// outright.
-fn patch_id_index(dir: &Path, window: Window, range: &str) -> Result<BTreeMap<PatchId, String>> {
+///
+/// The caller holds `memo` across both sides of a landing and saves it once, so
+/// the store is read and rewritten once per call rather than once per side.
+fn patch_id_index(
+    dir: &Path,
+    memo: &mut IdentityMemo,
+    window: Window,
+    range: &str,
+) -> Result<BTreeMap<PatchId, String>> {
     let repo = open(dir)?;
-    let mut memo = IdentityMemo::load(dir);
     let mut index = BTreeMap::new();
     for commit in rev_list(dir, window, range)? {
         let id = gix::ObjectId::from_hex(commit.as_bytes())
@@ -3987,7 +3994,6 @@ fn patch_id_index(dir: &Path, window: Window, range: &str) -> Result<BTreeMap<Pa
             index.insert(PatchId::parse(&hex)?, commit);
         }
     }
-    memo.save();
     Ok(index)
 }
 
@@ -4393,11 +4399,13 @@ pub fn landing(repo: &Path, target: &str, head: &str, window: Window) -> Result<
     let head_commit = resolve_commit(repo, head, "head")?;
 
     let target_commits = rev_list(repo, window, &target_commit)?;
-    let target_index = patch_id_index(repo, window, &target_commit)?;
+    let mut memo = IdentityMemo::load(repo);
+    let target_index = patch_id_index(repo, &mut memo, window, &target_commit)?;
 
     let range = format!("{target_commit}..{head_commit}");
     let head_commits = rev_list(repo, window, &range)?;
-    let head_index = patch_id_index(repo, window, &range)?;
+    let head_index = patch_id_index(repo, &mut memo, window, &range)?;
+    memo.save();
     // `patch_id_index` is keyed by identity for target lookups; the head side
     // needs the inverse, and building it here keeps one pipeline per side.
     let head_ids: BTreeMap<&str, &PatchId> = head_index
