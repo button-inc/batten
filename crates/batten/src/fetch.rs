@@ -318,7 +318,7 @@ pub struct Call<'a> {
     /// cannot also be its own precondition.
     pub direct: bool,
     /// The name of a header in `headers` the caller declares a credential,
-    /// beyond the fixed names [`is_sensitive`] already knows.
+    /// beyond the fixed names [`is_credential`] already knows.
     ///
     /// An MCP server's `Credential.header` may name its own header (an
     /// `X-Session-Token`), and nothing in a header's NAME says it carries a
@@ -369,14 +369,16 @@ impl std::fmt::Debug for Call<'_> {
     }
 }
 
-/// Whether a header's VALUE is a credential.
+/// Whether a header's VALUE is a credential: one of the four fixed names, or
+/// the one the caller declared ([`Call::credential`]).
 ///
 /// A denylist, and the direction is deliberate: a header nobody thought about
 /// renders, because an over-redacted report is unreadable and gets switched off,
 /// while these four names cover every credential-bearing header this crate
-/// sends or is likely to. Matched case-insensitively, since HTTP field names
+/// sends or is likely to. A header named anything else is a credential only
+/// when its caller says so. Matched case-insensitively, since HTTP field names
 /// are.
-fn is_sensitive(name: &str) -> bool {
+fn is_credential(name: &str, declared: Option<&str>) -> bool {
     const SENSITIVE: [&str; 4] = [
         "authorization",
         "proxy-authorization",
@@ -385,13 +387,9 @@ fn is_sensitive(name: &str) -> bool {
     ];
     SENSITIVE
         .iter()
+        .copied()
+        .chain(declared)
         .any(|candidate| name.eq_ignore_ascii_case(candidate))
-}
-
-/// Whether a header carries a credential: one [`is_sensitive`] names, or the
-/// one the caller declared ([`Call::credential`]).
-fn is_credential(name: &str, declared: Option<&str>) -> bool {
-    is_sensitive(name) || declared.is_some_and(|declared| name.eq_ignore_ascii_case(declared))
 }
 
 /// Run a sequence of calls on **one** runtime and one connection pool.
@@ -721,7 +719,7 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
 /// The headers a hop from `from` to `next` carries: every one on the same
 /// origin, and every one but the credentials on another.
 ///
-/// A credential is whatever [`is_credential`] names, the one list `Debug`
+/// A credential is whatever [`is_credential`] names, the one predicate `Debug`
 /// redacts by: `Cookie` and `Proxy-Authorization` as well as `Authorization`,
 /// plus the header the caller declared. Dropping `Authorization` alone let the
 /// rest reach the redirect target (CLOUD-2543).
@@ -811,10 +809,7 @@ fn sent_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
 /// host, answers `false` — a redirect this cannot reason about is one the
 /// credential does not follow.
 fn same_origin(from: &str, to: &str) -> bool {
-    match (origin_of(from), origin_of(to)) {
-        (Some(from), Some(to)) => from == to,
-        _ => false,
-    }
+    origin_of(from).is_some_and(|from| origin_of(to) == Some(from))
 }
 
 /// A URL's scheme, host and effective port, case-folded, or `None` when it
@@ -994,7 +989,7 @@ mod tests {
             .collect()
     }
 
-    /// Every credential stays on its origin: the fixed names `is_sensitive`
+    /// Every credential stays on its origin: the fixed names `is_credential`
     /// knows, `Cookie` and `Proxy-Authorization` among them, and the header the
     /// caller declared (CLOUD-2543). Everything else follows anywhere.
     #[test]
@@ -1193,9 +1188,10 @@ mod tests {
 
     #[test]
     fn a_credential_bearing_header_is_redacted_from_a_call_s_debug() {
-        assert!(is_sensitive("Authorization"));
-        assert!(is_sensitive("set-cookie"));
-        assert!(!is_sensitive("accept"));
+        assert!(is_credential("Authorization", None));
+        assert!(is_credential("set-cookie", None));
+        assert!(!is_credential("accept", None));
+        assert!(is_credential("X-Session-Token", Some("x-session-token")));
         let headers = [
             (
                 String::from("Authorization"),
