@@ -1105,6 +1105,26 @@ pub enum WeakeningKind {
     /// [`WeakeningKind::TaskRelaunchRemoved`] instead, reported once. Appended,
     /// for the `Ord` reason its neighbours give.
     TaskLifetimeFloorRaised,
+    /// A `[[lease.body_gate]]` row the base declared is gone, or changed, so a
+    /// landing asks its pull request's body one gate fewer before it readies
+    /// (CLOUD-2387).
+    ///
+    /// A row is compared WHOLE — family, inputs and rule — because each part
+    /// decides what the gate can refuse: a row whose input names another
+    /// `[[pattern]]`, or whose rule is another id, is a different gate, so a
+    /// changed row reads as this one removed. The ADDED direction is one more
+    /// gate and is silent. Appended, for the `Ord` reason its neighbours give.
+    LeaseBodyGateRemoved,
+    /// `[lease.unsubscribed]` is gone, or changed, so a landing no longer asks
+    /// the entry gate the base declared before its first lap (CLOUD-2387).
+    ///
+    /// Compared by the fields its decision reads — the session variable, the
+    /// family and the rule — for [`WeakeningKind::LeaseBodyGateRemoved`]'s
+    /// reason: another of any is another gate. The rest reach only the advisory
+    /// drop, whose answer is discarded. A table ARRIVING is the
+    /// gate starting to apply, which is a tightening. Appended, for the `Ord`
+    /// reason its neighbours give.
+    LeaseEntryGateRemoved,
 }
 
 impl WeakeningKind {
@@ -1150,6 +1170,8 @@ impl WeakeningKind {
         WeakeningKind::CiMergeCheckRemoved,
         WeakeningKind::CiMergeMethodAdded,
         WeakeningKind::CiLinearHistoryDropped,
+        WeakeningKind::LeaseBodyGateRemoved,
+        WeakeningKind::LeaseEntryGateRemoved,
         WeakeningKind::AttributionDenyRemoved,
         WeakeningKind::AttributionAllowAdded,
         WeakeningKind::DefectsLedgerRemoved,
@@ -1251,6 +1273,8 @@ impl WeakeningKind {
             WeakeningKind::CiMergeCheckRemoved => "ci-merge-check-removed",
             WeakeningKind::CiMergeMethodAdded => "ci-merge-method-added",
             WeakeningKind::CiLinearHistoryDropped => "ci-linear-history-dropped",
+            WeakeningKind::LeaseBodyGateRemoved => "lease-body-gate-removed",
+            WeakeningKind::LeaseEntryGateRemoved => "lease-entry-gate-removed",
             WeakeningKind::AttributionDenyRemoved => "attribution-deny-removed",
             WeakeningKind::AttributionAllowAdded => "attribution-allow-added",
             WeakeningKind::DefectsLedgerRemoved => "defects-ledger-removed",
@@ -1385,6 +1409,10 @@ impl WeakeningKind {
         "A required check is gone from the `[ci]` projection.";
     const CI_MERGE_METHOD_ADDED: &'static str = "The merge-method constraint admits a method it did not, or stopped constraining methods \
          at all.";
+    const LEASE_BODY_GATE_REMOVED: &'static str = "A `[[lease.body_gate]]` row is gone or changed, so a landing asks its pull request's \
+         body one gate fewer before it readies.";
+    const LEASE_ENTRY_GATE_REMOVED: &'static str = "`[lease.unsubscribed]` is gone or changed, so a landing no longer asks the entry gate \
+         the base declared before its first lap.";
     const CI_LINEAR_HISTORY_DROPPED: &'static str = "`ci.required_linear_history` was turned off, so `land linear` stops counting the merge \
          commits a branch carries.";
     const ATTRIBUTION_DENY_REMOVED: &'static str = "A pattern is gone from one of `[attribution]`'s deny lists, so a spelling it refused is \
@@ -1500,6 +1528,8 @@ impl WeakeningKind {
             WeakeningKind::CiMergeCheckRemoved => Self::CI_MERGE_CHECK_REMOVED,
             WeakeningKind::CiMergeMethodAdded => Self::CI_MERGE_METHOD_ADDED,
             WeakeningKind::CiLinearHistoryDropped => Self::CI_LINEAR_HISTORY_DROPPED,
+            WeakeningKind::LeaseBodyGateRemoved => Self::LEASE_BODY_GATE_REMOVED,
+            WeakeningKind::LeaseEntryGateRemoved => Self::LEASE_ENTRY_GATE_REMOVED,
             WeakeningKind::AttributionDenyRemoved => Self::ATTRIBUTION_DENY_REMOVED,
             WeakeningKind::AttributionAllowAdded => Self::ATTRIBUTION_ALLOW_ADDED,
             WeakeningKind::DefectsLedgerRemoved => Self::DEFECTS_LEDGER_REMOVED,
@@ -1682,6 +1712,8 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[
             WeakeningKind::LandingPathRemoved,
             WeakeningKind::FastForwardLaneAdded,
+            WeakeningKind::LeaseBodyGateRemoved,
+            WeakeningKind::LeaseEntryGateRemoved,
         ]),
     },
     FieldCoverage {
@@ -2758,6 +2790,8 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "lease.landing_paths",
     ));
 
+    found.extend(lease_gate_weakenings(base, working));
+
     // The same table's OTHER key, and the direction is inverted (review of
     // #848). `fast_forward_branches` is an EXEMPTION rather than evidence:
     // `fast_forward_lane` answers "not judging it" for a branch it matches,
@@ -3324,6 +3358,67 @@ fn verified_by(config: &Config) -> Vec<String> {
                 .iter()
                 .map(|check| (*check).to_owned())
                 .collect()
+        })
+}
+
+/// The landing's body and entry gates (CLOUD-2387): a row removed or changed
+/// weakens, and one added is one more gate asked.
+fn lease_gate_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    let mut found = removed_entries(
+        WeakeningKind::LeaseBodyGateRemoved,
+        &lease_body_gates(base),
+        &lease_body_gates(working),
+        "lease.body_gate",
+    );
+    found.extend(removed_entries(
+        WeakeningKind::LeaseEntryGateRemoved,
+        &lease_entry_gate(base),
+        &lease_entry_gate(working),
+        "lease.unsubscribed",
+    ));
+    found
+}
+
+/// The `[[lease.body_gate]]` rows, each spelled whole as `derive → rule` with
+/// its inputs, so a changed row compares as a removed one.
+fn lease_body_gates(config: &Config) -> Vec<String> {
+    config.lease.as_ref().map_or_else(Vec::new, |lease| {
+        lease
+            .body_gate
+            .iter()
+            .map(|gate| {
+                let inputs: Vec<String> = gate
+                    .inputs
+                    .iter()
+                    .map(|(key, value)| format!("{key}={value}"))
+                    .collect();
+                format!(
+                    "{} [{}] \u{2192} {}",
+                    gate.derive,
+                    inputs.join(" "),
+                    gate.rule
+                )
+            })
+            .collect()
+    })
+}
+
+/// `[lease.unsubscribed]` by the three fields its DECISION reads — the session
+/// variable, the family and the rule — or nothing when it is absent.
+///
+/// The endpoint, tool, credential and arguments reach only the advisory drop,
+/// whose answer the landing discards, so moving them cannot let a landing past
+/// a decision that would have refused.
+fn lease_entry_gate(config: &Config) -> Vec<String> {
+    config
+        .lease
+        .as_ref()
+        .and_then(|lease| lease.unsubscribed.as_ref())
+        .map_or_else(Vec::new, |gate| {
+            vec![format!(
+                "{} {} \u{2192} {}",
+                gate.session_env, gate.family, gate.rule
+            )]
         })
 }
 
@@ -5520,6 +5615,84 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    /// A body gate removed or changed asks the body one gate fewer, and one
+    /// added asks one more (CLOUD-2387).
+    #[test]
+    fn a_body_gate_removed_or_changed_weakens_and_one_added_does_not() {
+        let row = |derive: &str, rule: &str| {
+            format!(
+                "[[lease.body_gate]]\nderive = \"{derive}\"\ninputs = {{ base = \"origin/main\" }}\nrule = \"{rule}\"\n"
+            )
+        };
+        let base = config(&format!(
+            "{}{}",
+            row("deferral", "r"),
+            row("closing-key", "r")
+        ));
+        let dropped = config(&row("deferral", "r"));
+        assert_eq!(
+            weakenings(&base, &dropped),
+            vec![Weakening::new(
+                WeakeningKind::LeaseBodyGateRemoved,
+                "lease.body_gate[closing-key [base=origin/main] \u{2192} r]",
+                "present",
+                "absent",
+            )]
+        );
+        let changed = config(&format!(
+            "{}{}",
+            row("deferral", "r"),
+            row("closing-key", "other")
+        ));
+        assert_eq!(
+            weakenings(&base, &changed)
+                .iter()
+                .map(|found| found.kind)
+                .collect::<Vec<_>>(),
+            vec![WeakeningKind::LeaseBodyGateRemoved]
+        );
+        let added = config(&format!(
+            "{}{}{}",
+            row("deferral", "r"),
+            row("closing-key", "r"),
+            row("done", "r")
+        ));
+        assert!(weakenings(&base, &added).is_empty());
+    }
+
+    /// The entry gate is compared by what its decision reads: the table gone,
+    /// or another rule, weakens; another endpoint reaches only the advisory
+    /// drop and does not; a table arriving is the gate starting to apply.
+    #[test]
+    fn the_entry_gate_weakens_only_where_its_decision_moves() {
+        let table = |rule: &str, endpoint: &str| {
+            format!(
+                "[lease.unsubscribed]\nsession_env = \"S\"\nendpoint = \"{endpoint}\"\nfamily = \"pr-unsubscribed\"\nrule = \"{rule}\"\n"
+            )
+        };
+        let base = config(&table("r", "https://a"));
+        let gone = config("");
+        assert_eq!(
+            weakenings(&base, &gone),
+            vec![Weakening::new(
+                WeakeningKind::LeaseEntryGateRemoved,
+                "lease.unsubscribed[S pr-unsubscribed \u{2192} r]",
+                "present",
+                "absent",
+            )]
+        );
+        let other_rule = config(&table("other", "https://a"));
+        assert_eq!(
+            weakenings(&base, &other_rule)
+                .iter()
+                .map(|found| found.kind)
+                .collect::<Vec<_>>(),
+            vec![WeakeningKind::LeaseEntryGateRemoved]
+        );
+        assert!(weakenings(&base, &config(&table("r", "https://b"))).is_empty());
+        assert!(weakenings(&gone, &base).is_empty());
     }
 
     /// Dropping a required check shrinks the evidence `verified` demands.

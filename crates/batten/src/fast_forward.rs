@@ -502,7 +502,7 @@ fn grade(conclusion: &Conclusion) -> Answer {
 /// failed lap. The loop created the refusing condition, reported it as an
 /// external one, and lapped against something no rebase can change.
 ///
-/// **THE BOT'S OWN WORDS, NOT A MAPPING** — [`crate::land::Admitted::Refused`]'s
+/// **THE BOT'S OWN WORDS, NOT A MAPPING** — the landing entry gate's
 /// rule at a second site: *the gate is the authority on its own remedy and a
 /// summary here would be a second, staler copy of it*. An engine-side table from
 /// refusal to remedy would also put one consumer's tracker keys in this crate as
