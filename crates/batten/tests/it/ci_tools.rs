@@ -687,6 +687,14 @@ fn batten_facts(args: &[String]) -> (bool, Vec<String>) {
 /// A text's facts toward the suite: whether it runs it, and the tasks it runs.
 type Facts = (bool, Vec<String>);
 
+/// The committed `batten.toml`, parsed once.
+fn committed_config() -> &'static toml::Value {
+    static CONFIG: std::sync::OnceLock<toml::Value> = std::sync::OnceLock::new();
+    CONFIG.get_or_init(|| {
+        toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap()).unwrap()
+    })
+}
+
 /// Each `[[rule]]`'s id and the facts of its `check` command, read once.
 fn rule_checks() -> &'static [(String, Facts)] {
     static CHECKS: std::sync::OnceLock<Vec<(String, Facts)>> = std::sync::OnceLock::new();
@@ -700,10 +708,7 @@ fn rule_checks() -> &'static [(String, Facts)] {
     }
     READING.with(|reading| reading.set(true));
     CHECKS.get_or_init(|| {
-        let config: toml::Value =
-            toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap())
-                .unwrap();
-        config
+        committed_config()
             .get("rule")
             .and_then(toml::Value::as_array)
             .into_iter()
@@ -816,6 +821,32 @@ const CARGO_VALUED: &[&str] = &["-C", "--config", "--manifest-path", "-Z", "--co
 const BATTEN_VALUED: &[&str] = &["--config-from", "--config-in", "--strictness", "--rule"];
 const SHELL_VALUED: &[&str] = &["-o", "-O", "+o", "+O", "--rcfile", "--init-file"];
 
+/// Where the shell at `words[at]` reads its script.
+enum ShellInput<'a> {
+    Inline(&'a str),
+    File(&'a str),
+    Stdin,
+}
+
+/// `-c`, alone or in a cluster (`-ec`), takes the next word as the script;
+/// with neither a script nor a file, stdin is it. Only among the shell's own
+/// flags, a flag's value skipped with it (`-o pipefail`): after its script
+/// operand, a `-c` is the script's argument.
+fn shell_input(words: &[String], at: usize) -> ShellInput<'_> {
+    let mut operand = is_operand(SHELL_VALUED);
+    for (index, word) in words.iter().enumerate().skip(at + 1) {
+        if operand(word) {
+            return ShellInput::File(word);
+        }
+        if word.starts_with('-') && !word.starts_with("--") && word.contains('c') {
+            return words
+                .get(index + 1)
+                .map_or(ShellInput::Stdin, |script| ShellInput::Inline(script));
+        }
+    }
+    ShellInput::Stdin
+}
+
 /// One command's facts: whether it runs the suite, and the mise tasks it runs.
 /// Every word is tried as a program, so a suite run that is another program's
 /// operand (`ci step -- mise run coverage`) is read too: over-reading only
@@ -876,35 +907,15 @@ fn command_facts(words: &[String], stdin: &[String]) -> (bool, Vec<String>) {
                 ));
             }
             "batten" => take(batten_facts(&words[at + 1..])),
-            "bash" | "sh" => {
-                // `-c`, alone or in a cluster (`-ec`), takes the next word as
-                // the script; with neither a script nor a file, stdin is it.
-                // Only among the shell's own flags, a flag's value skipped with
-                // it (`-o pipefail`): after its script operand, a `-c` is the
-                // script's argument.
-                let mut operand = is_operand(SHELL_VALUED);
-                let mut inline = None;
-                let mut file = None;
-                for (index, word) in words.iter().enumerate().skip(at + 1) {
-                    if operand(word) {
-                        file = Some(word);
-                        break;
-                    }
-                    if word.starts_with('-') && !word.starts_with("--") && word.contains('c') {
-                        inline = words.get(index + 1);
-                        break;
-                    }
-                }
-                if let Some(script) = inline {
-                    take(suite_facts(script));
-                } else if let Some(file) = file {
-                    take(script_facts(file));
-                } else {
+            "bash" | "sh" => match shell_input(words, at) {
+                ShellInput::Inline(script) => take(suite_facts(script)),
+                ShellInput::File(file) => take(script_facts(file)),
+                ShellInput::Stdin => {
                     for text in stdin {
                         take(suite_facts(text));
                     }
                 }
-            }
+            },
             // A shell's own script operand was read by its arm above.
             _ if Path::new(word)
                 .extension()
@@ -990,12 +1001,16 @@ fn spawned_programs(run: &str) -> Option<(BTreeSet<String>, Vec<String>)> {
                 let Some(program) = batten::testing::effective_program(&words[start..]) else {
                     continue;
                 };
-                if matches!(program.as_str(), "bash" | "sh") {
-                    let script = words[start..]
-                        .iter()
-                        .position(|w| w.starts_with('-') && !w.starts_with("--") && w.contains('c'))
-                        .and_then(|flag| words.get(start + flag + 1));
-                    for text in script.into_iter().chain(&stdin) {
+                if matches!(program.as_str(), "bash" | "sh")
+                    && let Some(shell) = (start..words.len())
+                        .find(|&at| words[at].rsplit('/').next() == Some(program.as_str()))
+                {
+                    let texts: Vec<&str> = match shell_input(&words, shell) {
+                        ShellInput::Inline(script) => vec![script],
+                        ShellInput::File(_) => Vec::new(),
+                        ShellInput::Stdin => stdin.iter().map(String::as_str).collect(),
+                    };
+                    for text in texts {
                         let (more, also) = spawned_programs(text)?;
                         programs.extend(more);
                         tasks.extend(also);
@@ -1030,12 +1045,11 @@ fn task_deps(task: &toml::Value, names: &[&String]) -> Vec<String> {
         targets.extend(task_refs(task.get(key), names));
     }
     match task.get("run") {
-        Some(toml::Value::Array(entries)) => targets.extend(task_refs(
-            Some(&toml::Value::Array(
-                entries.iter().filter(|e| e.is_table()).cloned().collect(),
-            )),
-            names,
-        )),
+        Some(toml::Value::Array(entries)) => {
+            for entry in entries.iter().filter(|entry| entry.is_table()) {
+                targets.extend(task_refs(Some(entry), names));
+            }
+        }
         Some(table @ toml::Value::Table(_)) => targets.extend(task_refs(Some(table), names)),
         _ => {}
     }
@@ -1148,9 +1162,7 @@ fn config_programs(config: &toml::Value, manifest: &toml::Value) -> BTreeSet<Str
 /// its programs through `PATH`. A program no pinned tool provides (git, env,
 /// cargo) is no install's to make.
 fn config_tools(manifest: &toml::Value, pinned: &BTreeSet<String>) -> BTreeSet<String> {
-    let config: toml::Value =
-        toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap()).unwrap();
-    let reached = config_programs(&config, manifest);
+    let reached = config_programs(committed_config(), manifest);
     let tools: BTreeSet<String> = pinned
         .iter()
         .filter(|tool| {

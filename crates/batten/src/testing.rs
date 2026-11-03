@@ -659,7 +659,7 @@ pub fn shell_commands(text: &str) -> Option<Vec<(Vec<String>, Vec<String>)>> {
 pub fn effective_program(words: &[String]) -> Option<String> {
     let tokens: Vec<&str> = words.iter().map(String::as_str).collect();
     let program = crate::hook::program_token(tokens[crate::hook::effective_program(&tokens)?]);
-    Some(program.rsplit('/').next().unwrap_or(program).to_owned())
+    Some(crate::hook::program_name(program).to_owned())
 }
 
 /// What a source's `require_tool`/`require_bin` calls declare (CLOUD-2388).
@@ -737,16 +737,20 @@ fn scan_tokens(tokens: proc_macro2::TokenStream, census: &mut RequireCensus) {
 #[doc(hidden)]
 #[must_use]
 pub fn require_census(file: &syn::File) -> RequireCensus {
-    /// The census, whether the walk is inside the resolver's own body (where
-    /// `require_bin(name, name)` and its `mise which` are the mechanism), and
-    /// the names `Command` goes by in this file.
-    struct Walk(RequireCensus, bool, BTreeSet<String>);
+    struct Walk {
+        census: RequireCensus,
+        /// Inside the resolver's own body, where `require_bin(name, name)` and
+        /// its `mise which` are the mechanism.
+        in_resolver: bool,
+        /// The names `Command` goes by in this file.
+        command_names: BTreeSet<String>,
+    }
     impl<'a> Visit<'a> for Walk {
         fn visit_item_fn(&mut self, item: &'a syn::ItemFn) {
             let resolver = item.sig.ident == "require_tool" || item.sig.ident == "require_bin";
-            let outer = std::mem::replace(&mut self.1, resolver);
+            let outer = std::mem::replace(&mut self.in_resolver, resolver);
             syn::visit::visit_item_fn(self, item);
-            self.1 = outer;
+            self.in_resolver = outer;
         }
         fn visit_expr_call(&mut self, call: &'a syn::ExprCall) {
             if let syn::Expr::Path(path) = &*call.func
@@ -756,9 +760,9 @@ pub fn require_census(file: &syn::File) -> RequireCensus {
                     Some(syn::Expr::Lit(syn::ExprLit {
                         lit: syn::Lit::Str(tool),
                         ..
-                    })) => self.0.tools.push(tool.value()),
-                    _ if self.1 => {}
-                    _ => self.0.unnamed += 1,
+                    })) => self.census.tools.push(tool.value()),
+                    _ if self.in_resolver => {}
+                    _ => self.census.unnamed += 1,
                 }
                 // The callee is this call's, not a bare path's: walk the
                 // arguments only, or the path would count again below.
@@ -769,20 +773,20 @@ pub fn require_census(file: &syn::File) -> RequireCensus {
             }
             if let syn::Expr::Path(path) = &*call.func
                 && let [.., ty, new] = path.path.segments.iter().collect::<Vec<_>>()[..]
-                && self.2.contains(&ty.ident.to_string())
+                && self.command_names.contains(&ty.ident.to_string())
                 && new.ident == "new"
                 && let Some(syn::Expr::Lit(syn::ExprLit {
                     lit: syn::Lit::Str(program),
                     ..
                 })) = call.args.first()
             {
-                self.0.spawned.push(program.value());
+                self.census.spawned.push(program.value());
             }
             syn::visit::visit_expr_call(self, call);
         }
         fn visit_expr_path(&mut self, path: &'a syn::ExprPath) {
-            if names_resolver(&path.path) && !self.1 {
-                self.0.unnamed += 1;
+            if names_resolver(&path.path) && !self.in_resolver {
+                self.census.unnamed += 1;
             }
         }
         fn visit_macro(&mut self, mac: &'a syn::Macro) {
@@ -790,7 +794,7 @@ pub fn require_census(file: &syn::File) -> RequireCensus {
                 && let Ok(path) = mac.parse_body::<syn::LitStr>()
                 && (path.value() == "batten.toml" || path.value().ends_with("/batten.toml"))
             {
-                self.0.committed_config += 1;
+                self.census.committed_config += 1;
             }
             if let Ok(args) = mac.parse_body_with(
                 syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
@@ -798,20 +802,24 @@ pub fn require_census(file: &syn::File) -> RequireCensus {
                 for arg in &args {
                     self.visit_expr(arg);
                 }
-            } else if !self.1 {
-                scan_tokens(mac.tokens.clone(), &mut self.0);
+            } else if !self.in_resolver {
+                scan_tokens(mac.tokens.clone(), &mut self.census);
             }
         }
         fn visit_lit_str(&mut self, lit: &'a syn::LitStr) {
             // Split, so the census does not count its own needle.
-            if lit.value() == concat!("whi", "ch") && !self.1 {
-                self.0.which_literals += 1;
+            if lit.value() == concat!("whi", "ch") && !self.in_resolver {
+                self.census.which_literals += 1;
             }
         }
     }
-    let mut walk = Walk(RequireCensus::default(), false, command_names(file));
+    let mut walk = Walk {
+        census: RequireCensus::default(),
+        in_resolver: false,
+        command_names: command_names(file),
+    };
     walk.visit_file(file);
-    walk.0
+    walk.census
 }
 
 #[cfg(test)]

@@ -8247,7 +8247,7 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
 /// program". Canonicalising the path instead would make the answer depend on a
 /// checkout the boundary may not have, and on a symlink target that says which
 /// binary it is rather than which program was asked for.
-fn program_name(token: &str) -> &str {
+pub(crate) fn program_name(token: &str) -> &str {
     token.rsplit('/').next().unwrap_or(token)
 }
 
