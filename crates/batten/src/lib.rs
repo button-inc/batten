@@ -3542,8 +3542,18 @@ fn collect_dead_refs(repo: &Path, store_dir: &Path) -> Result<usize> {
     Ok(dropped)
 }
 
+/// The drain scan lock, now held, or `None` where another drain holds it
+/// (CLOUD-2536).
 //MUTANT-SUITE crates/batten/tests/it/hook_latency.rs
-//MUTANT drains-scan-concurrently|s@^        if fs4::FileExt::try_lock(\&scan_lock).is_err() {$@        if false {@|a_drain_finding_another_scanning_does_not_scan
+//MUTANT drains-scan-concurrently|s@^    if fs4::FileExt::try_lock(\&scan_lock).is_err() {$@    if false {@|a_drain_finding_another_scanning_does_not_scan
+fn take_drain_scan_lock(git_dir: &Path) -> std::io::Result<Option<std::fs::File>> {
+    let scan_lock = open_drain_lock(&git_dir.join(DRAIN_SCAN_LOCK))?;
+    if fs4::FileExt::try_lock(&scan_lock).is_err() {
+        return Ok(None);
+    }
+    Ok(Some(scan_lock))
+}
+
 //MUTANT drain-lock-taken-by-the-verb|s@^    let _scanning = if scan_tree \&\& std::env::var_os(DRAIN_MARKER).is_some() {$@    let _scanning = if scan_tree {@|a_drain_finding_another_scanning_does_not_scan
 fn run_state_record(
     overrides: &Overrides,
@@ -3588,16 +3598,14 @@ fn run_state_record(
     // recording the tree. Only drains take it, so neither the mediated path nor
     // the verb a human ran can lose a record to it.
     let _scanning = if scan_tree && std::env::var_os(DRAIN_MARKER).is_some() {
-        let scan_lock = open_drain_lock(&git_dir.join(DRAIN_SCAN_LOCK))?;
-        if fs4::FileExt::try_lock(&scan_lock).is_err() {
+        let Some(scan_lock) = take_drain_scan_lock(&git_dir)? else {
             return Ok(ExitCode::Success);
-        }
+        };
         Some(scan_lock)
     } else {
         None
     };
-    let lock_path = git_dir.join(DRAIN_LOCK);
-    let lock = open_drain_lock(&lock_path)?;
+    let lock = open_drain_lock(&git_dir.join(DRAIN_LOCK))?;
     // **The ref comes from HERE, not from `repo`.** `repo_root` answers with the
     // MAIN worktree's root — which is exactly what makes every linked worktree
     // share one store — so asking it for the branch would report the main
