@@ -12076,8 +12076,8 @@ fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
         .iter()
         .map(|entry| reapable(entry, &own_group))
         .collect();
-    for (entry, _) in abandoned.iter().zip(&signalled).filter(|(_, s)| **s) {
-        if exec::terminate_group(&entry.pgid) {
+    for (entry, was_signalled) in abandoned.iter().zip(&signalled) {
+        if *was_signalled && exec::terminate_group(&entry.pgid) {
             reaped.terminated += 1;
         }
     }
