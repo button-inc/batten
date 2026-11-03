@@ -660,19 +660,7 @@ fn batten_facts(args: &[String]) -> (bool, Vec<String>) {
         (Some("mutate"), Some("sweep"))
         | (Some("test"), Some("replay"))
         | (Some("land"), Some("lap")) => (true, Vec::new()),
-        (Some("enforce"), _) => {
-            // `--rule` repeats, and is spelled `--rule X` or `--rule=X`.
-            let only: Vec<&str> = args
-                .iter()
-                .enumerate()
-                .filter_map(|(at, word)| {
-                    word.strip_prefix("--rule=").or_else(|| {
-                        (word == "--rule")
-                            .then(|| args.get(at + 1).map(String::as_str))
-                            .flatten()
-                    })
-                })
-                .collect();
+        _ => enforced(args).map_or((false, Vec::new()), |only| {
             rule_checks()
                 .iter()
                 .filter(|(id, _)| only.is_empty() || only.contains(&id.as_str()))
@@ -680,8 +668,112 @@ fn batten_facts(args: &[String]) -> (bool, Vec<String>) {
                     tasks.extend(facts.1.iter().cloned());
                     (direct || facts.0, tasks)
                 })
+        }),
+    }
+}
+
+/// The rules `batten <args>` runs the `check` of, when `args` is an `enforce`:
+/// the `--rule`s named (it repeats, as `--rule X` or `--rule=X`), or every
+/// rule when none is.
+fn enforced(args: &[String]) -> Option<Vec<&str>> {
+    if operand_at(args, 0, BATTEN_VALUED).next()?.1 != "enforce" {
+        return None;
+    }
+    Some(
+        args.iter()
+            .enumerate()
+            .filter_map(|(at, word)| {
+                word.strip_prefix("--rule=").or_else(|| {
+                    (word == "--rule")
+                        .then(|| args.get(at + 1).map(String::as_str))
+                        .flatten()
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Whether cargo's own words name the batten package or binary, so
+/// `cargo run … -- <verb>` is batten itself.
+fn names_batten(own: &[String]) -> bool {
+    own.iter()
+        .any(|w| matches!(w.as_str(), "--package=batten" | "--bin=batten"))
+        || own
+            .windows(2)
+            .any(|w| matches!(w[0].as_str(), "-p" | "--package" | "--bin") && w[1] == "batten")
+}
+
+/// The arguments of each batten run in `words`: after a word that is the
+/// batten program (`batten`, `mise run batten`), or after the `--` of a
+/// `cargo run` that names it.
+fn batten_args(words: &[String]) -> Vec<&[String]> {
+    let mut found = Vec::new();
+    for (at, word) in words.iter().enumerate() {
+        match word.trim_start_matches(['(', '{']).rsplit('/').next() {
+            Some("batten") => found.push(&words[at + 1..]),
+            Some("cargo") => {
+                let end = own_end(words, at);
+                if names_batten(&words[at + 1..end]) && end < words.len() {
+                    found.push(&words[end + 1..]);
+                }
+            }
+            _ => {}
         }
-        _ => (false, Vec::new()),
+    }
+    found
+}
+
+/// The programs a text spawns, and the mise tasks it runs.
+type Spawns = (BTreeSet<String>, Vec<String>);
+
+/// Each `[[rule]]`'s id and the programs and mise tasks its `check` spawns,
+/// read once (CLOUD-2446): what a `batten enforce` step runs.
+fn rule_spawns() -> &'static [(String, Spawns)] {
+    static SPAWNS: std::sync::OnceLock<Vec<(String, Spawns)>> = std::sync::OnceLock::new();
+    thread_local! {
+        static READING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    // A check that itself runs `batten enforce` re-enters while the read is
+    // under way; it is that same read, so it adds nothing.
+    if SPAWNS.get().is_none() && READING.with(std::cell::Cell::get) {
+        return &[];
+    }
+    READING.with(|reading| reading.set(true));
+    SPAWNS.get_or_init(|| {
+        committed_config()
+            .get("rule")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|rule| {
+                let check = argv_text(rule.get("check")?)?;
+                let id = rule
+                    .get("id")
+                    .and_then(toml::Value::as_str)
+                    .unwrap_or_default();
+                let spawns = spawned_programs(&check)
+                    .unwrap_or_else(|| panic!("rule {id}: a check no parse reads: {check}"));
+                Some((id.to_owned(), spawns))
+            })
+            .collect()
+    })
+}
+
+/// A command value as one shell text: a string as written, an array of
+/// strings as one argv, each word shell-quoted.
+fn argv_text(value: &toml::Value) -> Option<String> {
+    match value {
+        toml::Value::String(line) => Some(line.clone()),
+        toml::Value::Array(argv) if !argv.is_empty() && argv.iter().all(toml::Value::is_str) => {
+            Some(
+                argv.iter()
+                    .filter_map(toml::Value::as_str)
+                    .map(|word| format!("'{}'", word.replace('\'', r"'\''")))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            )
+        }
+        _ => None,
     }
 }
 
@@ -878,14 +970,7 @@ fn command_facts(words: &[String], stdin: &[String]) -> (bool, Vec<String>) {
                 };
                 let scope = own;
                 take((runner && !scope.iter().any(|w| w == "--no-run"), Vec::new()));
-                // `cargo run --package=batten -- <verb>` is batten itself.
-                let names_batten = own
-                    .iter()
-                    .any(|w| matches!(w.as_str(), "--package=batten" | "--bin=batten"))
-                    || own.windows(2).any(|w| {
-                        matches!(w[0].as_str(), "-p" | "--package" | "--bin") && w[1] == "batten"
-                    });
-                if names_batten && end < words.len() {
+                if names_batten(own) && end < words.len() {
                     take(batten_facts(&words[end + 1..]));
                 }
             }
@@ -1035,6 +1120,19 @@ fn spawned_programs(run: &str) -> Option<(BTreeSet<String>, Vec<String>)> {
                 }
                 programs.insert(program);
             }
+            // `batten enforce` runs the selected rules' checks, so it spawns
+            // what they do.
+            for args in batten_args(&words) {
+                if let Some(only) = enforced(args) {
+                    for (_, (more, also)) in rule_spawns()
+                        .iter()
+                        .filter(|(id, _)| only.is_empty() || only.contains(&id.as_str()))
+                    {
+                        programs.extend(more.iter().cloned());
+                        tasks.extend(also.iter().cloned());
+                    }
+                }
+            }
             // A tracked script, run by its path or as a shell's operand, spawns
             // what its text does; it is read under the guard that stops a
             // script that runs itself.
@@ -1145,23 +1243,11 @@ fn config_programs(config: &toml::Value, manifest: &toml::Value) -> BTreeSet<Str
         match value {
             toml::Value::Table(table) => {
                 for (key, value) in table {
-                    let command = COMMAND_KEYS.contains(&key.as_str());
-                    match value {
-                        toml::Value::String(line) if command => found.push(line.clone()),
-                        toml::Value::Array(argv)
-                            if command
-                                && !argv.is_empty()
-                                && argv.iter().all(toml::Value::is_str) =>
-                        {
-                            found.push(
-                                argv.iter()
-                                    .filter_map(toml::Value::as_str)
-                                    .map(|word| format!("'{}'", word.replace('\'', r"'\''")))
-                                    .collect::<Vec<_>>()
-                                    .join(" "),
-                            );
+                    match argv_text(value) {
+                        Some(command) if COMMAND_KEYS.contains(&key.as_str()) => {
+                            found.push(command);
                         }
-                        other => commands(other, found),
+                        _ => commands(value, found),
                     }
                 }
             }
@@ -1178,14 +1264,57 @@ fn config_programs(config: &toml::Value, manifest: &toml::Value) -> BTreeSet<Str
     let by_task = task_programs(manifest);
     let mut programs = BTreeSet::new();
     for command in found {
-        let (own, tasks) = spawned_programs(&command)
-            .unwrap_or_else(|| panic!("a batten.toml command no parse reads: {command}"));
-        programs.extend(own);
-        for task in tasks {
-            programs.extend(by_task.get(&task).into_iter().flatten().cloned());
-        }
+        programs.extend(
+            command_programs(&command, &by_task)
+                .unwrap_or_else(|| panic!("a batten.toml command no parse reads: {command}")),
+        );
     }
     programs
+}
+
+/// The programs a command spawns, its own and those of every mise task it
+/// runs, closed over `by_task`; `None` when the parse cannot read it.
+fn command_programs(
+    command: &str,
+    by_task: &BTreeMap<String, BTreeSet<String>>,
+) -> Option<BTreeSet<String>> {
+    let (mut programs, tasks) = spawned_programs(command)?;
+    for task in tasks {
+        programs.extend(by_task.get(&task).into_iter().flatten().cloned());
+    }
+    Some(programs)
+}
+
+/// The pinned tools a job's own steps spawn (CLOUD-2446): whatever a `run:`
+/// starts, directly, through a mise task, or through the rules a `batten
+/// enforce` runs. Any job, the suite or not and on any trigger, is held to
+/// them, so an ad-hoc job that runs one rule is read as surely as `ci`. A step
+/// before the job's first installing mise-action step is not read: nothing
+/// mise installs is on `PATH` yet, so what it runs is the runner image's (the
+/// lease guard's `gh api`, before any checkout), and a job whose installer says
+/// `install: false` has declared it runs on the image's tools (`fast-forward`,
+/// which builds nothing). After it, a pinned program is the pin's. A step the
+/// parse cannot read is refused, naming its job.
+//MUTANT job-steps-unread|s@^        let reached = command_programs(run, by_task)$@        let reached = command_programs("", by_task)@|a_job_is_held_to_the_tools_its_own_steps_spawn
+fn step_tools(
+    job: &str,
+    steps: &[yaml_rust2::Yaml],
+    by_task: &BTreeMap<String, BTreeSet<String>>,
+    pinned: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut tools = BTreeSet::new();
+    let installed = steps.iter().skip_while(|step| !installs(step));
+    for run in installed.filter_map(|step| step["run"].as_str()) {
+        let reached = command_programs(run, by_task)
+            .unwrap_or_else(|| panic!("{job}: a step no parse reads: {run}"));
+        tools.extend(
+            pinned
+                .iter()
+                .filter(|tool| tool_programs(tool).iter().any(|p| reached.contains(*p)))
+                .cloned(),
+        );
+    }
+    tools
 }
 
 /// The pinned tools the committed config's rows reach (CLOUD-2446): a case
@@ -1404,20 +1533,25 @@ fn required_tools() -> (BTreeSet<String>, Vec<(String, PathBuf)>, usize) {
     (required, spawned, committed_config)
 }
 
+/// Whether a step runs mise's installer action.
+fn is_mise_action(step: &yaml_rust2::Yaml) -> bool {
+    step["uses"]
+        .as_str()
+        .and_then(|action| action.split('@').next())
+        .is_some_and(|action| action.ends_with("/mise-action"))
+}
+
+/// Whether a step runs mise's installer action and lets it install: one that
+/// says `install: false` installs nothing.
+//MUTANT install-all-unread|s@^    is_mise_action(step) && step\["with"\]\["install"\]\.as_bool() != Some(false)$@    is_mise_action(step)@|a_job_installs_what_its_mise_steps_say
+fn installs(step: &yaml_rust2::Yaml) -> bool {
+    is_mise_action(step) && step["with"]["install"].as_bool() != Some(false)
+}
+
 /// The required tools a job's steps do not install. A mise-action step with no
 /// `install_args` installs every `[tools]` entry, unless it says `install: false`.
-//MUTANT install-all-unread|s@^                && step\["with"\]\["install"\]\.as_bool() != Some(false)$@                \&\& true@|a_job_installs_what_its_mise_steps_say
 fn job_missing(steps: &[yaml_rust2::Yaml], required: &BTreeSet<String>) -> Vec<String> {
-    let installing: Vec<&yaml_rust2::Yaml> = steps
-        .iter()
-        .filter(|step| {
-            step["uses"]
-                .as_str()
-                .and_then(|action| action.split('@').next())
-                .is_some_and(|action| action.ends_with("/mise-action"))
-                && step["with"]["install"].as_bool() != Some(false)
-        })
-        .collect();
+    let installing: Vec<&yaml_rust2::Yaml> = steps.iter().filter(|step| installs(step)).collect();
     if installing
         .iter()
         .any(|step| step["with"]["install_args"].is_badvalue())
@@ -1486,7 +1620,6 @@ fn a_job_installs_what_its_mise_steps_say() {
 /// mise-action step with no `install_args` installs every `[tools]` entry.
 #[test]
 fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
-    use yaml_rust2::YamlLoader;
     let (mut required, spawned, committed_config) = required_tools();
     for floor in ["cargo-dist", "pkl", "node", "jq"] {
         assert!(
@@ -1526,7 +1659,35 @@ fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
     );
     required.extend(config_tools(&manifest, &pinned));
 
-    let suite = suite_tasks(&manifest);
+    let (suite_jobs, missing) = job_gaps(&manifest, &pinned, &required);
+    for expected in [
+        "ci.yml:ci",
+        "rust.yml:musl",
+        "coverage.yml:coverage",
+        "release-plz.yml:cache-warm-musl",
+    ] {
+        assert!(
+            suite_jobs.iter().any(|job| job == expected),
+            "{expected} runs the suite but was not found: {suite_jobs:?}"
+        );
+    }
+    assert!(
+        missing.is_empty(),
+        "a job omits a pinned tool its suite or its own steps reach: {missing:?}"
+    );
+}
+
+/// Every committed workflow job's gaps: a job with a mise-action step owes the
+/// tools its own steps spawn, and one that runs the suite also owes
+/// `suite_required`. Returns the suite jobs found and each `<file>:<job>
+/// <tool>` missing.
+fn job_gaps(
+    manifest: &toml::Value,
+    pinned: &BTreeSet<String>,
+    suite_required: &BTreeSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    let suite = suite_tasks(manifest);
+    let by_task = task_programs(manifest);
     let mut suite_jobs = Vec::new();
     let mut missing = Vec::new();
     for entry in std::fs::read_dir(common::at_root(".github/workflows"))
@@ -1541,43 +1702,87 @@ fn every_suite_job_installs_the_pinned_tools_its_cases_require() {
             continue;
         }
         let file = path.file_name().unwrap().to_string_lossy().into_owned();
-        let docs = YamlLoader::load_from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let docs = yaml_rust2::YamlLoader::load_from_str(&std::fs::read_to_string(&path).unwrap())
+            .unwrap();
         let Some(jobs) = docs.first().and_then(|doc| doc["jobs"].as_hash()) else {
             continue;
         };
         for (name, job) in jobs {
-            let name = name.as_str().unwrap_or_default();
+            let name = format!("{file}:{}", name.as_str().unwrap_or_default());
             let steps = job["steps"].as_vec().map_or(&[][..], Vec::as_slice);
-            if !steps.iter().any(|step| {
+            let runs = steps.iter().any(|step| {
                 step["run"]
                     .as_str()
                     .is_some_and(|run| runs_suite(run, &suite))
-            }) {
+            });
+            let installs = steps.iter().any(is_mise_action);
+            // A job no installer serves reaches no pinned tool through mise.
+            if !runs && !installs {
                 continue;
             }
-            suite_jobs.push(format!("{file}:{name}"));
+            let mut required = step_tools(&name, steps, &by_task, pinned);
+            if runs {
+                suite_jobs.push(name.clone());
+                required.extend(suite_required.iter().cloned());
+            }
             missing.extend(
                 job_missing(steps, &required)
                     .into_iter()
-                    .map(|tool| format!("{file}:{name} {tool}")),
+                    .map(|tool| format!("{name} {tool}")),
             );
         }
     }
-    for expected in [
-        "ci.yml:ci",
-        "rust.yml:musl",
-        "coverage.yml:coverage",
-        "release-plz.yml:cache-warm-musl",
+    (suite_jobs, missing)
+}
+
+/// Any job is held to the pinned tools its own steps spawn, the suite or not:
+/// an ad-hoc job running one rule owes that rule's tool (CLOUD-2446).
+#[test]
+fn a_job_is_held_to_the_tools_its_own_steps_spawn() {
+    let manifest: toml::Value = toml::from_str("[tasks.t]\nrun = \"jq .\"\n").unwrap();
+    let by_task = task_programs(&manifest);
+    let pinned: BTreeSet<String> = ["cli", "hk", "jq", "pkl"].map(str::to_owned).into();
+    for (run, tool) in [
+        // `release check unread` checks with `mise exec -- gh --version`.
+        (
+            "mise run batten -- enforce --rule 'release check unread'",
+            "cli",
+        ),
+        ("batten enforce --rule='release check unread'", "cli"),
+        ("mise exec -- pkl eval x", "pkl"),
+        ("mise run t", "jq"),
     ] {
-        assert!(
-            suite_jobs.iter().any(|job| job == expected),
-            "{expected} runs the suite but was not found: {suite_jobs:?}"
+        let text =
+            format!("- uses: jdx/mise-action@abc\n  with:\n    install_args: rust\n- run: {run}\n");
+        let steps = yaml_rust2::YamlLoader::load_from_str(&text).unwrap()[0]
+            .as_vec()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            job_missing(&steps, &step_tools("x", &steps, &by_task, &pinned)),
+            [tool],
+            "{run}"
         );
     }
-    assert!(
-        missing.is_empty(),
-        "a suite-running job omits a pinned tool a case requires: {missing:?}"
-    );
+    // Before the installer, a step runs the runner image's own programs.
+    let prelude = yaml_rust2::YamlLoader::load_from_str(
+        "- run: gh api repos/x/contents/install.sh\n\
+         - uses: jdx/mise-action@abc\n  with:\n    install_args: rust\n",
+    )
+    .unwrap()[0]
+        .as_vec()
+        .unwrap()
+        .clone();
+    assert!(step_tools("x", &prelude, &by_task, &pinned).is_empty());
+    // An installer that installs nothing declares the image's tools.
+    let bare = yaml_rust2::YamlLoader::load_from_str(
+        "- uses: jdx/mise-action@abc\n  with:\n    install: false\n- run: gh api x\n",
+    )
+    .unwrap()[0]
+        .as_vec()
+        .unwrap()
+        .clone();
+    assert!(step_tools("x", &bare, &by_task, &pinned).is_empty());
 }
 
 /// A config row's programs are read through the wrappers that run them and
