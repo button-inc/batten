@@ -1118,12 +1118,14 @@ pub enum WeakeningKind {
     /// `[lease.unsubscribed]` is gone, or changed, so a landing no longer asks
     /// the entry gate the base declared before its first lap (CLOUD-2387).
     ///
-    /// Compared by the fields its decision reads — the session variable, the
-    /// family and the rule — for [`WeakeningKind::LeaseBodyGateRemoved`]'s
-    /// reason: another of any is another gate. The rest reach only the advisory
-    /// drop, whose answer is discarded. A table ARRIVING is the
-    /// gate starting to apply, which is a tightening. Appended, for the `Ord`
-    /// reason its neighbours give.
+    /// Compared WHOLE, for [`WeakeningKind::LeaseBodyGateRemoved`]'s reason:
+    /// every field decides the gate. The session variable, family and rule are
+    /// what the decision reads, and the endpoint, tool, arguments and credential
+    /// decide whether the drop MINTS the receipt that decision reads — an
+    /// endpoint that answers `200` with a body passes the gate without any
+    /// subscription having been dropped. A table ARRIVING is the gate starting
+    /// to apply, which is a tightening. Appended, for the `Ord` reason its
+    /// neighbours give.
     LeaseEntryGateRemoved,
 }
 
@@ -3403,21 +3405,28 @@ fn lease_body_gates(config: &Config) -> Vec<String> {
     })
 }
 
-/// `[lease.unsubscribed]` by the three fields its DECISION reads — the session
-/// variable, the family and the rule — or nothing when it is absent.
+/// `[lease.unsubscribed]` spelled whole, or nothing when it is absent.
 ///
-/// The endpoint, tool, credential and arguments reach only the advisory drop,
-/// whose answer the landing discards, so moving them cannot let a landing past
-/// a decision that would have refused.
+/// EVERY FIELD, because every field decides the gate: the drop mints the
+/// receipt the decision reads whenever its endpoint answers `200` with a body,
+/// so the endpoint, tool, arguments and credential move the verdict as surely
+/// as the rule does. An unset optional field is spelled `-`.
 fn lease_entry_gate(config: &Config) -> Vec<String> {
     config
         .lease
         .as_ref()
         .and_then(|lease| lease.unsubscribed.as_ref())
         .map_or_else(Vec::new, |gate| {
+            let or_dash = |field: &Option<String>| field.clone().unwrap_or_else(|| "-".to_owned());
             vec![format!(
-                "{} {} \u{2192} {}",
-                gate.session_env, gate.family, gate.rule
+                "{} {} {} {} {} {} \u{2192} {}",
+                gate.session_env,
+                or_dash(&gate.token_env),
+                or_dash(&gate.endpoint),
+                or_dash(&gate.tool),
+                or_dash(&gate.arguments),
+                gate.family,
+                gate.rule
             )]
         })
 }
@@ -5662,11 +5671,11 @@ mod tests {
         assert!(weakenings(&base, &added).is_empty());
     }
 
-    /// The entry gate is compared by what its decision reads: the table gone,
-    /// or another rule, weakens; another endpoint reaches only the advisory
-    /// drop and does not; a table arriving is the gate starting to apply.
+    /// The entry gate is compared whole: the table gone, another rule, or
+    /// another ENDPOINT weakens — an endpoint answering `200` mints the receipt
+    /// the decision reads — and a table arriving is the gate starting to apply.
     #[test]
-    fn the_entry_gate_weakens_only_where_its_decision_moves() {
+    fn the_entry_gate_weakens_wherever_its_verdict_can_move() {
         let table = |rule: &str, endpoint: &str| {
             format!(
                 "[lease.unsubscribed]\nsession_env = \"S\"\nendpoint = \"{endpoint}\"\nfamily = \"pr-unsubscribed\"\nrule = \"{rule}\"\n"
@@ -5678,7 +5687,7 @@ mod tests {
             weakenings(&base, &gone),
             vec![Weakening::new(
                 WeakeningKind::LeaseEntryGateRemoved,
-                "lease.unsubscribed[S pr-unsubscribed \u{2192} r]",
+                "lease.unsubscribed[S - https://a - - pr-unsubscribed \u{2192} r]",
                 "present",
                 "absent",
             )]
@@ -5691,7 +5700,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![WeakeningKind::LeaseEntryGateRemoved]
         );
-        assert!(weakenings(&base, &config(&table("r", "https://b"))).is_empty());
+        assert_eq!(
+            weakenings(&base, &config(&table("r", "https://b")))
+                .iter()
+                .map(|found| found.kind)
+                .collect::<Vec<_>>(),
+            vec![WeakeningKind::LeaseEntryGateRemoved],
+            "an endpoint that answers 200 passes the gate, so moving it weakens"
+        );
         assert!(weakenings(&gone, &base).is_empty());
     }
 
