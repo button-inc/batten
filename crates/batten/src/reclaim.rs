@@ -664,6 +664,39 @@ mod tests {
         assert!(store(&git_dir, BOOTS).starts_with(&git_dir));
     }
 
+    /// Fails by: `note_in` writing nothing, or a record that drops its reason
+    /// or its boot. The landing's in-process beat and stop are this write
+    /// (CLOUD-2387), so a silent no-op reads every landing as a container death.
+    #[test]
+    fn a_note_is_appended_where_the_census_folds_it() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let boot = boot_time().expect("a linux host reads its boot time");
+        let git_dir = crate::scratch::scratch("reclaim-note-in");
+        note_in(&git_dir, "h", None);
+        note_in(&git_dir, "x", Some("land-stopped"));
+        let written = fold(&git_dir, BEATS).expect("the store folds");
+        let shapes: Vec<(String, String, Option<String>)> = written
+            .iter()
+            .map(|line| {
+                let fields: Vec<&str> = line.split(' ').collect();
+                (
+                    fields[0].to_owned(),
+                    fields[2].to_owned(),
+                    fields.get(3).map(|reason| (*reason).to_owned()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shapes,
+            [
+                (String::from("h"), boot.clone(), None),
+                (String::from("x"), boot, Some(String::from("land-stopped"))),
+            ]
+        );
+    }
+
     #[test]
     fn the_clock_and_the_checkout_are_read() {
         assert!(now() > 1_700_000_000, "the clock answers");
