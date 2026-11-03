@@ -1146,17 +1146,17 @@ pub fn admissions(smells: &[Smell], ledger: &crate::asked::Ledger) -> Vec<(Smell
     smells
         .iter()
         .map(|smell| {
-            let admission = match ledger {
-                crate::asked::Ledger::Rewritten => Admission::Refused(Cause::LedgerRewritten),
-                crate::asked::Ledger::Added(entries) => {
-                    let pair = format!("{} {}", smell.id, smell.at);
-                    if entries.iter().any(|entry| entry.admits(&pair)) {
-                        Admission::Asked
-                    } else if entries.iter().any(|entry| entry.question.contains(&pair)) {
-                        Admission::Refused(Cause::AnsweredWithoutAdmit)
-                    } else {
-                        Admission::Refused(Cause::NotAsked)
-                    }
+            let admission = if matches!(ledger, crate::asked::Ledger::Rewritten) {
+                Admission::Refused(Cause::LedgerRewritten)
+            } else {
+                let entries = ledger.admitting();
+                let pair = format!("{} {}", smell.id, smell.at);
+                if entries.iter().any(|entry| entry.admits(&pair)) {
+                    Admission::Asked
+                } else if entries.iter().any(|entry| entry.names(&pair)) {
+                    Admission::Refused(Cause::AnsweredWithoutAdmit)
+                } else {
+                    Admission::Refused(Cause::NotAsked)
                 }
             };
             (smell.clone(), admission)

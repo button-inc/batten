@@ -10429,10 +10429,10 @@ fn anchor_among(
 /// from it names a subject no single finding carries. Listing the subjects
 /// bare left the reader to re-spell the route; naming each as the command that
 /// binds it is a route this verb accepts as printed.
-fn per_subject_routes(rule: &str, class: &str, subjects: &[&str]) -> String {
+fn per_subject_routes(rule: &str, class: &str, subjects: &[impl AsRef<str>]) -> String {
     subjects
         .iter()
-        .map(|subject| refusal::override_route(rule, class, subject))
+        .map(|subject| refusal::override_route(rule, class, subject.as_ref()))
         .collect::<Vec<_>>()
         .join("; ")
 }
@@ -10509,7 +10509,6 @@ fn run_override_request(
         let listed = if bound.is_empty() {
             "none".to_owned()
         } else {
-            let bound: Vec<&str> = bound.iter().map(String::as_str).collect();
             per_subject_routes(rule, &resolved.id, &bound)
         };
         return Err(error::UsageError::raise(format!(

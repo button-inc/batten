@@ -93,6 +93,14 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// Whether this question names `pair` — the first of [`Entry::admits`]'s
+    /// conjuncts, and the one `config lint` also reads to tell an answer that
+    /// declined from a question never asked (CLOUD-2303).
+    #[must_use]
+    pub fn names(&self, pair: &str) -> bool {
+        self.question.contains(pair)
+    }
+
     /// Whether selecting this answer admits `pair`.
     ///
     /// Three conjuncts and each is load-bearing: the pair is NAMED (an answer
@@ -100,7 +108,7 @@ impl Entry {
     /// (free text is recorded, never a selection), and that option SAYS it admits.
     #[must_use]
     pub fn admits(&self, pair: &str) -> bool {
-        self.question.contains(pair)
+        self.names(pair)
             && self.answer.starts_with(ADMIT)
             && self
                 .options
