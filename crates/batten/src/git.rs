@@ -4026,6 +4026,7 @@ struct IdentityMemo {
 /// The spelling of a commit that changes nothing, which has no identity.
 const NO_IDENTITY: &str = "-";
 
+//MUTANT identity-memo-never-served|s@^        if let Some(identity) = self.known.get(commit) {$@        if let Some(identity) = self.known.get(commit).filter(\x7c_\x7c false) {@|a_remembered_identity_is_served_in_place_of_a_recomputation
 impl IdentityMemo {
     /// The memo for the repository at `dir`, empty where none is stored or the
     /// state directory cannot be named.
@@ -4067,7 +4068,6 @@ impl IdentityMemo {
     }
 
     /// `commit`'s identity, remembered or computed.
-    //MUTANT identity-memo-never-served|s@^        if let Some(identity) = self.known.get(commit) {$@        if let Some(identity) = self.known.get(commit).filter(\x7c_\x7c false) {@|a_remembered_identity_is_served_in_place_of_a_recomputation
     fn identity(
         &mut self,
         repo: &gix::Repository,

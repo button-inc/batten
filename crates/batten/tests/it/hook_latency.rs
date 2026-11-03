@@ -16,17 +16,12 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[cfg(unix)]
 use crate::common;
 use crate::perf_assert;
 
-#[cfg(unix)]
 use std::fs;
-#[cfg(unix)]
 use std::io::Write as _;
-#[cfg(unix)]
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
 use std::process::Stdio;
 
 /// A Stop measured over its ceiling is refused, inside an otherwise clean
@@ -55,10 +50,8 @@ fn a_stop_over_its_budget_is_refused() {
 /// The committed module the fixture's `symbols` row evaluates. Any tree module
 /// serves: the row exists to DECLARE the fact, and what decides is whether
 /// resolving it spawns.
-#[cfg(unix)]
 const MODULE: &str = "policy/docs-tree-absent.rego";
 
-#[cfg(unix)]
 const CONFIG: &str = r#"version = 1
 
 [[rule]]
@@ -90,7 +83,6 @@ target = "policy/docs-tree-absent.rego"
 /// The fixture declares no toolchain pin, so the analyser is the bare `cargo`
 /// on `PATH` (`rules::symbols_launcher`) — which is the shim. Unix only: the
 /// shim is a shell script.
-#[cfg(unix)]
 fn fixture(name: &str) -> (PathBuf, PathBuf, PathBuf) {
     let root = common::scratch(name);
     let repo = root.join("repo");
@@ -110,6 +102,7 @@ fn fixture(name: &str) -> (PathBuf, PathBuf, PathBuf) {
         format!("#!/bin/sh\necho \"$PPID\" >> '{}'\nexit 1\n", log.display()),
     )
     .expect("write shim");
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).expect("shim mode");
@@ -121,7 +114,6 @@ fn fixture(name: &str) -> (PathBuf, PathBuf, PathBuf) {
 
 /// `args` in `repo` with the shims first on `PATH` and `home` as the state
 /// home, output discarded.
-#[cfg(unix)]
 fn shimmed(repo: &Path, shims: &Path, home: &Path, args: &[&str]) -> common::Batten {
     let path = std::env::var_os("PATH").unwrap_or_default();
     let mut dirs = vec![shims.to_path_buf()];
@@ -140,7 +132,6 @@ fn shimmed(repo: &Path, shims: &Path, home: &Path, args: &[&str]) -> common::Bat
 
 /// `args` run in `repo` with the shims first on `PATH`, `payload` on stdin;
 /// returns the pid it ran as.
-#[cfg(unix)]
 fn run(repo: &Path, shims: &Path, home: &Path, args: &[&str], payload: &str) -> u32 {
     let mut command = shimmed(repo, shims, home, args);
     command.stdin(Stdio::piped());
@@ -158,7 +149,6 @@ fn run(repo: &Path, shims: &Path, home: &Path, args: &[&str], payload: &str) -> 
 
 /// `batten state record` in `repo` as a detached drain runs it, or as the verb
 /// when `drain` is false; returns the pid it ran as.
-#[cfg(unix)]
 fn record(repo: &Path, shims: &Path, home: &Path, drain: bool) -> u32 {
     let mut command = shimmed(repo, shims, home, &["state", "record"]);
     command.stdin(Stdio::null());
@@ -179,9 +169,13 @@ fn record(repo: &Path, shims: &Path, home: &Path, drain: bool) -> u32 {
 ///
 /// Fails by: drains scanning concurrently, which is how three ends of turn
 /// left three workspace compiler runs holding the build lock (CLOUD-2536).
-#[cfg(unix)]
 #[test]
 fn a_drain_finding_another_scanning_does_not_scan() {
+    // Off unix no host runs the shell-script shim as `cargo`, so there is no
+    // analyser spawn to observe; the case compiles everywhere and asserts here.
+    if !cfg!(unix) {
+        return;
+    }
     let (repo, shims, home) = fixture("hook-latency-drain");
     let held = fs::OpenOptions::new()
         .create(true)
@@ -209,7 +203,6 @@ fn a_drain_finding_another_scanning_does_not_scan() {
 }
 
 /// The parent pids the shim recorded.
-#[cfg(unix)]
 fn spawners(repo: &Path) -> Vec<u32> {
     let log = repo.parent().expect("fixture root").join("spawns.log");
     fs::read_to_string(log)
@@ -224,9 +217,13 @@ fn spawners(repo: &Path) -> Vec<u32> {
 ///
 /// Fails by: the surface gate on the two `Cost::Effect` facts removed, which
 /// put a compiler run inside every mediated call (23 execve where 1 belongs).
-#[cfg(unix)]
 #[test]
 fn the_mediated_verb_spawns_nothing_on_any_event() {
+    // As `a_drain_finding_another_scanning_does_not_scan`: the shim runs only
+    // on unix, so off it there is nothing to measure.
+    if !cfg!(unix) {
+        return;
+    }
     let (repo, shims, home) = fixture("hook-latency-spawn");
     let hooks = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hooks");
     for event in [
