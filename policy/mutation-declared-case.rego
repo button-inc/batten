@@ -125,10 +125,18 @@ resolves(entry) if {
 # The sweep judges a `.rego` row by a `test_<case>` rule in the mutated module
 # BEFORE it looks at any suite (`mutate.rs`'s `declares_own_case`), so a row
 # naming one is resolved wherever its file's `#MUTANT-SUITE` points. Spelled as
-# that function spells it — a line opening `test_<case> ` — so this reader and
-# the runner cannot disagree about which rows the module answers for.
+# that function spells it — a line opening `test_<case> `.
+#
+# ONLY UNDER `policy/`, because the runner judges by module only a REGISTERED
+# row's module (`lib.rs`'s `policy_case` answers `None` otherwise, and the row
+# falls back to its suite), and every `policy/*.rego` is a registered row while
+# a preset under `crates/batten/src/policy/presets/` is loaded another way.
+# Without the prefix a preset row naming its own `test_` rule would read as
+# resolved here and as `names-no-case` in the sweep (code review of CLOUD-2341).
 #MUTANT own-case-unread|s@^\tstartswith(line, sprintf("test_%v ", \[entry.case\]))$@\tfalse@|a_declaration_naming_its_own_modules_case_is_silent
+#MUTANT own-case-unregistered|s@^\tstartswith(entry.path, "policy/")$@\ttrue@|a_presets_own_case_is_still_judged_by_its_suite
 resolves(entry) if {
+	startswith(entry.path, "policy/")
 	endswith(entry.path, ".rego")
 	some line in lines[entry.path]
 	startswith(line, sprintf("test_%v ", [entry.case]))

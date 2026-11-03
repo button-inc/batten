@@ -184,6 +184,31 @@ fn a_declaration_naming_its_own_modules_case_is_silent() {
     );
 }
 
+/// The same row in a PRESET module is not resolved by its own `test_` rule: the
+/// runner judges a preset's row by its suite (`policy_case` reads registered
+/// rows only), so a case the suite lacks is still refused here.
+#[test]
+fn a_presets_own_case_is_still_judged_by_its_suite() {
+    let module = format!(
+        "{}package subject\n\ntest_a_rule_case if {{\n\ttrue\n}}\n",
+        declaring("crates/batten/tests/it/subject.rs", "a_rule_case")
+    );
+    let root = repo(
+        "mutation-case-preset-own-module",
+        &[
+            (
+                "crates/batten/src/policy/presets/subject/subject.rego",
+                &module,
+            ),
+            (
+                "crates/batten/tests/it/subject.rs",
+                "#[test]\nfn a_case_that_exists() {}\n",
+            ),
+        ],
+    );
+    assert_eq!(verdicts(&root), vec![UNDEFINED.to_owned()]);
+}
+
 /// The bats spelling over the engine, and it is not the case above repeated: a
 /// `.bats` suite matched with the Rust needle would pass vacuously, so the two
 /// needles need one live case each.
