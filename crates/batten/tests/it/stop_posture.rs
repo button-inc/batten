@@ -1612,7 +1612,10 @@ fn a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id() {
     let receipts = dir.join(".git/batten-receipts");
     fs::create_dir_all(&receipts).expect("receipts dir");
     fs::write(
-        receipts.join("board-writes.main"),
+        receipts.join(format!(
+            "board-writes.{}",
+            batten::receipt::branch_slug("main")
+        )),
         "issue CLOUD-1 2099-01-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs\n",
     )
     .expect("write the board record");
@@ -1648,7 +1651,10 @@ fn a_closed_row_leaves_the_filed_checklist() {
     let receipts = dir.join(".git/batten-receipts");
     fs::create_dir_all(&receipts).expect("receipts dir");
     fs::write(
-        receipts.join("board-writes.main"),
+        receipts.join(format!(
+            "board-writes.{}",
+            batten::receipt::branch_slug("main")
+        )),
         "issue CLOUD-7 2099-01-01T00:00:00Z ready 0 - 0\n\
          issue CLOUD-8 2099-01-01T00:00:00Z ready 0 - 0\n",
     )

@@ -304,7 +304,10 @@ fn mint_search_receipt(repo: &Path, branch: &str) {
         base
     };
     std::fs::write(
-        store.join(format!("issue-search.{branch}")),
+        store.join(format!(
+            "issue-search.{}",
+            batten::receipt::branch_slug(branch)
+        )),
         format!("CLOUD-1 CLOUD-2\nbase {base}\n"),
     )
     .expect("mint the search receipt");
@@ -1848,8 +1851,14 @@ fn a_search_result_mints_with_its_base_line() {
     completed(&repo, "mcp__Linear__list_issues", SEARCH_RESULT);
 
     let branch = common::git_in(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
-    let minted = receipt(&repo, &format!("issue-search.{}", branch.trim()))
-        .expect("the search minted its own receipt");
+    let minted = receipt(
+        &repo,
+        &format!(
+            "issue-search.{}",
+            batten::receipt::branch_slug(branch.trim())
+        ),
+    )
+    .expect("the search minted its own receipt");
     assert!(
         minted.starts_with("CLOUD-1 CLOUD-2\n"),
         "the ids seen, pointer-only: {minted}"
@@ -1878,7 +1887,10 @@ fn a_zero_hit_search_still_mints_and_a_read_payload_never_does() {
         r#"{"issues":[],"hasNextPage":false}"#,
     );
     let branch = common::git_in(&zero_hits, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
-    let name = format!("issue-search.{}", branch.trim());
+    let name = format!(
+        "issue-search.{}",
+        batten::receipt::branch_slug(branch.trim())
+    );
     assert!(
         receipt(&zero_hits, &name).is_some(),
         "a search returning nothing is still a search"

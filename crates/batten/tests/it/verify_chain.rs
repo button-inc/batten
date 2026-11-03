@@ -506,7 +506,7 @@ fn mint_claim(dir: &Path, branch: &str) {
     let receipts = Path::new(git_dir.trim()).join("batten-receipts");
     std::fs::create_dir_all(&receipts).expect("create the receipt store");
     std::fs::write(
-        receipts.join(format!("claim.{}", branch.replace('/', "-"))),
+        receipts.join(format!("claim.{}", batten::receipt::branch_slug(branch))),
         format!("CLOUD-843\nready-lint pass\nbase {}\n", base.trim()),
     )
     .expect("mint the receipt");

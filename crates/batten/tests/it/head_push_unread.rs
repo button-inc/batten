@@ -40,7 +40,7 @@ fn red_repo(name: &str) -> PathBuf {
         store.join(format!(
             "{}.{}",
             batten::land::RED_HEAD,
-            batten::land::red_head_slug("work/red")
+            batten::receipt::branch_slug("work/red")
         )),
         "head abc123\nfailed 101 windows\nrunning macos\n",
     )
@@ -50,16 +50,18 @@ fn red_repo(name: &str) -> PathBuf {
 
 /// THE KEY IS INJECTIVE (review of #1180): `work/red` and `work-red` are two
 /// branches and two records, so neither's debt is read, or cleared, as the
-/// other's. Under the shared `/` → `-` slug both named one file.
+/// other's. Under the old `/` → `-` slug both named one file; every receipt now
+/// hashes the branch (CLOUD-2353), and case is part of the name, so `feature/A`
+/// and `feature/a` are two records too.
 #[test]
 fn a_sibling_branchs_red_head_is_not_this_branchs() {
     assert_ne!(
-        batten::land::red_head_slug("work/red"),
-        batten::land::red_head_slug("work-red")
+        batten::receipt::branch_slug("work/red"),
+        batten::receipt::branch_slug("work-red")
     );
     assert_ne!(
-        batten::land::red_head_slug("a%2Fb"),
-        batten::land::red_head_slug("a/b")
+        batten::receipt::branch_slug("feature/A"),
+        batten::receipt::branch_slug("feature/a")
     );
 }
 
