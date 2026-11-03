@@ -44,8 +44,8 @@ Read on demand, never all of them.
 - `mem:github-rest-etiquette` — writing a task that calls the GitHub API;
   diagnosing a 403/429/abuse response.
 - `mem:toolchain-and-hooks` — pinning a tool, adding a task, touching `hk.pkl`
-  or the gate. **Before editing a `mise-tasks/*.sh` or a `tests/**/\*.bats`, the
-  binding rule is `.claude/rules/toolchain.md`'s two shapes\*\* — retire it whole
+  or the gate. Before editing a `mise-tasks/*.sh` or a `.bats` under `tests/`,
+  **the binding rule is `rules/toolchain.md`'s two shapes** — retire it whole
   or leave it — not this memory, which describes the layer being retired.
 - `mem:serena-setup` — a Serena worktree or index misbehaves; changing
   `.serena/` config.
