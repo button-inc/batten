@@ -52,12 +52,12 @@ if [ -n "${BATTEN_VERSION:-}" ]; then
 	missing=1
 else
 	case "$asset" in
-	batten-v0.0.217-x86_64-unknown-linux-gnu.tar.gz) want=2d9ac0d83186ed36c301ffb38afb8a86d11884e05bef81f3d2dfcac891700f96 ;;
-	batten-v0.0.217-aarch64-unknown-linux-gnu.tar.gz) want=a49d7ec39122b3357a1da5fb9f9e55e86716e926e364a338c67885873c6e6698 ;;
-	batten-v0.0.217-x86_64-unknown-linux-musl.tar.gz) want=a0a22ba6f6407907ac3debdd929a1331fbd48b47089208568598ad0b8cd746ee ;;
-	batten-v0.0.217-aarch64-unknown-linux-musl.tar.gz) want=defed9dab732c53cfb63cf82be5378df5f99f44f2fc9584e1b50e2734afb08d5 ;;
-	batten-v0.0.217-x86_64-apple-darwin.tar.gz) want=af3eb10c321da8022b966341aa807de5e041d2935f6455a2833ff5a983d2e064 ;;
-	batten-v0.0.217-aarch64-apple-darwin.tar.gz) want=48fa71f9d8c64e037543acc4bbcee8abc3bf74172f61287d8c7481f0a634c531 ;;
+	batten-v0.0.217-x86_64-unknown-linux-gnu.tar.gz) want=37109ad8b36d12c37e14bd49e4ebed50e3482de4934d653592b7c1373b12ccf1 ;;
+	batten-v0.0.217-aarch64-unknown-linux-gnu.tar.gz) want=34217b3b53bc7f4880b788028c68dd552aab859dca82928b2479bd71dce30327 ;;
+	batten-v0.0.217-x86_64-unknown-linux-musl.tar.gz) want=ccd6594f662bb9eaaf96a4ba2b099daf0b35c382009df238267c397adfba3a8d ;;
+	batten-v0.0.217-aarch64-unknown-linux-musl.tar.gz) want=d9a74b1406509250f5b94f8c46d8ba81f871859e3feee22c2fcef85250f1386a ;;
+	batten-v0.0.217-x86_64-apple-darwin.tar.gz) want=503a54d4c14e333055b218ce6c8a0f1541451cb801a74c2cadf9a90fa577fc54 ;;
+	batten-v0.0.217-aarch64-apple-darwin.tar.gz) want=ac2d0421583d70898daab26aa7e0df2f37254a9f38feaaad804efc3bfd9141ff ;;
 	esac
 	missing=2
 fi
