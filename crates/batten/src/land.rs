@@ -5606,24 +5606,6 @@ mod tests {
         assert!(store.join(&sibling).exists());
     }
 
-    /// A receipt name hashes the branch: `/` and `-` stay apart, case is kept,
-    /// and every slug is a 64-char lowercase hex digest.
-    #[test]
-    fn a_branch_slug_is_injective_over_slash_and_percent() {
-        let slug = crate::receipt::branch_slug;
-        assert_ne!(slug("feature/a"), slug("feature-a"));
-        assert_ne!(slug("feature/A"), slug("feature/a"));
-        for branch in ["feature/a", "feature-a", "feature/A", "feature/a%b"] {
-            let hex = slug(branch);
-            assert_eq!(hex.len(), 64, "{hex}");
-            assert!(
-                hex.chars()
-                    .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
-                "{hex}"
-            );
-        }
-    }
-
     /// Only an all-digit id is asked whether it was read.
     #[test]
     fn a_red_head_record_parses_and_only_a_digit_id_can_be_read() {

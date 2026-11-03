@@ -1099,7 +1099,7 @@ pub fn branch_slug(branch: &str) -> String {
 /// **A minter↔reader contract, not an internal detail.** `claim::mint` writes
 /// this file and this reads it, so the two spellings must agree exactly or the
 /// gate silently reports a missing receipt for one that exists — a deny on a
-/// claim that was made. `tests::the_branch_receipt_filename_matches_the_minting_task`
+/// claim that was made. `tests::the_branch_receipt_filename_matches_the_minter`
 /// is what stops the two halves drifting.
 fn branch_receipt_name(check: &str, branch: &str) -> String {
     format!("{check}.{}", branch_slug(branch))
@@ -3197,7 +3197,7 @@ mod tests {
     #[test]
     fn the_base_line_matches_what_the_minter_writes() {
         // The other half of the crate↔writer contract
-        // `the_branch_receipt_filename_matches_the_minting_task` pins: this reader
+        // `the_branch_receipt_filename_matches_the_minter` pins: this reader
         // and that writer must agree on the key, or the guard reads every receipt
         // as baseless and denies every edit.
         //
