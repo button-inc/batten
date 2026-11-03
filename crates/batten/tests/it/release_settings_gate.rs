@@ -134,7 +134,7 @@ fn no_workflow_finds_a_pull_request_through_the_search_index() {
                 !line.contains("--search"),
                 "{name}: `gh pr list --search` reads the search index, which misses a PR opened seconds ago"
             );
-            if name == "release-plz.yml" && line.contains("release-plz-") {
+            if name == "release-plz.yml" {
                 release_branch_lookups += 1;
             }
         }

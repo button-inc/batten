@@ -672,6 +672,10 @@ jobs:
         id: release-branch
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+          # The filter travels as an argument through `--arg-env`, as (c)'s
+          # `TARGET` does in release-land: a jq program needs `|` and `()`, which
+          # the shell ban reads as shell on a `run:` line.
+          FILTER: '--jq=[.[].headRefName | select(startswith("release-plz-"))][0] // empty'
         # THE PULL-REQUEST LIST, NEVER `--search` (CLOUD-2566): the search index
         # lags a PR's creation by seconds, and this step runs seconds after
         # `release-pr` opens one, so it read nothing for #1245 and the pin never
@@ -681,7 +685,7 @@ jobs:
         # `startswith` matches a branch PREFIX. A fork's PR whose branch
         # shares it names a branch origin does not have, so the fetch below
         # refuses and nothing is pushed; no filter here needs a shell to spell.
-        run: mise run batten -- ci step --capture branch -- gh pr list --state open --limit 1000 --json headRefName --jq '[.[].headRefName | select(startswith("release-plz-"))][0] // empty'
+        run: mise run batten -- ci step --capture branch --arg-env FILTER -- gh pr list --state open --limit 1000 --json headRefName
       - name: Fetch the release PR's head
         if: steps.release-branch.outputs.branch != ''
         env:
