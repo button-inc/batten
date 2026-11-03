@@ -16,6 +16,7 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[cfg(unix)]
 use crate::common;
 use crate::perf_assert;
 
