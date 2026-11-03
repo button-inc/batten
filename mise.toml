@@ -530,24 +530,6 @@ LAND_CI_WORKFLOW = "ci.yml"
 # count of unreadable bot answers, default 3) — so a consumer carrying it forward
 # would have truncated the CI wait to about three seconds (review of #848).
 LAND_ANSWER_ASKS = "120"
-# THE RECLAIM CENSUS'S STOP NOTE (CLOUD-451), declared here because the program
-# is this consumer's and a census name inside `crates/batten` is non-negotiable
-# rule 1's plainest violation. The engine spawns it wherever a holder CHOSE to
-# stop — `land lap` where the landing RETURNS (never where a lap hands its lease
-# back and laps, which is a landing still running), `lease hold` on its stall
-# bail, and `batten lease release` — and never on an exit path (CLOUD-491): an
-# exit path runs on the container kill too, and a note from one would erase the
-# only distinction the census draws.
-#
-# Both are ARGV for the engine's own `record census note` (CLOUD-843, retiring
-# `[tasks.reclaim-census]`), decoded as `LAND_BODY_GATES` is and never a shell.
-# The beat is the half that never existed, so the census's positive reading was
-# unreachable. It runs ONCE, when `land lap` starts, before any lap or lease: the
-# stop follows only where the landing returns, and the census reads only the kind
-# of the last record, so no later beat inside that window could change a verdict.
-# `lease hold`, unreached today, also writes it per renewal it applied.
-LEASE_STOP_NOTE = "batten record census note x land-stopped"
-LEASE_BEAT_NOTE = "batten record census note h"
 # The subset of that roster for which ABSENCE — no check-run at all, as opposed
 # to one that graded `skipped` — is a legitimate reading rather than a name that
 # has not registered yet. Exactly two WORKFLOWS earn it, and each earns it twice
