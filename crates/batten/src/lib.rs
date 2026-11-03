@@ -465,7 +465,15 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // and the worktree through `gitwrite`, so the same two edges are
         // forbidden — transitively, which the layering table states rather than
         // leaves to follow.
-        Some(Command::Land { command }) => run_land(&command, mode, out, err),
+        Some(Command::Land { command }) => run_land(
+            &command,
+            Deciding {
+                mode,
+                overrides: &overrides,
+            },
+            out,
+            err,
+        ),
         Some(Command::Wiring { command }) => run_wiring(&command, mode, &overrides, err),
         // The refinement gate and the pull-time claim (CLOUD-1121). Both read
         // the payload the caller supplies — or, under `--issue`, the one the
@@ -11452,7 +11460,7 @@ fn run_lease(
 /// what a conflict consists of and exactly what a report must not carry.
 fn run_land(
     command: &cli::LandCommand,
-    mode: Mode,
+    deciding: Deciding<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -11541,7 +11549,7 @@ fn run_land(
             let Some(reference) = land_reference(root, reference.as_deref(), err)? else {
                 return Ok(ExitCode::Internal);
             };
-            run_land_lap(root, &url, &reference, &branch, mode, out, err)
+            run_land_lap(root, &url, &reference, &branch, deciding, out, err)
         }
         cli::LandCommand::Linear { reference } => {
             let Some(url) = land_remote(root, err)? else {
@@ -12206,7 +12214,7 @@ fn run_land_lap(
     url: &str,
     reference: &str,
     branch: &str,
-    mode: Mode,
+    deciding: Deciding<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -12244,7 +12252,7 @@ fn run_land_lap(
     //
     // BEFORE the lease and the singleton, which is where the predecessor put it
     // and for its reason: a refusal here has spent nothing at all.
-    if let Some(code) = run_land_entry_gates(root, branch, mode, out, err)? {
+    if let Some(code) = run_land_entry_gates(root, branch, deciding, out, err)? {
         return Ok(code);
     }
 
@@ -12286,7 +12294,7 @@ fn run_land_lap(
         budget: laps,
         pipeline,
         guard: &guard,
-        mode,
+        deciding,
     };
     // ONE DISK WATCHER FOR THE WHOLE LANDING (CLOUD-2197): replay, verify, push
     // and the CI wait, every lap. It ends with the landing, on its stop flag.
@@ -12368,8 +12376,8 @@ struct Laps<'run> {
     pipeline: pipeline::Pipeline,
     /// Held by the caller for the whole landing; each step publishes its phase.
     guard: &'run LandSingleton,
-    /// The invocation's output mode, which the in-process body gates decide in.
-    mode: Mode,
+    /// How the in-process body gates decide: the invocation's mode and overrides.
+    deciding: Deciding<'run>,
 }
 
 /// Cancel `sha`'s runs, sparing the fan-in, and say how many in one line;
@@ -12495,7 +12503,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
         budget: laps,
         pipeline,
         guard,
-        mode,
+        deciding,
     } = run;
     // ONE POLL FOR THE WHOLE LANDING, held outside the lap loop so lap 2 onward
     // send the validator lap 1 was given. Rebuilt per lap it was a fresh
@@ -12583,7 +12591,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
             reference,
             branch,
             lap,
-            mode,
+            deciding,
         };
         for row in &pipeline.steps {
             let step = row.step;
@@ -13163,7 +13171,7 @@ fn run_the_step(
         url,
         reference,
         branch,
-        mode,
+        deciding,
         ..
     } = asked;
     let code = match step {
@@ -13195,7 +13203,7 @@ fn run_the_step(
             return Ok((code, None, None, stalled));
         }
         land::Step::Lease => run_land_lease(root, branch, out, err)?,
-        land::Step::Ready => run_land_ready(root, branch, bet, ledger, mode, out, err)?,
+        land::Step::Ready => run_land_ready(root, branch, bet, ledger, deciding, out, err)?,
         land::Step::Push => run_land_push(root, url, branch, out)?,
         land::Step::Wait => {
             let fresh_ready = ledger.take_fresh_ready();
@@ -15148,7 +15156,7 @@ fn run_land_ready(
     branch: &str,
     bet: &speculation::Bet,
     ledger: &mut land::Ledger,
-    mode: Mode,
+    deciding: Deciding<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -15157,7 +15165,7 @@ fn run_land_ready(
         Ok(pr) => pr,
         Err(code) => return Ok(code),
     };
-    let gates = lease_config(root, &Overrides::default())
+    let gates = lease_config(root, deciding.overrides)
         .map(|lease| lease.body_gate)
         .unwrap_or_default();
     // AN UNDECLARED GATE SET IS A PASS AND NOT AN EARLY RETURN, which is the
@@ -15179,7 +15187,7 @@ fn run_land_ready(
                 out,
                 "land: the pull request carries no body; nothing to ask"
             )?;
-        } else if let Some(code) = ask_the_body_gates(&gates, &body, bet, mode, err)? {
+        } else if let Some(code) = ask_the_body_gates(&gates, &body, bet, deciding, err)? {
             return Ok(code);
         } else {
             writeln!(out, "land: {} body gate(s) clear", gates.len())?;
@@ -15210,16 +15218,15 @@ fn ask_the_body_gates(
     gates: &[config::BodyGate],
     body: &str,
     bet: &speculation::Bet,
-    mode: Mode,
+    deciding: Deciding<'_>,
     err: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
-    let overrides = Overrides::default();
     for gate in gates {
         let named = format!("{} \u{2192} {}", gate.derive, gate.rule);
         if record::derive_and_store(
             &gate.derive,
             &gate.inputs,
-            &overrides,
+            deciding.overrides,
             Some(body),
             bet.published(),
             &mut std::io::sink(),
@@ -15233,13 +15240,7 @@ fn ask_the_body_gates(
             )?;
             return Ok(Some(ExitCode::Violation));
         }
-        let flags = cli::CheckFlags {
-            rule: vec![gate.rule.clone()],
-            ..cli::CheckFlags::default()
-        };
-        let mut said = Vec::new();
-        let mut also = Vec::new();
-        let decided = run_check(&flags, mode, &overrides, &mut said, &mut also)?;
+        let (decided, said) = decide_rule(&gate.rule, deciding)?;
         if decided == ExitCode::Success {
             continue;
         }
@@ -15256,10 +15257,30 @@ fn ask_the_body_gates(
             )?;
         }
         err.write_all(&said)?;
-        err.write_all(&also)?;
         return Ok(Some(ExitCode::Violation));
     }
     Ok(None)
+}
+
+/// Decide one rule in-process over the record store as it stands: the code the
+/// decision answered and everything it said, stdout and stderr together, so a
+/// caller forwards the decision's own words only on a stop.
+fn decide_rule(rule: &str, deciding: Deciding<'_>) -> Result<(ExitCode, Vec<u8>)> {
+    let flags = cli::CheckFlags {
+        rule: vec![rule.to_owned()],
+        ..cli::CheckFlags::default()
+    };
+    let mut said = Vec::new();
+    let mut also = Vec::new();
+    let code = run_check(
+        &flags,
+        deciding.mode,
+        deciding.overrides,
+        &mut said,
+        &mut also,
+    )?;
+    said.extend(also);
+    Ok((code, said))
 }
 
 /// The open pull request a ready step readies, or the stop its absence is.
@@ -15444,15 +15465,14 @@ fn fired(
 fn run_land_entry_gates(
     root: &Path,
     branch: &str,
-    mode: Mode,
+    deciding: Deciding<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
     if let Some(refused) = refuse_unread_red_head(root, branch, err)? {
         return Ok(Some(refused));
     }
-    let Some(declared) = lease_config(root, &Overrides::default()).and_then(|l| l.unsubscribed)
-    else {
+    let Some(declared) = lease_config(root, deciding.overrides).and_then(|l| l.unsubscribed) else {
         return Ok(None);
     };
     let repo = repo_or_placeholder(root);
@@ -15485,7 +15505,7 @@ fn run_land_entry_gates(
             return Ok(Some(ExitCode::Internal));
         }
     };
-    match ask_unsubscribed(&declared, &pr, mode) {
+    match ask_unsubscribed(&declared, &pr, deciding) {
         Ok((ExitCode::Success, _)) => {
             writeln!(out, "land: the entry gate `{}` is clear", declared.rule)?;
             Ok(None)
@@ -15535,7 +15555,7 @@ fn run_land_entry_gates(
 fn ask_unsubscribed(
     declared: &config::EntryUnsubscribed,
     pr: &str,
-    mode: Mode,
+    deciding: Deciding<'_>,
 ) -> Result<(ExitCode, Vec<u8>)> {
     let pr = unsubscribe::pr_number(pr)?;
     let host = unsubscribe::Host {
@@ -15550,15 +15570,7 @@ fn ask_unsubscribed(
     let _ = unsubscribe::drop_subscription(&git_dir, &host, pr, &mut std::io::sink());
     let reading = unsubscribe::reading(&git_dir, &host, pr);
     record::store_named("land", &host.family, &reading)?;
-    let flags = cli::CheckFlags {
-        rule: vec![declared.rule.clone()],
-        ..cli::CheckFlags::default()
-    };
-    let mut said = Vec::new();
-    let mut also = Vec::new();
-    let code = run_check(&flags, mode, &Overrides::default(), &mut said, &mut also)?;
-    said.extend(also);
-    Ok((code, said))
+    decide_rule(&declared.rule, deciding)
 }
 
 /// Hand the landing lease back, best-effort, on the path that landed.
@@ -16114,8 +16126,17 @@ struct Asked<'lap> {
     reference: &'lap str,
     branch: &'lap str,
     lap: u32,
-    /// The invocation's output mode, for the steps that decide in-process.
+    /// How the steps that decide in-process decide.
+    deciding: Deciding<'lap>,
+}
+
+/// The invocation's output mode and config overrides, which every in-process
+/// decision a landing makes runs under — the same two `batten check` would
+/// have been handed on the command line.
+#[derive(Debug, Clone, Copy)]
+struct Deciding<'a> {
     mode: Mode,
+    overrides: &'a Overrides,
 }
 
 /// The two prechecks a row can carry that end a lap before it spends.

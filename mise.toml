@@ -437,37 +437,11 @@ CI_REQUIRED_CHECKS = "ci,batten-check,mutants (0),mutants (1),mutants (2),mutant
 # retirements: `bats` passed through it (CLOUD-2301) and is gone.
 CI_RETIRING_CHECKS = ""
 
-# ─── THE LAP'S ENTRY GATES (CLOUD-1148) ───────────────────────────────────────
+# ─── THE LAP'S BODY AND ENTRY GATES (CLOUD-1148) ──────────────────────────────
 #
-# The ready step's body gates moved to `[[lease.body_gate]]` in `batten.toml`
-# (CLOUD-2387): the engine reads the body and decides them in-process.
-#
-# THE ENTRY GATES, ASKED ONCE BEFORE THE FIRST LAP (CLOUD-1471). `|`-separated
-# argvs of space-separated words. An UNDECLARED list passes and a DECLARED gate
-# that cannot run refuses, since an unknown verdict has not said clean. One
-# difference from an ordinary task argv matters: the engine
-# appends THE PULL REQUEST NUMBER to each argv, because which task drops a
-# subscription is this consumer's vocabulary and which pull request is being
-# landed is a fact the engine already resolved. A gate reading the number from its
-# own environment would be a second authority over it.
-#
-# WHY THIS PAIR. AGENTS.md bans PR-webhook babysitting and the harness arms a
-# subscription on every pull request this repo opens anyway, with no tool call
-# behind it on two of the three measured (CLOUD-518) — so a deny rule on the tool
-# closes only the path nobody used. `drop` FAILS OPEN and `check` does not, which
-# is what keeps the pair safe on the critical path: off harness, no token or any
-# non-200 mints nothing, `check` refuses exactly as before, and the manual
-# `record` is still the way through (CLOUD-790).
-#
-# `land.sh` ran these two as its first act and nothing in the engine carried them,
-# so retiring the lander would have dropped a live gate on the floor. Declared
-# here, they survive the deletion with their caller intact.
-# The `?` marks the drop ADVISORY, which is the pair's own asymmetry rather than
-# a softening: the bash ran `drop … || true` and only `check` as an `if !`. Drop
-# it and a `drop` that answers 1 (not dropped) or 2 (could not look) would stop
-# the landing where the predecessor carried on to `check` — whose refusal is the
-# one that names `record` as the way through.
-LAND_ENTRY_GATES = "?mise run pr-unsubscribed drop|mise run pr-unsubscribed check"
+# Both moved to `batten.toml` under CLOUD-2387: `[[lease.body_gate]]` and
+# `[lease.unsubscribed]`. The engine reads the body and the subscription and
+# decides them in-process, where these were argvs it spawned.
 # THE THREE THE LAP CANNOT RUN WITHOUT, AND NOTHING DECLARED THEM (review of
 # #848). Every one of these is a consumer fact `crates/batten` refuses to guess —
 # which is non-negotiable rule 1 working — but refusing to guess only reaches a
@@ -2289,9 +2263,9 @@ run = "cargo run --quiet -p batten -- release sums --manifest {{env.BATTEN_CHECK
 # variable carrying the session id (the id `[[mcp.source]] claude-code-remote`
 # spells its wiring file with), the variable carrying the credential file's
 # path, the endpoint — the `/github/mcp` route and not the toolbox one, with
-# `{session}` where the id goes — and the tool. `land` runs `pr-unsubscribed
-# drop` and then `check` as entry gates (`LAND_ENTRY_GATES`), by this name, with
-# the arm and the pull request appended to this argv.
+# `{session}` where the id goes — and the tool. `land` asks the same host
+# in-process from `[lease.unsubscribed]` in `batten.toml`, which carries these
+# flags; a test holds the two in step (CLOUD-2387).
 [tasks.pr-unsubscribed]
 description = "Gate: this session has dropped the PR's webhook subscription (records unsubscribe_pr_activity's answer, then decides) — CLOUD-518"
 run = "cargo run --quiet -p batten -- pr unsubscribed --session-env CLAUDE_CODE_REMOTE_SESSION_ID --token-env CLAUDE_SESSION_INGRESS_TOKEN_FILE --endpoint https://api.anthropic.com/v2/ccr-sessions/{session}/github/mcp --tool unsubscribe_pr_activity --arguments '{\"owner\":\"{owner}\",\"repo\":\"{repo}\",\"pullNumber\":\"{pr}\"}' --family pr-unsubscribed --rule 'event watch other'"

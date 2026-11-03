@@ -423,6 +423,41 @@ fn the_landings_own_stop_note_is_still_declared() {
     );
 }
 
+/// **THE LANDING'S GATES ARE CONFIG, AND THEIR RETIRED ARGVS ARE GONE**
+/// (CLOUD-2387).
+///
+/// The engine reads `[[lease.body_gate]]` and `[lease.unsubscribed]` and no
+/// longer reads `LAND_BODY_SOURCE`, `LAND_BODY_GATES` or `LAND_ENTRY_GATES`. A
+/// manifest still setting one is a dead third copy of a live gate, and a reader
+/// cannot tell which is in force.
+#[test]
+fn the_landings_gates_are_declared_in_config_and_not_as_argvs() {
+    let manifest = std::fs::read_to_string("../../mise.toml").expect("read the manifest");
+    for retired in ["LAND_BODY_SOURCE", "LAND_BODY_GATES", "LAND_ENTRY_GATES"] {
+        assert!(
+            !manifest
+                .lines()
+                .any(|line| line.trim_start().starts_with(retired)),
+            "{retired} is retired: the landing decides its gates in-process"
+        );
+    }
+    let config = std::fs::read_to_string("../../batten.toml").expect("read the consumer's config");
+    let parsed: toml::Value = toml::from_str(&config).expect("batten.toml parses");
+    let derived: Vec<&str> = parsed["lease"]["body_gate"]
+        .as_array()
+        .expect("the body gates are declared")
+        .iter()
+        .filter_map(|row| row.get("derive").and_then(toml::Value::as_str))
+        .collect();
+    assert_eq!(derived, ["deferral", "closing-key"]);
+    assert_eq!(
+        parsed["lease"]["unsubscribed"]
+            .get("rule")
+            .and_then(toml::Value::as_str),
+        Some("event watch other")
+    );
+}
+
 /// **THE LAP'S READY ASKS THE RECEIPTS `gh pr ready` ASKS** (CLOUD-2293).
 ///
 /// Through `land_ready_owes`, the call `spend_the_matrix` makes before any ready
