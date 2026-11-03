@@ -1029,6 +1029,16 @@ pub struct Lease {
     /// reason this is a short named list rather than a pattern.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fast_forward_branches: Vec<String>,
+
+    /// Whether this repository keeps a reclaim census, so a landing writes its
+    /// beat and its chosen stop into it (CLOUD-2387).
+    ///
+    /// The census is the engine's own `reclaim` module, so the notes are written
+    /// in-process; what the consumer decides is only WHETHER it keeps one. Off,
+    /// nothing is written — the same "declares nothing, nothing written" the
+    /// spawned `LEASE_BEAT_NOTE` and `LEASE_STOP_NOTE` argvs it replaces gave.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub census: bool,
 }
 
 /// The `[mutate]` table: which gates `batten mutate` must show able to fail

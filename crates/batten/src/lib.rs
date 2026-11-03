@@ -12275,8 +12275,7 @@ fn run_land_lap(
     // singleton, because the census store is this worktree's and the singleton is
     // what makes this the one landing in it: a second land refused above wrote
     // nothing, so it cannot mask a live one.
-    let beat_note = std::env::var("LEASE_BEAT_NOTE").unwrap_or_default();
-    let stop_note = std::env::var("LEASE_STOP_NOTE").unwrap_or_default();
+    let census = census_kept(root);
     let run = Laps {
         root,
         url,
@@ -12291,7 +12290,7 @@ fn run_land_lap(
     let prune_rules = resolve::resolve(root, &Overrides::default())
         .ok()
         .and_then(|resolved| resolved.prune);
-    land_census_window(root, &beat_note, &stop_note, || {
+    land_census_window(root, census, || {
         // WHAT A LAP THAT NEVER RETURNED LEFT SPENDING, reconciled once after the
         // lock and inside the window, so its forge writes read as in flight
         // (CLOUD-2371): `unwind_lap` is the fast path on a normal return.
@@ -12309,8 +12308,8 @@ fn run_land_lap(
     })
 }
 
-//MUTANT landing-start-unnoted|s@^    note_declared(root, begin_note);$@@|a_landing_notes_its_start_and_every_chosen_end
-//MUTANT landing-end-unnoted|s@^    note_declared(root, stop_note);$@@|a_landing_notes_its_start_and_every_chosen_end
+//MUTANT landing-start-unnoted|s@^    note_census(root, census, CensusNote::Beat);$@@|a_landing_notes_its_start_and_every_chosen_end
+//MUTANT landing-end-unnoted|s@^    note_census(root, census, CensusNote::Stop);$@@|a_landing_notes_its_start_and_every_chosen_end
 /// Run `laps` inside the reclaim census's window: a beat before, a stop after.
 ///
 /// **THE STOP IS WRITTEN WHERE THE LANDING ENDS, never where a lap does**
@@ -12321,6 +12320,9 @@ fn run_land_lap(
 /// minutes, read as *stopped on purpose*. The false-idle reading the census exists
 /// to rule out. Here the landing has returned — landed, stopped, refused, stood
 /// down or out of laps — so nothing this process does follows the stop.
+///
+/// Written only when `census` is set: `[lease] census` declares that this
+/// repository keeps one (CLOUD-2387).
 ///
 /// **THE BEAT OPENS THE WINDOW, AND IS ITS ONLY BEAT** (CLOUD-843, round-3
 /// review). It is written before any lease is held and before any lap, so a
@@ -12334,20 +12336,19 @@ fn run_land_lap(
 /// Never on an exit path (CLOUD-491): a kill never returns from `laps`, so it
 /// reaches neither note after the first, and the last record stays a beat. An
 /// `Err` is a return like any other — the process chose to stop — so it is
-/// noted too. Both argvs are the consumer's, for [`note_release`]'s reason.
+/// noted too.
 ///
 /// # Errors
 ///
 /// Whatever `laps` returned; the notes are best-effort and never an error.
 fn land_census_window(
     root: &Path,
-    begin_note: &str,
-    stop_note: &str,
+    census: bool,
     laps: impl FnOnce() -> Result<ExitCode>,
 ) -> Result<ExitCode> {
-    note_declared(root, begin_note);
+    note_census(root, census, CensusNote::Beat);
     let ended = laps();
-    note_declared(root, stop_note);
+    note_census(root, census, CensusNote::Stop);
     ended
 }
 
@@ -16859,10 +16860,9 @@ fn run_lease_hold(
         .and_then(|pid| pid.parse::<u32>().ok());
     let marker =
         std::env::var("LAND_LOCK_HOLDER_MARKER").unwrap_or_else(|_| String::from("batten land"));
-    // The consumer's reclaim-census beat and stop, read once: see
+    // Whether this repository keeps a reclaim census, read once: see
     // `lease_renewed` and `lease_hold_bail`.
-    let beat_note = std::env::var("LEASE_BEAT_NOTE").unwrap_or_default();
-    let stop_note = std::env::var("LEASE_STOP_NOTE").unwrap_or_default();
+    let census = census_kept(root);
     let mut misses = 0_u32;
     loop {
         // The interval is the lease's own `beat`, and the loop's exit condition is
@@ -16890,7 +16890,7 @@ fn run_lease_hold(
                 "lease: the land holding this lease (pid {pid}) is gone; releasing rather than \
                  renewing for nobody"
             )?;
-            lease_hold_bail(root, terms, &holder, now, HoldEnd::HolderGone, &stop_note);
+            lease_hold_bail(root, terms, &holder, now, HoldEnd::HolderGone, census);
             return Ok(ExitCode::Violation);
         }
         // The complementary case, and the one liveness cannot see: the land is
@@ -16914,7 +16914,7 @@ fn run_lease_hold(
                 "lease: the land holding this lease {why}; releasing and stopping it rather than \
                  holding the fleet"
             )?;
-            lease_hold_bail(root, terms, &holder, now, HoldEnd::Stalled, &stop_note);
+            lease_hold_bail(root, terms, &holder, now, HoldEnd::Stalled, census);
             lease_bail_reason(&git_dir, &why);
             // Re-corroborated immediately before the signal, never inferred from
             // the probe at the top of this beat: pids recycle inside twenty
@@ -16956,7 +16956,7 @@ fn run_lease_hold(
         let token = progress.map(lease::Progress::token);
         let renewed = lease::renewal(terms, body, token.as_deref(), now);
         if let Ok(lease::Outcome::Applied) = lease::cas(terms, &observed, &renewed, now) {
-            lease_renewed(root, &body.branch, now + terms.ttl, &beat_note);
+            lease_renewed(root, &body.branch, now + terms.ttl, census);
             misses = 0;
         } else {
             // A REJECTED SWAP AND A FAILED PUSH ARE ONE ARM HERE, deliberately.
@@ -17032,11 +17032,11 @@ fn lease_hold_bail(
     holder: &str,
     now: i64,
     end: HoldEnd,
-    stop_note: &str,
+    census: bool,
 ) {
     lease_hand_back(root, terms, holder, now);
     if end == HoldEnd::Stalled {
-        note_declared(root, stop_note);
+        note_census(root, census, CensusNote::Stop);
     }
 }
 
@@ -17077,31 +17077,52 @@ fn lease_bail_reason(git_dir: &Path, why: &str) {
 /// only distinction the census draws. This is the release recording that it
 /// chose to stop its own child.
 ///
-/// **The argv is the CONSUMER'S, read from `$LEASE_STOP_NOTE`.** A census
-/// program's name inside `crates/batten` is non-negotiable rule 1's plainest
-/// violation, and this is the same shape `LAND_BODY_GATES` already takes: the
-/// engine spawns what the consumer declared, through the sanctioned boundary,
-/// and a consumer that declares nothing gets nothing spawned.
+/// **WRITTEN IN-PROCESS, AND ONLY WHERE `[lease] census` IS SET** (CLOUD-2387).
+/// The census is the engine's own `reclaim` module, so the note was never a
+/// consumer's program to name: it used to be an argv in `$LEASE_STOP_NOTE` that
+/// spawned `batten record census note`, a detour through a fresh process and
+/// whatever `batten` the `PATH` resolved. What stays the consumer's is whether
+/// it keeps a census at all.
 ///
 /// Silent and best-effort in every direction. A census note that could not be
 /// written is not a reason to fail a release that already succeeded.
 fn note_release(root: &Path) {
-    note_declared(root, &std::env::var("LEASE_STOP_NOTE").unwrap_or_default());
+    note_census(root, census_kept(root), CensusNote::Stop);
 }
 
-/// Spawn the first argv `declared` names, silently and best-effort.
-fn note_declared(root: &Path, declared: &str) {
-    let Some(argv) = land::body_gates(declared).into_iter().next() else {
+/// Which reclaim-census record a landing writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CensusNote {
+    /// `h`: a landing is in flight.
+    Beat,
+    /// `x land-stopped`: this process chose to stop.
+    Stop,
+}
+
+/// Whether `root`'s committed `[lease]` declares a reclaim census.
+fn census_kept(root: &Path) -> bool {
+    lease_config(root, &resolve::Overrides::default()).is_some_and(|lease| lease.census)
+}
+
+/// Write `note` into `root`'s reclaim census when it keeps one, silently and
+/// best-effort.
+fn note_census(root: &Path, census: bool, note: CensusNote) {
+    if !census {
+        return;
+    }
+    let Ok(git_dir) = git::git_dir(root) else {
         return;
     };
-    let _ = exec::piped_argv(root, &argv, "", exec::Diagnostics::Keep, &[]);
+    match note {
+        CensusNote::Beat => reclaim::note_in(&git_dir, "h", None),
+        CensusNote::Stop => reclaim::note_in(&git_dir, "x", Some("land-stopped")),
+    }
 }
 
-//MUTANT renewal-writes-no-beat|s@^    note_declared(root, beat_note);$@@|an_applied_renewal_writes_its_receipt_and_the_declared_beat
-/// `lease hold`'s renewal that applied: its receipt, then the consumer's
-/// reclaim-census beat (`$LEASE_BEAT_NOTE`, read once by the hold loop and
-/// passed as `beat_note`). After the receipt, so a beat never claims a hold the
-/// remote refused.
+//MUTANT renewal-writes-no-beat|s@^    note_census(root, keeps_census, CensusNote::Beat);$@@|an_applied_renewal_writes_its_receipt_and_the_declared_beat
+/// `lease hold`'s renewal that applied: its receipt, then the reclaim-census
+/// beat when this repository keeps one (`keeps_census`, read once by the hold
+/// loop). After the receipt, so a beat never claims a hold the remote refused.
 ///
 /// **This is the UNREACHED holder's half** — nothing in the tree runs `lease
 /// hold` today. What makes the census's positive reading, *a landing was in
@@ -17109,13 +17130,12 @@ fn note_declared(root: &Path, declared: &str) {
 /// [`land_census_window`]'s opening beat (CLOUD-843); the lap's own heartbeat
 /// notes nothing, since no beat inside that window can change the verdict.
 ///
-/// The argv is the consumer's for [`note_release`]'s reason: the beat and the
-/// stop are one census, and only the consumer knows it keeps one. The hold's stop
-/// is [`lease_hold_bail`]'s, and only on the bail it chose — never on an exit
-/// path (CLOUD-491).
-fn lease_renewed(root: &Path, branch: &str, expires: i64, beat_note: &str) {
+/// The beat and the stop are one census, and only the consumer knows it keeps
+/// one. The hold's stop is [`lease_hold_bail`]'s, and only on the bail it chose —
+/// never on an exit path (CLOUD-491).
+fn lease_renewed(root: &Path, branch: &str, expires: i64, keeps_census: bool) {
     lease_receipt(root, branch, expires);
-    note_declared(root, beat_note);
+    note_census(root, keeps_census, CensusNote::Beat);
 }
 
 /// `lease release`: a tombstone, never a delete.
@@ -30483,42 +30503,72 @@ mod tests {
     /// the arm the loop calls on `Applied`: the receipt AND the declared beat.
     #[test]
     fn an_applied_renewal_writes_its_receipt_and_the_declared_beat() {
-        // `touch` is the declared note command this case stubs with, and no such
-        // program ships on Windows; the case compiles there and says so (`cfg!`,
-        // never `#[cfg]`, so the off-unix arm is type-checked on every host).
-        if !cfg!(unix) {
+        let Some(root) = census_scratch("renewed") else {
             return;
-        }
-        let root =
-            std::env::temp_dir().join(format!("batten-lease-renewed-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        crate::gitwrite::init_on_main(&root).unwrap();
-        let beat = root.join("beat");
-        lease_renewed(&root, "claude/x", 42, &format!("touch {}", beat.display()));
-        assert!(
-            beat.exists(),
-            "the declared beat ran on the applied renewal"
+        };
+        lease_renewed(&root, "claude/x", 42, true);
+        assert_eq!(
+            census_kinds(&root),
+            ["h"],
+            "the declared beat is written on the applied renewal"
         );
         let receipt = lease_receipt_path(&root, "claude/x").unwrap();
         assert_eq!(std::fs::read_to_string(receipt).unwrap(), "42\n");
-        // And a consumer that declares no beat gets nothing spawned.
-        let _ = std::fs::remove_file(&beat);
-        lease_renewed(&root, "claude/x", 43, "");
-        assert!(!beat.exists());
+        // And a repository that keeps no census gets nothing written.
+        lease_renewed(&root, "claude/x", 43, false);
+        assert_eq!(census_kinds(&root), ["h"]);
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// A scratch clone for the census-note cases, and the marker file a declared
-    /// `touch` note would create in it.
-    fn census_scratch(name: &str) -> (PathBuf, PathBuf) {
+    /// A scratch clone for the census-note cases, or `None` where this host's
+    /// boot time cannot be read and so no census record can be written at all.
+    fn census_scratch(name: &str) -> Option<PathBuf> {
+        if reclaim::boot_time().is_err() {
+            return None;
+        }
         let root =
             std::env::temp_dir().join(format!("batten-census-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         crate::gitwrite::init_on_main(&root).unwrap();
-        let marker = root.join("noted");
-        (root, marker)
+        Some(root)
+    }
+
+    /// The kind and reason of every census record `root` holds, in order.
+    fn census_kinds(root: &Path) -> Vec<String> {
+        let git_dir = git::git_dir(root).unwrap();
+        let store = crate::record::journal_store(&git_dir, reclaim::BEATS);
+        let crate::journal::Fold::Records(records) = crate::journal::fold_lines(&store) else {
+            return Vec::new();
+        };
+        records
+            .iter()
+            .map(|record| {
+                let fields: Vec<&str> = record.split(' ').collect();
+                std::iter::once(fields[0])
+                    .chain(fields.get(3).copied())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect()
+    }
+
+    /// `[lease] census` decides whether a landing writes into the census at all
+    /// (CLOUD-2387): declared, its stop is the engine's own `x land-stopped`,
+    /// written in-process under the root; undeclared, nothing is written.
+    #[test]
+    fn a_declared_census_writes_the_stop_note_and_an_undeclared_one_writes_nothing() {
+        let Some(root) = census_scratch("declared") else {
+            return;
+        };
+        note_census(&root, false, CensusNote::Stop);
+        assert!(
+            census_kinds(&root).is_empty(),
+            "undeclared, nothing is written"
+        );
+        note_census(&root, true, CensusNote::Stop);
+        assert_eq!(census_kinds(&root), ["x land-stopped"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// THE PRODUCTION STOP (CLOUD-843, round-2 review): the landing writes its
@@ -30532,22 +30582,15 @@ mod tests {
     /// stop, and a stop left unwritten there reads as a container death.
     #[test]
     fn a_landing_notes_its_start_and_every_chosen_end() {
-        // `touch` is the declared note command this case stubs with, and no such
-        // program ships on Windows; the case compiles there and says so (`cfg!`,
-        // never `#[cfg]`, so the off-unix arm is type-checked on every host).
-        if !cfg!(unix) {
+        let Some(root) = census_scratch("window") else {
             return;
-        }
-        let (root, started) = census_scratch("window");
-        let stopped = root.join("stopped");
-        let begin = format!("touch {}", started.display());
-        let stop = format!("touch {}", stopped.display());
-        let ended = land_census_window(&root, &begin, &stop, || {
-            assert!(
-                started.exists(),
-                "the beat opens the window, before any lap"
+        };
+        let ended = land_census_window(&root, true, || {
+            assert_eq!(
+                census_kinds(&root),
+                ["h"],
+                "the beat opens the window, before any lap, and no stop while the laps run"
             );
-            assert!(!stopped.exists(), "no stop while the laps still run");
             Ok(ExitCode::Violation)
         });
         assert_eq!(
@@ -30555,20 +30598,21 @@ mod tests {
             ExitCode::Violation,
             "the laps' answer, unchanged"
         );
-        assert!(stopped.exists(), "the landing's return is its chosen stop");
-        std::fs::remove_file(&started).unwrap();
-        std::fs::remove_file(&stopped).unwrap();
-        let failed = land_census_window(&root, &begin, &stop, || Err(anyhow::anyhow!("stdout")));
+        assert_eq!(
+            census_kinds(&root),
+            ["h", "x land-stopped"],
+            "the landing's return is its chosen stop"
+        );
+        let failed = land_census_window(&root, true, || Err(anyhow::anyhow!("stdout")));
         assert!(failed.is_err(), "the laps' error, unchanged");
-        assert!(
-            stopped.exists(),
+        assert_eq!(
+            census_kinds(&root),
+            ["h", "x land-stopped", "h", "x land-stopped"],
             "an error is a return, and a return is a stop"
         );
-        // And a consumer that declares neither gets nothing spawned.
-        std::fs::remove_file(&started).unwrap();
-        std::fs::remove_file(&stopped).unwrap();
-        let _ = land_census_window(&root, "", "", || Ok(ExitCode::Success));
-        assert!(!started.exists() && !stopped.exists());
+        // And a repository that keeps no census gets nothing written.
+        let _ = land_census_window(&root, false, || Ok(ExitCode::Success));
+        assert_eq!(census_kinds(&root).len(), 4);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -30579,22 +30623,24 @@ mod tests {
     /// note is still decided by the bail alone.
     #[test]
     fn a_hold_notes_a_stop_only_where_it_chose_one() {
-        // `touch` is the declared note command this case stubs with, and no such
-        // program ships on Windows; the case compiles there and says so (`cfg!`,
-        // never `#[cfg]`, so the off-unix arm is type-checked on every host).
-        if !cfg!(unix) {
+        let Some(root) = census_scratch("hold-bail") else {
             return;
-        }
-        let (root, marker) = census_scratch("hold-bail");
+        };
         let terms = lease::Terms {
             remote: String::from("not a remote"),
             ..lease::Terms::default()
         };
-        let note = format!("touch {}", marker.display());
-        lease_hold_bail(&root, &terms, "someone", 42, HoldEnd::HolderGone, &note);
-        assert!(!marker.exists(), "a dead lander is not a chosen stop");
-        lease_hold_bail(&root, &terms, "someone", 42, HoldEnd::Stalled, &note);
-        assert!(marker.exists(), "stopping a stalled lander is");
+        lease_hold_bail(&root, &terms, "someone", 42, HoldEnd::HolderGone, true);
+        assert!(
+            census_kinds(&root).is_empty(),
+            "a dead lander is not a chosen stop"
+        );
+        lease_hold_bail(&root, &terms, "someone", 42, HoldEnd::Stalled, true);
+        assert_eq!(
+            census_kinds(&root),
+            ["x land-stopped"],
+            "stopping a stalled lander is"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

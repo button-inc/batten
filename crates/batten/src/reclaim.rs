@@ -271,16 +271,29 @@ pub fn run_note(kind: &str, reason: Option<&str>) -> Result<ExitCode> {
             "record census note: the reason is one word",
         )));
     }
-    let (Some(git_dir), Ok(boot)) = (git_dir(), boot_time()) else {
-        return Ok(ExitCode::Success);
+    if let Some(git_dir) = git_dir() {
+        note_in(&git_dir, kind, reason);
+    }
+    Ok(ExitCode::Success)
+}
+
+/// Append one census record under `git_dir`, silently and best-effort.
+///
+/// The verb's write, for a caller that already knows its repository: `land`
+/// writes its beat and stop through this in-process (CLOUD-2387), rather than
+/// spawning `record census note` and resolving the store from its cwd. `kind`
+/// and `reason` are the verb's, already validated — `h` or `x`, and a reason of
+/// one word or none.
+pub(crate) fn note_in(git_dir: &Path, kind: &str, reason: Option<&str>) {
+    let Ok(boot) = boot_time() else {
+        return;
     };
     let epoch = now();
     let line = match reason {
         Some(reason) => format!("{kind} {epoch} {boot} {reason}"),
         None => format!("{kind} {epoch} {boot}"),
     };
-    let _ = append(&git_dir, BEATS, &line);
-    Ok(ExitCode::Success)
+    let _ = append(git_dir, BEATS, &line);
 }
 
 /// Record this boot unless the store's last boot already is it.

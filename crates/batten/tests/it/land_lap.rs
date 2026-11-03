@@ -401,54 +401,25 @@ fn the_shipped_lap_validates_and_ends_at_the_commit_point() {
 ///
 /// `tests/reclaim-census.bats` carried this as *"land records the stop it causes
 /// itself"*, reading `mise-tasks/land.sh` for the note. The note moved rather
-/// than died: the lander used to spawn it inline, and the engine spawns what
-/// `$LEASE_STOP_NOTE` names wherever a holder CHOSE to stop — the landing where
-/// it returns (never where a lap hands its lease back and laps), and `lease
-/// release` — since CLOUD-843 the argv of `batten record census note x`, the
-/// census having retired off its task. So the case is PORTED here rather than
-/// withdrawn; the engine's spawn is `a_landing_notes_its_start_and_every_chosen_end`.
+/// than died: the engine writes its beat and `x land-stopped` in-process wherever
+/// a holder CHOSE to stop — the landing where it returns (never where a lap hands
+/// its lease back and laps), and `lease release` — when `[lease] census` is set
+/// (CLOUD-2387). So the case is PORTED here rather than withdrawn; the engine's
+/// write is `a_landing_notes_its_start_and_every_chosen_end`.
 ///
-/// **The declaration is the subject, not the spawn.** The note's text is this
-/// consumer's — a census program's argv — so `crates/batten` may not carry it
-/// (non-negotiable rule 1) and what this can assert is that the consumer still
-/// declares one. A lap that stopped and recorded nothing leaves its last census
-/// record an `h`, and every successful landing then reads as *the container died
-/// under active work*.
+/// **The declaration is the subject, not the write.** Whether a repository keeps
+/// a census is this consumer's to say, so what this can assert is that it still
+/// does. A lap that stopped and recorded nothing leaves its last census record an
+/// `h`, and every successful landing then reads as *the container died under
+/// active work*.
 #[test]
 fn the_landings_own_stop_note_is_still_declared() {
-    let manifest =
-        std::fs::read_to_string("../../mise.toml").expect("read the consumer's manifest");
-    let declared: Vec<&str> = manifest
-        .lines()
-        .filter(|line| line.trim_start().starts_with("LEASE_STOP_NOTE"))
-        .collect();
+    let config = std::fs::read_to_string("../../batten.toml").expect("read the consumer's config");
+    let parsed: toml::Value = toml::from_str(&config).expect("batten.toml parses");
     assert_eq!(
-        declared.len(),
-        1,
-        "exactly one stop note is declared, or the lease spawns an ambiguous one"
-    );
-    // THE COUNT AND THE CONTENT, because a row declared empty would satisfy the
-    // count alone — and an empty note is a lease that records nothing, which is
-    // byte-identical to the defect this case exists to catch.
-    assert!(
-        declared[0].contains("land-stopped"),
-        "the declared note must still mark a landing's own stop: {}",
-        declared[0]
-    );
-    // AND ITS PAIR, the beat that opens the landing's census window (CLOUD-843,
-    // `land_census_window`). A stop with no beat before it can only ever answer
-    // "stopped on purpose", which is how the census's positive reading was
-    // unreachable in production. This pins the DECLARATION; the engine's spawn
-    // of it is `a_landing_notes_its_start_and_every_chosen_end`.
-    let beats: Vec<&str> = manifest
-        .lines()
-        .filter(|line| line.trim_start().starts_with("LEASE_BEAT_NOTE"))
-        .collect();
-    assert_eq!(beats.len(), 1, "exactly one beat note is declared");
-    assert!(
-        beats[0].contains("note h"),
-        "the declared beat must write an h: {}",
-        beats[0]
+        parsed["lease"].get("census").and_then(toml::Value::as_bool),
+        Some(true),
+        "this repository keeps a reclaim census, so a landing writes its beat and its stop"
     );
 }
 
