@@ -6710,6 +6710,24 @@ mod tests {
         assert_eq!(served, BTreeSet::from([forged]));
     }
 
+    /// Fails by: the memo pruned at its bound rather than past it, or never
+    /// pruned, so it grows with every commit any window ever named.
+    #[test]
+    fn a_memo_past_its_bound_keeps_only_what_was_asked() {
+        let (dir, _) = history("identity-memo-bound");
+        crate::testing::contain_state(&dir.join(".git").join("batten-state"));
+        let fill = |count: usize| {
+            let mut memo = IdentityMemo::load(&dir);
+            memo.known = (0..count).map(|n| (format!("{n:040x}"), None)).collect();
+            memo.asked.insert(format!("{:040x}", 0));
+            memo.grown = true;
+            memo.save();
+            IdentityMemo::load(&dir).known.len()
+        };
+        assert_eq!(fill(IDENTITY_MEMO_BOUND), IDENTITY_MEMO_BOUND);
+        assert_eq!(fill(IDENTITY_MEMO_BOUND + 1), 1);
+    }
+
     /// Fails by: a remote whose url or name is blank listed as though it named
     /// one.
     #[test]

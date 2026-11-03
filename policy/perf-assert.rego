@@ -268,6 +268,7 @@ agreeing_readme := [
 	"| `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 100 ms |",
 	"| `passthrough` | a call no rule selects | — | — | ≤ 100 ms |",
 	"| `posttool` | a PostToolUse call | — | — | ≤ 100 ms |",
+	"| `stop` | an end of turn | — | — | ≤ 100 ms |",
 	"| `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 100 ms |",
 ]
 
@@ -278,6 +279,7 @@ clean_record := {
 	"hook": "3.0",
 	"passthrough": "2.2",
 	"posttool": "2.3",
+	"stop": "2.6",
 	"wired": "8.4",
 }
 
@@ -346,7 +348,7 @@ test_a_readme_publishing_a_different_budget_is_refused if {
 			array.slice(agreeing_readme, 0, 2),
 			array.concat(
 				["| `noop` | process start | 2.1 ms | 2.4 ms | ≤ 50 ms |"],
-				array.slice(agreeing_readme, 3, 8),
+				array.slice(agreeing_readme, 3, 9),
 			),
 		)},
 		"tool-verdict": {"perf-p95": clean_record},
@@ -355,7 +357,7 @@ test_a_readme_publishing_a_different_budget_is_refused if {
 
 test_a_readme_with_no_row_for_a_budgeted_path_is_refused if {
 	count(violation) == 1 with input as {"tree": {
-		"lines": {"README.md": array.slice(agreeing_readme, 0, 7)},
+		"lines": {"README.md": array.slice(agreeing_readme, 0, 8)},
 		"tool-verdict": {"perf-p95": clean_record},
 	}}
 }
@@ -370,7 +372,7 @@ test_a_readme_publishing_no_budget_for_a_gated_path_is_refused if {
 			array.slice(agreeing_readme, 0, 2),
 			array.concat(
 				["| `noop` | process start | 2.1 ms | 2.4 ms | — |"],
-				array.slice(agreeing_readme, 3, 8),
+				array.slice(agreeing_readme, 3, 9),
 			),
 		)},
 		"tool-verdict": {"perf-p95": clean_record},
@@ -389,6 +391,7 @@ test_a_reordered_budget_column_is_still_found if {
 			"| `hook` | ≤ 100 ms | 2.8 ms | 3.0 ms |",
 			"| `passthrough` | ≤ 100 ms | — | — |",
 			"| `posttool` | ≤ 100 ms | — | — |",
+			"| `stop` | ≤ 100 ms | — | — |",
 			"| `wired` | ≤ 100 ms | 8.0 ms | 8.4 ms |",
 		]},
 		"tool-verdict": {"perf-p95": clean_record},

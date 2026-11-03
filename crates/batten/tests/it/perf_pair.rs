@@ -673,7 +673,15 @@ fn a_measurement_times_every_path_off_its_release_build() {
     let measured = perf(&repo, &path, &["measure"], &[]);
     assert!(measured.status.success(), "{}", said(&measured));
     let records = stdout(&measured);
-    for id in ["noop", "check", "hook", "passthrough", "posttool", "wired"] {
+    for id in [
+        "noop",
+        "check",
+        "hook",
+        "passthrough",
+        "posttool",
+        "stop",
+        "wired",
+    ] {
         assert!(records.contains(id), "the {id} path is recorded: {records}");
     }
     let argv = instrumented(&repo);
@@ -682,7 +690,7 @@ fn a_measurement_times_every_path_off_its_release_build() {
         .lines()
         .filter(|line| line.starts_with("hyperfine "))
         .collect();
-    assert_eq!(timed.len(), 6, "{argv}");
+    assert_eq!(timed.len(), 7, "{argv}");
     for line in timed {
         assert_eq!(
             line.contains("--prepare"),
