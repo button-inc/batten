@@ -1365,6 +1365,26 @@ pub fn run_derive(
     out: &mut dyn std::io::Write,
 ) -> Result<ExitCode> {
     let inputs = inputs_of("record derive", inputs)?;
+    let spec_base = std::env::var(crate::speculation::PUBLISHED_AS).ok();
+    derive_and_store(family, &inputs, overrides, None, spec_base.as_deref(), out)
+}
+
+/// [`run_derive`]'s whole effect over inputs already parsed: clear the tracker
+/// siblings, read, store, emit. A landing's body gates call it in-process with
+/// the pull request's body as `document` and its own bet as `spec_base`
+/// (CLOUD-2387), so the record they leave is the one the verb would have.
+///
+/// # Errors
+///
+/// [`run_derive`]'s, less the input parse.
+pub(crate) fn derive_and_store(
+    family: &str,
+    inputs: &BTreeMap<String, String>,
+    overrides: &Overrides,
+    document: Option<&str>,
+    spec_base: Option<&str>,
+    out: &mut dyn std::io::Write,
+) -> Result<ExitCode> {
     // THE TRACKER FAMILIES ARE CLEARED BEFORE ANY OF THEM IS READ (CLOUD-843).
     // One preset row decides over all five, so a record another tracker question
     // left on this branch would otherwise answer beside this one — and a reading
@@ -1381,7 +1401,7 @@ pub fn run_derive(
             clear_named("record derive", sibling)?;
         }
     }
-    let derived = derive_reading(family, &inputs, overrides, None)?;
+    let derived = derive_reading_under(family, inputs, overrides, document, spec_base)?;
     let family = safe_component("family", family)?;
     store_derived(&family, &derived)?;
     emit_derived(&derived, out)
@@ -1627,6 +1647,19 @@ fn derive_reading(
     overrides: &Overrides,
     document: Option<&str>,
 ) -> Result<String> {
+    let spec_base = std::env::var(crate::speculation::PUBLISHED_AS).ok();
+    derive_reading_under(family, inputs, overrides, document, spec_base.as_deref())
+}
+
+/// [`derive_reading`] with the speculative base supplied rather than read from
+/// the environment: a verb edge inherits it, and a landing holds the bet itself.
+fn derive_reading_under(
+    family: &str,
+    inputs: &BTreeMap<String, String>,
+    overrides: &Overrides,
+    document: Option<&str>,
+    spec_base: Option<&str>,
+) -> Result<String> {
     let derived = match family {
         "evaluator-io-probe" => {
             only_these_inputs(inputs, family, &["status", "test"])?;
@@ -1712,13 +1745,14 @@ fn derive_reading(
         }
         tracker if crate::tracker_reading::is_family(tracker) => {
             let config = resolve::resolve(Path::new("."), overrides)?;
-            let stdin = verdict_lines()?;
+            let stdin = document_or_stdin(document)?;
             crate::tracker_reading::reading(
                 tracker,
                 inputs,
                 &config.patterns,
                 Path::new("."),
                 &stdin,
+                spec_base,
             )?
         }
         // AN UNKNOWN FAMILY IS A USAGE ERROR, never a record written under a name

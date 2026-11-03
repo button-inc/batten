@@ -11869,6 +11869,44 @@ census = true
 # is which workflow lands the branch, and a workflow selects on the name.
 fast_forward_branches = ["renovate/", "sbom-actions/", "release-plz-"]
 
+# THE GATES A LANDING ASKS OF ITS PULL REQUEST'S BODY BEFORE IT READIES
+# (CLOUD-2387). They were `LAND_BODY_SOURCE` and `LAND_BODY_GATES` in `mise.toml`:
+# a `gh pr view` spawn for the body, then `mise run deferral-check` and `mise run
+# closing-key-check`, each two `batten` spawns. The engine now reads the body
+# itself and derives and decides each row in-process; what stays the consumer's
+# is which families, over which inputs, decided by which rule. The two tasks
+# remain for a hand-run over a body on stdin.
+#
+# A declared row that will not derive or decide stops the lap: a gate whose
+# verdict is unknown has not said clean. An empty or unreadable body asks none.
+[[lease.body_gate]]
+derive = "deferral"
+inputs = { shape = "deferral-shape", base = "origin/main" }
+rule = "issue state other"
+
+[[lease.body_gate]]
+derive = "closing-key"
+inputs = { hold = "closing-hold-marker", base = "origin/main" }
+rule = "issue state other"
+
+# THE LANDING'S ENTRY GATE, ASKED ONCE BEFORE THE FIRST LAP (CLOUD-1471,
+# CLOUD-2387). AGENTS.md bans PR-webhook babysitting and the harness arms a
+# subscription on every pull request this repo opens anyway, with no tool call
+# behind it on two of the three measured (CLOUD-518) — so a deny rule on the tool
+# closes only the path nobody used. The landing drops the subscription, then
+# decides `rule` over the `pr unsubscribed` reading; the drop FAILS OPEN and the
+# decision does not, so off the harness nothing is minted, the decision refuses,
+# and `mise run pr-unsubscribed record` is still the way through (CLOUD-790).
+# These are the `pr-unsubscribed` task's own flags, which were `LAND_ENTRY_GATES`.
+#PARK[lease.unsubscribed]
+#PARKsession_env = "CLAUDE_CODE_REMOTE_SESSION_ID"
+#PARKtoken_env = "CLAUDE_SESSION_INGRESS_TOKEN_FILE"
+#PARKendpoint = "https://api.anthropic.com/v2/ccr-sessions/{session}/github/mcp"
+#PARKtool = "unsubscribe_pr_activity"
+#PARKarguments = '{"owner":"{owner}","repo":"{repo}","pullNumber":"{pr}"}'
+#PARKfamily = "pr-unsubscribed"
+#PARKrule = "event watch other"
+
 # WHICH RECEIPTS A HEAD MUST CARRY TO BE CALLED VERIFIED (CLOUD-1338).
 #
 # These two names were `const VERIFIED_BY: [&str; 2]` inside `crates/batten`,

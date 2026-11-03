@@ -437,31 +437,15 @@ CI_REQUIRED_CHECKS = "ci,batten-check,mutants (0),mutants (1),mutants (2),mutant
 # retirements: `bats` passed through it (CLOUD-2301) and is gone.
 CI_RETIRING_CHECKS = ""
 
-# ─── THE LAP'S READY PHASE (CLOUD-1148) ───────────────────────────────────────
+# ─── THE LAP'S ENTRY GATES (CLOUD-1148) ───────────────────────────────────────
 #
-# `batten land lap`'s ready step reads the pull request's BODY and asks the gates
-# that judge it. Both halves are declared here rather than compiled in, and that
-# is non-negotiable rule 1 rather than taste: a task name — or a forge client's
-# argv — inside `crates/batten` is that rule's plainest violation, and the engine
-# refuses to default either.
+# The ready step's body gates moved to `[[lease.body_gate]]` in `batten.toml`
+# (CLOUD-2387): the engine reads the body and decides them in-process.
 #
-# THE ENGINE TREATS THESE TWO ASYMMETRICALLY, on purpose. An UNDECLARED gate list
-# is a legitimate configuration and passes; a DECLARED gate that cannot run is a
-# refusal, because a gate whose verdict is unknown has not said clean. So a typo
-# in a task name here stops a lap rather than quietly retiring the gate — which
-# is the failure this whole campaign is about.
-#
-# `|`-separated argvs, space-separated words. A comma would give one argv per
-# word.
-#
-# WHY THESE TWO AND NOT `filed-here-check`: that gate is already the engine's
-# (CLOUD-1051) and the lap reaches it through `batten check`, so listing it here
-# would run it twice. These two are still bash and still have `land.sh` as their
-# only caller — which is what slice 7's deletion would orphan.
-LAND_BODY_SOURCE = "gh pr view --json body --jq .body"
-LAND_BODY_GATES = "mise run deferral-check|mise run closing-key-check"
-# THE ENTRY GATES, ASKED ONCE BEFORE THE FIRST LAP (CLOUD-1471). Same grammar and
-# same asymmetry as `LAND_BODY_GATES`, and one difference that matters: the engine
+# THE ENTRY GATES, ASKED ONCE BEFORE THE FIRST LAP (CLOUD-1471). `|`-separated
+# argvs of space-separated words. An UNDECLARED list passes and a DECLARED gate
+# that cannot run refuses, since an unknown verdict has not said clean. One
+# difference from an ordinary task argv matters: the engine
 # appends THE PULL REQUEST NUMBER to each argv, because which task drops a
 # subscription is this consumer's vocabulary and which pull request is being
 # landed is a fact the engine already resolved. A gate reading the number from its
