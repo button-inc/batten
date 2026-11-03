@@ -84,6 +84,37 @@ fn the_release_settings_gate_maps_its_violation_exit() {
     }
 }
 
+/// `release-land` moves the draft onto its bake BEFORE it verifies it
+/// (CLOUD-2574).
+///
+/// `release verify --draft` reads `install.lock` at the draft's target. The cut
+/// created the draft at the pre-bake head, which carries the previous cut's
+/// lock, so every v0.0.217 draft was refused and discarded and re-cut six
+/// times. A `gh release edit --target` carrying the bake must come first.
+#[test]
+fn the_draft_is_moved_onto_its_bake_before_it_is_verified() {
+    let (_, text) = workflows()
+        .into_iter()
+        .find(|(name, _)| name == "release-land.yml")
+        .expect("release-land.yml is committed");
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect();
+    let verify = lines
+        .iter()
+        .position(|line| line.contains("release verify --draft"))
+        .expect("release-land verifies the draft");
+    let moved = lines
+        .iter()
+        .position(|line| line.contains("--arg-env TARGET -- gh release edit"))
+        .expect("release-land moves the release onto its bake with `gh release edit`");
+    assert!(
+        moved < verify,
+        "release-land.yml verifies the draft at its cut, before it is moved onto the bake that carries its install.lock"
+    );
+}
+
 /// No workflow finds a pull request through the SEARCH INDEX (CLOUD-2566).
 ///
 /// `gh pr list --search` reads GitHub's search index, which lags a PR's

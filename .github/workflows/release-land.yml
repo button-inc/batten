@@ -1,4 +1,6 @@
 name: release-land
+#MUTANT-SUITE crates/batten/tests/it/release_settings_gate.rs
+#MUTANT draft-verified-at-its-cut|s@^        run: mise run batten -- ci step --arg-env TAG --arg-env TARGET -- gh release edit$@        run: true@|the_draft_is_moved_onto_its_bake_before_it_is_verified
 
 # TITLED BY ITS TAG (CLOUD-2033), as `release-artifacts` is: `release in-flight`
 # reads both workflows' runs, so a land queued here holds the next cut, and finds
@@ -8,6 +10,8 @@ run-name: "release-land ${{ inputs.tag }}"
 # workflow-shell: CLOUD-2287 the land job moved here from release-artifacts.yml
 # unchanged but for its publish target, so the step count it adds is the count
 # that file lost, plus the bake job that took its place there.
+# workflow-shell: CLOUD-2574 one single-command step moves the draft onto its
+# bake before (b) verifies it; plain argv, the (c) publish step's own shape.
 
 # Publish a built release and fast-forward `main` to it (CLOUD-2287).
 #
@@ -98,6 +102,19 @@ jobs:
       # (b) A REFUSAL DISCARDS AND A COULD-NOT-LOOK DOES NOT: exit 2, the
       # verb's `Violation`, is mapped to `refused`, and exit 3 stays the step's
       # own failure (CLOUD-2392).
+      #
+      # THE DRAFT MOVES ONTO ITS BAKE FIRST (CLOUD-2574). `release verify --draft`
+      # reads `install.lock` at the draft's target (`lib.rs`, "the target's while
+      # a draft"), and the cut created the draft at A, before the bake. A carries
+      # the PREVIOUS cut's lock, and a rebuild has new bytes, so every draft was
+      # refused and discarded and v0.0.217 was re-cut six times. B, this run's
+      # `inputs.sha`, carries this build's lock. It stays a draft; (c) publishes.
+      - name: (b) Move the draft onto its bake, where install.lock lives
+        if: steps.state.outputs.state == 'draft-ok'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET: --target=${{ inputs.sha }}
+        run: mise run batten -- ci step --arg-env TAG --arg-env TARGET -- gh release edit
       - name: (b) Verify the draft
         if: steps.state.outputs.state == 'draft-ok'
         id: verify
