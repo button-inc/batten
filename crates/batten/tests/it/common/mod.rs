@@ -1807,7 +1807,7 @@ pub(crate) fn scratch_repo(name: &str) -> PathBuf {
 /// so a concurrent first caller never observes a half-built clone. `--shared`
 /// borrows the checkout's objects, so the clone costs a checkout and no copy.
 //MUTANT-SUITE crates/batten/tests/it/push_before_check.rs
-//MUTANT fixed-world-unpinned|s@^    git_in(&building, &\["update-ref", "refs/remotes/origin/fixed-world", &head\]);$@@|the_committed_clone_is_pushed_and_carries_no_session_state
+//MUTANT fixed-world-unpinned|s@^        &\["update-ref", "refs/remotes/origin/fixed-world", &head\],$@        \&["rev-parse", "HEAD"],@|the_committed_clone_is_pushed_and_carries_no_session_state
 #[must_use]
 pub(crate) fn committed_clone() -> PathBuf {
     // ONE BUILDER PER PROCESS as well: under `cargo test` the cases are threads
