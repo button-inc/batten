@@ -200,6 +200,19 @@ fn an_undeclared_entry_gate_asks_nothing() {
     assert!(!err.contains("entry gate"), "stderr: {err}");
 }
 
+/// **A CONFIG THAT WILL NOT LOAD IS NOT ONE DECLARING NO GATE** (code review of
+/// #1248). Read as "no `[lease.unsubscribed]`", it took the undeclared-is-a-pass
+/// arm and the landing went ahead unasked; it is a could-not-look, so `3`.
+#[test]
+fn a_config_that_will_not_load_refuses_rather_than_skipping_the_entry_gate() {
+    let dir = fixture("land-entry-broken-config");
+    common::write(&dir, "batten.toml", "this is not = = toml\n");
+    let (code, _, err) = lap(&dir, Some("cse_fixture"));
+
+    assert_eq!(code, 3, "stderr: {err}");
+    assert!(err.contains("will not load"), "stderr: {err}");
+}
+
 /// **A DECLARED GATE THAT CANNOT BE DECIDED IS A REFUSAL, NOT A PASS.**
 ///
 /// The dead-gate class this engine exists to refuse. `3` rather than `2` —
