@@ -2508,6 +2508,9 @@ fn post_all(
             direct: false,
             patch: false,
             delete: false,
+            // The declared header is a credential whatever its name, so a
+            // cross-origin redirect drops it (CLOUD-2543).
+            credential: wiring.credential.as_ref().map(|(name, _)| name.as_str()),
         })
         .collect();
     crate::fetch::spend(&calls)
@@ -2744,6 +2747,37 @@ mod tests {
         assert_eq!(
             *carried.borrow(),
             [None, Some(String::from("abc")), Some(String::from("abc"))]
+        );
+    }
+
+    /// Fails by: the declared credential header not marked as one on the call,
+    /// so a cross-origin redirect would carry it on (CLOUD-2543).
+    #[test]
+    fn a_call_declares_the_wired_credential_header() {
+        let declared = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = std::rc::Rc::clone(&declared);
+        crate::fetch::stand_in(Box::new(move |calls: &[crate::fetch::Call<'_>]| {
+            Ok(calls
+                .iter()
+                .map(|call| {
+                    seen.borrow_mut().push(call.credential.map(str::to_owned));
+                    crate::fetch::Response {
+                        status: 200,
+                        body: Vec::new(),
+                        headers: Vec::new(),
+                    }
+                })
+                .collect())
+        }));
+        let wiring = Wiring {
+            credential: Some(("X-Session-Token".to_owned(), Secret("tok".to_owned()))),
+            ..stood_up()
+        };
+        post(&wiring, &serde_json::json!({}), None).expect("posted");
+        post(&stood_up(), &serde_json::json!({}), None).expect("posted");
+        assert_eq!(
+            *declared.borrow(),
+            [Some(String::from("X-Session-Token")), None]
         );
     }
 

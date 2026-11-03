@@ -1081,6 +1081,7 @@ fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method)
         // taking the direct route here would bypass the egress fence for every
         // read this module makes.
         direct: false,
+        credential: None,
     }])
     .ok()?;
     // ONE call in, one answer out. `spend` returns them in the order given and

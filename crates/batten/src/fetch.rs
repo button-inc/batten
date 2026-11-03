@@ -246,6 +246,7 @@ pub fn get(url: &str, headers: &[(String, String)]) -> Result<Response> {
         direct: false,
         patch: false,
         delete: false,
+        credential: None,
     }])?
     .pop()
     .ok_or_else(|| anyhow::anyhow!("fetch: the exchange returned no answer"))
@@ -270,6 +271,7 @@ pub fn get_direct(url: &str, headers: &[(String, String)]) -> Result<Response> {
         direct: true,
         patch: false,
         delete: false,
+        credential: None,
     }])?
     .pop()
     .ok_or_else(|| anyhow::anyhow!("fetch: the exchange returned no answer"))
@@ -315,6 +317,14 @@ pub struct Call<'a> {
     /// ordering that terminates: the fence is the thing being proven, so it
     /// cannot also be its own precondition.
     pub direct: bool,
+    /// The name of a header in `headers` the caller declares a credential,
+    /// beyond the fixed names [`is_sensitive`] already knows.
+    ///
+    /// An MCP server's `Credential.header` may name its own header (an
+    /// `X-Session-Token`), and nothing in a header's NAME says it carries a
+    /// secret. Declaring it here is what lets a cross-origin redirect drop it and
+    /// this type's `Debug` redact it, the same as `Authorization` (CLOUD-2543).
+    pub credential: Option<&'a str>,
 }
 
 /// **HAND-WRITTEN, BECAUSE THE DERIVE PRINTED CREDENTIALS.** `headers` carries
@@ -344,7 +354,7 @@ impl std::fmt::Debug for Call<'_> {
                     .map(|(name, value)| {
                         (
                             name.as_str(),
-                            if is_sensitive(name) {
+                            if is_credential(name, self.credential) {
                                 crate::secret::REDACTED
                             } else {
                                 value.as_str()
@@ -376,6 +386,12 @@ fn is_sensitive(name: &str) -> bool {
     SENSITIVE
         .iter()
         .any(|candidate| name.eq_ignore_ascii_case(candidate))
+}
+
+/// Whether a header carries a credential: one [`is_sensitive`] names, or the
+/// one the caller declared ([`Call::credential`]).
+fn is_credential(name: &str, declared: Option<&str>) -> bool {
+    is_sensitive(name) || declared.is_some_and(|declared| name.eq_ignore_ascii_case(declared))
 }
 
 /// Run a sequence of calls on **one** runtime and one connection pool.
@@ -669,7 +685,7 @@ const PROXY_HEAD_LIMIT: usize = 8192;
 /// URL it is HANDED, and a 302 hands it a new one.
 async fn exchange(call: &Call<'_>) -> Result<Response> {
     let mut target = call.url.to_owned();
-    // **THE HEADERS NARROW WHEN THE HOST CHANGES** (review of #848). This replayed
+    // **THE HEADERS NARROW WHEN THE ORIGIN CHANGES** (review of #848). This replayed
     // `call.headers` verbatim on every hop, and `redirect_target` constrains only
     // the SCHEME — so a `Location` naming another host received whatever the
     // caller attached, `Authorization: Bearer <token>` included. `curl`, the
@@ -694,7 +710,7 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
         let Some(next) = redirect_target(&target, answer.status, location.as_deref())? else {
             return Ok(answer);
         };
-        carried = carried_to(carried, &target, &next);
+        carried = carried_to(carried, &target, &next, call.credential);
         target = next;
     }
     Err(anyhow::anyhow!(
@@ -703,18 +719,33 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
 }
 
 /// The headers a hop from `from` to `next` carries: every one on the same
-/// host, and every one but the credential (`Authorization`) on another.
+/// origin, and every one but the credentials on another.
+///
+/// A credential is whatever [`is_credential`] names, the one list `Debug`
+/// redacts by: `Cookie` and `Proxy-Authorization` as well as `Authorization`,
+/// plus the header the caller declared. Dropping `Authorization` alone let the
+/// rest reach the redirect target (CLOUD-2543).
 ///
 /// Apart from the exchange so the narrowing tests without a live HTTPS
 /// redirect, which the `https_only` transport gives a loopback no way to stage
 /// (CLOUD-2509).
-fn carried_to(headers: Vec<(String, String)>, from: &str, next: &str) -> Vec<(String, String)> {
-    if same_host(from, next) {
+//MUTANT-SUITE crates/batten/src/fetch.rs
+//MUTANT declared-credential-follows-redirect|s@!is_credential(name, declared))@!is_credential(name, None))@|a_credential_follows_a_redirect_only_on_the_same_origin
+//MUTANT cookie-follows-redirect|s@!is_credential(name, declared))@!(name.eq_ignore_ascii_case("authorization") \x7c\x7c Some(name) == declared))@|a_credential_follows_a_redirect_only_on_the_same_origin
+//MUTANT origin-ignores-port|s@(Some(port), _) => port,@(Some(_), _) => 443,@|a_redirect_stays_on_its_origin_only_when_scheme_host_and_port_agree
+//MUTANT origin-ignores-scheme|s@^    Some((scheme, host, port))$@    Some((String::new(), host, port))@|a_redirect_stays_on_its_origin_only_when_scheme_host_and_port_agree
+fn carried_to(
+    headers: Vec<(String, String)>,
+    from: &str,
+    next: &str,
+    declared: Option<&str>,
+) -> Vec<(String, String)> {
+    if same_origin(from, next) {
         return headers;
     }
     headers
         .into_iter()
-        .filter(|(name, _)| !name.eq_ignore_ascii_case("authorization"))
+        .filter(|(name, _)| !is_credential(name, declared))
         .collect()
 }
 
@@ -766,23 +797,40 @@ fn sent_headers(headers: &[(String, String)]) -> Vec<(String, String)> {
     sent
 }
 
-/// Do two URLs name the same host, so a credential may follow?
+/// Do two URLs name the same origin, so a credential may follow?
 ///
-/// **A HOST COMPARISON, NOT AN ORIGIN ONE, and the difference is deliberate.**
-/// The scheme is already pinned to `https` by [`redirect_target`] and the port is
-/// not what a credential is scoped to in practice; the host is. A URL that will
-/// not parse, or that names no host, answers `false` — a redirect this cannot
-/// reason about is one the credential does not follow.
-fn same_host(from: &str, to: &str) -> bool {
-    let host_of = |raw: &str| {
-        raw.parse::<hyper::Uri>()
-            .ok()
-            .and_then(|uri| uri.host().map(str::to_ascii_lowercase))
-    };
-    match (host_of(from), host_of(to)) {
+/// **AN ORIGIN COMPARISON: scheme, host and effective port** (CLOUD-2543). This
+/// compared the host alone, on the reasoning that the port is not what a
+/// credential is scoped to; but a different port is a different server, and
+/// `curl`, the client this transport replaced, compares host and port. A port
+/// the URL leaves out is its scheme's default, so `:443` on `https` is the same
+/// origin as no port at all.
+///
+/// The scheme half is defence in depth: [`redirect_target`] already refuses a
+/// non-`https` target. A URL that will not parse, or that names no scheme or
+/// host, answers `false` — a redirect this cannot reason about is one the
+/// credential does not follow.
+fn same_origin(from: &str, to: &str) -> bool {
+    match (origin_of(from), origin_of(to)) {
         (Some(from), Some(to)) => from == to,
         _ => false,
     }
+}
+
+/// A URL's scheme, host and effective port, case-folded, or `None` when it
+/// names no scheme or host, or a scheme with no known default port and no
+/// explicit one.
+fn origin_of(raw: &str) -> Option<(String, String, u16)> {
+    let uri = raw.parse::<hyper::Uri>().ok()?;
+    let scheme = uri.scheme_str()?.to_ascii_lowercase();
+    let host = uri.host()?.to_ascii_lowercase();
+    let port = match (uri.port_u16(), scheme.as_str()) {
+        (Some(port), _) => port,
+        (None, "https") => 443,
+        (None, "http") => 80,
+        (None, _) => return None,
+    };
+    Some((scheme, host, port))
 }
 
 /// Where a redirect points, or `None` when the answer is the answer.
@@ -946,20 +994,46 @@ mod tests {
             .collect()
     }
 
+    /// Every credential stays on its origin: the fixed names `is_sensitive`
+    /// knows, `Cookie` and `Proxy-Authorization` among them, and the header the
+    /// caller declared (CLOUD-2543). Everything else follows anywhere.
     #[test]
-    fn a_credential_follows_a_redirect_only_on_the_same_host() {
-        let headers = pairs(&[("Authorization", "Bearer t"), ("Accept", "a")]);
+    fn a_credential_follows_a_redirect_only_on_the_same_origin() {
+        let headers = pairs(&[
+            ("Authorization", "Bearer t"),
+            ("Cookie", "c"),
+            ("Proxy-Authorization", "Basic p"),
+            ("X-Session-Token", "s"),
+            ("Accept", "a"),
+        ]);
+        let declared = Some("x-session-token");
         assert_eq!(
             carried_to(
                 headers.clone(),
                 "https://h.example/a",
-                "https://H.example/b"
+                "https://H.example/b",
+                declared
             ),
             headers
         );
         assert_eq!(
-            carried_to(headers, "https://h.example/a", "https://cdn.example/b"),
+            carried_to(
+                headers.clone(),
+                "https://h.example/a",
+                "https://cdn.example/b",
+                declared
+            ),
             pairs(&[("Accept", "a")])
+        );
+        // Undeclared, a header is not a credential by its name alone.
+        assert_eq!(
+            carried_to(
+                headers,
+                "https://h.example/a",
+                "https://cdn.example/b",
+                None
+            ),
+            pairs(&[("X-Session-Token", "s"), ("Accept", "a")])
         );
     }
 
@@ -1075,17 +1149,46 @@ mod tests {
         assert_eq!(response.header("absent"), None);
     }
 
-    /// The host decides, case-insensitively; an unparseable side is never the
-    /// same host.
+    /// Scheme, host and effective port decide, case-insensitively; an
+    /// unparseable side, or a scheme with no default port, is never the same
+    /// origin (CLOUD-2543).
     #[test]
-    fn a_redirect_stays_on_its_host_only_when_both_name_the_same_one() {
-        assert!(same_host("https://API.example/a", "https://api.example/b"));
-        assert!(!same_host(
+    fn a_redirect_stays_on_its_origin_only_when_scheme_host_and_port_agree() {
+        assert!(same_origin(
+            "https://API.example/a",
+            "https://api.example/b"
+        ));
+        assert!(same_origin(
+            "HTTPS://api.example/a",
+            "https://api.example:443/b"
+        ));
+        assert!(same_origin(
+            "http://api.example/a",
+            "http://api.example:80/b"
+        ));
+        assert!(same_origin(
+            "https://api.example:8443/a",
+            "https://api.example:8443/b"
+        ));
+        assert!(!same_origin(
             "https://api.example/a",
             "https://storage.example/a"
         ));
-        assert!(!same_host("not a url", "https://api.example/a"));
-        assert!(!same_host("https://api.example/a", "not a url"));
+        assert!(!same_origin(
+            "https://api.example/a",
+            "https://api.example:8443/a"
+        ));
+        assert!(!same_origin(
+            "https://api.example/a",
+            "http://api.example/a"
+        ));
+        assert!(!same_origin(
+            "https://api.example:80/a",
+            "http://api.example/a"
+        ));
+        assert!(!same_origin("ftp://api.example/a", "ftp://api.example/a"));
+        assert!(!same_origin("not a url", "https://api.example/a"));
+        assert!(!same_origin("https://api.example/a", "not a url"));
     }
 
     #[test]
@@ -1098,6 +1201,10 @@ mod tests {
                 String::from("Authorization"),
                 String::from("Bearer secret-token"),
             ),
+            (
+                String::from("X-Session-Token"),
+                String::from("declared-token"),
+            ),
             (String::from("accept"), String::from("application/json")),
         ];
         let call = Call {
@@ -1107,9 +1214,11 @@ mod tests {
             patch: false,
             delete: false,
             direct: false,
+            credential: Some("x-session-token"),
         };
         let shown = format!("{call:?}");
         assert!(!shown.contains("secret-token"), "{shown}");
+        assert!(!shown.contains("declared-token"), "{shown}");
         assert!(
             shown.contains("application/json") && shown.contains("api.example"),
             "{shown}"

@@ -128,6 +128,7 @@ fn a_request_does_not_render_its_authorization_header() {
         direct: true,
         patch: false,
         delete: false,
+        credential: None,
     };
     let rendered = format!("{call:?}");
     assert!(
@@ -159,6 +160,7 @@ fn the_header_match_is_case_insensitive() {
             direct: false,
             patch: false,
             delete: false,
+            credential: None,
         };
         let rendered = format!("{call:?}");
         assert!(
@@ -180,6 +182,7 @@ fn a_request_body_renders_as_a_length() {
         direct: false,
         patch: false,
         delete: false,
+        credential: None,
     };
     let rendered = format!("{call:?}");
     assert!(!rendered.contains(FRAGMENT), "{rendered}");

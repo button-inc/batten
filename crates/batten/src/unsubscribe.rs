@@ -399,6 +399,7 @@ fn ask_endpoint(
         patch: false,
         delete: false,
         direct: false,
+        credential: None,
     };
     let Ok(answers) = spend(&[call]) else {
         return give_up(out, pr, "the endpoint could not be reached");
