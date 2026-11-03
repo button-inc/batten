@@ -3532,6 +3532,9 @@ fn collect_dead_refs(repo: &Path, store_dir: &Path) -> Result<usize> {
     Ok(dropped)
 }
 
+//MUTANT-SUITE crates/batten/tests/it/hook_latency.rs
+//MUTANT drains-scan-concurrently|s@^        if fs4::FileExt::try_lock(\&scan_lock).is_err() {$@        if false {@|a_drain_finding_another_scanning_does_not_scan
+//MUTANT drain-lock-taken-by-the-verb|s@^    let _scanning = if scan_tree \&\& std::env::var_os(DRAIN_MARKER).is_some() {$@    let _scanning = if scan_tree {@|a_drain_finding_another_scanning_does_not_scan
 fn run_state_record(
     overrides: &Overrides,
     mode: Mode,
@@ -3580,8 +3583,6 @@ fn run_state_record(
             .truncate(false)
             .write(true)
             .open(git_dir.join(DRAIN_SCAN_LOCK))?;
-        //MUTANT-SUITE crates/batten/tests/it/hook_latency.rs
-        //MUTANT drains-scan-concurrently|s@^        if fs4::FileExt::try_lock(\&scan_lock).is_err() {$@        if false {@|a_drain_finding_another_scanning_does_not_scan
         if fs4::FileExt::try_lock(&scan_lock).is_err() {
             return Ok(ExitCode::Success);
         }
