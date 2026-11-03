@@ -4044,9 +4044,15 @@ impl IdentityMemo {
             && let Ok(body) = String::from_utf8(body)
         {
             for line in body.lines() {
+                // A line that is not a well-formed identity is not remembered,
+                // so it costs a recomputation rather than failing the caller's
+                // `PatchId::parse`.
                 if let Some((oid, identity)) = line.split_once(' ') {
-                    let identity = (identity != NO_IDENTITY).then(|| identity.to_owned());
-                    known.insert(oid.to_owned(), identity);
+                    if identity == NO_IDENTITY {
+                        known.insert(oid.to_owned(), None);
+                    } else if PatchId::parse(identity).is_ok() {
+                        known.insert(oid.to_owned(), Some(identity.to_owned()));
+                    }
                 }
             }
         }
@@ -6709,13 +6715,31 @@ mod tests {
         assert_eq!(computed.len(), 2);
         let mut memo = IdentityMemo::load(&dir);
         assert_eq!(memo.known.len(), 2, "both commits were remembered");
-        let forged = "0".repeat(40);
+        let forged = "0".repeat(64);
         memo.known.insert(third, Some(forged.clone()));
         memo.known.insert(second, None);
         memo.grown = true;
         memo.save();
         let served = patch_identities(&dir, Window::DEFAULT, &range).unwrap();
         assert_eq!(served, BTreeSet::from([forged]));
+    }
+
+    /// Fails by: a malformed remembered identity served, so `landing` raises
+    /// on a cache line where a recomputation was owed.
+    #[test]
+    fn a_malformed_remembered_identity_is_recomputed() {
+        let (dir, [first, _, third]) = history("identity-memo-malformed");
+        crate::testing::contain_state(&dir.join(".git").join("batten-state"));
+        let range = format!("{first}..{third}");
+        let computed = patch_identities(&dir, Window::DEFAULT, &range).unwrap();
+        let mut memo = IdentityMemo::load(&dir);
+        memo.known.insert(third, Some("not-an-identity".to_owned()));
+        memo.grown = true;
+        memo.save();
+        let index =
+            patch_id_index(&dir, &mut IdentityMemo::load(&dir), Window::DEFAULT, &range).unwrap();
+        let served: BTreeSet<String> = index.keys().map(|id| id.as_str().to_owned()).collect();
+        assert_eq!(served, computed);
     }
 
     /// Fails by: the memo pruned at its bound rather than past it, or never
