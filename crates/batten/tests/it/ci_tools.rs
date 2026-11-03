@@ -338,7 +338,6 @@ fn a_dispatched_workflow_with_a_decorative_list_is_refused() {
     let dir = tools_repo(
         "tools-dispatched-loose",
         MANIFEST,
-        NO_SPAWNS,
         &[
             (
                 ".github/workflows/ci.yml",
@@ -366,7 +365,6 @@ fn a_dispatched_workflow_with_a_binding_list_passes() {
     let dir = tools_repo(
         "tools-dispatched-bound",
         MANIFEST,
-        NO_SPAWNS,
         &[
             (
                 ".github/workflows/ci.yml",
