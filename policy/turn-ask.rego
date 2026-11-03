@@ -49,7 +49,11 @@ message := text if {
 elided := "ELIDED"
 
 # Fenced blocks before code spans: a fence contains backticks.
+#MUTANT ask-scrub-off-a-stop|s@^\tmessage != ""$@\ttrue@|off_a_stop_nothing_is_scrubbed
 scrubbed := s4 if {
+	# Nothing to scrub off a Stop: `stop-posture.rego`'s guard, for its measured
+	# reason (CLOUD-2341).
+	message != ""
 	s1 := regex.replace(message, data.batten.patterns["md-fenced-block"], elided)
 	s2 := regex.replace(s1, data.batten.patterns["md-code-span"], elided)
 	s3 := regex.replace(s2, data.batten.patterns["md-quoted-span"], elided)
@@ -122,6 +126,10 @@ test_a_quoted_offer_is_a_report_of_one if {
 
 test_a_clean_compound_turn_is_silent if {
 	count(offered("Landed and pushed; CI is green && the row moved.")) == 0
+}
+
+test_off_a_stop_nothing_is_scrubbed if {
+	not scrubbed with input as {"call": {"event": "pre-tool", "final-message": null}}
 }
 
 test_not_a_stop_is_silent if {

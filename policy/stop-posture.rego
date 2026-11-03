@@ -96,7 +96,14 @@ elided := "ELIDED"
 # THE SCRUB, in the shell's order, which is load-bearing: fenced blocks before
 # code spans, because a fence contains backticks and stripping the spans first
 # would leave the fence's own delimiters behind to pair with prose.
+#MUTANT scrub-off-a-stop|s@^\tmessage != ""$@\ttrue@|off_a_stop_nothing_is_scrubbed
 scrubbed := s4 if {
+	# NOTHING TO SCRUB OFF A STOP (CLOUD-2341). Every other event projects an
+	# empty message, and evaluating the scrub over it still compiled each pattern
+	# afresh — regorus caches a compiled regex per process, and the hook is one
+	# process per tool call. Measured: 21M of a warm call's 50.9M instructions
+	# across this module and its two siblings, for a scan that cannot match.
+	message != ""
 	s1 := regex.replace(message, data.batten.patterns["md-fenced-block"], elided)
 	s2 := regex.replace(s1, data.batten.patterns["md-code-span"], elided)
 	s3 := regex.replace(s2, data.batten.patterns["md-quoted-span"], elided)
@@ -125,6 +132,13 @@ violation contains {
 # that fired on every turn would satisfy the deny above and nudge about nothing.
 
 ending(text) := {"call": {"final-message": text}}
+
+# The guard's own case (CLOUD-2341): off a Stop the scrub is not evaluated at
+# all. Dropping the guard changes no decision, only the cost, so it is the
+# scrub's being UNDEFINED that this case pins, not a verdict.
+test_off_a_stop_nothing_is_scrubbed if {
+	not scrubbed with input as {"call": {"event": "pre-tool", "final-message": null}}
+}
 
 test_a_hedged_flag_is_named if {
 	some v in violation with input as ending("One thing I would flag is the exit code.")
