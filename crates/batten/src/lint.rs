@@ -1073,9 +1073,10 @@ token_enum! {
     pub enum Cause by as_str {
         /// No question added on this branch names the pair: ask it.
         NotAsked => "not-asked",
-        /// A question naming it was answered, but not with an option whose
-        /// label starts `Admit`, so the answer reads as no: ask with an `Admit`
-        /// option.
+        /// A question naming it was answered, but the answer is not a
+        /// presented option whose label starts `Admit` — a declining option,
+        /// or free text, which is recorded and never a selection — so it reads
+        /// as no: ask again and select an `Admit` option.
         AnsweredWithoutAdmit => "answered-without-admit",
         /// The head does not begin with every base line, so nothing is
         /// admitted: restore the base lines, in order, ahead of this branch's.

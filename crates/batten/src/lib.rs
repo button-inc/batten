@@ -10414,11 +10414,14 @@ fn anchor_among(
             "{count} findings for rule `{rule}` name subject `{subject}`, so the pair does not \
              address one finding and an admission bound to it would suppress none of them; \
              name one by its fingerprint as the subject: {}",
-            matched
-                .iter()
-                .map(|(_, fingerprint)| fingerprint.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
+            per_subject_routes(
+                rule,
+                class,
+                &matched
+                    .iter()
+                    .map(|(_, fingerprint)| fingerprint.as_str())
+                    .collect::<Vec<_>>()
+            )
         ))),
     }
 }
