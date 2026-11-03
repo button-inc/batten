@@ -1,4 +1,6 @@
 name: release-artifacts
+#MUTANT-SUITE crates/batten/tests/it/release_settings_gate.rs
+#MUTANT checksums-installs-everything|s@^          install_args: rust aqua:cli/cli$@@|the_checksums_job_installs_only_what_it_runs
 
 # TITLED BY ITS TAG (CLOUD-2033). `release in-flight` finds the build of a tag,
 # and the `land` job that failed on it, by `display_title`; the run object
@@ -583,6 +585,10 @@ jobs:
           # 11s on v0.0.152 and the release published with zero binaries.
           version: 2026.9.1
           cache: false
+          # ONLY WHAT IT RUNS (CLOUD-2579): `release sums` and `gh release
+          # upload`. With no list mise installs every tool, and a zig mirror
+          # outage at this step discarded a fully built v0.0.217.
+          install_args: rust aqua:cli/cli
       # `checksums` emits a sums= KEY=VALUE line, so the asset path is decided in
       # that one file and never re-derived in YAML.
       - name: Derive the manifest from the release's own assets

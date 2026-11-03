@@ -1,6 +1,7 @@
 name: release-plz
 #MUTANT-SUITE crates/batten/tests/it/release_settings_gate.rs
 #MUTANT settings-gate-maps-usage|s@--on 2=false -- mise run batten -- release settings@--on 1=false -- mise run batten -- release settings@|the_release_settings_gate_maps_its_violation_exit
+#MUTANT pin-steps-under-the-old-ceiling|s@^    timeout-minutes: 46 # budget: p95=920s x3 measured=2026-11-03$@    timeout-minutes: 15 # budget: grandfathered measured=2026-08-10@|the_release_plz_job_outlasts_its_pin_steps
 #MUTANT release-pr-found-by-search|s@gh pr list --state open --limit 1000 --json headRefName@gh pr list --state open --search head:release-plz- --json headRefName@|no_workflow_finds_a_pull_request_through_the_search_index
 
 # workflow-shell: CLOUD-2063 the step count rises by the seven single-command
@@ -564,7 +565,10 @@ jobs:
 
   release-plz:
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # budget: grandfathered measured=2026-08-10
+    # THE PIN STEPS RUN LAST, so the ceiling covers them (CLOUD-2578): at 15 it
+    # cancelled run 41690047943 one second after `release-pr` updated #1249, and
+    # the pin never moved.
+    timeout-minutes: 46 # budget: p95=920s x3 measured=2026-11-03
     # What this job actually does: opens and updates the release PR, and pushes
     # the release commit and its tag.
     permissions:

@@ -84,6 +84,72 @@ fn the_release_settings_gate_maps_its_violation_exit() {
     }
 }
 
+/// The text of one committed workflow.
+fn workflow(file: &str) -> String {
+    workflows()
+        .into_iter()
+        .find(|(name, _)| name == file)
+        .map(|(_, text)| text)
+        .unwrap_or_else(|| panic!("{file} is committed"))
+}
+
+/// The lines of the job whose body contains `marker`: from its two-space-indented
+/// `name:` header to the next one.
+fn job_holding<'a>(text: &'a str, marker: &str) -> Vec<&'a str> {
+    let is_header = |line: &str| {
+        line.starts_with("  ")
+            && !line.starts_with("   ")
+            && line.trim_end().ends_with(':')
+            && !line.trim_start().starts_with('#')
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let at = lines
+        .iter()
+        .position(|line| line.contains(marker) && !line.trim_start().starts_with('#'))
+        .unwrap_or_else(|| panic!("a job runs `{marker}`"));
+    let start = (0..=at)
+        .rev()
+        .find(|&i| is_header(lines[i]))
+        .expect("the job has a header");
+    let end = (at + 1..lines.len())
+        .find(|&i| is_header(lines[i]))
+        .unwrap_or(lines.len());
+    lines[start..end].to_vec()
+}
+
+/// The release-plz job's ceiling covers the engine-pin steps it ends with
+/// (CLOUD-2578). At 15 minutes it cancelled run 41690047943 one second after
+/// `release-pr` updated #1249, and the pin never moved.
+#[test]
+fn the_release_plz_job_outlasts_its_pin_steps() {
+    let text = workflow("release-plz.yml");
+    let job = job_holding(&text, "engine pin version");
+    let minutes: u32 = job
+        .iter()
+        .find_map(|line| line.strip_prefix("    timeout-minutes:"))
+        .and_then(|rest| rest.split('#').next())
+        .and_then(|value| value.trim().parse().ok())
+        .expect("the pin job declares a job-level ceiling");
+    assert!(
+        minutes >= 30,
+        "release-plz.yml: the job that moves the engine pin is bounded at {minutes} minutes, under the ~15 its earlier steps can spend"
+    );
+}
+
+/// `checksums` installs only what it runs (CLOUD-2579). With no list mise
+/// installs every tool, and a zig mirror outage at that step discarded a fully
+/// built v0.0.217.
+#[test]
+fn the_checksums_job_installs_only_what_it_runs() {
+    let text = workflow("release-artifacts.yml");
+    let job = job_holding(&text, "mise run checksums");
+    assert!(
+        job.iter()
+            .any(|line| line.trim() == "install_args: rust aqua:cli/cli"),
+        "release-artifacts.yml: the checksums job's mise step declares no `install_args`, so it installs every tool"
+    );
+}
+
 /// `release-land` moves the draft onto its bake BEFORE it verifies it
 /// (CLOUD-2574).
 ///
