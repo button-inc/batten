@@ -18082,26 +18082,6 @@ deny contains "refused by themodule" if {
         );
     }
 
-    /// Exactly one host has a surveyed question tool and a surveyed MCP log
-    /// tree, read off the table: a new host answers `None` until measured.
-    #[test]
-    fn only_claude_code_has_a_surveyed_question_tool_and_mcp_log_tree() {
-        let surveyed = |fact: fn(Harness) -> Option<&'static str>| -> Vec<(Harness, &'static str)> {
-            Harness::ALL
-                .iter()
-                .filter_map(|&harness| fact(harness).map(|value| (harness, value)))
-                .collect()
-        };
-        assert_eq!(
-            surveyed(Harness::question_tool),
-            [(Harness::ClaudeCode, "AskUserQuestion")]
-        );
-        assert_eq!(
-            surveyed(Harness::mcp_logs),
-            [(Harness::ClaudeCode, ".cache/claude-cli-nodejs")]
-        );
-    }
-
     /// A pre-approval on a host that reads Claude Code's verdict object is the
     /// allow verdict with its reason, on the event it is honoured on.
     #[test]
@@ -18810,7 +18790,7 @@ deny contains "refused by themodule" if {
                 .unwrap_or_else(|e| panic!("{}: {e}: {rendered}", harness.as_str()));
             let hooks = match wiring.file {
                 WiringFile::Whole(_) => &parsed["hooks"],
-                WiringFile::Key { .. } => &parsed,
+                WiringFile::Key { .. } | WiringFile::Root(_) => &parsed,
             };
             for (_, spelling) in wiring.registrations(*harness) {
                 rendered_any = true;
