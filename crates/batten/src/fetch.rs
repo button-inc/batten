@@ -246,7 +246,7 @@ pub fn get(url: &str, headers: &[(String, String)]) -> Result<Response> {
         direct: false,
         patch: false,
         delete: false,
-        credential: None,
+        credentials: &[],
     }])?
     .pop()
     .ok_or_else(|| anyhow::anyhow!("fetch: the exchange returned no answer"))
@@ -271,7 +271,7 @@ pub fn get_direct(url: &str, headers: &[(String, String)]) -> Result<Response> {
         direct: true,
         patch: false,
         delete: false,
-        credential: None,
+        credentials: &[],
     }])?
     .pop()
     .ok_or_else(|| anyhow::anyhow!("fetch: the exchange returned no answer"))
@@ -317,14 +317,15 @@ pub struct Call<'a> {
     /// ordering that terminates: the fence is the thing being proven, so it
     /// cannot also be its own precondition.
     pub direct: bool,
-    /// The name of a header in `headers` the caller declares a credential,
+    /// The names of headers in `headers` the caller declares credentials,
     /// beyond the fixed names [`is_credential`] already knows.
     ///
     /// An MCP server's `Credential.header` may name its own header (an
-    /// `X-Session-Token`), and nothing in a header's NAME says it carries a
-    /// secret. Declaring it here is what lets a cross-origin redirect drop it and
-    /// this type's `Debug` redact it, the same as `Authorization` (CLOUD-2543).
-    pub credential: Option<&'a str>,
+    /// `X-Session-Token`), and its session lives in `Mcp-Session-Id`; nothing in
+    /// either NAME says it carries a secret. Declaring them here is what lets a
+    /// cross-origin redirect drop them and this type's `Debug` redact them, the
+    /// same as `Authorization` (CLOUD-2543).
+    pub credentials: &'a [&'a str],
 }
 
 /// **HAND-WRITTEN, BECAUSE THE DERIVE PRINTED CREDENTIALS.** `headers` carries
@@ -354,7 +355,7 @@ impl std::fmt::Debug for Call<'_> {
                     .map(|(name, value)| {
                         (
                             name.as_str(),
-                            if is_credential(name, self.credential) {
+                            if is_credential(name, self.credentials) {
                                 crate::secret::REDACTED
                             } else {
                                 value.as_str()
@@ -370,7 +371,7 @@ impl std::fmt::Debug for Call<'_> {
 }
 
 /// Whether a header's VALUE is a credential: one of the four fixed names, or
-/// the one the caller declared ([`Call::credential`]).
+/// one the caller declared ([`Call::credentials`]).
 ///
 /// A denylist, and the direction is deliberate: a header nobody thought about
 /// renders, because an over-redacted report is unreadable and gets switched off,
@@ -378,7 +379,7 @@ impl std::fmt::Debug for Call<'_> {
 /// sends or is likely to. A header named anything else is a credential only
 /// when its caller says so. Matched case-insensitively, since HTTP field names
 /// are.
-fn is_credential(name: &str, declared: Option<&str>) -> bool {
+fn is_credential(name: &str, declared: &[&str]) -> bool {
     const SENSITIVE: [&str; 4] = [
         "authorization",
         "proxy-authorization",
@@ -387,7 +388,6 @@ fn is_credential(name: &str, declared: Option<&str>) -> bool {
     ];
     SENSITIVE
         .iter()
-        .copied()
         .chain(declared)
         .any(|candidate| name.eq_ignore_ascii_case(candidate))
 }
@@ -685,11 +685,15 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
     let mut target = call.url.to_owned();
     // **THE HEADERS NARROW WHEN THE ORIGIN CHANGES** (review of #848). This replayed
     // `call.headers` verbatim on every hop, and `redirect_target` constrains only
-    // the SCHEME — so a `Location` naming another host received whatever the
+    // the SCHEME — so a `Location` naming another origin received whatever the
     // caller attached, `Authorization: Bearer <token>` included. `curl`, the
-    // client this transport replaced, strips credentials on a cross-host redirect
-    // unless `--location-trusted` is passed; the port kept the redirect-following
-    // and dropped that protection silently.
+    // client this transport replaced, strips credentials on a redirect off the
+    // original host and port unless `--location-trusted` is passed; the port
+    // kept the redirect-following and dropped that protection silently.
+    //
+    // Each hop is judged against the ORIGINAL url, not the previous hop, so a
+    // chain that leaves and comes back sends the credential again on its return
+    // and never to anyone in between (CLOUD-2543).
     //
     // Latent rather than live today — no current call site reaches a redirecting
     // endpoint — which is exactly why it is worth closing now: the next asset or
@@ -708,7 +712,7 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
         let Some(next) = redirect_target(&target, answer.status, location.as_deref())? else {
             return Ok(answer);
         };
-        carried = carried_to(carried, &target, &next, call.credential);
+        carried = carried_to(call.headers, call.url, &next, call.credentials);
         target = next;
     }
     Err(anyhow::anyhow!(
@@ -716,34 +720,35 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
     ))
 }
 
-/// The headers a hop from `from` to `next` carries: every one on the same
-/// origin, and every one but the credentials on another.
+/// The headers a hop to `next` carries: every one when `next` is on the
+/// `origin` the call was made to, and every one but the credentials otherwise.
 ///
 /// A credential is whatever [`is_credential`] names, the one predicate `Debug`
 /// redacts by: `Cookie` and `Proxy-Authorization` as well as `Authorization`,
-/// plus the header the caller declared. Dropping `Authorization` alone let the
+/// plus the headers the caller declared. Dropping `Authorization` alone let the
 /// rest reach the redirect target (CLOUD-2543).
 ///
 /// Apart from the exchange so the narrowing tests without a live HTTPS
 /// redirect, which the `https_only` transport gives a loopback no way to stage
 /// (CLOUD-2509).
 //MUTANT-SUITE crates/batten/src/fetch.rs
-//MUTANT declared-credential-follows-redirect|s@!is_credential(name, declared))@!is_credential(name, None))@|a_credential_follows_a_redirect_only_on_the_same_origin
-//MUTANT cookie-follows-redirect|s@!is_credential(name, declared))@!(name.eq_ignore_ascii_case("authorization") \x7c\x7c Some(name) == declared))@|a_credential_follows_a_redirect_only_on_the_same_origin
+//MUTANT declared-credential-follows-redirect|s@!is_credential(name, declared))@!is_credential(name, Default::default()))@|a_credential_follows_a_redirect_only_on_the_same_origin
+//MUTANT cookie-follows-redirect|s@!is_credential(name, declared))@!(name.eq_ignore_ascii_case("authorization") \x7c\x7c declared.iter().any(\x7cd\x7c name.eq_ignore_ascii_case(d))))@|a_credential_follows_a_redirect_only_on_the_same_origin
 //MUTANT origin-ignores-port|s@(Some(port), _) => port,@(Some(_), _) => 443,@|a_redirect_stays_on_its_origin_only_when_scheme_host_and_port_agree
 //MUTANT origin-ignores-scheme|s@^    Some((scheme, host, port))$@    Some((String::new(), host, port))@|a_redirect_stays_on_its_origin_only_when_scheme_host_and_port_agree
 fn carried_to(
-    headers: Vec<(String, String)>,
-    from: &str,
+    headers: &[(String, String)],
+    origin: &str,
     next: &str,
-    declared: Option<&str>,
+    declared: &[&str],
 ) -> Vec<(String, String)> {
-    if same_origin(from, next) {
-        return headers;
+    if same_origin(origin, next) {
+        return headers.to_vec();
     }
     headers
-        .into_iter()
+        .iter()
         .filter(|(name, _)| !is_credential(name, declared))
+        .cloned()
         .collect()
 }
 
@@ -990,7 +995,7 @@ mod tests {
     }
 
     /// Every credential stays on its origin: the fixed names `is_credential`
-    /// knows, `Cookie` and `Proxy-Authorization` among them, and the header the
+    /// knows, `Cookie` and `Proxy-Authorization` among them, and the headers the
     /// caller declared (CLOUD-2543). Everything else follows anywhere.
     #[test]
     fn a_credential_follows_a_redirect_only_on_the_same_origin() {
@@ -999,36 +1004,27 @@ mod tests {
             ("Cookie", "c"),
             ("Proxy-Authorization", "Basic p"),
             ("X-Session-Token", "s"),
+            ("Mcp-Session-Id", "m"),
             ("Accept", "a"),
         ]);
-        let declared = Some("x-session-token");
+        let declared = ["x-session-token", "mcp-session-id"];
+        let origin = "https://h.example/a";
         assert_eq!(
-            carried_to(
-                headers.clone(),
-                "https://h.example/a",
-                "https://H.example/b",
-                declared
-            ),
+            carried_to(&headers, origin, "https://H.example/b", &declared),
             headers
         );
         assert_eq!(
-            carried_to(
-                headers.clone(),
-                "https://h.example/a",
-                "https://cdn.example/b",
-                declared
-            ),
+            carried_to(&headers, origin, "https://cdn.example/b", &declared),
             pairs(&[("Accept", "a")])
         );
         // Undeclared, a header is not a credential by its name alone.
         assert_eq!(
-            carried_to(
-                headers,
-                "https://h.example/a",
-                "https://cdn.example/b",
-                None
-            ),
-            pairs(&[("X-Session-Token", "s"), ("Accept", "a")])
+            carried_to(&headers, origin, "https://cdn.example/b", &[]),
+            pairs(&[
+                ("X-Session-Token", "s"),
+                ("Mcp-Session-Id", "m"),
+                ("Accept", "a")
+            ])
         );
     }
 
@@ -1188,10 +1184,10 @@ mod tests {
 
     #[test]
     fn a_credential_bearing_header_is_redacted_from_a_call_s_debug() {
-        assert!(is_credential("Authorization", None));
-        assert!(is_credential("set-cookie", None));
-        assert!(!is_credential("accept", None));
-        assert!(is_credential("X-Session-Token", Some("x-session-token")));
+        assert!(is_credential("Authorization", &[]));
+        assert!(is_credential("set-cookie", &[]));
+        assert!(!is_credential("accept", &[]));
+        assert!(is_credential("X-Session-Token", &["x-session-token"]));
         let headers = [
             (
                 String::from("Authorization"),
@@ -1210,7 +1206,7 @@ mod tests {
             patch: false,
             delete: false,
             direct: false,
-            credential: Some("x-session-token"),
+            credentials: &["x-session-token"],
         };
         let shown = format!("{call:?}");
         assert!(!shown.contains("secret-token"), "{shown}");

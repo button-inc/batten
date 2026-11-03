@@ -2499,6 +2499,14 @@ fn post_all(
                 .map_err(|err| anyhow::anyhow!("mcp: the request will not render: {err}"))
         })
         .collect::<Result<Vec<_>>>()?;
+    // The session id and the declared credential are both credentials whatever
+    // their names, so a cross-origin redirect drops them (CLOUD-2543). The
+    // wiring's own headers are routing identifiers ([`Wiring::headers`]) and
+    // follow.
+    let mut credentials = vec![SESSION_HEADER];
+    if let Some((name, _)) = wiring.credential.as_ref() {
+        credentials.push(name.as_str());
+    }
     let calls: Vec<crate::fetch::Call<'_>> = bodies
         .iter()
         .map(|body| crate::fetch::Call {
@@ -2508,9 +2516,7 @@ fn post_all(
             direct: false,
             patch: false,
             delete: false,
-            // The declared header is a credential whatever its name, so a
-            // cross-origin redirect drops it (CLOUD-2543).
-            credential: wiring.credential.as_ref().map(|(name, _)| name.as_str()),
+            credentials: &credentials,
         })
         .collect();
     crate::fetch::spend(&calls)
@@ -2750,17 +2756,23 @@ mod tests {
         );
     }
 
-    /// Fails by: the declared credential header not marked as one on the call,
-    /// so a cross-origin redirect would carry it on (CLOUD-2543).
+    /// Fails by: the session header or the declared credential header not
+    /// marked as one on the call, so a cross-origin redirect would carry it on
+    /// (CLOUD-2543).
     #[test]
-    fn a_call_declares_the_wired_credential_header() {
+    fn a_call_declares_the_session_and_the_wired_credential_header() {
         let declared = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let seen = std::rc::Rc::clone(&declared);
         crate::fetch::stand_in(Box::new(move |calls: &[crate::fetch::Call<'_>]| {
             Ok(calls
                 .iter()
                 .map(|call| {
-                    seen.borrow_mut().push(call.credential.map(str::to_owned));
+                    seen.borrow_mut().push(
+                        call.credentials
+                            .iter()
+                            .map(|name| (*name).to_owned())
+                            .collect::<Vec<_>>(),
+                    );
                     crate::fetch::Response {
                         status: 200,
                         body: Vec::new(),
@@ -2777,7 +2789,10 @@ mod tests {
         post(&stood_up(), &serde_json::json!({}), None).expect("posted");
         assert_eq!(
             *declared.borrow(),
-            [Some(String::from("X-Session-Token")), None]
+            [
+                vec![SESSION_HEADER.to_owned(), String::from("X-Session-Token")],
+                vec![SESSION_HEADER.to_owned()],
+            ]
         );
     }
 
