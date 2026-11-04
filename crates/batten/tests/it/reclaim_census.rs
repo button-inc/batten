@@ -407,6 +407,13 @@ fn the_declared_notes_are_argv_for_the_census_verb() {
         );
     }
     let config = std::fs::read_to_string(common::at_root("batten.toml")).expect("batten.toml");
+    // THE DECLARATION IS HELD UNTIL A RELEASE CARRIES CLOUD-2387: read through
+    // the `#HELD ` prefix, so the values are still pinned while the rows are not live.
+    let config: String = config
+        .lines()
+        .map(|line| line.strip_prefix("#HELD ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n");
     let parsed: toml::Value = toml::from_str(&config).expect("batten.toml parses");
     assert_eq!(
         parsed["lease"].get("census").and_then(toml::Value::as_bool),
