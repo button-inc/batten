@@ -297,7 +297,12 @@ pub fn land_trunk(repo: &Path, must_land_on: Option<&str>) -> Result<Option<Trun
 ///
 /// Propagates a present `batten.toml` that will not load, and [`land_trunk`]'s.
 pub fn declared_trunk(root: &Path) -> Result<Option<Trunk>> {
-    let site = crate::config::authority_site(root, None);
+    // THE AUTHORITY FOR `root`, not `root` itself (CLOUD-2532): a caller standing
+    // in a worktree subdirectory passes `.`, which carries no `batten.toml`, and
+    // `must_land_on` must come from the worktree's file rather than read as
+    // undeclared. The git reads below stay on `root`.
+    let authority = crate::config::authority_root(root).unwrap_or_else(|_| root.to_path_buf());
+    let site = crate::config::authority_site(&authority, None);
     let declared = if site.path.is_file() {
         crate::config::load_site(&site)?.0.must_land_on
     } else {
