@@ -1287,7 +1287,7 @@ impl RunnerKind {
 //MUTANT status-level-unpinned|s@^    "--status-level=pass",$@    "--status-level=fail",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
 //MUTANT nextest-unprobed|s@^    let absent = mine.iter().any(runs_nextest) \&\& !cargo_answers(root, "nextest", None);$@    let absent = false;@|a_declared_cargo_row_without_nextest_reads_one_runner_absent
 //MUTANT malformed-shard-unrefused|s@^    parse_shard(shard).ok_or_else(\x7c\x7c format!("{SHARD}={shard} is not `k/n` with 0 <= k < n"))$@    Ok(parse_shard(shard).unwrap_or((0, 1)))@|a_malformed_shard_is_refused_before_the_registered_runner
-//MUTANT declared-profile-dropped|s@^    if let Some(profile) = declared_profile(staged, std::env::var("NEXTEST_PROFILE").ok()) {$@    if let Some(profile) = None::<String> {@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
+//MUTANT declared-profile-dropped|s@^    if let Some(profile) = declared_profile(staged, std::env::var("NEXTEST_PROFILE").ok())$@    if let Some(profile) = None::<String>@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
 /// Which registered runner owns which sources.
 ///
 /// Every source has exactly one owner: the first registered runner whose glob
@@ -3008,12 +3008,10 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
 /// this env reaches, because it names nextest's profile ([`scrubbed`]).
 fn nextest_env(root: &Path, staged: &Path, provisioned: Option<&Path>) -> Vec<(String, String)> {
     let mut env = suite_env(root);
-    if let Some(profile) = declared_profile(staged, std::env::var("NEXTEST_PROFILE").ok()) {
-        for (key, value) in &mut env {
-            if key == "NEXTEST_PROFILE" {
-                value.clone_from(&profile);
-            }
-        }
+    if let Some(profile) = declared_profile(staged, std::env::var("NEXTEST_PROFILE").ok())
+        && let Some((_, value)) = env.iter_mut().find(|(key, _)| key == "NEXTEST_PROFILE")
+    {
+        *value = profile;
     }
     env.extend(runner_path(provisioned));
     env
@@ -4411,23 +4409,26 @@ fn gate_stopped(root: &Path, gate: &Gate) -> Option<Verdict> {
 type ShardRow<'a> = (&'a String, &'a Gate, &'a Row);
 
 /// `mine` less the rows that run under nextest where `cargo nextest` does not
-/// answer, and whether it did not.
+/// answer, and the one [`NEXTEST`] `runner-absent` that says so.
 ///
 /// ONE `runner-absent` FOR A CONSUMER WITHOUT NEXTEST (CLOUD-2466 item 4),
 /// probed once before anything is staged, where every Cargo row used to read
 /// `suite-did-not-run` on its own. Those rows are not judged; the rest are. A
 /// row its own module judges in process needs no nextest.
-fn without_absent_nextest<'a>(root: &Path, mine: Vec<ShardRow<'a>>) -> (Vec<ShardRow<'a>>, bool) {
+fn without_absent_nextest<'a>(
+    root: &Path,
+    mine: Vec<ShardRow<'a>>,
+) -> (Vec<ShardRow<'a>>, Option<Finding>) {
     let runs_nextest = |(_, gate, row): &ShardRow<'_>| {
         !declares_own_case(root, row) && matches!(gate.suite_for(row), Some(Suite::Cargo { .. }))
     };
     let absent = mine.iter().any(runs_nextest) && !cargo_answers(root, "nextest", None);
     if !absent {
-        return (mine, false);
+        return (mine, None);
     }
     (
         mine.into_iter().filter(|row| !runs_nextest(row)).collect(),
-        true,
+        Some(runner_absent(NEXTEST)),
     )
 }
 
@@ -4492,9 +4493,7 @@ pub fn sweep_shard(
     holding.dedup();
     // Disjoint from the gates reported above, which are never runnable.
     let gates = findings.len() + holding.len();
-    if nextest_absent {
-        findings.push(runner_absent(NEXTEST));
-    }
+    findings.extend(nextest_absent);
     let total = mine.len();
     let _ = writeln!(
         progress,
@@ -5011,11 +5010,8 @@ mod tests {
     fn a_provisioned_runner_directory_leads_every_runner_path() {
         let dir = PathBuf::from("/provisioned/cargo-mutants");
         let registry = Registry::default().with_provisioned(Some(dir.clone()));
-        let env = nextest_env(
-            Path::new("/repo"),
-            Path::new("/staged"),
-            registry.provisioned.as_deref(),
-        );
+        assert_eq!(registry.provisioned.as_deref(), Some(dir.as_path()));
+        let env = nextest_env(Path::new("/repo"), Path::new("/staged"), Some(&dir));
         let path = env
             .iter()
             .find(|(key, _)| key == "PATH")
@@ -5023,17 +5019,17 @@ mod tests {
             .expect("a provisioned directory sets PATH");
         assert_eq!(
             std::env::split_paths(&path).next(),
-            Some(dir),
+            Some(dir.clone()),
             "the provisioned directory must come first: {path}"
         );
         assert_eq!(
-            runner_path(registry.provisioned.as_deref()).len(),
+            runner_path(Some(&dir)).len(),
             1,
             "unresolvable reads the same PATH"
         );
         assert!(
-            runner_path(Registry::default().provisioned.as_deref()).is_empty(),
-            "a registry with no provisioned directory leaves PATH inherited"
+            runner_path(None).is_empty(),
+            "no provisioned directory leaves PATH inherited"
         );
     }
 
@@ -5097,14 +5093,12 @@ mod tests {
     /// the staged copy.
     #[test]
     fn a_declared_profile_is_kept_and_an_undeclared_one_is_not() {
-        let staged = std::env::temp_dir().join(format!("batten-profile-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&staged);
-        fs::create_dir_all(staged.join(".config")).expect("dirs");
-        fs::write(
-            staged.join(".config/nextest.toml"),
+        let staged = fixture("declared-profile");
+        put(
+            &staged,
+            ".config/nextest.toml",
             "[profile.ci]\nretries = 3\n\n[profile.ci.junit]\npath = \"j.xml\"\n",
-        )
-        .expect("config");
+        );
         let kept = |profile: &str| declared_profile(&staged, Some(profile.to_owned()));
         assert_eq!(kept("ci"), Some(String::from("ci")));
         assert_eq!(kept("narrow"), None);
@@ -5114,7 +5108,6 @@ mod tests {
             declared_profile(Path::new("/no/such/tree"), Some(String::from("ci"))),
             None
         );
-        let _ = fs::remove_dir_all(&staged);
     }
 
     /// Fails by: the pinned profile dropped or changed, so an inherited
