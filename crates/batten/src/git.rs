@@ -780,6 +780,8 @@ fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
 /// is alive. A WRITE never does ([`open_for_write`]): a remembered handle is a
 /// clone that shares its index and packed-refs snapshots, and a write through
 /// one would leave every later read in the call answered from the shared copy.
+//MUTANT remember-ignored|s@^    if !remember \x7c\x7c !scope_open() {$@    if !scope_open() {@|a_write_is_never_served_from_the_memo
+//MUTANT open-key-ignores-cwd|s@^        cwd: std::env::current_dir().ok(),$@        cwd: None,@|a_read_from_another_working_directory_is_opened_again
 fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<gix::Repository> {
     let ceilings: Vec<PathBuf> = ceilings
         .into_iter()
@@ -796,7 +798,7 @@ fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<g
     let refused = || UsageError::raise(format!("{} is not a git repository", dir.display()));
     // NO SCOPE, NO MEMO WORK: outside a hook call this is the plain open, without
     // a second walk or the config reads a remembered entry would need.
-    if !remember || with_opens(|_| ()).is_none() {
+    if !remember || !scope_open() {
         return gix::discover_opts(start, discovery(&ceilings), gix::open::Options::isolated())
             .map_err(|_| refused());
     }
@@ -863,8 +865,19 @@ struct OpenKey {
 /// and a byte comparison has no racy window — a stamp-checked entry could not
 /// be made for two seconds after a write, so whether a call hit depended on the
 /// clock (CLOUD-2433's verify, `shell_retirement_cost`).
+///
+/// **A WRITE SPENDS THE SCOPE** (CLOUD-2526). "A hook call only reads" was
+/// assumed, not checked: a write in the call followed by a read would be served
+/// the snapshot from before it. So [`open_for_write`] clears the memo and marks
+/// it spent ([`Opens::spend`]), and a spent scope remembers nothing more — every
+/// later open in the call is fresh, by construction rather than by convention.
 #[derive(Default)]
-struct Opens(BTreeMap<OpenKey, Opened>);
+struct Opens {
+    /// The remembered opens.
+    opened: BTreeMap<OpenKey, Opened>,
+    /// Whether a write has opened a repository in this scope.
+    spent: bool,
+}
 
 /// One remembered open: the repository, and the bytes its open read.
 struct Opened {
@@ -898,6 +911,7 @@ impl Drop for OpenScope {
 //MUTANT open-scope-never-opens|s@^        \*opens = Some(Opens::default());$@@|a_repository_read_twice_in_one_scope_is_opened_once
 //MUTANT open-never-remembered|s@^        let _ = with_opens(.opens. opens.remember(key, \&repo, read));$@@|a_repository_read_twice_in_one_scope_is_opened_once
 //MUTANT open-memo-never-consulted|s@^    if let Some(repo) = with_opens(.opens. opens.get(\&key)).flatten() {$@    if let Some(repo) = None::<gix::Repository> {@|a_repository_read_twice_in_one_scope_is_opened_once
+#[must_use = "the memo lives only as long as the guard: an unbound scope ends at once"]
 pub(crate) fn open_scope() -> OpenScope {
     let owner = with_cell(|opens| {
         if opens.is_some() {
@@ -925,6 +939,22 @@ fn with_cell<R>(with: impl FnOnce(&mut Option<Opens>) -> R) -> Option<R> {
 fn with_opens<R>(with: impl FnOnce(&mut Opens) -> R) -> Option<R> {
     with_cell(|opens| opens.as_mut().map(with)).flatten()
 }
+
+/// Whether an open may be remembered: a scope is alive and no write has spent
+/// it ([`Opens::spend`]).
+//MUTANT spent-scope-still-remembers|s@^    with_opens(.opens. !opens.spent).unwrap_or(false)$@    with_opens(.opens. true).unwrap_or(false)@|a_write_spends_the_scopes_memo
+fn scope_open() -> bool {
+    with_opens(|opens| !opens.spent).unwrap_or(false)
+}
+
+/// The gix release [`read_by_open`]'s list was audited against (CLOUD-2526).
+/// The list is what gix's isolated open reads; a gix that reads another file
+/// would have a remembered handle served stale, so a bump fails
+/// `the_memos_read_list_was_audited_against_this_gix` until the list is
+/// re-audited against the new open and this moves with it.
+//MUTANT audited-gix-moved|s@^const AUDITED_GIX: \&str = "0.87.1";$@const AUDITED_GIX: \&str = "0.0.0";@|the_memos_read_list_was_audited_against_this_gix
+#[cfg(test)]
+const AUDITED_GIX: &str = "0.87.1";
 
 /// The bytes of every file an isolated open of `git_dir` reads — no includes,
 /// no system, global or environment configuration
@@ -955,7 +985,7 @@ impl Opens {
     /// The repository remembered for `key`, if every file its open read is
     /// unchanged.
     fn get(&self, key: &OpenKey) -> Option<gix::Repository> {
-        let opened = self.0.get(key)?;
+        let opened = self.opened.get(key)?;
         let now = read_by_open(&key.git_dir);
         (opened.read == now).then(|| opened.repo.clone())
     }
@@ -966,7 +996,14 @@ impl Opens {
             repo: repo.clone(),
             read,
         };
-        self.0.insert(key, opened);
+        self.opened.insert(key, opened);
+    }
+
+    /// A write opened a repository: forget every open, and remember none for
+    /// the rest of the scope (CLOUD-2526).
+    fn spend(&mut self) {
+        self.opened.clear();
+        self.spent = true;
     }
 }
 
@@ -2127,12 +2164,20 @@ fn unreachable_from_remotes(
 /// a hook call's memo (CLOUD-2433), because a remembered handle is a clone that
 /// shares its index and packed-refs snapshots with every later read.
 ///
+/// It also SPENDS the hook call's memo (CLOUD-2526): every remembered open is
+/// forgotten and none is made for the rest of the call, so no read after this
+/// write can be served a snapshot from before it. Spent AFTER the open, so the
+/// open itself is the fresh one this function promises even with a scope live.
+///
 /// # Errors
 ///
 /// A directory that is not a repository, or one discovery cannot reach.
-//MUTANT write-from-the-memo|s@^    open_isolated(dir, ceiling_dirs(), false)$@    open(dir)@|a_write_is_never_served_from_the_memo
+//MUTANT write-from-the-memo|s@^    let repo = open_isolated(dir, ceiling_dirs(), false)?;$@    let repo = open(dir)?;@|a_write_is_never_served_from_the_memo
+//MUTANT write-keeps-the-memo|s@^    let _ = with_opens(Opens::spend);$@@|a_write_spends_the_scopes_memo
 pub fn open_for_write(dir: &Path) -> Result<gix::Repository> {
-    open_isolated(dir, ceiling_dirs(), false)
+    let repo = open_isolated(dir, ceiling_dirs(), false)?;
+    let _ = with_opens(Opens::spend);
+    Ok(repo)
 }
 
 /// The one UTC stamp both committer signatures take (CLOUD-1486).
@@ -2425,8 +2470,10 @@ pub fn config_value(dir: &Path, key: &str) -> Result<Option<String>> {
 /// # Errors
 ///
 /// Raises a [`UsageError`] (exit `1`) when the write fails.
+//MUTANT config-write-from-the-memo|s@^    let repo = open_for_write(dir)?;$@    let repo = open(dir)?;@|a_config_write_spends_the_scopes_memo
 pub fn set_config_local(dir: &Path, key: &str, value: &str) -> Result<()> {
-    let repo = open(dir)?;
+    // A WRITE, so opened as one (CLOUD-2526): fresh, and spending the memo.
+    let repo = open_for_write(dir)?;
     let refusal = || UsageError::raise("could not write the repo-local config value".to_owned());
     // `user.name`, or `remote.origin.url` — section, an optional subsection, and
     // the key. The shell-out handed git one dotted string and let it do this
@@ -6291,7 +6338,7 @@ mod tests {
         let planted = gix::discover_opts(other, discovery(&[]), gix::open::Options::isolated())
             .expect("open");
         with_opens(|opens| {
-            let (_, opened) = opens.0.iter_mut().next().expect("one remembered open");
+            let (_, opened) = opens.opened.iter_mut().next().expect("one remembered open");
             opened.repo = planted;
         })
         .expect("a scope is open");
@@ -6353,7 +6400,7 @@ mod tests {
             let _inner = open_scope();
         }
         assert_eq!(
-            with_opens(|opens| opens.0.len()),
+            with_opens(|opens| opens.opened.len()),
             Some(1),
             "the outer call's memo survives an inner scope"
         );
@@ -6381,13 +6428,13 @@ mod tests {
         let _scope = open_scope();
         open_upwards(&linked, Vec::new()).expect("read");
         assert_eq!(
-            with_opens(|opens| opens.0.len()),
+            with_opens(|opens| opens.opened.len()),
             Some(1),
             "the linked worktree's open is remembered"
         );
         // The COMMON config is the one a linked worktree's open parses, and an
         // edit to it — not to the worktree's own git dir — must be a miss.
-        let key = with_opens(|opens| opens.0.keys().next().cloned())
+        let key = with_opens(|opens| opens.opened.keys().next().cloned())
             .flatten()
             .expect("one key");
         let config = dir.join(".git/config");
@@ -6412,9 +6459,91 @@ mod tests {
         }
         open_upwards(&dir, Vec::new()).expect("read");
         assert_eq!(
-            with_opens(|opens| opens.0.len()),
+            with_opens(|opens| opens.opened.len()),
             None,
             "a dropped scope leaves no memo behind"
+        );
+    }
+
+    /// A write spends the scope (CLOUD-2526): what was remembered is forgotten,
+    /// and a read after the write is opened fresh and not remembered either.
+    #[test]
+    fn a_write_spends_the_scopes_memo() {
+        let dir = crate::scratch::scratch("git-memo-spent");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let _scope = open_scope();
+        open_upwards(&dir, Vec::new()).expect("read");
+        assert_eq!(
+            with_opens(|opens| opens.opened.len()),
+            Some(1),
+            "the premise: the read was remembered"
+        );
+        open_for_write(&dir).expect("write open");
+        open_upwards(&dir, Vec::new()).expect("read after the write");
+        assert_eq!(
+            with_opens(|opens| opens.opened.len()),
+            Some(0),
+            "a spent scope forgets and remembers nothing more"
+        );
+    }
+
+    /// A repo-local config write is a write: it spends the scope too.
+    #[test]
+    fn a_config_write_spends_the_scopes_memo() {
+        let dir = crate::scratch::scratch("git-memo-config-spent");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let _scope = open_scope();
+        open_upwards(&dir, Vec::new()).expect("read");
+        set_config_local(&dir, "user.name", "spent").expect("config write");
+        open_upwards(&dir, Vec::new()).expect("read after the write");
+        assert_eq!(
+            with_opens(|opens| opens.opened.len()),
+            Some(0),
+            "a config write spends the scope"
+        );
+    }
+
+    /// The working directory is part of what an open depends on, so a read of
+    /// the same repository from another one is a separate entry. Safe to move
+    /// the process's directory: nextest runs each case in its own process.
+    #[test]
+    fn a_read_from_another_working_directory_is_opened_again() {
+        let dir = crate::scratch::scratch("git-memo-cwd");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let elsewhere = crate::scratch::scratch("git-memo-cwd-elsewhere");
+        let home = std::env::current_dir().expect("cwd");
+        let _scope = open_scope();
+        open_upwards(&dir, Vec::new()).expect("read");
+        std::env::set_current_dir(&elsewhere).expect("move");
+        let second = open_upwards(&dir, Vec::new());
+        std::env::set_current_dir(&home).expect("move back");
+        second.expect("read from elsewhere");
+        assert_eq!(
+            with_opens(|opens| opens.opened.len()),
+            Some(2),
+            "each working directory keys its own open"
+        );
+    }
+
+    /// `read_by_open`'s list holds only for the gix it was audited against.
+    #[test]
+    fn the_memos_read_list_was_audited_against_this_gix() {
+        let lock = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock");
+        let lock = fs::read_to_string(lock).expect("Cargo.lock");
+        let versions: Vec<&str> = lock
+            .split("[[package]]")
+            .filter(|package| package.lines().any(|line| line == "name = \"gix\""))
+            .filter_map(|package| {
+                package
+                    .lines()
+                    .find_map(|line| line.strip_prefix("version = \""))
+                    .and_then(|rest| rest.strip_suffix('"'))
+            })
+            .collect();
+        assert_eq!(
+            versions,
+            vec![AUDITED_GIX],
+            "gix moved: re-audit read_by_open's list against its isolated open, then move AUDITED_GIX"
         );
     }
 
