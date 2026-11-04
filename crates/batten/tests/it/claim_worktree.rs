@@ -74,6 +74,21 @@ fn main_and_worktree(name: &str) -> (PathBuf, PathBuf) {
     (main, linked)
 }
 
+/// The first file whose name starts with `prefix` under `dir`, depth first.
+fn find_named(dir: &Path, prefix: &str) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_named(&path, prefix) {
+                return Some(found);
+            }
+        } else if entry.file_name().to_string_lossy().starts_with(prefix) {
+            return Some(path);
+        }
+    }
+    None
+}
+
 /// A body that passes the readiness rule, so nothing but the trunk decides.
 fn refined_body() -> String {
     "**Refinement — Ready (a summary)**\n\n\
@@ -120,5 +135,18 @@ fn claim_check_in_a_worktree_reads_the_worktrees_trunk() {
         "the worktree's authority loads and declares the trunk, so the claim mints: \
          {:?} {said}",
         output.status.code()
+    );
+    // AND THE BASE IS THE TRUNK THE WORKTREE NAMED, resolved: success alone
+    // would admit a claim minted against any base at all.
+    let trunk = git_in(&linked, &["rev-parse", "refs/remotes/origin/trunk"]);
+    // WHERE it lands and WHICH branch keys it are CLOUD-2112 / CLOUD-2464's
+    // questions (the module doc), so any claim receipt under the shared git dir
+    // is read rather than one path asserted.
+    let receipt = find_named(&main.join(".git"), "claim.")
+        .map(|path| std::fs::read_to_string(path).expect("read the claim receipt"))
+        .expect("the claim receipt is minted");
+    assert!(
+        receipt.contains(&format!("\nbase {}", trunk.trim())),
+        "the base is the worktree trunk's tip: {receipt}"
     );
 }
