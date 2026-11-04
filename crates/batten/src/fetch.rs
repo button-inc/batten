@@ -702,8 +702,9 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
     // endpoint — which is exactly why it is worth closing now: the next asset or
     // download endpoint added here would leak the credential to a CDN host with
     // nothing in the code saying it could.
-    let mut carried: Vec<(String, String)> = call.headers.to_vec();
+    let mut path: Vec<String> = Vec::new();
     for _hop in 0..=MAX_REDIRECTS {
+        let carried = carried_to(call.headers, call.url, &path, call.credentials);
         let (answer, location) = one_exchange(
             &target,
             &carried,
@@ -715,7 +716,7 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
         let Some(next) = redirect_target(&target, answer.status, location.as_deref())? else {
             return Ok(answer);
         };
-        carried = carried_to(&carried, call.url, &next, call.credentials);
+        path.push(next.clone());
         target = next;
     }
     Err(anyhow::anyhow!(
@@ -723,10 +724,9 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
     ))
 }
 
-/// The headers a hop to `next` carries out of those the previous hop carried:
-/// every one when `next` is on the `origin` the call was made to, and every one
-/// but the credentials otherwise. Fed its own output hop by hop, so a
-/// credential dropped once stays dropped.
+/// The headers a request carries after following `path`, the redirect targets
+/// so far: every one while every hop has stayed on the `origin` the call was
+/// made to, and every one but the credentials once any hop has left it.
 ///
 /// A credential is whatever [`is_credential`] names, the one predicate `Debug`
 /// redacts by: `Cookie` and `Proxy-Authorization` as well as `Authorization`,
@@ -739,15 +739,16 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
 //MUTANT-SUITE crates/batten/src/fetch.rs
 //MUTANT declared-credential-follows-redirect|s@!is_credential(name, declared))@!is_credential(name, Default::default()))@|a_credential_follows_a_redirect_only_on_the_same_origin
 //MUTANT cookie-follows-redirect|s@!is_credential(name, declared))@!(name.eq_ignore_ascii_case("authorization") \x7c\x7c declared.iter().any(\x7cd\x7c name.eq_ignore_ascii_case(d))))@|a_credential_follows_a_redirect_only_on_the_same_origin
+//MUTANT detour-returns-credential|s@path.iter().all(\x7chop\x7c same_origin(origin, hop))@path.last().is_none_or(\x7chop\x7c same_origin(origin, hop))@|a_credential_follows_a_redirect_only_on_the_same_origin
 //MUTANT origin-ignores-port|s@(Some(port), _) => port,@(Some(_), _) => 443,@|a_redirect_stays_on_its_origin_only_when_scheme_host_and_port_agree
 //MUTANT origin-ignores-scheme|s@^    Some((scheme, host, port))$@    Some((String::new(), host, port))@|a_redirect_stays_on_its_origin_only_when_scheme_host_and_port_agree
 fn carried_to(
     headers: &[(String, String)],
     origin: &str,
-    next: &str,
+    path: &[String],
     declared: &[&str],
 ) -> Vec<(String, String)> {
-    if same_origin(origin, next) {
+    if path.iter().all(|hop| same_origin(origin, hop)) {
         return headers.to_vec();
     }
     headers
@@ -1014,24 +1015,36 @@ mod tests {
         ]);
         let declared = ["x-session-token", "mcp-session-id"];
         let origin = "https://h.example/a";
+        let path = |hops: &[&str]| hops.iter().map(|hop| (*hop).to_owned()).collect::<Vec<_>>();
+        let stripped = pairs(&[("Accept", "a")]);
+        assert_eq!(carried_to(&headers, origin, &[], &declared), headers);
         assert_eq!(
-            carried_to(&headers, origin, "https://H.example/b", &declared),
+            carried_to(&headers, origin, &path(&["https://H.example/b"]), &declared),
             headers
         );
         assert_eq!(
-            carried_to(&headers, origin, "https://cdn.example/b", &declared),
-            pairs(&[("Accept", "a")])
+            carried_to(
+                &headers,
+                origin,
+                &path(&["https://cdn.example/b"]),
+                &declared
+            ),
+            stripped
         );
         // A chain that leaves the origin and comes back does not get the
         // credential back: the host in between would choose where it goes.
-        let detoured = carried_to(&headers, origin, "https://cdn.example/b", &declared);
         assert_eq!(
-            carried_to(&detoured, origin, "https://h.example/c", &declared),
-            pairs(&[("Accept", "a")])
+            carried_to(
+                &headers,
+                origin,
+                &path(&["https://cdn.example/b", "https://h.example/c"]),
+                &declared
+            ),
+            stripped
         );
         // Undeclared, a header is not a credential by its name alone.
         assert_eq!(
-            carried_to(&headers, origin, "https://cdn.example/b", &[]),
+            carried_to(&headers, origin, &path(&["https://cdn.example/b"]), &[]),
             pairs(&[
                 ("X-Session-Token", "s"),
                 ("Mcp-Session-Id", "m"),
