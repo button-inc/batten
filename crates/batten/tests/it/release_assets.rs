@@ -570,6 +570,38 @@ fn a_list_that_cannot_be_derived_is_partial_never_complete() {
     }
 }
 
+/// A release workflow that calls `dist.yml` (CLOUD-2554) cannot derive its list
+/// while the callee is absent or will not parse: the callee's uploads would drop
+/// out of the expected set, so the grade is partial, never complete. Once the
+/// callee reads, the same release grades as before.
+#[test]
+fn a_called_workflow_that_cannot_be_read_is_partial_never_complete() {
+    let assets = complete(&[]);
+    let calling = format!("{WORKFLOW}  legs:\n    uses: ./{LEGS_PATH}\n");
+    let readable = "name: dist\non: workflow_call\njobs:\n  noop:\n    runs-on: x\n    steps:\n      \
+                    - run: echo\n";
+    for (name, legs, partial) in [
+        ("callee-absent", None, true),
+        ("callee-unparsed", Some("jobs: [\n"), true),
+        ("callee-read", Some(readable), false),
+    ] {
+        let dir = repo(name, Some(&calling));
+        if let Some(legs) = legs {
+            write(&dir, LEGS_PATH, legs);
+            git_in(&dir, &["add", "-A"]);
+            git_in(&dir, &["commit", "-qm", "the callee"]);
+        }
+        let forge = forge(name, &assets, Some(&manifest_over(&assets, None)));
+        let (code, text) = decide(&dir, &forge);
+        let flagged = text
+            .contains("batten deny release grade other at .github/workflows/release-artifacts.yml");
+        assert_eq!(flagged, partial, "{name}: {text}");
+        if !partial {
+            assert_eq!(code, Some(0), "{name}: {text}");
+        }
+    }
+}
+
 #[test]
 fn a_release_with_no_manifest_is_refused_and_nothing_else_is() {
     let dir = repo("no-manifest", Some(WORKFLOW));

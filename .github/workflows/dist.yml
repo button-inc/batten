@@ -351,6 +351,9 @@ jobs:
           name: dist-manifest-${{ matrix.target }}
           path: ${{ steps.dist.outputs.manifest }}
           if-no-files-found: error
+          # A re-run of a leg that failed after this step uploads the same
+          # name again; without overwrite the re-run fails here instead.
+          overwrite: true
           # A pull request's copy has no reader; it is kept only to prove the
           # leg wrote one.
           retention-days: ${{ inputs.tag != '' && 90 || 1 }}

@@ -44,6 +44,7 @@
 #MUTANT-SUITE crates/batten/tests/it/release_assets.rs
 #MUTANT missing-archive-passes|s@^\tnot archived(target)$@\tfalse@|a_release_with_only_the_schema_is_refused
 #MUTANT missing-extra-passes|s@^\tnot name in assets$@\tfalse@|every_non_target_asset_is_demanded_from_both_sources
+#MUTANT called-workflow-unread|s@^\t\tis_object(input.tree.documents\[callee\].jobs)$@\t\ttrue@|a_called_workflow_that_cannot_be_read_is_partial_never_complete
 #MUTANT unreadable-list-passes|s@^\tnot expectations_readable$@\tfalse@|a_list_that_cannot_be_derived_is_partial_never_complete
 #MUTANT cross-leg-sbom-demanded|s@^\tleg\["build-tool"\] != "cross"$@\ttrue@|a_cross_leg_is_never_demanded_a_binary_sbom
 #MUTANT sbom-document-name-drifts|s@^sbom_documents := {"batten.spdx.json", @sbom_documents := {"batten.sbom.json", @|the_names_the_module_demands_are_the_names_the_producers_write
@@ -175,8 +176,24 @@ literal contains name if {
 
 reference := input.tree.documents["mise.toml"].env.BATTEN_CLI_REFERENCE
 
+# Every workflow a job of the release workflow calls with a job-level `uses: ./`
+# (CLOUD-2554: `dist.yml`), as the key its document is held under.
+called contains callee if {
+	some job in input.tree.documents[".github/workflows/release-artifacts.yml"].jobs
+	ref := job.uses
+	startswith(ref, "./")
+	callee := substring(ref, 2, -1)
+}
+
+# THE RELEASE WORKFLOW AND EVERY ONE IT CALLS, never any one of them: each
+# carries uploads the others do not, so a document that will not parse would
+# drop its assets from the expected list and a release missing them would grade
+# complete.
 expectations_readable if {
-	count(workflows) > 0
+	is_object(input.tree.documents[".github/workflows/release-artifacts.yml"].jobs)
+	every callee in called {
+		is_object(input.tree.documents[callee].jobs)
+	}
 	count(targets) > 0
 	count(literal) > 0
 	is_string(reference)
