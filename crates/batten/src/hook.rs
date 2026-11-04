@@ -8442,6 +8442,8 @@ fn redirects_to_a_file(tokens: &[&str]) -> bool {
         .any(|(_, target)| !target.starts_with('&') && *target != "/dev/null")
 }
 
+//MUTANT info-flag-past-option|s@^            on_path = false;$@@|an_informational_flag_on_the_path_is_a_read
+//MUTANT help-verb-unread|s@word == "help"@word == "none"@|an_informational_flag_on_the_path_is_a_read
 /// The effect [`crate::surface`] declares for the deepest subcommand a `batten`
 /// argv names, or `None` for any other program (CLOUD-1949).
 ///
@@ -8452,14 +8454,28 @@ fn redirects_to_a_file(tokens: &[&str]) -> bool {
 /// cannot leak onto a read list (CLOUD-170), and the leaf carries the effect
 /// that actually runs. A bare noun resolves to the noun's own reading, which is
 /// never `read` or `write` for a write-bearing one — so nothing is granted on it.
+///
+/// AN INFORMATIONAL FLAG IS A READ only where clap reads it as one: reached
+/// while every earlier word named the subcommand path (`batten --version`,
+/// `batten override spend --help`), or as clap's own `help` subcommand. Both
+/// print and run nothing (CLOUD-2206). Past any other word it may be an
+/// option's value, so the leaf keeps its effect.
 fn batten_effect(name: &str, arguments: &[&str]) -> Option<&'static str> {
     if name.strip_suffix(".exe").unwrap_or(name) != "batten" {
         return None;
     }
+    if arguments.first().is_some_and(|word| *word == "help") {
+        return Some(crate::effect::Effect::Read.as_str());
+    }
     let mut path = String::new();
     let mut effect = crate::effect::Effect::Unclassified;
+    let mut on_path = true;
     for argument in arguments {
+        if on_path && ["-h", "--help", "-V", "--version"].contains(argument) {
+            return Some(crate::effect::Effect::Read.as_str());
+        }
         if argument.starts_with('-') {
+            on_path = false;
             continue;
         }
         let candidate = if path.is_empty() {
@@ -19195,6 +19211,30 @@ deny contains "refused by themodule" if {
             Some(crate::surface::effect_for("check").as_str())
         );
         assert_eq!(batten_effect("git", &["status"]), None);
+    }
+
+    /// CLOUD-2206: an informational flag on the subcommand path prints and runs
+    /// nothing; the same flag past an option is a value, and the leaf decides.
+    #[test]
+    fn an_informational_flag_on_the_path_is_a_read() {
+        for argv in [
+            &["--version"][..],
+            &["-V"],
+            &["-h"],
+            &["help", "check"],
+            &["override", "spend", "--help"],
+        ] {
+            assert_eq!(batten_effect("batten", argv), Some("read"), "{argv:?}");
+        }
+        let leaf = Some(crate::surface::effect_for("override spend").as_str());
+        assert_eq!(
+            batten_effect("batten", &["override", "spend", "--rule", "--help"]),
+            leaf
+        );
+        assert_ne!(
+            batten_effect("batten", &["--strictness", "strict", "--help"]),
+            Some("read")
+        );
     }
 
     /// A key is present when the command or the evidence carries one.

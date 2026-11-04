@@ -738,6 +738,23 @@ fn a_plan_mode_ps_is_allowed() {
     assert_granted_by(&read, "call read now");
 }
 
+/// CLOUD-2206: the exact lines plan mode refused, measured 2026-10-11 and again
+/// 2026-11-03. An informational flag prints and runs nothing; behind an option
+/// it is that option's value, and a writer stays refused.
+#[test]
+fn a_plan_mode_batten_version_is_allowed() {
+    for line in [
+        "batten --version",
+        "batten help startup",
+        "batten claim check --help",
+    ] {
+        let read = shell("plan", line);
+        assert_not_plan_refused(&read);
+        assert_granted_by(&read, "call read now");
+    }
+    assert_plan_refused(&shell("plan", "batten override spend --rule --help"));
+}
+
 /// CLOUD-2418: the exact line plan mode refused, measured 2026-10-16. Git's
 /// global options come before the subcommand, so `-C` is never the verb, and a
 /// writer behind them is still a writer.
