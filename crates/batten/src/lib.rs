@@ -2794,7 +2794,7 @@ fn run_provision_status(
         on_path: &on_path,
         writable: writable_dir,
     };
-    let report = provision::status(&config.provisions, &provision::cache_root(&repo)?, host)?;
+    let report = provision::status_on(&config.provisions, &provision::cache_root(&repo)?, host)?;
 
     if json {
         writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
@@ -2881,7 +2881,7 @@ fn run_provision_apply(
         // A checksum mismatch propagates as a `Denial` (exit 2) from here, so
         // the loop stops at the first bad artifact rather than going on to
         // install the rest under a verdict that already failed.
-        let applied = provision::apply(entry, &site.cache, dry_run, site.host())?;
+        let applied = provision::apply_on(entry, &site.cache, dry_run, site.host())?;
         let verb = match applied {
             provision::Applied::Installed => "installed",
             provision::Applied::AlreadyFresh => continue,
@@ -4121,7 +4121,7 @@ fn provisioned_binary(binary: &str, overrides: &Overrides) -> Option<PathBuf> {
         .provisions
         .iter()
         .find(|entry| entry.binary == binary)?;
-    provision::apply(entry, &site.cache, false, site.host()).ok()?;
+    provision::apply_on(entry, &site.cache, false, site.host()).ok()?;
     provision::binary_path(&site.repo, entry).ok()
 }
 

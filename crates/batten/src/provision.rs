@@ -618,7 +618,17 @@ pub fn digest(bytes: &[u8]) -> String {
 ///
 /// An I/O failure other than a missing cache entry propagates as an internal
 /// error (→ exit `3`). A missing entry is a verdict, not a failure.
-pub fn status(entries: &[Provision], cache_root: &Path, host: Host<'_>) -> Result<Report> {
+pub fn status(entries: &[Provision], cache_root: &Path) -> Result<Report> {
+    status_on(entries, cache_root, Host::isolated(true))
+}
+
+/// [`status`], with each declared link judged where [`link_dir`] resolves it
+/// on `host` — the same place [`apply_on`] writes it (CLOUD-2617).
+///
+/// # Errors
+///
+/// As [`status`].
+pub fn status_on(entries: &[Provision], cache_root: &Path, host: Host<'_>) -> Result<Report> {
     let mut report = Vec::with_capacity(entries.len());
     for entry in entries {
         report.push(EntryStatus {
@@ -815,10 +825,24 @@ pub enum Applied {
 /// unsupported URL scheme is a [`UsageError`] (→ exit `1`), since the manifest
 /// asked for something this build does not do.
 ///
-/// `host.links` is [`links_host`]'s answer: `false` leaves the declared link —
-/// the host's, not the repository's — unjudged and unwritten. Where it is
-/// written is [`link_dir`]'s answer over the same `host` [`status`] judges.
+/// `links_host` is [`links_host`]'s answer: `false` leaves the declared link —
+/// the host's, not the repository's — unjudged and unwritten.
 pub fn apply(
+    entry: &Provision,
+    cache_root: &Path,
+    dry_run: bool,
+    links_host: bool,
+) -> Result<Applied> {
+    apply_on(entry, cache_root, dry_run, Host::isolated(links_host))
+}
+
+/// [`apply`], with each declared link written where [`link_dir`] resolves it
+/// on `host` — the same place [`status_on`] judges it (CLOUD-2617).
+///
+/// # Errors
+///
+/// As [`apply`].
+pub fn apply_on(
     entry: &Provision,
     cache_root: &Path,
     dry_run: bool,
@@ -3063,16 +3087,16 @@ mod tests {
         entry.url = Some(format!("file://{}", artifact.display()));
         let cache = dir.join("cache");
         let freshness = |entry: &Provision| {
-            status(std::slice::from_ref(entry), &cache, Host::isolated(true)).unwrap()
+            status_on(std::slice::from_ref(entry), &cache, Host::isolated(true)).unwrap()
         };
 
         assert_eq!(freshness(&entry).entries[0].freshness, Freshness::Missing);
         assert_eq!(
-            apply(&entry, &cache, true, Host::isolated(false)).unwrap(),
+            apply_on(&entry, &cache, true, Host::isolated(false)).unwrap(),
             Applied::Previewed
         );
         assert_eq!(
-            apply(&entry, &cache, false, Host::isolated(false)).unwrap(),
+            apply_on(&entry, &cache, false, Host::isolated(false)).unwrap(),
             Applied::Installed
         );
         let binary = entry_dir(&cache, &entry).join(BIN_DIR).join("tool");
@@ -3089,7 +3113,7 @@ mod tests {
         }
         assert_eq!(freshness(&entry).entries[0].freshness, Freshness::Fresh);
         assert_eq!(
-            apply(&entry, &cache, false, Host::isolated(false)).unwrap(),
+            apply_on(&entry, &cache, false, Host::isolated(false)).unwrap(),
             Applied::AlreadyFresh
         );
 
@@ -3097,7 +3121,7 @@ mod tests {
         fs::remove_file(&binary).unwrap();
         fs::remove_file(&artifact).unwrap();
         assert_eq!(
-            apply(&entry, &cache, false, Host::isolated(false)).unwrap(),
+            apply_on(&entry, &cache, false, Host::isolated(false)).unwrap(),
             Applied::Installed
         );
         assert_eq!(fs::read(&binary).unwrap(), body);
@@ -3110,7 +3134,7 @@ mod tests {
         wrong.sha256 = Some(digest(b"other bytes"));
         fs::write(&artifact, &body).unwrap();
         let cache = dir.join("other-cache");
-        let err = apply(&wrong, &cache, false, Host::isolated(false)).unwrap_err();
+        let err = apply_on(&wrong, &cache, false, Host::isolated(false)).unwrap_err();
         assert!(err.downcast_ref::<crate::Denial>().is_some(), "{err}");
         assert!(
             !entry_dir(&cache, &wrong)
@@ -3139,14 +3163,14 @@ mod tests {
         entry.env = vec![row];
         let cache = dir.join("cache");
         let freshness = |entry: &Provision| {
-            status(std::slice::from_ref(entry), &cache, Host::isolated(true))
+            status_on(std::slice::from_ref(entry), &cache, Host::isolated(true))
                 .unwrap()
                 .entries[0]
                 .freshness
         };
 
         assert_eq!(
-            apply(&entry, &cache, false, Host::isolated(true)).unwrap(),
+            apply_on(&entry, &cache, false, Host::isolated(true)).unwrap(),
             Applied::Installed
         );
         let linked = bin.join("tool");
