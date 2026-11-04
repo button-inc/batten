@@ -310,7 +310,6 @@ fn a_workflow_binding_auto_install_lists_every_use() {
     let dir = tools_repo(
         "tools-bound-dispatch",
         MANIFEST,
-        NO_SPAWNS,
         &[
             (
                 ".github/workflows/ci.yml",
