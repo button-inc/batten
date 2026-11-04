@@ -1098,11 +1098,12 @@ pub enum WeakeningKind {
     /// (CLOUD-2370). The REMOVED direction only: an added task is one more crash
     /// watched. Appended, for the `Ord` reason its neighbours give.
     TaskRelaunchRemoved,
-    /// `[task].min_lifetime_secs` rose, or the table is gone, so a crash must
-    /// have lived longer before it forces a relaunch (CLOUD-2370). A floor a
-    /// crash must clear to refuse, so larger forgives more: the
-    /// [`ceiling_raised`] direction. Appended, for the `Ord` reason its
-    /// neighbours give.
+    /// `[task].min_lifetime_secs` rose while both refs relaunch a task, so a
+    /// crash must have lived longer before it forces a relaunch (CLOUD-2370). A
+    /// floor a crash must clear to refuse, so larger forgives more: the
+    /// [`ceiling_raised`] direction. A table gone or a relaunch list emptied is
+    /// [`WeakeningKind::TaskRelaunchRemoved`] instead, reported once. Appended,
+    /// for the `Ord` reason its neighbours give.
     TaskLifetimeFloorRaised,
 }
 
