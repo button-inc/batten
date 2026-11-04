@@ -953,14 +953,20 @@ fn scope_open() -> bool {
     with_opens(|opens| !opens.spent).unwrap_or(false)
 }
 
-/// The gix release [`read_by_open`]'s list was audited against (CLOUD-2526).
-/// The list is what gix's isolated open reads; a gix that reads another file
-/// would have a remembered handle served stale, so a bump fails
+/// The gix crates, and their releases, [`read_by_open`]'s list was audited
+/// against (CLOUD-2526). The list is what an isolated open reads, and three
+/// crates decide that — `gix`'s open, `gix-discover`'s walk and `gix-config`'s
+/// load — each of which a lockfile update can move alone. One that reads another
+/// file would have a remembered handle served stale, so any of them moving fails
 /// `the_memos_read_list_was_audited_against_this_gix` until the list is
 /// re-audited against the new open and this moves with it.
-//MUTANT audited-gix-moved|s@^const AUDITED_GIX: \&str = "0.87.1";$@const AUDITED_GIX: \&str = "0.0.0";@|the_memos_read_list_was_audited_against_this_gix
+//MUTANT audited-gix-moved|s@^    ("gix", "0.87.1"),$@    ("gix", "0.0.0"),@|the_memos_read_list_was_audited_against_this_gix
 #[cfg(test)]
-const AUDITED_GIX: &str = "0.87.1";
+const AUDITED_GIX: &[(&str, &str)] = &[
+    ("gix", "0.87.1"),
+    ("gix-config", "0.60.0"),
+    ("gix-discover", "0.55.0"),
+];
 
 /// The bytes of every file an isolated open of `git_dir` reads — no includes,
 /// no system, global or environment configuration
@@ -2171,8 +2177,9 @@ fn unreachable_from_remotes(
 /// shares its index and packed-refs snapshots with every later read.
 ///
 /// It also SPENDS the hook call's memo (CLOUD-2526): every remembered open is
-/// forgotten and none is made for the rest of the call, so no read after this
-/// write can be served a snapshot from before it. Spent AFTER the open, so the
+/// forgotten and none is made for the rest of the call, so no OPEN after this
+/// write is served a snapshot from before it. A handle a caller already holds
+/// keeps the snapshot it was opened with; re-open after writing. Spent AFTER the open, so the
 /// open itself is the fresh one this function promises even with a scope live.
 ///
 /// # Errors
@@ -6590,19 +6597,22 @@ mod tests {
         let lock = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock");
         let lock: toml::Value =
             toml::from_str(&fs::read_to_string(lock).expect("Cargo.lock")).expect("toml");
-        let versions: Vec<&str> = lock
+        let packages = lock
             .get("package")
             .and_then(toml::Value::as_array)
-            .expect("[[package]]")
-            .iter()
-            .filter(|package| package.get("name").and_then(toml::Value::as_str) == Some("gix"))
-            .filter_map(|package| package.get("version").and_then(toml::Value::as_str))
-            .collect();
-        assert_eq!(
-            versions,
-            vec![AUDITED_GIX],
-            "gix moved: re-audit read_by_open's list against its isolated open, then move AUDITED_GIX"
-        );
+            .expect("[[package]]");
+        for (name, audited) in AUDITED_GIX {
+            let versions: Vec<&str> = packages
+                .iter()
+                .filter(|package| package.get("name").and_then(toml::Value::as_str) == Some(*name))
+                .filter_map(|package| package.get("version").and_then(toml::Value::as_str))
+                .collect();
+            assert_eq!(
+                versions,
+                vec![*audited],
+                "{name} moved: re-audit read_by_open's list against its isolated open, then move AUDITED_GIX"
+            );
+        }
     }
 
     /// The fence still holds where it applies: a directory below a ceiling, with no
