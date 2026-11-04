@@ -1833,10 +1833,18 @@ fn source_args(
 /// THE TIMEOUT IS NOT HERE, because cargo-nextest 0.9.104 has no flag for it
 /// (`cargo nextest run --help`): a profile's `terminate-after` still bounds a
 /// case inside the sweep's own bound (CLOUD-2590).
-const NEXTEST_VERDICT_FLAGS: [&str; 3] = [
+///
+/// `--fail-fast`: A MUTANT IS DECIDED BY ITS FIRST FAILING CASE.
+/// `.config/nextest.toml` sets `fail-fast = false` so a suite run reports every
+/// failure, which a mutant run has no use for: measured on CLOUD-2595,
+/// `declared -> None` failed case after case for 53s until the bound cut it off
+/// as TIMEOUT, a caught mutant graded as a finding. A clean run is unchanged, so
+/// the declared arm still counts every case it names.
+const NEXTEST_VERDICT_FLAGS: [&str; 4] = [
     "--retries=0",
     "--ignore-default-filter",
     "--status-level=pass",
+    "--fail-fast",
 ];
 
 /// One mutant's test bound in a sharded run, which skips the baseline that
@@ -5571,6 +5579,15 @@ mod tests {
                 .filter(|arg| arg.starts_with("--cargo-arg="))
                 .count(),
             3
+        );
+        // The test tool stops at a mutant's first failure (CLOUD-2595).
+        let tool = args
+            .iter()
+            .position(|arg| arg == "--")
+            .map(|at| &args[at + 1..]);
+        assert!(
+            tool.is_some_and(|tool| tool.iter().any(|arg| arg == "--fail-fast")),
+            "{args:?}"
         );
         assert!(
             suite_env(&root)
