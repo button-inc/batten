@@ -5228,6 +5228,9 @@ struct ClaimAsk<'a> {
     issue: Option<&'a str>,
     /// Emit the refusals on the structured channel.
     json: bool,
+    /// Where the authority the receipt's base is read from lives
+    /// (`--config-in` / `--config-from`, CLOUD-2532).
+    overrides: &'a Overrides,
 }
 
 /// The repository root, or the working directory where there is none.
@@ -7060,8 +7063,18 @@ fn refuse_claim_bot(err: &mut dyn Write, text: &str) -> Result<ExitCode> {
 ///
 /// [`UsageError`] carrying [`worktree::NO_TRUNK`], or naming the unresolved
 /// ref; a broken `batten.toml` propagates.
-fn claim_base(repo: &Path, verb: &str) -> Result<String> {
-    let Some(trunk) = worktree::declared_trunk(repo)? else {
+///
+/// **The trunk is CONFIG, read from the worktree's authority; the ref is STATE,
+/// resolved in `repo`** (CLOUD-2532). `repo` is the shared root, so from a
+/// linked worktree it is the main checkout, and reading `must_land_on` there
+/// judged the claim by another branch's `batten.toml` — refusing it outright
+/// when that file would not load, and ignoring `--config-in` because the read
+/// took no overrides.
+//MUTANT-SUITE crates/batten/tests/it/claim_worktree.rs
+//MUTANT claim-base-on-repo-root|s@^    let authority = config::authority_root(Path::new("."))?;$@    let authority = repo.to_path_buf();@|claim_check_in_a_worktree_reads_the_worktrees_trunk
+fn claim_base(repo: &Path, verb: &str, overrides: &Overrides) -> Result<String> {
+    let authority = config::authority_root(Path::new("."))?;
+    let Some(trunk) = worktree::committed_trunk(&authority, overrides)? else {
         return Err(UsageError::raise(format!(
             "{verb}: {} — no receipt minted",
             worktree::NO_TRUNK
@@ -7412,7 +7425,7 @@ fn run_claim_bot(
         pr: number,
     };
     let receipts = git::git_dir(repo)?.join("batten-receipts");
-    let base = claim_base(repo, "claim bot")?;
+    let base = claim_base(repo, "claim bot", overrides)?;
     bot::mint(
         &receipts,
         &branch,
@@ -7970,6 +7983,7 @@ fn run_claim(
                     adopt_from: adopt_from.as_deref(),
                     issue: issue.as_deref(),
                     json,
+                    overrides,
                 },
                 mode,
                 out,
@@ -8307,6 +8321,7 @@ fn run_claim_check(
         adopt_from,
         issue,
         json,
+        overrides,
     } = *ask;
     let receipts = git::git_dir(repo).ok().map(|dir| dir.join(RECEIPT_DIR));
     if adopt {
@@ -8380,7 +8395,7 @@ fn run_claim_check(
     // stands and only the side effect is skipped: a caller inspecting the board
     // from anywhere still deserves the answer.
     if let (Some(receipts), Ok(Some(branch))) = (receipts.as_deref(), git::current_branch(repo)) {
-        let base = claim_base(repo, "claim check")?;
+        let base = claim_base(repo, "claim check", overrides)?;
         claim::mint(
             receipts,
             &branch,
@@ -27009,7 +27024,9 @@ fn anchor() -> PathBuf {
     if here.join(config::CONFIG_FILE).is_file() {
         return here;
     }
-    git::repo_root(&here).unwrap_or(here)
+    // The worktree's own authority before the repository's (CLOUD-2532): from a
+    // linked worktree's subdirectory, `repo_root` alone is the MAIN checkout.
+    config::authority_root(&here).unwrap_or(here)
 }
 
 /// Filter `findings` against this checkout's baseline, and fold what drifted

@@ -209,6 +209,95 @@ fn outside_a_repository_the_call_is_allowed_rather_than_refused() {
     );
 }
 
+/// A policy that declares nothing to refuse: the worktree's own authority in
+/// [`worktree_with_its_own_authority`], so a call it judges is allowed.
+const DECLARES_NOTHING: &str = "version = 1\n";
+
+/// A repository whose `main` carries [`ONE_DENY`], plus a linked worktree on a
+/// branch whose OWN `batten.toml` declares nothing (CLOUD-2532).
+///
+/// The opposite of [`repo_with_bare_worktree`]: there the worktree has no
+/// authority and must fall through to the repository's; here it has one, and
+/// must be judged by it from anywhere inside its tree.
+fn worktree_with_its_own_authority(name: &str) -> (PathBuf, PathBuf) {
+    let main = Fixture::new(name).file("README.md", "base\n").git().build();
+    git_in(&main, &["add", "-A"]);
+    git_in(&main, &["commit", "-q", "-m", "base"]);
+    git_in(&main, &["branch", "own-authority"]);
+    common::write(&main, "batten.toml", ONE_DENY);
+    git_in(&main, &["add", "-A"]);
+    git_in(&main, &["commit", "-q", "-m", "authority"]);
+
+    let linked = common::scratch(&format!("{name}-linked"));
+    let _ = std::fs::remove_dir_all(&linked);
+    git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            linked.to_str().unwrap_or_default(),
+            "own-authority",
+        ],
+    );
+    common::write(&linked, "batten.toml", DECLARES_NOTHING);
+    git_in(&linked, &["add", "-A"]);
+    git_in(
+        &linked,
+        &["commit", "-q", "-m", "the branch's own authority"],
+    );
+    (main, linked)
+}
+
+#[test]
+fn two_worktrees_with_different_configs_get_different_verdicts() {
+    // THE REGRESSION (CLOUD-2532, reproduced 2026-11-04). A desktop session
+    // runs in a linked worktree, and its shell stands wherever the agent last
+    // `cd`'d. From a subdirectory `anchor` found no `./batten.toml` and fell
+    // straight to `repo_root` — the MAIN checkout — so the branch's calls were
+    // judged by another branch's config, and a fix written into the worktree's
+    // own `batten.toml` could not unblock it.
+    let (main, linked) = worktree_with_its_own_authority("hook-root-own");
+    let nested = linked.join("src").join("deep");
+    std::fs::create_dir_all(&nested).expect("create a nested directory");
+
+    assert!(
+        denied(&hook_from(&main)),
+        "the main checkout is judged by its own deny"
+    );
+    assert!(
+        !denied(&hook_from(&linked)),
+        "the worktree's root is judged by the worktree's authority"
+    );
+    let output = hook_from(&nested);
+    assert!(
+        !denied(&output),
+        "a call from a subdirectory of a linked worktree carrying its own \
+         `batten.toml` must be judged by THAT file, not the main checkout's: \
+         {:?} {:?}",
+        output.status.code(),
+        common::stderr(&output)
+    );
+}
+
+#[test]
+fn a_session_that_stood_in_the_main_checkout_is_judged_by_the_worktree_it_moves_to() {
+    // The session-record shape of the same incident. The record answers only
+    // when the cwd resolves no authority, so once the worktree's own file is
+    // found from any depth, an earlier stand in the main checkout cannot
+    // override it. Red before the fix: `anchor` resolved `src` to the main
+    // checkout, which carries a file, so the record was never even consulted.
+    let (main, linked) = worktree_with_its_own_authority("hook-root-own-session");
+    let nested = linked.join("src");
+    std::fs::create_dir_all(&nested).expect("create a nested directory");
+    let session = "cloud-2532-moved";
+    assert!(denied(&hook_in_session(&main, session)));
+    assert!(
+        !denied(&hook_in_session(&nested, session)),
+        "the worktree's authority answers for a call made inside it"
+    );
+}
+
 /// The same refused call, carrying the session it belongs to (CLOUD-2204).
 fn hook_in_session(dir: &Path, session: &str) -> Output {
     let payload = serde_json::json!({

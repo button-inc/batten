@@ -5364,6 +5364,37 @@ pub struct AuthoritySite {
     pub required: bool,
 }
 
+/// The directory whose `batten.toml` is the authority for a call made at
+/// `start` (CLOUD-2532).
+///
+/// **The working tree's, then the repository's.** A linked worktree is the
+/// isolation unit for an agent's branch, and its own `batten.toml` is that
+/// branch's authority — so it answers first, from any depth inside the worktree.
+/// [`crate::git::repo_root`] resolves a linked worktree to the MAIN checkout
+/// (the shared common dir), which is right for per-repository state (CLOUD-164)
+/// and was wrong for config: from a worktree subdirectory a call was judged,
+/// claimed and probed by whatever branch the main checkout had out, and a fix
+/// written into the worktree's own file could not unblock it.
+///
+/// A worktree that carries no `batten.toml` still falls through to the
+/// repository's, which is what `hook_worktree_root.rs`'s bare-worktree case
+/// requires: a branch that predates the authority is still governed by it.
+///
+/// # Errors
+///
+/// As [`crate::git::repo_root`]: not a directory, not inside a repository, or a
+/// layout with no working tree to root.
+//MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
+//MUTANT anchor-skips-worktree|s@^        \&\& worktree.join(CONFIG_FILE).is_file()$@        \&\& false@|two_worktrees_with_different_configs_get_different_verdicts
+pub fn authority_root(start: &Path) -> Result<PathBuf> {
+    if let Ok(worktree) = crate::git::worktree_root(start)
+        && worktree.join(CONFIG_FILE).is_file()
+    {
+        return Ok(worktree);
+    }
+    crate::git::repo_root(start)
+}
+
 /// Locate the one committed authority for a run anchored at `anchor`.
 ///
 /// `config_in` is `--config-in <dir>`, when passed. It names a **directory**,
