@@ -584,6 +584,11 @@ pub const SYSTEM_BIN_DIRS: &[&str] = &["/usr/local/bin", "/opt/homebrew/bin"];
 /// on `PATH`; otherwise the first system directory that is both on `PATH` and
 /// writable — a root Setup shell carries `/usr/local/bin` and not `~/.local/bin`;
 /// otherwise the per-user directory, reported as off `PATH`.
+///
+/// **Two callers, one rule** (CLOUD-2617): `provision::link_dir` resolves a
+/// declared `[[provision]].link` through this too, so the runner a setup
+/// provisions lands beside the batten that provisioned it rather than in a
+/// directory the same shell cannot resolve.
 //MUTANT-SUITE crates/batten/src/install.rs
 //MUTANT self-install-ignores-path|s@^        if on_path.iter().any(\x7centry\x7c entry == dir) && writable(dir) {$@        if false {@|a_writable_system_directory_on_path_is_chosen
 #[must_use]

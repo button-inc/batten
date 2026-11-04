@@ -379,6 +379,13 @@ tasks = "~/.claude/tasks/{session}"
 # updated itself under a container would make two sessions on one commit run
 # different toolchains, which is the disagreement `[[provision]]`'s pinning exists
 # to remove. `lock-currency.yml`'s clock is where a bump belongs.
+#
+# `link` IS A PREFERENCE, NOT A PROMISE (CLOUD-2617). Where `~/.local/bin` is off
+# the caller's `PATH`, the link follows `engine install`'s own fallback to the
+# first system directory on `PATH` that is writable. Measured on a cold Kilo.ai
+# container: its root Setup shell carries `/usr/local/bin` and not `~/.local/bin`,
+# so batten landed in one and the runner in the other, and the three rows below
+# that invoke `mise` were could-not-look under a green `toolchain-runner-present`.
 [[provision]]
 name = "mise"
 version = "2026.9.1"

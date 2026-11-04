@@ -1724,9 +1724,7 @@ fn place_download(
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
     let var = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
-    let on_path: Vec<std::path::PathBuf> = std::env::var_os("PATH")
-        .map(|path| std::env::split_paths(&path).collect())
-        .unwrap_or_default();
+    let on_path = path_dirs();
     let user = var("XDG_BIN_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| var("HOME").map(|home| Path::new(&home).join(".local").join("bin")))
@@ -2788,7 +2786,15 @@ fn run_provision_status(
 ) -> Result<ExitCode> {
     let config = resolve::resolve(Path::new("."), overrides)?;
     let repo = git::repo_root(Path::new("."))?;
-    let report = provision::status(&config.provisions, &provision::cache_root(&repo)?)?;
+    // THE SAME HOST `apply` WRITES TO (CLOUD-2617), so a link placed by the
+    // `PATH` fallback is judged where it was placed rather than where declared.
+    let on_path = path_dirs();
+    let host = provision::Host {
+        links: true,
+        on_path: &on_path,
+        writable: writable_dir,
+    };
+    let report = provision::status(&config.provisions, &provision::cache_root(&repo)?, host)?;
 
     if json {
         writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
@@ -2810,6 +2816,29 @@ struct ProvisionSite {
     repo: PathBuf,
     cache: PathBuf,
     links_host: bool,
+    on_path: Vec<PathBuf>,
+}
+
+impl ProvisionSite {
+    /// The host a declared link resolves against: [`links_host`] and the
+    /// caller's `PATH`, which is where `engine install` placed batten too
+    /// (CLOUD-2617).
+    ///
+    /// [`links_host`]: provision::links_host
+    fn host(&self) -> provision::Host<'_> {
+        provision::Host {
+            links: self.links_host,
+            on_path: &self.on_path,
+            writable: writable_dir,
+        }
+    }
+}
+
+/// The directories on this process's `PATH`, in order; empty when it is unset.
+fn path_dirs() -> Vec<PathBuf> {
+    std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default()
 }
 
 /// The [`ProvisionSite`] for the checkout in the working directory, shared by
@@ -2831,6 +2860,7 @@ fn provision_site(overrides: &Overrides) -> Result<ProvisionSite> {
         repo,
         cache,
         links_host,
+        on_path: path_dirs(),
     })
 }
 
@@ -2845,18 +2875,13 @@ fn run_provision_apply(
     overrides: &Overrides,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let ProvisionSite {
-        config,
-        cache,
-        links_host,
-        ..
-    } = provision_site(overrides)?;
+    let site = provision_site(overrides)?;
 
-    for entry in &config.provisions {
+    for entry in &site.config.provisions {
         // A checksum mismatch propagates as a `Denial` (exit 2) from here, so
         // the loop stops at the first bad artifact rather than going on to
         // install the rest under a verdict that already failed.
-        let applied = provision::apply(entry, &cache, dry_run, links_host)?;
+        let applied = provision::apply(entry, &site.cache, dry_run, site.host())?;
         let verb = match applied {
             provision::Applied::Installed => "installed",
             provision::Applied::AlreadyFresh => continue,
@@ -4090,18 +4115,14 @@ fn provisioned_launch(command: &[String], overrides: &Overrides) -> Option<Vec<S
 //MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
 //MUTANT spawn-unprovisioned|s@^        \.find(\x7centry\x7c entry.binary == binary)?;$@        .find(\x7c_\x7c false)?;@|a_launch_program_missing_from_path_is_provisioned_then_becomes_the_launch_line
 fn provisioned_binary(binary: &str, overrides: &Overrides) -> Option<PathBuf> {
-    let ProvisionSite {
-        config,
-        repo,
-        cache,
-        links_host,
-    } = provision_site(overrides).ok()?;
-    let entry = config
+    let site = provision_site(overrides).ok()?;
+    let entry = site
+        .config
         .provisions
         .iter()
         .find(|entry| entry.binary == binary)?;
-    provision::apply(entry, &cache, false, links_host).ok()?;
-    provision::binary_path(&repo, entry).ok()
+    provision::apply(entry, &site.cache, false, site.host()).ok()?;
+    provision::binary_path(&site.repo, entry).ok()
 }
 
 /// `batten mcp call` (CLOUD-1260).
