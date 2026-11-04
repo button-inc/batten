@@ -8471,7 +8471,7 @@ fn batten_effect(name: &str, arguments: &[&str]) -> Option<&'static str> {
     let mut effect = crate::effect::Effect::Unclassified;
     let mut on_path = true;
     for argument in arguments {
-        if on_path && ["-h", "--help", "-V", "--version"].contains(argument) {
+        if on_path && crate::surface::INFORMATIONAL_FLAGS.contains(argument) {
             return Some(crate::effect::Effect::Read.as_str());
         }
         if argument.starts_with('-') {

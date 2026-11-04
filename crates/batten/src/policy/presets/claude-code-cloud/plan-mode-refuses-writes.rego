@@ -59,14 +59,13 @@ refused_subject(call) := array.concat(not_reads(object.get(call, "programs", [])
 not_reads(programs) := [programs[i].name | programs[i]; not reads(programs[i])]
 
 # The host's own plan-mode surface: leaving it, asking, and its task list, which
-# is session state rather than the tree.
+# is session state rather than the tree. `Skill` loads instructions into the
+# turn and writes nothing; every call the skill then makes meets this rule on
+# its own (CLOUD-2206). Exempt here, never pre-approved: outside plan mode the
+# host still decides it.
 plan_tools(tool) if {
 	tool in {"ExitPlanMode", "EnterPlanMode", "AskUserQuestion", "TodoWrite", "TaskCreate", "TaskUpdate", "Skill"}
 }
-
-# `Skill` loads instructions into the turn and writes nothing; every call the
-# skill then makes meets this rule on its own (CLOUD-2206). Exempt here, never
-# pre-approved: outside plan mode the host still decides it.
 
 # The one file plan mode exists to write. Its path is the host's, never a
 # repository's.

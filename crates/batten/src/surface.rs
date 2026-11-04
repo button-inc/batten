@@ -3876,6 +3876,10 @@ pub const BINARY: &str = "batten";
 /// exists to survive.
 pub const MEDIATION_ID: &str = "hook";
 
+/// The flags clap answers by printing and exiting, on every command
+/// [`command`] builds (CLOUD-2206). Its own `help` subcommand does the same.
+pub const INFORMATIONAL_FLAGS: &[&str] = &["-h", "--help", "-V", "--version"];
+
 /// The mediation row, resolved from [`SURFACE`] by [`MEDIATION_ID`].
 ///
 /// **One authority for how the mediator is invoked** (CLOUD-1191). Before this,
@@ -8648,6 +8652,40 @@ mod narrowed_tests {
                 "{other:?} builds the whole tree"
             );
         }
+    }
+
+    /// The hook reads [`super::INFORMATIONAL_FLAGS`] as reads, so it must be exactly
+    /// the flags clap answers by printing: a flag added there that clap would
+    /// run is a write granted in plan mode.
+    #[test]
+    fn the_informational_flags_are_claps_help_and_version() {
+        let mut root = command();
+        root.build();
+        let mut answered: Vec<String> = root
+            .get_arguments()
+            .filter(|arg| {
+                matches!(
+                    arg.get_action(),
+                    clap::ArgAction::Help
+                        | clap::ArgAction::HelpShort
+                        | clap::ArgAction::HelpLong
+                        | clap::ArgAction::Version
+                )
+            })
+            .flat_map(|arg| {
+                arg.get_short()
+                    .map(|short| format!("-{short}"))
+                    .into_iter()
+                    .chain(arg.get_long().map(|long| format!("--{long}")))
+            })
+            .collect();
+        answered.sort();
+        let mut declared: Vec<String> = super::INFORMATIONAL_FLAGS
+            .iter()
+            .map(|f| (*f).to_owned())
+            .collect();
+        declared.sort();
+        assert_eq!(answered, declared);
     }
 }
 
