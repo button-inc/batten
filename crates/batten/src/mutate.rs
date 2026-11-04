@@ -2634,6 +2634,7 @@ fn sweep_group(_leader: u32) {}
 /// nobody. The zombie also keeps the group answering, so the sweep runs its full
 /// count rather than stopping at the first `ESRCH`: a bounded cost of microseconds
 /// per suite, against a build per mutant.
+//MUTANT sweep-sends-nothing|s@^    for _ in 0\.\.SWEEPS {$@    for _ in 0..0 {@|a_sweep_ends_what_is_left_in_a_group
 #[cfg(unix)]
 fn sweep_group(leader: u32) {
     let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default())
