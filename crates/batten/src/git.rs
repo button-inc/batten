@@ -870,10 +870,13 @@ struct OpenKey {
 /// assumed, not checked: a write in the call followed by a read would be served
 /// the snapshot from before it. So [`open_for_write`] clears the memo and marks
 /// it spent ([`Opens::spend`]), and a spent scope remembers nothing more — every
-/// later open in the call is fresh. That holds for every write that opens as one;
-/// a write through a plain [`open`], a child `git` or the filesystem would still
-/// go unseen, which is why every write in this crate opens through
-/// [`open_for_write`].
+/// later open in the call is fresh. That holds for every write that opens through
+/// [`open_for_write`] or calls [`spend_scope`] (`gitwrite::commit_paths`).
+/// `init_on_main` and `seed` create the repository they write, so nothing of it
+/// can have been remembered. A child `git` or a direct filesystem write is
+/// unseen, and no gate holds the rule: a gix write is a call on a handle, not a
+/// shape a source scan can tell from a read. A read that only needs an unshared
+/// handle takes [`open_fresh`], which spends nothing.
 #[derive(Default)]
 struct Opens {
     /// The remembered opens.
@@ -2181,6 +2184,40 @@ pub fn open_for_write(dir: &Path) -> Result<gix::Repository> {
     let repo = open_isolated(dir, ceiling_dirs(), false)?;
     let _ = with_opens(Opens::spend);
     Ok(repo)
+}
+
+/// A fresh, unshared handle for a READ that must not be answered from the hook
+/// call's memo — opened as [`open_for_write`] opens, but spending nothing, since
+/// nothing is written (CLOUD-2526). `gitwrite::carries` and `merges_in` take it.
+///
+/// # Errors
+///
+/// A directory that is not a repository, or one discovery cannot reach.
+pub fn open_fresh(dir: &Path) -> Result<gix::Repository> {
+    open_isolated(dir, ceiling_dirs(), false)
+}
+
+/// Spend the hook call's memo for a write that opened its own handle rather than
+/// through [`open_for_write`] — `gitwrite::commit_paths` (CLOUD-2526).
+pub fn spend_scope() {
+    let _ = with_opens(Opens::spend);
+}
+
+/// How many opens this thread's scope remembers, `None` outside one — for the
+/// write modules' cases, which cannot reach the memo themselves.
+#[cfg(test)]
+pub(crate) fn remembered_opens() -> Option<usize> {
+    with_opens(|opens| opens.opened.len())
+}
+
+/// Read `dir` the way every read in this module does: through the memo.
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "a test fixture that is not a repository is a broken test"
+)]
+pub(crate) fn read_through_the_memo(dir: &Path) {
+    open(dir).expect("a repository");
 }
 
 /// The one UTC stamp both committer signatures take (CLOUD-1486).
@@ -6469,8 +6506,10 @@ mod tests {
     }
 
     /// Within a scope: a read is remembered, `write` runs, and a read after it
-    /// finds the memo empty — forgotten, and not refilled (CLOUD-2526).
-    fn assert_write_spends(name: &str, write: impl FnOnce(&Path)) {
+    /// finds the memo empty — forgotten (`write-keeps-the-memo`), and not
+    /// refilled by that read (`spent-scope-still-remembers`) (CLOUD-2526).
+    /// Answers the post-write read's handle, for a case to check it sees the write.
+    fn assert_write_spends(name: &str, write: impl FnOnce(&Path)) -> gix::Repository {
         let dir = crate::scratch::scratch(name);
         crate::gitwrite::init_on_main(&dir).expect("init");
         let _scope = open_scope();
@@ -6481,28 +6520,40 @@ mod tests {
             "the premise: the read was remembered"
         );
         write(&dir);
-        open_upwards(&dir, Vec::new()).expect("read after the write");
+        let after = open_upwards(&dir, Vec::new()).expect("read after the write");
         assert_eq!(
             with_opens(|opens| opens.opened.len()),
             Some(0),
             "a spent scope forgets and remembers nothing more"
         );
+        after
     }
 
-    /// A write spends the scope.
+    /// A write open spends the scope: the read remembered before it is
+    /// forgotten, and the read after it is not remembered. Kills
+    /// `write-keeps-the-memo` and `spent-scope-still-remembers`.
     #[test]
     fn a_write_spends_the_scopes_memo() {
-        assert_write_spends("git-memo-spent", |dir| {
+        let _ = assert_write_spends("git-memo-spent", |dir| {
             open_for_write(dir).expect("write open");
         });
     }
 
-    /// A repo-local config write is a write: it spends the scope too.
+    /// A repo-local config write is a write: it spends the scope too, and the
+    /// read after it sees the value written. Kills `config-write-from-the-memo`.
     #[test]
     fn a_config_write_spends_the_scopes_memo() {
-        assert_write_spends("git-memo-config-spent", |dir| {
+        let after = assert_write_spends("git-memo-config-spent", |dir| {
             set_config_local(dir, "user.name", "spent").expect("config write");
         });
+        assert_eq!(
+            after
+                .config_snapshot()
+                .string("user.name")
+                .map(|name| name.to_string()),
+            Some("spent".to_owned()),
+            "the read after the write sees it"
+        );
     }
 
     /// The working directory is part of what an open depends on, so a read of

@@ -236,9 +236,12 @@ pub fn delete_ref(dir: &Path, reference: &str) -> Result<()> {
 /// `false` for anything that will not resolve, which is the fail-closed
 /// direction every caller of this wants: a bet whose base cannot be read is not
 /// a bet whose base is present.
+///
+/// A READ, so it opens fresh without spending the hook call's memo (CLOUD-2526).
 #[must_use]
+//MUTANT carries-spends|s@^    let Ok(repo) = crate::git::open_fresh(dir) else {$@    let Ok(repo) = crate::git::open_for_write(dir) else {@|an_ancestry_read_leaves_the_memo_standing
 pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
-    let Ok(repo) = crate::git::open_for_write(dir) else {
+    let Ok(repo) = crate::git::open_fresh(dir) else {
         return false;
     };
     let resolve = |rev: &str| repo.rev_parse_single(rev).ok().map(gix::Id::detach);
@@ -255,9 +258,12 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
 /// A LINEAR TRUNK REFUSES THEM, so descending from the base is not linearity:
 /// measured on #1132, two merges sat in a branch that `land linear` passed as
 /// "built on origin/main", and every fast-forward was declined by the ruleset.
+///
+/// A READ, so it opens fresh without spending the hook call's memo (CLOUD-2526).
 #[must_use]
+//MUTANT merges-in-spends|s@^    let repo = crate::git::open_fresh(dir).ok()?;$@    let repo = crate::git::open_for_write(dir).ok()?;@|an_ancestry_read_leaves_the_memo_standing
 pub fn merges_in(dir: &Path, base: &str, tip: &str) -> Option<Vec<String>> {
-    let repo = crate::git::open_for_write(dir).ok()?;
+    let repo = crate::git::open_fresh(dir).ok()?;
     let resolve = |rev: &str| repo.rev_parse_single(rev).ok().map(gix::Id::detach);
     let (base, tip) = (resolve(base)?, resolve(tip)?);
     let walk = repo.rev_walk([tip]).with_hidden([base]).all().ok()?;
@@ -1513,6 +1519,7 @@ pub fn init_on_main(dir: &Path) -> Result<()> {
 ///
 /// A directory that will not initialise or open, a file that will not read, an
 /// object the odb refuses, or an index that will not write.
+//MUTANT commit-keeps-the-memo|s@^    crate::git::spend_scope();$@@|a_commit_spends_the_scopes_memo
 pub fn commit_paths(dir: &Path, paths: &[String], message: &str) -> Result<()> {
     let repo = if dir.join(".git").exists() {
         gix::open(dir)
@@ -1522,6 +1529,10 @@ pub fn commit_paths(dir: &Path, paths: &[String], message: &str) -> Result<()> {
             anyhow::anyhow!("gitwrite: could not initialise {}: {err}", dir.display())
         })?
     };
+    // A WRITE through its own handle, so it spends the hook call's memo as
+    // `open_for_write` would (CLOUD-2526): no later read is served a pre-commit
+    // index or ref snapshot.
+    crate::git::spend_scope();
     let mut root = Node::default();
     for path in paths {
         let full = dir.join(path);
@@ -1812,6 +1823,49 @@ fn drop_set(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CLOUD-2526: an ancestry question opens fresh but writes nothing, so it
+    /// leaves the hook call's remembered opens standing.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "a fixture that cannot be written is a broken test"
+    )]
+    fn an_ancestry_read_leaves_the_memo_standing() {
+        let dir = crate::scratch::scratch("gitwrite-memo-read");
+        init_on_main(&dir).expect("init");
+        let _scope = crate::git::open_scope();
+        crate::git::read_through_the_memo(&dir);
+        assert_eq!(crate::git::remembered_opens(), Some(1), "the premise");
+        let _ = carries(&dir, "HEAD", "HEAD");
+        let _ = merges_in(&dir, "HEAD", "HEAD");
+        assert_eq!(
+            crate::git::remembered_opens(),
+            Some(1),
+            "a read spends nothing"
+        );
+    }
+
+    /// CLOUD-2526: a commit writes the index and refs through its own handle,
+    /// so it spends the memo as `open_for_write` does.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "a fixture that cannot be written is a broken test"
+    )]
+    fn a_commit_spends_the_scopes_memo() {
+        let dir = crate::scratch::scratch("gitwrite-memo-commit");
+        init_on_main(&dir).expect("init");
+        let _scope = crate::git::open_scope();
+        crate::git::read_through_the_memo(&dir);
+        assert_eq!(crate::git::remembered_opens(), Some(1), "the premise");
+        commit_paths(&dir, &[], "spend").expect("commit");
+        assert_eq!(
+            crate::git::remembered_opens(),
+            Some(0),
+            "a commit forgets what the call remembered"
+        );
+    }
 
     /// Every line of ours, then each line of theirs ours lacks, never a blank.
     #[test]
