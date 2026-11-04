@@ -1348,6 +1348,14 @@ pub fn red_runs(
     }
 }
 
+/// A branch's red-head key: [`crate::receipt::branch_slug`], the one spelling
+/// every branch-keyed receipt now takes (CLOUD-2353). Kept as a name so the
+/// public API stays patch-compatible.
+#[must_use]
+pub fn red_head_slug(branch: &str) -> String {
+    crate::receipt::branch_slug(branch)
+}
+
 /// Where a branch's red-head record lives under a receipt `store`: the ONE
 /// spelling the writer, the reader and the clear share, so they cannot drift.
 /// The branch is [`crate::receipt::branch_slug`], every receipt's own injective
