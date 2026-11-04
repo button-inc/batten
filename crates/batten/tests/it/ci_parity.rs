@@ -1249,6 +1249,10 @@ fn the_constructor_and_its_declaration_may_sit_on_one_line() {
     );
 }
 
+/// The landing-lease precondition step exactly as [`WORKFLOW`] spells it, so the
+/// cases that remove it or write it into a callee agree with the fixture.
+const LEASE_STEP: &str = "      - name: Landing lease precondition\n        run: |\n          \"$RUNNER_TEMP/batten-bin/batten\" lease guard \\\n            \"$LEASE_HEAD_SHA\" \"$LEASE_HEAD_REF\" \"$LEASE_RUN_ID\" || exit 0\n";
+
 #[test]
 fn a_job_that_starts_without_asking_the_lease_is_refused() {
     // The lease serialises landing, but enforcing it only inside the lander means
@@ -1259,10 +1263,7 @@ fn a_job_that_starts_without_asking_the_lease_is_refused() {
     common::write(
         &root,
         ".github/workflows/ci.yml",
-        &WORKFLOW.replace(
-            "      - name: Landing lease precondition\n        run: |\n          \"$RUNNER_TEMP/batten-bin/batten\" lease guard \\\n            \"$LEASE_HEAD_SHA\" \"$LEASE_HEAD_REF\" \"$LEASE_RUN_ID\" || exit 0\n",
-            "",
-        ),
+        &WORKFLOW.replace(LEASE_STEP, ""),
     );
     assert!(
         !findings(&root).is_empty(),
@@ -1274,11 +1275,7 @@ fn a_job_that_starts_without_asking_the_lease_is_refused() {
 /// release legs (CLOUD-2554). `lease` decides whether its job opens with the
 /// landing-lease precondition.
 fn called_workflow(lease: bool) -> String {
-    let first = if lease {
-        "      - name: Landing lease precondition\n        run: |\n          \"$RUNNER_TEMP/batten-bin/batten\" lease guard \\\n            \"$LEASE_HEAD_SHA\" \"$LEASE_HEAD_REF\" \"$LEASE_RUN_ID\" || exit 0\n"
-    } else {
-        ""
-    };
+    let first = if lease { LEASE_STEP } else { "" };
     format!(
         "name: dist\non:\n  workflow_call:\njobs:\n  dist:\n    name: dist (${{{{ matrix.target }}}})\n    runs-on: ubuntu-latest\n    steps:\n{first}      - run: build\n"
     )
