@@ -718,6 +718,15 @@ fn a_plan_mode_guide_subagent_is_allowed() {
     assert_granted_by(&guide, "call read now");
 }
 
+/// CLOUD-2206: loading a skill writes nothing, so plan mode admits it; it is
+/// exempted from the refusal, never pre-approved.
+#[test]
+fn a_plan_mode_skill_load_is_allowed() {
+    let skill = envelope("plan", "Skill", &serde_json::json!({ "skill": "groom" }));
+    assert_not_plan_refused(&skill);
+    assert_not_granted(&skill);
+}
+
 /// CLOUD-2367: `printenv` reads, bare and through the `env` wrapper the
 /// boundary looks through. Bare `env` names no program and stays refused.
 #[test]
