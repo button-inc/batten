@@ -119,7 +119,7 @@ workflows contains document if {
 }
 
 workflows contains document if {
-	path := ".github/workflows/dist.yml"
+	some path in called
 	document := input.tree.documents[path]
 	is_object(document.jobs)
 }
@@ -332,7 +332,10 @@ split_fixture(record) := {"tree": {
 			]}},
 			"steps": [{"run": `gh release upload "$TAG" "$SPDX" --clobber`}],
 		}}},
-		".github/workflows/release-artifacts.yml": {"jobs": {"schema": {"steps": [{"run": `gh release upload "$TAG" schema/batten.schema.json setup.sh --clobber`}]}}},
+		".github/workflows/release-artifacts.yml": {"jobs": {
+			"dist": {"uses": "./.github/workflows/dist.yml"},
+			"schema": {"steps": [{"run": `gh release upload "$TAG" schema/batten.schema.json setup.sh --clobber`}]},
+		}},
 		"mise.toml": {"env": {"BATTEN_CLI_REFERENCE": "ref.md"}},
 	},
 	"lines": {},

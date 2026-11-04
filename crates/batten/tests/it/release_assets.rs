@@ -580,6 +580,11 @@ fn a_called_workflow_that_cannot_be_read_is_partial_never_complete() {
     let calling = format!("{WORKFLOW}  legs:\n    uses: ./{LEGS_PATH}\n");
     let readable = "name: dist\non: workflow_call\njobs:\n  noop:\n    runs-on: x\n    steps:\n      \
                     - run: echo\n";
+    let forge = forge(
+        "called-workflow",
+        &assets,
+        Some(&manifest_over(&assets, None)),
+    );
     for (name, legs, partial) in [
         ("callee-absent", None, true),
         ("callee-unparsed", Some("jobs: [\n"), true),
@@ -591,7 +596,6 @@ fn a_called_workflow_that_cannot_be_read_is_partial_never_complete() {
             git_in(&dir, &["add", "-A"]);
             git_in(&dir, &["commit", "-qm", "the callee"]);
         }
-        let forge = forge(name, &assets, Some(&manifest_over(&assets, None)));
         let (code, text) = decide(&dir, &forge);
         let flagged = text
             .contains("batten deny release grade other at .github/workflows/release-artifacts.yml");
