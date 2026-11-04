@@ -46,7 +46,7 @@ fn install(home: &Path, path: &[PathBuf], env: &[(&str, &str)]) -> std::process:
 }
 
 /// The file `engine install` places: `batten.exe` on Windows.
-fn binary() -> String {
+pub(crate) fn binary() -> String {
     format!("batten{}", std::env::consts::EXE_SUFFIX)
 }
 
@@ -122,13 +122,13 @@ fn an_off_path_destination_declared_deliberate_is_admitted() {
 }
 
 /// The repository path the TLS fixture serves the release from.
-const REPO: &str = "example/pkg";
+pub(crate) const REPO: &str = "example/pkg";
 
 /// The release a ref's `batten.toml` pins in the fixture, never this binary's own.
-const WANTED: &str = "v9.9.9";
+pub(crate) const WANTED: &str = "v9.9.9";
 
 /// The bytes the fixture release ships as its binary.
-const SHIPPED: &[u8] = b"#!/bin/sh\necho the fixture release\n";
+pub(crate) const SHIPPED: &[u8] = b"#!/bin/sh\necho the fixture release\n";
 
 /// The date `main`'s changelog gives `main`'s own release.
 const MAIN_DATE: &str = "2020-02-01";
@@ -151,7 +151,7 @@ fn platform_digest(target: &str) -> String {
 /// The digest the fixture release `tag` served from `home` publishes for
 /// `target`'s archive, read off its `SHA256SUMS`: this build's own is the real
 /// archive's, which a case cannot spell ahead of the build.
-fn published(home: &Path, tag: &str, target: &str) -> String {
+pub(crate) fn published(home: &Path, tag: &str, target: &str) -> String {
     let sums = std::fs::read_to_string(
         home.join("www")
             .join(REPO)
@@ -174,7 +174,7 @@ fn ref_release_host(home: &Path) -> (common::TlsWww, Vec<(String, String)>) {
 /// [`ref_release_host`] with `main` pinning `main_pin` and the one published
 /// release `served`, so a case can stand a worktree's pin on either side of
 /// `main`'s.
-fn release_host(
+pub(crate) fn release_host(
     home: &Path,
     main_pin: &str,
     served: &str,
@@ -387,7 +387,7 @@ fn pin_worktree(home: &Path, tag: &str) {
 }
 
 /// `served`'s environment as a case passes it.
-fn served_env(served: &[(String, String)]) -> Vec<(&str, &str)> {
+pub(crate) fn served_env(served: &[(String, String)]) -> Vec<(&str, &str)> {
     served
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -746,7 +746,7 @@ fn an_update_brings_every_batten_declaration_to_the_release() {
         return;
     }
     let home = common::scratch_repo("engine-update-every-copy");
-    pin_every_copy(&home, "8.8.8", "");
+    pin_every_copy(&home, "0.0.1", "");
     let named = home.join("bin");
     let named_str = named.display().to_string();
     let (_host, served) = release_host(&home, WANTED, WANTED);
@@ -767,8 +767,10 @@ fn an_update_brings_every_batten_declaration_to_the_release() {
         config.contains(&format!("engine = {{ release = \"{WANTED}\" }}")),
         "{config}"
     );
+    // THE FLOOR IS NO LONGER MOVED (CLOUD-2595): `min_batten_version` is retired
+    // and the row is the pin, so an update leaves the key as it found it.
     assert!(
-        config.contains("min_batten_version = \"9.9.9\""),
+        config.contains("min_batten_version = \"0.0.1\""),
         "{config}"
     );
     assert!(config.contains("version = \"9.9.9\"\nbinary"), "{config}");
@@ -908,8 +910,9 @@ fn an_update_leaves_a_digest_in_another_case() {
     );
 }
 
-/// The floor is RAISED, never lowered: a `min_batten_version` already past the
-/// release is the consumer's own word and stays.
+/// The floor is never moved (CLOUD-2595 retired the raise with the key): a
+/// `min_batten_version` already past the release is the consumer's own word and
+/// stays.
 #[test]
 fn an_update_never_lowers_min_batten_version() {
     if !cfg!(target_os = "linux") {

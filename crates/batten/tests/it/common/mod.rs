@@ -545,6 +545,13 @@ pub(crate) fn batten() -> Batten {
     ] {
         command.env_remove(name);
     }
+    // NOR THE REAL RELEASE HOST (CLOUD-2595). An engine that finds a config
+    // pinning nothing fetches its own release's `SHA256SUMS` to write the pin,
+    // so with network a case's starter or session start was rewritten by
+    // whatever GitHub served that minute. A loopback port nothing listens on
+    // fails the fetch at once; a case that wants a release serves its own and
+    // sets this after, as the engine suites do.
+    command.env("BATTEN_RELEASES", "https://127.0.0.1:9/no-release-host");
     Batten(command)
 }
 
