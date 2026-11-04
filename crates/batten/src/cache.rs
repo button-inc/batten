@@ -576,6 +576,98 @@ pub(crate) fn stat_identity(path: &Path) -> Option<String> {
     stamp(path).map(|stamp| stamp.fields)
 }
 
+/// The format of a [`content_digest`] entry; bumping it makes every older one a
+/// miss.
+const DIGEST_FORMAT: &str = "batten-content-digest-1";
+
+/// BLAKE3 of `path`'s bytes, believed from a record under `cache` while the
+/// file's stat stamp is the one recorded beside it (CLOUD-2343).
+///
+/// **WHY.** Each hook call is its own process, and the policy bytecode key was
+/// BLAKE3 over every module's text — 2 MB read and hashed per call (3.66M of
+/// 31.1M instructions, measured) to learn that nothing had changed. A stamp says
+/// that in one `statx` per file. This is git's index applied to a digest, as
+/// CLOUD-2440 applied it to `pinned`'s key.
+///
+/// **A STAMP ONLY DECIDES WHETHER A RECORDED DIGEST IS BELIEVED; IT IS NEVER
+/// HASHED.** A recorded digest is believed when the file's stamp now equals the
+/// recorded one. Otherwise the bytes are read and hashed, and the digest is
+/// recorded only when the file held still across the read (the stamps before and
+/// after agree), its change is clear of the racy window
+/// ([`Stamp::racily_clean`]), and on unix, where a stamp carries ctime: elsewhere
+/// an in-place edit restoring the mtime would read as unchanged.
+///
+/// `None` when the file cannot be read. `cache` is a [`root_under`] directory.
+#[must_use]
+pub fn content_digest(cache: &Path, path: &Path) -> Option<[u8; 32]> {
+    let (entry, key) = digest_entry(cache, path);
+    let before = stamp(path);
+    if let Some(before) = before.as_ref()
+        && let Some(recorded) = believed(&entry, &key, before)
+    {
+        return Some(recorded);
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let digest = *blake3::hash(&bytes).as_bytes();
+    if let Some(before) = before {
+        record(&entry, &key, &before, stamp(path).as_ref(), &digest);
+    }
+    Some(digest)
+}
+
+/// Where `path`'s [`content_digest`] is recorded under `cache`, and the key it
+/// carries: both named by the canonical path, so two spellings share one.
+fn digest_entry(cache: &Path, path: &Path) -> (PathBuf, String) {
+    let named = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let named = named.to_string_lossy();
+    let entry = cache
+        .join("digest")
+        .join(blake3::hash(named.as_bytes()).to_hex().as_str());
+    (entry, key(DIGEST_FORMAT, &[named.as_bytes()]))
+}
+
+/// The digest recorded at `entry`, when it was recorded beside `now`'s fields.
+//MUTANT digest-never-believed|s@^    if fields == now.fields.as_bytes() {$@    if false {@|an_unchanged_file_is_believed_without_reading
+//MUTANT digest-ignores-stamp|s@^    if fields == now.fields.as_bytes() {$@    if true {@|an_edited_file_is_hashed_again
+fn believed(entry: &Path, key: &str, now: &Stamp) -> Option<[u8; 32]> {
+    let body = read(entry, key)?;
+    let (fields, digest) = split_line(&body)?;
+    if fields == now.fields.as_bytes() {
+        return unhex(digest);
+    }
+    None
+}
+
+/// Record `digest` for a file stamped `before` the read and `after` it — only
+/// where the two agree, the change is clear of the racy window, and on unix.
+//MUTANT digest-believed-racy|s@^    if racy {$@    if false {@|a_digest_recorded_in_its_racy_window_is_not_believed
+fn record(entry: &Path, key: &str, before: &Stamp, after: Option<&Stamp>, digest: &[u8; 32]) {
+    if !cfg!(unix) || after != Some(before) {
+        return;
+    }
+    let racy = before.racily_clean(now());
+    if racy {
+        return;
+    }
+    let mut body = before.fields.clone().into_bytes();
+    body.push(b'\n');
+    body.extend_from_slice(hex(digest).as_bytes());
+    write(entry, key, &body);
+}
+
+/// The 32 bytes `text` spells in lowercase hex, or `None`.
+fn unhex(text: &[u8]) -> Option<[u8; 32]> {
+    let mut out = [0_u8; 32];
+    if text.len() != 64 {
+        return None;
+    }
+    let (pairs, _) = text.as_chunks::<2>();
+    for (slot, pair) in out.iter_mut().zip(pairs) {
+        *slot = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(out)
+}
+
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     bytes
@@ -596,6 +688,72 @@ mod tests {
 
     fn scratch(name: &str) -> PathBuf {
         crate::scratch::scratch(&format!("cache-{name}"))
+    }
+
+    /// A scratch file and a cache directory for [`content_digest`], and an
+    /// instant an hour after the file's change — clear of its racy window.
+    fn digested(name: &str) -> (PathBuf, PathBuf, std::time::SystemTime) {
+        let dir = scratch(name);
+        let file = dir.join("module.rego");
+        std::fs::write(&file, "package a\n").expect("file");
+        let later = std::time::SystemTime::now() + std::time::Duration::from_hours(1);
+        (dir.join("cache"), file, later)
+    }
+
+    /// Overwrite `file`'s recorded digest with `planted`, beside its stamp now.
+    fn plant(cache: &Path, file: &Path, planted: &[u8; 32]) {
+        let (entry, key) = digest_entry(cache, file);
+        let mut body = stamp(file).expect("stamp").fields.into_bytes();
+        body.push(b'\n');
+        body.extend_from_slice(hex(planted).as_bytes());
+        write(&entry, &key, &body);
+    }
+
+    /// CLOUD-2343: an unchanged file is answered from its record without being
+    /// read — a planted digest comes back, which no read of the bytes could give.
+    #[test]
+    fn an_unchanged_file_is_believed_without_reading() {
+        let (cache, file, later) = digested("digest-believed");
+        let real = clock::at(later, || content_digest(&cache, &file)).expect("digest");
+        let planted = [7_u8; 32];
+        plant(&cache, &file, &planted);
+        let answer = clock::at(later, || content_digest(&cache, &file));
+        if cfg!(unix) {
+            assert_eq!(answer, Some(planted), "an unchanged stamp is believed");
+        } else {
+            assert_eq!(
+                answer,
+                Some(real),
+                "off unix nothing is recorded or believed"
+            );
+        }
+    }
+
+    /// An edit after the record moves the stamp, so the new bytes are hashed.
+    #[test]
+    fn an_edited_file_is_hashed_again() {
+        let (cache, file, later) = digested("digest-edited");
+        let _ = clock::at(later, || content_digest(&cache, &file));
+        std::fs::write(&file, "package a\n\nallow := true\n").expect("edit");
+        let edited = *blake3::hash(b"package a\n\nallow := true\n").as_bytes();
+        assert_eq!(
+            clock::at(later, || content_digest(&cache, &file)),
+            Some(edited),
+            "an edited file is read again"
+        );
+    }
+
+    /// A digest taken within the file's racy window is not recorded, so a
+    /// planted entry beside it is never what answers — the file is read.
+    #[test]
+    fn a_digest_recorded_in_its_racy_window_is_not_believed() {
+        let (cache, file, _) = digested("digest-racy");
+        let real = content_digest(&cache, &file).expect("digest");
+        assert!(
+            !digest_entry(&cache, &file).0.exists(),
+            "the premise: a racy digest is not recorded"
+        );
+        assert_eq!(content_digest(&cache, &file), Some(real), "read again");
     }
 
     /// CLOUD-2509: `now` is the pinned reading's distance from the epoch, and a

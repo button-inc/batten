@@ -1065,17 +1065,29 @@ pub fn load(
             (None, Some(bundle)) => bundle_members(root, bundle, reference, &rule.id)?,
             (None, None) => Vec::new(),
         };
-        let sources = read_sources(root, &paths, reference, &rule.id, checks)?;
-        if checks != ModuleChecks::SkipOnHotPath {
-            check_finding_ids(&sources, words, &tokens)?;
-        }
-
-        // EVERYTHING PAST THE READ IS PURE, and the split is what lets the
-        // composition property be tested without a filesystem: `compile` builds
-        // one engine from N sources, which is the whole of CLOUD-837. The hot
-        // path reads it from the bytecode cache when nothing it is a function
-        // of has changed (CLOUD-2236).
-        let bundle = compile_for(root, &rule.id, &sources, data, checks)?;
+        // THE HOT PATH OVER MODULES ON DISK READS NO TEXT ON A HIT (CLOUD-2343):
+        // its key takes each module's digest believed by its stat stamp, and the
+        // text is read only to compile on a miss. Everywhere else — a ref, a
+        // checked load — the text is read first, as it always was.
+        let on_disk =
+            checks == ModuleChecks::SkipOnHotPath && reference.is_none() && registry.is_none();
+        let (bundle, sources) = if on_disk {
+            (compile_on_disk(root, &rule.id, &paths, data)?, Vec::new())
+        } else {
+            let sources = read_sources(root, &paths, reference, &rule.id, checks)?;
+            if checks != ModuleChecks::SkipOnHotPath {
+                check_finding_ids(&sources, words, &tokens)?;
+            }
+            // EVERYTHING PAST THE READ IS PURE, and the split is what lets the
+            // composition property be tested without a filesystem: `compile`
+            // builds one engine from N sources, which is the whole of CLOUD-837.
+            // The hot path reads it from the bytecode cache when nothing it is a
+            // function of has changed (CLOUD-2236).
+            (
+                compile_for(root, &rule.id, &sources, data, checks)?,
+                sources,
+            )
+        };
         let declared = bundle.declared.clone();
 
         // The pointer a bundle-level fault is reported against.
@@ -1201,15 +1213,76 @@ fn compile_for(
     checks: ModuleChecks,
 ) -> Result<Bundle> {
     if checks == ModuleChecks::SkipOnHotPath {
-        let (text, digest) = pattern_text.get_or_init(|| {
-            let text = pattern_data.to_string();
-            let digest = *blake3::hash(text.as_bytes()).as_bytes();
-            (text, digest)
-        });
+        let (text, digest) = pattern_table(pattern_data, pattern_text);
         compile_cached(root, id, sources, pattern_data, (text, digest))
     } else {
         compile(id, sources, pattern_data)
     }
+}
+
+/// The pattern table's text and digest, made once per load.
+fn pattern_table<'a>(
+    pattern_data: &serde_json::Value,
+    pattern_text: &'a PatternText,
+) -> (&'a str, &'a [u8; 32]) {
+    let (text, digest) = pattern_text.get_or_init(|| {
+        let text = pattern_data.to_string();
+        let digest = *blake3::hash(text.as_bytes()).as_bytes();
+        (text, digest)
+    });
+    (text, digest)
+}
+
+/// One row's bundle on the hot path, from modules on disk (CLOUD-2343).
+///
+/// The lookup key takes each module's digest from
+/// [`crate::cache::content_digest`], believed by its stat stamp, so a hit reads
+/// no module text. A miss reads the text, keys by the digests of the bytes it
+/// read — never the looked-up ones, which a file edited between the two would
+/// make wrong — strips the `test_` rules, compiles and writes. Off a state
+/// directory there is no memo, and every digest is of a fresh read.
+fn compile_on_disk(
+    root: &Path,
+    id: &str,
+    paths: &[String],
+    (pattern_data, pattern_text): (&serde_json::Value, &PatternText),
+) -> Result<Bundle> {
+    let (text, digest) = pattern_table(pattern_data, pattern_text);
+    let unreadable = |path: &str| {
+        UsageError::raise(format!(
+            "rule `{id}` registers `{path}`, which cannot be read"
+        ))
+    };
+    let memo = cache_path(root, id).and_then(|entry| entry.parent().map(Path::to_path_buf));
+    let keyed = paths
+        .iter()
+        .map(|path| {
+            let file = root.join(path);
+            let digest = match memo.as_deref() {
+                Some(memo) => crate::cache::content_digest(memo, &file),
+                None => std::fs::read(&file)
+                    .ok()
+                    .map(|bytes| *blake3::hash(&bytes).as_bytes()),
+            };
+            digest
+                .map(|digest| (path.clone(), digest))
+                .ok_or_else(|| unreadable(path))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if let Some(bundle) = cached(root, id, &keyed, (text, digest)) {
+        return Ok(bundle);
+    }
+    let mut raw = Vec::with_capacity(paths.len());
+    for path in paths {
+        let text = std::fs::read_to_string(root.join(path)).map_err(|_| unreadable(path))?;
+        raw.push((path.clone(), text));
+    }
+    let keyed = digested(&raw);
+    let sources: Vec<(String, String)> = raw
+        .into_iter()
+        .map(|(path, text)| (path, without_test_rules(&text)))
+        .collect();
+    compile_and_write(root, id, &sources, &keyed, pattern_data, digest)
 }
 
 /// Which of a preset's modules this row compiles, given the CI provider it
@@ -2032,14 +2105,40 @@ fn compile_cached(
     data: &serde_json::Value,
     (text, digest): (&str, &[u8; 32]),
 ) -> Result<Bundle> {
-    let key = cache_key(id, sources, digest);
-    let path = cache_path(root, id);
-    if let Some(bundle) = path
-        .as_deref()
-        .and_then(|path| read_cached(path, &key, id, sources, text))
-    {
+    let keyed = digested(sources);
+    if let Some(bundle) = cached(root, id, &keyed, (text, digest)) {
         return Ok(bundle);
     }
+    compile_and_write(root, id, sources, &keyed, data, digest)
+}
+
+/// The bundle cached for `id` under the key `keyed` and the pattern table make,
+/// or `None` — a miss, an unreadable entry, or no state directory.
+fn cached(
+    root: &Path,
+    id: &str,
+    keyed: &[(String, [u8; 32])],
+    (text, digest): (&str, &[u8; 32]),
+) -> Option<Bundle> {
+    let key = cache_key(id, keyed, digest);
+    let path = cache_path(root, id)?;
+    let path = path.as_path();
+    read_cached(path, &key, id, keyed, text)
+}
+
+/// The miss half of [`compile_cached`]: compile `sources`, and write the result
+/// under the key their digests `keyed` make — the digests of the bytes compiled,
+/// so an entry is never filed under text it was not compiled from.
+fn compile_and_write(
+    root: &Path,
+    id: &str,
+    sources: &[(String, String)],
+    keyed: &[(String, [u8; 32])],
+    data: &serde_json::Value,
+    digest: &[u8; 32],
+) -> Result<Bundle> {
+    let key = cache_key(id, keyed, digest);
+    let path = cache_path(root, id);
     let bundle = compile(id, sources, data)?;
     let Some(compiled) = Compiled::from_bundle(&bundle, data) else {
         return Ok(bundle);
@@ -2069,8 +2168,8 @@ struct CacheHeader {
 /// bumps it, which makes every older entry a miss. `2` since the entry moved
 /// onto `crate::cache` (CLOUD-2315): the key left the header for the entry's own
 /// key line, and the binary is identified by its build ID. `3` keys the pattern
-/// table by its digest rather than its text.
-const CACHE_FORMAT: &str = "batten-policy-rvm-3";
+/// table by its digest rather than its text, and `4` each module (CLOUD-2343).
+const CACHE_FORMAT: &str = "batten-policy-rvm-4";
 
 /// The entry for row `id`, under the repository's cache directory: one file per
 /// row, overwritten on a miss, so the cache never grows past the row count.
@@ -2116,16 +2215,29 @@ fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
 /// included, is a miss, and a relink to identical code is not. The pattern
 /// table enters by its digest, taken once per load, which names its content
 /// exactly as its text would.
-//MUTANT cache-key-ignores-source|s@        fields.push(source.as_bytes());@        let _ = source;@|an_edited_module_is_not_answered_from_stale_bytecode
-fn cache_key(id: &str, sources: &[(String, String)], data: &[u8; 32]) -> String {
+///
+/// EACH MODULE ENTERS BY THE DIGEST OF ITS TEXT (CLOUD-2343), which names it
+/// exactly as the text would: the hot path takes a module on disk's digest from
+/// `crate::cache::content_digest`, believed by its stat stamp, so a warm call
+/// neither reads nor hashes the 2 MB of source the key used to cover.
+//MUTANT cache-key-ignores-source|s@        fields.push(digest);@        let _ = digest;@|an_edited_module_is_not_answered_from_stale_bytecode
+fn cache_key(id: &str, sources: &[(String, [u8; 32])], data: &[u8; 32]) -> String {
     let mut fields: Vec<&[u8]> = Vec::with_capacity(2 + 2 * sources.len());
     fields.push(id.as_bytes());
-    for (path, source) in sources {
+    for (path, digest) in sources {
         fields.push(path.as_bytes());
-        fields.push(source.as_bytes());
+        fields.push(digest);
     }
     fields.push(data);
     crate::cache::key(CACHE_FORMAT, &fields)
+}
+
+/// Each source's path beside BLAKE3 of its text, for [`cache_key`].
+fn digested(sources: &[(String, String)]) -> Vec<(String, [u8; 32])> {
+    sources
+        .iter()
+        .map(|(path, text)| (path.clone(), *blake3::hash(text.as_bytes()).as_bytes()))
+        .collect()
 }
 
 /// The data document as a `regorus::Value`, parsed once per distinct text
@@ -2156,7 +2268,7 @@ fn read_cached(
     path: &Path,
     key: &str,
     id: &str,
-    sources: &[(String, String)],
+    sources: &[(String, [u8; 32])],
     data: &str,
 ) -> Option<Bundle> {
     let bytes = crate::cache::read(path, key)?;
