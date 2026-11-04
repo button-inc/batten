@@ -1834,16 +1834,11 @@ mod tests {
     fn an_ancestry_read_leaves_the_memo_standing() {
         let dir = crate::scratch::scratch("gitwrite-memo-read");
         init_on_main(&dir).expect("init");
-        let _scope = crate::git::open_scope();
-        crate::git::read_through_the_memo(&dir);
-        assert_eq!(crate::git::remembered_opens(), Some(1), "the premise");
-        let _ = carries(&dir, "HEAD", "HEAD");
-        let _ = merges_in(&dir, "HEAD", "HEAD");
-        assert_eq!(
-            crate::git::remembered_opens(),
-            Some(1),
-            "a read spends nothing"
-        );
+        let left = crate::git::memo_after(&dir, |dir| {
+            let _ = carries(dir, "HEAD", "HEAD");
+            let _ = merges_in(dir, "HEAD", "HEAD");
+        });
+        assert_eq!(left, Some(1), "a read spends nothing");
     }
 
     /// CLOUD-2526: a commit writes the index and refs through its own handle,
@@ -1856,15 +1851,10 @@ mod tests {
     fn a_commit_spends_the_scopes_memo() {
         let dir = crate::scratch::scratch("gitwrite-memo-commit");
         init_on_main(&dir).expect("init");
-        let _scope = crate::git::open_scope();
-        crate::git::read_through_the_memo(&dir);
-        assert_eq!(crate::git::remembered_opens(), Some(1), "the premise");
-        commit_paths(&dir, &[], "spend").expect("commit");
-        assert_eq!(
-            crate::git::remembered_opens(),
-            Some(0),
-            "a commit forgets what the call remembered"
-        );
+        let left = crate::git::memo_after(&dir, |dir| {
+            commit_paths(dir, &[], "spend").expect("commit");
+        });
+        assert_eq!(left, Some(0), "a commit forgets what the call remembered");
     }
 
     /// Every line of ours, then each line of theirs ours lacks, never a blank.

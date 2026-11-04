@@ -2178,17 +2178,20 @@ fn unreachable_from_remotes(
 /// # Errors
 ///
 /// A directory that is not a repository, or one discovery cannot reach.
-//MUTANT write-from-the-memo|s@^    let repo = open_isolated(dir, ceiling_dirs(), false)?;$@    let repo = open(dir)?;@|a_write_is_never_served_from_the_memo
-//MUTANT write-keeps-the-memo|s@^    let _ = with_opens(Opens::spend);$@@|a_write_spends_the_scopes_memo
+//MUTANT write-from-the-memo|s@^    let repo = open_fresh(dir)?;$@    let repo = open(dir)?;@|a_write_is_never_served_from_the_memo
+//MUTANT write-keeps-the-memo|s@^    spend_scope();$@@|a_write_spends_the_scopes_memo
 pub fn open_for_write(dir: &Path) -> Result<gix::Repository> {
-    let repo = open_isolated(dir, ceiling_dirs(), false)?;
-    let _ = with_opens(Opens::spend);
+    let repo = open_fresh(dir)?;
+    spend_scope();
     Ok(repo)
 }
 
 /// A fresh, unshared handle for a READ that must not be answered from the hook
 /// call's memo — opened as [`open_for_write`] opens, but spending nothing, since
-/// nothing is written (CLOUD-2526). `gitwrite::carries` and `merges_in` take it.
+/// nothing is written (CLOUD-2526). `gitwrite::carries` and `merges_in` take it:
+/// they ask about ancestry right after a child `git` (a fetch, a push) may have
+/// moved refs, which a remembered handle's shared packed-refs snapshot would not
+/// show — so a cheaper memoised [`open`] there would answer stale.
 ///
 /// # Errors
 ///
@@ -2203,21 +2206,24 @@ pub fn spend_scope() {
     let _ = with_opens(Opens::spend);
 }
 
-/// How many opens this thread's scope remembers, `None` outside one — for the
-/// write modules' cases, which cannot reach the memo themselves.
-#[cfg(test)]
-pub(crate) fn remembered_opens() -> Option<usize> {
-    with_opens(|opens| opens.opened.len())
-}
-
-/// Read `dir` the way every read in this module does: through the memo.
+/// Within a fresh scope: read `dir` through the memo (asserting it was
+/// remembered), run `act`, and answer how many opens the scope still remembers
+/// — for the write modules' cases, which cannot reach the memo themselves.
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
     reason = "a test fixture that is not a repository is a broken test"
 )]
-pub(crate) fn read_through_the_memo(dir: &Path) {
+pub(crate) fn memo_after(dir: &Path, act: impl FnOnce(&Path)) -> Option<usize> {
+    let _scope = open_scope();
     open(dir).expect("a repository");
+    assert_eq!(
+        with_opens(|opens| opens.opened.len()),
+        Some(1),
+        "the premise: the read was remembered"
+    );
+    act(dir);
+    with_opens(|opens| opens.opened.len())
 }
 
 /// The one UTC stamp both committer signatures take (CLOUD-1486).
