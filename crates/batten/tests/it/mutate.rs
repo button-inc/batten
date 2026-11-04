@@ -2274,8 +2274,9 @@ fn a_declared_rust_suite_is_reddened_by_a_mutation_on_the_module() {
 /// Fails by: `--retries=0` dropped (retries pass the flaky catch: SURVIVED),
 /// `--ignore-default-filter` dropped (the default filter empties `-E`:
 /// `names-no-case`), `--status-level=pass` dropped (no PASS line is printed:
-/// `names-no-case`), the declared profile not kept (its setup script never runs:
-/// `case-already-red`), or the inherited variables reaching nextest.
+/// `names-no-case`), or the declared profile not kept (its setup script never
+/// runs: `case-already-red`). The exported variables are overridden by those
+/// flags too, so the scrub itself is `scrubbed`'s unit case, not this one.
 #[test]
 fn a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings() {
     let root = rust_tier_repo("rust-tier-ci-profile", "limit := 10");
@@ -2318,7 +2319,8 @@ fn a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings()
 
 /// A consumer without cargo-nextest reads ONE `runner-absent` (CLOUD-2466 item
 /// 4), never `suite-did-not-run` on every declared Cargo row. `PATH` holds only
-/// the directory of the `cargo` running this suite, which carries no nextest.
+/// the directory of the `cargo` running this suite, which carries no nextest,
+/// and `CARGO_HOME` is empty, since cargo also finds subcommands in its `bin`.
 /// Fails by: the probe dropped, so each row runs and reads `suite-did-not-run`.
 #[test]
 fn a_declared_cargo_row_without_nextest_reads_one_runner_absent() {
@@ -2333,6 +2335,10 @@ fn a_declared_cargo_row_without_nextest_reads_one_runner_absent() {
         .args(["mutate", "sweep"])
         .current_dir(&root)
         .env("PATH", only_cargo)
+        .env(
+            "CARGO_HOME",
+            common::scratch("mutate-no-nextest-cargo-home"),
+        )
         .env("MUTANT_GATES", "toy")
         .env("MUTANT_TASKS", "mise.toml")
         .output()
