@@ -280,7 +280,7 @@ fn a_declaration_whose_file_names_no_suite_is_not_judged() {
         &[
             (
                 "mise-tasks/subject.sh",
-                "#MUTANT slug|s@a@b@|a case nobody wrote\n",
+                "#MUTANT slug|s@a@b@|a_case_nobody_wrote\n",
             ),
             ("tests/subject.bats", "@test \"a case that exists\" {\n}\n"),
         ],

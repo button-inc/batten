@@ -865,7 +865,7 @@ fn kill(pid: u32, signal: &str) {
 fn a_filter_naming_no_case_is_still_a_filter_fault_and_not_a_timeout() {
     let root = toy_repo(
         "no-case-not-timeout",
-        &["#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|no case is named this"],
+        &["#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|no_case_is_named_this"],
     );
     let answer = common::batten()
         .args(["mutate", "sweep"])
@@ -1292,7 +1292,7 @@ fn anti_vacuity_a_listed_gate_with_no_declaration_fails_rather_than_being_skippe
 fn anti_vacuity_a_filter_naming_no_case_is_not_a_pass() {
     let root = toy_repo(
         "no-case",
-        &["#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|no case is named this"],
+        &["#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|no_case_is_named_this"],
     );
     let (code, out, _) = sweep(&root, "toy");
     // Could-not-look, and it is exit 3 rather than the verdict class.
@@ -2917,11 +2917,18 @@ fn a_row_that_cannot_apply_is_refused_by_the_census() {
         "package batten.some_rule\n\
          #MUTANT split|s@a | b@c@|test_x\n\
          #MUTANT addressed|/^deny/{n;s@x@y@}|test_x\n\
+         #MUTANT glued|s@^deny@allow@|test_x#MUTANT-SUITE tests/x.rs\n\
          deny if input.bad\n",
     );
     track(&root);
     let (code, out, _) = census(&root, "some-rule");
     assert_eq!(code, 2, "{out}");
+    // CLOUD-2586: a row whose case swallowed the next line's directive is
+    // three fields and applies, and is still refused, by its line.
+    assert!(
+        out.contains("policy/some-rule.rego:4 glued malformed-row"),
+        "{out}"
+    );
     assert!(
         out.contains("policy/some-rule.rego:2 split malformed-row"),
         "{out}"

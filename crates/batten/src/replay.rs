@@ -554,36 +554,98 @@ const TEST_RUN_FAILED: i32 = 100;
 /// `nextest`'s exit when the build failed. `cargo` uses it for its own setup
 /// failures too, so it is a finding only beside [`COMPILE_FAILED`].
 const BUILD_FAILED: i32 = 101;
-/// The result words `nextest` ends a test's run with. `SLOW`, `START`, `TRY` and
-/// `SETUP` lines name a test too and decide nothing, so only these are read.
-/// `mutate::nextest_lines` counts selected cases off this list plus `LEAK`
-/// (a pass that leaked handles), which this module does not read yet.
-pub(crate) const TERMINAL: &[&str] = &[
+/// The result words `nextest` ends a test's first attempt with: exactly what
+/// cargo-nextest 0.9.104's `nextest-runner/src/reporter/displayer/imp.rs`
+/// `status_str` returns, the `SIG` names being `helpers.rs` `signal_str`'s.
+/// A signal `signal_str` cannot name prints `ABORT SIG <n>` ([`unnamed`]), and
+/// `ABORT` alone is Windows'. `SLOW`, `START`, `SKIP`, `TERMINATING` and `SETUP …`
+/// lines name a case or a script too and decide nothing, so are not here.
+const TERMINAL: &[&str] = &[
     "PASS",
+    "LEAK",
     "FAIL",
+    "FAIL + LEAK",
+    "XFAIL",
+    "LEAK-FAIL",
     "TIMEOUT",
     "ABORT",
-    "SIGSEGV",
+    "SIGHUP",
+    "SIGINT",
+    "SIGQUIT",
+    "SIGILL",
+    "SIGTRAP",
     "SIGABRT",
+    "SIGFPE",
     "SIGKILL",
+    "SIGSEGV",
+    "SIGPIPE",
+    "SIGALRM",
     "SIGTERM",
-    "LEAK-FAIL",
 ];
+/// The words after a `TRY <n> ` prefix: exactly what the same file's
+/// `short_status_str` returns, a signal by its bare `signal_str` name and an
+/// unnamed one as `SIG <n>`.
+const RETRIED: &[&str] = &[
+    "PASS", "LEAK", "FAIL", "XFAIL", "LKFAIL", "TMT", "ABORT", "HUP", "INT", "QUIT", "ILL", "TRAP",
+    "ABRT", "FPE", "KILL", "SEGV", "PIPE", "ALRM", "TERM",
+];
+/// The result words that are a pass: `LEAK` is one that leaked handles.
+const PASSED: &[&str] = &["PASS", "LEAK"];
+
+/// Whether `word` is `prefix` then a signal number.
+fn unnamed(word: &str, prefix: &str) -> bool {
+    word.strip_prefix(prefix)
+        .is_some_and(|number| number.parse::<i32>().is_ok())
+}
+
+/// One attempt's result line as `(result, case)`: a result word, bare or after
+/// a `TRY <n> ` retry prefix (which `result` drops), then the bracketed duration
+/// and the case. Anchored on the whole text before the first `[`, so only a
+/// word nextest prints, in the place it prints it, reads as a result.
+pub(crate) fn attempt(line: &str) -> Option<(&str, &str)> {
+    let (word, rest) = line.split_once('[')?;
+    let (_, case) = rest.split_once(']')?;
+    let (word, case) = (word.trim(), case.trim());
+    let result = match word.strip_prefix("TRY ") {
+        Some(retried) => {
+            let (number, result) = retried.split_once(' ')?;
+            number.parse::<u32>().ok()?;
+            (RETRIED.contains(&result) || unnamed(result, "SIG ")).then_some(result)?
+        }
+        None => (TERMINAL.contains(&word) || unnamed(word, "ABORT SIG ")).then_some(word)?,
+    };
+    (!case.is_empty()).then_some((result, case))
+}
+
+/// Whether `line` is nextest's run summary. Past it nextest repeats each
+/// failure, so no attempt is read after it; a run printed it when it ran at all.
+pub(crate) fn summary(line: &str) -> bool {
+    line.trim_start().starts_with("Summary [")
+}
+
+/// Every attempt a nextest run reported, up to its summary.
+pub(crate) fn attempts(output: &str) -> impl Iterator<Item = (&str, &str)> {
+    output
+        .lines()
+        .take_while(|line| !summary(line))
+        .filter_map(attempt)
+}
 /// What `cargo` prints when rustc refused the crate: a base body HEAD's code
 /// cannot compile, as opposed to a build that never reached rustc.
 const COMPILE_FAILED: &str = "could not compile";
 
 /// Whether one test passed in the shared run.
 ///
-/// Judged from the test's OWN result lines (`PASS`, `FAIL`, `TIMEOUT`, …, then
-/// the binary and the test's path), so one failing case never reads as another
-/// failing. Every line naming the test must be `PASS`, as the per-test run's
-/// exit 0 required of every case its filter matched. A rustc refusal fails
+/// Judged from the test's OWN attempts ([`attempts`]), so one failing case
+/// never reads as another failing. Every attempt naming the test must pass, a
+/// retried one included, whatever nextest's exit says of a retry that passed:
+/// the repository refuses retries so that a flake never reads as a pass. A
+/// rustc refusal fails
 /// every test, as it failed every per-test build of the one spliced tree. A run
 /// that named the test nowhere and did not fail to compile is could-not-look,
 /// never a finding: a refusal the replay never measured would read as one it did.
 //MUTANT-SUITE crates/batten/tests/it/test_replay.rs
-//MUTANT expectation-unchecked|s@^    let failed = statuses.iter().any(\x7cstatus\x7c \*status != "PASS");$@    let failed = false;@|a_narrowed_expectation_is_refused_by_name
+//MUTANT expectation-unchecked|s@^    let failed = results.iter().any(\x7cresult\x7c !PASSED.contains(result));$@    let failed = false;@|a_narrowed_expectation_is_refused_by_name
 fn passes(outcome: Option<&(i32, String)>, test: &str) -> Result<bool> {
     let Some((code, output)) = outcome else {
         bail!("test replay: could not replay {test}: {}", said(outcome));
@@ -592,20 +654,18 @@ fn passes(outcome: Option<&(i32, String)>, test: &str) -> Result<bool> {
         return Ok(false);
     }
     let suffix = format!("::{test}");
-    let statuses: Vec<&str> = output
-        .lines()
-        .filter_map(|line| {
-            let mut words = line.split_whitespace();
-            let status = words.next()?;
-            let name = words.last()?;
-            let named = name == test || name.ends_with(&suffix);
-            (named && TERMINAL.contains(&status)).then_some(status)
+    let results: Vec<&str> = attempts(output)
+        .filter(|(_, case)| {
+            case.split_whitespace()
+                .last()
+                .is_some_and(|name| name == test || name.ends_with(&suffix))
         })
+        .map(|(result, _)| result)
         .collect();
-    if statuses.is_empty() {
+    if results.is_empty() {
         bail!("test replay: could not replay {test}: {}", said(outcome));
     }
-    let failed = statuses.iter().any(|status| *status != "PASS");
+    let failed = results.iter().any(|result| !PASSED.contains(result));
     if failed && *code != TEST_RUN_FAILED && *code != 0 {
         bail!("test replay: could not replay {test}: {}", said(outcome));
     }
@@ -771,6 +831,63 @@ mod tests {
         assert!(passes(said(101, "error: no such command: `nextest`").as_ref(), "t").is_err());
         assert!(passes(said(4, "").as_ref(), "t").is_err());
         assert!(passes(None, "t").is_err());
+    }
+
+    /// Fails by: a word nextest's `status_str` / `short_status_str` print read
+    /// as no result, a word they never print (or one in the wrong place) read
+    /// as one, a `TRY` prefix kept in the result, or a line naming no case read.
+    #[test]
+    fn only_the_words_nextest_prints_are_results() {
+        fn read(line: &str) -> Option<&str> {
+            attempt(line).map(|(result, _)| result)
+        }
+        assert_eq!(
+            attempt("        LEAK [   0.120s] batten::it m::t"),
+            Some(("LEAK", "batten::it m::t"))
+        );
+        assert_eq!(read(" FAIL + LEAK [   0.010s] b t"), Some("FAIL + LEAK"));
+        assert_eq!(read("      SIGILL [   0.010s] b t"), Some("SIGILL"));
+        assert_eq!(read(" ABORT SIG 7 [   0.010s] b t"), Some("ABORT SIG 7"));
+        assert_eq!(read("   TRY 2 TMT [  60.000s] b t"), Some("TMT"));
+        assert_eq!(read(" TRY 3 SIG 7 [   0.010s] b t"), Some("SIG 7"));
+        assert_eq!(read("  TRY 2 SEGV [   0.010s] b t"), Some("SEGV"));
+        for refused in [
+            "        SLOW [> 60.000s] b t",
+            "  SETUP PASS [   0.010s] db-setup",
+            "      SIGBUS [   0.010s] b t",
+            "         TMT [   0.010s] b t",
+            "TRY 2 SIGILL [   0.010s] b t",
+            " TRY x FAIL [   0.010s] b t",
+            " TRY 2 SIG x [   0.010s] b t",
+            " ABORT SIG x [   0.010s] b t",
+            "    log PASS [   0.010s] b t",
+            "        PASS [   0.004s]",
+            "        PASS   0.004s  b t",
+        ] {
+            assert_eq!(read(refused), None, "{refused}");
+        }
+    }
+
+    /// Fails by: a retried attempt or a `LEAK` pass left unjudged, any failed
+    /// attempt not failing the test, or a failure nextest repeats after its
+    /// summary read as another attempt.
+    #[test]
+    fn every_attempt_up_to_the_summary_is_judged() {
+        let said = |text: &str| Some((100, text.to_owned()));
+        let flaked =
+            "  TRY 1 FAIL [   0.010s] batten::it m::t\n  TRY 2 PASS [   0.010s] batten::it m::t\n";
+        assert!(
+            !passes(said(flaked).as_ref(), "t").unwrap(),
+            "a flake is not a pass"
+        );
+        let leaked = "        LEAK [   0.120s] batten::it m::t\n";
+        assert!(passes(said(leaked).as_ref(), "t").unwrap());
+        let repeated = "        PASS [   0.010s] batten::it m::t\n     \
+                        Summary [   0.020s] 1 test run: 1 passed\n        \
+                        FAIL [   0.010s] batten::it m::t\n";
+        assert!(passes(said(repeated).as_ref(), "t").unwrap());
+        assert!(summary("     Summary [   0.020s] 1 test run: 1 passed"));
+        assert!(!summary("        PASS [   0.010s] batten::it Summary"));
     }
 
     /// Fails by: a compile failure not charged, the charged body not the one

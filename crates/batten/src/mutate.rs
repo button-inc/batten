@@ -516,8 +516,9 @@ pub enum Verdict {
     /// anti-vacuity term: without it the sweep reports success over a set it
     /// never touched.
     NoMutantDeclared,
-    /// The row does not carry exactly three fields.
-    MalformedRow { fields: usize },
+    /// The row does not carry exactly three fields, or its case field is not
+    /// one case (`rows_in`); `why` says which.
+    MalformedRow { why: String },
     /// The filter matched no case, on either the clean or the mutated run.
     NamesNoCase { want: String },
     /// The suite was still running at its bound and was killed (CLOUD-1860).
@@ -610,9 +611,7 @@ impl fmt::Display for Verdict {
             Verdict::NoSuchGate => write!(out, "no-such-gate"),
             Verdict::NoSuite { suite } => write!(out, "no-suite ({suite})"),
             Verdict::NoMutantDeclared => write!(out, "no-mutant-declared"),
-            Verdict::MalformedRow { fields } => {
-                write!(out, "malformed-row ({fields} fields, want 3)")
-            }
+            Verdict::MalformedRow { why } => write!(out, "malformed-row ({why})"),
             Verdict::NamesNoCase { want } => write!(out, "names-no-case ({want})"),
             Verdict::SuiteTimedOut { seconds } => {
                 write!(out, "suite-timed-out ({seconds}s)")
@@ -755,10 +754,21 @@ pub fn rows_of(root: &Path, source: &str) -> Vec<Row> {
         .unwrap_or_default()
 }
 
-/// The `#MUTANT` rows in one source, refusing a row that is not three fields.
+/// Why [`rows_in`] refuses a three-field row whose case field is not one case.
+const NOT_ONE_CASE: &str = "case field is not one case";
+
+/// The `#MUTANT` rows in one source, refusing a row that is not three fields,
+/// as `(slug, why)`.
 ///
 /// The count precedes the split because after the split the evidence is gone: a
 /// case filter holding a `|` is indistinguishable from one that meant to.
+///
+/// A CASE FIELD IS ONE CASE NAME, so whitespace or a marker (an opener then
+/// `MUTANT`) in it is refused here (CLOUD-2586). Removing a row together with its line break glued
+/// the next line's `//MUTANT-SUITE <path>` onto the row above: three fields
+/// still, a case that names nothing, and the suite switch lost. The sweep read
+/// it `names-no-case` only when it reached that source; the census reads every
+/// row and names this one by `path:line`.
 ///
 /// EACH ROW CARRIES THE SUITE ABOVE IT (CLOUD-2193). A source may declare
 /// several (`land.rs` declares four, `lib.rs` fifteen), and every author of a
@@ -766,7 +776,7 @@ pub fn rows_of(root: &Path, source: &str) -> Vec<Row> {
 /// under the first, so a change to a later suite selected no sweep and the
 /// every-case check counted the wrong file. A row above every declaration
 /// keeps the first, which is all a single-declaration source ever had.
-fn rows_in(lines: &[String], source: &str) -> Vec<std::result::Result<Row, (String, usize)>> {
+fn rows_in(lines: &[String], source: &str) -> Vec<std::result::Result<Row, (String, String)>> {
     let first = declared(lines, SUITE);
     let mut above = first.clone();
     let mut rows = Vec::new();
@@ -780,10 +790,17 @@ fn rows_in(lines: &[String], source: &str) -> Vec<std::result::Result<Row, (Stri
         };
         let fields: Vec<&str> = body.split('|').collect();
         let [slug, script, want] = fields.as_slice() else {
-            let head = body.split('|').next().unwrap_or_default().to_owned();
-            rows.push(Err((head, fields.len())));
+            let why = format!("{} fields, want 3", fields.len());
+            rows.push(Err((fields[0].to_owned(), why)));
             continue;
         };
+        let glued = OPENERS
+            .iter()
+            .any(|opener| want.contains(&format!("{opener}MUTANT")));
+        if glued || want.contains(char::is_whitespace) {
+            rows.push(Err(((*slug).to_owned(), String::from(NOT_ONE_CASE))));
+            continue;
+        }
         rows.push(Ok(Row {
             slug: (*slug).to_owned(),
             script: (*script).to_owned(),
@@ -937,11 +954,11 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
     // caller reports it in place rather than losing it: the predecessor
     // reported it and counted it as declared, and a repair that dropped it
     // would make a broken declaration cheaper than an honest one.
-    for (head, fields) in malformed {
+    for (head, why) in malformed {
         rows.push(Row {
             slug: head,
             script: String::new(),
-            want: format!("\u{0}malformed:{fields}"),
+            want: format!("\u{0}malformed:{why}"),
             source: sources[0].clone(),
             suite: None,
             resolved: None,
@@ -3224,28 +3241,12 @@ fn libtest_ran(output: &str) -> bool {
 }
 
 /// The cases a nextest run selected, one per case whatever its attempts or
-/// outcome: a line led by one of nextest's result words
-/// ([`crate::replay::TERMINAL`], `SIGTERM` among them, which [`wait_bounded`]
-/// itself sends a timed-out runner, plus `LEAK`, a pass that leaked handles),
-/// bare or after a `TRY <n>` retry prefix, then the bracketed duration. Counted
-/// by distinct case, so a retried case is one, and read up to the `Summary [`
-/// line, past which nextest repeats each failure.
+/// outcome: every attempt [`crate::replay::attempts`] reads (`SIGTERM` among
+/// the results, which [`wait_bounded`] itself sends a timed-out runner),
+/// counted by distinct case, so a retried case is one.
 fn nextest_lines(output: &str) -> usize {
-    output
-        .lines()
-        .take_while(|line| !line.trim_start().starts_with("Summary ["))
-        .filter_map(|line| {
-            let mut words = line.split_whitespace();
-            let mut word = words.next()?;
-            if word == "TRY" {
-                words.next()?.parse::<u32>().ok()?;
-                word = words.next()?;
-            }
-            let result = word == "LEAK" || crate::replay::TERMINAL.contains(&word);
-            (result && words.next()?.starts_with('[')).then(|| line.split_once(']'))?
-        })
-        .map(|(_, case)| case.trim())
-        .filter(|case| !case.is_empty())
+    crate::replay::attempts(output)
+        .map(|(_, case)| case)
         .collect::<std::collections::BTreeSet<_>>()
         .len()
 }
@@ -3253,9 +3254,7 @@ fn nextest_lines(output: &str) -> usize {
 /// Whether a nextest run printed its summary, which it does for an empty
 /// selection under `--no-tests=pass` too; absent, nothing ran.
 fn nextest_ran(output: &str) -> bool {
-    output
-        .lines()
-        .any(|line| line.trim_start().starts_with("Summary ["))
+    output.lines().any(crate::replay::summary)
 }
 
 /// The named `run`'s verdict out of `tofu test -json`'s machine-readable lines.
@@ -3726,12 +3725,10 @@ fn code_lines_changed(before: &str, after: &str) -> usize {
 
 /// Judge one row.
 fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result<Verdict> {
-    if let Some(fields) = row.want.strip_prefix('\u{0}') {
-        let count = fields
-            .strip_prefix("malformed:")
-            .and_then(|n| n.parse().ok())
-            .unwrap_or(0);
-        return Ok(Verdict::MalformedRow { fields: count });
+    if let Some(why) = row.want.strip_prefix("\u{0}malformed:") {
+        return Ok(Verdict::MalformedRow {
+            why: why.to_owned(),
+        });
     }
     // The previous row's subject first — it may be a DIFFERENT gate's file, and
     // this row's suite may compose over it.
@@ -4366,8 +4363,9 @@ pub enum CensusVerdict {
     /// A declared row whose script, applied to its own file, changes nothing:
     /// it proves nothing, and a sweep would only say so once it reached it.
     InertMutation,
-    /// A declared row that is not three `|`-separated fields, so no script and
-    /// case can be read from it at all.
+    /// A declared row that is not three `|`-separated fields, or whose case
+    /// field is not one case (a marker glued into it, CLOUD-2586), so no
+    /// script and case can be read from it.
     MalformedRow,
     /// A declared row whose script is outside the one-substitution subset the
     /// runner applies ([`substitute`]), so it can never be applied.
@@ -4838,6 +4836,36 @@ mod tests {
         assert_eq!(
             case_verdict(results.iter().map(result_verdict)),
             Some("error")
+        );
+    }
+
+    /// Fails by: a case field holding whitespace or a `MUTANT` marker read as a
+    /// case (CLOUD-2586), the glued form a removed line break leaves; or a
+    /// field-count refusal no longer saying its count.
+    #[test]
+    fn a_case_glued_to_the_next_directive_is_refused_at_parse() {
+        let lines = vec![
+            format!("//{ROW}spaced|s@a@b@|one_case//{SUITE}tests/x.rs"),
+            format!("//{ROW}marked|s@a@b@|one_case//MUTANT-OWNER"),
+            format!("//{ROW}split|s@a@b@|one|two"),
+            format!("//{ROW}kept|s@a@b@|tests::one_case"),
+            format!("//{ROW}named|s@a@b@|test_MUTANT_rows"),
+        ];
+        let read: Vec<std::result::Result<String, (String, String)>> = rows_in(&lines, "src/x.rs")
+            .into_iter()
+            .map(|row| row.map(|row| row.slug))
+            .collect();
+        let glued = String::from(NOT_ONE_CASE);
+        assert_eq!(
+            read,
+            [
+                Err((String::from("spaced"), glued.clone())),
+                Err((String::from("marked"), glued)),
+                Err((String::from("split"), String::from("4 fields, want 3"))),
+                Ok(String::from("kept")),
+                Ok(String::from("named")),
+            ],
+            "a case may say MUTANT; only a marker glued into it is refused"
         );
     }
 
@@ -5363,12 +5391,15 @@ mod tests {
     #[test]
     fn a_row_is_exactly_three_fields() {
         let lines = vec![
-            String::from("#MUTANT slug|s/a/b/|the case"),
-            String::from("#MUTANT bad|s/a|b/|extra|the case"),
+            String::from("#MUTANT slug|s/a/b/|the_case"),
+            String::from("#MUTANT bad|s/a|b/|extra|the_case"),
         ];
         let rows = rows_in(&lines, "policy/x.rego");
         assert!(rows[0].is_ok());
-        assert_eq!(rows[1].as_ref().err().map(|(_, n)| *n), Some(5));
+        assert_eq!(
+            rows[1].as_ref().err().map(|(_, why)| why.as_str()),
+            Some("5 fields, want 3")
+        );
     }
 
     #[test]
