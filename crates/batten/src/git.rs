@@ -870,7 +870,10 @@ struct OpenKey {
 /// assumed, not checked: a write in the call followed by a read would be served
 /// the snapshot from before it. So [`open_for_write`] clears the memo and marks
 /// it spent ([`Opens::spend`]), and a spent scope remembers nothing more — every
-/// later open in the call is fresh, by construction rather than by convention.
+/// later open in the call is fresh. That holds for every write that opens as one;
+/// a write through a plain [`open`], a child `git` or the filesystem would still
+/// go unseen, which is why every write in this crate opens through
+/// [`open_for_write`].
 #[derive(Default)]
 struct Opens {
     /// The remembered opens.
@@ -6465,11 +6468,10 @@ mod tests {
         );
     }
 
-    /// A write spends the scope (CLOUD-2526): what was remembered is forgotten,
-    /// and a read after the write is opened fresh and not remembered either.
-    #[test]
-    fn a_write_spends_the_scopes_memo() {
-        let dir = crate::scratch::scratch("git-memo-spent");
+    /// Within a scope: a read is remembered, `write` runs, and a read after it
+    /// finds the memo empty — forgotten, and not refilled (CLOUD-2526).
+    fn assert_write_spends(name: &str, write: impl FnOnce(&Path)) {
+        let dir = crate::scratch::scratch(name);
         crate::gitwrite::init_on_main(&dir).expect("init");
         let _scope = open_scope();
         open_upwards(&dir, Vec::new()).expect("read");
@@ -6478,7 +6480,7 @@ mod tests {
             Some(1),
             "the premise: the read was remembered"
         );
-        open_for_write(&dir).expect("write open");
+        write(&dir);
         open_upwards(&dir, Vec::new()).expect("read after the write");
         assert_eq!(
             with_opens(|opens| opens.opened.len()),
@@ -6487,20 +6489,20 @@ mod tests {
         );
     }
 
+    /// A write spends the scope.
+    #[test]
+    fn a_write_spends_the_scopes_memo() {
+        assert_write_spends("git-memo-spent", |dir| {
+            open_for_write(dir).expect("write open");
+        });
+    }
+
     /// A repo-local config write is a write: it spends the scope too.
     #[test]
     fn a_config_write_spends_the_scopes_memo() {
-        let dir = crate::scratch::scratch("git-memo-config-spent");
-        crate::gitwrite::init_on_main(&dir).expect("init");
-        let _scope = open_scope();
-        open_upwards(&dir, Vec::new()).expect("read");
-        set_config_local(&dir, "user.name", "spent").expect("config write");
-        open_upwards(&dir, Vec::new()).expect("read after the write");
-        assert_eq!(
-            with_opens(|opens| opens.opened.len()),
-            Some(0),
-            "a config write spends the scope"
-        );
+        assert_write_spends("git-memo-config-spent", |dir| {
+            set_config_local(dir, "user.name", "spent").expect("config write");
+        });
     }
 
     /// The working directory is part of what an open depends on, so a read of
@@ -6529,16 +6531,15 @@ mod tests {
     #[test]
     fn the_memos_read_list_was_audited_against_this_gix() {
         let lock = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock");
-        let lock = fs::read_to_string(lock).expect("Cargo.lock");
+        let lock: toml::Value =
+            toml::from_str(&fs::read_to_string(lock).expect("Cargo.lock")).expect("toml");
         let versions: Vec<&str> = lock
-            .split("[[package]]")
-            .filter(|package| package.lines().any(|line| line == "name = \"gix\""))
-            .filter_map(|package| {
-                package
-                    .lines()
-                    .find_map(|line| line.strip_prefix("version = \""))
-                    .and_then(|rest| rest.strip_suffix('"'))
-            })
+            .get("package")
+            .and_then(toml::Value::as_array)
+            .expect("[[package]]")
+            .iter()
+            .filter(|package| package.get("name").and_then(toml::Value::as_str) == Some("gix"))
+            .filter_map(|package| package.get("version").and_then(toml::Value::as_str))
             .collect();
         assert_eq!(
             versions,
