@@ -8489,11 +8489,11 @@ fn has_children(path: &str) -> bool {
     SURFACE.iter().any(|decl| is_child_of(decl.path, path))
 }
 
-//MUTANT info-flag-past-separator|s@if \*argument == "--" \{$@if *argument == "-=" {@|an_informational_flag_is_a_read_wherever_clap_answers_it
-//MUTANT info-flag-value-unskipped|s@skip = consumes_a_value\(argument\);$@skip = false;@|an_informational_flag_is_a_read_wherever_clap_answers_it
-//MUTANT info-flag-before-clap|s@^            if path.is_empty\(\) \{$@            if false {@|an_informational_flag_is_a_read_wherever_clap_answers_it
-//MUTANT help-verb-unread|s@if \*argument == "help" \x26\x26 has_children\(\x26path\) \{$@if false {@|an_informational_flag_is_a_read_wherever_clap_answers_it
-//MUTANT help-verb-on-a-leaf|s@ \x26\x26 has_children\(\x26path\) \{$@ {@|an_informational_flag_is_a_read_wherever_clap_answers_it
+//MUTANT info-flag-past-separator|s@if \*argument == "--" {$@if *argument == "-=" {@|an_informational_flag_is_a_read_wherever_clap_answers_it
+//MUTANT info-flag-value-unskipped|s@skip = consumes_a_value(argument);$@skip = false;@|an_informational_flag_is_a_read_wherever_clap_answers_it
+//MUTANT info-flag-before-clap|s@^            if path.is_empty() {$@            if false {@|an_informational_flag_is_a_read_wherever_clap_answers_it
+//MUTANT help-verb-unread|s@if \*argument == "help" && has_children(&path) {$@if false {@|an_informational_flag_is_a_read_wherever_clap_answers_it
+//MUTANT help-verb-on-a-leaf|s@ && has_children(&path) {$@ {@|an_informational_flag_is_a_read_wherever_clap_answers_it
 /// The effect a `batten` argv runs with: the declared effect of the deepest
 /// subcommand it names, walking the non-flag arguments while each extension is
 /// a declared path, so `batten override spend --rule x` resolves
