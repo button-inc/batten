@@ -2191,9 +2191,22 @@ const ACCEPT: &str = "application/json, text/event-stream";
 /// The header a session-bearing server establishes its session in.
 const SESSION_HEADER: &str = "mcp-session-id";
 
-/// The two headers every request states its content in, which describe the
-/// body rather than authenticate it, so they follow any redirect.
-const CONTENT_HEADERS: [&str; 2] = ["content-type", "accept"];
+/// The two headers every request states its content in, with their values.
+///
+/// THE TRANSPORT OWNS THESE, not the wiring: they describe the body this
+/// module renders, so a wiring entry of the same name is dropped rather than
+/// sent beside them (CLOUD-2543). That is also what lets every wiring header
+/// that remains be declared a credential, since credentials match by name and
+/// declaring a wiring `Accept` would strip this transport's own on a redirect.
+const CONTENT_HEADERS: [(&str, &str); 2] =
+    [("content-type", "application/json"), ("accept", ACCEPT)];
+
+/// Whether `name` is one of [`CONTENT_HEADERS`], case-insensitively.
+fn is_content_header(name: &str) -> bool {
+    CONTENT_HEADERS
+        .iter()
+        .any(|(content, _)| name.eq_ignore_ascii_case(content))
+}
 
 /// Dispatch one call and return the JSON-RPC `result` it answered with.
 ///
@@ -2490,9 +2503,18 @@ fn post_all(
     documents: &[serde_json::Value],
     session: Option<&str>,
 ) -> Result<Vec<crate::fetch::Response>> {
-    let mut headers = wiring.headers.clone();
-    headers.push((CONTENT_HEADERS[0].to_owned(), "application/json".to_owned()));
-    headers.push((CONTENT_HEADERS[1].to_owned(), ACCEPT.to_owned()));
+    let wired = || {
+        wiring
+            .headers
+            .iter()
+            .filter(|(name, _)| !is_content_header(name))
+    };
+    let mut headers: Vec<(String, String)> = wired().cloned().collect();
+    headers.extend(
+        CONTENT_HEADERS
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
+    );
     // THE ONE PLACE A `Secret` IS SPENT. It goes from the resolved credential
     // straight into the header list the transport sends, and `header_value` is the
     // only method that yields its bytes — so this line is the whole audit.
@@ -2513,22 +2535,9 @@ fn post_all(
     // name, so a cross-origin redirect drops it (CLOUD-2543): the session id,
     // the declared credential, and the wiring's own headers, since a wiring file
     // "whose headers already authenticate" needs no declared credential at all
-    // ([`Source::credential`]). The content headers follow, even when a wiring
-    // also names one: matching is by name, so declaring a wiring `Accept` would
-    // strip this transport's own `accept` too, and the redirected POST would
-    // arrive with no content type.
+    // ([`Source::credential`]). The content headers follow ([`CONTENT_HEADERS`]).
     let credentials: Vec<&str> = std::iter::once(SESSION_HEADER)
-        .chain(
-            wiring
-                .headers
-                .iter()
-                .map(|(name, _)| name.as_str())
-                .filter(|name| {
-                    !CONTENT_HEADERS
-                        .iter()
-                        .any(|content| name.eq_ignore_ascii_case(content))
-                }),
-        )
+        .chain(wired().map(|(name, _)| name.as_str()))
         .chain(wiring.credential.as_ref().map(|(name, _)| name.as_str()))
         .collect();
     let calls: Vec<crate::fetch::Call<'_>> = bodies
@@ -2791,12 +2800,18 @@ mod tests {
             Ok(calls
                 .iter()
                 .map(|call| {
-                    seen.borrow_mut().push(
+                    let accepts = call
+                        .headers
+                        .iter()
+                        .filter(|(name, _)| name.eq_ignore_ascii_case("accept"))
+                        .count();
+                    seen.borrow_mut().push((
                         call.credentials
                             .iter()
                             .map(|name| (*name).to_owned())
                             .collect::<Vec<_>>(),
-                    );
+                        accepts,
+                    ));
                     crate::fetch::Response {
                         status: 200,
                         body: Vec::new(),
@@ -2817,13 +2832,18 @@ mod tests {
         post(&stood_up(), &serde_json::json!({}), None).expect("posted");
         assert_eq!(
             *declared.borrow(),
+            // The wiring's `Accept` is the transport's to set: dropped, so one
+            // goes out and it is never declared a credential.
             [
-                vec![
-                    SESSION_HEADER.to_owned(),
-                    String::from("X-Api-Key"),
-                    String::from("X-Session-Token"),
-                ],
-                vec![SESSION_HEADER.to_owned()],
+                (
+                    vec![
+                        SESSION_HEADER.to_owned(),
+                        String::from("X-Api-Key"),
+                        String::from("X-Session-Token"),
+                    ],
+                    1,
+                ),
+                (vec![SESSION_HEADER.to_owned()], 1),
             ]
         );
     }
