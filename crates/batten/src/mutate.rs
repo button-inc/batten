@@ -1470,26 +1470,44 @@ pub fn owned_changes(
 #[must_use]
 pub fn unresolvable(root: &Path, registry: &Registry) -> Vec<Finding> {
     let provisioned = registry.provisioned.as_deref();
+    absent_runners(
+        registry,
+        |subcommand| cargo_answers(root, subcommand, provisioned),
+        // A LOOKUP, NEVER A PROBE RUN: the consumer's program has no
+        // `--version` contract, and running it would be the sweep itself.
+        |program| resolves(root, program),
+    )
+    .into_iter()
+    .map(runner_absent)
+    .collect()
+}
+
+/// The runners `registry` needs whose program does not answer, by id: `cargo`
+/// says whether `cargo <subcommand>` answers, `command` whether a `command`
+/// runner's program resolves.
+fn absent_runners(
+    registry: &Registry,
+    cargo: impl Fn(&str) -> bool,
+    command: impl Fn(&str) -> bool,
+) -> Vec<&'static str> {
     let mut absent = Vec::new();
     for kind in registry.registered() {
         let answers = match kind {
             RunnerKind::Declared => true,
-            RunnerKind::CargoMutants => cargo_answers(root, "mutants", provisioned),
-            // A LOOKUP, NEVER A PROBE RUN: the consumer's program has no
-            // `--version` contract, and running it would be the sweep itself.
+            RunnerKind::CargoMutants => cargo("mutants"),
             RunnerKind::Command => registry
                 .command
                 .first()
-                .is_some_and(|program| resolves(root, program)),
+                .is_some_and(|program| command(program)),
         };
         if !answers {
             absent.push(kind.id());
         }
-        if kind == RunnerKind::CargoMutants && !cargo_answers(root, "nextest", provisioned) {
+        if kind == RunnerKind::CargoMutants && !cargo("nextest") {
             absent.push(NEXTEST);
         }
     }
-    absent.into_iter().map(runner_absent).collect()
+    absent
 }
 
 /// The runner every Cargo suite runs under, as its `runner-absent` names it.
@@ -5037,7 +5055,40 @@ mod tests {
             scrubbed(inherited.clone(), &env),
             ["NEXTEST_RETRIES", "NEXTEST_STATUS_LEVEL"]
         );
-        assert!(scrubbed(inherited, &[]).is_empty());
+        assert!(scrubbed(inherited.clone(), &[]).is_empty());
+        assert!(
+            scrubbed(inherited, &[(String::from("PATH"), String::from("/bin"))]).is_empty(),
+            "an env setting only PATH names no profile, so nothing is scrubbed"
+        );
+    }
+
+    /// Fails by: a cargo-mutants registry whose nextest does not answer read as
+    /// resolvable (every source then fails inside the run), nextest reported
+    /// absent where it answers, or demanded of a runner that never runs it.
+    #[test]
+    fn cargo_mutants_needs_nextest_and_no_other_runner_does() {
+        let answering =
+            |programs: &'static [&'static str]| move |sub: &str| programs.contains(&sub);
+        let cargo_mutants = Registry::parse("cargo-mutants=**/*.rs").expect("parses");
+        assert_eq!(
+            absent_runners(&cargo_mutants, answering(&["mutants"]), |_| true),
+            [NEXTEST]
+        );
+        assert!(
+            absent_runners(&cargo_mutants, answering(&["mutants", "nextest"]), |_| true).is_empty()
+        );
+        assert_eq!(
+            absent_runners(&cargo_mutants, answering(&[]), |_| true),
+            ["cargo-mutants", NEXTEST]
+        );
+        let command = Registry::parse("command=**/*.rs")
+            .and_then(|registry| registry.with_command(&[String::from("./mutscore.sh")]))
+            .expect("parses");
+        assert!(absent_runners(&command, answering(&[]), |_| true).is_empty());
+        assert_eq!(
+            absent_runners(&command, answering(&[]), |_| false),
+            ["command"]
+        );
     }
 
     /// Fails by: an inherited profile kept that the staged tree does not
