@@ -944,6 +944,12 @@ pub struct Wiring {
     /// answered **401**, and CLOUD-673 had already reached the same result with a
     /// different client. Whether they suffice is the SERVER's business; a source
     /// that needs more says so with a [`Credential`] row.
+    ///
+    /// **Whether they authenticate is the server's business too, so the
+    /// transport treats them as credentials** (CLOUD-2543): a wiring file "whose
+    /// headers already authenticate" is allowed ([`Source::credential`]), so
+    /// `post_all` declares every one of these, and a cross-origin redirect drops
+    /// them rather than guess which carries a secret.
     pub headers: Vec<(String, String)>,
     /// The credential this source declared, already resolved: the header name it
     /// is sent under, and the value with its scheme folded in.

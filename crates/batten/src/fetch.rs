@@ -691,16 +691,19 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
     // original host and port unless `--location-trusted` is passed; the port
     // kept the redirect-following and dropped that protection silently.
     //
-    // Each hop is judged against the ORIGINAL url, not the previous hop, so a
-    // chain that leaves and comes back sends the credential again on its return
-    // and never to anyone in between (CLOUD-2543).
+    // Each hop is judged against the ORIGINAL url, and the narrowing is
+    // CUMULATIVE: once a hop leaves that origin, no later hop gets the
+    // credential back, even one that returns to it. Re-sending on return would
+    // let the host in between choose which path on the origin receives an
+    // authenticated request (CLOUD-2543's review). A chain that needs its
+    // credential after a detour fails honestly with the server's 401.
     //
     // Latent rather than live today — no current call site reaches a redirecting
     // endpoint — which is exactly why it is worth closing now: the next asset or
     // download endpoint added here would leak the credential to a CDN host with
     // nothing in the code saying it could.
+    let mut carried: Vec<(String, String)> = call.headers.to_vec();
     for _hop in 0..=MAX_REDIRECTS {
-        let carried = carried_to(call.headers, call.url, &target, call.credentials);
         let (answer, location) = one_exchange(
             &target,
             &carried,
@@ -712,6 +715,7 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
         let Some(next) = redirect_target(&target, answer.status, location.as_deref())? else {
             return Ok(answer);
         };
+        carried = carried_to(&carried, call.url, &next, call.credentials);
         target = next;
     }
     Err(anyhow::anyhow!(
@@ -719,8 +723,10 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
     ))
 }
 
-/// The headers a hop to `next` carries: every one when `next` is on the
-/// `origin` the call was made to, and every one but the credentials otherwise.
+/// The headers a hop to `next` carries out of those the previous hop carried:
+/// every one when `next` is on the `origin` the call was made to, and every one
+/// but the credentials otherwise. Fed its own output hop by hop, so a
+/// credential dropped once stays dropped.
 ///
 /// A credential is whatever [`is_credential`] names, the one predicate `Debug`
 /// redacts by: `Cookie` and `Proxy-Authorization` as well as `Authorization`,
@@ -1014,6 +1020,13 @@ mod tests {
         );
         assert_eq!(
             carried_to(&headers, origin, "https://cdn.example/b", &declared),
+            pairs(&[("Accept", "a")])
+        );
+        // A chain that leaves the origin and comes back does not get the
+        // credential back: the host in between would choose where it goes.
+        let detoured = carried_to(&headers, origin, "https://cdn.example/b", &declared);
+        assert_eq!(
+            carried_to(&detoured, origin, "https://h.example/c", &declared),
             pairs(&[("Accept", "a")])
         );
         // Undeclared, a header is not a credential by its name alone.
