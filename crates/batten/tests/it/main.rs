@@ -117,6 +117,7 @@ mod claim_carry;
 mod claim_order;
 mod claim_race;
 mod claim_receipt;
+mod claim_worktree;
 mod claimed_keys;
 mod cli;
 mod codemod;
