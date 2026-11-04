@@ -4057,7 +4057,8 @@ impl ChangeInputs {
     ///   (non-UTF-8 working bytes), the path and a digest of those bytes;
     /// - what judges it: the bytes of every [`declared_suites`] entry of a
     ///   changed source, the scope cargo-mutants runs beyond the source's own
-    ///   tests (which the patch already carries), and each
+    ///   inline tests (keyed only where a hunk's context reaches them;
+    ///   CLOUD-2591 owns the rest of the file), and each
     ///   narrowed gate's name and its rows' [`row_key`]s, which carry the bytes
     ///   of the sources and suites a declared row runs against.
     ///
@@ -4087,7 +4088,8 @@ impl ChangeInputs {
             // which `in_diff_patch` would read as empty, is keyed by its bytes,
             // so one binary file neither disables the record nor goes unkeyed.
             // Any other patch that cannot be written (a base that will not
-            // open, or a binary base side) is `None`: no record, a full run.
+            // open) is `None`: no record, a full run. A binary base side
+            // reads as empty, so its text successor keys as a whole-file add.
             let read = fs::read(root.join(path));
             let absent = read
                 .as_ref()
