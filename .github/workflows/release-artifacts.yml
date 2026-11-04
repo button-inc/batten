@@ -108,12 +108,6 @@ permissions:
   contents: read
 
 env:
-  # EACH JOB INSTALLS ITS OWN LIST AND NOTHING ELSE (CLOUD-2553), `ci.yml`'s
-  # binding. Unbound, `mise run` auto-installed the whole manifest on every leg,
-  # and v0.0.217's macOS legs died building the agent toolchain's `tiktoken`
-  # for a tool no step here runs. `ci-tools` holds every use to a list now.
-  MISE_TASK_RUN_AUTO_INSTALL: "false"
-  MISE_EXEC_AUTO_INSTALL: "false"
   # Restores locked installs, which `[settings] lockfile = false` turns off
   # along with the install-time write it exists to deny (CLOUD-223). A runner
   # should install locked, and its checkout is disposable, so a write here

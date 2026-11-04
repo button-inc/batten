@@ -392,9 +392,7 @@ fn the_binary_task_produces_and_its_check_task_decides() {
     // `cargo list other` is the module's own rule, not a config row.
     let decide = run("sbom-binary-check");
     assert!(
-        // Double quotes: the Windows dist leg runs this body without a POSIX
-        // shell, where single quotes split the id (CLOUD-2553).
-        decide.ends_with("check --rule \"commit grade unsafe\""),
+        decide.ends_with("check --rule 'commit grade unsafe'"),
         "{decide}"
     );
 }
