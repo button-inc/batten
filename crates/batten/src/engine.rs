@@ -1853,6 +1853,15 @@ mod tests {
                 "{written}"
             );
         }
+        // Two builds of one flavour on one key: the first published is kept.
+        let x32 = "batten-v0.0.216-x86_64-unknown-linux-gnux32.tar.gz";
+        let sums = format!("{}  {gnu}\n{}  {x32}\n", "1".repeat(64), "5".repeat(64));
+        let written = adopted("version = 1\n", "o/r", "v0.0.216", &sums).expect("a row");
+        assert_eq!(
+            row_digest(&written, "linux-x86_64"),
+            Some("1".repeat(64)),
+            "{written}"
+        );
         assert_eq!(
             adopted("version = 1\n", "o/r", "v0.0.216", "nothing here\n"),
             None,
