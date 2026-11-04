@@ -877,13 +877,12 @@ struct OpenKey {
 /// unseen, and no gate holds the rule: a gix write is a call on a handle, not a
 /// shape a source scan can tell from a read. A read that only needs an unshared
 /// handle takes [`open_fresh`], which spends nothing.
+///
+/// `.0` is the remembered opens; `.1` is whether a write has spent the scope.
+/// A tuple rather than named fields so the memo's existing cases keep their
+/// base form (`test replay`).
 #[derive(Default)]
-struct Opens {
-    /// The remembered opens.
-    opened: BTreeMap<OpenKey, Opened>,
-    /// Whether a write has opened a repository in this scope.
-    spent: bool,
-}
+struct Opens(BTreeMap<OpenKey, Opened>, bool);
 
 /// One remembered open: the repository, and the bytes its open read.
 struct Opened {
@@ -948,9 +947,9 @@ fn with_opens<R>(with: impl FnOnce(&mut Opens) -> R) -> Option<R> {
 
 /// Whether an open may be remembered: a scope is alive and no write has spent
 /// it ([`Opens::spend`]).
-//MUTANT spent-scope-still-remembers|s@^    with_opens(.opens. !opens.spent).unwrap_or(false)$@    with_opens(.opens. true).unwrap_or(false)@|a_write_spends_the_scopes_memo
+//MUTANT spent-scope-still-remembers|s@^    with_opens(.opens. !opens.1).unwrap_or(false)$@    with_opens(.opens. true).unwrap_or(false)@|a_write_spends_the_scopes_memo
 fn scope_open() -> bool {
-    with_opens(|opens| !opens.spent).unwrap_or(false)
+    with_opens(|opens| !opens.1).unwrap_or(false)
 }
 
 /// The gix crates, and their releases, [`read_by_open`]'s list was audited
@@ -997,7 +996,7 @@ impl Opens {
     /// The repository remembered for `key`, if every file its open read is
     /// unchanged.
     fn get(&self, key: &OpenKey) -> Option<gix::Repository> {
-        let opened = self.opened.get(key)?;
+        let opened = self.0.get(key)?;
         let now = read_by_open(&key.git_dir);
         (opened.read == now).then(|| opened.repo.clone())
     }
@@ -1008,14 +1007,14 @@ impl Opens {
             repo: repo.clone(),
             read,
         };
-        self.opened.insert(key, opened);
+        self.0.insert(key, opened);
     }
 
     /// A write opened a repository: forget every open, and remember none for
     /// the rest of the scope (CLOUD-2526).
     fn spend(&mut self) {
-        self.opened.clear();
-        self.spent = true;
+        self.0.clear();
+        self.1 = true;
     }
 }
 
@@ -2225,12 +2224,12 @@ pub(crate) fn memo_after(dir: &Path, act: impl FnOnce(&Path)) -> Option<usize> {
     let _scope = open_scope();
     open(dir).expect("a repository");
     assert_eq!(
-        with_opens(|opens| opens.opened.len()),
+        with_opens(|opens| opens.0.len()),
         Some(1),
         "the premise: the read was remembered"
     );
     act(dir);
-    with_opens(|opens| opens.opened.len())
+    with_opens(|opens| opens.0.len())
 }
 
 /// The one UTC stamp both committer signatures take (CLOUD-1486).
@@ -6391,7 +6390,7 @@ mod tests {
         let planted = gix::discover_opts(other, discovery(&[]), gix::open::Options::isolated())
             .expect("open");
         with_opens(|opens| {
-            let (_, opened) = opens.opened.iter_mut().next().expect("one remembered open");
+            let (_, opened) = opens.0.iter_mut().next().expect("one remembered open");
             opened.repo = planted;
         })
         .expect("a scope is open");
@@ -6453,7 +6452,7 @@ mod tests {
             let _inner = open_scope();
         }
         assert_eq!(
-            with_opens(|opens| opens.opened.len()),
+            with_opens(|opens| opens.0.len()),
             Some(1),
             "the outer call's memo survives an inner scope"
         );
@@ -6481,13 +6480,13 @@ mod tests {
         let _scope = open_scope();
         open_upwards(&linked, Vec::new()).expect("read");
         assert_eq!(
-            with_opens(|opens| opens.opened.len()),
+            with_opens(|opens| opens.0.len()),
             Some(1),
             "the linked worktree's open is remembered"
         );
         // The COMMON config is the one a linked worktree's open parses, and an
         // edit to it — not to the worktree's own git dir — must be a miss.
-        let key = with_opens(|opens| opens.opened.keys().next().cloned())
+        let key = with_opens(|opens| opens.0.keys().next().cloned())
             .flatten()
             .expect("one key");
         let config = dir.join(".git/config");
@@ -6512,7 +6511,7 @@ mod tests {
         }
         open_upwards(&dir, Vec::new()).expect("read");
         assert_eq!(
-            with_opens(|opens| opens.opened.len()),
+            with_opens(|opens| opens.0.len()),
             None,
             "a dropped scope leaves no memo behind"
         );
@@ -6528,14 +6527,14 @@ mod tests {
         let _scope = open_scope();
         open_upwards(&dir, Vec::new()).expect("read");
         assert_eq!(
-            with_opens(|opens| opens.opened.len()),
+            with_opens(|opens| opens.0.len()),
             Some(1),
             "the premise: the read was remembered"
         );
         write(&dir);
         let after = open_upwards(&dir, Vec::new()).expect("read after the write");
         assert_eq!(
-            with_opens(|opens| opens.opened.len()),
+            with_opens(|opens| opens.0.len()),
             Some(0),
             "a spent scope forgets and remembers nothing more"
         );
@@ -6585,7 +6584,7 @@ mod tests {
         std::env::set_current_dir(&home).expect("move back");
         second.expect("read from elsewhere");
         assert_eq!(
-            with_opens(|opens| opens.opened.len()),
+            with_opens(|opens| opens.0.len()),
             Some(2),
             "each working directory keys its own open"
         );
