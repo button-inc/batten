@@ -754,6 +754,14 @@ fn a_plan_mode_batten_version_is_allowed() {
         assert_granted_by(&read, "call read now");
     }
     assert_plan_refused(&shell("plan", "batten override spend --rule --help"));
+    // The shell passes `{--help` through literally, a positional to batten.
+    assert_plan_refused(&shell("plan", "batten lease acquire {--help"));
+    let braced = shell("default", "batten lease acquire {--help");
+    let (_, reason) = verdict(&braced).unwrap_or_default();
+    assert!(
+        !reason.contains("call read now"),
+        "a braced `{{--help` is no read: {reason}"
+    );
 }
 
 /// CLOUD-2418: the exact line plan mode refused, measured 2026-10-16. Git's

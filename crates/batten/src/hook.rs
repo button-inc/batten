@@ -8379,10 +8379,6 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
             let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
             let index = effective_program(&tokens)?;
             let program = program_token(tokens[index]);
-            let arguments: Vec<&str> = tokens[index + 1..]
-                .iter()
-                .map(|token| program_token(token))
-                .collect();
             Some(serde_json::json!({
                 "program": program,
                 // THE NAME AS WELL AS THE TOKEN, because they are different
@@ -8411,7 +8407,10 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
                 // predicate is decided on. `(git push origin main --force)` was
                 // allowed with `--force)` here while the same flag written
                 // earlier denied.
-                "arguments": &arguments,
+                "arguments": tokens[index + 1..]
+                    .iter()
+                    .map(|token| program_token(token))
+                    .collect::<Vec<_>>(),
                 "mediated": mediator_present(
                     crate::rules::RequireVia::Mise,
                     &tokens[..index],
@@ -8425,8 +8424,11 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
                 // reader into a writer is a SEGMENT key, because a bare `> f`
                 // runs no program and so has no entry here.
                 "reads-only": reads_its_operands(program_name(program)),
-                // The normalised `arguments`, so `(batten --version)` matches.
-                "batten-effect": batten_effect(program_name(program), &arguments),
+                // THE RAW TOKENS, NEVER `arguments`: `program_token` strips a
+                // leading `{` the shell passes through literally, so
+                // `batten lease acquire {--help` would read as `--help` here
+                // while batten receives a positional and writes (CLOUD-2206).
+                "batten-effect": batten_effect(program_name(program), &tokens[index + 1..]),
             }))
         })
         .collect()
