@@ -8424,7 +8424,14 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
                 // reader into a writer is a SEGMENT key, because a bare `> f`
                 // runs no program and so has no entry here.
                 "reads-only": reads_its_operands(program_name(program)),
-                "batten-effect": batten_effect(program_name(program), &tokens[index + 1..]),
+                // Normalised like `arguments`, so `(batten --version)` matches.
+                "batten-effect": batten_effect(
+                    program_name(program),
+                    &tokens[index + 1..]
+                        .iter()
+                        .map(|token| program_token(token))
+                        .collect::<Vec<_>>(),
+                ),
             }))
         })
         .collect()
@@ -8442,8 +8449,11 @@ fn redirects_to_a_file(tokens: &[&str]) -> bool {
         .any(|(_, target)| !target.starts_with('&') && *target != "/dev/null")
 }
 
-//MUTANT info-flag-past-option|s@^            on_path = false;$@@|an_informational_flag_on_the_path_is_a_read
-//MUTANT help-verb-unread|s@word == "help"@word == "none"@|an_informational_flag_on_the_path_is_a_read
+//MUTANT info-flag-past-separator|s@if \*argument == "--" \{$@if *argument == "-=" {@|an_informational_flag_is_a_read_wherever_clap_answers_it
+//MUTANT info-flag-value-unskipped|s@skip = crate::surface::consumes_a_value\(argument\);$@skip = false;@|an_informational_flag_is_a_read_wherever_clap_answers_it
+//MUTANT info-flag-before-clap|s@^            if path.is_empty\(\) \{$@            if false {@|an_informational_flag_is_a_read_wherever_clap_answers_it
+//MUTANT help-verb-unread|s@let clap_help = \*argument == "help";$@let clap_help = false;@|an_informational_flag_is_a_read_wherever_clap_answers_it
+//MUTANT help-verb-on-a-leaf|s@let has_children = path.is_empty\(\)$@let has_children = true@|an_informational_flag_is_a_read_wherever_clap_answers_it
 /// The effect [`crate::surface`] declares for the deepest subcommand a `batten`
 /// argv names, or `None` for any other program (CLOUD-1949).
 ///
@@ -8455,28 +8465,48 @@ fn redirects_to_a_file(tokens: &[&str]) -> bool {
 /// that actually runs. A bare noun resolves to the noun's own reading, which is
 /// never `read` or `write` for a write-bearing one — so nothing is granted on it.
 ///
-/// AN INFORMATIONAL FLAG IS A READ only where clap reads it as one: reached
-/// while every earlier word named the subcommand path (`batten --version`,
-/// `batten override spend --help`), or as clap's own `help` subcommand. Both
-/// print and run nothing (CLOUD-2206). Past any other word it may be an
-/// option's value, so the leaf keeps its effect.
+/// AN INFORMATIONAL FLAG IS A READ wherever clap answers it by printing
+/// (CLOUD-2206): anywhere before `--`, once the first word clap sees is a
+/// declared subcommand or a flag. No value-taking flag accepts a hyphen value
+/// (only a `Trailing` tail does, and that needs the `--`), so `--help` is never
+/// swallowed as a value; a declared value-taking flag's own value is skipped so
+/// it is not mistaken for a subcommand. Clap's `help` subcommand reads too,
+/// where the path so far still has subcommands to parse. A FIRST WORD THAT IS
+/// NOT A SUBCOMMAND grants nothing: `provision-exec` and the rustc wrapper run
+/// before clap parses anything.
 fn batten_effect(name: &str, arguments: &[&str]) -> Option<&'static str> {
     if name.strip_suffix(".exe").unwrap_or(name) != "batten" {
         return None;
     }
-    if arguments.first().is_some_and(|word| *word == "help") {
-        return Some(crate::effect::Effect::Read.as_str());
-    }
+    let read = Some(crate::effect::Effect::Read.as_str());
     let mut path = String::new();
     let mut effect = crate::effect::Effect::Unclassified;
-    let mut on_path = true;
+    let mut resolving = true;
+    let mut skip = false;
     for argument in arguments {
-        if on_path && crate::surface::INFORMATIONAL_FLAGS.contains(argument) {
-            return Some(crate::effect::Effect::Read.as_str());
+        if std::mem::take(&mut skip) {
+            continue;
+        }
+        if *argument == "--" {
+            break;
+        }
+        if crate::surface::INFORMATIONAL_FLAGS.contains(argument) {
+            return read;
         }
         if argument.starts_with('-') {
-            on_path = false;
+            skip = crate::surface::consumes_a_value(argument);
             continue;
+        }
+        if !resolving {
+            continue;
+        }
+        let clap_help = *argument == "help";
+        let has_children = path.is_empty()
+            || crate::surface::SURFACE
+                .iter()
+                .any(|decl| decl.path.starts_with(&format!("{path} ")));
+        if clap_help && has_children {
+            return read;
         }
         let candidate = if path.is_empty() {
             (*argument).to_owned()
@@ -8484,7 +8514,11 @@ fn batten_effect(name: &str, arguments: &[&str]) -> Option<&'static str> {
             format!("{path} {argument}")
         };
         if crate::surface::id_for(&candidate).is_none() {
-            break;
+            if path.is_empty() {
+                return Some(effect.as_str());
+            }
+            resolving = false;
+            continue;
         }
         effect = crate::surface::effect_for(&candidate);
         path = candidate;
@@ -19213,27 +19247,55 @@ deny contains "refused by themodule" if {
         assert_eq!(batten_effect("git", &["status"]), None);
     }
 
-    /// CLOUD-2206: an informational flag on the subcommand path prints and runs
-    /// nothing; the same flag past an option is a value, and the leaf decides.
+    /// CLOUD-2206: clap answers an informational flag, or its `help`
+    /// subcommand, by printing, so each is a read wherever clap would reach it;
+    /// past `--`, before clap runs, or as a leaf's positional, the leaf decides.
     #[test]
-    fn an_informational_flag_on_the_path_is_a_read() {
+    fn an_informational_flag_is_a_read_wherever_clap_answers_it() {
         for argv in [
             &["--version"][..],
             &["-V"],
             &["-h"],
             &["help", "check"],
+            &["-v", "help", "check"],
+            &["override", "help", "spend"],
             &["override", "spend", "--help"],
+            &["override", "spend", "--rule", "x", "--help"],
+            &["-v", "--version"],
+            &["--strictness", "strict", "--help"],
+            &["--strictness=strict", "--help"],
+            &["check", "-q", "--help"],
         ] {
             assert_eq!(batten_effect("batten", argv), Some("read"), "{argv:?}");
         }
-        let leaf = Some(crate::surface::effect_for("override spend").as_str());
+        let spend = Some(crate::surface::effect_for("override spend").as_str());
         assert_eq!(
-            batten_effect("batten", &["override", "spend", "--rule", "--help"]),
-            leaf
+            batten_effect("batten", &["override", "spend", "--", "--help"]),
+            spend
         );
-        assert_ne!(
-            batten_effect("batten", &["--strictness", "strict", "--help"]),
-            Some("read")
+        assert_eq!(
+            batten_effect("batten", &["provision-exec", "--help"]),
+            Some("unclassified")
+        );
+        // `--strictness` takes `help` as its value; it is not the subcommand.
+        assert_eq!(
+            batten_effect("batten", &["--strictness", "help", "override", "spend"]),
+            spend
+        );
+        let leaf = crate::surface::SURFACE
+            .iter()
+            .find(|decl| {
+                decl.effect != crate::effect::Effect::Read
+                    && !crate::surface::SURFACE
+                        .iter()
+                        .any(|other| other.path.starts_with(&format!("{} ", decl.path)))
+            })
+            .expect("a non-read leaf is declared");
+        let argv: Vec<&str> = leaf.path.split(' ').chain(["help"]).collect();
+        assert_eq!(
+            batten_effect("batten", &argv),
+            Some(leaf.effect.as_str()),
+            "`help` under a leaf is a positional, not clap's subcommand"
         );
     }
 

@@ -8654,30 +8654,48 @@ mod narrowed_tests {
         }
     }
 
-    /// The hook reads [`super::INFORMATIONAL_FLAGS`] as reads, so it must be exactly
-    /// the flags clap answers by printing: a flag added there that clap would
-    /// run is a write granted in plan mode.
+    /// The hook reads [`super::INFORMATIONAL_FLAGS`] as reads at any depth of the
+    /// subcommand path, so on EVERY built command a word in that list must be one
+    /// clap answers by printing: a subcommand that gave `-V` to a flag of its own
+    /// would be a write granted in plan mode. The root answers all of them.
     #[test]
     fn the_informational_flags_are_claps_help_and_version() {
+        fn prints(arg: &clap::Arg) -> bool {
+            matches!(
+                arg.get_action(),
+                clap::ArgAction::Help
+                    | clap::ArgAction::HelpShort
+                    | clap::ArgAction::HelpLong
+                    | clap::ArgAction::Version
+            )
+        }
+        fn spellings(arg: &clap::Arg) -> Vec<String> {
+            arg.get_short()
+                .map(|short| format!("-{short}"))
+                .into_iter()
+                .chain(arg.get_long().map(|long| format!("--{long}")))
+                .collect()
+        }
+        fn walk(command: &clap::Command, path: &str) {
+            for arg in command.get_arguments() {
+                for spelling in spellings(arg) {
+                    assert!(
+                        prints(arg) || !super::INFORMATIONAL_FLAGS.contains(&spelling.as_str()),
+                        "`{path}` gives `{spelling}` to a flag clap runs"
+                    );
+                }
+            }
+            for sub in command.get_subcommands() {
+                walk(sub, &format!("{path} {}", sub.get_name()));
+            }
+        }
         let mut root = command();
         root.build();
+        walk(&root, "batten");
         let mut answered: Vec<String> = root
             .get_arguments()
-            .filter(|arg| {
-                matches!(
-                    arg.get_action(),
-                    clap::ArgAction::Help
-                        | clap::ArgAction::HelpShort
-                        | clap::ArgAction::HelpLong
-                        | clap::ArgAction::Version
-                )
-            })
-            .flat_map(|arg| {
-                arg.get_short()
-                    .map(|short| format!("-{short}"))
-                    .into_iter()
-                    .chain(arg.get_long().map(|long| format!("--{long}")))
-            })
+            .filter(|arg| prints(arg))
+            .flat_map(spellings)
             .collect();
         answered.sort();
         let mut declared: Vec<String> = super::INFORMATIONAL_FLAGS

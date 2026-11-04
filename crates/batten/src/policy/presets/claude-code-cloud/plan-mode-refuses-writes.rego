@@ -1,7 +1,6 @@
 #MUTANT-SUITE crates/batten/tests/it/preapprove.rs
 #MUTANT plan-mode-unread|s@^\tinput.call\["permission-mode"\] == "plan"$@\tinput.call["permission-mode"] == "none"@|a_plan_mode_write_is_refused
 #MUTANT plan-file-refused|s@^\tnot plan_file_write(input.call)$@\ttrue@|the_plan_file_is_writable_in_plan_mode
-#MUTANT skill-refused-in-plan|s@, "TaskUpdate", "Skill"\}@, "TaskUpdate"}@|a_plan_mode_skill_load_is_allowed
 #MUTANT unwatch-refused-in-plan|s@^\tnot unwatch_method(input.call.tool)$@\ttrue@|an_unsubscribe_is_preapproved_in_every_mode
 # In plan mode, a call either reads or is refused — never prompted (CLOUD-1949).
 #
@@ -59,12 +58,9 @@ refused_subject(call) := array.concat(not_reads(object.get(call, "programs", [])
 not_reads(programs) := [programs[i].name | programs[i]; not reads(programs[i])]
 
 # The host's own plan-mode surface: leaving it, asking, and its task list, which
-# is session state rather than the tree. `Skill` loads instructions into the
-# turn and writes nothing; every call the skill then makes meets this rule on
-# its own (CLOUD-2206). Exempt here, never pre-approved: outside plan mode the
-# host still decides it.
+# is session state rather than the tree.
 plan_tools(tool) if {
-	tool in {"ExitPlanMode", "EnterPlanMode", "AskUserQuestion", "TodoWrite", "TaskCreate", "TaskUpdate", "Skill"}
+	tool in {"ExitPlanMode", "EnterPlanMode", "AskUserQuestion", "TodoWrite", "TaskCreate", "TaskUpdate"}
 }
 
 # The one file plan mode exists to write. Its path is the host's, never a
@@ -135,13 +131,6 @@ test_dropping_a_pr_subscription_is_not if {
 	count(violation) == 0 with input as {"call": {
 		"event": "pre-tool", "permission-mode": "plan",
 		"tool": "mcp__Claude_Code_Remote__unsubscribe_pr_activity",
-	}}
-}
-
-test_loading_a_skill_is_not if {
-	count(violation) == 0 with input as {"call": {
-		"event": "pre-tool", "permission-mode": "plan", "tool": "Skill",
-		"arguments": {"skill": "groom"},
 	}}
 }
 
