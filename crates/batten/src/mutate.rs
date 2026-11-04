@@ -4088,7 +4088,6 @@ impl ChangeInputs {
             // so one binary file neither disables the record nor goes unkeyed.
             // Any other patch that cannot be written (a base that will not
             // open, or a binary base side) is `None`: no record, a full run.
-            //
             let read = fs::read(root.join(path));
             let absent = read
                 .as_ref()

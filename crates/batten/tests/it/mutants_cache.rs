@@ -86,7 +86,8 @@ fn the_mutants_warm_job_builds_the_shards_target() {
         Some("0"),
         "cache-warm-mutants builds the suites under another debug level than suite_env"
     );
-    let family = rust_cache(&shards)["with"]["shared-key"]
+    let shard_cache = rust_cache(&shards);
+    let family = shard_cache["with"]["shared-key"]
         .as_str()
         .expect("the mutants job names its family");
     assert_ne!(
@@ -99,7 +100,7 @@ fn the_mutants_warm_job_builds_the_shards_target() {
         "cache-warm-mutants writes a family the mutants job does not read"
     );
     assert_eq!(
-        rust_cache(&shards)["with"]["save-if"].as_bool(),
+        shard_cache["with"]["save-if"].as_bool(),
         Some(false),
         "a shard writes the family on its own ref, where no other pull request reads it"
     );

@@ -1451,19 +1451,39 @@ fn sweep_since(root: &Path, gates: &str, base: &str) -> (i32, String, String) {
     // THE INHERITED ENVIRONMENT, as before CLOUD-2588: these cases run under a
     // CI leg's own `$CI`, which is where #1209's class showed. Only the
     // pass-record cases clear it, through `sweep_since_with`.
-    let answer = common::batten()
+    answered(&mut narrowed_sweep(root, gates, base))
+}
+
+/// The sweep of `gates` narrowed to what changed since `base`, as a command
+/// both narrowed helpers start from.
+fn narrowed_sweep(root: &Path, gates: &str, base: &str) -> common::Batten {
+    let mut command = common::batten();
+    command
         .args(["mutate", "sweep"])
         .current_dir(root)
         .env("MUTANT_GATES", gates)
         .env("MUTANT_CHANGED_SINCE", base)
-        .env("MUTANT_TASKS", "mise.toml")
-        .output()
-        .expect("run batten mutate");
+        .env("MUTANT_TASKS", "mise.toml");
+    command
+}
+
+/// Run `command` to its exit, as `(code, stdout, stderr)`.
+fn answered(command: &mut common::Batten) -> (i32, String, String) {
+    let answer = command.output().expect("run batten mutate");
     (
         answer.status.code().unwrap_or(-1),
         stdout(&answer),
         stderr(&answer),
     )
+}
+
+/// `toy`'s gate, edited: the one change most cases below judge.
+fn edit_toy(root: &Path) {
+    write_program(
+        root,
+        "mise-tasks/toy.sh",
+        &format!("{TOY_GATE}{CAUGHT}\n# edited\n"),
+    );
 }
 
 /// The control: unnarrowed, `other`'s survivor fails the sweep. Without it the
@@ -1483,8 +1503,7 @@ fn anti_vacuity_the_whole_set_reaches_the_surviving_row() {
 #[test]
 fn a_change_to_one_gate_sweeps_only_that_gate() {
     let root = two_gate_repo("since-one");
-    let gate = format!("{TOY_GATE}{CAUGHT}\n# edited\n");
-    write_program(&root, "mise-tasks/toy.sh", &gate);
+    edit_toy(&root);
     let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("every one caught"), "{out}");
@@ -1552,13 +1571,8 @@ fn sweep_since_with(
     base: &str,
     env: &[(&str, &str)],
 ) -> (i32, String, String) {
-    let mut command = common::batten();
+    let mut command = narrowed_sweep(root, gates, base);
     command
-        .args(["mutate", "sweep"])
-        .current_dir(root)
-        .env("MUTANT_GATES", gates)
-        .env("MUTANT_CHANGED_SINCE", base)
-        .env("MUTANT_TASKS", "mise.toml")
         .env_remove("MUTANT_SHARD")
         .env_remove("MUTANT_RUNNER")
         .env_remove("MUTANT_RUNNERS")
@@ -1569,12 +1583,7 @@ fn sweep_since_with(
     for (key, value) in env {
         command.env(key, value);
     }
-    let answer = command.output().expect("run batten mutate");
-    (
-        answer.status.code().unwrap_or(-1),
-        stdout(&answer),
-        stderr(&answer),
-    )
+    answered(&mut command)
 }
 
 /// `two_gate_repo` with `target/` ignored and committed, as a real checkout
@@ -1605,11 +1614,7 @@ fn sweep_recorded(root: &Path) {
 /// that passes whole and so is recorded.
 fn passed_change(name: &str) -> PathBuf {
     let root = ignoring_target(name);
-    write_program(
-        &root,
-        "mise-tasks/toy.sh",
-        &format!("{TOY_GATE}{CAUGHT}\n# edited\n"),
-    );
+    edit_toy(&root);
     let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("every one caught"), "{out}");
@@ -1690,11 +1695,7 @@ fn a_change_whose_declared_suite_moved_under_it_is_swept_again() {
     );
     track(&root);
     common::git_in(&root, &["commit", "-m", "a source and its suite"]);
-    write_program(
-        &root,
-        "mise-tasks/toy.sh",
-        &format!("{TOY_GATE}{CAUGHT}\n# edited\n"),
-    );
+    edit_toy(&root);
     write(
         &root,
         "src/extra.rs",
@@ -1727,11 +1728,7 @@ fn a_rebase_that_moves_only_unchanged_context_is_answered() {
     write(&root, "notes.txt", &format!("{}\n", lines.join("\n")));
     common::git_in(&root, &["add", "notes.txt"]);
     common::git_in(&root, &["commit", "-m", "notes"]);
-    write_program(
-        &root,
-        "mise-tasks/toy.sh",
-        &format!("{TOY_GATE}{CAUGHT}\n# edited\n"),
-    );
+    edit_toy(&root);
     write(
         &root,
         "notes.txt",
@@ -1769,11 +1766,7 @@ fn a_deleted_file_is_not_the_emptied_one() {
     write(&root, "notes.txt", "notes\n");
     common::git_in(&root, &["add", "notes.txt"]);
     common::git_in(&root, &["commit", "-m", "notes"]);
-    write_program(
-        &root,
-        "mise-tasks/toy.sh",
-        &format!("{TOY_GATE}{CAUGHT}\n# edited\n"),
-    );
+    edit_toy(&root);
     write(&root, "notes.txt", "");
     sweep_recorded(&root);
     fs::remove_file(root.join("notes.txt")).expect("delete notes.txt");
@@ -1835,11 +1828,7 @@ fn a_changed_binary_file_moves_the_key() {
     fs::write(root.join("data.bin"), [0xff_u8, 0x00]).expect("write data.bin");
     common::git_in(&root, &["add", "data.bin"]);
     common::git_in(&root, &["commit", "-m", "a binary file"]);
-    write_program(
-        &root,
-        "mise-tasks/toy.sh",
-        &format!("{TOY_GATE}{CAUGHT}\n# edited\n"),
-    );
+    edit_toy(&root);
     fs::write(root.join("data.bin"), [0xff_u8, 0x01]).expect("write data.bin");
     sweep_recorded(&root);
     fs::write(root.join("data.bin"), [0xff_u8, 0x02]).expect("write data.bin");
