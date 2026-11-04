@@ -11842,7 +11842,12 @@ landing_paths = [
 # kill too, and a note from one would erase the only distinction the census draws.
 # The notes are the engine's own `reclaim` writes, made in-process; this row is
 # only whether there is a census to write into.
-census = true
+# HELD UNTIL A RELEASE CARRIES CLOUD-2387: `engine-pin-check` refuses a key
+# newer than the release pin as feature drift, so each line below carries
+# `#HELD `. Undeclared, the landing asks no census beat or stop.
+# On that release the prefix is stripped here and in the tests that read
+# this declaration through it.
+#HELD census = true
 
 # THE BRANCHES A LANDER FAST-FORWARDS, so no agent ever holds the lease for them
 # and the runner-side precondition must not judge them. Read off the two landers'
@@ -11879,15 +11884,20 @@ fast_forward_branches = ["renovate/", "sbom-actions/", "release-plz-"]
 #
 # A declared row that will not derive or decide stops the lap: a gate whose
 # verdict is unknown has not said clean. An empty or unreadable body asks none.
-[[lease.body_gate]]
-derive = "deferral"
-inputs = { shape = "deferral-shape", base = "origin/main" }
-rule = "issue state other"
-
-[[lease.body_gate]]
-derive = "closing-key"
-inputs = { hold = "closing-hold-marker", base = "origin/main" }
-rule = "issue state other"
+# HELD UNTIL A RELEASE CARRIES CLOUD-2387: `engine-pin-check` refuses a key
+# newer than the release pin as feature drift, so each line below carries
+# `#HELD `. Undeclared, the landing asks no body gate.
+# On that release the prefix is stripped here and in the tests that read
+# this declaration through it.
+#HELD [[lease.body_gate]]
+#HELD derive = "deferral"
+#HELD inputs = { shape = "deferral-shape", base = "origin/main" }
+#HELD rule = "issue state other"
+#HELD
+#HELD [[lease.body_gate]]
+#HELD derive = "closing-key"
+#HELD inputs = { hold = "closing-hold-marker", base = "origin/main" }
+#HELD rule = "issue state other"
 
 # THE LANDING'S ENTRY GATE, ASKED ONCE BEFORE THE FIRST LAP (CLOUD-1471,
 # CLOUD-2387). AGENTS.md bans PR-webhook babysitting and the harness arms a
@@ -11898,14 +11908,19 @@ rule = "issue state other"
 # decision does not, so off the harness nothing is minted, the decision refuses,
 # and `mise run pr-unsubscribed record` is still the way through (CLOUD-790).
 # These are the `pr-unsubscribed` task's own flags, which were `LAND_ENTRY_GATES`.
-[lease.unsubscribed]
-session_env = "CLAUDE_CODE_REMOTE_SESSION_ID"
-token_env = "CLAUDE_SESSION_INGRESS_TOKEN_FILE"
-endpoint = "https://api.anthropic.com/v2/ccr-sessions/{session}/github/mcp"
-tool = "unsubscribe_pr_activity"
-arguments = '{"owner":"{owner}","repo":"{repo}","pullNumber":"{pr}"}'
-family = "pr-unsubscribed"
-rule = "event watch other"
+# HELD UNTIL A RELEASE CARRIES CLOUD-2387: `engine-pin-check` refuses a key
+# newer than the release pin as feature drift, so each line below carries
+# `#HELD `. Undeclared, the landing asks no entry gate.
+# On that release the prefix is stripped here and in the tests that read
+# this declaration through it.
+#HELD [lease.unsubscribed]
+#HELD session_env = "CLAUDE_CODE_REMOTE_SESSION_ID"
+#HELD token_env = "CLAUDE_SESSION_INGRESS_TOKEN_FILE"
+#HELD endpoint = "https://api.anthropic.com/v2/ccr-sessions/{session}/github/mcp"
+#HELD tool = "unsubscribe_pr_activity"
+#HELD arguments = '{"owner":"{owner}","repo":"{repo}","pullNumber":"{pr}"}'
+#HELD family = "pr-unsubscribed"
+#HELD rule = "event watch other"
 
 # WHICH RECEIPTS A HEAD MUST CARRY TO BE CALLED VERIFIED (CLOUD-1338).
 #
