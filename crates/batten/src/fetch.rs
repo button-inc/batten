@@ -699,8 +699,8 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
     // endpoint — which is exactly why it is worth closing now: the next asset or
     // download endpoint added here would leak the credential to a CDN host with
     // nothing in the code saying it could.
-    let mut carried: Vec<(String, String)> = call.headers.to_vec();
     for _hop in 0..=MAX_REDIRECTS {
+        let carried = carried_to(call.headers, call.url, &target, call.credentials);
         let (answer, location) = one_exchange(
             &target,
             &carried,
@@ -712,7 +712,6 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
         let Some(next) = redirect_target(&target, answer.status, location.as_deref())? else {
             return Ok(answer);
         };
-        carried = carried_to(call.headers, call.url, &next, call.credentials);
         target = next;
     }
     Err(anyhow::anyhow!(
@@ -1145,41 +1144,25 @@ mod tests {
     /// origin (CLOUD-2543).
     #[test]
     fn a_redirect_stays_on_its_origin_only_when_scheme_host_and_port_agree() {
-        assert!(same_origin(
-            "https://API.example/a",
-            "https://api.example/b"
-        ));
-        assert!(same_origin(
-            "HTTPS://api.example/a",
-            "https://api.example:443/b"
-        ));
-        assert!(same_origin(
-            "http://api.example/a",
-            "http://api.example:80/b"
-        ));
-        assert!(same_origin(
-            "https://api.example:8443/a",
-            "https://api.example:8443/b"
-        ));
-        assert!(!same_origin(
-            "https://api.example/a",
-            "https://storage.example/a"
-        ));
-        assert!(!same_origin(
-            "https://api.example/a",
-            "https://api.example:8443/a"
-        ));
-        assert!(!same_origin(
-            "https://api.example/a",
-            "http://api.example/a"
-        ));
-        assert!(!same_origin(
-            "https://api.example:80/a",
-            "http://api.example/a"
-        ));
-        assert!(!same_origin("ftp://api.example/a", "ftp://api.example/a"));
-        assert!(!same_origin("not a url", "https://api.example/a"));
-        assert!(!same_origin("https://api.example/a", "not a url"));
+        for (from, to, same) in [
+            ("https://API.example/a", "https://api.example/b", true),
+            ("HTTPS://api.example/a", "https://api.example:443/b", true),
+            ("http://api.example/a", "http://api.example:80/b", true),
+            (
+                "https://api.example:8443/a",
+                "https://api.example:8443/b",
+                true,
+            ),
+            ("https://api.example/a", "https://storage.example/a", false),
+            ("https://api.example/a", "https://api.example:8443/a", false),
+            ("https://api.example/a", "http://api.example/a", false),
+            ("https://api.example:80/a", "http://api.example/a", false),
+            ("ftp://api.example/a", "ftp://api.example/a", false),
+            ("not a url", "https://api.example/a", false),
+            ("https://api.example/a", "not a url", false),
+        ] {
+            assert_eq!(same_origin(from, to), same, "{from} -> {to}");
+        }
     }
 
     #[test]

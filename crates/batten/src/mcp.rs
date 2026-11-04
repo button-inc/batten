@@ -2499,14 +2499,15 @@ fn post_all(
                 .map_err(|err| anyhow::anyhow!("mcp: the request will not render: {err}"))
         })
         .collect::<Result<Vec<_>>>()?;
-    // The session id and the declared credential are both credentials whatever
-    // their names, so a cross-origin redirect drops them (CLOUD-2543). The
-    // wiring's own headers are routing identifiers ([`Wiring::headers`]) and
-    // follow.
-    let mut credentials = vec![SESSION_HEADER];
-    if let Some((name, _)) = wiring.credential.as_ref() {
-        credentials.push(name.as_str());
-    }
+    // Everything this source authenticates with is a credential whatever its
+    // name, so a cross-origin redirect drops it (CLOUD-2543): the session id,
+    // the declared credential, and the wiring's own headers, since a wiring file
+    // "whose headers already authenticate" needs no declared credential at all
+    // ([`Source::credential`]). The content headers above follow.
+    let credentials: Vec<&str> = std::iter::once(SESSION_HEADER)
+        .chain(wiring.headers.iter().map(|(name, _)| name.as_str()))
+        .chain(wiring.credential.as_ref().map(|(name, _)| name.as_str()))
+        .collect();
     let calls: Vec<crate::fetch::Call<'_>> = bodies
         .iter()
         .map(|body| crate::fetch::Call {
@@ -2756,11 +2757,11 @@ mod tests {
         );
     }
 
-    /// Fails by: the session header or the declared credential header not
-    /// marked as one on the call, so a cross-origin redirect would carry it on
-    /// (CLOUD-2543).
+    /// Fails by: the session header, a wiring header or the declared credential
+    /// header not marked as one on the call, so a cross-origin redirect would
+    /// carry it on (CLOUD-2543).
     #[test]
-    fn a_call_declares_the_session_and_the_wired_credential_header() {
+    fn a_call_declares_every_header_the_source_authenticates_with() {
         let declared = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let seen = std::rc::Rc::clone(&declared);
         crate::fetch::stand_in(Box::new(move |calls: &[crate::fetch::Call<'_>]| {
@@ -2782,6 +2783,7 @@ mod tests {
                 .collect())
         }));
         let wiring = Wiring {
+            headers: vec![("X-Api-Key".to_owned(), "k".to_owned())],
             credential: Some(("X-Session-Token".to_owned(), Secret("tok".to_owned()))),
             ..stood_up()
         };
@@ -2790,7 +2792,11 @@ mod tests {
         assert_eq!(
             *declared.borrow(),
             [
-                vec![SESSION_HEADER.to_owned(), String::from("X-Session-Token")],
+                vec![
+                    SESSION_HEADER.to_owned(),
+                    String::from("X-Api-Key"),
+                    String::from("X-Session-Token"),
+                ],
                 vec![SESSION_HEADER.to_owned()],
             ]
         );
