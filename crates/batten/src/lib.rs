@@ -17360,7 +17360,7 @@ fn run_registered_runner(
         return Ok(ExitCode::Internal);
     }
     let shard = mutate::shard_set(std::env::var(mutate::SHARD).ok());
-    let work = root.join("target").join("mutate");
+    let work = mutate::work_dir(root);
     std::fs::create_dir_all(&work)?;
     let site = mutate::Site {
         root,
@@ -17567,6 +17567,17 @@ fn run_mutate_sweep(
         .ok()
         .map(|id| id.trim().to_owned())
         .filter(|id| !id.is_empty());
+    // ONE PASS RECORD OVER BOTH HALVES (CLOUD-2588): a change that already
+    // passed whole under the same patch and rows is answered before either
+    // half builds or provisions anything, and recorded only once both pass.
+    let pass = mutate::ChangePass::of(root, narrowed.change.as_ref(), &narrowed.names, command);
+    if pass.as_ref().is_some_and(mutate::ChangePass::passed) {
+        writeln!(
+            out,
+            "mutate sweep: this change passed whole under the same patch and rows, so it is not run again"
+        )?;
+        return Ok(ExitCode::Success);
+    }
     if !disk_admits(root, "mutate sweep", err)? {
         return Ok(ExitCode::Internal);
     }
@@ -17595,6 +17606,9 @@ fn run_mutate_sweep(
     );
     for line in &lines {
         writeln!(err, "mutate sweep: {line}")?;
+    }
+    if let (Ok(ExitCode::Success), Some(pass)) = (&swept, &pass) {
+        pass.record();
     }
     swept
 }
@@ -17751,7 +17765,7 @@ fn run_declared_sweep(
     // crate every sweep. `Staged::new` prunes what the tracked set no
     // longer names and re-copies only what differs, so a persisted tree
     // still carries exactly the tracked bytes.
-    let work = root.join("target").join("mutate");
+    let work = mutate::work_dir(root);
     std::fs::create_dir_all(&work)?;
     let sweep = match mutate::sweep_shard(root, &names, work, registry, shard, err) {
         Ok(sweep) => sweep,

@@ -3,10 +3,16 @@ name: release-plz
 #MUTANT settings-gate-maps-usage|s@--on 2=false -- mise run batten -- release settings@--on 1=false -- mise run batten -- release settings@|the_release_settings_gate_maps_its_violation_exit
 #MUTANT pin-steps-under-the-old-ceiling|s@^    timeout-minutes: 46 # budget: p95=920s x3 measured=2026-11-03$@    timeout-minutes: 15 # budget: grandfathered measured=2026-08-10@|the_release_plz_job_outlasts_its_pin_steps
 #MUTANT release-pr-found-by-search|s@gh pr list --state open --limit 1000 --json headRefName@gh pr list --state open --search head:release-plz- --json headRefName@|no_workflow_finds_a_pull_request_through_the_search_index
+#MUTANT-SUITE crates/batten/tests/it/mutants_cache.rs
+#MUTANT warm-target-elsewhere|s@^          CARGO_TARGET_DIR: target/mutate-cargo$@          CARGO_TARGET_DIR: target/elsewhere@|the_mutants_warm_job_builds_the_shards_target
+#MUTANT warm-debug-level|s@^          CARGO_PROFILE_TEST_DEBUG: "0"$@          CARGO_PROFILE_TEST_DEBUG: "1"@|the_mutants_warm_job_builds_the_shards_target
+#MUTANT warm-family-elsewhere|s@^          shared-key: mutants-$@          shared-key: mutants-warm-@|the_mutants_warm_job_builds_the_shards_target
 
 # workflow-shell: CLOUD-2063 the step count rises by the seven single-command
 # steps that move the engine pin onto the release PR; each is plain argv, and
-# none carries a shell body.
+# none carries a shell body. CLOUD-2588 adds `cache-warm-mutants`, whose two
+# compile steps are single argv commands guarded on `cache-hit`, as
+# `cache-warm-linux`'s is.
 
 # Automatic semver from Conventional Commits, via release-plz
 # (https://release-plz.dev), installed and pinned by mise like every other tool.
@@ -264,6 +270,62 @@ jobs:
       # version of this step.
       - run: mise exec -- cargo nextest run --no-run --workspace
         if: steps.rust-cache.outputs.cache-hit != 'true'
+
+  # THE `mutants-` FAMILY'S ONE WRITER (CLOUD-2588). `ci.yml`'s `mutants` shards
+  # read it `save-if: false`; before it they read `ci-`, which holds nothing
+  # they build. Measured on run 41728967023, shard 0: 4m21s of "building the
+  # cargo suites the rows run under" for three rows judged in 1s each.
+  #
+  # IT BUILDS WHAT THE SWEEP BUILDS, UNDER THE SWEEP'S ENVIRONMENT: `target/`
+  # as `cache-warm-linux` fills it for `ci-`, which is what the shards restored
+  # for the engine `mise run mutant:changed` starts with `cargo run`, then
+  # `cargo test --no-run` into `mutate.rs`'s `SUITE_TARGET` at
+  # `CARGO_PROFILE_TEST_DEBUG=0` (`suite_env`). Both are `--no-run`, which
+  # `ci-parity`'s foreign-cargo comparison exempts: they execute nothing. A different target directory or profile would warm an entry
+  # no shard reads; `mutants_cache.rs` holds the two together. What survives
+  # rust-cache's cleaning is the dependency crates: it drops workspace members,
+  # and the sweep builds those from its staged copy under `target/mutate`.
+  #
+  # ARM64, MATCHING THE SHARDS' `ubuntu-24.04-arm`, for `cache-warm-linux`'s
+  # reason: the arch is inside rust-cache's restore prefix.
+  cache-warm-mutants:
+    name: cache-warm-mutants
+    runs-on: ubuntu-24.04-arm
+    # Grandfathered for `cache-warm-linux`'s reason: no measured p95 exists for a
+    # job that has never run, and a guessed number would read as measured.
+    timeout-minutes: 30 # budget: grandfathered measured=2026-11-03
+    # A warm job must never be able to red the release lane, exactly as above.
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        with:
+          # Pinned to `batten.toml`'s `[[provision]]` version (CLOUD-1672).
+          version: 2026.9.1
+          # What the two builds below compile with, and nothing the sweep's
+          # judging needs: the cache being filled is a cargo target dir.
+          install_args: rust github:nextest-rs/nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Read by the compile steps below; `ci-local-parity` property 17 holds
+        # the `id` and the guard together.
+        id: rust-cache
+        with:
+          # Must match `ci.yml`'s `mutants` job exactly or this writes an entry
+          # no shard can read.
+          shared-key: mutants-
+      # Compile only when there is nothing to restore, for the Windows job's
+      # recorded reason.
+      - run: mise exec -- cargo nextest run --no-run --workspace
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+      - run: mise exec -- cargo test --no-run
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+        env:
+          CARGO_TARGET_DIR: target/mutate-cargo
+          CARGO_PROFILE_TEST_DEBUG: "0"
 
   # THE TWO ORPHANED FAMILIES ON THE PULL-REQUEST PATH (CLOUD-1477's siblings).
   #

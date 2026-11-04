@@ -2,7 +2,8 @@ name: CI
 
 # workflow-shell: CLOUD-1746 the `mutants` job adds a job of argv steps only
 # (checkout, fetch, toolchain, caches, `mise run mutant:changed`); it runs
-# behind `ci`, so it carries no landing-lease shell of its own.
+# behind `ci`, so it carries no landing-lease shell of its own. CLOUD-2588 adds
+# one `actions/cache` step to it, a `uses:` step with no shell body.
 
 # CI minutes cost money; an agent's local execution does not. So CI runs as
 # rarely as correctness allows:
@@ -1141,12 +1142,34 @@ jobs:
         with:
           path: ~/.pkl/cache
           key: pkl-${{ runner.os }}-${{ hashFiles('hk.pkl') }}
-      # The `ci-` family's arm64 entry, read-only like every pull-request
-      # consumer of it (CLOUD-1477).
+      # THE SHARDS' OWN FAMILY, `mutants-` (CLOUD-2588). They read `ci-` until
+      # this, and `ci-` never held what they build: the sweep compiles into
+      # `target/mutate-cargo` at `CARGO_PROFILE_TEST_DEBUG=0` (`mutate.rs`
+      # `suite_env`), which no `ci-` writer fills. Measured on run 41728967023,
+      # shard 0: three declared rows judged in 1s each and no mutant, behind
+      # 4m21s of "building the cargo suites the rows run under". rust-cache
+      # keeps a nested target directory (it carries `CACHEDIR.TAG`), so one
+      # family holds that directory's dependency crates and the `cargo run`
+      # engine build's in `target/debug`. Read-only: `cache-warm-mutants` on
+      # `main` is the writer.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: ci-
+          shared-key: mutants-
           save-if: false
+      # THE PINNED CARGO-MUTANTS, which the sweep fetches from `batten.toml`'s
+      # `[[provision]]` row into this state directory on every shard. Keyed on
+      # that file, which carries the row's version and digest, and restored by
+      # prefix otherwise: most edits to `batten.toml` move no provision row, and
+      # a stale entry is safe, because the cache keeps each version in its own
+      # directory and `provision apply` digests the artifact it runs. It saves
+      # on this pull request's ref, so a later lap's shards reuse it; `main`
+      # cannot warm it, because `provision apply` refuses the whole manifest on
+      # arm64 (the `ripsecrets` row ships no linux-aarch64 artifact; CLOUD-2592).
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/share/batten/*/provision
+          key: provision-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('batten.toml') }}
+          restore-keys: provision-${{ runner.os }}-${{ runner.arch }}-
       - run: mise run mutant:changed
         env:
           # Both halves from `strategy`, so another matrix axis cannot leave a

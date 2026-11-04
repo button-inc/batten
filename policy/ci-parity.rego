@@ -65,6 +65,10 @@
 #MUTANT bump-push-unprivileged|s@^\tnot pushes_with_the_pat(step)$@\tfalse@|the_cut_pushes_the_bump_with_the_pat
 #MUTANT freeze-armed-one-release-early|s@^freeze_from := \[0, 0, 219\]$@freeze_from := [0, 0, 218]@|a_pin_one_release_past_the_cut_arms_no_freeze
 #MUTANT source-pin-arms-the-freeze|s@^\tnot input.tree.documents\["batten.toml"\].engine.source$@\ttrue@|a_source_pin_arms_no_freeze
+#MUTANT env-fork-unread|s@^\tregex.match(data.batten.patterns\["ci-discriminator-read"\], env_text(value))$@\tfalse@|an_env_value_that_forks_on_ci_is_refused
+#MUTANT vars-fork-unread|s@^\treads_ci(vars_value)$@\tfalse@|a_vars_value_that_forks_on_ci_is_refused
+#MUTANT task-env-fork-unread|s@^\treads_ci(task_value)$@\tfalse@|a_task_env_value_that_forks_on_ci_is_refused
+#MUTANT table-form-unread|s@^env_text(value) := object.get(value, "value", "") if is_object(value)$@env_text(value) := "" if is_object(value)@|a_table_form_env_value_that_forks_on_ci_is_refused
 #MUTANT callee-lease-unread|s@^\t\tjob.steps\[0\].name == lease_step_name$@\t\ttrue@|a_called_workflow_that_skips_the_lease_is_refused
 #MUTANT caller-named-as-its-own-check|s@^\tnot calls(path, key)$@\ttrue@|a_job_calling_a_workflow_that_asks_the_lease_is_clean
 #MUTANT-SUITE crates/batten/tests/it/ci_parity.rs
@@ -105,6 +109,8 @@ rules contains "path reach dead"
 rules contains "job list loose"
 
 rules contains "release ship other"
+
+rules contains "manifest state unseen"
 
 # --- the manifest, and the guard ----------------------------------------------
 
@@ -1791,6 +1797,58 @@ violation contains {
 	count(task_cargo) == 0
 }
 
+# --- `verify` runs under CI's environment (CLOUD-2588) ------------------------
+#
+# A value that differs under `$CI` is one `verify` never runs under, so whatever
+# depends on it is proven only in CI: on #1209 every declared Cargo row read
+# `suite-did-not-run` on four CI legs because the sweep inherited
+# `NEXTEST_PROFILE=ci`, which no local lap had run under. So no `[env]` or
+# `[vars]` value, and no task's own `env`, reads a forge discriminator at all,
+# and the environment is the same in both places by construction.
+#
+# WHAT COUNTS AS A READ IS ONE DECLARED PATTERN, `ci-discriminator-read`, whose
+# `[[pattern]]` row in `batten.toml` states it: every accessor over every
+# discriminator, any whitespace, and whole names, so `env.CI_FANIN_CHECK`, which
+# this manifest sets the same everywhere, is not refused.
+
+# A value's template text: a string, or mise's table form's `value`. Read as
+# the field, never a serialisation of the table, which escapes the quotes a
+# double-quoted accessor carries.
+env_text(value) := value if is_string(value)
+
+env_text(value) := object.get(value, "value", "") if is_object(value)
+
+reads_ci(value) if {
+	regex.match(data.batten.patterns["ci-discriminator-read"], env_text(value))
+}
+
+ci_forks contains key if {
+	some key, value in manifest_env
+	reads_ci(value)
+}
+
+# `[vars]` renders as `[env]` does, and an `[env]` value can carry one through.
+ci_forks contains sprintf("vars.%s", [key]) if {
+	some key, vars_value in object.get(input.tree.documents["mise.toml"], "vars", {})
+	reads_ci(vars_value)
+}
+
+# Inlined, for the `[tasks.deny]` reason the manifest's header records.
+ci_forks contains sprintf("%s.env.%s", [name, key]) if {
+	some name, task in input.tree.documents["mise.toml"].tasks
+	some key, task_value in object.get(task, "env", {})
+	reads_ci(task_value)
+}
+
+violation contains {
+	"rule": "manifest state unseen",
+	"verdict": "manifest state unseen",
+	"subjects": [{"path": "mise.toml"}, {"artifact": key}],
+} if {
+	governed
+	some key in ci_forks
+}
+
 sound_manifest := {
 	"tasks": {
 		"verify": {"run": "mise run verify:gated\nmise run test:bats"},
@@ -2293,6 +2351,30 @@ test_a_job_missing_from_the_roster_is_refused if {
 	f.verdict == "job list missing"
 	some s in f.subjects
 	s.artifact == "extra"
+}
+
+# --- `manifest state unseen` (CLOUD-2588) --------------------------------------
+
+test_an_env_value_forking_on_ci_is_refused if {
+	m := object.union(sound_manifest, {"env": object.union(sound_manifest.env, {"PROFILE": "{% if env.CI%}ci{% endif %}"})})
+	found := violation with input as swap("mise.toml", m)
+	some f in found
+	f.verdict == "manifest state unseen"
+}
+
+test_a_task_env_value_forking_on_ci_is_refused if {
+	m := object.union(sound_manifest, {"tasks": object.union(sound_manifest.tasks, {"probe": {"run": "true", "env": {"PROFILE": {"value": `{{ get_env(name="CI") }}`}}}})})
+	found := violation with input as swap("mise.toml", m)
+	some f in found
+	f.verdict == "manifest state unseen"
+}
+
+# ANTI-VACUITY: a manifest that never reads `$CI` is not this rule's business.
+test_a_manifest_reading_no_ci_is_clean if {
+	found := violation with input as sound_input
+	every f in found {
+		f.verdict != "manifest state unseen"
+	}
 }
 
 test_a_retiring_job_off_the_roster_is_accepted if {

@@ -138,18 +138,18 @@ fail-fast = false
 # `target/nextest/<profile>/junit.xml`, and `batten record suites` reads it into a
 # per-module table. Before it, the only per-case figures were whatever scrolled
 # past in a terminal, so "which module is slow" was answered by grepping logs that
-# a container reclaim deletes. `ci` inherits it, so a CI leg's report is the same
-# file under the same name.
+# a container reclaim deletes. CI runs this same profile (CLOUD-2588), so a CI
+# leg's report is the same file under the same name.
 #MUTANT-SUITE crates/batten/tests/it/junit_wired.rs
 #MUTANT junit-unwired|s@^path = "junit.xml"$@path = ""@|the_default_profile_writes_a_junit_report
 [profile.default.junit]
 path = "junit.xml"
 
-# CI's profile, selected by `NEXTEST_PROFILE=ci`. It sets NOTHING of its own and
-# inherits every key from `default` above, `fail-fast = false` included: a red
-# CI leg must still report every failure, or each fix buys another matrix to
-# find the next one (review of #928, where this profile was briefly `true`).
-[profile.ci]
+# NO `ci` PROFILE (CLOUD-2588). It set nothing of its own and inherited every
+# key from `default`, so selecting it under `$CI` moved only the report
+# directory, while making CI's environment one `verify` never ran under. CI runs
+# `default`, `fail-fast = false` included: a red CI leg must still report every
+# failure, or each fix buys another matrix to find the next one (review of #928).
 
 # THE SUBSET GATES' PROFILE, so a filtered run never overwrites the full run's
 # report (CLOUD-2059). The junit stanza above writes under the PROFILE's store

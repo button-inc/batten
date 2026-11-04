@@ -335,9 +335,9 @@ CARGO_TERM_COLOR = "always"
 # SOURCE: `[tasks.alive]` templates it rather than repeating the literal.
 BATTEN_TASK_PROGRAM_ROOT = "mise-tasks"
 # WHICH NEXTEST PROFILE APPLIES, and therefore whether the suite stops at the
-# first failure (review of #928). `.config/nextest.toml` states both halves and
-# why they differ; this decides which one is in force, once, for every leg that
-# goes through mise — `mise run test:cargo` and the two `mise exec -- cargo
+# first failure (review of #928): `default`, whose `fail-fast = false`
+# `.config/nextest.toml` states and justifies. Named once here, for every leg
+# that goes through mise — `mise run test:cargo` and the two `mise exec -- cargo
 # nextest` lines the foreign runners use.
 #
 # HERE RATHER THAN IN THE TASK BODY, because the task's cargo statement is read
@@ -346,8 +346,14 @@ BATTEN_TASK_PROGRAM_ROOT = "mise-tasks"
 # remember it and a forgotten one silently runs the wrong posture on metered
 # minutes.
 #
-# `$CI` is the discriminator every forge runner sets and no local shell does.
-NEXTEST_PROFILE = "{% if env.CI %}ci{% else %}default{% endif %}"
+# ONE VALUE, LOCALLY AND IN CI (CLOUD-2588). This read `ci` under `$CI` and
+# `default` elsewhere, and `[profile.ci]` set nothing of its own, so the fork
+# moved only where reports landed — and it was the one value `verify` never ran
+# under: on #1209 every declared Cargo row read `suite-did-not-run` on four CI
+# legs because the sweep inherited `ci`, a gap no local lap could show.
+# `ci-parity`'s `manifest state unseen` refuses an `[env]` value that reads
+# `env.CI`, so the environment `verify` runs under is CI's by construction.
+NEXTEST_PROFILE = "default"
 # THE CHECKSUM MANIFEST'S ONE NAME (CLOUD-278). `checksums` writes it and
 # `release-assets-record` looks for it on the release; both read it from here, so
 # the two cannot drift. It replaced asking `checksums.sh --names` by path when

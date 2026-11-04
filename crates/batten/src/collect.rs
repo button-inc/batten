@@ -785,8 +785,7 @@ fn read_by_a_run(unit: &Unit) -> bool {
 const SCRATCH: &str = "tmp";
 
 /// The staged repository copy `batten mutate` keeps under the build root
-/// (`lib.rs`'s `root.join("target").join("mutate")`): the engine's own path,
-/// never a consumer's.
+/// ([`crate::mutate::work_dir`]): the engine's own path, never a consumer's.
 const STAGED: &str = "mutate";
 
 /// The directories a pass takes whole rather than unit by unit (CLOUD-2286):

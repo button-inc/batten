@@ -1251,7 +1251,7 @@ impl RunnerKind {
 //MUTANT registry-owns-nothing|s@^            .filter(\x7c(_, glob)\x7c crate::rules::glob_match(glob, path))$@            .filter(\x7c_\x7c false)@|a_registered_glob_owns_its_sources_and_the_declared_runner_the_rest
 //MUTANT overlap-picks-one|s@^        let mut owners = owners.into_iter();$@        let mut owners = owners.into_iter().take(1);@|a_source_two_runners_claim_has_no_owner
 //MUTANT declared-runner-takes-globs|s@^            if kind == RunnerKind::Declared {$@            if false {@|a_registry_naming_no_runner_or_giving_the_declared_one_globs_is_refused
-//MUTANT declared-suites-unscoped|s@^        if has_extension(suite, "rs")$@        if false@|a_sources_scope_is_its_own_tests_and_every_suite_it_declares
+//MUTANT declared-suites-unscoped|s@^        .filter(\x7csuite\x7c has_extension(suite, "rs"))$@        .filter(\x7c_\x7c false)@|a_sources_scope_is_its_own_tests_and_every_suite_it_declares
 //MUTANT missed-unread|s@^    let missed: Vec<String> = lines("missed.txt")@    let missed: Vec<String> = lines("absent.txt")@|a_missed_mutant_is_a_survivor_named_by_pointer_alone
 //MUTANT failed-run-reads-caught|s@^        } else if !ran.passed() \&\& found.is_empty() {$@        } else if false {@|a_failed_run_with_nothing_missed_is_never_every_mutant_caught
 //MUTANT row-judged-under-first-suite|s@^            above = Some(suite);$@            above = first.clone().or(Some(suite));@|a_row_is_judged_under_the_suite_above_it
@@ -2009,23 +2009,31 @@ fn scope_of(root: &Path, source: &str) -> Vec<(String, Option<String>)> {
         .map(|(term, target)| (term, Some(target)))
         .collect();
     let home = package_of(root, source).map(|(package, _)| package);
-    for line in lines_of(root, source).unwrap_or_default() {
-        let Some(suite) = strip_marker(&line, SUITE) else {
-            continue;
-        };
-        let suite = suite.trim();
-        if has_extension(suite, "rs")
-            && let Some((term, target)) = tests_of(root, suite)
+    for suite in declared_suites(root, source) {
+        if let Some((term, target)) = tests_of(root, &suite)
             && !scope.iter().any(|(known, _)| *known == term)
         {
             // A SUITE IN ANOTHER PACKAGE NAMES NO TARGET HERE: cargo-mutants
             // builds the mutated package, where `--test=<t>` of a sibling's
             // target is a build error rather than a narrower build.
-            let home_package = package_of(root, suite).map(|(package, _)| package) == home;
+            let home_package = package_of(root, &suite).map(|(package, _)| package) == home;
             scope.push((term, home_package.then_some(target)));
         }
     }
     scope
+}
+
+/// The Rust suites `source` declares with `MUTANT-SUITE`, trimmed, in order:
+/// what [`scope_of`] judges it by beyond its own tests, and what a
+/// [`ChangePass`] key carries, so the two cannot name different scopes.
+fn declared_suites(root: &Path, source: &str) -> Vec<String> {
+    lines_of(root, source)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|line| strip_marker(line, SUITE))
+        .map(|suite| suite.trim().to_owned())
+        .filter(|suite| has_extension(suite, "rs"))
+        .collect()
 }
 
 /// The filterset term naming the tests compiled from `path`, inside its
@@ -2891,7 +2899,8 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
         (String::from("CARGO_PROFILE_TEST_DEBUG"), String::from("0")),
         // THE PROFILE EVERY NEXTEST CONFIG HAS, for both runners that run
         // nextest (the declared Cargo arm and cargo-mutants). An inherited
-        // `NEXTEST_PROFILE` (this repository's `[env]` sets `ci` under CI)
+        // `NEXTEST_PROFILE` (this repository's `[env]` set `ci` under CI until
+        // CLOUD-2588; a consumer's still may)
         // names a profile the staged tree may not declare, a fixture's or a
         // consumer's, and nextest then exits before selecting a case: every
         // declared Cargo row read `suite-did-not-run` in CI alone. A declared
@@ -3913,6 +3922,203 @@ fn recorded_caught(record: &Path) -> std::collections::HashSet<String> {
 /// effort: a key not recorded is a row run again.
 fn record_caught(record: &Path, key: &str) {
     let _ = crate::durable::append_whole_lines(record, &format!("{key}\n"));
+}
+
+/// Where a sweep records a change it saw pass whole: `target/mutate-passed.tsv`,
+/// BESIDE [`work_dir`] AND NOT IN IT, because the work directory is the staged
+/// repository itself, and a file there sits in the tree every suite runs in.
+///
+/// A WHOLE-CHANGE ANSWER, FOR `mutant:changed`'s LAPS (CLOUD-2588). Measured on
+/// #1209: every `land` lap re-ran the diff's mutants, about 33 minutes, when
+/// only a rebase had moved. A change recorded passing under the same key is
+/// answered without running either half. It is [`CAUGHT_RECORD`]'s heuristic
+/// widened to the change, and it is NOT cargo-mutants' `--iterate`, which
+/// skips by mutant name and was refused on CLOUD-1746: the key here is the
+/// change's content, so a mutant whose code moved is a key that moved.
+///
+/// WHAT IT DOES NOT SEE, AND WHY THAT IS SAFE. Outside the key: code beyond the
+/// patch that a source's own test target compiles (a changed `lib.rs` is judged
+/// by every unit test in the crate), inherited `NEXTEST_*` settings, the
+/// cargo-mutants pin and the engine binary, and a non-UTF-8 path's base side.
+/// Each can move a verdict under an unchanged key, as with [`row_key`]. So the
+/// record never answers under `$CI` ([`ChangePass::of`]): the required
+/// `mutants (k)` shards judge every pull-request head whole, and a local
+/// answer only spares a lap's re-run. CLOUD-2591 owns keying those inputs.
+const PASSED_RECORD: &str = "mutate-passed.tsv";
+
+/// The directory a sweep stages its copy in, runs its tools under and keeps
+/// [`CAUGHT_RECORD`] in.
+#[must_use]
+pub fn work_dir(root: &Path) -> PathBuf {
+    target_dir(root).join("mutate")
+}
+
+/// The build root every sweep path sits under: [`work_dir`], and beside it the
+/// state that must stay outside the staged tree ([`PASSED_RECORD`]).
+fn target_dir(root: &Path) -> PathBuf {
+    root.join("target")
+}
+
+/// The environment a sweep's scope is read from, beside the tree: which runner
+/// judges, which sources it owns, and which shard of them this run is.
+const PASS_ENV: [&str; 3] = [RUNNER, RUNNERS, SHARD];
+
+/// One change a sweep is about to judge, keyed so a whole passing result is
+/// recorded once and answered after (CLOUD-2588).
+#[derive(Debug)]
+pub struct ChangePass {
+    inputs: ChangeInputs,
+    key: String,
+}
+
+/// What a [`ChangePass`] key is computed over, kept so the key can be taken
+/// again once the sweep ends.
+#[derive(Debug)]
+struct ChangeInputs {
+    root: PathBuf,
+    base: String,
+    /// The changed paths, sorted and unique, as the change's set holds them.
+    paths: Vec<String>,
+    names: Vec<String>,
+    command: Vec<String>,
+}
+
+impl ChangePass {
+    /// The pass of `change`, the base and paths a sweep narrowed against, and
+    /// of `names`, the gates it narrowed to; `None` where there is no change in
+    /// hand, its patch cannot be written, or [`crate::step::bypassed`] holds (a
+    /// non-empty `$CI`, or the step cache's own bypass), and the sweep then
+    /// runs as it always did.
+    ///
+    /// NOT UNDER CI, AND IT IS THE STRUCTURAL HALF OF [`PASSED_RECORD`]'s
+    /// SAFETY: a runner that keeps its workspace between runs (self-hosted, or a
+    /// cached `target/`) would otherwise answer a confirmation from a record.
+    #[must_use]
+    pub fn of(
+        root: &Path,
+        change: Option<&(String, std::collections::BTreeSet<String>)>,
+        names: &[String],
+        command: &[String],
+    ) -> Option<Self> {
+        if crate::step::bypassed() {
+            return None;
+        }
+        let (base, changed) = change?;
+        let inputs = ChangeInputs {
+            root: root.to_path_buf(),
+            base: base.clone(),
+            paths: changed.iter().cloned().collect(),
+            names: names.to_vec(),
+            command: command.to_vec(),
+        };
+        let key = inputs.key()?;
+        Some(Self { inputs, key })
+    }
+
+    /// Whether this change already passed whole under the same key.
+    #[must_use]
+    pub fn passed(&self) -> bool {
+        recorded_caught(&self.inputs.record_path()).contains(&self.key)
+    }
+
+    /// Record this change as passing whole, ONLY WHERE THE TREE STILL KEYS AS
+    /// IT DID WHEN THE SWEEP BEGAN: an edit made while it ran (a backgrounded
+    /// lap is half an hour) was never judged, so its key is not this one. Best
+    /// effort, as [`record_caught`] is: a key not recorded is a change run again.
+    pub fn record(&self) {
+        if self.inputs.key().as_deref() != Some(self.key.as_str()) {
+            return;
+        }
+        let _ = fs::create_dir_all(target_dir(&self.inputs.root));
+        record_caught(&self.inputs.record_path(), &self.key);
+    }
+}
+
+impl ChangeInputs {
+    /// Where the pass record lives: [`PASSED_RECORD`] in [`target_dir`].
+    fn record_path(&self) -> PathBuf {
+        target_dir(&self.root).join(PASSED_RECORD)
+    }
+
+    /// The key of the tree as it stands now.
+    ///
+    /// THE KEY IS CONTENT, NEVER A COMMIT ID, so a rebase that moves nothing in
+    /// the change hits. Its material, each part prefixed with its length, so two
+    /// different scopes cannot serialise to the same bytes:
+    ///
+    /// - who judges: [`PASS_ENV`]'s values, trimmed as the verb reads them, and
+    ///   `command`, the `[mutate] command` the registry carries;
+    /// - the change: for each changed path, whether it is absent (a deleted
+    ///   file and one emptied to nothing write the same patch, and are two
+    ///   trees), then the hunks [`in_diff_patch`] writes for it WITH THEIR
+    ///   `@@` LINE NUMBERS COLLAPSED, so a base that added lines above the
+    ///   change, most rebases onto a busy trunk, keys alike while the context
+    ///   lines still place the change; or, where no patch can be written
+    ///   (non-UTF-8 working bytes), the path and a digest of those bytes;
+    /// - what judges it: the bytes of every [`declared_suites`] entry of a
+    ///   changed source, the scope cargo-mutants runs beyond the source's own
+    ///   tests (which the patch already carries), and each
+    ///   narrowed gate's name and its rows' [`row_key`]s, which carry the bytes
+    ///   of the sources and suites a declared row runs against.
+    ///
+    /// So a base that moved a suite under an unchanged patch is a key that
+    /// moved, for either runner.
+    fn key(&self) -> Option<String> {
+        let Self {
+            root,
+            base,
+            paths,
+            names,
+            command,
+        } = self;
+        let mut material = Vec::new();
+        let mut put = |part: &[u8]| {
+            material.extend_from_slice(&part.len().to_le_bytes());
+            material.extend_from_slice(part);
+        };
+        for name in PASS_ENV {
+            put(std::env::var(name).unwrap_or_default().trim().as_bytes());
+        }
+        for word in command {
+            put(word.as_bytes());
+        }
+        for path in paths {
+            // EACH PATH'S OWN HUNKS, OR ITS BYTES. A non-UTF-8 working file,
+            // which `in_diff_patch` would read as empty, is keyed by its bytes,
+            // so one binary file neither disables the record nor goes unkeyed.
+            // Any other patch that cannot be written (a base that will not
+            // open, or a binary base side) is `None`: no record, a full run.
+            //
+            let read = fs::read(root.join(path));
+            let absent = read
+                .as_ref()
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+            let bytes = read.unwrap_or_default();
+            if std::str::from_utf8(&bytes).is_ok() {
+                put(&[u8::from(absent)]);
+                let patch = in_diff_patch(root, base, std::slice::from_ref(path)).ok()?;
+                for line in patch.lines() {
+                    put(if line.starts_with("@@") { "@@" } else { line }.as_bytes());
+                }
+            } else {
+                put(path.as_bytes());
+                put(crate::provision::digest(&bytes).as_bytes());
+            }
+            for suite in declared_suites(root, path) {
+                put(suite.as_bytes());
+                put(&fs::read(root.join(&suite)).unwrap_or_default());
+            }
+        }
+        for name in names {
+            put(name.as_bytes());
+            if let Some(gate) = resolve(root, name) {
+                for row in &gate.rows {
+                    put(row_key(root, &gate, row).as_bytes());
+                }
+            }
+        }
+        Some(crate::provision::digest(&material))
+    }
 }
 
 /// BUILD ONCE, BEFORE ANY ROW IS TIMED (CLOUD-1910). Best effort: a build that

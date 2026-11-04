@@ -233,10 +233,9 @@ fn findings_declared_by(root: &Path, vocabulary_root: &Path) -> Vec<(String, Opt
     // declares it. An inline regex in the module is refused at LOAD, so the row
     // has to exist for the bundle to compile at all — which is the registry
     // doing its job rather than a fixture detail.
-    let patterns = [batten::pattern::NamedPattern {
-        id: "mise-run-task".to_owned(),
-        regex: "mise run [a-z][a-z0-9:_-]*".to_owned(),
-    }];
+    // The COMMITTED `[[pattern]]` rows, so a fixture cannot pass over a regex
+    // the real gate does not carry (`mise-run-task`, `ci-discriminator-read`).
+    let patterns = common::committed_patterns();
     rules::run_static(
         &[row()],
         &[],
@@ -269,10 +268,9 @@ fn findings_declared_by(root: &Path, vocabulary_root: &Path) -> Vec<(String, Opt
 /// fixture edit introduced.
 fn verdicts_raised(root: &Path) -> Vec<String> {
     let verdicts = common::verdicts_in(root);
-    let patterns = [batten::pattern::NamedPattern {
-        id: "mise-run-task".to_owned(),
-        regex: "mise run [a-z][a-z0-9:_-]*".to_owned(),
-    }];
+    // The COMMITTED `[[pattern]]` rows, so a fixture cannot pass over a regex
+    // the real gate does not carry (`mise-run-task`, `ci-discriminator-read`).
+    let patterns = common::committed_patterns();
     let mut raised: Vec<String> = rules::run_static(
         &[row()],
         &[],
@@ -354,6 +352,7 @@ const MANIFEST: &str = r#"
 CI_REQUIRED_CHECKS = "ci,musl,final"
 CI_FANIN_CHECK = "final"
 CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
+NEXTEST_PROFILE = "default"
 
 [tasks.verify]
 run = "mise run verify:gated"
@@ -572,6 +571,169 @@ fn a_ci_task_verify_does_not_run_is_refused() {
         !findings(&root).is_empty(),
         "a task CI runs that verify does not should be refused"
     );
+}
+
+/// The `manifest state unseen` verdicts `root`'s tree raises.
+fn env_forks(root: &Path) -> Vec<String> {
+    verdicts_raised(root)
+        .into_iter()
+        .filter(|verdict| verdict == "manifest state unseen")
+        .collect()
+}
+
+/// `#MUTANT env-fork-unread` reddens here: a value CI renders one way and
+/// `verify` another is the gap #1209 found only in CI (CLOUD-2588). Each
+/// spelling mise's templates read `$CI` by is refused, not one of them.
+#[test]
+fn an_env_value_that_forks_on_ci_is_refused() {
+    for (case, fork) in [
+        ("if", "{% if env.CI %}ci{% else %}default{% endif %}"),
+        ("if-tight", "{% if env.CI%}ci{% else %}default{% endif %}"),
+        ("compare", "{% if env.CI==\"true\" %}ci{% endif %}"),
+        ("print", "{{env.CI}}"),
+        ("filter", "{{ env.CI|default(value='') }}"),
+        ("index", "{{ env[\"CI\"] }}"),
+        ("index-single", "{{ env['CI'] }}"),
+        ("get-env", "{{ get_env(name=\"CI\", default=\"\") }}"),
+        ("get-env-single", "{{ get_env(name='CI') }}"),
+        ("get-env-spaced", "{{ get_env(name = \"CI\") }}"),
+        ("get-env-lopsided", "{{ get_env(name  =\"CI\") }}"),
+        ("github-actions", "{% if env.GITHUB_ACTIONS %}ci{% endif %}"),
+        ("github-actions-index", "{{ env[\"GITHUB_ACTIONS\"] }}"),
+        ("runner-os", "{{ env.RUNNER_OS }}"),
+        ("runner-os-get-env", "{{ get_env(name=\"RUNNER_OS\") }}"),
+        ("get-env-tab", "{{ get_env(name=\t\"CI\") }}"),
+        ("and", "{% if env.CI and env.HOME %}ci{% endif %}"),
+        (
+            "github-event",
+            "{% if env.GITHUB_EVENT_NAME %}ci{% endif %}",
+        ),
+        ("gitlab", "{{ env.GITLAB_CI }}"),
+    ] {
+        let root = sound(&format!("env-fork-{case}"));
+        common::write(
+            &root,
+            "mise.toml",
+            &manifest_with(
+                "NEXTEST_PROFILE = \"default\"",
+                &format!("NEXTEST_PROFILE = {}", toml_string(fork)),
+            ),
+        );
+        assert_eq!(
+            env_forks(&root).len(),
+            1,
+            "{fork}: a value forking on CI should be refused: {:?}",
+            findings(&root)
+        );
+    }
+}
+
+/// `#MUTANT table-form-unread` reddens here: mise's table form of an `[env]`
+/// value forks as surely as the string form. The double-quoted spelling is the
+/// one a serialised read misses, because the serialiser escapes the quotes.
+#[test]
+fn a_table_form_env_value_that_forks_on_ci_is_refused() {
+    let root = sound("env-fork-table");
+    common::write(
+        &root,
+        "mise.toml",
+        &manifest_with(
+            "NEXTEST_PROFILE = \"default\"",
+            "NEXTEST_PROFILE = { value = \"{{ get_env(name=\\\"CI\\\") }}\" }",
+        ),
+    );
+    assert_eq!(
+        env_forks(&root).len(),
+        1,
+        "a table-form fork should be refused: {:?}",
+        findings(&root)
+    );
+}
+
+/// `#MUTANT task-env-fork-unread` reddens here: a task's own `env` renders
+/// under CI as the top-level table does.
+#[test]
+fn a_task_env_value_that_forks_on_ci_is_refused() {
+    let root = sound("env-fork-task");
+    common::write(
+        &root,
+        "mise.toml",
+        &manifest_with(
+            "[tasks.hooks]\n",
+            "[tasks.hooks]\nenv = { PROFILE = \"{{env.CI}}\" }\n",
+        ),
+    );
+    assert_eq!(
+        env_forks(&root).len(),
+        1,
+        "a task env fork should be refused: {:?}",
+        findings(&root)
+    );
+}
+
+/// A variable whose name only BEGINS with `CI` is not the discriminator: this
+/// repository's own `CI_REQUIRED_CHECKS` is set the same everywhere, and a gate
+/// refusing a read of it would be refusing wrongly.
+#[test]
+fn an_env_value_reading_a_ci_prefixed_name_is_not_a_fork() {
+    let root = sound("env-fork-prefixed");
+    common::write(
+        &root,
+        "mise.toml",
+        &manifest_with(
+            "NEXTEST_PROFILE = \"default\"",
+            "NEXTEST_PROFILE = \"default\"\nFANIN = \"{{ env.CI_FANIN_CHECK }}\"",
+        ),
+    );
+    assert!(
+        env_forks(&root).is_empty(),
+        "a CI_-prefixed name is not a CI fork: {:?}",
+        findings(&root)
+    );
+}
+
+/// A credential passed through is not a fork: this repository's scorecard and
+/// release tasks read `GITHUB_TOKEN`, and a gate refusing that would be
+/// refusing wrongly.
+#[test]
+fn a_task_env_passing_a_token_through_is_not_a_fork() {
+    let root = sound("env-fork-token");
+    common::write(
+        &root,
+        "mise.toml",
+        &manifest_with(
+            "[tasks.hooks]\n",
+            "[tasks.hooks]\nenv = { GIT_TOKEN = \"{{env.GITHUB_TOKEN}}\" }\n",
+        ),
+    );
+    assert!(
+        env_forks(&root).is_empty(),
+        "a token pass-through is not a CI fork: {:?}",
+        findings(&root)
+    );
+}
+
+/// `#MUTANT vars-fork-unread` reddens here: `[vars]` renders under CI as
+/// `[env]` does, and an `[env]` value can carry one through `{{vars.x}}`.
+#[test]
+fn a_vars_value_that_forks_on_ci_is_refused() {
+    let root = sound("env-fork-vars");
+    common::write(
+        &root,
+        "mise.toml",
+        &format!("[vars]\nprofile = \"{{% if env.CI %}}ci{{% endif %}}\"\n{MANIFEST}"),
+    );
+    assert_eq!(
+        env_forks(&root).len(),
+        1,
+        "a [vars] fork should be refused: {:?}",
+        findings(&root)
+    );
+}
+
+/// `value` as a TOML basic string.
+fn toml_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 // ---------------------------------------------------------------------------

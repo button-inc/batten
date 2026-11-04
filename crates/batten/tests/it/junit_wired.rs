@@ -121,7 +121,7 @@ fn a_subset_gate_never_overwrites_the_full_suites_report() {
             .and_then(toml::Value::as_str)
             .unwrap_or("default");
         assert!(
-            !matches!(profile, "default" | "ci"),
+            profile != "default",
             "task `{name}` runs a filtered nextest under `{profile}`, the profile the full suite \
              reports into, so its report replaces the full one"
         );

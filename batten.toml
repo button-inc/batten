@@ -2150,6 +2150,21 @@ id = "mise-run-task"
 # as the defined `present`. A trailing `.` (a sentence ending) is not captured.
 regex = 'mise run [a-z][a-z0-9:_-]*(\.[a-z0-9_-]+)*'
 
+# A mise template reading a variable a forge runner sets and a local shell does
+# not, through `env.X`, `env["X"]` or `get_env(name="X")` with any whitespace:
+# the forges' own flags as whole names (`\b`, so this manifest's
+# `CI_REQUIRED_CHECKS` is not one) — `CI`, `GITLAB_CI`, `BUILDKITE`, `CIRCLECI`,
+# `TF_BUILD` — GitHub's run context (`GITHUB_ACTIONS`, `GITHUB_EVENT_NAME`, the
+# `GITHUB_*REF*` names, `GITHUB_WORKFLOW`, `GITHUB_RUN_*`, `GITHUB_JOB`,
+# `GITHUB_WORKSPACE`), and the `RUNNER_*` family. NOT `GITHUB_TOKEN` or
+# `GITHUB_REPOSITORY`: a credential or a target passed through is not a fork,
+# and this manifest's scorecard and release tasks read both.
+# `policy/ci-parity.rego`'s `manifest state unseen` refuses an `[env]`, `[vars]`
+# or task `env` value that matches it (CLOUD-2588).
+[[pattern]]
+id = "ci-discriminator-read"
+regex = '''(env\.|env\[\s*["']|name\s*=\s*["'])((CI|GITLAB_CI|BUILDKITE|CIRCLECI|TF_BUILD|GITHUB_(ACTIONS|EVENT_NAME|REF|REF_NAME|HEAD_REF|BASE_REF|WORKFLOW|JOB|WORKSPACE))\b|GITHUB_RUN_|RUNNER_)'''
+
 # A command line that invokes the engine, bare or through this manifest's
 # `vars.batten` indirection — `policy/sweep-exit-table.rego` reads a task body
 # every one of whose lines matches as answering on the ENGINE's exit table.
@@ -15236,6 +15251,23 @@ second one here would be a second authority.
 id = "workflow read first"
 kind = "document"
 target = ".github/workflows/dist.yml"
+
+[[verdict]]
+id = "manifest state unseen"
+gloss = "a manifest value forks on CI, so verify never runs under the value CI does"
+class = """
+A manifest value that forks on CI is one a local run never takes, so whatever \
+depends on it is proven only on metered minutes. Measured on #1209: every \
+declared Cargo row in the mutation cases read `suite-did-not-run` on four CI legs \
+because the sweep inherited CI's nextest profile, which no local verify had run \
+under. No environment value forks on CI, so the environment verify runs under \
+is CI's by construction.
+"""
+
+[[verdict.route]]
+id = "task read first"
+kind = "document"
+target = "mise.toml"
 
 [[verdict]]
 id = "job list missing"

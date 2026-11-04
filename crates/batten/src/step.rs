@@ -188,8 +188,10 @@ fn shown(key: &str) -> &str {
     key.get(..SHOWN).unwrap_or(key)
 }
 
-/// Whether the cache is switched off here.
-fn bypassed() -> bool {
+/// Whether the cache is switched off here: under a forge runner's `$CI`, or
+/// [`BYPASS`]. Also the rule the mutation pass record follows
+/// (`mutate::ChangePass`), so every local-only answer is off in the same place.
+pub(crate) fn bypassed() -> bool {
     ["CI", BYPASS]
         .iter()
         .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))

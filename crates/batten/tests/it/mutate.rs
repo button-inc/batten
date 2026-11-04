@@ -258,8 +258,9 @@ fn run(root: &Path, verb: &str, gates: &str) -> (i32, String, String) {
         // `[env]` (CLOUD-1909). A toy with no manifest resolves no `task-` gate
         // either way.
         .env("MUTANT_TASKS", "mise.toml")
-        // A PROFILE NO TOY DECLARES, as this repository's `[env]` exports under
-        // CI, so every case whose Cargo row reaches nextest proves an undeclared
+        // A PROFILE NO TOY DECLARES, as a consumer's `[env]` may export (this
+        // repository's did under CI until CLOUD-2588), so every case whose Cargo
+        // row reaches nextest proves an undeclared
         // inherited profile does not reach the sweep's nextest runs.
         .env("NEXTEST_PROFILE", "ci")
         .output()
@@ -1447,6 +1448,9 @@ fn other_suite(tail: &str) -> String {
 /// Sweep `gates` narrowed to what changed since `base`.
 #[cfg(unix)]
 fn sweep_since(root: &Path, gates: &str, base: &str) -> (i32, String, String) {
+    // THE INHERITED ENVIRONMENT, as before CLOUD-2588: these cases run under a
+    // CI leg's own `$CI`, which is where #1209's class showed. Only the
+    // pass-record cases clear it, through `sweep_since_with`.
     let answer = common::batten()
         .args(["mutate", "sweep"])
         .current_dir(root)
@@ -1525,6 +1529,323 @@ fn a_change_to_a_sources_second_suite_sweeps_its_gate() {
     let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
     assert_ne!(code, 0, "{out}{err}");
     assert!(out.contains("other/pipefail-dropped SURVIVED"), "{out}");
+}
+
+// ---------------------------------------------------------------------------
+// The whole-change pass record (CLOUD-2588): a change that passed whole is
+// answered without running again, under a key that moves with its content.
+// ---------------------------------------------------------------------------
+
+/// The line a sweep answers with when the change already passed whole.
+///
+/// EVERY CASE BELOW IS COMPILED ON EVERY TARGET AND RUNS ON UNIX ALONE, by
+/// `cfg!` rather than `#[cfg]` (`policy/cfg-gated-test.rego`): the toy gate is a
+/// bash program, so off unix there is no subject to judge, and `cross-check`
+/// still type-checks each case where it does not run.
+const NOT_RUN_AGAIN: &str = "so it is not run again";
+
+/// Sweep `gates` narrowed to what changed since `base`, with `env` on top of a
+/// scope the runner and shard variables of the outer run cannot reach.
+fn sweep_since_with(
+    root: &Path,
+    gates: &str,
+    base: &str,
+    env: &[(&str, &str)],
+) -> (i32, String, String) {
+    let mut command = common::batten();
+    command
+        .args(["mutate", "sweep"])
+        .current_dir(root)
+        .env("MUTANT_GATES", gates)
+        .env("MUTANT_CHANGED_SINCE", base)
+        .env("MUTANT_TASKS", "mise.toml")
+        .env_remove("MUTANT_SHARD")
+        .env_remove("MUTANT_RUNNER")
+        .env_remove("MUTANT_RUNNERS")
+        // A forge runner's own `$CI`, and the step cache's bypass, either of
+        // which turns the record off (`step::bypassed`).
+        .env_remove("CI")
+        .env_remove("BATTEN_STEP_RECEIPT_BYPASS");
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let answer = command.output().expect("run batten mutate");
+    (
+        answer.status.code().unwrap_or(-1),
+        stdout(&answer),
+        stderr(&answer),
+    )
+}
+
+/// `two_gate_repo` with `target/` ignored and committed, as a real checkout
+/// has it: the sweep writes its staged copy and builds under `target/`, and an
+/// unignored one is a change the next run's key would carry.
+fn ignoring_target(name: &str) -> PathBuf {
+    let root = two_gate_repo(name);
+    write(&root, ".gitignore", "/target/\n");
+    common::git_in(&root, &["add", ".gitignore"]);
+    common::git_in(&root, &["commit", "-m", "ignore target"]);
+    root
+}
+
+/// Sweep `root`'s change, which must pass, then sweep it unmoved and require it
+/// answered: THE CONTROL a case runs before moving something, so the run after
+/// is judged because something moved and not because nothing was recorded.
+fn sweep_recorded(root: &Path) {
+    let (code, out, err) = sweep_since_with(root, "toy,other", "HEAD", &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    let (_, out, _) = sweep_since_with(root, "toy,other", "HEAD", &[]);
+    assert!(
+        out.contains(NOT_RUN_AGAIN),
+        "the first sweep was recorded: {out}"
+    );
+}
+
+/// `ignoring_target` with `toy`'s gate edited, and a first sweep of that change
+/// that passes whole and so is recorded.
+fn passed_change(name: &str) -> PathBuf {
+    let root = ignoring_target(name);
+    write_program(
+        &root,
+        "mise-tasks/toy.sh",
+        &format!("{TOY_GATE}{CAUGHT}\n# edited\n"),
+    );
+    let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+    assert!(!out.contains(NOT_RUN_AGAIN), "a first run is run: {out}");
+    root
+}
+
+/// **The discriminating case.** The same change, swept again, is answered from
+/// the record and judges no row.
+#[test]
+fn a_change_that_passed_whole_is_not_swept_again() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = passed_change("pass-again");
+    let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains(NOT_RUN_AGAIN), "{out}");
+    assert!(
+        !out.contains("declared mutation(s)"),
+        "a row was judged: {out}"
+    );
+}
+
+/// A change whose patch moved is a key that moved.
+#[test]
+fn a_change_whose_patch_moved_is_swept_again() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = passed_change("pass-patch-moved");
+    write_program(
+        &root,
+        "mise-tasks/toy.sh",
+        &format!("{TOY_GATE}{CAUGHT}\n# edited twice\n"),
+    );
+    let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!out.contains(NOT_RUN_AGAIN), "{out}");
+    assert!(out.contains("every one caught"), "{out}");
+}
+
+/// The base moved a row's SUITE under an unchanged patch, as a rebase does:
+/// the rows' keys carry the suite's bytes, so the change runs again.
+#[test]
+fn a_change_whose_suite_moved_under_it_is_swept_again() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = passed_change("pass-suite-moved");
+    let suite = format!("{}// moved on the base\n", toy_suite("toy.sh", ""));
+    write(&root, "tests/toy.rs", &suite);
+    common::git_in(&root, &["add", "tests/toy.rs"]);
+    common::git_in(&root, &["commit", "-m", "the base moves the suite"]);
+    let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!out.contains(NOT_RUN_AGAIN), "{out}");
+}
+
+/// The base moved a suite a changed SOURCE declares, under an unchanged patch:
+/// that suite is the scope cargo-mutants runs over the source, so the key
+/// carries its bytes and the change runs again.
+#[test]
+fn a_change_whose_declared_suite_moved_under_it_is_swept_again() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = ignoring_target("pass-declared-suite");
+    write(
+        &root,
+        "src/extra.rs",
+        "//MUTANT-SUITE tests/extra_suite.rs\n",
+    );
+    write(
+        &root,
+        "tests/extra_suite.rs",
+        "#[test]\nfn extra_holds() {}\n",
+    );
+    track(&root);
+    common::git_in(&root, &["commit", "-m", "a source and its suite"]);
+    write_program(
+        &root,
+        "mise-tasks/toy.sh",
+        &format!("{TOY_GATE}{CAUGHT}\n# edited\n"),
+    );
+    write(
+        &root,
+        "src/extra.rs",
+        "//MUTANT-SUITE tests/extra_suite.rs\n// edited\n",
+    );
+    sweep_recorded(&root);
+    write(
+        &root,
+        "tests/extra_suite.rs",
+        "#[test]\nfn extra_holds() {}\n// moved on the base\n",
+    );
+    common::git_in(&root, &["add", "tests/extra_suite.rs"]);
+    common::git_in(&root, &["commit", "-m", "the base moves the suite"]);
+    let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!out.contains(NOT_RUN_AGAIN), "{out}");
+}
+
+/// **What the record is for.** The base moved a changed file AWAY FROM the
+/// change, as a rebase onto a busy trunk does: the change's hunks are the same,
+/// so the key is, and the lap is answered. A key over the file's whole working
+/// bytes would miss here.
+#[test]
+fn a_rebase_that_moves_only_unchanged_context_is_answered() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = ignoring_target("pass-context");
+    let lines: Vec<String> = (1..=20).map(|n| format!("line {n}")).collect();
+    write(&root, "notes.txt", &format!("{}\n", lines.join("\n")));
+    common::git_in(&root, &["add", "notes.txt"]);
+    common::git_in(&root, &["commit", "-m", "notes"]);
+    write_program(
+        &root,
+        "mise-tasks/toy.sh",
+        &format!("{TOY_GATE}{CAUGHT}\n# edited\n"),
+    );
+    write(
+        &root,
+        "notes.txt",
+        &format!("{}\nline 21\n", lines.join("\n")),
+    );
+    let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    // The base edits line 1 and adds a line above it, far outside the hunk at
+    // the end, so every line number under the change moves. The working copy
+    // keeps the change on top of it.
+    let mut moved = lines.clone();
+    moved[0] = String::from("line one");
+    moved.insert(0, String::from("line zero"));
+    write(&root, "notes.txt", &format!("{}\n", moved.join("\n")));
+    common::git_in(&root, &["add", "notes.txt"]);
+    common::git_in(&root, &["commit", "-m", "the base moves unchanged context"]);
+    write(
+        &root,
+        "notes.txt",
+        &format!("{}\nline 21\n", moved.join("\n")),
+    );
+    let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains(NOT_RUN_AGAIN), "{out}");
+}
+
+/// A changed file emptied and the same file deleted write the same patch, and
+/// are two trees: a deleted source removes a module. They are two keys.
+#[test]
+fn a_deleted_file_is_not_the_emptied_one() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = ignoring_target("pass-deleted");
+    write(&root, "notes.txt", "notes\n");
+    common::git_in(&root, &["add", "notes.txt"]);
+    common::git_in(&root, &["commit", "-m", "notes"]);
+    write_program(
+        &root,
+        "mise-tasks/toy.sh",
+        &format!("{TOY_GATE}{CAUGHT}\n# edited\n"),
+    );
+    write(&root, "notes.txt", "");
+    sweep_recorded(&root);
+    fs::remove_file(root.join("notes.txt")).expect("delete notes.txt");
+    let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!out.contains(NOT_RUN_AGAIN), "{out}");
+}
+
+/// Under `$CI` the record is never read: a confirmation run judges the change
+/// whole even where a workspace kept a record from an earlier run.
+#[test]
+fn a_change_under_ci_is_swept_again() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = passed_change("pass-under-ci");
+    let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[("CI", "true")]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!out.contains(NOT_RUN_AGAIN), "{out}");
+    assert!(out.contains("every one caught"), "{out}");
+}
+
+/// Another shard is another scope, so another key.
+#[test]
+fn a_change_under_another_shard_is_swept_again() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = passed_change("pass-shard");
+    let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[("MUTANT_SHARD", "0/1")]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!out.contains(NOT_RUN_AGAIN), "{out}");
+}
+
+/// A sweep that refused is never recorded: the same change refuses again.
+#[test]
+fn a_failing_change_is_never_recorded() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = ignoring_target("pass-failing");
+    write(&root, "tests/other.rs", &other_suite("// edited\n"));
+    for _ in 0..2 {
+        let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
+        assert_ne!(code, 0, "{out}{err}");
+        assert!(out.contains("other/pipefail-dropped SURVIVED"), "{out}");
+        assert!(!out.contains(NOT_RUN_AGAIN), "{out}");
+    }
+}
+
+/// A changed file the patch reads as empty, because it is not UTF-8, still
+/// moves the key through its digest.
+#[test]
+fn a_changed_binary_file_moves_the_key() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = ignoring_target("pass-binary");
+    fs::write(root.join("data.bin"), [0xff_u8, 0x00]).expect("write data.bin");
+    common::git_in(&root, &["add", "data.bin"]);
+    common::git_in(&root, &["commit", "-m", "a binary file"]);
+    write_program(
+        &root,
+        "mise-tasks/toy.sh",
+        &format!("{TOY_GATE}{CAUGHT}\n# edited\n"),
+    );
+    fs::write(root.join("data.bin"), [0xff_u8, 0x01]).expect("write data.bin");
+    sweep_recorded(&root);
+    fs::write(root.join("data.bin"), [0xff_u8, 0x02]).expect("write data.bin");
+    let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!out.contains(NOT_RUN_AGAIN), "{out}");
 }
 
 /// `sweep_since` with a runner registry declared, and optionally the registered
