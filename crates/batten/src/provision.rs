@@ -618,13 +618,13 @@ pub fn digest(bytes: &[u8]) -> String {
 ///
 /// An I/O failure other than a missing cache entry propagates as an internal
 /// error (→ exit `3`). A missing entry is a verdict, not a failure.
-pub fn status(entries: &[Provision], cache_root: &Path) -> Result<Report> {
+pub fn status(entries: &[Provision], cache_root: &Path, host: Host<'_>) -> Result<Report> {
     let mut report = Vec::with_capacity(entries.len());
     for entry in entries {
         report.push(EntryStatus {
             name: entry.name.clone(),
             version: entry.version.clone(),
-            freshness: freshness_of(entry, cache_root, true)?,
+            freshness: freshness_of(entry, cache_root, host)?,
         });
     }
     Ok(Report { entries: report })
@@ -649,7 +649,74 @@ pub fn links_host(exe: &Path, repo_root: &Path) -> bool {
     !exe.starts_with(repo_root)
 }
 
-fn freshness_of(entry: &Provision, cache_root: &Path, links_host: bool) -> Result<Freshness> {
+/// What a declared link is resolved against: whether this engine may write the
+/// host's links at all ([`links_host`]'s answer), the caller's `PATH`, and how
+/// to ask whether a directory is writable.
+///
+/// One value rather than loose parameters so [`status`] and [`apply`] are
+/// handed the same answer: the two must judge and write ONE path, or the row
+/// reads green over a link nobody wrote (CLOUD-2617).
+#[derive(Debug, Clone, Copy)]
+pub struct Host<'a> {
+    /// Whether the declared links are judged and written at all.
+    pub links: bool,
+    /// The caller's `PATH`, in order.
+    pub on_path: &'a [PathBuf],
+    /// Whether a directory may be written.
+    pub writable: fn(&Path) -> bool,
+}
+
+impl Host<'static> {
+    /// A host with no `PATH` and nothing writable, so every declared link
+    /// resolves to the directory it names. What a case wants: a suite run as
+    /// root must never reach a real system directory.
+    #[must_use]
+    pub const fn isolated(links: bool) -> Self {
+        const fn never(_: &Path) -> bool {
+            false
+        }
+        Self {
+            links,
+            on_path: &[],
+            writable: never,
+        }
+    }
+}
+
+/// The directory a declared `link` resolves to on `host` (CLOUD-2617).
+///
+/// **`engine install`'s rule, not a second one.** A link under `~/` is the
+/// per-user preference: where it is not on `PATH`, the first conventional system
+/// directory that is on `PATH` and writable wins, and otherwise it stands. An
+/// absolute link is NAMED, and stands wherever it is — the manifest asked for
+/// that directory, as `BATTEN_INSTALL_DIR` does. That is
+/// [`crate::install::destination`] exactly, called rather than copied, with
+/// `~/` in the per-user seat and an absolute path in the named one.
+///
+/// A root Setup shell carries `/usr/local/bin` and not `~/.local/bin`:
+/// measured on a cold Kilo.ai container, `engine install` put batten in
+/// `/usr/local/bin` while this linked the runner into `~/.local/bin`, so
+/// `provision status` was fresh, the bare name did not resolve, and every
+/// `[[startup]]` row naming it was could-not-look.
+///
+/// # Errors
+///
+/// [`expand_home`]'s: a `~` with no `HOME`, or a relative destination.
+//MUTANT link-ignores-path|s@^        host.on_path,$@        \&[],@|a_declared_link_off_path_follows_engine_installs_fallback
+pub fn link_dir(dest: &str, host: Host<'_>) -> Result<PathBuf> {
+    let declared = expand_home(dest)?;
+    if !dest.starts_with("~/") {
+        return Ok(declared);
+    }
+    Ok(crate::install::destination(
+        None,
+        declared,
+        host.on_path,
+        host.writable,
+    ))
+}
+
+fn freshness_of(entry: &Provision, cache_root: &Path, host: Host<'_>) -> Result<Freshness> {
     let dir = entry_dir(cache_root, entry);
     let binary = dir.join(BIN_DIR).join(&entry.binary);
     if !binary.is_file() {
@@ -671,8 +738,8 @@ fn freshness_of(entry: &Provision, cache_root: &Path, links_host: bool) -> Resul
     // `Missing` rather than a fourth verdict: what is missing is the binary at
     // the place this entry declares it must be, which is the same class as
     // nothing cached and takes the same repair.
-    if let Some(dest) = entry.link.as_deref().filter(|_| links_host) {
-        let linked = expand_home(dest)?.join(&entry.binary);
+    if let Some(dest) = entry.link.as_deref().filter(|_| host.links) {
+        let linked = link_dir(dest, host)?.join(&entry.binary);
         if !linked.is_file() {
             return Ok(Freshness::Missing);
         }
@@ -748,15 +815,16 @@ pub enum Applied {
 /// unsupported URL scheme is a [`UsageError`] (→ exit `1`), since the manifest
 /// asked for something this build does not do.
 ///
-/// `links_host` is [`links_host`]'s answer: `false` leaves the declared link —
-/// the host's, not the repository's — unjudged and unwritten.
+/// `host.links` is [`links_host`]'s answer: `false` leaves the declared link —
+/// the host's, not the repository's — unjudged and unwritten. Where it is
+/// written is [`link_dir`]'s answer over the same `host` [`status`] judges.
 pub fn apply(
     entry: &Provision,
     cache_root: &Path,
     dry_run: bool,
-    links_host: bool,
+    host: Host<'_>,
 ) -> Result<Applied> {
-    if freshness_of(entry, cache_root, links_host)? == Freshness::Fresh {
+    if freshness_of(entry, cache_root, host)? == Freshness::Fresh {
         return Ok(Applied::AlreadyFresh);
     }
     if dry_run {
@@ -774,7 +842,7 @@ pub fn apply(
     // checksum.
     let artifact = entry.artifact()?;
     if let Some(bytes) = cached_artifact_matching_pin(entry, cache_root, &artifact.sha256) {
-        install(entry, cache_root, &bytes, links_host)?;
+        install(entry, cache_root, &bytes, host)?;
         return Ok(Applied::Installed);
     }
     let bytes = fetch(&artifact.url)?;
@@ -796,14 +864,14 @@ pub fn apply(
         return Err(crate::Denial::raise(&refusal, crate::refusal::Arm::Full));
     }
 
-    install(entry, cache_root, &bytes, links_host)?;
+    install(entry, cache_root, &bytes, host)?;
     Ok(Applied::Installed)
 }
 
 /// Write the verified artifact and its binary into the cache.
 ///
 /// Called only after the checksum matched.
-fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], links_host: bool) -> Result<()> {
+fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], host: Host<'_>) -> Result<()> {
     let dir = entry_dir(cache_root, entry);
     let bin_dir = dir.join(BIN_DIR);
     fs::create_dir_all(&bin_dir).context("create the provision cache directory")?;
@@ -848,8 +916,8 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], links_host: bool)
     // reading `missing` also leaves the link unmade. A fresh entry whose link
     // never landed would be the silent half-install this ordering exists to
     // rule out.
-    if let Some(dest) = entry.link.as_deref().filter(|_| links_host) {
-        link_onto_path(entry, dest, &cached, &binary)?;
+    if let Some(dest) = entry.link.as_deref().filter(|_| host.links) {
+        link_onto_path(entry, &link_dir(dest, host)?, &cached, &binary)?;
     }
     // The artifact is written last, so a crash between the two leaves the entry
     // reading `missing` rather than `fresh` — the direction that re-applies.
@@ -907,9 +975,8 @@ const LAUNCHER_VERB: &str = "provision-exec";
 /// running process keeps its own open inode — so the temp file is made
 /// executable BEFORE the rename and the file on `PATH` is never a moment
 /// non-executable. Same directory, so it cannot cross a filesystem.
-fn link_onto_path(entry: &Provision, dest: &str, cached: &Path, binary: &[u8]) -> Result<()> {
-    let dir = expand_home(dest)?;
-    fs::create_dir_all(&dir).context("create the linked binary's directory")?;
+fn link_onto_path(entry: &Provision, dir: &Path, cached: &Path, binary: &[u8]) -> Result<()> {
+    fs::create_dir_all(dir).context("create the linked binary's directory")?;
     let path = dir.join(&entry.binary);
     // Keyed on the PID so two provisions running at once cannot write each
     // other's staging file, and dot-prefixed so a directory listing of `PATH`
@@ -2217,6 +2284,56 @@ mod tests {
         );
     }
 
+    /// CLOUD-2617: the measured case, a root Setup shell whose `PATH` carries
+    /// `/usr/local/bin` and not the declared `~/.local/bin`, links where
+    /// `engine install` put batten; a declared directory `PATH` reaches still
+    /// wins, and with nothing writable the declaration stands.
+    ///
+    /// Fails by: the fallback dropped, so the runner is linked off `PATH`, every
+    /// `[[startup]]` row naming it is could-not-look, and `status` reads fresh.
+    #[test]
+    #[cfg(unix)]
+    fn a_declared_link_off_path_follows_engine_installs_fallback() {
+        const PER_USER: &str = "~/.local/bin";
+        let declared = expand_home(PER_USER).unwrap();
+        let system = PathBuf::from(crate::install::SYSTEM_BIN_DIRS[0]);
+        let resolve = |dest: &str, on_path: &[PathBuf], writable: fn(&Path) -> bool| {
+            let host = Host {
+                links: true,
+                on_path,
+                writable,
+            };
+            link_dir(dest, host).unwrap()
+        };
+
+        let root_setup = [system.clone(), PathBuf::from("/usr/bin")];
+        assert_eq!(
+            resolve(PER_USER, &root_setup, |_| true),
+            system,
+            "off PATH: the fallback"
+        );
+        assert_eq!(
+            resolve(PER_USER, &[declared.clone(), system], |_| true),
+            declared,
+            "on PATH: the declaration"
+        );
+        assert_eq!(
+            resolve(PER_USER, &root_setup, |_| false),
+            declared,
+            "nothing writable"
+        );
+        assert_eq!(
+            resolve("/opt/tools/bin", &root_setup, |_| true),
+            PathBuf::from("/opt/tools/bin"),
+            "an absolute link is named, and stands off PATH"
+        );
+        assert_eq!(
+            link_dir(PER_USER, Host::isolated(true)).unwrap(),
+            declared,
+            "an isolated host never reaches a system directory"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // The control credential is DERIVED, never a forge's literal (CLOUD-1615).
     //
@@ -2663,7 +2780,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("a scratch directory");
         let dest = dir.display().to_string();
-        link_onto_path(&declared, &dest, Path::new("/cache/bin/tool"), &[]).expect("first link");
+        link_onto_path(
+            &declared,
+            Path::new(&dest),
+            Path::new("/cache/bin/tool"),
+            &[],
+        )
+        .expect("first link");
 
         let linked = dir.join("tool");
         let inode = |path: &Path| {
@@ -2675,7 +2798,13 @@ mod tests {
 
         let mut relinked = declared.clone();
         relinked.env = vec![rule("OTHER_TOKEN")];
-        link_onto_path(&relinked, &dest, Path::new("/cache/bin/tool"), &[]).expect("the re-link");
+        link_onto_path(
+            &relinked,
+            Path::new(&dest),
+            Path::new("/cache/bin/tool"),
+            &[],
+        )
+        .expect("the re-link");
         assert_ne!(
             before,
             inode(&linked),
@@ -2933,15 +3062,17 @@ mod tests {
         let mut entry = entry("tool", &digest(&body));
         entry.url = Some(format!("file://{}", artifact.display()));
         let cache = dir.join("cache");
-        let freshness = |entry: &Provision| status(std::slice::from_ref(entry), &cache).unwrap();
+        let freshness = |entry: &Provision| {
+            status(std::slice::from_ref(entry), &cache, Host::isolated(true)).unwrap()
+        };
 
         assert_eq!(freshness(&entry).entries[0].freshness, Freshness::Missing);
         assert_eq!(
-            apply(&entry, &cache, true, false).unwrap(),
+            apply(&entry, &cache, true, Host::isolated(false)).unwrap(),
             Applied::Previewed
         );
         assert_eq!(
-            apply(&entry, &cache, false, false).unwrap(),
+            apply(&entry, &cache, false, Host::isolated(false)).unwrap(),
             Applied::Installed
         );
         let binary = entry_dir(&cache, &entry).join(BIN_DIR).join("tool");
@@ -2958,7 +3089,7 @@ mod tests {
         }
         assert_eq!(freshness(&entry).entries[0].freshness, Freshness::Fresh);
         assert_eq!(
-            apply(&entry, &cache, false, false).unwrap(),
+            apply(&entry, &cache, false, Host::isolated(false)).unwrap(),
             Applied::AlreadyFresh
         );
 
@@ -2966,7 +3097,7 @@ mod tests {
         fs::remove_file(&binary).unwrap();
         fs::remove_file(&artifact).unwrap();
         assert_eq!(
-            apply(&entry, &cache, false, false).unwrap(),
+            apply(&entry, &cache, false, Host::isolated(false)).unwrap(),
             Applied::Installed
         );
         assert_eq!(fs::read(&binary).unwrap(), body);
@@ -2979,7 +3110,7 @@ mod tests {
         wrong.sha256 = Some(digest(b"other bytes"));
         fs::write(&artifact, &body).unwrap();
         let cache = dir.join("other-cache");
-        let err = apply(&wrong, &cache, false, false).unwrap_err();
+        let err = apply(&wrong, &cache, false, Host::isolated(false)).unwrap_err();
         assert!(err.downcast_ref::<crate::Denial>().is_some(), "{err}");
         assert!(
             !entry_dir(&cache, &wrong)
@@ -3008,11 +3139,14 @@ mod tests {
         entry.env = vec![row];
         let cache = dir.join("cache");
         let freshness = |entry: &Provision| {
-            status(std::slice::from_ref(entry), &cache).unwrap().entries[0].freshness
+            status(std::slice::from_ref(entry), &cache, Host::isolated(true))
+                .unwrap()
+                .entries[0]
+                .freshness
         };
 
         assert_eq!(
-            apply(&entry, &cache, false, true).unwrap(),
+            apply(&entry, &cache, false, Host::isolated(true)).unwrap(),
             Applied::Installed
         );
         let linked = bin.join("tool");
