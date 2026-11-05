@@ -30,6 +30,10 @@ gemini\-cli: Gemini CLI. Claude\-identical payload fields, different event names
 .IP \(bu 2
 codex\-cli: Codex CLI, whose wire format is a near\-verbatim clone of Claude Code\*(Aqs — its own repo says so. No payload shim is needed; the adapter exists so the host is nameable and its fixture is pinned against drift
 .IP \(bu 2
+factory: Factory Droid. Claude Code\*(Aqs wire shape — the same event names, the same `hookSpecificOutput.permissionDecision` verdict object — over a different tool vocabulary (`Create`/`Edit`/`ApplyPatch` write, `Execute` runs a shell) and its own hooks\-only project file. Fetched 2026\-10\-03 from `docs.factory.com/reference/hooks\-reference` (CLOUD\-1942)
+.IP \(bu 2
+opencode: `OpenCode`. No stdin/stdout hook contract at all: its plugin API\*(Aqs `tool.execute.before(input, output)` blocks by THROWING. So the adapter is a plugin Batten generates (`batten generate hooks \-\-harness opencode`), which hands the engine a Claude\-shaped envelope and throws the reason on exit 2. Fetched 2026\-10\-03 from `opencode.ai/docs/plugins/` (CLOUD\-1942)
+.IP \(bu 2
 exit\-code: The neutral core contract: envelope in, decision as exit code out — `0` allow, `2` deny (reason on stderr), for any host whose only decision channel is an exit status. Both codes are the §7 table\*(Aqs, unmodified
 .RE
 .TP

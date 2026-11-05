@@ -101,6 +101,23 @@ pub enum Harness {
     /// its own repo says so. No payload shim is needed; the adapter exists so
     /// the host is nameable and its fixture is pinned against drift.
     CodexCli,
+    /// Factory Droid. Claude Code's wire shape — the same event names, the same
+    /// `hookSpecificOutput.permissionDecision` verdict object — over a different
+    /// tool vocabulary (`Create`/`Edit`/`ApplyPatch` write, `Execute` runs a
+    /// shell) and its own hooks-only project file. Fetched 2026-10-03 from
+    /// `docs.factory.com/reference/hooks-reference` (CLOUD-1942).
+    Factory,
+    /// `OpenCode`. No stdin/stdout hook contract at all: its plugin API's
+    /// `tool.execute.before(input, output)` blocks by THROWING. So the adapter is
+    /// a plugin Batten generates (`batten generate hooks --harness opencode`),
+    /// which hands the engine a Claude-shaped envelope and throws the reason on
+    /// exit 2. Fetched 2026-10-03 from `opencode.ai/docs/plugins/` (CLOUD-1942).
+    ///
+    /// The token is one word because the product is: the derive would spell it
+    /// `open-code`, a name the host never uses.
+    #[value(name = "opencode")]
+    #[serde(rename = "opencode")]
+    OpenCode,
     /// The neutral core contract: envelope in, decision as exit code out —
     /// `0` allow, `2` deny (reason on stderr), for any host whose only decision
     /// channel is an exit status. Both codes are the §7 table's, unmodified.
@@ -117,6 +134,8 @@ impl Harness {
         Harness::CopilotCli,
         Harness::GeminiCli,
         Harness::CodexCli,
+        Harness::Factory,
+        Harness::OpenCode,
         Harness::ExitCode,
     ];
 
@@ -133,6 +152,8 @@ impl Harness {
             Harness::CopilotCli => "copilot-cli",
             Harness::GeminiCli => "gemini-cli",
             Harness::CodexCli => "codex-cli",
+            Harness::Factory => "factory",
+            Harness::OpenCode => "opencode",
             Harness::ExitCode => "exit-code",
         }
     }
@@ -190,6 +211,17 @@ impl Harness {
                 // and the two are different fetches.
                 project_dir_var: None,
             }),
+            // A hooks-only project file whose root IS the hooks object: the
+            // vendor reference names `.factory/hooks.json` for the project scope
+            // and says hooks "live directly at the root" of a standalone
+            // `hooks.json`. Claude's event names, so the spellings are shared;
+            // and unlike Codex, the variable IS fetched — the same page names
+            // `$FACTORY_PROJECT_DIR` for referencing project scripts.
+            Harness::Factory => Some(Wiring {
+                file: WiringFile::Root(".factory/hooks.json"),
+                spellings: CLAUDE_SPELLINGS,
+                project_dir_var: Some("FACTORY_PROJECT_DIR"),
+            }),
             // Registered in the PascalCase dialect deliberately: M1 records that
             // the camelCase one omits `hook_event_name` entirely, and the casing
             // of the config key is what selects the dialect. So this row is not
@@ -229,11 +261,16 @@ impl Harness {
                 ],
                 project_dir_var: None,
             }),
+            // A host, but not a JSON registration surface: OpenCode loads code,
+            // not config. Its adapter is the plugin [`Harness::plugin`] names, and
+            // reporting a hooks file here would send `doctor hooks` and the
+            // wiring rule to read events from a JavaScript module.
+            //
             // Not a host. `exit-code` is the neutral contract — envelope in,
             // decision as exit status out — for any host whose only channel is
             // an exit code. There is no file to register in, and inventing one
             // would be claiming something about a host nobody named.
-            Harness::ExitCode => None,
+            Harness::OpenCode | Harness::ExitCode => None,
         }
     }
 
@@ -272,15 +309,29 @@ impl Harness {
     #[must_use]
     pub const fn write_tools(self) -> &'static [&'static str] {
         match self {
-            Harness::ClaudeCode | Harness::CodexCli => {
+            // The neutral contract states the normalized shape, so a caller
+            // composing the envelope by hand gets Claude's normalized spellings.
+            Harness::ClaudeCode | Harness::ExitCode => {
                 &["Write", "Edit", "MultiEdit", "NotebookEdit"]
             }
+            // Claude's spellings, plus Codex's own patch tool, which names its
+            // files inside `input` and is the one way this host edits a file.
+            Harness::CodexCli => &["Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"],
             Harness::GeminiCli => &["WriteFile", "Edit", "Write", "MultiEdit", "NotebookEdit"],
             Harness::Cursor => &["Write", "Edit", "MultiEdit", "write", "edit"],
             Harness::CopilotCli => &["Write", "Edit", "MultiEdit", "StrReplaceEditor"],
-            // The neutral contract: a caller composing the envelope by hand is
-            // stating the normalized shape, so it gets the normalized spellings.
-            Harness::ExitCode => &["Write", "Edit", "MultiEdit", "NotebookEdit"],
+            // The vendor reference's own tool list: `Create` makes a file,
+            // `Edit` changes one, `ApplyPatch` applies a diff. Claude's `Write`
+            // is not a Factory tool, which is why this host is not folded into
+            // Claude's row despite sharing its wire shape.
+            Harness::Factory => &["Create", "Edit", "ApplyPatch"],
+            // The tools reference's own names for what its `edit` permission
+            // covers: `write`, `edit` and `multiedit` carry a `filePath`, which
+            // the envelope reader takes beside `file_path`; `apply_patch` and
+            // the older `patch` name their files inside `patchText`, which
+            // [`patch_targets`] reads. A name a release dropped costs nothing
+            // here; a name left out is a write judged as nothing.
+            Harness::OpenCode => &["write", "edit", "multiedit", "apply_patch", "patch"],
         }
     }
 
@@ -302,6 +353,8 @@ impl Harness {
         match self {
             Harness::ClaudeCode => Some("AskUserQuestion"),
             Harness::CodexCli
+            | Harness::Factory
+            | Harness::OpenCode
             | Harness::GeminiCli
             | Harness::Cursor
             | Harness::CopilotCli
@@ -351,6 +404,23 @@ impl Harness {
                 // spellings are one operation, or every spawn row goes dead.
                 "Agent" | "Task" => Operation::Subagent,
                 other if other.starts_with(MCP_TOOL_PREFIX) => Operation::Mcp,
+                other => Operation::Other(other.to_owned()),
+            },
+            // The vendor reference names its shell, read and subagent tools and
+            // no MCP spelling, so an MCP call classifies as `Other` — could not
+            // look — rather than borrowing Claude's prefix on the strength of a
+            // shared wire shape.
+            Harness::Factory => match raw_tool {
+                "Execute" => Operation::Execute,
+                "Read" => Operation::Read,
+                "Task" => Operation::Subagent,
+                other => Operation::Other(other.to_owned()),
+            },
+            // The plugin reference names `bash` and `read` beside its writes and
+            // nothing else, so every other tool is could-not-look.
+            Harness::OpenCode => match raw_tool {
+                "bash" => Operation::Execute,
+                "read" => Operation::Read,
                 other => Operation::Other(other.to_owned()),
             },
             Harness::Cursor => match raw_tool {
@@ -403,9 +473,15 @@ impl Harness {
             // has fetched Codex's transcript format, so it is unsurveyed —
             // reading the clone as evidence would be the confident wrong answer
             // `operation_of` declines for the other two.
-            Harness::CodexCli | Harness::Cursor | Harness::GeminiCli | Harness::CopilotCli => {
-                TranscriptShape::Unsurveyed("CLOUD-1781")
-            }
+            // Factory's hook payload names a `transcript_path` and the reference
+            // documents no record grammar behind it, so it is unsurveyed for
+            // Codex's reason.
+            Harness::CodexCli
+            | Harness::Factory
+            | Harness::OpenCode
+            | Harness::Cursor
+            | Harness::GeminiCli
+            | Harness::CopilotCli => TranscriptShape::Unsurveyed("CLOUD-1781"),
         }
     }
 }
@@ -1232,8 +1308,13 @@ impl Capabilities {
 /// business rewriting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WiringFile {
-    /// A hooks-only file, owned whole.
+    /// A hooks-only file, owned whole, whose events sit under a `hooks` key.
     Whole(&'static str),
+    /// A hooks-only file, owned whole, keyed DIRECTLY by event name — no `hooks`
+    /// wrapper (CLOUD-1942). Factory's reference: "Standalone `hooks.json` files
+    /// are keyed directly by event name", and a wrapped document there registers
+    /// nothing, because the host reads `hooks` as an event it does not have.
+    Root(&'static str),
     /// One key inside a file the host shares with other configuration.
     Key {
         /// The file, repo-root-relative.
@@ -1241,6 +1322,52 @@ pub enum WiringFile {
         /// The key batten's registrations live under.
         key: &'static str,
     },
+}
+
+/// A host's plugin adapter: where its host loads it, and the code that renders
+/// it (CLOUD-1942).
+#[derive(Debug, Clone, Copy)]
+pub struct Plugin {
+    /// The path, repo-root-relative, the host loads project plugins from.
+    pub path: &'static str,
+    /// Renders the plugin's source from the path it is loaded at, byte-stable (§6).
+    pub render: fn(&str) -> String,
+}
+
+impl Plugin {
+    /// The plugin's source, rendered for its own path.
+    #[must_use]
+    pub fn source(self) -> String {
+        (self.render)(self.path)
+    }
+}
+
+impl WiringFile {
+    /// The file, repo-root-relative, whatever the layout inside it.
+    #[must_use]
+    pub const fn path(self) -> &'static str {
+        match self {
+            Self::Whole(path) | Self::Root(path) | Self::Key { path, .. } => path,
+        }
+    }
+
+    /// Which key the file's events live under, `None` where the document IS the
+    /// event map.
+    ///
+    /// One answer for every reader — the emitter's shape, `wiring`'s mutable and
+    /// immutable walks, and `perf`'s wired-pair read — so no two of them can
+    /// silently stop describing the same document.
+    #[must_use]
+    pub const fn event_key(self) -> Option<&'static str> {
+        match self {
+            Self::Key { key, .. } => Some(key),
+            // A hooks-only file is what `render_wiring` emits whole, and what it
+            // emits is `{"hooks": {…}}`.
+            Self::Whole(_) => Some("hooks"),
+            // Keyed directly by event name: the document is the map.
+            Self::Root(_) => None,
+        }
+    }
 }
 
 /// One host's hook wiring: where it lives, and what it calls each event.
@@ -1353,11 +1480,17 @@ const CLAUDE_SPELLINGS: &[(Event, &str)] = &[
 /// literal fallback here: emitting `"hook"` when the declaration is gone would
 /// be the fourth spelling this removes, and it would report healthy.
 pub(crate) fn wiring_command(harness: Harness) -> String {
-    let argv = crate::surface::mediation_argv().unwrap_or_default();
+    wiring_argv(harness).join(" ")
+}
+
+/// [`wiring_command`] as argv: the binary, the mediation verb's argv, and the
+/// harness token — for an adapter that spawns the engine rather than naming a
+/// shell command (the `OpenCode` plugin), so both carry one derivation.
+pub(crate) fn wiring_argv(harness: Harness) -> Vec<String> {
     let mut parts = vec![crate::surface::BINARY.to_owned()];
-    parts.extend(argv);
+    parts.extend(crate::surface::mediation_argv().unwrap_or_default());
     parts.push(harness.as_str().to_owned());
-    parts.join(" ")
+    parts
 }
 
 /// Render one harness's registrations as the JSON its host reads.
@@ -1402,8 +1535,10 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
 
     match wiring.file {
         // The key's VALUE alone: the file carries configuration the engine does
-        // not own, so emitting the file would be claiming the rest of it.
-        WiringFile::Key { .. } => {
+        // not own, so emitting the file would be claiming the rest of it. A
+        // root-keyed hooks-only file is the same document for the opposite
+        // reason — the event map IS the whole file.
+        WiringFile::Key { .. } | WiringFile::Root(_) => {
             let body: Vec<String> = registrations
                 .iter()
                 .map(|(_, spelling)| entry(spelling, "  "))
@@ -1437,6 +1572,11 @@ const CONVERGED_EVENTS: &[Event] = &[
     Event::Stop,
     Event::SessionStart,
 ];
+
+/// `OpenCode`'s set: what the generated plugin delivers — `tool.execute.before`
+/// as the pre-tool event, and the `event` hook's `session.idle` as the end of a
+/// turn, which no plugin hook can veto (opencode.ai/docs/plugins).
+const OPENCODE_EVENTS: &[Event] = &[Event::PreTool, Event::Stop];
 
 /// The attribution row group every named host shares: nothing the evidence
 /// answers except the session id (CLOUD-276).
@@ -1815,6 +1955,77 @@ impl Harness {
                 attribution: UNSURVEYED_ATTRIBUTION,
                 capture: UNSURVEYED_CAPTURE,
             },
+            // Every value below is from the vendor reference fetched 2026-10-03
+            // (`docs.factory.com/reference/hooks-reference`) or is stated as
+            // unanswered by it.
+            Harness::Factory => Capabilities {
+                // The reference lists hook-visible tools and no plan tool.
+                plan_tools: PlanTools::Unsurveyed("CLOUD-1781"),
+                events: CONVERGED_EVENTS,
+                // `"ask"` is documented on `PreToolUse` as "Forces a user
+                // confirmation prompt", in the same `hookSpecificOutput` object a
+                // deny travels in.
+                ask: AskReach {
+                    enforced_on: &["PreToolUse"],
+                    declared: Declaration::Yes,
+                },
+                // The reference says stdout "can add context" for
+                // `UserPromptSubmit` and `SessionStart`. Batten registers
+                // `SessionStart`, and nothing here has probed it, so the channel
+                // exists and is delivered on nothing — `ADVISORY_GAPS` states it.
+                advisory: AdvisoryReach::unreachable(Declaration::Yes),
+                // `permissionDecision: "allow"` is documented on `PreToolUse`,
+                // the same field Claude Code honours there.
+                preapprove: PreapproveReach {
+                    honoured_on: &["PreToolUse"],
+                    declared: Declaration::Yes,
+                },
+                // Unprobed, as every host is until a live probe answers.
+                rewrites_tool_output: Declaration::Unknown,
+                stop_vetoes_completion: false,
+                // The reference states a 60-second default and no timeout
+                // outcome, so nothing here claims it fails open.
+                timeout_fails_open: false,
+                needs_fail_closed_config: false,
+                // "stdout is otherwise visible in transcripts": stray output is
+                // shown, not parsed as a decision.
+                stdout_must_stay_clean: false,
+                // The verdict object carries `permissionDecisionReason`, the
+                // channel the deny below writes.
+                reason_travels_in_band: true,
+                attribution: UNSURVEYED_ATTRIBUTION,
+                capture: UNSURVEYED_CAPTURE,
+            },
+            // From the plugin reference fetched 2026-10-03
+            // (`opencode.ai/docs/plugins/`), and from the plugin itself: the
+            // generated adapter is Batten's own code, so what it carries is a
+            // measurement of that code rather than of a host's documentation.
+            Harness::OpenCode => Capabilities {
+                plan_tools: PlanTools::Unsurveyed("CLOUD-1781"),
+                // What the generated plugin delivers: `tool.execute.before` as
+                // pre-tool, and the `event` hook's `session.idle` as Stop.
+                events: OPENCODE_EVENTS,
+                // The hook's vocabulary is throw or return: there is no third
+                // value to carry an escalation. A documented absence, so `No`.
+                ask: AskReach::unreachable(Declaration::No),
+                // The reference names no channel for a non-blocking message from
+                // this hook.
+                advisory: AdvisoryReach::unreachable(Declaration::Unknown),
+                // Nor any value that suppresses a prompt.
+                preapprove: PreapproveReach::unreachable(Declaration::Unknown),
+                // Unprobed, as every host is until a live probe answers.
+                rewrites_tool_output: Declaration::Unknown,
+                stop_vetoes_completion: false,
+                // The plugin waits for the engine; it sets no timeout of its own.
+                timeout_fails_open: false,
+                needs_fail_closed_config: false,
+                stdout_must_stay_clean: false,
+                // The plugin throws the engine's stderr as the error message, so
+                // the reason travels out of band, as on every exit-code host.
+                reason_travels_in_band: false,
+                attribution: UNSURVEYED_ATTRIBUTION,
+                capture: UNSURVEYED_CAPTURE,
+            },
             Harness::ExitCode => Capabilities {
                 // The neutral contract carries no host tool surface of its own.
                 plan_tools: PlanTools::Surveyed(&[]),
@@ -1925,6 +2136,9 @@ impl Harness {
             // Gemini merges the same user-level file its committed wiring is
             // keyed in — one layout, two locations.
             Harness::GeminiCli => &[".gemini/settings.json"],
+            // The reference's user scope: `~/.factory/hooks.json`, "applies
+            // across projects" — the same layout as the committed file.
+            Harness::Factory => &[".factory/hooks.json"],
             // EMPTY IS A MEASUREMENT HERE, not a gap: these hosts declare a
             // hooks-only project file and the survey records no user-level merge
             // for them, so there is nothing beyond the committed surface to
@@ -1932,6 +2146,9 @@ impl Harness {
             // out to merge has to be answered for rather than defaulting to
             // "does not".
             Harness::Cursor | Harness::CopilotCli | Harness::CodexCli => &[],
+            // OpenCode merges PLUGINS from a global directory, and those are
+            // code: nothing there is a hook registration this census can read.
+            Harness::OpenCode => &[],
             // Not a host: the neutral contract is an envelope in and an exit
             // status out, with no file to merge.
             Harness::ExitCode => &[],
@@ -1958,7 +2175,33 @@ impl Harness {
             Harness::Cursor
             | Harness::CopilotCli
             | Harness::CodexCli
+            | Harness::Factory
+            | Harness::OpenCode
             | Harness::GeminiCli
+            | Harness::ExitCode => None,
+        }
+    }
+
+    /// The plugin adapter for this host, for a host whose adapter is CODE rather
+    /// than a hook registration (CLOUD-1942).
+    ///
+    /// `batten generate hooks` renders it to stdout and the caller writes it to
+    /// its path: the plugin is a generated artifact, never a committed copy, so
+    /// the engine and the plugin cannot drift. The renderer rides in the row so
+    /// a second plugin host is rendered by its own code, never by `OpenCode`'s.
+    #[must_use]
+    pub const fn plugin(self) -> Option<Plugin> {
+        match self {
+            Harness::OpenCode => Some(Plugin {
+                path: ".opencode/plugins/batten.js",
+                render: render_opencode_plugin,
+            }),
+            Harness::ClaudeCode
+            | Harness::Cursor
+            | Harness::CopilotCli
+            | Harness::GeminiCli
+            | Harness::CodexCli
+            | Harness::Factory
             | Harness::ExitCode => None,
         }
     }
@@ -2759,6 +3002,47 @@ impl Envelope {
             *target = Some(relative);
         }
     }
+
+    /// Whether this call writes something, and every file it writes meets
+    /// `meets`: the predicate a gate admitting a call by what it writes asks,
+    /// so none of them can forget the call that names no file.
+    #[must_use]
+    pub fn writes_only(&self, meets: impl Fn(&str) -> bool) -> bool {
+        let targets = self.write_targets();
+        !targets.is_empty() && targets.into_iter().all(meets)
+    }
+
+    /// Every file this call writes: the one [`Envelope::writes`] names, or each
+    /// file a patch tool's body names.
+    ///
+    /// The reader for a question about the WHOLE write. `writes` is one path,
+    /// and a patch's is its first file, so a predicate that admits a call by
+    /// what it writes — the ripcord's arm and its floor — reads this, or a
+    /// patch adding the sentinel beside a protected file reads as the sentinel
+    /// alone.
+    #[must_use]
+    pub fn write_targets(&self) -> Vec<&str> {
+        // A patch tool names its files in its body, never under a path key, so
+        // the body is read for a write tool that named no path. A write that
+        // DID name one is never re-read for header-shaped content: the file it
+        // carries is content, and a fixture holding a patch is not a patch. Nor
+        // is any other tool's text: a subagent's prompt quoting a patch writes
+        // nothing.
+        let names_no_path =
+            self.operation == Operation::Write && target_path(&self.input).is_none();
+        let patched = if names_no_path {
+            patch_targets(&self.input)
+        } else {
+            Vec::new()
+        };
+        // A patch's every target already holds the one `writes` kept, so
+        // `writes` is read only when no patch was: no target is judged twice.
+        if patched.is_empty() {
+            self.writes.as_deref().into_iter().collect()
+        } else {
+            patched
+        }
+    }
 }
 
 /// The path a READ tool named, from the same keys a write is read from
@@ -2776,9 +3060,20 @@ fn read_target(operation: &Operation, input: &Value) -> Option<String> {
     if !matches!(operation, Operation::Read) {
         return None;
     }
+    target_path(input)
+}
+
+/// The file a tool's input names, under every spelling a host uses for it.
+///
+/// One lookup for reads and writes alike, so a new spelling cannot reach one
+/// and miss the other. `filePath` is `OpenCode`'s: its `read`, `write` and `edit`
+/// name their target that way (its plugin reference), and the generated plugin
+/// passes the args through unchanged.
+fn target_path(input: &Value) -> Option<String> {
     input
         .pointer("/file_path")
         .or_else(|| input.pointer("/notebook_path"))
+        .or_else(|| input.pointer("/filePath"))
         .and_then(Value::as_str)
         .filter(|path| !path.is_empty())
         .map(ToOwned::to_owned)
@@ -3340,16 +3635,17 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
     // write — omitting it would have left one tool in the matcher unjudged,
     // which is the CLOUD-185 shape (the guard was installed and one route
     // around it stayed open).
+    //
+    // A patch's first file, so a gate keyed on "this call writes" sees a patch
+    // as a write. It is one file of the patch, never the whole write: a
+    // predicate that admits a call by what it writes reads
+    // [`Envelope::write_targets`].
     let writes = harness
         .write_tools()
         .contains(&tool.as_str())
         .then(|| {
-            input
-                .pointer("/file_path")
-                .or_else(|| input.pointer("/notebook_path"))
-                .and_then(Value::as_str)
-                .filter(|path| !path.is_empty())
-                .map(ToOwned::to_owned)
+            target_path(&input)
+                .or_else(|| patch_targets(&input).first().map(|&path| path.to_owned()))
         })
         .flatten();
 
@@ -3483,7 +3779,12 @@ fn normalize_event(harness: Harness, raw: &str) -> Event {
             "sessionStart" => Some(Event::SessionStart),
             _ => None,
         },
-        Harness::ClaudeCode | Harness::CopilotCli | Harness::CodexCli | Harness::ExitCode => None,
+        Harness::ClaudeCode
+        | Harness::CopilotCli
+        | Harness::CodexCli
+        | Harness::Factory
+        | Harness::OpenCode
+        | Harness::ExitCode => None,
     };
     renamed.unwrap_or_else(|| Event::normalize(raw))
 }
@@ -5228,15 +5529,21 @@ pub fn edit_spans_of(input: &Value) -> Option<Vec<(String, String, bool)>> {
 }
 
 fn edit_spans(input: &Value) -> Option<Vec<(String, String, bool)>> {
+    // Each field under both spellings a host uses: snake case, and `OpenCode`'s
+    // camel case (`oldString`, `newString`, `replaceAll`) — the same split
+    // `target_path` reads `filePath` for, so an edit whose target is judged is
+    // never one whose text cannot be looked at.
+    fn field<'a>(value: &'a Value, snake: &str, camel: &str) -> Option<&'a Value> {
+        value.get(snake).or_else(|| value.get(camel))
+    }
     let replace_all = |value: &Value| {
-        value
-            .pointer("/replace_all")
+        field(value, "replace_all", "replaceAll")
             .and_then(Value::as_bool)
             .unwrap_or(false)
     };
     let span = |value: &Value| {
-        let old = value.pointer("/old_string").and_then(Value::as_str)?;
-        let new = value.pointer("/new_string").and_then(Value::as_str)?;
+        let old = field(value, "old_string", "oldString").and_then(Value::as_str)?;
+        let new = field(value, "new_string", "newString").and_then(Value::as_str)?;
         Some((old.to_owned(), new.to_owned(), replace_all(value)))
     };
     if let Some(one) = span(input) {
@@ -8835,18 +9142,21 @@ fn redirected_read(policy: &Policy, envelope: &Envelope) -> Decision {
 /// fact the old `verbs::classify(raw_tool)` was failing to reconstruct from a
 /// consumer's config. The `[[verb]]` row is consulted only for its remedy text,
 /// and its absence costs a more specific sentence rather than the whole gate.
+//MUTANT patch-targets-unread|s@^        let patched = if names_no_path {$@        let patched = if false {@|a_patch_naming_a_protected_file_is_refused_on_every_patch_tool
 fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
-    let Some(path) = envelope.writes.as_deref() else {
-        return Decision::Allow;
-    };
     // Through `protects` like every other reader (CLOUD-1236). The envelope's
     // target is already relativised upstream by `relativise_writes`, so this
     // changes no verdict here — which is the point: the two readers can no longer
     // drift apart, and a future call site that forgets the upstream step is
-    // covered rather than silently open.
-    if !protects(policy, path) {
+    // covered rather than silently open. A patch's targets take the same lookup,
+    // which is why they need no relativising of their own.
+    let Some(path) = envelope
+        .write_targets()
+        .into_iter()
+        .find(|target| protects(policy, target))
+    else {
         return Decision::Allow;
-    }
+    };
     // Looked up by program alone, and since CLOUD-442 that is a decision rather
     // than an omission: `verbs::classify` is `qualify` over no arguments, so a row
     // whose mutation is qualified by a flag or a subcommand cannot match here. A
@@ -8864,6 +9174,203 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
             redirect,
         },
     ))
+}
+
+/// The files a patch-shaped tool input names, from its own file headers.
+///
+/// A patch tool — `OpenCode`'s `apply_patch`, Factory's `ApplyPatch`, Codex's
+/// `apply_patch` — carries no path key: its targets are lines inside the patch
+/// text, so [`target_path`] finds nothing and a protected-path write would pass
+/// unjudged under the one tool whose whole job is writing. Every top-level
+/// string that is a patch is read, whatever the host keys it, because the key is
+/// per host and the format is not. Two formats: the `*** Begin Patch` envelope,
+/// and a unified diff — its `---`/`+++` header pairs, and git's own `diff --git`,
+/// `rename` and `copy` lines, which are the only names a rename, a copy or a
+/// mode change carries.
+///
+/// The two formats read their headers differently, as their hosts do. A
+/// unified or git header counts only at column 0, where `git apply` and
+/// `patch` read it: a context line quoting one starts with a space, and is the
+/// file's content. An envelope header counts at any indent, because a host's
+/// envelope parser trims a line before it matches one — so an over-read here
+/// costs a refusal, never the guard.
+fn patch_targets(input: &Value) -> Vec<&str> {
+    let Some(fields) = input.as_object() else {
+        return Vec::new();
+    };
+    let mut targets = Vec::new();
+    // The strings a host may carry a patch in: a top-level field, or one
+    // element of an argv-shaped array.
+    let texts = fields.values().flat_map(|value| match value {
+        Value::String(text) => vec![text.as_str()],
+        Value::Array(items) => items.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    });
+    for text in texts {
+        // BOTH FORMATS ARE READ OVER THE WHOLE TEXT, and an over-read is the
+        // safe direction: a file named that is not written costs a refusal, a
+        // file written that is not named costs the guard.
+        //
+        // A text holding a `*** Begin Patch` line anywhere is an envelope, and
+        // every line of it is read for a header, trimmed: a host's lenient
+        // parser decides where an envelope opens and closes — it strips a
+        // heredoc wrapper (`<<'EOF'`) or a preamble, and trims a line before
+        // it matches — and copying its bounds one quirk at a time is how a
+        // header past a misread `*** End Patch` goes unjudged.
+        let envelope = text.lines().any(|line| line.trim() == "*** Begin Patch");
+        let mut git = false;
+        // A `---` header counts only with a `+++` header on the very next
+        // line: a hunk removing the line `-- x` carries `--- x`, which opens
+        // nothing. A context diff pairs `*** x` with the `--- y` after it,
+        // which `patch` reads the same way.
+        let mut old = None;
+        let mut context = None;
+        for line in text.lines() {
+            // A hunk's own `*** 1,3 ****` / `--- 1,3 ----` range pair names
+            // no file.
+            if let Some(previous) = context.take()
+                && let Some(rest) = line.strip_prefix("--- ")
+                && !rest.trim_end().ends_with("----")
+            {
+                name_diff(&mut targets, previous);
+                name_diff(&mut targets, rest);
+            }
+            context = line
+                .strip_prefix("*** ")
+                .filter(|rest| !rest.trim_end().ends_with("****"));
+            // `patch` reads an `Index:` line as the file a hunk applies to.
+            if let Some(path) = line.strip_prefix("Index: ") {
+                name(&mut targets, path.trim());
+            }
+            if envelope
+                && let Some(path) = HEADERS
+                    .iter()
+                    .find_map(|header| line.trim().strip_prefix(header))
+            {
+                name(&mut targets, path.trim());
+            }
+            if let Some(rest) = line.strip_prefix("+++ ") {
+                if let Some(previous) = old.take() {
+                    name_diff(&mut targets, previous);
+                    name_diff(&mut targets, rest);
+                }
+                continue;
+            }
+            old = line.strip_prefix("--- ");
+            if let Some(rest) = line.strip_prefix("diff --git ") {
+                git = true;
+                if let Some((a, b)) = git_sides(rest) {
+                    name_diff(&mut targets, a);
+                    name_diff(&mut targets, b);
+                }
+            } else if let Some(path) = GIT_HEADERS
+                .iter()
+                .find_map(|header| line.strip_prefix(header))
+            {
+                // Only inside a git patch, which opens with `diff --git`.
+                if git {
+                    name(&mut targets, git_unquote(path));
+                }
+            }
+        }
+    }
+    targets
+}
+
+/// The headers a `*** Begin Patch` envelope names a file in.
+const HEADERS: &[&str] = &[
+    "*** Add File: ",
+    "*** Update File: ",
+    "*** Delete File: ",
+    "*** Move to: ",
+];
+
+/// The lines after a `diff --git` that name a file of their own. `rename
+/// old`/`rename new` are the spellings `git apply` takes beside `rename
+/// from`/`rename to`.
+const GIT_HEADERS: &[&str] = &[
+    "rename from ",
+    "rename to ",
+    "rename old ",
+    "rename new ",
+    "copy from ",
+    "copy to ",
+];
+
+/// A path git quoted because it must escape it. The outer quotes only: a
+/// C-escape inside one stays as written.
+fn git_unquote(path: &str) -> &str {
+    let path = path.trim();
+    path.strip_prefix('"')
+        .and_then(|path| path.strip_suffix('"'))
+        .unwrap_or(path)
+}
+
+/// Name the file a diff header's path names, however the patch was prefixed.
+///
+/// A tab and a timestamp may follow the path, and git may quote it. `git
+/// apply` and `patch -p1` strip the first component whatever it is — `a/` and
+/// `b/`, the `i/` `w/` `c/` `o/` of `diff.mnemonicPrefix`, or a custom
+/// `--src-prefix` — so that file is always named. Any other first component
+/// may instead be a real directory under `-p0` (`--no-prefix`), so the path as
+/// written is named too: an over-read costs a refusal, an under-read the guard.
+///
+/// `a/` and `b/` alone are taken as git's own prefixes and nothing else, which
+/// is the line between the two costs: naming `a/batten.toml` as well would
+/// make every default git patch of the config authority, or of the ripcord
+/// sentinel, fail the whole-write predicates that admit a repair.
+fn name_diff<'a>(targets: &mut Vec<&'a str>, rest: &'a str) {
+    let path = git_unquote(rest.split('\t').next().unwrap_or(rest));
+    if path == "/dev/null" {
+        return;
+    }
+    match path.split_once('/') {
+        Some(("a" | "b", tail)) => name(targets, tail),
+        Some((_, tail)) => {
+            name(targets, tail);
+            name(targets, path);
+        }
+        None => name(targets, path),
+    }
+}
+
+/// Add `path` to a patch's targets once, and never a path that names no file.
+fn name<'a>(targets: &mut Vec<&'a str>, path: &'a str) {
+    if !path.is_empty() && path != "/dev/null" && !targets.contains(&path) {
+        targets.push(path);
+    }
+}
+
+/// One side of a `diff --git` line with its first component stripped,
+/// whatever that prefix is.
+fn prefix_tail(side: &str) -> Option<&str> {
+    git_unquote(side).split_once('/').map(|(_, tail)| tail)
+}
+
+/// Where a `diff --git` line splits: `a/x b/y`, or quoted `"a/x" "b/y"` when
+/// either side needs it. A path may itself hold ` b/`, so the split where both
+/// sides name one file — every patch but a rename — is taken first: both sides
+/// prefixed and naming one path, or, under `--no-prefix`, the same bytes on
+/// either side. Only WHERE to split: both sides keep their quotes and
+/// prefixes, and [`name_diff`] reads them, one rule for either side.
+fn git_sides(rest: &str) -> Option<(&str, &str)> {
+    let middle = rest.len() / 2;
+    let (a, b) = (rest.get(..middle), rest.get(middle + 1..));
+    // Two absent prefixes are no match, so the prefixed case asks for both,
+    // each side read unquoted, so a quoted path holding ` b/` splits here too.
+    // Any prefix: `a/` `b/`, `diff.mnemonicPrefix`'s `i/` `w/`, or a custom
+    // `--src-prefix`, as long as both sides then name the one file.
+    let prefixed = a
+        .and_then(prefix_tail)
+        .is_some_and(|a| b.and_then(prefix_tail) == Some(a));
+    let same_file = rest.get(middle..=middle) == Some(" ") && (prefixed || a.is_some() && a == b);
+    let at = if same_file {
+        middle
+    } else {
+        rest.find(" b/").or_else(|| rest.find(" \"b/"))?
+    };
+    // The second side keeps the separating space, which `name_diff` trims.
+    Some(rest.split_at(at))
 }
 
 fn protected_mutation(policy: &Policy, command: &str) -> Decision {
@@ -11143,6 +11650,12 @@ fn encode_cursor_verdict(permission: &str, reason: &str) -> serde_json::Result<S
 ///
 /// Serialization of these fixed shapes cannot practically fail; the `Result` is
 /// the honest signature for a serde boundary.
+//MUTANT-SUITE crates/batten/tests/it/cli.rs
+//MUTANT factory-deny-drops-reason|s@^        Harness::Factory => encode_claude_deny(event, reason).map(Some),$@        Harness::Factory => encode_claude_deny(event, "").map(Some),@|a_factory_deny_carries_its_reason_in_the_verdict_object
+// `match_same_arms` would fold Factory into Claude's arm. Refused for
+// `write_tools`' reason: the two share a wire shape today by coincidence of two
+// vendors' documentation, and each host answers for its own deny.
+#[allow(clippy::match_same_arms)]
 pub fn encode_deny(
     harness: Harness,
     event: &str,
@@ -11150,10 +11663,16 @@ pub fn encode_deny(
 ) -> serde_json::Result<Option<String>> {
     match harness {
         Harness::ClaudeCode => encode_claude_deny(event, reason).map(Some),
+        // Factory documents the same verdict object, reason included, so it
+        // takes Claude's encoder rather than a copy of it. Its own arm so the
+        // reason it carries is pinned for this host by itself.
+        Harness::Factory => encode_claude_deny(event, reason).map(Some),
         Harness::Cursor => encode_cursor_deny(reason).map(Some),
-        Harness::CopilotCli | Harness::GeminiCli | Harness::CodexCli | Harness::ExitCode => {
-            Ok(None)
-        }
+        Harness::CopilotCli
+        | Harness::GeminiCli
+        | Harness::CodexCli
+        | Harness::OpenCode
+        | Harness::ExitCode => Ok(None),
     }
 }
 
@@ -11210,7 +11729,9 @@ pub fn encode_ask(
         // Documented, and merged most-restrictive-first by the host itself
         // (`deny > defer > ask > allow`), so an ask here cannot override another
         // hook's deny.
-        Harness::ClaudeCode => encode_claude_verdict(event, "ask", reason).map(Some),
+        Harness::ClaudeCode | Harness::Factory => {
+            encode_claude_verdict(event, "ask", reason).map(Some)
+        }
         // Reachable on `beforeShellExecution` and `beforeMCPExecution` only, which
         // the guard above has already established by the time this arm runs. The
         // body is the host's one documented verdict shape, the same one a deny
@@ -11221,9 +11742,11 @@ pub fn encode_ask(
         // through the guard above, and stated rather than wildcarded so a row that
         // ever gains an `enforced_on` entry has to come back here and answer for
         // its wire shape.
-        Harness::CopilotCli | Harness::GeminiCli | Harness::CodexCli | Harness::ExitCode => {
-            Ok(None)
-        }
+        Harness::CopilotCli
+        | Harness::GeminiCli
+        | Harness::CodexCli
+        | Harness::OpenCode
+        | Harness::ExitCode => Ok(None),
     }
 }
 
@@ -11317,7 +11840,15 @@ pub fn encode_advice(
         // its wire shape. Cursor documents a verdict body and no advisory one;
         // Copilot's output object is unconfirmed; Codex is unsurveyed; the
         // neutral adapter has an exit status and nothing else.
-        Harness::Cursor | Harness::CopilotCli | Harness::CodexCli | Harness::ExitCode => Ok(None),
+        // Factory's channel is delivered on nothing until its `SessionStart`
+        // is probed (its `ADVISORY_GAPS` row), so the guard above never lets
+        // it reach this arm.
+        Harness::Cursor
+        | Harness::CopilotCli
+        | Harness::CodexCli
+        | Harness::Factory
+        | Harness::OpenCode
+        | Harness::ExitCode => Ok(None),
     }
 }
 
@@ -11363,7 +11894,7 @@ pub fn encode_preapproval(
         // The same envelope a deny and an ask travel in, with the third verdict
         // word, and the call's advice beside it (CLOUD-1949) — one document,
         // because the channel reads one.
-        Harness::ClaudeCode => serde_json::to_string(&ClaudeVerdict {
+        Harness::ClaudeCode | Harness::Factory => serde_json::to_string(&ClaudeVerdict {
             hook_specific_output: ClaudeVerdictInner {
                 hook_event_name: event,
                 permission_decision: "allow",
@@ -11383,9 +11914,95 @@ pub fn encode_preapproval(
         | Harness::CopilotCli
         | Harness::GeminiCli
         | Harness::CodexCli
+        | Harness::OpenCode
         | Harness::ExitCode => Ok(None),
     }
 }
+
+/// Render `OpenCode`'s plugin adapter: the module its host loads from
+/// [`Harness::plugin`]'s path (CLOUD-1942).
+///
+/// `OpenCode` has no stdin/stdout hook contract. Its `tool.execute.before(input,
+/// output)` hook blocks by throwing, so the adapter is this module: it hands the
+/// engine a Claude-shaped `PreToolUse` envelope — the tool name and its args
+/// passed through unchanged, the project directory as `cwd` — and throws the
+/// engine's stderr when it exits `2`. Its `event` hook hands the engine a `Stop`
+/// envelope on `session.idle` and never throws: the session has already ended,
+/// so the engine's answer there is a record, never a veto.
+///
+/// **Every other exit lets the call through.** `0` is an allow; anything else —
+/// the engine missing, crashing, or answering `1`/`3` — is a guard that could not
+/// decide, and §7(c) makes that an allow rather than the reason a session cannot
+/// proceed. That is the same fail-open every other adapter takes.
+///
+/// Byte-stable (§6), and generated rather than committed so the plugin and the
+/// engine it spawns are one release: `node:child_process` runs under the Bun the
+/// host executes plugins with, and under Node for the test that drives it.
+//MUTANT opencode-exit2-not-thrown|s@^      throw new Error(reason);$@      return;@|a_generated_opencode_plugin_throws_the_engine_s_refusal
+fn render_opencode_plugin(path: &str) -> String {
+    let quoted: Vec<String> = wiring_argv(Harness::OpenCode)
+        .iter()
+        .map(|part| json_string(part))
+        .collect();
+    OPENCODE_PLUGIN
+        .replace("@PATH@", path)
+        .replace("@ARGV@", &quoted.join(", "))
+}
+
+/// The plugin [`render_opencode_plugin`] fills in: the argv from
+/// [`wiring_argv`], so the plugin spawns exactly the command every hook
+/// registration runs, and the path it is loaded from.
+///
+/// The engine is spawned ASYNCHRONOUSLY. `spawnSync` would hold the host's
+/// event loop for the whole engine run on every tool call — no UI, no other
+/// plugin, no parallel call — where an awaited child process blocks only the
+/// call it judges. A spawn that fails resolves with a `null` status, which is
+/// an allow like every other exit but `2`.
+const OPENCODE_PLUGIN: &str = r#"// Generated by `batten generate hooks --harness opencode`. Do not edit: regenerate it.
+// OpenCode loads it from @PATH@.
+import { spawn } from "node:child_process";
+
+const [program, ...args] = [@ARGV@];
+
+const adjudicate = (directory, envelope) =>
+  new Promise((resolve) => {
+    const child = spawn(program, args, {
+      cwd: directory,
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", () => resolve({ status: null, stderr }));
+    child.on("close", (status) => resolve({ status, stderr }));
+    child.stdin.on("error", () => {});
+    child.stdin.end(JSON.stringify({ cwd: directory, ...envelope }));
+  });
+
+export const Batten = async ({ directory }) => ({
+  "tool.execute.before": async (input, output) => {
+    const run = await adjudicate(directory, {
+      hook_event_name: "PreToolUse",
+      session_id: input.sessionID,
+      tool_name: input.tool,
+      tool_input: output.args,
+    });
+    if (run.status === 2) {
+      const reason = run.stderr.trim() || "batten refused this call; run batten check";
+      throw new Error(reason);
+    }
+  },
+  event: async ({ event }) => {
+    if (event.type === "session.idle") {
+      await adjudicate(directory, {
+        hook_event_name: "Stop",
+        session_id: event.properties?.sessionID,
+      });
+    }
+  },
+});"#;
 
 /// Surfaces where an advisory is documented and Batten does not use it,
 /// **stated** (CLOUD-461).
@@ -11401,16 +12018,26 @@ pub fn encode_preapproval(
 /// describes a gap — so probing a surface fails until its row is removed.
 ///
 /// `pub` because being readable IS the mechanism.
-pub const ADVISORY_GAPS: &[(Harness, &str)] = &[(
-    Harness::ClaudeCode,
-    "`PostToolUse` and `UserPromptSubmit` are documented to accept \
+pub const ADVISORY_GAPS: &[(Harness, &str)] = &[
+    (
+        Harness::ClaudeCode,
+        "`PostToolUse` and `UserPromptSubmit` are documented to accept \
          `additionalContext` and are NOT in `delivered_on`, because nothing here \
          has probed them. Listing an unprobed surface costs a notice that \
          vanishes silently; leaving it out costs only silence. `PreToolUse` was \
          a third entry here until CLOUD-1131 probed it and it delivered — so a \
          row leaving this table is what closing a gap looks like, and the \
          absence of a probe is never itself a finding about the host.",
-)];
+    ),
+    (
+        Harness::Factory,
+        "The reference says stdout \"can add context\" on `UserPromptSubmit` and \
+         `SessionStart`, and Batten registers `SessionStart`; neither is in \
+         `delivered_on`, because nothing here has probed this host at all. \
+         Listing an unprobed surface costs a notice that vanishes silently; \
+         leaving it out costs only silence, as Claude Code's row says.",
+    ),
+];
 
 /// Surfaces where a pre-approval is honoured and Batten does not spend one,
 /// **stated**.
@@ -16333,22 +16960,24 @@ deny contains "refused by themodule" if {
     }
 
     #[test]
-    fn five_of_six_hosts_declare_the_response_bytes_unreachable_rather_than_guessing() {
-        // The honest-value discipline, as a count. An unsurveyed response
-        // surface is `Unavailable`, never a guess, and exactly one host has a
-        // measurement here: Claude Code's post-tool member, read as DECODED
+    fn exactly_one_host_has_a_measured_capture_row() {
+        // The honest-value discipline, read off the table. An unsurveyed
+        // response surface is `Unavailable`, never a guess, and exactly one host
+        // has a measurement here: Claude Code's post-tool member, read as DECODED
         // content because the decoder hands the engine an already-parsed value.
-        let unreachable = Harness::ALL
+        let measured: Vec<Harness> = Harness::ALL
             .iter()
+            .copied()
             .filter(|harness| {
                 let capabilities = harness.capabilities();
-                ResponseShape::ALL.iter().all(|shape| {
-                    capabilities.fidelity(*shape) == crate::capture::Fidelity::Unavailable
+                ResponseShape::ALL.iter().any(|shape| {
+                    capabilities.fidelity(*shape) != crate::capture::Fidelity::Unavailable
                 })
             })
-            .count();
+            .collect();
         assert_eq!(
-            unreachable, 5,
+            measured,
+            [Harness::ClaudeCode],
             "exactly one host has a measured capture row; widening another is a \
              measurement, filed per host"
         );
@@ -16671,35 +17300,34 @@ deny contains "refused by themodule" if {
     }
 
     #[test]
-    fn every_harness_declares_a_wiring_row_or_declares_itself_not_a_host() {
-        // CLOUD-62's totality obligation. The `match` in `wiring()` already
-        // makes a new variant a COMPILE error, which is the strong half. This
-        // is the half a compiler cannot give: a variant added as `None` to make
-        // the build pass, with nobody deciding whether it is installable.
+    fn every_harness_declares_one_install_route_or_declares_itself_not_a_host() {
+        // CLOUD-62's totality obligation. The `match`es in `wiring()` and
+        // `plugin()` already make a new variant a COMPILE error, which is the
+        // strong half. This is the half a compiler cannot give: a variant added
+        // as `None` to make the build pass, with nobody deciding whether it is
+        // installable.
         //
-        // So the non-installable set is named here, once. Adding a variant to it
-        // is a deliberate edit in a test that says what the claim means; adding
-        // one silently is a failure.
+        // A host installs by exactly one route — a hook file it reads
+        // (`wiring()`) or code Batten generates for it (`plugin()`, CLOUD-1942).
+        // The non-installable set is named here, once, and has neither. Adding
+        // a variant to it is a deliberate edit in a test that says what the
+        // claim means; adding one silently is a failure.
         const NOT_A_HOST: &[Harness] = &[Harness::ExitCode];
 
         for &harness in Harness::ALL {
             let wiring = harness.wiring();
-            if NOT_A_HOST.contains(&harness) {
-                assert!(
-                    wiring.is_none(),
-                    "{} is declared a contract rather than a host, so it must have no \
-                     wiring row",
-                    harness.as_str()
-                );
+            let routes = usize::from(wiring.is_some()) + usize::from(harness.plugin().is_some());
+            let expected = usize::from(!NOT_A_HOST.contains(&harness));
+            assert_eq!(
+                routes,
+                expected,
+                "{} declares {routes} install route(s); a host has exactly one of a \
+                 wiring row and a plugin, and a NOT_A_HOST contract has neither",
+                harness.as_str()
+            );
+            let Some(wiring) = wiring else {
                 continue;
-            }
-            let wiring = wiring.unwrap_or_else(|| {
-                panic!(
-                    "{} has no wiring row and is not in NOT_A_HOST — decide which it is \
-                     rather than leaving it unregisterable",
-                    harness.as_str()
-                )
-            });
+            };
             let registrations = wiring.registrations(harness);
             assert!(
                 !registrations.is_empty(),
@@ -17283,6 +17911,8 @@ deny contains "refused by themodule" if {
         (Harness::CopilotCli, "StrReplaceEditor"),
         (Harness::GeminiCli, "WriteFile"),
         (Harness::CodexCli, "NotebookEdit"),
+        (Harness::Factory, "Create"),
+        (Harness::OpenCode, "write"),
         (Harness::ExitCode, "Write"),
     ];
 
@@ -17433,6 +18063,489 @@ deny contains "refused by themodule" if {
                 "{}: `{spelling}` reached a protected path and was not refused — \
                  the gate reads as coverage on every harness and enforces on one",
                 harness.as_str()
+            );
+        }
+    }
+
+    /// A PATCH TOOL NAMES ITS FILES IN ITS BODY, AND THEY ARE JUDGED THERE.
+    ///
+    /// `OpenCode`'s `apply_patch`, Factory's `ApplyPatch` and Codex's
+    /// `apply_patch` carry no path key, so a protected file reached through one
+    /// passed unjudged while the same change through `write` was refused. Driven
+    /// through each host's own decoder, with the protected file second so the
+    /// gate must read past the first header.
+    #[test]
+    fn a_patch_naming_a_protected_file_is_refused_on_every_patch_tool() {
+        let policy = protected_policy(vec![verb(
+            "Write",
+            Some("use the surface that owns the file"),
+        )]);
+        let patch = |second: &str| {
+            format!(
+                "*** Begin Patch\n*** Update File: src/ok.rs\n@@\n-a\n+b\n\
+                 *** Update File: {second}\n@@\n-c\n+d\n*** End Patch"
+            )
+        };
+        let judge = |harness: Harness, tool: &str, key: &str, body: String| {
+            let envelope = decode_value(
+                harness,
+                &serde_json::json!({
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": tool,
+                    "tool_input": { key: body },
+                }),
+            )
+            .expect("a Claude-shaped pre-tool payload decodes");
+            adjudicate(
+                &policy,
+                &envelope,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
+                &crate::stop::StopFacts::default(),
+            )
+        };
+        for (harness, tool, key) in [
+            (Harness::OpenCode, "apply_patch", "patchText"),
+            (Harness::Factory, "ApplyPatch", "patch"),
+            (Harness::CodexCli, "apply_patch", "input"),
+        ] {
+            assert!(
+                matches!(
+                    judge(harness, tool, key, patch("batten.toml")),
+                    Decision::Deny(_)
+                ),
+                "{}: `{tool}` patched a protected file and was not refused",
+                harness.as_str()
+            );
+            assert_eq!(
+                judge(harness, tool, key, patch("src/also_ok.rs")),
+                Decision::Allow,
+                "{}: a patch of unprotected files is not refused",
+                harness.as_str()
+            );
+        }
+        // A unified diff names its files in `---`/`+++` headers.
+        assert!(matches!(
+            judge(
+                Harness::Factory,
+                "ApplyPatch",
+                "patch",
+                "--- a/batten.toml\n+++ b/batten.toml\n@@ -1 +1 @@\n-a\n+b\n".to_owned()
+            ),
+            Decision::Deny(_)
+        ));
+        // Header-shaped text that opens no patch is content, not a target.
+        assert_eq!(
+            judge(
+                Harness::OpenCode,
+                "write",
+                "content",
+                "*** Update File: batten.toml".to_owned()
+            ),
+            Decision::Allow,
+        );
+        // A host trims an envelope line before it matches a header, so an
+        // indented header inside an envelope is one, and is judged.
+        assert!(matches!(
+            judge(
+                Harness::OpenCode,
+                "apply_patch",
+                "patchText",
+                "*** Begin Patch\n*** Update File: src/ok.rs\n@@\n *** Update File: batten.toml\n-a\n+b\n*** End Patch".to_owned()
+            ),
+            Decision::Deny(_)
+        ));
+        // A tool that writes nothing is never read as a patch: a subagent's
+        // prompt quoting one asks for review, not a write.
+        assert_eq!(
+            judge(Harness::OpenCode, "task", "prompt", patch("batten.toml")),
+            Decision::Allow,
+        );
+        // OpenCode's `multiedit` names its file under `filePath`, as `edit` does.
+        assert!(matches!(
+            judge(
+                Harness::OpenCode,
+                "multiedit",
+                "filePath",
+                "batten.toml".to_owned()
+            ),
+            Decision::Deny(_)
+        ));
+    }
+
+    /// A write that names its path is never re-read for patch-shaped content.
+    ///
+    /// The file a `write` carries is content: a fixture holding a whole patch of
+    /// a protected file, written somewhere unprotected, is that somewhere.
+    #[test]
+    fn a_write_carrying_a_patch_as_content_is_judged_by_its_own_path() {
+        let policy = protected_policy(vec![verb(
+            "Write",
+            Some("use the surface that owns the file"),
+        )]);
+        let envelope = decode_value(
+            Harness::OpenCode,
+            &serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "write",
+                "tool_input": {
+                    "filePath": "tests/fixtures/a.patch",
+                    "content": "*** Begin Patch\n*** Update File: batten.toml\n*** End Patch",
+                },
+            }),
+        )
+        .expect("decodes");
+        assert_eq!(
+            adjudicate(
+                &policy,
+                &envelope,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
+                &crate::stop::StopFacts::default(),
+            ),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn an_opencode_edit_s_camel_case_spans_are_read() {
+        // OpenCode's `edit` spells its spans `oldString`/`newString`/
+        // `replaceAll`, beside the `filePath` its target is read from.
+        assert_eq!(
+            edit_spans_of(&serde_json::json!({
+                "filePath": "src/a.rs",
+                "oldString": "a",
+                "newString": "b",
+                "replaceAll": true,
+            })),
+            Some(vec![("a".to_owned(), "b".to_owned(), true)])
+        );
+    }
+
+    /// A unified diff is both headers, and `/dev/null` is no file.
+    ///
+    /// A lone `---` line is a markdown rule or a YAML document marker, so it
+    /// opens no diff; and an added or deleted file's other side is `/dev/null`,
+    /// which names nothing to judge.
+    #[test]
+    fn a_unified_patch_needs_both_headers_and_never_names_dev_null() {
+        assert!(
+            patch_targets(&serde_json::json!({ "content": "--- a/batten.toml\nnot a diff" }))
+                .is_empty()
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "--- /dev/null\n+++ b/src/new.rs\n@@ -0,0 +1 @@\n+x\n",
+            })),
+            ["src/new.rs"]
+        );
+    }
+
+    /// Neither patch format switches the other off: a diff whose added line
+    /// quotes the envelope's opening is still a diff, and an envelope header
+    /// outside an envelope names nothing.
+    #[test]
+    fn a_diff_quoting_the_envelope_is_still_read_as_a_diff() {
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "--- a/batten.toml\n+++ b/batten.toml\n@@ -1 +1,2 @@\n x\n+*** Begin Patch\n",
+            })),
+            ["batten.toml"]
+        );
+        assert!(
+            patch_targets(&serde_json::json!({ "content": "*** Add File: batten.toml\n" }))
+                .is_empty()
+        );
+    }
+
+    /// A patch's `writes` is its first file, and its write targets are every
+    /// file: a patch adding the ripcord sentinel beside a protected file is a
+    /// write of both.
+    #[test]
+    fn a_patch_writes_its_first_file_and_targets_every_file() {
+        let envelope = decode_value(
+            Harness::OpenCode,
+            &serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "apply_patch",
+                "tool_input": {
+                    "patchText": "*** Begin Patch\n*** Add File: .batten-ripcord\n+x\n*** Update File: batten.toml\n@@\n-a\n+b\n*** End Patch",
+                },
+            }),
+        )
+        .expect("decodes");
+        assert_eq!(envelope.writes.as_deref(), Some(".batten-ripcord"));
+        assert_eq!(envelope.write_targets(), [".batten-ripcord", "batten.toml"]);
+        // `writes_only` asks every target, and a call writing nothing meets
+        // no predicate, not even one every path meets.
+        assert!(envelope.writes_only(|_| true));
+        assert!(!envelope.writes_only(|path| path == ".batten-ripcord"));
+        let read = decode_value(
+            Harness::OpenCode,
+            &serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "read",
+                "tool_input": { "filePath": "a.rs" },
+            }),
+        )
+        .expect("decodes");
+        assert!(!read.writes_only(|_| true));
+        // A write naming its path is that path alone, whatever its content.
+        let named = decode_value(
+            Harness::OpenCode,
+            &serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "write",
+                "tool_input": { "filePath": "a.patch", "content": "*** Begin Patch\n*** Add File: b\n" },
+            }),
+        )
+        .expect("decodes");
+        assert_eq!(named.write_targets(), ["a.patch"]);
+    }
+
+    /// A heredoc wrapper or a preamble before an envelope, which a lenient host
+    /// strips before it parses, does not hide the envelope's files.
+    #[test]
+    fn an_envelope_is_read_wherever_it_opens() {
+        for wrapped in [
+            "<<'EOF'\n*** Begin Patch\n*** Update File: batten.toml\n@@\n-a\n+b\n*** End Patch\nEOF",
+            "Here is the patch:\n*** Begin Patch\n*** Update File: batten.toml\n@@\n-a\n+b\n*** End Patch",
+            "*** Begin Patch\n  *** Update File: batten.toml\n@@\n-a\n+b\n*** End Patch",
+        ] {
+            assert_eq!(
+                patch_targets(&serde_json::json!({ "input": wrapped })),
+                ["batten.toml"],
+                "{wrapped:?}"
+            );
+        }
+    }
+
+    /// A git patch names a rename, a copy or a mode change only in its own
+    /// lines, a quoted path is the path, and a hunk removing `-- x` names
+    /// nothing.
+    #[test]
+    fn a_git_patch_names_its_files_without_a_hunk() {
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git a/notes.md b/batten.toml\nsimilarity index 100%\nrename from notes.md\nrename to batten.toml\n",
+            })),
+            ["notes.md", "batten.toml"]
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git \"a/sp ace\" \"b/sp ace\"\nold mode 100644\nnew mode 100755\n",
+            })),
+            ["sp ace"]
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "--- \"a/sp ace\"\n+++ \"b/sp ace\"\n",
+            })),
+            ["sp ace"]
+        );
+        assert!(
+            patch_targets(&serde_json::json!({
+                "patch": "rename from batten.toml\nrename to x\n",
+            }))
+            .is_empty(),
+            "a rename line outside a git patch is content"
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1 @@\n--- batten.toml\n x\n",
+            })),
+            ["q.sql"]
+        );
+        // An envelope's bounds are the host's to read, so a header is judged
+        // wherever it sits: a context line quoting `*** End Patch` closes
+        // nothing here.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patchText": "*** Begin Patch\n*** Update File: a.rs\n@@\n *** End Patch\n*** Update File: batten.toml\n@@\n-a\n+b\n*** End Patch",
+            })),
+            ["a.rs", "batten.toml"]
+        );
+        // A path holding ` b/` splits where both sides name the one file.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git a/x b/y b/x b/y\nold mode 100644\nnew mode 100755\n",
+            })),
+            ["x b/y"]
+        );
+        // Quoted sides of unequal length, a space at the middle: the split is
+        // at the quoted `b/` side, never the middle byte.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git \"a/pq rs t\" \"b/u\"\nold mode 100644\nnew mode 100755\n",
+            })),
+            ["pq rs t", "u"]
+        );
+        // git apply's `rename old`/`rename new`, a context diff's `***`/`---`
+        // pair, and an `Index:` line each name the file they patch.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git a/x b/y\nrename old batten.toml\nrename new y\n",
+            })),
+            ["x", "y", "batten.toml"]
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "*** batten.toml\t2026-01-01\n--- batten.toml\t2026-01-02\n***************\n",
+            })),
+            ["batten.toml"]
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({ "patch": "Index: batten.toml\n=====\n" })),
+            ["batten.toml"]
+        );
+    }
+
+    /// Any one-letter prefix is stripped (`diff.mnemonicPrefix`), a
+    /// `--no-prefix` mode change names its one file, a context hunk's range
+    /// lines name nothing, and a longer first component is read both ways.
+    #[test]
+    fn a_diff_path_is_read_under_every_prefix_convention() {
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git i/batten.toml w/batten.toml\n--- i/batten.toml\n+++ w/batten.toml\n",
+            })),
+            ["batten.toml", "i/batten.toml", "w/batten.toml"]
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git batten.toml batten.toml\nold mode 100644\nnew mode 100755\n",
+            })),
+            ["batten.toml"]
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "*** a.rs\t1\n--- a.rs\t2\n***************\n*** 0 ****\n--- 1,3 ----\n",
+            })),
+            ["a.rs"]
+        );
+        // A first component longer than one letter may be a real directory
+        // under `-p0`, so both readings are named.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "--- src/batten.toml\n+++ src/batten.toml\n",
+            })),
+            ["batten.toml", "src/batten.toml"]
+        );
+    }
+
+    #[test]
+    fn a_diff_git_middle_space_splits_only_on_one_file() {
+        // A space at the middle is no split unless both sides name one file.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git a/x b/y b/zzzzz\nsimilarity index 100%\n",
+            })),
+            ["x", "y b/zzzzz"]
+        );
+        // Each side loses its own prefix once: a path that starts with `b/`
+        // keeps it.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git a/b/x b/b/z\nsimilarity index 100%\n",
+            })),
+            ["b/x", "b/z"]
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git a/b/x b/b/x\nold mode 100644\nnew mode 100755\n",
+            })),
+            ["b/x"]
+        );
+        // A same-file mode change under any prefix pair splits at its middle.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git i/batten.toml w/batten.toml\nold mode 100644\nnew mode 100755\n",
+            })),
+            ["batten.toml", "i/batten.toml", "w/batten.toml"]
+        );
+        // A one-letter first component may be a real directory under `-p0`,
+        // so it is read both ways too.
+        assert_eq!(
+            patch_targets(
+                &serde_json::json!({ "patch": "--- c/secret.toml\n+++ c/secret.toml\n" })
+            ),
+            ["secret.toml", "c/secret.toml"]
+        );
+        // A quoted same-file path holding ` b/` splits at its middle.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git \"a/x b/y\" \"b/x b/y\"\nold mode 100644\nnew mode 100755\n",
+            })),
+            ["x b/y"]
+        );
+        // A patch carried as one element of an argv-shaped array.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "command": ["apply_patch", "*** Begin Patch\n*** Update File: batten.toml\n*** End Patch"],
+            })),
+            ["batten.toml"]
+        );
+    }
+
+    /// A read names its target under each host's spelling of the key.
+    #[test]
+    fn a_read_s_target_is_resolved_under_each_spelling() {
+        for (harness, tool, key) in [
+            (Harness::ClaudeCode, "Read", "file_path"),
+            (Harness::OpenCode, "read", "filePath"),
+        ] {
+            let envelope = decode_value(
+                harness,
+                &serde_json::json!({
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": tool,
+                    "tool_input": { key: "notes.txt" },
+                }),
+            )
+            .expect("decodes");
+            assert_eq!(
+                envelope.reads.as_deref(),
+                Some("notes.txt"),
+                "{}: `{tool}` named its target under `{key}`",
+                harness.as_str()
+            );
+        }
+    }
+
+    /// Each layout answers its path and the key its events live under.
+    #[test]
+    fn a_wiring_file_names_its_path_and_event_key_in_every_layout() {
+        let key = WiringFile::Key {
+            path: "k.json",
+            key: "events",
+        };
+        assert_eq!(
+            [WiringFile::Whole("w.json"), WiringFile::Root("r.json"), key].map(WiringFile::path),
+            ["w.json", "r.json", "k.json"]
+        );
+        assert_eq!(
+            [WiringFile::Whole("w.json"), WiringFile::Root("r.json"), key]
+                .map(WiringFile::event_key),
+            [Some("hooks"), None, Some("events")]
+        );
+    }
+
+    /// A pre-approval on a host that reads Claude Code's verdict object is the
+    /// allow verdict with its reason, on the event it is honoured on.
+    #[test]
+    fn a_preapproval_on_a_claude_shaped_host_is_an_allow_with_its_reason() {
+        for harness in [Harness::ClaudeCode, Harness::Factory] {
+            let body = encode_preapproval(harness, "PreToolUse", "the rule allows it", None, None)
+                .expect("serializes")
+                .unwrap_or_else(|| panic!("{} honours a pre-approval", harness.as_str()));
+            let verdict: Value = serde_json::from_str(&body).expect("json");
+            assert_eq!(
+                verdict.pointer("/hookSpecificOutput/permissionDecision"),
+                Some(&serde_json::json!("allow"))
+            );
+            assert_eq!(
+                verdict.pointer("/hookSpecificOutput/permissionDecisionReason"),
+                Some(&serde_json::json!("the rule allows it"))
             );
         }
     }
@@ -18125,7 +19238,7 @@ deny contains "refused by themodule" if {
                 .unwrap_or_else(|e| panic!("{}: {e}: {rendered}", harness.as_str()));
             let hooks = match wiring.file {
                 WiringFile::Whole(_) => &parsed["hooks"],
-                WiringFile::Key { .. } => &parsed,
+                WiringFile::Key { .. } | WiringFile::Root(_) => &parsed,
             };
             for (_, spelling) in wiring.registrations(*harness) {
                 rendered_any = true;

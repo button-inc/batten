@@ -4288,8 +4288,8 @@ fn mcp_settings(repo: &Path, given: Option<&str>) -> PathBuf {
     if let Some(given) = given {
         return PathBuf::from(given);
     }
-    match hook::Harness::ClaudeCode.wiring().map(|wiring| wiring.file) {
-        Some(hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path)) => repo.join(path),
+    match hook::Harness::ClaudeCode.wiring() {
+        Some(wiring) => repo.join(wiring.file.path()),
         None => repo.to_path_buf(),
     }
 }
@@ -19879,7 +19879,7 @@ impl Drop for Spool {
 //MUTANT floor-admits-everything|s@        _ => false,@        _ => true,@|a_command_is_still_refused_over_a_config_that_will_not_load
 //MUTANT floor-admits-an-unclassified-call|s@        (hook::Operation::Read, None) => true,@        (_, None) => true,@|a_mutating_mcp_call_is_still_refused_over_a_config_that_will_not_load
 //MUTANT floor-refuses-inert-tools|s@        (hook::Operation::Other(name), None) if hook::INERT_TOOLS.contains(\&name.as_str()) => true,@@|a_search_still_answers_over_a_config_that_will_not_load
-//MUTANT floor-admits-any-write|s@        (hook::Operation::Write, Some(path)) => names_the_config_authority(path),@        (hook::Operation::Write, Some(_)) => true,@|a_write_to_another_path_is_still_refused_over_a_config_that_will_not_load
+//MUTANT floor-admits-any-write|s@        (hook::Operation::Write, Some(_)) => envelope.writes_only(names_the_config_authority),@        (hook::Operation::Write, Some(_)) => true,@|a_write_to_another_path_is_still_refused_over_a_config_that_will_not_load
 //MUTANT floor-refuses-engine-repair|s@^        (hook::Operation::Execute, None) => engine::is_repair_at($@        (hook::Operation::Execute, None) => false \&\& engine::is_repair_at(@|the_engine_repair_verb_reaches_a_skewed_pin
 fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
     // NO `command.is_empty()` GUARD, AND ITS ABSENCE IS THE DECISION. A `Bash`
@@ -19898,8 +19898,10 @@ fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
         // Refusing them left a session over a binary/config mismatch unable to
         // find the line to repair or to leave plan mode at all.
         (hook::Operation::Other(name), None) if hook::INERT_TOOLS.contains(&name.as_str()) => true,
-        // The repair, and only onto the file that is faulting.
-        (hook::Operation::Write, Some(path)) => names_the_config_authority(path),
+        // The repair, and only onto the file that is faulting: every file the
+        // call writes, so a patch naming the authority first carries nothing
+        // else through.
+        (hook::Operation::Write, Some(_)) => envelope.writes_only(names_the_config_authority),
         // THE OTHER REPAIR, for the fault no edit can end (CLOUD-2116). A pin
         // naming a NEWER build than the installed one is fixed by installing
         // the pin, never by lowering it, so a floor of read-and-edit bricked the
@@ -20696,6 +20698,16 @@ fn admitted(
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 //MUTANT ripcord-reaches-a-loaded-deny-all|s@    let admits = bootstrap \x7c\x7c (ripcord::present(root) \&\& recoverable_without_rules(envelope));@    let admits = false;@|the_ripcord_admits_a_read_a_loaded_rule_refused
 //MUTANT ripcord-becomes-a-global-allow|s@    let admits = bootstrap \x7c\x7c (ripcord::present(root) \&\& recoverable_without_rules(envelope));@    let admits = bootstrap \x7c\x7c ripcord::present(root);@|the_ripcord_is_not_a_global_allow
+/// Whether this call writes the ripcord sentinel and nothing else.
+///
+/// EVERY file the call writes, never `writes` alone: a patch names its first
+/// file there, so a patch adding the sentinel beside a protected file would
+/// otherwise arm the ripcord and carry the protected write through with it.
+fn arms_the_ripcord(envelope: &hook::Envelope) -> bool {
+    matches!(envelope.operation, hook::Operation::Write)
+        && envelope.writes_only(|target| ripcord::creates_the_sentinel(Some(target)))
+}
+
 fn pull_ripcord(
     envelope: &hook::Envelope,
     decision: hook::Decision,
@@ -20708,8 +20720,7 @@ fn pull_ripcord(
     // THE OPERATION CHECK IS OURS, so `ripcord` stays a leaf with no edge onto
     // `hook`. `writes` is already `None` for anything but a classified write;
     // the `matches!` states that rather than leaning on it.
-    let bootstrap = matches!(envelope.operation, hook::Operation::Write)
-        && ripcord::creates_the_sentinel(envelope.writes.as_deref());
+    let bootstrap = arms_the_ripcord(envelope);
     let root = hook_authority_root();
     // NAMED AND POSITIVE, rather than a negated conjunction inline. The two arms
     // are the whole contract — arming is unconditional, a pull is floored — and a
@@ -29805,6 +29816,13 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
         // register with". `UsageError` is exit 1 — the caller named something
         // that cannot be asked for, which is a statement about the invocation.
         GenerateCommand::Hooks { harness } => {
+            // A host whose adapter is code rather than a registration gets the
+            // code (CLOUD-1942). The caller writes it to the path named in its
+            // header, exactly as it redirects every other generated artifact.
+            if let Some(plugin) = harness.plugin() {
+                writeln!(out, "{}", plugin.source())?;
+                return Ok(ExitCode::Success);
+            }
             let wiring = harness.wiring().ok_or_else(|| {
                 UsageError::raise(format!(
                     "generate hooks: {} is the neutral contract, not a host — it has no \
@@ -30117,6 +30135,69 @@ pub fn land_ready_owes(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// The ripcord arms on a write of the sentinel alone: a patch adding it
+    /// beside another file arms nothing, and the config floor admits a patch
+    /// only when every file it writes is the authority.
+    #[test]
+    fn a_patch_arms_the_ripcord_or_reaches_the_floor_only_whole() {
+        let patch = |body: &str| {
+            hook::decode_value(
+                hook::Harness::OpenCode,
+                &serde_json::json!({
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "apply_patch",
+                    "tool_input": { "patchText": format!("*** Begin Patch\n{body}*** End Patch") },
+                }),
+            )
+            .expect("decodes")
+        };
+        let sentinel = format!("*** Add File: {}\n+x\n", ripcord::SENTINEL);
+        let config = format!("*** Update File: {}\n@@\n-a\n+b\n", config::CONFIG_FILE);
+        assert!(arms_the_ripcord(&patch(&sentinel)));
+        assert!(!arms_the_ripcord(&patch(&format!("{sentinel}{config}"))));
+        assert!(recoverable_without_rules(&patch(&config)));
+        assert!(!recoverable_without_rules(&patch(&format!(
+            "{config}*** Update File: src/lib.rs\n@@\n-a\n+b\n"
+        ))));
+        // A default git patch of the authority is a repair of it alone: its
+        // `a/` and `b/` are git's prefixes, not two more files.
+        let git = hook::decode_value(
+            hook::Harness::Factory,
+            &serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "ApplyPatch",
+                "tool_input": {
+                    "patch": format!(
+                        "--- a/{0}\n+++ b/{0}\n@@ -1 +1 @@\n-a\n+b\n",
+                        config::CONFIG_FILE
+                    ),
+                },
+            }),
+        )
+        .expect("decodes");
+        assert!(recoverable_without_rules(&git));
+    }
+
+    /// `mcp grant` and `mcp posture` judge the operand where one was given, and
+    /// otherwise the committed settings file the MCP permission grammar lives in.
+    #[test]
+    fn mcp_settings_is_the_operand_or_the_committed_claude_settings() {
+        assert_eq!(
+            mcp_settings(Path::new("repo"), Some("elsewhere.json")),
+            PathBuf::from("elsewhere.json")
+        );
+        // The committed file is the harness table's, never spelled here (rule 1).
+        let committed = hook::Harness::ClaudeCode
+            .wiring()
+            .expect("claude-code is wired")
+            .file
+            .path();
+        assert_eq!(
+            mcp_settings(Path::new("repo"), None),
+            Path::new("repo").join(committed)
+        );
+    }
 
     /// CLOUD-2372: the next landing's reap, not a reader, forgets a dead
     /// registrant. A pid past every platform's `pid_max` is dead wherever a

@@ -71,7 +71,11 @@ pub(crate) fn committed_events(
     document: &serde_json::Value,
     file: hook::WiringFile,
 ) -> Option<Cow<'_, serde_json::Map<String, serde_json::Value>>> {
-    let key = event_key(file);
+    let Some(key) = file.event_key() else {
+        // A root-keyed file IS the event map, so only a non-object is
+        // unreadable.
+        return document.as_object().map(Cow::Borrowed);
+    };
     // AN ABSENT KEY IS AN EMPTY MAP, NEVER UNREADABLE, and the distinction is a
     // verdict rather than a detail. A settings file carrying `permissions` and no
     // `hooks` parses perfectly and registers batten nowhere — which under
@@ -86,20 +90,6 @@ pub(crate) fn committed_events(
             .is_object()
             .then(|| Cow::Owned(serde_json::Map::new())),
         Some(value) => value.as_object().map(Cow::Borrowed),
-    }
-}
-
-/// Which key a wiring file's events live under.
-///
-/// Extracted so the mutable walk in [`prune_siblings`] and the immutable read in
-/// [`committed_events`] cannot pick different keys — the one way those two could
-/// silently stop describing the same document.
-const fn event_key(file: hook::WiringFile) -> &'static str {
-    match file {
-        hook::WiringFile::Key { key, .. } => key,
-        // A hooks-only file is what `render_wiring` emits whole, and what it
-        // emits is `{"hooks": {…}}`.
-        hook::WiringFile::Whole(_) => "hooks",
     }
 }
 
@@ -431,11 +421,7 @@ fn prune_siblings(
     file: hook::WiringFile,
     command: &str,
 ) -> Vec<(String, usize)> {
-    let key = event_key(file);
-    let Some(events) = document
-        .get_mut(key)
-        .and_then(serde_json::Value::as_object_mut)
-    else {
+    let Some(events) = events_mut(document, file, false) else {
         return Vec::new();
     };
     let mut removed = Vec::new();
@@ -539,10 +525,7 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
     let (true, Some(wiring)) = (out.above, harness.wiring()) else {
         return Ok(out);
     };
-    let surface = match wiring.file {
-        hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
-    };
-    let path = root.join(surface);
+    let path = root.join(wiring.file.path());
     let mut document = match std::fs::read_to_string(&path) {
         Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
             Ok(document) if document.is_object() => document,
@@ -582,6 +565,28 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
     Ok(out)
 }
 
+/// The writable event map in `document`, the one walk both writers take, so
+/// they cannot pick different maps: a root-keyed file IS the event map, and a
+/// keyed one holds it under its key — made empty first when `create`, since a
+/// file that registers nothing yet is where an add goes, never a prune.
+fn events_mut(
+    document: &mut serde_json::Value,
+    file: hook::WiringFile,
+    create: bool,
+) -> Option<&mut serde_json::Map<String, serde_json::Value>> {
+    let root = document.as_object_mut()?;
+    let Some(key) = file.event_key() else {
+        return Some(root);
+    };
+    if create {
+        root.entry(key)
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+    } else {
+        root.get_mut(key).and_then(serde_json::Value::as_object_mut)
+    }
+}
+
 /// Add batten's registration under every event in `spellings` that carries
 /// none, and return those events in the order given.
 ///
@@ -593,13 +598,7 @@ fn add_missing(
     spellings: &[&str],
     command: &str,
 ) -> Vec<String> {
-    let Some(root) = document.as_object_mut() else {
-        return Vec::new();
-    };
-    let events = root
-        .entry(event_key(file))
-        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
-    let Some(events) = events.as_object_mut() else {
+    let Some(events) = events_mut(document, file, true) else {
         return Vec::new();
     };
     let mut added = Vec::new();
@@ -1005,6 +1004,28 @@ mod tests {
             .file
     }
 
+    /// A prune finds no map where the key is absent and leaves the file as it
+    /// was; an add makes the empty map it registers into. A root-keyed file is
+    /// its own map either way.
+    #[test]
+    fn only_an_add_creates_the_event_map_it_writes_into() {
+        let mut document = serde_json::json!({ "permissions": {} });
+        assert!(events_mut(&mut document, claude(), false).is_none());
+        assert_eq!(document, serde_json::json!({ "permissions": {} }));
+        assert!(events_mut(&mut document, claude(), true).is_some_and(|events| events.is_empty()));
+        assert_eq!(
+            document,
+            serde_json::json!({ "permissions": {}, "hooks": {} })
+        );
+        let mut root = serde_json::json!({ "PreToolUse": [] });
+        let root_file = hook::WiringFile::Root("hooks.json");
+        assert!(
+            events_mut(&mut root, root_file, false)
+                .is_some_and(|events| events.contains_key("PreToolUse"))
+        );
+        assert!(events_mut(&mut serde_json::json!([]), root_file, true).is_none());
+    }
+
     /// The load-bearing negative: a broad selector, so a MIS-registered batten is
     /// wrong rather than reclaimed.
     ///
@@ -1173,10 +1194,7 @@ mod tests {
         let root = scratch("register-existing");
         let repo = root.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let committed = match claude() {
-            hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
-        };
-        let path = root.join(committed);
+        let path = root.join(claude().path());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "{\"permissions\": {}}\n").unwrap();
         let done = register(&root, &repo, false).unwrap();
