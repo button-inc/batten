@@ -370,9 +370,10 @@ jobs:
           # is a separate resolution the digest does not reach.
           version: 2026.9.1
           # What the `cross` job installs, for its stated reason: cross-check is
-          # `rustup target add` + `cargo check`, and rust is the only tool it
-          # touches.
-          install_args: rust
+          # `rustup target add` + `cargo check`, plus the zig that compiles
+          # mimalloc's C for musl (CLOUD-2344). Without it this step fails under
+          # `continue-on-error` and the family silently stops being warmed.
+          install_args: rust zig github:rust-cross/cargo-zigbuild
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         # Read by the compile step below; `ci-local-parity` property 17 holds the
         # `id` and the guard together.
@@ -418,8 +419,9 @@ jobs:
           # What the `musl` job installs, for its stated reason: `tests/cli.rs`
           # materializes fixtures carrying this repository's `batten.toml`, whose
           # rules spawn hk and jq; opa for `lint_rego.rs`, which judges the
-          # corpus with the pinned formatter and fails where it is absent.
-          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa pkl aqua:axodotdev/cargo-dist node
+          # corpus with the pinned formatter and fails where it is absent; zig
+          # and cargo-zigbuild for mimalloc's musl C (CLOUD-2344).
+          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa pkl aqua:axodotdev/cargo-dist node zig github:rust-cross/cargo-zigbuild
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         # Read by the compile step below; `ci-local-parity` property 17 holds the
         # `id` and the guard together.
