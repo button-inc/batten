@@ -1283,7 +1283,7 @@ impl RunnerKind {
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
 //MUTANT later-suites-unread|s@^                    own.push(resolved);$@                    if own.is_empty() { own.push(resolved); }@|a_change_to_a_sources_second_suite_sweeps_its_gate
 //MUTANT retries-unpinned|s@^    "--retries=0",$@    "--retries=3",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
-//MUTANT default-filter-kept|s@^    "--ignore-default-filter",$@    "--color=never",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
+//MUTANT default-filter-kept|s@^    "--ignore-default-filter",$@    "--test-threads=num-cpus",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
 //MUTANT status-level-unpinned|s@^    "--status-level=pass",$@    "--status-level=fail",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
 //MUTANT nextest-unprobed|s@^    let absent = mine.iter().any(runs_nextest) \&\& !cargo_answers(root, "nextest", None);$@    let absent = false;@|a_declared_cargo_row_without_nextest_reads_one_runner_absent
 //MUTANT malformed-shard-unrefused|s@^    parse_shard(shard).ok_or_else(\x7c\x7c format!("{SHARD}={shard} is not `k/n` with 0 <= k < n"))$@    Ok(parse_shard(shard).unwrap_or((0, 1)))@|a_malformed_shard_is_refused_before_the_registered_runner
@@ -1605,7 +1605,8 @@ pub struct Site<'a> {
 ///
 /// # Errors
 ///
-/// A tree that cannot be staged, or a diff that cannot be written.
+/// A tree that cannot be staged, or a diff that cannot be written; a `shard`
+/// that is not `k/n` with `k < n`, which [`shard_parsed`] never yields.
 pub fn run_registered(
     site: &Site<'_>,
     changed: &std::collections::BTreeSet<String>,
@@ -1613,6 +1614,11 @@ pub fn run_registered(
     shard: Option<(usize, usize)>,
     progress: &mut dyn std::io::Write,
 ) -> Result<Registered> {
+    if let Some((k, n)) = shard
+        && k >= n
+    {
+        bail!("mutate: shard {k}/{n} is not `k/n` with 0 <= k < n");
+    }
     let Site {
         root,
         base,
@@ -6574,6 +6580,36 @@ mod tests {
             .and_then(|meta| meta.modified())
             .expect("the kept file's timestamp");
         assert_eq!(kept, set, "an unchanged file is not rewritten");
+    }
+
+    /// Fails by: a shard outside `0 <= k < n` reaching the plan, where `n = 0`
+    /// divides by zero and `k >= n` judges a shard that does not exist; or a
+    /// valid one refused.
+    #[test]
+    fn a_registered_run_refuses_a_shard_shard_parsed_never_yields() {
+        let root = fixture("registered-shard-bounds");
+        let work = fixture("registered-shard-bounds-work");
+        let registry = Registry::default();
+        let site = Site {
+            root: &root,
+            base: "HEAD",
+            registry: &registry,
+            work: &work,
+        };
+        let changed = std::collections::BTreeSet::new();
+        let run = |shard| {
+            run_registered(
+                &site,
+                &changed,
+                RunnerKind::Declared,
+                shard,
+                &mut std::io::sink(),
+            )
+        };
+        assert!(run(Some((0, 1))).is_ok(), "0/1 is a shard");
+        for bad in [(0, 0), (2, 2), (3, 2)] {
+            assert!(run(Some(bad)).is_err(), "{bad:?} is not a shard");
+        }
     }
 
     /// Fails by: the declared runner carried past its early return, every
