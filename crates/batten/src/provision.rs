@@ -2315,11 +2315,20 @@ mod tests {
     ///
     /// Fails by: the fallback dropped, so the runner is linked off `PATH`, every
     /// `[[startup]]` row naming it is could-not-look, and `status` reads fresh.
+    ///
+    /// Compiled and run on every target. The one host fact it needs is `HOME`,
+    /// and where that is unset a `~/` link is a usage error rather than a
+    /// fallback, which is the contract this case asserts there.
     #[test]
-    #[cfg(unix)]
     fn a_declared_link_off_path_follows_engine_installs_fallback() {
         const PER_USER: &str = "~/.local/bin";
-        let declared = expand_home(PER_USER).unwrap();
+        let Ok(declared) = expand_home(PER_USER) else {
+            assert!(
+                link_dir(PER_USER, Host::isolated(true)).is_err(),
+                "a `~/` link with no HOME to expand is refused, never resolved"
+            );
+            return;
+        };
         let system = PathBuf::from(crate::install::SYSTEM_BIN_DIRS[0]);
         let resolve = |dest: &str, on_path: &[PathBuf], writable: fn(&Path) -> bool| {
             let host = Host {
