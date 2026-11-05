@@ -487,7 +487,17 @@ impl Lock {
 /// own reading of `CURL_CA_BUNDLE`, then `SSL_CERT_FILE`. `BATTEN_RELEASES`
 /// exists so a suite can serve the release from a fixture; nothing else is
 /// configurable here.
+///
+/// **NO LIBC CHOICE EITHER (CLOUD-2595).** Linux always takes the static musl
+/// build, the one that runs on every Linux, so the script never probes the host.
+/// Choosing gnu — about 15× faster per hook — where it runs is work for the
+/// binary: `engine install` fetches the same tag's gnu build, verifies it, runs
+/// it, and keeps it only if it answered. The script used to guess from a
+/// `/lib/ld-musl-*` loader, which handed a gnu binary to every host with no libc
+/// or too old a glibc.
 //MUTANT-SUITE crates/batten/tests/it/install_web.rs
+//MUTANT bootstrap-probes-the-libc|s@^Linux) target="$arch-unknown-linux-musl" ;;$@Linux) for l in /lib/ld-musl-*; do target="$arch-unknown-linux-musl"; done ;;@|the_bootstrap_is_the_bare_minimum
+//MUTANT bootstrap-fetches-gnu|s@^Linux) target="$arch-unknown-linux-musl" ;;$@Linux) target="$arch-unknown-linux-gnu" ;;@|linux_fetches_the_musl_build_and_never_a_gnu_one
 //MUTANT bootstrap-skips-its-baked-hash|s@^\[ "${{sum%% \*}}" = "$want" \] \x7c\x7c fail@true \x7c\x7c fail@|a_served_archive_disagreeing_with_the_lock_installs_nothing
 #[must_use]
 pub fn render_bootstrap(name: &str, repository: &str, lock: &Lock) -> String {
@@ -524,13 +534,7 @@ aarch64 | arm64) arch=aarch64 ;;
 *) fail "no release for $os/$arch" 1 ;;
 esac
 case "$os" in
-Linux)
-	libc=gnu
-	for loader in /lib/ld-musl-*; do
-		[ -e "$loader" ] && libc=musl
-	done
-	target="$arch-unknown-linux-$libc"
-	;;
+Linux) target="$arch-unknown-linux-musl" ;;
 Darwin) target="$arch-apple-darwin" ;;
 *) fail "no release for $os/$arch" 1 ;;
 esac

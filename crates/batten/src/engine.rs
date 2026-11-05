@@ -323,6 +323,57 @@ pub fn row_digest(text: &str, platform: &str) -> Option<String> {
     (!digest.is_empty()).then_some(digest)
 }
 
+/// The `sha256` the batten row pins for the asset THIS engine follows: its own
+/// target triple's (`running_target`), never a sibling libc's (CLOUD-2595).
+///
+/// **A FOLLOW KEEPS ITS LIBC.** The row's `<os>-<arch>` artifact is the static
+/// musl build, the one `provision apply` can install on any Linux; a gnu engine
+/// following that digest would fetch the gnu asset and refuse it as tampered.
+/// So the triple's own table answers first; the `<os>-<arch>` one only when its
+/// URL names this engine's asset; otherwise `None`, and the follow verifies
+/// against the release's `SHA256SUMS`.
+//MUTANT-SUITE crates/batten/src/engine.rs
+//MUTANT follow-takes-a-sibling-libc|s@^        .filter(\x7cartifact\x7c url_names(\*artifact, \&asset))$@        .filter(\x7c_\x7c true)@|the_follow_reads_its_own_triples_digest
+#[must_use]
+pub fn followed_digest(text: &str) -> Option<String> {
+    let target = running_target();
+    let tag = row_release(text)?;
+    let asset = release_asset(&tag, &target);
+    let row = batten_row(text)?;
+    let platforms = row
+        .get("platforms")
+        .and_then(toml_edit::Item::as_table_like);
+    let Some(platforms) = platforms else {
+        return row_digest(text, &target);
+    };
+    let digest_of = |artifact: &dyn toml_edit::TableLike| {
+        artifact
+            .get("sha256")
+            .and_then(toml_edit::Item::as_str)
+            .map(|digest| digest.trim().to_ascii_lowercase())
+            .filter(|digest| !digest.is_empty())
+    };
+    if let Some(own) = platforms
+        .get(&target)
+        .and_then(toml_edit::Item::as_table_like)
+    {
+        return digest_of(own);
+    }
+    platforms
+        .get(&crate::provision::platform_key())
+        .and_then(toml_edit::Item::as_table_like)
+        .filter(|artifact| url_names(*artifact, &asset))
+        .and_then(digest_of)
+}
+
+/// Whether an artifact table's `url` downloads `asset`.
+fn url_names(artifact: &dyn toml_edit::TableLike, asset: &str) -> bool {
+    artifact
+        .get("url")
+        .and_then(toml_edit::Item::as_str)
+        .is_some_and(|url| url.rsplit('/').next() == Some(asset))
+}
+
 /// The `engine` key's release and the batten row's, when both are declared and
 /// they name different releases (CLOUD-2595): `(key, row)`, both as tags.
 ///
@@ -347,11 +398,18 @@ pub fn row_disagreement(text: &str) -> Option<(String, String)> {
 /// pinned — by a row, or by the `engine` key's alias — is never written.
 ///
 /// The row is APPENDED, so every other byte of the file is the bytes it had. It
-/// carries one `[provision.platforms.<os>-<arch>]` artifact per published
-/// `.tar.gz` target, URL and `sha256` from the release itself; where glibc and
-/// musl builds share a platform key, the static musl build is pinned. A `.zip`
-/// target has no `unpack` spelling a provision row can carry, so it is left to
-/// the `SHA256SUMS` fallback the follow keeps for an unlisted platform.
+/// carries, URL and `sha256` from the release itself:
+///
+/// - **one artifact per published `.tar.gz` target under its own triple**
+///   (`[provision.platforms.x86_64-unknown-linux-gnu]`), which is what a
+///   follow reads ([`followed_digest`]): an engine keeps the libc it runs as;
+/// - **one per `<os>-<arch>`**, the key `provision apply` looks up. On Linux
+///   that is the static musl build, because a generic provision cannot tell
+///   which libc a host has and musl runs on every one; `engine install` is what
+///   upgrades a glibc host to the faster gnu build.
+///
+/// A `.zip` target has no `unpack` spelling a provision row can carry, so it is
+/// left to the `SHA256SUMS` fallback the follow keeps for an unlisted platform.
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 //MUTANT row-never-written|s@^    if declared(text).is_some() {$@    if true {@|a_config_without_a_row_gains_one_after_a_clean_load
 #[must_use]
@@ -361,8 +419,11 @@ pub fn adopted(text: &str, repository: &str, tag: &str, sums: &str) -> Option<St
     }
     let bare = tag.trim_start_matches('v');
     let prefix = format!("batten-v{bare}-");
-    // key -> (url, digest, musl)
-    let mut platforms: std::collections::BTreeMap<String, (String, String, bool)> =
+    // key -> (url, digest): every triple under its own name, then each
+    // `<os>-<arch>` key once, the musl build where a platform has one.
+    let mut platforms: std::collections::BTreeMap<String, (String, String)> =
+        std::collections::BTreeMap::new();
+    let mut generic: std::collections::BTreeMap<String, (String, String, bool)> =
         std::collections::BTreeMap::new();
     for (digest, asset) in sums_entries(sums) {
         let Some(target) = asset
@@ -374,22 +435,26 @@ pub fn adopted(text: &str, repository: &str, tag: &str, sums: &str) -> Option<St
         let Some(key) = platform_of(target) else {
             continue;
         };
+        let url = release_url(repository, tag, asset);
+        platforms.insert(target.to_owned(), (url.clone(), digest.clone()));
         let musl = target.ends_with("-musl");
-        if platforms
-            .get(&key)
-            .is_some_and(|(_, _, held)| *held || !musl)
-        {
+        if generic.get(&key).is_some_and(|(_, _, held)| *held || !musl) {
             continue;
         }
-        platforms.insert(key, (release_url(repository, tag, asset), digest, musl));
+        generic.insert(key, (url, digest, musl));
     }
     if platforms.is_empty() {
         return None;
     }
+    platforms.extend(
+        generic
+            .into_iter()
+            .map(|(key, (url, digest, _))| (key, (url, digest))),
+    );
     let mut row = format!(
         "\n[[provision]]\nname = \"batten\"\nversion = \"{bare}\"\nunpack = \"tar_gz\"\nbinary = \"batten\"\n"
     );
-    for (key, (url, digest, _)) in &platforms {
+    for (key, (url, digest)) in &platforms {
         use std::fmt::Write as _;
         // Writing to a `String` cannot fail.
         let _ = write!(
@@ -877,10 +942,25 @@ pub fn fetch_release(repository: &str, tag: &str) -> Result<Vec<u8>> {
 /// # Errors
 ///
 /// As [`fetch_release`], and an archive whose digest is not `pinned`.
+pub fn fetch_release_pinned(repository: &str, tag: &str, pinned: Option<&str>) -> Result<Vec<u8>> {
+    fetch_release_for(repository, tag, &running_target(), pinned)
+}
+
+/// [`fetch_release_pinned`] for `target`'s asset rather than this engine's:
+/// how `engine install` fetches the same tag's gnu build to try it here.
+///
+/// # Errors
+///
+/// As [`fetch_release_pinned`].
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 //MUTANT row-digest-unchecked|s@^        if got != want {$@        if false {@|a_followed_release_is_verified_against_the_rows_digest
-pub fn fetch_release_pinned(repository: &str, tag: &str, pinned: Option<&str>) -> Result<Vec<u8>> {
-    let target = running_target();
+pub fn fetch_release_for(
+    repository: &str,
+    tag: &str,
+    target: &str,
+    pinned: Option<&str>,
+) -> Result<Vec<u8>> {
+    let target = target.to_owned();
     let asset = release_asset(tag, &target);
     let archive = crate::fetch::get(&release_url(repository, tag, &asset), &[])?;
     if let Some(want) = pinned {
@@ -912,6 +992,41 @@ pub fn fetch_release_pinned(repository: &str, tag: &str, pinned: Option<&str>) -
 
 // The rows below are judged by this module's own unit suite, as before.
 //MUTANT-SUITE crates/batten/src/engine.rs
+
+/// The gnu build of a musl Linux `target`'s platform, or `None` for any other.
+#[must_use]
+pub fn gnu_twin(target: &str) -> Option<String> {
+    target
+        .strip_suffix("-unknown-linux-musl")
+        .map(|arch| format!("{arch}-unknown-linux-gnu"))
+}
+
+/// Which build `engine install` places: `(target, bytes)` (CLOUD-2595).
+///
+/// **gnu where it RUNS, musl everywhere else.** The bootstrap always fetches
+/// the static musl build, because it runs on every Linux and the script cannot
+/// know more. gnu is about 15× faster per hook (`mallocng` returning freed
+/// memory on every free, measured in CLOUD-1859), so a musl engine fetches its
+/// tag's gnu build — verified as any download is — and keeps it only when
+/// `runs` says it answered on this host. Not by guessing from a loader: a host
+/// with no libc, or a glibc older than the build, fails `runs` and keeps musl.
+/// Anything else — no gnu build for the platform, an unpublished tag, a fetch
+/// that failed — keeps the musl bytes, silently, since they already run.
+//MUTANT gnu-kept-unrun|s@^        Some(candidate) if runs(\&candidate) => (gnu, candidate),$@        Some(candidate) => (gnu, candidate),@|a_gnu_build_that_does_not_run_leaves_musl
+pub fn chosen_build(
+    running: &str,
+    musl: Vec<u8>,
+    fetch: impl FnOnce(&str) -> Option<Vec<u8>>,
+    runs: impl FnOnce(&[u8]) -> bool,
+) -> (String, Vec<u8>) {
+    let Some(gnu) = gnu_twin(running) else {
+        return (running.to_owned(), musl);
+    };
+    match fetch(&gnu) {
+        Some(candidate) if runs(&candidate) => (gnu, candidate),
+        _ => (running.to_owned(), musl),
+    }
+}
 
 /// The release `reference`'s `batten.toml` pins, read off the repository's
 /// raw-file host — never the API, whose anonymous budget a shared egress
@@ -1808,8 +1923,86 @@ mod tests {
         assert_eq!(row_digest(single, "macos-aarch64").as_deref(), Some("def"));
     }
 
-    /// The written row pins one artifact per `<os>-<arch>` key, the static musl
-    /// build where glibc and musl share one, and no `.zip` target.
+    /// A musl engine whose tag's gnu build runs here places gnu.
+    #[test]
+    fn a_gnu_build_that_runs_replaces_musl() {
+        let (target, bytes) = chosen_build(
+            "x86_64-unknown-linux-musl",
+            b"musl".to_vec(),
+            |gnu| (gnu == "x86_64-unknown-linux-gnu").then(|| b"gnu".to_vec()),
+            |candidate| candidate == b"gnu",
+        );
+        assert_eq!(
+            (target.as_str(), bytes.as_slice()),
+            ("x86_64-unknown-linux-gnu", &b"gnu"[..])
+        );
+    }
+
+    /// A gnu build that does not answer here — no libc, too old a glibc — is
+    /// never placed; the musl build, which already runs, stays.
+    #[test]
+    fn a_gnu_build_that_does_not_run_leaves_musl() {
+        let (target, bytes) = chosen_build(
+            "aarch64-unknown-linux-musl",
+            b"musl".to_vec(),
+            |_| Some(b"gnu".to_vec()),
+            |_| false,
+        );
+        assert_eq!(
+            (target.as_str(), bytes.as_slice()),
+            ("aarch64-unknown-linux-musl", &b"musl"[..])
+        );
+        // A fetch that failed keeps musl too.
+        let (target, _) = chosen_build("x86_64-unknown-linux-musl", Vec::new(), |_| None, |_| true);
+        assert_eq!(target, "x86_64-unknown-linux-musl");
+    }
+
+    /// Any engine that is not musl Linux fetches nothing and keeps itself.
+    #[test]
+    fn only_a_musl_linux_engine_looks_for_gnu() {
+        for running in [
+            "x86_64-unknown-linux-gnu",
+            "aarch64-apple-darwin",
+            "x86_64-pc-windows-msvc",
+        ] {
+            let (target, _) = chosen_build(
+                running,
+                Vec::new(),
+                |_| panic!("{running} must not fetch a twin"),
+                |_| true,
+            );
+            assert_eq!(target, running);
+        }
+        assert_eq!(gnu_twin("x86_64-unknown-linux-gnu"), None);
+    }
+
+    /// A follow verifies against its OWN triple's digest, and takes the
+    /// `<os>-<arch>` one only when that artifact is this engine's asset.
+    #[test]
+    fn the_follow_reads_its_own_triples_digest() {
+        let target = running_target();
+        let own = release_asset("v0.0.216", &target);
+        let head = "[[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n";
+        let key = crate::provision::platform_key();
+        let triple = format!(
+            "{head}\n[provision.platforms.{target}]\nurl = \"https://h/{own}\"\nsha256 = \"aa\"\n\n\
+             [provision.platforms.{key}]\nurl = \"https://h/{own}\"\nsha256 = \"bb\"\n"
+        );
+        assert_eq!(followed_digest(&triple).as_deref(), Some("aa"));
+        let generic_own = format!(
+            "{head}\n[provision.platforms.{key}]\nurl = \"https://h/{own}\"\nsha256 = \"bb\"\n"
+        );
+        assert_eq!(followed_digest(&generic_own).as_deref(), Some("bb"));
+        // The generic artifact is a SIBLING libc's: never this engine's digest.
+        let sibling = format!(
+            "{head}\n[provision.platforms.{key}]\nurl = \"https://h/batten-v0.0.216-other.tar.gz\"\nsha256 = \"cc\"\n"
+        );
+        assert_eq!(followed_digest(&sibling), None);
+    }
+
+    /// The written row pins every archive under its own triple, plus one per
+    /// `<os>-<arch>` key — the static musl build where a platform has one, for
+    /// `provision apply` — and no `.zip` target.
     #[test]
     fn the_adopted_row_pins_one_archive_per_platform() {
         let gnu = "batten-v0.0.216-x86_64-unknown-linux-gnu.tar.gz";
@@ -1844,10 +2037,18 @@ mod tests {
                 Some("3".repeat(64)),
                 "{written}"
             );
-            assert!(
-                written.contains(musl) && !written.contains(gnu),
+            // Each libc keeps its own artifact, under its own triple.
+            assert_eq!(
+                row_digest(&written, "x86_64-unknown-linux-gnu"),
+                Some("1".repeat(64)),
                 "{written}"
             );
+            assert_eq!(
+                row_digest(&written, "x86_64-unknown-linux-musl"),
+                Some("2".repeat(64)),
+                "{written}"
+            );
+            assert!(written.contains(musl) && written.contains(gnu), "{written}");
             assert!(
                 !written.contains(".zip") && !written.contains("windows"),
                 "{written}"
