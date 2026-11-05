@@ -292,13 +292,46 @@ pub fn row_release(text: &str) -> Option<String> {
 }
 
 /// The first batten `[[provision]]` row of `text`, parsed syntactically.
+///
+/// **ONLY THE ROW'S OWN LINES ARE PARSED**, never the whole file. Every engine
+/// call reads its pin, and parsing this repository's 962 KB `batten.toml` to
+/// find one row made `check`, `hook`, `passthrough` and the wired path 2.6-3x
+/// slower than the scan it replaced (`perf gate`, measured on this change). Each
+/// `[[provision]]` block runs from its header to the next table header that is
+/// not one of its own `[provision.…]` subtables, and only that slice meets
+/// `toml_edit`. A block that will not parse is passed over, so a malformed
+/// neighbour can no more hide the pin than a later release's check can.
+//MUTANT-SUITE crates/batten/src/engine.rs
+//MUTANT row-block-swallows-the-file|s@^            if header \&\& !trimmed.starts_with("\[provision.") {$@            if false {@|a_row_is_read_from_its_own_block
 fn batten_row(text: &str) -> Option<toml_edit::Table> {
-    let doc = text.parse::<toml_edit::DocumentMut>().ok()?;
-    doc.get("provision")?
-        .as_array_of_tables()?
-        .iter()
-        .find(|row| is_batten_row(*row))
-        .cloned()
+    let mut blocks: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("[[provision]]") {
+            blocks.extend(current.take());
+            current = Some(format!("{line}\n"));
+            continue;
+        }
+        if let Some(block) = current.as_mut() {
+            let header = trimmed.starts_with('[');
+            if header && !trimmed.starts_with("[provision.") {
+                blocks.extend(current.take());
+                continue;
+            }
+            block.push_str(line);
+            block.push('\n');
+        }
+    }
+    blocks.extend(current);
+    blocks.iter().find_map(|block| {
+        let doc = block.parse::<toml_edit::DocumentMut>().ok()?;
+        doc.get("provision")?
+            .as_array_of_tables()?
+            .iter()
+            .find(|row| is_batten_row(*row))
+            .cloned()
+    })
 }
 
 /// The `sha256` the batten row pins for `platform` (`provision::platform_key`'s
@@ -1921,6 +1954,22 @@ mod tests {
         assert_eq!(row_digest(text, "macos-aarch64"), None);
         let single = "[[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\nsha256 = \"def\"\n";
         assert_eq!(row_digest(single, "macos-aarch64").as_deref(), Some("def"));
+    }
+
+    /// The row is read from its own block: a later table, a broken neighbour,
+    /// or another `[[provision]]` row before it never changes the answer.
+    #[test]
+    fn a_row_is_read_from_its_own_block() {
+        let text = "version = 1\n\n[[provision]]\nname = \"other\"\nversion = \"9.9.9\"\n\n\
+                    [[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n\n\
+                    [provision.platforms.linux-x86_64]\nurl = \"u\"\nsha256 = \"abc\"\n\n\
+                    [[rule]]\nid = \"x\"\nversion = \"not the row's\"\n\n\
+                    [broken\n";
+        assert_eq!(row_release(text).as_deref(), Some("v0.0.216"));
+        assert_eq!(row_digest(text, "linux-x86_64").as_deref(), Some("abc"));
+        // The block ends at the next foreign table: `[[rule]]`'s keys are not the row's.
+        let swallowed = "[[provision]]\nname = \"batten\"\n\n[[rule]]\nversion = \"1.2.3\"\n";
+        assert_eq!(row_release(swallowed), None);
     }
 
     /// A musl engine whose tag's gnu build runs here places gnu.
