@@ -144,7 +144,7 @@ fn this_process() -> (String, String) {
     (root, name)
 }
 
-/// Whether a record under [`unassignable_pid`] can read as a corpse on this target.
+/// Whether a record under [`common::unassignable_pid`] can read as a corpse on this target.
 ///
 /// `pid_exists` has **no probe off unix** — its `#[cfg(not(unix))]` arm answers
 /// `true` for every parseable pid, deliberately, so nothing is ever reported dead

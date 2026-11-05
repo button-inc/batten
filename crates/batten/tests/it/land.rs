@@ -819,6 +819,65 @@ fn a_lap_over_a_clone_with_no_remote_stops_rather_than_lapping_toward_nothing() 
     );
 }
 
+/// **A dead land's kept crash witness whose group is provably an orphan is
+/// signalled by the reap, and only then disowned**, so no later reap signals
+/// the number again; its record and hold stay for its branch's own land
+/// (CLOUD-2456). Only a real spawn leaves an orphaned group, and only a
+/// `/proc` reader proves one. The reap is called directly, through the
+/// public seam `collect::is_orphaned_group` set the precedent for, so nothing
+/// but the reap decides the answer.
+///
+/// Fails by: the reap disowning a group it never signalled, or never
+/// disowning one it did, or forgetting the witness it signalled.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: an orphaned group is a property of processes this one is not, so only a real spawn can leave one"
+)]
+fn a_signalled_witness_is_disowned_and_kept() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let git_dir = scratch("reap-orphaned-witness");
+    let note = git_dir.join("group");
+    // The inner shell leads a group of its own, leaves a member in it, and
+    // exits: the orphan a dead land's verify leaves behind.
+    let status = std::process::Command::new("setsid")
+        .args([
+            "-w",
+            "sh",
+            "-c",
+            "sleep 600 & printf '%s' \"$$\" > \"$NOTE\"",
+        ])
+        .env("NOTE", &note)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("setsid runs");
+    assert!(status.success());
+    let group = std::fs::read_to_string(&note).expect("the group is noted");
+    batten::task::register_as(&git_dir, "land", &group, "verify", 100, "elsewhere", 0);
+    // A stamp every live member predates, fixed rather than read off the
+    // clock: 2100-01-01.
+    batten::task::push(
+        &git_dir,
+        &group,
+        batten::task::Signal::Tick,
+        "1",
+        4_102_444_800,
+    );
+    batten::task::hold(&git_dir, &group)
+        .expect("a hold is taken")
+        .release_as_a_death_would();
+    let (terminated, _, _) = batten::reap_abandoned_tasks(&git_dir, "mise-tasks");
+    let pgid = batten::task::read_field(&git_dir, &group, "pgid");
+    let held = batten::task::hold_stands(&git_dir, &group);
+    assert_eq!(terminated, 1, "the orphan's group is signalled");
+    assert_eq!(pgid.as_deref(), Some(""), "and disowned once signalled");
+    assert!(held, "its witness stays for its branch's land");
+}
+
 /// `batten land fast-forward`, with the workflow named in the environment.
 fn land_fast_forward(repo: &Path, workflow: &str) -> (i32, String, String) {
     let output = batten()
