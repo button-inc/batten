@@ -3106,12 +3106,56 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selecti
     };
     let _ = fs::remove_file(&junit);
     if ran.outcome == Outcome::TimedOut {
+        if let Some(stopped) = stopped_at(&ran.output) {
+            use std::io::Write as _;
+            let _ = writeln!(
+                std::io::stderr(),
+                "mutate sweep: {want} timed out at `{stopped}`"
+            );
+        }
         return Selection {
             reach: Reach::TimedOut,
             ..selection
         };
     }
     selection
+}
+
+/// The words cargo and nextest open a status line with.
+const STATUS_WORDS: &[&str] = &[
+    "Compiling",
+    "Blocking",
+    "Finished",
+    "Running",
+    "Starting",
+    "SETUP",
+    "START",
+    "SLOW",
+    "PASS",
+    "FAIL",
+    "TIMEOUT",
+    "LEAK",
+];
+
+//MUTANT stopped-at-first-line|s@^        \.rev()$@        .skip(0)@|a_timed_out_suite_names_where_it_stopped
+/// Where a suite killed at its bound had got to: the first five words of the
+/// LAST status line cargo or nextest printed, so `Compiling <crate>`, `SETUP`
+/// or `SLOW [> Ns] <case>` (CLOUD-2206). A POINTER, NEVER THE OUTPUT: a
+/// timeout used to say only `suite-timed-out`, measured on #1258 where one CI
+/// shard's first row hit 900s while the same case ran in 0.5s locally, and
+/// nothing told a cold compile from a hung case.
+fn stopped_at(output: &str) -> Option<String> {
+    output
+        .lines()
+        .rev()
+        .map(str::split_whitespace)
+        .map(|words| words.take(5).collect::<Vec<_>>())
+        .find(|words| {
+            words
+                .first()
+                .is_some_and(|word| STATUS_WORDS.contains(word))
+        })
+        .map(|words| words.join(" "))
 }
 
 /// Where each harness runs and what it is handed: the working directory and
@@ -4749,6 +4793,21 @@ fn engine_undeclared(root: &Path, censused: &BTreeMap<String, String>) -> usize 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: the first status line reported instead of the last, or a
+    /// non-status line (a case's own output) taken for one, or the whole line
+    /// reported rather than a pointer to it (CLOUD-2206).
+    #[test]
+    fn a_timed_out_suite_names_where_it_stopped() {
+        let output = "   Compiling batten v0.0.217 (/w)\n    Finished `test` profile\n        \
+                      SLOW [> 890.000s] batten::it preapprove::a_case and more words\n\
+                      a case's own stderr line\n";
+        assert_eq!(
+            stopped_at(output).as_deref(),
+            Some("SLOW [> 890.000s] batten::it preapprove::a_case")
+        );
+        assert_eq!(stopped_at("no status here\n"), None);
+    }
 
     /// Fails by: the provisioned runner's directory dropped, or put after the
     /// inherited `PATH`, so a CI runner with no cargo-mutants reads
