@@ -2989,10 +2989,10 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
         // THE PROFILE EVERY NEXTEST CONFIG HAS, for both runners that run
         // nextest (the declared Cargo arm and cargo-mutants). An inherited
         // `NEXTEST_PROFILE` (this repository's `[env]` set `ci` under CI until
-        // CLOUD-2588; a consumer's still may)
-        // names a profile the staged tree may not declare, a fixture's or a
-        // consumer's, and nextest then exits before selecting a case: every
-        // declared Cargo row read `suite-did-not-run` in CI alone. A profile
+        // CLOUD-2588; a consumer's still may) names a profile the staged tree
+        // may not declare, a fixture's or a consumer's, and nextest then exits
+        // before selecting a case, which is how every declared Cargo row once
+        // read `suite-did-not-run` in CI alone. A profile
         // the staged tree DOES declare is kept by [`nextest_env`], for its
         // setup scripts; its verdict settings are overridden by
         // [`NEXTEST_VERDICT_FLAGS`] (CLOUD-2466 item 9).

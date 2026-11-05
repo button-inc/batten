@@ -305,9 +305,10 @@ fn a_malformed_shard_is_refused_before_the_sweep() {
 
 /// The registered runner takes the shard the sweep already parsed (CLOUD-2541),
 /// so a malformed `$MUTANT_SHARD` under `MUTANT_RUNNER=cargo-mutants` is the one
-/// usage error, never `shard_plan`'s second refusal (`mutate: mutate: ...`, exit
-/// 3) nor an unsharded run. Fails by: the sweep's refusal dropped, which leaves
-/// nothing downstream able to refuse the value.
+/// usage error. `shard_plan` once refused it a second time (`mutate: mutate:
+/// ...`, exit 3); the assertion on that text guards against its return. Fails
+/// by: the sweep's refusal dropped, which leaves nothing downstream able to
+/// refuse the value.
 #[test]
 fn a_malformed_shard_is_refused_before_the_registered_runner() {
     let root = toy("shard-malformed-registered");
