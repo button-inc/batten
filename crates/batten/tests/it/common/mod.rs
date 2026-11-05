@@ -491,12 +491,20 @@ pub(crate) fn bypass_env_vars_in(path: &Path) -> Vec<String> {
 /// (`batten::testing::contain_state`), so what a child writes is what the case
 /// reads back.
 #[must_use]
+pub(crate) fn batten() -> Batten {
+    batten_as(Path::new(env!("CARGO_BIN_EXE_batten")))
+}
+
+/// [`batten`], running the engine at `program` instead: the same scrubbed and
+/// pinned environment, so a copy of the binary placed elsewhere (inside a
+/// fixture checkout, say) reads the same state store the case does.
+#[must_use]
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the subject of an end-to-end test is the compiled binary, so there is nothing to move in-process without testing something else"
 )]
-pub(crate) fn batten() -> Batten {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_batten"));
+pub(crate) fn batten_as(program: &Path) -> Batten {
+    let mut command = Command::new(program);
     for name in declared_env_vars() {
         command.env_remove(name);
     }
@@ -546,6 +554,24 @@ pub(crate) fn batten() -> Batten {
         command.env_remove(name);
     }
     Batten(command)
+}
+
+/// Place the compiled binary at `at`, by LINK where the filesystem allows one.
+///
+/// The test binary is ~140 MiB and several suites want it elsewhere, so copying
+/// would write most of a gigabyte per run — and those cases carry
+/// `//MUTANT-SUITE` rows, so a sweep replays them. A hard link is enough: the
+/// kernel reports the path it was exec'd by (`/proc/self/exe`), which is what a
+/// case placing it inside a checkout needs, and nothing writes THROUGH it. A
+/// symlink would not do, because the exe path resolves to its target. A
+/// cross-device link falls back to the copy.
+pub(crate) fn place_build(at: &Path) -> PathBuf {
+    fs::create_dir_all(at.parent().expect("a parent directory")).expect("create the parent");
+    let built = Path::new(env!("CARGO_BIN_EXE_batten"));
+    fs::hard_link(built, at)
+        .or_else(|_| fs::copy(built, at).map(|_| ()))
+        .expect("place the compiled binary");
+    at.to_path_buf()
 }
 
 /// The case's own home, and the toolchain the developer's home holds pinned

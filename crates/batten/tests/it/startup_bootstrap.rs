@@ -302,6 +302,86 @@ fn a_warm_cache_whose_link_vanished_is_relinked_rather_than_reported_fresh() {
     );
 }
 
+/// CLOUD-2617: `provision status` judges the declared link even when the engine
+/// asking is a build of the checkout, which `links_host` keeps from WRITING it.
+///
+/// `toolchain-runner-present` runs `provision status` through the engine's own
+/// image, and in this repository that image can be `target/release/batten`. If
+/// status took `links_host`'s answer, that build would skip the link, read a
+/// warm cache as fresh, and report `ok` over a runner that is not on PATH —
+/// CLOUD-1389's false green, one layer over.
+///
+/// Fails by: status's host taking `links` from `links_host` instead of `true`.
+#[test]
+fn status_from_a_checkout_build_still_judges_the_link() {
+    let dest = scratch("provision-status-in-tree-dest");
+    std::fs::create_dir_all(&dest).expect("the destination exists");
+    let (dir, _artifact) = linked_fixture(
+        "provision-status-in-tree",
+        dest.to_str().expect("the scratch path is UTF-8"),
+        b"#!/bin/sh\nexit 0\n",
+    );
+    // AN ENVIRONMENT ROW, so the link is a LAUNCHER: a plain-copy link reads
+    // `missing` whoever asks (CLOUD-2210), which would make the fresh reading
+    // below impossible and the stale one prove nothing.
+    {
+        use std::io::Write as _;
+        let mut manifest = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.join("batten.toml"))
+            .expect("open the manifest");
+        manifest
+            .write_all(
+                b"\n[[provision.env]]\nname = \"PROBE_HOME\"\nprepend_list = [\"/opt/probe\"]\n",
+            )
+            .expect("declare an environment row");
+    }
+    let warm = batten()
+        .current_dir(&dir)
+        .args(["provision", "apply"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(warm.status.code(), Some(0), "{}", stderr(&warm));
+    let landed = dest.join("probe");
+    assert!(landed.is_file(), "the installed engine links");
+
+    // The same engine, placed inside the checkout it judges.
+    let built = Path::new(env!("CARGO_BIN_EXE_batten"));
+    let engine = common::place_build(
+        &dir.join("target")
+            .join("release")
+            .join(built.file_name().expect("a name")),
+    );
+    // `batten_as`, not a bare `Command`: the same pinned state store, or the
+    // copy reads an empty cache and reports `missing` for that reason instead.
+    let status = || {
+        common::batten_as(&engine)
+            .current_dir(&dir)
+            .args(["provision", "status"])
+            .output()
+            .expect("the in-tree engine runs")
+    };
+
+    // FRESH FIRST, so the stale reading below can only be the link: the in-tree
+    // engine reads the warm cache the installed one wrote.
+    let fresh = status();
+    assert_eq!(
+        (fresh.status.code(), stdout(&fresh)),
+        (Some(0), String::new()),
+        "the in-tree engine reads the warm cache: {}",
+        stderr(&fresh)
+    );
+
+    std::fs::remove_file(&landed).expect("the link is removed");
+    let stale = status();
+    assert_ne!(stale.status.code(), Some(0), "{}", stderr(&stale));
+    assert_eq!(
+        stdout(&stale).trim(),
+        "probe 1 missing",
+        "an in-tree build must read the missing link, and only it, as stale"
+    );
+}
+
 #[test]
 fn a_relative_link_destination_is_refused_rather_than_resolved() {
     // The direction a miss must fail in. Resolved against the process's own

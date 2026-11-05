@@ -493,9 +493,9 @@ pub enum Unpack {
     TarGz,
 }
 
-/// Why an entry is not fresh. Three states rather than a boolean, because
-/// "never installed" and "installed, and the bytes are not what the pin says"
-/// are different facts, and only the second is alarming.
+/// Why an entry is not fresh. Several states rather than a boolean, because
+/// "never installed", "installed, and the bytes are not what the pin says"
+/// and "another tool holds the name" are different facts, with different fixes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -506,10 +506,17 @@ pub enum Freshness {
     Missing,
     /// Cached, but the artifact's digest is not the pinned one.
     Mismatch,
+    /// The link's name, in a directory the `PATH` fallback shares with package
+    /// managers, holds another tool's binary (CLOUD-2617). Not `Missing`: the
+    /// file is there, and no apply may replace it, so the operator's fix is to
+    /// move that tool or declare an absolute `link`.
+    Foreign,
 }
 
 impl Freshness {
-    /// Whether this entry needs an apply.
+    /// Whether this entry is not fresh. For [`Freshness::Foreign`] the apply it
+    /// prompts refuses, which is the point: the startup row fails visibly, with
+    /// the operator's fix in the refusal.
     #[must_use]
     pub const fn is_stale(self) -> bool {
         !matches!(self, Freshness::Fresh)
@@ -522,6 +529,7 @@ impl Freshness {
             Freshness::Fresh => "fresh",
             Freshness::Missing => "missing",
             Freshness::Mismatch => "mismatch",
+            Freshness::Foreign => "foreign",
         }
     }
 }
@@ -619,12 +627,22 @@ pub fn digest(bytes: &[u8]) -> String {
 /// An I/O failure other than a missing cache entry propagates as an internal
 /// error (→ exit `3`). A missing entry is a verdict, not a failure.
 pub fn status(entries: &[Provision], cache_root: &Path) -> Result<Report> {
+    status_on(entries, cache_root, Host::isolated(true))
+}
+
+/// [`status`], with each declared link judged where [`link_dir`] resolves it
+/// on `host` — the same place [`apply_on`] writes it (CLOUD-2617).
+///
+/// # Errors
+///
+/// As [`status`].
+pub fn status_on(entries: &[Provision], cache_root: &Path, host: Host<'_>) -> Result<Report> {
     let mut report = Vec::with_capacity(entries.len());
     for entry in entries {
         report.push(EntryStatus {
             name: entry.name.clone(),
             version: entry.version.clone(),
-            freshness: freshness_of(entry, cache_root, true)?,
+            freshness: freshness_of(entry, cache_root, link_of(entry, host)?.as_ref())?,
         });
     }
     Ok(Report { entries: report })
@@ -649,7 +667,262 @@ pub fn links_host(exe: &Path, repo_root: &Path) -> bool {
     !exe.starts_with(repo_root)
 }
 
-fn freshness_of(entry: &Provision, cache_root: &Path, links_host: bool) -> Result<Freshness> {
+/// What a declared link is resolved against: whether this engine may write the
+/// host's links at all ([`links_host`]'s answer), the caller's `PATH`, and how
+/// to ask whether a directory is writable.
+///
+/// One value rather than loose parameters so [`status`] and [`apply`] are
+/// handed the same answer: the two must judge and write ONE path, or the row
+/// reads green over a link nobody wrote (CLOUD-2617).
+#[derive(Debug, Clone, Copy)]
+pub struct Host<'a> {
+    /// Whether the declared links are judged and written at all.
+    pub links: bool,
+    /// The caller's `PATH`, in order.
+    pub on_path: &'a [PathBuf],
+    /// Whether a directory may be written.
+    pub writable: fn(&Path) -> bool,
+}
+
+impl Host<'static> {
+    /// A host with no `PATH` and nothing writable, so every declared link
+    /// resolves to the directory it names. What a case wants: a suite run as
+    /// root must never reach a real system directory.
+    #[must_use]
+    pub const fn isolated(links: bool) -> Self {
+        const fn never(_: &Path) -> bool {
+            false
+        }
+        Self {
+            links,
+            on_path: &[],
+            writable: never,
+        }
+    }
+}
+
+/// The directory a declared `link` resolves to on `host` (CLOUD-2617).
+///
+/// **`engine install`'s rule, not a second one.** A link under `~/` is the
+/// per-user preference: where it is not on `PATH`, the first conventional system
+/// directory that is on `PATH` and writable wins, and otherwise it stands. An
+/// absolute link is NAMED, and stands wherever it is — the manifest asked for
+/// that directory, as `BATTEN_INSTALL_DIR` does. That is
+/// [`crate::install::destination`] exactly, called rather than copied, with
+/// `~/` in the per-user seat and an absolute path in the named one.
+///
+/// A root Setup shell carries `/usr/local/bin` and not `~/.local/bin`:
+/// measured on a cold Kilo.ai container, `engine install` put batten in
+/// `/usr/local/bin` while this linked the runner into `~/.local/bin`, so
+/// `provision status` was fresh, the bare name did not resolve, and every
+/// `[[startup]]` row naming it was could-not-look.
+///
+/// # Errors
+///
+/// [`expand_home`]'s: a `~` with no `HOME`, or a relative destination.
+//MUTANT link-ignores-path|s@^        host.on_path,$@        \&[],@|a_declared_link_off_path_follows_engine_installs_fallback
+pub fn link_dir(dest: &str, host: Host<'_>) -> Result<PathBuf> {
+    let declared = expand_home(dest)?;
+    if !dest.starts_with("~/") {
+        return Ok(declared);
+    }
+    Ok(crate::install::destination(
+        None,
+        declared,
+        host.on_path,
+        host.writable,
+    ))
+}
+
+/// Where one entry's link goes, and whether that directory is SHARED: a system
+/// directory the `PATH` fallback chose, rather than the declared one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Link {
+    /// The directory the link lands in.
+    dir: PathBuf,
+    /// Whether [`link_dir`] fell back to a directory package managers share.
+    shared: bool,
+}
+
+impl Link {
+    /// Whether this link's name belongs to another tool: only ever true in a
+    /// shared directory, where [`claimable`] decides it.
+    fn foreign(&self, entry: &Provision, cache_root: &Path) -> bool {
+        self.shared && !claimable(&self.dir, entry, cache_root)
+    }
+
+    /// The refusal for a [`Link::foreign`] name, naming the file and the two
+    /// fixes the operator has.
+    fn refusal(&self, entry: &Provision) -> anyhow::Error {
+        anyhow::anyhow!(
+            "provision: {} is another tool's {}, so batten will not replace it; \
+             move that tool, or declare an absolute `link` for this entry",
+            self.dir.join(&entry.binary).display(),
+            entry.binary
+        )
+    }
+}
+
+/// Where `entry`'s link resolves on `host`, or `None` where it declares none
+/// or the host's links are not this engine's to write.
+///
+/// RESOLVED ONCE PER ENTRY, and handed to both the freshness reading and the
+/// install, so one call cannot judge one directory and write another.
+fn link_of(entry: &Provision, host: Host<'_>) -> Result<Option<Link>> {
+    let Some(dest) = entry.link.as_deref().filter(|_| host.links) else {
+        return Ok(None);
+    };
+    let dir = link_dir(dest, host)?;
+    let shared = dir != expand_home(dest)?;
+    Ok(Some(Link { dir, shared }))
+}
+
+/// Whether a SHARED directory's name is batten's to write: free, a batten
+/// launcher, or the very file [`record_link`] recorded writing.
+///
+/// **A FALLBACK NEVER TAKES A NAME SOMEBODY ELSE OWNS, AND SAYS SO.** The
+/// declared `~/` directory is batten's, but `/usr/local/bin` and
+/// `/opt/homebrew/bin` are shared with package managers. A foreign name there
+/// reads [`Freshness::Foreign`] and the install refuse, so the startup row
+/// fails visibly. Quietly linking somewhere off `PATH` instead would be
+/// CLOUD-2617's false green again, over somebody else's `mise`.
+///
+/// RECORDED, NOT INFERRED FROM BYTES, and by IDENTITY as well as path. Bytes
+/// cost two whole binaries per status and broke on upgrade (the new version's
+/// cache is empty until `install`); a path alone would trust whatever replaced
+/// the file later. The record is per entry NAME, so it survives a version bump.
+//MUTANT fallback-claims-a-foreign-name|s@^    !linked.exists()$@    true@|a_fallback_never_takes_a_name_another_tool_owns
+fn claimable(dir: &Path, entry: &Provision, cache_root: &Path) -> bool {
+    let linked = dir.join(&entry.binary);
+    !linked.exists() || is_launcher(&linked) || recorded_as_ours(&linked, entry, cache_root)
+}
+
+/// Whether the link record names `linked` and, once completed, `linked`'s
+/// present stamp.
+///
+/// An INTENT — a record naming the path with no stamp yet — is what a run
+/// killed between [`record_intent`] and [`record_written`] leaves. It admits
+/// the file only if it holds this entry's own cached bytes, which is all that
+/// half-finished run could have put there. Admitting whatever sits at the path
+/// would let a crash vouch for a binary another tool installed afterwards. A
+/// launcher needs no record, so this byte read is the rare crash path only.
+fn recorded_as_ours(linked: &Path, entry: &Provision, cache_root: &Path) -> bool {
+    let Ok(record) = fs::read_to_string(link_record(cache_root, entry)) else {
+        return false;
+    };
+    let mut lines = record.lines();
+    if lines.next().map(Path::new) != Some(linked) {
+        return false;
+    }
+    match lines.next() {
+        Some(recorded) => written_stamp(linked).as_deref() == Some(recorded),
+        None => same_bytes(
+            linked,
+            &entry_dir(cache_root, entry)
+                .join(BIN_DIR)
+                .join(&entry.binary),
+        ),
+    }
+}
+
+/// Whether two files hold the same bytes; `false` when either cannot be read.
+/// Sizes first, so a file of another length costs two `stat`s.
+fn same_bytes(left: &Path, right: &Path) -> bool {
+    let size = |path: &Path| fs::metadata(path).map(|meta| meta.len()).ok();
+    match (size(left), size(right)) {
+        (Some(a), Some(b)) if a == b => {
+            matches!((fs::read(left), fs::read(right)), (Ok(a), Ok(b)) if a == b)
+        }
+        _ => false,
+    }
+}
+
+/// Where `entry`'s last written link is recorded: beside its versioned cache
+/// directories, so a version bump still finds it.
+fn link_record(cache_root: &Path, entry: &Provision) -> PathBuf {
+    cache_root.join(CACHE_DIR).join(&entry.name).join("linked")
+}
+
+/// Record that batten is ABOUT to write `entry`'s link at `linked`: the path
+/// alone, before the file exists, so a crash before [`record_written`] leaves
+/// batten's own half-written link claimable.
+///
+/// Never the present file's stamp: an older batten file at the path would get
+/// its stamp recorded, and a crash then makes the link batten is writing read
+/// as foreign.
+fn record_intent(cache_root: &Path, entry: &Provision, linked: &Path) -> Result<()> {
+    write_link_record(cache_root, entry, &linked.to_string_lossy())
+}
+
+/// Record that batten WROTE `entry`'s link at `linked`: the path and the
+/// written file's [`written_stamp`].
+fn record_written(cache_root: &Path, entry: &Provision, linked: &Path) -> Result<()> {
+    let stamp = written_stamp(linked).context("stamp the written link")?;
+    write_link_record(
+        cache_root,
+        entry,
+        &format!("{}\n{stamp}", linked.to_string_lossy()),
+    )
+}
+
+/// The one writer of [`link_record`], which may run before `install` has made
+/// the entry's cache directory.
+fn write_link_record(cache_root: &Path, entry: &Provision, body: &str) -> Result<()> {
+    let record = link_record(cache_root, entry);
+    if let Some(parent) = record.parent() {
+        fs::create_dir_all(parent).context("create the link record's directory")?;
+    }
+    crate::durable::replace(record, body.as_bytes()).context("record the written link")
+}
+
+/// A written file's stamp for [`recorded_as_ours`]: its length and
+/// modification time, which any later replacement of the file changes. Not
+/// `collect`'s inode identity, which an in-place overwrite keeps.
+fn written_stamp(path: &Path) -> Option<String> {
+    let meta = fs::metadata(path).ok()?;
+    let modified = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    Some(format!("{} {}", meta.len(), modified.as_nanos()))
+}
+
+/// How much of a file is read to find a launcher's `#!` line, which is short;
+/// the name may instead hold a large binary.
+const LAUNCHER_HEAD: u64 = 4096;
+
+/// Whether the file at `path` is a batten launcher ([`launcher`]'s shape).
+fn is_launcher(path: &Path) -> bool {
+    use std::io::Read as _;
+    let mut head = Vec::new();
+    fs::File::open(path)
+        .and_then(|file| file.take(LAUNCHER_HEAD).read_to_end(&mut head))
+        .is_ok()
+        && launcher_interpreter(&head).is_some()
+}
+
+/// The interpreter a launcher's first line names, or `None` for anything that
+/// is not a launcher. The one reader of [`launcher`]'s `#!` line.
+fn launcher_interpreter(bytes: &[u8]) -> Option<&str> {
+    let first = bytes.split(|byte| *byte == b'\n').next()?;
+    let (interpreter, verb) = std::str::from_utf8(first)
+        .ok()?
+        .strip_prefix("#!")?
+        .rsplit_once(' ')?;
+    (verb == LAUNCHER_VERB).then_some(interpreter)
+}
+
+fn freshness_of(entry: &Provision, cache_root: &Path, link: Option<&Link>) -> Result<Freshness> {
+    // A SHARED DIRECTORY'S NAME MUST BE BATTEN'S, and that is asked FIRST: it
+    // is the one verdict no apply can change, so a cold cache must not answer
+    // `missing` over it. Another tool's `mise` would otherwise also answer the
+    // link's `is_file` below and read fresh over a binary the pin does not name.
+    if let Some(link) = link
+        && link.foreign(entry, cache_root)
+    {
+        return Ok(Freshness::Foreign);
+    }
     let dir = entry_dir(cache_root, entry);
     let binary = dir.join(BIN_DIR).join(&entry.binary);
     if !binary.is_file() {
@@ -671,8 +944,8 @@ fn freshness_of(entry: &Provision, cache_root: &Path, links_host: bool) -> Resul
     // `Missing` rather than a fourth verdict: what is missing is the binary at
     // the place this entry declares it must be, which is the same class as
     // nothing cached and takes the same repair.
-    if let Some(dest) = entry.link.as_deref().filter(|_| links_host) {
-        let linked = expand_home(dest)?.join(&entry.binary);
+    if let Some(link) = link {
+        let linked = link.dir.join(&entry.binary);
         if !linked.is_file() {
             return Ok(Freshness::Missing);
         }
@@ -756,7 +1029,32 @@ pub fn apply(
     dry_run: bool,
     links_host: bool,
 ) -> Result<Applied> {
-    if freshness_of(entry, cache_root, links_host)? == Freshness::Fresh {
+    apply_on(entry, cache_root, dry_run, Host::isolated(links_host))
+}
+
+/// [`apply`], with each declared link written where [`link_dir`] resolves it
+/// on `host` — the same place [`status_on`] judges it (CLOUD-2617).
+///
+/// # Errors
+///
+/// As [`apply`].
+pub fn apply_on(
+    entry: &Provision,
+    cache_root: &Path,
+    dry_run: bool,
+    host: Host<'_>,
+) -> Result<Applied> {
+    let link = link_of(entry, host)?;
+    let link = link.as_ref();
+    // BEFORE ANY ARTIFACT IS READ OR FETCHED: a foreign name is known from a
+    // `stat` and a record, and no download can change it, so a session repeating
+    // this repair must not pay for one each time.
+    if let Some(link) = link
+        && link.foreign(entry, cache_root)
+    {
+        return Err(link.refusal(entry));
+    }
+    if freshness_of(entry, cache_root, link)? == Freshness::Fresh {
         return Ok(Applied::AlreadyFresh);
     }
     if dry_run {
@@ -774,7 +1072,7 @@ pub fn apply(
     // checksum.
     let artifact = entry.artifact()?;
     if let Some(bytes) = cached_artifact_matching_pin(entry, cache_root, &artifact.sha256) {
-        install(entry, cache_root, &bytes, links_host)?;
+        install(entry, cache_root, &bytes, link)?;
         return Ok(Applied::Installed);
     }
     let bytes = fetch(&artifact.url)?;
@@ -796,14 +1094,23 @@ pub fn apply(
         return Err(crate::Denial::raise(&refusal, crate::refusal::Arm::Full));
     }
 
-    install(entry, cache_root, &bytes, links_host)?;
+    install(entry, cache_root, &bytes, link)?;
     Ok(Applied::Installed)
 }
 
-/// Write the verified artifact and its binary into the cache.
+/// Write the verified artifact and its binary into the cache, and the link
+/// into `link` where one was resolved.
 ///
 /// Called only after the checksum matched.
-fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], links_host: bool) -> Result<()> {
+fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], link: Option<&Link>) -> Result<()> {
+    // REFUSED BEFORE ANYTHING IS WRITTEN: a shared directory whose name another
+    // tool holds is reported, never renamed over (see [`claimable`]). `apply_on`
+    // asks first; this is the install's own guard for any other caller.
+    if let Some(link) = link
+        && link.foreign(entry, cache_root)
+    {
+        return Err(link.refusal(entry));
+    }
     let dir = entry_dir(cache_root, entry);
     let bin_dir = dir.join(BIN_DIR);
     fs::create_dir_all(&bin_dir).context("create the provision cache directory")?;
@@ -814,7 +1121,7 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], links_host: bool)
     };
     let cached = bin_dir.join(&entry.binary);
     // **STAGED AND RENAMED, NEVER WRITTEN IN PLACE** (CLOUD-1586), which is
-    // [`link_onto_path`]'s discipline applied to the site that needed it just as
+    // [`link_into`]'s discipline applied to the site that needed it just as
     // much. Writing over this path returns `ETXTBSY` — "Text file busy" — the
     // moment anything is executing it, and something usually is: the launcher's
     // `#!` line names this exact file, so every `provision-exec` holds it open,
@@ -830,7 +1137,7 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], links_host: bool)
     // `write the provisioned binary / Text file busy`, which reads as a
     // filesystem fault and is really a self-collision.
     //
-    // Keyed on the pid and dot-prefixed for `link_onto_path`'s reasons exactly —
+    // Keyed on the pid and dot-prefixed for `link_into`'s reasons exactly —
     // two provisions running at once must not write each other's staging file.
     let staged = bin_dir.join(format!(".{}.{}.tmp", entry.binary, std::process::id()));
     let written = crate::durable::replace(&staged, &binary)
@@ -848,8 +1155,22 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], links_host: bool)
     // reading `missing` also leaves the link unmade. A fresh entry whose link
     // never landed would be the silent half-install this ordering exists to
     // rule out.
-    if let Some(dest) = entry.link.as_deref().filter(|_| links_host) {
-        link_onto_path(entry, dest, &cached, &binary)?;
+    if let Some(link) = link {
+        // RECORDED ONLY IN A SHARED DIRECTORY, the one place [`claimable`]
+        // reads it. Rewriting it for the declared directory would erase the only
+        // evidence that batten's earlier copy in the shared one is batten's, and
+        // that copy would read `foreign` for good.
+        //
+        // INTENT FIRST, crash-only: the record names the path before the link
+        // exists, so a run killed in between finds its own file claimable.
+        let linked = link.dir.join(&entry.binary);
+        if link.shared {
+            record_intent(cache_root, entry, &linked)?;
+        }
+        link_into(entry, &link.dir, &cached, &binary)?;
+        if link.shared {
+            record_written(cache_root, entry, &linked)?;
+        }
     }
     // The artifact is written last, so a crash between the two leaves the entry
     // reading `missing` rather than `fresh` — the direction that re-applies.
@@ -907,9 +1228,11 @@ const LAUNCHER_VERB: &str = "provision-exec";
 /// running process keeps its own open inode — so the temp file is made
 /// executable BEFORE the rename and the file on `PATH` is never a moment
 /// non-executable. Same directory, so it cannot cross a filesystem.
-fn link_onto_path(entry: &Provision, dest: &str, cached: &Path, binary: &[u8]) -> Result<()> {
-    let dir = expand_home(dest)?;
-    fs::create_dir_all(&dir).context("create the linked binary's directory")?;
+///
+/// `dir` is already resolved, by [`link_dir`] on the host [`status_on`] judges
+/// (CLOUD-2617).
+fn link_into(entry: &Provision, dir: &Path, cached: &Path, binary: &[u8]) -> Result<()> {
+    fs::create_dir_all(dir).context("create the linked binary's directory")?;
     let path = dir.join(&entry.binary);
     // Keyed on the PID so two provisions running at once cannot write each
     // other's staging file, and dot-prefixed so a directory listing of `PATH`
@@ -931,6 +1254,17 @@ fn link_onto_path(entry: &Provision, dest: &str, cached: &Path, binary: &[u8]) -
         return Err(err).context("move the linked binary into place");
     }
     Ok(())
+}
+
+/// [`link_into`], from the declared `link` string rather than a resolved
+/// directory.
+///
+/// TEST-ONLY SINCE CLOUD-2617: production resolves the directory first, through
+/// [`link_dir`]. This keeps the form the unix-only relink case was written
+/// against, so that case runs unchanged.
+#[cfg(all(test, unix))]
+fn link_onto_path(entry: &Provision, dest: &str, cached: &Path, binary: &[u8]) -> Result<()> {
+    link_into(entry, &expand_home(dest)?, cached, binary)
 }
 
 /// The bytes of the launcher that stands in for a tool needing an environment.
@@ -1022,19 +1356,7 @@ fn relaunches_a_present_interpreter(linked: &Path) -> bool {
         // races question that re-linking would not fix.
         return true;
     };
-    let Some(first) = bytes.split(|byte| *byte == b'\n').next() else {
-        return true;
-    };
-    let Ok(line) = std::str::from_utf8(first) else {
-        return true;
-    };
-    let Some(shebang) = line.strip_prefix("#!") else {
-        return true;
-    };
-    match shebang.rsplit_once(' ') {
-        Some((interpreter, verb)) if verb == LAUNCHER_VERB => Path::new(interpreter).is_file(),
-        _ => true,
-    }
+    launcher_interpreter(&bytes).is_none_or(|interpreter| Path::new(interpreter).is_file())
 }
 
 /// Does the launcher at `linked` carry the environment rules `entry` declares?
@@ -2214,6 +2536,159 @@ mod tests {
         assert!(
             links_host(Path::new("/home/user/batten/target/debug/batten"), repo),
             "a build of another tree is not a build of this one"
+        );
+    }
+
+    /// CLOUD-2617: the measured case, a root Setup shell whose `PATH` carries
+    /// `/usr/local/bin` and not the declared `~/.local/bin`, links where
+    /// `engine install` put batten; a declared directory `PATH` reaches still
+    /// wins, and with nothing writable the declaration stands.
+    ///
+    /// Fails by: the fallback dropped, so the runner is linked off `PATH`, every
+    /// `[[startup]]` row naming it is could-not-look, and `status` reads fresh.
+    ///
+    /// Compiled and run on every target. The one host fact it needs is `HOME`,
+    /// and where that is unset a `~/` link is a usage error rather than a
+    /// fallback, which is the contract this case asserts there.
+    #[test]
+    fn a_declared_link_off_path_follows_engine_installs_fallback() {
+        // BOTH ARMS ASSERT, so no host passes this case without a verdict.
+        match expand_home(LINK_PER_USER) {
+            Ok(declared) => assert_the_fallback(&declared),
+            Err(_) => assert!(
+                link_dir(LINK_PER_USER, Host::isolated(true)).is_err(),
+                "a `~/` link with no HOME to expand is refused, never resolved"
+            ),
+        }
+    }
+
+    /// CLOUD-2617 review: the fallback writes into a directory package managers
+    /// share, so it takes a name only where that name is free or batten's own.
+    ///
+    /// Fails by: the free-name test answering `true` for everything, so
+    /// Homebrew's or an image's `mise` is renamed over.
+    #[test]
+    fn a_fallback_never_takes_a_name_another_tool_owns() {
+        let dir = scratch("claimable");
+        let cache = dir.join("cache");
+        let shared = dir.join("shared-bin");
+        fs::create_dir_all(&shared).unwrap();
+        let body = b"#!/bin/sh\nexit 0\n".to_vec();
+        let entry = entry("tool", &digest(&body));
+        let linked = shared.join("tool");
+
+        assert!(claimable(&shared, &entry, &cache), "a free name");
+
+        fs::write(&linked, b"another tool's binary").unwrap();
+        assert!(!claimable(&shared, &entry, &cache), "a foreign binary");
+
+        fs::write(&linked, format!("#!/opt/batten {LAUNCHER_VERB}\n{{}}\n")).unwrap();
+        assert!(claimable(&shared, &entry, &cache), "batten's own launcher");
+
+        fs::write(&linked, &body).unwrap();
+        assert!(
+            !claimable(&shared, &entry, &cache),
+            "a plain copy nobody recorded"
+        );
+        // AN INTENT ALONE, the crash between the two record writes: it admits
+        // the file only where it holds this entry's own cached bytes.
+        record_intent(&cache, &entry, &linked).unwrap();
+        assert!(
+            !claimable(&shared, &entry, &cache),
+            "an intent does not vouch for bytes batten never cached"
+        );
+        let cached = entry_dir(&cache, &entry).join(BIN_DIR).join("tool");
+        fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        fs::write(&cached, &body).unwrap();
+        assert!(
+            claimable(&shared, &entry, &cache),
+            "an intent over this entry's own cached bytes is batten's half-finished link"
+        );
+        record_written(&cache, &entry, &linked).unwrap();
+        assert!(
+            claimable(&shared, &entry, &cache),
+            "the link batten recorded writing, whatever version wrote it"
+        );
+
+        // REPLACED AFTERWARDS by another tool: the path still matches the
+        // record, the identity does not, and the name is not batten's again.
+        fs::write(&linked, b"a different tool's longer binary").unwrap();
+        assert!(
+            !claimable(&shared, &entry, &cache),
+            "a file another tool put at the recorded path"
+        );
+
+        // AND THE INSTALL REFUSES rather than renaming over it, leaving it whole.
+        let link = Link {
+            dir: shared.clone(),
+            shared: true,
+        };
+        assert!(install(&entry, &cache, &body, Some(&link)).is_err());
+        assert_eq!(
+            fs::read(&linked).unwrap(),
+            b"a different tool's longer binary"
+        );
+        assert_eq!(
+            freshness_of(&entry, &cache, Some(&link)).unwrap(),
+            Freshness::Foreign,
+            "a foreign name in a shared directory reads foreign, never fresh"
+        );
+    }
+
+    /// The per-user link the fallback case resolves.
+    const LINK_PER_USER: &str = "~/.local/bin";
+
+    /// The fallback's five readings, for a host where `~/` expands to `declared`.
+    fn assert_the_fallback(declared: &Path) {
+        const PER_USER: &str = LINK_PER_USER;
+        let declared = declared.to_path_buf();
+        let system = PathBuf::from(crate::install::SYSTEM_BIN_DIRS[0]);
+        let resolve = |dest: &str, on_path: &[PathBuf], writable: fn(&Path) -> bool| {
+            let host = Host {
+                links: true,
+                on_path,
+                writable,
+            };
+            link_dir(dest, host).unwrap()
+        };
+
+        let root_setup = [system.clone(), PathBuf::from("/usr/bin")];
+        assert_eq!(
+            resolve(PER_USER, &root_setup, |_| true),
+            system,
+            "off PATH: the fallback"
+        );
+        assert_eq!(
+            resolve(PER_USER, &[declared.clone(), system], |_| true),
+            declared,
+            "on PATH: the declaration"
+        );
+        assert_eq!(
+            resolve(PER_USER, &root_setup, |_| false),
+            declared,
+            "nothing writable"
+        );
+        // ABSOLUTE ON EVERY TARGET: `/opt/tools/bin` is relative on Windows,
+        // which `expand_home` refuses.
+        let named = std::env::temp_dir().join("batten-named-link");
+        assert_eq!(
+            resolve(&named.to_string_lossy(), &root_setup, |_| true),
+            named,
+            "an absolute link is named, and stands off PATH"
+        );
+        assert_eq!(
+            link_dir(PER_USER, Host::isolated(true)).unwrap(),
+            declared,
+            "an isolated host never reaches a system directory"
+        );
+        let spliced = Host {
+            on_path: &root_setup,
+            ..Host::isolated(true)
+        };
+        assert_eq!(
+            link_dir(PER_USER, spliced).unwrap(),
+            declared,
+            "an isolated host answers that nothing is writable, whatever PATH it is given"
         );
     }
 
