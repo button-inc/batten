@@ -634,7 +634,7 @@ pub fn status_on(entries: &[Provision], cache_root: &Path, host: Host<'_>) -> Re
         report.push(EntryStatus {
             name: entry.name.clone(),
             version: entry.version.clone(),
-            freshness: freshness_of(entry, cache_root, host)?,
+            freshness: freshness_of(entry, cache_root, link_of(entry, host)?.as_deref())?,
         });
     }
     Ok(Report { entries: report })
@@ -726,7 +726,21 @@ pub fn link_dir(dest: &str, host: Host<'_>) -> Result<PathBuf> {
     ))
 }
 
-fn freshness_of(entry: &Provision, cache_root: &Path, host: Host<'_>) -> Result<Freshness> {
+/// The directory `entry`'s link resolves to on `host`, or `None` where it
+/// declares none or the host's links are not this engine's to write.
+///
+/// RESOLVED ONCE PER ENTRY, and handed to both the freshness reading and the
+/// install, so one call cannot judge one directory and write another.
+fn link_of(entry: &Provision, host: Host<'_>) -> Result<Option<PathBuf>> {
+    entry
+        .link
+        .as_deref()
+        .filter(|_| host.links)
+        .map(|dest| link_dir(dest, host))
+        .transpose()
+}
+
+fn freshness_of(entry: &Provision, cache_root: &Path, link: Option<&Path>) -> Result<Freshness> {
     let dir = entry_dir(cache_root, entry);
     let binary = dir.join(BIN_DIR).join(&entry.binary);
     if !binary.is_file() {
@@ -748,8 +762,8 @@ fn freshness_of(entry: &Provision, cache_root: &Path, host: Host<'_>) -> Result<
     // `Missing` rather than a fourth verdict: what is missing is the binary at
     // the place this entry declares it must be, which is the same class as
     // nothing cached and takes the same repair.
-    if let Some(dest) = entry.link.as_deref().filter(|_| host.links) {
-        let linked = link_dir(dest, host)?.join(&entry.binary);
+    if let Some(dir) = link {
+        let linked = dir.join(&entry.binary);
         if !linked.is_file() {
             return Ok(Freshness::Missing);
         }
@@ -848,7 +862,9 @@ pub fn apply_on(
     dry_run: bool,
     host: Host<'_>,
 ) -> Result<Applied> {
-    if freshness_of(entry, cache_root, host)? == Freshness::Fresh {
+    let link = link_of(entry, host)?;
+    let link = link.as_deref();
+    if freshness_of(entry, cache_root, link)? == Freshness::Fresh {
         return Ok(Applied::AlreadyFresh);
     }
     if dry_run {
@@ -866,7 +882,7 @@ pub fn apply_on(
     // checksum.
     let artifact = entry.artifact()?;
     if let Some(bytes) = cached_artifact_matching_pin(entry, cache_root, &artifact.sha256) {
-        install(entry, cache_root, &bytes, host)?;
+        install(entry, cache_root, &bytes, link)?;
         return Ok(Applied::Installed);
     }
     let bytes = fetch(&artifact.url)?;
@@ -888,14 +904,15 @@ pub fn apply_on(
         return Err(crate::Denial::raise(&refusal, crate::refusal::Arm::Full));
     }
 
-    install(entry, cache_root, &bytes, host)?;
+    install(entry, cache_root, &bytes, link)?;
     Ok(Applied::Installed)
 }
 
-/// Write the verified artifact and its binary into the cache.
+/// Write the verified artifact and its binary into the cache, and the link
+/// into `link` where one was resolved.
 ///
 /// Called only after the checksum matched.
-fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], host: Host<'_>) -> Result<()> {
+fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], link: Option<&Path>) -> Result<()> {
     let dir = entry_dir(cache_root, entry);
     let bin_dir = dir.join(BIN_DIR);
     fs::create_dir_all(&bin_dir).context("create the provision cache directory")?;
@@ -906,7 +923,7 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], host: Host<'_>) -
     };
     let cached = bin_dir.join(&entry.binary);
     // **STAGED AND RENAMED, NEVER WRITTEN IN PLACE** (CLOUD-1586), which is
-    // [`link_onto_path`]'s discipline applied to the site that needed it just as
+    // [`link_into`]'s discipline applied to the site that needed it just as
     // much. Writing over this path returns `ETXTBSY` — "Text file busy" — the
     // moment anything is executing it, and something usually is: the launcher's
     // `#!` line names this exact file, so every `provision-exec` holds it open,
@@ -922,7 +939,7 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], host: Host<'_>) -
     // `write the provisioned binary / Text file busy`, which reads as a
     // filesystem fault and is really a self-collision.
     //
-    // Keyed on the pid and dot-prefixed for `link_onto_path`'s reasons exactly —
+    // Keyed on the pid and dot-prefixed for `link_into`'s reasons exactly —
     // two provisions running at once must not write each other's staging file.
     let staged = bin_dir.join(format!(".{}.{}.tmp", entry.binary, std::process::id()));
     let written = crate::durable::replace(&staged, &binary)
@@ -940,8 +957,8 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], host: Host<'_>) -
     // reading `missing` also leaves the link unmade. A fresh entry whose link
     // never landed would be the silent half-install this ordering exists to
     // rule out.
-    if let Some(dest) = entry.link.as_deref().filter(|_| host.links) {
-        link_into(entry, &link_dir(dest, host)?, &cached, &binary)?;
+    if let Some(dir) = link {
+        link_into(entry, dir, &cached, &binary)?;
     }
     // The artifact is written last, so a crash between the two leaves the entry
     // reading `missing` rather than `fresh` — the direction that re-applies.
@@ -1000,17 +1017,8 @@ const LAUNCHER_VERB: &str = "provision-exec";
 /// executable BEFORE the rename and the file on `PATH` is never a moment
 /// non-executable. Same directory, so it cannot cross a filesystem.
 ///
-/// TEST-ONLY SINCE CLOUD-2617: production resolves the directory first, through
-/// [`link_dir`], and calls [`link_into`]. This keeps the declared-string form the
-/// relink case was written against, so that case runs unchanged. That case is
-/// unix-only (inode identity), and so is this.
-#[cfg(all(test, unix))]
-fn link_onto_path(entry: &Provision, dest: &str, cached: &Path, binary: &[u8]) -> Result<()> {
-    link_into(entry, &expand_home(dest)?, cached, binary)
-}
-
-/// [`link_onto_path`] into a directory already resolved — by [`link_dir`], on
-/// the host [`status_on`] judges (CLOUD-2617).
+/// `dir` is already resolved, by [`link_dir`] on the host [`status_on`] judges
+/// (CLOUD-2617).
 fn link_into(entry: &Provision, dir: &Path, cached: &Path, binary: &[u8]) -> Result<()> {
     fs::create_dir_all(dir).context("create the linked binary's directory")?;
     let path = dir.join(&entry.binary);
@@ -1034,6 +1042,17 @@ fn link_into(entry: &Provision, dir: &Path, cached: &Path, binary: &[u8]) -> Res
         return Err(err).context("move the linked binary into place");
     }
     Ok(())
+}
+
+/// [`link_into`], from the declared `link` string rather than a resolved
+/// directory.
+///
+/// TEST-ONLY SINCE CLOUD-2617: production resolves the directory first, through
+/// [`link_dir`]. This keeps the form the unix-only relink case was written
+/// against, so that case runs unchanged.
+#[cfg(all(test, unix))]
+fn link_onto_path(entry: &Provision, dest: &str, cached: &Path, binary: &[u8]) -> Result<()> {
+    link_into(entry, &expand_home(dest)?, cached, binary)
 }
 
 /// The bytes of the launcher that stands in for a tool needing an environment.
@@ -2335,7 +2354,7 @@ mod tests {
     fn a_declared_link_off_path_follows_engine_installs_fallback() {
         // BOTH ARMS ASSERT, so no host passes this case without a verdict.
         match expand_home(LINK_PER_USER) {
-            Ok(declared) => assert_the_fallback(&declared),
+            Ok(declared) => assert_the_fallback(declared),
             Err(_) => assert!(
                 link_dir(LINK_PER_USER, Host::isolated(true)).is_err(),
                 "a `~/` link with no HOME to expand is refused, never resolved"
@@ -2347,9 +2366,8 @@ mod tests {
     const LINK_PER_USER: &str = "~/.local/bin";
 
     /// The fallback's five readings, for a host where `~/` expands to `declared`.
-    fn assert_the_fallback(declared: &Path) {
+    fn assert_the_fallback(declared: PathBuf) {
         const PER_USER: &str = LINK_PER_USER;
-        let declared = declared.to_path_buf();
         let system = PathBuf::from(crate::install::SYSTEM_BIN_DIRS[0]);
         let resolve = |dest: &str, on_path: &[PathBuf], writable: fn(&Path) -> bool| {
             let host = Host {
