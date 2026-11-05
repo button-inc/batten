@@ -8580,46 +8580,87 @@ fn run_claim_adopt(
 /// tracker returned without reshaping it.
 fn claim_payloads(repo: &Path, issue: Option<&str>) -> Result<Vec<claim::Issue>> {
     let value = if let Some(key) = issue {
-        let tools = [READ_TOOL.to_owned(), WRITE_TOOL.to_owned()];
-        let selector = capture::Selector {
-            tools: &tools,
-            key,
-            key_at: DEFAULT_KEY_AT,
-        };
-        let Some(found) = capture::find(repo, &selector)? else {
-            return Err(UsageError::raise(format!(
-                "claim check: no stored payload for {key} in this repository's capture store"
-            )));
-        };
-        let bytes = capture::read(repo, &found.capture)?;
-        let text = String::from_utf8(bytes).map_err(|_| {
+        stored_issue(repo, key)?.ok_or_else(|| {
             UsageError::raise(format!(
-                "claim check: the stored response for {key} is not UTF-8"
+                "claim check: no stored payload for {key} in this repository's capture store"
             ))
-        })?;
-        serde_json::from_str::<serde_json::Value>(&text)
+        })?
     } else {
         let mut body = String::new();
         std::io::stdin().read_to_string(&mut body)?;
         serde_json::from_str::<serde_json::Value>(&body)
-    }
-    .map_err(|_| {
-        UsageError::raise(
-            "the input is not a set of get_issue payloads (need id and status per issue)"
-                .to_owned(),
-        )
-    })?;
+            .map_err(|_| UsageError::raise(NOT_ISSUE_PAYLOADS.to_owned()))?
+    };
     let values = match value {
         serde_json::Value::Array(items) => items,
         other => vec![other],
     };
     if values.is_empty() {
-        return Err(UsageError::raise(
-            "the input is not a set of get_issue payloads (need id and status per issue)"
-                .to_owned(),
-        ));
+        return Err(UsageError::raise(NOT_ISSUE_PAYLOADS.to_owned()));
     }
-    values.iter().map(claim::Issue::parse).collect()
+    values
+        .iter()
+        .map(|value| match through_store(repo, value)? {
+            Some(stored) => claim::Issue::parse(&stored),
+            None => claim::Issue::parse(value),
+        })
+        .collect()
+}
+
+const NOT_ISSUE_PAYLOADS: &str =
+    "the input is not a set of get_issue payloads (need id and status per issue)";
+
+/// The newest stored `get_issue`/`save_issue` response for `key`, parsed.
+fn stored_issue(repo: &Path, key: &str) -> Result<Option<serde_json::Value>> {
+    let tools = [READ_TOOL.to_owned(), WRITE_TOOL.to_owned()];
+    let selector = capture::Selector {
+        tools: &tools,
+        key,
+        key_at: DEFAULT_KEY_AT,
+    };
+    let Some(found) = capture::find(repo, &selector)? else {
+        return Ok(None);
+    };
+    let bytes = capture::read(repo, &found.capture)?;
+    let text = String::from_utf8(bytes).map_err(|_| {
+        UsageError::raise(format!(
+            "claim check: the stored response for {key} is not UTF-8"
+        ))
+    })?;
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|_| UsageError::raise(NOT_ISSUE_PAYLOADS.to_owned()))
+}
+
+/// The full stored response behind a piped projection, when it is that response.
+///
+/// `batten mcp call … get_issue` prints a reduction: `id`, `status` and
+/// `updatedAt` survive and the body is left behind a pointer into the store.
+/// Piped here, it reached the readiness rule bodyless and was refused, so the
+/// verb could not consume its own output. The stored copy is used only when its
+/// `updatedAt` equals the projection's, so an older capture never answers for a
+/// newer read.
+//MUTANT-SUITE crates/batten/tests/it/claim.rs
+//MUTANT claim-projection-unread|s@^    if value.get("description").is_some() {$@    if true {@|the_projection_mcp_call_prints_is_read_through_the_store
+//MUTANT claim-store-stale|s@^    let same_read = field(\&stored, "updatedAt").as_deref() == Some(updated.as_str());$@    let same_read = true;@|a_stored_response_older_than_the_projection_does_not_answer_for_it
+fn through_store(repo: &Path, value: &serde_json::Value) -> Result<Option<serde_json::Value>> {
+    if value.get("description").is_some() {
+        return Ok(None);
+    }
+    let field = |value: &serde_json::Value, key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let (Some(id), Some(updated)) = (field(value, "id"), field(value, "updatedAt")) else {
+        return Ok(None);
+    };
+    let Some(stored) = stored_issue(repo, &id)? else {
+        return Ok(None);
+    };
+    let same_read = field(&stored, "updatedAt").as_deref() == Some(updated.as_str());
+    Ok(same_read.then_some(stored))
 }
 
 /// The out-of-tree receipt directory both halves of the claim protocol share.

@@ -504,6 +504,77 @@ fn a_bodyless_payload_nothing_else_refuses_is_could_not_look_naming_the_field() 
     assert!(claim_receipt(&dir).is_none());
 }
 
+/// Run the post-tool hook under `home`, so a `get_issue` response lands in the
+/// store the way the engine writes it rather than as this test would.
+fn seed_stored_issue(dir: &Path, home: &Path, document: &serde_json::Value) {
+    use common::StateHome as _;
+    let envelope = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "claim-suite",
+        "tool_name": "mcp__tracker__get_issue",
+        "tool_input": {},
+        "tool_response": [{ "type": "text", "text": document.to_string() }],
+    });
+    let mut command = common::batten();
+    command.state_home(home);
+    let output = common::stdin_run(
+        &mut command,
+        dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &envelope.to_string(),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+/// `claim check` under `home`, reading `payload` on stdin.
+fn check_at_home(dir: &Path, home: &Path, payload: &serde_json::Value) -> Output {
+    use common::StateHome as _;
+    let mut command = common::batten();
+    command.state_home(home);
+    common::stdin_run(&mut command, dir, &["claim", "check"], &payload.to_string())
+}
+
+#[test]
+fn the_projection_mcp_call_prints_is_read_through_the_store() {
+    // `batten mcp call … get_issue | mise run claim-check` is the route the gate
+    // is run by. The call prints a reduction — id, status and updatedAt, the body
+    // behind a pointer — so the gate used to refuse its own sibling's output as
+    // bodyless.
+    let (dir, payload) = ready_to_pull("claim-through-store");
+    let home = dir.join(".git").join("state-home");
+    seed_stored_issue(&dir, &home, &payload);
+    let projection = serde_json::json!({
+        "id": "CLOUD-1",
+        "status": "Todo",
+        "updatedAt": payload["updatedAt"],
+    });
+    let output = check_at_home(&dir, &home, &projection);
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(claim_receipt(&dir).is_some());
+}
+
+#[test]
+fn a_stored_response_older_than_the_projection_does_not_answer_for_it() {
+    // The store's newest copy is the body only when it IS the response piped;
+    // an older one would let a stale body pass for a re-read row.
+    let (dir, payload) = ready_to_pull("claim-stale-store");
+    let home = dir.join(".git").join("state-home");
+    seed_stored_issue(&dir, &home, &payload);
+    let projection = serde_json::json!({
+        "id": "CLOUD-1",
+        "status": "Todo",
+        "updatedAt": "2026-09-01T00:00:00Z",
+    });
+    let output = check_at_home(&dir, &home, &projection);
+    assert_eq!(code(&output), 1, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("--issue CLOUD-1"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(claim_receipt(&dir).is_none());
+}
+
 // ---------------------------------------------------------------------------
 // The refinement-sequence rules — the forgery-resistant half.
 // ---------------------------------------------------------------------------
