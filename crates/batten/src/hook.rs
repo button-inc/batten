@@ -9188,8 +9188,12 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
 /// `rename` and `copy` lines, which are the only names a rename, a copy or a
 /// mode change carries.
 ///
-/// A header counts only at column 0, which is where both formats put it: a
-/// context line quoting one starts with a space, and is the file's content.
+/// The two formats read their headers differently, as their hosts do. A
+/// unified or git header counts only at column 0, where `git apply` and
+/// `patch` read it: a context line quoting one starts with a space, and is the
+/// file's content. An envelope header counts at any indent, because a host's
+/// envelope parser trims a line before it matches one — so an over-read here
+/// costs a refusal, never the guard.
 fn patch_targets(input: &Value) -> Vec<&str> {
     // Git quotes a path it must escape. The outer quotes only: a C-escape
     // inside one stays as written.
