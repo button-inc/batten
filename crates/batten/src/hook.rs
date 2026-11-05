@@ -3598,7 +3598,10 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
     let writes = harness
         .write_tools()
         .contains(&tool.as_str())
-        .then(|| target_path(&input).or_else(|| patch_targets(&input).into_iter().next()))
+        .then(|| {
+            target_path(&input)
+                .or_else(|| patch_targets(&input).first().map(|&path| path.to_owned()))
+        })
         .flatten();
 
     // The neutral vocabulary, resolved here beside `writes` for the same reason
@@ -9110,8 +9113,8 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
     };
     // A patch's every target already holds the one `writes` kept, so `writes`
     // is read only when no patch was: no target is judged twice.
-    let targets: Vec<String> = if patched.is_empty() {
-        envelope.writes.iter().cloned().collect()
+    let targets = if patched.is_empty() {
+        envelope.writes.as_deref().into_iter().collect()
     } else {
         patched
     };
@@ -9124,7 +9127,6 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
     let Some(path) = targets.into_iter().find(|target| protects(policy, target)) else {
         return Decision::Allow;
     };
-    let path = path.as_str();
     // Looked up by program alone, and since CLOUD-442 that is a decision rather
     // than an omission: `verbs::classify` is `qualify` over no arguments, so a row
     // whose mutation is qualified by a flag or a subcommand cannot match here. A
@@ -9158,20 +9160,28 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
 ///
 /// A header counts only at column 0, which is where both formats put it: a
 /// context line quoting one starts with a space, and is the file's content.
-fn patch_targets(input: &Value) -> Vec<String> {
-    // A unified header's path: a tab and a timestamp may follow it, git quotes
-    // a path it must escape, and prefixes each side with `a/` or `b/`.
-    fn unquote(path: &str) -> &str {
+fn patch_targets(input: &Value) -> Vec<&str> {
+    // Git quotes a path it must escape. The outer quotes only: a C-escape
+    // inside one stays as written.
+    fn git_unquote(path: &str) -> &str {
         let path = path.trim();
         path.strip_prefix('"')
             .and_then(|path| path.strip_suffix('"'))
             .unwrap_or(path)
     }
+    // A unified header's path: a tab and a timestamp may follow it, and git
+    // prefixes each side with `a/` or `b/`.
     fn unified(rest: &str) -> &str {
-        let path = unquote(rest.split('\t').next().unwrap_or(rest));
+        let path = git_unquote(rest.split('\t').next().unwrap_or(rest));
         path.strip_prefix("a/")
             .or_else(|| path.strip_prefix("b/"))
             .unwrap_or(path)
+    }
+    // Once each, and never a path that names no file.
+    fn name<'a>(targets: &mut Vec<&'a str>, path: &'a str) {
+        if !path.is_empty() && path != "/dev/null" && !targets.contains(&path) {
+            targets.push(path);
+        }
     }
     const HEADERS: &[&str] = &[
         "*** Add File: ",
@@ -9185,12 +9195,11 @@ fn patch_targets(input: &Value) -> Vec<String> {
     };
     let mut targets = Vec::new();
     for text in fields.values().filter_map(Value::as_str) {
-        // One walk per text, each format's headers collected apart. Neither
-        // format can switch the other off, so a diff whose content quotes the
-        // envelope's opening line is still read as a diff.
+        // One walk per text, each format's headers read only where the text is
+        // that format. Neither can switch the other off, so a diff whose
+        // content quotes the envelope's opening line is still read as a diff.
         let envelope = text.contains("*** Begin Patch");
         let mut git = false;
-        let (mut enveloped, mut diffed) = (Vec::new(), Vec::new());
         // A `---` header counts only with a `+++` header on the very next
         // line: a hunk removing the line `-- x` carries `--- x`, which opens
         // nothing.
@@ -9198,15 +9207,22 @@ fn patch_targets(input: &Value) -> Vec<String> {
         for line in text.lines() {
             if let Some(rest) = line.strip_prefix("+++ ") {
                 if let Some(previous) = old.take() {
-                    diffed.extend([previous, unified(rest)]);
+                    name(&mut targets, previous);
+                    name(&mut targets, unified(rest));
                 }
                 continue;
             }
             old = line.strip_prefix("--- ").map(unified);
             if let Some(rest) = line.strip_prefix("diff --git ") {
                 git = true;
-                if let Some((a, b)) = rest.split_once(" b/").or_else(|| rest.split_once(" \"b/")) {
-                    diffed.extend([unified(a), b.trim().trim_end_matches('"')]);
+                // `a/x b/y`, or quoted `"a/x" "b/y"` when either side needs it.
+                let sides = rest.split_once(" b/").or_else(|| {
+                    rest.split_once(" \"b/")
+                        .map(|(a, b)| (a, b.trim().strip_suffix('"').unwrap_or(b)))
+                });
+                if let Some((a, b)) = sides {
+                    name(&mut targets, unified(a));
+                    name(&mut targets, b.trim());
                 }
             } else if let Some(path) = GIT_HEADERS
                 .iter()
@@ -9214,17 +9230,14 @@ fn patch_targets(input: &Value) -> Vec<String> {
             {
                 // Only inside a git patch, which opens with `diff --git`.
                 if git {
-                    diffed.push(unquote(path));
+                    name(&mut targets, git_unquote(path));
                 }
-            } else if let Some(path) = HEADERS.iter().find_map(|header| line.strip_prefix(header)) {
-                enveloped.push(path.trim());
+            } else if envelope
+                && let Some(path) = HEADERS.iter().find_map(|header| line.strip_prefix(header))
+            {
+                name(&mut targets, path.trim());
             }
         }
-        let named = |path: &&str| !path.is_empty() && *path != "/dev/null";
-        if envelope {
-            targets.extend(enveloped.into_iter().filter(named).map(ToOwned::to_owned));
-        }
-        targets.extend(diffed.into_iter().filter(named).map(ToOwned::to_owned));
     }
     targets
 }
@@ -18105,7 +18118,7 @@ deny contains "refused by themodule" if {
             patch_targets(&serde_json::json!({
                 "patch": "--- a/batten.toml\n+++ b/batten.toml\n@@ -1 +1,2 @@\n x\n+*** Begin Patch\n",
             })),
-            ["batten.toml", "batten.toml"]
+            ["batten.toml"]
         );
         assert!(
             patch_targets(&serde_json::json!({ "content": "*** Add File: batten.toml\n" }))
@@ -18122,19 +18135,19 @@ deny contains "refused by themodule" if {
             patch_targets(&serde_json::json!({
                 "patch": "diff --git a/notes.md b/batten.toml\nsimilarity index 100%\nrename from notes.md\nrename to batten.toml\n",
             })),
-            ["notes.md", "batten.toml", "notes.md", "batten.toml"]
+            ["notes.md", "batten.toml"]
         );
         assert_eq!(
             patch_targets(&serde_json::json!({
                 "patch": "diff --git \"a/sp ace\" \"b/sp ace\"\nold mode 100644\nnew mode 100755\n",
             })),
-            ["sp ace", "sp ace"]
+            ["sp ace"]
         );
         assert_eq!(
             patch_targets(&serde_json::json!({
                 "patch": "--- \"a/sp ace\"\n+++ \"b/sp ace\"\n",
             })),
-            ["sp ace", "sp ace"]
+            ["sp ace"]
         );
         assert!(
             patch_targets(&serde_json::json!({
@@ -18147,7 +18160,7 @@ deny contains "refused by themodule" if {
             patch_targets(&serde_json::json!({
                 "patch": "--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1 @@\n--- batten.toml\n x\n",
             })),
-            ["q.sql", "q.sql"]
+            ["q.sql"]
         );
     }
 
