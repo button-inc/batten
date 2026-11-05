@@ -356,7 +356,9 @@ jobs:
       # `git push origin` at :296 went out with no credential: "could not read
       # Username". This approves the same token the same way, whether or not the
       # action does; `persist-credentials: false` still holds for every step
-      # before this one.
+      # before this one. Since CLOUD-2548 the release path's fetch above puts a
+      # fork head in the clone too, so the action skips that block for every head
+      # and this step is the only credential the push has.
       - name: cache the push credential the action caches only for a fork head
         env:
           PUSH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}

@@ -1972,8 +1972,9 @@ fn unfrozen_lander_wire_wrong(name: &str, pin: &str) -> bool {
 }
 
 /// THE FREEZE IS OWED AT EVERY RELEASE PIN (CLOUD-2548). The landers carry the
-/// step since `main` pins the release that ships the verb, so a lander without
-/// it is refused under the pin `main` holds and under the next one alike.
+/// step since `main` pins the release that ships the verb, so the arm reads no
+/// release number at all: a pin before that release (216), the one `main` holds
+/// (217) and the next (218) refuse a lander without it alike.
 #[test]
 fn every_release_pin_arms_the_freeze() {
     assert!(unfrozen_lander_wire_wrong(

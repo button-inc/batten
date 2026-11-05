@@ -674,7 +674,7 @@ jobs:
           SHA: ${{ steps.target.outputs.sha }}
         run: batten ci step --require-env SHA --arg-env SHA -- batten release path --strict
       - name: Fast-forward main to the tested SHA
-        if: steps.freeze.outputs.clear == 'yes'
+        if: steps.closes.outputs.linked == 'true' && steps.freeze.outputs.clear == 'yes'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUM: ${{ steps.target.outputs.num }}
