@@ -4603,7 +4603,7 @@ fn record_digest(named: &str, fields: &str, digest: &[u8; 32]) {
 /// The stamp only decides whether a recorded digest is BELIEVED; it never
 /// enters a key, which stays a function of the bytes as `crate::cache` requires.
 //MUTANT authority-digest-recorded-racy|s@ \&\& !stamp.racily_clean(at)@@|an_authority_read_in_its_racy_window_records_no_digest
-//MUTANT authority-digest-believed-while-moving|s@^    if still \&\& cfg!(unix) \&\& let Some@    if cfg!(unix) \&\& let Some@|a_file_changed_across_its_read_is_hashed
+//MUTANT authority-digest-believed-while-moving|s@^    let believed = still \&\& cfg!(unix);$@    let believed = cfg!(unix);@|a_file_changed_across_its_read_is_hashed
 fn text_digest(
     path: &Path,
     named: &str,
@@ -4611,10 +4611,8 @@ fn text_digest(
     text: &str,
 ) -> [u8; 32] {
     let still = crate::cache::stamp(path).is_some_and(|after| after == *stamp);
-    if still
-        && cfg!(unix)
-        && let Some(recorded) = recorded_digest(named, &stamp.fields)
-    {
+    let believed = still && cfg!(unix);
+    if believed && let Some(recorded) = recorded_digest(named, &stamp.fields) {
         return recorded;
     }
     let digest = *blake3::hash(text.as_bytes()).as_bytes();
