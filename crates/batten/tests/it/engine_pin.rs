@@ -445,6 +445,43 @@ fn the_session_start_writes_the_row() {
     );
 }
 
+/// Under `--config-in` another directory's file is the authority, so a clean
+/// load there says nothing about this file: it is never written.
+#[test]
+fn a_session_under_config_in_never_writes_the_row() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let dir = common::scratch_repo("engine-pin-row-config-in");
+    let (_host, served) = release_host(&dir, RELEASE, RELEASE);
+    common::write(&dir, "batten.toml", "version = 1\n");
+    let elsewhere = dir.join("elsewhere");
+    common::write(&elsewhere, "batten.toml", "version = 1\n");
+    let payload = serde_json::json!({
+        "session_id": "cloud-2595-config-in",
+        "transcript_path": "/dev/null",
+        "cwd": dir.display().to_string(),
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+    })
+    .to_string();
+    let elsewhere = elsewhere.display().to_string();
+    let mut env = served_env(&served);
+    env.push(("BATTEN_CONFIG_IN", elsewhere.as_str()));
+    let output = following(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &env,
+        Some(&payload),
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("batten.toml")).unwrap(),
+        "version = 1\n",
+        "{}",
+        text(&output)
+    );
+}
+
 #[test]
 fn a_config_that_fails_to_load_is_never_written() {
     if !cfg!(target_os = "linux") {
@@ -513,11 +550,13 @@ fn an_install_of_a_named_version_writes_no_row() {
     if !cfg!(target_os = "linux") {
         return;
     }
+    // THE RUNNING ENGINE'S OWN RELEASE IS SERVED, sums and all, so the only
+    // thing keeping its row out of the file is that a NAMED version installed.
     let dir = common::scratch_repo("engine-pin-row-named");
-    let (_host, served) = release_host(&dir, WANTED, WANTED);
+    let (_host, served) = release_host(&dir, RELEASE, RELEASE);
     common::write(&dir, "batten.toml", "version = 1\n");
     let mut env = served_env(&served);
-    env.push(("BATTEN_VERSION", WANTED));
+    env.push(("BATTEN_VERSION", RELEASE));
     let output = installing(&dir, &env);
     assert!(output.status.success(), "{}", text(&output));
     assert_eq!(

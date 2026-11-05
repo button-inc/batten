@@ -304,11 +304,9 @@ impl Pins {
     fn disagreement(&self) -> Option<(String, String)> {
         let key = self.key.as_ref()?.release.clone()?;
         let row = self.row.clone()?;
-        let same = match (release_version(&key), release_version(&row)) {
-            (Ok(key), Ok(row)) => key == row,
-            _ => key.trim_start_matches('v') == row.trim_start_matches('v'),
-        };
-        (!same).then_some((key, row))
+        // `row_tag` already spells the row as a tag, so the leading `v` is the
+        // one spelling the two can differ by.
+        (key.trim_start_matches('v') != row.trim_start_matches('v')).then_some((key, row))
     }
 }
 
@@ -561,21 +559,19 @@ pub fn adopted(text: &str, repository: &str, tag: &str, sums: &str) -> Option<St
     (!declares_batten(text) && declared(&out).is_some() && parses(&out)).then_some(out)
 }
 
-/// Whether `text` parses as TOML and declares a batten `provision` entry in any
-/// spelling: an array of tables, or an inline array of inline tables. A file
-/// that does not parse answers `true`, so nothing is written beside it.
+/// Whether `text` parses as TOML and declares a batten `[[provision]]` row in
+/// any header spelling (a quoted `[["provision"]]` included). A file that does
+/// not parse answers `true`, so nothing is written beside it.
+///
+/// An INLINE `provision = [{…}]` needs no arm: a `[[provision]]` appended after
+/// it can never parse, so [`parses`] refuses that write whatever it declares.
 fn declares_batten(text: &str) -> bool {
     let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
         return true;
     };
-    match doc.get("provision") {
-        Some(toml_edit::Item::ArrayOfTables(rows)) => rows.iter().any(|row| is_batten_row(row)),
-        Some(toml_edit::Item::Value(toml_edit::Value::Array(rows))) => rows
-            .iter()
-            .filter_map(toml_edit::Value::as_inline_table)
-            .any(|row| row.get("name").and_then(toml_edit::Value::as_str) == Some("batten")),
-        _ => false,
-    }
+    doc.get("provision")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .is_some_and(|rows| rows.iter().any(|row| is_batten_row(row)))
 }
 
 /// Every batten declaration in `text` that disagrees with pin `tag`, as
@@ -2114,6 +2110,37 @@ mod tests {
             Some(("provision", true))
         );
         assert_eq!(table_header("  [1, 2],"), None);
+        assert_eq!(table_header("[]"), None);
+    }
+
+    /// The gate refuses every batten declaration off the pin: a floor ABOVE it
+    /// (never one at or below), and every batten row naming another release,
+    /// each at its own line; a row at the pin and another tool's row say nothing.
+    #[test]
+    fn every_batten_declaration_off_the_pin_is_named() {
+        let text = "version = 1\nmin_batten_version = \"0.0.217\"\n\n\
+                    [[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n\n\
+                    [[provision]]\nname = \"other\"\nversion = \"9.0.0\"\n\n\
+                    [[provision]]\nname = \"batten\"\nversion = \"0.0.210\"\n";
+        assert_eq!(
+            gate_disagreements(text, "v0.0.216"),
+            [
+                (
+                    2,
+                    "min_batten_version 0.0.217 is above engine pin v0.0.216".to_owned()
+                ),
+                (
+                    14,
+                    "provision batten 0.0.210 disagrees with engine pin v0.0.216".to_owned()
+                ),
+            ]
+        );
+        for floor in ["0.0.216", "0.0.100"] {
+            let at = format!(
+                "min_batten_version = \"{floor}\"\n\n[[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n"
+            );
+            assert!(gate_disagreements(&at, "v0.0.216").is_empty(), "{floor}");
+        }
     }
 
     /// A pin the line scan cannot see is still a pin: no row is appended beside
@@ -2127,6 +2154,8 @@ mod tests {
         );
         for pinned in [
             "version = 1\nprovision = [{ name = \"batten\", version = \"0.0.216\" }]\n",
+            // Another tool's inline array: the append would not parse.
+            "version = 1\nprovision = [{ name = \"other\", version = \"1.0.0\" }]\n",
             "version = 1\n\n[[\"provision\"]]\nname = \"batten\"\nversion = \"0.0.216\"\n",
             "version = [\n",
         ] {
