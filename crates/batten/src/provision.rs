@@ -999,6 +999,12 @@ const LAUNCHER_VERB: &str = "provision-exec";
 /// running process keeps its own open inode — so the temp file is made
 /// executable BEFORE the rename and the file on `PATH` is never a moment
 /// non-executable. Same directory, so it cannot cross a filesystem.
+///
+/// TEST-ONLY SINCE CLOUD-2617: production resolves the directory first, through
+/// [`link_dir`], and calls [`link_into`]. This keeps the declared-string form the
+/// relink case was written against, so that case runs unchanged. That case is
+/// unix-only (inode identity), and so is this.
+#[cfg(all(test, unix))]
 fn link_onto_path(entry: &Provision, dest: &str, cached: &Path, binary: &[u8]) -> Result<()> {
     link_into(entry, &expand_home(dest)?, cached, binary)
 }
