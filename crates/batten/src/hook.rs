@@ -9171,33 +9171,37 @@ fn patch_targets(input: &Value) -> Vec<String> {
     };
     let mut targets = Vec::new();
     for text in fields.values().filter_map(Value::as_str) {
-        // One walk per text: the headers are collected as they pass, and kept
-        // only if the text turned out to be a patch — an envelope, or a diff
-        // carrying both a `---` and a `+++` header.
+        // One walk per text, each format's headers collected apart and kept
+        // only if the text is that format: an envelope, or a diff carrying both
+        // a `---` and a `+++` header. Neither format can switch the other off,
+        // so a diff whose content quotes the envelope's opening line is still
+        // read as a diff.
         let envelope = text.contains("*** Begin Patch");
         let (mut old, mut new) = (false, false);
-        let mut found = Vec::new();
+        let (mut enveloped, mut diffed) = (Vec::new(), Vec::new());
         for line in text.lines() {
-            let path = if envelope {
-                HEADERS
-                    .iter()
-                    .find_map(|header| line.strip_prefix(header))
-                    .map(str::trim)
-            } else if let Some(rest) = line.strip_prefix("--- ") {
+            let (path, into) = if let Some(rest) = line.strip_prefix("--- ") {
                 old = true;
-                Some(unified(rest))
+                (Some(unified(rest)), &mut diffed)
             } else if let Some(rest) = line.strip_prefix("+++ ") {
                 new = true;
-                Some(unified(rest))
+                (Some(unified(rest)), &mut diffed)
             } else {
-                None
+                let header = HEADERS
+                    .iter()
+                    .find_map(|header| line.strip_prefix(header))
+                    .map(str::trim);
+                (header, &mut enveloped)
             };
             if let Some(path) = path.filter(|path| !path.is_empty() && *path != "/dev/null") {
-                found.push(path.to_owned());
+                into.push(path.to_owned());
             }
         }
-        if envelope || (old && new) {
-            targets.extend(found);
+        if envelope {
+            targets.extend(enveloped);
+        }
+        if old && new {
+            targets.extend(diffed);
         }
     }
     targets
@@ -18045,6 +18049,23 @@ deny contains "refused by themodule" if {
                 "patch": "--- /dev/null\n+++ b/src/new.rs\n@@ -0,0 +1 @@\n+x\n",
             })),
             ["src/new.rs"]
+        );
+    }
+
+    /// Neither patch format switches the other off: a diff whose added line
+    /// quotes the envelope's opening is still a diff, and an envelope header
+    /// outside an envelope names nothing.
+    #[test]
+    fn a_diff_quoting_the_envelope_is_still_read_as_a_diff() {
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "--- a/batten.toml\n+++ b/batten.toml\n@@ -1 +1,2 @@\n x\n+*** Begin Patch\n",
+            })),
+            ["batten.toml", "batten.toml"]
+        );
+        assert!(
+            patch_targets(&serde_json::json!({ "content": "*** Add File: batten.toml\n" }))
+                .is_empty()
         );
     }
 
