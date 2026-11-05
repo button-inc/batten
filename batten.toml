@@ -248,10 +248,12 @@ mutation = "never write it by hand — it records a human's answers, so put the 
 glob = ".serena/memories/**"
 mutation = "use Serena's memory tools — `write_memory` to create, `edit_memory` to change in place, `rename_memory` to move (it is the only route that rewrites `mem:` referrers)"
 read = "read_memory"
-# `read_server = "serena"` (CLOUD-2229) is HELD until the release that carries
-# it: `main` pins v0.0.214, which does not know the key, and a config naming a
-# key its pinned release cannot read is refused at landing (CLOUD-2063). It
-# returns with the pin that can read it.
+# The route is offered only where some `[[mcp.source]]` resolves `serena`
+# (CLOUD-2229): a refusal must name a route that can be taken. Here `.mcp.json`
+# declares it, so the `project` source resolves it. In a session where no
+# source does, the read is admitted rather than refused toward a tool that is
+# not there. v0.0.217 is the first release that reads the key (CLOUD-2649).
+read_server = "serena"
 
 [[redirect]]
 glob = "policy/**"
