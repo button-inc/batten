@@ -9253,26 +9253,23 @@ fn patch_targets(input: &Value) -> Vec<&str> {
         // safe direction: a file named that is not written costs a refusal, a
         // file written that is not named costs the guard.
         //
-        // An envelope runs from a `*** Begin Patch` line to its `*** End
-        // Patch`, wherever it opens: a host's parser strips a heredoc wrapper
-        // (`<<'EOF'`) or a preamble before it, and trims each line before it
-        // matches a header, so the envelope's headers are read trimmed.
-        let mut envelope = false;
+        // A text holding a `*** Begin Patch` line anywhere is an envelope, and
+        // every line of it is read for a header, trimmed: a host's lenient
+        // parser decides where an envelope opens and closes — it strips a
+        // heredoc wrapper (`<<'EOF'`) or a preamble, and trims a line before
+        // it matches — and copying its bounds one quirk at a time is how a
+        // header past a misread `*** End Patch` goes unjudged.
+        let envelope = text.lines().any(|line| line.trim() == "*** Begin Patch");
         let mut git = false;
         // A `---` header counts only with a `+++` header on the very next
         // line: a hunk removing the line `-- x` carries `--- x`, which opens
         // nothing.
         let mut old = None;
         for line in text.lines() {
-            let trimmed = line.trim();
-            if trimmed == "*** Begin Patch" {
-                envelope = true;
-            } else if trimmed == "*** End Patch" {
-                envelope = false;
-            } else if envelope
+            if envelope
                 && let Some(path) = HEADERS
                     .iter()
-                    .find_map(|header| trimmed.strip_prefix(header))
+                    .find_map(|header| line.trim().strip_prefix(header))
             {
                 name(&mut targets, path.trim());
             }
@@ -18273,13 +18270,14 @@ deny contains "refused by themodule" if {
             })),
             ["q.sql"]
         );
-        // An envelope's headers count only inside it: one after its end is
-        // content.
+        // An envelope's bounds are the host's to read, so a header is judged
+        // wherever it sits: a context line quoting `*** End Patch` closes
+        // nothing here.
         assert_eq!(
             patch_targets(&serde_json::json!({
-                "patchText": "*** Begin Patch\n*** Update File: a.rs\n@@\n-a\n+b\n*** End Patch\n*** Update File: batten.toml\n",
+                "patchText": "*** Begin Patch\n*** Update File: a.rs\n@@\n *** End Patch\n*** Update File: batten.toml\n@@\n-a\n+b\n*** End Patch",
             })),
-            ["a.rs"]
+            ["a.rs", "batten.toml"]
         );
         // A path holding ` b/` splits where both sides name the one file.
         assert_eq!(
