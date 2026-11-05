@@ -1274,8 +1274,19 @@ fn attribute_text(value: &x509_cert::der::Any) -> Option<String> {
 /// gave it.
 fn credential_declaration() -> std::result::Result<CredentialProbe, String> {
     let cwd = std::env::current_dir().map_err(|err| format!("no working directory: {err}"))?;
-    let root = crate::git::repo_root(&cwd)
-        .map_err(|err| format!("{} is in no repository: {err}", cwd.display()))?;
+    credential_declaration_in(&cwd)
+}
+
+/// [`credential_declaration`] for a call made at `start`.
+///
+/// **The worktree's authority, not the shared root's** (CLOUD-2532). From a
+/// linked worktree `repo_root` is the MAIN checkout, so `land` → `verify` in a
+/// worktree reported `<main checkout>/batten.toml will not load` over a branch
+/// whose own file loaded fine.
+//MUTANT credential-on-repo-root|s@^    let root = crate::config::authority_root(start)$@    let root = crate::git::repo_root(start)@|the_credential_declaration_in_a_worktree_is_the_worktrees
+fn credential_declaration_in(start: &Path) -> std::result::Result<CredentialProbe, String> {
+    let root = crate::config::authority_root(start)
+        .map_err(|err| format!("{} is in no repository: {err}", start.display()))?;
     // The FILE, not the directory. `load` takes a path to `batten.toml`, and
     // handing it the root read as `Is a directory (os error 21)` — swallowed by
     // the `.ok()` chain this function used to be, and reported to the operator
@@ -2919,6 +2930,66 @@ mod tests {
         };
         assert!(stale.any_stale());
         assert_eq!(stale.stale_lines(), vec!["b 1.0 missing".to_owned()]);
+    }
+
+    /// Run `git` in `dir`, hermetically, asserting it succeeded.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the fixture is built by the reference implementation, as `git.rs`'s own fixtures are"
+    )]
+    fn git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} in {}", dir.display());
+    }
+
+    /// CLOUD-2532: from a linked worktree, the probe is declared by the
+    /// WORKTREE's `batten.toml`, never the main checkout's. Measured: `land` →
+    /// `verify` in a worktree reported `<main checkout>/batten.toml will not
+    /// load` over a branch whose own file loaded fine.
+    #[test]
+    fn the_credential_declaration_in_a_worktree_is_the_worktrees() {
+        let dir = scratch("credential-worktree");
+        let main = dir.join("main");
+        let linked = dir.join("linked");
+        fs::create_dir_all(&main).unwrap();
+        git(&main, &["init", "-q", "-b", "main"]);
+        fs::write(main.join("README.md"), "base\n").unwrap();
+        git(&main, &["add", "-A"]);
+        git(&main, &["commit", "-q", "-m", "base"]);
+        // The main checkout's authority will not load at all: an unknown key.
+        fs::write(main.join("batten.toml"), "version = 1\nnot_a_key = true\n").unwrap();
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "own",
+                linked.to_str().unwrap(),
+            ],
+        );
+        fs::write(
+            linked.join("batten.toml"),
+            "version = 1\n\n[credential]\nprobe_url = \"https://probe.invalid/\"\n",
+        )
+        .unwrap();
+        let nested = linked.join("src");
+        fs::create_dir_all(&nested).unwrap();
+
+        let probe = credential_declaration_in(&nested).expect(
+            "a worktree whose own batten.toml declares a probe answers with it, \
+             not with the main checkout's load failure",
+        );
+        assert_eq!(probe.probe_url.as_deref(), Some("https://probe.invalid/"));
     }
 
     /// An artifact fetched over `file://` installs a runnable binary, reads as

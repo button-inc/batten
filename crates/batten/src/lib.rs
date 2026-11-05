@@ -710,7 +710,8 @@ fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
 /// A source pin is built over the running binary as before, and never on the
 /// hook path.
 ///
-/// **IT WRITES NOTHING, on either branch.** Every non-hook verb is a
+/// **IT WRITES NOTHING BUT THE FOLLOW LINE, and that only to a terminal**
+/// (CLOUD-2595 §2e). Every non-hook verb is a
 /// transparent passthrough whose child inherits this process's own descriptors,
 /// so its bytes never travel through a writer here at all; and the hook branch
 /// no longer spawns, so it has no child's bytes to hold. [`follow_to_pinned`]
@@ -726,7 +727,7 @@ fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
 //MUTANT hook-path-builds|s@^    let may_build = !hook_path;$@    let may_build = true;@|the_hook_path_never_builds_a_source_pin
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT follow-pin-passes-a-crash-through|s@^    if hook_path {$@    if false {@|a_crashing_followed_build_never_fails_the_hook_open
-//MUTANT fetch-failure-always-falls-through|s@^            engine::pinned_release(&cache, &releases_repository(), tag)?$@            match engine::pinned_release(\&cache, \&releases_repository(), tag) { Ok(path) => path, Err(_) => return Ok(Followed::Nothing) }@|a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path
+//MUTANT fetch-failure-always-falls-through|s@^            engine::pinned_release(&cache, &releases_repository(), tag, pinned)?$@            match engine::pinned_release(\&cache, \&releases_repository(), tag, pinned) { Ok(path) => path, Err(_) => return Ok(Followed::Nothing) }@|a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path
 fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
     // THE HOOK FOLLOWS A RELEASE PIN BUT NEVER BUILDS A SOURCE ONE (CLOUD-2062,
     // narrowed under CLOUD-2059), and that is the same bit rather than a second
@@ -737,7 +738,10 @@ fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
     let Ok(root) = git::worktree_root(Path::new(".")) else {
         return Ok(Followed::Nothing);
     };
-    let Some(text) = pin_text(&root, overrides) else {
+    // THE PIN IS READ FROM THE AUTHORITY, which is the worktree's own file when
+    // it carries one and the repository's otherwise (CLOUD-2532).
+    let authority = config::authority_root(&root).unwrap_or_else(|_| root.clone());
+    let Some(text) = pin_text(&authority, overrides) else {
         return Ok(Followed::Nothing);
     };
     let Some(pin) = engine::stale(&text, engine::running_stamp) else {
@@ -768,7 +772,11 @@ fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
             // decides the call and admits the one repair verb (CLOUD-2116);
             // a second fall-through here was that rule spelled twice, and it
             // made `run`'s copy unreachable by any case.
-            engine::pinned_release(&cache, &releases_repository(), tag)?
+            // VERIFIED AGAINST THE ROW'S OWN DIGEST when it lists one for this
+            // platform (CLOUD-2595 §2b), the consumer's pin rather than the
+            // release's manifest.
+            let pinned = || engine::followed_digest(&text);
+            engine::pinned_release(&cache, &releases_repository(), tag, pinned)?
         }
         // A SOURCE PIN IS FOLLOWED TO THE CHECKOUT'S OWN BUILD (CLOUD-2232),
         // as a release pin is followed to its cache: the installed binary execs
@@ -792,6 +800,11 @@ fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
         // refusal names it.
         _ => return Ok(Followed::Nothing),
     };
+    let pin_name = pin
+        .release
+        .clone()
+        .or_else(|| pin.source.as_ref().map(|digest| format!("source {digest}")))
+        .unwrap_or_default();
     let mut argv: Vec<String> = vec![engine.to_string_lossy().into_owned()];
     argv.extend(std::env::args().skip(1));
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
@@ -819,7 +832,23 @@ fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
         // which streams it, spills what is over the bound, and owns what a
         // harness sent. Spawning before that read makes the child the reader
         // instead, and a crash then leaves the fall-through nothing to judge.
-        return Ok(Followed::Pinned(FollowTarget { root, argv }));
+        return Ok(Followed::Pinned(FollowTarget {
+            root,
+            argv,
+            pinned: pin_name,
+        }));
+    }
+    // OFF THE HOOK PATH every run is its own session, so the follow says itself
+    // on each (CLOUD-2595 §2e) — TO A PERSON ONLY. `exec --`, `statusline` and
+    // every captured caller read this process's stderr as the pinned engine's
+    // (or the child's), so a line there is bytes the passthrough never produced,
+    // and a closed stderr must never fail the verb before the pin runs.
+    {
+        use std::io::IsTerminal as _;
+        let mut stderr = std::io::stderr();
+        if stderr.is_terminal() {
+            let _ = writeln!(stderr, "{}", follow_line(&pin_name));
+        }
     }
     // TEED EVERYWHERE ELSE, because the pinned engine's output IS this
     // invocation's output, live. `batten exec -- cmd` keeps its child's bytes
@@ -884,6 +913,48 @@ struct FollowTarget {
     root: PathBuf,
     /// The pinned engine followed by this invocation's own operands.
     argv: Vec<String>,
+    /// What the pin names, for the line the follow says itself in (CLOUD-2595).
+    pinned: String,
+}
+
+/// The line a follow names itself in (CLOUD-2595 §2e): `batten: this binary is
+/// vX; following the pinned vY`.
+///
+/// **THE FOLLOW WAS SILENT,** measured in a consumer: 0.0.217 fetched
+/// and ran 0.0.216 with nothing on stderr, so a reader had no way to tell which
+/// engine judged the session. One line per session says it.
+fn follow_line(pinned: &str) -> String {
+    format!(
+        "batten: this binary is {}; following the pinned {pinned}",
+        engine::release()
+    )
+}
+
+/// Write [`follow_line`] once per reader the payload names (CLOUD-2595 §2e),
+/// marked in the sighting store every once-per-context line shares
+/// ([`refusal::first_sighting`]): created exclusively, so a parallel batch of
+/// one session's calls says it once, and forgotten with the window, so a
+/// compacted session hears it again.
+///
+/// A payload naming no session says the line every time, as a sighting does.
+//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
+//MUTANT follow-silent|s@^        writeln!(err, "{line}")?;$@@|a_followed_pin_names_itself_once
+fn say_follow_once(
+    target: &FollowTarget,
+    value: &serde_json::Value,
+    err: &mut dyn Write,
+) -> Result<()> {
+    let line = follow_line(&target.pinned);
+    let agent = hook::present_str(value, "agent_id");
+    let first = hook::present_str(value, "session_id").is_none_or(|session| {
+        let context = hook::sighting_context(&session, agent.as_deref());
+        // The store `expire_sightings` forgets, so a compacted window hears it again.
+        refusal::first_sighting(hook_authority_root(), &context, "engine-followed", &line)
+    });
+    if first {
+        writeln!(err, "{line}")?;
+    }
+    Ok(())
 }
 
 /// `batten engine update` (CLOUD-2287, CLOUD-2279): bring every batten
@@ -1457,9 +1528,11 @@ fn sync_artifacts(
 }
 
 /// `text` with every batten declaration brought to release `tag` (CLOUD-2279):
-/// the `engine` pin; each `[[provision]] name = "batten"` row's `version`, its
-/// URLs with the version substituted, and each `sha256` from the release's
-/// `SHA256SUMS`; and `min_batten_version`, raised and never lowered.
+/// each `[[provision]] name = "batten"` row's `version`, its URLs with the
+/// version substituted, and each `sha256` from the release's `SHA256SUMS`; and
+/// the `engine` key's release alias, only where the config still declares the
+/// key (CLOUD-2595: the row is the pin, and a config that dropped the key is
+/// never given one back). `min_batten_version` is retired and no longer moved.
 ///
 /// `sums` is asked for only when a provision row needs a digest; the caller
 /// owns the one fetch it stands for.
@@ -1472,7 +1545,6 @@ fn sync_artifacts(
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT update-leaves-provision-stale|s@^                set_str(item, &fresh);$@@|an_update_brings_every_batten_declaration_to_the_release
 //MUTANT update-keys-on-version-alone|s@^            sync_artifacts(row, &bare, moving, sums)?;$@            if moving { sync_artifacts(row, \&bare, moving, sums)?; }@|an_update_repairs_a_stale_digest_at_the_current_version
-//MUTANT update-lowers-min-version|s@^        .is_some_and(\x7cfloor\x7c floor < version);$@        .is_some_and(\x7cfloor\x7c floor != version);@|an_update_never_lowers_min_batten_version
 fn sync_declarations(text: &str, tag: &str, sums: &dyn Fn() -> Result<String>) -> Result<String> {
     let version = engine::release_version(tag)?;
     let bare = version.to_string();
@@ -1514,19 +1586,15 @@ fn sync_declarations(text: &str, tag: &str, sums: &dyn Fn() -> Result<String>) -
             }
         }
     }
-    let raise = doc
-        .get("min_batten_version")
-        .and_then(toml_edit::Item::as_str)
-        .and_then(|floor| ::semver::Version::parse(floor).ok())
-        .is_some_and(|floor| floor < version);
-    if raise && let Some(item) = doc.get_mut("min_batten_version") {
-        set_str(item, &bare);
+    let synced = doc.to_string();
+    if engine::top_level(&synced, "engine").is_none() {
+        return Ok(synced);
     }
     let pin = engine::Pin {
         release: Some(format!("v{bare}")),
         source: None,
     };
-    Ok(engine::rewrite(&doc.to_string(), &pin))
+    Ok(engine::rewrite(&synced, &pin))
 }
 
 /// The repository releases are fetched from: `BATTEN_RELEASES`, the
@@ -1669,7 +1737,34 @@ fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
         .transpose()?;
     let pin = worktree_pin(root.as_deref());
     let want = install_want(named_env("BATTEN_VERSION").as_deref(), by_ref, pin)?;
-    install_wanted(want, root, &repository, out)
+    // ONLY THE RUNNING ENGINE IS ITS OWN TO PIN: the row it writes names its own
+    // release, so where `BATTEN_VERSION` or a ref placed another, writing it would
+    // pin bytes that were never installed. That engine pins itself on its own
+    // first clean load.
+    // AND ONLY WHEN THIS RUN PLACED IT: an `engine install` that found batten
+    // already installed changed nothing, and a session-start or setup task that
+    // runs it in an unpinned checkout must leave that checkout as it was
+    // (CLOUD-2123) — not dirty every developer's tree with their own version.
+    let bootstraps = !engine::is_installed(
+        &std::env::current_exe()?,
+        std::env::var_os("PATH").as_deref(),
+        root.as_deref(),
+    );
+    let installs_itself = want == Want::Running && bootstraps;
+    let adopt_at = root.clone();
+    let code = install_wanted(want, root, &repository, out)?;
+    // THE BOOTSTRAP'S LAST STEP PINS WHAT IT INSTALLED (CLOUD-2595 §2c). The
+    // public `install.sh` ends in this verb; a checkout that pinned nothing gains
+    // the row for the engine now running, so the next engine to read the file is
+    // that one, whatever the installer bakes later.
+    if installs_itself
+        && code == ExitCode::Success
+        && let Some(root) = adopt_at
+        && let Ok(Some(tag)) = adopt_engine_row(&root, &Overrides::default())
+    {
+        writeln!(std::io::stderr(), "{}", adopted_line(&tag))?;
+    }
+    Ok(code)
 }
 
 /// Install `want`, decided already: the half of [`engine_install`] after the
@@ -1755,15 +1850,20 @@ fn place_download(
             dest.display()
         ))
     })?;
-    let binary = dest.join(dist::binary_file(
-        env!("CARGO_PKG_NAME"),
+    // GNU WHERE IT RUNS (CLOUD-2595): the bootstrap placed the static musl
+    // build; this tag's gnu build replaces it only after running here.
+    let (target, bytes) = engine::chosen_build(
         &engine::running_target(),
-    ));
+        bytes,
+        |gnu| engine::fetch_release_for(repository, &tag, gnu, None).ok(),
+        |candidate| runs_here(&dest, candidate),
+    );
+    let binary = dest.join(dist::binary_file(env!("CARGO_PKG_NAME"), &target));
     durable::replace(&binary, &bytes)?;
     engine::make_executable(&binary)?;
     writeln!(out, "installed={}", binary.display())?;
     writeln!(out, "version={tag}")?;
-    writeln!(out, "target={}", engine::running_target())?;
+    writeln!(out, "target={target}")?;
     writeln!(out, "verified=sha256")?;
     if !on_path.contains(&dest) {
         if var("BATTEN_ALLOW_OFF_PATH").as_deref() == Some("1") {
@@ -1788,6 +1888,18 @@ fn place_download(
         }
     }
     Ok(ExitCode::Success)
+}
+
+/// Whether `binary`'s bytes answer `--version` with exit 0 on this host: written
+/// beside where they would be installed, run with no shell, then removed.
+fn runs_here(dir: &Path, binary: &[u8]) -> bool {
+    let probe = dir.join(format!(".batten-probe-{}", std::process::id()));
+    let ran = durable::replace(&probe, binary).is_ok()
+        && engine::make_executable(&probe).is_ok()
+        && exec::piped(dir, &probe, &[String::from("--version")], "")
+            .is_some_and(|(code, _)| code == 0);
+    let _ = std::fs::remove_file(&probe);
+    ran
 }
 
 /// Install the engine built from this tree's source at `want` (CLOUD-2062,
@@ -1882,17 +1994,20 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
         _ => {}
     }
     let root = git::worktree_root(Path::new("."))?;
-    let digest = engine::digest(&root)?;
+    // THE DIGEST ONLY WHERE A VERB USES IT (CLOUD-2595). A consumer tree tracks no
+    // engine source, so computing it eagerly refused `engine pin <tag>` there —
+    // the one writer of a consumer's row — before the verb could run.
     match command {
-        cli::EngineCommand::Digest => writeln!(out, "{digest}")?,
+        cli::EngineCommand::Digest => writeln!(out, "{}", engine::digest(&root)?)?,
         cli::EngineCommand::Stamp => {
+            let digest = engine::digest(&root)?;
             let binary = std::env::current_exe()?;
             engine::stamp(&binary, &digest)?;
             writeln!(out, "{}", engine::stamp_path(&binary).display())?;
         }
         cli::EngineCommand::Update => return engine_update(out),
         cli::EngineCommand::Pin { value, check } => {
-            return engine_pin(&root, &digest, value.as_deref(), check, out);
+            return engine_pin(&root, value.as_deref(), check, out);
         }
         cli::EngineCommand::Gate { lanes } => return engine_gate(&root, &lanes, out),
         cli::EngineCommand::Install => return engine_install(out),
@@ -1956,16 +2071,17 @@ fn run_outdated(
 /// with the version it bumps.
 fn engine_pin(
     root: &Path,
-    digest: &str,
     value: Option<&str>,
     check: bool,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
     let path = root.join(config::CONFIG_FILE);
     let text = std::fs::read_to_string(&path)?;
-    let source = |digest: &str| engine::Pin {
-        release: None,
-        source: Some(digest.to_owned()),
+    let source = || -> Result<engine::Pin> {
+        Ok(engine::Pin {
+            release: None,
+            source: Some(engine::digest(root)?),
+        })
     };
     let release = |tag: String| engine::Pin {
         release: Some(tag),
@@ -1973,10 +2089,10 @@ fn engine_pin(
     };
     let pin = match value {
         None => match engine::declared(&text).map(engine::Pin::kind) {
-            Some(engine::PinKind::Source(_)) => source(digest),
+            Some(engine::PinKind::Source(_)) => source()?,
             _ => return Ok(ExitCode::Success),
         },
-        Some("source") => source(digest),
+        Some("source") => source()?,
         Some("version") => release(engine::release()),
         Some(tag) if tag.starts_with('v') => release(tag.to_owned()),
         Some(other) => {
@@ -1985,7 +2101,21 @@ fn engine_pin(
             )));
         }
     };
-    let rewritten = engine::rewrite(&text, &pin);
+    // ONE WRITER (CLOUD-2595). A release pin over a config that declares the
+    // batten row moves the ROW — version, URLs and digests, the release's own —
+    // through the same rewrite `engine update` makes; the `engine` key moves with
+    // it only where it is still declared. A release with no published
+    // `SHA256SUMS` has no bytes the row could pin, so that refuses.
+    let rewritten = match (&pin.release, engine::row_release(&text)) {
+        (Some(tag), Some(_)) => {
+            let cache = state::repo_state_dir(root)?;
+            let repository = releases_repository();
+            sync_declarations(&text, tag, &|| {
+                engine::pinned_sums(&cache, &repository, tag)
+            })?
+        }
+        _ => engine::rewrite(&text, &pin),
+    };
     if rewritten == text {
         return Ok(ExitCode::Success);
     }
@@ -2012,12 +2142,24 @@ fn engine_pin(
 /// Every finding is a pointer: the file, the token, the pin.
 //MUTANT-SUITE crates/batten/tests/it/engine_gates.rs
 //MUTANT source-pin-admitted|s@^        Some(engine::PinKind::Source(_)) => return source_never_lands(&config_path, out),$@        Some(engine::PinKind::Source(_)) => return Ok(ExitCode::Success),@|a_source_pin_is_refused_on_the_landing_path
-//MUTANT gate-admits-disagreeing-provision|s@^    if !disagreeing.is_empty() {$@    if false {@|a_provision_row_disagreeing_with_the_pin_is_refused
+//MUTANT gate-admits-a-second-row|s@^    let disagreeing = engine::gate_disagreements(\&text, tag);$@    let disagreeing: Vec<(usize, String)> = Vec::new();@|a_second_batten_row_or_a_floor_above_the_pin_is_refused
+//MUTANT gate-admits-disagreeing-provision|s@^    if let Some((key, row)) = engine::row_disagreement(\&text) {$@    if let Some((key, row)) = None::<(String, String)> {@|a_provision_row_disagreeing_with_the_pin_is_refused
 //MUTANT gate-ignores-stale-digest|s@^    if !foreign.is_empty() {$@    if false {@|a_stale_digest_at_the_pinned_version_is_refused
 //MUTANT dropped-row-unchecked|s@^    if !runs(\&\["config", "lint"\])? {$@    if !runs(\&["config", "show"])? {@|a_config_the_pinned_release_drops_a_row_of_is_drift
 fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<ExitCode> {
     let config_path = root.join(config::CONFIG_FILE);
     let text = std::fs::read_to_string(&config_path)?;
+    // ONE DECLARATION (CLOUD-2595). The batten row IS the pin, so the only copy
+    // left to disagree is the `engine` key's release alias; a floor no longer
+    // exists to sit above it.
+    if let Some((key, row)) = engine::row_disagreement(&text) {
+        writeln!(
+            out,
+            "{} engine pins {key} and the batten provision row pins {row}; the row is the pin",
+            config_path.display()
+        )?;
+        return Ok(ExitCode::Violation);
+    }
     let tag = match engine::declared(&text).map(engine::Pin::kind) {
         None => return Ok(ExitCode::Success),
         Some(engine::PinKind::Release(tag)) => tag,
@@ -2028,17 +2170,12 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
         }
     };
     let tag = tag.as_str();
-    // EVERY COPY AGREES WITH THE PIN (CLOUD-2279), decided before anything is
-    // fetched: a batten provision row on another release, or a floor above the
-    // pin, is a config that names two engines. Each finding names the move that
-    // clears it, since `engine update` moves rows but never lowers a floor.
-    let disagreeing = engine::disagreements(&text, tag);
-    for (line, what, remedy) in &disagreeing {
-        writeln!(
-            out,
-            "{}:{line} {what} disagrees with engine pin {tag}; {remedy}",
-            config_path.display()
-        )?;
+    // EVERY OTHER BATTEN DECLARATION AGREES WITH THE PIN (CLOUD-2595): a second
+    // batten row a merge left behind, or a `min_batten_version` the followed
+    // engine would refuse itself under. Judged before anything is fetched.
+    let disagreeing = engine::gate_disagreements(&text, tag);
+    for (line, what) in &disagreeing {
+        writeln!(out, "{}:{line} {what}", config_path.display())?;
     }
     if !disagreeing.is_empty() {
         return Ok(ExitCode::Violation);
@@ -2068,7 +2205,8 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
     if !foreign.is_empty() {
         return Ok(ExitCode::Violation);
     }
-    let binary = engine::pinned_release(&cache, &repository, tag)?;
+    let binary =
+        engine::pinned_release(&cache, &repository, tag, || engine::followed_digest(&text))?;
     // The pinned engine must decide as itself: never update itself mid-gate.
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
     // A non-zero child arrives as a `Passthrough` ERROR, which is the right shape
@@ -2891,6 +3029,21 @@ fn run_init(
     match init::apply(Path::new("."), dry_run)? {
         init::Outcome::Created => {
             writeln!(out, "{}", config::CONFIG_FILE)?;
+            // THE STARTER IS WRITTEN PINNED (CLOUD-2595 §2c): the same row the
+            // Gradle-style write adds, for the engine that wrote it. Offline, or
+            // on a build no release publishes, it stays unpinned and says so.
+            match adopt_engine_row(Path::new("."), &Overrides::default()) {
+                Ok(Some(tag)) => {
+                    output::message(mode, Verbosity::Normal, err, &adopted_line(&tag))?;
+                }
+                _ => output::message(
+                    mode,
+                    Verbosity::Normal,
+                    err,
+                    "init: the engine pin could not be written (no published release to pin); \
+                     the first session start writes it",
+                )?,
+            }
             output::message(
                 mode,
                 Verbosity::Normal,
@@ -5228,6 +5381,9 @@ struct ClaimAsk<'a> {
     issue: Option<&'a str>,
     /// Emit the refusals on the structured channel.
     json: bool,
+    /// Where the authority the receipt's base is read from lives
+    /// (`--config-in` / `--config-from`, CLOUD-2532).
+    overrides: &'a Overrides,
 }
 
 /// The repository root, or the working directory where there is none.
@@ -7060,8 +7216,18 @@ fn refuse_claim_bot(err: &mut dyn Write, text: &str) -> Result<ExitCode> {
 ///
 /// [`UsageError`] carrying [`worktree::NO_TRUNK`], or naming the unresolved
 /// ref; a broken `batten.toml` propagates.
-fn claim_base(repo: &Path, verb: &str) -> Result<String> {
-    let Some(trunk) = worktree::declared_trunk(repo)? else {
+///
+/// **The trunk is CONFIG, read from the worktree's authority; the ref is STATE,
+/// resolved in `repo`** (CLOUD-2532). `repo` is the shared root, so from a
+/// linked worktree it is the main checkout, and reading `must_land_on` there
+/// judged the claim by another branch's `batten.toml` — refusing it outright
+/// when that file would not load, and ignoring `--config-in` because the read
+/// took no overrides.
+//MUTANT-SUITE crates/batten/tests/it/claim_worktree.rs
+//MUTANT claim-base-on-repo-root|s@^    let authority = config::authority_root(Path::new("."))?;$@    let authority = repo.to_path_buf();@|claim_check_in_a_worktree_reads_the_worktrees_trunk
+fn claim_base(repo: &Path, verb: &str, overrides: &Overrides) -> Result<String> {
+    let authority = config::authority_root(Path::new("."))?;
+    let Some(trunk) = worktree::committed_trunk(&authority, overrides)? else {
         return Err(UsageError::raise(format!(
             "{verb}: {} — no receipt minted",
             worktree::NO_TRUNK
@@ -7412,7 +7578,7 @@ fn run_claim_bot(
         pr: number,
     };
     let receipts = git::git_dir(repo)?.join("batten-receipts");
-    let base = claim_base(repo, "claim bot")?;
+    let base = claim_base(repo, "claim bot", overrides)?;
     bot::mint(
         &receipts,
         &branch,
@@ -7970,6 +8136,7 @@ fn run_claim(
                     adopt_from: adopt_from.as_deref(),
                     issue: issue.as_deref(),
                     json,
+                    overrides,
                 },
                 mode,
                 out,
@@ -8307,6 +8474,7 @@ fn run_claim_check(
         adopt_from,
         issue,
         json,
+        overrides,
     } = *ask;
     let receipts = git::git_dir(repo).ok().map(|dir| dir.join(RECEIPT_DIR));
     if adopt {
@@ -8380,7 +8548,7 @@ fn run_claim_check(
     // stands and only the side effect is skipped: a caller inspecting the board
     // from anywhere still deserves the answer.
     if let (Some(receipts), Ok(Some(branch))) = (receipts.as_deref(), git::current_branch(repo)) {
-        let base = claim_base(repo, "claim check")?;
+        let base = claim_base(repo, "claim check", overrides)?;
         claim::mint(
             receipts,
             &branch,
@@ -19164,7 +19332,7 @@ fn run_hook(
     // THE FOLLOW, BEFORE THIS BUILD READS THE PAYLOAD FOR ITSELF. An answer the
     // §7 table names is this invocation's; anything else decided nothing and
     // falls through, over a stream this process has already taken.
-    let followed = follow_to_pinned(pinned, &payload, out)?;
+    let followed = follow_to_pinned(pinned, &payload, out, err)?;
     if let Some(code) = followed.answer {
         return Ok(code);
     }
@@ -20152,6 +20320,7 @@ fn follow_to_pinned<'a>(
     pinned: Option<&'a FollowTarget>,
     payload: &Payload,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<Follow<'a>> {
     let Some(target) = pinned else {
         return Ok(Follow::NOTHING);
@@ -20166,7 +20335,11 @@ fn follow_to_pinned<'a>(
     let Ok(raw) = std::fs::read_to_string(&payload.streamed.raw) else {
         return Ok(Follow::NOTHING);
     };
-    hand_off(&target.root, &target.argv, &raw, out)
+    let followed = hand_off(&target.root, &target.argv, &raw, out)?;
+    if followed.ran.is_some() {
+        say_follow_once(target, &payload.streamed.value, err)?;
+    }
+    Ok(followed)
 }
 
 /// What the follow did: the answer if the child decided one, and the engine it
@@ -20394,10 +20567,19 @@ fn already_ran(ran: Option<&Path>, build: &Path) -> bool {
 /// the move the session can make itself.
 ///
 /// **A DECISION, NOT AN ERROR, WHICH IS WHY IT RENDERS.** [`render`] owns the
-/// per-harness deny channel: Claude Code answers in its JSON decision object at
-/// exit `0`, where the document *is* the deny, and the neutral adapter answers
+/// per-harness deny channel: Claude Code reads its JSON decision object, where
+/// the document *is* the deny, and the neutral adapter answers
 /// [`ExitCode::Violation`]. Raising a [`Denial`] here would send `2` to the one
 /// host that reads the document instead of the number.
+///
+/// **Exit `3` carries the deny on Claude Code, measured rather than assumed**
+/// (CLOUD-2595, 2026-11-04). The host's hook runner drops a JSON document that
+/// arrives with a status other than `0` or `2` UNLESS the document is a deny
+/// (`decision: "block"` or `permissionDecision: "deny"`), and this one is — so the
+/// call is refused and the number stays honest about nothing having been judged.
+/// What the session saw as a bare `engine-cannot-adjudicate` was the pointer
+/// arm, not the exit code: [`arm_for`] now gives this refusal its full arm on
+/// every firing.
 ///
 /// **The refusal is `unloaded`**, and its hop still resolves: `policy explain`
 /// answers `engine-cannot-adjudicate` from the engine's own table with no config
@@ -20443,7 +20625,7 @@ fn deny_unadjudicable(
         .collect::<Vec<_>>()
         .join(" ");
     let refusal = Refusal::unloaded(
-        "engine-cannot-adjudicate",
+        UNADJUDICABLE,
         format!(
             "this build could not load the rules it is registered to enforce, so nothing judged \
              this call: {pointer}"
@@ -21041,6 +21223,7 @@ fn collect_batch_advice(
     expire_sightings(envelope);
     expire_history_reads(envelope);
     repair_startup_rows(envelope, overrides);
+    adopt_engine_pin(envelope, overrides, advice);
     report_container_health(envelope, overrides, advice);
     Ok(())
 }
@@ -21158,6 +21341,92 @@ fn repair_startup_rows(envelope: &hook::Envelope, overrides: &Overrides) {
     // to say, off a fresh reading. Reporting it from here would describe a state
     // that the very next call re-decides.
     let _outcomes = startup::repair(here, &resolved.startup);
+}
+
+/// Pin this engine into a config that pins nothing, at the session's start
+/// (CLOUD-2595 §2c), and say so once on the advisory channel.
+///
+/// `SessionStart` rather than any call: it is the one hook event that may write
+/// (a session's first moment, the same one `repair_startup_rows` repairs at), and
+/// it fires once per session, so the record is said once.
+fn adopt_engine_pin(
+    envelope: &hook::Envelope,
+    overrides: &Overrides,
+    advice: &mut Vec<advisory::Advice>,
+) {
+    if envelope.event != hook::Event::SessionStart {
+        return;
+    }
+    let here = hook_authority_root();
+    if !here.join(config::CONFIG_FILE).exists() {
+        return;
+    }
+    if let Ok(Some(tag)) = adopt_engine_row(here, overrides) {
+        advice.push(advisory::Advice::rendered(
+            severity::AdvisoryTier::Advisory,
+            adopted_line(&tag),
+        ));
+    }
+}
+
+/// The record a written pin is reported by: `batten note call fix silent at
+/// batten.toml provision.batten (pinned <tag>)`.
+fn adopted_line(tag: &str) -> String {
+    let head = refusal::head(refusal::Severity::Note, verdict::Native::CallFixSilent.id());
+    format!(
+        "{head} at {} provision.batten (pinned {tag})",
+        config::CONFIG_FILE
+    )
+}
+
+/// Append this engine's own batten row to `root`'s `batten.toml` when the file
+/// pins nothing and LOADS (CLOUD-2595 §2c): the release written, or `None` where
+/// nothing was.
+///
+/// **A config that fails to load is never written.** The load is the predicate:
+/// the owner's ruling is that a later engine finding a toml without a pin adds
+/// one "after the parse succeeds", and a file this engine refuses is not one it
+/// can vouch for being read by itself.
+///
+/// Never under `--config-from` (the ref, not the working tree, is the authority
+/// then) or `CI` (a checkout CI builds is not one to dirty), and silent when the
+/// release's `SHA256SUMS` cannot be read: an unpublished or local build has no
+/// bytes to pin, and the next clean load tries again.
+///
+/// # Errors
+///
+/// A config that fails to load, or a write that fails.
+//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
+//MUTANT row-written-on-failed-load|s@^    resolve::resolve(root, overrides)?;$@    let _ = resolve::resolve(root, overrides);@|a_config_that_fails_to_load_is_never_written
+fn adopt_engine_row(root: &Path, overrides: &Overrides) -> Result<Option<String>> {
+    // An override names ANOTHER authority than `root`'s file, so a clean load
+    // under it says nothing about the bytes this would write.
+    if overrides.config_from.is_some()
+        || overrides.config_in.is_some()
+        || std::env::var_os("CI").is_some()
+    {
+        return Ok(None);
+    }
+    // ABSOLUTE, because the state directory is keyed by the repository's path:
+    // the hook and `init` hand in `.`.
+    let root = &git::canonical(root);
+    let path = root.join(config::CONFIG_FILE);
+    let text = std::fs::read_to_string(&path)?;
+    if engine::declared(&text).is_some() {
+        return Ok(None);
+    }
+    resolve::resolve(root, overrides)?;
+    let tag = engine::release();
+    let cache = state::repo_state_dir(root)?;
+    let repository = releases_repository();
+    let Ok(sums) = engine::pinned_sums(&cache, &repository, &tag) else {
+        return Ok(None);
+    };
+    let Some(adopted) = engine::adopted(&text, &repository, &tag, &sums) else {
+        return Ok(None);
+    };
+    durable::replace(&path, adopted)?;
+    Ok(Some(tag))
 }
 
 /// Say at session start whether this container is misconfigured (CLOUD-1324).
@@ -25546,6 +25815,15 @@ struct Rendering<'a> {
 /// The one chooser between a finding's two arms (CLOUD-2075): the source's
 /// declared lifecycle, consulted against the context's store.
 fn arm_for(source: hook::HookSource, envelope: &hook::Envelope, refusal: &Refusal) -> refusal::Arm {
+    // THE UNLOADED REFUSAL SAYS ITS CAUSE ON EVERY FIRING, as an `ask` does
+    // (CLOUD-2595 §2f). It carries no subjects and no routes, so its pointer arm
+    // is the bare head — measured in a consumer, every call after the
+    // first read `batten deny engine-cannot-adjudicate` and nothing else, and the
+    // session never saw WHY its config would not load. A refusal that blocks
+    // every call is the one whose reason must never be shed.
+    if refusal.rule() == UNADJUDICABLE {
+        return refusal::Arm::Full;
+    }
     match (source.finding_lifecycle(), envelope.context()) {
         (hook::Lifecycle::Sighted, Some(context)) => {
             refusal::sight(hook_authority_root(), &context, refusal)
@@ -25554,6 +25832,11 @@ fn arm_for(source: hook::HookSource, envelope: &hook::Envelope, refusal: &Refusa
     }
 }
 
+/// The id the hook refuses every call under when its config will not load.
+const UNADJUDICABLE: &str = "engine-cannot-adjudicate";
+
+//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
+//MUTANT unloaded-sighted|s@^    if refusal.rule() == UNADJUDICABLE {$@    if false {@|the_unloaded_refusal_reason_reaches_the_harness
 //MUTANT-SUITE crates/batten/tests/it/preapprove.rs
 //MUTANT grant-said-every-firing|s@^            let arm = arm_for(hook::HookSource::Harness, envelope, \&grant);$@            let arm = refusal::Arm::Full;@|a_grant_says_its_definition_once_per_window
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
@@ -27018,7 +27301,9 @@ fn anchor() -> PathBuf {
     if here.join(config::CONFIG_FILE).is_file() {
         return here;
     }
-    git::repo_root(&here).unwrap_or(here)
+    // The worktree's own authority before the repository's (CLOUD-2532): from a
+    // linked worktree's subdirectory, `repo_root` alone is the MAIN checkout.
+    config::authority_root(&here).unwrap_or(here)
 }
 
 /// Filter `findings` against this checkout's baseline, and fold what drifted
@@ -30117,6 +30402,37 @@ pub fn land_ready_owes(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// `engine install`'s gnu probe (CLOUD-2595) keeps only bytes that ANSWER
+    /// here, judged by running them with no shell, and leaves no probe behind.
+    /// Real executables stand in for the release builds: `true` answers,
+    /// `false` refuses, and bytes that are no program cannot be run at all.
+    #[test]
+    fn a_build_is_kept_only_when_it_answers_here() {
+        // The gnu probe runs only on musl Linux; `true` and `false` stand in on
+        // every unix host, and a missing one is a failure, never a skip.
+        if cfg!(not(unix)) {
+            return;
+        }
+        let dir = crate::scratch::scratch("runs-here");
+        let program = |name: &str| {
+            ["/bin", "/usr/bin"]
+                .iter()
+                .map(|bin| Path::new(bin).join(name))
+                .find(|path| path.is_file())
+                .and_then(|path| std::fs::read(path).ok())
+        };
+        let answers = program("true").expect("every unix host carries `true`");
+        let refuses = program("false").expect("every unix host carries `false`");
+        assert!(runs_here(&dir, &answers), "a build that exits 0 is kept");
+        assert!(!runs_here(&dir, &refuses), "a build that exits 1 is not");
+        assert!(
+            !runs_here(&dir, b"not a program"),
+            "bytes that cannot run are not"
+        );
+        let left = std::fs::read_dir(&dir).unwrap().count();
+        assert_eq!(left, 0, "the probe is removed whatever it answered");
+    }
 
     /// CLOUD-2372: the next landing's reap, not a reader, forgets a dead
     /// registrant. A pid past every platform's `pid_max` is dead wherever a
