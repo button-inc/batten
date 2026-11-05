@@ -2779,23 +2779,13 @@ fn run_startup(
     })
 }
 
-//MUTANT-SUITE crates/batten/tests/it/startup_bootstrap.rs
-//MUTANT status-skips-host-links|s@^        links: true,$@@|status_from_a_checkout_build_still_judges_the_link
 fn run_provision_status(
     json: bool,
     overrides: &Overrides,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
-    // THE SAME HOST `apply` WRITES TO (CLOUD-2617), from the one constructor
-    // both use, so a link placed by the `PATH` fallback is judged where it was
-    // placed. Status always judges the link, which `links_host` only gates for
-    // the writer.
     let site = provision_site(overrides)?;
-    let host = provision::Host {
-        links: true,
-        ..site.host()
-    };
-    let report = provision::status_on(&site.config.provisions, &site.cache, host)?;
+    let report = provision::status_on(&site.config.provisions, &site.cache, site.judge_host())?;
 
     if json {
         writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
@@ -2821,14 +2811,32 @@ struct ProvisionSite {
 }
 
 impl ProvisionSite {
-    /// The host a declared link resolves against: [`links_host`] and the
-    /// caller's `PATH`, which is where `engine install` placed batten too
-    /// (CLOUD-2617).
+    /// The host a WRITER resolves declared links against: [`links_host`] says
+    /// whether this engine may write them at all, and the caller's `PATH` says
+    /// where, as it said where `engine install` placed batten (CLOUD-2617).
     ///
     /// [`links_host`]: provision::links_host
-    fn host(&self) -> provision::Host<'_> {
+    fn write_host(&self) -> provision::Host<'_> {
         provision::Host {
             links: self.links_host,
+            ..self.judge_host()
+        }
+    }
+
+    /// The host a READER judges declared links against: the writer's, except
+    /// that every link is judged whoever asks (CLOUD-2617).
+    ///
+    /// `toolchain-runner-present` asks through the engine's own image, which in
+    /// this repository can be the checkout's build — the one `links_host`
+    /// refuses to let WRITE. Judging by that answer would skip the link, read a
+    /// warm cache as fresh, and report `ok` over a runner that is not on `PATH`.
+    /// Two named roles rather than one constructor and an override, so the
+    /// next reader cannot inherit the writer's gate by forgetting.
+    //MUTANT-SUITE crates/batten/tests/it/startup_bootstrap.rs
+    //MUTANT status-skips-host-links|s@^            links: true,$@            links: self.links_host,@|status_from_a_checkout_build_still_judges_the_link
+    fn judge_host(&self) -> provision::Host<'_> {
+        provision::Host {
+            links: true,
             on_path: &self.on_path,
             writable: writable_dir,
         }
@@ -2882,7 +2890,7 @@ fn run_provision_apply(
         // A checksum mismatch propagates as a `Denial` (exit 2) from here, so
         // the loop stops at the first bad artifact rather than going on to
         // install the rest under a verdict that already failed.
-        let applied = provision::apply_on(entry, &site.cache, dry_run, site.host())?;
+        let applied = provision::apply_on(entry, &site.cache, dry_run, site.write_host())?;
         let verb = match applied {
             provision::Applied::Installed => "installed",
             provision::Applied::AlreadyFresh => continue,
@@ -4122,7 +4130,7 @@ fn provisioned_binary(binary: &str, overrides: &Overrides) -> Option<PathBuf> {
         .provisions
         .iter()
         .find(|entry| entry.binary == binary)?;
-    provision::apply_on(entry, &site.cache, false, site.host()).ok()?;
+    provision::apply_on(entry, &site.cache, false, site.write_host()).ok()?;
     provision::binary_path(&site.repo, entry).ok()
 }
 
