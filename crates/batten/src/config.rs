@@ -4567,14 +4567,9 @@ fn recorded_digest(named: &str, fields: &str) -> Option<[u8; 32]> {
     if held != fields {
         return None;
     }
-    if hex.len() != 64 {
-        return None;
-    }
-    let mut out = [0_u8; 32];
-    for (at, slot) in out.iter_mut().enumerate() {
-        *slot = u8::from_str_radix(hex.get(at * 2..at * 2 + 2)?, 16).ok()?;
-    }
-    Some(out)
+    blake3::Hash::from_hex(hex)
+        .ok()
+        .map(|hash| *hash.as_bytes())
 }
 
 /// Record `digest` for `named`, read while its stamp was `fields`.
@@ -4593,6 +4588,9 @@ fn record_digest(named: &str, fields: &str, digest: &[u8; 32]) {
 /// The digest of `text` just read from `path` while it was `stamp`: believed
 /// from its record where the file held still across the read, else hashed — and
 /// recorded where it held still, clear of the racy window, on unix (CLOUD-2608).
+///
+/// The stamp only decides whether a recorded digest is BELIEVED; it never
+/// enters a key, which stays a function of the bytes as `crate::cache` requires.
 //MUTANT authority-digest-recorded-racy|s@ \&\& !stamp.racily_clean(crate::cache::now())@@|an_authority_read_in_its_racy_window_records_no_digest
 fn text_digest(path: &Path, named: &str, stamp: &crate::cache::Stamp, text: &str) -> [u8; 32] {
     let still = crate::cache::stamp(path).is_some_and(|after| after == *stamp);
@@ -5939,17 +5937,22 @@ mod tests {
         *LAST_DIGEST.lock().unwrap() = None;
     }
 
+    /// [`read_text`] with the clock reading `at`.
+    fn read_at(path: &Path, at: std::time::SystemTime) -> std::sync::Arc<String> {
+        crate::cache::clock::at(at, || read_text(path)).unwrap()
+    }
+
     /// CLOUD-2608: a recorded digest is what keys an unchanged authority — a
     /// planted one comes back, which no hash of the bytes could give.
     #[test]
     fn an_unchanged_authority_is_keyed_by_its_recorded_digest() {
         let (path, named, later) = digested_authority("config-digest-believed");
-        crate::cache::clock::at(later, || read_text(&path)).unwrap();
+        read_at(&path, later);
         let planted = [7_u8; 32];
         let fields = crate::cache::stamp(&path).unwrap().fields;
         record_digest(&named, &fields, &planted);
         forget_reads();
-        let text = crate::cache::clock::at(later, || read_text(&path)).unwrap();
+        let text = read_at(&path, later);
         let expected = if cfg!(unix) {
             planted
         } else {
@@ -5962,10 +5965,10 @@ mod tests {
     #[test]
     fn an_edited_authority_is_hashed_again() {
         let (path, named, later) = digested_authority("config-digest-edited");
-        crate::cache::clock::at(later, || read_text(&path)).unwrap();
+        read_at(&path, later);
         fs::write(&path, "version = 1\n# edited\n").unwrap();
         forget_reads();
-        let text = crate::cache::clock::at(later, || read_text(&path)).unwrap();
+        let text = read_at(&path, later);
         assert_eq!(
             held_digest(&text, &named),
             Some(*blake3::hash(b"version = 1\n# edited\n").as_bytes())
@@ -5978,7 +5981,7 @@ mod tests {
     fn an_authority_read_in_its_racy_window_records_no_digest() {
         let (path, named, _) = digested_authority("config-digest-racy");
         let changed = crate::cache::stamp(&path).unwrap().changed;
-        crate::cache::clock::at(std::time::UNIX_EPOCH + changed, || read_text(&path)).unwrap();
+        read_at(&path, std::time::UNIX_EPOCH + changed);
         assert!(
             !digest_path(&named).unwrap().exists(),
             "no record in the window"
@@ -5990,7 +5993,7 @@ mod tests {
     #[test]
     fn a_text_read_from_another_path_is_hashed() {
         let (path, named, later) = digested_authority("config-digest-path");
-        let text = crate::cache::clock::at(later, || read_text(&path)).unwrap();
+        let text = read_at(&path, later);
         assert!(held_digest(&text, &named).is_some(), "the premise");
         assert_eq!(held_digest(&text, "/elsewhere/batten.toml"), None);
     }
