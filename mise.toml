@@ -4119,8 +4119,12 @@ description = "Type-check for other targets from Linux (no macOS runner needed)"
 #   error occurred in cc-rs: failed to find tool "aarch64-linux-musl-gcc"
 #
 # Both triples fail identically, so the constraint is the ARCHITECTURE and not the
-# libc; `x86_64-unknown-linux-musl` checks clean here because the host compiler
-# already serves that arch. Covering the pair needs an aarch64 cross C toolchain
+# libc. `blake3`'s C checks clean for `x86_64-unknown-linux-musl` because the
+# host compiler serves that arch, but mimalloc's (CLOUD-2344) needs a MUSL C
+# compiler, so the `env` below points cc-rs at the one the release uses: zig,
+# through `cargo-zigbuild`'s `zig cc` front end, which drops the
+# `--target=x86_64-unknown-linux-musl` cc-rs appends and plain `zig cc` refuses.
+# Covering the pair needs an aarch64 cross C toolchain
 # this repository pins nowhere — `release-artifacts.yml` builds them under
 # `build-tool: cross`, which supplies one inside a container, so the release path
 # solved this and the verification path never inherited the solution. Pinning one
@@ -4151,6 +4155,7 @@ description = "Type-check for other targets from Linux (no macOS runner needed)"
 #     workspace code is held to it.
 #   * `--message-format=short` is one `path:line:col: error: …` per diagnostic,
 #     which is the shape `cross-turn` reads pointers from (CLOUD-1731).
+env = { CC_x86_64_unknown_linux_musl = "cargo-zigbuild zig cc -- -target x86_64-linux-musl", AR_x86_64_unknown_linux_musl = "cargo-zigbuild zig ar" }
 run = [
   "mise run target-ensure x86_64-pc-windows-gnu",
   "mise run target-ensure x86_64-unknown-linux-musl",
@@ -4194,6 +4199,11 @@ description = "Run the workspace suite against x86_64-unknown-linux-musl — the
 # the flattening to 1. The target step still goes through `target-ensure`, so a
 # concurrent toolchain mutator queues on the lock instead of colliding inside
 # rustup (CLOUD-220).
+#
+# THE SAME `env` AS `cross-check`, for its reason: mimalloc's C needs a musl C
+# compiler, and this suite links and RUNS what it builds, so a binary on the
+# wrong allocator fails `allocator.rs` here (CLOUD-2344).
+env = { CC_x86_64_unknown_linux_musl = "cargo-zigbuild zig cc -- -target x86_64-linux-musl", AR_x86_64_unknown_linux_musl = "cargo-zigbuild zig ar" }
 run = [
   "mise run target-ensure x86_64-unknown-linux-musl",
   "cargo nextest run --workspace --target x86_64-unknown-linux-musl",

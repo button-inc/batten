@@ -187,9 +187,11 @@ jobs:
           # digest above pins the ACTION; this pins the MISE it installs, which
           # is a separate resolution the digest does not reach.
           version: 2026.9.1
-          # cross-check is `rustup target add` + `cargo check`; rust is the only
-          # tool it touches. See the ci job for why these lists are narrow.
-          install_args: rust
+          # cross-check is `rustup target add` + `cargo check`, plus zig and
+          # cargo-zigbuild: its musl triple compiles mimalloc's C through
+          # `cargo-zigbuild zig cc`, the compiler the release builds it with
+          # (CLOUD-2344). See the ci job for why these lists are narrow.
+          install_args: rust zig github:rust-cross/cargo-zigbuild
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # The profile is part of the key — see `ci.yml`'s `ci` job.
@@ -328,7 +330,10 @@ jobs:
           # rather than letting them return, passing, over nothing.
           # cargo-dist is `install_web.rs`'s: the Linux-only tamper case runs the
           # pinned `dist` to generate the installer it refuses (CLOUD-2297).
-          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa pkl aqua:axodotdev/cargo-dist node
+          # zig and cargo-zigbuild are this LIBC's: `test:musl` compiles
+          # mimalloc's C for musl through `cargo-zigbuild zig cc`, as the
+          # release does (CLOUD-2344).
+          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest aqua:open-policy-agent/opa pkl aqua:axodotdev/cargo-dist node zig github:rust-cross/cargo-zigbuild
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A DISTINCT FAMILY, because this target dir holds musl artifacts the
@@ -369,6 +374,12 @@ jobs:
       - name: pkl resolves on PATH, as install_args declares
         shell: bash
         run: pkl --version
+      - name: zig resolves on PATH, as install_args declares
+        shell: bash
+        run: zig version
+      - name: cargo-zigbuild resolves on PATH, as install_args declares
+        shell: bash
+        run: cargo-zigbuild --version
       - run: mise run test:musl
 
   # The macOS gate. `cargo check` never links, so it cannot see a dependency that
