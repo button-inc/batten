@@ -493,9 +493,9 @@ pub enum Unpack {
     TarGz,
 }
 
-/// Why an entry is not fresh. Three states rather than a boolean, because
-/// "never installed" and "installed, and the bytes are not what the pin says"
-/// are different facts, and only the second is alarming.
+/// Why an entry is not fresh. Several states rather than a boolean, because
+/// "never installed", "installed, and the bytes are not what the pin says"
+/// and "another tool holds the name" are different facts, with different fixes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -514,7 +514,9 @@ pub enum Freshness {
 }
 
 impl Freshness {
-    /// Whether this entry needs an apply.
+    /// Whether this entry is not fresh. For [`Freshness::Foreign`] the apply it
+    /// prompts refuses, which is the point: the startup row fails visibly, with
+    /// the operator's fix in the refusal.
     #[must_use]
     pub const fn is_stale(self) -> bool {
         !matches!(self, Freshness::Fresh)
@@ -781,7 +783,7 @@ fn link_of(entry: &Provision, host: Host<'_>) -> Result<Option<Link>> {
 /// **A FALLBACK NEVER TAKES A NAME SOMEBODY ELSE OWNS, AND SAYS SO.** The
 /// declared `~/` directory is batten's, but `/usr/local/bin` and
 /// `/opt/homebrew/bin` are shared with package managers. A foreign name there
-/// makes the link read `missing` and the install refuse, so the startup row
+/// reads [`Freshness::Foreign`] and the install refuse, so the startup row
 /// fails visibly. Quietly linking somewhere off `PATH` instead would be
 /// CLOUD-2617's false green again, over somebody else's `mise`.
 ///
@@ -796,11 +798,14 @@ fn claimable(dir: &Path, entry: &Provision, cache_root: &Path) -> bool {
 }
 
 /// Whether the link record names `linked` and, once completed, `linked`'s
-/// present identity.
+/// present stamp.
 ///
-/// An INTENT — a record naming the path with no identity yet — counts as
-/// ours: it is written before the link (crash-only), so a run killed between
-/// the two finds its own half-written link claimable rather than foreign.
+/// An INTENT — a record naming the path with no stamp yet — is what a run
+/// killed between [`record_intent`] and [`record_written`] leaves. It admits
+/// the file only if it holds this entry's own cached bytes, which is all that
+/// half-finished run could have put there. Admitting whatever sits at the path
+/// would let a crash vouch for a binary another tool installed afterwards. A
+/// launcher needs no record, so this byte read is the rare crash path only.
 fn recorded_as_ours(linked: &Path, entry: &Provision, cache_root: &Path) -> bool {
     let Ok(record) = fs::read_to_string(link_record(cache_root, entry)) else {
         return false;
@@ -809,9 +814,27 @@ fn recorded_as_ours(linked: &Path, entry: &Provision, cache_root: &Path) -> bool
     if lines.next().map(Path::new) != Some(linked) {
         return false;
     }
-    lines
-        .next()
-        .is_none_or(|recorded| written_stamp(linked).as_deref() == Some(recorded))
+    match lines.next() {
+        Some(recorded) => written_stamp(linked).as_deref() == Some(recorded),
+        None => same_bytes(
+            linked,
+            &entry_dir(cache_root, entry)
+                .join(BIN_DIR)
+                .join(&entry.binary),
+        ),
+    }
+}
+
+/// Whether two files hold the same bytes; `false` when either cannot be read.
+/// Sizes first, so a file of another length costs two `stat`s.
+fn same_bytes(left: &Path, right: &Path) -> bool {
+    let size = |path: &Path| fs::metadata(path).map(|meta| meta.len()).ok();
+    match (size(left), size(right)) {
+        (Some(a), Some(b)) if a == b => {
+            matches!((fs::read(left), fs::read(right)), (Ok(a), Ok(b)) if a == b)
+        }
+        _ => false,
+    }
 }
 
 /// Where `entry`'s last written link is recorded: beside its versioned cache
@@ -1133,12 +1156,21 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], link: Option<&Lin
     // never landed would be the silent half-install this ordering exists to
     // rule out.
     if let Some(link) = link {
+        // RECORDED ONLY IN A SHARED DIRECTORY, the one place [`claimable`]
+        // reads it. Rewriting it for the declared directory would erase the only
+        // evidence that batten's earlier copy in the shared one is batten's, and
+        // that copy would read `foreign` for good.
+        //
         // INTENT FIRST, crash-only: the record names the path before the link
         // exists, so a run killed in between finds its own file claimable.
         let linked = link.dir.join(&entry.binary);
-        record_intent(cache_root, entry, &linked)?;
+        if link.shared {
+            record_intent(cache_root, entry, &linked)?;
+        }
         link_into(entry, &link.dir, &cached, &binary)?;
-        record_written(cache_root, entry, &linked)?;
+        if link.shared {
+            record_written(cache_root, entry, &linked)?;
+        }
     }
     // The artifact is written last, so a crash between the two leaves the entry
     // reading `missing` rather than `fresh` — the direction that re-applies.
@@ -2558,10 +2590,19 @@ mod tests {
             !claimable(&shared, &entry, &cache),
             "a plain copy nobody recorded"
         );
+        // AN INTENT ALONE, the crash between the two record writes: it admits
+        // the file only where it holds this entry's own cached bytes.
         record_intent(&cache, &entry, &linked).unwrap();
         assert!(
+            !claimable(&shared, &entry, &cache),
+            "an intent does not vouch for bytes batten never cached"
+        );
+        let cached = entry_dir(&cache, &entry).join(BIN_DIR).join("tool");
+        fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        fs::write(&cached, &body).unwrap();
+        assert!(
             claimable(&shared, &entry, &cache),
-            "an intent recorded before the link is batten's"
+            "an intent over this entry's own cached bytes is batten's half-finished link"
         );
         record_written(&cache, &entry, &linked).unwrap();
         assert!(
