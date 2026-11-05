@@ -324,7 +324,12 @@ jobs:
         run: batten release in-flight --workflow release-artifacts.yml --workflow release-land.yml
       # THE RELEASE PREDICATE (CLOUD-2033 G2): the head's engine pin names a
       # verified release, or the head moves nothing a release must vouch for.
-      # The very head the roster step graded, never a second read of it.
+      # The very head the roster step graded, never a second read of it, and
+      # fetched first: a head pushed after the checkout is not in the clone.
+      - name: fetch the graded head beside main
+        env:
+          HEAD_SHA: ${{ steps.roster.outputs.head_sha }}
+        run: batten ci step --arg-env HEAD_SHA -- git fetch origin
       - name: refuse a head the release predicate fails
         env:
           BATTEN_GITHUB_TOKEN: ${{ github.token }}
