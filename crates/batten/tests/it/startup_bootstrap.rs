@@ -302,6 +302,59 @@ fn a_warm_cache_whose_link_vanished_is_relinked_rather_than_reported_fresh() {
     );
 }
 
+/// CLOUD-2617: `provision status` judges the declared link even when the engine
+/// asking is a build of the checkout, which `links_host` keeps from WRITING it.
+///
+/// `toolchain-runner-present` runs `provision status` through the engine's own
+/// image, and in this repository that image can be `target/release/batten`. If
+/// status took `links_host`'s answer, that build would skip the link, read a
+/// warm cache as fresh, and report `ok` over a runner that is not on PATH —
+/// CLOUD-1389's false green, one layer over.
+///
+/// Fails by: status's host taking `links` from `links_host` instead of `true`.
+#[test]
+fn status_from_a_checkout_build_still_judges_the_link() {
+    let dest = scratch("provision-status-in-tree-dest");
+    std::fs::create_dir_all(&dest).expect("the destination exists");
+    let (dir, _artifact) = linked_fixture(
+        "provision-status-in-tree",
+        dest.to_str().expect("the scratch path is UTF-8"),
+        b"#!/bin/sh\nexit 0\n",
+    );
+    let warm = batten()
+        .current_dir(&dir)
+        .args(["provision", "apply"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(warm.status.code(), Some(0), "{}", stderr(&warm));
+    let landed = dest.join("probe");
+    assert!(landed.is_file(), "the installed engine links");
+    std::fs::remove_file(&landed).expect("the link is removed");
+
+    // The same engine, placed inside the checkout it judges.
+    let in_tree = dir.join("target").join("release");
+    std::fs::create_dir_all(&in_tree).expect("an in-tree target directory");
+    let engine = in_tree.join(
+        Path::new(env!("CARGO_BIN_EXE_batten"))
+            .file_name()
+            .expect("a name"),
+    );
+    std::fs::copy(env!("CARGO_BIN_EXE_batten"), &engine).expect("the engine is copied in-tree");
+    // `batten_as`, not a bare `Command`: the same pinned state store, or the
+    // copy reads an empty cache and reports `missing` for that reason instead.
+    let status = common::batten_as(&engine)
+        .current_dir(&dir)
+        .args(["provision", "status"])
+        .output()
+        .expect("the in-tree engine runs");
+    assert_ne!(
+        status.status.code(),
+        Some(0),
+        "an in-tree build must still read the missing link as stale: {}",
+        stdout(&status)
+    );
+}
+
 #[test]
 fn a_relative_link_destination_is_refused_rather_than_resolved() {
     // The direction a miss must fail in. Resolved against the process's own
