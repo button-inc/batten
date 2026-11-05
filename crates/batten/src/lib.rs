@@ -30160,6 +30160,23 @@ mod tests {
         assert!(!recoverable_without_rules(&patch(&format!(
             "{config}*** Update File: src/lib.rs\n@@\n-a\n+b\n"
         ))));
+        // A default git patch of the authority is a repair of it alone: its
+        // `a/` and `b/` are git's prefixes, not two more files.
+        let git = hook::decode_value(
+            hook::Harness::Factory,
+            &serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "ApplyPatch",
+                "tool_input": {
+                    "patch": format!(
+                        "--- a/{0}\n+++ b/{0}\n@@ -1 +1 @@\n-a\n+b\n",
+                        config::CONFIG_FILE
+                    ),
+                },
+            }),
+        )
+        .expect("decodes");
+        assert!(recoverable_without_rules(&git));
     }
 
     /// `mcp grant` and `mcp posture` judge the operand where one was given, and
