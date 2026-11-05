@@ -1881,7 +1881,7 @@ fn place_download(
 /// beside where they would be installed, run with no shell, then removed.
 fn runs_here(dir: &Path, binary: &[u8]) -> bool {
     let probe = dir.join(format!(".batten-probe-{}", std::process::id()));
-    let ran = std::fs::write(&probe, binary).is_ok()
+    let ran = durable::replace(&probe, binary).is_ok()
         && engine::make_executable(&probe).is_ok()
         && exec::piped(dir, &probe, &[String::from("--version")], "")
             .is_some_and(|(code, _)| code == 0);
@@ -30364,6 +30364,35 @@ pub fn land_ready_owes(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// `engine install`'s gnu probe (CLOUD-2595) keeps only bytes that ANSWER
+    /// here, judged by running them with no shell, and leaves no probe behind.
+    /// Real executables stand in for the release builds: `true` answers,
+    /// `false` refuses, and bytes that are no program cannot be run at all.
+    #[test]
+    fn a_build_is_kept_only_when_it_answers_here() {
+        let dir = std::env::temp_dir().join(format!("batten-runs-here-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = |name: &str| {
+            ["/bin", "/usr/bin"]
+                .iter()
+                .map(|bin| Path::new(bin).join(name))
+                .find(|path| path.is_file())
+                .and_then(|path| std::fs::read(path).ok())
+        };
+        let (Some(answers), Some(refuses)) = (program("true"), program("false")) else {
+            return;
+        };
+        assert!(runs_here(&dir, &answers), "a build that exits 0 is kept");
+        assert!(!runs_here(&dir, &refuses), "a build that exits 1 is not");
+        assert!(
+            !runs_here(&dir, b"not a program"),
+            "bytes that cannot run are not"
+        );
+        let left = std::fs::read_dir(&dir).unwrap().count();
+        assert_eq!(left, 0, "the probe is removed whatever it answered");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// CLOUD-2372: the next landing's reap, not a reader, forgets a dead
     /// registrant. A pid past every platform's `pid_max` is dead wherever a
