@@ -1,8 +1,9 @@
 name: fast-forward
 
 # workflow-shell: CLOUD-2548 the step count rises by the four single-command
-# steps every writer of `main` owes the release path: the freeze, a re-read of
-# the head, its fetch, and the predicate. Each is plain argv under `ci step`.
+# steps every writer of `main` owes the release path: one read of the head the
+# roster shares, the freeze, the head's fetch, and the predicate. Each is plain
+# argv under `ci step`.
 
 # THE RUN CARRIES THE PR IT ANSWERS FOR (CLOUD-409, CLOUD-456). An
 # `issue_comment` run attaches to the default-branch tip, so `head_branch` and
@@ -287,20 +288,27 @@ jobs:
           set -euo pipefail
           sh ./install.sh
           batten --version
+      # The head as it is NOW, not as the comment event snapshotted it — the same
+      # reason the draft step re-reads the draft bit through `gh api`. Read once,
+      # so the roster and the release path below grade the same commit.
+      - name: read the head the gates below grade
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ROUTE: repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}
+        run: batten ci step --capture sha --arg-env ROUTE -- gh api --jq .head.sha
       - name: refuse a head whose required checks have not all answered
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.issue.number }}
+          SHA: ${{ steps.head.outputs.sha }}
         run: |
           set -euo pipefail
-          # The head as it is NOW, not as the comment event snapshotted it — the
-          # same reason the draft step re-reads the draft bit through `gh api`.
-          head_sha=$(gh api "repos/$REPO/pulls/$PR" --jq .head.sha)
           rc=0
-          SHA="$head_sha" mise run checks-green || rc=$?
+          mise run checks-green || rc=$?
           if [ "$rc" -eq 0 ]; then
-            echo "#$PR at $head_sha is green over the whole required roster."
+            echo "#$PR at $SHA is green over the whole required roster."
             exit 0
           fi
           case "$rc" in
@@ -312,9 +320,9 @@ jobs:
           # log, and never the comment body, which is how a substring trigger
           # re-arms itself (CLOUD-853).
           gh api "repos/$REPO/issues/$PR/comments" -f body="$(
-            printf '%s' "Refusing to fast-forward #$PR at \`$head_sha\`: $why. Branch protection requires only \`final\`, which fans in over 4 of the 20 names in \`CI_REQUIRED_CHECKS\` — so a green \`final\` is not a green roster (CLOUD-1570). Wait for the matrix, or let \`mise run land\` drive it."
+            printf '%s' "Refusing to fast-forward #$PR at \`$SHA\`: $why. Branch protection requires only \`final\`, which fans in over 4 of the 20 names in \`CI_REQUIRED_CHECKS\` — so a green \`final\` is not a green roster (CLOUD-1570). Wait for the matrix, or let \`mise run land\` drive it."
           )" >/dev/null
-          echo "::error:: refusing #$PR at $head_sha: $why (CLOUD-1570)"
+          echo "::error:: refusing #$PR at $SHA: $why (CLOUD-1570)"
           exit 1
 
       # THE RELEASE FREEZE AND THE RELEASE PREDICATE (CLOUD-2033, CLOUD-2548),
@@ -329,14 +337,7 @@ jobs:
         run: batten ci step -- batten release in-flight --workflow release-artifacts.yml --workflow release-land.yml
       # The predicate grades the head against its merge-base in this clone, and
       # a reviewed fork head lives only at `refs/pull/N/head`, which the checkout
-      # does not fetch. Read again as the roster step does, then fetched as
-      # objects, never checked out or run.
-      - name: read the head the release path grades
-        id: head
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ROUTE: repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}
-        run: batten ci step --capture sha --arg-env ROUTE -- gh api --jq .head.sha
+      # does not fetch. Fetched as objects, never checked out or run.
       - name: fetch the head beside main
         env:
           SHA: ${{ steps.head.outputs.sha }}
