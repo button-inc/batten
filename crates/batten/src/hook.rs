@@ -9249,28 +9249,33 @@ fn patch_targets(input: &Value) -> Vec<&str> {
         _ => Vec::new(),
     });
     for text in texts {
-        // An envelope opens with its own line, and its body is never read as
-        // a diff: an envelope hunk removing the line `-- x` carries `--- x`.
-        // A diff whose content quotes that line opens with a diff header, so
-        // it is still read as a diff.
-        let envelope = text
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .is_some_and(|line| line.trim() == "*** Begin Patch");
-        if envelope {
-            for line in text.lines() {
-                if let Some(path) = HEADERS.iter().find_map(|header| line.strip_prefix(header)) {
-                    name(&mut targets, path.trim());
-                }
-            }
-            continue;
-        }
+        // BOTH FORMATS ARE READ OVER THE WHOLE TEXT, and an over-read is the
+        // safe direction: a file named that is not written costs a refusal, a
+        // file written that is not named costs the guard.
+        //
+        // An envelope runs from a `*** Begin Patch` line to its `*** End
+        // Patch`, wherever it opens: a host's parser strips a heredoc wrapper
+        // (`<<'EOF'`) or a preamble before it, and trims each line before it
+        // matches a header, so the envelope's headers are read trimmed.
+        let mut envelope = false;
         let mut git = false;
         // A `---` header counts only with a `+++` header on the very next
         // line: a hunk removing the line `-- x` carries `--- x`, which opens
         // nothing.
         let mut old = None;
         for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed == "*** Begin Patch" {
+                envelope = true;
+            } else if trimmed == "*** End Patch" {
+                envelope = false;
+            } else if envelope
+                && let Some(path) = HEADERS
+                    .iter()
+                    .find_map(|header| trimmed.strip_prefix(header))
+            {
+                name(&mut targets, path.trim());
+            }
             if let Some(rest) = line.strip_prefix("+++ ") {
                 if let Some(previous) = old.take() {
                     name(&mut targets, previous);
@@ -18070,17 +18075,17 @@ deny contains "refused by themodule" if {
             ),
             Decision::Allow,
         );
-        // A context line quoting a header starts with a space: it is the
-        // patched file's content, and only column-0 headers are targets.
-        assert_eq!(
+        // A host trims an envelope line before it matches a header, so an
+        // indented header inside an envelope is one, and is judged.
+        assert!(matches!(
             judge(
                 Harness::OpenCode,
                 "apply_patch",
                 "patchText",
                 "*** Begin Patch\n*** Update File: src/ok.rs\n@@\n *** Update File: batten.toml\n-a\n+b\n*** End Patch".to_owned()
             ),
-            Decision::Allow,
-        );
+            Decision::Deny(_)
+        ));
         // A tool that writes nothing is never read as a patch: a subagent's
         // prompt quoting one asks for review, not a write.
         assert_eq!(
@@ -18215,6 +18220,23 @@ deny contains "refused by themodule" if {
         assert_eq!(named.write_targets(), ["a.patch"]);
     }
 
+    /// A heredoc wrapper or a preamble before an envelope, which a lenient host
+    /// strips before it parses, does not hide the envelope's files.
+    #[test]
+    fn an_envelope_is_read_wherever_it_opens() {
+        for wrapped in [
+            "<<'EOF'\n*** Begin Patch\n*** Update File: batten.toml\n@@\n-a\n+b\n*** End Patch\nEOF",
+            "Here is the patch:\n*** Begin Patch\n*** Update File: batten.toml\n@@\n-a\n+b\n*** End Patch",
+            "*** Begin Patch\n  *** Update File: batten.toml\n@@\n-a\n+b\n*** End Patch",
+        ] {
+            assert_eq!(
+                patch_targets(&serde_json::json!({ "input": wrapped })),
+                ["batten.toml"],
+                "{wrapped:?}"
+            );
+        }
+    }
+
     /// A git patch names a rename, a copy or a mode change only in its own
     /// lines, a quoted path is the path, and a hunk removing `-- x` names
     /// nothing.
@@ -18251,12 +18273,13 @@ deny contains "refused by themodule" if {
             })),
             ["q.sql"]
         );
-        // An envelope's hunk removing `-- x` and adding `++ y` names no file.
+        // An envelope's headers count only inside it: one after its end is
+        // content.
         assert_eq!(
             patch_targets(&serde_json::json!({
-                "patchText": "*** Begin Patch\n*** Update File: a.sql\n@@\n--- old\n+++ new\n*** End Patch",
+                "patchText": "*** Begin Patch\n*** Update File: a.rs\n@@\n-a\n+b\n*** End Patch\n*** Update File: batten.toml\n",
             })),
-            ["a.sql"]
+            ["a.rs"]
         );
         // A path holding ` b/` splits where both sides name the one file.
         assert_eq!(
