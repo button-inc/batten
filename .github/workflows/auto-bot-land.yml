@@ -668,7 +668,7 @@ jobs:
         env:
           BATTEN_GITHUB_TOKEN: ${{ github.token }}
           SHA: ${{ steps.target.outputs.sha }}
-        run: batten ci step --arg-env SHA -- batten release path --strict
+        run: batten ci step --require-env SHA --arg-env SHA -- batten release path --strict
       - name: Fast-forward main to the tested SHA
         if: steps.freeze.outputs.clear == 'yes'
         env:
