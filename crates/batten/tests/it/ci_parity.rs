@@ -195,7 +195,8 @@ fn row() -> Rule {
             "mise.toml",
             "release-plz.toml",
             "renovate.json5",
-            // The engine pin the release freeze waits for (`freeze_runnable`).
+            // The engine pin, read for the one pin the freeze exempts: a source
+            // pin (`freeze_runnable`).
             "batten.toml",
         ],
         "line_sources": [
@@ -1956,7 +1957,7 @@ fn every_lander_and_the_cut_check_the_freeze() {
 }
 
 /// `wire_wrong` for a lander without the freeze, under the engine pin `pin`
-/// (CLOUD-2515).
+/// (CLOUD-2515, CLOUD-2548).
 fn unfrozen_lander_wire_wrong(name: &str, pin: &str) -> bool {
     let root = release_tree(
         name,
