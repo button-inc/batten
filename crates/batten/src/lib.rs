@@ -774,7 +774,7 @@ fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
             // VERIFIED AGAINST THE ROW'S OWN DIGEST when it lists one for this
             // platform (CLOUD-2595 §2b), the consumer's pin rather than the
             // release's manifest.
-            let pinned = engine::row_digest(&text, &provision::platform_key());
+            let pinned = engine::followed_digest(&text);
             engine::pinned_release(&cache, &releases_repository(), tag, pinned.as_deref())?
         }
         // A SOURCE PIN IS FOLLOWED TO THE CHECKOUT'S OWN BUILD (CLOUD-2232),
@@ -1837,15 +1837,20 @@ fn place_download(
             dest.display()
         ))
     })?;
-    let binary = dest.join(dist::binary_file(
-        env!("CARGO_PKG_NAME"),
+    // GNU WHERE IT RUNS (CLOUD-2595): the bootstrap placed the static musl
+    // build; this tag's gnu build replaces it only after running here.
+    let (target, bytes) = engine::chosen_build(
         &engine::running_target(),
-    ));
+        bytes,
+        |gnu| engine::fetch_release_for(repository, &tag, gnu, None).ok(),
+        |candidate| runs_here(&dest, candidate),
+    );
+    let binary = dest.join(dist::binary_file(env!("CARGO_PKG_NAME"), &target));
     durable::replace(&binary, &bytes)?;
     engine::make_executable(&binary)?;
     writeln!(out, "installed={}", binary.display())?;
     writeln!(out, "version={tag}")?;
-    writeln!(out, "target={}", engine::running_target())?;
+    writeln!(out, "target={target}")?;
     writeln!(out, "verified=sha256")?;
     if !on_path.contains(&dest) {
         if var("BATTEN_ALLOW_OFF_PATH").as_deref() == Some("1") {
@@ -1870,6 +1875,18 @@ fn place_download(
         }
     }
     Ok(ExitCode::Success)
+}
+
+/// Whether `binary`'s bytes answer `--version` with exit 0 on this host: written
+/// beside where they would be installed, run with no shell, then removed.
+fn runs_here(dir: &Path, binary: &[u8]) -> bool {
+    let probe = dir.join(format!(".batten-probe-{}", std::process::id()));
+    let ran = std::fs::write(&probe, binary).is_ok()
+        && engine::make_executable(&probe).is_ok()
+        && exec::piped(dir, &probe, &[String::from("--version")], "")
+            .is_some_and(|(code, _)| code == 0);
+    let _ = std::fs::remove_file(&probe);
+    ran
 }
 
 /// Install the engine built from this tree's source at `want` (CLOUD-2062,
@@ -2164,7 +2181,7 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
     if !foreign.is_empty() {
         return Ok(ExitCode::Violation);
     }
-    let pinned = engine::row_digest(&text, &provision::platform_key());
+    let pinned = engine::followed_digest(&text);
     let binary = engine::pinned_release(&cache, &repository, tag, pinned.as_deref())?;
     // The pinned engine must decide as itself: never update itself mid-gate.
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];

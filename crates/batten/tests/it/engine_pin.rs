@@ -567,7 +567,7 @@ fn engine_pin_rewrites_the_row() {
         "{config}"
     );
     assert_eq!(
-        batten::engine::row_digest(&config, &batten::provision::platform_key()),
+        batten::engine::followed_digest(&config),
         Some(published(&dir, WANTED, &batten::engine::running_target())),
         "the row's digest is the release's own: {config}"
     );
