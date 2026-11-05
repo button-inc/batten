@@ -1,4 +1,4 @@
-# GitHub access — go around the proxy, never through it
+# GitHub access — PAT-free routes first; the PAT only when none reaches the goal
 
 Read when: any GitHub operation, OR before claiming the toolchain/tests/CI can't
 run because "the proxy/network blocks GitHub" (that claim is almost always
@@ -11,7 +11,8 @@ Routing a GitHub call _through_ the security proxy fails: it answers with a
 scoped app credential and 403s almost everything (`not accessible by
 integration`; GraphQL pinned to a tiny allowlist). GitHub itself is reachable —
 a direct PAT-authenticated request to `api.github.com` returns 200 with the full
-5000/hr limit. Go _around_ the proxy.
+5000/hr limit. Going _around_ the proxy is the PAT route, the last resort, not
+the default (see the preference order).
 
 **THROUGH THE PROXY, YOUR TOKEN IS NOT USED AT ALL — the proxy answers with its
 own credential, whatever you send.** Measured 2026-09-06, `api.github.com/user`
@@ -44,22 +45,36 @@ hour and reaches for `add_repo`, which is blocked (below) and is not the fix.
 
 ## Fixed preference order (fall through only on an observed failure)
 
-1. **`gh` through mise — default for everything.** `mise exec -- gh <…>`.
-   `mise.toml [env]` sets `GH_TOKEN` to our PAT, so `gh` authenticates as us.
-   (`NO_PROXY` is also set there and IS mise's lever as well as `gh`'s and
-   `curl`'s — see the toolchain section. An earlier revision of this line said it
-   "does nothing for mise itself"; that was measured backwards.) PR create/ready/view,
-   comments, landing (`gh pr comment <n> --body /fast-forward`), issues, `gh api`.
-2. **GitHub API direct with our PAT**, routed around the proxy — `gh api …`, or
+**THE PAT IS THE LAST RESORT, NOT THE DEFAULT (operator, 2026-11-05).**
+`BATTEN_GITHUB_TOKEN` is not to be used when any other route reaches the goal.
+This inverts the order this section used to carry (PAT-backed `gh` first, MCP
+last). The inverted order is what sent a CLOUD-2580 session to reach for the PAT
+to list Actions secrets and to run a `search/issues` query. The search needed no
+PAT, and the listing was path-denied by the proxy anyway.
+
+1. **Routes that carry no PAT — default.** The `mcp__github__*` tools, and `gh`
+   through the proxy on its own credential (`gh api -X GET search/…` is the
+   session's named search route). Prefer these even where the PAT would answer
+   the same question.
+2. **`BATTEN_GITHUB_TOKEN` — only when no route in (1) reaches the goal**, on a
+   failure you observed for that operation, not one you assumed. Note that
+   `mise exec -- gh` IS a PAT route: `mise.toml [env]` sets `GH_TOKEN` to the
+   PAT and `NO_PROXY` sends it around the proxy, so it belongs here, not in (1).
+   Around the proxy: `gh api …` under mise, or
    `curl --noproxy '*' -H "Authorization: Bearer $BATTEN_GITHUB_TOKEN" …`.
-   `rate_limit`, repo, `pulls/<n>`, `commits/<sha>/status` all return 200.
-   **`BATTEN_GITHUB_TOKEN` is the name this container injects** —
-   `GITHUB_PERSONAL_ACCESS_TOKEN` is UNSET here, so the older spelling of this
-   line sent an empty header and read as a token failure. Prefer
-   `--noproxy '*'` over `env -u HTTPS_PROXY`: it steers this one call instead of
-   handing an unproxied environment to whatever the command spawns.
-3. **`mcp__github__*` tools — LAST RESORT**, only after (1) and (2) both actually
-   failed for that operation.
+   Prefer `--noproxy '*'` over `env -u HTTPS_PROXY`: it steers this one call
+   instead of handing an unproxied environment to whatever the command spawns.
+   `GITHUB_PERSONAL_ACCESS_TOKEN` is UNSET here; `BATTEN_GITHUB_TOKEN` is the
+   name the container injects.
+3. **Setting `GH_TOKEN=$BATTEN_GITHUB_TOKEN` on a PROXIED call is never a use of
+   the PAT**: the proxy discards it (the table above). It is noise, and a
+   finding stated as "even with the PAT" over that path proves nothing about the
+   PAT.
+4. **Paths no route reaches.** The proxy path-denies `actions/secrets`,
+   `actions/variables`, `actions/organization-*` and `environments` (403 "not
+   permitted through this proxy", 2026-11-03), and no MCP tool lists them. Say
+   that it needs an admin's browser or a local `gh`. Don't reach for the PAT to
+   find out.
 
 ## A degraded session start repairs itself, and says batten is broken
 
