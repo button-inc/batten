@@ -2142,23 +2142,39 @@ pub fn head_on_a_remote(dir: &Path) -> Option<bool> {
 /// is a second name: a clone with no `refs/remotes` at all answers `None` here,
 /// not "unpushed". A gate whose remedy is "push" must not fire where no push is
 /// possible, or it refuses every check in that clone forever.
+///
+/// **THE COMMON ANSWER WALKS NOTHING.** This runs on shell calls, and a just-pushed
+/// `HEAD` is a remote tip itself, so it is answered from the tips the guard already
+/// collected; only a `HEAD` that is no tip pays the walk.
 #[must_use]
 pub fn head_unpushed_to_a_remote(dir: &Path) -> Option<bool> {
     let repo = open(dir).ok()?;
-    let has_remote = repo
-        .references()
-        .ok()?
-        .prefixed("refs/remotes")
-        .ok()?
-        .flatten()
-        .next()
-        .is_some();
-    if !has_remote {
+    let tips = remote_tips(&repo);
+    if tips.is_empty() {
         return None;
     }
-    unreachable_from_remotes(&repo, Vec::new(), 1)
+    let head = repo.rev_parse_single("HEAD").ok()?.detach();
+    if tips.contains(&head) {
+        return Some(false);
+    }
+    walk_hiding(&repo, head, tips, 1)
         .ok()
         .map(|unpushed| !unpushed.is_empty())
+}
+
+/// Every `refs/remotes` tip that names an object directly.
+fn remote_tips(repo: &gix::Repository) -> Vec<gix::ObjectId> {
+    let mut tips = Vec::new();
+    if let Ok(references) = repo.references()
+        && let Ok(remotes) = references.prefixed("refs/remotes")
+    {
+        for reference in remotes.flatten() {
+            if let Some(id) = reference.target().try_id() {
+                tips.push(id.to_owned());
+            }
+        }
+    }
+    tips
 }
 
 /// The commits reachable from `HEAD` and from neither `hidden` nor any
@@ -2168,19 +2184,24 @@ fn unreachable_from_remotes(
     mut hidden: Vec<gix::ObjectId>,
     at_most: usize,
 ) -> Result<Vec<String>> {
+    let head = repo
+        .rev_parse_single("HEAD")
+        .map_err(|_| UsageError::raise("could not resolve the reset target".to_owned()))?;
+    hidden.extend(remote_tips(repo));
+    walk_hiding(repo, head.detach(), hidden, at_most)
+}
+
+/// The commits reachable from `from` and not from `hidden`, newest first, at
+/// most `at_most` of them.
+fn walk_hiding(
+    repo: &gix::Repository,
+    from: gix::ObjectId,
+    hidden: Vec<gix::ObjectId>,
+    at_most: usize,
+) -> Result<Vec<String>> {
     let refused = || UsageError::raise("could not resolve the reset target".to_owned());
-    let head = repo.rev_parse_single("HEAD").map_err(|_| refused())?;
-    if let Ok(references) = repo.references()
-        && let Ok(remotes) = references.prefixed("refs/remotes")
-    {
-        for reference in remotes.flatten() {
-            if let Some(id) = reference.target().try_id() {
-                hidden.push(id.to_owned());
-            }
-        }
-    }
     let walk = repo
-        .rev_walk([head.detach()])
+        .rev_walk([from])
         .with_hidden(hidden)
         .all()
         .map_err(|_| refused())?;

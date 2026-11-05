@@ -1816,6 +1816,28 @@ pub(crate) fn committed_clone() -> PathBuf {
     CLONE.get_or_init(build_committed_clone).clone()
 }
 
+/// Remove every finished `committed-<sha12>` clone but `kept`.
+///
+/// Each commit the suite runs at leaves a full worktree, and nothing else ever
+/// reads an older one. A pid-suffixed name is another process's build in flight,
+/// so it is left alone.
+fn prune_older_clones(kept: &Path) {
+    let Ok(entries) = fs::read_dir(target_tmp()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let finished = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_prefix("committed-"))
+            .is_some_and(|rest| !rest.contains('.'));
+        if finished && path != kept {
+            let _ = fs::remove_dir_all(&path);
+        }
+    }
+}
+
 fn build_committed_clone() -> PathBuf {
     let root = at_root("");
     let head = git_in(&root, &["rev-parse", "HEAD"]);
@@ -1846,6 +1868,8 @@ fn build_committed_clone() -> PathBuf {
     if fs::rename(&building, &clone).is_err() {
         // Another process built the same commit first; theirs is the one used.
         let _ = fs::remove_dir_all(&building);
+    } else {
+        prune_older_clones(&clone);
     }
     clone
 }

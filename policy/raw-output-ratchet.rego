@@ -126,21 +126,10 @@ sites(lines) := count([index |
 ])
 
 # An ADDED path has no base side, so its base count is zero, not unreadable.
-base_lines_of(path) := lines if {
-	lines := delta["base-lines"][path]
-}
-
-base_lines_of(path) := [] if {
-	not delta["base-lines"][path]
-}
+base_lines_of(path) := object.get(delta["base-lines"], path, [])
 
 touched contains path if {
-	some path in delta.added
-	endswith(path, ".rs")
-}
-
-touched contains path if {
-	some path in delta.edited
+	some path in array.concat(delta.added, delta.edited)
 	endswith(path, ".rs")
 }
 

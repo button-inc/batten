@@ -38,13 +38,10 @@ import rego.v1
 
 rules contains "check run early"
 
-basename(tok) := b if {
-	parts := split(tok, "/")
-	b := parts[count(parts) - 1]
-}
-
-# The program and its words as one line, so one declared pattern reads it.
-spelled(program) := concat(" ", array.concat([basename(program.program)], program.arguments))
+# The program and its words as one line, so one declared pattern reads it. `name`
+# is the engine's basename of the token (`hook.rs`, `program_name`), never split
+# here: path splitting is argv reading, and the boundary owns it.
+spelled(program) := concat(" ", array.concat([program.name], program.arguments))
 
 slow_check(program) if {
 	regex.match(data.batten.patterns["slow-check"], spelled(program))
@@ -82,7 +79,8 @@ test_an_unpushed_head_refuses_verify if {
 }
 
 test_an_unpushed_head_refuses_cargo_test if {
-	count(violation) == 1 with input as call(true, [prog("/usr/bin/cargo", ["test", "-p", "batten"])])
+	cargo := object.union(prog("cargo", ["test", "-p", "batten"]), {"program": "/usr/bin/cargo"})
+	count(violation) == 1 with input as call(true, [cargo])
 }
 
 test_a_pushed_head_runs_any_check if {

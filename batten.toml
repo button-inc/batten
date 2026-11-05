@@ -7973,7 +7973,8 @@ no_fix_reason = "class 3 (review disposition): which typed line replaces the lit
 kind = "policy"
 scope = "tree"
 base = "origin/main"
-delta_sources = ["**"]
+# Rust alone, as the module reads: `**` built base lines for every touched TOML.
+delta_sources = ["crates/**/*.rs"]
 line_sources = ["crates/**/*.rs"]
 module = "policy/raw-output-ratchet.rego"
 severity = "deny"
