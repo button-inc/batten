@@ -321,6 +321,21 @@ fn status_from_a_checkout_build_still_judges_the_link() {
         dest.to_str().expect("the scratch path is UTF-8"),
         b"#!/bin/sh\nexit 0\n",
     );
+    // AN ENVIRONMENT ROW, so the link is a LAUNCHER: a plain-copy link reads
+    // `missing` whoever asks (CLOUD-2210), which would make the fresh reading
+    // below impossible and the stale one prove nothing.
+    {
+        use std::io::Write as _;
+        let mut manifest = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.join("batten.toml"))
+            .expect("open the manifest");
+        manifest
+            .write_all(
+                b"\n[[provision.env]]\nname = \"PROBE_HOME\"\nprepend_list = [\"/opt/probe\"]\n",
+            )
+            .expect("declare an environment row");
+    }
     let warm = batten()
         .current_dir(&dir)
         .args(["provision", "apply"])
@@ -329,29 +344,41 @@ fn status_from_a_checkout_build_still_judges_the_link() {
     assert_eq!(warm.status.code(), Some(0), "{}", stderr(&warm));
     let landed = dest.join("probe");
     assert!(landed.is_file(), "the installed engine links");
-    std::fs::remove_file(&landed).expect("the link is removed");
 
     // The same engine, placed inside the checkout it judges.
-    let in_tree = dir.join("target").join("release");
-    std::fs::create_dir_all(&in_tree).expect("an in-tree target directory");
-    let engine = in_tree.join(
-        Path::new(env!("CARGO_BIN_EXE_batten"))
-            .file_name()
-            .expect("a name"),
+    let built = Path::new(env!("CARGO_BIN_EXE_batten"));
+    let engine = common::place_build(
+        &dir.join("target")
+            .join("release")
+            .join(built.file_name().expect("a name")),
     );
-    std::fs::copy(env!("CARGO_BIN_EXE_batten"), &engine).expect("the engine is copied in-tree");
     // `batten_as`, not a bare `Command`: the same pinned state store, or the
     // copy reads an empty cache and reports `missing` for that reason instead.
-    let status = common::batten_as(&engine)
-        .current_dir(&dir)
-        .args(["provision", "status"])
-        .output()
-        .expect("the in-tree engine runs");
-    assert_ne!(
-        status.status.code(),
-        Some(0),
-        "an in-tree build must still read the missing link as stale: {}",
-        stdout(&status)
+    let status = || {
+        common::batten_as(&engine)
+            .current_dir(&dir)
+            .args(["provision", "status"])
+            .output()
+            .expect("the in-tree engine runs")
+    };
+
+    // FRESH FIRST, so the stale reading below can only be the link: the in-tree
+    // engine reads the warm cache the installed one wrote.
+    let fresh = status();
+    assert_eq!(
+        (fresh.status.code(), stdout(&fresh)),
+        (Some(0), String::new()),
+        "the in-tree engine reads the warm cache: {}",
+        stderr(&fresh)
+    );
+
+    std::fs::remove_file(&landed).expect("the link is removed");
+    let stale = status();
+    assert_ne!(stale.status.code(), Some(0), "{}", stderr(&stale));
+    assert_eq!(
+        stdout(&stale).trim(),
+        "probe 1 missing",
+        "an in-tree build must read the missing link, and only it, as stale"
     );
 }
 

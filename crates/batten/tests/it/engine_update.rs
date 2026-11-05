@@ -57,22 +57,12 @@ fn private_binary(dir: &Path) -> PathBuf {
     private_build(&dir.join("engine").join("batten"))
 }
 
-/// Place the compiled binary at `at`, by LINK where the filesystem allows one.
-///
-/// The test binary is ~137 MiB and this file wants it in five places, so
-/// copying would write most of a gigabyte per run — and these cases carry
-/// `//MUTANT-SUITE` rows, so a sweep replays them. A link is enough because
-/// nothing here writes THROUGH the file: a stamp is a sibling
+/// Place the compiled binary at `at`: [`common::place_build`], which links
+/// where it can. Nothing here writes THROUGH the file: a stamp is a sibling
 /// (`engine::stamp_path`) and `durable::replace` renames over the directory
-/// entry, leaving the shared inode untouched. `scratch_outside_tree` can land
-/// on another filesystem, so a cross-device link falls back to the copy.
+/// entry, leaving the shared inode untouched.
 fn private_build(at: &Path) -> PathBuf {
-    std::fs::create_dir_all(at.parent().unwrap()).unwrap();
-    let built = Path::new(env!("CARGO_BIN_EXE_batten"));
-    std::fs::hard_link(built, at)
-        .or_else(|_| std::fs::copy(built, at).map(|_| ()))
-        .expect("place the compiled binary");
-    at.to_path_buf()
+    common::place_build(at)
 }
 
 fn make_executable(path: &Path) {
