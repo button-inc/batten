@@ -526,12 +526,28 @@ fn seed_stored_issue(dir: &Path, home: &Path, document: &serde_json::Value) {
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
-/// `claim check` under `home`, reading `payload` on stdin.
-fn check_at_home(dir: &Path, home: &Path, payload: &serde_json::Value) -> Output {
+/// A ready row stored the way the engine stores it, then `claim check` fed the
+/// bodyless projection `mcp call` prints for it — at `updated_at` when given,
+/// else at the stored read's own.
+fn check_projection(name: &str, updated_at: Option<&str>) -> (PathBuf, Output) {
     use common::StateHome as _;
+    let (dir, payload) = ready_to_pull(name);
+    let home = dir.join(".git").join("state-home");
+    seed_stored_issue(&dir, &home, &payload);
+    let projection = serde_json::json!({
+        "id": payload["id"],
+        "status": payload["status"],
+        "updatedAt": updated_at.map_or(payload["updatedAt"].clone(), Into::into),
+    });
     let mut command = common::batten();
-    command.state_home(home);
-    common::stdin_run(&mut command, dir, &["claim", "check"], &payload.to_string())
+    command.state_home(&home);
+    let output = common::stdin_run(
+        &mut command,
+        &dir,
+        &["claim", "check"],
+        &projection.to_string(),
+    );
+    (dir, output)
 }
 
 #[test]
@@ -540,15 +556,7 @@ fn the_projection_mcp_call_prints_is_read_through_the_store() {
     // is run by. The call prints a reduction — id, status and updatedAt, the body
     // behind a pointer — so the gate used to refuse its own sibling's output as
     // bodyless.
-    let (dir, payload) = ready_to_pull("claim-through-store");
-    let home = dir.join(".git").join("state-home");
-    seed_stored_issue(&dir, &home, &payload);
-    let projection = serde_json::json!({
-        "id": "CLOUD-1",
-        "status": "Todo",
-        "updatedAt": payload["updatedAt"],
-    });
-    let output = check_at_home(&dir, &home, &projection);
+    let (dir, output) = check_projection("claim-through-store", None);
     assert_eq!(code(&output), 0, "{}", stderr(&output));
     assert!(claim_receipt(&dir).is_some());
 }
@@ -557,15 +565,7 @@ fn the_projection_mcp_call_prints_is_read_through_the_store() {
 fn a_stored_response_older_than_the_projection_does_not_answer_for_it() {
     // The store's newest copy is the body only when it IS the response piped;
     // an older one would let a stale body pass for a re-read row.
-    let (dir, payload) = ready_to_pull("claim-stale-store");
-    let home = dir.join(".git").join("state-home");
-    seed_stored_issue(&dir, &home, &payload);
-    let projection = serde_json::json!({
-        "id": "CLOUD-1",
-        "status": "Todo",
-        "updatedAt": "2026-09-01T00:00:00Z",
-    });
-    let output = check_at_home(&dir, &home, &projection);
+    let (dir, output) = check_projection("claim-stale-store", Some("2026-09-01T00:00:00Z"));
     assert_eq!(code(&output), 1, "{}", stderr(&output));
     assert!(
         stderr(&output).contains("--issue CLOUD-1"),

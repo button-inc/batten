@@ -328,11 +328,11 @@ pub fn judge(
 
         let Some(description) = &issue.description else {
             return Err(UsageError::raise(format!(
-                "claim: {} carries no description, and nothing else has refused it — the \
+                "claim: {id} carries no description, and nothing else has refused it — the \
                  not-ready rule decides on the body, and the store holds no response matching \
-                 this one. Run `batten mcp call <server> get_issue '{{\"id\":\"{}\"}}'`, then \
-                 `claim check --issue {}`.",
-                issue.id, issue.id, issue.id
+                 this one. Run `batten mcp call <server> get_issue '{{\"id\":\"{id}\"}}'`, then \
+                 `claim check --issue {id}`.",
+                id = issue.id
             )));
         };
         if !is_ready(grammar, issue, description, root)? {

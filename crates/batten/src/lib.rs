@@ -8146,28 +8146,13 @@ fn ready_payload(repo: &Path, issue: Option<&str>) -> Result<ready::Payload> {
         std::io::stdin().read_to_string(&mut body)?;
         return ready::Payload::parse(&parse_json(&body)?);
     };
-    // `get_issue` AND `save_issue`, newest wins (CLOUD-1118): a lint run straight
-    // after a write must judge the body the tracker STORED, and the write's own
-    // response is the only place that body appears without a second fetch.
-    let tools = [READ_TOOL.to_owned(), WRITE_TOOL.to_owned()];
-    let selector = capture::Selector {
-        tools: &tools,
-        key,
-        key_at: DEFAULT_KEY_AT,
-    };
-    let Some(found) = capture::find(repo, &selector)? else {
+    let Some(value) = stored_issue(repo, key, "ready lint")? else {
         return Err(UsageError::raise(format!(
             "ready lint: no stored payload for {key} in this repository's capture store — read \
              the row and the capture mints itself, then run this again"
         )));
     };
-    let bytes = capture::read(repo, &found.capture)?;
-    let text = String::from_utf8(bytes).map_err(|_| {
-        UsageError::raise(format!(
-            "ready lint: the stored response for {key} is not UTF-8"
-        ))
-    })?;
-    ready::Payload::parse(&parse_json(&text)?)
+    ready::Payload::parse(&value)
 }
 
 /// One JSON document, or the could-not-read refusal.
@@ -8580,7 +8565,7 @@ fn run_claim_adopt(
 /// tracker returned without reshaping it.
 fn claim_payloads(repo: &Path, issue: Option<&str>) -> Result<Vec<claim::Issue>> {
     let value = if let Some(key) = issue {
-        stored_issue(repo, key)?.ok_or_else(|| {
+        stored_issue(repo, key, "claim check")?.ok_or_else(|| {
             UsageError::raise(format!(
                 "claim check: no stored payload for {key} in this repository's capture store"
             ))
@@ -8598,11 +8583,17 @@ fn claim_payloads(repo: &Path, issue: Option<&str>) -> Result<Vec<claim::Issue>>
     if values.is_empty() {
         return Err(UsageError::raise(NOT_ISSUE_PAYLOADS.to_owned()));
     }
+    // A value read from the store under `--issue` is already the full response.
+    let piped = issue.is_none();
     values
         .iter()
-        .map(|value| match through_store(repo, value)? {
-            Some(stored) => claim::Issue::parse(&stored),
-            None => claim::Issue::parse(value),
+        .map(|value| {
+            let stored = if piped {
+                through_store(repo, value)?
+            } else {
+                None
+            };
+            claim::Issue::parse(stored.as_ref().unwrap_or(value))
         })
         .collect()
 }
@@ -8610,8 +8601,13 @@ fn claim_payloads(repo: &Path, issue: Option<&str>) -> Result<Vec<claim::Issue>>
 const NOT_ISSUE_PAYLOADS: &str =
     "the input is not a set of get_issue payloads (need id and status per issue)";
 
-/// The newest stored `get_issue`/`save_issue` response for `key`, parsed.
-fn stored_issue(repo: &Path, key: &str) -> Result<Option<serde_json::Value>> {
+/// The newest stored `get_issue`/`save_issue` response for `key`, parsed;
+/// `verb` names the caller in the could-not-read refusals.
+///
+/// Both tools, newest wins (CLOUD-1118): a run straight after a write must judge
+/// the body the tracker STORED, and the write's own response is the only place
+/// that body appears without a second fetch.
+fn stored_issue(repo: &Path, key: &str, verb: &str) -> Result<Option<serde_json::Value>> {
     let tools = [READ_TOOL.to_owned(), WRITE_TOOL.to_owned()];
     let selector = capture::Selector {
         tools: &tools,
@@ -8624,12 +8620,10 @@ fn stored_issue(repo: &Path, key: &str) -> Result<Option<serde_json::Value>> {
     let bytes = capture::read(repo, &found.capture)?;
     let text = String::from_utf8(bytes).map_err(|_| {
         UsageError::raise(format!(
-            "claim check: the stored response for {key} is not UTF-8"
+            "{verb}: the stored response for {key} is not UTF-8"
         ))
     })?;
-    serde_json::from_str(&text)
-        .map(Some)
-        .map_err(|_| UsageError::raise(NOT_ISSUE_PAYLOADS.to_owned()))
+    parse_json(&text).map(Some)
 }
 
 /// The full stored response behind a piped projection, when it is that response.
@@ -8642,24 +8636,19 @@ fn stored_issue(repo: &Path, key: &str) -> Result<Option<serde_json::Value>> {
 /// newer read.
 //MUTANT-SUITE crates/batten/tests/it/claim.rs
 //MUTANT claim-projection-unread|s@^    if value.get("description").is_some() {$@    if true {@|the_projection_mcp_call_prints_is_read_through_the_store
-//MUTANT claim-store-stale|s@^    let same_read = field(\&stored, "updatedAt").as_deref() == Some(updated.as_str());$@    let same_read = true;@|a_stored_response_older_than_the_projection_does_not_answer_for_it
+//MUTANT claim-store-stale|s@^    let same_read = stored.get("updatedAt") == Some(updated);$@    let same_read = true;@|a_stored_response_older_than_the_projection_does_not_answer_for_it
 fn through_store(repo: &Path, value: &serde_json::Value) -> Result<Option<serde_json::Value>> {
     if value.get("description").is_some() {
         return Ok(None);
     }
-    let field = |value: &serde_json::Value, key: &str| {
-        value
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
-    };
-    let (Some(id), Some(updated)) = (field(value, "id"), field(value, "updatedAt")) else {
+    let id = value.get("id").and_then(serde_json::Value::as_str);
+    let (Some(id), Some(updated)) = (id, value.get("updatedAt")) else {
         return Ok(None);
     };
-    let Some(stored) = stored_issue(repo, &id)? else {
+    let Some(stored) = stored_issue(repo, id, "claim check")? else {
         return Ok(None);
     };
-    let same_read = field(&stored, "updatedAt").as_deref() == Some(updated.as_str());
+    let same_read = stored.get("updatedAt") == Some(updated);
     Ok(same_read.then_some(stored))
 }
 
