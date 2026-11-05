@@ -54,7 +54,7 @@ fn row() -> Rule {
         "kind": "policy",
         "scope": "tree",
         "base": "origin/main",
-        "delta_sources": ["**"],
+        "delta_sources": ["crates/**/*.rs"],
         "line_sources": ["crates/**/*.rs"],
         "module": "policy/raw-output-ratchet.rego",
         "severity": "deny",

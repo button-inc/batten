@@ -35,9 +35,9 @@
 #
 # THE RESIDUE IS NAMED RATHER THAN SILENT: `write!` without `ln`, a literal
 # assembled by `concat!` or `format!` before the call, a `{{` escape, a format
-# string more than three lines below its `writeln!(`, and a PURE RENAME — the
+# string more than three lines below its `writeln!(`, and a DELETED SOURCE — the
 # engine keeps no base side for a deleted path (`git.rs`, `base_lines`), so sites
-# moved by `git mv` alone read as added.
+# moved out of a file the branch deletes, a `git mv` included, read as added.
 #
 #MUTANT-SUITE crates/batten/tests/it/raw_output_ratchet.rs
 #MUTANT direction-may-invert|s@\tafter > base@\tafter < base@|a_branch_that_adds_a_raw_writeln_is_refused

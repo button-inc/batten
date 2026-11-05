@@ -2337,7 +2337,7 @@ impl Fact {
             }),
             Fact::HeadUnpushed => serde_json::json!({
                 "type": ["boolean", "null"],
-                "description": "Fact::HeadUnpushed (CLOUD-2489). TRUE when HEAD carries a commit no `refs/remotes` tip reaches -- committed work this clone alone holds; FALSE when every commit on HEAD is on some remote; NULL when it could not look (no repository, an unresolvable HEAD, a failed walk). A boolean and nothing else: no sha reaches this document.",
+                "description": "Fact::HeadUnpushed (CLOUD-2489). TRUE when HEAD carries a commit no `refs/remotes` tip reaches -- committed work this clone alone holds; FALSE when every commit on HEAD is on some remote; NULL when it could not look (no repository, no remote-tracking ref at all, an unresolvable HEAD, a failed walk) and on every call the hook does not ask it for (anything but a pre-tool shell call under a policy row). A boolean and nothing else: no sha reaches this document.",
             }),
             Fact::Instant => serde_json::json!({
                 "type": ["integer", "null"],

@@ -1816,12 +1816,15 @@ pub(crate) fn committed_clone() -> PathBuf {
     CLONE.get_or_init(build_committed_clone).clone()
 }
 
-/// Remove every finished `committed-<sha12>` clone but `kept`.
+/// Remove every finished `committed-<sha12>` clone but `kept` that is over a day
+/// old.
 ///
-/// Each commit the suite runs at leaves a full worktree, and nothing else ever
-/// reads an older one. A pid-suffixed name is another process's build in flight,
-/// so it is left alone.
+/// Each commit the suite runs at leaves a full worktree. A recent one may be in
+/// use by a run at another commit sharing this `target/` (`land`'s verify beside a
+/// hand-run test), so only a stale one goes. A pid-suffixed name is a build in
+/// flight and is never touched.
 fn prune_older_clones(kept: &Path) {
+    const STALE: std::time::Duration = std::time::Duration::from_hours(24);
     let Ok(entries) = fs::read_dir(target_tmp()) else {
         return;
     };
@@ -1832,15 +1835,74 @@ fn prune_older_clones(kept: &Path) {
             .and_then(|name| name.to_str())
             .and_then(|name| name.strip_prefix("committed-"))
             .is_some_and(|rest| !rest.contains('.'));
-        if finished && path != kept {
+        let stale = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age > STALE);
+        if finished && stale && path != kept {
             let _ = fs::remove_dir_all(&path);
         }
     }
 }
 
+/// The commit a clone of `root` must check out to carry its working tree: `HEAD`
+/// itself when no tracked file differs, else a commit on top of `HEAD` holding
+/// the tracked edits.
+///
+/// THE WORKING TREE, NOT ONLY HEAD: an uncommitted edit to `batten.toml` or a
+/// module is what the live-root cases exist to test. Built through a PRIVATE
+/// index, because `git stash create` takes the checkout's own `index.lock` and
+/// nextest's concurrent first callers then refuse each other. The private index
+/// starts as a copy of the real one, so `add` reuses its stat cache rather than
+/// hashing the tree. The dates are pinned so every process computes the SAME sha
+/// and shares one clone. The objects land in the checkout's store, which
+/// `--shared` reads through its alternates.
+fn working_tree_commit(root: &Path) -> String {
+    let head = git_in(root, &["rev-parse", "HEAD"]);
+    let index = target_tmp().join(format!("committed-index.{}", std::process::id()));
+    let seeded = fs::copy(root.join(".git/index"), &index).is_ok();
+    let in_private_index = |args: &[&str]| {
+        let output = git_command(root, args)
+            .env("GIT_INDEX_FILE", &index)
+            .env("GIT_AUTHOR_DATE", "@0 +0000")
+            .env("GIT_COMMITTER_DATE", "@0 +0000")
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    };
+    if !seeded {
+        in_private_index(&["read-tree", "HEAD"]);
+    }
+    // Staged-but-uncommitted entries in the copied index are part of the working
+    // tree too, so they stay; `--update` adds the unstaged tracked edits on top.
+    in_private_index(&["add", "--update", "--", "."]);
+    let tree = in_private_index(&["write-tree"]);
+    let commit = if tree == git_in(root, &["rev-parse", "HEAD^{tree}"]) {
+        head
+    } else {
+        in_private_index(&[
+            "commit-tree",
+            &tree,
+            "-p",
+            &head,
+            "-m",
+            "committed_clone: working tree",
+        ])
+    };
+    let _ = fs::remove_file(&index);
+    commit
+}
+
 fn build_committed_clone() -> PathBuf {
     let root = at_root("");
-    let head = git_in(&root, &["rev-parse", "HEAD"]);
+    let head = working_tree_commit(&root);
     let clone = target_tmp().join(format!("committed-{}", &head[..12]));
     if clone.join(".git").is_dir() {
         return clone;

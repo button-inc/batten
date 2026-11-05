@@ -12732,8 +12732,9 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
     Ok(ExitCode::Internal)
 }
 
-/// What a stopping `land` run still holds, read from its own records rather
-/// than said (CLOUD-2417).
+/// What a stopping `land` run took, read from its own records rather than said,
+/// and snapshotted before any undo hands it back (CLOUD-2417). The line reports
+/// the cost the run paid, not what it holds once it has exited.
 ///
 /// HERE AND NOT IN `land`, which is plumbing: `module_closure.rs` holds its
 /// closure under nine modules, and reading the bet and rendering a progress line
