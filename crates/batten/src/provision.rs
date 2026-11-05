@@ -2321,14 +2321,23 @@ mod tests {
     /// fallback, which is the contract this case asserts there.
     #[test]
     fn a_declared_link_off_path_follows_engine_installs_fallback() {
-        const PER_USER: &str = "~/.local/bin";
-        let Ok(declared) = expand_home(PER_USER) else {
-            assert!(
-                link_dir(PER_USER, Host::isolated(true)).is_err(),
+        // BOTH ARMS ASSERT, so no host passes this case without a verdict.
+        match expand_home(LINK_PER_USER) {
+            Ok(declared) => assert_the_fallback(&declared),
+            Err(_) => assert!(
+                link_dir(LINK_PER_USER, Host::isolated(true)).is_err(),
                 "a `~/` link with no HOME to expand is refused, never resolved"
-            );
-            return;
-        };
+            ),
+        }
+    }
+
+    /// The per-user link the fallback case resolves.
+    const LINK_PER_USER: &str = "~/.local/bin";
+
+    /// The fallback's five readings, for a host where `~/` expands to `declared`.
+    fn assert_the_fallback(declared: &Path) {
+        const PER_USER: &str = LINK_PER_USER;
+        let declared = declared.to_path_buf();
         let system = PathBuf::from(crate::install::SYSTEM_BIN_DIRS[0]);
         let resolve = |dest: &str, on_path: &[PathBuf], writable: fn(&Path) -> bool| {
             let host = Host {
