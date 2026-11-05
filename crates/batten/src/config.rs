@@ -4491,13 +4491,20 @@ const PARSE_CACHE_FORMAT: &str = "batten-config-msgpack-2";
 /// path, so two repositories each loading `./batten.toml` do not take turns
 /// evicting one entry.
 fn parse_cache_path(source: &str) -> Option<std::path::PathBuf> {
-    let named = canonical_source(source);
-    let root = crate::cache::root_under(&crate::state::state_root().ok()?)?;
-    Some(
-        root.join("config")
-            .join(format!("{}.cfg", blake3::hash(named.as_bytes()).to_hex())),
-    )
+    entry_for(&canonical_source(source), "cfg")
 }
+
+/// The entry for the authority canonically `named`, with `extension`.
+fn entry_for(named: &str, extension: &str) -> Option<std::path::PathBuf> {
+    let root = crate::cache::root_under(&crate::state::state_root().ok()?)?;
+    Some(root.join("config").join(format!(
+        "{}.{extension}",
+        blake3::hash(named.as_bytes()).to_hex()
+    )))
+}
+
+/// Bump on any change to how a digest record is written ([`record_digest`]).
+const DIGEST_CACHE_FORMAT: &str = "batten-config-digest-1";
 
 /// Declare the `[forge]` table of the validated `Config` the parse cache holds
 /// for exactly `text` from `source`, and say whether it held one; never a parse,
@@ -4547,14 +4554,15 @@ fn held_digest(text: &str, named: &str) -> Option<[u8; 32]> {
 type HeldDigest = Option<(String, [u8; 32], std::sync::Arc<String>)>;
 static LAST_DIGEST: std::sync::Mutex<HeldDigest> = std::sync::Mutex::new(None);
 
-/// Where `named`'s digest is recorded: beside its parse entry.
+/// Where `named`'s digest is recorded: beside its parse entry. `named` is
+/// already canonical, so it is not canonicalised again.
 fn digest_path(named: &str) -> Option<std::path::PathBuf> {
-    parse_cache_path(named).map(|path| path.with_extension("digest"))
+    entry_for(named, "digest")
 }
 
 /// The key a digest record carries: its own format, over the canonical path.
 fn digest_key(named: &str) -> String {
-    crate::cache::key("batten-config-digest-1", &[named.as_bytes()])
+    crate::cache::key(DIGEST_CACHE_FORMAT, &[named.as_bytes()])
 }
 
 /// The digest recorded for `named` beside exactly these stamp `fields`.
@@ -4585,20 +4593,32 @@ fn record_digest(named: &str, fields: &str, digest: &[u8; 32]) {
     );
 }
 
-/// The digest of `text` just read from `path` while it was `stamp`: believed
-/// from its record where the file held still across the read, else hashed — and
-/// recorded where it held still, clear of the racy window, on unix (CLOUD-2608).
+/// The digest of `text`, read from `path` at `at` while it was `stamp`:
+/// believed from its record where the file held still across the read, else
+/// hashed — and recorded where it held still, clear of the racy window measured
+/// from BEFORE the read, on unix (CLOUD-2608). Unix only both ways: a stamp
+/// elsewhere carries no ctime, so an in-place edit restoring the mtime would
+/// read as unchanged.
 ///
 /// The stamp only decides whether a recorded digest is BELIEVED; it never
 /// enters a key, which stays a function of the bytes as `crate::cache` requires.
-//MUTANT authority-digest-recorded-racy|s@ \&\& !stamp.racily_clean(crate::cache::now())@@|an_authority_read_in_its_racy_window_records_no_digest
-fn text_digest(path: &Path, named: &str, stamp: &crate::cache::Stamp, text: &str) -> [u8; 32] {
+//MUTANT authority-digest-recorded-racy|s@ \&\& !stamp.racily_clean(at)@@|an_authority_read_in_its_racy_window_records_no_digest
+//MUTANT authority-digest-believed-while-moving|s@^    if still \&\& cfg!(unix) \&\& let Some@    if cfg!(unix) \&\& let Some@|a_file_changed_across_its_read_is_hashed
+fn text_digest(
+    path: &Path,
+    named: &str,
+    (stamp, at): (&crate::cache::Stamp, std::time::Duration),
+    text: &str,
+) -> [u8; 32] {
     let still = crate::cache::stamp(path).is_some_and(|after| after == *stamp);
-    if still && let Some(recorded) = recorded_digest(named, &stamp.fields) {
+    if still
+        && cfg!(unix)
+        && let Some(recorded) = recorded_digest(named, &stamp.fields)
+    {
         return recorded;
     }
     let digest = *blake3::hash(text.as_bytes()).as_bytes();
-    if still && cfg!(unix) && !stamp.racily_clean(crate::cache::now()) {
+    if still && cfg!(unix) && !stamp.racily_clean(at) {
         record_digest(named, &stamp.fields, &digest);
     }
     digest
@@ -4648,7 +4668,7 @@ pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<String>> {
     // Off the cache, nothing here touches a cache directory.
     if PERSIST_PARSES.load(std::sync::atomic::Ordering::Relaxed) {
         let named = canonical_source(&path.to_string_lossy());
-        let digest = text_digest(path, &named, &stamp, &text);
+        let digest = text_digest(path, &named, (&stamp, at), &text);
         if let Ok(mut last) = LAST_DIGEST.lock() {
             *last = Some((named, digest, std::sync::Arc::clone(&text)));
         }
@@ -5985,6 +6005,22 @@ mod tests {
         assert!(
             !digest_path(&named).unwrap().exists(),
             "no record in the window"
+        );
+    }
+
+    /// A record beside the stamp taken BEFORE the read is not believed when the
+    /// file moved across it: the bytes read may be newer than the stamp says.
+    #[test]
+    fn a_file_changed_across_its_read_is_hashed() {
+        let (path, named, later) = digested_authority("config-digest-moving");
+        let before = crate::cache::stamp(&path).unwrap();
+        record_digest(&named, &before.fields, &[7_u8; 32]);
+        let text = "version = 1\n# moved\n";
+        fs::write(&path, text).unwrap();
+        let at = later.duration_since(std::time::UNIX_EPOCH).unwrap();
+        assert_eq!(
+            text_digest(&path, &named, (&before, at), text),
+            *blake3::hash(text.as_bytes()).as_bytes()
         );
     }
 
