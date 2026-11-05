@@ -9226,13 +9226,18 @@ fn patch_targets(input: &Value) -> Vec<&str> {
         let mut old = None;
         let mut context = None;
         for line in text.lines() {
+            // A hunk's own `*** 1,3 ****` / `--- 1,3 ----` range pair names
+            // no file.
             if let Some(previous) = context.take()
                 && let Some(rest) = line.strip_prefix("--- ")
+                && !rest.trim_end().ends_with("----")
             {
-                name(&mut targets, previous);
-                name(&mut targets, unified(rest));
+                name_diff(&mut targets, previous);
+                name_diff(&mut targets, rest);
             }
-            context = line.strip_prefix("*** ").map(unified);
+            context = line
+                .strip_prefix("*** ")
+                .filter(|rest| !rest.trim_end().ends_with("****"));
             // `patch` reads an `Index:` line as the file a hunk applies to.
             if let Some(path) = line.strip_prefix("Index: ") {
                 name(&mut targets, path.trim());
@@ -9246,17 +9251,17 @@ fn patch_targets(input: &Value) -> Vec<&str> {
             }
             if let Some(rest) = line.strip_prefix("+++ ") {
                 if let Some(previous) = old.take() {
-                    name(&mut targets, previous);
-                    name(&mut targets, unified(rest));
+                    name_diff(&mut targets, previous);
+                    name_diff(&mut targets, rest);
                 }
                 continue;
             }
-            old = line.strip_prefix("--- ").map(unified);
+            old = line.strip_prefix("--- ");
             if let Some(rest) = line.strip_prefix("diff --git ") {
                 git = true;
                 if let Some((a, b)) = git_sides(rest) {
-                    name(&mut targets, unified(a));
-                    name(&mut targets, unified(b));
+                    name_diff(&mut targets, a);
+                    name_diff(&mut targets, b);
                 }
             } else if let Some(path) = GIT_HEADERS
                 .iter()
@@ -9301,13 +9306,29 @@ fn git_unquote(path: &str) -> &str {
         .unwrap_or(path)
 }
 
-/// A unified header's path: a tab and a timestamp may follow it, and git
-/// prefixes each side with `a/` or `b/`.
-fn unified(rest: &str) -> &str {
+/// Name the file a diff header's path names, however the patch was prefixed.
+///
+/// A tab and a timestamp may follow the path, and git may quote it. `git
+/// apply` and `patch -p1` strip the first component whatever it is — `a/` and
+/// `b/`, the `i/` `w/` `c/` `o/` of `diff.mnemonicPrefix`, or a custom
+/// `--src-prefix` — so that file is always named. A first component longer
+/// than one character may instead be a real directory under `-p0`
+/// (`--no-prefix`), so the path as written is named too: an over-read costs a
+/// refusal, an under-read the guard.
+fn name_diff<'a>(targets: &mut Vec<&'a str>, rest: &'a str) {
     let path = git_unquote(rest.split('\t').next().unwrap_or(rest));
-    path.strip_prefix("a/")
-        .or_else(|| path.strip_prefix("b/"))
-        .unwrap_or(path)
+    if path == "/dev/null" {
+        return;
+    }
+    match path.split_once('/') {
+        Some((first, tail)) => {
+            name(targets, tail);
+            if first.chars().count() != 1 {
+                name(targets, path);
+            }
+        }
+        None => name(targets, path),
+    }
 }
 
 /// Add `path` to a patch's targets once, and never a path that names no file.
@@ -9319,23 +9340,24 @@ fn name<'a>(targets: &mut Vec<&'a str>, path: &'a str) {
 
 /// Where a `diff --git` line splits: `a/x b/y`, or quoted `"a/x" "b/y"` when
 /// either side needs it. A path may itself hold ` b/`, so the split where both
-/// sides name one file — every patch but a rename — is taken first. Only WHERE
-/// to split: both sides keep their quotes and prefixes, and [`unified`] strips
-/// them, one rule for either side.
+/// sides name one file — every patch but a rename — is taken first: both sides
+/// prefixed and naming one path, or, under `--no-prefix`, the same bytes on
+/// either side. Only WHERE to split: both sides keep their quotes and
+/// prefixes, and [`name_diff`] reads them, one rule for either side.
 fn git_sides(rest: &str) -> Option<(&str, &str)> {
     let middle = rest.len() / 2;
-    // Both sides prefixed, and one file: two absent prefixes are no match.
-    let same_file = rest.get(middle..=middle) == Some(" ")
-        && rest
-            .get(..middle)
-            .and_then(|a| a.strip_prefix("a/"))
-            .is_some_and(|a| rest.get(middle + 1..).and_then(|b| b.strip_prefix("b/")) == Some(a));
+    let (a, b) = (rest.get(..middle), rest.get(middle + 1..));
+    // Two absent prefixes are no match, so the prefixed case asks for both.
+    let prefixed = a
+        .and_then(|a| a.strip_prefix("a/"))
+        .is_some_and(|a| b.and_then(|b| b.strip_prefix("b/")) == Some(a));
+    let same_file = rest.get(middle..=middle) == Some(" ") && (prefixed || a.is_some() && a == b);
     let at = if same_file {
         middle
     } else {
         rest.find(" b/").or_else(|| rest.find(" \"b/"))?
     };
-    // The second side keeps the separating space, which `unified` trims.
+    // The second side keeps the separating space, which `name_diff` trims.
     Some(rest.split_at(at))
 }
 
@@ -18364,6 +18386,43 @@ deny contains "refused by themodule" if {
             patch_targets(&serde_json::json!({ "patch": "Index: batten.toml\n=====\n" })),
             ["batten.toml"]
         );
+    }
+
+    /// Any one-letter prefix is stripped (`diff.mnemonicPrefix`), a
+    /// `--no-prefix` mode change names its one file, a context hunk's range
+    /// lines name nothing, and a longer first component is read both ways.
+    #[test]
+    fn a_diff_path_is_read_under_every_prefix_convention() {
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git i/batten.toml w/batten.toml\n--- i/batten.toml\n+++ w/batten.toml\n",
+            })),
+            ["batten.toml"]
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git batten.toml batten.toml\nold mode 100644\nnew mode 100755\n",
+            })),
+            ["batten.toml"]
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "*** a.rs\t1\n--- a.rs\t2\n***************\n*** 0 ****\n--- 1,3 ----\n",
+            })),
+            ["a.rs"]
+        );
+        // A first component longer than one letter may be a real directory
+        // under `-p0`, so both readings are named.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "--- src/batten.toml\n+++ src/batten.toml\n",
+            })),
+            ["batten.toml", "src/batten.toml"]
+        );
+    }
+
+    #[test]
+    fn a_diff_git_middle_space_splits_only_on_one_file() {
         // A space at the middle is no split unless both sides name one file.
         assert_eq!(
             patch_targets(&serde_json::json!({
