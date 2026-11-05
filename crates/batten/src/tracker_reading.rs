@@ -84,19 +84,26 @@ pub fn is_family(family: &str) -> bool {
 /// A [`UsageError`] for an unknown family, an input the family does not read or
 /// is missing, an undeclared `[[pattern]]` row, or any input the family cannot
 /// look at — the refusals are each family's own, named below.
+///
+/// `spec_base` is the commit a speculative landing replayed this branch onto
+/// ([`crate::speculation::PUBLISHED_AS`]'s value), which bounds the authored log
+/// the git-reading families walk. The caller supplies it: `record derive` reads
+/// it from its environment, and a landing hands over the bet it holds.
 pub fn reading(
     family: &str,
     inputs: &BTreeMap<String, String>,
     patterns: &[NamedPattern],
     root: &Path,
     stdin: &str,
+    spec_base: Option<&str>,
 ) -> Result<String> {
+    let authored = Authored { root, spec_base };
     match family {
         "done" => done(inputs, root, stdin),
         "done-pr" => done_pr(inputs, stdin),
         "duplicate-close" => duplicate_close(inputs, stdin),
-        "deferral" => deferral(inputs, patterns, root, stdin),
-        "closing-key" => closing_key(inputs, patterns, root, stdin),
+        "deferral" => deferral(inputs, patterns, &authored, stdin),
+        "closing-key" => closing_key(inputs, patterns, &authored, stdin),
         _ => Err(UsageError::raise(format!(
             "record derive: no reading is declared for family `{family}`"
         ))),
@@ -588,17 +595,32 @@ fn without_code_spans(text: &str) -> String {
     out
 }
 
+/// The checkout a git-reading family walks, and the speculative base that
+/// bounds what it counts as this branch's own commits.
+struct Authored<'a> {
+    root: &'a Path,
+    spec_base: Option<&'a str>,
+}
+
+impl Authored<'_> {
+    /// The commit messages this branch authored since `base`, by
+    /// [`crate::race::authored_log_from`]'s one bound.
+    fn log(&self, base: &str) -> String {
+        crate::race::authored_log_from(self.root, base, self.spec_base.map(str::to_owned))
+    }
+}
+
 /// The keys this branch claims, by `claim keys`' one authority
 /// ([`crate::race::claimed_from`]) over the branch, its authored log since
 /// `base`, and the body.
 ///
 /// **Empty where there is no branch**, which is `claim keys`' own fail-open: an
 /// unresolvable claim subtracts nothing, so every owner a paragraph names stands.
-fn claimed(root: &Path, base: &str, body: &str, grammar: &Grammar) -> Vec<String> {
-    let Some(branch) = crate::git::current_branch(root).ok().flatten() else {
+fn claimed(authored: &Authored<'_>, base: &str, body: &str, grammar: &Grammar) -> Vec<String> {
+    let Some(branch) = crate::git::current_branch(authored.root).ok().flatten() else {
         return Vec::new();
     };
-    let log = crate::race::authored_log(root, base);
+    let log = authored.log(base);
     crate::race::claimed_from(&branch, "", &log, body, grammar, crate::race::Source::All)
 }
 
@@ -616,7 +638,7 @@ fn claimed(root: &Path, base: &str, body: &str, grammar: &Grammar) -> Vec<String
 fn deferral(
     inputs: &BTreeMap<String, String>,
     patterns: &[NamedPattern],
-    root: &Path,
+    authored: &Authored<'_>,
     stdin: &str,
 ) -> Result<String> {
     const FAMILY: &str = "deferral";
@@ -628,7 +650,7 @@ fn deferral(
     writeln!(
         record,
         "claimed\t{}",
-        column(&claimed(root, base, stdin, &grammar))
+        column(&claimed(authored, base, stdin, &grammar))
     )?;
     let mut counted = 0usize;
     for (index, paragraph) in paragraphs(stdin).iter().enumerate() {
@@ -689,7 +711,7 @@ fn marker_lines<'a>(hold: &Regex, body: &'a str) -> Vec<&'a str> {
 fn closing_key(
     inputs: &BTreeMap<String, String>,
     patterns: &[NamedPattern],
-    root: &Path,
+    authored: &Authored<'_>,
     stdin: &str,
 ) -> Result<String> {
     const FAMILY: &str = "closing-key";
@@ -712,11 +734,11 @@ fn closing_key(
         &grammar,
         crate::race::Source::ClosingOnly,
     ));
-    let served = match crate::git::current_branch(root).ok().flatten() {
+    let served = match crate::git::current_branch(authored.root).ok().flatten() {
         Some(branch) => by_ordinal(crate::race::claimed_from(
             &branch,
             "",
-            &crate::race::authored_log(root, base),
+            &authored.log(base),
             "",
             &grammar,
             crate::race::Source::RefsFirstOnly,

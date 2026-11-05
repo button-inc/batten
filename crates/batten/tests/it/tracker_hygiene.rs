@@ -1227,8 +1227,8 @@ fn the_committed_gates_record_then_check_the_one_row() {
 /// piped — so what answers is the task's OWN wiring rather than [`gate`]'s copy
 /// of it: the `'released=v[0-9]*'` quoting, the check entry running only when the
 /// reading succeeded, the exit code the task runner reports, and `vars.batten`
-/// resolving to the binary under test through `BATTEN_BIN`. `land` reaches the
-/// two body gates the same way (`LAND_BODY_GATES`).
+/// resolving to the binary under test through `BATTEN_BIN`. `land` derives and
+/// decides the same two body gates in-process (`[[lease.body_gate]]`).
 fn task(dir: &Path, name: &str, env: &[(&str, &str)], stdin: &str) -> (Option<i32>, String) {
     let output = common::mise_task(dir, name, env, stdin);
     (output.status.code(), said(&output))

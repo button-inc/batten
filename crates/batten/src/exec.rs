@@ -2306,7 +2306,7 @@ fn piped_through(
     {
         // **A GATE THAT DID NOT READ STDIN STILL ANSWERED** (review of #848). This
         // was `.ok()?`, which turns an ordinary `EPIPE` into `None` — and `None`
-        // reaches `land::ready` as `Readied::Unrunnable`, a could-not-look, over a
+        // reached its caller as unrunnable, a could-not-look, over a
         // gate that ran and produced a real verdict. Rust ignores `SIGPIPE`, so a
         // gate that ignores its stdin and exits before the write completes is not
         // a crash; it is a program that had already decided.
@@ -2322,9 +2322,9 @@ fn piped_through(
         // diagnostics before consuming all of stdin blocks writing stderr while
         // this blocks writing stdin, and the lap hangs with no timeout. With
         // `Stdio::null()` that was unreachable: the child could only ever block on
-        // stdout, which the caller was not filling. `land::ready` feeds a pull
-        // request BODY on stdin to a gate that takes `Keep`, which is exactly the
-        // shape.
+        // stdout, which the caller was not filling. Any caller feeding stdin to a
+        // gate under `Keep` has exactly the shape: the landing's body gates did,
+        // with a pull request BODY, until CLOUD-2387 decided them in-process.
         //
         // Detached rather than joined: the handle closes when the thread's owned
         // pipe drops, and `wait_with_output` is what decides. A caller must never
@@ -2487,7 +2487,7 @@ pub fn become_argv<S: AsRef<std::ffi::OsStr>>(argv: &[S]) -> Result<std::convert
 /// Whether a spawn's stderr joins its stdout, and it is per CALL SITE.
 ///
 /// **A shared spawn may not decide this, which is what the first attempt got
-/// wrong** (review of #848). Capturing everywhere fixed `land::ready`'s empty
+/// wrong** (review of #848). Capturing everywhere fixed the landing body gates' empty
 /// `detail` and broke two callers that PARSE the string it returns:
 /// `review::ready` runs `serde_json::from_str` over it, so a runner emitting any
 /// diagnostic — a deprecation warning, a TLS notice — would fail to parse and
@@ -2558,15 +2558,15 @@ impl Diagnostics {
 /// # [`Diagnostics`] IS THE CALLER'S, and hardcoding it here was the same defect
 /// one layer up
 ///
-/// This entry point pinned [`Diagnostics::Keep`] because the LANDING GATES need
-/// their refusal reason: their verdict is the exit code and the coordinate is on
-/// stderr, so dropping it left `Readied::Refused { detail }` empty and the
-/// operator reading a refusal with nowhere to look.
+/// This entry point pinned [`Diagnostics::Keep`] because a GATE needs its
+/// refusal reason: its verdict is the exit code and the coordinate is on
+/// stderr, so dropping it left the landing's body gate (spawned here until
+/// CLOUD-2387) with an empty refusal and the operator with nowhere to look.
 ///
 /// **But the same entry point also fetches the pull request's BODY** (review of
 /// #848), and there the returned string is PARSED rather than shown. A forge
 /// client's notice on stderr — an auth warning, a deprecation, a proxy line —
-/// was folded into the body, which defeats `land::ready`'s empty-body pass and
+/// was folded into the body, which defeated the body gates' empty-body pass and
 /// runs the body gates over text nobody wrote. [`Diagnostics`]' own doc forbids
 /// `Keep` for a caller that parses.
 ///

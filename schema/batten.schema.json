@@ -925,6 +925,35 @@
       },
       "additionalProperties": false
     },
+    "BodyGate": {
+      "description": "One `[[lease.body_gate]]` row: a family derived over the pull request's\nbody, and the rule decided over the record it leaves.",
+      "type": "object",
+      "properties": {
+        "derive": {
+          "description": "The `record derive` family read over the body, e.g. `closing-key`.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "inputs": {
+          "description": "The family's `--input` pairs, as `record derive` takes them.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
+        "rule": {
+          "description": "The rule id `batten check --rule` decides over the stored record.",
+          "type": "string",
+          "maxLength": 1536
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "derive",
+        "rule"
+      ]
+    },
     "BotLane": {
       "description": "The `[bot_lane]` table: which proposals this repository will file a row for.\n\nAbsent means the repository runs no bot lane, and the verbs say so rather than\nfiling against defaults — a lane assembled from engine literals would be a row\nasserting a bump nobody configured, which is the CLOUD-198 class with a new\nauthor.",
       "type": "object",
@@ -2487,6 +2516,65 @@
         "key"
       ]
     },
+    "EntryUnsubscribed": {
+      "description": "`[lease.unsubscribed]`: the `pr unsubscribed` host a landing drops and then\ndecides over, field for field the verb's own flags.",
+      "type": "object",
+      "properties": {
+        "arguments": {
+          "description": "The tool's arguments, as a JSON object template.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "endpoint": {
+          "description": "The endpoint, with `{session}` where the session id goes.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "family": {
+          "description": "The record family, and the receipts' filename prefix.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "rule": {
+          "description": "The rule id decided over the stored reading.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "session_env": {
+          "description": "The NAME of the environment variable holding the host's session id.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "token_env": {
+          "description": "The NAME of the environment variable holding the credential file's path.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "tool": {
+          "description": "The tool the endpoint is asked to call.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "session_env",
+        "family",
+        "rule"
+      ]
+    },
     "Epoch": {
       "description": "The `[epoch]` table: which files govern this repository.\n\nDeclared as **config** rather than compiled in, because which files govern a\nrepository is that repository's business: an agent settings file, a\ncontributor guide, a hook config — each meaningful in one repository and\nmeaningless in the next. The core therefore carries only the default (this\nfile), and every consumer's own list lives in that consumer's own config, so\na grep of `crates/batten` for any consumer's identifiers returns nothing\n(non-negotiable rule 1; verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).",
       "type": "object",
@@ -3080,6 +3168,17 @@
       "description": "The landing lease's own configuration (CLOUD-1148 §2).",
       "type": "object",
       "properties": {
+        "body_gate": {
+          "description": "The gates a landing asks of its pull request's BODY before it readies\n(CLOUD-2387), replacing the `LAND_BODY_SOURCE` and `LAND_BODY_GATES`\nargvs.\n\nThe engine reads the body from the forge itself and derives each row's\nfamily over it in-process, then decides the row's `rule` over the record\nit left — the same record `record derive` and `batten check` would have\nproduced through two spawns. Empty is a landing with no body gates, which\nis a legitimate configuration; a declared row that cannot be derived or\ndecided is a refusal, never a pass.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BodyGate"
+          }
+        },
+        "census": {
+          "description": "Whether this repository keeps a reclaim census, so a landing writes its\nbeat and its chosen stop into it (CLOUD-2387).\n\nThe census is the engine's own `reclaim` module, so the notes are written\nin-process; what the consumer decides is only WHETHER it keeps one. Off,\nnothing is written — the same \"declares nothing, nothing written\" the\nspawned `LEASE_BEAT_NOTE` and `LEASE_STOP_NOTE` argvs it replaces gave.",
+          "type": "boolean"
+        },
         "fast_forward_branches": {
           "description": "Branch-name prefixes that land WITHOUT taking the lease, so the runner-side\nprecondition must not judge them.\n\n# THE POPULATION IS THE LANDER'S, NOT THE AUTHOR'S\n\nThese are branches some other workflow fast-forwards on a `workflow_run`\ncompletion, so no agent ever holds the lease on their behalf and judging\nthem would refuse the run the gate exists to let through. The predecessor\nspelled the same set as a `case` in shell, and its comment carries the\neconomics: a cancelled run is `completed`, so those landers DO fire, find\nthe checks not green, and stop; nothing retries. Cancelling here would not\nsave a matrix, it would DEFER one and add a stall.\n\n**Not the bot-author set** (`[bot_lane] bots`), and the two must not be\ncollapsed: that keys on a forge LOGIN and this keys on a branch NAME,\nbecause what decides the question is which workflow lands the branch. A\nhuman who names a branch with one of these prefixes gets the same\ntreatment, correctly — the lander fires on the name.\n\n**Prefixes on the branch, never a substring anywhere in the ref**, which\nthe predecessor's suite pinned as its own case: a `case` arm matching\nmid-ref would exempt a branch that merely mentions one.\n\nEmpty means every branch is judged, which is the gate's default and the\nreason this is a short named list rather than a pattern.",
           "type": "array",
@@ -3095,6 +3194,17 @@
             "type": "string",
             "maxLength": 1536
           }
+        },
+        "unsubscribed": {
+          "description": "The landing's entry gate (CLOUD-2387): before the first lap, drop this\nsession's webhook subscription on the pull request, then decide `rule`\nover the `pr unsubscribed` reading — what `LAND_ENTRY_GATES` spelled as two\n`mise run pr-unsubscribed` argvs.\n\nThe drop is advisory, as the argv's `?` made it: off the harness it\ncannot mint a receipt, and the decision is the one whose refusal names\n`pr unsubscribed record` as the way through. Absent, a landing asks no\nentry gate.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntryUnsubscribed"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false

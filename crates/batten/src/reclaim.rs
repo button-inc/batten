@@ -271,16 +271,29 @@ pub fn run_note(kind: &str, reason: Option<&str>) -> Result<ExitCode> {
             "record census note: the reason is one word",
         )));
     }
-    let (Some(git_dir), Ok(boot)) = (git_dir(), boot_time()) else {
-        return Ok(ExitCode::Success);
+    if let Some(git_dir) = git_dir() {
+        note_in(&git_dir, kind, reason);
+    }
+    Ok(ExitCode::Success)
+}
+
+/// Append one census record under `git_dir`, silently and best-effort.
+///
+/// The verb's write, for a caller that already knows its repository: `land`
+/// writes its beat and stop through this in-process (CLOUD-2387), rather than
+/// spawning `record census note` and resolving the store from its cwd. `kind`
+/// and `reason` are the verb's, already validated — `h` or `x`, and a reason of
+/// one word or none.
+pub(crate) fn note_in(git_dir: &Path, kind: &str, reason: Option<&str>) {
+    let Ok(boot) = boot_time() else {
+        return;
     };
     let epoch = now();
     let line = match reason {
         Some(reason) => format!("{kind} {epoch} {boot} {reason}"),
         None => format!("{kind} {epoch} {boot}"),
     };
-    let _ = append(&git_dir, BEATS, &line);
-    Ok(ExitCode::Success)
+    let _ = append(git_dir, BEATS, &line);
 }
 
 /// Record this boot unless the store's last boot already is it.
@@ -649,6 +662,39 @@ mod tests {
         record_boot(&git_dir, "200").unwrap();
         assert_eq!(fold(&git_dir, BOOTS), Some(lines(&["100", "200"])));
         assert!(store(&git_dir, BOOTS).starts_with(&git_dir));
+    }
+
+    /// Fails by: `note_in` writing nothing, or a record that drops its reason
+    /// or its boot. The landing's in-process beat and stop are this write
+    /// (CLOUD-2387), so a silent no-op reads every landing as a container death.
+    #[test]
+    fn a_note_is_appended_where_the_census_folds_it() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let boot = boot_time().expect("a linux host reads its boot time");
+        let git_dir = crate::scratch::scratch("reclaim-note-in");
+        note_in(&git_dir, "h", None);
+        note_in(&git_dir, "x", Some("land-stopped"));
+        let written = fold(&git_dir, BEATS).expect("the store folds");
+        let shapes: Vec<(String, String, Option<String>)> = written
+            .iter()
+            .map(|line| {
+                let fields: Vec<&str> = line.split(' ').collect();
+                (
+                    fields[0].to_owned(),
+                    fields[2].to_owned(),
+                    fields.get(3).map(|reason| (*reason).to_owned()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shapes,
+            [
+                (String::from("h"), boot.clone(), None),
+                (String::from("x"), boot, Some(String::from("land-stopped"))),
+            ]
+        );
     }
 
     #[test]

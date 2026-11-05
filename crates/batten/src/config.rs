@@ -1029,6 +1029,84 @@ pub struct Lease {
     /// reason this is a short named list rather than a pattern.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fast_forward_branches: Vec<String>,
+
+    /// Whether this repository keeps a reclaim census, so a landing writes its
+    /// beat and its chosen stop into it (CLOUD-2387).
+    ///
+    /// The census is the engine's own `reclaim` module, so the notes are written
+    /// in-process; what the consumer decides is only WHETHER it keeps one. Off,
+    /// nothing is written — the same "declares nothing, nothing written" the
+    /// spawned `LEASE_BEAT_NOTE` and `LEASE_STOP_NOTE` argvs it replaces gave.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub census: bool,
+
+    /// The gates a landing asks of its pull request's BODY before it readies
+    /// (CLOUD-2387), replacing the `LAND_BODY_SOURCE` and `LAND_BODY_GATES`
+    /// argvs.
+    ///
+    /// The engine reads the body from the forge itself and derives each row's
+    /// family over it in-process, then decides the row's `rule` over the record
+    /// it left — the same record `record derive` and `batten check` would have
+    /// produced through two spawns. Empty is a landing with no body gates, which
+    /// is a legitimate configuration; a declared row that cannot be derived or
+    /// decided is a refusal, never a pass.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub body_gate: Vec<BodyGate>,
+
+    /// The landing's entry gate (CLOUD-2387): before the first lap, drop this
+    /// session's webhook subscription on the pull request, then decide `rule`
+    /// over the `pr unsubscribed` reading — what `LAND_ENTRY_GATES` spelled as two
+    /// `mise run pr-unsubscribed` argvs.
+    ///
+    /// The drop is advisory, as the argv's `?` made it: off the harness it
+    /// cannot mint a receipt, and the decision is the one whose refusal names
+    /// `pr unsubscribed record` as the way through. Absent, a landing asks no
+    /// entry gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unsubscribed: Option<EntryUnsubscribed>,
+}
+
+/// `[lease.unsubscribed]`: the `pr unsubscribed` host a landing drops and then
+/// decides over, field for field the verb's own flags.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct EntryUnsubscribed {
+    /// The NAME of the environment variable holding the host's session id.
+    pub session_env: String,
+    /// The NAME of the environment variable holding the credential file's path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_env: Option<String>,
+    /// The endpoint, with `{session}` where the session id goes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    /// The tool the endpoint is asked to call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// The tool's arguments, as a JSON object template.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<String>,
+    /// The record family, and the receipts' filename prefix.
+    pub family: String,
+    /// The rule id decided over the stored reading.
+    pub rule: String,
+}
+
+/// One `[[lease.body_gate]]` row: a family derived over the pull request's
+/// body, and the rule decided over the record it leaves.
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct BodyGate {
+    /// The `record derive` family read over the body, e.g. `closing-key`.
+    pub derive: String,
+    /// The family's `--input` pairs, as `record derive` takes them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub inputs: BTreeMap<String, String>,
+    /// The rule id `batten check --rule` decides over the stored record.
+    pub rule: String,
 }
 
 /// The `[mutate]` table: which gates `batten mutate` must show able to fail

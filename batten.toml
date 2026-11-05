@@ -11835,6 +11835,20 @@ landing_paths = [
   "crates/batten/src/fast_forward.rs",
 ]
 
+# THIS REPOSITORY KEEPS A RECLAIM CENSUS (CLOUD-451, CLOUD-2387). A landing writes
+# its beat when `land lap` starts and `x land-stopped` wherever a holder CHOSE to
+# stop: where the landing returns, on `lease hold`'s stall bail, and on `lease
+# release`. Never on an exit path (CLOUD-491): an exit path runs on a container
+# kill too, and a note from one would erase the only distinction the census draws.
+# The notes are the engine's own `reclaim` writes, made in-process; this row is
+# only whether there is a census to write into.
+# HELD UNTIL A RELEASE CARRIES CLOUD-2387: `engine-pin-check` refuses a key
+# newer than the release pin as feature drift, so each line below carries
+# `#HELD `. Undeclared, the landing asks no census beat or stop.
+# On that release the prefix is stripped here and in the tests that read
+# this declaration through it.
+#HELD census = true
+
 # THE BRANCHES A LANDER FAST-FORWARDS, so no agent ever holds the lease for them
 # and the runner-side precondition must not judge them. Read off the two landers'
 # own `branches:` filters rather than guessed:
@@ -11859,6 +11873,54 @@ landing_paths = [
 # NOT `[bot_lane] bots`, which keys on a forge login. What decides this question
 # is which workflow lands the branch, and a workflow selects on the name.
 fast_forward_branches = ["renovate/", "sbom-actions/", "release-plz-"]
+
+# THE GATES A LANDING ASKS OF ITS PULL REQUEST'S BODY BEFORE IT READIES
+# (CLOUD-2387). They were `LAND_BODY_SOURCE` and `LAND_BODY_GATES` in `mise.toml`:
+# a `gh pr view` spawn for the body, then `mise run deferral-check` and `mise run
+# closing-key-check`, each two `batten` spawns. The engine now reads the body
+# itself and derives and decides each row in-process; what stays the consumer's
+# is which families, over which inputs, decided by which rule. The two tasks
+# remain for a hand-run over a body on stdin.
+#
+# A declared row that will not derive or decide stops the lap: a gate whose
+# verdict is unknown has not said clean. An empty or unreadable body asks none.
+# HELD UNTIL A RELEASE CARRIES CLOUD-2387: `engine-pin-check` refuses a key
+# newer than the release pin as feature drift, so each line below carries
+# `#HELD `. Undeclared, the landing asks no body gate.
+# On that release the prefix is stripped here and in the tests that read
+# this declaration through it.
+#HELD [[lease.body_gate]]
+#HELD derive = "deferral"
+#HELD inputs = { shape = "deferral-shape", base = "origin/main" }
+#HELD rule = "issue state other"
+#HELD
+#HELD [[lease.body_gate]]
+#HELD derive = "closing-key"
+#HELD inputs = { hold = "closing-hold-marker", base = "origin/main" }
+#HELD rule = "issue state other"
+
+# THE LANDING'S ENTRY GATE, ASKED ONCE BEFORE THE FIRST LAP (CLOUD-1471,
+# CLOUD-2387). AGENTS.md bans PR-webhook babysitting and the harness arms a
+# subscription on every pull request this repo opens anyway, with no tool call
+# behind it on two of the three measured (CLOUD-518) — so a deny rule on the tool
+# closes only the path nobody used. The landing drops the subscription, then
+# decides `rule` over the `pr unsubscribed` reading; the drop FAILS OPEN and the
+# decision does not, so off the harness nothing is minted, the decision refuses,
+# and `mise run pr-unsubscribed record` is still the way through (CLOUD-790).
+# These are the `pr-unsubscribed` task's own flags, which were `LAND_ENTRY_GATES`.
+# HELD UNTIL A RELEASE CARRIES CLOUD-2387: `engine-pin-check` refuses a key
+# newer than the release pin as feature drift, so each line below carries
+# `#HELD `. Undeclared, the landing asks no entry gate.
+# On that release the prefix is stripped here and in the tests that read
+# this declaration through it.
+#HELD [lease.unsubscribed]
+#HELD session_env = "CLAUDE_CODE_REMOTE_SESSION_ID"
+#HELD token_env = "CLAUDE_SESSION_INGRESS_TOKEN_FILE"
+#HELD endpoint = "https://api.anthropic.com/v2/ccr-sessions/{session}/github/mcp"
+#HELD tool = "unsubscribe_pr_activity"
+#HELD arguments = '{"owner":"{owner}","repo":"{repo}","pullNumber":"{pr}"}'
+#HELD family = "pr-unsubscribed"
+#HELD rule = "event watch other"
 
 # WHICH RECEIPTS A HEAD MUST CARRY TO BE CALLED VERIFIED (CLOUD-1338).
 #

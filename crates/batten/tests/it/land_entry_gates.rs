@@ -45,73 +45,95 @@ fn fixture(name: &str) -> std::path::PathBuf {
     // gate asked too late.
     common::git_in(&dir, &["checkout", "-q", "-b", "topic"]);
     std::fs::write(dir.join("resp.last"), one_pull_request()).expect("write the canned answer");
+    let module = std::fs::read_to_string(common::at_root(MODULE)).expect("the module");
+    common::write(&dir, MODULE, &module);
     dir
 }
 
-/// Write an executable gate that records its argv and exits with `code`.
-///
-/// **PER-PLATFORM, BECAUSE `run_land_entry_gates` SPAWNS THE ARGV DIRECTLY** and
-/// the shebang script this wrote unconditionally is not a program Windows can
-/// execute. Measured on the `windows` leg: both cases below read `asked` as `""`
-/// and failed at their first assertion, because the gate had never run.
-///
-/// That is `rules/rust.md`'s "shown able to fail" rule inverted — a case
-/// asserting a conclusion over a premise the environment never created — and it
-/// is worth naming that `test cover missing` does NOT see this shape: the `#[cfg]`
-/// was on a block inside this helper rather than on a `#[test]`, so the cases
-/// compiled and ran on Windows and only their fixture was missing. The remedy is
-/// to make the premise real on both platforms rather than to narrow the cases.
-fn gate(dir: &std::path::Path, name: &str, code: i32) -> String {
-    let asked = dir.join("asked");
-    // `.cmd` is what `CreateProcess` will run without an interpreter, so the
-    // extension is part of the fixture rather than cosmetic.
-    let path = if cfg!(windows) {
-        dir.join(std::path::Path::new(name).with_extension("cmd"))
+/// The committed decision module the fixture registers.
+const MODULE: &str = "policy/pr-unsubscribed.rego";
+
+/// The session variable the fixture's `[lease.unsubscribed]` names — not the
+/// harness's own, so a case never reads the session it runs in.
+const SESSION_ENV: &str = "LAND_ENTRY_FIXTURE_SESSION";
+
+/// The fixture's config: the module, its verdicts, and `lease` as the
+/// `[lease.unsubscribed]` table's body (empty declares no entry gate).
+fn config(dir: &std::path::Path, lease: &str) {
+    let table = if lease.is_empty() {
+        String::new()
     } else {
-        dir.join(name)
+        format!("\n[lease.unsubscribed]\n{lease}")
     };
-    let body = if cfg!(windows) {
-        format!(
-            "@echo off\r\necho %* >>\"{}\"\r\necho the gate spoke\r\nexit /b {code}\r\n",
-            asked.display()
-        )
-    } else {
-        format!(
-            "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>'{}'\necho 'the gate spoke'\nexit {code}\n",
-            asked.display()
-        )
-    };
-    std::fs::write(&path, body).expect("write the gate");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-            .expect("make the gate executable");
-    }
-    path.display().to_string()
+    common::write(
+        dir,
+        "batten.toml",
+        &format!(
+            r#"version = 1
+scope = ["**"]
+
+[[verdict]]
+id = "event watch held"
+gloss = "no receipt"
+class = "fixture"
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run pr-unsubscribed drop"
+
+[[verdict]]
+id = "event read partial"
+gloss = "torn"
+class = "fixture"
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run pr-unsubscribed check"
+
+[[rule]]
+id = "event watch other"
+kind = "policy"
+scope = "tree"
+module = "{MODULE}"
+severity = "deny"
+
+[[record]]
+record = "pr-unsubscribed"
+writer = "mise run pr-unsubscribed check"
+{table}"#
+        ),
+    );
 }
 
-/// What the gates recorded about how they were called.
-fn asked(dir: &std::path::Path) -> String {
-    std::fs::read_to_string(dir.join("asked")).unwrap_or_default()
+/// The entry gate this repository declares, over the fixture's session
+/// variable. No credential is declared, so the advisory drop always gives up.
+fn declared() -> String {
+    format!(
+        "session_env = \"{SESSION_ENV}\"\nfamily = \"pr-unsubscribed\"\nrule = \"event watch other\"\n"
+    )
 }
 
-/// Run `batten land lap` against the fixture with `gates` declared.
-fn lap(dir: &std::path::Path, gates: &str) -> (i32, String, String) {
-    let output = common::batten()
+/// Run `batten land lap` against the fixture, in `session` when one is given.
+fn lap(dir: &std::path::Path, session: Option<&str>) -> (i32, String, String) {
+    let mut command = common::batten();
+    command
         .arg("land")
         .arg("lap")
         .arg("main")
         .env("GH_REPO", REPO)
-        .env("LAND_ENTRY_GATES", gates)
         .env("BATTEN_REST_FIXTURE", dir)
         // Bounded so a lap that gets PAST the entry gate cannot run away: every
-        // case here is about stopping before the first step, and a runaway would
-        // be reported as a hang rather than as the miss it is.
+        // case here is about the gate, and a runaway would be reported as a hang
+        // rather than as the miss it is.
         .env("LAND_MAX_LAPS", "1")
-        .current_dir(dir)
-        .output()
-        .expect("the compiled binary runs");
+        .current_dir(dir);
+    match session {
+        Some(session) => command.env(SESSION_ENV, session),
+        None => command.env_remove(SESSION_ENV),
+    };
+    let output = command.output().expect("the compiled binary runs");
     (
         output.status.code().expect("the child exited normally"),
         String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -119,78 +141,101 @@ fn lap(dir: &std::path::Path, gates: &str) -> (i32, String, String) {
     )
 }
 
-/// **A DECLARED GATE IS ASKED ABOUT THIS PULL REQUEST, AND ITS REFUSAL STOPS THE
-/// LANDING BEFORE ANYTHING IS SPENT.**
+/// **A SESSION THAT NEVER DROPPED ITS SUBSCRIPTION IS REFUSED BEFORE ANYTHING IS
+/// SPENT, over THIS pull request** (CLOUD-2387).
 ///
-/// The number is appended by the ENGINE rather than spelled by the consumer,
-/// which is the half a reader is most likely to get wrong: a gate reading it from
-/// its own environment would be a second authority over which pull request a lap
-/// is landing, and the two can name different ones.
+/// The number is the ENGINE's, resolved from the branch and handed to the
+/// reading: the rule's own words name `#42`, which is the lookup's answer and
+/// nothing the config spelled.
 #[test]
-fn a_refusing_entry_gate_stops_the_landing_and_is_told_which_pull_request() {
+fn a_session_that_never_unsubscribed_stops_the_landing_over_this_pull_request() {
     let dir = fixture("land-entry-refuses");
-    let refuses = gate(&dir, "refuses.sh", 1);
-    let (code, _, err) = lap(&dir, &refuses);
+    config(&dir, &declared());
+    let (code, _, err) = lap(&dir, Some("cse_fixture"));
 
     assert_eq!(
         code, 2,
-        "a gate's refusal is a verdict about this repository"
+        "the refusal is a verdict about this landing: {err}"
     );
-    assert!(
-        asked(&dir).trim() == PR,
-        "the gate should be handed the pull request number; it got: {:?}",
-        asked(&dir)
-    );
-    assert!(
-        err.contains("refused this landing"),
-        "the refusal should name itself: {err}"
-    );
-    // THE GATE'S OWN WORDS REACH THE OPERATOR (CLOUD-407), rather than a summary
-    // written here that would be a second, staler copy of the remedy.
-    assert!(err.contains("the gate spoke"), "stderr: {err}");
+    assert!(err.contains("refused this landing"), "stderr: {err}");
+    // THE RULE'S OWN WORDS REACH THE OPERATOR (CLOUD-407).
+    assert!(err.contains(&format!("#{PR}")), "stderr: {err}");
 }
 
-/// **THE ADVISORY MARKER IS WHAT THE PAIR ACTUALLY NEEDS, and without it the port
-/// promotes an exit code the predecessor deliberately ignored.**
+/// **THE DROP IS ADVISORY: one that cannot run does not stop a landing whose
+/// session already holds its receipt.**
 ///
-/// `land.sh` ran the drop as `… || true` and only the check as an `if !`. A
-/// marked gate is still ASKED — that is the whole point of keeping the call — and
-/// its verdict does not stop the lap.
-///
-/// The mirror is the case above: an unmarked gate with the same exit code stops
-/// the landing, so this cannot be satisfied by a runner that ignores every code.
+/// No credential is declared, so the drop gives up on every case here; the
+/// mirror is the case above, where the same give-up and no receipt refuses.
 #[test]
-fn an_advisory_gate_is_asked_and_its_refusal_does_not_stop_the_landing() {
-    let dir = fixture("land-entry-advisory");
-    let refuses = gate(&dir, "refuses.sh", 1);
-    let (code, _, _) = lap(&dir, &format!("?{refuses}"));
+fn a_held_receipt_clears_the_gate_though_the_drop_could_not_run() {
+    let dir = fixture("land-entry-receipt");
+    config(&dir, &declared());
+    let store = dir.join(".git").join("batten-receipts");
+    std::fs::create_dir_all(&store).expect("create the receipt store");
+    std::fs::write(
+        store.join(format!("pr-unsubscribed.cse_fixture.{PR}")),
+        "pr 42\n",
+    )
+    .expect("write the receipt");
+    let (code, out, err) = lap(&dir, Some("cse_fixture"));
 
     assert!(
-        asked(&dir).trim() == PR,
-        "an advisory gate is still asked; it recorded: {:?}",
-        asked(&dir)
+        out.contains("entry gate `event watch other` is clear"),
+        "stdout: {out}\nstderr: {err}"
     );
-    assert_ne!(
-        code, 2,
-        "an advisory gate's refusal must not become the landing's verdict"
-    );
+    assert!(!err.contains("refused this landing"), "stderr: {err}");
+    assert_ne!(code, 2, "a held receipt must not refuse: {err}");
 }
 
-/// **A DECLARED GATE THAT CANNOT RUN IS A REFUSAL, NOT A PASS.**
+/// **AN UNDECLARED ENTRY GATE IS A PASS**: naming none is a legitimate
+/// configuration, and the lap goes on without asking anything.
+#[test]
+fn an_undeclared_entry_gate_asks_nothing() {
+    let dir = fixture("land-entry-undeclared");
+    config(&dir, "");
+    let (_, out, err) = lap(&dir, Some("cse_fixture"));
+
+    assert!(!out.contains("entry gate"), "stdout: {out}");
+    assert!(!err.contains("entry gate"), "stderr: {err}");
+}
+
+/// **A CONFIG THAT WILL NOT LOAD IS NOT ONE DECLARING NO GATE** (code review of
+/// #1248). Read as "no `[lease.unsubscribed]`", it took the undeclared-is-a-pass
+/// arm and the landing went ahead unasked; it is a could-not-look, so `3`.
+#[test]
+fn a_config_that_will_not_load_refuses_rather_than_skipping_the_entry_gate() {
+    let dir = fixture("land-entry-broken-config");
+    common::write(&dir, "batten.toml", "this is not = = toml\n");
+    let (code, _, err) = lap(&dir, Some("cse_fixture"));
+
+    assert_eq!(code, 3, "stderr: {err}");
+    assert!(err.contains("will not load"), "stderr: {err}");
+}
+
+/// **A DECLARED GATE THAT CANNOT BE DECIDED IS A REFUSAL, NOT A PASS.**
 ///
-/// The dead-gate class this engine exists to refuse: naming no entry gates is a
-/// legitimate configuration, and naming one that will not run is a precondition
-/// left unasked. `3` rather than `2` — nothing was decided about the repository.
+/// The dead-gate class this engine exists to refuse. `3` rather than `2` —
+/// nothing was decided about the repository.
 #[test]
 fn a_declared_entry_gate_that_will_not_run_is_refused() {
     let dir = fixture("land-entry-unrunnable");
-    let (code, _, err) = lap(&dir, &dir.join("no-such-gate").display().to_string());
+    config(
+        &dir,
+        &format!(
+            "session_env = \"{SESSION_ENV}\"\nfamily = \"pr-unsubscribed\"\nrule = \"no such rule\"\n"
+        ),
+    );
+    let (code, _, err) = lap(&dir, Some("cse_fixture"));
 
-    assert_eq!(code, 3, "an unasked precondition is a could-not-look");
-    assert!(err.contains("will not run"), "stderr: {err}");
+    assert_eq!(
+        code, 3,
+        "an unasked precondition is a could-not-look: {err}"
+    );
+    assert!(err.contains("unasked rather than met"), "stderr: {err}");
 }
 
-/// **DECLARED GATES OVER A PULL REQUEST NOBODY CAN NAME ARE REFUSED, and this is
+/// **A DECLARED GATE OVER A PULL REQUEST NOBODY CAN NAME IS REFUSED, and this is
 /// the one read in the family that does NOT fail open.**
 ///
 /// Everywhere else could-not-look carries on, because spending nothing is the
@@ -199,6 +244,7 @@ fn a_declared_entry_gate_that_will_not_run_is_refused() {
 #[test]
 fn entry_gates_over_an_unresolvable_pull_request_are_refused() {
     let dir = fixture("land-entry-no-pr");
+    config(&dir, &declared());
     // An empty list: the lookup succeeds and names nothing, which is the shape a
     // branch with no open pull request produces.
     std::fs::write(
@@ -206,15 +252,10 @@ fn entry_gates_over_an_unresolvable_pull_request_are_refused() {
         "HTTP/2 200\ncontent-type: application/json\n\n[]\n",
     )
     .expect("write the canned answer");
-    let passes = gate(&dir, "passes.sh", 0);
-    let (code, _, err) = lap(&dir, &passes);
+    let (code, _, err) = lap(&dir, Some("cse_fixture"));
 
-    assert_eq!(code, 3);
+    assert_eq!(code, 3, "stderr: {err}");
     assert!(err.contains("cannot be asked"), "stderr: {err}");
-    assert!(
-        asked(&dir).is_empty(),
-        "no gate should have been asked at all"
-    );
 }
 
 /// **THE BRANCH-KEYED RECEIPTS GO WITH THE BRANCH (CLOUD-774), and the third

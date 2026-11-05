@@ -325,15 +325,13 @@ fn taking_the_landing_lock_clears_the_dispatch_receipt() {
     let receipt = dispatch_receipt(&repo);
     std::fs::create_dir_all(receipt.parent().expect("a parent")).expect("a receipt dir");
     std::fs::write(&receipt, "land\n").expect("a receipt");
-    // No entry gates: the developer's `mise.toml` exports some, and asking them
-    // needs a forge this tier does not have, before the lock is ever reached.
+    // No entry gate: the fixture's `batten.toml` declares no `[lease.unsubscribed]`,
+    // so nothing asks a forge this tier does not have before the lock is reached.
     let output = isolated(&repo, &home)
         .args(["land", "lap", "refs/heads/main"])
         .env("LAND_MAX_LAPS", "1")
         .env("LAND_VERIFY", "true")
         .env("LAND_WORKFLOW", "fast-forward.yml")
-        .env_remove("LAND_ENTRY_GATES")
-        .env_remove("LAND_BODY_GATES")
         .output()
         .expect("run batten land lap");
     assert!(

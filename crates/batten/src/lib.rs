@@ -465,7 +465,15 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // and the worktree through `gitwrite`, so the same two edges are
         // forbidden — transitively, which the layering table states rather than
         // leaves to follow.
-        Some(Command::Land { command }) => run_land(&command, out, err),
+        Some(Command::Land { command }) => run_land(
+            &command,
+            Deciding {
+                mode,
+                overrides: &overrides,
+            },
+            out,
+            err,
+        ),
         Some(Command::Wiring { command }) => run_wiring(&command, mode, &overrides, err),
         // The refinement gate and the pull-time claim (CLOUD-1121). Both read
         // the payload the caller supplies — or, under `--issue`, the one the
@@ -11452,6 +11460,7 @@ fn run_lease(
 /// what a conflict consists of and exactly what a report must not carry.
 fn run_land(
     command: &cli::LandCommand,
+    deciding: Deciding<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -11540,7 +11549,7 @@ fn run_land(
             let Some(reference) = land_reference(root, reference.as_deref(), err)? else {
                 return Ok(ExitCode::Internal);
             };
-            run_land_lap(root, &url, &reference, &branch, out, err)
+            run_land_lap(root, &url, &reference, &branch, deciding, out, err)
         }
         cli::LandCommand::Linear { reference } => {
             let Some(url) = land_remote(root, err)? else {
@@ -12205,6 +12214,7 @@ fn run_land_lap(
     url: &str,
     reference: &str,
     branch: &str,
+    deciding: Deciding<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -12242,7 +12252,7 @@ fn run_land_lap(
     //
     // BEFORE the lease and the singleton, which is where the predecessor put it
     // and for its reason: a refusal here has spent nothing at all.
-    if let Some(code) = run_land_entry_gates(root, branch, out, err)? {
+    if let Some(code) = run_land_entry_gates(root, branch, deciding, out, err)? {
         return Ok(code);
     }
 
@@ -12275,8 +12285,7 @@ fn run_land_lap(
     // singleton, because the census store is this worktree's and the singleton is
     // what makes this the one landing in it: a second land refused above wrote
     // nothing, so it cannot mask a live one.
-    let beat_note = std::env::var("LEASE_BEAT_NOTE").unwrap_or_default();
-    let stop_note = std::env::var("LEASE_STOP_NOTE").unwrap_or_default();
+    let census = census_kept(root, deciding.overrides);
     let run = Laps {
         root,
         url,
@@ -12285,13 +12294,14 @@ fn run_land_lap(
         budget: laps,
         pipeline,
         guard: &guard,
+        deciding,
     };
     // ONE DISK WATCHER FOR THE WHOLE LANDING (CLOUD-2197): replay, verify, push
     // and the CI wait, every lap. It ends with the landing, on its stop flag.
     let prune_rules = resolve::resolve(root, &Overrides::default())
         .ok()
         .and_then(|resolved| resolved.prune);
-    land_census_window(root, &beat_note, &stop_note, || {
+    land_census_window(root, census, || {
         // WHAT A LAP THAT NEVER RETURNED LEFT SPENDING, reconciled once after the
         // lock and inside the window, so its forge writes read as in flight
         // (CLOUD-2371): `unwind_lap` is the fast path on a normal return.
@@ -12309,8 +12319,8 @@ fn run_land_lap(
     })
 }
 
-//MUTANT landing-start-unnoted|s@^    note_declared(root, begin_note);$@@|a_landing_notes_its_start_and_every_chosen_end
-//MUTANT landing-end-unnoted|s@^    note_declared(root, stop_note);$@@|a_landing_notes_its_start_and_every_chosen_end
+//MUTANT landing-start-unnoted|s@^    note_census(root, census, CensusNote::Beat);$@@|a_landing_notes_its_start_and_every_chosen_end
+//MUTANT landing-end-unnoted|s@^    note_census(root, census, CensusNote::Stop);$@@|a_landing_notes_its_start_and_every_chosen_end
 /// Run `laps` inside the reclaim census's window: a beat before, a stop after.
 ///
 /// **THE STOP IS WRITTEN WHERE THE LANDING ENDS, never where a lap does**
@@ -12321,6 +12331,9 @@ fn run_land_lap(
 /// minutes, read as *stopped on purpose*. The false-idle reading the census exists
 /// to rule out. Here the landing has returned — landed, stopped, refused, stood
 /// down or out of laps — so nothing this process does follows the stop.
+///
+/// Written only when `census` is set: `[lease] census` declares that this
+/// repository keeps one (CLOUD-2387).
 ///
 /// **THE BEAT OPENS THE WINDOW, AND IS ITS ONLY BEAT** (CLOUD-843, round-3
 /// review). It is written before any lease is held and before any lap, so a
@@ -12334,20 +12347,19 @@ fn run_land_lap(
 /// Never on an exit path (CLOUD-491): a kill never returns from `laps`, so it
 /// reaches neither note after the first, and the last record stays a beat. An
 /// `Err` is a return like any other — the process chose to stop — so it is
-/// noted too. Both argvs are the consumer's, for [`note_release`]'s reason.
+/// noted too.
 ///
 /// # Errors
 ///
 /// Whatever `laps` returned; the notes are best-effort and never an error.
 fn land_census_window(
     root: &Path,
-    begin_note: &str,
-    stop_note: &str,
+    census: bool,
     laps: impl FnOnce() -> Result<ExitCode>,
 ) -> Result<ExitCode> {
-    note_declared(root, begin_note);
+    note_census(root, census, CensusNote::Beat);
     let ended = laps();
-    note_declared(root, stop_note);
+    note_census(root, census, CensusNote::Stop);
     ended
 }
 
@@ -12364,6 +12376,8 @@ struct Laps<'run> {
     pipeline: pipeline::Pipeline,
     /// Held by the caller for the whole landing; each step publishes its phase.
     guard: &'run LandSingleton,
+    /// How the in-process body gates decide: the invocation's mode and overrides.
+    deciding: Deciding<'run>,
 }
 
 /// Cancel `sha`'s runs, sparing the fan-in, and say how many in one line;
@@ -12489,6 +12503,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
         budget: laps,
         pipeline,
         guard,
+        deciding,
     } = run;
     // ONE POLL FOR THE WHOLE LANDING, held outside the lap loop so lap 2 onward
     // send the validator lap 1 was given. Rebuilt per lap it was a fresh
@@ -12576,6 +12591,7 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
             reference,
             branch,
             lap,
+            deciding,
         };
         for row in &pipeline.steps {
             let step = row.step;
@@ -13155,6 +13171,7 @@ fn run_the_step(
         url,
         reference,
         branch,
+        deciding,
         ..
     } = asked;
     let code = match step {
@@ -13186,7 +13203,7 @@ fn run_the_step(
             return Ok((code, None, None, stalled));
         }
         land::Step::Lease => run_land_lease(root, branch, out, err)?,
-        land::Step::Ready => run_land_ready(root, branch, bet, ledger, out, err)?,
+        land::Step::Ready => run_land_ready(root, branch, bet, ledger, deciding, out, err)?,
         land::Step::Push => run_land_push(root, url, branch, out)?,
         land::Step::Wait => {
             let fresh_ready = ledger.take_fresh_ready();
@@ -14109,7 +14126,7 @@ fn run_land_fast_forward(
                 fast_forward::Answer::Refused => {
                     // THE BOT'S OWN SENTENCE, or none at all. Nothing here maps a
                     // refusal to a remedy: the bot is the authority on its own,
-                    // which is `land::Admitted::Refused`'s rule at a second site,
+                    // which is the landing entry gate's rule at a second site,
                     // and a table from its rows to advice would put one consumer's
                     // tracker keys in this crate as matched data (rule 1).
                     //
@@ -14965,16 +14982,26 @@ fn lease_config(root: &Path, overrides: &resolve::Overrides) -> Option<config::L
     // again, by the third route this function's own doc records.
     //
     // Only where `--config-in` names none: that flag is the runner's answer and
-    // it must keep winning, which is the paragraph above.
+    // it must keep winning, which is the paragraph above. Both halves live in
+    // `lease_declared`, which this folds.
+    lease_declared(root, overrides).ok().flatten()
+}
+
+/// [`lease_config`] without the fold: `Err` is could-not-look and `Ok(None)` a
+/// config that loaded and declares no `[lease]`.
+///
+/// THE LANDING'S GATES NEED THE TWO APART (code review of #1248). Folded, a
+/// `batten.toml` that will not load reads as one declaring no gates, which is
+/// the undeclared-is-a-pass arm — so every declared gate went silently unasked
+/// over a broken config, where the spawned gates it replaced had refused.
+fn lease_declared(root: &Path, overrides: &resolve::Overrides) -> Result<Option<config::Lease>> {
     let anchored = if overrides.config_in.is_some() {
         root.to_path_buf()
     } else {
         crate::git::worktree_root(root).unwrap_or_else(|_| root.to_path_buf())
     };
     let site = config::authority_site(&anchored, overrides.config_in.as_deref().map(Path::new));
-    config::load_site(&site)
-        .ok()
-        .and_then(|(loaded, _)| loaded.lease)
+    config::load_site(&site).map(|(loaded, _)| loaded.lease)
 }
 
 /// The staleness reading, over the declared landing paths.
@@ -15111,14 +15138,15 @@ fn trunk_watch(reference: &str, base: &str, repo: &str, interval: u64) -> main_w
 
 /// The lap's READY phase: the gates that read the pull request's body.
 ///
-/// # Both the body source and the gates are the consumer's
+/// # The engine reads the body, and the consumer names the gates
 ///
-/// `LAND_BODY_SOURCE` is the argv that prints the body, and `LAND_BODY_GATES` is
-/// a `|`-separated list of gate argvs. Neither is defaulted, for
-/// `run_land_fast_forward`'s reason at its own site: a default compiled in here
-/// would be a consumer's vocabulary inside `crates/batten`, which is
-/// non-negotiable rule 1's plainest violation — and the failure a default buys is
-/// the quiet one, a fleet whose gates silently do not run.
+/// The body is the forge's, read in-process ([`bot::forge::pull`]); the gates are
+/// `[[lease.body_gate]]` rows (CLOUD-2387), each a family derived over that body
+/// and a rule decided over the record it leaves — what `LAND_BODY_SOURCE` and
+/// `LAND_BODY_GATES` spelled as argvs, through a `gh` spawn and two `batten`
+/// spawns per gate. Neither is defaulted, for `run_land_fast_forward`'s reason at
+/// its own site: a default compiled in here would be a consumer's vocabulary
+/// inside `crates/batten`, which is non-negotiable rule 1's plainest violation.
 ///
 /// **An UNDECLARED gate set is a pass, and a DECLARED one that cannot run is
 /// not.** The asymmetry is the point: a consumer that names no body gates has
@@ -15138,11 +15166,24 @@ fn run_land_ready(
     branch: &str,
     bet: &speculation::Bet,
     ledger: &mut land::Ledger,
+    deciding: Deciding<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let declared = std::env::var("LAND_BODY_GATES").unwrap_or_default();
-    let gates = land::body_gates(&declared);
+    let repo = repo_or_placeholder(root);
+    let pr = match ready_pull_request(&repo, branch, err)? {
+        Ok(pr) => pr,
+        Err(code) => return Ok(code),
+    };
+    let Ok(lease) = lease_declared(root, deciding.overrides) else {
+        writeln!(
+            err,
+            "::error:: land: the config will not load, so whether this landing declares body \
+             gates is unknown rather than none"
+        )?;
+        return Ok(ExitCode::Violation);
+    };
+    let gates = lease.map(|lease| lease.body_gate).unwrap_or_default();
     // AN UNDECLARED GATE SET IS A PASS AND NOT AN EARLY RETURN, which is the
     // correction this step needed most: returning here skipped the ready itself,
     // so a consumer declaring no body gates got a lap that pushed and then waited
@@ -15152,73 +15193,156 @@ fn run_land_ready(
     } else {
         // FAIL OPEN ON THE FETCH, and only on the fetch. A body this never saw is
         // not evidence about what the author wrote, which is the predecessor's
-        // posture spelled `[[ -n "$body" ]] &&`. An unreadable source therefore
-        // yields an empty body and `land::ready` treats that as clear.
-        let source = std::env::var("LAND_BODY_SOURCE").unwrap_or_default();
-        let body = land::body_gates(&source)
-            .first()
-            // `Drop`: this string is PARSED as the body, so a client's notice
-            // on stderr would become text the author never wrote. The gates
-            // below take `Keep`, because their stderr IS their reason.
-            // NO BET PUBLISHED TO THE FETCH, deliberately. This call reads the
-            // pull request's BODY; the bet is a fact about the commit RANGE, and
-            // handing it to a client that does not read one would be a variable
-            // in an environment for no reader.
-            .and_then(|argv| exec::piped_argv(root, argv, "", exec::Diagnostics::Drop, &[]))
-            .filter(|(code, _)| *code == 0)
-            .map(|(_, body)| body)
-            .unwrap_or_default();
-
-        // THE SAME PUBLICATION `run_land_verify` MAKES, and for the same reason
-        // one step later (CLOUD-1770). `Bet::published` is `None` with no bet
-        // outstanding, so the variable is simply absent from a non-speculative
-        // lap's gates — the publication stays a function of the bet rather than a
-        // side effect kept in step with it.
-        // ONE ENTRY ALWAYS, and its VALUE is the bet. An empty list would leave
-        // an inherited `BATTEN_SPEC_BASE` in place — and this lap's own gates run
-        // as children of a `verify` that exports it, so "no bet" has to be said
-        // out loud rather than left unsaid (measured: the case for this asserted
-        // the mirror and read an outer process's bet).
-        let published: Vec<(String, Option<String>)> = vec![(
-            speculation::PUBLISHED_AS.to_owned(),
-            bet.published().map(str::to_owned),
-        )];
-        match land::ready(root, &gates, &body, &published) {
-            land::Readied::Clear => {
-                writeln!(out, "land: {} body gate(s) clear", gates.len())?;
-            }
-            land::Readied::Refused { gate, detail } => {
-                writeln!(
-                    err,
-                    "::error:: land: {gate} refused this pull request's body"
-                )?;
-                if !detail.is_empty() {
-                    writeln!(err, "{detail}")?;
-                }
-                return Ok(ExitCode::Violation);
-            }
-            // INTERNAL RATHER THAN A VIOLATION, because the subject differs: a
-            // refusal is about the body and this is about the clone.
-            // `land::progress` stops on both for this step, so the lap behaves
-            // identically — what the split buys is a reader who can tell "the
-            // author must fix this" from "this checkout cannot ask".
-            land::Readied::Unrunnable { gate } => {
-                writeln!(
-                    err,
-                    "::error:: land: {gate} is declared in LAND_BODY_GATES and will not run, so \
-                     its verdict is unknown rather than clean"
-                )?;
-                // `Violation` rather than `Internal`, and the lap is UNCHANGED:
-                // `land::progress` stops on both arms for this step before and
-                // after. What the code now says is which KIND of stop it is —
-                // this one is the author's to fix, and `Internal` is reserved for
-                // a forge read that did not answer, which laps (review of #848).
-                return Ok(ExitCode::Violation);
-            }
+        // posture spelled `[[ -n "$body" ]] &&`, so an unreadable body and an
+        // empty one both ask nothing.
+        // AN UNREAD BODY ASKS NOTHING, as the spawned source's empty answer did,
+        // but it is said as unread: "carries no body" over a forge that never
+        // answered states a fact nobody looked at (code review of #1248).
+        let read = bot::forge::pull(&repo, &pr).map(|pull| pull.body);
+        let body = read.as_deref().unwrap_or_default();
+        if let Err(cause) = &read {
+            writeln!(
+                out,
+                "land: the pull request's body could not be read ({cause}); nothing to ask"
+            )?;
+        } else if body.trim().is_empty() {
+            writeln!(
+                out,
+                "land: the pull request carries no body; nothing to ask"
+            )?;
+        } else if let Some(code) = ask_the_body_gates(&gates, body, bet, deciding, err)? {
+            return Ok(code);
+        } else {
+            writeln!(out, "land: {} body gate(s) clear", gates.len())?;
         }
     }
 
-    spend_the_matrix(root, branch, ledger, out, err)
+    spend_the_matrix(&repo, &pr, branch, ledger, root, out, err)
+}
+
+/// Each `[[lease.body_gate]]` row over `body`, in order: `Some` is the first
+/// stop, `None` every row clear.
+///
+/// THE BET IS HANDED OVER, NOT EXPORTED (CLOUD-1770). A row reading the
+/// branch's commit range — `closing-key` does — cannot otherwise tell a commit
+/// this branch authored from one the speculation adopted, and would count the
+/// holder's keys as this branch's stranded ones. `Bet::published` is `None`
+/// with no bet outstanding, so "no bet" is said rather than left to whatever an
+/// outer process exported.
+///
+/// THE DECISION'S OWN WORDS REACH THE OPERATOR ON A REFUSAL, and only then: the
+/// rule is the authority on its own remedy, and a clear row says nothing.
+///
+/// Every stop is `Violation` rather than `Internal`: `land::progress` stops on
+/// both for this step, and each of these is the author's to fix, where
+/// `Internal` is reserved for a forge read that did not answer, which laps
+/// (review of #848).
+fn ask_the_body_gates(
+    gates: &[config::BodyGate],
+    body: &str,
+    bet: &speculation::Bet,
+    deciding: Deciding<'_>,
+    err: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    for gate in gates {
+        let named = format!("{} \u{2192} {}", gate.derive, gate.rule);
+        // THE CAUSE IS THE GATE'S OWN WORDS (CLOUD-407): an undeclared pattern,
+        // a missing input or an unknown family each names its remedy, and a
+        // stop that dropped it would leave the operator nowhere to look.
+        if let Err(cause) = record::derive_and_store(
+            &gate.derive,
+            &gate.inputs,
+            deciding.overrides,
+            Some(body),
+            bet.published(),
+            &mut std::io::sink(),
+        ) {
+            writeln!(
+                err,
+                "::error:: land: the body gate {named} will not derive ({cause}), so its \
+                 verdict is unknown rather than clean"
+            )?;
+            return Ok(Some(ExitCode::Violation));
+        }
+        // A DECISION THAT ERRS IS A STOP, NOT AN ESCAPE: `?` here left the lap
+        // loop with no line and no unwind (code review of #1248).
+        let (decided, said) = match decide_rule(&gate.rule, deciding) {
+            Ok(decided) => decided,
+            Err(cause) => {
+                writeln!(
+                    err,
+                    "::error:: land: the body gate {named} could not be decided ({cause}), so \
+                     its verdict is unknown rather than clean"
+                )?;
+                return Ok(Some(ExitCode::Violation));
+            }
+        };
+        if decided == ExitCode::Success {
+            continue;
+        }
+        let why = if decided == ExitCode::Violation {
+            format!("{named} refused this pull request's body")
+        } else {
+            format!(
+                "the body gate {named} could not be decided, so its verdict is unknown \
+                 rather than clean"
+            )
+        };
+        writeln!(err, "::error:: land: {why}")?;
+        err.write_all(&said)?;
+        return Ok(Some(ExitCode::Violation));
+    }
+    Ok(None)
+}
+
+/// Decide one rule in-process over the record store as it stands: the code the
+/// decision answered and everything it said, stdout and stderr together, so a
+/// caller forwards the decision's own words only on a stop.
+fn decide_rule(rule: &str, deciding: Deciding<'_>) -> Result<(ExitCode, Vec<u8>)> {
+    let flags = cli::CheckFlags {
+        rule: vec![rule.to_owned()],
+        ..cli::CheckFlags::default()
+    };
+    let mut said = Vec::new();
+    let mut also = Vec::new();
+    let code = run_check(
+        &flags,
+        deciding.mode,
+        deciding.overrides,
+        &mut said,
+        &mut also,
+    )?;
+    said.extend(also);
+    Ok((code, said))
+}
+
+/// The open pull request a ready step readies, or the stop its absence is.
+///
+/// A BRANCH WITH NO PULL REQUEST IS A STATE, NOT A FAILED READ, so it stops
+/// rather than lapping: no number of laps opens one. An unreadable lookup is the
+/// environment's, and laps.
+fn ready_pull_request(
+    repo: &str,
+    branch: &str,
+    err: &mut dyn Write,
+) -> Result<std::result::Result<String, ExitCode>> {
+    match fast_forward::look_up_pull_request(repo, branch) {
+        fast_forward::Lookup::Found(pr) => Ok(Ok(pr)),
+        fast_forward::Lookup::None => {
+            writeln!(
+                err,
+                "::error:: land: no open pull request for {branch}, so there is nothing to ready and no run to buy"
+            )?;
+            Ok(Err(ExitCode::Violation))
+        }
+        fast_forward::Lookup::Unreadable(status) => {
+            writeln!(
+                err,
+                "::error:: land: could not read {repo}'s pull requests ({status}), so nothing is readied — this is the environment, not the branch"
+            )?;
+            Ok(Err(ExitCode::Internal))
+        }
+    }
 }
 
 /// Fire the ready, which is the event that starts CI.
@@ -15241,37 +15365,19 @@ fn run_land_ready(
 /// while this lap's own run is still in flight leaves it alone — cancelling the
 /// matrix it had just bought is the failure that arm exists to refuse.
 fn spend_the_matrix(
-    root: &Path,
+    repo: &str,
+    pr: &str,
     branch: &str,
     ledger: &mut land::Ledger,
+    root: &Path,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let repo = repo_or_placeholder(root);
-    let pr = match fast_forward::look_up_pull_request(&repo, branch) {
-        fast_forward::Lookup::Found(pr) => pr,
-        // A BRANCH WITH NO PULL REQUEST IS A STATE, NOT A FAILED READ, so it
-        // stops rather than lapping: no number of laps opens one.
-        fast_forward::Lookup::None => {
-            writeln!(
-                err,
-                "::error:: land: no open pull request for {branch}, so there is nothing to ready and no run to buy"
-            )?;
-            return Ok(ExitCode::Violation);
-        }
-        fast_forward::Lookup::Unreadable(status) => {
-            writeln!(
-                err,
-                "::error:: land: could not read {repo}'s pull requests ({status}), so nothing is readied — this is the environment, not the branch"
-            )?;
-            return Ok(ExitCode::Internal);
-        }
-    };
     let Some(land::Readiness {
         draft: is_draft,
         node,
         head,
-    }) = land::draft_state(&repo, &pr)
+    }) = land::draft_state(repo, pr)
     else {
         writeln!(
             err,
@@ -15286,7 +15392,7 @@ fn spend_the_matrix(
     // **THE FORGE'S HEAD, NEVER THIS CLONE'S**: `Readiness::head` says why. A
     // ready pull request's push that bought a run is asked its receipts by the
     // Push row's precheck (CLOUD-2436), since this may then buy `Nothing`.
-    let reading = verdict_for(&repo, &head);
+    let reading = verdict_for(repo, &head);
     let spend = land::buys_a_matrix(Some(is_draft), reading.as_ref());
     // THE RECEIPTS `gh pr ready` OWES, asked of this ready too (CLOUD-2293), and
     // only when a ready will actually fire: a lap that readies nothing — the
@@ -15306,12 +15412,12 @@ fn spend_the_matrix(
             )?;
             Ok(ExitCode::Success)
         }
-        land::Spend::Ready => fired(land::mark_ready(&repo, &pr, &node), ledger, out, err),
+        land::Spend::Ready => fired(land::mark_ready(repo, pr, &node), ledger, out, err),
         land::Spend::Refire => {
             // DRAFT FIRST, and a draft that will not happen is a stop: readying an
             // already-ready pull request is a no-op the forge reports as success,
             // so proceeding would report a matrix it never bought.
-            if !land::redraft(&repo, &pr, &node) {
+            if !land::redraft(repo, pr, &node) {
                 writeln!(
                     err,
                     "::error:: land: {branch} is ready over a head that can never grade, and it \
@@ -15323,7 +15429,7 @@ fn spend_the_matrix(
                 out,
                 "land: {branch} carried no answer and no run in flight; re-firing its ready"
             )?;
-            fired(land::mark_ready(&repo, &pr, &node), ledger, out, err)
+            fired(land::mark_ready(repo, pr, &node), ledger, out, err)
         }
     }
 }
@@ -15369,15 +15475,17 @@ fn fired(
     Ok(ExitCode::Violation)
 }
 
-/// Run `$LAND_ENTRY_GATES` over this landing's pull request, once.
+/// Ask `[lease.unsubscribed]` of this landing's pull request, once.
 ///
 /// `Some(code)` stops the landing; `None` lets it proceed.
 ///
-/// # The consumer names the gate and the engine supplies the pull request
+/// # The consumer names the host and the engine supplies the pull request
 ///
-/// `LAND_ENTRY_GATES` is a `|`-separated list of argvs, each run with the pull
-/// request number appended. Undeclared is a pass and declared-but-unrunnable is a
-/// refusal, which is [`run_land_ready`]'s asymmetry and is stated there.
+/// The table is `pr unsubscribed`'s own flags (CLOUD-2387), which
+/// `LAND_ENTRY_GATES` spelled as two `mise run` argvs with the number appended:
+/// an advisory drop, then the decision. Both now run in-process. Undeclared is a
+/// pass and declared-but-undecidable is a refusal, which is [`run_land_ready`]'s
+/// asymmetry and is stated there.
 ///
 /// # A pull request that will not resolve is a REFUSAL rather than a pass
 ///
@@ -15387,28 +15495,35 @@ fn fired(
 /// run, and letting the lap proceed is precisely the dead-gate reading. The lap
 /// cannot finish without a pull request anyway — `run_land_fast_forward` stops on
 /// the same absence — so this refuses at the cheap end instead of after a matrix.
+//MUTANT-SUITE crates/batten/tests/it/land_entry_gates.rs
 fn run_land_entry_gates(
     root: &Path,
     branch: &str,
+    deciding: Deciding<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {
     if let Some(refused) = refuse_unread_red_head(root, branch, err)? {
         return Ok(Some(refused));
     }
-    let declared = std::env::var("LAND_ENTRY_GATES").unwrap_or_default();
-    let gates = land::body_gates(&declared);
-    if gates.is_empty() {
+    let Ok(lease) = lease_declared(root, deciding.overrides) else {
+        writeln!(
+            err,
+            "::error:: land: the config will not load, so whether this landing declares an \
+             entry gate is unknown rather than none"
+        )?;
+        return Ok(Some(ExitCode::Internal));
+    };
+    let Some(declared) = lease.and_then(|lease| lease.unsubscribed) else {
         return Ok(None);
-    }
+    };
     let repo = repo_or_placeholder(root);
     let pr = match fast_forward::look_up_pull_request(&repo, branch) {
         fast_forward::Lookup::Found(pr) => pr,
         fast_forward::Lookup::None => {
             writeln!(
                 err,
-                "::error:: land: {} entry gate(s) are declared and no open pull request for {branch} will resolve, so they cannot be asked",
-                gates.len()
+                "::error:: land: an entry gate is declared and no open pull request for {branch} will resolve, so it cannot be asked"
             )?;
             return Ok(Some(ExitCode::Internal));
         }
@@ -15422,8 +15537,7 @@ fn run_land_entry_gates(
         fast_forward::Lookup::Unreadable(status) => {
             writeln!(
                 err,
-                "::error:: land: {} entry gate(s) are declared and {repo}'s pull requests could not be read ({status}), so they cannot be asked{}",
-                gates.len(),
+                "::error:: land: an entry gate is declared and {repo}'s pull requests could not be read ({status}), so it cannot be asked{}",
                 if crate::rest::declared_credential().is_some() {
                     ""
                 } else {
@@ -15433,34 +15547,72 @@ fn run_land_entry_gates(
             return Ok(Some(ExitCode::Internal));
         }
     };
-    match land::admits_the_landing(root, &gates, &pr) {
-        land::Admitted::Clear => {
-            writeln!(out, "land: {} entry gate(s) clear", gates.len())?;
+    match ask_unsubscribed(&declared, &pr, deciding) {
+        Ok((ExitCode::Success, _)) => {
+            writeln!(out, "land: the entry gate `{}` is clear", declared.rule)?;
             Ok(None)
         }
-        land::Admitted::Refused { gate, detail } => {
-            // THE GATE'S OWN WORDS REACH THE OPERATOR (CLOUD-407). The
-            // predecessor's `die` added only the landing's context, because the
-            // gate is the authority on its own remedy and a summary here would be
-            // a second, staler copy of it.
-            writeln!(err, "::error:: land: {gate} refused this landing")?;
-            if !detail.is_empty() {
-                writeln!(err, "{detail}")?;
-            }
+        Ok((ExitCode::Violation, said)) => {
+            // THE GATE'S OWN WORDS REACH THE OPERATOR (CLOUD-407): the rule is
+            // the authority on its own remedy, and a summary here would be a
+            // second, staler copy of it.
+            writeln!(
+                err,
+                "::error:: land: the entry gate `{}` refused this landing",
+                declared.rule
+            )?;
+            err.write_all(&said)?;
             writeln!(
                 err,
                 "::error:: nothing has been spent — the refusal above says how to clear it, then run the landing again"
             )?;
             Ok(Some(ExitCode::Violation))
         }
-        land::Admitted::Unrunnable { gate } => {
+        Ok((_, said)) => {
             writeln!(
                 err,
-                "::error:: land: the declared entry gate {gate} will not run, so this landing's precondition is unasked rather than met"
+                "::error:: land: the entry gate `{}` could not be decided, so this landing's precondition is unasked rather than met",
+                declared.rule
+            )?;
+            err.write_all(&said)?;
+            Ok(Some(ExitCode::Internal))
+        }
+        Err(cause) => {
+            writeln!(
+                err,
+                "::error:: land: the entry gate `{}` will not run ({cause}), so this landing's precondition is unasked rather than met",
+                declared.rule
             )?;
             Ok(Some(ExitCode::Internal))
         }
     }
+}
+
+/// `pr unsubscribed drop`, then `check`, over `pr`, in-process: the code the
+/// decision answered and everything it said.
+///
+/// THE DROP IS ADVISORY and its answer is discarded, the `?` the argv carried:
+/// a drop that answers not-dropped or could-not-look must not stop a landing
+/// before the decision whose refusal names `record` as the way through.
+fn ask_unsubscribed(
+    declared: &config::EntryUnsubscribed,
+    pr: &str,
+    deciding: Deciding<'_>,
+) -> Result<(ExitCode, Vec<u8>)> {
+    let pr = unsubscribe::pr_number(pr)?;
+    let host = unsubscribe::Host {
+        session_env: declared.session_env.clone(),
+        token_env: declared.token_env.clone(),
+        endpoint: declared.endpoint.clone(),
+        tool: declared.tool.clone(),
+        arguments: declared.arguments.clone(),
+        family: record::safe_component("family", &declared.family)?,
+    };
+    let git_dir = git::git_dir(Path::new("."))?;
+    let _ = unsubscribe::drop_subscription(&git_dir, &host, pr, &mut std::io::sink());
+    let reading = unsubscribe::reading(&git_dir, &host, pr);
+    record::store_named("land", &host.family, &reading)?;
+    decide_rule(&declared.rule, deciding)
 }
 
 /// Hand the landing lease back, best-effort, on the path that landed.
@@ -16016,6 +16168,17 @@ struct Asked<'lap> {
     reference: &'lap str,
     branch: &'lap str,
     lap: u32,
+    /// How the steps that decide in-process decide.
+    deciding: Deciding<'lap>,
+}
+
+/// The invocation's output mode and config overrides, which every in-process
+/// decision a landing makes runs under — the same two `batten check` would
+/// have been handed on the command line.
+#[derive(Debug, Clone, Copy)]
+struct Deciding<'a> {
+    mode: Mode,
+    overrides: &'a Overrides,
 }
 
 /// The two prechecks a row can carry that end a lap before it spends.
@@ -16050,6 +16213,7 @@ fn asks_before_the_step(
         reference,
         branch,
         lap,
+        ..
     } = asked;
     match row.precheck {
         // THE BET IS SETTLED BEFORE ANYTHING IS SPENT, and before the replay that
@@ -16859,10 +17023,9 @@ fn run_lease_hold(
         .and_then(|pid| pid.parse::<u32>().ok());
     let marker =
         std::env::var("LAND_LOCK_HOLDER_MARKER").unwrap_or_else(|_| String::from("batten land"));
-    // The consumer's reclaim-census beat and stop, read once: see
+    // Whether this repository keeps a reclaim census, read once: see
     // `lease_renewed` and `lease_hold_bail`.
-    let beat_note = std::env::var("LEASE_BEAT_NOTE").unwrap_or_default();
-    let stop_note = std::env::var("LEASE_STOP_NOTE").unwrap_or_default();
+    let census = census_kept(root, &resolve::Overrides::default());
     let mut misses = 0_u32;
     loop {
         // The interval is the lease's own `beat`, and the loop's exit condition is
@@ -16890,7 +17053,7 @@ fn run_lease_hold(
                 "lease: the land holding this lease (pid {pid}) is gone; releasing rather than \
                  renewing for nobody"
             )?;
-            lease_hold_bail(root, terms, &holder, now, HoldEnd::HolderGone, &stop_note);
+            lease_hold_bail(root, terms, &holder, now, HoldEnd::HolderGone, census);
             return Ok(ExitCode::Violation);
         }
         // The complementary case, and the one liveness cannot see: the land is
@@ -16914,7 +17077,7 @@ fn run_lease_hold(
                 "lease: the land holding this lease {why}; releasing and stopping it rather than \
                  holding the fleet"
             )?;
-            lease_hold_bail(root, terms, &holder, now, HoldEnd::Stalled, &stop_note);
+            lease_hold_bail(root, terms, &holder, now, HoldEnd::Stalled, census);
             lease_bail_reason(&git_dir, &why);
             // Re-corroborated immediately before the signal, never inferred from
             // the probe at the top of this beat: pids recycle inside twenty
@@ -16956,7 +17119,7 @@ fn run_lease_hold(
         let token = progress.map(lease::Progress::token);
         let renewed = lease::renewal(terms, body, token.as_deref(), now);
         if let Ok(lease::Outcome::Applied) = lease::cas(terms, &observed, &renewed, now) {
-            lease_renewed(root, &body.branch, now + terms.ttl, &beat_note);
+            lease_renewed(root, &body.branch, now, terms.ttl, census);
             misses = 0;
         } else {
             // A REJECTED SWAP AND A FAILED PUSH ARE ONE ARM HERE, deliberately.
@@ -17032,11 +17195,11 @@ fn lease_hold_bail(
     holder: &str,
     now: i64,
     end: HoldEnd,
-    stop_note: &str,
+    census: bool,
 ) {
     lease_hand_back(root, terms, holder, now);
     if end == HoldEnd::Stalled {
-        note_declared(root, stop_note);
+        note_census(root, census, CensusNote::Stop);
     }
 }
 
@@ -17077,31 +17240,56 @@ fn lease_bail_reason(git_dir: &Path, why: &str) {
 /// only distinction the census draws. This is the release recording that it
 /// chose to stop its own child.
 ///
-/// **The argv is the CONSUMER'S, read from `$LEASE_STOP_NOTE`.** A census
-/// program's name inside `crates/batten` is non-negotiable rule 1's plainest
-/// violation, and this is the same shape `LAND_BODY_GATES` already takes: the
-/// engine spawns what the consumer declared, through the sanctioned boundary,
-/// and a consumer that declares nothing gets nothing spawned.
+/// **WRITTEN IN-PROCESS, AND ONLY WHERE `[lease] census` IS SET** (CLOUD-2387).
+/// The census is the engine's own `reclaim` module, so the note was never a
+/// consumer's program to name: it used to be an argv in `$LEASE_STOP_NOTE` that
+/// spawned `batten record census note`, a detour through a fresh process and
+/// whatever `batten` the `PATH` resolved. What stays the consumer's is whether
+/// it keeps a census at all.
 ///
 /// Silent and best-effort in every direction. A census note that could not be
 /// written is not a reason to fail a release that already succeeded.
 fn note_release(root: &Path) {
-    note_declared(root, &std::env::var("LEASE_STOP_NOTE").unwrap_or_default());
+    note_census(
+        root,
+        census_kept(root, &resolve::Overrides::default()),
+        CensusNote::Stop,
+    );
 }
 
-/// Spawn the first argv `declared` names, silently and best-effort.
-fn note_declared(root: &Path, declared: &str) {
-    let Some(argv) = land::body_gates(declared).into_iter().next() else {
+/// Which reclaim-census record a landing writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CensusNote {
+    /// `h`: a landing is in flight.
+    Beat,
+    /// `x land-stopped`: this process chose to stop.
+    Stop,
+}
+
+/// Whether `root`'s committed `[lease]` declares a reclaim census.
+fn census_kept(root: &Path, overrides: &resolve::Overrides) -> bool {
+    lease_config(root, overrides).is_some_and(|lease| lease.census)
+}
+
+/// Write `note` into `root`'s reclaim census when it keeps one, silently and
+/// best-effort.
+fn note_census(root: &Path, census: bool, note: CensusNote) {
+    if !census {
+        return;
+    }
+    let Ok(git_dir) = git::git_dir(root) else {
         return;
     };
-    let _ = exec::piped_argv(root, &argv, "", exec::Diagnostics::Keep, &[]);
+    match note {
+        CensusNote::Beat => reclaim::note_in(&git_dir, "h", None),
+        CensusNote::Stop => reclaim::note_in(&git_dir, "x", Some("land-stopped")),
+    }
 }
 
-//MUTANT renewal-writes-no-beat|s@^    note_declared(root, beat_note);$@@|an_applied_renewal_writes_its_receipt_and_the_declared_beat
-/// `lease hold`'s renewal that applied: its receipt, then the consumer's
-/// reclaim-census beat (`$LEASE_BEAT_NOTE`, read once by the hold loop and
-/// passed as `beat_note`). After the receipt, so a beat never claims a hold the
-/// remote refused.
+//MUTANT renewal-writes-no-beat|s@^    note_census(root, keeps_census, CensusNote::Beat);$@@|an_applied_renewal_writes_its_receipt_and_the_declared_beat
+/// `lease hold`'s renewal that applied: its receipt, then the reclaim-census
+/// beat when this repository keeps one (`keeps_census`, read once by the hold
+/// loop). After the receipt, so a beat never claims a hold the remote refused.
 ///
 /// **This is the UNREACHED holder's half** — nothing in the tree runs `lease
 /// hold` today. What makes the census's positive reading, *a landing was in
@@ -17109,13 +17297,16 @@ fn note_declared(root: &Path, declared: &str) {
 /// [`land_census_window`]'s opening beat (CLOUD-843); the lap's own heartbeat
 /// notes nothing, since no beat inside that window can change the verdict.
 ///
-/// The argv is the consumer's for [`note_release`]'s reason: the beat and the
-/// stop are one census, and only the consumer knows it keeps one. The hold's stop
-/// is [`lease_hold_bail`]'s, and only on the bail it chose — never on an exit
-/// path (CLOUD-491).
-fn lease_renewed(root: &Path, branch: &str, expires: i64, beat_note: &str) {
-    lease_receipt(root, branch, expires);
-    note_declared(root, beat_note);
+/// The beat and the stop are one census, and only the consumer knows it keeps
+/// one. The hold's stop is [`lease_hold_bail`]'s, and only on the bail it chose —
+/// never on an exit path (CLOUD-491).
+///
+/// The expiry is summed HERE, from the renewal's clock and the lease's TTL,
+/// because the hold loop has no offline seam (`tests/it/lease_health.rs`): a sum
+/// at the call site is one no case can read, and this one is the receipt's.
+fn lease_renewed(root: &Path, branch: &str, now: i64, ttl: i64, keeps_census: bool) {
+    lease_receipt(root, branch, now + ttl);
+    note_census(root, keeps_census, CensusNote::Beat);
 }
 
 /// `lease release`: a tombstone, never a delete.
@@ -30483,42 +30674,294 @@ mod tests {
     /// the arm the loop calls on `Applied`: the receipt AND the declared beat.
     #[test]
     fn an_applied_renewal_writes_its_receipt_and_the_declared_beat() {
-        // `touch` is the declared note command this case stubs with, and no such
-        // program ships on Windows; the case compiles there and says so (`cfg!`,
-        // never `#[cfg]`, so the off-unix arm is type-checked on every host).
-        if !cfg!(unix) {
+        if !cfg!(target_os = "linux") {
             return;
         }
-        let root =
-            std::env::temp_dir().join(format!("batten-lease-renewed-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        crate::gitwrite::init_on_main(&root).unwrap();
-        let beat = root.join("beat");
-        lease_renewed(&root, "claude/x", 42, &format!("touch {}", beat.display()));
-        assert!(
-            beat.exists(),
-            "the declared beat ran on the applied renewal"
+        let root = census_scratch("renewed");
+        lease_renewed(&root, "claude/x", 40, 2, true);
+        assert_eq!(
+            census_kinds(&root),
+            ["h"],
+            "the declared beat is written on the applied renewal"
         );
         let receipt = lease_receipt_path(&root, "claude/x").unwrap();
         assert_eq!(std::fs::read_to_string(receipt).unwrap(), "42\n");
-        // And a consumer that declares no beat gets nothing spawned.
-        let _ = std::fs::remove_file(&beat);
-        lease_renewed(&root, "claude/x", 43, "");
-        assert!(!beat.exists());
+        // And a repository that keeps no census gets nothing written.
+        lease_renewed(&root, "claude/x", 40, 3, false);
+        assert_eq!(census_kinds(&root), ["h"]);
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// A scratch clone for the census-note cases, and the marker file a declared
-    /// `touch` note would create in it.
-    fn census_scratch(name: &str) -> (PathBuf, PathBuf) {
+    /// A scratch clone for the census-note cases. The boot time is read from
+    /// `/proc/stat`, so the cases are Linux-only by `cfg!`, and an unreadable boot
+    /// time on Linux is a failure, never a silent pass (`silent_skip`).
+    fn census_scratch(name: &str) -> PathBuf {
+        reclaim::boot_time().expect("a Linux host reads its boot time from /proc/stat");
         let root =
             std::env::temp_dir().join(format!("batten-census-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         crate::gitwrite::init_on_main(&root).unwrap();
-        let marker = root.join("noted");
-        (root, marker)
+        root
+    }
+
+    /// The kind and reason of every census record `root` holds, in order.
+    fn census_kinds(root: &Path) -> Vec<String> {
+        let git_dir = git::git_dir(root).unwrap();
+        let store = crate::record::journal_store(&git_dir, reclaim::BEATS);
+        let crate::journal::Fold::Records(records) = crate::journal::fold_lines(&store) else {
+            return Vec::new();
+        };
+        records
+            .iter()
+            .map(|record| {
+                let fields: Vec<&str> = record.split(' ').collect();
+                std::iter::once(fields[0])
+                    .chain(fields.get(3).copied())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect()
+    }
+
+    /// A committed repository carrying the evaluator-io-probe module, entered as
+    /// this case's working directory: the record store and the decision are both
+    /// read from it, as on a lap. nextest runs each case in its own process, so
+    /// the move is this case's.
+    fn enter_body_gate_fixture(name: &str) -> PathBuf {
+        let module = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../policy/evaluator-io-probe.rego"),
+        )
+        .unwrap();
+        let config = r#"version = 1
+scope = ["**"]
+
+[[verdict]]
+id = "test judge never"
+gloss = "g"
+class = "c"
+
+[[verdict.route]]
+id = "test read first"
+kind = "document"
+target = "README.md"
+
+[[verdict]]
+id = "test run unread"
+gloss = "g"
+class = "c"
+
+[[verdict.route]]
+id = "task run first"
+kind = "command"
+target = "mise run evaluator-io-record"
+
+[[rule]]
+id = "test cover never"
+kind = "policy"
+scope = "tree"
+module = "policy/evaluator-io-probe.rego"
+severity = "deny"
+
+[[record]]
+record = "evaluator-io-probe"
+writer = "mise run evaluator-io-record"
+"#;
+        let dir = crate::scratch::scratch(name);
+        crate::testing::contain_state(&dir.join("state"));
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(repo.join("policy")).unwrap();
+        std::fs::write(repo.join("policy/evaluator-io-probe.rego"), module).unwrap();
+        std::fs::write(repo.join("batten.toml"), config).unwrap();
+        crate::gitwrite::commit_paths(
+            &repo,
+            &[
+                String::from("batten.toml"),
+                String::from("policy/evaluator-io-probe.rego"),
+            ],
+            "fixture",
+        )
+        .unwrap();
+        std::env::set_current_dir(&repo).unwrap();
+        repo
+    }
+
+    /// The body gates in-process (CLOUD-2387): each row is derived over the
+    /// body and decided under its own rule. Fails by: a gate that is not asked,
+    /// a clean decision read as a stop or a refusal as clean, a refusal worded
+    /// as could-not-decide, or a decision that runs every rule instead of the
+    /// row's own.
+    #[test]
+    fn a_body_gate_passes_a_clean_body_and_stops_on_a_refused_one() {
+        enter_body_gate_fixture("land-body-gates");
+        let overrides = resolve::Overrides::default();
+        let deciding = Deciding {
+            mode: Mode::default(),
+            overrides: &overrides,
+        };
+        let gates = [config::BodyGate {
+            derive: String::from("evaluator-io-probe"),
+            inputs: std::collections::BTreeMap::from([
+                (String::from("status"), String::from("101")),
+                (
+                    String::from("test"),
+                    String::from("no_evaluator_feature_admits_io"),
+                ),
+            ]),
+            rule: String::from("test cover never"),
+        }];
+        let bet = speculation::Bet::default();
+        let ask = |body: &str| {
+            let mut err = Vec::new();
+            let stop = ask_the_body_gates(&gates, body, &bet, deciding, &mut err).unwrap();
+            (stop, String::from_utf8(err).unwrap())
+        };
+
+        let clean = "failures:\n    no_evaluator_feature_admits_io\n\ntest result: FAILED. 0 passed; 1 failed\n";
+        let (stop, said) = ask(clean);
+        assert_eq!(stop, None, "a clean body asks nothing more: {said}");
+
+        let (stop, said) = ask("error[E0432]: unresolved import\n");
+        assert_eq!(stop, Some(ExitCode::Violation));
+        assert!(said.contains("refused this pull request's body"), "{said}");
+
+        // The row's own rule, never every rule: an id no row declares decides
+        // nothing, where an unfiltered check over this tree would be clean.
+        assert!(
+            decide_rule("no such rule", deciding)
+                .map_or(true, |(code, _)| code != ExitCode::Success),
+            "an undeclared rule is not a clean decision"
+        );
+    }
+
+    /// Fails by: the ready step readying a pull request other than the branch's
+    /// own, or one where the branch has none.
+    #[test]
+    fn the_ready_step_readies_the_branchs_own_pull_request_or_stops() {
+        let found = rest::routed("land-ready-found", &[("pulls?", 200, r#"[{"number":42}]"#)]);
+        let none = rest::routed("land-ready-none", &[("pulls?", 200, "[]")]);
+        let mut err = Vec::new();
+        let answered = rest::with_fixture(&found, || ready_pull_request("o/r", "topic", &mut err));
+        assert_eq!(answered.unwrap(), Ok(String::from("42")));
+        let answered = rest::with_fixture(&none, || ready_pull_request("o/r", "topic", &mut err));
+        assert_eq!(answered.unwrap(), Err(ExitCode::Violation));
+        assert!(
+            String::from_utf8(err)
+                .unwrap()
+                .contains("no open pull request for topic"),
+            "the stop names the branch"
+        );
+    }
+
+    /// Fails by: a re-fire that could not go back to draft readying anyway,
+    /// which the forge reports as success over a run it never minted.
+    #[test]
+    fn a_refire_that_will_not_redraft_stops_before_it_readies() {
+        let root = crate::scratch::scratch("land-refire-root");
+        std::fs::write(root.join("batten.toml"), "version = 1\n").unwrap();
+        // EVERY REQUIRED CHECK CANCELLED, the masked terminal set a re-fire is
+        // for. The roster is the one `verdict_for` reads, from the manifest's
+        // `[env]`; a run with none set has no roster and nothing to re-fire.
+        let required = std::env::var("CI_REQUIRED_CHECKS")
+            .expect("the manifest's [env] declares the required checks");
+        let runs: Vec<serde_json::Value> = required
+            .split(',')
+            .filter(|name| !name.is_empty())
+            .map(|name| {
+                serde_json::json!({
+                    "name": name,
+                    "status": "completed",
+                    "conclusion": "cancelled",
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "completed_at": "2026-01-01T00:01:00Z",
+                    "id": 1,
+                })
+            })
+            .collect();
+        let check_runs =
+            serde_json::json!({ "total_count": runs.len(), "check_runs": runs }).to_string();
+        let dir = rest::routed(
+            "land-refire-redraft",
+            &[
+                ("ccr/convert_to_draft", 500, "{}"),
+                ("ccr/ready_for_review", 200, "{}"),
+                ("graphql", 403, "{}"),
+                ("check-runs", 200, &check_runs),
+                (
+                    "pulls/7",
+                    200,
+                    r#"{"draft":false,"node_id":"N","head":{"sha":"h"}}"#,
+                ),
+            ],
+        );
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let mut ledger = land::Ledger::default();
+        let code = rest::with_fixture(&dir, || {
+            spend_the_matrix("o/r", "7", "topic", &mut ledger, &root, &mut out, &mut err)
+        })
+        .unwrap();
+        let said = String::from_utf8(err).unwrap();
+        assert_eq!(
+            code,
+            ExitCode::Internal,
+            "{said}{}\n{}",
+            String::from_utf8_lossy(&out),
+            rest::asked(&dir)
+        );
+        assert!(said.contains("would not go back to draft"), "{said}");
+        assert_eq!(ledger, land::Ledger::default(), "nothing was bought");
+    }
+
+    /// Fails by: the census read as kept, or as not kept, whatever `[lease]`
+    /// says — including a config that will not load, which keeps none.
+    #[test]
+    fn the_census_is_kept_only_where_the_committed_lease_declares_it() {
+        let root = crate::scratch::scratch("census-kept");
+        let kept = |config: &str| {
+            std::fs::write(root.join("batten.toml"), config).unwrap();
+            census_kept(&root, &resolve::Overrides::default())
+        };
+        assert!(kept("version = 1\n[lease]\ncensus = true\n"));
+        assert!(!kept("version = 1\n[lease]\ncensus = false\n"));
+        assert!(!kept("version = 1\n"));
+        assert!(!kept("version = 1\n[lease\n"));
+    }
+
+    /// Fails by: `lease release` writing no stop where the census is declared
+    /// (CLOUD-2387), which reads every chosen release as a container death.
+    #[test]
+    fn a_release_writes_its_stop_where_the_census_is_declared() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let root = census_scratch("release");
+        std::fs::write(
+            root.join("batten.toml"),
+            "version = 1\n[lease]\ncensus = true\n",
+        )
+        .unwrap();
+        note_release(&root);
+        assert_eq!(census_kinds(&root), ["x land-stopped"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `[lease] census` decides whether a landing writes into the census at all
+    /// (CLOUD-2387): declared, its stop is the engine's own `x land-stopped`,
+    /// written in-process under the root; undeclared, nothing is written.
+    #[test]
+    fn a_declared_census_writes_the_stop_note_and_an_undeclared_one_writes_nothing() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let root = census_scratch("declared");
+        note_census(&root, false, CensusNote::Stop);
+        assert!(
+            census_kinds(&root).is_empty(),
+            "undeclared, nothing is written"
+        );
+        note_census(&root, true, CensusNote::Stop);
+        assert_eq!(census_kinds(&root), ["x land-stopped"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// THE PRODUCTION STOP (CLOUD-843, round-2 review): the landing writes its
@@ -30532,22 +30975,16 @@ mod tests {
     /// stop, and a stop left unwritten there reads as a container death.
     #[test]
     fn a_landing_notes_its_start_and_every_chosen_end() {
-        // `touch` is the declared note command this case stubs with, and no such
-        // program ships on Windows; the case compiles there and says so (`cfg!`,
-        // never `#[cfg]`, so the off-unix arm is type-checked on every host).
-        if !cfg!(unix) {
+        if !cfg!(target_os = "linux") {
             return;
         }
-        let (root, started) = census_scratch("window");
-        let stopped = root.join("stopped");
-        let begin = format!("touch {}", started.display());
-        let stop = format!("touch {}", stopped.display());
-        let ended = land_census_window(&root, &begin, &stop, || {
-            assert!(
-                started.exists(),
-                "the beat opens the window, before any lap"
+        let root = census_scratch("window");
+        let ended = land_census_window(&root, true, || {
+            assert_eq!(
+                census_kinds(&root),
+                ["h"],
+                "the beat opens the window, before any lap, and no stop while the laps run"
             );
-            assert!(!stopped.exists(), "no stop while the laps still run");
             Ok(ExitCode::Violation)
         });
         assert_eq!(
@@ -30555,20 +30992,21 @@ mod tests {
             ExitCode::Violation,
             "the laps' answer, unchanged"
         );
-        assert!(stopped.exists(), "the landing's return is its chosen stop");
-        std::fs::remove_file(&started).unwrap();
-        std::fs::remove_file(&stopped).unwrap();
-        let failed = land_census_window(&root, &begin, &stop, || Err(anyhow::anyhow!("stdout")));
+        assert_eq!(
+            census_kinds(&root),
+            ["h", "x land-stopped"],
+            "the landing's return is its chosen stop"
+        );
+        let failed = land_census_window(&root, true, || Err(anyhow::anyhow!("stdout")));
         assert!(failed.is_err(), "the laps' error, unchanged");
-        assert!(
-            stopped.exists(),
+        assert_eq!(
+            census_kinds(&root),
+            ["h", "x land-stopped", "h", "x land-stopped"],
             "an error is a return, and a return is a stop"
         );
-        // And a consumer that declares neither gets nothing spawned.
-        std::fs::remove_file(&started).unwrap();
-        std::fs::remove_file(&stopped).unwrap();
-        let _ = land_census_window(&root, "", "", || Ok(ExitCode::Success));
-        assert!(!started.exists() && !stopped.exists());
+        // And a repository that keeps no census gets nothing written.
+        let _ = land_census_window(&root, false, || Ok(ExitCode::Success));
+        assert_eq!(census_kinds(&root).len(), 4);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -30579,22 +31017,25 @@ mod tests {
     /// note is still decided by the bail alone.
     #[test]
     fn a_hold_notes_a_stop_only_where_it_chose_one() {
-        // `touch` is the declared note command this case stubs with, and no such
-        // program ships on Windows; the case compiles there and says so (`cfg!`,
-        // never `#[cfg]`, so the off-unix arm is type-checked on every host).
-        if !cfg!(unix) {
+        if !cfg!(target_os = "linux") {
             return;
         }
-        let (root, marker) = census_scratch("hold-bail");
+        let root = census_scratch("hold-bail");
         let terms = lease::Terms {
             remote: String::from("not a remote"),
             ..lease::Terms::default()
         };
-        let note = format!("touch {}", marker.display());
-        lease_hold_bail(&root, &terms, "someone", 42, HoldEnd::HolderGone, &note);
-        assert!(!marker.exists(), "a dead lander is not a chosen stop");
-        lease_hold_bail(&root, &terms, "someone", 42, HoldEnd::Stalled, &note);
-        assert!(marker.exists(), "stopping a stalled lander is");
+        lease_hold_bail(&root, &terms, "someone", 42, HoldEnd::HolderGone, true);
+        assert!(
+            census_kinds(&root).is_empty(),
+            "a dead lander is not a chosen stop"
+        );
+        lease_hold_bail(&root, &terms, "someone", 42, HoldEnd::Stalled, true);
+        assert_eq!(
+            census_kinds(&root),
+            ["x land-stopped"],
+            "stopping a stalled lander is"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }
