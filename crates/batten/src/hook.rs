@@ -9311,24 +9311,19 @@ fn git_unquote(path: &str) -> &str {
 /// A tab and a timestamp may follow the path, and git may quote it. `git
 /// apply` and `patch -p1` strip the first component whatever it is — `a/` and
 /// `b/`, the `i/` `w/` `c/` `o/` of `diff.mnemonicPrefix`, or a custom
-/// `--src-prefix` — so that file is always named. A first component longer
-/// than one character may instead be a real directory under `-p0`
-/// (`--no-prefix`), so the path as written is named too: an over-read costs a
-/// refusal, an under-read the guard.
+/// `--src-prefix` — so that file is always named. The first component may
+/// instead be a real directory under `-p0` (`--no-prefix`), whatever its
+/// length, so the path as written is named too: an over-read costs a refusal,
+/// an under-read the guard.
 fn name_diff<'a>(targets: &mut Vec<&'a str>, rest: &'a str) {
     let path = git_unquote(rest.split('\t').next().unwrap_or(rest));
     if path == "/dev/null" {
         return;
     }
-    match path.split_once('/') {
-        Some((first, tail)) => {
-            name(targets, tail);
-            if first.chars().count() != 1 {
-                name(targets, path);
-            }
-        }
-        None => name(targets, path),
+    if let Some((_, tail)) = path.split_once('/') {
+        name(targets, tail);
     }
+    name(targets, path);
 }
 
 /// Add `path` to a patch's targets once, and never a path that names no file.
@@ -9347,10 +9342,11 @@ fn name<'a>(targets: &mut Vec<&'a str>, path: &'a str) {
 fn git_sides(rest: &str) -> Option<(&str, &str)> {
     let middle = rest.len() / 2;
     let (a, b) = (rest.get(..middle), rest.get(middle + 1..));
-    // Two absent prefixes are no match, so the prefixed case asks for both.
+    // Two absent prefixes are no match, so the prefixed case asks for both,
+    // each side read unquoted, so a quoted path holding ` b/` splits here too.
     let prefixed = a
-        .and_then(|a| a.strip_prefix("a/"))
-        .is_some_and(|a| b.and_then(|b| b.strip_prefix("b/")) == Some(a));
+        .and_then(|a| git_unquote(a).strip_prefix("a/"))
+        .is_some_and(|a| b.and_then(|b| git_unquote(b).strip_prefix("b/")) == Some(a));
     let same_file = rest.get(middle..=middle) == Some(" ") && (prefixed || a.is_some() && a == b);
     let at = if same_file {
         middle
@@ -18225,7 +18221,7 @@ deny contains "refused by themodule" if {
             patch_targets(&serde_json::json!({
                 "patch": "--- /dev/null\n+++ b/src/new.rs\n@@ -0,0 +1 @@\n+x\n",
             })),
-            ["src/new.rs"]
+            ["src/new.rs", "b/src/new.rs"]
         );
     }
 
@@ -18238,7 +18234,7 @@ deny contains "refused by themodule" if {
             patch_targets(&serde_json::json!({
                 "patch": "--- a/batten.toml\n+++ b/batten.toml\n@@ -1 +1,2 @@\n x\n+*** Begin Patch\n",
             })),
-            ["batten.toml"]
+            ["batten.toml", "a/batten.toml", "b/batten.toml"]
         );
         assert!(
             patch_targets(&serde_json::json!({ "content": "*** Add File: batten.toml\n" }))
@@ -18317,19 +18313,19 @@ deny contains "refused by themodule" if {
             patch_targets(&serde_json::json!({
                 "patch": "diff --git a/notes.md b/batten.toml\nsimilarity index 100%\nrename from notes.md\nrename to batten.toml\n",
             })),
-            ["notes.md", "batten.toml"]
+            ["notes.md", "a/notes.md", "batten.toml", "b/batten.toml"]
         );
         assert_eq!(
             patch_targets(&serde_json::json!({
                 "patch": "diff --git \"a/sp ace\" \"b/sp ace\"\nold mode 100644\nnew mode 100755\n",
             })),
-            ["sp ace"]
+            ["sp ace", "a/sp ace", "b/sp ace"]
         );
         assert_eq!(
             patch_targets(&serde_json::json!({
                 "patch": "--- \"a/sp ace\"\n+++ \"b/sp ace\"\n",
             })),
-            ["sp ace"]
+            ["sp ace", "a/sp ace", "b/sp ace"]
         );
         assert!(
             patch_targets(&serde_json::json!({
@@ -18342,7 +18338,7 @@ deny contains "refused by themodule" if {
             patch_targets(&serde_json::json!({
                 "patch": "--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1 @@\n--- batten.toml\n x\n",
             })),
-            ["q.sql"]
+            ["q.sql", "a/q.sql", "b/q.sql"]
         );
         // An envelope's bounds are the host's to read, so a header is judged
         // wherever it sits: a context line quoting `*** End Patch` closes
@@ -18358,7 +18354,7 @@ deny contains "refused by themodule" if {
             patch_targets(&serde_json::json!({
                 "patch": "diff --git a/x b/y b/x b/y\nold mode 100644\nnew mode 100755\n",
             })),
-            ["x b/y"]
+            ["x b/y", "a/x b/y", "b/x b/y"]
         );
         // Quoted sides of unequal length, a space at the middle: the split is
         // at the quoted `b/` side, never the middle byte.
@@ -18366,7 +18362,7 @@ deny contains "refused by themodule" if {
             patch_targets(&serde_json::json!({
                 "patch": "diff --git \"a/pq rs t\" \"b/u\"\nold mode 100644\nnew mode 100755\n",
             })),
-            ["pq rs t", "u"]
+            ["pq rs t", "a/pq rs t", "u", "b/u"]
         );
         // git apply's `rename old`/`rename new`, a context diff's `***`/`---`
         // pair, and an `Index:` line each name the file they patch.
@@ -18374,7 +18370,7 @@ deny contains "refused by themodule" if {
             patch_targets(&serde_json::json!({
                 "patch": "diff --git a/x b/y\nrename old batten.toml\nrename new y\n",
             })),
-            ["x", "y", "batten.toml"]
+            ["x", "a/x", "y", "b/y", "batten.toml"]
         );
         assert_eq!(
             patch_targets(&serde_json::json!({
@@ -18397,7 +18393,7 @@ deny contains "refused by themodule" if {
             patch_targets(&serde_json::json!({
                 "patch": "diff --git i/batten.toml w/batten.toml\n--- i/batten.toml\n+++ w/batten.toml\n",
             })),
-            ["batten.toml"]
+            ["batten.toml", "i/batten.toml", "w/batten.toml"]
         );
         assert_eq!(
             patch_targets(&serde_json::json!({
@@ -18428,7 +18424,7 @@ deny contains "refused by themodule" if {
             patch_targets(&serde_json::json!({
                 "patch": "diff --git a/x b/y b/zzzzz\nsimilarity index 100%\n",
             })),
-            ["x", "y b/zzzzz"]
+            ["x", "a/x", "y b/zzzzz", "b/y b/zzzzz"]
         );
         // Each side loses its own prefix once: a path that starts with `b/`
         // keeps it.
@@ -18436,13 +18432,28 @@ deny contains "refused by themodule" if {
             patch_targets(&serde_json::json!({
                 "patch": "diff --git a/b/x b/b/z\nsimilarity index 100%\n",
             })),
-            ["b/x", "b/z"]
+            ["b/x", "a/b/x", "b/z", "b/b/z"]
         );
         assert_eq!(
             patch_targets(&serde_json::json!({
                 "patch": "diff --git a/b/x b/b/x\nold mode 100644\nnew mode 100755\n",
             })),
-            ["b/x"]
+            ["b/x", "a/b/x", "b/b/x"]
+        );
+        // A one-letter first component may be a real directory under `-p0`,
+        // so it is read both ways too.
+        assert_eq!(
+            patch_targets(
+                &serde_json::json!({ "patch": "--- c/secret.toml\n+++ c/secret.toml\n" })
+            ),
+            ["secret.toml", "c/secret.toml"]
+        );
+        // A quoted same-file path holding ` b/` splits at its middle.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git \"a/x b/y\" \"b/x b/y\"\nold mode 100644\nnew mode 100755\n",
+            })),
+            ["x b/y", "a/x b/y", "b/x b/y"]
         );
         // A patch carried as one element of an argv-shaped array.
         assert_eq!(
