@@ -4864,6 +4864,13 @@ mod tests {
             stopped_at(finished).as_deref(),
             Some("START [ 2/2] it b::case")
         );
+        // A case nextest killed is where the run stopped, whatever follows it.
+        let killed = "        TIMEOUT [ 120.000s] it a::case\n        \
+                      PASS [   0.100s] it b::case\n";
+        assert_eq!(
+            stopped_at(killed).as_deref(),
+            Some("TIMEOUT [ 120.000s] it a::case")
+        );
     }
 
     /// Fails by: the provisioned runner's directory dropped, or put after the
