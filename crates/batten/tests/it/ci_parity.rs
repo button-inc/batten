@@ -1976,15 +1976,18 @@ fn unfrozen_lander_wire_wrong(name: &str, pin: &str) -> bool {
 /// it is refused under the pin `main` holds and under the next one alike.
 #[test]
 fn every_release_pin_arms_the_freeze() {
-    for pin in ["v0.0.216", "v0.0.217", "v0.0.218"] {
-        assert!(
-            unfrozen_lander_wire_wrong(
-                &format!("release-lander-pinned-{pin}"),
-                &format!("engine = {{ release = \"{pin}\" }}"),
-            ),
-            "{pin}"
-        );
-    }
+    assert!(unfrozen_lander_wire_wrong(
+        "release-lander-pinned-216",
+        "engine = { release = \"v0.0.216\" }",
+    ));
+    assert!(unfrozen_lander_wire_wrong(
+        "release-lander-pinned-217",
+        "engine = { release = \"v0.0.217\" }",
+    ));
+    assert!(unfrozen_lander_wire_wrong(
+        "release-lander-pinned-218",
+        "engine = { release = \"v0.0.218\" }",
+    ));
 }
 
 /// A source pin never lands, so it arms nothing (CLOUD-2515).

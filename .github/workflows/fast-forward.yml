@@ -1,5 +1,9 @@
 name: fast-forward
 
+# workflow-shell: CLOUD-2548 the step count rises by the four single-command
+# steps every writer of `main` owes the release path: the freeze, a re-read of
+# the head, its fetch, and the predicate. Each is plain argv under `ci step`.
+
 # THE RUN CARRIES THE PR IT ANSWERS FOR (CLOUD-409, CLOUD-456). An
 # `issue_comment` run attaches to the default-branch tip, so `head_branch` and
 # `head_sha` name `main` for every one of these — there is no field on the run
@@ -284,7 +288,6 @@ jobs:
           sh ./install.sh
           batten --version
       - name: refuse a head whose required checks have not all answered
-        id: roster
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -298,7 +301,6 @@ jobs:
           SHA="$head_sha" mise run checks-green || rc=$?
           if [ "$rc" -eq 0 ]; then
             echo "#$PR at $head_sha is green over the whole required roster."
-            echo "head=$head_sha" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           case "$rc" in
@@ -327,15 +329,22 @@ jobs:
         run: batten ci step -- batten release in-flight --workflow release-artifacts.yml --workflow release-land.yml
       # The predicate grades the head against its merge-base in this clone, and
       # a reviewed fork head lives only at `refs/pull/N/head`, which the checkout
-      # does not fetch. Fetched as objects, never checked out or run.
+      # does not fetch. Read again as the roster step does, then fetched as
+      # objects, never checked out or run.
+      - name: read the head the release path grades
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ROUTE: repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}
+        run: batten ci step --capture sha --arg-env ROUTE -- gh api --jq .head.sha
       - name: fetch the head beside main
         env:
-          SHA: ${{ steps.roster.outputs.head }}
+          SHA: ${{ steps.head.outputs.sha }}
         run: batten ci step --require-env SHA --arg-env SHA -- git fetch origin
       - name: refuse a head the release path does not admit
         env:
           BATTEN_GITHUB_TOKEN: ${{ github.token }}
-          SHA: ${{ steps.roster.outputs.head }}
+          SHA: ${{ steps.head.outputs.sha }}
         run: batten ci step --require-env SHA --arg-env SHA -- batten release path --strict
 
       # THE ACTION'S PUSH CREDENTIAL IS OURS TO CACHE (CLOUD-2288). The action

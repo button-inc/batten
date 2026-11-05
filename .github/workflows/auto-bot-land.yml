@@ -1,5 +1,9 @@
 name: auto-bot-land
 
+# workflow-shell: CLOUD-2548 the step count rises by the two single-command
+# steps every writer of `main` owes the release path: the freeze and the
+# predicate. Each is plain argv under `ci step`.
+
 # Land the bot's pull requests with no human in the loop — the whole lane, from a
 # draft nobody has looked at to a fast-forward on `main`.
 #
