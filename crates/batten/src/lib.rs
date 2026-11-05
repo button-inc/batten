@@ -2779,6 +2779,8 @@ fn run_startup(
     })
 }
 
+//MUTANT-SUITE crates/batten/tests/it/startup_bootstrap.rs
+//MUTANT status-skips-host-links|s@^        links: true,$@@|status_from_a_checkout_build_still_judges_the_link
 fn run_provision_status(
     json: bool,
     overrides: &Overrides,

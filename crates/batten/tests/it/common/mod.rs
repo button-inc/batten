@@ -496,7 +496,19 @@ pub(crate) fn bypass_env_vars_in(path: &Path) -> Vec<String> {
     reason = "stays, and test-only: the subject of an end-to-end test is the compiled binary, so there is nothing to move in-process without testing something else"
 )]
 pub(crate) fn batten() -> Batten {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_batten"));
+    batten_as(Path::new(env!("CARGO_BIN_EXE_batten")))
+}
+
+/// [`batten`], running the engine at `program` instead: the same scrubbed and
+/// pinned environment, so a copy of the binary placed elsewhere (inside a
+/// fixture checkout, say) reads the same state store the case does.
+#[must_use]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the subject of an end-to-end test is the compiled binary, so there is nothing to move in-process without testing something else"
+)]
+pub(crate) fn batten_as(program: &Path) -> Batten {
+    let mut command = Command::new(program);
     for name in declared_env_vars() {
         command.env_remove(name);
     }
