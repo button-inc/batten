@@ -2394,9 +2394,12 @@ mod tests {
             declared,
             "nothing writable"
         );
+        // ABSOLUTE ON EVERY TARGET: `/opt/tools/bin` is relative on Windows,
+        // which `expand_home` refuses.
+        let named = std::env::temp_dir().join("batten-named-link");
         assert_eq!(
-            resolve("/opt/tools/bin", &root_setup, |_| true),
-            PathBuf::from("/opt/tools/bin"),
+            resolve(&named.to_string_lossy(), &root_setup, |_| true),
+            named,
             "an absolute link is named, and stands off PATH"
         );
         assert_eq!(
