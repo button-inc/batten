@@ -1203,6 +1203,27 @@ fn a_land_just_started_is_excused_until_it_registers() {
     );
 }
 
+/// A DISPATCH WITH NO CRASH TO ANSWER OUTLIVES EVERY STOP UNTIL ITS LAND LOCKS
+/// (CLOUD-2456 over CLOUD-2370): the refusal never consumes the receipt, since
+/// the Stop watchdog reads the same file as a land on its way, and a Stop that
+/// deleted it would read that building land as no relaunch at all.
+///
+/// Fails by: a Stop with no crash on its branch removing the receipt.
+#[test]
+fn a_stop_with_no_crash_keeps_the_dispatch_for_the_watchdog() {
+    let (repo, home) = unlanded_fixture("stop-unlanded-dispatch-kept");
+    let _ = hook_in(&repo, &home, &land_started());
+    let branch = common::git_in(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    let receipt =
+        batten::recorder::record_path(&repo.join(".git"), "land-dispatched", branch.trim(), None);
+    assert!(receipt.exists(), "the dispatch is recorded");
+    for _ in 0..2 {
+        let stop = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+        assert_eq!(stop.status.code(), Some(0), "no crash, nothing refused");
+    }
+    assert!(receipt.exists(), "and no Stop consumed it");
+}
+
 /// AN OPERATOR PROMPT RE-ARMS THE REFUSAL (CLOUD-2456): the excuse a dispatch
 /// wrote does not outlive the operator's next message, so a land that died
 /// before registering is not excused across every prompt after. Dispatching

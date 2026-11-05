@@ -23767,15 +23767,14 @@ fn unlanded_claim() -> Option<UnlandedClaim> {
 fn unlanded_stop_block() -> Option<refusal::Refusal> {
     let git_dir = git::git_dir(Path::new(".")).ok()?;
     let branch = git::current_branch(Path::new(".")).ok().flatten()?;
-    // The dispatch excuse is cleared once there is no crash for it to answer.
-    let dispatched = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
     // Cheapest first, the claim last: the crash read lists the holds, which is
     // empty on almost every Stop, where the claim loads the whole findings store.
     let crash = task::crashed_on(&git_dir, LAND_TASK, &branch);
-    let Some(crash) = crash else {
-        let _ = std::fs::remove_file(&dispatched);
-        return None;
-    };
+    let crash = crash?;
+    // Read, never consumed: it names the crash it answers, so a stale one
+    // excuses no other, and the Stop watchdog reads the same receipt as a land
+    // on its way until that land takes the lock (CLOUD-2370's `forget_dispatch`).
+    let dispatched = recorder::record_path(&git_dir, LAND_DISPATCHED, &branch, None);
     // A land started against THIS crash excuses every Stop over it until it
     // registers, which forgets the crash; one that dies before registering
     // never does, and that is the instant crash, escapable too.
