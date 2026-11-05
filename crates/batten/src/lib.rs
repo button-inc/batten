@@ -10468,7 +10468,7 @@ fn anchor_among(
                 "no finding for rule `{rule}` names subject `{subject}`, so an admission bound \
                  to it would suppress nothing; that rule names {} subject(s) here: {}",
                 named.len(),
-                per_subject_routes(rule, class, &named)
+                refusal::override_routes(rule, class, &named)
             )))
         }
         // AMBIGUITY REFUSES, because falling back here is a silent no-op. The
@@ -10483,7 +10483,7 @@ fn anchor_among(
             "{count} findings for rule `{rule}` name subject `{subject}`, so the pair does not \
              address one finding and an admission bound to it would suppress none of them; \
              run one route, each binding one finding by its fingerprint: {}",
-            per_subject_routes(
+            refusal::override_routes(
                 rule,
                 class,
                 &matched
@@ -10493,20 +10493,6 @@ fn anchor_among(
             )
         ))),
     }
-}
-
-/// One whole `override request` route per subject, `; `-joined (CLOUD-2303).
-///
-/// A refusal line renders every subject joined by a space, so a remedy copied
-/// from it names a subject no single finding carries. Listing the subjects
-/// bare left the reader to re-spell the route; naming each as the command that
-/// binds it is a route this verb accepts as printed.
-fn per_subject_routes(rule: &str, class: &str, subjects: &[impl AsRef<str>]) -> String {
-    subjects
-        .iter()
-        .map(|subject| refusal::override_route(rule, class, subject.as_ref()))
-        .collect::<Vec<_>>()
-        .join("; ")
 }
 
 /// `batten override request` — issue an admission for one situation
@@ -10581,7 +10567,7 @@ fn run_override_request(
         let listed = if bound.is_empty() {
             "none".to_owned()
         } else {
-            per_subject_routes(rule, &resolved.id, &bound)
+            refusal::override_routes(rule, &resolved.id, &bound)
         };
         return Err(error::UsageError::raise(format!(
             "no `{rule}` refusal under `{}` binds subject `{subject}`, so an admission bound \
@@ -23095,13 +23081,18 @@ fn stop_nudges(
             .map(|path| verdict::Subject::Path { path: path.clone() })
             .collect();
         if let Ok(config) = resolve::resolve(root, overrides) {
-            rungs.push(refusal::Refusal::from_class(
-                FILED_OVER_OWN_DIFF,
-                &config.verdicts,
-                FILED_OVER_OWN_DIFF,
-                &subjects,
-                refusal::Fix::None,
-            ));
+            // ONE FINDING PER PATH (`filed-here.rego`), so one route per path:
+            // the joined spelling names no finding (CLOUD-2505).
+            rungs.push(
+                refusal::Refusal::from_class(
+                    FILED_OVER_OWN_DIFF,
+                    &config.verdicts,
+                    FILED_OVER_OWN_DIFF,
+                    &subjects,
+                    refusal::Fix::None,
+                )
+                .over_findings(flagged),
+            );
         }
     }
     // RULE 4 was the completion reading and is now RULE 1, at the top of this

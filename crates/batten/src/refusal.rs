@@ -316,6 +316,17 @@ pub struct Refusal {
     /// reason, so `-J` is unmoved.
     #[serde(skip)]
     counted: bool,
+    /// The path of each tree finding this refusal gathers, in bound spelling,
+    /// when its subjects are SEPARATE findings rather than one situation
+    /// (CLOUD-2505). Empty for every other refusal. Skipped for `routes`' reason.
+    ///
+    /// The override route then names each path on its own: `override request`
+    /// admits a tree finding by its path, so a route over the joined spelling
+    /// was one the verb refused. A mediated refusal keeps its single route,
+    /// because its bindings are the joined spelling and the first path, and a
+    /// route for a later path would mint an admission that admits nothing.
+    #[serde(skip)]
+    finding_paths: Vec<String>,
 }
 
 /// Every spelling a mediated refusal of `token` naming `subjects` binds, in
@@ -989,6 +1000,18 @@ pub fn override_route(rule: &str, class: &str, subject: &str) -> String {
     )
 }
 
+/// One whole [`override_route`] per subject, `; `-joined (CLOUD-2303,
+/// CLOUD-2505): the refusal line and `override request`'s own refusal spell a
+/// set of routes the same way, each one a command the verb accepts as printed.
+#[must_use]
+pub fn override_routes(rule: &str, class: &str, subjects: &[impl AsRef<str>]) -> String {
+    subjects
+        .iter()
+        .map(|subject| override_route(rule, class, subject.as_ref()))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 /// One route's text, or `None` where it does not render.
 //MUTANT override-route-unrendered|s@^    if route.kind == RouteKind::Override {$@    if route.kind == RouteKind::Override \&\& false {@|the_override_route_on_the_line_is_the_request_that_admits
 //MUTANT route-reader-unnamed|s@^        Some(reader) => format!("{text} via {reader}"),$@        Some(_) => text,@|a_document_route_into_a_read_redirected_path_names_its_reader
@@ -996,6 +1019,13 @@ fn route_text(refusal: &Refusal, route: &crate::verdict::Route) -> Option<String
     use crate::verdict::RouteKind;
     if route.kind == RouteKind::Override {
         let class = refusal.verdict()?;
+        if !refusal.finding_paths.is_empty() {
+            return Some(override_routes(
+                refusal.rule(),
+                class,
+                &refusal.finding_paths,
+            ));
+        }
         let subject = refusal.bindings().first()?;
         return Some(override_route(refusal.rule(), class, subject));
     }
@@ -1130,6 +1160,7 @@ impl Refusal {
             // it would read as admissible.
             bindings: Vec::new(),
             counted: false,
+            finding_paths: Vec::new(),
         }
     }
 
@@ -1191,6 +1222,18 @@ impl Refusal {
             target: path.to_owned(),
             precondition: None,
         });
+        self
+    }
+
+    /// Mark this refusal's subjects as separate tree findings at `paths`, so
+    /// its override route names each one (CLOUD-2505). For a caller that
+    /// gathers several findings into one line, never for a mediated refusal.
+    #[must_use]
+    pub fn over_findings(mut self, paths: &[impl AsRef<str>]) -> Refusal {
+        self.finding_paths = paths
+            .iter()
+            .map(|path| crate::verdict::bound_subject(path.as_ref()))
+            .collect();
         self
     }
 
@@ -1317,6 +1360,7 @@ impl Refusal {
             fix,
             bindings: admission_bindings(token, subjects),
             counted: false,
+            finding_paths: Vec::new(),
         }
     }
 
@@ -1982,6 +2026,55 @@ mod tests {
             .unwrap_or_default()
         );
         assert!(!native.gloss().is_empty());
+    }
+
+    /// Fails by: a refusal gathering separate findings printing one route over
+    /// their joined spelling, which `override request` refuses, or a mediated
+    /// refusal printing a route per path, whose later routes admit nothing
+    /// (CLOUD-2505).
+    #[test]
+    fn separate_findings_print_one_override_route_each() {
+        let paths = ["a.rs", "b/c.rs"];
+        let subjects: Vec<crate::verdict::Subject> = paths
+            .iter()
+            .map(|path| crate::verdict::Subject::Path {
+                path: (*path).to_owned(),
+            })
+            .collect();
+        let with_override = |refusal: Refusal| {
+            let mut refusal = refusal;
+            refusal.routes.push(crate::verdict::Route {
+                id: "admit".to_owned(),
+                kind: crate::verdict::RouteKind::Override,
+                target: String::new(),
+                precondition: None,
+            });
+            refusal
+        };
+        let class = crate::verdict::Native::RunBroken.id();
+        let mediated = with_override(Refusal::engine(
+            crate::verdict::Native::RunBroken,
+            &subjects,
+            Fix::None,
+        ));
+        let gathered = with_override(
+            Refusal::engine(crate::verdict::Native::RunBroken, &subjects, Fix::None)
+                .over_findings(&paths),
+        );
+        // The override route is the one pushed last; the class's own come first.
+        assert_eq!(
+            routes(&mediated).last(),
+            Some(&override_route("", class, &mediated.bindings()[0])),
+            "a mediated refusal keeps its one route"
+        );
+        assert_eq!(
+            routes(&gathered).last(),
+            Some(&format!(
+                "{}; {}",
+                override_route("", class, "a.rs"),
+                override_route("", class, "b/c.rs")
+            ))
+        );
     }
 }
 
