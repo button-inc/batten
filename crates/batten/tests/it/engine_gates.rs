@@ -199,6 +199,32 @@ fn a_provision_row_disagreeing_with_the_pin_is_refused() {
     );
 }
 
+/// EVERY BATTEN DECLARATION AGREES (CLOUD-2595), not only the row the follow
+/// reads: a second batten row a merge left behind names another engine, and a
+/// `min_batten_version` above the pin is one the followed engine refuses itself
+/// under. Both are refused by `path:line`, before the network.
+#[test]
+fn a_second_batten_row_or_a_floor_above_the_pin_is_refused() {
+    let dir = repo(
+        "engine-gate-second-row",
+        "version = 1\nmin_batten_version = \"9.9.10\"\n\n\
+         [[provision]]\nname = \"batten\"\nversion = \"9.9.9\"\n\n\
+         [[provision]]\nname = \"batten\"\nversion = \"9.9.1\"\n",
+    );
+    seed_release(&dir, "v9.9.9", 0, &[]);
+    let output = run(&dir, &["engine", "gate"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    let said = text(&output);
+    assert!(
+        said.contains("provision batten 9.9.1 disagrees with engine pin v9.9.9"),
+        "{said}"
+    );
+    assert!(
+        said.contains("min_batten_version 9.9.10 is above engine pin v9.9.9"),
+        "{said}"
+    );
+}
+
 /// A ROW NAMING THE PIN CAN STILL CARRY ANOTHER RELEASE'S BYTES (CLOUD-2418): its
 /// `sha256` is judged against the pinned release's `SHA256SUMS`, cached beside
 /// the release, so the gate refuses it by `path:line` without the network.
