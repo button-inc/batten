@@ -330,6 +330,89 @@ fn install_installs_its_baked_tag() {
     );
 }
 
+/// On Linux the bootstrap fetches the static musl build and NEVER a gnu one: it
+/// makes no libc choice, because only the binary can tell whether gnu runs here
+/// (CLOUD-2595), and `engine install` makes that upgrade in Rust.
+#[test]
+fn linux_fetches_the_musl_build_and_never_a_gnu_one() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let dir = scratch("install-web-musl");
+    let archive = tarball(&dir);
+    let (web, log) = logged_host(|base| release_routes(base, &archive));
+    let (code, stdout, stderr) = install(
+        "install-web-musl-run",
+        &web,
+        &lock_for(&digest(&archive)),
+        &[],
+    );
+    assert_eq!(code, Some(0), "install failed: {stdout}{stderr}");
+    assert_eq!(
+        requests_ending(&log, "-unknown-linux-musl.tar.gz"),
+        1,
+        "{log:?}"
+    );
+    assert_eq!(
+        requests_ending(&log, "-unknown-linux-gnu.tar.gz"),
+        0,
+        "{log:?}"
+    );
+}
+
+/// THE BOOTSTRAP IS THE BARE MINIMUM (CLOUD-2595), as a predicate over its
+/// logic, beside `install::BOOTSTRAP_PROGRAMS` over its programs: one archive
+/// download, one `exec` of what it verified, no loop but the `SHA256SUMS` read
+/// `BATTEN_VERSION` needs, no host probe beyond `uname`, and a line ceiling on
+/// everything but the baked digest arms. A choice the binary can make is never
+/// made here, because a cached copy of this script would freeze it.
+#[test]
+fn the_bootstrap_is_the_bare_minimum() {
+    let script = batten::install::render_bootstrap(
+        "batten",
+        "https://example.invalid/unused",
+        &lock_for(&"0".repeat(64)),
+    );
+    let logic: Vec<&str> = script
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter(|line| !line.contains(") want="))
+        .collect();
+    let count = |needle: &str| logic.iter().filter(|line| line.contains(needle)).count();
+    assert_eq!(
+        count("get \"$base/releases/download/$tag/$asset\""),
+        1,
+        "{script}"
+    );
+    assert_eq!(count("engine install"), 1, "{script}");
+    // Loops are STATEMENTS, matched at a line's start: "no release for $os" is
+    // prose in a failure message, not a loop.
+    let statements = |keyword: &str| {
+        logic
+            .iter()
+            .filter(|line| line.trim_start().starts_with(keyword))
+            .count()
+    };
+    assert_eq!(
+        statements("while "),
+        1,
+        "only the SHA256SUMS read loops: {script}"
+    );
+    assert_eq!(statements("for "), 0, "no loop over the host: {script}");
+    assert_eq!(statements("until "), 0, "no loop over the host: {script}");
+    for probe in ["/lib/", "ldd", "libc", "/proc/", "/etc/"] {
+        assert_eq!(count(probe), 0, "{probe} probes the host: {script}");
+    }
+    assert!(
+        logic.len() <= BOOTSTRAP_CEILING,
+        "the bootstrap grew to {} logic lines, over {BOOTSTRAP_CEILING}: {script}",
+        logic.len()
+    );
+}
+
+/// The bootstrap's logic lines today. A change may lower this, never raise it.
+const BOOTSTRAP_CEILING: usize = 53;
+
 /// `BATTEN_VERSION` is the escape hatch: that tag is fetched and checked against
 /// its own release's `SHA256SUMS`, whatever the lock baked.
 #[test]
