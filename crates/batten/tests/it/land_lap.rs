@@ -549,14 +549,28 @@ reason = "dispatch the code-review skill"
     );
 }
 
-/// **ONLY A PUSH THAT BUYS A RUN OWES ITS REVIEWS** (CLOUD-2436).
+/// A pull request #7 read as `draft` at forge `head`, for the two push cases.
+fn found(draft: bool, head: &str) -> batten::PushRead {
+    batten::PushRead::Found {
+        pr: "7".to_owned(),
+        readiness: batten::land::Readiness {
+            draft,
+            node: "PR_node".to_owned(),
+            head: head.to_owned(),
+        },
+    }
+}
+
+/// **A PUSH NEVER LANDS A NEW HEAD ON A READY PULL REQUEST** (CLOUD-1564,
+/// CLOUD-2436).
 ///
-/// Through `land_push_owes`, the question the Push row's precheck asks: a whole
+/// Through `land_push_gate`, the question the Push row's precheck asks: a whole
 /// lap needs a forge this tier does not stand up, so the forge read is handed
-/// in. On `main` the lap's push asked nothing, so a new head on an
-/// already-ready pull request started CI with no review on file.
+/// in. A ready pull request at another head is redrafted whatever receipts are
+/// on file, so the push buys no run and the Ready after it asks them. Only a
+/// forge that cannot say asks the receipts here.
 #[test]
-fn the_laps_push_is_refused_by_a_missing_review_receipt() {
+fn the_laps_push_redrafts_a_ready_pull_request_at_another_head() {
     let dir = common::Fixture::new("land-lap-push-receipt")
         .config(
             r#"version = 1
@@ -592,45 +606,159 @@ reason = "dispatch the code-review skill"
     std::env::set_current_dir(&dir).expect("enter the fixture");
     let now = std::time::UNIX_EPOCH;
     let local = "local-head";
-    let read = |draft: bool, head: &str| {
-        let head = head.to_owned();
-        move || {
-            Some(Some(batten::land::Readiness {
-                draft,
-                node: "PR_node".to_owned(),
-                head: head.clone(),
-            }))
-        }
-    };
-    let owes = |forge: &dyn Fn() -> Option<Option<batten::land::Readiness>>| {
-        batten::land_push_owes(&dir, now, Some(local), forge).expect("the authority resolves")
+    let gate = |read: batten::PushRead| {
+        batten::land_push_gate(&dir, now, Some(local), read).expect("the authority resolves")
     };
 
-    let refusal = owes(&read(false, "an-older-head"))
-        .expect("a new head on a ready pull request owes its review");
-    assert_eq!(refusal.rule(), "review ask missing");
     assert!(
-        owes(&|| None).is_some(),
-        "a forge that cannot say still asks"
+        matches!(
+            gate(found(false, "an-older-head")),
+            batten::PushGate::Redraft { pr, node } if pr == "7" && node == "PR_node"
+        ),
+        "a new head on a ready pull request is redrafted before the push"
     );
     assert!(
-        owes(&read(true, "an-older-head")).is_none(),
+        matches!(gate(found(true, "an-older-head")), batten::PushGate::Go),
         "a draft push buys no run"
     );
     assert!(
-        owes(&|| Some(None)).is_none(),
+        matches!(gate(found(false, local)), batten::PushGate::Go),
+        "a ready pull request already at this head buys nothing"
+    );
+    assert!(
+        matches!(gate(batten::PushRead::NoPullRequest), batten::PushGate::Go),
         "a branch with no pull request buys no run"
     );
     assert!(
-        owes(&read(false, local)).is_none(),
-        "a ready pull request already at this head buys nothing"
+        matches!(
+            gate(batten::PushRead::Unreadable),
+            batten::PushGate::Owed(refusal) if refusal.rule() == "review ask missing"
+        ),
+        "a forge that cannot say asks the receipts"
     );
 
     common::dispatch_skill(&dir, "code-review");
     assert!(
-        owes(&read(false, "an-older-head")).is_none(),
-        "a reviewed head owes the push nothing"
+        matches!(gate(batten::PushRead::Unreadable), batten::PushGate::Go),
+        "a reviewed head owes an unreadable forge's push nothing"
     );
+    assert!(
+        matches!(
+            gate(found(false, "an-older-head")),
+            batten::PushGate::Redraft { .. }
+        ),
+        "and a ready pull request at another head is redrafted even so"
+    );
+}
+
+/// **EVERY COMMIT IS ON THE REMOTE BEFORE ANY LAP VERIFIES** (CLOUD-1353).
+///
+/// Through `land_entry_push`, the decision a landing takes at entry: the push it
+/// makes needs a smart-HTTP remote, which this tier does not stand up, so the
+/// forge read is handed in. On `main` nothing pushed before the first lap's
+/// `verify`, so a reclaim during it took every commit this clone had not pushed.
+#[test]
+fn a_landing_pushes_its_own_commits_before_any_lap_verifies() {
+    use batten::{EntryPush, PushRead, land_entry_push};
+    let local = Some("local-head");
+    let decide = |read: &PushRead| land_entry_push(false, local, read, || false);
+
+    assert_eq!(
+        decide(&found(true, "an-older-head")),
+        EntryPush::Push,
+        "a draft behind this clone is pushed: its jobs are draft-gated"
+    );
+    assert_eq!(
+        decide(&PushRead::NoPullRequest),
+        EntryPush::Push,
+        "no pull request, no run"
+    );
+    for (read, why) in [
+        (found(true, "local-head"), "a draft already at this head"),
+        (
+            found(false, "an-older-head"),
+            "a ready pull request would buy a run",
+        ),
+        (
+            found(false, "local-head"),
+            "a ready pull request already at this head",
+        ),
+        (PushRead::Unreadable, "a forge that could not say"),
+    ] {
+        assert!(
+            matches!(decide(&read), EntryPush::Skip(_)),
+            "{why} is not pushed at entry"
+        );
+    }
+    assert!(
+        matches!(
+            land_entry_push(true, local, &found(true, "an-older-head"), || false),
+            EntryPush::Skip(_)
+        ),
+        "a recorded speculation may carry another branch's commits"
+    );
+    assert!(
+        matches!(
+            land_entry_push(false, local, &found(true, "an-older-head"), || true),
+            EntryPush::Skip(_)
+        ),
+        "another clone landing this branch keeps its head"
+    );
+}
+
+/// **A RIVAL IS ANOTHER CLONE HOLDING A LIVE LEASE FOR THIS BRANCH** (CLOUD-1353),
+/// and a lease that will not read or parse is one, so the entry push skips.
+///
+/// Every state of the lease, because each half of `lease_rival` can go wrong
+/// alone: the holder (this clone's own lease is not a rival), the branch (a
+/// rival on another branch moves no head of ours), and liveness (an expired or
+/// released lease is nobody's).
+#[test]
+fn a_rival_is_another_holder_live_on_this_branch() {
+    use batten::lease::{Body, Observed};
+    let now = 1_000;
+    let held = |holder: &str, expires: i64, branch: &str| Observed::Held {
+        sha: "lease-sha".to_owned(),
+        body: Body {
+            holder: holder.to_owned(),
+            expires,
+            branch: branch.to_owned(),
+            ..Body::default()
+        },
+    };
+    let rival = |observed: &Observed| batten::lease_rival(Some((observed, "me", now)), "topic");
+
+    assert!(
+        rival(&held("them", now + 60, "topic")),
+        "another clone, live, on this branch"
+    );
+    assert!(
+        rival(&Observed::Garbage {
+            sha: "lease-sha".to_owned(),
+            why: "no body".to_owned(),
+        }),
+        "a lease that will not parse"
+    );
+    assert!(
+        batten::lease_rival(None, "topic"),
+        "a lease that will not read"
+    );
+    assert!(
+        rival(&held("them", now + 60, "")),
+        "another clone, live, naming no branch"
+    );
+    for (observed, why) in [
+        (
+            held("them", now + 60, "other"),
+            "another clone on another branch",
+        ),
+        (held("me", now + 60, "topic"), "this clone's own lease"),
+        (held("them", now - 1, "topic"), "an expired lease"),
+        (held("them", 0, "topic"), "a released lease"),
+        (Observed::Absent, "no lease"),
+    ] {
+        assert!(!rival(&observed), "{why} is no rival");
+    }
 }
 
 /// **A LAP NEVER RUNS FROM THE TRUNK.**
