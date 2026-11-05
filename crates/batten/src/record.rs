@@ -72,12 +72,44 @@ use crate::{forge, git, resolve, tools};
 /// The whole of stdin, because a record is small by construction — a status token
 /// and a finding name per line — and a producer that streams one is a producer
 /// that has already decided to write a payload here.
+///
+/// **AN IN-PROCESS CALLER'S DOCUMENT IS STDIN** (CLOUD-2387). A landing's body
+/// gate derives over the pull request's body in-process, where the spawned
+/// `record derive` it replaced had the body piped to it. A family reading stdin
+/// here rather than through [`document_or_stdin`] would otherwise read the
+/// landing's own stdin, so [`derive_reading_under`] sets [`DOCUMENT`] for the
+/// derive and this answers it first.
 fn verdict_lines() -> Result<String> {
+    if let Some(given) = DOCUMENT.with(|document| document.borrow().clone()) {
+        return Ok(given);
+    }
     let mut raw = String::new();
     std::io::stdin()
         .read_to_string(&mut raw)
         .context("read the verdict from stdin")?;
     Ok(raw)
+}
+
+thread_local! {
+    /// The document an in-process derive reads as its stdin, set only for the
+    /// span of [`derive_reading_under`] by [`DocumentAsStdin`].
+    static DOCUMENT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// [`DOCUMENT`] set for one derive and cleared when it ends, error or not.
+struct DocumentAsStdin;
+
+impl DocumentAsStdin {
+    fn set(document: &str) -> Self {
+        DOCUMENT.with(|slot| *slot.borrow_mut() = Some(document.to_owned()));
+        DocumentAsStdin
+    }
+}
+
+impl Drop for DocumentAsStdin {
+    fn drop(&mut self) {
+        DOCUMENT.with(|slot| *slot.borrow_mut() = None);
+    }
 }
 
 /// Refuse a line the reader would silently skip.
@@ -1660,6 +1692,9 @@ fn derive_reading_under(
     document: Option<&str>,
     spec_base: Option<&str>,
 ) -> Result<String> {
+    // Every family reads the caller's document as stdin, not only the ones that
+    // take it through `document_or_stdin`: see `verdict_lines`.
+    let _as_stdin = document.map(DocumentAsStdin::set);
     let derived = match family {
         "evaluator-io-probe" => {
             only_these_inputs(inputs, family, &["status", "test"])?;
@@ -1730,10 +1765,10 @@ fn derive_reading_under(
         // retired body's `[[ -t 0 ]]`: no payloads, so the tag's refs alone.
         crate::released::FAMILY => {
             let config = resolve::resolve(Path::new("."), overrides)?;
-            let stdin = if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-                String::new()
-            } else {
-                verdict_lines()?
+            let stdin = match document {
+                Some(given) => given.to_owned(),
+                None if std::io::IsTerminal::is_terminal(&std::io::stdin()) => String::new(),
+                None => verdict_lines()?,
             };
             crate::released::reading(
                 inputs,
@@ -2303,6 +2338,32 @@ pub fn run_journal_show(family: &str, out: &mut dyn std::io::Write) -> Result<Ex
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// **AN IN-PROCESS DOCUMENT IS EVERY FAMILY'S STDIN, AND ONLY FOR ITS DERIVE**
+    /// (CLOUD-2387). A body gate derives over the pull request's body in-process,
+    /// so a family reading `verdict_lines` rather than `document_or_stdin` must
+    /// still see the body, never the landing's own stdin; and the document must
+    /// not outlive the derive, error or not, or the next verb would read it.
+    #[test]
+    fn a_derives_document_is_its_stdin_and_is_gone_after_it() {
+        {
+            let _as_stdin = DocumentAsStdin::set("the body");
+            assert_eq!(verdict_lines().unwrap(), "the body");
+        }
+        assert!(DOCUMENT.with(|slot| slot.borrow().is_none()));
+        let refused = derive_reading_under(
+            "no-such-family",
+            &BTreeMap::new(),
+            &Overrides::default(),
+            Some("the body"),
+            None,
+        );
+        assert!(refused.is_err());
+        assert!(
+            DOCUMENT.with(|slot| slot.borrow().is_none()),
+            "a refused derive leaves no document behind"
+        );
+    }
 
     /// A committed repository carrying `files`, entered as this case's working
     /// directory. nextest runs each case in its own process, so the move is
