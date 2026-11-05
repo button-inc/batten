@@ -2356,6 +2356,15 @@ mod tests {
             declared,
             "an isolated host never reaches a system directory"
         );
+        let spliced = Host {
+            on_path: &root_setup,
+            ..Host::isolated(true)
+        };
+        assert_eq!(
+            link_dir(PER_USER, spliced).unwrap(),
+            declared,
+            "an isolated host answers that nothing is writable, whatever PATH it is given"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -3086,13 +3095,13 @@ mod tests {
         let mut entry = entry("tool", &digest(&body));
         entry.url = Some(format!("file://{}", artifact.display()));
         let cache = dir.join("cache");
-        let freshness = |entry: &Provision| {
-            status_on(std::slice::from_ref(entry), &cache, Host::isolated(true)).unwrap()
-        };
+        // The published `status` and `apply`, which keep their signatures and
+        // delegate to the host-aware forms (CLOUD-2617).
+        let freshness = |entry: &Provision| status(std::slice::from_ref(entry), &cache).unwrap();
 
         assert_eq!(freshness(&entry).entries[0].freshness, Freshness::Missing);
         assert_eq!(
-            apply_on(&entry, &cache, true, Host::isolated(false)).unwrap(),
+            apply(&entry, &cache, true, false).unwrap(),
             Applied::Previewed
         );
         assert_eq!(
