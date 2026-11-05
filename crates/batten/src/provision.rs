@@ -506,6 +506,11 @@ pub enum Freshness {
     Missing,
     /// Cached, but the artifact's digest is not the pinned one.
     Mismatch,
+    /// The link's name, in a directory the `PATH` fallback shares with package
+    /// managers, holds another tool's binary (CLOUD-2617). Not `Missing`: the
+    /// file is there, and no apply may replace it, so the operator's fix is to
+    /// move that tool or declare an absolute `link`.
+    Foreign,
 }
 
 impl Freshness {
@@ -522,6 +527,7 @@ impl Freshness {
             Freshness::Fresh => "fresh",
             Freshness::Missing => "missing",
             Freshness::Mismatch => "mismatch",
+            Freshness::Foreign => "foreign",
         }
     }
 }
@@ -736,6 +742,25 @@ struct Link {
     shared: bool,
 }
 
+impl Link {
+    /// Whether this link's name belongs to another tool: only ever true in a
+    /// shared directory, where [`claimable`] decides it.
+    fn foreign(&self, entry: &Provision, cache_root: &Path) -> bool {
+        self.shared && !claimable(&self.dir, entry, cache_root)
+    }
+
+    /// The refusal for a [`Link::foreign`] name, naming the file and the two
+    /// fixes the operator has.
+    fn refusal(&self, entry: &Provision) -> anyhow::Error {
+        anyhow::anyhow!(
+            "provision: {} is another tool's {}, so batten will not replace it; \
+             move that tool, or declare an absolute `link` for this entry",
+            self.dir.join(&entry.binary).display(),
+            entry.binary
+        )
+    }
+}
+
 /// Where `entry`'s link resolves on `host`, or `None` where it declares none
 /// or the host's links are not this engine's to write.
 ///
@@ -786,7 +811,7 @@ fn recorded_as_ours(linked: &Path, entry: &Provision, cache_root: &Path) -> bool
     }
     lines
         .next()
-        .is_none_or(|recorded| identity(linked).as_deref() == Some(recorded))
+        .is_none_or(|recorded| written_stamp(linked).as_deref() == Some(recorded))
 }
 
 /// Where `entry`'s last written link is recorded: beside its versioned cache
@@ -795,29 +820,42 @@ fn link_record(cache_root: &Path, entry: &Provision) -> PathBuf {
     cache_root.join(CACHE_DIR).join(&entry.name).join("linked")
 }
 
-/// Record that batten writes, or has written, `entry`'s link at `linked`:
-/// the path, then the written file's [`identity`] once there is one.
-fn record_link(
-    cache_root: &Path,
-    entry: &Provision,
-    linked: &Path,
-    written: Option<&str>,
-) -> Result<()> {
+/// Record that batten is ABOUT to write `entry`'s link at `linked`: the path
+/// alone, before the file exists, so a crash before [`record_written`] leaves
+/// batten's own half-written link claimable.
+///
+/// Never the present file's stamp: an older batten file at the path would get
+/// its stamp recorded, and a crash then makes the link batten is writing read
+/// as foreign.
+fn record_intent(cache_root: &Path, entry: &Provision, linked: &Path) -> Result<()> {
+    write_link_record(cache_root, entry, &linked.to_string_lossy())
+}
+
+/// Record that batten WROTE `entry`'s link at `linked`: the path and the
+/// written file's [`written_stamp`].
+fn record_written(cache_root: &Path, entry: &Provision, linked: &Path) -> Result<()> {
+    let stamp = written_stamp(linked).context("stamp the written link")?;
+    write_link_record(
+        cache_root,
+        entry,
+        &format!("{}\n{stamp}", linked.to_string_lossy()),
+    )
+}
+
+/// The one writer of [`link_record`], which may run before `install` has made
+/// the entry's cache directory.
+fn write_link_record(cache_root: &Path, entry: &Provision, body: &str) -> Result<()> {
     let record = link_record(cache_root, entry);
     if let Some(parent) = record.parent() {
         fs::create_dir_all(parent).context("create the link record's directory")?;
     }
-    let mut body = linked.to_string_lossy().into_owned();
-    if let Some(written) = written {
-        body.push('\n');
-        body.push_str(written);
-    }
     crate::durable::replace(record, body.as_bytes()).context("record the written link")
 }
 
-/// A file's identity for [`recorded_as_ours`]: its length and modification
-/// time, which any later replacement of the file changes.
-fn identity(path: &Path) -> Option<String> {
+/// A written file's stamp for [`recorded_as_ours`]: its length and
+/// modification time, which any later replacement of the file changes. Not
+/// `collect`'s inode identity, which an in-place overwrite keeps.
+fn written_stamp(path: &Path) -> Option<String> {
     let meta = fs::metadata(path).ok()?;
     let modified = meta
         .modified()
@@ -853,6 +891,15 @@ fn launcher_interpreter(bytes: &[u8]) -> Option<&str> {
 }
 
 fn freshness_of(entry: &Provision, cache_root: &Path, link: Option<&Link>) -> Result<Freshness> {
+    // A SHARED DIRECTORY'S NAME MUST BE BATTEN'S, and that is asked FIRST: it
+    // is the one verdict no apply can change, so a cold cache must not answer
+    // `missing` over it. Another tool's `mise` would otherwise also answer the
+    // link's `is_file` below and read fresh over a binary the pin does not name.
+    if let Some(link) = link
+        && link.foreign(entry, cache_root)
+    {
+        return Ok(Freshness::Foreign);
+    }
     let dir = entry_dir(cache_root, entry);
     let binary = dir.join(BIN_DIR).join(&entry.binary);
     if !binary.is_file() {
@@ -877,12 +924,6 @@ fn freshness_of(entry: &Provision, cache_root: &Path, link: Option<&Link>) -> Re
     if let Some(link) = link {
         let linked = link.dir.join(&entry.binary);
         if !linked.is_file() {
-            return Ok(Freshness::Missing);
-        }
-        // AND A SHARED DIRECTORY'S NAME MUST BE BATTEN'S. Present is not
-        // enough there: another tool's `mise` would answer `is_file` and read
-        // fresh over a binary batten never wrote and the pin does not name.
-        if link.shared && !claimable(&link.dir, entry, cache_root) {
             return Ok(Freshness::Missing);
         }
         // AND A LAUNCHER NAMING AN INTERPRETER THAT IS NO LONGER THERE IS STALE
@@ -982,6 +1023,14 @@ pub fn apply_on(
 ) -> Result<Applied> {
     let link = link_of(entry, host)?;
     let link = link.as_ref();
+    // BEFORE ANY ARTIFACT IS READ OR FETCHED: a foreign name is known from a
+    // `stat` and a record, and no download can change it, so a session repeating
+    // this repair must not pay for one each time.
+    if let Some(link) = link
+        && link.foreign(entry, cache_root)
+    {
+        return Err(link.refusal(entry));
+    }
     if freshness_of(entry, cache_root, link)? == Freshness::Fresh {
         return Ok(Applied::AlreadyFresh);
     }
@@ -1032,15 +1081,12 @@ pub fn apply_on(
 /// Called only after the checksum matched.
 fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], link: Option<&Link>) -> Result<()> {
     // REFUSED BEFORE ANYTHING IS WRITTEN: a shared directory whose name another
-    // tool holds is reported, never renamed over (see [`claimable`]).
-    if let Some(link) = link.filter(|link| link.shared)
-        && !claimable(&link.dir, entry, cache_root)
+    // tool holds is reported, never renamed over (see [`claimable`]). `apply_on`
+    // asks first; this is the install's own guard for any other caller.
+    if let Some(link) = link
+        && link.foreign(entry, cache_root)
     {
-        anyhow::bail!(
-            "provision: {} is another tool's {}, so batten will not replace it",
-            link.dir.join(&entry.binary).display(),
-            entry.binary
-        );
+        return Err(link.refusal(entry));
     }
     let dir = entry_dir(cache_root, entry);
     let bin_dir = dir.join(BIN_DIR);
@@ -1090,9 +1136,9 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], link: Option<&Lin
         // INTENT FIRST, crash-only: the record names the path before the link
         // exists, so a run killed in between finds its own file claimable.
         let linked = link.dir.join(&entry.binary);
-        record_link(cache_root, entry, &linked, None)?;
+        record_intent(cache_root, entry, &linked)?;
         link_into(entry, &link.dir, &cached, &binary)?;
-        record_link(cache_root, entry, &linked, identity(&linked).as_deref())?;
+        record_written(cache_root, entry, &linked)?;
     }
     // The artifact is written last, so a crash between the two leaves the entry
     // reading `missing` rather than `fresh` — the direction that re-applies.
@@ -2512,12 +2558,12 @@ mod tests {
             !claimable(&shared, &entry, &cache),
             "a plain copy nobody recorded"
         );
-        record_link(&cache, &entry, &linked, None).unwrap();
+        record_intent(&cache, &entry, &linked).unwrap();
         assert!(
             claimable(&shared, &entry, &cache),
             "an intent recorded before the link is batten's"
         );
-        record_link(&cache, &entry, &linked, identity(&linked).as_deref()).unwrap();
+        record_written(&cache, &entry, &linked).unwrap();
         assert!(
             claimable(&shared, &entry, &cache),
             "the link batten recorded writing, whatever version wrote it"
@@ -2543,8 +2589,8 @@ mod tests {
         );
         assert_eq!(
             freshness_of(&entry, &cache, Some(&link)).unwrap(),
-            Freshness::Missing,
-            "a foreign name in a shared directory reads missing, not fresh"
+            Freshness::Foreign,
+            "a foreign name in a shared directory reads foreign, never fresh"
         );
     }
 
