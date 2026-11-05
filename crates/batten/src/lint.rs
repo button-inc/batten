@@ -1061,6 +1061,30 @@ impl Admission {
     pub fn is_refused(self) -> bool {
         matches!(self, Admission::Refused(_))
     }
+
+    /// What a verb prints in parentheses: the cause of a refusal, or `asked`
+    /// (CLOUD-2505). One spelling for `config lint` and `test-replay`, so a
+    /// refusal on either names the repair rather than reading as never asked.
+    #[must_use]
+    pub fn token(self) -> &'static str {
+        match self {
+            Admission::Refused(cause) => cause.as_str(),
+            Admission::Asked => self.as_str(),
+        }
+    }
+}
+
+/// The repair line for each cause that refused a pair in `adjudicated`, once
+/// per cause, prefixed with `verb` (CLOUD-2505). A cause whose remedy is to ask
+/// adds nothing: the refused line already says so.
+#[must_use]
+pub fn remedy_lines(verb: &str, adjudicated: &[Admission]) -> Vec<String> {
+    Cause::ALL
+        .iter()
+        .filter(|cause| adjudicated.contains(&Admission::Refused(**cause)))
+        .filter_map(|cause| cause.remedy())
+        .map(|remedy| format!("{verb}: {remedy}"))
+        .collect()
 }
 
 token_enum! {
@@ -1117,22 +1141,21 @@ pub fn admission_lines(adjudicated: &[(Smell, Admission)]) -> Vec<String> {
     let mut lines: Vec<String> = adjudicated
         .iter()
         .map(|(smell, admission)| {
-            let (verdict, token) = match admission {
-                Admission::Refused(cause) => ("refused", cause.as_str()),
-                Admission::Asked => ("admitted", admission.as_str()),
+            let verdict = if admission.is_refused() {
+                "refused"
+            } else {
+                "admitted"
             };
-            format!("config-lint: {verdict} {} {} ({token})", smell.id, smell.at)
+            format!(
+                "config-lint: {verdict} {} {} ({})",
+                smell.id,
+                smell.at,
+                admission.token()
+            )
         })
         .collect();
-    for cause in Cause::ALL {
-        if let Some(remedy) = cause.remedy()
-            && adjudicated
-                .iter()
-                .any(|(_, admission)| *admission == Admission::Refused(*cause))
-        {
-            lines.push(format!("config-lint: {remedy}"));
-        }
-    }
+    let admissions: Vec<Admission> = adjudicated.iter().map(|(_, a)| *a).collect();
+    lines.extend(remedy_lines("config-lint", &admissions));
     lines
 }
 

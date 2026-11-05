@@ -143,7 +143,35 @@ fn a_narrowed_expectation_is_refused_by_name() {
     assert_eq!(output.status.code(), Some(2), "{}", text(&output));
     assert!(
         String::from_utf8_lossy(&output.stdout)
-            .contains("test-expectation-changed src/lib.rs::tests::sums (refused)"),
+            .contains("test-expectation-changed src/lib.rs::tests::sums (refused not-asked)"),
+        "{}",
+        text(&output)
+    );
+}
+
+/// A REFUSAL NAMES ITS CAUSE (CLOUD-2505). The pair was asked, and the answer
+/// chosen does not say `Admit`, so the line says that rather than reading as
+/// never asked.
+#[test]
+fn an_answer_that_does_not_admit_names_its_cause() {
+    let (dir, base) = repo("replay-not-admitted");
+    narrowed(&dir);
+    let pair = "test-expectation-changed src/lib.rs::tests::sums";
+    let entry = serde_json::json!({
+        "question": format!("Override `{pair}`?"),
+        "options": [
+            {"label": "Yes, override", "description": "the expectation changes"},
+            {"label": "No", "description": "keep it"}
+        ],
+        "answer": "Yes, override",
+        "at": 1
+    });
+    common::write(&dir, ".batten/asked.jsonl", &format!("{entry}\n"));
+    let output = replay(&dir, &base);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains(&format!("{pair} (refused answered-without-admit)")),
         "{}",
         text(&output)
     );
@@ -187,7 +215,7 @@ fn a_removed_test_is_refused_by_name() {
     assert_eq!(output.status.code(), Some(2), "{}", text(&output));
     assert!(
         String::from_utf8_lossy(&output.stdout)
-            .contains("test-removed src/lib.rs::tests::sums (refused)"),
+            .contains("test-removed src/lib.rs::tests::sums (refused not-asked)"),
         "{}",
         text(&output)
     );

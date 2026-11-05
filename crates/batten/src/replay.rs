@@ -266,11 +266,57 @@ struct Finding {
 }
 
 /// One rendered finding: the finding and how the `asked` ledger answered it.
+///
+/// A REFUSAL CARRIES ITS CAUSE (CLOUD-2505), as `config lint`'s does: a bare
+/// `refused` read as never asked, so an admission already recorded under a
+/// mistyped pair was only found by asking again.
 #[derive(serde::Serialize)]
 struct Row<'a> {
     #[serde(flatten)]
     finding: &'a Finding,
     admission: &'static str,
+    cause: Option<&'static str>,
+}
+
+/// Write each finding with its admission, then the repair line for any cause
+/// that is a repair rather than a question (CLOUD-2505). Text or one JSON
+/// document; the document is emitted even when it is empty.
+fn write_rows(
+    findings: &[Finding],
+    admissions: &[crate::lint::Admission],
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let rows: Vec<Row<'_>> = findings
+        .iter()
+        .zip(admissions)
+        .map(|(finding, admission)| Row {
+            finding,
+            admission: admission.as_str(),
+            cause: admission.is_refused().then(|| admission.token()),
+        })
+        .collect();
+    if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&rows)?)?;
+        return Ok(());
+    }
+    for row in &rows {
+        let Finding {
+            path,
+            line,
+            id,
+            key,
+        } = row.finding;
+        let token = match row.cause {
+            Some(cause) => format!("{} {cause}", row.admission),
+            None => row.admission.to_owned(),
+        };
+        writeln!(out, "{path}:{line} {id} {key} ({token})")?;
+    }
+    for line in crate::lint::remedy_lines("test-replay", admissions) {
+        writeln!(out, "{line}")?;
+    }
+    Ok(())
 }
 
 /// `batten test replay --base <ref>`: run each modified test's base form against
@@ -325,27 +371,8 @@ pub fn run(root: &Path, base: &str, json: bool, out: &mut dyn Write) -> Result<E
         .collect();
     let ledger = crate::asked::added_since(root, base)?;
     let admitted = crate::lint::admissions(&smells, &ledger);
-    let rows: Vec<Row<'_>> = findings
-        .iter()
-        .zip(&admitted)
-        .map(|(finding, (_, admission))| Row {
-            finding,
-            admission: admission.as_str(),
-        })
-        .collect();
-    if json {
-        writeln!(out, "{}", serde_json::to_string_pretty(&rows)?)?;
-    } else {
-        for row in &rows {
-            let Finding {
-                path,
-                line,
-                id,
-                key,
-            } = row.finding;
-            writeln!(out, "{path}:{line} {id} {key} ({})", row.admission)?;
-        }
-    }
+    let verdicts: Vec<crate::lint::Admission> = admitted.iter().map(|(_, a)| *a).collect();
+    write_rows(&findings, &verdicts, json, out)?;
     let refused = admitted
         .iter()
         .filter(|(_, admission)| admission.is_refused())
@@ -685,6 +712,44 @@ fn said(outcome: Option<&(i32, String)>) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A REFUSAL NAMES ITS CAUSE, AND A REPAIR IS SAID ONCE (CLOUD-2505).
+    #[test]
+    fn a_refused_row_names_its_cause_and_a_repair_is_said_once() {
+        use crate::lint::{Admission, Cause};
+        let finding = |test: &str| Finding {
+            key: format!("src/x.rs::tests::{test}"),
+            path: String::from("src/x.rs"),
+            line: 3,
+            id: SmellId::TestRemoved,
+        };
+        let findings = [finding("a"), finding("b"), finding("c")];
+        let admissions = [
+            Admission::Refused(Cause::NotAsked),
+            Admission::Asked,
+            Admission::Refused(Cause::LedgerRewritten),
+        ];
+        let mut text = Vec::new();
+        write_rows(&findings, &admissions, false, &mut text).unwrap();
+        let remedy = Cause::LedgerRewritten.remedy().unwrap();
+        assert_eq!(
+            String::from_utf8(text).unwrap(),
+            format!(
+                "src/x.rs:3 test-removed src/x.rs::tests::a (refused not-asked)\n\
+                 src/x.rs:3 test-removed src/x.rs::tests::b (asked)\n\
+                 src/x.rs:3 test-removed src/x.rs::tests::c (refused ledger-rewritten)\n\
+                 test-replay: {remedy}\n"
+            )
+        );
+
+        let mut json = Vec::new();
+        write_rows(&findings[..2], &admissions[..2], true, &mut json).unwrap();
+        let rows: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(rows[0]["admission"], "refused");
+        assert_eq!(rows[0]["cause"], "not-asked");
+        assert_eq!(rows[1]["admission"], "asked");
+        assert!(rows[1]["cause"].is_null());
+    }
 
     const BASE: &str = "\
 fn helper() -> u8 { 1 }
