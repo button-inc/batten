@@ -67,14 +67,22 @@ pub enum PinKind {
 }
 
 /// What every verb says of a [`PinKind::Malformed`] pin.
-pub const MALFORMED_PIN: &str = "`engine` names exactly one of `release` or `source`";
+pub const MALFORMED_PIN: &str =
+    "`engine` names exactly one of `release` (a release tag, `v0.0.217`) or `source`";
 
+//MUTANT-SUITE crates/batten/src/engine.rs
+//MUTANT tag-unvalidated|s@^            (Some(tag), None) if release_version(\&tag).is_ok() => PinKind::Release(tag),$@            (Some(tag), None) => PinKind::Release(tag),@|a_tag_that_is_not_a_release_is_malformed
 impl Pin {
     /// What this pin names.
+    ///
+    /// **A RELEASE IS A RELEASE TAG OR IT IS MALFORMED (CLOUD-2644).** The tag is
+    /// joined into the engine cache's path, and a binary found there is run
+    /// without a re-check, so `"../../x"` must never reach the join: it is
+    /// refused here, by the one reader every caller asks.
     #[must_use]
     pub fn kind(self) -> PinKind {
         match (self.release, self.source) {
-            (Some(tag), None) => PinKind::Release(tag),
+            (Some(tag), None) if release_version(&tag).is_ok() => PinKind::Release(tag),
             (None, Some(digest)) => PinKind::Source(digest),
             _ => PinKind::Malformed,
         }
@@ -345,7 +353,7 @@ fn artifact_digest(artifact: &dyn toml_edit::TableLike) -> Option<String> {
 /// `toml_edit`. A block that will not parse is passed over, so a malformed
 /// neighbour can no more hide the pin than a later release's check can.
 //MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT row-block-swallows-the-file|s@^            \&\& !trimmed.starts_with("\[provision.")$@            \&\& false@|a_row_is_read_from_its_own_block
+//MUTANT row-block-swallows-the-file|s@^        if header.is_some_and(\x7c(name, _)\x7c opens \x7c\x7c !name.starts_with("provision."))$@        if false@|a_row_is_read_from_its_own_block
 fn batten_row(text: &str) -> Option<toml_edit::Table> {
     // Each block is parsed as it closes, and the first batten row ends the scan.
     let parsed = |block: &str| {
@@ -358,11 +366,9 @@ fn batten_row(text: &str) -> Option<toml_edit::Table> {
     };
     let mut current: Option<String> = None;
     for line in text.lines() {
-        let trimmed = line.trim_start();
-        let opens = trimmed.starts_with("[[provision]]");
-        let header = trimmed.starts_with('[');
-        if header
-            && !trimmed.starts_with("[provision.")
+        let header = table_header(line);
+        let opens = header == Some(("provision", true));
+        if header.is_some_and(|(name, _)| opens || !name.starts_with("provision."))
             && let Some(row) = current.take().as_deref().and_then(parsed)
         {
             return Some(row);
@@ -384,12 +390,32 @@ fn batten_row(text: &str) -> Option<toml_edit::Table> {
 /// `None` where the row lists no digest for this platform: the follow then
 /// verifies against the release's `SHA256SUMS`, as it did before the row was
 /// read (CLOUD-2595 §2b).
-#[must_use]
-pub fn row_digest(text: &str, platform: &str) -> Option<String> {
+#[cfg(test)]
+fn row_digest(text: &str, platform: &str) -> Option<String> {
     let row = batten_row(text)?;
     platform_artifact(&row, platform)
         .and_then(artifact_digest)
         .or_else(|| artifact_digest(&row))
+}
+
+/// The key and array-ness of a TOML table header line (`[a.b]` or `[[a.b]]`),
+/// spaces inside the brackets ignored; `None` for any other line, a `[`-led
+/// value line of a multi-line array included.
+fn table_header(line: &str) -> Option<(&str, bool)> {
+    let trimmed = line.trim();
+    let trimmed = trimmed
+        .split_once(" #")
+        .map_or(trimmed, |(head, _)| head)
+        .trim_end();
+    let (inner, array) = match trimmed.strip_prefix("[[") {
+        Some(rest) => (rest.strip_suffix("]]")?, true),
+        None => (trimmed.strip_prefix('[')?.strip_suffix(']')?, false),
+    };
+    let key = inner.trim();
+    let bare = key
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '"' | ' '));
+    (bare && !key.is_empty()).then_some((key, array))
 }
 
 /// The row's `platforms.<key>` artifact table.
@@ -418,13 +444,17 @@ fn platform_artifact<'row>(
 pub fn followed_digest(text: &str) -> Option<String> {
     let row = batten_row(text)?;
     let target = running_target();
-    if row.get("platforms").is_none() {
-        return artifact_digest(&row);
-    }
     if let Some(own) = platform_artifact(&row, &target) {
         return artifact_digest(own);
     }
     let asset = release_asset(&row_tag(&row)?, &target);
+    // A row pinning ONE artifact is this engine's only when its url is: a
+    // single musl tarball's digest is never a gnu or macOS engine's.
+    if row.get("platforms").is_none() {
+        return url_names(&row, &asset)
+            .then(|| artifact_digest(&row))
+            .flatten();
+    }
     platform_artifact(&row, &crate::provision::platform_key())
         .filter(|artifact| url_names(*artifact, &asset))
         .and_then(artifact_digest)
@@ -471,6 +501,8 @@ pub fn row_disagreement(text: &str) -> Option<(String, String)> {
 ///
 /// A `.zip` target has no `unpack` spelling a provision row can carry, so it is
 /// left to the `SHA256SUMS` fallback the follow keeps for an unlisted platform.
+//MUTANT-SUITE crates/batten/src/engine.rs
+//MUTANT adopt-trusts-the-scan|s@^    (!declares_batten(text) \&\& declared(\&out).is_some() \&\& parses(\&out)).then_some(out)$@    Some(out)@|adopted_never_writes_beside_a_row_the_scan_cannot_see
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 //MUTANT row-never-written|s@^    if declared(text).is_some() {$@    if true {@|a_config_without_a_row_gains_one_after_a_clean_load
 #[must_use]
@@ -521,7 +553,79 @@ pub fn adopted(text: &str, repository: &str, tag: &str, sums: &str) -> Option<St
     }
     // The row opens on its own newline, so it starts a line whether or not the
     // file ended in one.
-    Some(format!("{text}{row}"))
+    let out = format!("{text}{row}");
+    // A WRITE IS DECIDED ON THE WHOLE DOCUMENT, never the hot path's line scan:
+    // a batten row spelled any other valid way (an inline `provision = [{…}]`, a
+    // quoted header) is a pin the scan cannot see, and appending beside it would
+    // leave a file that no longer loads. This runs once per session, not per call.
+    (!declares_batten(text) && declared(&out).is_some() && parses(&out)).then_some(out)
+}
+
+/// Whether `text` parses as TOML and declares a batten `provision` entry in any
+/// spelling: an array of tables, or an inline array of inline tables. A file
+/// that does not parse answers `true`, so nothing is written beside it.
+fn declares_batten(text: &str) -> bool {
+    let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
+        return true;
+    };
+    match doc.get("provision") {
+        Some(toml_edit::Item::ArrayOfTables(rows)) => rows.iter().any(|row| is_batten_row(row)),
+        Some(toml_edit::Item::Value(toml_edit::Value::Array(rows))) => rows
+            .iter()
+            .filter_map(toml_edit::Value::as_inline_table)
+            .any(|row| row.get("name").and_then(toml_edit::Value::as_str) == Some("batten")),
+        _ => false,
+    }
+}
+
+/// Every batten declaration in `text` that disagrees with pin `tag`, as
+/// `(line, what)`, for `engine gate` (CLOUD-2595): a `min_batten_version` above
+/// the pin, which the followed engine would refuse as too old on every call,
+/// and EVERY batten row naming another release — not only the first, which the
+/// follow reads, but any a merge left behind that `provision apply` still acts on.
+///
+/// The gate's question, off the hot path, so it reads the whole document.
+#[must_use]
+pub fn gate_disagreements(text: &str, tag: &str) -> Vec<(usize, String)> {
+    let (Ok(pin), Ok(doc)) = (release_version(tag), toml_edit::Document::parse(text)) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    if let Some(item) = doc.get("min_batten_version")
+        && let Some(floor) = item.as_str()
+        && semver::Version::parse(floor).is_ok_and(|floor| floor > pin)
+    {
+        found.push((
+            item_line(text, item),
+            format!("min_batten_version {floor} is above engine pin {tag}"),
+        ));
+    }
+    let rows = doc
+        .get("provision")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .into_iter()
+        .flat_map(toml_edit::ArrayOfTables::iter);
+    for row in rows.filter(|row| is_batten_row(*row)) {
+        let Some(item) = row.get("version") else {
+            continue;
+        };
+        let Some(version) = item.as_str() else {
+            continue;
+        };
+        if release_version(version).ok().as_ref() != Some(&pin) {
+            found.push((
+                item_line(text, item),
+                format!("provision batten {version} disagrees with engine pin {tag}"),
+            ));
+        }
+    }
+    found.sort();
+    found
+}
+
+/// Whether `text` is a TOML document.
+fn parses(text: &str) -> bool {
+    text.parse::<toml_edit::DocumentMut>().is_ok()
 }
 
 /// The `<os>-<arch>` provision key (`provision::platform_key`'s spelling) a Rust
@@ -1998,6 +2102,58 @@ mod tests {
         // The block ends at the next foreign table: `[[rule]]`'s keys are not the row's.
         let swallowed = "[[provision]]\nname = \"batten\"\n\n[[rule]]\nversion = \"1.2.3\"\n";
         assert_eq!(row_release(swallowed), None);
+        // An array subtable of the row, and a `[`-led line of a multi-line
+        // array, are the row's own: neither ends the block.
+        let nested = "[[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n\
+                      matrix = [\n  [1, 2],\n]\n\n[[provision.env]]\nname = \"K\"\nvalue = \"v\"\n\n\
+                      [provision.platforms.linux-x86_64]\nurl = \"u\"\nsha256 = \"abc\"\n";
+        assert_eq!(row_release(nested).as_deref(), Some("v0.0.216"));
+        assert_eq!(row_digest(nested, "linux-x86_64").as_deref(), Some("abc"));
+        assert_eq!(
+            table_header("[[ provision ]]  # a comment"),
+            Some(("provision", true))
+        );
+        assert_eq!(table_header("  [1, 2],"), None);
+    }
+
+    /// A pin the line scan cannot see is still a pin: no row is appended beside
+    /// an inline-array or quoted-header batten entry, or to a file that does not
+    /// parse, and what is written always loads as pinned.
+    #[test]
+    fn adopted_never_writes_beside_a_row_the_scan_cannot_see() {
+        let sums = format!(
+            "{}  batten-v0.0.216-x86_64-unknown-linux-musl.tar.gz\n",
+            "2".repeat(64)
+        );
+        for pinned in [
+            "version = 1\nprovision = [{ name = \"batten\", version = \"0.0.216\" }]\n",
+            "version = 1\n\n[[\"provision\"]]\nname = \"batten\"\nversion = \"0.0.216\"\n",
+            "version = [\n",
+        ] {
+            assert_eq!(adopted(pinned, "o/r", "v0.0.216", &sums), None, "{pinned}");
+        }
+        let written = adopted("version = 1\n", "o/r", "v0.0.216", &sums).expect("a row");
+        assert!(declares_batten(&written), "{written}");
+    }
+
+    /// A pinned tag that is not a release never reaches a path (CLOUD-2644):
+    /// from the row or from the key, it reads as malformed.
+    #[test]
+    fn a_tag_that_is_not_a_release_is_malformed() {
+        let row = "[[provision]]\nname = \"batten\"\nversion = \"../../x\"\n";
+        let key = "engine = { release = \"../../x\" }\n";
+        for text in [row, key] {
+            assert_eq!(
+                declared(text).map(Pin::kind),
+                Some(PinKind::Malformed),
+                "{text}"
+            );
+        }
+        let good = "[[provision]]\nname = \"batten\"\nversion = \"0.0.216\"\n";
+        assert_eq!(
+            declared(good).map(Pin::kind),
+            Some(PinKind::Release("v0.0.216".to_owned()))
+        );
     }
 
     /// A musl engine whose tag's gnu build runs here places gnu.
@@ -2075,6 +2231,13 @@ mod tests {
             "{head}\n[provision.platforms.{key}]\nurl = \"https://h/batten-v0.0.216-other.tar.gz\"\nsha256 = \"cc\"\n"
         );
         assert_eq!(followed_digest(&sibling), None);
+        // A row pinning ONE artifact answers only when that artifact is this
+        // engine's asset; another build's digest is never checked against it.
+        let single_own = format!("{head}url = \"https://h/{own}\"\nsha256 = \"dd\"\n");
+        assert_eq!(followed_digest(&single_own).as_deref(), Some("dd"));
+        let single_other =
+            format!("{head}url = \"https://h/batten-v0.0.216-other.tar.gz\"\nsha256 = \"ee\"\n");
+        assert_eq!(followed_digest(&single_other), None);
     }
 
     /// The written row pins every archive under its own triple, plus one per
