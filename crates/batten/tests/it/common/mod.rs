@@ -491,10 +491,6 @@ pub(crate) fn bypass_env_vars_in(path: &Path) -> Vec<String> {
 /// (`batten::testing::contain_state`), so what a child writes is what the case
 /// reads back.
 #[must_use]
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays, and test-only: the subject of an end-to-end test is the compiled binary, so there is nothing to move in-process without testing something else"
-)]
 pub(crate) fn batten() -> Batten {
     batten_as(Path::new(env!("CARGO_BIN_EXE_batten")))
 }
