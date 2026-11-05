@@ -3137,25 +3137,27 @@ const STATUS_WORDS: &[&str] = &[
     "LEAK",
 ];
 
-//MUTANT stopped-at-first-line|s@^        \.rev()$@        .skip(0)@|a_timed_out_suite_names_where_it_stopped
+//MUTANT stopped-at-first-line|s@^            \.rev()$@            .skip(0)@|a_timed_out_suite_names_where_it_stopped
+//MUTANT stopped-at-a-sibling|s@last(&\["SLOW", "TIMEOUT"\]).or_else(\x7c\x7c last(STATUS_WORDS))@last(STATUS_WORDS)@|a_timed_out_suite_names_where_it_stopped
 /// Where a suite killed at its bound had got to: the first five words of the
 /// LAST status line cargo or nextest printed, so `Compiling <crate>`, `SETUP`
 /// or `SLOW [> Ns] <case>` (CLOUD-2206). A POINTER, NEVER THE OUTPUT: a
 /// timeout used to say only `suite-timed-out`, measured on #1258 where one CI
 /// shard's first row hit 900s while the same case ran in 0.5s locally, and
 /// nothing told a cold compile from a hung case.
+///
+/// A STUCK CASE OUTRANKS A LATER LINE: nextest runs cases in parallel, so the
+/// `PASS` of a sibling can follow the `SLOW` of the case that hung.
 fn stopped_at(output: &str) -> Option<String> {
-    output
-        .lines()
-        .rev()
-        .map(str::split_whitespace)
-        .map(|words| words.take(5).collect::<Vec<_>>())
-        .find(|words| {
-            words
-                .first()
-                .is_some_and(|word| STATUS_WORDS.contains(word))
-        })
-        .map(|words| words.join(" "))
+    let last = |words: &[&str]| {
+        output
+            .lines()
+            .rev()
+            .map(|line| line.split_whitespace().take(5).collect::<Vec<_>>())
+            .find(|line| line.first().is_some_and(|word| words.contains(word)))
+            .map(|line| line.join(" "))
+    };
+    last(&["SLOW", "TIMEOUT"]).or_else(|| last(STATUS_WORDS))
 }
 
 /// Where each harness runs and what it is handed: the working directory and
@@ -4807,6 +4809,17 @@ mod tests {
             Some("SLOW [> 890.000s] batten::it preapprove::a_case")
         );
         assert_eq!(stopped_at("no status here\n"), None);
+        // A sibling's later `PASS` does not hide the case that hung.
+        let parallel = "        SLOW [> 890.000s] batten::it hung::case\n        \
+                        PASS [   0.400s] batten::it quick::case\n";
+        assert_eq!(
+            stopped_at(parallel).as_deref(),
+            Some("SLOW [> 890.000s] batten::it hung::case")
+        );
+        assert_eq!(
+            stopped_at("   Compiling a v1\n        START [ 1/1] x::y\n").as_deref(),
+            Some("START [ 1/1] x::y")
+        );
     }
 
     /// Fails by: the provisioned runner's directory dropped, or put after the
