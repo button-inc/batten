@@ -284,6 +284,7 @@ jobs:
           sh ./install.sh
           batten --version
       - name: refuse a head whose required checks have not all answered
+        id: roster
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -297,6 +298,7 @@ jobs:
           SHA="$head_sha" mise run checks-green || rc=$?
           if [ "$rc" -eq 0 ]; then
             echo "#$PR at $head_sha is green over the whole required roster."
+            echo "head=$head_sha" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           case "$rc" in
@@ -313,12 +315,21 @@ jobs:
           echo "::error:: refusing #$PR at $head_sha: $why (CLOUD-1570)"
           exit 1
 
-      # THE RELEASE FREEZE AND THE RELEASE PREDICATE (CLOUD-2033) ARE NOT HERE
-      # YET: this lane runs the engine `main` pins, and `release in-flight` and
-      # `release path` first ship in v0.0.217. They join this job in the first
-      # pull request after `main` pins that release, never with its pin bump: a
-      # release head may change only the release paths (CLOUD-2515), so the bump
-      # cannot carry them. `ci-parity`'s freeze arm demands them from v0.0.219.
+      # THE RELEASE FREEZE AND THE RELEASE PREDICATE (CLOUD-2033, CLOUD-2548),
+      # which every writer of `main` reads inside `main-writer`. This lane runs on
+      # one comment with no next tick, so a release in flight REFUSES it rather
+      # than holding it, as does a head whose pin is neither inherited nor a
+      # verified published release. Both verbs are the pinned engine's, which
+      # carries them from v0.0.217.
+      - name: refuse while a release is in flight
+        env:
+          BATTEN_GITHUB_TOKEN: ${{ github.token }}
+        run: batten ci step -- batten release in-flight --workflow release-artifacts.yml --workflow release-land.yml
+      - name: refuse a head the release path does not admit
+        env:
+          BATTEN_GITHUB_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.roster.outputs.head }}
+        run: batten ci step --arg-env SHA -- batten release path --strict
 
       # THE ACTION'S PUSH CREDENTIAL IS OURS TO CACHE (CLOUD-2288). The action
       # approves `github_token` into a credential store only when the PR head is

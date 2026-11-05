@@ -1970,21 +1970,20 @@ fn unfrozen_lander_wire_wrong(name: &str, pin: &str) -> bool {
     verdicts_raised(&root).contains(&String::from("release wire wrong"))
 }
 
-/// THE RELEASE PR'S PIN MOVE ARMS NOTHING ITS HEAD CANNOT SATISFY (CLOUD-2515).
-/// v0.0.217's own release PR rehearses v0.0.218, so the freeze may not demand a
-/// step there: a release-shaped head cannot add it.
+/// THE FREEZE IS OWED AT EVERY RELEASE PIN (CLOUD-2548). The landers carry the
+/// step since `main` pins the release that ships the verb, so a lander without
+/// it is refused under the pin `main` holds and under the next one alike.
 #[test]
-fn a_pin_one_release_past_the_cut_arms_no_freeze() {
-    assert!(!unfrozen_lander_wire_wrong(
-        "release-lander-pinned-218",
-        "engine = { release = \"v0.0.218\" }",
-    ));
-    // The control: the same tree at the threshold IS refused, so the pin the
-    // helper writes is read and the arm can fire through it.
-    assert!(unfrozen_lander_wire_wrong(
-        "release-lander-pinned-219",
-        "engine = { release = \"v0.0.219\" }",
-    ));
+fn every_release_pin_arms_the_freeze() {
+    for pin in ["v0.0.217", "v0.0.218"] {
+        assert!(
+            unfrozen_lander_wire_wrong(
+                &format!("release-lander-pinned-{pin}"),
+                &format!("engine = {{ release = \"{pin}\" }}"),
+            ),
+            "{pin}"
+        );
+    }
 }
 
 /// A source pin never lands, so it arms nothing (CLOUD-2515).

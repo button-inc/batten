@@ -651,14 +651,26 @@ jobs:
             2) echo "linked=false" >> "$GITHUB_OUTPUT" ;;
             *) exit "$verdict" ;;
           esac
-      # THE RELEASE FREEZE AND THE RELEASE PREDICATE (CLOUD-2033) ARE NOT HERE
-      # YET: this lane runs the engine `main` pins, and `release in-flight` and
-      # `release path` first ship in v0.0.217. They join this job in the first
-      # pull request after `main` pins that release, never with its pin bump: a
-      # release head may change only the release paths (CLOUD-2515), so the bump
-      # cannot carry them. `ci-parity`'s freeze arm demands them from v0.0.219.
-      - name: Fast-forward main to the tested SHA
+      # THE RELEASE FREEZE AND THE RELEASE PREDICATE (CLOUD-2033, CLOUD-2548),
+      # which every writer of `main` reads inside `main-writer`. A release in
+      # flight HOLDS this landing, an ordinary outcome the next tick asks again
+      # about; a head whose pin is neither inherited nor a verified published
+      # release is REFUSED, red. Both verbs are the pinned engine's, which carries
+      # them from v0.0.217.
+      - name: Hold while a release is in flight
         if: steps.closes.outputs.linked == 'true'
+        id: freeze
+        env:
+          BATTEN_GITHUB_TOKEN: ${{ github.token }}
+        run: batten ci step --verdict clear --on 0=yes --on 2=no -- batten release in-flight --workflow release-artifacts.yml --workflow release-land.yml
+      - name: Refuse a head the release path does not admit
+        if: steps.freeze.outputs.clear == 'yes'
+        env:
+          BATTEN_GITHUB_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: batten ci step --arg-env SHA -- batten release path --strict
+      - name: Fast-forward main to the tested SHA
+        if: steps.freeze.outputs.clear == 'yes'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUM: ${{ steps.target.outputs.num }}
