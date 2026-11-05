@@ -14,9 +14,11 @@ use anyhow::Result;
 use batten::output::{self, Mode};
 
 /// mimalloc, not the platform allocator (CLOUD-2315): see the workspace
-/// manifest's `mimalloc` row for the measurement. Linux glibc only, as the crate
-/// manifest says why.
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
+/// manifest's `mimalloc` row for the measurement. Linux only — glibc and the
+/// musl build `install.sh` ships (CLOUD-2344) — as the crate manifest says why.
+//MUTANT-SUITE crates/batten/tests/it/allocator.rs
+//MUTANT allocator-gate-off|s@^#\[cfg(target_os = "linux")\]$@#[cfg(target_os = "none")]@|the_linux_binary_allocates_through_mimalloc
+#[cfg(target_os = "linux")]
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

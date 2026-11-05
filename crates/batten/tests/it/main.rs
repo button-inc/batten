@@ -69,6 +69,7 @@ mod advisory_drain;
 mod agent_capabilities;
 mod agent_facts;
 mod agentic_record;
+mod allocator;
 mod ambient_authority;
 mod answer_operator;
 mod artifacts_write;
