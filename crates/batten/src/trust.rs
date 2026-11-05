@@ -2778,6 +2778,47 @@ fn record_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     )
 }
 
+/// `[lease] fast_forward_branches`, the table's other key beside
+/// `landing_paths`, compared in the inverted direction (review of #848). It is
+/// an EXEMPTION rather than evidence:
+/// `fast_forward_lane` answers "not judging it" for a branch it matches,
+/// before any staleness or lease read runs at all. So a prefix ADDED is what
+/// switches the runner-side precondition off, and one row can do it for a
+/// whole fleet of agent branches.
+///
+/// The `lease` census row declared this field `Compared` while only
+/// `landing_paths` reached a comparison, so the key that disables the guard
+/// was asserted covered and was not.
+///
+/// **IT WIDENS A DECLARED LANE SET; IT DOES NOT PRICE INTRODUCING ONE, AND
+/// THE FIRST DRAFT DID** (review of #848). Both sides are `Vec`, so an ABSENT
+/// key and a DECLARED-EMPTY one arrive here identically — the collapse this
+/// crate refuses everywhere else — and reading absent as "exempts nobody"
+/// makes the base look like a gate that judged every branch.
+///
+/// It is not one. Measured on this branch: `origin/main` carries neither
+/// `fast_forward_branches` NOR `fast_forward_lane`, so the base judges ZERO
+/// branches by a lane gate that does not exist, and a head declaring three
+/// prefixes judges every branch except three. That is strictly MORE gating,
+/// and pricing it as a weakening refuses the commit that INTRODUCES the
+/// guard — the one shape a gate must never refuse, because the alternative
+/// to a gate with three exemptions is no gate at all.
+///
+/// So the comparison runs only where the base already declared a lane. Adding
+/// `claude/` to a live exemption set — the case the review named — still
+/// fires, and it is the case where the base genuinely was judging that branch
+/// a moment ago.
+fn fast_forward_lane_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    if fast_forward_branches(base).is_empty() {
+        return Vec::new();
+    }
+    added_entries(
+        WeakeningKind::FastForwardLaneAdded,
+        &fast_forward_branches(base),
+        &fast_forward_branches(working),
+    )
+}
+
 fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     let mut found = Vec::new();
 
@@ -2806,42 +2847,7 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
 
     found.extend(lease_gate_weakenings(base, working));
 
-    // The same table's OTHER key, and the direction is inverted (review of
-    // #848). `fast_forward_branches` is an EXEMPTION rather than evidence:
-    // `fast_forward_lane` answers "not judging it" for a branch it matches,
-    // before any staleness or lease read runs at all. So a prefix ADDED is what
-    // switches the runner-side precondition off, and one row can do it for a
-    // whole fleet of agent branches.
-    //
-    // The census row above declared this field `Compared` while only
-    // `landing_paths` reached a comparison, so the key that disables the guard
-    // was asserted covered and was not.
-    //
-    // **IT WIDENS A DECLARED LANE SET; IT DOES NOT PRICE INTRODUCING ONE, AND
-    // THE FIRST DRAFT DID** (review of #848). Both sides are `Vec`, so an ABSENT
-    // key and a DECLARED-EMPTY one arrive here identically — the collapse this
-    // crate refuses everywhere else — and reading absent as "exempts nobody"
-    // makes the base look like a gate that judged every branch.
-    //
-    // It is not one. Measured on this branch: `origin/main` carries neither
-    // `fast_forward_branches` NOR `fast_forward_lane`, so the base judges ZERO
-    // branches by a lane gate that does not exist, and a head declaring three
-    // prefixes judges every branch except three. That is strictly MORE gating,
-    // and pricing it as a weakening refuses the commit that INTRODUCES the
-    // guard — the one shape a gate must never refuse, because the alternative
-    // to a gate with three exemptions is no gate at all.
-    //
-    // So the comparison runs only where the base already declared a lane. Adding
-    // `claude/` to a live exemption set — the case the review named — still
-    // fires, and it is the case where the base genuinely was judging that branch
-    // a moment ago.
-    if !fast_forward_branches(base).is_empty() {
-        found.extend(added_entries(
-            WeakeningKind::FastForwardLaneAdded,
-            &fast_forward_branches(base),
-            &fast_forward_branches(working),
-        ));
-    }
+    found.extend(fast_forward_lane_weakenings(base, working));
 
     // The evidence `verified` demands (CLOUD-1338). Removed-direction only, for
     // the reason above one field over: the verb reports a head verified when NO
