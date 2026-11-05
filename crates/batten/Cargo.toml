@@ -182,12 +182,14 @@ signal-hook.workspace = true
 [target.'cfg(windows)'.dependencies]
 winapi-util.workspace = true
 
-# The global allocator (CLOUD-2315), Linux glibc only. Its C source needs a
-# platform SDK to link on macOS, which `macos_link.rs` holds the macOS graph clear
-# of; and on musl it needs a musl C compiler the verification path does not have
-# (`cross-check` in `mise.toml`: "failed to find tool x86_64-linux-musl-gcc"), so
-# shipping it there would change an artifact nothing here checks (CLOUD-2344).
-[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+# The global allocator (CLOUD-2315), Linux only. Its C source needs a platform
+# SDK to link on macOS, which `macos_link.rs` holds the macOS graph clear of. On
+# musl — the build `install.sh` ships to every Linux consumer — it needs a musl C
+# compiler: the release zigbuilds that triple, and `cross-check` and `test:musl`
+# point cc-rs at the same zig through `cargo-zigbuild`, so what ships is what is
+# checked. Measured on the musl artifact: 19.4 -> 16.7 ms per warm hook call
+# (CLOUD-2344).
+[target.'cfg(target_os = "linux")'.dependencies]
 mimalloc.workspace = true
 
 # The running programs' executables on macOS (CLOUD-2197); Linux reads `/proc`.
