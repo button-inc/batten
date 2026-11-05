@@ -309,9 +309,14 @@ impl Harness {
     #[must_use]
     pub const fn write_tools(self) -> &'static [&'static str] {
         match self {
-            Harness::ClaudeCode | Harness::CodexCli => {
+            // The neutral contract states the normalized shape, so a caller
+            // composing the envelope by hand gets Claude's normalized spellings.
+            Harness::ClaudeCode | Harness::ExitCode => {
                 &["Write", "Edit", "MultiEdit", "NotebookEdit"]
             }
+            // Claude's spellings, plus Codex's own patch tool, which names its
+            // files inside `input` and is the one way this host edits a file.
+            Harness::CodexCli => &["Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"],
             Harness::GeminiCli => &["WriteFile", "Edit", "Write", "MultiEdit", "NotebookEdit"],
             Harness::Cursor => &["Write", "Edit", "MultiEdit", "write", "edit"],
             Harness::CopilotCli => &["Write", "Edit", "MultiEdit", "StrReplaceEditor"],
@@ -320,14 +325,13 @@ impl Harness {
             // is not a Factory tool, which is why this host is not folded into
             // Claude's row despite sharing its wire shape.
             Harness::Factory => &["Create", "Edit", "ApplyPatch"],
-            // The tools reference's own names, the three its `edit` permission
-            // covers: `write` and `edit` carry a `filePath`, which the envelope
-            // reader takes beside `file_path`; `apply_patch` names its files
-            // inside `patchText`, which [`patch_targets`] reads.
-            Harness::OpenCode => &["write", "edit", "apply_patch"],
-            // The neutral contract: a caller composing the envelope by hand is
-            // stating the normalized shape, so it gets the normalized spellings.
-            Harness::ExitCode => &["Write", "Edit", "MultiEdit", "NotebookEdit"],
+            // The tools reference's own names for what its `edit` permission
+            // covers: `write`, `edit` and `multiedit` carry a `filePath`, which
+            // the envelope reader takes beside `file_path`; `apply_patch` and
+            // the older `patch` name their files inside `patchText`, which
+            // [`patch_targets`] reads. A name a release dropped costs nothing
+            // here; a name left out is a write judged as nothing.
+            Harness::OpenCode => &["write", "edit", "multiedit", "apply_patch", "patch"],
         }
     }
 
@@ -9093,19 +9097,20 @@ fn redirected_read(policy: &Policy, envelope: &Envelope) -> Decision {
 //MUTANT patch-targets-unread|s@^    let patched = if names_no_path {$@    let patched = if false {@|a_patch_naming_a_protected_file_is_refused_on_every_patch_tool
 fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
     // A patch tool names its files in its body, never under a path key, so the
-    // body is read for a call that could be a write and named no path. A write
-    // that DID name one is never re-read for header-shaped content: the file it
-    // carries is content, and a fixture holding a patch is not a patch.
-    let names_no_path = matches!(envelope.operation, Operation::Write | Operation::Other(_))
-        && target_path(&envelope.input).is_none();
-    // A patch's every target already holds the one `writes` kept, so `writes`
-    // is read only when no patch was: no target is judged twice.
+    // body is read for a write tool that named no path. A write that DID name
+    // one is never re-read for header-shaped content: the file it carries is
+    // content, and a fixture holding a patch is not a patch. Nor is any other
+    // tool's text: a subagent's prompt quoting a patch writes nothing.
+    let names_no_path =
+        envelope.operation == Operation::Write && target_path(&envelope.input).is_none();
     let patched = if names_no_path {
         patch_targets(&envelope.input)
     } else {
         Vec::new()
     };
-    let patched = if patched.is_empty() {
+    // A patch's every target already holds the one `writes` kept, so `writes`
+    // is read only when no patch was: no target is judged twice.
+    let targets: Vec<String> = if patched.is_empty() {
         envelope.writes.iter().cloned().collect()
     } else {
         patched
@@ -9116,7 +9121,7 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
     // drift apart, and a future call site that forgets the upstream step is
     // covered rather than silently open. A patch's targets take the same lookup,
     // which is why they need no relativising of their own.
-    let Some(path) = patched.into_iter().find(|target| protects(policy, target)) else {
+    let Some(path) = targets.into_iter().find(|target| protects(policy, target)) else {
         return Decision::Allow;
     };
     let path = path.as_str();
@@ -9147,15 +9152,23 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
 /// unjudged under the one tool whose whole job is writing. Every top-level
 /// string that is a patch is read, whatever the host keys it, because the key is
 /// per host and the format is not. Two formats: the `*** Begin Patch` envelope,
-/// and a unified diff's `---`/`+++` headers.
+/// and a unified diff — its `---`/`+++` header pairs, and git's own `diff --git`,
+/// `rename` and `copy` lines, which are the only names a rename, a copy or a
+/// mode change carries.
 ///
 /// A header counts only at column 0, which is where both formats put it: a
 /// context line quoting one starts with a space, and is the file's content.
 fn patch_targets(input: &Value) -> Vec<String> {
-    // A unified header's path: a tab and a timestamp may follow it, and git
-    // prefixes each side with `a/` or `b/`.
+    // A unified header's path: a tab and a timestamp may follow it, git quotes
+    // a path it must escape, and prefixes each side with `a/` or `b/`.
+    fn unquote(path: &str) -> &str {
+        let path = path.trim();
+        path.strip_prefix('"')
+            .and_then(|path| path.strip_suffix('"'))
+            .unwrap_or(path)
+    }
     fn unified(rest: &str) -> &str {
-        let path = rest.split('\t').next().unwrap_or(rest).trim();
+        let path = unquote(rest.split('\t').next().unwrap_or(rest));
         path.strip_prefix("a/")
             .or_else(|| path.strip_prefix("b/"))
             .unwrap_or(path)
@@ -9166,43 +9179,52 @@ fn patch_targets(input: &Value) -> Vec<String> {
         "*** Delete File: ",
         "*** Move to: ",
     ];
+    const GIT_HEADERS: &[&str] = &["rename from ", "rename to ", "copy from ", "copy to "];
     let Some(fields) = input.as_object() else {
         return Vec::new();
     };
     let mut targets = Vec::new();
     for text in fields.values().filter_map(Value::as_str) {
-        // One walk per text, each format's headers collected apart and kept
-        // only if the text is that format: an envelope, or a diff carrying both
-        // a `---` and a `+++` header. Neither format can switch the other off,
-        // so a diff whose content quotes the envelope's opening line is still
-        // read as a diff.
+        // One walk per text, each format's headers collected apart. Neither
+        // format can switch the other off, so a diff whose content quotes the
+        // envelope's opening line is still read as a diff.
         let envelope = text.contains("*** Begin Patch");
-        let (mut old, mut new) = (false, false);
+        let mut git = false;
         let (mut enveloped, mut diffed) = (Vec::new(), Vec::new());
+        // A `---` header counts only with a `+++` header on the very next
+        // line: a hunk removing the line `-- x` carries `--- x`, which opens
+        // nothing.
+        let mut old = None;
         for line in text.lines() {
-            let (path, into) = if let Some(rest) = line.strip_prefix("--- ") {
-                old = true;
-                (Some(unified(rest)), &mut diffed)
-            } else if let Some(rest) = line.strip_prefix("+++ ") {
-                new = true;
-                (Some(unified(rest)), &mut diffed)
-            } else {
-                let header = HEADERS
-                    .iter()
-                    .find_map(|header| line.strip_prefix(header))
-                    .map(str::trim);
-                (header, &mut enveloped)
-            };
-            if let Some(path) = path.filter(|path| !path.is_empty() && *path != "/dev/null") {
-                into.push(path.to_owned());
+            if let Some(rest) = line.strip_prefix("+++ ") {
+                if let Some(previous) = old.take() {
+                    diffed.extend([previous, unified(rest)]);
+                }
+                continue;
+            }
+            old = line.strip_prefix("--- ").map(unified);
+            if let Some(rest) = line.strip_prefix("diff --git ") {
+                git = true;
+                if let Some((a, b)) = rest.split_once(" b/").or_else(|| rest.split_once(" \"b/")) {
+                    diffed.extend([unified(a), b.trim().trim_end_matches('"')]);
+                }
+            } else if let Some(path) = GIT_HEADERS
+                .iter()
+                .find_map(|header| line.strip_prefix(header))
+            {
+                // Only inside a git patch, which opens with `diff --git`.
+                if git {
+                    diffed.push(unquote(path));
+                }
+            } else if let Some(path) = HEADERS.iter().find_map(|header| line.strip_prefix(header)) {
+                enveloped.push(path.trim());
             }
         }
+        let named = |path: &&str| !path.is_empty() && *path != "/dev/null";
         if envelope {
-            targets.extend(enveloped);
+            targets.extend(enveloped.into_iter().filter(named).map(ToOwned::to_owned));
         }
-        if old && new {
-            targets.extend(diffed);
-        }
+        targets.extend(diffed.into_iter().filter(named).map(ToOwned::to_owned));
     }
     targets
 }
@@ -11771,7 +11793,7 @@ pub fn encode_preapproval(
 /// Byte-stable (§6), and generated rather than committed so the plugin and the
 /// engine it spawns are one release: `node:child_process` runs under the Bun the
 /// host executes plugins with, and under Node for the test that drives it.
-//MUTANT opencode-exit2-not-thrown|s@^      throw new Error(run.stderr.trim());$@      return;@|a_generated_opencode_plugin_throws_the_engine_s_refusal
+//MUTANT opencode-exit2-not-thrown|s@^      throw new Error(reason);$@      return;@|a_generated_opencode_plugin_throws_the_engine_s_refusal
 fn render_opencode_plugin(path: &str) -> String {
     let quoted: Vec<String> = wiring_argv(Harness::OpenCode)
         .iter()
@@ -11818,16 +11840,21 @@ export const Batten = async ({ directory }) => ({
   "tool.execute.before": async (input, output) => {
     const run = await adjudicate(directory, {
       hook_event_name: "PreToolUse",
+      session_id: input.sessionID,
       tool_name: input.tool,
       tool_input: output.args,
     });
     if (run.status === 2) {
-      throw new Error(run.stderr.trim());
+      const reason = run.stderr.trim() || "batten refused this call; run batten check";
+      throw new Error(reason);
     }
   },
   event: async ({ event }) => {
     if (event.type === "session.idle") {
-      await adjudicate(directory, { hook_event_name: "Stop" });
+      await adjudicate(directory, {
+        hook_event_name: "Stop",
+        session_id: event.properties?.sessionID,
+      });
     }
   },
 });"#;
@@ -11860,9 +11887,10 @@ pub const ADVISORY_GAPS: &[(Harness, &str)] = &[
     (
         Harness::Factory,
         "The reference says stdout \"can add context\" on `UserPromptSubmit` and \
-         `SessionStart` and names no context field on the events Batten \
-         registers, so the channel is declared and reached nowhere. Nothing here \
-         has probed this host at all.",
+         `SessionStart`, and Batten registers `SessionStart`; neither is in \
+         `delivered_on`, because nothing here has probed this host at all. \
+         Listing an unprobed surface costs a notice that vanishes silently; \
+         leaving it out costs only silence, as Claude Code's row says.",
     ),
 ];
 
@@ -17982,6 +18010,22 @@ deny contains "refused by themodule" if {
             ),
             Decision::Allow,
         );
+        // A tool that writes nothing is never read as a patch: a subagent's
+        // prompt quoting one asks for review, not a write.
+        assert_eq!(
+            judge(Harness::OpenCode, "task", "prompt", patch("batten.toml")),
+            Decision::Allow,
+        );
+        // OpenCode's `multiedit` names its file under `filePath`, as `edit` does.
+        assert!(matches!(
+            judge(
+                Harness::OpenCode,
+                "multiedit",
+                "filePath",
+                "batten.toml".to_owned()
+            ),
+            Decision::Deny(_)
+        ));
     }
 
     /// A write that names its path is never re-read for patch-shaped content.
@@ -18066,6 +18110,44 @@ deny contains "refused by themodule" if {
         assert!(
             patch_targets(&serde_json::json!({ "content": "*** Add File: batten.toml\n" }))
                 .is_empty()
+        );
+    }
+
+    /// A git patch names a rename, a copy or a mode change only in its own
+    /// lines, a quoted path is the path, and a hunk removing `-- x` names
+    /// nothing.
+    #[test]
+    fn a_git_patch_names_its_files_without_a_hunk() {
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git a/notes.md b/batten.toml\nsimilarity index 100%\nrename from notes.md\nrename to batten.toml\n",
+            })),
+            ["notes.md", "batten.toml", "notes.md", "batten.toml"]
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git \"a/sp ace\" \"b/sp ace\"\nold mode 100644\nnew mode 100755\n",
+            })),
+            ["sp ace", "sp ace"]
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "--- \"a/sp ace\"\n+++ \"b/sp ace\"\n",
+            })),
+            ["sp ace", "sp ace"]
+        );
+        assert!(
+            patch_targets(&serde_json::json!({
+                "patch": "rename from batten.toml\nrename to x\n",
+            }))
+            .is_empty(),
+            "a rename line outside a git patch is content"
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "--- a/q.sql\n+++ b/q.sql\n@@ -1,2 +1 @@\n--- batten.toml\n x\n",
+            })),
+            ["q.sql", "q.sql"]
         );
     }
 
