@@ -422,10 +422,14 @@ fn the_session_start_writes_the_row() {
     let dir = common::scratch_repo("engine-pin-row-session");
     let (_host, served) = release_host(&dir, RELEASE, RELEASE);
     common::write(&dir, "batten.toml", "version = 1\n");
-    let payload = format!(
-        "{{\"session_id\":\"cloud-2595-start\",\"transcript_path\":\"/dev/null\",\"cwd\":\"{}\",\"hook_event_name\":\"SessionStart\",\"source\":\"startup\"}}",
-        dir.display()
-    );
+    let payload = serde_json::json!({
+        "session_id": "cloud-2595-start",
+        "transcript_path": "/dev/null",
+        "cwd": dir.display().to_string(),
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+    })
+    .to_string();
     let output = following(
         &dir,
         &["adjudicate", "--harness", "claude-code"],
@@ -602,7 +606,7 @@ fn a_followed_pin_names_itself_once() {
     if !cfg!(target_os = "linux") {
         return;
     }
-    let dir = common::scratch_repo("engine-pin-row-named");
+    let dir = common::scratch_repo("engine-pin-row-says-once");
     let (_host, served) = release_host(&dir, WANTED, WANTED);
     let digest = published(&dir, WANTED, &batten::engine::running_target());
     common::write(
@@ -610,10 +614,16 @@ fn a_followed_pin_names_itself_once() {
         "batten.toml",
         &format!("version = 1\n{}", row(WANTED, &digest)),
     );
-    let payload = format!(
-        "{{\"session_id\":\"cloud-2595-named\",\"transcript_path\":\"/dev/null\",\"cwd\":\"{}\",\"permission_mode\":\"default\",\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{{\"command\":\"ls\"}}}}",
-        dir.display()
-    );
+    let payload = serde_json::json!({
+        "session_id": "cloud-2595-named",
+        "transcript_path": "/dev/null",
+        "cwd": dir.display().to_string(),
+        "permission_mode": "default",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": "ls" },
+    })
+    .to_string();
     let line = format!("batten: this binary is {RELEASE}; following the pinned {WANTED}");
     let args = ["adjudicate", "--harness", "claude-code"];
     let first = following(&dir, &args, &served_env(&served), Some(&payload));
