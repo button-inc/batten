@@ -710,7 +710,8 @@ fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
 /// A source pin is built over the running binary as before, and never on the
 /// hook path.
 ///
-/// **IT WRITES NOTHING, on either branch.** Every non-hook verb is a
+/// **IT WRITES NOTHING BUT THE FOLLOW LINE, and that only to a terminal**
+/// (CLOUD-2595 §2e). Every non-hook verb is a
 /// transparent passthrough whose child inherits this process's own descriptors,
 /// so its bytes never travel through a writer here at all; and the hook branch
 /// no longer spawns, so it has no child's bytes to hold. [`follow_to_pinned`]
@@ -838,8 +839,17 @@ fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
         }));
     }
     // OFF THE HOOK PATH every run is its own session, so the follow says itself
-    // on each (CLOUD-2595 §2e).
-    writeln!(std::io::stderr(), "{}", follow_line(&pin_name))?;
+    // on each (CLOUD-2595 §2e) — TO A PERSON ONLY. `exec --`, `statusline` and
+    // every captured caller read this process's stderr as the pinned engine's
+    // (or the child's), so a line there is bytes the passthrough never produced,
+    // and a closed stderr must never fail the verb before the pin runs.
+    {
+        use std::io::IsTerminal as _;
+        let mut stderr = std::io::stderr();
+        if stderr.is_terminal() {
+            let _ = writeln!(stderr, "{}", follow_line(&pin_name));
+        }
+    }
     // TEED EVERYWHERE ELSE, because the pinned engine's output IS this
     // invocation's output, live. `batten exec -- cmd` keeps its child's bytes
     // as they arrive and its child's own code, `101` included: that verb is a
@@ -938,7 +948,8 @@ fn say_follow_once(
     let agent = hook::present_str(value, "agent_id");
     let first = hook::present_str(value, "session_id").is_none_or(|session| {
         let context = hook::sighting_context(&session, agent.as_deref());
-        refusal::first_sighting(&target.root, &context, "engine-followed", &line)
+        // The store `expire_sightings` forgets, so a compacted window hears it again.
+        refusal::first_sighting(hook_authority_root(), &context, "engine-followed", &line)
     });
     if first {
         writeln!(err, "{line}")?;
@@ -1730,7 +1741,16 @@ fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
     // release, so where `BATTEN_VERSION` or a ref placed another, writing it would
     // pin bytes that were never installed. That engine pins itself on its own
     // first clean load.
-    let installs_itself = want == Want::Running;
+    // AND ONLY WHEN THIS RUN PLACED IT: an `engine install` that found batten
+    // already installed changed nothing, and a session-start or setup task that
+    // runs it in an unpinned checkout must leave that checkout as it was
+    // (CLOUD-2123) — not dirty every developer's tree with their own version.
+    let bootstraps = !engine::is_installed(
+        &std::env::current_exe()?,
+        std::env::var_os("PATH").as_deref(),
+        root.as_deref(),
+    );
+    let installs_itself = want == Want::Running && bootstraps;
     let adopt_at = root.clone();
     let code = install_wanted(want, root, &repository, out)?;
     // THE BOOTSTRAP'S LAST STEP PINS WHAT IT INSTALLED (CLOUD-2595 §2c). The
@@ -2122,6 +2142,7 @@ fn engine_pin(
 /// Every finding is a pointer: the file, the token, the pin.
 //MUTANT-SUITE crates/batten/tests/it/engine_gates.rs
 //MUTANT source-pin-admitted|s@^        Some(engine::PinKind::Source(_)) => return source_never_lands(&config_path, out),$@        Some(engine::PinKind::Source(_)) => return Ok(ExitCode::Success),@|a_source_pin_is_refused_on_the_landing_path
+//MUTANT gate-admits-a-second-row|s@^    let disagreeing = engine::gate_disagreements(\&text, tag);$@    let disagreeing: Vec<(usize, String)> = Vec::new();@|a_second_batten_row_or_a_floor_above_the_pin_is_refused
 //MUTANT gate-admits-disagreeing-provision|s@^    if let Some((key, row)) = engine::row_disagreement(\&text) {$@    if let Some((key, row)) = None::<(String, String)> {@|a_provision_row_disagreeing_with_the_pin_is_refused
 //MUTANT gate-ignores-stale-digest|s@^    if !foreign.is_empty() {$@    if false {@|a_stale_digest_at_the_pinned_version_is_refused
 //MUTANT dropped-row-unchecked|s@^    if !runs(\&\["config", "lint"\])? {$@    if !runs(\&["config", "show"])? {@|a_config_the_pinned_release_drops_a_row_of_is_drift
@@ -2149,6 +2170,16 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
         }
     };
     let tag = tag.as_str();
+    // EVERY OTHER BATTEN DECLARATION AGREES WITH THE PIN (CLOUD-2595): a second
+    // batten row a merge left behind, or a `min_batten_version` the followed
+    // engine would refuse itself under. Judged before anything is fetched.
+    let disagreeing = engine::gate_disagreements(&text, tag);
+    for (line, what) in &disagreeing {
+        writeln!(out, "{}:{line} {what}", config_path.display())?;
+    }
+    if !disagreeing.is_empty() {
+        return Ok(ExitCode::Violation);
+    }
     // NO DRAFT WAIT (CLOUD-2033 retires CLOUD-2138's). `main` used to pin vX
     // from the moment the release PR landed, while vX was still a draft being
     // built, so this gate waited out the build. The release path closes that
@@ -21368,7 +21399,12 @@ fn adopted_line(tag: &str) -> String {
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 //MUTANT row-written-on-failed-load|s@^    resolve::resolve(root, overrides)?;$@    let _ = resolve::resolve(root, overrides);@|a_config_that_fails_to_load_is_never_written
 fn adopt_engine_row(root: &Path, overrides: &Overrides) -> Result<Option<String>> {
-    if overrides.config_from.is_some() || std::env::var_os("CI").is_some() {
+    // An override names ANOTHER authority than `root`'s file, so a clean load
+    // under it says nothing about the bytes this would write.
+    if overrides.config_from.is_some()
+        || overrides.config_in.is_some()
+        || std::env::var_os("CI").is_some()
+    {
         return Ok(None);
     }
     // ABSOLUTE, because the state directory is keyed by the repository's path:
