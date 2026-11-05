@@ -30371,6 +30371,11 @@ mod tests {
     /// `false` refuses, and bytes that are no program cannot be run at all.
     #[test]
     fn a_build_is_kept_only_when_it_answers_here() {
+        // The gnu probe runs only on musl Linux; `true` and `false` stand in on
+        // every unix host, and a missing one is a failure, never a skip.
+        if cfg!(not(unix)) {
+            return;
+        }
         let dir = std::env::temp_dir().join(format!("batten-runs-here-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let program = |name: &str| {
@@ -30380,9 +30385,8 @@ mod tests {
                 .find(|path| path.is_file())
                 .and_then(|path| std::fs::read(path).ok())
         };
-        let (Some(answers), Some(refuses)) = (program("true"), program("false")) else {
-            return;
-        };
+        let answers = program("true").expect("every unix host carries `true`");
+        let refuses = program("false").expect("every unix host carries `false`");
         assert!(runs_here(&dir, &answers), "a build that exits 0 is kept");
         assert!(!runs_here(&dir, &refuses), "a build that exits 1 is not");
         assert!(
