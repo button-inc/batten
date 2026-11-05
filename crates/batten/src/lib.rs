@@ -726,7 +726,7 @@ fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
 //MUTANT hook-path-builds|s@^    let may_build = !hook_path;$@    let may_build = true;@|the_hook_path_never_builds_a_source_pin
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT follow-pin-passes-a-crash-through|s@^    if hook_path {$@    if false {@|a_crashing_followed_build_never_fails_the_hook_open
-//MUTANT fetch-failure-always-falls-through|s@^            engine::pinned_release(&cache, &releases_repository(), tag, pinned.as_deref())?$@            match engine::pinned_release(\&cache, \&releases_repository(), tag, pinned.as_deref()) { Ok(path) => path, Err(_) => return Ok(Followed::Nothing) }@|a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path
+//MUTANT fetch-failure-always-falls-through|s@^            engine::pinned_release(&cache, &releases_repository(), tag, pinned)?$@            match engine::pinned_release(\&cache, \&releases_repository(), tag, pinned) { Ok(path) => path, Err(_) => return Ok(Followed::Nothing) }@|a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path
 fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
     // THE HOOK FOLLOWS A RELEASE PIN BUT NEVER BUILDS A SOURCE ONE (CLOUD-2062,
     // narrowed under CLOUD-2059), and that is the same bit rather than a second
@@ -774,8 +774,8 @@ fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
             // VERIFIED AGAINST THE ROW'S OWN DIGEST when it lists one for this
             // platform (CLOUD-2595 §2b), the consumer's pin rather than the
             // release's manifest.
-            let pinned = engine::followed_digest(&text);
-            engine::pinned_release(&cache, &releases_repository(), tag, pinned.as_deref())?
+            let pinned = || engine::followed_digest(&text);
+            engine::pinned_release(&cache, &releases_repository(), tag, pinned)?
         }
         // A SOURCE PIN IS FOLLOWED TO THE CHECKOUT'S OWN BUILD (CLOUD-2232),
         // as a release pin is followed to its cache: the installed binary execs
@@ -920,35 +920,28 @@ fn follow_line(pinned: &str) -> String {
     )
 }
 
-/// Write [`follow_line`] once for the session `raw` (the host's payload) names
-/// (CLOUD-2595 §2e): a stamp per session under the repository's state, so the
-/// second and later calls of one session stay quiet.
+/// Write [`follow_line`] once per reader the payload names (CLOUD-2595 §2e),
+/// marked in the sighting store every once-per-context line shares
+/// ([`refusal::first_sighting`]): created exclusively, so a parallel batch of
+/// one session's calls says it once, and forgotten with the window, so a
+/// compacted session hears it again.
 ///
-/// Best-effort, as every byte the hook path writes about itself is: a payload
-/// with no session, or a stamp that will not write, says the line anyway rather
-/// than not at all.
+/// A payload naming no session says the line every time, as a sighting does.
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT follow-silent|s@^    writeln!(err, "{}", follow_line(\&target.pinned))?;$@@|a_followed_pin_names_itself_once
-fn say_follow_once(target: &FollowTarget, raw: &str, err: &mut dyn Write) -> Result<()> {
-    let session = serde_json::from_str::<serde_json::Value>(raw)
-        .ok()
-        .and_then(|value| value.get("session_id")?.as_str().map(str::to_owned));
-    let stamp = session.as_deref().and_then(|session| {
-        let dir = state::repo_state_dir(&target.root)
-            .ok()?
-            .join("engine")
-            .join("followed.d");
-        Some(dir.join(provision::digest(session.as_bytes())))
+//MUTANT follow-silent|s@^        writeln!(err, "{line}")?;$@@|a_followed_pin_names_itself_once
+fn say_follow_once(
+    target: &FollowTarget,
+    value: &serde_json::Value,
+    err: &mut dyn Write,
+) -> Result<()> {
+    let line = follow_line(&target.pinned);
+    let agent = hook::present_str(value, "agent_id");
+    let first = hook::present_str(value, "session_id").is_none_or(|session| {
+        let context = hook::sighting_context(&session, agent.as_deref());
+        refusal::first_sighting(&target.root, &context, "engine-followed", &line)
     });
-    if stamp.as_ref().is_some_and(|stamp| stamp.is_file()) {
-        return Ok(());
-    }
-    writeln!(err, "{}", follow_line(&target.pinned))?;
-    if let Some(stamp) = stamp {
-        if let Some(dir) = stamp.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = durable::replace(&stamp, &target.pinned);
+    if first {
+        writeln!(err, "{line}")?;
     }
     Ok(())
 }
@@ -2181,8 +2174,8 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
     if !foreign.is_empty() {
         return Ok(ExitCode::Violation);
     }
-    let pinned = engine::followed_digest(&text);
-    let binary = engine::pinned_release(&cache, &repository, tag, pinned.as_deref())?;
+    let binary =
+        engine::pinned_release(&cache, &repository, tag, || engine::followed_digest(&text))?;
     // The pinned engine must decide as itself: never update itself mid-gate.
     let published = [(String::from(ENGINE_UPDATED), String::from("1"))];
     // A non-zero child arrives as a `Passthrough` ERROR, which is the right shape
@@ -20299,7 +20292,7 @@ fn follow_to_pinned<'a>(
     };
     let followed = hand_off(&target.root, &target.argv, &raw, out)?;
     if followed.ran.is_some() {
-        say_follow_once(target, &raw, err)?;
+        say_follow_once(target, &payload.streamed.value, err)?;
     }
     Ok(followed)
 }
@@ -30376,8 +30369,7 @@ mod tests {
         if cfg!(not(unix)) {
             return;
         }
-        let dir = std::env::temp_dir().join(format!("batten-runs-here-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::scratch("runs-here");
         let program = |name: &str| {
             ["/bin", "/usr/bin"]
                 .iter()
@@ -30395,7 +30387,6 @@ mod tests {
         );
         let left = std::fs::read_dir(&dir).unwrap().count();
         assert_eq!(left, 0, "the probe is removed whatever it answered");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// CLOUD-2372: the next landing's reap, not a reader, forgets a dead
