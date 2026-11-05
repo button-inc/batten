@@ -634,11 +634,7 @@ pub fn status_on(entries: &[Provision], cache_root: &Path, host: Host<'_>) -> Re
         report.push(EntryStatus {
             name: entry.name.clone(),
             version: entry.version.clone(),
-            freshness: freshness_of(
-                entry,
-                cache_root,
-                link_of(entry, cache_root, host)?.as_deref(),
-            )?,
+            freshness: freshness_of(entry, cache_root, link_of(entry, host)?.as_ref())?,
         });
     }
     Ok(Report { entries: report })
@@ -730,64 +726,105 @@ pub fn link_dir(dest: &str, host: Host<'_>) -> Result<PathBuf> {
     ))
 }
 
-/// The directory `entry`'s link resolves to on `host`, or `None` where it
-/// declares none or the host's links are not this engine's to write.
+/// Where one entry's link goes, and whether that directory is SHARED: a system
+/// directory the `PATH` fallback chose, rather than the declared one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Link {
+    /// The directory the link lands in.
+    dir: PathBuf,
+    /// Whether [`link_dir`] fell back to a directory package managers share.
+    shared: bool,
+}
+
+/// Where `entry`'s link resolves on `host`, or `None` where it declares none
+/// or the host's links are not this engine's to write.
 ///
 /// RESOLVED ONCE PER ENTRY, and handed to both the freshness reading and the
 /// install, so one call cannot judge one directory and write another.
-///
-/// **A FALLBACK NEVER TAKES A NAME SOMEBODY ELSE OWNS.** The declared `~/`
-/// directory is batten's to write, but a system directory the fallback picks
-/// (`/usr/local/bin`, `/opt/homebrew/bin`) is shared with package managers. The
-/// link lands there only where the name is free or already batten's
-/// ([`claimable`]). Otherwise the declared directory stands, and the host keeps
-/// its own `mise` rather than having it renamed over.
-fn link_of(entry: &Provision, cache_root: &Path, host: Host<'_>) -> Result<Option<PathBuf>> {
+fn link_of(entry: &Provision, host: Host<'_>) -> Result<Option<Link>> {
     let Some(dest) = entry.link.as_deref().filter(|_| host.links) else {
         return Ok(None);
     };
-    let resolved = link_dir(dest, host)?;
-    let declared = expand_home(dest)?;
-    Ok(Some(
-        if resolved == declared || claimable(&resolved, entry, cache_root) {
-            resolved
-        } else {
-            declared
-        },
-    ))
+    let dir = link_dir(dest, host)?;
+    let shared = dir != expand_home(dest)?;
+    Ok(Some(Link { dir, shared }))
 }
 
-/// Whether a fallback directory may take `entry`'s link: the name is free, or
-/// what holds it is batten's — a launcher, or the path [`record_link`] says
-/// batten wrote for this entry last.
+/// Whether a SHARED directory's name is batten's to write: free, a batten
+/// launcher, or the very file [`record_link`] recorded writing.
 ///
-/// RECORDED, NOT INFERRED FROM BYTES. Comparing the file with the cached
-/// binary read two whole binaries per status, and broke on the upgrade it
-/// mattered for: the new version's cache is empty until `install`, so batten's
-/// own old copy read as foreign and the upgraded link went off `PATH`. The
-/// record is per entry NAME, not version, so it survives the bump.
+/// **A FALLBACK NEVER TAKES A NAME SOMEBODY ELSE OWNS, AND SAYS SO.** The
+/// declared `~/` directory is batten's, but `/usr/local/bin` and
+/// `/opt/homebrew/bin` are shared with package managers. A foreign name there
+/// makes the link read `missing` and the install refuse, so the startup row
+/// fails visibly. Quietly linking somewhere off `PATH` instead would be
+/// CLOUD-2617's false green again, over somebody else's `mise`.
+///
+/// RECORDED, NOT INFERRED FROM BYTES, and by IDENTITY as well as path. Bytes
+/// cost two whole binaries per status and broke on upgrade (the new version's
+/// cache is empty until `install`); a path alone would trust whatever replaced
+/// the file later. The record is per entry NAME, so it survives a version bump.
 //MUTANT fallback-claims-a-foreign-name|s@^    !linked.exists()$@    true@|a_fallback_never_takes_a_name_another_tool_owns
 fn claimable(dir: &Path, entry: &Provision, cache_root: &Path) -> bool {
     let linked = dir.join(&entry.binary);
-    !linked.exists()
-        || is_launcher(&linked)
-        || fs::read_to_string(link_record(cache_root, entry))
-            .is_ok_and(|recorded| Path::new(recorded.trim_end()) == linked)
+    !linked.exists() || is_launcher(&linked) || recorded_as_ours(&linked, entry, cache_root)
 }
 
-/// Where the path of `entry`'s last written link is recorded: beside its
-/// versioned cache directories, so a version bump still finds it.
+/// Whether the link record names `linked` and, once completed, `linked`'s
+/// present identity.
+///
+/// An INTENT — a record naming the path with no identity yet — counts as
+/// ours: it is written before the link (crash-only), so a run killed between
+/// the two finds its own half-written link claimable rather than foreign.
+fn recorded_as_ours(linked: &Path, entry: &Provision, cache_root: &Path) -> bool {
+    let Ok(record) = fs::read_to_string(link_record(cache_root, entry)) else {
+        return false;
+    };
+    let mut lines = record.lines();
+    if lines.next().map(Path::new) != Some(linked) {
+        return false;
+    }
+    lines
+        .next()
+        .is_none_or(|recorded| identity(linked).as_deref() == Some(recorded))
+}
+
+/// Where `entry`'s last written link is recorded: beside its versioned cache
+/// directories, so a version bump still finds it.
 fn link_record(cache_root: &Path, entry: &Provision) -> PathBuf {
     cache_root.join(CACHE_DIR).join(&entry.name).join("linked")
 }
 
-/// Record that batten wrote `entry`'s link at `linked`.
-fn record_link(cache_root: &Path, entry: &Provision, linked: &Path) -> Result<()> {
-    crate::durable::replace(
-        link_record(cache_root, entry),
-        linked.to_string_lossy().as_bytes(),
-    )
-    .context("record the written link")
+/// Record that batten writes, or has written, `entry`'s link at `linked`:
+/// the path, then the written file's [`identity`] once there is one.
+fn record_link(
+    cache_root: &Path,
+    entry: &Provision,
+    linked: &Path,
+    written: Option<&str>,
+) -> Result<()> {
+    let record = link_record(cache_root, entry);
+    if let Some(parent) = record.parent() {
+        fs::create_dir_all(parent).context("create the link record's directory")?;
+    }
+    let mut body = linked.to_string_lossy().into_owned();
+    if let Some(written) = written {
+        body.push('\n');
+        body.push_str(written);
+    }
+    crate::durable::replace(record, body.as_bytes()).context("record the written link")
+}
+
+/// A file's identity for [`recorded_as_ours`]: its length and modification
+/// time, which any later replacement of the file changes.
+fn identity(path: &Path) -> Option<String> {
+    let meta = fs::metadata(path).ok()?;
+    let modified = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    Some(format!("{} {}", meta.len(), modified.as_nanos()))
 }
 
 /// How much of a file is read to find a launcher's `#!` line, which is short;
@@ -815,7 +852,7 @@ fn launcher_interpreter(bytes: &[u8]) -> Option<&str> {
     (verb == LAUNCHER_VERB).then_some(interpreter)
 }
 
-fn freshness_of(entry: &Provision, cache_root: &Path, link: Option<&Path>) -> Result<Freshness> {
+fn freshness_of(entry: &Provision, cache_root: &Path, link: Option<&Link>) -> Result<Freshness> {
     let dir = entry_dir(cache_root, entry);
     let binary = dir.join(BIN_DIR).join(&entry.binary);
     if !binary.is_file() {
@@ -837,9 +874,15 @@ fn freshness_of(entry: &Provision, cache_root: &Path, link: Option<&Path>) -> Re
     // `Missing` rather than a fourth verdict: what is missing is the binary at
     // the place this entry declares it must be, which is the same class as
     // nothing cached and takes the same repair.
-    if let Some(dir) = link {
-        let linked = dir.join(&entry.binary);
+    if let Some(link) = link {
+        let linked = link.dir.join(&entry.binary);
         if !linked.is_file() {
+            return Ok(Freshness::Missing);
+        }
+        // AND A SHARED DIRECTORY'S NAME MUST BE BATTEN'S. Present is not
+        // enough there: another tool's `mise` would answer `is_file` and read
+        // fresh over a binary batten never wrote and the pin does not name.
+        if link.shared && !claimable(&link.dir, entry, cache_root) {
             return Ok(Freshness::Missing);
         }
         // AND A LAUNCHER NAMING AN INTERPRETER THAT IS NO LONGER THERE IS STALE
@@ -937,8 +980,8 @@ pub fn apply_on(
     dry_run: bool,
     host: Host<'_>,
 ) -> Result<Applied> {
-    let link = link_of(entry, cache_root, host)?;
-    let link = link.as_deref();
+    let link = link_of(entry, host)?;
+    let link = link.as_ref();
     if freshness_of(entry, cache_root, link)? == Freshness::Fresh {
         return Ok(Applied::AlreadyFresh);
     }
@@ -987,7 +1030,18 @@ pub fn apply_on(
 /// into `link` where one was resolved.
 ///
 /// Called only after the checksum matched.
-fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], link: Option<&Path>) -> Result<()> {
+fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], link: Option<&Link>) -> Result<()> {
+    // REFUSED BEFORE ANYTHING IS WRITTEN: a shared directory whose name another
+    // tool holds is reported, never renamed over (see [`claimable`]).
+    if let Some(link) = link.filter(|link| link.shared)
+        && !claimable(&link.dir, entry, cache_root)
+    {
+        anyhow::bail!(
+            "provision: {} is another tool's {}, so batten will not replace it",
+            link.dir.join(&entry.binary).display(),
+            entry.binary
+        );
+    }
     let dir = entry_dir(cache_root, entry);
     let bin_dir = dir.join(BIN_DIR);
     fs::create_dir_all(&bin_dir).context("create the provision cache directory")?;
@@ -1032,9 +1086,13 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], link: Option<&Pat
     // reading `missing` also leaves the link unmade. A fresh entry whose link
     // never landed would be the silent half-install this ordering exists to
     // rule out.
-    if let Some(dir) = link {
-        link_into(entry, dir, &cached, &binary)?;
-        record_link(cache_root, entry, &dir.join(&entry.binary))?;
+    if let Some(link) = link {
+        // INTENT FIRST, crash-only: the record names the path before the link
+        // exists, so a run killed in between finds its own file claimable.
+        let linked = link.dir.join(&entry.binary);
+        record_link(cache_root, entry, &linked, None)?;
+        link_into(entry, &link.dir, &cached, &binary)?;
+        record_link(cache_root, entry, &linked, identity(&linked).as_deref())?;
     }
     // The artifact is written last, so a crash between the two leaves the entry
     // reading `missing` rather than `fresh` — the direction that re-applies.
@@ -2454,11 +2512,39 @@ mod tests {
             !claimable(&shared, &entry, &cache),
             "a plain copy nobody recorded"
         );
-        fs::create_dir_all(link_record(&cache, &entry).parent().unwrap()).unwrap();
-        record_link(&cache, &entry, &linked).unwrap();
+        record_link(&cache, &entry, &linked, None).unwrap();
+        assert!(
+            claimable(&shared, &entry, &cache),
+            "an intent recorded before the link is batten's"
+        );
+        record_link(&cache, &entry, &linked, identity(&linked).as_deref()).unwrap();
         assert!(
             claimable(&shared, &entry, &cache),
             "the link batten recorded writing, whatever version wrote it"
+        );
+
+        // REPLACED AFTERWARDS by another tool: the path still matches the
+        // record, the identity does not, and the name is not batten's again.
+        fs::write(&linked, b"a different tool's longer binary").unwrap();
+        assert!(
+            !claimable(&shared, &entry, &cache),
+            "a file another tool put at the recorded path"
+        );
+
+        // AND THE INSTALL REFUSES rather than renaming over it, leaving it whole.
+        let link = Link {
+            dir: shared.clone(),
+            shared: true,
+        };
+        assert!(install(&entry, &cache, &body, Some(&link)).is_err());
+        assert_eq!(
+            fs::read(&linked).unwrap(),
+            b"a different tool's longer binary"
+        );
+        assert_eq!(
+            freshness_of(&entry, &cache, Some(&link)).unwrap(),
+            Freshness::Missing,
+            "a foreign name in a shared directory reads missing, not fresh"
         );
     }
 
