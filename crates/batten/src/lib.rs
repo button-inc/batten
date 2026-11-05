@@ -19879,7 +19879,7 @@ impl Drop for Spool {
 //MUTANT floor-admits-everything|s@        _ => false,@        _ => true,@|a_command_is_still_refused_over_a_config_that_will_not_load
 //MUTANT floor-admits-an-unclassified-call|s@        (hook::Operation::Read, None) => true,@        (_, None) => true,@|a_mutating_mcp_call_is_still_refused_over_a_config_that_will_not_load
 //MUTANT floor-refuses-inert-tools|s@        (hook::Operation::Other(name), None) if hook::INERT_TOOLS.contains(\&name.as_str()) => true,@@|a_search_still_answers_over_a_config_that_will_not_load
-//MUTANT floor-admits-any-write|s@        (hook::Operation::Write, Some(path)) => names_the_config_authority(path),@        (hook::Operation::Write, Some(_)) => true,@|a_write_to_another_path_is_still_refused_over_a_config_that_will_not_load
+//MUTANT floor-admits-any-write|s@        (hook::Operation::Write, Some(_)) => envelope.writes_only(names_the_config_authority),@        (hook::Operation::Write, Some(_)) => true,@|a_write_to_another_path_is_still_refused_over_a_config_that_will_not_load
 //MUTANT floor-refuses-engine-repair|s@^        (hook::Operation::Execute, None) => engine::is_repair_at($@        (hook::Operation::Execute, None) => false \&\& engine::is_repair_at(@|the_engine_repair_verb_reaches_a_skewed_pin
 fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
     // NO `command.is_empty()` GUARD, AND ITS ABSENCE IS THE DECISION. A `Bash`

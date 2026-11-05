@@ -3003,14 +3003,6 @@ impl Envelope {
         }
     }
 
-    /// Every file this call writes: the one [`Envelope::writes`] names, or each
-    /// file a patch tool's body names.
-    ///
-    /// The reader for a question about the WHOLE write. `writes` is one path,
-    /// and a patch's is its first file, so a predicate that admits a call by
-    /// what it writes — the ripcord's arm and its floor — reads this, or a
-    /// patch adding the sentinel beside a protected file reads as the sentinel
-    /// alone.
     /// Whether this call writes something, and every file it writes meets
     /// `meets`: the predicate a gate admitting a call by what it writes asks,
     /// so none of them can forget the call that names no file.
@@ -3020,8 +3012,15 @@ impl Envelope {
         !targets.is_empty() && targets.into_iter().all(meets)
     }
 
+    /// Every file this call writes: the one [`Envelope::writes`] names, or each
+    /// file a patch tool's body names.
+    ///
+    /// The reader for a question about the WHOLE write. `writes` is one path,
+    /// and a patch's is its first file, so a predicate that admits a call by
+    /// what it writes — the ripcord's arm and its floor — reads this, or a
+    /// patch adding the sentinel beside a protected file reads as the sentinel
+    /// alone.
     #[must_use]
-    //MUTANT patch-targets-unread|s@^        let patched = if names_no_path {$@        let patched = if false {@|a_patch_naming_a_protected_file_is_refused_on_every_patch_tool
     pub fn write_targets(&self) -> Vec<&str> {
         // A patch tool names its files in its body, never under a path key, so
         // the body is read for a write tool that named no path. A write that
@@ -9143,6 +9142,7 @@ fn redirected_read(policy: &Policy, envelope: &Envelope) -> Decision {
 /// fact the old `verbs::classify(raw_tool)` was failing to reconstruct from a
 /// consumer's config. The `[[verb]]` row is consulted only for its remedy text,
 /// and its absence costs a more specific sentence rather than the whole gate.
+//MUTANT patch-targets-unread|s@^        let patched = if names_no_path {$@        let patched = if false {@|a_patch_naming_a_protected_file_is_refused_on_every_patch_tool
 fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
     // Through `protects` like every other reader (CLOUD-1236). The envelope's
     // target is already relativised upstream by `relativise_writes`, so this
@@ -9239,7 +9239,8 @@ fn patch_targets(input: &Value) -> Vec<&str> {
         } else {
             rest.find(" b/").or_else(|| rest.find(" \"b/"))?
         };
-        Some((&rest[..at], &rest[at + 1..]))
+        // The second side keeps the separating space, which `unified` trims.
+        Some(rest.split_at(at))
     }
     let Some(fields) = input.as_object() else {
         return Vec::new();
@@ -18208,6 +18209,20 @@ deny contains "refused by themodule" if {
         .expect("decodes");
         assert_eq!(envelope.writes.as_deref(), Some(".batten-ripcord"));
         assert_eq!(envelope.write_targets(), [".batten-ripcord", "batten.toml"]);
+        // `writes_only` asks every target, and a call writing nothing meets
+        // no predicate, not even one every path meets.
+        assert!(envelope.writes_only(|_| true));
+        assert!(!envelope.writes_only(|path| path == ".batten-ripcord"));
+        let read = decode_value(
+            Harness::OpenCode,
+            &serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "read",
+                "tool_input": { "filePath": "a.rs" },
+            }),
+        )
+        .expect("decodes");
+        assert!(!read.writes_only(|_| true));
         // A write naming its path is that path alone, whatever its content.
         let named = decode_value(
             Harness::OpenCode,
@@ -18289,6 +18304,13 @@ deny contains "refused by themodule" if {
                 "patch": "diff --git a/x b/y b/x b/y\nold mode 100644\nnew mode 100755\n",
             })),
             ["x b/y"]
+        );
+        // A space at the middle is no split unless both sides name one file.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git a/x b/y b/zzzzz\nsimilarity index 100%\n",
+            })),
+            ["x", "y b/zzzzz"]
         );
         // Each side loses its own prefix once: a path that starts with `b/`
         // keeps it.
