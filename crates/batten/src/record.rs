@@ -1765,10 +1765,10 @@ fn derive_reading_under(
         // retired body's `[[ -t 0 ]]`: no payloads, so the tag's refs alone.
         crate::released::FAMILY => {
             let config = resolve::resolve(Path::new("."), overrides)?;
-            let stdin = match document {
-                Some(given) => given.to_owned(),
-                None if std::io::IsTerminal::is_terminal(&std::io::stdin()) => String::new(),
-                None => verdict_lines()?,
+            let stdin = if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                String::new()
+            } else {
+                verdict_lines()?
             };
             crate::released::reading(
                 inputs,
