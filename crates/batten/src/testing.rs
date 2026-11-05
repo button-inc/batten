@@ -992,4 +992,51 @@ mod tests {
             census("use std::process::Command as Cmd; fn f() { Cmd::new(\"jq\").status(); }");
         assert_eq!(aliased.spawned, ["jq"]);
     }
+
+    /// Each census count, exactly: a literal resolver call names its tool, a
+    /// non-literal one or a resolver passed as a value is unnamed, the
+    /// resolvers' own bodies count nothing, `which` is counted in an expression
+    /// list and in a token-read body alike, and only a path ending in
+    /// `batten.toml` is the committed config.
+    #[test]
+    fn the_require_census_counts_each_source_exactly() {
+        let census = require_census(
+            &syn::parse_str(
+                r#"
+                fn require_tool(name: &str) { require_bin(name, name); let _ = ["which"].map(require_bin); }
+                fn require_bin(name: &str, _: &str) { let _ = "which"; }
+                fn case() {
+                    require_tool("jq");
+                    require_bin(&name, "x");
+                    let _ = names.map(require_tool);
+                    let _ = some_path;
+                    assert!(probe("which"));
+                    let _ = vec!["which"; 2];
+                    let _ = vec!["whence"; 2];
+                    let _ = include_str!("../../batten.toml");
+                    let _ = include_str!("batten.toml");
+                    let _ = include_str!("other.toml");
+                    Command::new("gh");
+                }
+                "#,
+            )
+            .expect("the fixture parses"),
+        );
+        assert_eq!(census.tools, ["jq"]);
+        assert_eq!(census.unnamed, 2);
+        assert_eq!(census.which_literals, 2);
+        assert_eq!(census.committed_config, 2);
+        assert_eq!(census.spawned, ["gh"]);
+    }
+
+    /// The program is the hooks' own reading, by file name, past assignments.
+    #[test]
+    fn the_effective_program_is_named_by_its_file_name() {
+        let words = |text: &str| text.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(
+            effective_program(&words("FOO=1 /usr/bin/jq .")).as_deref(),
+            Some("jq")
+        );
+        assert_eq!(effective_program(&words("FOO=1")), None);
+    }
 }
