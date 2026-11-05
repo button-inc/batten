@@ -32,7 +32,7 @@
 
 use crate::common;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use common::{run, run_with_stdin, stderr};
 
@@ -92,33 +92,6 @@ fn assert_allowed(command: &str) {
         verdict(command),
         Some(0),
         "the committed policy must allow: {command}"
-    );
-}
-
-/// This command is not refused **as a write to a protected path**.
-///
-/// Weaker than [`assert_allowed`] on purpose, and only for commands where a
-/// SECOND row legitimately fires. `sed -n 1p <memory>` is a read as far as the
-/// `[[verb]]` table is concerned — the property these tests exist to pin — and
-/// is also, correctly, a `tool select other` deny, because printing a range
-/// of a tracked file is what `Read(offset, limit)` is for (CLOUD-864). Reading
-/// the aggregate exit code would make one rule's arrival look like the other
-/// rule's regression.
-///
-/// So the assertion is on WHICH row spoke. Every protected-path refusal carries
-/// its `redirect` — the Serena tool to use instead — and those all end in
-/// `_memory`; no other row's text does. A caller that stops emitting that token
-/// fails this, which is the direction worth protecting.
-fn assert_not_refused_as_a_write(command: &str) {
-    let refusal = stderr(&run_with_stdin(
-        &root(),
-        &["adjudicate", "--harness", "exit-code"],
-        &bash_payload(command),
-    ));
-    assert!(
-        !refusal.contains("_memory"),
-        "the verb table must read this as a read, whatever else refuses it: \
-         {command}\n{refusal}"
     );
 }
 
@@ -246,14 +219,11 @@ fn an_in_place_stream_edit_is_a_write_and_every_other_one_is_a_read() {
     // The read half, which a row without `requires_flag` would have refused:
     // every filtering invocation in the repository.
     assert_allowed("sed --version");
-    // A TRANSFORM, and allowed outright: `tool select other` qualifies its
-    // `sed` entry with `-n` precisely so this stays allowed — no first-class
-    // tool applies a substitution expression, so refusing it would state a
-    // reason that does not hold.
+    // A TRANSFORM to stdout, and a read to the verb table.
     assert_allowed(&format!("sed s/old/new/ {GUARDED}"));
-    // The PRINT form is a read here and a substitution there, and both are
-    // right. See `assert_not_refused_as_a_write`.
-    assert_not_refused_as_a_write(&format!("sed -n 1p {GUARDED}"));
+    // The PRINT form is a read too. It was also refused by `tool select other`
+    // until CLOUD-2362 retired that row, so it is now asserted allowed outright.
+    assert_allowed(&format!("sed -n 1p {GUARDED}"));
 }
 
 #[test]
@@ -402,7 +372,7 @@ fn a_qualified_verb_is_judged_per_segment() {
     // the direction that actually matters — a write must not be excused by a
     // read. Every other guard here judges per segment; the new rows are held to
     // it too.
-    assert_not_refused_as_a_write(&format!("sed -n 1p {GUARDED}; cp {GUARDED} /tmp/x"));
+    assert_allowed(&format!("sed -n 1p {GUARDED}; cp {GUARDED} /tmp/x"));
     assert_denied(&format!("cat /tmp/x; sed -i s/a/b/ {GUARDED}"));
     assert_denied(&format!("git log; git rm {GUARDED}"));
 }
@@ -434,12 +404,10 @@ fn the_unqualified_rows_still_deny_and_a_read_is_still_allowed() {
     assert_denied(&format!("tee {GUARDED}"));
     assert_denied(&format!("cat x > {GUARDED}"));
     // Reads, and still reads to the VERB TABLE — which is what this case is
-    // about. `tool select other` also refuses them now, correctly, since
-    // `cat`/`grep` over a tracked path is what `Read` and `Grep` are for; the
-    // weaker assertion is what keeps that from reading as a protected-path
-    // regression.
-    assert_not_refused_as_a_write(&format!("cat {GUARDED}"));
-    assert_not_refused_as_a_write(&format!("grep -r mem: {GUARDED}"));
+    // about. No other row refuses them since CLOUD-2362, so they are asserted
+    // allowed outright.
+    assert_allowed(&format!("cat {GUARDED}"));
+    assert_allowed(&format!("grep -r mem: {GUARDED}"));
     // `rm` on an ordinary path is untouched by either row, so it stays the
     // strong assertion — the one that proves the protected set is a SET and not
     // "everything".
@@ -677,16 +645,14 @@ fn an_interpreter_writing_through_a_heredoc_body_is_refused() {
 /// how this class of guard dies. `cat`, `grep` and the repository's own gate
 /// tools point at `batten.toml` constantly, so they are declared readers and must
 /// stay allowed — and that is the whole reason the remedy was to invert the
-/// enumeration rather than lengthen it.
-/// NOT `cat` OR `grep`, AND THAT IS THIS REPOSITORY'S OWN CONFIG SPEAKING. Both
-/// are declared readers, and both are refused here by a DIFFERENT row —
-/// `tool select other`, which routes a text utility over a tracked path to the
-/// structured surface. Asserting them allowed would fail for a reason that has
-/// nothing to do with this gate, and asserting them denied would read as evidence
-/// about readers when it is evidence about substitution.
+/// enumeration rather than lengthen it. `cat` and `grep` were left out of this
+/// case while `tool select other` refused them over a tracked path; CLOUD-2362
+/// retired that row, so they are asserted here as the declared readers they are.
 #[test]
 fn a_declared_reader_may_still_read_a_protected_path() {
     assert_allowed(&format!("taplo lint {AUTHORITY}"));
+    assert_allowed(&format!("cat {AUTHORITY}"));
+    assert_allowed(&format!("grep -n rule {AUTHORITY}"));
 }
 
 /// THE LIVE REPRO CLOUD-1804 REPORTED, and it is red without `crate::readers`.
@@ -708,16 +674,13 @@ fn a_declared_reader_may_still_read_a_protected_path() {
 /// reach: `protects` reads a directory as enclosing the modules under it, so
 /// `ls policy` is refused by a path that is not itself any rule's module.
 ///
-/// NOT `ls policy/`, AND THAT IS THE SIBLING CASE'S TRAP ONE PATH CLASS OVER.
-/// The trailing-slash spelling is refused here by `tool select other`, which
-/// routes a directory listing to the structured glob surface — a different row,
-/// correctly fired. Asserting it allowed would fail for a reason that has
-/// nothing to do with this gate, and asserting it denied would read as evidence
-/// about the floor when it is evidence about substitution.
+/// The trailing-slash spelling `ls policy/` was left out while `tool select
+/// other` refused it as a directory listing; CLOUD-2362 retired that row.
 #[test]
 fn a_read_only_program_may_name_a_derived_module() {
     const MODULE: &str = "policy/memories.rego";
     assert_allowed("ls policy");
+    assert_allowed("ls policy/");
     assert_allowed(&format!("echo {MODULE}"));
     assert_allowed(&format!("echo policy {MODULE}"));
     // And over the DECLARED set too, which is why the floor is one predicate
@@ -889,14 +852,24 @@ fn bash_payload_in(cwd: &std::path::Path, command: &str) -> String {
     )
 }
 
-fn verdict_in(cwd: &std::path::Path, command: &str) -> Option<i32> {
+fn verdict_in(repo: &Path, cwd: &Path, command: &str) -> Option<i32> {
     run_with_stdin(
-        &root(),
+        repo,
         &["adjudicate", "--harness", "exit-code"],
         &bash_payload_in(cwd, command),
     )
     .status
     .code()
+}
+
+/// A repository carrying the retired substitution row (CLOUD-2362), with the
+/// subdirectory the containment cases reach a path from. This repository no
+/// longer declares the row, and these cases are about how such a row resolves
+/// a relative operand, so they need one to judge with.
+fn containment_repo(name: &str) -> PathBuf {
+    let repo = common::substitution_repo(&format!("containment-{name}"));
+    std::fs::create_dir_all(repo.join("crates/batten")).expect("the fixture's subdirectory");
+    repo
 }
 
 #[test]
@@ -909,14 +882,16 @@ fn one_file_outside_the_repository_gets_one_verdict_whichever_way_it_is_spelled(
     let dir = common::scratch_outside_tree("cloud-1109", "outside");
     std::fs::write(dir.join("err.txt"), "scratch\n").expect("the scratch file is writable");
     let absolute = dir.join("err.txt").display().to_string();
+    let repo = containment_repo("outside");
 
+    let relative = verdict_in(&repo, &dir, "cat err.txt");
     assert_eq!(
-        verdict_in(&dir, "cat err.txt"),
-        verdict_in(&dir, &format!("cat {absolute}")),
+        relative,
+        verdict_in(&repo, &dir, &format!("cat {absolute}")),
         "one file, two spellings, one verdict"
     );
     assert_eq!(
-        verdict_in(&dir, "cat err.txt"),
+        relative,
         Some(0),
         "and the verdict is allow: the repository does not contain it"
     );
@@ -927,9 +902,10 @@ fn a_relative_path_inside_the_repository_is_still_refused_from_a_subdirectory() 
     // THE DISCRIMINATOR. Without it the fix above is a blanket allow for every
     // relative operand, which would switch clause 3 off entirely — and a gate
     // that refuses nothing looks exactly like a gate that passed.
-    let inside = root().join("crates");
+    let repo = containment_repo("subdirectory");
+    let inside = repo.join("crates");
     assert_eq!(
-        verdict_in(&inside, "cat batten/Cargo.toml"),
+        verdict_in(&repo, &inside, "cat batten/Cargo.toml"),
         Some(2),
         "a path the repository contains, reached relatively from a subdirectory"
     );
@@ -1016,9 +992,35 @@ fn a_backslash_continuation_is_one_command_and_is_still_refused() {
 
 // --- CLOUD-1258: a generic read of a memory names `read_memory` ---------------
 //
-// The third face of the object CLOUD-185 and CLOUD-864 closed the other two of.
-// `tool select other` decides over shell argv, so a structured-tool call is
-// invisible to it; `protected` crossed with `[[verb]]` enumerates mutations.
+// The third face of the object CLOUD-185 and CLOUD-864 closed the other two of:
+// a shell-argv row cannot see a structured-tool call, and `protected` crossed
+// with `[[verb]]` enumerates mutations.
+//
+// JUDGED AGAINST A FIXTURE (CLOUD-2362). This repository retired its own `read`
+// route: its one stated reason was CLOUD-868's move of the memories into a
+// private repository, which was canceled. The engine still offers the key to any
+// consumer that declares it, and the rows below are this repository's former
+// table, verbatim in everything the read gate consults.
+
+/// A repository whose `[[redirect]]` table declares a `read` route for the
+/// memories and none for the authority or the workflows.
+///
+/// NOTHING ELSE, and that is the case `Policy::is_empty` once got wrong: a
+/// config whose only policy is a `read` route was read as empty, so the route
+/// was never adjudicated and the memory read below was allowed (CLOUD-2362).
+fn read_route_repo(name: &str) -> PathBuf {
+    crate::common::Fixture::new(&format!("read-route-{name}"))
+        .config(
+            "version = 1\n\n\
+             [[redirect]]\nglob = \".github/workflows/**\"\nmutation = \"change it in a pull request\"\n\n\
+             [[redirect]]\nglob = \"batten.toml\"\nmutation = \"change it in a pull request\"\n\n\
+             [[redirect]]\nglob = \".serena/memories/**\"\n\
+             mutation = \"use Serena's memory tools\"\nread = \"read_memory\"\n",
+        )
+        .git()
+        .base_commit()
+        .build()
+}
 
 /// A `Read` tool call naming a path, as a host sends it.
 fn read_payload(path: &str) -> String {
@@ -1029,37 +1031,40 @@ fn read_payload(path: &str) -> String {
     )
 }
 
-fn read_verdict(path: &str) -> Option<i32> {
-    read_with_serena(path).status.code()
+fn read_verdict(repo: &Path, path: &str) -> Option<i32> {
+    read_with_serena(repo, path).status.code()
 }
 
-/// A home whose `.claude.json` declares a `serena` server, so the
-/// `claude-code-local` source resolves it (CLOUD-2229): the memories row is
-/// refused only where its read route can actually be taken.
-fn serena_home() -> std::path::PathBuf {
-    crate::common::serena_home()
-}
-
-/// A `Read` of `path` adjudicated with a resolvable `serena`.
-fn read_with_serena(path: &str) -> std::process::Output {
+/// A `Read` of `path` in `repo`, adjudicated with a home whose `.claude.json`
+/// declares a `serena` server, so the `claude-code-local` source resolves it
+/// (CLOUD-2229): a `read` route is refused only where it can actually be taken.
+fn read_with_serena(repo: &Path, path: &str) -> std::process::Output {
     let mut command = crate::common::batten();
-    command.env("HOME", serena_home());
+    command.env("HOME", crate::common::serena_home());
     crate::common::stdin_run(
         &mut command,
-        &root(),
+        repo,
         &["adjudicate", "--harness", "exit-code"],
         &read_payload(path),
     )
 }
 
+/// THIS repository declares no `read` route, so a generic read of a memory is
+/// allowed here (CLOUD-2362).
+#[test]
+fn this_repository_routes_no_memory_read() {
+    assert_eq!(read_verdict(&root(), GUARDED), Some(0));
+}
+
 #[test]
 fn a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers() {
+    let repo = read_route_repo("memory");
     assert_eq!(
-        read_verdict(GUARDED),
+        read_verdict(&repo, GUARDED),
         Some(2),
         "a generic file read of a memory is refused"
     );
-    let refusal = stderr(&read_with_serena(GUARDED));
+    let refusal = stderr(&read_with_serena(&repo, GUARDED));
     // Pointer-only: the path and the class, never a byte of the memory.
     assert!(refusal.contains(GUARDED), "names the path: {refusal}");
     // ITS OWN CLASS, WITH THE ROUTE ON THE LINE (CLOUD-1929). It refused under
@@ -1080,7 +1085,7 @@ fn a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers() {
     );
     // The remedy is one hop away since CLOUD-1286, and it must reach the READ
     // tool rather than the mutation tools — the whole content of this row.
-    let explained = run(&root(), &["policy", "explain", "protected-mutation"]);
+    let explained = run(&repo, &["policy", "explain", "protected-mutation"]);
     assert_eq!(explained.status.code(), Some(0), "the gate resolves");
     assert!(
         String::from_utf8_lossy(&explained.stdout).contains("read_memory"),
@@ -1090,22 +1095,24 @@ fn a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers() {
 
 #[test]
 fn a_generic_read_of_an_ordinary_path_is_untouched() {
+    let repo = read_route_repo("ordinary");
     // THE LOAD-BEARING HALF. This fires on a READ rather than a write, and a
     // noisy deny stops the fleet — a gate refusing ordinary reads is one people
     // switch off within a day.
-    assert_eq!(read_verdict("crates/batten/src/hook.rs"), Some(0));
-    assert_eq!(read_verdict(AUTHORITY), Some(0));
-    assert_eq!(read_verdict("policy/shell-retirement.rego"), Some(0));
+    assert_eq!(read_verdict(&repo, "crates/batten/src/hook.rs"), Some(0));
+    assert_eq!(read_verdict(&repo, AUTHORITY), Some(0));
+    assert_eq!(read_verdict(&repo, "policy/shell-retirement.rego"), Some(0));
 }
 
 #[test]
 fn a_class_declaring_no_read_remedy_gates_no_read() {
+    let repo = read_route_repo("no-remedy");
     // THE "SESSION DOES NOT OFFER IT" ARM, which is what keeps this from being
-    // CLOUD-998's defect one layer over. `batten.toml` is a protected path whose
+    // CLOUD-998's defect one layer over. `batten.toml`'s
     // `[[redirect]]` row declares a mutation and no `read`, so reading it is
     // allowed — and that is the same shape a consumer without Serena is in.
-    assert_eq!(read_verdict(AUTHORITY), Some(0));
-    assert_eq!(read_verdict(".github/workflows/ci.yml"), Some(0));
+    assert_eq!(read_verdict(&repo, AUTHORITY), Some(0));
+    assert_eq!(read_verdict(&repo, ".github/workflows/ci.yml"), Some(0));
 }
 
 #[test]

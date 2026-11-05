@@ -128,13 +128,13 @@ look up a definition no longer in context. That line, verbatim:
 A real deny reason, on its first firing in a window:
 
 ```text
-batten deny tool run loose at batten.toml head; read rules/scanning.md — tool select other: a shell text utility stood in for the structured file surface. ... Do: ... Don't: ...
+batten deny call name refused at cargo; admit with batten override request --rule 'cargo run loose' --verdict 'call name refused' --subject 'cargo' — cargo run loose: the mediated call matches a command shape the config refuses. ... Do: ... Don't: ...
 ```
 
 and on every later firing in that window:
 
 ```text
-batten deny tool run loose at batten.toml head; read rules/scanning.md
+batten deny call name refused at cargo; admit with batten override request --rule 'cargo run loose' --verdict 'call name refused' --subject 'cargo'
 ```
 
 `batten` says the line is this gate's and not the host's; `deny`, `warn` or

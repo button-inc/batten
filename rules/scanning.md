@@ -195,8 +195,7 @@ because **the winner is not the same in every session**: which instruments a
 session actually carries varies, so some sessions offer a first-class search-and-
 read surface and some offer only the shell utilities. A row naming either winner
 is therefore wrong wherever the other one is what exists — and naming a
-first-class tool is the same defect as naming `grep`, one layer over (CLOUD-998,
-where this row said `grep` and the gate below refuses exactly that).
+first-class tool is the same defect as naming `grep`, one layer over (CLOUD-998).
 
 So the row states the capability and the invariant, not a product. **The
 invariant is the preference, not the roster:** over a path this repository
@@ -210,8 +209,8 @@ ROW THREE HAS NO SUBSTITUTE** (2026-09-07). Serena is critical path here — it 
 the only instrument for name resolution, `mem:core` routes every on-demand memory
 through it, and `rust.md` sends the spawn census to it by name. A session that
 decides it is unavailable does not fall back to a lesser instrument for row
-three; it falls back to `grep`, which is the substitution the gate below refuses
-and which this file's own worked example measures as wrong.
+three; it falls back to `grep`, which this file's own worked example measures
+as wrong.
 
 **A PERMISSION PROMPT IS NOT ABSENCE.** Three different config faults have now
 been read as "Serena is not available" and answered by reaching for the shell:
@@ -223,32 +222,25 @@ symptom. `mem:serena-setup` carries the four gates and how to tell them apart;
 the rule here is the disposition: **report the prompt as a config finding and
 keep using the instrument, never quietly downgrade the instrument.**
 
-`tool select other` in `batten.toml` is the authority on which utility over
-which path is refused, and on what it deliberately does not catch. Read it there;
-a second copy of that corpus here is the drift this file exists to avoid.
-
-## This rule is feedforward on suitability, and gated on substitution
-
-Two axes, and only one of them is a judgement — the earlier version of this
-section claimed neither was gated, which is how a reader learned to expect no
-refusal (CLOUD-998).
+## This rule is feedforward
 
 **Instrument suitability is feedforward.** There is no honest exit code over
 "text, syntax or names — did the agent pick the right class": the object a gate
 would have to decide over is a judgement, and non-negotiable rule 3 says a gate
 resolves to a command and an exit code, never a model verdict.
 
-**Substitution is gated.** Reaching for a shell text utility where the structured
-surface answers the question is decided by `tool select other`, a `pipeline`
-row over the command line — a real object, a real exit code. It is a deny, and
-its refusal points back here to choose between the classes above. So silence from
-that gate is not evidence you picked the right class; it only means you did not
-substitute.
+**Substitution is not gated either, and was once** (CLOUD-2362). A `pipeline`
+row refused a shell text utility over a tracked path. It was retired because its
+only evidence was how often it would fire, never an outcome it improved. About a
+third of its measured denials misparsed their subject (CLOUD-1690), and the error
+this file's worked example records is one of instrument CLASS, which a structured
+text search makes just as readily as `grep`. The preference above stands as
+advice; no refusal enforces it.
 
 The mechanism over this file is correspondingly thin and is named for what it
 does. `crates/batten/tests/it/scanner_taxonomy.rs` asserts that this file still
-names an instrument for each of the three question classes, still names the gate
-over the substitution axis, still keeps row one free of a bare product name, and
+names an instrument for each of the three question classes, names no retired
+gate, still keeps row one free of a bare product name, and
 still states the no-extension defect beside the recommendation — the same shape
 as `spawn_census.rs`'s assertion that `clippy.toml` names the spawn type. It
 catches **deletion and drift** in the prose. It does not catch a misused

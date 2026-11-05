@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 use common::{Fixture, git_in, run_with_stdin, stderr, without_session_handlers};
 
 /// The row every case edits, and a line only it carries.
-const ROW: &str = "tool select other";
-const ROW_LINE: &str = "id = \"tool select other\"";
+const ROW: &str = "verdict guard missing";
+const ROW_LINE: &str = "id = \"verdict guard missing\"";
 
 /// A fixture whose `HEAD` carries the committed authority AND its policy
 /// modules: without the modules the config does not load, and the landed floor

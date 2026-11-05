@@ -23,7 +23,8 @@
 //! one (CLOUD-418) — is that every refusal this repository can actually emit
 //! passes. A ceiling that refuses correct output is a gate somebody switches
 //! off, and the converted `tool select other` refusal is the specific line
-//! the row names.
+//! the row names. CLOUD-2362 retired that row from this repository, so the
+//! repeat cases judge in [`ceiling_root`], which declares it.
 //!
 //! **BOTH ARMS ARE MEASURED HERE NOW, EACH AGAINST ITS OWN CEILING**
 //! (CLOUD-1637). The paragraph above is right that the two are different
@@ -51,7 +52,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, run_with_stdin, stderr};
+use common::{Fixture, RETIRED_SUBSTITUTION_ROW, run_with_stdin, stderr};
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -113,7 +114,7 @@ fn refusal_once(payload: &str) -> Option<String> {
     command.env("HOME", common::serena_home());
     let run = common::stdin_run(
         &mut command,
-        &root(),
+        &ceiling_root(),
         &["adjudicate", "--harness", "exit-code"],
         payload,
     );
@@ -122,6 +123,50 @@ fn refusal_once(payload: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// The repository the repeat-arm cases judge in: this one's committed config,
+/// plus the two refusals CLOUD-2362 retired from it (CLOUD-2362).
+///
+/// Every case here measures a line the engine EMITS, and the retired
+/// substitution row and memories read route are still the engine's to emit for
+/// any consumer that declares them. So rather than shrink the corpus to what
+/// this repository still declares, the cases run in a fixture that declares
+/// both: the corpus, its commands and its assertions are `main`'s, unchanged.
+///
+/// ONE PER PROCESS. Every firing measured is a repeat by construction (each is
+/// fired twice), so cases sharing the fixture's sightings store cannot change
+/// what any of them measures.
+fn ceiling_root() -> PathBuf {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        stage(
+            &format!("ceiling-root-{}", std::process::id()),
+            &with_memory_read_route(&common::without_session_handlers(COMMITTED)),
+        )
+    })
+    .clone()
+}
+
+/// `config` with `read = "read_memory"` restored on its memories `[[redirect]]`
+/// row, the line CLOUD-2362 removed from this repository's copy.
+fn with_memory_read_route(config: &str) -> String {
+    let mut config: toml_edit::DocumentMut = config.parse().expect("the config is TOML");
+    let row = config
+        .get_mut("redirect")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+        .and_then(|rows| {
+            rows.iter_mut().find(|row| {
+                row.get("glob").and_then(toml_edit::Item::as_str) == Some(".serena/memories/**")
+            })
+        })
+        .expect("the committed config carries the memories redirect row");
+    let replaced = row.insert("read", toml_edit::value("read_memory"));
+    assert!(
+        replaced.is_none(),
+        "the committed memories row declares no read route; this restores the one CLOUD-2362 removed"
+    );
+    config.to_string()
 }
 
 /// The declared ceiling, read from the committed config rather than re-typed.
@@ -152,11 +197,10 @@ fn declared(key: &str) -> usize {
     .expect("a ceiling is not negative")
 }
 
-/// The committed `reason` of one `[[rule]]` row.
+/// The `reason` of one `[[rule]]` row a fixture here stages.
 fn rule_reason(id: &str) -> String {
-    let text = std::fs::read_to_string(root().join("batten.toml"))
-        .expect("the committed config is readable");
-    let config: toml::Value = toml::from_str(&text).expect("the committed config parses");
+    let text = format!("{COMMITTED}\n{RETIRED_SUBSTITUTION_ROW}");
+    let config: toml::Value = toml::from_str(&text).expect("the staged config parses");
     config
         .get("rule")
         .and_then(toml::Value::as_array)
@@ -353,9 +397,13 @@ fn session_provisioning(config: &str) -> (usize, usize) {
     (startup, handlers)
 }
 
-/// Stage `config` and the committed policy modules in a fixture named `name`.
+/// Stage `config`, the fixture [`common::RETIRED_SUBSTITUTION_ROW`] and the
+/// committed policy modules in a fixture named `name`.
+///
+/// The fixture cases test the renderer over a `document`-route class, and
+/// `head -40 batten.toml` under that row is their canonical firing.
 fn stage(name: &str, config: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(config);
+    let staged = Fixture::new(name).config(&format!("{config}\n{RETIRED_SUBSTITUTION_ROW}"));
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR"))
