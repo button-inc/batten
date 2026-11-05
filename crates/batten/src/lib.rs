@@ -13668,6 +13668,9 @@ fn place_the_bet(
             Ok(())
         }
         Ok(replay) => {
+            // THE CHAIN THE LEASE READS (CLOUD-2645). Recorded before anything else
+            // can stop this arm, so a later push still reaches the pre-bet head.
+            land::record_speculation(root, branch, &undo, &replay)?;
             // A SIGNAL MUST NOT STRAND THE BET (CLOUD-1747). Armed over the head
             // the replay left, so a signal never unwinds work made after it.
             let bet_head = match &replay {

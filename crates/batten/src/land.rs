@@ -590,6 +590,41 @@ pub fn record(root: &Path, branch: &str, outcome: &Replay) -> Result<()> {
     append(root, branch, std::slice::from_ref(&outcome.line()))
 }
 
+/// Record the replay a speculation made, as [`replay_onto`] records its own
+/// (CLOUD-2645).
+///
+/// **THE BET REWRITES THE HEAD TOO**, and [`admitted`] follows the `rebase
+/// replayed` chain back from the head a push sends. A bet that replayed with no
+/// line left that chain broken: once it landed or unwound, nothing linked the head
+/// to the pre-bet history, and where an earlier replay had resolved a conflict the
+/// patch-identity test did not match either. So the branch's own last push read as
+/// a sibling's and every lap's push was refused (measured on #1228). `undo` is the
+/// head the bet replayed from.
+///
+/// # Errors
+///
+/// As [`record`]. A rebase that replayed nothing writes nothing.
+//MUTANT bet-replay-unrecorded|s@^    if let gitwrite::Rebase::Replayed { head, commits } = replayed {$@    if let Some(gitwrite::Rebase::Replayed { head, commits }) = None::<\&gitwrite::Rebase> {@|a_speculative_replay_keeps_the_pushed_head_admitted
+pub fn record_speculation(
+    root: &Path,
+    branch: &str,
+    undo: &str,
+    replayed: &gitwrite::Rebase,
+) -> Result<()> {
+    if let gitwrite::Rebase::Replayed { head, commits } = replayed {
+        return record(
+            root,
+            branch,
+            &Replay::Replayed {
+                head: head.clone(),
+                commits: *commits,
+                from: undo.to_owned(),
+            },
+        );
+    }
+    Ok(())
+}
+
 /// Append the disk watcher's lines (`disk-collected …`, `disk-unlink-ms …`) to
 /// this branch's lap record, once the landing has returned (CLOUD-2197).
 ///
@@ -5363,6 +5398,52 @@ mod tests {
                 super::Linearity::Behind
             );
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A pushed head rewritten by a recorded replay and then by a speculation is
+    /// still admitted, because the bet records its own replay (CLOUD-2645). Without
+    /// the bet's line the chain stops at the bet's head, and the push is refused.
+    #[test]
+    fn a_speculative_replay_keeps_the_pushed_head_admitted() {
+        let root = crate::scratch::scratch("land-bet-chain");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        let tip = || crate::git::resolve_ref(&root, "HEAD").unwrap().unwrap();
+        crate::gitwrite::commit_paths(&root, &[], "base").unwrap();
+        let bet_head = tip();
+        std::fs::write(root.join("pushed.txt"), "ours\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("pushed.txt")], "pushed").unwrap();
+        let pushed = tip();
+        std::fs::write(root.join("replayed.txt"), "ours\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("replayed.txt")], "replayed").unwrap();
+        let replayed = tip();
+
+        let replay_line = format!("rebase replayed {replayed} {pushed}");
+        super::record_disk(&root, "unbet", std::slice::from_ref(&replay_line)).unwrap();
+        assert!(
+            !super::admitted(&root, "unbet", &pushed, &bet_head),
+            "with no bet line the chain does not reach the pushed head"
+        );
+
+        super::record_disk(&root, "bet", std::slice::from_ref(&replay_line)).unwrap();
+        let bet = crate::gitwrite::Rebase::Replayed {
+            head: bet_head.clone(),
+            commits: 1,
+        };
+        super::record_speculation(&root, "bet", &replayed, &bet).unwrap();
+        assert!(super::admitted(&root, "bet", &pushed, &bet_head));
+
+        super::record_speculation(
+            &root,
+            "current",
+            &replayed,
+            &crate::gitwrite::Rebase::Current,
+        )
+        .unwrap();
+        assert!(
+            super::branch_lap_lines(&root, "current").is_empty(),
+            "a bet that replayed nothing writes nothing"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
