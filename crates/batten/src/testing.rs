@@ -1009,13 +1009,14 @@ mod tests {
                     require_tool("jq");
                     require_bin(&name, "x");
                     let _ = names.map(require_tool);
+                    let _ = more.map(require_bin);
                     let _ = some_path;
                     assert!(probe("which"));
                     let _ = vec!["which"; 2];
-                    let _ = vec!["whence"; 2];
                     let _ = include_str!("../../batten.toml");
                     let _ = include_str!("batten.toml");
                     let _ = include_str!("other.toml");
+                    let _ = include_str!("notes.txt");
                     Command::new("gh");
                 }
                 "#,
@@ -1023,7 +1024,7 @@ mod tests {
             .expect("the fixture parses"),
         );
         assert_eq!(census.tools, ["jq"]);
-        assert_eq!(census.unnamed, 2);
+        assert_eq!(census.unnamed, 3);
         assert_eq!(census.which_literals, 2);
         assert_eq!(census.committed_config, 2);
         assert_eq!(census.spawned, ["gh"]);
