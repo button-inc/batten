@@ -19901,10 +19901,7 @@ fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
         // The repair, and only onto the file that is faulting: every file the
         // call writes, so a patch naming the authority first carries nothing
         // else through.
-        (hook::Operation::Write, Some(_)) => envelope
-            .write_targets()
-            .iter()
-            .all(|&path| names_the_config_authority(path)),
+        (hook::Operation::Write, Some(_)) => envelope.writes_only(names_the_config_authority),
         // THE OTHER REPAIR, for the fault no edit can end (CLOUD-2116). A pin
         // naming a NEWER build than the installed one is fixed by installing
         // the pin, never by lowering it, so a floor of read-and-edit bricked the
@@ -20707,12 +20704,8 @@ fn admitted(
 /// file there, so a patch adding the sentinel beside a protected file would
 /// otherwise arm the ripcord and carry the protected write through with it.
 fn arms_the_ripcord(envelope: &hook::Envelope) -> bool {
-    let targets = envelope.write_targets();
     matches!(envelope.operation, hook::Operation::Write)
-        && !targets.is_empty()
-        && targets
-            .iter()
-            .all(|&target| ripcord::creates_the_sentinel(Some(target)))
+        && envelope.writes_only(|target| ripcord::creates_the_sentinel(Some(target)))
 }
 
 fn pull_ripcord(

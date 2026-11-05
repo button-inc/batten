@@ -3011,6 +3011,15 @@ impl Envelope {
     /// what it writes — the ripcord's arm and its floor — reads this, or a
     /// patch adding the sentinel beside a protected file reads as the sentinel
     /// alone.
+    /// Whether this call writes something, and every file it writes meets
+    /// `meets`: the predicate a gate admitting a call by what it writes asks,
+    /// so none of them can forget the call that names no file.
+    #[must_use]
+    pub fn writes_only(&self, meets: impl Fn(&str) -> bool) -> bool {
+        let targets = self.write_targets();
+        !targets.is_empty() && targets.into_iter().all(meets)
+    }
+
     #[must_use]
     //MUTANT patch-targets-unread|s@^        let patched = if names_no_path {$@        let patched = if false {@|a_patch_naming_a_protected_file_is_refused_on_every_patch_tool
     pub fn write_targets(&self) -> Vec<&str> {
@@ -9214,22 +9223,19 @@ fn patch_targets(input: &Value) -> Vec<&str> {
     // `a/x b/y`, or quoted `"a/x" "b/y"` when either side needs it. A path may
     // itself hold ` b/`, so the split where both sides name one file — every
     // patch but a rename — is taken first.
+    // Only WHERE to split: both sides keep their quotes and prefixes, and
+    // [`unified`] strips them, one rule for either side.
     fn git_sides(rest: &str) -> Option<(&str, &str)> {
         let middle = rest.len() / 2;
-        if let (Some(a), Some(" "), Some(b)) = (
-            rest.get(..middle),
-            rest.get(middle..=middle),
-            rest.get(middle + 1..),
-        ) && a
-            .strip_prefix("a/")
-            .is_some_and(|path| Some(path) == b.strip_prefix("b/"))
-        {
-            return Some((a, b));
-        }
-        rest.split_once(" b/").or_else(|| {
-            rest.split_once(" \"b/")
-                .map(|(a, b)| (a, b.trim().strip_suffix('"').unwrap_or(b)))
-        })
+        let same_file = rest.get(middle..=middle) == Some(" ")
+            && rest.get(..middle).and_then(|a| a.strip_prefix("a/"))
+                == rest.get(middle + 1..).and_then(|b| b.strip_prefix("b/"));
+        let at = if same_file {
+            middle
+        } else {
+            rest.find(" b/").or_else(|| rest.find(" \"b/"))?
+        };
+        Some((&rest[..at], &rest[at + 1..]))
     }
     let Some(fields) = input.as_object() else {
         return Vec::new();
@@ -18258,6 +18264,20 @@ deny contains "refused by themodule" if {
                 "patch": "diff --git a/x b/y b/x b/y\nold mode 100644\nnew mode 100755\n",
             })),
             ["x b/y"]
+        );
+        // Each side loses its own prefix once: a path that starts with `b/`
+        // keeps it.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git a/b/x b/b/z\nsimilarity index 100%\n",
+            })),
+            ["b/x", "b/z"]
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git a/b/x b/b/x\nold mode 100644\nnew mode 100755\n",
+            })),
+            ["b/x"]
         );
         // A patch carried as one element of an argv-shaped array.
         assert_eq!(
