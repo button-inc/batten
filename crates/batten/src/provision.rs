@@ -941,7 +941,7 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], host: Host<'_>) -
     // never landed would be the silent half-install this ordering exists to
     // rule out.
     if let Some(dest) = entry.link.as_deref().filter(|_| host.links) {
-        link_onto_path(entry, &link_dir(dest, host)?, &cached, &binary)?;
+        link_into(entry, &link_dir(dest, host)?, &cached, &binary)?;
     }
     // The artifact is written last, so a crash between the two leaves the entry
     // reading `missing` rather than `fresh` — the direction that re-applies.
@@ -999,7 +999,13 @@ const LAUNCHER_VERB: &str = "provision-exec";
 /// running process keeps its own open inode — so the temp file is made
 /// executable BEFORE the rename and the file on `PATH` is never a moment
 /// non-executable. Same directory, so it cannot cross a filesystem.
-fn link_onto_path(entry: &Provision, dir: &Path, cached: &Path, binary: &[u8]) -> Result<()> {
+fn link_onto_path(entry: &Provision, dest: &str, cached: &Path, binary: &[u8]) -> Result<()> {
+    link_into(entry, &expand_home(dest)?, cached, binary)
+}
+
+/// [`link_onto_path`] into a directory already resolved — by [`link_dir`], on
+/// the host [`status_on`] judges (CLOUD-2617).
+fn link_into(entry: &Provision, dir: &Path, cached: &Path, binary: &[u8]) -> Result<()> {
     fs::create_dir_all(dir).context("create the linked binary's directory")?;
     let path = dir.join(&entry.binary);
     // Keyed on the PID so two provisions running at once cannot write each
@@ -2831,13 +2837,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("a scratch directory");
         let dest = dir.display().to_string();
-        link_onto_path(
-            &declared,
-            Path::new(&dest),
-            Path::new("/cache/bin/tool"),
-            &[],
-        )
-        .expect("first link");
+        link_onto_path(&declared, &dest, Path::new("/cache/bin/tool"), &[]).expect("first link");
 
         let linked = dir.join("tool");
         let inode = |path: &Path| {
@@ -2849,13 +2849,7 @@ mod tests {
 
         let mut relinked = declared.clone();
         relinked.env = vec![rule("OTHER_TOKEN")];
-        link_onto_path(
-            &relinked,
-            Path::new(&dest),
-            Path::new("/cache/bin/tool"),
-            &[],
-        )
-        .expect("the re-link");
+        link_onto_path(&relinked, &dest, Path::new("/cache/bin/tool"), &[]).expect("the re-link");
         assert_ne!(
             before,
             inode(&linked),
@@ -3113,8 +3107,6 @@ mod tests {
         let mut entry = entry("tool", &digest(&body));
         entry.url = Some(format!("file://{}", artifact.display()));
         let cache = dir.join("cache");
-        // The published `status` and `apply`, which keep their signatures and
-        // delegate to the host-aware forms (CLOUD-2617).
         let freshness = |entry: &Provision| status(std::slice::from_ref(entry), &cache).unwrap();
 
         assert_eq!(freshness(&entry).entries[0].freshness, Freshness::Missing);
@@ -3123,7 +3115,7 @@ mod tests {
             Applied::Previewed
         );
         assert_eq!(
-            apply_on(&entry, &cache, false, Host::isolated(false)).unwrap(),
+            apply(&entry, &cache, false, false).unwrap(),
             Applied::Installed
         );
         let binary = entry_dir(&cache, &entry).join(BIN_DIR).join("tool");
@@ -3140,7 +3132,7 @@ mod tests {
         }
         assert_eq!(freshness(&entry).entries[0].freshness, Freshness::Fresh);
         assert_eq!(
-            apply_on(&entry, &cache, false, Host::isolated(false)).unwrap(),
+            apply(&entry, &cache, false, false).unwrap(),
             Applied::AlreadyFresh
         );
 
@@ -3148,7 +3140,7 @@ mod tests {
         fs::remove_file(&binary).unwrap();
         fs::remove_file(&artifact).unwrap();
         assert_eq!(
-            apply_on(&entry, &cache, false, Host::isolated(false)).unwrap(),
+            apply(&entry, &cache, false, false).unwrap(),
             Applied::Installed
         );
         assert_eq!(fs::read(&binary).unwrap(), body);
@@ -3161,7 +3153,7 @@ mod tests {
         wrong.sha256 = Some(digest(b"other bytes"));
         fs::write(&artifact, &body).unwrap();
         let cache = dir.join("other-cache");
-        let err = apply_on(&wrong, &cache, false, Host::isolated(false)).unwrap_err();
+        let err = apply(&wrong, &cache, false, false).unwrap_err();
         assert!(err.downcast_ref::<crate::Denial>().is_some(), "{err}");
         assert!(
             !entry_dir(&cache, &wrong)
@@ -3190,14 +3182,11 @@ mod tests {
         entry.env = vec![row];
         let cache = dir.join("cache");
         let freshness = |entry: &Provision| {
-            status_on(std::slice::from_ref(entry), &cache, Host::isolated(true))
-                .unwrap()
-                .entries[0]
-                .freshness
+            status(std::slice::from_ref(entry), &cache).unwrap().entries[0].freshness
         };
 
         assert_eq!(
-            apply_on(&entry, &cache, false, Host::isolated(true)).unwrap(),
+            apply(&entry, &cache, false, true).unwrap(),
             Applied::Installed
         );
         let linked = bin.join("tool");
