@@ -284,6 +284,7 @@ jobs:
           sh ./install.sh
           batten --version
       - name: refuse a head whose required checks have not all answered
+        id: roster
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -293,6 +294,7 @@ jobs:
           # The head as it is NOW, not as the comment event snapshotted it — the
           # same reason the draft step re-reads the draft bit through `gh api`.
           head_sha=$(gh api "repos/$REPO/pulls/$PR" --jq .head.sha)
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
           rc=0
           SHA="$head_sha" mise run checks-green || rc=$?
           if [ "$rc" -eq 0 ]; then
@@ -322,18 +324,12 @@ jobs:
         run: batten release in-flight --workflow release-artifacts.yml --workflow release-land.yml
       # THE RELEASE PREDICATE (CLOUD-2033 G2): the head's engine pin names a
       # verified release, or the head moves nothing a release must vouch for.
-      # The head as it is NOW, as the roster step reads it.
+      # The very head the roster step graded, never a second read of it.
       - name: refuse a head the release predicate fails
         env:
           BATTEN_GITHUB_TOKEN: ${{ github.token }}
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ github.event.issue.number }}
-        run: |
-          set -euo pipefail
-          HEAD_SHA=$(gh api "repos/$REPO/pulls/$PR" --jq .head.sha)
-          export HEAD_SHA
-          batten ci step --arg-env HEAD_SHA -- batten release path --strict
+          HEAD_SHA: ${{ steps.roster.outputs.head_sha }}
+        run: batten ci step --arg-env HEAD_SHA -- batten release path --strict
 
       # THE ACTION'S PUSH CREDENTIAL IS OURS TO CACHE (CLOUD-2288). The action
       # approves `github_token` into a credential store only when the PR head is

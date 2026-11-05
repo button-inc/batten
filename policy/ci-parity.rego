@@ -1395,8 +1395,8 @@ freeze_owed(path, name) if dispatches_build(path, name)
 # release pin waits any longer.
 #
 # A SOURCE PIN ARMS NOTHING. It is `install:local`'s, never lands (`engine
-# gate`'s `source_never_lands`), and arming on it only made every cloud
-# session's local gates refuse a wire `main` cannot carry yet.
+# gate`'s `source_never_lands`), so a freeze demanded under it would refuse a
+# wire on behalf of a pin that never reaches `main`.
 freeze_runnable if not input.tree.documents["batten.toml"].engine.source
 
 test_every_release_pin_arms_the_freeze if {

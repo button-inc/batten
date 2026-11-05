@@ -655,17 +655,17 @@ jobs:
       # release is built or landed, so `main` never moves under the cut. A
       # release in flight holds this landing, which is ordinary: the next tick
       # asks again. Exit 3, could-not-look, fails the run.
-      - name: Fetch the head beside main
-        if: steps.closes.outputs.linked == 'true'
-        env:
-          SHA: ${{ steps.target.outputs.sha }}
-        run: batten ci step --arg-env SHA -- git fetch origin
       - name: Hold while a release is in flight
         if: steps.closes.outputs.linked == 'true'
         id: freeze
         env:
           BATTEN_GITHUB_TOKEN: ${{ github.token }}
         run: batten ci step --verdict clear --on 0=yes --on 2=no -- batten release in-flight --workflow release-artifacts.yml --workflow release-land.yml
+      - name: Fetch the head beside main
+        if: steps.freeze.outputs.clear == 'yes'
+        env:
+          SHA: ${{ steps.target.outputs.sha }}
+        run: batten ci step --arg-env SHA -- git fetch origin
       # THE RELEASE PREDICATE (CLOUD-2033 G2): the head's engine pin names a
       # verified release, or the head moves nothing a release must vouch for.
       # A failure verdict fails the run before the ref moves.
