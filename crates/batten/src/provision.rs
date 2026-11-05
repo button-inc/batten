@@ -758,46 +758,61 @@ fn link_of(entry: &Provision, cache_root: &Path, host: Host<'_>) -> Result<Optio
 }
 
 /// Whether a fallback directory may take `entry`'s link: the name is free, or
-/// what holds it is batten's — a launcher, or this entry's own cached bytes,
-/// which is what an earlier fallback wrote for a plain-copy entry.
+/// what holds it is batten's — a launcher, or the path [`record_link`] says
+/// batten wrote for this entry last.
+///
+/// RECORDED, NOT INFERRED FROM BYTES. Comparing the file with the cached
+/// binary read two whole binaries per status, and broke on the upgrade it
+/// mattered for: the new version's cache is empty until `install`, so batten's
+/// own old copy read as foreign and the upgraded link went off `PATH`. The
+/// record is per entry NAME, not version, so it survives the bump.
 //MUTANT fallback-claims-a-foreign-name|s@^    !linked.exists()$@    true@|a_fallback_never_takes_a_name_another_tool_owns
 fn claimable(dir: &Path, entry: &Provision, cache_root: &Path) -> bool {
     let linked = dir.join(&entry.binary);
     !linked.exists()
-        || is_launcher_file(&linked)
-        || same_bytes(
-            &linked,
-            &entry_dir(cache_root, entry)
-                .join(BIN_DIR)
-                .join(&entry.binary),
-        )
+        || is_launcher(&linked)
+        || fs::read_to_string(link_record(cache_root, entry))
+            .is_ok_and(|recorded| Path::new(recorded.trim_end()) == linked)
 }
 
-/// Whether the file at `path` opens with a batten launcher's `#!` line. Reads
-/// only the first line's worth, since the name may hold a large binary.
-fn is_launcher_file(path: &Path) -> bool {
+/// Where the path of `entry`'s last written link is recorded: beside its
+/// versioned cache directories, so a version bump still finds it.
+fn link_record(cache_root: &Path, entry: &Provision) -> PathBuf {
+    cache_root.join(CACHE_DIR).join(&entry.name).join("linked")
+}
+
+/// Record that batten wrote `entry`'s link at `linked`.
+fn record_link(cache_root: &Path, entry: &Provision, linked: &Path) -> Result<()> {
+    crate::durable::replace(
+        link_record(cache_root, entry),
+        linked.to_string_lossy().as_bytes(),
+    )
+    .context("record the written link")
+}
+
+/// How much of a file is read to find a launcher's `#!` line, which is short;
+/// the name may instead hold a large binary.
+const LAUNCHER_HEAD: u64 = 4096;
+
+/// Whether the file at `path` is a batten launcher ([`launcher`]'s shape).
+fn is_launcher(path: &Path) -> bool {
     use std::io::Read as _;
     let mut head = Vec::new();
-    let read = fs::File::open(path).and_then(|file| file.take(4096).read_to_end(&mut head));
-    if read.is_err() {
-        return false;
-    }
-    let first = head.split(|byte| *byte == b'\n').next().unwrap_or_default();
-    std::str::from_utf8(first)
-        .ok()
-        .and_then(|line| line.strip_prefix("#!"))
-        .and_then(|shebang| shebang.rsplit_once(' '))
-        .is_some_and(|(_, verb)| verb == LAUNCHER_VERB)
+    fs::File::open(path)
+        .and_then(|file| file.take(LAUNCHER_HEAD).read_to_end(&mut head))
+        .is_ok()
+        && launcher_interpreter(&head).is_some()
 }
 
-/// Whether two files hold the same bytes; `false` when either cannot be read.
-/// Sizes first, so a foreign binary of another length costs two `stat`s.
-fn same_bytes(left: &Path, right: &Path) -> bool {
-    let size = |path: &Path| fs::metadata(path).map(|meta| meta.len()).ok();
-    match (size(left), size(right)) {
-        (Some(a), Some(b)) if a == b => fs::read(left).ok() == fs::read(right).ok(),
-        _ => false,
-    }
+/// The interpreter a launcher's first line names, or `None` for anything that
+/// is not a launcher. The one reader of [`launcher`]'s `#!` line.
+fn launcher_interpreter(bytes: &[u8]) -> Option<&str> {
+    let first = bytes.split(|byte| *byte == b'\n').next()?;
+    let (interpreter, verb) = std::str::from_utf8(first)
+        .ok()?
+        .strip_prefix("#!")?
+        .rsplit_once(' ')?;
+    (verb == LAUNCHER_VERB).then_some(interpreter)
 }
 
 fn freshness_of(entry: &Provision, cache_root: &Path, link: Option<&Path>) -> Result<Freshness> {
@@ -1019,6 +1034,7 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], link: Option<&Pat
     // rule out.
     if let Some(dir) = link {
         link_into(entry, dir, &cached, &binary)?;
+        record_link(cache_root, entry, &dir.join(&entry.binary))?;
     }
     // The artifact is written last, so a crash between the two leaves the entry
     // reading `missing` rather than `fresh` — the direction that re-applies.
@@ -1204,19 +1220,7 @@ fn relaunches_a_present_interpreter(linked: &Path) -> bool {
         // races question that re-linking would not fix.
         return true;
     };
-    let Some(first) = bytes.split(|byte| *byte == b'\n').next() else {
-        return true;
-    };
-    let Ok(line) = std::str::from_utf8(first) else {
-        return true;
-    };
-    let Some(shebang) = line.strip_prefix("#!") else {
-        return true;
-    };
-    match shebang.rsplit_once(' ') {
-        Some((interpreter, verb)) if verb == LAUNCHER_VERB => Path::new(interpreter).is_file(),
-        _ => true,
-    }
+    launcher_interpreter(&bytes).is_none_or(|interpreter| Path::new(interpreter).is_file())
 }
 
 /// Does the launcher at `linked` carry the environment rules `entry` declares?
@@ -2445,13 +2449,16 @@ mod tests {
         fs::write(&linked, format!("#!/opt/batten {LAUNCHER_VERB}\n{{}}\n")).unwrap();
         assert!(claimable(&shared, &entry, &cache), "batten's own launcher");
 
-        let cached = entry_dir(&cache, &entry).join(BIN_DIR).join("tool");
-        fs::create_dir_all(cached.parent().unwrap()).unwrap();
-        fs::write(&cached, &body).unwrap();
         fs::write(&linked, &body).unwrap();
         assert!(
+            !claimable(&shared, &entry, &cache),
+            "a plain copy nobody recorded"
+        );
+        fs::create_dir_all(link_record(&cache, &entry).parent().unwrap()).unwrap();
+        record_link(&cache, &entry, &linked).unwrap();
+        assert!(
             claimable(&shared, &entry, &cache),
-            "this entry's own cached bytes"
+            "the link batten recorded writing, whatever version wrote it"
         );
     }
 
