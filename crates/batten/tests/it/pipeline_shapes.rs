@@ -32,8 +32,11 @@ use std::path::PathBuf;
 
 use common::{run, run_with_stdin, stderr};
 
+/// The committed tree in a fixed world (CLOUD-2528): HEAD pushed, no session
+/// state. On the live checkout `check run early` refuses every slow check these
+/// cases name while HEAD is unpushed, and `land`'s replayed head always is.
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    common::committed_clone()
 }
 
 fn payload(command: &str) -> String {
