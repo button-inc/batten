@@ -1615,7 +1615,7 @@ pub fn run_registered(
     progress: &mut dyn std::io::Write,
 ) -> Result<Registered> {
     if let Some((k, n)) = shard
-        && k >= n
+        && shard_bounded(k, n).is_none()
     {
         bail!("mutate: shard {k}/{n} is not `k/n` with 0 <= k < n");
     }
@@ -1873,7 +1873,14 @@ pub fn shard_parsed(shard: &str) -> Result<(usize, usize), String> {
 pub fn parse_shard(shard: &str) -> Option<(usize, usize)> {
     let (k, n) = shard.trim().split_once('/')?;
     let (k, n) = (k.trim().parse().ok()?, n.trim().parse().ok()?);
-    (k < n).then_some((k, n))
+    shard_bounded(k, n)
+}
+
+/// `(k, n)` where it names a shard (`k < n`, so `n > 0`), else `None`: the one
+/// statement of the bound, for the text [`parse_shard`] reads and the tuple
+/// [`run_registered`] is handed.
+const fn shard_bounded(k: usize, n: usize) -> Option<(usize, usize)> {
+    if k < n { Some((k, n)) } else { None }
 }
 
 /// The `--shard` each source's own run takes on shard `k` of `n`, so the
@@ -6587,14 +6594,15 @@ mod tests {
     /// valid one refused.
     #[test]
     fn a_registered_run_refuses_a_shard_shard_parsed_never_yields() {
+        // Nothing is staged: a bad shard is refused first, and the declared
+        // runner over an empty change returns before it reads either path.
         let root = fixture("registered-shard-bounds");
-        let work = fixture("registered-shard-bounds-work");
         let registry = Registry::default();
         let site = Site {
             root: &root,
             base: "HEAD",
             registry: &registry,
-            work: &work,
+            work: &root,
         };
         let changed = std::collections::BTreeSet::new();
         let run = |shard| {
