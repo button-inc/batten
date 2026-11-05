@@ -3137,27 +3137,63 @@ const STATUS_WORDS: &[&str] = &[
     "LEAK",
 ];
 
-//MUTANT stopped-at-first-line|s@^            \.rev()$@            .skip(0)@|a_timed_out_suite_names_where_it_stopped
-//MUTANT stopped-at-a-sibling|s@last(&\["SLOW", "TIMEOUT"\]).or_else(\x7c\x7c last(STATUS_WORDS))@last(STATUS_WORDS)@|a_timed_out_suite_names_where_it_stopped
-/// Where a suite killed at its bound had got to: the first five words of the
-/// LAST status line cargo or nextest printed, so `Compiling <crate>`, `SETUP`
-/// or `SLOW [> Ns] <case>` (CLOUD-2206). A POINTER, NEVER THE OUTPUT: a
-/// timeout used to say only `suite-timed-out`, measured on #1258 where one CI
-/// shard's first row hit 900s while the same case ran in 0.5s locally, and
-/// nothing told a cold compile from a hung case.
+//MUTANT stopped-at-a-sibling|s@Some("SLOW") if@Some("SLOWX") if@|a_timed_out_suite_names_where_it_stopped
+//MUTANT stopped-at-a-finished-case|s@ if !finished.contains(&case_of(words)) =>@ =>@|a_timed_out_suite_names_where_it_stopped
+//MUTANT stopped-at-first-line|s@^        \.rev()$@        .skip(0)@|a_timed_out_suite_names_where_it_stopped
+/// Where a suite killed at its bound had got to: the first five words of a
+/// status line cargo or nextest printed, so `Compiling <crate>`, `SETUP` or
+/// `SLOW [> Ns] <case>` (CLOUD-2206). A POINTER, NEVER THE OUTPUT: a timeout
+/// used to say only `suite-timed-out`, measured on #1258 where one CI shard's
+/// first row hit 900s while the same case ran in 0.5s locally, and nothing told
+/// a cold compile from a hung case.
 ///
 /// A STUCK CASE OUTRANKS A LATER LINE: nextest runs cases in parallel, so the
-/// `PASS` of a sibling can follow the `SLOW` of the case that hung.
+/// `PASS` of a sibling can follow the `SLOW` of the case that hung. A case is
+/// stuck where nextest killed it (`TIMEOUT`), or where it was marked `SLOW`
+/// and never finished after. With none, the last status line says where the
+/// run was.
 fn stopped_at(output: &str) -> Option<String> {
-    let last = |words: &[&str]| {
-        output
-            .lines()
-            .rev()
-            .map(|line| line.split_whitespace().take(5).collect::<Vec<_>>())
-            .find(|line| line.first().is_some_and(|word| words.contains(word)))
-            .map(|line| line.join(" "))
-    };
-    last(&["SLOW", "TIMEOUT"]).or_else(|| last(STATUS_WORDS))
+    let lines: Vec<Vec<&str>> = output
+        .lines()
+        .map(|line| line.split_whitespace().collect())
+        .collect();
+    let mut finished = std::collections::HashSet::new();
+    for words in lines.iter().rev() {
+        match words.first().copied() {
+            Some("PASS" | "FAIL" | "LEAK") => {
+                finished.insert(case_of(words));
+            }
+            Some("TIMEOUT") => return Some(pointer(words)),
+            Some("SLOW") if !finished.contains(&case_of(words)) => return Some(pointer(words)),
+            _ => {}
+        }
+    }
+    lines
+        .iter()
+        .rev()
+        .find(|words| {
+            words
+                .first()
+                .is_some_and(|word| STATUS_WORDS.contains(word))
+        })
+        .map(|words| pointer(words))
+}
+
+/// The case a nextest status line names: the two words after its bracketed
+/// duration, `<binary> <case>`.
+fn case_of<'a>(words: &[&'a str]) -> Vec<&'a str> {
+    words
+        .iter()
+        .skip_while(|word| !word.ends_with(']'))
+        .skip(1)
+        .take(2)
+        .copied()
+        .collect()
+}
+
+/// A status line's first five words.
+fn pointer(words: &[&str]) -> String {
+    words.iter().take(5).copied().collect::<Vec<_>>().join(" ")
 }
 
 /// Where each harness runs and what it is handed: the working directory and
@@ -4819,6 +4855,14 @@ mod tests {
         assert_eq!(
             stopped_at("   Compiling a v1\n        START [ 1/1] x::y\n").as_deref(),
             Some("START [ 1/1] x::y")
+        );
+        // A case marked slow that then finished is not where the run stopped.
+        let finished = "        SLOW [> 60.000s] it a::case\n        \
+                        PASS [  70.000s] it a::case\n        \
+                        START [ 2/2] it b::case\n";
+        assert_eq!(
+            stopped_at(finished).as_deref(),
+            Some("START [ 2/2] it b::case")
         );
     }
 
