@@ -29809,7 +29809,7 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
             // code (CLOUD-1942). The caller writes it to the path named in its
             // header, exactly as it redirects every other generated artifact.
             if let Some(plugin) = harness.plugin() {
-                writeln!(out, "{}", (plugin.render)())?;
+                writeln!(out, "{}", plugin.source())?;
                 return Ok(ExitCode::Success);
             }
             let wiring = harness.wiring().ok_or_else(|| {

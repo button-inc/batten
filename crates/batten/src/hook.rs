@@ -1326,8 +1326,16 @@ pub enum WiringFile {
 pub struct Plugin {
     /// The path, repo-root-relative, the host loads project plugins from.
     pub path: &'static str,
-    /// Renders the plugin's source, byte-stable (§6).
-    pub render: fn() -> String,
+    /// Renders the plugin's source from the path it is loaded at, byte-stable (§6).
+    pub render: fn(&str) -> String,
+}
+
+impl Plugin {
+    /// The plugin's source, rendered for its own path.
+    #[must_use]
+    pub fn source(self) -> String {
+        (self.render)(self.path)
+    }
 }
 
 impl WiringFile {
@@ -9090,10 +9098,17 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
     // carries is content, and a fixture holding a patch is not a patch.
     let names_no_path = matches!(envelope.operation, Operation::Write | Operation::Other(_))
         && target_path(&envelope.input).is_none();
+    // A patch's every target already holds the one `writes` kept, so `writes`
+    // is read only when no patch was: no target is judged twice.
     let patched = if names_no_path {
         patch_targets(&envelope.input)
     } else {
         Vec::new()
+    };
+    let patched = if patched.is_empty() {
+        envelope.writes.iter().cloned().collect()
+    } else {
+        patched
     };
     // Through `protects` like every other reader (CLOUD-1236). The envelope's
     // target is already relativised upstream by `relativise_writes`, so this
@@ -9101,13 +9116,7 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
     // drift apart, and a future call site that forgets the upstream step is
     // covered rather than silently open. A patch's targets take the same lookup,
     // which is why they need no relativising of their own.
-    let Some(path) = envelope
-        .writes
-        .iter()
-        .cloned()
-        .chain(patched)
-        .find(|target| protects(policy, target))
-    else {
+    let Some(path) = patched.into_iter().find(|target| protects(policy, target)) else {
         return Decision::Allow;
     };
     let path = path.as_str();
@@ -9143,6 +9152,14 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
 /// A header counts only at column 0, which is where both formats put it: a
 /// context line quoting one starts with a space, and is the file's content.
 fn patch_targets(input: &Value) -> Vec<String> {
+    // A unified header's path: a tab and a timestamp may follow it, and git
+    // prefixes each side with `a/` or `b/`.
+    fn unified(rest: &str) -> &str {
+        let path = rest.split('\t').next().unwrap_or(rest).trim();
+        path.strip_prefix("a/")
+            .or_else(|| path.strip_prefix("b/"))
+            .unwrap_or(path)
+    }
     const HEADERS: &[&str] = &[
         "*** Add File: ",
         "*** Update File: ",
@@ -9154,34 +9171,33 @@ fn patch_targets(input: &Value) -> Vec<String> {
     };
     let mut targets = Vec::new();
     for text in fields.values().filter_map(Value::as_str) {
-        if text.contains("*** Begin Patch") {
-            targets.extend(
-                text.lines()
-                    .filter_map(|line| HEADERS.iter().find_map(|header| line.strip_prefix(header)))
+        // One walk per text: the headers are collected as they pass, and kept
+        // only if the text turned out to be a patch — an envelope, or a diff
+        // carrying both a `---` and a `+++` header.
+        let envelope = text.contains("*** Begin Patch");
+        let (mut old, mut new) = (false, false);
+        let mut found = Vec::new();
+        for line in text.lines() {
+            let path = if envelope {
+                HEADERS
+                    .iter()
+                    .find_map(|header| line.strip_prefix(header))
                     .map(str::trim)
-                    .filter(|path| !path.is_empty())
-                    .map(ToOwned::to_owned),
-            );
-        } else if text.lines().any(|line| line.starts_with("--- "))
-            && text.lines().any(|line| line.starts_with("+++ "))
-        {
-            targets.extend(
-                text.lines()
-                    .filter_map(|line| {
-                        line.strip_prefix("--- ")
-                            .or_else(|| line.strip_prefix("+++ "))
-                    })
-                    // A header may carry a tab and a timestamp after the path.
-                    .filter_map(|rest| rest.split('\t').next())
-                    .map(str::trim)
-                    .filter(|path| !path.is_empty() && *path != "/dev/null")
-                    .map(|path| {
-                        path.strip_prefix("a/")
-                            .or_else(|| path.strip_prefix("b/"))
-                            .unwrap_or(path)
-                            .to_owned()
-                    }),
-            );
+            } else if let Some(rest) = line.strip_prefix("--- ") {
+                old = true;
+                Some(unified(rest))
+            } else if let Some(rest) = line.strip_prefix("+++ ") {
+                new = true;
+                Some(unified(rest))
+            } else {
+                None
+            };
+            if let Some(path) = path.filter(|path| !path.is_empty() && *path != "/dev/null") {
+                found.push(path.to_owned());
+            }
+        }
+        if envelope || (old && new) {
+            targets.extend(found);
         }
     }
     targets
@@ -11752,27 +11768,18 @@ pub fn encode_preapproval(
 /// engine it spawns are one release: `node:child_process` runs under the Bun the
 /// host executes plugins with, and under Node for the test that drives it.
 //MUTANT opencode-exit2-not-thrown|s@^      throw new Error(run.stderr.trim());$@      return;@|a_generated_opencode_plugin_throws_the_engine_s_refusal
-fn render_opencode_plugin() -> String {
+fn render_opencode_plugin(path: &str) -> String {
     let quoted: Vec<String> = wiring_argv(Harness::OpenCode)
         .iter()
         .map(|part| json_string(part))
         .collect();
-    let (program, args) = quoted
-        .split_first()
-        .map_or(("\"\"", &[][..]), |(program, args)| {
-            (program.as_str(), args)
-        });
     OPENCODE_PLUGIN
-        .replace(
-            "@PATH@",
-            Harness::OpenCode.plugin().map_or("", |plugin| plugin.path),
-        )
-        .replace("@PROGRAM@", program)
-        .replace("@ARGS@", &args.join(", "))
+        .replace("@PATH@", path)
+        .replace("@ARGV@", &quoted.join(", "))
 }
 
-/// The plugin [`render_opencode_plugin`] fills in: the program and its args
-/// from [`wiring_argv`], so the plugin spawns exactly the command every hook
+/// The plugin [`render_opencode_plugin`] fills in: the argv from
+/// [`wiring_argv`], so the plugin spawns exactly the command every hook
 /// registration runs, and the path it is loaded from.
 ///
 /// The engine is spawned ASYNCHRONOUSLY. `spawnSync` would hold the host's
@@ -11784,9 +11791,11 @@ const OPENCODE_PLUGIN: &str = r#"// Generated by `batten generate hooks --harnes
 // OpenCode loads it from @PATH@.
 import { spawn } from "node:child_process";
 
+const [program, ...args] = [@ARGV@];
+
 const adjudicate = (directory, envelope) =>
   new Promise((resolve) => {
-    const child = spawn(@PROGRAM@, [@ARGS@], {
+    const child = spawn(program, args, {
       cwd: directory,
       stdio: ["pipe", "ignore", "pipe"],
     });

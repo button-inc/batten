@@ -1101,7 +1101,6 @@ fn wired_command(tree: &Path, bin: &Path) -> Result<Vec<String>> {
             "perf-pair: this harness registers no wiring file, so the wired pair cannot be measured. No measurement."
         );
     };
-    let key = wiring.file.event_key();
     let settings = tree.join(wiring.file.path());
     let text = std::fs::read_to_string(&settings).with_context(|| {
         format!(
@@ -1111,15 +1110,16 @@ fn wired_command(tree: &Path, bin: &Path) -> Result<Vec<String>> {
     })?;
     let parsed: serde_json::Value = serde_json::from_str(&text)
         .with_context(|| format!("perf-pair: {} did not parse.", settings.display()))?;
-    let hooks = key.map_or(Some(&parsed), |key| parsed.get(key));
+    let events = crate::wiring::committed_events(&parsed, wiring.file);
     let spelling = wiring
         .spellings
         .iter()
         .find(|(event, _)| *event == Event::PreTool)
         .map_or("PreToolUse", |(_, name)| *name);
 
-    let command = hooks
-        .and_then(|hooks| hooks.get(spelling))
+    let command = events
+        .as_deref()
+        .and_then(|events| events.get(spelling))
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()

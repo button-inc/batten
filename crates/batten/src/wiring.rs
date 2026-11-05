@@ -421,13 +421,7 @@ fn prune_siblings(
     file: hook::WiringFile,
     command: &str,
 ) -> Vec<(String, usize)> {
-    let events = match file.event_key() {
-        Some(key) => document
-            .get_mut(key)
-            .and_then(serde_json::Value::as_object_mut),
-        None => document.as_object_mut(),
-    };
-    let Some(events) = events else {
+    let Some(events) = events_mut(document, file, false) else {
         return Vec::new();
     };
     let mut removed = Vec::new();
@@ -571,6 +565,28 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
     Ok(out)
 }
 
+/// The writable event map in `document`, the one walk both writers take, so
+/// they cannot pick different maps: a root-keyed file IS the event map, and a
+/// keyed one holds it under its key — made empty first when `create`, since a
+/// file that registers nothing yet is where an add goes, never a prune.
+fn events_mut(
+    document: &mut serde_json::Value,
+    file: hook::WiringFile,
+    create: bool,
+) -> Option<&mut serde_json::Map<String, serde_json::Value>> {
+    let root = document.as_object_mut()?;
+    let Some(key) = file.event_key() else {
+        return Some(root);
+    };
+    if create {
+        root.entry(key)
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+    } else {
+        root.get_mut(key).and_then(serde_json::Value::as_object_mut)
+    }
+}
+
 /// Add batten's registration under every event in `spellings` that carries
 /// none, and return those events in the order given.
 ///
@@ -582,19 +598,7 @@ fn add_missing(
     spellings: &[&str],
     command: &str,
 ) -> Vec<String> {
-    let Some(root) = document.as_object_mut() else {
-        return Vec::new();
-    };
-    // A root-keyed file IS the event map, so the registrations go at its top
-    // level rather than under a key.
-    let events = match file.event_key() {
-        Some(key) => root
-            .entry(key)
-            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
-            .as_object_mut(),
-        None => Some(root),
-    };
-    let Some(events) = events else {
+    let Some(events) = events_mut(document, file, true) else {
         return Vec::new();
     };
     let mut added = Vec::new();
@@ -998,6 +1002,28 @@ mod tests {
             .wiring()
             .expect("claude-code declares a wiring surface")
             .file
+    }
+
+    /// A prune finds no map where the key is absent and leaves the file as it
+    /// was; an add makes the empty map it registers into. A root-keyed file is
+    /// its own map either way.
+    #[test]
+    fn only_an_add_creates_the_event_map_it_writes_into() {
+        let mut document = serde_json::json!({ "permissions": {} });
+        assert!(events_mut(&mut document, claude(), false).is_none());
+        assert_eq!(document, serde_json::json!({ "permissions": {} }));
+        assert!(events_mut(&mut document, claude(), true).is_some_and(|events| events.is_empty()));
+        assert_eq!(
+            document,
+            serde_json::json!({ "permissions": {}, "hooks": {} })
+        );
+        let mut root = serde_json::json!({ "PreToolUse": [] });
+        let root_file = hook::WiringFile::Root("hooks.json");
+        assert!(
+            events_mut(&mut root, root_file, false)
+                .is_some_and(|events| events.contains_key("PreToolUse"))
+        );
+        assert!(events_mut(&mut serde_json::json!([]), root_file, true).is_none());
     }
 
     /// The load-bearing negative: a broad selector, so a MIS-registered batten is
