@@ -19898,8 +19898,13 @@ fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
         // Refusing them left a session over a binary/config mismatch unable to
         // find the line to repair or to leave plan mode at all.
         (hook::Operation::Other(name), None) if hook::INERT_TOOLS.contains(&name.as_str()) => true,
-        // The repair, and only onto the file that is faulting.
-        (hook::Operation::Write, Some(path)) => names_the_config_authority(path),
+        // The repair, and only onto the file that is faulting: every file the
+        // call writes, so a patch naming the authority first carries nothing
+        // else through.
+        (hook::Operation::Write, Some(_)) => envelope
+            .write_targets()
+            .iter()
+            .all(|&path| names_the_config_authority(path)),
         // THE OTHER REPAIR, for the fault no edit can end (CLOUD-2116). A pin
         // naming a NEWER build than the installed one is fixed by installing
         // the pin, never by lowering it, so a floor of read-and-edit bricked the
@@ -20696,6 +20701,20 @@ fn admitted(
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 //MUTANT ripcord-reaches-a-loaded-deny-all|s@    let admits = bootstrap \x7c\x7c (ripcord::present(root) \&\& recoverable_without_rules(envelope));@    let admits = false;@|the_ripcord_admits_a_read_a_loaded_rule_refused
 //MUTANT ripcord-becomes-a-global-allow|s@    let admits = bootstrap \x7c\x7c (ripcord::present(root) \&\& recoverable_without_rules(envelope));@    let admits = bootstrap \x7c\x7c ripcord::present(root);@|the_ripcord_is_not_a_global_allow
+/// Whether this call writes the ripcord sentinel and nothing else.
+///
+/// EVERY file the call writes, never `writes` alone: a patch names its first
+/// file there, so a patch adding the sentinel beside a protected file would
+/// otherwise arm the ripcord and carry the protected write through with it.
+fn arms_the_ripcord(envelope: &hook::Envelope) -> bool {
+    let targets = envelope.write_targets();
+    matches!(envelope.operation, hook::Operation::Write)
+        && !targets.is_empty()
+        && targets
+            .iter()
+            .all(|&target| ripcord::creates_the_sentinel(Some(target)))
+}
+
 fn pull_ripcord(
     envelope: &hook::Envelope,
     decision: hook::Decision,
@@ -20708,8 +20727,7 @@ fn pull_ripcord(
     // THE OPERATION CHECK IS OURS, so `ripcord` stays a leaf with no edge onto
     // `hook`. `writes` is already `None` for anything but a classified write;
     // the `matches!` states that rather than leaning on it.
-    let bootstrap = matches!(envelope.operation, hook::Operation::Write)
-        && ripcord::creates_the_sentinel(envelope.writes.as_deref());
+    let bootstrap = arms_the_ripcord(envelope);
     let root = hook_authority_root();
     // NAMED AND POSITIVE, rather than a negated conjunction inline. The two arms
     // are the whole contract — arming is unconditional, a pull is floored — and a
@@ -30124,6 +30142,32 @@ pub fn land_ready_owes(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// The ripcord arms on a write of the sentinel alone: a patch adding it
+    /// beside another file arms nothing, and the config floor admits a patch
+    /// only when every file it writes is the authority.
+    #[test]
+    fn a_patch_arms_the_ripcord_or_reaches_the_floor_only_whole() {
+        let patch = |body: &str| {
+            hook::decode_value(
+                hook::Harness::OpenCode,
+                &serde_json::json!({
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "apply_patch",
+                    "tool_input": { "patchText": format!("*** Begin Patch\n{body}*** End Patch") },
+                }),
+            )
+            .expect("decodes")
+        };
+        let sentinel = format!("*** Add File: {}\n+x\n", ripcord::SENTINEL);
+        let config = format!("*** Update File: {}\n@@\n-a\n+b\n", config::CONFIG_FILE);
+        assert!(arms_the_ripcord(&patch(&sentinel)));
+        assert!(!arms_the_ripcord(&patch(&format!("{sentinel}{config}"))));
+        assert!(recoverable_without_rules(&patch(&config)));
+        assert!(!recoverable_without_rules(&patch(&format!(
+            "{config}*** Update File: src/lib.rs\n@@\n-a\n+b\n"
+        ))));
+    }
 
     /// `mcp grant` and `mcp posture` judge the operand where one was given, and
     /// otherwise the committed settings file the MCP permission grammar lives in.
