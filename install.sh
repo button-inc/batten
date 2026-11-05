@@ -20,13 +20,7 @@ aarch64 | arm64) arch=aarch64 ;;
 *) fail "no release for $os/$arch" 1 ;;
 esac
 case "$os" in
-Linux)
-	libc=gnu
-	for loader in /lib/ld-musl-*; do
-		[ -e "$loader" ] && libc=musl
-	done
-	target="$arch-unknown-linux-$libc"
-	;;
+Linux) target="$arch-unknown-linux-musl" ;;
 Darwin) target="$arch-apple-darwin" ;;
 *) fail "no release for $os/$arch" 1 ;;
 esac
