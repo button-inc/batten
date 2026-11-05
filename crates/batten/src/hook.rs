@@ -8247,7 +8247,7 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
 /// program". Canonicalising the path instead would make the answer depend on a
 /// checkout the boundary may not have, and on a symlink target that says which
 /// binary it is rather than which program was asked for.
-fn program_name(token: &str) -> &str {
+pub(crate) fn program_name(token: &str) -> &str {
     token.rsplit('/').next().unwrap_or(token)
 }
 
@@ -10899,7 +10899,7 @@ const SHELL_GRAMMAR: [&str; 9] = [
 /// its `)` closes the `$(` inside it rather than a group around it — while
 /// reaching every case above. It is a rule about two characters, not a parser,
 /// and CLOUD-1381 is still what replaces it.
-fn program_token(token: &str) -> &str {
+pub(crate) fn program_token(token: &str) -> &str {
     let opened = token.trim_start_matches(['(', '{']);
     if opened.contains(['(', '{']) {
         return opened;
@@ -10943,7 +10943,7 @@ fn is_shell_grammar(token: &str) -> bool {
 /// The index returned is still an index into the RAW `tokens`, because callers
 /// normalise what they read off it themselves — normalising here is about which
 /// arm is taken, never about what the answer points at.
-fn effective_program(tokens: &[&str]) -> Option<usize> {
+pub(crate) fn effective_program(tokens: &[&str]) -> Option<usize> {
     let mut i = 0;
     while i < tokens.len() && is_env_assignment(program_token(tokens[i])) {
         i += 1;

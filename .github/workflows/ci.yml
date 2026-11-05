@@ -327,8 +327,8 @@ jobs:
           # reporting a conformance level.
           #
           # Kept out deliberately: zig and cargo-zigbuild (darwin-link only),
-          # zizmor (its own zizmor.yml workflow), and gh, release-plz and
-          # serena, which back agent and release tasks that never run here.
+          # zizmor (its own zizmor.yml workflow), and release-plz and serena,
+          # which back agent and release tasks that never run here.
           # `mise run ci-tools-check` fails if a name here drifts from mise.toml.
           #
           # Kept on ONE line on purpose: `mise run ci-tools-check` reads these
@@ -341,11 +341,13 @@ jobs:
           # With `MISE_EXEC_AUTO_INSTALL: false` above making this list binding, a
           # tool absent from it is not slow, it is missing: both rows failed
           # CLOSED in CI while passing locally, which is the verify/CI
-          # disagreement `land` refuses on (CLOUD-480). `ci-tools-check` cannot
-          # see this direction — it holds tools NAMED IN THE WORKFLOW to being
-          # declared in mise.toml, not tools a batten.toml row needs to being
-          # installed here.
-          install_args: rust hk github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker aqua:axodotdev/cargo-dist
+          # disagreement `land` refuses on (CLOUD-480). `ci-tools-check` holds
+          # tools NAMED IN THE WORKFLOW to being declared in mise.toml; the
+          # tools a batten.toml row spawns — gh among them, for `release check
+          # unread` — are held to this list by the suite-job install gate in
+          # crates/batten/tests/it/ci_tools.rs, since the suite's fixtures run
+          # those rows (CLOUD-2446).
+          install_args: rust hk aqua:cli/cli github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker aqua:axodotdev/cargo-dist
       - name: Fetch the pull request's own base ref, when it is not main
         if: github.event.pull_request.base.ref != 'main'
         env:

@@ -651,6 +651,17 @@ pub fn shell_commands(text: &str) -> Option<Vec<(Vec<String>, Vec<String>)>> {
     crate::hook::shell_commands(text)
 }
 
+/// The program `words` runs once the hooks look through its wrappers (`env`,
+/// `nohup`, `mise exec`), by its file name (CLOUD-2446); `None` when the words
+/// are only grammar or assignments.
+#[doc(hidden)]
+#[must_use]
+pub fn effective_program(words: &[String]) -> Option<String> {
+    let tokens: Vec<&str> = words.iter().map(String::as_str).collect();
+    let program = crate::hook::program_token(tokens[crate::hook::effective_program(&tokens)?]);
+    Some(crate::hook::program_name(program).to_owned())
+}
+
 /// What a source's `require_tool`/`require_bin` calls declare (CLOUD-2388).
 #[doc(hidden)]
 #[derive(Debug, Default)]
@@ -665,6 +676,9 @@ pub struct RequireCensus {
     /// Each `Command::new("<literal>")` program: a pinned tool among them is
     /// reached around the resolver, so no reader sees it required.
     pub spawned: Vec<String>,
+    /// `include_str!`s of a `batten.toml`: a fixture carrying the committed
+    /// config, whose rows spawn their programs through `PATH` (CLOUD-2446).
+    pub committed_config: usize,
 }
 
 /// Whether `path` names the resolver: its last segment is `require_tool` or
@@ -675,21 +689,68 @@ fn names_resolver(path: &syn::Path) -> bool {
         .is_some_and(|last| last.ident == "require_tool" || last.ident == "require_bin")
 }
 
+/// The names `std::process::Command` goes by in `file`: `Command` itself, and
+/// every `use … Command as X` alias anywhere in it (CLOUD-2450).
+fn command_names(file: &syn::File) -> BTreeSet<String> {
+    struct Uses(BTreeSet<String>);
+    impl<'a> Visit<'a> for Uses {
+        fn visit_use_rename(&mut self, rename: &'a syn::UseRename) {
+            if rename.ident == "Command" {
+                self.0.insert(rename.rename.to_string());
+            }
+        }
+    }
+    let mut uses = Uses(BTreeSet::from(["Command".to_owned()]));
+    uses.visit_file(file);
+    uses.0
+}
+
+/// A macro body that is not a list of expressions, read token by token: a
+/// resolver named there states a requirement no reader can name, and a `which`
+/// literal is a `mise which` (CLOUD-2450).
+//MUTANT macro-body-unscanned|s@^    for token in tokens {$@    for token in tokens.into_iter().take(0) {@|an_unparsed_macro_body_still_states_its_requirement
+fn scan_tokens(tokens: proc_macro2::TokenStream, census: &mut RequireCensus) {
+    for token in tokens {
+        match token {
+            proc_macro2::TokenTree::Group(group) => scan_tokens(group.stream(), census),
+            proc_macro2::TokenTree::Ident(ident)
+                if ident == "require_tool" || ident == "require_bin" =>
+            {
+                census.unnamed += 1;
+            }
+            proc_macro2::TokenTree::Literal(literal) => {
+                if let syn::Lit::Str(text) = syn::Lit::new(literal)
+                    && text.value() == concat!("whi", "ch")
+                {
+                    census.which_literals += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// The `require_tool`/`require_bin` calls in `file`, by any path that ends in
 /// one, inside a macro whose body is comma-separated expressions (`assert!`,
-/// `vec!`, `format!`) as well as outside.
+/// `vec!`, `format!`) as well as outside; any other macro body is read token by
+/// token.
 #[doc(hidden)]
 #[must_use]
 pub fn require_census(file: &syn::File) -> RequireCensus {
-    /// The census, and whether the walk is inside the resolver's own body,
-    /// where `require_bin(name, name)` and its `mise which` are the mechanism.
-    struct Walk(RequireCensus, bool);
+    struct Walk {
+        census: RequireCensus,
+        /// Inside the resolver's own body, where `require_bin(name, name)` and
+        /// its `mise which` are the mechanism.
+        in_resolver: bool,
+        /// The names `Command` goes by in this file.
+        command_names: BTreeSet<String>,
+    }
     impl<'a> Visit<'a> for Walk {
         fn visit_item_fn(&mut self, item: &'a syn::ItemFn) {
             let resolver = item.sig.ident == "require_tool" || item.sig.ident == "require_bin";
-            let outer = std::mem::replace(&mut self.1, resolver);
+            let outer = std::mem::replace(&mut self.in_resolver, resolver);
             syn::visit::visit_item_fn(self, item);
-            self.1 = outer;
+            self.in_resolver = outer;
         }
         fn visit_expr_call(&mut self, call: &'a syn::ExprCall) {
             if let syn::Expr::Path(path) = &*call.func
@@ -699,9 +760,9 @@ pub fn require_census(file: &syn::File) -> RequireCensus {
                     Some(syn::Expr::Lit(syn::ExprLit {
                         lit: syn::Lit::Str(tool),
                         ..
-                    })) => self.0.tools.push(tool.value()),
-                    _ if self.1 => {}
-                    _ => self.0.unnamed += 1,
+                    })) => self.census.tools.push(tool.value()),
+                    _ if self.in_resolver => {}
+                    _ => self.census.unnamed += 1,
                 }
                 // The callee is this call's, not a bare path's: walk the
                 // arguments only, or the path would count again below.
@@ -712,41 +773,53 @@ pub fn require_census(file: &syn::File) -> RequireCensus {
             }
             if let syn::Expr::Path(path) = &*call.func
                 && let [.., ty, new] = path.path.segments.iter().collect::<Vec<_>>()[..]
-                && ty.ident == "Command"
+                && self.command_names.contains(&ty.ident.to_string())
                 && new.ident == "new"
                 && let Some(syn::Expr::Lit(syn::ExprLit {
                     lit: syn::Lit::Str(program),
                     ..
                 })) = call.args.first()
             {
-                self.0.spawned.push(program.value());
+                self.census.spawned.push(program.value());
             }
             syn::visit::visit_expr_call(self, call);
         }
         fn visit_expr_path(&mut self, path: &'a syn::ExprPath) {
-            if names_resolver(&path.path) && !self.1 {
-                self.0.unnamed += 1;
+            if names_resolver(&path.path) && !self.in_resolver {
+                self.census.unnamed += 1;
             }
         }
         fn visit_macro(&mut self, mac: &'a syn::Macro) {
+            if mac.path.is_ident("include_str")
+                && let Ok(path) = mac.parse_body::<syn::LitStr>()
+                && (path.value() == "batten.toml" || path.value().ends_with("/batten.toml"))
+            {
+                self.census.committed_config += 1;
+            }
             if let Ok(args) = mac.parse_body_with(
                 syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
             ) {
                 for arg in &args {
                     self.visit_expr(arg);
                 }
+            } else if !self.in_resolver {
+                scan_tokens(mac.tokens.clone(), &mut self.census);
             }
         }
         fn visit_lit_str(&mut self, lit: &'a syn::LitStr) {
             // Split, so the census does not count its own needle.
-            if lit.value() == concat!("whi", "ch") && !self.1 {
-                self.0.which_literals += 1;
+            if lit.value() == concat!("whi", "ch") && !self.in_resolver {
+                self.census.which_literals += 1;
             }
         }
     }
-    let mut walk = Walk(RequireCensus::default(), false);
+    let mut walk = Walk {
+        census: RequireCensus::default(),
+        in_resolver: false,
+        command_names: command_names(file),
+    };
     walk.visit_file(file);
-    walk.0
+    walk.census
 }
 
 #[cfg(test)]
@@ -899,5 +972,72 @@ mod tests {
                 refused: ["bare", "after_guard", "nested"].map(String::from).to_vec(),
             }
         );
+    }
+
+    /// A requirement a macro hides is still a requirement (CLOUD-2450): a body
+    /// that is not an expression list is read token by token, and a `Command`
+    /// alias is still `Command`.
+    #[test]
+    fn an_unparsed_macro_body_still_states_its_requirement() {
+        let census =
+            |source: &str| require_census(&syn::parse_str(source).expect("the fixture parses"));
+        for hidden in [
+            r#"fn f() { let v = vec![require_tool("x"); 2]; }"#,
+            r#"fn f() { assert!(matches!(require_tool("x"), p if p.is_file())); }"#,
+            r"macro_rules! tool { ($n:literal) => { common::require_tool($n) }; }",
+        ] {
+            assert_eq!(census(hidden).unnamed, 1, "{hidden}");
+        }
+        let aliased =
+            census("use std::process::Command as Cmd; fn f() { Cmd::new(\"jq\").status(); }");
+        assert_eq!(aliased.spawned, ["jq"]);
+    }
+
+    /// Each census count, exactly: a literal resolver call names its tool, a
+    /// non-literal one or a resolver passed as a value is unnamed, the
+    /// resolvers' own bodies count nothing, `which` is counted in an expression
+    /// list and in a token-read body alike, and only a path ending in
+    /// `batten.toml` is the committed config.
+    #[test]
+    fn the_require_census_counts_each_source_exactly() {
+        let census = require_census(
+            &syn::parse_str(
+                r#"
+                fn require_tool(name: &str) { require_bin(name, name); let _ = ["which"].map(require_bin); }
+                fn require_bin(name: &str, _: &str) { let _ = "which"; }
+                fn case() {
+                    require_tool("jq");
+                    require_bin(&name, "x");
+                    let _ = names.map(require_tool);
+                    let _ = more.map(require_bin);
+                    let _ = some_path;
+                    assert!(probe("which"));
+                    let _ = vec!["which"; 2];
+                    let _ = include_str!("../../batten.toml");
+                    let _ = include_str!("batten.toml");
+                    let _ = include_str!("other.toml");
+                    let _ = include_str!("notes.txt");
+                    Command::new("gh");
+                }
+                "#,
+            )
+            .expect("the fixture parses"),
+        );
+        assert_eq!(census.tools, ["jq"]);
+        assert_eq!(census.unnamed, 3);
+        assert_eq!(census.which_literals, 2);
+        assert_eq!(census.committed_config, 2);
+        assert_eq!(census.spawned, ["gh"]);
+    }
+
+    /// The program is the hooks' own reading, by file name, past assignments.
+    #[test]
+    fn the_effective_program_is_named_by_its_file_name() {
+        let words = |text: &str| text.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(
+            effective_program(&words("FOO=1 /usr/bin/jq .")).as_deref(),
+            Some("jq")
+        );
+        assert_eq!(effective_program(&words("FOO=1")), None);
     }
 }
