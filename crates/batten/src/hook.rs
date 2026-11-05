@@ -9195,58 +9195,6 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
 /// envelope parser trims a line before it matches one — so an over-read here
 /// costs a refusal, never the guard.
 fn patch_targets(input: &Value) -> Vec<&str> {
-    // Git quotes a path it must escape. The outer quotes only: a C-escape
-    // inside one stays as written.
-    fn git_unquote(path: &str) -> &str {
-        let path = path.trim();
-        path.strip_prefix('"')
-            .and_then(|path| path.strip_suffix('"'))
-            .unwrap_or(path)
-    }
-    // A unified header's path: a tab and a timestamp may follow it, and git
-    // prefixes each side with `a/` or `b/`.
-    fn unified(rest: &str) -> &str {
-        let path = git_unquote(rest.split('\t').next().unwrap_or(rest));
-        path.strip_prefix("a/")
-            .or_else(|| path.strip_prefix("b/"))
-            .unwrap_or(path)
-    }
-    // Once each, and never a path that names no file.
-    fn name<'a>(targets: &mut Vec<&'a str>, path: &'a str) {
-        if !path.is_empty() && path != "/dev/null" && !targets.contains(&path) {
-            targets.push(path);
-        }
-    }
-    const HEADERS: &[&str] = &[
-        "*** Add File: ",
-        "*** Update File: ",
-        "*** Delete File: ",
-        "*** Move to: ",
-    ];
-    const GIT_HEADERS: &[&str] = &["rename from ", "rename to ", "copy from ", "copy to "];
-    // `a/x b/y`, or quoted `"a/x" "b/y"` when either side needs it. A path may
-    // itself hold ` b/`, so the split where both sides name one file — every
-    // patch but a rename — is taken first.
-    // Only WHERE to split: both sides keep their quotes and prefixes, and
-    // [`unified`] strips them, one rule for either side.
-    fn git_sides(rest: &str) -> Option<(&str, &str)> {
-        let middle = rest.len() / 2;
-        // Both sides prefixed, and one file: two absent prefixes are no match.
-        let same_file = rest.get(middle..=middle) == Some(" ")
-            && rest
-                .get(..middle)
-                .and_then(|a| a.strip_prefix("a/"))
-                .is_some_and(|a| {
-                    rest.get(middle + 1..).and_then(|b| b.strip_prefix("b/")) == Some(a)
-                });
-        let at = if same_file {
-            middle
-        } else {
-            rest.find(" b/").or_else(|| rest.find(" \"b/"))?
-        };
-        // The second side keeps the separating space, which `unified` trims.
-        Some(rest.split_at(at))
-    }
     let Some(fields) = input.as_object() else {
         return Vec::new();
     };
@@ -9273,9 +9221,22 @@ fn patch_targets(input: &Value) -> Vec<&str> {
         let mut git = false;
         // A `---` header counts only with a `+++` header on the very next
         // line: a hunk removing the line `-- x` carries `--- x`, which opens
-        // nothing.
+        // nothing. A context diff pairs `*** x` with the `--- y` after it,
+        // which `patch` reads the same way.
         let mut old = None;
+        let mut context = None;
         for line in text.lines() {
+            if let Some(previous) = context.take()
+                && let Some(rest) = line.strip_prefix("--- ")
+            {
+                name(&mut targets, previous);
+                name(&mut targets, unified(rest));
+            }
+            context = line.strip_prefix("*** ").map(unified);
+            // `patch` reads an `Index:` line as the file a hunk applies to.
+            if let Some(path) = line.strip_prefix("Index: ") {
+                name(&mut targets, path.trim());
+            }
             if envelope
                 && let Some(path) = HEADERS
                     .iter()
@@ -9309,6 +9270,73 @@ fn patch_targets(input: &Value) -> Vec<&str> {
         }
     }
     targets
+}
+
+/// The headers a `*** Begin Patch` envelope names a file in.
+const HEADERS: &[&str] = &[
+    "*** Add File: ",
+    "*** Update File: ",
+    "*** Delete File: ",
+    "*** Move to: ",
+];
+
+/// The lines after a `diff --git` that name a file of their own. `rename
+/// old`/`rename new` are the spellings `git apply` takes beside `rename
+/// from`/`rename to`.
+const GIT_HEADERS: &[&str] = &[
+    "rename from ",
+    "rename to ",
+    "rename old ",
+    "rename new ",
+    "copy from ",
+    "copy to ",
+];
+
+/// A path git quoted because it must escape it. The outer quotes only: a
+/// C-escape inside one stays as written.
+fn git_unquote(path: &str) -> &str {
+    let path = path.trim();
+    path.strip_prefix('"')
+        .and_then(|path| path.strip_suffix('"'))
+        .unwrap_or(path)
+}
+
+/// A unified header's path: a tab and a timestamp may follow it, and git
+/// prefixes each side with `a/` or `b/`.
+fn unified(rest: &str) -> &str {
+    let path = git_unquote(rest.split('\t').next().unwrap_or(rest));
+    path.strip_prefix("a/")
+        .or_else(|| path.strip_prefix("b/"))
+        .unwrap_or(path)
+}
+
+/// Add `path` to a patch's targets once, and never a path that names no file.
+fn name<'a>(targets: &mut Vec<&'a str>, path: &'a str) {
+    if !path.is_empty() && path != "/dev/null" && !targets.contains(&path) {
+        targets.push(path);
+    }
+}
+
+/// Where a `diff --git` line splits: `a/x b/y`, or quoted `"a/x" "b/y"` when
+/// either side needs it. A path may itself hold ` b/`, so the split where both
+/// sides name one file — every patch but a rename — is taken first. Only WHERE
+/// to split: both sides keep their quotes and prefixes, and [`unified`] strips
+/// them, one rule for either side.
+fn git_sides(rest: &str) -> Option<(&str, &str)> {
+    let middle = rest.len() / 2;
+    // Both sides prefixed, and one file: two absent prefixes are no match.
+    let same_file = rest.get(middle..=middle) == Some(" ")
+        && rest
+            .get(..middle)
+            .and_then(|a| a.strip_prefix("a/"))
+            .is_some_and(|a| rest.get(middle + 1..).and_then(|b| b.strip_prefix("b/")) == Some(a));
+    let at = if same_file {
+        middle
+    } else {
+        rest.find(" b/").or_else(|| rest.find(" \"b/"))?
+    };
+    // The second side keeps the separating space, which `unified` trims.
+    Some(rest.split_at(at))
 }
 
 fn protected_mutation(policy: &Policy, command: &str) -> Decision {
@@ -18317,6 +18345,24 @@ deny contains "refused by themodule" if {
                 "patch": "diff --git \"a/pq rs t\" \"b/u\"\nold mode 100644\nnew mode 100755\n",
             })),
             ["pq rs t", "u"]
+        );
+        // git apply's `rename old`/`rename new`, a context diff's `***`/`---`
+        // pair, and an `Index:` line each name the file they patch.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git a/x b/y\nrename old batten.toml\nrename new y\n",
+            })),
+            ["x", "y", "batten.toml"]
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "*** batten.toml\t2026-01-01\n--- batten.toml\t2026-01-02\n***************\n",
+            })),
+            ["batten.toml"]
+        );
+        assert_eq!(
+            patch_targets(&serde_json::json!({ "patch": "Index: batten.toml\n=====\n" })),
+            ["batten.toml"]
         );
         // A space at the middle is no split unless both sides name one file.
         assert_eq!(
