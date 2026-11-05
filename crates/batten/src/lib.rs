@@ -15195,15 +15195,22 @@ fn run_land_ready(
         // not evidence about what the author wrote, which is the predecessor's
         // posture spelled `[[ -n "$body" ]] &&`, so an unreadable body and an
         // empty one both ask nothing.
-        let body = bot::forge::pull(&repo, &pr)
-            .map(|pull| pull.body)
-            .unwrap_or_default();
-        if body.trim().is_empty() {
+        // AN UNREAD BODY ASKS NOTHING, as the spawned source's empty answer did,
+        // but it is said as unread: "carries no body" over a forge that never
+        // answered states a fact nobody looked at (code review of #1248).
+        let read = bot::forge::pull(&repo, &pr).map(|pull| pull.body);
+        let body = read.as_deref().unwrap_or_default();
+        if let Err(cause) = &read {
+            writeln!(
+                out,
+                "land: the pull request's body could not be read ({cause}); nothing to ask"
+            )?;
+        } else if body.trim().is_empty() {
             writeln!(
                 out,
                 "land: the pull request carries no body; nothing to ask"
             )?;
-        } else if let Some(code) = ask_the_body_gates(&gates, &body, bet, deciding, err)? {
+        } else if let Some(code) = ask_the_body_gates(&gates, body, bet, deciding, err)? {
             return Ok(code);
         } else {
             writeln!(out, "land: {} body gate(s) clear", gates.len())?;
