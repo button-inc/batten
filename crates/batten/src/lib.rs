@@ -12076,8 +12076,14 @@ fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
         .iter()
         .map(|entry| reapable(entry, &own_group))
         .collect();
-    for (entry, was_signalled) in abandoned.iter().zip(&signalled) {
-        if *was_signalled && exec::terminate_group(&entry.pgid) {
+    // Only the proved ones are TERMed, by the filter rather than an `&&`: a
+    // record the first pass refused names a group no unit case may signal.
+    for (entry, _) in abandoned
+        .iter()
+        .zip(&signalled)
+        .filter(|(_, proved)| **proved)
+    {
+        if exec::terminate_group(&entry.pgid) {
             reaped.terminated += 1;
         }
     }
