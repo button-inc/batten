@@ -414,15 +414,7 @@ fn the_shipped_lap_validates_and_ends_at_the_commit_point() {
 /// active work*.
 #[test]
 fn the_landings_own_stop_note_is_still_declared() {
-    let config = std::fs::read_to_string("../../batten.toml").expect("read the consumer's config");
-    // THE DECLARATION IS HELD UNTIL A RELEASE CARRIES CLOUD-2387: read through
-    // the `#HELD ` prefix, so the values are still pinned while the rows are not live.
-    let config: String = config
-        .lines()
-        .map(|line| line.strip_prefix("#HELD ").unwrap_or(line))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let parsed: toml::Value = toml::from_str(&config).expect("batten.toml parses");
+    let parsed = common::committed_config();
     assert_eq!(
         parsed["lease"].get("census").and_then(toml::Value::as_bool),
         Some(true),
@@ -448,15 +440,7 @@ fn the_landings_gates_are_declared_in_config_and_not_as_argvs() {
             "{retired} is retired: the landing decides its gates in-process"
         );
     }
-    let config = std::fs::read_to_string("../../batten.toml").expect("read the consumer's config");
-    // THE DECLARATION IS HELD UNTIL A RELEASE CARRIES CLOUD-2387: read through
-    // the `#HELD ` prefix, so the values are still pinned while the rows are not live.
-    let config: String = config
-        .lines()
-        .map(|line| line.strip_prefix("#HELD ").unwrap_or(line))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let parsed: toml::Value = toml::from_str(&config).expect("batten.toml parses");
+    let parsed = common::committed_config();
     let derived: Vec<&str> = parsed["lease"]["body_gate"]
         .as_array()
         .expect("the body gates are declared")

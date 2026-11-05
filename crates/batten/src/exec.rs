@@ -2306,7 +2306,7 @@ fn piped_through(
     {
         // **A GATE THAT DID NOT READ STDIN STILL ANSWERED** (review of #848). This
         // was `.ok()?`, which turns an ordinary `EPIPE` into `None` — and `None`
-        // reached the landing's body gates as unrunnable, a could-not-look, over a
+        // reached its caller as unrunnable, a could-not-look, over a
         // gate that ran and produced a real verdict. Rust ignores `SIGPIPE`, so a
         // gate that ignores its stdin and exits before the write completes is not
         // a crash; it is a program that had already decided.
@@ -2322,9 +2322,9 @@ fn piped_through(
         // diagnostics before consuming all of stdin blocks writing stderr while
         // this blocks writing stdin, and the lap hangs with no timeout. With
         // `Stdio::null()` that was unreachable: the child could only ever block on
-        // stdout, which the caller was not filling. The landing's body gates fed a
-        // pull request BODY on stdin to a gate that took `Keep`, which is exactly
-        // the shape.
+        // stdout, which the caller was not filling. Any caller feeding stdin to a
+        // gate under `Keep` has exactly the shape: the landing's body gates did,
+        // with a pull request BODY, until CLOUD-2387 decided them in-process.
         //
         // Detached rather than joined: the handle closes when the thread's owned
         // pipe drops, and `wait_with_output` is what decides. A caller must never
@@ -2558,10 +2558,10 @@ impl Diagnostics {
 /// # [`Diagnostics`] IS THE CALLER'S, and hardcoding it here was the same defect
 /// one layer up
 ///
-/// This entry point pinned [`Diagnostics::Keep`] because the LANDING GATES need
-/// their refusal reason: their verdict is the exit code and the coordinate is on
-/// stderr, so dropping it left the body gate's refusal detail empty and the
-/// operator reading a refusal with nowhere to look.
+/// This entry point pinned [`Diagnostics::Keep`] because a GATE needs its
+/// refusal reason: its verdict is the exit code and the coordinate is on
+/// stderr, so dropping it left the landing's body gate (spawned here until
+/// CLOUD-2387) with an empty refusal and the operator with nowhere to look.
 ///
 /// **But the same entry point also fetches the pull request's BODY** (review of
 /// #848), and there the returned string is PARSED rather than shown. A forge

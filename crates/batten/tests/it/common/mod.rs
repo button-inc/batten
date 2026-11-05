@@ -234,6 +234,24 @@ pub(crate) fn at_root(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// This repository's committed `batten.toml`, parsed, with every `#HELD ` line
+/// read as live.
+///
+/// THE LANDING'S CENSUS, BODY AND ENTRY GATE ROWS ARE HELD UNTIL A RELEASE
+/// CARRIES CLOUD-2387: `engine-pin-check` refuses a key newer than the release
+/// pin, so they are committed behind the prefix. Read through it here, once, so
+/// the declared values stay pinned while the rows are not live, and the release
+/// that strips the prefix changes one place.
+pub(crate) fn committed_config() -> toml::Value {
+    let text = fs::read_to_string(at_root("batten.toml")).expect("read the committed batten.toml");
+    let live: String = text
+        .lines()
+        .map(|line| line.strip_prefix("#HELD ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    toml::from_str(&live).expect("the committed batten.toml parses")
+}
+
 /// The committed `dist-workspace.toml`, parsed: cargo-dist's config, which the
 /// release, its installers and the package channels all read.
 pub(crate) fn dist_config() -> toml::Table {

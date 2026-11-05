@@ -385,15 +385,7 @@ fn the_task_is_the_verb_and_land_still_names_it() {
     );
     // THE LANDING ASKS THE SAME HOST IN-PROCESS (CLOUD-2387): `[lease.unsubscribed]`
     // carries the task's own flags, so the two cannot name different hosts.
-    let text = std::fs::read_to_string(at_root("batten.toml")).expect("the config");
-    // THE DECLARATION IS HELD UNTIL A RELEASE CARRIES CLOUD-2387: read through
-    // the `#HELD ` prefix, so the values are still pinned while the rows are not live.
-    let text: String = text
-        .lines()
-        .map(|line| line.strip_prefix("#HELD ").unwrap_or(line))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let parsed: toml::Value = toml::from_str(&text).expect("batten.toml parses");
+    let parsed = common::committed_config();
     let table = &parsed["lease"]["unsubscribed"];
     for (flag, key) in [
         ("--session-env", "session_env"),
