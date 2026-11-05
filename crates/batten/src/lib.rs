@@ -15273,18 +15273,15 @@ fn ask_the_body_gates(
         if decided == ExitCode::Success {
             continue;
         }
-        if decided == ExitCode::Violation {
-            writeln!(
-                err,
-                "::error:: land: {named} refused this pull request's body"
-            )?;
+        let why = if decided == ExitCode::Violation {
+            format!("{named} refused this pull request's body")
         } else {
-            writeln!(
-                err,
-                "::error:: land: the body gate {named} could not be decided, so its verdict \
-                 is unknown rather than clean"
-            )?;
-        }
+            format!(
+                "the body gate {named} could not be decided, so its verdict is unknown \
+                 rather than clean"
+            )
+        };
+        writeln!(err, "::error:: land: {why}")?;
         err.write_all(&said)?;
         return Ok(Some(ExitCode::Violation));
     }
