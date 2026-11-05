@@ -634,7 +634,11 @@ pub fn status_on(entries: &[Provision], cache_root: &Path, host: Host<'_>) -> Re
         report.push(EntryStatus {
             name: entry.name.clone(),
             version: entry.version.clone(),
-            freshness: freshness_of(entry, cache_root, link_of(entry, host)?.as_deref())?,
+            freshness: freshness_of(
+                entry,
+                cache_root,
+                link_of(entry, cache_root, host)?.as_deref(),
+            )?,
         });
     }
     Ok(Report { entries: report })
@@ -731,13 +735,69 @@ pub fn link_dir(dest: &str, host: Host<'_>) -> Result<PathBuf> {
 ///
 /// RESOLVED ONCE PER ENTRY, and handed to both the freshness reading and the
 /// install, so one call cannot judge one directory and write another.
-fn link_of(entry: &Provision, host: Host<'_>) -> Result<Option<PathBuf>> {
-    entry
-        .link
-        .as_deref()
-        .filter(|_| host.links)
-        .map(|dest| link_dir(dest, host))
-        .transpose()
+///
+/// **A FALLBACK NEVER TAKES A NAME SOMEBODY ELSE OWNS.** The declared `~/`
+/// directory is batten's to write, but a system directory the fallback picks
+/// (`/usr/local/bin`, `/opt/homebrew/bin`) is shared with package managers. The
+/// link lands there only where the name is free or already batten's
+/// ([`claimable`]). Otherwise the declared directory stands, and the host keeps
+/// its own `mise` rather than having it renamed over.
+fn link_of(entry: &Provision, cache_root: &Path, host: Host<'_>) -> Result<Option<PathBuf>> {
+    let Some(dest) = entry.link.as_deref().filter(|_| host.links) else {
+        return Ok(None);
+    };
+    let resolved = link_dir(dest, host)?;
+    let declared = expand_home(dest)?;
+    Ok(Some(
+        if resolved == declared || claimable(&resolved, entry, cache_root) {
+            resolved
+        } else {
+            declared
+        },
+    ))
+}
+
+/// Whether a fallback directory may take `entry`'s link: the name is free, or
+/// what holds it is batten's — a launcher, or this entry's own cached bytes,
+/// which is what an earlier fallback wrote for a plain-copy entry.
+//MUTANT fallback-claims-a-foreign-name|s@^    !linked.exists()$@    true@|a_fallback_never_takes_a_name_another_tool_owns
+fn claimable(dir: &Path, entry: &Provision, cache_root: &Path) -> bool {
+    let linked = dir.join(&entry.binary);
+    !linked.exists()
+        || is_launcher_file(&linked)
+        || same_bytes(
+            &linked,
+            &entry_dir(cache_root, entry)
+                .join(BIN_DIR)
+                .join(&entry.binary),
+        )
+}
+
+/// Whether the file at `path` opens with a batten launcher's `#!` line. Reads
+/// only the first line's worth, since the name may hold a large binary.
+fn is_launcher_file(path: &Path) -> bool {
+    use std::io::Read as _;
+    let mut head = Vec::new();
+    let read = fs::File::open(path).and_then(|file| file.take(4096).read_to_end(&mut head));
+    if read.is_err() {
+        return false;
+    }
+    let first = head.split(|byte| *byte == b'\n').next().unwrap_or_default();
+    std::str::from_utf8(first)
+        .ok()
+        .and_then(|line| line.strip_prefix("#!"))
+        .and_then(|shebang| shebang.rsplit_once(' '))
+        .is_some_and(|(_, verb)| verb == LAUNCHER_VERB)
+}
+
+/// Whether two files hold the same bytes; `false` when either cannot be read.
+/// Sizes first, so a foreign binary of another length costs two `stat`s.
+fn same_bytes(left: &Path, right: &Path) -> bool {
+    let size = |path: &Path| fs::metadata(path).map(|meta| meta.len()).ok();
+    match (size(left), size(right)) {
+        (Some(a), Some(b)) if a == b => fs::read(left).ok() == fs::read(right).ok(),
+        _ => false,
+    }
 }
 
 fn freshness_of(entry: &Provision, cache_root: &Path, link: Option<&Path>) -> Result<Freshness> {
@@ -862,7 +922,7 @@ pub fn apply_on(
     dry_run: bool,
     host: Host<'_>,
 ) -> Result<Applied> {
-    let link = link_of(entry, host)?;
+    let link = link_of(entry, cache_root, host)?;
     let link = link.as_deref();
     if freshness_of(entry, cache_root, link)? == Freshness::Fresh {
         return Ok(Applied::AlreadyFresh);
@@ -2360,6 +2420,39 @@ mod tests {
                 "a `~/` link with no HOME to expand is refused, never resolved"
             ),
         }
+    }
+
+    /// CLOUD-2617 review: the fallback writes into a directory package managers
+    /// share, so it takes a name only where that name is free or batten's own.
+    ///
+    /// Fails by: the free-name test answering `true` for everything, so
+    /// Homebrew's or an image's `mise` is renamed over.
+    #[test]
+    fn a_fallback_never_takes_a_name_another_tool_owns() {
+        let dir = scratch("claimable");
+        let cache = dir.join("cache");
+        let shared = dir.join("shared-bin");
+        fs::create_dir_all(&shared).unwrap();
+        let body = b"#!/bin/sh\nexit 0\n".to_vec();
+        let entry = entry("tool", &digest(&body));
+        let linked = shared.join("tool");
+
+        assert!(claimable(&shared, &entry, &cache), "a free name");
+
+        fs::write(&linked, b"another tool's binary").unwrap();
+        assert!(!claimable(&shared, &entry, &cache), "a foreign binary");
+
+        fs::write(&linked, format!("#!/opt/batten {LAUNCHER_VERB}\n{{}}\n")).unwrap();
+        assert!(claimable(&shared, &entry, &cache), "batten's own launcher");
+
+        let cached = entry_dir(&cache, &entry).join(BIN_DIR).join("tool");
+        fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        fs::write(&cached, &body).unwrap();
+        fs::write(&linked, &body).unwrap();
+        assert!(
+            claimable(&shared, &entry, &cache),
+            "this entry's own cached bytes"
+        );
     }
 
     /// The per-user link the fallback case resolves.
