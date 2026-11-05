@@ -9231,9 +9231,14 @@ fn patch_targets(input: &Value) -> Vec<&str> {
     // [`unified`] strips them, one rule for either side.
     fn git_sides(rest: &str) -> Option<(&str, &str)> {
         let middle = rest.len() / 2;
+        // Both sides prefixed, and one file: two absent prefixes are no match.
         let same_file = rest.get(middle..=middle) == Some(" ")
-            && rest.get(..middle).and_then(|a| a.strip_prefix("a/"))
-                == rest.get(middle + 1..).and_then(|b| b.strip_prefix("b/"));
+            && rest
+                .get(..middle)
+                .and_then(|a| a.strip_prefix("a/"))
+                .is_some_and(|a| {
+                    rest.get(middle + 1..).and_then(|b| b.strip_prefix("b/")) == Some(a)
+                });
         let at = if same_file {
             middle
         } else {
@@ -18304,6 +18309,14 @@ deny contains "refused by themodule" if {
                 "patch": "diff --git a/x b/y b/x b/y\nold mode 100644\nnew mode 100755\n",
             })),
             ["x b/y"]
+        );
+        // Quoted sides of unequal length, a space at the middle: the split is
+        // at the quoted `b/` side, never the middle byte.
+        assert_eq!(
+            patch_targets(&serde_json::json!({
+                "patch": "diff --git \"a/pq rs t\" \"b/u\"\nold mode 100644\nnew mode 100755\n",
+            })),
+            ["pq rs t", "u"]
         );
         // A space at the middle is no split unless both sides name one file.
         assert_eq!(
