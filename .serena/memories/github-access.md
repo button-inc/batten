@@ -7,9 +7,14 @@ this is the full mechanics and fallback order.
 
 ## The core fact
 
-Routing a GitHub call _through_ the security proxy fails: it answers with a
-scoped app credential and 403s almost everything (`not accessible by
-integration`; GraphQL pinned to a tiny allowlist). GitHub itself is reachable —
+Routing a GitHub call _through_ the security proxy uses the proxy's own scoped
+app credential. On 2026-09-06 that 403'd almost everything (`not accessible by
+integration`; GraphQL pinned to a tiny allowlist). Since then it answers for
+this repository: on 2026-11-03/05 proxied reads of repo metadata, check runs,
+pulls, Actions runs and `search/issues` all returned 200, and the only refusals
+seen were the path denials listed under the preference order. So try the proxied
+route first, and treat a 403 there as an observed failure for that operation,
+not a general one. GitHub itself is reachable —
 a direct PAT-authenticated request to `api.github.com` returns 200 with the full
 5000/hr limit. Going _around_ the proxy is the PAT route, the last resort, not
 the default (see the preference order).
