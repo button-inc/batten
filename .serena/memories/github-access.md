@@ -46,11 +46,8 @@ hour and reaches for `add_repo`, which is blocked (below) and is not the fix.
 ## Fixed preference order (fall through only on an observed failure)
 
 **THE PAT IS THE LAST RESORT, NOT THE DEFAULT (operator, 2026-11-05).**
-`BATTEN_GITHUB_TOKEN` is not to be used when any other route reaches the goal.
-This inverts the order this section used to carry (PAT-backed `gh` first, MCP
-last). The inverted order is what sent a CLOUD-2580 session to reach for the PAT
-to list Actions secrets and to run a `search/issues` query. The search needed no
-PAT, and the listing was path-denied by the proxy anyway.
+`BATTEN_GITHUB_TOKEN` is not to be used when any other route reaches the goal
+(CLOUD-2646).
 
 1. **Routes that carry no PAT — default.** The `mcp__github__*` tools, and `gh`
    through the proxy on its own credential (`gh api -X GET search/…` is the
@@ -66,15 +63,14 @@ PAT, and the listing was path-denied by the proxy anyway.
    instead of handing an unproxied environment to whatever the command spawns.
    `GITHUB_PERSONAL_ACCESS_TOKEN` is UNSET here; `BATTEN_GITHUB_TOKEN` is the
    name the container injects.
-3. **Setting `GH_TOKEN=$BATTEN_GITHUB_TOKEN` on a PROXIED call is never a use of
-   the PAT**: the proxy discards it (the table above). It is noise, and a
-   finding stated as "even with the PAT" over that path proves nothing about the
-   PAT.
-4. **Paths no route reaches.** The proxy path-denies `actions/secrets`,
-   `actions/variables`, `actions/organization-*` and `environments` (403 "not
-   permitted through this proxy", 2026-11-03), and no MCP tool lists them. Say
-   that it needs an admin's browser or a local `gh`. Don't reach for the PAT to
-   find out.
+   **`GH_TOKEN=$BATTEN_GITHUB_TOKEN` on a PROXIED call is never a use of the PAT**:
+   the proxy discards it (the table above). A finding stated as "even with the PAT"
+   over that path proves nothing about the PAT.
+
+**Paths no route reaches.** The proxy path-denies `actions/secrets`,
+`actions/variables`, `actions/organization-*` and `environments` (403 "not
+permitted through this proxy", 2026-11-03), and no MCP tool lists them. They need
+an admin's browser or a local `gh`; don't reach for the PAT to find out.
 
 ## A degraded session start repairs itself, and says batten is broken
 
