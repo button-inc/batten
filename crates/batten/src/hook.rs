@@ -2693,10 +2693,17 @@ impl Envelope {
     #[must_use]
     pub fn context(&self) -> Option<String> {
         let session = self.session.as_deref()?;
-        Some(match self.agent.as_deref() {
-            Some(agent) => format!("{session}\u{1f}{agent}"),
-            None => session.to_owned(),
-        })
+        Some(sighting_context(session, self.agent.as_deref()))
+    }
+}
+
+/// The sighting key for `session`, and `agent` when a subagent is the reader:
+/// [`Envelope::context`]'s spelling, for a caller holding only the raw fields.
+#[must_use]
+pub fn sighting_context(session: &str, agent: Option<&str>) -> String {
+    match agent {
+        Some(agent) => format!("{session}\u{1f}{agent}"),
+        None => session.to_owned(),
     }
 }
 
@@ -3445,7 +3452,7 @@ fn background_ceiling(harness: Harness) -> Option<u64> {
 }
 
 /// One non-empty string member of a decoded payload, owned.
-fn present_str(value: &Value, key: &str) -> Option<String> {
+pub(crate) fn present_str(value: &Value, key: &str) -> Option<String> {
     value
         .get(key)
         .and_then(Value::as_str)

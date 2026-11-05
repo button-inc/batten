@@ -257,18 +257,50 @@ pub fn stamp(binary: &Path, digest: &str) -> Result<()> {
 /// row ([`row_disagreement`]). Top-level keys precede the first table header in
 /// TOML, so an `engine` line past it belongs to some table and is not the pin.
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT row-unread|s@^        (_, Some(tag)) => Some(Pin {$@        (_, Some(tag)) if false => Some(Pin {@|a_provision_row_alone_pins_and_is_followed_before_the_parse
+//MUTANT row-unread|s@^            (_, Some(tag)) => Some(Pin {$@            (_, Some(tag)) if false => Some(Pin {@|a_provision_row_alone_pins_and_is_followed_before_the_parse
 #[must_use]
 pub fn declared(text: &str) -> Option<Pin> {
-    let key: Option<Pin> = top_level(text, "engine").and_then(|value| value.try_into().ok());
-    match (key, row_release(text)) {
-        // A source pin, or a key naming both or neither, is the key's to answer.
-        (Some(pin), _) if pin.source.is_some() || pin.release.is_none() => Some(pin),
-        (_, Some(tag)) => Some(Pin {
-            release: Some(tag),
-            source: None,
-        }),
-        (key, None) => key,
+    Pins::of(text).declared()
+}
+
+/// Both pin declarations of one config, each read ONCE: the top-level `engine`
+/// key and the batten row's release. [`declared`], [`row_disagreement`] and
+/// [`check`] all answer from one of these, so a load scans the text once for
+/// each rather than once per question (every hook call pays for this read).
+struct Pins {
+    key: Option<Pin>,
+    row: Option<String>,
+}
+
+impl Pins {
+    fn of(text: &str) -> Self {
+        Self {
+            key: top_level(text, "engine").and_then(|value| value.try_into().ok()),
+            row: row_release(text),
+        }
+    }
+
+    fn declared(self) -> Option<Pin> {
+        match (self.key, self.row) {
+            // A source pin, or a key naming both or neither, is the key's to answer.
+            (Some(pin), _) if pin.source.is_some() || pin.release.is_none() => Some(pin),
+            (_, Some(tag)) => Some(Pin {
+                release: Some(tag),
+                source: None,
+            }),
+            (key, None) => key,
+        }
+    }
+
+    /// `(key, row)` when both name a release and they are different versions.
+    fn disagreement(&self) -> Option<(String, String)> {
+        let key = self.key.as_ref()?.release.clone()?;
+        let row = self.row.clone()?;
+        let same = match (release_version(&key), release_version(&row)) {
+            (Ok(key), Ok(row)) => key == row,
+            _ => key.trim_start_matches('v') == row.trim_start_matches('v'),
+        };
+        (!same).then_some((key, row))
     }
 }
 
@@ -282,13 +314,24 @@ pub fn declared(text: &str) -> Option<Pin> {
 /// or the row names no version: the load then reports the file as it always did.
 #[must_use]
 pub fn row_release(text: &str) -> Option<String> {
-    let version = batten_row(text)?
-        .get("version")?
-        .as_str()?
-        .trim()
-        .to_owned();
+    row_tag(&batten_row(text)?)
+}
+
+/// The release a parsed batten row names, as a tag.
+fn row_tag(row: &toml_edit::Table) -> Option<String> {
+    let version = row.get("version")?.as_str()?.trim();
     let bare = version.trim_start_matches('v');
     (!bare.is_empty()).then(|| format!("v{bare}"))
+}
+
+/// An artifact table's `sha256`, normalised, or `None` when it names none.
+fn artifact_digest(artifact: &dyn toml_edit::TableLike) -> Option<String> {
+    let digest = artifact
+        .get("sha256")?
+        .as_str()?
+        .trim()
+        .to_ascii_lowercase();
+    (!digest.is_empty()).then_some(digest)
 }
 
 /// The first batten `[[provision]]` row of `text`, parsed syntactically.
@@ -302,36 +345,37 @@ pub fn row_release(text: &str) -> Option<String> {
 /// `toml_edit`. A block that will not parse is passed over, so a malformed
 /// neighbour can no more hide the pin than a later release's check can.
 //MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT row-block-swallows-the-file|s@^            if header \&\& !trimmed.starts_with("\[provision.") {$@            if false {@|a_row_is_read_from_its_own_block
+//MUTANT row-block-swallows-the-file|s@^            \&\& !trimmed.starts_with("\[provision.")$@            \&\& false@|a_row_is_read_from_its_own_block
 fn batten_row(text: &str) -> Option<toml_edit::Table> {
-    let mut blocks: Vec<String> = Vec::new();
-    let mut current: Option<String> = None;
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("[[provision]]") {
-            blocks.extend(current.take());
-            current = Some(format!("{line}\n"));
-            continue;
-        }
-        if let Some(block) = current.as_mut() {
-            let header = trimmed.starts_with('[');
-            if header && !trimmed.starts_with("[provision.") {
-                blocks.extend(current.take());
-                continue;
-            }
-            block.push_str(line);
-            block.push('\n');
-        }
-    }
-    blocks.extend(current);
-    blocks.iter().find_map(|block| {
+    // Each block is parsed as it closes, and the first batten row ends the scan.
+    let parsed = |block: &str| {
         let doc = block.parse::<toml_edit::DocumentMut>().ok()?;
         doc.get("provision")?
             .as_array_of_tables()?
             .iter()
             .find(|row| is_batten_row(*row))
             .cloned()
-    })
+    };
+    let mut current: Option<String> = None;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let opens = trimmed.starts_with("[[provision]]");
+        let header = trimmed.starts_with('[');
+        if header
+            && !trimmed.starts_with("[provision.")
+            && let Some(row) = current.take().as_deref().and_then(parsed)
+        {
+            return Some(row);
+        }
+        if opens {
+            current = Some(String::new());
+        }
+        if let Some(block) = current.as_mut() {
+            block.push_str(line);
+            block.push('\n');
+        }
+    }
+    current.as_deref().and_then(parsed)
 }
 
 /// The `sha256` the batten row pins for `platform` (`provision::platform_key`'s
@@ -343,17 +387,20 @@ fn batten_row(text: &str) -> Option<toml_edit::Table> {
 #[must_use]
 pub fn row_digest(text: &str, platform: &str) -> Option<String> {
     let row = batten_row(text)?;
-    let digest = row
-        .get("platforms")
-        .and_then(toml_edit::Item::as_table_like)
-        .and_then(|platforms| platforms.get(platform))
-        .and_then(toml_edit::Item::as_table_like)
-        .and_then(|artifact| artifact.get("sha256"))
-        .or_else(|| row.get("sha256"))?
-        .as_str()?
-        .trim()
-        .to_ascii_lowercase();
-    (!digest.is_empty()).then_some(digest)
+    platform_artifact(&row, platform)
+        .and_then(artifact_digest)
+        .or_else(|| artifact_digest(&row))
+}
+
+/// The row's `platforms.<key>` artifact table.
+fn platform_artifact<'row>(
+    row: &'row toml_edit::Table,
+    key: &str,
+) -> Option<&'row dyn toml_edit::TableLike> {
+    row.get("platforms")?
+        .as_table_like()?
+        .get(key)?
+        .as_table_like()
 }
 
 /// The `sha256` the batten row pins for the asset THIS engine follows: its own
@@ -369,34 +416,18 @@ pub fn row_digest(text: &str, platform: &str) -> Option<String> {
 //MUTANT follow-takes-a-sibling-libc|s@^        .filter(\x7cartifact\x7c url_names(\*artifact, \&asset))$@        .filter(\x7c_\x7c true)@|the_follow_reads_its_own_triples_digest
 #[must_use]
 pub fn followed_digest(text: &str) -> Option<String> {
-    let target = running_target();
-    let tag = row_release(text)?;
-    let asset = release_asset(&tag, &target);
     let row = batten_row(text)?;
-    let platforms = row
-        .get("platforms")
-        .and_then(toml_edit::Item::as_table_like);
-    let Some(platforms) = platforms else {
-        return row_digest(text, &target);
-    };
-    let digest_of = |artifact: &dyn toml_edit::TableLike| {
-        artifact
-            .get("sha256")
-            .and_then(toml_edit::Item::as_str)
-            .map(|digest| digest.trim().to_ascii_lowercase())
-            .filter(|digest| !digest.is_empty())
-    };
-    if let Some(own) = platforms
-        .get(&target)
-        .and_then(toml_edit::Item::as_table_like)
-    {
-        return digest_of(own);
+    let target = running_target();
+    if row.get("platforms").is_none() {
+        return artifact_digest(&row);
     }
-    platforms
-        .get(&crate::provision::platform_key())
-        .and_then(toml_edit::Item::as_table_like)
+    if let Some(own) = platform_artifact(&row, &target) {
+        return artifact_digest(own);
+    }
+    let asset = release_asset(&row_tag(&row)?, &target);
+    platform_artifact(&row, &crate::provision::platform_key())
         .filter(|artifact| url_names(*artifact, &asset))
-        .and_then(digest_of)
+        .and_then(artifact_digest)
 }
 
 /// Whether an artifact table's `url` downloads `asset`.
@@ -414,10 +445,7 @@ fn url_names(artifact: &dyn toml_edit::TableLike, asset: &str) -> bool {
 /// as an alias, two that disagree are refused rather than one silently winning.
 #[must_use]
 pub fn row_disagreement(text: &str) -> Option<(String, String)> {
-    let key: Pin = top_level(text, "engine")?.try_into().ok()?;
-    let key = key.release?;
-    let row = row_release(text)?;
-    (key.trim_start_matches('v') != row.trim_start_matches('v')).then_some((key, row))
+    Pins::of(text).disagreement()
 }
 
 /// `text` with a batten `[[provision]]` row pinning release `tag` appended, for
@@ -451,17 +479,16 @@ pub fn adopted(text: &str, repository: &str, tag: &str, sums: &str) -> Option<St
         return None;
     }
     let bare = tag.trim_start_matches('v');
-    let prefix = format!("batten-v{bare}-");
-    // key -> (url, digest): every triple under its own name, then each
+    // The asset names are `dist`'s contract, never spelled here.
+    let prefix = crate::dist::archive_stem("batten", bare, "");
+    // key -> (url, digest): every triple under its own name, and each
     // `<os>-<arch>` key once, the musl build where a platform has one.
     let mut platforms: std::collections::BTreeMap<String, (String, String)> =
-        std::collections::BTreeMap::new();
-    let mut generic: std::collections::BTreeMap<String, (String, String, bool)> =
         std::collections::BTreeMap::new();
     for (digest, asset) in sums_entries(sums) {
         let Some(target) = asset
             .strip_prefix(&prefix)
-            .and_then(|rest| rest.strip_suffix(".tar.gz"))
+            .and_then(|rest| rest.strip_suffix(crate::dist::archive_ext(rest)))
         else {
             continue;
         };
@@ -470,20 +497,17 @@ pub fn adopted(text: &str, repository: &str, tag: &str, sums: &str) -> Option<St
         };
         let url = release_url(repository, tag, asset);
         platforms.insert(target.to_owned(), (url.clone(), digest.clone()));
-        let musl = target.ends_with("-musl");
-        if generic.get(&key).is_some_and(|(_, _, held)| *held || !musl) {
+        let held_musl = platforms
+            .get(&key)
+            .map(|(held, _)| held.ends_with(&format!("-musl{}", crate::dist::archive_ext(target))));
+        if held_musl.is_some_and(|held| held || !target.ends_with("-musl")) {
             continue;
         }
-        generic.insert(key, (url, digest, musl));
+        platforms.insert(key, (url, digest));
     }
     if platforms.is_empty() {
         return None;
     }
-    platforms.extend(
-        generic
-            .into_iter()
-            .map(|(key, (url, digest, _))| (key, (url, digest))),
-    );
     let mut row = format!(
         "\n[[provision]]\nname = \"batten\"\nversion = \"{bare}\"\nunpack = \"tar_gz\"\nbinary = \"batten\"\n"
     );
@@ -604,7 +628,7 @@ fn shell_word(word: &str) -> String {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT pin-unread|s@^    let Some(pin) = declared(text) else {$@    let Some(pin) = None::<Pin> else {@|a_release_pin_naming_another_build_is_refused_with_its_install
+//MUTANT pin-unread|s@^    let Some(pin) = pins.declared() else {$@    let Some(pin) = None::<Pin> else {@|a_release_pin_naming_another_build_is_refused_with_its_install
 //MUTANT stamp-trusted-when-absent|s@^            if stamp.as_deref() != Some(digest.as_str()) {$@            if stamp.is_some() \&\& stamp.as_deref() != Some(digest.as_str()) {@|a_source_pin_without_a_stamp_is_refused
 
 /// Whether the running binary lives inside the tree holding `source`, the
@@ -749,13 +773,14 @@ pub fn release_build(root: &Path) -> PathBuf {
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 //MUTANT in-tree-build-unaccepted|s@^            if built_in(source) \x7c\x7c runs_local() {$@            if runs_local() {@|the_checkouts_own_build_satisfies_its_source_pin
 pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -> Result<()> {
-    if let Some((key, row)) = row_disagreement(text) {
+    let pins = Pins::of(text);
+    if let Some((key, row)) = pins.disagreement() {
         return Err(UsageError::raise(format!(
             "{source}: `engine` pins {key} and the `[[provision]] batten` row pins {row}; the row \
              is the pin, so remove the `engine` key or make it agree"
         )));
     }
-    let Some(pin) = declared(text) else {
+    let Some(pin) = pins.declared() else {
         return Ok(());
     };
     match pin.kind() {
@@ -924,9 +949,6 @@ pub fn published_digest(sums: &str, asset: &str) -> Option<String> {
     sums_entries(sums).find_map(|(digest, name)| (name == asset).then_some(digest))
 }
 
-//MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT digest-unchecked|s@^    if got != want {$@    if false {@|an_archive_whose_digest_disagrees_is_refused
-
 /// Refuse an archive whose SHA-256 is not the one its release published.
 ///
 /// # Errors
@@ -939,14 +961,28 @@ pub fn verify(archive: &[u8], sums: &str, asset: &str) -> Result<()> {
             "engine install: the release publishes no digest for {asset}, so it cannot be verified"
         ))
     })?;
+    verify_digest(archive, &want, asset, "its release published")
+}
+
+/// Refuse an archive whose SHA-256 is not `want`, naming `whose` digest it was:
+/// the release's `SHA256SUMS`, or the consumer's batten row (CLOUD-2595). The
+/// one comparison every download passes, whichever side vouched for the bytes.
+//MUTANT-SUITE crates/batten/src/engine.rs
+//MUTANT digest-unchecked|s@^    if got != want {$@    if false {@|an_archive_whose_digest_disagrees_is_refused
+//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
+//MUTANT row-digest-unchecked|s@^    if got != want {$@    if false {@|a_followed_release_is_verified_against_the_rows_digest
+fn verify_digest(archive: &[u8], want: &str, asset: &str, whose: &str) -> Result<()> {
     let got = crate::receipt::hex_sha256(archive);
     if got != want {
         return Err(UsageError::raise(format!(
-            "engine install: {asset} hashes {got}, not the {want} its release published; nothing was installed"
+            "engine install: {asset} hashes {got}, not the {want} {whose}; nothing was installed"
         )));
     }
     Ok(())
 }
+
+// The rows below are judged by this module's own unit suite, as before.
+//MUTANT-SUITE crates/batten/src/engine.rs
 
 /// The engine binary of release `tag`, fetched from `repository` for this build's
 /// own target and checked against that release's `SHA256SUMS` (CLOUD-2062).
@@ -985,16 +1021,13 @@ pub fn fetch_release_pinned(repository: &str, tag: &str, pinned: Option<&str>) -
 /// # Errors
 ///
 /// As [`fetch_release_pinned`].
-//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT row-digest-unchecked|s@^        if got != want {$@        if false {@|a_followed_release_is_verified_against_the_rows_digest
 pub fn fetch_release_for(
     repository: &str,
     tag: &str,
     target: &str,
     pinned: Option<&str>,
 ) -> Result<Vec<u8>> {
-    let target = target.to_owned();
-    let asset = release_asset(tag, &target);
+    let asset = release_asset(tag, target);
     let archive = crate::fetch::get(&release_url(repository, tag, &asset), &[])?;
     if let Some(want) = pinned {
         if archive.status != 200 {
@@ -1003,14 +1036,8 @@ pub fn fetch_release_for(
                 archive.status
             )));
         }
-        let got = crate::receipt::hex_sha256(&archive.body);
-        if got != want {
-            return Err(UsageError::raise(format!(
-                "engine install: {asset} hashes {got}, not the {want} the batten provision row \
-                 pins; nothing was installed"
-            )));
-        }
-        return extract(&archive.body, &crate::dist::binary_file("batten", &target));
+        verify_digest(&archive.body, want, &asset, "the batten provision row pins")?;
+        return extract(&archive.body, &crate::dist::binary_file("batten", target));
     }
     let sums = crate::fetch::get(&release_url(repository, tag, "SHA256SUMS"), &[])?;
     if archive.status != 200 || sums.status != 200 {
@@ -1020,7 +1047,7 @@ pub fn fetch_release_for(
         )));
     }
     verify(&archive.body, &String::from_utf8_lossy(&sums.body), &asset)?;
-    extract(&archive.body, &crate::dist::binary_file("batten", &target))
+    extract(&archive.body, &crate::dist::binary_file("batten", target))
 }
 
 // The rows below are judged by this module's own unit suite, as before.
@@ -1028,7 +1055,7 @@ pub fn fetch_release_for(
 
 /// The gnu build of a musl Linux `target`'s platform, or `None` for any other.
 #[must_use]
-pub fn gnu_twin(target: &str) -> Option<String> {
+fn gnu_twin(target: &str) -> Option<String> {
     target
         .strip_suffix("-unknown-linux-musl")
         .map(|arch| format!("{arch}-unknown-linux-gnu"))
@@ -1745,9 +1772,10 @@ pub fn cached_release(state_dir: &Path, tag: &str) -> PathBuf {
 
 /// The pinned release's binary, fetched and verified once and cached after.
 ///
-/// `pinned` is the batten row's `sha256` for this platform, when the config
-/// declares one ([`fetch_release_pinned`]). The cache is written only after the
-/// archive verified, so a cached binary is never re-checked.
+/// `pinned` answers the batten row's `sha256` for this engine's asset, when the
+/// config declares one ([`fetch_release_pinned`]). It is asked only on a cache
+/// miss: every followed hook call reaches here, and a cached binary was verified
+/// before it was written, so it is never re-checked and its digest never read.
 ///
 /// # Errors
 ///
@@ -1756,13 +1784,13 @@ pub fn pinned_release(
     state_dir: &Path,
     repository: &str,
     tag: &str,
-    pinned: Option<&str>,
+    pinned: impl FnOnce() -> Option<String>,
 ) -> Result<PathBuf> {
     let path = cached_release(state_dir, tag);
     if path.is_file() {
         return Ok(path);
     }
-    let bytes = fetch_release_pinned(repository, tag, pinned)?;
+    let bytes = fetch_release_pinned(repository, tag, pinned().as_deref())?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
