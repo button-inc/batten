@@ -2784,17 +2784,16 @@ fn run_provision_status(
     overrides: &Overrides,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let config = resolve::resolve(Path::new("."), overrides)?;
-    let repo = git::repo_root(Path::new("."))?;
-    // THE SAME HOST `apply` WRITES TO (CLOUD-2617), so a link placed by the
-    // `PATH` fallback is judged where it was placed rather than where declared.
-    let on_path = path_dirs();
+    // THE SAME HOST `apply` WRITES TO (CLOUD-2617), from the one constructor
+    // both use, so a link placed by the `PATH` fallback is judged where it was
+    // placed. Status always judges the link, which `links_host` only gates for
+    // the writer.
+    let site = provision_site(overrides)?;
     let host = provision::Host {
         links: true,
-        on_path: &on_path,
-        writable: writable_dir,
+        ..site.host()
     };
-    let report = provision::status_on(&config.provisions, &provision::cache_root(&repo)?, host)?;
+    let report = provision::status_on(&site.config.provisions, &site.cache, host)?;
 
     if json {
         writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
