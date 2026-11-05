@@ -6006,6 +6006,28 @@ mod tests {
         );
     }
 
+    /// A record is believed only under its own key: one carrying another
+    /// name's key (or another format's) at this name's entry is refused, so a
+    /// format bump or a misfiled record is a miss, never a digest lent.
+    #[test]
+    fn a_record_under_another_key_is_not_believed() {
+        let (path, named, _) = digested_authority("config-digest-key");
+        let fields = crate::cache::stamp(&path).unwrap().fields;
+        let hex = blake3::Hash::from([7_u8; 32]).to_hex();
+        crate::cache::write(
+            &digest_path(&named).unwrap(),
+            &digest_key("/elsewhere/batten.toml"),
+            format!("{fields}\n{hex}").as_bytes(),
+        );
+        assert_eq!(recorded_digest(&named, &fields), None);
+        record_digest(&named, &fields, &[7_u8; 32]);
+        assert_eq!(
+            recorded_digest(&named, &fields),
+            Some([7_u8; 32]),
+            "the premise: under its own key it is believed"
+        );
+    }
+
     /// A record beside the stamp taken BEFORE the read is not believed when the
     /// file moved across it: the bytes read may be newer than the stamp says.
     #[test]
