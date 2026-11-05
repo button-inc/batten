@@ -3595,12 +3595,20 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
     // write — omitting it would have left one tool in the matcher unjudged,
     // which is the CLOUD-185 shape (the guard was installed and one route
     // around it stayed open).
+    //
+    // A patch's target is `writes` only when the patch names ONE file: every
+    // reader of `writes` takes it as the call's whole write, and the ripcord's
+    // bootstrap admits a refused call whose `writes` is the sentinel, so a
+    // patch adding the sentinel beside a protected file must not present the
+    // sentinel alone. The protected-path guard reads every target itself.
     let writes = harness
         .write_tools()
         .contains(&tool.as_str())
         .then(|| {
-            target_path(&input)
-                .or_else(|| patch_targets(&input).first().map(|&path| path.to_owned()))
+            target_path(&input).or_else(|| match patch_targets(&input).as_slice() {
+                [only] => Some((*only).to_owned()),
+                _ => None,
+            })
         })
         .flatten();
 
@@ -18123,6 +18131,35 @@ deny contains "refused by themodule" if {
         assert!(
             patch_targets(&serde_json::json!({ "content": "*** Add File: batten.toml\n" }))
                 .is_empty()
+        );
+    }
+
+    /// A multi-file patch presents no single write target: a reader of
+    /// `writes` takes it as the whole write, so a patch adding the ripcord
+    /// sentinel beside a protected file must never read as the sentinel alone.
+    #[test]
+    fn a_patch_s_write_target_is_its_only_file_or_none() {
+        let decode = |body: &str| {
+            decode_value(
+                Harness::OpenCode,
+                &serde_json::json!({
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "apply_patch",
+                    "tool_input": { "patchText": body },
+                }),
+            )
+            .expect("decodes")
+            .writes
+        };
+        assert_eq!(
+            decode("*** Begin Patch\n*** Add File: .batten-ripcord\n+x\n*** End Patch"),
+            Some(".batten-ripcord".to_owned())
+        );
+        assert_eq!(
+            decode(
+                "*** Begin Patch\n*** Add File: .batten-ripcord\n+x\n*** Update File: batten.toml\n@@\n-a\n+b\n*** End Patch"
+            ),
+            None
         );
     }
 
