@@ -1,5 +1,8 @@
 name: renovate
 #MUTANT-SUITE crates/batten/tests/it/renovate_carry.rs
+# workflow-shell: CLOUD-2653 the step count rises by one: the identity check
+# splits into one `exit 1` step per missing value (the App ID, the private key),
+# so a run names the binding it lacks. Each is a bare `exit 1` under an `if:`.
 
 # Renovate, run here rather than by Mend's hosted app (CLOUD-2300).
 #
