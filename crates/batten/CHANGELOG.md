@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.218](https://github.com/button-inc/batten/compare/v0.0.217...v0.0.218) - 2026-11-06
+
+### Added
+
+- *(stop)* [**breaking**] a declared task that crashed forces one relaunch at Stop; [task] carries the program root
+- *(mutate)* mutant:changed admission speed and CI parity (CLOUD-2588)
+
+### Fixed
+
+- *(ci)* auto-bot-land's write keeps its closes condition beside the freeze, and two comments say what the tree now does
+- *(ci)* the fast-forward lane reads its head in a single-command step, and both landers declare their release steps
+- *(ci)* the fast-forward lane fetches a fork head before grading it, and both release-path steps require their SHA
+- *(ci)* both landers read the release freeze and the release path, and the freeze applies at every release pin
+- *(mutate)* code-review: run_registered refuses a shard outside 0 <= k < n; default-filter-kept no longer duplicates a flag
+- *(mutate)* code-review findings: empty CARGO_HOME in the no-nextest case, honest profile-case doc, stale use_provisioned pointer
+- *(mutate)* [**breaking**] pin nextest verdict settings, scrub NEXTEST_*, probe nextest, pass the parsed shard
+- *(mutate)* a slow case that finished is not where the run stopped
+- *(mutate)* a hung case outranks a sibling's later status line
+- *(mutate)* a timed-out suite names where it stopped
+- *(surface)* the argv walk's mutation rows are sed basic regex
+- *(hook)* batten's effect is read from the raw tokens, not the normalised ones
+- *(hook)* an informational flag is a read wherever clap answers it
+- *(policy)* plan mode admits loading a skill
+- *(hook)* an informational flag on batten's subcommand path is a read
+- *(config)* /simplify — anchor the belief guard's mutant on a line rustfmt keeps whole
+- *(config)* /code-review — believe a digest on unix only, judge its racy window from before the read
+- *(mutate)* [**breaking**] one nextest result-line parser and summary predicate; glued rows refused at parse
+- *(trust)* define the two [task] weakening kinds for policy explain
+- *(stop)* each watchdog row runs under its own suite, and an unwatched floor is no bar
+- apply the sixth /code-review of CLOUD-2588
+- *(mcp)* a wiring Accept or Content-Type does not strip the transport's own
+- *(fetch)* narrow credentials cumulatively across a redirect chain
+- *(mcp)* declare the wiring's own headers as credentials
+- *(fetch)* [**breaking**] declare the MCP session header, judge every hop against the origin
+- *(fetch)* drop every credential on a cross-origin redirect
+- *(release)* grade partial while any workflow the release calls is unread
+- *(release)* keep main's auto-install binding and sbom-binary-check body
+- *(release)* read the release matrix where it lives now, in dist.yml
+- *(policy)* judge a job that calls a reusable workflow through its callee
+- *(release)* keep the agent toolchain out of the release build
+- *(git)* `test replay` — keep the memo's existing cases in their base form
+- *(git)* /code-review — pin every gix crate that decides an open's reads
+- *(git)* /code-review — a commit spends the memo, an ancestry read does not
+- *(git)* a write spends the hook call's repository-open memo
+- *(state)* only contention skips a drain's scan, and only a landing prunes the memo
+- *(hook)* a malformed memo line is recomputed, never served
+- *(state)* one drain scans at a time, so ends of turn stop stacking compiler runs
+- *(hook)* remember each commit's patch identity, and gate the Stop
+- *(policy)* /code-review — the own-module case resolves only a registered `policy/` row
+- *(policy)* `marker name undefined` resolves a row's own-module `test_` case
+- *(test)* read a committed workflow through map_or_else, as clippy's map_unwrap_or asks
+- *(release)* release-plz outlasts its pin steps, and checksums installs only what it runs
+
+### Other
+
+- *(ci)* the freeze cases' comments describe the pin they still read
+- *(mutate)* simplify: one shard_bounded rule for parse_shard and run_registered
+- *(mutate)* simplify re-pass: comments past CLOUD-2588 and the retired shard_plan refusal
+- *(mutate)* simplify pass over the nextest env, probe and cases
+- *(mutate)* kill the unresolvable and scrubbed survivors with probe-injected units
+- *(mutate)* make the profile case's catch flaky by a per-run marker, not NEXTEST_ATTEMPT
+- *(mutate)* split the nextest probe out of sweep_shard
+- *(mutate)* a case nextest killed outranks a sibling's later line
+- *(surface)* the argv walk lives beside the grammar it models
+- *(surface)* clap's informational flags are declared beside the command
+- *(config)* `mutant:changed` — a digest record is believed only under its own key
+- *(config)* /simplify — decode a recorded digest with blake3, one clock-pinned read helper
+- *(config)* key the authority's parse entry by a digest believed by its stat stamp
+- *(trust)* the floor kind fires only where both refs relaunch
+- *(mutate)* the sweep's discrimination is a declared row
+- *(trust)* the floor compares only where both sides watch, said once
+- *(task)* one liveness split, a borrowed relaunch list, the engine's receipt path
+- *(stop)* the watchdog's suite judges its mutants, and its boundaries are pinned
+- apply the sixth /simplify review of CLOUD-2588
+- *(mcp)* the transport owns its content headers
+- *(fetch)* carried_to decides on the whole redirect path
+- *(fetch)* fold is_sensitive into is_credential
+- *(release)* read the release's documents from the workflows it calls
+- *(ci)* one lease-step literal for the cases that remove it or call it
+- *(release)* give two declared mutants a case that can see them
+- *(git)* /simplify — a write is a fresh open then a spend, one memo probe for the write modules
+- *(git)* /simplify — one helper for the spend cases, a TOML-parsed lock
+- *(state)* hook_latency compiles on every target, and the memo row reads at column 0
+- *(hook)* the memo bound says replays can carry it past
+- *(state)* the drain scan lock is taken through its own function
+- *(state)* hook_latency imports common only where it is used
+- *(state)* one memo per landing, one lock opener, one shimmed command
+- *(state)* the stop fixture initialises through the shared template
+- *(state)* declare the drain lock's suite where the cargo runner reads it
+- *(perf)* carry the stop arm through every fixture that lists the paths
+
 ## [0.0.217](https://github.com/button-inc/batten/compare/v0.0.216...v0.0.217) - 2026-11-03
 
 ### Added
