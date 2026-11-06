@@ -100,32 +100,7 @@ fn a_body_that_closes_rows_records_them_in_the_readers_own_shape() {
 /// repository does not carry, the hook cannot load it there, and it records
 /// nothing.
 fn body_recorder_config() -> String {
-    let committed: toml::Table = std::fs::read_to_string(common::at_root("batten.toml"))
-        .expect("read the committed authority")
-        .parse()
-        .expect("the committed authority parses");
-    let rows: Vec<toml::Value> = committed["recorder"]
-        .as_array()
-        .expect("the authority declares recorders")
-        .iter()
-        .filter(|row| {
-            matches!(
-                row["name"].as_str(),
-                Some("pr-body-edit-closes" | "pr-body-create-closes")
-            )
-        })
-        .cloned()
-        .collect();
-    assert_eq!(
-        rows.len(),
-        2,
-        "the committed authority declares both body recorders"
-    );
-    let mut fixture = toml::Table::new();
-    fixture.insert("version".to_owned(), toml::Value::Integer(1));
-    fixture.insert("pattern".to_owned(), committed["pattern"].clone());
-    fixture.insert("recorder".to_owned(), toml::Value::Array(rows));
-    toml::to_string(&fixture).expect("the fixture serializes")
+    common::committed_recorders(&["pr-body-edit-closes", "pr-body-create-closes"])
 }
 
 /// A repository carrying [`body_recorder_config`].

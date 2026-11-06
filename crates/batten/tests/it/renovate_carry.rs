@@ -49,12 +49,18 @@ fn carry_command() -> String {
     commands[0].as_str().expect("a command string").to_owned()
 }
 
-/// The patterns `renovate.yml` hands Renovate as `RENOVATE_ALLOWED_COMMANDS`.
-fn allowed() -> Vec<regex::Regex> {
+/// The `renovate` job of `.github/workflows/renovate.yml`.
+fn renovate_job() -> yaml_rust2::Yaml {
     let text = std::fs::read_to_string(at_root(".github/workflows/renovate.yml"))
         .expect("read renovate.yml");
     let docs = yaml_rust2::YamlLoader::load_from_str(&text).expect("renovate.yml parses");
-    let step = docs[0]["jobs"]["renovate"]["steps"]
+    docs[0]["jobs"]["renovate"].clone()
+}
+
+/// The patterns `renovate.yml` hands Renovate as `RENOVATE_ALLOWED_COMMANDS`.
+fn allowed() -> Vec<regex::Regex> {
+    let job = renovate_job();
+    let step = job["steps"]
         .as_vec()
         .expect("steps")
         .iter()
@@ -170,10 +176,7 @@ fn the_carry_script_passes_its_own_suite() {
 /// resolved ID, and each missing value must fail its own named step.
 #[test]
 fn renovate_reads_the_app_id_from_a_variable_or_a_secret() {
-    let text = std::fs::read_to_string(at_root(".github/workflows/renovate.yml"))
-        .expect("read renovate.yml");
-    let docs = yaml_rust2::YamlLoader::load_from_str(&text).expect("renovate.yml parses");
-    let job = &docs[0]["jobs"]["renovate"];
+    let job = renovate_job();
     assert_eq!(
         job["env"]["APP_ID"].as_str(),
         Some("${{ vars.RENOVATE_APP_ID || secrets.RENOVATE_APP_ID }}"),

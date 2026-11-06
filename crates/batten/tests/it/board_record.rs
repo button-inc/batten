@@ -847,38 +847,6 @@ fn a_multi_key_claim_is_order_insensitive() {
     );
 }
 
-/// The COMMITTED closing recorders and the whole committed `[[pattern]]` table,
-/// cut from `batten.toml` rather than retyped — `record_closes.rs`'s shape, so
-/// this case grades the rows as they ship and not a fixture's copy of them.
-fn closing_recorders() -> String {
-    let committed: toml::Table = fs::read_to_string(common::at_root("batten.toml"))
-        .expect("read the committed authority")
-        .parse()
-        .expect("the committed authority parses");
-    let rows: Vec<toml::Value> = committed["recorder"]
-        .as_array()
-        .expect("the authority declares recorders")
-        .iter()
-        .filter(|row| {
-            matches!(
-                row["name"].as_str(),
-                Some("board-issue-closed" | "board-issue-duplicated")
-            )
-        })
-        .cloned()
-        .collect();
-    assert_eq!(
-        rows.len(),
-        2,
-        "the committed authority declares both closing recorders"
-    );
-    let mut fixture = toml::Table::new();
-    fixture.insert("version".to_owned(), toml::Value::Integer(1));
-    fixture.insert("pattern".to_owned(), committed["pattern"].clone());
-    fixture.insert("recorder".to_owned(), toml::Value::Array(rows));
-    toml::to_string(&fixture).expect("the fixture serializes")
-}
-
 /// A CLOSE SPELLED `duplicateOf` ALONE SUPERSEDES THE GROOM ROW'S LINT
 /// (CLOUD-2652). The tracker sets the status itself and the input carries no
 /// `state`, so before this row only the groom recorder fired, re-linted the
@@ -886,7 +854,9 @@ fn closing_recorders() -> String {
 #[test]
 fn a_duplicate_close_supersedes_the_groom_lint() {
     let dir = repo("record-duplicate-close", 1, "", "0");
-    fs::write(dir.join("batten.toml"), closing_recorders()).expect("install the cut config");
+    // The COMMITTED closing rows, so this grades them as they ship.
+    let config = common::committed_recorders(&["board-issue-closed", "board-issue-duplicated"]);
+    fs::write(dir.join("batten.toml"), config).expect("install the cut config");
     let receipts = dir.join(".git/batten-receipts");
     fs::create_dir_all(&receipts).expect("receipts dir");
     fs::write(
