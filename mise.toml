@@ -5074,3 +5074,13 @@ lockfile = false
 # to be read off every run rather than guessed. `task.timings`, not the
 # `task_timings` spelling mise deprecated (removed in mise 2027.2.0).
 task.timings = true
+# ZIG COMES FROM ITS OWN ORIGIN, NOT A COMMUNITY MIRROR (CLOUD-2654). mise's core
+# zig plugin (v2026.9.1 `src/plugins/core/zig.rs:69-142`) takes the tarball from a
+# shuffled mirror, then fetches its `.minisig` exactly once from that same mirror,
+# with no next mirror and no ziglang.org fallback: one mirror erroring on the
+# signature fails the install, which discarded a built v0.0.217 (CLOUD-2579). Off,
+# both files come from the URL ziglang.org's own index names, and minisign still
+# verifies them.
+#MUTANT-SUITE crates/batten/tests/it/release_settings_gate.rs
+#MUTANT zig-community-mirrors|s@^zig\.use_community_mirrors = false$@zig.use_community_mirrors = true@|zig_is_fetched_from_its_own_origin
+zig.use_community_mirrors = false
