@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.219](https://github.com/button-inc/batten/compare/v0.0.218...v0.0.219) - 2026-11-06
+
+### Fixed
+
+- *(refusal)* a line gathering separate findings prints a route for each
+- *(replay)* a test-replay refusal names its cause, as config lint's does
+
 ## [0.0.218](https://github.com/button-inc/batten/compare/v0.0.217...v0.0.218) - 2026-11-06
 
 ### Added
