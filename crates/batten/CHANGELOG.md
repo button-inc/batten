@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.220](https://github.com/button-inc/batten/compare/v0.0.219...v0.0.220) - 2026-11-07
+
+### Fixed
+
+- *(ci)* Renovate runs on the release token, not on a GitHub App
+
+### Other
+
+- *(ci)* one parse of renovate.yml for the allowlist and the auth case
+
 ## [0.0.219](https://github.com/button-inc/batten/compare/v0.0.218...v0.0.219) - 2026-11-06
 
 ### Fixed
