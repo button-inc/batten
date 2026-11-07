@@ -1,7 +1,7 @@
 name: renovate
 #MUTANT-SUITE crates/batten/tests/it/renovate_carry.rs
 #MUTANT renovate-guard-dropped|s@^        if: env\.RELEASE_PLZ_TOKEN_SET != 'true'$@        if: false@|renovate_authenticates_with_the_release_token_and_fails_by_name_without_it
-#MUTANT renovate-app-token-back|s@^          token: \$\{\{ secrets\.RELEASE_PLZ_TOKEN \}\}$@          token: ${{ steps.token.outputs.token }}@|renovate_authenticates_with_the_release_token_and_fails_by_name_without_it
+#MUTANT renovate-other-token|s@^          token: .* secrets\.RELEASE_PLZ_TOKEN .*$@          token: ${{ github.token }}@|renovate_authenticates_with_the_release_token_and_fails_by_name_without_it
 
 # Renovate, run here rather than by Mend's hosted app (CLOUD-2300).
 #
