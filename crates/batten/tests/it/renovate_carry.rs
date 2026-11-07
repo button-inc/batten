@@ -49,21 +49,35 @@ fn carry_command() -> String {
     commands[0].as_str().expect("a command string").to_owned()
 }
 
-/// The patterns `renovate.yml` hands Renovate as `RENOVATE_ALLOWED_COMMANDS`.
-fn allowed() -> Vec<regex::Regex> {
+/// `renovate.yml`'s one job, parsed.
+fn renovate_job() -> yaml_rust2::Yaml {
     let text = std::fs::read_to_string(at_root(".github/workflows/renovate.yml"))
         .expect("read renovate.yml");
     let docs = yaml_rust2::YamlLoader::load_from_str(&text).expect("renovate.yml parses");
-    let step = docs[0]["jobs"]["renovate"]["steps"]
+    docs[0]["jobs"]["renovate"].clone()
+}
+
+/// Whether a step runs the action `prefix` names.
+fn uses(step: &yaml_rust2::Yaml, prefix: &str) -> bool {
+    step["uses"]
+        .as_str()
+        .is_some_and(|uses| uses.starts_with(prefix))
+}
+
+/// The job's `renovatebot/github-action` step.
+fn renovate_step(job: &yaml_rust2::Yaml) -> yaml_rust2::Yaml {
+    job["steps"]
         .as_vec()
         .expect("steps")
         .iter()
-        .find(|step| {
-            step["uses"]
-                .as_str()
-                .is_some_and(|uses| uses.starts_with("renovatebot/github-action@"))
-        })
-        .expect("a renovatebot/github-action step");
+        .find(|step| uses(step, "renovatebot/github-action@"))
+        .expect("a renovatebot/github-action step")
+        .clone()
+}
+
+/// The patterns `renovate.yml` hands Renovate as `RENOVATE_ALLOWED_COMMANDS`.
+fn allowed() -> Vec<regex::Regex> {
+    let step = renovate_step(&renovate_job());
     let raw = step["env"]["RENOVATE_ALLOWED_COMMANDS"]
         .as_str()
         .expect("RENOVATE_ALLOWED_COMMANDS is set");
@@ -173,16 +187,8 @@ fn the_carry_script_passes_its_own_suite() {
 #[test]
 fn renovate_authenticates_with_the_release_token_and_fails_by_name_without_it() {
     const TOKEN: &str = "${{ secrets.RELEASE_PLZ_TOKEN }}";
-    let text = std::fs::read_to_string(at_root(".github/workflows/renovate.yml"))
-        .expect("read renovate.yml");
-    let docs = yaml_rust2::YamlLoader::load_from_str(&text).expect("renovate.yml parses");
-    let job = &docs[0]["jobs"]["renovate"];
+    let job = renovate_job();
     let steps = job["steps"].as_vec().expect("steps");
-    let uses = |step: &yaml_rust2::Yaml, prefix: &str| {
-        step["uses"]
-            .as_str()
-            .is_some_and(|uses| uses.starts_with(prefix))
-    };
 
     assert!(
         !steps
@@ -190,10 +196,7 @@ fn renovate_authenticates_with_the_release_token_and_fails_by_name_without_it() 
             .any(|step| uses(step, "actions/create-github-app-token@")),
         "no step mints an App token"
     );
-    let renovate = steps
-        .iter()
-        .find(|step| uses(step, "renovatebot/github-action@"))
-        .expect("a renovatebot/github-action step");
+    let renovate = renovate_step(&job);
     assert_eq!(
         renovate["with"]["token"].as_str(),
         Some(TOKEN),
