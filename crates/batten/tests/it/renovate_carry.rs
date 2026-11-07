@@ -162,3 +162,66 @@ fn the_carry_script_passes_its_own_suite() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// CLOUD-2580: Renovate runs on the release token, not on a GitHub App.
+///
+/// Fails by: a step minting an App token coming back (the App the workflow
+/// waited on was never visible to this repository's Actions, so every run
+/// stopped at its guard), the Renovate step reading any credential but the
+/// release token, or the guard that names the missing secret dropping out from
+/// in front of the steps that would consume an empty one.
+#[test]
+fn renovate_authenticates_with_the_release_token_and_fails_by_name_without_it() {
+    const TOKEN: &str = "${{ secrets.RELEASE_PLZ_TOKEN }}";
+    let text = std::fs::read_to_string(at_root(".github/workflows/renovate.yml"))
+        .expect("read renovate.yml");
+    let docs = yaml_rust2::YamlLoader::load_from_str(&text).expect("renovate.yml parses");
+    let job = &docs[0]["jobs"]["renovate"];
+    let steps = job["steps"].as_vec().expect("steps");
+    let uses = |step: &yaml_rust2::Yaml, prefix: &str| {
+        step["uses"]
+            .as_str()
+            .is_some_and(|uses| uses.starts_with(prefix))
+    };
+
+    assert!(
+        !steps
+            .iter()
+            .any(|step| uses(step, "actions/create-github-app-token@")),
+        "no step mints an App token"
+    );
+    let renovate = steps
+        .iter()
+        .find(|step| uses(step, "renovatebot/github-action@"))
+        .expect("a renovatebot/github-action step");
+    assert_eq!(
+        renovate["with"]["token"].as_str(),
+        Some(TOKEN),
+        "Renovate authenticates with the release token"
+    );
+    assert!(
+        renovate["env"]["RENOVATE_CUSTOM_ENV_VARIABLES"]
+            .as_str()
+            .is_some_and(|value| value.contains("secrets.RELEASE_PLZ_TOKEN")),
+        "the carry's tree reads go out on the same token"
+    );
+
+    assert_eq!(
+        job["env"]["RELEASE_PLZ_TOKEN_SET"].as_str(),
+        Some("${{ secrets.RELEASE_PLZ_TOKEN != '' }}"),
+        "the job reads whether the secret is set, never the secret"
+    );
+    let guard = &steps[0];
+    assert_eq!(
+        guard["if"].as_str(),
+        Some("env.RELEASE_PLZ_TOKEN_SET != 'true'"),
+        "the first step runs exactly when the secret is empty"
+    );
+    assert_eq!(guard["run"].as_str(), Some("exit 1"));
+    assert!(
+        guard["name"]
+            .as_str()
+            .is_some_and(|name| name.contains("RELEASE_PLZ_TOKEN")),
+        "the failing step names the secret it lacks"
+    );
+}

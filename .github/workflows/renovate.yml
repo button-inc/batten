@@ -1,4 +1,7 @@
 name: renovate
+#MUTANT-SUITE crates/batten/tests/it/renovate_carry.rs
+#MUTANT renovate-guard-dropped|s@^        if: env\.RELEASE_PLZ_TOKEN_SET != 'true'$@        if: false@|renovate_authenticates_with_the_release_token_and_fails_by_name_without_it
+#MUTANT renovate-app-token-back|s@^          token: \$\{\{ secrets\.RELEASE_PLZ_TOKEN \}\}$@          token: ${{ steps.token.outputs.token }}@|renovate_authenticates_with_the_release_token_and_fails_by_name_without_it
 
 # Renovate, run here rather than by Mend's hosted app (CLOUD-2300).
 #
@@ -46,33 +49,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30 # budget: grandfathered measured=2026-10-15
     env:
-      APP_ID_SET: ${{ secrets.RENOVATE_APP_ID != '' }}
+      # A BOOLEAN, NEVER THE SECRET: a step's `if:` cannot read `secrets`, so the
+      # guard reads whether it is set through this (`release-plz.yml`'s pattern).
+      RELEASE_PLZ_TOKEN_SET: ${{ secrets.RELEASE_PLZ_TOKEN != '' }}
     steps:
-      # A PR opened with the job's own GITHUB_TOKEN triggers no workflow, so CI
-      # would never run on Renovate's PRs; the PAT would author them as a person.
-      # So Renovate runs as its own GitHub App. A missing secret fails here, by
-      # name, rather than as an auth error three steps down.
-      - name: RENOVATE_APP_ID or RENOVATE_APP_PRIVATE_KEY is unset, so Renovate has no identity to open pull requests as (CLOUD-2300) - create the App and set both secrets
-        if: env.APP_ID_SET != 'true'
+      # THE RELEASE TOKEN, NOT AN APP (CLOUD-2580). A PR opened with the job's own
+      # GITHUB_TOKEN triggers no workflow, so CI would never run on Renovate's PRs.
+      # This ran as its own GitHub App until every one of 529 runs stopped here:
+      # the App ID was never visible to this repository's Actions (run
+      # 42304429299 read `vars.RENOVATE_APP_ID || secrets.RENOVATE_APP_ID` as
+      # empty). `RELEASE_PLZ_TOKEN` is the fine-grained PAT release-plz already
+      # opens CI-triggering PRs with (`release-plz.yml:26-35`).
+      #
+      # WHAT IT COSTS, STATED: Renovate's PRs are authored by the token's owner, not
+      # a bot, so `auto-bot-land`'s bot lanes do not admit them (CLOUD-2357). And
+      # an actions-pin bump edits `.github/workflows/*`, which needs the token's
+      # Workflows permission; release-plz never needed it.
+      #
+      # A missing secret fails here, by name, rather than as an auth error below.
+      - name: RELEASE_PLZ_TOKEN is empty, so Renovate has no credential whose pull requests trigger CI (CLOUD-2580) - set the secret, do not remove this guard
+        if: env.RELEASE_PLZ_TOKEN_SET != 'true'
         run: exit 1
-      - id: token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          app-id: ${{ secrets.RENOVATE_APP_ID }}
-          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
-          # Scoped to what Renovate's GitHub App documentation lists, never the
-          # installation's blanket grant. `workflows` because the bumps it opens
-          # edit `.github/workflows/*`.
-          permission-contents: write
-          permission-pull-requests: write
-          permission-issues: write
-          permission-workflows: write
-          permission-checks: write
-          permission-statuses: write
-          permission-vulnerability-alerts: read
       - uses: renovatebot/github-action@f0f41e5f2e706165f6814b1d0f0d0e319de7d1d9 # v46.3.8
         with:
-          token: ${{ steps.token.outputs.token }}
+          token: ${{ secrets.RELEASE_PLZ_TOKEN }}
         env:
           RENOVATE_REPOSITORIES: ${{ github.repository }}
           RENOVATE_ONBOARDING: "false"
@@ -82,4 +82,4 @@ jobs:
           # two tree reads would go out unauthenticated and share a runner IP's
           # 60-an-hour anonymous limit. `customEnvVariables` is the declared way
           # to hand a child process a variable; the carry reads GITHUB_TOKEN.
-          RENOVATE_CUSTOM_ENV_VARIABLES: ${{ format('{{"GITHUB_TOKEN":"{0}"}}', steps.token.outputs.token) }}
+          RENOVATE_CUSTOM_ENV_VARIABLES: ${{ format('{{"GITHUB_TOKEN":"{0}"}}', secrets.RELEASE_PLZ_TOKEN) }}
