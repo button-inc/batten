@@ -209,3 +209,20 @@ fn no_workflow_finds_a_pull_request_through_the_search_index() {
         "release-plz.yml names the release PR's branch with one `gh pr list`; this case reads nothing without it"
     );
 }
+
+/// ZIG COMES FROM ITS OWN ORIGIN (CLOUD-2654). mise's core zig plugin fetches
+/// the `.minisig` once, from whichever community mirror served the tarball, so
+/// one mirror erroring on the signature failed the install and discarded a
+/// built v0.0.217. With the mirrors off both files come from ziglang.org.
+#[test]
+fn zig_is_fetched_from_its_own_origin() {
+    let manifest: toml::Table = std::fs::read_to_string(common::at_root("mise.toml"))
+        .expect("read mise.toml")
+        .parse()
+        .expect("mise.toml parses");
+    assert_eq!(
+        manifest["settings"]["zig"]["use_community_mirrors"].as_bool(),
+        Some(false),
+        "zig's tarball and signature come from ziglang.org, never one mirror"
+    );
+}

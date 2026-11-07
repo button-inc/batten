@@ -846,3 +846,50 @@ fn a_multi_key_claim_is_order_insensitive() {
         "one attempt, one record, whichever order the keys were listed in: {lines:?}"
     );
 }
+
+/// A CLOSE SPELLED `duplicateOf` ALONE SUPERSEDES THE GROOM ROW'S LINT
+/// (CLOUD-2652). The tracker sets the status itself and the input carries no
+/// `state`, so before this row only the groom recorder fired, re-linted the
+/// unchanged body to `unready`, and `filed-here` refused the branch forever.
+#[test]
+fn a_duplicate_close_supersedes_the_groom_lint() {
+    let dir = repo("record-duplicate-close", 1, "", "0");
+    // The COMMITTED closing rows, so this grades them as they ship.
+    let config = common::committed_recorders(&["board-issue-closed", "board-issue-duplicated"]);
+    fs::write(dir.join("batten.toml"), config).expect("install the cut config");
+    let receipts = dir.join(".git/batten-receipts");
+    fs::create_dir_all(&receipts).expect("receipts dir");
+    fs::write(
+        receipts.join("board-writes.work"),
+        "issue CLOUD-7 2026-11-01T00:00:00Z unready - - - -\n",
+    )
+    .expect("seed the groom row's reading");
+
+    // Un-duplicating (`null`) is no close: nothing is recorded for it.
+    hook(
+        &dir,
+        "mcp__Linear__save_issue",
+        r#"{"id":"CLOUD-7","duplicateOf":null}"#,
+        r#"{"id":"CLOUD-7","status":"Backlog","updatedAt":"2026-11-02T00:00:00Z"}"#,
+    );
+    assert_eq!(record(&dir).lines().count(), 1, "got: {:?}", record(&dir));
+
+    hook(
+        &dir,
+        "mcp__Linear__save_issue",
+        r#"{"id":"CLOUD-7","duplicateOf":"CLOUD-8"}"#,
+        r#"{"id":"CLOUD-7","status":"Duplicate","updatedAt":"2026-11-03T00:00:00Z"}"#,
+    );
+    let last = record(&dir).lines().last().unwrap_or_default().to_owned();
+    let columns: Vec<&str> = last.split_whitespace().collect();
+    assert_eq!(
+        (
+            columns.first().copied(),
+            columns.get(1).copied(),
+            columns.get(3).copied()
+        ),
+        (Some("issue"), Some("CLOUD-7"), Some("Duplicate")),
+        "the close is the latest reading for the row: {:?}",
+        record(&dir)
+    );
+}

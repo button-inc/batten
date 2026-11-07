@@ -49,12 +49,18 @@ fn carry_command() -> String {
     commands[0].as_str().expect("a command string").to_owned()
 }
 
-/// The patterns `renovate.yml` hands Renovate as `RENOVATE_ALLOWED_COMMANDS`.
-fn allowed() -> Vec<regex::Regex> {
+/// The `renovate` job of `.github/workflows/renovate.yml`.
+fn renovate_job() -> yaml_rust2::Yaml {
     let text = std::fs::read_to_string(at_root(".github/workflows/renovate.yml"))
         .expect("read renovate.yml");
     let docs = yaml_rust2::YamlLoader::load_from_str(&text).expect("renovate.yml parses");
-    let step = docs[0]["jobs"]["renovate"]["steps"]
+    docs[0]["jobs"]["renovate"].clone()
+}
+
+/// The patterns `renovate.yml` hands Renovate as `RENOVATE_ALLOWED_COMMANDS`.
+fn allowed() -> Vec<regex::Regex> {
+    let job = renovate_job();
+    let step = job["steps"]
         .as_vec()
         .expect("steps")
         .iter()
@@ -160,5 +166,40 @@ fn the_carry_script_passes_its_own_suite() {
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// THE APP ID IS READ FROM A VARIABLE OR A SECRET (CLOUD-2653). Reading only
+/// `secrets.RENOVATE_APP_ID` failed every run since 2026-10-15 at step one, and
+/// an ID stored the way `actions/create-github-app-token`'s documentation stores
+/// it — as a variable — was never read. The token step must take the job's
+/// resolved ID, and each missing value must fail its own named step.
+#[test]
+fn renovate_reads_the_app_id_from_a_variable_or_a_secret() {
+    let job = renovate_job();
+    assert_eq!(
+        job["env"]["APP_ID"].as_str(),
+        Some("${{ vars.RENOVATE_APP_ID || secrets.RENOVATE_APP_ID }}"),
+        "the App ID falls back from a repository variable to a repository secret"
+    );
+    let steps = job["steps"].as_vec().expect("steps");
+    let token = steps
+        .iter()
+        .find(|step| {
+            step["uses"]
+                .as_str()
+                .is_some_and(|uses| uses.starts_with("actions/create-github-app-token@"))
+        })
+        .expect("a create-github-app-token step");
+    assert_eq!(token["with"]["app-id"].as_str(), Some("${{ env.APP_ID }}"));
+    let checks: Vec<&str> = steps
+        .iter()
+        .filter(|step| step["run"].as_str() == Some("exit 1"))
+        .filter_map(|step| step["if"].as_str())
+        .collect();
+    assert_eq!(
+        checks,
+        ["env.APP_ID == ''", "env.KEY_SET != 'true'"],
+        "one named check per missing value"
     );
 }

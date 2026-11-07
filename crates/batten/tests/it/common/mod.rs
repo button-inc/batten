@@ -234,6 +234,40 @@ pub(crate) fn at_root(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// A config carrying the COMMITTED `[[recorder]]` rows named in `names` and the
+/// whole committed `[[pattern]]` table, cut from `batten.toml` rather than
+/// retyped, so a case grades the rows as they ship. The whole table names
+/// `policy/` modules a scratch repository does not carry, so the hook cannot
+/// load it there; the pattern table cannot be cut to "just those" without
+/// restating the grammars that resolve from it.
+pub(crate) fn committed_recorders(names: &[&str]) -> String {
+    let committed: toml::Table = std::fs::read_to_string(at_root("batten.toml"))
+        .expect("read the committed authority")
+        .parse()
+        .expect("the committed authority parses");
+    let rows: Vec<toml::Value> = committed["recorder"]
+        .as_array()
+        .expect("the authority declares recorders")
+        .iter()
+        .filter(|row| {
+            row["name"]
+                .as_str()
+                .is_some_and(|name| names.contains(&name))
+        })
+        .cloned()
+        .collect();
+    assert_eq!(
+        rows.len(),
+        names.len(),
+        "the committed authority declares every recorder named: {names:?}"
+    );
+    let mut fixture = toml::Table::new();
+    fixture.insert("version".to_owned(), toml::Value::Integer(1));
+    fixture.insert("pattern".to_owned(), committed["pattern"].clone());
+    fixture.insert("recorder".to_owned(), toml::Value::Array(rows));
+    toml::to_string(&fixture).expect("the fixture serializes")
+}
+
 /// The committed `dist-workspace.toml`, parsed: cargo-dist's config, which the
 /// release, its installers and the package channels all read.
 pub(crate) fn dist_config() -> toml::Table {

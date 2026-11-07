@@ -1,4 +1,8 @@
 name: renovate
+#MUTANT-SUITE crates/batten/tests/it/renovate_carry.rs
+# workflow-shell: CLOUD-2653 the step count rises by one: the identity check
+# splits into one `exit 1` step per missing value (the App ID, the private key),
+# so a run names the binding it lacks. Each is a bare `exit 1` under an `if:`.
 
 # Renovate, run here rather than by Mend's hosted app (CLOUD-2300).
 #
@@ -46,19 +50,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30 # budget: grandfathered measured=2026-10-15
     env:
-      APP_ID_SET: ${{ secrets.RENOVATE_APP_ID != '' }}
+      # THE APP ID IS READ FROM A VARIABLE OR A SECRET (CLOUD-2653). It is not a
+      # secret, and `actions/create-github-app-token`'s own documentation stores
+      # it as a variable; reading only `secrets.` failed 455 runs in a row with no
+      # way to tell, from a cloud session the proxy keeps out of the settings
+      # listings, which binding was missing. The private key stays secret-only.
+      #MUTANT renovate-app-id-secret-only|s@^      APP_ID: \$\{\{ vars\.RENOVATE_APP_ID \|\| secrets\.RENOVATE_APP_ID \}\}$@      APP_ID: ${{ secrets.RENOVATE_APP_ID }}@|renovate_reads_the_app_id_from_a_variable_or_a_secret
+      APP_ID: ${{ vars.RENOVATE_APP_ID || secrets.RENOVATE_APP_ID }}
+      KEY_SET: ${{ secrets.RENOVATE_APP_PRIVATE_KEY != '' }}
     steps:
       # A PR opened with the job's own GITHUB_TOKEN triggers no workflow, so CI
       # would never run on Renovate's PRs; the PAT would author them as a person.
-      # So Renovate runs as its own GitHub App. A missing secret fails here, by
-      # name, rather than as an auth error three steps down.
-      - name: RENOVATE_APP_ID or RENOVATE_APP_PRIVATE_KEY is unset, so Renovate has no identity to open pull requests as (CLOUD-2300) - create the App and set both secrets
-        if: env.APP_ID_SET != 'true'
+      # So Renovate runs as its own GitHub App. A missing value fails here, by
+      # name, ONE VALUE PER STEP, rather than as an auth error three steps down.
+      - name: RENOVATE_APP_ID is set neither as a repository variable nor as a repository secret, so Renovate has no App to run as (CLOUD-2300, CLOUD-2653)
+        if: env.APP_ID == ''
+        run: exit 1
+      - name: RENOVATE_APP_PRIVATE_KEY is not a repository secret, so Renovate cannot sign in as its App (CLOUD-2300, CLOUD-2653)
+        if: env.KEY_SET != 'true'
         run: exit 1
       - id: token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ secrets.RENOVATE_APP_ID }}
+          app-id: ${{ env.APP_ID }}
           private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
           # Scoped to what Renovate's GitHub App documentation lists, never the
           # installation's blanket grant. `workflows` because the bumps it opens

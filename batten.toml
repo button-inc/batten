@@ -3059,6 +3059,64 @@ value = { literal = "-" }
 name = "obligations"
 value = { literal = "-" }
 
+# A CLOSE SPELLED AS A DUPLICATE (CLOUD-2652). `save_issue {id, duplicateOf}`
+# closes the row too, and the tracker sets its status to Duplicate on its own,
+# but that input carries no `state`, so the row above never fires and only the
+# groom row's re-lint is recorded: `unready`, refused forever. Measured on
+# CLOUD-2580.
+#
+# A SECOND ROW, NOT A SECOND KEY ON THE ONE ABOVE: `requires-input-matching` is
+# all-of across its keys, and selection reads only the input, so one row cannot
+# accept `state` OR `duplicateOf`. Declared after the groom row for the same
+# reason the row above is, and with the same verdict: the tracker's returned
+# `status`. A `null` `duplicateOf` (un-duplicating) resolves to no scalar, so it
+# never selects.
+[[pattern]]
+id = "any-value"
+regex = '.'
+
+[[recorder]]
+name = "board-issue-duplicated"
+record = "board-writes"
+tool = "save_issue"
+key = "branch"
+requires = ["id", "status"]
+requires-recorded = { matches = { 0 = { literal = "issue" }, 1 = { result = "id" } } }
+#MUTANT duplicate-close-unselected|s@^requires-input-matching = \{ duplicateOf = "any-value" \}$@requires-input-matching = { duplicateOf = "closed-state" }@|a_duplicate_close_supersedes_the_groom_lint
+requires-input-matching = { duplicateOf = "any-value" }
+
+[[recorder.columns]]
+name = "kind"
+value = { literal = "issue" }
+
+[[recorder.columns]]
+name = "id"
+value = { result = "id" }
+
+[[recorder.columns]]
+name = "updated"
+value = { result = "updatedAt" }
+
+[[recorder.columns]]
+name = "verdict"
+value = { result = "status" }
+
+[[recorder.columns]]
+name = "overlap"
+value = { literal = "-" }
+
+[[recorder.columns]]
+name = "cites"
+value = { literal = "-" }
+
+[[recorder.columns]]
+name = "sec1"
+value = { literal = "-" }
+
+[[recorder.columns]]
+name = "obligations"
+value = { literal = "-" }
+
 # A COMMENT IS RECORDED AND NEVER GATED. It is the honest common case — a comment
 # on the row that already owns a finding — and pricing it would push the pressure
 # toward silence, which is the failure `finding-sink-check` exists to catch. So the
