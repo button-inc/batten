@@ -6149,7 +6149,7 @@
       ]
     },
     "TaskTable": {
-      "description": "The `[task]` table: where this consumer keeps its task programs, and which\nof them the Stop watchdog relaunches (CLOUD-2370).\n\nCONSUMER CONFIG, NOT A CONST (non-negotiable rule 1), for the module\nheader's reason. It is the authority for the program root: `land`'s reap\nand `task alive` read it first. Until the pinned release carries the table,\n`BATTEN_TASK_PROGRAM_ROOT` and `task alive --program-root` answer where it\nis absent, and they retire once a consumer can declare it (CLOUD-2463).",
+      "description": "The `[task]` table: where this consumer keeps its task programs, and which\nof them the Stop watchdog relaunches (CLOUD-2370).\n\nCONSUMER CONFIG, NOT A CONST (non-negotiable rule 1). Liveness no longer\nreads the program root (CLOUD-1560): it stays required and load-validated\nfor the watchdog's relaunch, and `BATTEN_TASK_PROGRAM_ROOT` and\n`task alive --program-root` stay accepted and unread until CLOUD-2463\nretires all three.",
       "type": "object",
       "properties": {
         "min_lifetime_secs": {
@@ -6160,7 +6160,7 @@
           "minimum": 0
         },
         "program_root": {
-          "description": "The directory, relative to the repository root, the task programs live\nin, matched inside a live process's `cmdline`.",
+          "description": "The directory, relative to the repository root, the task programs live\nin.",
           "type": "string",
           "maxLength": 1536
         },

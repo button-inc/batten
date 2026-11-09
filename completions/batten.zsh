@@ -4478,7 +4478,7 @@ trace\:"Add everything"))' \
 ;;
 (alive)
 _arguments "${_arguments_options[@]}" : \
-'--program-root=[The directory this consumer keeps its task programs in, matched inside a live process'\''s cmdline]:program_root:_default' \
+'--program-root=[Accepted and unread\: liveness compares the cmdline each registrant recorded (CLOUD-1560)]:program_root:_default' \
 '--instant=[The epoch second to judge time-dependent records against, supplied as data]:instant:_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"

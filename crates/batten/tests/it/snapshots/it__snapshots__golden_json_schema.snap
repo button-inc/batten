@@ -5014,7 +5014,7 @@ expression: stdout_of(&output)
               "long": "program-root",
               "takes_value": true,
               "positional": false,
-              "help": "The directory this consumer keeps its task programs in, matched inside a live process's cmdline"
+              "help": "Accepted and unread: liveness compares the cmdline each registrant recorded (CLOUD-1560)"
             }
           ],
           "subcommands": []

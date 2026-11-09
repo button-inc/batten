@@ -6419,39 +6419,14 @@ fn run_task(command: TaskCommand, out: &mut dyn Write, err: &mut dyn Write) -> R
             }
             None => Ok(ExitCode::Violation),
         },
-        TaskCommand::Alive {
-            program_root,
-            instant,
-        } => {
-            // COULD-NOT-LOOK WITHOUT THE ROOT, never a default: an unmatched
-            // corroboration reads as alive, so a guessed root would hide every
-            // crash behind a registry that looks healthy. The committed config's
-            // `[task] program_root` first, read at the repository root whatever
-            // directory asked; the flag only where it declares none (CLOUD-2370,
-            // transitional until the pinned release carries the table).
-            let Ok(table) =
-                crate::git::repo_root(Path::new(".")).and_then(|root| task_table(&root))
-            else {
-                writeln!(
-                    err,
-                    "batten: task alive: the committed config did not resolve, so there is no program root to read; `batten config lint` names why"
-                )?;
-                return Ok(ExitCode::Internal);
-            };
-            let Some(program_root) = table
-                .map(|table| table.program_root)
-                .or(program_root.filter(|root| task::normalized_root(root).is_some()))
-            else {
-                writeln!(
-                    err,
-                    "batten: task alive: no [task] program_root in the committed config and no --program-root, so nothing tells a live task from a recycled pid"
-                )?;
-                return Ok(ExitCode::Internal);
-            };
+        // NO CONFIG IS READ (CLOUD-1560): liveness compares the digest each
+        // registrant recorded, so there is no program root to resolve and no
+        // could-not-look for its absence. `--program-root` stays accepted and
+        // unread until CLOUD-2463 retires it.
+        TaskCommand::Alive { instant, .. } => {
             let reading = task::alive(
                 &git_dir,
                 task::Alive {
-                    program_root: &program_root,
                     now: supplied_epoch(instant.as_deref())?,
                 },
             );
@@ -12271,8 +12246,8 @@ struct Reaped {
 /// second pass is the observation that tells the two apart.
 //MUTANT-SUITE crates/batten/src/lib.rs
 //MUTANT reap-leaves-the-headstone|s@^        task::unregister(git_dir, &entry.pid);$@@|reap_abandoned_unregisters_a_dead_registrant
-fn reap_abandoned(git_dir: &Path, program_root: &str) -> Reaped {
-    let abandoned = task::abandoned(git_dir, program_root);
+fn reap_abandoned(git_dir: &Path) -> Reaped {
+    let abandoned = task::abandoned(git_dir);
     let own_group = task::process_group(&std::process::id().to_string());
     let mut reaped = Reaped::default();
     for entry in &abandoned {
@@ -12325,41 +12300,13 @@ fn run_land_singleton(
     };
     let pid = std::process::id().to_string();
 
-    // THE REAP, AND IT ABSTAINS WHERE THE CONSUMER HAS NOT SAID WHERE ITS
-    // PROGRAMS LIVE (non-negotiable rule 1).
-    //
-    // `program_root` is what tells a live task from a recycled pid wearing its
-    // number, and *where a consumer keeps its programs* is a fact about that
-    // consumer. The first version of this defaulted the value to a literal, which
-    // `document_facts::no_artifact_name_reaches_the_core` refused — correctly, and
-    // `task.rs`'s own header names that test as the reason the root is a
-    // parameter there rather than a constant. It is `[task] program_root`, which
-    // `task alive` reads too (CLOUD-2370), and until the pinned release carries
-    // that table, the environment's `BATTEN_TASK_PROGRAM_ROOT` where it is absent.
-    //
-    // Absent, this reaps NOTHING rather than guessing. A wrong root makes
-    // `matches_cmdline` miss every live task, so every entry reads as abandoned
-    // and the reaper signals the group of a lap that is running — the direction
-    // a miss must never fail in. Nor does it forget: without the root nothing
-    // tells an abandoned record from a live one, so `alive` keeps showing it
-    // until a landing that can tell runs.
-    //
-    // ONLY THE REAP IS CONDITIONAL. The lock and the registration below run
-    // either way: `singleton_acquire` reclaims on `pid_exists`, which needs no
-    // root at all, and skipping them here would trade a reaper for the
-    // concurrent-lands defect the lock exists to stop — a strictly worse bargain
-    // than reaping nothing.
-    let reaped = task_table(root)
-        .ok()
-        .flatten()
-        .map(|table| table.program_root)
-        .or_else(|| {
-            std::env::var("BATTEN_TASK_PROGRAM_ROOT")
-                .ok()
-                .filter(|root| task::normalized_root(root).is_some())
-        })
-        .map(|root| reap_abandoned(&git_dir, &root))
-        .unwrap_or_default();
+    // THE REAP, UNCONDITIONALLY (CLOUD-1560). It used to abstain wherever the
+    // consumer had not named its program root, because a wrong root made the
+    // path matcher miss every live task and the reaper would have signalled a
+    // running lap. Liveness now compares the cmdline digest each registrant
+    // recorded, so there is no root to get wrong, and `collect::group_orphaned`
+    // still declines any group its registrant or leader is in.
+    let reaped = reap_abandoned(&git_dir);
     if reaped.terminated > 0 {
         // COUNTS AND NOTHING ELSE (rule 4). What was reaped is somebody's command
         // line; this reports how many groups went and how many had to be forced,
@@ -24232,7 +24179,7 @@ fn watchdog_stop(
         return (None, None);
     };
     let receipt = git_dir.join(RECEIPT_DIR).join(WATCHDOG_SPOKEN);
-    let (running, abandoned) = task::partition(&git_dir, &table.program_root);
+    let (running, abandoned) = task::partition(&git_dir);
     let mut unspoken: Vec<task::Entry> = abandoned
         .into_iter()
         .filter(|entry| table.relaunch.contains(&entry.task))
@@ -30619,8 +30566,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&git_dir);
         std::fs::create_dir_all(&git_dir).unwrap();
         task::register(&git_dir, "land", "4194305", "verify", 100);
-        let reaped = reap_abandoned(&git_dir, "programs");
-        let left = task::abandoned(&git_dir, "programs").len();
+        let reaped = reap_abandoned(&git_dir);
+        let left = task::abandoned(&git_dir).len();
         let _ = std::fs::remove_dir_all(&git_dir);
         let found_dead = usize::from(cfg!(unix));
         assert_eq!(

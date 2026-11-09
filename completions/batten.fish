@@ -2810,7 +2810,7 @@ complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from read" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from read" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from read" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from alive" -l program-root -d 'The directory this consumer keeps its task programs in, matched inside a live process\'s cmdline' -r
+complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from alive" -l program-root -d 'Accepted and unread: liveness compares the cmdline each registrant recorded (CLOUD-1560)' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from alive" -l instant -d 'The epoch second to judge time-dependent records against, supplied as data' -r
 complete -c batten -n "__fish_batten_using_subcommand task; and __fish_seen_subcommand_from alive" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
