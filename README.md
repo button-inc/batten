@@ -583,6 +583,9 @@ harness payload on **stdin** — which is what the `stdin` input is for:
 With `stdin` empty the Action closes the descriptor rather than leaving it open,
 so a verb that reads standard input ends at EOF instead of blocking the job.
 
+`exit-code` accepts every normalized event, so a `[[hook.handler]]` keyed on any
+of them runs there, and its advisory drain wakes on `PostToolBatch`.
+
 The Action does **not** prepend its install directory to `PATH`. A `$GITHUB_PATH`
 write changes how every later step in the job resolves a command, which is a
 hazard disproportionate to the convenience; use the `binary` output instead.
