@@ -8690,6 +8690,9 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                 .map(|segment| {
                     serde_json::json!({
                         "words": segment.words,
+                        // CLOUD-2670: the redirection tokens, the suffix of
+                        // `words`, which keeps its meaning for its readers.
+                        "redirects": segment.redirects,
                         "raw": segment.raw,
                         // The operator that FOLLOWED this span, spelled as the
                         // shell spells it so a module reads what an author
@@ -8880,6 +8883,10 @@ pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
 /// The day a second mediator exists this becomes a set and the key becomes a
 /// name rather than a boolean; spelling it now would be a vocabulary with one
 /// member and no consumer.
+//MUTANT-SUITE crates/batten/src/hook.rs
+//MUTANT redirect-handed-as-argument|s@^            let handed = tokens.len().saturating_sub(line.redirects.len());$@            let handed = tokens.len();@|program_reach_hands_no_redirection_to_the_program
+//MUTANT line-redirects-dropped|s@^                        redirects: segment.redirects,$@                        redirects: Vec::new(),@|a_joined_lines_redirects_stay_with_their_own_line
+//MUTANT segment-redirects-unprojected|s@^                        "redirects": segment.redirects,$@@|the_call_document_projects_a_segments_redirections
 fn program_reach(command: &str) -> Vec<serde_json::Value> {
     let crate::facts::Look::Is(parsed) = segments(command) else {
         return Vec::new();
@@ -8894,8 +8901,14 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
         .flat_map(|segment| segment.lines.iter())
         .filter_map(|line| {
             let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
-            let index = effective_program(&tokens)?;
-            let program = program_token(tokens[index]);
+            // A REDIRECTION IS NEVER HANDED TO THE PROGRAM (CLOUD-2670): the
+            // line's redirect tokens are the suffix of its words, so the argv
+            // is what precedes them. A line that is only redirects runs no
+            // program and so yields no entry.
+            let handed = tokens.len().saturating_sub(line.redirects.len());
+            let argv = &tokens[..handed];
+            let index = effective_program(argv)?;
+            let program = program_token(argv[index]);
             Some(serde_json::json!({
                 "program": program,
                 // THE NAME AS WELL AS THE TOKEN, because they are different
@@ -8924,13 +8937,13 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
                 // predicate is decided on. `(git push origin main --force)` was
                 // allowed with `--force)` here while the same flag written
                 // earlier denied.
-                "arguments": tokens[index + 1..]
+                "arguments": argv[index + 1..]
                     .iter()
                     .map(|token| program_token(token))
                     .collect::<Vec<_>>(),
                 "mediated": mediator_present(
                     crate::rules::RequireVia::Mise,
-                    &tokens[..index],
+                    &argv[..index],
                 ),
                 // WHAT THIS PROGRAM DOES TO THE TREE, as far as the boundary can
                 // say without running it (CLOUD-1949). Each is a table this
@@ -8945,7 +8958,7 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
                 // leading `{` the shell passes through literally, so
                 // `batten lease acquire {--help` would read as `--help` here
                 // while batten receives a positional and writes (CLOUD-2206).
-                "batten-effect": batten_effect(program_name(program), &tokens[index + 1..]),
+                "batten-effect": batten_effect(program_name(program), &argv[index + 1..]),
             }))
         })
         .collect()
@@ -10070,6 +10083,9 @@ fn unkeyed_refusal(rule: &Rule) -> Refusal {
 struct Segment {
     /// The span's arguments, quotes resolved and escapes applied.
     words: Vec<String>,
+    /// The redirection tokens, exactly the suffix of `words` (CLOUD-2670):
+    /// what `program_reach` strips before it reads what a program was handed.
+    redirects: Vec<String>,
     /// The span exactly as written, quotes and all.
     raw: String,
     /// The operator that FOLLOWED this span, or `None` where the command ended.
@@ -10178,6 +10194,8 @@ struct Segment {
 struct SegmentLine {
     /// This command's arguments, quotes resolved and escapes applied.
     words: Vec<String>,
+    /// This line's redirection tokens, the suffix of its `words` (CLOUD-2670).
+    redirects: Vec<String>,
     /// This command's own span, exactly as written.
     raw: String,
 }
@@ -10379,6 +10397,7 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
                 if !segment.nested {
                     line_readings.push(SegmentLine {
                         words: segment.words,
+                        redirects: segment.redirects,
                         raw: segment.raw,
                     });
                 }
@@ -10668,6 +10687,10 @@ fn flatten_command(
     let mut segment = Segment {
         lines: Vec::new(),
         words: command_words(assignments, words, redirects, source),
+        redirects: redirects
+            .iter()
+            .flat_map(|redirect| redirect_words(redirect, source))
+            .collect(),
         raw: node.source_text(source).to_owned(),
         terminator: after,
         input_redirect: redirects.iter().any(binds_stdin),
@@ -10682,6 +10705,7 @@ fn flatten_command(
     }
     segment.lines = vec![SegmentLine {
         words: segment.words.clone(),
+        redirects: segment.redirects.clone(),
         raw: segment.raw.clone(),
     }];
     // Everything the descent produced is nested, however deep: an inner `$(…)`
@@ -14194,6 +14218,54 @@ mod tests {
         assert_eq!(
             project(&envelope("git status")).pointer("/call/forge"),
             Some(&serde_json::Value::Null)
+        );
+    }
+
+    /// Fails by: a redirection handed to the program as an argument, or a
+    /// redirect-only line read as a program (CLOUD-2670).
+    #[test]
+    fn program_reach_hands_no_redirection_to_the_program() {
+        let reach = program_reach("git config --get core.hooksPath 2>/dev/null");
+        assert_eq!(
+            reach[0]["arguments"],
+            serde_json::json!(["config", "--get", "core.hooksPath"])
+        );
+        assert_eq!(program_reach("> /tmp/f"), Vec::<serde_json::Value>::new());
+    }
+
+    /// Fails by: a joined line's redirections lost, so the line after reads
+    /// its own redirect as an argument (CLOUD-2670).
+    #[test]
+    fn a_joined_lines_redirects_stay_with_their_own_line() {
+        let reach =
+            program_reach("cd /tmp 2>/dev/null\ngit config --get core.hooksPath 2>/dev/null");
+        assert_eq!(reach[0]["arguments"], serde_json::json!(["/tmp"]));
+        assert_eq!(
+            reach[1]["arguments"],
+            serde_json::json!(["config", "--get", "core.hooksPath"])
+        );
+    }
+
+    /// Fails by: a segment's redirections not projected, or `words` losing
+    /// them (CLOUD-2670).
+    #[test]
+    fn the_call_document_projects_a_segments_redirections() {
+        let document = call_document(
+            &envelope("cargo build > /tmp/log 2>&1"),
+            &Facts::none(
+                &crate::stop::StopFacts::default(),
+                &crate::waiver::Live::new(),
+            ),
+        )
+        .expect("the document serializes");
+        let parsed: serde_json::Value = serde_json::from_str(&document).expect("it parses");
+        assert_eq!(
+            parsed["call"]["segments"][0]["redirects"],
+            serde_json::json!([">", "/tmp/log", "2>&1"])
+        );
+        assert_eq!(
+            parsed["call"]["segments"][0]["words"],
+            serde_json::json!(["cargo", "build", ">", "/tmp/log", "2>&1"])
         );
     }
 
