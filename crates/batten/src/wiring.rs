@@ -469,6 +469,8 @@ fn write_at_load(dir: &Path, rows: &[AtLoadRow]) -> Result<bool> {
 /// generator never emits. Leaving the husk would also make the census read
 /// `read: 1, commands: 0`, which is a real disposition and would now be a lie
 /// about how the file got there.
+//MUTANT-SUITE crates/batten/src/wiring.rs
+//MUTANT reclaim-skips-flat-entry|s@^            entries.retain(ours);$@            entries.retain(\x7c_\x7c true);@|a_flat_merged_sibling_is_pruned
 fn prune_siblings(
     document: &mut serde_json::Value,
     file: hook::WiringFile,
@@ -493,11 +495,9 @@ fn prune_siblings(
         // is the whole entry, dropped whole.
         if let hook::EntryShape::Flat { read, .. } = shape {
             let before = entries.len();
-            //MUTANT-SUITE crates/batten/src/wiring.rs
             let ours = |entry: &serde_json::Value| {
                 flat_command(entry, read).is_none_or(|cmd| is_batten(cmd, command))
             };
-            //MUTANT reclaim-skips-flat-entry|s@^            entries.retain(ours);$@            entries.retain(\x7c_\x7c true);@|a_flat_merged_sibling_is_pruned
             entries.retain(ours);
             count = before - entries.len();
             if count > 0 {
@@ -727,6 +727,8 @@ pub fn register_committed(repo: &Path, check: bool) -> Result<Vec<(hook::Harness
 ///
 /// An event already registering a batten command is left exactly as it is, so
 /// a second run adds nothing — the property the `[[startup]]` check relies on.
+//MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
+//MUTANT register-writes-nested-for-flat|s@^        let entry = new_entry(shape, command);$@        let entry = new_entry(hook::EntryShape::Nested, command);@|register_all_writes_flat_hosts_flat
 fn add_missing(
     document: &mut serde_json::Value,
     file: hook::WiringFile,
@@ -771,8 +773,6 @@ fn add_missing(
         if present {
             continue;
         }
-        //MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
-        //MUTANT register-writes-nested-for-flat|s@^        let entry = new_entry(shape, command);$@        let entry = new_entry(hook::EntryShape::Nested, command);@|register_all_writes_flat_hosts_flat
         let entry = new_entry(shape, command);
         match events
             .get_mut(*spelling)
