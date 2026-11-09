@@ -5469,6 +5469,14 @@
           ],
           "maxLength": 1536
         },
+        "unless_word": {
+          "description": "The exempting polarity of [`Rule::word`]: a line whose argv carries a\nmatching word does not fire. Line-scoped, like `unless_contains`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
         "use_sources": {
           "description": "The same, glob-selected (CLOUD-762).\n\nA layering rule decides over every module by construction, so the glob is\nthe spelling that matters and it ships with its literal column.",
           "type": "array",
@@ -5543,6 +5551,14 @@
         "while_unpushed": {
           "description": "Fire only while `HEAD` exists in this clone and on no remote-tracking ref\n(CLOUD-843).\n\n**The harm a punt row names, measured rather than proxied.** `turn mint\nahead` refuses because work \"committed nowhere but this container\" dies\nwith a reclaim, and its remedy says a push is what makes stopping safe —\nbut nothing it selected on read a push. Its only lever was a `verify`\nreceipt for `HEAD`, and on a tree that compiles only after edits that\nreceipt cannot be earned without the writes the row refuses: a deadlock\nwhose sole exit, a head-bound admission, every commit voids.\n\nConjoined with the other modifiers, so a row carrying `while_marker` too\nfires while the marker exists AND `HEAD` is unpushed. Could-not-look\nselects the row, the direction `while_marker`'s own unreadable arms take:\nan unknown answer must not switch a refusal off.",
           "type": "boolean"
+        },
+        "word": {
+          "description": "Narrow a [`RuleKind::Shape`] deny to a line whose argv carries a WORD\nmatching this expression (CLOUD-2669), anchored as `^(?:…)$`.\n\nThe words are this line's argv after the effective program, minus its\nredirections, unquoted by the segmenter: `-m \"never use --no-verify\"` is\none word and holds no `--no-verify` word, where `contains` sees one. A\nregex rather than a literal so a bundled short flag (`-anm`) is\nexpressible; anchoring is what keeps it a word test.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
         }
       },
       "additionalProperties": false,
