@@ -1,0 +1,20 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-forge 1  batten 
+.SH NAME
+batten\-forge \- Take forge events into the hook surface
+.SH SYNOPSIS
+\fBbatten forge\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Take forge events into the hook surface
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-forge\-intake(1)
+Run one forge event payload from stdin through the handlers and rules a harness hook gets
+.TP
+batten\-forge\-help(1)
+Print this message or the help of the given subcommand(s)

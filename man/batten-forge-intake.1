@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-forge-intake 1  batten 
+.SH NAME
+batten\-forge\-intake \- Run one forge event payload from stdin through the handlers and rules a harness hook gets
+.SH SYNOPSIS
+\fBbatten forge intake\fR [\fB\-\-event\fR] [\fB\-\-from\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Run one forge event payload from stdin through the handlers and rules a harness hook gets
+.SH OPTIONS
+.TP
+\fB\-\-event\fR \fI<event>\fR
+The X\-GitHub\-Event name the webhook body on stdin arrived under
+.TP
+\fB\-\-from\fR \fI<from>\fR
+`wake`: stdin is a harness user\-prompt\-submit payload carrying the event
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
