@@ -1732,28 +1732,15 @@ const SINGLETON_RECHECK: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
-/// `--program-root <dir>` on `task alive`: where the CONSUMER keeps its programs.
-///
-/// Non-negotiable rule 1, as a flag. Corroborating that a live pid is still the
-/// task that registered it means matching the task's own name inside the
-/// process's `cmdline`, and *where a consumer keeps its programs* is a fact about
-/// that consumer — `document_facts::no_artifact_name_reaches_the_core` refuses a
-/// manifest name in this crate for exactly the same reason.
-///
-/// Never defaulted. A default would be one consumer's layout promoted to the
-/// engine's, and it would fail SILENTLY everywhere else: an unmatched
-/// corroboration reads as alive, so a wrong root produces a registry that never
-/// reports a crash and looks like one that has nothing to report.
-///
-/// Optional since CLOUD-2370 and TRANSITIONAL: `[task] program_root` is the one
-/// authority, and this flag answers only where the config declares none, so a
-/// manifest written for a release that predates the table keeps working until
-/// its pin carries it. Neither present is could-not-look.
+/// `task alive --program-root`: ACCEPTED AND UNREAD since CLOUD-1560. Liveness
+/// compares the cmdline digest each registrant recorded, so no program root is
+/// consulted; the flag stays so a manifest written for an older release keeps
+/// parsing, and retires with `[task] program_root` (CLOUD-2463).
 const TASK_PROGRAM_ROOT: FlagDecl = FlagDecl {
     id: "program_root",
     long: Some("program-root"),
     short: None,
-    help: "The directory this consumer keeps its task programs in, matched inside a live process's cmdline",
+    help: "Accepted and unread: liveness compares the cmdline each registrant recorded (CLOUD-1560)",
     env: EnvDecl::None,
     global: false,
     positional: false,
