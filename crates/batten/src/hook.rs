@@ -1818,7 +1818,12 @@ impl Harness {
             Harness::ExitCode => Capabilities {
                 // The neutral contract carries no host tool surface of its own.
                 plan_tools: PlanTools::Surveyed(&[]),
-                events: CONVERGED_EVENTS,
+                // Every moment, not the converged four: this is Batten's own
+                // envelope, so it carries whatever the core normalizes, and a
+                // handler keyed on any of them runs here (CLOUD-2674).
+                //MUTANT-SUITE crates/batten/tests/it/exit_code_handlers.rs
+                //MUTANT exit-code-events-converged|s@^                events: Event::MOMENTS,$@                events: CONVERGED_EVENTS,@|exit_code_runs_a_user_prompt_submit_handler
+                events: Event::MOMENTS,
                 // Not a host: the channel is the exit status alone, which has no
                 // third value to carry an escalation. Measured, not unsurveyed.
                 ask: AskReach::unreachable(Declaration::No),
@@ -2301,6 +2306,21 @@ impl Event {
         Event::UserPromptSubmit,
         Event::Unrecognized,
     ];
+
+    /// Every event that is a moment: [`Event::ALL`] without `Unrecognized`.
+    ///
+    /// Derived in const context, so a new variant in `ALL` is a moment here with
+    /// no second edit. The `panic!` arm makes "`Unrecognized` stays last" a
+    /// compile error rather than a comment, so a reordered `ALL` cannot quietly
+    /// drop a real moment. The neutral exit-code adapter declares exactly this set
+    /// (CLOUD-2674): it is Batten's own envelope, not a host, so a narrower row
+    /// would be a statement about nobody.
+    //MUTANT-SUITE crates/batten/src/hook.rs
+    //MUTANT moments-is-all|s@^        Some((Event::Unrecognized, moments)) => moments,$@        Some((Event::Unrecognized, _)) => Event::ALL,@|moments_is_every_event_but_unrecognized
+    pub const MOMENTS: &'static [Event] = match Event::ALL.split_last() {
+        Some((Event::Unrecognized, moments)) => moments,
+        _ => panic!("Event::ALL ends with Unrecognized"),
+    };
 
     /// Whether a refusal is a thing this moment can carry at all.
     ///
@@ -16578,6 +16598,19 @@ deny contains "refused by themodule" if {
     }
 
     #[test]
+    fn moments_is_every_event_but_unrecognized() {
+        // CLOUD-2674: the const is derived, so this pins the derivation and the
+        // one row that reads it.
+        let expected: Vec<Event> = Event::ALL
+            .iter()
+            .copied()
+            .filter(|event| *event != Event::Unrecognized)
+            .collect();
+        assert_eq!(Event::MOMENTS, expected.as_slice());
+        assert_eq!(Harness::ExitCode.capabilities().events, Event::MOMENTS);
+    }
+
+    #[test]
     fn task_completed_is_claude_only_and_degrades_to_the_stop_family() {
         // The one Claude-exclusive capability that is load-bearing for Batten's
         // completion-signal thesis.
@@ -16588,11 +16621,14 @@ deny contains "refused by themodule" if {
         );
         for harness in Harness::ALL {
             let capabilities = harness.capabilities();
-            if *harness == Harness::ClaudeCode {
+            // Exit-code is Batten's envelope, not a surveyed host: it carries
+            // every moment, so it watches TaskCompleted exactly (CLOUD-2674).
+            if matches!(harness, Harness::ClaudeCode | Harness::ExitCode) {
                 assert_eq!(
                     capabilities.degrade(Event::TaskCompleted),
                     Some(Event::TaskCompleted),
-                    "the host that has it watches it"
+                    "{}: the adapter that has it watches it",
+                    harness.as_str()
                 );
                 continue;
             }
@@ -16620,6 +16656,15 @@ deny contains "refused by themodule" if {
         // event would be worse than admitting the gap.
         for harness in Harness::ALL {
             if *harness == Harness::ClaudeCode {
+                continue;
+            }
+            // Batten's own envelope carries every moment (CLOUD-2674).
+            if *harness == Harness::ExitCode {
+                assert_eq!(
+                    harness.capabilities().degrade(Event::ConfigChange),
+                    Some(Event::ConfigChange),
+                    "exit-code carries ConfigChange itself"
+                );
                 continue;
             }
             assert_eq!(

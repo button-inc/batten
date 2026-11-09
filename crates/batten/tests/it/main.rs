@@ -181,6 +181,7 @@ mod evaluator_closure;
 mod evaluator_io_probe;
 mod exec_lock;
 mod exec_tracked;
+mod exit_code_handlers;
 mod extension_surfaces;
 mod external_facts;
 mod extracted_facts;
