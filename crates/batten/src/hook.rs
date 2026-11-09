@@ -218,6 +218,12 @@ impl Harness {
                     //MUTANT-SUITE crates/batten/tests/it/cli.rs
                     //MUTANT gemini-start-spelled-before-agent|s@^                    (Event::SessionStart, "SessionStart"),$@                    (Event::SessionStart, "BeforeAgent"),@|generated_hook_wiring_matches_its_golden_for_every_installable_harness
                     (Event::SessionStart, "SessionStart"),
+                    // CLOUD-2695: `BeforeAgent` is Gemini's prompt-submit moment,
+                    // and `PreCompress` its pre-compaction.
+                    (Event::UserPromptSubmit, "BeforeAgent"),
+                    (Event::SessionEnd, "SessionEnd"),
+                    (Event::Notification, "Notification"),
+                    (Event::PreCompact, "PreCompress"),
                 ],
                 project_dir_var: None,
             }),
@@ -231,6 +237,12 @@ impl Harness {
                     (Event::PostTool, "afterFileEdit"),
                     (Event::Stop, "stop"),
                     (Event::SessionStart, "sessionStart"),
+                    // CLOUD-2695.
+                    (Event::PostToolFailure, "postToolUseFailure"),
+                    (Event::SessionEnd, "sessionEnd"),
+                    (Event::SubagentStart, "subagentStart"),
+                    (Event::SubagentStop, "subagentStop"),
+                    (Event::PreCompact, "preCompact"),
                 ],
                 project_dir_var: None,
             }),
@@ -1553,12 +1565,68 @@ fn json_string(raw: &str) -> String {
     serde_json::to_string(raw).unwrap_or_else(|_| format!("\"{raw}\""))
 }
 
-/// The events every surveyed host emits — the converged core.
-const CONVERGED_EVENTS: &[Event] = &[
+// EACH NON-CLAUDE HOST'S DOCUMENTED EVENTS THAT NAME A MOMENT BATTEN HAS A
+// VARIANT FOR (CLOUD-2695, fetched from each host's docs 2026-11-09). A
+// prompt-submit event is derived only where Batten's deny reaches the host:
+// Codex (exit 2 + stderr) and Gemini (`BeforeAgent`, exit 2). Cursor's
+// `beforeSubmitPrompt` reads `continue` where Batten writes `permission`, and
+// Copilot documents no blocking output for it, so both would fail open.
+// What stays off each surface is CLOUD-2700's.
+
+/// Codex CLI: 11 of its 14 documented events.
+const CODEX_EVENTS: &[Event] = &[
     Event::PreTool,
     Event::PostTool,
     Event::Stop,
     Event::SessionStart,
+    Event::SessionEnd,
+    Event::SubagentStart,
+    Event::SubagentStop,
+    Event::PermissionRequest,
+    Event::PreCompact,
+    Event::PostCompact,
+    Event::UserPromptSubmit,
+];
+
+/// Copilot CLI: 10 of 14, in its `PascalCase` dialect.
+const COPILOT_EVENTS: &[Event] = &[
+    Event::PreTool,
+    Event::PostTool,
+    Event::PostToolFailure,
+    Event::Stop,
+    Event::SessionStart,
+    Event::SessionEnd,
+    Event::SubagentStop,
+    Event::PreCompact,
+    Event::Notification,
+    Event::PermissionRequest,
+];
+
+/// Gemini CLI: 8 of 11.
+const GEMINI_EVENTS: &[Event] = &[
+    Event::PreTool,
+    Event::PostTool,
+    Event::Stop,
+    Event::SessionStart,
+    Event::UserPromptSubmit,
+    Event::SessionEnd,
+    Event::Notification,
+    Event::PreCompact,
+];
+
+/// Cursor: 9 of 21.
+//MUTANT-SUITE crates/batten/src/hook.rs
+//MUTANT cursor-prompt-submit-derived|s@^const CURSOR_EVENTS: \&\[Event\] = \&\[$@const CURSOR_EVENTS: \&[Event] = \&[Event::UserPromptSubmit,@|prompt_submit_is_derived_only_where_a_deny_reaches_the_host
+const CURSOR_EVENTS: &[Event] = &[
+    Event::PreTool,
+    Event::PostTool,
+    Event::PostToolFailure,
+    Event::Stop,
+    Event::SessionStart,
+    Event::SessionEnd,
+    Event::SubagentStart,
+    Event::SubagentStop,
+    Event::PreCompact,
 ];
 
 /// The attribution row group every named host shares: nothing the evidence
@@ -1803,7 +1871,9 @@ impl Harness {
                 // found, and a name taken from a forum post is exactly what
                 // CLOUD-209's "assume it wrong without a fetch" refuses.
                 plan_tools: PlanTools::Unsurveyed("CLOUD-209"),
-                events: CONVERGED_EVENTS,
+                //MUTANT-SUITE crates/batten/src/doctor.rs
+                //MUTANT cursor-events-converged-only|s@^                events: CURSOR_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
+                events: CURSOR_EVENTS,
                 // The row that forced this column to become event-scoped
                 // (CLOUD-601). M1 records the verdict vocabulary as
                 // event-dependent: `allow|deny|ask` on `beforeShellExecution` and
@@ -1843,7 +1913,9 @@ impl Harness {
                 // Not fetched, like the rest of this host's tool surface — the
                 // same survey gap `operation_of` records for it.
                 plan_tools: PlanTools::Unsurveyed("CLOUD-209"),
-                events: CONVERGED_EVENTS,
+                //MUTANT-SUITE crates/batten/src/doctor.rs
+                //MUTANT copilot-events-converged-only|s@^                events: COPILOT_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
+                events: COPILOT_EVENTS,
                 // `Unknown`, not `No`, and not `Yes` either: M1 confirms the
                 // verdict exists and names the `preToolUse` output *fields*
                 // (`permissionDecision`/`permissionDecisionReason`) without
@@ -1877,7 +1949,9 @@ impl Harness {
                 // Fetched 2026-09-01 from the vendor docs: `write_todos`, on by
                 // default and disableable with `"useWriteTodos": false`.
                 plan_tools: PlanTools::Surveyed(&["write_todos"]),
-                events: CONVERGED_EVENTS,
+                //MUTANT-SUITE crates/batten/src/doctor.rs
+                //MUTANT gemini-events-converged-only|s@^                events: GEMINI_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
+                events: GEMINI_EVENTS,
                 // Allow/deny only. A policy wanting confirmation must hard-deny
                 // here — degrading to *allow* would turn "ask a human" into "go
                 // ahead".
@@ -1942,7 +2016,9 @@ impl Harness {
             Harness::CodexCli => Capabilities {
                 // Fetched 2026-09-01: `update_plan`, the built-in plan tool.
                 plan_tools: PlanTools::Surveyed(&["update_plan"]),
-                events: CONVERGED_EVENTS,
+                //MUTANT-SUITE crates/batten/src/doctor.rs
+                //MUTANT codex-events-converged-only|s@^                events: CODEX_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
+                events: CODEX_EVENTS,
                 // Advertised in the output schema, marked "parsed but not
                 // supported yet" in the docs. Advertised is not available, and
                 // that is a measurement rather than a gap — hence `No`.
@@ -1971,7 +2047,7 @@ impl Harness {
                 // envelope, so it carries whatever the core normalizes, and a
                 // handler keyed on any of them runs here (CLOUD-2674).
                 //MUTANT-SUITE crates/batten/tests/it/exit_code_handlers.rs
-                //MUTANT exit-code-events-converged|s@^                events: Event::MOMENTS,$@                events: CONVERGED_EVENTS,@|exit_code_runs_a_user_prompt_submit_handler
+                //MUTANT exit-code-events-converged|s@^                events: Event::MOMENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|exit_code_runs_a_user_prompt_submit_handler
                 events: Event::MOMENTS,
                 // Not a host: the channel is the exit status alone, which has no
                 // third value to carry an escalation. Measured, not unsurveyed.
@@ -2502,9 +2578,8 @@ impl Event {
         // chronological start of a turn: this list is what the wiring emitter
         // iterates, so its order is a committed artifact's key order, and the
         // grouping that already holds — converged core, then the events one host
-        // alone offers — is the one a reader can check against
-        // `CONVERGED_EVENTS`. `Unrecognized` stays last because it is not a
-        // moment.
+        // alone offers — is the one a reader can check against each host's
+        // event set. `Unrecognized` stays last because it is not a moment.
         Event::UserPromptSubmit,
         Event::PostToolFailure,
         Event::Notification,
@@ -3802,6 +3877,11 @@ fn normalize_event(harness: Harness, raw: &str) -> Event {
             // `AfterAgent` is Gemini's end-of-turn; it is the Stop family's
             // member here even though the word differs.
             "AfterAgent" => Some(Event::Stop),
+            // Its prompt-submit moment and its pre-compaction (CLOUD-2695).
+            //MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
+            //MUTANT gemini-before-agent-unrecognized|s@^            "BeforeAgent" => Some(Event::UserPromptSubmit),$@@|a_gemini_before_agent_reaches_a_prompt_handler
+            "BeforeAgent" => Some(Event::UserPromptSubmit),
+            "PreCompress" => Some(Event::PreCompact),
             _ => None,
         },
         // Cursor splits pre-tool across a generic event and three specialized
@@ -3812,8 +3892,18 @@ fn normalize_event(harness: Harness, raw: &str) -> Event {
                 Some(Event::PreTool)
             }
             "afterFileEdit" => Some(Event::PostTool),
-            "stop" | "subagentStop" => Some(Event::Stop),
+            // `subagentStop` is its own moment now (CLOUD-2695): the Stop-family
+            // mapping predates the variant, and a subagent ending does not run
+            // the end-of-turn gate on Claude Code either.
+            //MUTANT-SUITE crates/batten/src/hook.rs
+            //MUTANT cursor-subagent-stop-is-stop|s@^            "stop" => Some(Event::Stop),$@            "stop" \x7c "subagentStop" => Some(Event::Stop),@|cursors_renamed_events_normalize
+            "stop" => Some(Event::Stop),
             "sessionStart" => Some(Event::SessionStart),
+            "postToolUseFailure" => Some(Event::PostToolFailure),
+            "sessionEnd" => Some(Event::SessionEnd),
+            "subagentStart" => Some(Event::SubagentStart),
+            "subagentStop" => Some(Event::SubagentStop),
+            "preCompact" => Some(Event::PreCompact),
             _ => None,
         },
         Harness::ClaudeCode | Harness::CopilotCli | Harness::CodexCli | Harness::ExitCode => None,
@@ -18737,10 +18827,36 @@ deny contains "refused by themodule" if {
         for (raw, event) in [
             ("afterFileEdit", Event::PostTool),
             ("stop", Event::Stop),
-            ("subagentStop", Event::Stop),
+            // Its own moment, not the Stop family (CLOUD-2695).
+            ("subagentStop", Event::SubagentStop),
             ("sessionStart", Event::SessionStart),
+            ("postToolUseFailure", Event::PostToolFailure),
+            ("sessionEnd", Event::SessionEnd),
+            ("subagentStart", Event::SubagentStart),
+            ("preCompact", Event::PreCompact),
         ] {
             assert_eq!(normalize_event(Harness::Cursor, raw), event, "{raw}");
+        }
+    }
+
+    #[test]
+    fn prompt_submit_is_derived_only_where_a_deny_reaches_the_host() {
+        // CLOUD-2695: Codex and Gemini honour Batten's exit-2 deny at prompt
+        // submit; Cursor reads a field Batten does not write, and Copilot
+        // documents no block, so deriving it there would fail open.
+        for (harness, derived) in [
+            (Harness::ClaudeCode, true),
+            (Harness::CodexCli, true),
+            (Harness::GeminiCli, true),
+            (Harness::Cursor, false),
+            (Harness::CopilotCli, false),
+        ] {
+            assert_eq!(
+                harness.capabilities().emits(Event::UserPromptSubmit),
+                derived,
+                "{}",
+                harness.as_str()
+            );
         }
     }
 

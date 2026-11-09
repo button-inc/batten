@@ -24,6 +24,36 @@
         "type": "command",
         "command": "batten adjudicate --harness cursor"
       }
+    ],
+    "postToolUseFailure": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "subagentStop": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "preCompact": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
     ]
   }
 }
