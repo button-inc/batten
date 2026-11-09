@@ -456,6 +456,9 @@ token_enum! {
         /// A config row changed by a context that has not read its history
         /// (CLOUD-2144).
         History => "history",
+        /// A `&` job nothing in the same call waits on, where the harness has a
+        /// supported background option instead (CLOUD-2667).
+        Detach => "detach",
     }
 }
 
