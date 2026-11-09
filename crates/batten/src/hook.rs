@@ -9019,6 +9019,11 @@ fn key_present(expression: &str, command: &str, keys: &KeyFacts) -> bool {
     evidence.iter().any(|text| pattern.is_match(text))
 }
 
+//MUTANT-SUITE crates/batten/tests/it/word_filters.rs
+//MUTANT word-matched-as-substring|s@^                \&\& !has_word(argv, word).unwrap_or(true)$@                \&\& !line.raw.contains(word)@|a_word_row_reads_flags_not_message_text
+//MUTANT unless-word-ignored|s@^                \&\& has_word(argv, exemption).unwrap_or(false)$@                \&\& false@|an_unless_word_row_exempts_only_its_own_line
+//MUTANT word-reads-redirection|s@^        let spoken = tokens.len().saturating_sub(line.redirects.len());$@        let spoken = tokens.len();@|a_redirection_target_is_not_a_word
+//MUTANT-SUITE crates/batten/src/hook.rs
 /// Every shape row this command matches, in declaration order within each
 /// segment.
 ///
@@ -9058,6 +9063,12 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
         let Some(program_index) = effective_program(&tokens) else {
             continue;
         };
+        // The argv the program was handed (CLOUD-2669): its redirections are the
+        // exact suffix of `words` (CLOUD-2670), so a redirect target is no word.
+        // `get` answers `None` for a reversed range, so a program inside its own
+        // redirections (`> f`) reads as an empty argv rather than a panic.
+        let spoken = tokens.len().saturating_sub(line.redirects.len());
+        let argv: &[&str] = tokens.get(program_index + 1..spoken).unwrap_or_default();
         // Subcommand words with flags dropped. A value-taking flag leaves its
         // value behind, but the blocked words are adjacent, so that never hides
         // a real match (`gh -R o/r pr merge` still matches; `gh pr view
@@ -9144,10 +9155,33 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
             {
                 continue;
             }
+            // Whole words of THIS LINE's argv (CLOUD-2669), in both polarities.
+            // Fail closed either way: an expression that does not compile (load
+            // already refused it) fires the deny and grants no exemption.
+            if let Some(word) = rule.word.as_deref()
+                && !has_word(argv, word).unwrap_or(true)
+            {
+                continue;
+            }
+            if let Some(exemption) = rule.unless_word.as_deref()
+                && has_word(argv, exemption).unwrap_or(false)
+            {
+                continue;
+            }
             matched.push(rule);
         }
     }
     matched
+}
+
+/// Whether any word of `argv`, normalised by [`program_token`], matches `shape`
+/// anchored as `^(?:shape)$` (CLOUD-2669). `None` when `shape` does not compile.
+fn has_word(argv: &[&str], shape: &str) -> Option<bool> {
+    let anchored = regex::Regex::new(&format!("^(?:{shape})$")).ok()?;
+    Some(
+        argv.iter()
+            .any(|word| anchored.is_match(program_token(word))),
+    )
 }
 
 /// The id the derived protected-path gate denies under.
@@ -12323,6 +12357,10 @@ mod tests {
         live
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one line per `Rule` column, which has no `Default` on purpose"
+    )]
     fn shape(id: &str, pattern: &str, contains: Option<&str>) -> Rule {
         Rule {
             review: Vec::new(),
@@ -12352,6 +12390,8 @@ mod tests {
             requires_field: None,
             contains: contains.map(ToOwned::to_owned),
             unless_contains: None,
+            word: None,
+            unless_word: None,
             require_via: None,
             requires_key: None,
             reason: Some(format!("use the sanctioned path for {id}")),
