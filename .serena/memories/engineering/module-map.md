@@ -68,6 +68,7 @@ row here, so a new module lands with its line.
 - `traversal.rs` — the `[[traversal]]` table (CLOUD-1866): a walk DECLARED in `batten.toml` rather than written into a module, because which field carries an edge is a consumer's vocabulary (rule 1) and declaring it bounds it.
 - `register.rs` — the `[[register]]` table (CLOUD-2005): a declared key set, the ONE GFM row grammar, and the `resolve()` join a `reference` rule runs; pure, so the caller acquires and this module only joins. `traversal.rs` (CLOUD-1868) also walks to a register terminal through it.
 - `propose.rs` — candidate resolutions for a conflicted replay, never applied (CLOUD-1956): a pure diff3 merge per path, returned only when every region matches a built-in shape (`comment-only`, `list-union`, `json-array-union`); `gitwrite` writes the candidate and `--resolve` stays the only act that applies one.
+- `forge_event.rs` — the forge's event vocabulary (CLOUD-2689): GitHub's 73 webhook events as a catalog, the webhook and Events API normalizers onto `Event::Forge`, and the content-derived dedupe key. Reads no source; `forge intake` is its door.
 - `githook.rs` — batten AS every git hook (CLOUD-2339): argv[0] dispatch through `[hook.git]`, the `BATTEN_GATE_PID` re-entry guard, and the table's load-time validation; `wiring::link_git_hooks` writes the links.
 - `gitwrite.rs` — the LOCAL git writes: a loose object into the odb, and a ref moved (CLOUD-1274's D2).
 - `land.rs` — the landing lap's REPLAY half, and the first consumer of `gitwrite.rs` and `lease.rs` (CLOUD-1335).

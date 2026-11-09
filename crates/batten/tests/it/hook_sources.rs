@@ -126,7 +126,7 @@ fn the_harness_vocabulary_agrees_with_wiring_registrations() {
     let vocabulary = HookSource::Harness.vocabulary();
     let moments = Event::ALL
         .iter()
-        .filter(|event| **event != Event::Unrecognized)
+        .filter(|event| **event != Event::Unrecognized && event.host_emitted())
         .count();
     assert_eq!(vocabulary.len(), Harness::ALL.len() * moments);
     for harness in Harness::ALL {
@@ -160,4 +160,145 @@ fn the_harness_vocabulary_agrees_with_wiring_registrations() {
             }
         }
     }
+}
+
+/// GitHub's webhook events, as its reference page lists them. A SNAPSHOT,
+/// fetched 2026-11-09 from
+/// <https://docs.github.com/en/webhooks/webhook-events-and-payloads> (73 `h2`
+/// sections): an event GitHub adds later is not caught automatically, which is
+/// the `GITHOOKS_5` posture — this is what was reproduced, nothing more.
+const GITHUB_WEBHOOK_EVENTS: [&str; 73] = [
+    "branch_protection_configuration",
+    "branch_protection_rule",
+    "check_run",
+    "check_suite",
+    "code_scanning_alert",
+    "commit_comment",
+    "create",
+    "custom_property",
+    "custom_property_values",
+    "delete",
+    "dependabot_alert",
+    "deploy_key",
+    "deployment",
+    "deployment_protection_rule",
+    "deployment_review",
+    "deployment_status",
+    "discussion",
+    "discussion_comment",
+    "fork",
+    "github_app_authorization",
+    "gollum",
+    "installation",
+    "installation_repositories",
+    "installation_target",
+    "issue_comment",
+    "issue_dependencies",
+    "issue_relates_to",
+    "issues",
+    "label",
+    "marketplace_purchase",
+    "member",
+    "membership",
+    "merge_group",
+    "meta",
+    "milestone",
+    "org_block",
+    "organization",
+    "package",
+    "page_build",
+    "personal_access_token_request",
+    "ping",
+    "project",
+    "project_card",
+    "project_column",
+    "public",
+    "pull_request",
+    "pull_request_review",
+    "pull_request_review_comment",
+    "pull_request_review_thread",
+    "push",
+    "registry_package",
+    "release",
+    "repository",
+    "repository_advisory",
+    "repository_dispatch",
+    "repository_import",
+    "repository_ruleset",
+    "repository_vulnerability_alert",
+    "secret_scanning_alert",
+    "secret_scanning_alert_location",
+    "secret_scanning_scan",
+    "security_advisory",
+    "security_and_analysis",
+    "sponsorship",
+    "star",
+    "status",
+    "sub_issues",
+    "team",
+    "team_add",
+    "watch",
+    "workflow_dispatch",
+    "workflow_job",
+    "workflow_run",
+];
+
+/// The `ci` vocabulary is the polls, `socket`, and exactly the catalog
+/// (CLOUD-2689). Fails at HEAD, which had five names.
+//MUTANT-SUITE crates/batten/tests/it/hook_sources.rs
+#[test]
+fn the_ci_vocabulary_is_the_forge_catalog() {
+    let vocabulary = HookSource::Ci.vocabulary();
+    let names: BTreeSet<&str> = vocabulary
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .filter(|name| !name.starts_with("poll:") && *name != "socket")
+        .collect();
+    assert_eq!(names, BTreeSet::from(GITHUB_WEBHOOK_EVENTS));
+    for sentinel in [
+        "pull_request",
+        "push",
+        "check_run",
+        "workflow_run",
+        "issues",
+        "ping",
+    ] {
+        assert!(names.contains(sentinel), "{sentinel}");
+    }
+    assert!(
+        vocabulary.iter().all(|(name, _)| name != "webhook"),
+        "payload intake is a verb, not a server"
+    );
+    assert!(vocabulary.iter().any(|(name, disposition)| name == "socket"
+        && *disposition
+            == HookDisposition::Unsupported {
+                reason: "no-server"
+            }));
+    for row in batten::forge_event::CATALOG {
+        assert!(!row.id.is_empty(), "{} names no subject", row.name);
+    }
+}
+
+/// No host emits a forge event, so no wiring registers it and no harness
+/// vocabulary names it (CLOUD-2689).
+#[test]
+fn forge_is_in_no_harness_vocabulary_or_wiring() {
+    for harness in Harness::ALL {
+        if let Some(wiring) = harness.wiring() {
+            assert!(
+                wiring
+                    .registrations(*harness)
+                    .iter()
+                    .all(|(event, _)| *event != Event::Forge),
+                "{} registers forge",
+                harness.as_str()
+            );
+        }
+    }
+    assert!(
+        HookSource::Harness
+            .vocabulary()
+            .iter()
+            .all(|(name, _)| !name.ends_with(":forge"))
+    );
 }

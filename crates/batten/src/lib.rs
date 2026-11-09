@@ -83,6 +83,7 @@ pub mod findings;
 pub mod forge;
 /// Declared `[[forge.query]]` reads, walked and reduced into a record family a
 /// module decides over (CLOUD-843).
+pub mod forge_event;
 pub mod forge_query;
 pub mod git;
 pub mod githook;
