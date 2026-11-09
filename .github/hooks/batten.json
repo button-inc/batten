@@ -24,6 +24,42 @@
         "type": "command",
         "bash": "batten adjudicate --harness copilot-cli"
       }
+    ],
+    "PostToolUseFailure": [
+      {
+        "type": "command",
+        "bash": "batten adjudicate --harness copilot-cli"
+      }
+    ],
+    "Notification": [
+      {
+        "type": "command",
+        "bash": "batten adjudicate --harness copilot-cli"
+      }
+    ],
+    "SessionEnd": [
+      {
+        "type": "command",
+        "bash": "batten adjudicate --harness copilot-cli"
+      }
+    ],
+    "SubagentStop": [
+      {
+        "type": "command",
+        "bash": "batten adjudicate --harness copilot-cli"
+      }
+    ],
+    "PreCompact": [
+      {
+        "type": "command",
+        "bash": "batten adjudicate --harness copilot-cli"
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "type": "command",
+        "bash": "batten adjudicate --harness copilot-cli"
+      }
     ]
   }
 }
