@@ -22,12 +22,13 @@
 //! is feedforward, the rule says so on its own row, and a §7 claiming otherwise
 //! here would be the same defect CLOUD-844 is about.
 //!
-//! **The substitution axis is a different matter, and saying otherwise was a
-//! defect of its own** (CLOUD-998). This file used to state flatly that it was
-//! "not a gate over tool choice"; `tool select other` is exactly that, over
-//! the command line, and its refusal redirects to the rules file. So the claim
-//! here is narrowed to the axis it holds for, and one assertion now pins the
-//! gate's name into the prose. This is otherwise the same shape as
+//! **The substitution axis was gated, and no longer is** (CLOUD-2698). From
+//! CLOUD-998 until that row, `tool select other` refused a shell text utility
+//! over a tracked path, and one assertion pinned the gate's name into the prose
+//! so a reader expected the refusal. The owner retired the row on the evidence
+//! that it refused transforms and whole commands and that nothing measured a
+//! structured tool as better, so the assertion now pins the opposite: the prose
+//! says the axis is ungated and names the row that retired it. This is the same shape as
 //! `spawn_census.rs`'s assertion that `clippy.toml` names the spawn type: the
 //! prose carries the position, and the test keeps the prose from evaporating.
 
@@ -101,13 +102,12 @@ const INSTRUMENTS: &[(&str, &[&str])] = &[
 /// rather than copy.
 const DISPOSITION: &str = "CLOUD-310";
 
-/// The gate that decides the substitution axis, whose refusal redirects here.
+/// The row that retired the substitution gate (CLOUD-2698).
 ///
-/// The rules file must name it. For its whole life the file asserted that no
-/// gate existed over instrument choice, which was true when written and false
-/// once this row landed — and a reader who believes no gate exists has no reason
-/// to expect the refusal (CLOUD-998).
-const SUBSTITUTION_GATE: &str = "tool select other";
+/// The rules file must say the axis is ungated and cite it, so a reader neither
+/// expects a refusal that no longer comes nor re-adds the row without the
+/// evidence it was retired on.
+const SUBSTITUTION_RETIRED: &str = "CLOUD-2698";
 
 /// The bare product names row one must not answer with.
 ///
@@ -177,13 +177,12 @@ fn the_rules_state_the_no_extension_defect_beside_the_recommendation() {
 }
 
 #[test]
-fn the_rules_name_the_gate_over_the_substitution_axis() {
+fn the_rules_say_the_substitution_axis_is_not_gated() {
     let text = rules_text();
     assert!(
-        text.contains(SUBSTITUTION_GATE),
-        "{RULES} must name `{SUBSTITUTION_GATE}` — its refusal redirects a reader here to choose \
-         between the question classes, and a file that does not mention the gate tells that \
-         reader no refusal is coming"
+        text.contains("Substitution is not gated") && text.contains(SUBSTITUTION_RETIRED),
+        "{RULES} must say substitution is not gated and cite {SUBSTITUTION_RETIRED}, the row \
+         that retired the gate: a reader who expects a refusal reads its absence as coverage"
     );
 }
 
