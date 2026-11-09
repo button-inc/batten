@@ -6359,6 +6359,8 @@ fn run_receipt(
 /// contract has one meaning per code and no per-verb exception — `2` is the
 /// policy verdict everywhere, and a caller branching on the code alone must not
 /// read "I could not tell" as an answer about what is running.
+//MUTANT-SUITE crates/batten/tests/it/task_registry.rs
+//MUTANT task-read-unknown-field-silent|s@if !task::FIELDS.contains(\&field.as_str()) {$@if false {@|read_refuses_an_unknown_field_and_lists_the_fields
 fn run_task(command: TaskCommand, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     // Could-not-look, and never "nothing runs": those are different answers and
     // conflating them is the defect CLOUD-425 exists to fix.
@@ -6412,13 +6414,24 @@ fn run_task(command: TaskCommand, out: &mut dyn Write, err: &mut dyn Write) -> R
         // than a blank line. The retiring shell spelled it `1`; the one table
         // spells a record that is not there `2`, and reserves `3` for
         // could-not-look.
-        TaskCommand::Read { pid, field } => match task::read_field(&git_dir, &pid, &field) {
-            Some(value) => {
-                writeln!(out, "{value}")?;
-                Ok(ExitCode::Success)
+        // AN UNKNOWN FIELD IS USAGE, BEFORE THE PID LOOKUP (CLOUD-2679): it read
+        // as an empty line, which is what an unset KNOWN field prints, so a
+        // misspelled `started` looked like a task that had not started.
+        TaskCommand::Read { pid, field } => {
+            if !task::FIELDS.contains(&field.as_str()) {
+                return Err(UsageError::raise(format!(
+                    "task read: `{field}` is no record field; the fields are {}",
+                    task::FIELDS.join(", ")
+                )));
             }
-            None => Ok(ExitCode::Violation),
-        },
+            match task::read_field(&git_dir, &pid, &field) {
+                Some(value) => {
+                    writeln!(out, "{value}")?;
+                    Ok(ExitCode::Success)
+                }
+                None => Ok(ExitCode::Violation),
+            }
+        }
         // NO CONFIG IS READ (CLOUD-1560): liveness compares the digest each
         // registrant recorded, so there is no program root to resolve and no
         // could-not-look for its absence. `--program-root` stays accepted and
