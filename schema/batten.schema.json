@@ -3461,6 +3461,11 @@
           "description": "A config row changed by a context that has not read its history\n(CLOUD-2144).",
           "type": "string",
           "const": "history"
+        },
+        {
+          "description": "A `&` job nothing in the same call waits on, where the harness has a\nsupported background option instead (CLOUD-2667).",
+          "type": "string",
+          "const": "detach"
         }
       ]
     },
