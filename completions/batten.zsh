@@ -7677,6 +7677,7 @@ normal\:"The default"
 verbose\:"Explain what is being checked"
 debug\:"Add resolution detail"
 trace\:"Add everything"))' \
+'--check[Exit non-zero if a git hook link is owed, and write nothing]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
@@ -7691,7 +7692,7 @@ trace\:"Add everything"))' \
 '--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-':body -- The hook body to link, relative to the repository root:_default' \
+'::body -- A hook body to link both commit hooks to, relative to the repository root:_default' \
 && ret=0
 ;;
 (help)
@@ -13403,7 +13404,7 @@ _batten__subcmd__help__subcmd__wiring_commands() {
     local commands; commands=(
 'reclaim:Remove non-batten hook registrations from this host'\''s merged surfaces' \
 'register:Register batten on the session root when a session is rooted above this repository' \
-'gate:Link this clone'\''s two commit hooks to a hook body the repository checks in' \
+'gate:Link every git hook in this clone to the running batten binary, or both commit hooks to a checked-in body' \
     )
     _describe -t commands 'batten help wiring commands' commands "$@"
 }
@@ -15449,7 +15450,7 @@ _batten__subcmd__wiring_commands() {
     local commands; commands=(
 'reclaim:Remove non-batten hook registrations from this host'\''s merged surfaces' \
 'register:Register batten on the session root when a session is rooted above this repository' \
-'gate:Link this clone'\''s two commit hooks to a hook body the repository checks in' \
+'gate:Link every git hook in this clone to the running batten binary, or both commit hooks to a checked-in body' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten wiring commands' commands "$@"
@@ -15464,7 +15465,7 @@ _batten__subcmd__wiring__subcmd__help_commands() {
     local commands; commands=(
 'reclaim:Remove non-batten hook registrations from this host'\''s merged surfaces' \
 'register:Register batten on the session root when a session is rooted above this repository' \
-'gate:Link this clone'\''s two commit hooks to a hook body the repository checks in' \
+'gate:Link every git hook in this clone to the running batten binary, or both commit hooks to a checked-in body' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten wiring help commands' commands "$@"

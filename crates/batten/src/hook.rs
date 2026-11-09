@@ -2259,6 +2259,12 @@ const fn unsupported(reason: &'static str) -> HookDisposition {
     HookDisposition::Unsupported { reason }
 }
 
+/// Whether `name` is a githooks(5) hook name, one of [`GIT_HOOKS`] (CLOUD-2339).
+#[must_use]
+pub fn is_git_hook(name: &str) -> bool {
+    GIT_HOOKS.iter().any(|(hook, _)| *hook == name)
+}
+
 /// githooks(5) for git 2.43, one row per name, alphabetical.
 ///
 /// **A SNAPSHOT**: a hook a later git adds is not caught automatically. The two

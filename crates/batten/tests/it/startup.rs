@@ -444,6 +444,173 @@ fn out_code(output: &Output) -> i32 {
     output.status.code().unwrap_or(-1)
 }
 
+/// Run `batten wiring gate` in `dir` with `args`.
+fn wiring_gate(dir: &Path, args: &[&str]) -> Output {
+    batten()
+        .current_dir(dir)
+        .args(["wiring", "gate"])
+        .args(args)
+        .output()
+        .expect("the binary runs")
+}
+
+/// The hooks in `dir` that are symlinks to the built binary, by name.
+fn linked_to_batten(dir: &Path) -> Vec<String> {
+    let exe = Path::new(env!("CARGO_BIN_EXE_batten"))
+        .canonicalize()
+        .unwrap();
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .filter(|entry| {
+            std::fs::read_link(entry.path())
+                .is_ok_and(|target| target.canonicalize().is_ok_and(|target| target == exe))
+        })
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// `batten wiring gate` — the repair the committed row runs, through
+/// `session:git-hooks` — links EVERY githooks(5) name to the running binary,
+/// answered by the diagnosis it repairs (CLOUD-1991, CLOUD-2339).
+///
+/// The binary dispatches on argv[0] through `[hook.git]`, so there is no body
+/// in the tree to point at: the link IS the registration. A second run is the
+/// idempotent arm, and `--check` after it owes nothing.
+#[test]
+fn wiring_gate_links_every_git_hook_to_the_running_batten() {
+    let dir = scratch("wiring-gate-binary");
+    write(&dir, "batten.toml", "version = 1\n\n");
+    common::init_repo(&dir);
+
+    let gate = |dir: &Path| {
+        batten()
+            .current_dir(dir)
+            .args(["doctor", "gate"])
+            .output()
+            .expect("the binary runs")
+    };
+    assert_eq!(out_code(&gate(&dir)), 1, "a fresh clone bypasses the gate");
+    assert_eq!(
+        out_code(&wiring_gate(&dir, &["--check"])),
+        2,
+        "a fresh clone owes the links"
+    );
+
+    for pass in ["first", "again"] {
+        let linked = wiring_gate(&dir, &[]);
+        assert_eq!(out_code(&linked), 0, "{pass}: {}", common::stderr(&linked));
+        assert_eq!(
+            stdout(&gate(&dir)),
+            "commit-gate ok\n",
+            "{pass}: the commit path runs batten"
+        );
+    }
+    let linked = linked_to_batten(&dir.join(".git").join("hooks"));
+    assert_eq!(linked.len(), 28, "every githooks(5) name: {linked:?}");
+    for name in [
+        "pre-commit",
+        "commit-msg",
+        "pre-push",
+        "post-checkout",
+        "reference-transaction",
+    ] {
+        assert!(
+            linked.iter().any(|linked| linked == name),
+            "`{name}` is linked: {linked:?}"
+        );
+    }
+    let checked = wiring_gate(&dir, &["--check"]);
+    assert_eq!(out_code(&checked), 0, "{}", common::stderr(&checked));
+}
+
+/// A hook that is not batten's and that `[hook.git]` does not declare is KEPT,
+/// and `--check` names it: replacing a teammate's pre-push to install batten
+/// would be the tool destroying work it was never told about.
+#[test]
+fn a_foreign_pre_push_survives_wiring_gate_and_check_names_it() {
+    let dir = scratch("wiring-gate-foreign");
+    write(&dir, "batten.toml", "version = 1\n\n");
+    common::init_repo(&dir);
+    let body = "#!/bin/sh\necho theirs\n";
+    write(&dir, ".git/hooks/pre-push", body);
+
+    let linked = wiring_gate(&dir, &[]);
+    assert_eq!(out_code(&linked), 0, "{}", common::stderr(&linked));
+    assert_eq!(
+        std::fs::read_to_string(dir.join(".git/hooks/pre-push")).unwrap(),
+        body
+    );
+    let linked = linked_to_batten(&dir.join(".git").join("hooks"));
+    assert_eq!(linked.len(), 27, "every other name is linked: {linked:?}");
+
+    let checked = wiring_gate(&dir, &["--check"]);
+    assert_eq!(out_code(&checked), 2, "a violation exits 2");
+    assert_eq!(
+        common::stderr(&checked),
+        "batten: wiring gate: pre-push git-hook-foreign\n"
+    );
+}
+
+/// A foreign hook in a SHARED hooks directory is never taken over, even when
+/// `[hook.git]` declares its name — other repositories run that file too. The
+/// same file in the clone's own directory IS taken over by a declared row.
+#[test]
+fn a_foreign_hook_in_a_shared_hooks_dir_is_never_taken_over() {
+    let dir = scratch("wiring-gate-shared");
+    write(
+        &dir,
+        "batten.toml",
+        "version = 1\n\n[hook.git]\npre-commit = [\"true\"]\n",
+    );
+    common::init_repo(&dir);
+    let body = "#!/bin/sh\necho shared\n";
+
+    let shared = scratch("wiring-gate-shared-hooks");
+    write(&shared, "pre-commit", body);
+    git_in(
+        &dir,
+        &["config", "core.hooksPath", shared.to_str().unwrap()],
+    );
+    let kept = wiring_gate(&dir, &[]);
+    assert_eq!(out_code(&kept), 0, "{}", common::stderr(&kept));
+    assert_eq!(
+        std::fs::read_to_string(shared.join("pre-commit")).unwrap(),
+        body
+    );
+
+    git_in(&dir, &["config", "--unset", "core.hooksPath"]);
+    write(&dir, ".git/hooks/pre-commit", body);
+    let taken = wiring_gate(&dir, &[]);
+    assert_eq!(out_code(&taken), 0, "{}", common::stderr(&taken));
+    let linked = linked_to_batten(&dir.join(".git").join("hooks"));
+    assert!(linked.iter().any(|name| name == "pre-commit"), "{linked:?}");
+}
+
+/// A declared `[hook.git]` row whose program does not resolve is named by
+/// `--check`: git gives a hook a near-empty `PATH`, and a row that cannot run
+/// is a hook that silently does nothing.
+#[test]
+fn wiring_gate_check_names_a_declared_hook_whose_program_does_not_resolve() {
+    let dir = scratch("wiring-gate-unresolved");
+    write(
+        &dir,
+        "batten.toml",
+        "version = 1\n\n[hook.git]\npre-push = [\"no-such-program-cloud-2339\"]\n",
+    );
+    common::init_repo(&dir);
+    assert_eq!(out_code(&wiring_gate(&dir, &[])), 0);
+
+    let checked = wiring_gate(&dir, &["--check"]);
+    assert_eq!(out_code(&checked), 2, "a violation exits 2");
+    assert_eq!(
+        common::stderr(&checked),
+        "batten: wiring gate: pre-push git-hook-runner-unresolved\n"
+    );
+}
+
 /// `batten wiring gate` — the repair the committed row runs, through
 /// `session:git-hooks` — linking both hooks, answered by the diagnosis it
 /// repairs (CLOUD-1991).

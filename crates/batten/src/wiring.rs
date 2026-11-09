@@ -1114,6 +1114,138 @@ pub fn link_commit_gate(dir: &Path, body: &str) -> Result<usize> {
 //MUTANT gate-links-one-hook|s@^    for name in crate::doctor::COMMIT_HOOKS {$@    for name in crate::doctor::COMMIT_HOOKS.iter().take(1) {@|wiring_gate_links_both_commit_hooks_to_the_checked_in_body
 //MUTANT gate-links-a-missing-body|s@^    if !source.is_file() {$@    if false {@|wiring_gate_refuses_a_body_the_repository_does_not_carry
 
+/// What `wiring gate` found, and with `check` unset, repaired (CLOUD-2339).
+///
+/// Hook NAMES under stable reason ids, never paths (rule 4): `unlinked` is a
+/// hook absent or linked to another binary, `foreign` a file kept because it is
+/// not batten's and not declared over, `runner_unresolved` a declared row whose
+/// program does not resolve on `PATH`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct GateReport {
+    /// `git-hook-unlinked`: absent, or linked to another binary. Written when not
+    /// checking.
+    pub unlinked: Vec<String>,
+    /// `git-hook-foreign`: a file that is not batten's and is kept.
+    pub foreign: Vec<String>,
+    /// `git-hook-runner-unresolved`: a `[hook.git]` row whose argv[0] does not
+    /// resolve.
+    pub runner_unresolved: Vec<String>,
+}
+
+impl GateReport {
+    /// Whether a repair is owed.
+    #[must_use]
+    pub fn owed(&self) -> bool {
+        !(self.unlinked.is_empty() && self.foreign.is_empty() && self.runner_unresolved.is_empty())
+    }
+}
+
+/// Link every githooks(5) name in this clone's hooks directory to the running
+/// batten binary, which dispatches on argv[0] through `[hook.git]`
+/// (CLOUD-2339); with `check`, write nothing and report what is owed.
+///
+/// The hooks directory is `doctor gate`'s, so the repair and the diagnosis
+/// cannot disagree about WHERE: `core.hooksPath` first, else the common
+/// directory's `hooks/`. The target is `current_exe`, not canonicalized:
+/// git gives a hook a near-empty `PATH`, so a bare `batten` would not resolve.
+///
+/// OWNERSHIP. A symlink to this binary is current. A symlink whose target's
+/// file name is `batten` but is another path, or that dangles, is stale and is
+/// relinked. Anything else is foreign and KEPT, unless `[hook.git]` declares
+/// that name AND the hooks directory is the clone's own: a declared row then
+/// takes the file over (an hk shim retired, git-lfs adopted by declaring its
+/// argv). A foreign file in a SHARED hooks directory is never taken over,
+/// because other repositories run it too.
+///
+/// # Errors
+///
+/// A [`crate::error::UsageError`] when `dir` is not in a repository or its
+/// hooks directory does not resolve; an internal error when the directory
+/// cannot be created or a hook cannot be replaced.
+//MUTANT-SUITE crates/batten/tests/it/startup.rs
+//MUTANT gate-links-commit-hooks-only|s@^    for \&(name, _) in crate::hook::GIT_HOOKS {$@    for \&(name, _) in crate::hook::GIT_HOOKS.iter().take(2) {@|wiring_gate_links_every_git_hook_to_the_running_batten
+//MUTANT foreign-hook-replaced|s@^        if is_foreign(\&link, \&exe) \&\& !(owned \&\& declared.contains_key(name)) {$@        if false {@|a_foreign_pre_push_survives_wiring_gate_and_check_names_it
+//MUTANT shared-hook-taken-over|s@^        if is_foreign(\&link, \&exe) \&\& !(owned \&\& declared.contains_key(name)) {$@        if is_foreign(\&link, \&exe) \&\& !declared.contains_key(name) {@|a_foreign_hook_in_a_shared_hooks_dir_is_never_taken_over
+//MUTANT passthrough-program-unchecked|s@^        if !argv.first().is_some_and(resolves) {$@        if false {@|wiring_gate_check_names_a_declared_hook_whose_program_does_not_resolve
+pub fn link_git_hooks(dir: &Path, check: bool) -> Result<GateReport> {
+    let root = git::repo_root(dir)?;
+    let Some(hooks) = crate::doctor::hooks_dir(dir) else {
+        return Err(crate::error::UsageError::raise(
+            "wiring gate: this checkout's hooks directory does not resolve".to_owned(),
+        ));
+    };
+    let exe = std::env::current_exe()
+        .map_err(|error| anyhow::anyhow!("wiring gate: the running binary: {error}"))?;
+    let declared = crate::resolve::resolve(&root, &crate::resolve::Overrides::default())
+        .ok()
+        .and_then(|config| config.hook.map(|hook| hook.git))
+        .unwrap_or_default();
+    // The clone's own hooks directory: under its common dir or its work tree.
+    let common = git::common_dir(&root).map(PathBuf::from).ok();
+    let canonical_hooks = git::canonical(&hooks);
+    let owned = canonical_hooks.starts_with(git::canonical(&root))
+        || common.is_some_and(|common| canonical_hooks.starts_with(git::canonical(&common)));
+    let mut report = GateReport::default();
+    let resolves = |program: &String| crate::doctor::on_path(program);
+    for (name, argv) in &declared {
+        if !argv.first().is_some_and(resolves) {
+            report.runner_unresolved.push(name.clone());
+        }
+    }
+    if !check {
+        std::fs::create_dir_all(&hooks)
+            .map_err(|error| anyhow::anyhow!("wiring gate: the hooks directory: {error}"))?;
+    }
+    for &(name, _) in crate::hook::GIT_HOOKS {
+        let link = hooks.join(name);
+        if std::fs::read_link(&link).is_ok_and(|target| target == exe) {
+            continue;
+        }
+        if is_foreign(&link, &exe) && !(owned && declared.contains_key(name)) {
+            report.foreign.push(name.to_owned());
+            continue;
+        }
+        report.unlinked.push(name.to_owned());
+        if check {
+            continue;
+        }
+        match std::fs::remove_file(&link) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "wiring gate: the `{name}` hook will not be replaced: {error}"
+                ));
+            }
+        }
+        link_hook(&exe, &link).map_err(|error| {
+            anyhow::anyhow!("wiring gate: the `{name}` hook will not link: {error}")
+        })?;
+    }
+    if !check {
+        // A repaired hook is no longer owed; what stays is what was kept.
+        report.unlinked.clear();
+    }
+    Ok(report)
+}
+
+/// Whether the file at `link` exists and is not batten's: not a symlink whose
+/// target is `exe` or whose target's file name is batten's.
+fn is_foreign(link: &Path, exe: &Path) -> bool {
+    match std::fs::read_link(link) {
+        Ok(target) => {
+            target != exe
+                && !target
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == "batten" || name == "batten.exe")
+        }
+        // Not a symlink: a regular file is foreign; nothing there is not.
+        Err(_) => link.symlink_metadata().is_ok(),
+    }
+}
+
 /// A symbolic link from `link` to `source`; off unix, the `core.symlinks=false`
 /// shape: the body's bytes, where no symlink exists. Only each platform's call is
 /// under `cfg` (CLOUD-2509).
@@ -1523,6 +1655,29 @@ mod tests {
         std::fs::create_dir_all(&blocked).unwrap();
         let err = link_commit_gate(&dir, "gate.sh").unwrap_err().to_string();
         assert!(err.contains("will not be replaced"), "{err}");
+    }
+
+    /// Every git hook links to the running binary, and `--check` then owes
+    /// nothing; an existing hook that cannot be removed is refused rather than
+    /// linked over (CLOUD-2339).
+    #[test]
+    fn the_gate_links_every_git_hook_and_refuses_one_it_cannot_replace() {
+        let dir = scratch("link-gate");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        let report = link_git_hooks(&dir, false).unwrap();
+        assert!(!report.owed(), "{report:?}");
+        let hooks = crate::doctor::hooks_dir(&dir).unwrap();
+        let exe = std::env::current_exe().unwrap();
+        for name in crate::hook::GIT_HOOKS.iter().map(|&(name, _)| name) {
+            assert_eq!(std::fs::read_link(hooks.join(name)).unwrap(), exe, "{name}");
+        }
+        assert!(!link_git_hooks(&dir, true).unwrap().owed());
+        let blocked = hooks.join("pre-commit");
+        std::fs::remove_file(&blocked).unwrap();
+        std::fs::create_dir_all(&blocked).unwrap();
+        // A directory is a foreign file: kept, and named, never linked over.
+        let kept = link_git_hooks(&dir, true).unwrap();
+        assert_eq!(kept.foreign, vec!["pre-commit".to_owned()]);
     }
 
     #[test]

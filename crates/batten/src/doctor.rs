@@ -1354,7 +1354,7 @@ fn newest_source_under(root: &Path) -> Option<std::time::SystemTime> {
 /// repository failed its own `doctor` (CLOUD-617). Two answers to "is this
 /// program on PATH" is one too many: the probe must agree with the spawn it is
 /// predicting, or it diagnoses a run that would have worked.
-fn on_path(program: &str) -> bool {
+pub(crate) fn on_path(program: &str) -> bool {
     if program.contains([std::path::MAIN_SEPARATOR, '/']) {
         return Path::new(program).is_file();
     }

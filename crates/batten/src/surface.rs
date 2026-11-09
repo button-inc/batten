@@ -2093,6 +2093,21 @@ const REGISTER_CHECK: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `--check` on `wiring gate` (CLOUD-2339): decide whether a link is owed.
+const GATE_CHECK: FlagDecl = FlagDecl {
+    id: "check",
+    long: Some("check"),
+    short: None,
+    help: "Exit non-zero if a git hook link is owed, and write nothing",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 /// `--all` on `wiring register` (CLOUD-2676): also write every harness's
 /// committed surface under the repository, ungated by the disposable home.
 const REGISTER_ALL: FlagDecl = FlagDecl {
@@ -7333,18 +7348,23 @@ pub const SURFACE: &[CommandDecl] = &[
     // not a file shared by every checkout on the box, and what it replaces is
     // the link it would write — a committed `[[startup]]` row names it as that
     // directory's repair, which is the authorisation `reclaim` has to ask `-y`
-    // for. The body is an OPERAND: which file is the gate is the consumer's fact.
+    // for. CLOUD-2339: with no operand every git hook links to the batten binary
+    // itself, which dispatches on argv[0] through `[hook.git]`; a body operand
+    // keeps CLOUD-1991's two-hook link until a consumer's pin reads that table.
     CommandDecl {
         path: "wiring gate",
         id: "wiring.gate",
-        about: "Link this clone's two commit hooks to a hook body the repository checks in",
+        about: "Link every git hook in this clone to the running batten binary, or both commit hooks to a checked-in body",
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
-        flags: &[FlagDecl::positional(
-            "body",
-            "The hook body to link, relative to the repository root",
-        )],
+        flags: &[
+            FlagDecl::positional_optional(
+                "body",
+                "A hook body to link both commit hooks to, relative to the repository root",
+            ),
+            GATE_CHECK,
+        ],
     },
     // CLOUD-1274. THE LANDING LEASE, and the noun is `unclassified` for
     // `provision`'s reason rather than `policy`'s: the subtree writes — a

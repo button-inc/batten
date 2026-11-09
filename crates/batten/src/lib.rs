@@ -85,6 +85,7 @@ pub mod forge;
 /// module decides over (CLOUD-843).
 pub mod forge_query;
 pub mod git;
+pub mod githook;
 pub mod gitwrite;
 pub mod graph;
 pub mod handler;
@@ -8955,7 +8956,9 @@ fn run_wiring(
             check,
         } => run_wiring_reclaim(*yes, *dry_run, *check, mode, overrides, err),
         cli::WiringCommand::Register { check, all } => run_wiring_register(*check, *all, mode, err),
-        cli::WiringCommand::Gate { body } => {
+        cli::WiringCommand::Gate {
+            body: Some(body), ..
+        } => {
             let linked = wiring::link_commit_gate(Path::new("."), body)?;
             output::message(
                 mode,
@@ -8963,6 +8966,28 @@ fn run_wiring(
                 err,
                 &format!("wiring gate: {linked} commit hook(s) linked to {body}"),
             )?;
+            Ok(ExitCode::Success)
+        }
+        cli::WiringCommand::Gate { body: None, check } => {
+            let report = wiring::link_git_hooks(Path::new("."), *check)?;
+            // Hook NAMES under stable reason ids, never paths (rule 4).
+            for (reason, names) in [
+                ("git-hook-unlinked", &report.unlinked),
+                ("git-hook-foreign", &report.foreign),
+                ("git-hook-runner-unresolved", &report.runner_unresolved),
+            ] {
+                for name in names {
+                    output::message(
+                        mode,
+                        output::Verbosity::Normal,
+                        err,
+                        &format!("wiring gate: {name} {reason}"),
+                    )?;
+                }
+            }
+            if *check && report.owed() {
+                return Ok(ExitCode::Violation);
+            }
             Ok(ExitCode::Success)
         }
     }
