@@ -517,6 +517,12 @@ pub enum ForgeCommand {
         /// `wake`: stdin is a harness user-prompt-submit payload.
         from: Option<String>,
     },
+    /// One round from the first available `[[forge.source]]`, or a loop every
+    /// N seconds registered with `task` (CLOUD-2693).
+    Poll {
+        /// The interval, in whole seconds above 0.
+        every: Option<String>,
+    },
 }
 
 /// Subcommands of `test` (CLOUD-2090).
@@ -4054,6 +4060,9 @@ fn forge_of(matches: &ArgMatches) -> Option<ForgeCommand> {
         ("intake", matches) => Some(ForgeCommand::Intake {
             event: matches.get_one::<String>("event").cloned(),
             from: matches.get_one::<String>("from").cloned(),
+        }),
+        ("poll", matches) => Some(ForgeCommand::Poll {
+            every: matches.get_one::<String>("every").cloned(),
         }),
         _ => None,
     }

@@ -5622,29 +5622,30 @@ complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from replay" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from help" -f -a "replay" -d 'Run each modified test\'s base form against HEAD; a changed expectation is admitted only by a recorded answer'
 complete -c batten -n "__fish_batten_using_subcommand test; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
 normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -l silent -d 'Say nothing but a verdict or a usage error'
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -l debug -d 'Add resolution detail'
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -l trace -d 'Add everything'
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -l no-color -d 'Never colour stderr, whatever it is attached to'
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -l no-input -d 'Never prompt; treat the run as unattended'
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -f -a "intake" -d 'Run one forge event payload from stdin through the handlers and rules a harness hook gets'
-complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -f -a "intake" -d 'Run one forge event payload from stdin through the handlers and rules a harness hook gets'
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -f -a "poll" -d 'Read forge events from the first available declared source and run each through intake'
+complete -c batten -n "__fish_batten_using_subcommand forge; and not __fish_seen_subcommand_from intake poll help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from intake" -l event -d 'The X-GitHub-Event name the webhook body on stdin arrived under' -r
 complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from intake" -l from -d '`wake`: stdin is a harness user-prompt-submit payload carrying the event' -r
 complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from intake" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
@@ -5668,7 +5669,30 @@ complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from intake" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from intake" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from intake" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from poll" -l every -d 'Poll every this many seconds, registered with `task` as forge-poll' -r
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from poll" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+standard\t'The default: a finding is a violation'
+strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from poll" -l config-from -d 'Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from poll" -l config-in -d 'Read the committed config from this directory instead of the directory being judged' -r
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from poll" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+quiet\t'Suppress ordinary progress; keep warnings'
+normal\t'The default'
+verbose\t'Explain what is being checked'
+debug\t'Add resolution detail'
+trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from poll" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from poll" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from poll" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from poll" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from poll" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from poll" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from poll" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from poll" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from poll" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from poll" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from help" -f -a "intake" -d 'Run one forge event payload from stdin through the handlers and rules a harness hook gets'
+complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from help" -f -a "poll" -d 'Read forge events from the first available declared source and run each through intake'
 complete -c batten -n "__fish_batten_using_subcommand forge; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand artifacts; and not __fish_seen_subcommand_from write help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
@@ -5951,4 +5975,5 @@ complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from engine" -f -a "gate" -d 'Refuse a source pin, or a release pin that cannot load this config or lacks a verb the released lanes call'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from test" -f -a "replay" -d 'Run each modified test\'s base form against HEAD; a changed expectation is admitted only by a recorded answer'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from forge" -f -a "intake" -d 'Run one forge event payload from stdin through the handlers and rules a harness hook gets'
+complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from forge" -f -a "poll" -d 'Read forge events from the first available declared source and run each through intake'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from artifacts" -f -a "write" -d 'Write completions, man pages, schemas or the CLI reference where the caller names'

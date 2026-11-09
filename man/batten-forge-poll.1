@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-forge-poll 1  batten 
+.SH NAME
+batten\-forge\-poll \- Read forge events from the first available declared source and run each through intake
+.SH SYNOPSIS
+\fBbatten forge poll\fR [\fB\-\-every\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Read forge events from the first available declared source and run each through intake
+.SH OPTIONS
+.TP
+\fB\-\-every\fR \fI<every>\fR
+Poll every this many seconds, registered with `task` as forge\-poll
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

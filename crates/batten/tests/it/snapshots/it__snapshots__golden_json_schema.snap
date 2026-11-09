@@ -1822,6 +1822,24 @@ expression: stdout_of(&output)
             }
           ],
           "subcommands": []
+        },
+        {
+          "path": "forge poll",
+          "id": "forge.poll",
+          "about": "Read forge events from the first available declared source and run each through intake",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "every",
+              "short": null,
+              "long": "every",
+              "takes_value": true,
+              "positional": false,
+              "help": "Poll every this many seconds, registered with `task` as forge-poll"
+            }
+          ],
+          "subcommands": []
         }
       ]
     },

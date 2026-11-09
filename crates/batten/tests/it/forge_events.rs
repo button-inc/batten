@@ -222,3 +222,229 @@ fn an_unknown_event_name_is_a_usage_error() {
     assert!(common::stderr(&wake_out).contains("forge intake:"));
     assert_eq!(dispatched(&dir), 0);
 }
+
+// ---------------------------------------------------------------------------
+// CLOUD-2693: declared sources, read by `forge poll`
+// ---------------------------------------------------------------------------
+//
+// Every source is a `command` row whose `run` is `cat <fixture>`, so no case
+// needs `gh`, the network or a live MCP server. The handler appends the event
+// tokens it reads on stdin, one line each.
+
+/// A repository whose forge handler logs every event's tokens, declaring
+/// `sources` (TOML `[[forge.source]]` rows).
+fn poll_repo(name: &str, sources: &str) -> PathBuf {
+    let dir = common::scratch(name);
+    let log = dir.join("events");
+    let script = dir.join("logger");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\ncat >> '{}'\necho >> '{}'\nexit 0\n",
+            log.display(),
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::write(
+        &dir,
+        "batten.toml",
+        &format!(
+            "version = 1\n\n[[hook.handler]]\nid = \"forge-log\"\non = \"forge\"\nrun = [{}]\n\
+             timeout_ms = 5000\nowner = \"CLOUD-2693\"\nexpires = \"2027-02-28\"\n\n{sources}",
+            serde_json::to_string(script.to_str().unwrap()).unwrap()
+        ),
+    );
+    common::init_repo(&dir);
+    dir
+}
+
+/// The `<event>.<action>` of every dispatched event, in order.
+fn polled(dir: &Path) -> Vec<String> {
+    std::fs::read_to_string(dir.join("events"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .map(|tokens| match tokens["action"].as_str() {
+            Some(action) => format!("{}.{action}", tokens["event"].as_str().unwrap_or_default()),
+            None => tokens["event"].as_str().unwrap_or_default().to_owned(),
+        })
+        .collect()
+}
+
+/// A `command` source reading `file`, available when `available` exits 0.
+fn command_source(id: &str, file: &Path, available: &str, decode: &str) -> String {
+    format!(
+        "[[forge.source]]\nid = \"{id}\"\nkind = \"command\"\ndecode = \"{decode}\"\n\
+         run = [\"cat\", {}]\navailable = [\"{available}\"]\n\n",
+        serde_json::to_string(file.to_str().unwrap()).unwrap()
+    )
+}
+
+fn push_item(id: &str, git_ref: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": id, "type": "PushEvent", "repo": {"name": "o/r"},
+        "payload": {"ref": git_ref, "head": format!("sha-{id}")}
+    })
+}
+
+fn poll(dir: &Path) -> Output {
+    common::run_with_stdin(dir, &["forge", "poll"], "")
+}
+
+#[test]
+fn the_first_available_source_wins() {
+    let fixtures = common::scratch("forge-poll-first-fixtures");
+    let first = fixtures.join("first.json");
+    let second = fixtures.join("second.json");
+    std::fs::write(
+        &first,
+        serde_json::json!([push_item("1", "refs/heads/a")]).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        &second,
+        serde_json::json!([{
+            "id": "2", "type": "IssuesEvent", "repo": {"name": "o/r"},
+            "payload": {"action": "opened", "issue": {"id": 9, "updated_at": "t"}}
+        }])
+        .to_string(),
+    )
+    .unwrap();
+    let dir = poll_repo(
+        "forge-poll-first",
+        &(command_source("first", &first, "true", "events")
+            + &command_source("second", &second, "true", "events")),
+    );
+    let out = poll(&dir);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert_eq!(polled(&dir), vec!["push".to_owned()]);
+}
+
+#[test]
+fn an_absent_source_falls_through_and_none_is_could_not_look() {
+    let fixtures = common::scratch("forge-poll-absent-fixtures");
+    let events = fixtures.join("events.json");
+    std::fs::write(
+        &events,
+        serde_json::json!([push_item("1", "refs/heads/a")]).to_string(),
+    )
+    .unwrap();
+    let unreachable = "[[forge.source]]\nid = \"nowhere\"\nkind = \"mcp\"\ndecode = \"snapshot\"\n\
+                       server = \"no-such-server\"\nmethod = \"list\"\nevent = \"pull_request\"\nkey = \"/number\"\n\n";
+    let offline = command_source("offline", &events, "false", "events");
+    let dir = poll_repo(
+        "forge-poll-absent",
+        &format!(
+            "{unreachable}{offline}{}",
+            command_source("live", &events, "true", "events")
+        ),
+    );
+    let out = poll(&dir);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert_eq!(polled(&dir), vec!["push".to_owned()]);
+    assert_eq!(
+        common::stderr(&out).matches(" absent").count(),
+        2,
+        "{}",
+        common::stderr(&out)
+    );
+
+    let none = poll_repo("forge-poll-none", &format!("{unreachable}{offline}"));
+    let out = poll(&none);
+    assert_eq!(out.status.code(), Some(3), "{}", common::stderr(&out));
+    assert!(polled(&none).is_empty());
+}
+
+#[test]
+fn a_snapshot_first_sight_is_baseline_and_changes_emit_their_track() {
+    let fixtures = common::scratch("forge-poll-snapshot-fixtures");
+    let pulls = fixtures.join("pulls.json");
+    let pr = |number: u64, state: &str, sha: &str| serde_json::json!({"number": number, "state": state, "head": {"sha": sha}});
+    std::fs::write(
+        &pulls,
+        serde_json::json!([pr(1, "open", "a"), pr(2, "open", "b"), pr(3, "open", "c")]).to_string(),
+    )
+    .unwrap();
+    let source = format!(
+        "[[forge.source]]\nid = \"pulls\"\nkind = \"command\"\ndecode = \"snapshot\"\n\
+         run = [\"cat\", {}]\navailable = [\"true\"]\nevent = \"pull_request\"\nkey = \"/number\"\n\
+         new = \"opened\"\n\n[[forge.source.track]]\npointer = \"/head/sha\"\naction = \"synchronize\"\n\n\
+         [[forge.source.track]]\npointer = \"/state\"\nvalues = {{ closed = \"closed\", open = \"reopened\" }}\n",
+        serde_json::to_string(pulls.to_str().unwrap()).unwrap()
+    );
+    let dir = poll_repo("forge-poll-snapshot", &source);
+    let out = poll(&dir);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert!(
+        polled(&dir).is_empty(),
+        "the first sight is baseline: {:?}",
+        polled(&dir)
+    );
+
+    std::fs::write(
+        &pulls,
+        serde_json::json!([
+            pr(1, "open", "a2"),
+            pr(2, "closed", "b"),
+            pr(3, "open", "c"),
+            pr(4, "open", "d")
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    let out = poll(&dir);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    let mut seen = polled(&dir);
+    seen.sort();
+    assert_eq!(
+        seen,
+        vec![
+            "pull_request.closed".to_owned(),
+            "pull_request.opened".to_owned(),
+            "pull_request.synchronize".to_owned()
+        ]
+    );
+}
+
+#[test]
+fn a_round_resumes_from_its_cursor() {
+    let fixtures = common::scratch("forge-poll-cursor-fixtures");
+    let events = fixtures.join("events.json");
+    let two = serde_json::json!([
+        push_item("102", "refs/heads/b"),
+        push_item("101", "refs/heads/a")
+    ]);
+    std::fs::write(&events, two.to_string()).unwrap();
+    let dir = poll_repo(
+        "forge-poll-cursor",
+        &command_source("events", &events, "true", "events"),
+    );
+    assert_eq!(poll(&dir).status.code(), Some(0));
+    assert_eq!(polled(&dir).len(), 2);
+
+    let common_dir = dir.join(common::git_in(&dir, &["rev-parse", "--git-common-dir"]));
+    std::fs::remove_file(common_dir.join("batten-forge-events").join("seen")).unwrap();
+    assert_eq!(poll(&dir).status.code(), Some(0));
+    assert_eq!(
+        polled(&dir).len(),
+        2,
+        "only the cursor can keep this round silent"
+    );
+    let cursor: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(common_dir.join("batten-forge-events").join("events.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(cursor["last_id"], "102");
+
+    let three = serde_json::json!([
+        push_item("103", "refs/heads/c"),
+        push_item("102", "refs/heads/b"),
+        push_item("101", "refs/heads/a")
+    ]);
+    std::fs::write(&events, three.to_string()).unwrap();
+    assert_eq!(poll(&dir).status.code(), Some(0));
+    assert_eq!(polled(&dir).len(), 3);
+}

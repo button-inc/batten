@@ -1129,3 +1129,72 @@ fn register_keeps_a_dead_sibling_whose_group_still_runs() {
         "a record whose group still runs is kept"
     );
 }
+
+/// Kills and reaps a spawned child when the case ends, pass or fail.
+struct Reaped(std::process::Child);
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// CLOUD-2693: `forge poll --every N` registers itself as `forge-poll`, ticks
+/// once a round, and reads alive while it runs.
+///
+/// A WRITER CASE WITH A REAL CHILD, unlike the reader cases above that use this
+/// process: the subject is the loop's own registration, which only a running
+/// poller can make. Bounded twice over: the child is killed on drop, and the
+/// wait for its second tick is 600 × 50 ms.
+#[test]
+fn forge_poll_every_registers_and_ticks() {
+    let repo = registry_repo("forge-poll-every");
+    std::fs::write(repo.join("empty.json"), "[]").unwrap();
+    let config = std::fs::read_to_string(repo.join("batten.toml")).unwrap();
+    std::fs::write(
+        repo.join("batten.toml"),
+        format!(
+            "{config}\n[forge]\n\n[[forge.source]]\nid = \"empty\"\nkind = \"command\"\n\
+             decode = \"events\"\nrun = [\"cat\", \"empty.json\"]\navailable = [\"true\"]\n"
+        ),
+    )
+    .unwrap();
+    let child = batten()
+        .current_dir(&repo)
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .args(["forge", "poll", "--every", "1"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the poller starts");
+    let mut child = Reaped(child);
+    let pid = child.0.id().to_string();
+    let git_dir = repo.join(".git");
+    let mut ticked = false;
+    for _ in 0..600 {
+        assert!(
+            child.0.try_wait().unwrap().is_none(),
+            "the poller exited before it ticked twice"
+        );
+        let tick = batten::task::read_field(&git_dir, &pid, "tick").unwrap_or_default();
+        if tick.parse::<u64>().is_ok_and(|tick| tick >= 2) {
+            ticked = true;
+            break;
+        }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a bounded poll: the exit condition is the poller's second tick in its registry record, and the `0..600` bound turns a poller that never ticks into a failed assertion rather than a hang (CLOUD-1177)"
+        )]
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(ticked, "the poller never ticked twice");
+    let output = alive(&repo, &[]);
+    let listed = stdout(&output);
+    assert!(
+        listed
+            .lines()
+            .any(|line| line.starts_with(&format!("forge-poll polling {pid} "))),
+        "{listed}"
+    );
+}

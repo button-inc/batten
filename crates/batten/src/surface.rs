@@ -2531,6 +2531,21 @@ const INTAKE_FROM: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `forge poll --every <seconds>` (CLOUD-2693): loop, registered with `task`.
+const POLL_EVERY: FlagDecl = FlagDecl {
+    id: "every",
+    long: Some("every"),
+    short: None,
+    help: "Poll every this many seconds, registered with `task` as forge-poll",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const SLOW_BASE: FlagDecl = FlagDecl {
     id: "base",
     long: Some("base"),
@@ -8201,6 +8216,17 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_VERDICT,
         effect: Effect::Write,
         flags: &[INTAKE_EVENT, INTAKE_FROM],
+    },
+    // CLOUD-2693. Where events come from when nothing pushes them: the first
+    // available `[[forge.source]]`, read once or every N seconds.
+    CommandDecl {
+        path: "forge poll",
+        id: "forge.poll",
+        about: "Read forge events from the first available declared source and run each through intake",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[POLL_EVERY],
     },
     CommandDecl {
         path: "artifacts",
