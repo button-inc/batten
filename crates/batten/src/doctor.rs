@@ -1933,8 +1933,20 @@ fn hook_wiring_check(dir: &Path) -> Check {
 /// Plain `doctor`'s wiring check name.
 const HOOK_WIRING: &str = "hook-wiring";
 
+/// The surface the live session's root carries its wiring in: Claude Code's
+/// own declared file, read off [`hook::Harness::wiring`] so the core restates
+/// no consumer path (rule 1). The session root is that host's notion.
+fn session_root_surface() -> &'static str {
+    match hook::Harness::ClaudeCode.wiring().map(|wiring| wiring.file) {
+        Some(hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path)) => path,
+        None => "",
+    }
+}
+
 /// The surface token the live session's root is reported under.
-const SESSION_ROOT_FILE: &str = "session-root:.claude/settings.json";
+fn session_root_file() -> String {
+    format!("session-root:{}", session_root_surface())
+}
 
 /// One harness's wiring diagnosis.
 ///
@@ -2717,10 +2729,10 @@ fn diagnose_session_root(
     let finding = |event: &str, reason| WiringFinding {
         event: event.to_owned(),
         reason,
-        file: SESSION_ROOT_FILE.to_owned(),
+        file: session_root_file(),
         fix: String::new(),
     };
-    let surface = root.join(".claude").join("settings.json");
+    let surface = root.join(session_root_surface());
     let Ok(raw) = std::fs::read_to_string(&surface) else {
         return (vec![finding("", FILE_MISSING)], 0);
     };
@@ -2767,6 +2779,8 @@ fn diagnose_session_root(
 /// to keep out of the engine, and it would do it exactly where the evidence is
 /// weakest. The `config` check in bare [`diagnose`] is what reports an
 /// unloadable config; this verb does not re-report it.
+//MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
+//MUTANT doctor-ignores-session-root|s@^        .filter(\x7croot\x7c \*root != repo \&\& repo.starts_with(root));$@        .filter(\x7c_\x7c false);@|doctor_reads_the_live_session_root
 #[must_use]
 pub fn diagnose_hooks(dir: &Path) -> WiringReport {
     // ONE RESOLUTION, TWO READINGS. Both the exclusivity flag and the declared
@@ -2783,8 +2797,6 @@ pub fn diagnose_hooks(dir: &Path) -> WiringReport {
     // session, nothing loads a candidate root, and a root AT the repository is
     // the committed file already judged.
     let repo = crate::git::canonical(dir);
-    //MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
-    //MUTANT doctor-ignores-session-root|s@^        .filter(\x7croot\x7c \*root != repo \&\& repo.starts_with(root));$@        .filter(\x7c_\x7c false);@|doctor_reads_the_live_session_root
     let session_root = wiring::live_session_root()
         .map(|root| crate::git::canonical(&root))
         .filter(|root| *root != repo && repo.starts_with(root));
