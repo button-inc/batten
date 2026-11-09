@@ -1,6 +1,11 @@
 #MUTANT-SUITE crates/batten/tests/it/preset_segments.rs
 #MUTANT force-flag-unread|s@^\tword in {"--force", "-f"}$@\tfalse@|a_force_push_alone_still_denies
 #MUTANT program-anchor-unread|s@^\tprogram.name == "git"$@\ttrue@|another_tool_is_not_judged_wherever_it_sits
+#MUTANT refspec-plus-unread|s@^\tstartswith(word, "+")$@\tfalse@|a_refspec_force_denies
+#MUTANT bundled-short-force-unread|s@^\tregex.match("^-\[A-Za-np-z0-9\]\*f", word)$@\tfalse@|a_bundled_short_force_denies
+#MUTANT bundled-digit-unread|s@^\tregex.match("^-\[A-Za-np-z0-9\]\*f", word)$@\tregex.match("^-[A-Za-np-z]*f", word)@|a_bundled_short_force_denies
+#MUTANT push-subcommand-unread|s@^\tprogram.subcommand == "push"$@\t"push" in program.arguments@|a_push_word_outside_the_subcommand_is_not_a_push
+#MUTANT push-option-value-unread|s@^\tnot push_option_value(program.arguments, i)$@\ttrue@|a_push_option_value_is_not_a_force
 # Trunk-based development: a shared branch is not rewritten under its readers.
 #
 # `--force-with-lease` is deliberately NOT matched. It is the sanctioned form —
@@ -49,11 +54,46 @@ violation contains {
 	# THE ENGINE HALF IS A DECLARED STOPGAP AND THIS ROW STAYS OPEN. A list of
 	# grammar tokens cannot enumerate a grammar; `hook.rs`'s `SHELL_GRAMMAR`
 	# says so at its own site, and the parsed command line is CLOUD-1381.
+	#
+	# PUSH IS GIT'S SUBCOMMAND, NEVER ANY WORD (CLOUD-2691): membership fired on
+	# `git stash push`, where a `+wip` message is no refspec. The subcommand is
+	# the one the engine projects past git's own options (CLOUD-2354).
 	some program in input.call.programs
 	program.name == "git"
-	"push" in program.arguments
-	some word in program.arguments
+	program.subcommand == "push"
+	some i, word in program.arguments
+	not push_option_value(program.arguments, i)
+	forces(word)
+}
+
+forces(word) if {
 	word in {"--force", "-f"}
+}
+
+# A forced refspec: `+` is git's per-ref force.
+forces(word) if {
+	startswith(word, "+")
+	count(word) > 1
+}
+
+# A bundled short force, `-uf` or `-4f`: push's short options are letters and
+# digits, and no `o` may come before the `f`, because `-o` takes the rest of the
+# word as its value (`-of` is a push option named `f`).
+forces(word) if {
+	regex.match("^-[A-Za-np-z0-9]*f", word)
+}
+
+# A word an option consumes is its value, never a force. THE BOUND: a git GLOBAL
+# option's value that looks like one (`git -C +dir push`) is over-denied, which
+# fails closed.
+push_option_value(arguments, i) if {
+	i > 0
+	arguments[i - 1] in {"--push-option", "--repo", "--receive-pack", "--exec"}
+}
+
+push_option_value(arguments, i) if {
+	i > 0
+	regex.match("^-[A-Za-z0-9]*o$", arguments[i - 1])
 }
 
 # The predicate's own tests (CLOUD-835), and the second is the point: the
@@ -86,7 +126,7 @@ violation contains {
 test_no_force_push if {
 	some v in violation with input as {"call": {
 		"command": "git push --force origin main",
-		"programs": [{"program": "git", "name": "git", "arguments": ["push", "--force", "origin", "main"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["push", "--force", "origin", "main"], "subcommand": "push", "global-options": [], "mediated": false}],
 	}}
 	v.rule == "trunk push forced"
 }
@@ -94,7 +134,7 @@ test_no_force_push if {
 test_short_force_flag_is_caught_too if {
 	some v in violation with input as {"call": {
 		"command": "git push -f origin main",
-		"programs": [{"program": "git", "name": "git", "arguments": ["push", "-f", "origin", "main"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["push", "-f", "origin", "main"], "subcommand": "push", "global-options": [], "mediated": false}],
 	}}
 	v.rule == "trunk push forced"
 }
@@ -111,7 +151,7 @@ test_short_force_flag_is_caught_too if {
 test_a_force_push_later_in_a_list_is_caught if {
 	some v in violation with input as {"call": {
 		"command": "cd /tmp && git push --force origin main",
-		"programs": [{"program": "cd", "name": "cd", "arguments": ["/tmp"], "mediated": false}, {"program": "git", "name": "git", "arguments": ["push", "--force", "origin", "main"], "mediated": false}],
+		"programs": [{"program": "cd", "name": "cd", "arguments": ["/tmp"], "mediated": false}, {"program": "git", "name": "git", "arguments": ["push", "--force", "origin", "main"], "subcommand": "push", "global-options": [], "mediated": false}],
 	}}
 	v.rule == "trunk push forced"
 }
@@ -122,7 +162,7 @@ test_a_force_push_later_in_a_list_is_caught if {
 test_a_grammar_token_does_not_hide_the_program if {
 	some v in violation with input as {"call": {
 		"command": "time git push --force origin main",
-		"programs": [{"program": "git", "name": "git", "arguments": ["push", "--force", "origin", "main"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["push", "--force", "origin", "main"], "subcommand": "push", "global-options": [], "mediated": false}],
 	}}
 	v.rule == "trunk push forced"
 }
@@ -132,7 +172,7 @@ test_a_grammar_token_does_not_hide_the_program if {
 test_git_reached_through_a_path_is_still_git if {
 	some v in violation with input as {"call": {
 		"command": "/usr/bin/git push --force origin main",
-		"programs": [{"program": "/usr/bin/git", "name": "git", "arguments": ["push", "--force", "origin", "main"], "mediated": false}],
+		"programs": [{"program": "/usr/bin/git", "name": "git", "arguments": ["push", "--force", "origin", "main"], "subcommand": "push", "global-options": [], "mediated": false}],
 	}}
 	v.rule == "trunk push forced"
 }
@@ -140,7 +180,7 @@ test_git_reached_through_a_path_is_still_git if {
 test_force_with_lease_is_left_alone if {
 	count(violation) == 0 with input as {"call": {
 		"command": "git push --force-with-lease origin main",
-		"programs": [{"program": "git", "name": "git", "arguments": ["push", "--force-with-lease", "origin", "main"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["push", "--force-with-lease", "origin", "main"], "subcommand": "push", "global-options": [], "mediated": false}],
 	}}
 }
 
@@ -149,7 +189,7 @@ test_force_with_lease_is_left_alone if {
 test_force_with_lease_survives_a_list_too if {
 	count(violation) == 0 with input as {"call": {
 		"command": "cd /tmp && git push --force-with-lease origin main",
-		"programs": [{"program": "cd", "name": "cd", "arguments": ["/tmp"], "mediated": false}, {"program": "git", "name": "git", "arguments": ["push", "--force-with-lease", "origin", "main"], "mediated": false}],
+		"programs": [{"program": "cd", "name": "cd", "arguments": ["/tmp"], "mediated": false}, {"program": "git", "name": "git", "arguments": ["push", "--force-with-lease", "origin", "main"], "subcommand": "push", "global-options": [], "mediated": false}],
 	}}
 }
 
@@ -169,7 +209,7 @@ test_a_quoted_mention_does_not_fire if {
 test_another_programs_force_flag_is_not_gits if {
 	count(violation) == 0 with input as {"call": {
 		"command": "git push origin feature; hg push --force",
-		"programs": [{"program": "git", "name": "git", "arguments": ["push", "origin", "feature"], "mediated": false}, {"program": "hg", "name": "hg", "arguments": ["push", "--force"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["push", "origin", "feature"], "subcommand": "push", "global-options": [], "mediated": false}, {"program": "hg", "name": "hg", "arguments": ["push", "--force"], "mediated": false}],
 	}}
 }
 
@@ -177,5 +217,52 @@ test_another_tool_is_not_judged if {
 	count(violation) == 0 with input as {"call": {
 		"command": "hg push --force",
 		"programs": [{"program": "hg", "name": "hg", "arguments": ["push", "--force"], "mediated": false}],
+	}}
+}
+
+# CLOUD-2691: git's two other force spellings, and what is not one.
+
+test_a_forced_refspec_is_caught if {
+	some v in violation with input as {"call": {
+		"command": "git push origin +HEAD:main",
+		"programs": [{"program": "git", "name": "git", "arguments": ["push", "origin", "+HEAD:main"], "mediated": false, "subcommand": "push", "global-options": []}],
+	}}
+	v.rule == "trunk push forced"
+}
+
+test_a_bundled_short_force_is_caught if {
+	some v in violation with input as {"call": {
+		"command": "git push -uf origin main",
+		"programs": [{"program": "git", "name": "git", "arguments": ["push", "-uf", "origin", "main"], "mediated": false, "subcommand": "push", "global-options": []}],
+	}}
+	v.rule == "trunk push forced"
+}
+
+test_a_digit_bundled_force_is_caught if {
+	some v in violation with input as {"call": {
+		"command": "git push -4f origin main",
+		"programs": [{"program": "git", "name": "git", "arguments": ["push", "-4f", "origin", "main"], "mediated": false, "subcommand": "push", "global-options": []}],
+	}}
+	v.rule == "trunk push forced"
+}
+
+test_a_push_option_named_f_is_left_alone if {
+	count(violation) == 0 with input as {"call": {
+		"command": "git push -of origin main",
+		"programs": [{"program": "git", "name": "git", "arguments": ["push", "-of", "origin", "main"], "mediated": false, "subcommand": "push", "global-options": []}],
+	}}
+}
+
+test_a_stash_push_is_no_push if {
+	count(violation) == 0 with input as {"call": {
+		"command": "git stash push -m +wip",
+		"programs": [{"program": "git", "name": "git", "arguments": ["stash", "push", "-m", "+wip"], "mediated": false, "subcommand": "stash", "global-options": []}],
+	}}
+}
+
+test_a_push_option_value_is_no_refspec if {
+	count(violation) == 0 with input as {"call": {
+		"command": "git push -o +opt origin main",
+		"programs": [{"program": "git", "name": "git", "arguments": ["push", "-o", "+opt", "origin", "main"], "mediated": false, "subcommand": "push", "global-options": []}],
 	}}
 }
