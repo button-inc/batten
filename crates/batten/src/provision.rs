@@ -422,9 +422,28 @@ pub struct Artifact {
     pub url: String,
     /// The SHA-256 of the artifact, lowercase hex.
     pub sha256: String,
+    /// This platform's archive format, when it is not the entry's.
+    ///
+    /// A tool commonly ships a tarball for every Unix target and a zip for
+    /// Windows (uv, zizmor and actionlint all do), so one entry-wide
+    /// [`Provision::unpack`] could not pin all five platforms. Absent means the
+    /// entry's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unpack: Option<Unpack>,
 }
 
 impl Provision {
+    /// The name the binary is cached and linked under on this host.
+    ///
+    /// [`Provision::binary`] plus the platform's executable suffix: `.exe` on
+    /// Windows, where a file without it is not a program, and nothing elsewhere,
+    /// so every Unix path is the one it always was. It is also the archive
+    /// entry an unpack looks for, since a Windows build names its binary so.
+    #[must_use]
+    pub fn cached_name(&self) -> String {
+        format!("{}{}", self.binary, std::env::consts::EXE_SUFFIX)
+    }
+
     /// The artifact this host should install.
     ///
     /// # Errors
@@ -449,6 +468,7 @@ impl Provision {
             return Ok(Artifact {
                 url: url.clone(),
                 sha256: sha256.clone(),
+                unpack: None,
             });
         }
         self.platforms.get(platform).cloned().ok_or_else(|| {
@@ -488,9 +508,11 @@ pub enum Unpack {
     /// The artifact *is* the binary.
     #[default]
     None,
-    /// A gzipped tarball; the entry whose file name is [`Provision::binary`] is
-    /// extracted and everything else ignored.
+    /// A gzipped tarball; the entry whose file name is
+    /// [`Provision::cached_name`] is extracted and everything else ignored.
     TarGz,
+    /// A zip archive, read the same way as [`Unpack::TarGz`].
+    Zip,
 }
 
 /// Why an entry is not fresh. Several states rather than a boolean, because
@@ -756,7 +778,7 @@ impl Link {
         anyhow::anyhow!(
             "provision: {} is another tool's {}, so batten will not replace it; \
              move that tool, or declare an absolute `link` for this entry",
-            self.dir.join(&entry.binary).display(),
+            self.dir.join(entry.cached_name()).display(),
             entry.binary
         )
     }
@@ -799,7 +821,7 @@ fn link_of(entry: &Provision, host: Host<'_>) -> Result<Option<Link>> {
 /// through upgrading is still that package manager's name.
 //MUTANT fallback-claims-a-foreign-name|s@^    fs::symlink_metadata(\&linked).is_err()$@    true@|a_fallback_never_takes_a_name_another_tool_owns
 fn claimable(dir: &Path, entry: &Provision, cache_root: &Path) -> bool {
-    let linked = dir.join(&entry.binary);
+    let linked = dir.join(entry.cached_name());
     fs::symlink_metadata(&linked).is_err()
         || is_launcher(&linked)
         || vouched_stamp(&linked, entry, cache_root).is_some()
@@ -839,7 +861,7 @@ fn vouched_stamp(linked: &Path, entry: &Provision, cache_root: &Path) -> Option<
     }
     let cached = entry_dir(cache_root, entry)
         .join(BIN_DIR)
-        .join(&entry.binary);
+        .join(entry.cached_name());
     (lines.next() == Some(INTENT) && crate::wiring::same_bytes(linked, &cached))
         .then(|| present.unwrap_or_default())
 }
@@ -941,7 +963,7 @@ fn freshness_of(entry: &Provision, cache_root: &Path, link: Option<&Link>) -> Re
         return Ok(Freshness::Foreign);
     }
     let dir = entry_dir(cache_root, entry);
-    let binary = dir.join(BIN_DIR).join(&entry.binary);
+    let binary = dir.join(BIN_DIR).join(entry.cached_name());
     if !binary.is_file() {
         return Ok(Freshness::Missing);
     }
@@ -962,7 +984,7 @@ fn freshness_of(entry: &Provision, cache_root: &Path, link: Option<&Link>) -> Re
     // the place this entry declares it must be, which is the same class as
     // nothing cached and takes the same repair.
     if let Some(link) = link {
-        let linked = link.dir.join(&entry.binary);
+        let linked = link.dir.join(entry.cached_name());
         if !linked.is_file() {
             return Ok(Freshness::Missing);
         }
@@ -1100,8 +1122,11 @@ fn apply_with(
     // is, so a tampered cache is a mismatch rather than a shortcut past the
     // checksum.
     let artifact = entry.artifact()?;
+    //MUTANT-SUITE crates/batten/tests/it/provision.rs
+    //MUTANT platform-unpack-ignored|s@^    let unpack = artifact.unpack.unwrap_or(entry.unpack);$@    let unpack = entry.unpack;@|a_platform_row_names_its_own_unpack
+    let unpack = artifact.unpack.unwrap_or(entry.unpack);
     if let Some(bytes) = cached_artifact_matching_pin(entry, cache_root, &artifact.sha256) {
-        install(entry, cache_root, &bytes, link)?;
+        install(entry, unpack, cache_root, &bytes, link)?;
         return Ok(Applied::Installed);
     }
     let bytes = fetch(&artifact.url)?;
@@ -1123,7 +1148,7 @@ fn apply_with(
         return Err(crate::Denial::raise(&refusal, crate::refusal::Arm::Full));
     }
 
-    install(entry, cache_root, &bytes, link)?;
+    install(entry, unpack, cache_root, &bytes, link)?;
     Ok(Applied::Installed)
 }
 
@@ -1131,17 +1156,26 @@ fn apply_with(
 /// into `link` where one was resolved.
 ///
 /// Called only after the checksum matched, and only by [`apply_with`], which
-/// has already refused a foreign `link` name (see [`claimable`]).
-fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], link: Option<&Link>) -> Result<()> {
+/// has already refused a foreign `link` name (see [`claimable`]). `unpack` is
+/// this platform's ([`Artifact::unpack`], else the entry's).
+fn install(
+    entry: &Provision,
+    unpack: Unpack,
+    cache_root: &Path,
+    bytes: &[u8],
+    link: Option<&Link>,
+) -> Result<()> {
     let dir = entry_dir(cache_root, entry);
     let bin_dir = dir.join(BIN_DIR);
     fs::create_dir_all(&bin_dir).context("create the provision cache directory")?;
 
-    let binary = match entry.unpack {
+    let name = entry.cached_name();
+    let binary = match unpack {
         Unpack::None => bytes.to_vec(),
-        Unpack::TarGz => extract(bytes, &entry.binary)?,
+        Unpack::TarGz => extract(bytes, &name)?,
+        Unpack::Zip => extract_zip(bytes, &name)?,
     };
-    let cached = bin_dir.join(&entry.binary);
+    let cached = bin_dir.join(&name);
     // **STAGED AND RENAMED, NEVER WRITTEN IN PLACE** (CLOUD-1586), which is
     // [`link_into`]'s discipline applied to the site that needed it just as
     // much. Writing over this path returns `ETXTBSY` — "Text file busy" — the
@@ -1161,7 +1195,7 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], link: Option<&Lin
     //
     // Keyed on the pid and dot-prefixed for `link_into`'s reasons exactly —
     // two provisions running at once must not write each other's staging file.
-    let staged = bin_dir.join(format!(".{}.{}.tmp", entry.binary, std::process::id()));
+    let staged = bin_dir.join(format!(".{name}.{}.tmp", std::process::id()));
     let written = crate::durable::replace(&staged, &binary)
         .context("write the provisioned binary")
         .and_then(|()| make_executable(&staged));
@@ -1185,7 +1219,7 @@ fn install(entry: &Provision, cache_root: &Path, bytes: &[u8], link: Option<&Lin
         //
         // INTENT FIRST, crash-only: the record names the path before the link
         // exists, so a run killed in between finds its own file claimable.
-        let linked = link.dir.join(&entry.binary);
+        let linked = link.dir.join(entry.cached_name());
         if link.shared {
             record_intent(cache_root, entry, &linked)?;
         }
@@ -1255,11 +1289,12 @@ const LAUNCHER_VERB: &str = "provision-exec";
 /// (CLOUD-2617).
 fn link_into(entry: &Provision, dir: &Path, cached: &Path, binary: &[u8]) -> Result<()> {
     fs::create_dir_all(dir).context("create the linked binary's directory")?;
-    let path = dir.join(&entry.binary);
+    let name = entry.cached_name();
+    let path = dir.join(&name);
     // Keyed on the PID so two provisions running at once cannot write each
     // other's staging file, and dot-prefixed so a directory listing of `PATH`
     // does not offer it as a command.
-    let staged = dir.join(format!(".{}.{}.tmp", entry.binary, std::process::id()));
+    let staged = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     let written = if entry.env.is_empty() {
         crate::durable::replace(&staged, binary).context("write the linked binary")
     } else {
@@ -2229,6 +2264,31 @@ fn expand_home(dest: &str) -> Result<PathBuf> {
     Ok(expanded)
 }
 
+/// Extract the entry named `binary` from a zip archive, by file name as
+/// [`extract`] does for a tarball.
+fn extract_zip(bytes: &[u8], binary: &str) -> Result<Vec<u8>> {
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(bytes)).context("read the zip archive")?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).context("read a zip entry")?;
+        let named = entry
+            .enclosed_name()
+            .and_then(|path| path.file_name().map(|name| name == binary))
+            .unwrap_or(false);
+        if !named || entry.is_dir() {
+            continue;
+        }
+        let mut out = Vec::new();
+        entry
+            .read_to_end(&mut out)
+            .context("read the binary out of the archive")?;
+        return Ok(out);
+    }
+    Err(UsageError::raise(format!(
+        "the artifact contains no entry named {binary}"
+    )))
+}
+
 /// Extract the entry named `binary` from a gzipped tarball.
 ///
 /// Matches on the archive path's **file name**, so a release tarball that nests
@@ -2544,7 +2604,7 @@ fn check_sha256(name: &str, where_: &str, sha256: &str) -> Result<()> {
 pub fn binary_path(repo_root: &Path, entry: &Provision) -> Result<PathBuf> {
     Ok(entry_dir(&cache_root(repo_root)?, entry)
         .join(BIN_DIR)
-        .join(&entry.binary))
+        .join(entry.cached_name()))
 }
 
 #[cfg(test)]
@@ -3276,6 +3336,7 @@ mod tests {
                     Artifact {
                         url: format!("file:///dev/null/{platform}"),
                         sha256: (*sha).to_owned(),
+                        unpack: None,
                     },
                 )
             })
