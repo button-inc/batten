@@ -2,7 +2,7 @@
 //! (CLOUD-2581).
 //!
 //! Both reached Batten as `Unrecognized` and answered an empty allow, and the
-//! host reads WorktreeCreate's stdout as the new worktree's path, so an empty
+//! host reads `WorktreeCreate`'s stdout as the new worktree's path, so an empty
 //! answer failed every `EnterWorktree` in a repository that registered Batten
 //! there. The fixture-side `git` below only OBSERVES what Batten wrote: Batten
 //! itself spawns no git.
