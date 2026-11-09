@@ -1,43 +1,28 @@
 {
+  "version": 1,
   "hooks": {
     "preToolUse": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness cursor"
-          }
-        ]
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
       }
     ],
     "afterFileEdit": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness cursor"
-          }
-        ]
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
       }
     ],
     "stop": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness cursor"
-          }
-        ]
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
       }
     ],
     "sessionStart": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness cursor"
-          }
-        ]
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
       }
     ]
   }

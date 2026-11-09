@@ -189,6 +189,10 @@ fn register_all_writes_every_committed_surface() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: a live session is a PROCESS whose cwd `/proc/<pid>/cwd` reads, which has no in-process form"
+)]
 fn doctor_reads_the_live_session_root() {
     let (home, repo) = layout("wiring-register-live-root");
     let root = repo.parent().expect("the clone has a parent").to_path_buf();
@@ -264,4 +268,34 @@ fn doctor_reads_the_live_session_root() {
 
     let _ = session.kill();
     let _ = session.wait();
+}
+
+#[test]
+fn register_all_writes_flat_hosts_flat() {
+    // CLOUD-2694: Copilot's file seeded with v0.0.220's nested batten entry is
+    // migrated to the flat shape the host reads, and a second run is a no-op.
+    let (home, repo) = layout("wiring-register-flat");
+    common::write(
+        &repo,
+        ".github/hooks/batten.json",
+        r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"batten adjudicate --harness copilot-cli"}]}]}}"#,
+    );
+    let written = register_all(&home, &repo, &[]);
+    assert_eq!(written.status.code(), Some(0), "{}", stderr(&written));
+    let path = repo.join(".github/hooks/batten.json");
+    let first = std::fs::read(&path).expect("the surface");
+    let file: serde_json::Value = serde_json::from_slice(&first).expect("the surface parses");
+    assert_eq!(file["version"], 1, "{file}");
+    for (_, entries) in events_of(&file) {
+        for entry in entries.as_array().expect("an event's entries") {
+            assert!(entry.get("hooks").is_none(), "no nested entry: {file}");
+            assert!(entry["bash"].is_string(), "every entry is flat: {file}");
+        }
+    }
+    assert_eq!(register_all(&home, &repo, &[]).status.code(), Some(0));
+    assert_eq!(
+        std::fs::read(&path).expect("the surface"),
+        first,
+        "idempotent"
+    );
 }

@@ -103,23 +103,66 @@ const fn event_key(file: hook::WiringFile) -> &'static str {
     }
 }
 
-/// Every `{matcher, command}` pair registered under one event.
-pub(crate) fn entries_under(value: &serde_json::Value) -> Vec<(Option<&str>, &str)> {
+/// Every `{matcher, command}` pair registered under one event, read in the
+/// entry shape the host reads (CLOUD-2694).
+///
+/// One shape per host, never both: a nested entry on a flat host is a hook that
+/// can never fire, so counting it would report it installed.
+pub(crate) fn entries_under(
+    value: &serde_json::Value,
+    shape: hook::EntryShape,
+) -> Vec<(Option<&str>, &str)> {
     let mut pairs = Vec::new();
     for entry in value.as_array().into_iter().flatten() {
         let matcher = entry.get("matcher").and_then(serde_json::Value::as_str);
-        for hook in entry
-            .get("hooks")
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            if let Some(command) = hook.get("command").and_then(serde_json::Value::as_str) {
-                pairs.push((matcher, command));
-            }
+        for command in entry_commands(entry, shape) {
+            pairs.push((matcher, command));
         }
     }
     pairs
+}
+
+/// The commands one entry registers, in `shape`.
+//MUTANT-SUITE crates/batten/tests/it/harness_wiring.rs
+//MUTANT flat-entry-unread|s@^        hook::EntryShape::Flat { read, .. } => flat_command(entry, read).into_iter().collect(),$@        hook::EntryShape::Flat { .. } => Vec::new(),@|a_hand_written_flat_cursor_file_is_registered
+//MUTANT nested-counted-on-flat-host|s@^        hook::EntryShape::Flat { read, .. } => flat_command(entry, read).into_iter().collect(),$@        hook::EntryShape::Flat { read, .. } => flat_command(entry, read).into_iter().chain(nested_commands(entry)).collect(),@|a_nested_cursor_file_reads_unregistered
+fn entry_commands(entry: &serde_json::Value, shape: hook::EntryShape) -> Vec<&str> {
+    match shape {
+        hook::EntryShape::Flat { read, .. } => flat_command(entry, read).into_iter().collect(),
+        hook::EntryShape::Nested => nested_commands(entry),
+    }
+}
+
+/// A flat entry's command: the first of `read` it carries as a string.
+fn flat_command<'a>(entry: &'a serde_json::Value, read: &[&str]) -> Option<&'a str> {
+    read.iter()
+        .find_map(|key| entry.get(*key).and_then(serde_json::Value::as_str))
+}
+
+/// A nested entry's commands: `hooks[].command`.
+fn nested_commands(entry: &serde_json::Value) -> Vec<&str> {
+    entry
+        .get("hooks")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|hook| hook.get("command").and_then(serde_json::Value::as_str))
+        .collect()
+}
+
+/// One new entry carrying `command`, in `shape` (CLOUD-2694).
+fn new_entry(shape: hook::EntryShape, command: &str) -> serde_json::Value {
+    match shape {
+        hook::EntryShape::Flat { write, .. } => {
+            let mut entry = serde_json::Map::new();
+            entry.insert("type".to_owned(), serde_json::Value::from("command"));
+            entry.insert(write.to_owned(), serde_json::Value::from(command));
+            serde_json::Value::Object(entry)
+        }
+        hook::EntryShape::Nested => {
+            serde_json::json!({"hooks": [{"type": "command", "command": command}]})
+        }
+    }
 }
 
 /// Whether two paths name the same file on disk.
@@ -348,7 +391,7 @@ pub fn reclaim(dir: &Path, home: &Path, dry_run: bool) -> Result<Reclaimed> {
                 continue;
             }
             out.surfaces_read += 1;
-            let removed = prune_siblings(&mut document, key, &command);
+            let removed = prune_siblings(&mut document, key, &command, harness.entry_shape());
             if removed.is_empty() {
                 continue;
             }
@@ -430,6 +473,7 @@ fn prune_siblings(
     document: &mut serde_json::Value,
     file: hook::WiringFile,
     command: &str,
+    shape: hook::EntryShape,
 ) -> Vec<(String, usize)> {
     let key = event_key(file);
     let Some(events) = document
@@ -445,6 +489,25 @@ fn prune_siblings(
             continue;
         };
         let mut count = 0;
+        // A FLAT HOST'S ENTRY IS ITS OWN REGISTRATION (CLOUD-2694): a sibling
+        // is the whole entry, dropped whole.
+        if let hook::EntryShape::Flat { read, .. } = shape {
+            let before = entries.len();
+            //MUTANT-SUITE crates/batten/src/wiring.rs
+            let ours = |entry: &serde_json::Value| {
+                flat_command(entry, read).is_none_or(|cmd| is_batten(cmd, command))
+            };
+            //MUTANT reclaim-skips-flat-entry|s@^            entries.retain(ours);$@            entries.retain(\x7c_\x7c true);@|a_flat_merged_sibling_is_pruned
+            entries.retain(ours);
+            count = before - entries.len();
+            if count > 0 {
+                removed.push((event.clone(), count));
+                if entries.is_empty() {
+                    dead_events.push(event.clone());
+                }
+            }
+            continue;
+        }
         for entry in entries.iter_mut() {
             let Some(hooks) = entry
                 .get_mut("hooks")
@@ -563,6 +626,7 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
         wiring.file,
         &spellings,
         &hook::wiring_command(harness),
+        harness.entry_shape(),
     );
     if out.events.is_empty() || check || !out.authoritative {
         return Ok(out);
@@ -637,6 +701,7 @@ pub fn register_committed(repo: &Path, check: bool) -> Result<Vec<(hook::Harness
             wiring.file,
             &spellings,
             &hook::wiring_command(*harness),
+            harness.entry_shape(),
         );
         if events.is_empty() {
             continue;
@@ -667,27 +732,48 @@ fn add_missing(
     file: hook::WiringFile,
     spellings: &[&str],
     command: &str,
+    shape: hook::EntryShape,
 ) -> Vec<String> {
     let Some(root) = document.as_object_mut() else {
         return Vec::new();
     };
+    // A flat host's file carries `"version": 1`, and a user's own `version` is
+    // never changed (CLOUD-2694).
+    if matches!(shape, hook::EntryShape::Flat { .. }) && !root.contains_key("version") {
+        root.insert("version".to_owned(), serde_json::Value::from(1));
+    }
     let events = root
         .entry(event_key(file))
         .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
     let Some(events) = events.as_object_mut() else {
         return Vec::new();
     };
+    // BATTEN'S OWN NESTED ENTRIES ON A FLAT HOST ARE MIGRATED (CLOUD-2694):
+    // v0.0.220 wrote them, and the host cannot read them. Only entries whose
+    // every nested command is batten's go; anybody else's is left alone.
+    if matches!(shape, hook::EntryShape::Flat { .. }) {
+        for value in events.values_mut() {
+            if let Some(entries) = value.as_array_mut() {
+                entries.retain(|entry| {
+                    let nested = nested_commands(entry);
+                    nested.is_empty() || !nested.iter().all(|cmd| is_batten(cmd, command))
+                });
+            }
+        }
+    }
     let mut added = Vec::new();
     for spelling in spellings {
         let present = events.get(*spelling).is_some_and(|value| {
-            entries_under(value)
+            entries_under(value, shape)
                 .iter()
                 .any(|(_, registered)| is_batten(registered, command))
         });
         if present {
             continue;
         }
-        let entry = serde_json::json!({"hooks": [{"type": "command", "command": command}]});
+        //MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
+        //MUTANT register-writes-nested-for-flat|s@^        let entry = new_entry(shape, command);$@        let entry = new_entry(hook::EntryShape::Nested, command);@|register_all_writes_flat_hosts_flat
+        let entry = new_entry(shape, command);
         match events
             .get_mut(*spelling)
             .and_then(serde_json::Value::as_array_mut)
@@ -1090,7 +1176,15 @@ mod tests {
         // Reaches no engine — the `--harness` flag is gone — so `doctor` reports
         // it as wrong. It must still not be deleted here.
         let mut document = surface(&["/usr/local/bin/batten hook"]);
-        assert!(prune_siblings(&mut document, claude(), &command).is_empty());
+        assert!(
+            prune_siblings(
+                &mut document,
+                claude(),
+                &command,
+                hook::Harness::ClaudeCode.entry_shape()
+            )
+            .is_empty()
+        );
     }
 
     /// A sibling goes, and the event it emptied goes with it.
@@ -1103,7 +1197,12 @@ mod tests {
         let command = hook::wiring_command(hook::Harness::ClaudeCode);
         let mut document = surface(&["session-start-git-identity.sh"]);
         assert_eq!(
-            prune_siblings(&mut document, claude(), &command),
+            prune_siblings(
+                &mut document,
+                claude(),
+                &command,
+                hook::Harness::ClaudeCode.entry_shape()
+            ),
             vec![("SessionStart".to_owned(), 1)]
         );
         assert_eq!(document, serde_json::json!({"hooks": {}}));
@@ -1119,7 +1218,12 @@ mod tests {
         let command = hook::wiring_command(hook::Harness::ClaudeCode);
         let mut document = surface(&[&command, "stop-hook-git-check.sh"]);
         assert_eq!(
-            prune_siblings(&mut document, claude(), &command),
+            prune_siblings(
+                &mut document,
+                claude(),
+                &command,
+                hook::Harness::ClaudeCode.entry_shape()
+            ),
             vec![("SessionStart".to_owned(), 1)]
         );
         assert_eq!(document, surface(&[&command]));
@@ -1136,7 +1240,15 @@ mod tests {
             "hooks": {"Stop": [{"hooks": [{"type": "command"}]}]}
         });
         let before = document.clone();
-        assert!(prune_siblings(&mut document, claude(), &command).is_empty());
+        assert!(
+            prune_siblings(
+                &mut document,
+                claude(),
+                &command,
+                hook::Harness::ClaudeCode.entry_shape()
+            )
+            .is_empty()
+        );
         assert_eq!(document, before);
     }
 
@@ -1151,14 +1263,19 @@ mod tests {
         let events = committed_events(&document, claude()).expect("a wiring file");
         let counted = events
             .values()
-            .flat_map(entries_under)
+            .flat_map(|value| entries_under(value, hook::Harness::ClaudeCode.entry_shape()))
             .filter(|(_, entry)| !is_batten(entry, &command))
             .count();
         let mut pruned = document;
-        let removed: usize = prune_siblings(&mut pruned, claude(), &command)
-            .iter()
-            .map(|(_, count)| count)
-            .sum();
+        let removed: usize = prune_siblings(
+            &mut pruned,
+            claude(),
+            &command,
+            hook::Harness::ClaudeCode.entry_shape(),
+        )
+        .iter()
+        .map(|(_, count)| count)
+        .sum();
         assert_eq!(counted, removed);
     }
 
@@ -1176,11 +1293,22 @@ mod tests {
             claude(),
             &["SessionStart", "PreToolUse"],
             "batten adjudicate --harness claude-code",
+            hook::Harness::ClaudeCode.entry_shape(),
         );
         assert_eq!(added, vec!["PreToolUse".to_owned()]);
-        assert_eq!(entries_under(&document["hooks"]["SessionStart"]).len(), 1);
         assert_eq!(
-            entries_under(&document["hooks"]["PreToolUse"]),
+            entries_under(
+                &document["hooks"]["SessionStart"],
+                hook::Harness::ClaudeCode.entry_shape()
+            )
+            .len(),
+            1
+        );
+        assert_eq!(
+            entries_under(
+                &document["hooks"]["PreToolUse"],
+                hook::Harness::ClaudeCode.entry_shape()
+            ),
             vec![(None, "batten adjudicate --harness claude-code")]
         );
     }
@@ -1191,10 +1319,26 @@ mod tests {
         let spellings = ["SessionStart", "Stop"];
         let command = "batten adjudicate --harness claude-code";
         assert_eq!(
-            add_missing(&mut document, claude(), &spellings, command).len(),
+            add_missing(
+                &mut document,
+                claude(),
+                &spellings,
+                command,
+                hook::Harness::ClaudeCode.entry_shape()
+            )
+            .len(),
             2
         );
-        assert!(add_missing(&mut document, claude(), &spellings, command).is_empty());
+        assert!(
+            add_missing(
+                &mut document,
+                claude(),
+                &spellings,
+                command,
+                hook::Harness::ClaudeCode.entry_shape()
+            )
+            .is_empty()
+        );
         // A key this verb never read survives the edit.
         assert!(document["permissions"]["allow"].is_array());
     }
@@ -1207,9 +1351,17 @@ mod tests {
             claude(),
             &["SessionStart"],
             "batten adjudicate --harness claude-code",
+            hook::Harness::ClaudeCode.entry_shape(),
         );
         assert_eq!(added, vec!["SessionStart".to_owned()]);
-        assert_eq!(entries_under(&document["hooks"]["SessionStart"]).len(), 2);
+        assert_eq!(
+            entries_under(
+                &document["hooks"]["SessionStart"],
+                hook::Harness::ClaudeCode.entry_shape()
+            )
+            .len(),
+            2
+        );
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -1380,5 +1532,27 @@ mod tests {
         std::fs::create_dir_all(&one).unwrap();
         std::fs::create_dir_all(&two).unwrap();
         assert!(!register(&one, &two, true).unwrap().above);
+    }
+
+    #[test]
+    fn a_flat_merged_sibling_is_pruned() {
+        // CLOUD-2694: on a flat host the entry IS the registration, so a
+        // sibling is dropped whole and batten's own entry stays.
+        let mut document = serde_json::json!({"version": 1, "hooks": {"stop": [
+            {"command": "other-tool"},
+            {"command": "batten adjudicate --harness cursor"}
+        ]}});
+        let command = hook::wiring_command(hook::Harness::Cursor);
+        let removed = prune_siblings(
+            &mut document,
+            hook::WiringFile::Whole(".cursor/hooks.json"),
+            &command,
+            hook::Harness::Cursor.entry_shape(),
+        );
+        assert_eq!(removed, vec![("stop".to_owned(), 1)]);
+        assert_eq!(
+            document["hooks"]["stop"],
+            serde_json::json!([{"command": "batten adjudicate --harness cursor"}])
+        );
     }
 }

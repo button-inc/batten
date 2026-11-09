@@ -895,3 +895,103 @@ fn a_missing_surface_names_its_file_and_fix() {
         "{human}"
     );
 }
+
+// --- Cursor and Copilot read flat entries (CLOUD-2694) -------------------------
+
+/// A git repository with `body` at `.cursor/hooks.json`, and the cursor row of
+/// `doctor hooks --json` over it.
+fn cursor_row(name: &str, body: &serde_json::Value) -> serde_json::Value {
+    let repo = common::scratch(name).join("repo");
+    std::fs::create_dir_all(&repo).expect("the fixture");
+    common::init_repo(&repo);
+    common::write(&repo, "batten.toml", "version = 1\n");
+    common::write(&repo, ".cursor/hooks.json", &body.to_string());
+    let home = common::scratch(&format!("{name}-home"));
+    let output = common::batten()
+        .current_dir(&repo)
+        .args(["doctor", "hooks", "--json"])
+        .env("HOME", &home)
+        .env_remove("CLAUDE_PID")
+        .output()
+        .expect("the binary runs");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json parses");
+    report["harnesses"]
+        .as_array()
+        .expect("harnesses")
+        .iter()
+        .find(|harness| harness["harness"] == "cursor")
+        .cloned()
+        .expect("cursor is diagnosed")
+}
+
+/// The four spellings Cursor registers.
+const CURSOR_EVENTS: [&str; 4] = ["preToolUse", "afterFileEdit", "stop", "sessionStart"];
+
+fn unregistered(row: &serde_json::Value) -> Vec<serde_json::Value> {
+    row["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .filter(|finding| finding["reason"] == "hook-wiring-event-unregistered")
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn a_flat_host_is_generated_flat() {
+    let generate = |harness: &str| -> serde_json::Value {
+        let output = common::batten()
+            .current_dir(common::at_root(""))
+            .args(["generate", "hooks", "--harness", harness])
+            .output()
+            .expect("the binary runs");
+        serde_json::from_slice(&output.stdout).expect("generate hooks parses")
+    };
+    let cursor = generate("cursor");
+    assert_eq!(cursor["version"], 1, "{cursor}");
+    let entry = &cursor["hooks"]["preToolUse"][0];
+    assert!(entry["command"].is_string(), "{cursor}");
+    assert!(entry.get("hooks").is_none(), "{cursor}");
+    let copilot = generate("copilot-cli");
+    assert_eq!(copilot["version"], 1, "{copilot}");
+    assert!(
+        copilot["hooks"]["PreToolUse"][0]["bash"].is_string(),
+        "{copilot}"
+    );
+}
+
+#[test]
+fn a_hand_written_flat_cursor_file_is_registered() {
+    let mut hooks = serde_json::Map::new();
+    for event in CURSOR_EVENTS {
+        hooks.insert(
+            event.to_owned(),
+            serde_json::json!([{"command": "batten adjudicate --harness cursor"}]),
+        );
+    }
+    let row = cursor_row(
+        "cursor-flat-registered",
+        &serde_json::json!({"version": 1, "hooks": hooks}),
+    );
+    assert!(unregistered(&row).is_empty(), "{row}");
+    assert_eq!(row["registrations"], 4, "{row}");
+}
+
+#[test]
+fn a_nested_cursor_file_reads_unregistered() {
+    let mut hooks = serde_json::Map::new();
+    for event in CURSOR_EVENTS {
+        hooks.insert(
+            event.to_owned(),
+            serde_json::json!([{"hooks": [{"type": "command", "command": "batten adjudicate --harness cursor"}]}]),
+        );
+    }
+    let row = cursor_row("cursor-nested-unread", &serde_json::json!({"hooks": hooks}));
+    let owed = unregistered(&row);
+    assert_eq!(owed.len(), 4, "{row}");
+    assert!(
+        owed.iter()
+            .all(|finding| finding["fix"] == "batten wiring register --all"),
+        "{row}"
+    );
+}

@@ -1,43 +1,28 @@
 {
+  "version": 1,
   "hooks": {
     "PreToolUse": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness copilot-cli"
-          }
-        ]
+        "type": "command",
+        "bash": "batten adjudicate --harness copilot-cli"
       }
     ],
     "PostToolUse": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness copilot-cli"
-          }
-        ]
+        "type": "command",
+        "bash": "batten adjudicate --harness copilot-cli"
       }
     ],
     "Stop": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness copilot-cli"
-          }
-        ]
+        "type": "command",
+        "bash": "batten adjudicate --harness copilot-cli"
       }
     ],
     "SessionStart": [
       {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness copilot-cli"
-          }
-        ]
+        "type": "command",
+        "bash": "batten adjudicate --harness copilot-cli"
       }
     ]
   }
