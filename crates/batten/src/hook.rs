@@ -2308,15 +2308,27 @@ pub const GIT_HOOKS: &[(&str, HookDisposition)] = &[
     ("update", unsupported("server-side")),
 ];
 
-/// What batten reads from the forge, and the two ingress shapes it refuses to be
-/// (CLOUD-204: no server, and a webhook's silence is not success).
+/// What batten reads from the forge, and the ingress shape it refuses to be
+/// (CLOUD-204: no server). Payload intake is a verb reading stdin, so `webhook`
+/// left this table when the catalog joined it (CLOUD-2689).
 const CI_READS: &[(&str, HookDisposition)] = &[
     ("poll:pull-request", BY_FORGE),
     ("poll:check-run", BY_FORGE),
     ("poll:workflow-run", BY_FORGE),
-    ("webhook", unsupported("no-server")),
     ("socket", unsupported("no-server")),
 ];
+
+/// The forge's whole vocabulary: the polls, then one entry per catalog event
+/// (CLOUD-2689). Unsupported until a verb takes the payload.
+fn ci_vocabulary() -> Vec<(String, HookDisposition)> {
+    let mut entries = owned(CI_READS);
+    entries.extend(
+        crate::forge_event::CATALOG
+            .iter()
+            .map(|row| (row.name.to_owned(), unsupported("no-intake"))),
+    );
+    entries
+}
 
 fn owned(table: &[(&str, HookDisposition)]) -> Vec<(String, HookDisposition)> {
     table
@@ -2329,6 +2341,7 @@ fn owned(table: &[(&str, HookDisposition)]) -> Vec<(String, HookDisposition)> {
 //MUTANT git-vocabulary-emptied|s@^            HookSource::Git => owned(GIT_HOOKS),$@            HookSource::Git => Vec::new(),@|the_git_vocabulary_is_githooks5_with_one_disposition_each
 //MUTANT check-verb-undeclared|s@^const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor gate" };$@const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor commit-gate" };@|every_registered_disposition_names_a_declared_verb
 //MUTANT harness-registration-ignored|s@^            } else if registered.contains(event) {$@            } else if false {@|the_harness_vocabulary_agrees_with_wiring_registrations
+//MUTANT forge-catalog-emptied|s@^            HookSource::Ci => ci_vocabulary(),$@            HookSource::Ci => owned(CI_READS),@|the_ci_vocabulary_is_the_forge_catalog
 //MUTANT commit-msg-demoted|s@^    ("commit-msg", BY_GATE),$@    ("commit-msg", unsupported("no-predicate")),@|the_git_vocabulary_registers_exactly_the_commit_hooks
 impl HookSource {
     /// Every source. The `match` in [`HookSource::vocabulary`] is exhaustive, so
@@ -2364,7 +2377,7 @@ impl HookSource {
                 .collect(),
             HookSource::Harness => harness_vocabulary(),
             HookSource::Git => owned(GIT_HOOKS),
-            HookSource::Ci => owned(CI_READS),
+            HookSource::Ci => ci_vocabulary(),
         }
     }
 
@@ -2406,7 +2419,7 @@ fn harness_vocabulary() -> Vec<(String, HookDisposition)> {
             .unwrap_or_default();
         for event in Event::ALL
             .iter()
-            .filter(|event| **event != Event::Unrecognized)
+            .filter(|event| **event != Event::Unrecognized && event.host_emitted())
         {
             let disposition = if wiring.is_none() {
                 unsupported("no-wiring-surface")
@@ -2568,8 +2581,15 @@ pub enum Event {
     DirectoryAdded,
     /// The host displayed a message. Claude Code (CLOUD-2581).
     MessageDisplay,
+    /// A forge event: one of GitHub's webhook events, normalized by
+    /// [`crate::forge_event`] (CLOUD-2689). No host emits it, so no wiring
+    /// registers it; `forge intake` is its door. Its verdict is a finding about
+    /// something that already happened, as on `post-tool`.
+    Forge,
 }
 
+//MUTANT-SUITE crates/batten/tests/it/hook_sources.rs
+//MUTANT forge-host-emitted|s@^        !matches!(self, Event::Forge)$@        true@|forge_is_in_no_harness_vocabulary_or_wiring
 //MUTANT-SUITE crates/batten/src/hook.rs
 //MUTANT moments-is-all|s@^        Some((Event::Unrecognized, moments)) => moments,$@        Some((Event::Unrecognized, _)) => Event::ALL,@|moments_is_every_event_but_unrecognized
 impl Event {
@@ -2614,6 +2634,7 @@ impl Event {
         Event::FileChanged,
         Event::DirectoryAdded,
         Event::MessageDisplay,
+        Event::Forge,
         Event::Unrecognized,
     ];
 
@@ -2719,6 +2740,15 @@ impl Event {
         matches!(self, Event::PreTool)
     }
 
+    /// Whether any HOST emits this moment (CLOUD-2689). Only [`Event::Forge`]
+    /// is not a host's: it arrives through `forge intake`, so it appears in no
+    /// harness vocabulary and in no wiring, and a census of host spellings
+    /// exempts it.
+    #[must_use]
+    pub const fn host_emitted(self) -> bool {
+        !matches!(self, Event::Forge)
+    }
+
     /// The normalized token. Deliberately not a host spelling — a host's own
     /// word for an event travels in [`Envelope::raw_event`] and is echoed back
     /// verbatim, so this one is free to name the concept.
@@ -2758,6 +2788,7 @@ impl Event {
             Event::FileChanged => "file-changed",
             Event::DirectoryAdded => "directory-added",
             Event::MessageDisplay => "message-display",
+            Event::Forge => "forge",
             Event::Unrecognized => "unrecognized",
         }
     }
@@ -3057,6 +3088,9 @@ pub struct Envelope {
     /// resolved by its adapter at decode from the variables it reads; `None` on
     /// every other host, so the core carries no host's arithmetic.
     pub background_ceiling: Option<u64>,
+    /// A forge event's tokens (CLOUD-2689); `None` on every host event.
+    /// Projected as `input.call.forge`.
+    pub forge: Option<crate::forge_event::ForgeCall>,
 }
 
 /// The mode a host names when the turn may propose but not perform.
@@ -3844,6 +3878,7 @@ pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
         agent: present_str(value, "agent_id"),
         start_source: present_str(value, "source"),
         background_ceiling: background_ceiling(harness),
+        forge: None,
     })
 }
 
@@ -5136,6 +5171,9 @@ fn event_decides(event: Event) -> Option<Decision> {
         | Event::FileChanged
         | Event::DirectoryAdded
         | Event::MessageDisplay
+        // `Forge` (CLOUD-2689): the native gate chain is `pre-tool`'s alone; a
+        // forge event is judged by rules and handlers through `forge intake`.
+        | Event::Forge
         // `Unrecognized`: the host said something this build cannot normalize.
         // Allow, loudly elsewhere — an unrecognized event is a fact about the
         // host, never a reason to refuse a call (CLOUD-45), and guessing which
@@ -8175,6 +8213,8 @@ pub fn policy_rewrite(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -
     clippy::too_many_lines,
     reason = "the projected document is one object, and each arm carries why that fact is or is not in it"
 )]
+//MUTANT-SUITE crates/batten/src/hook.rs
+//MUTANT forge-projection-dropped|s@^            "forge": envelope.forge,$@            "forge": serde_json::Value::Null,@|a_forge_envelope_projects_its_tokens_and_no_other_event_does
 fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde_json::Error> {
     let mut projected_facts = serde_json::Map::new();
     for fact in crate::facts::Fact::ALL {
@@ -8556,6 +8596,8 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // bounded and the projection cheap.
             "final-message": envelope.last_message,
             "transcript": envelope.transcript,
+            // CLOUD-2689: a forge event's tokens, `null` on every host event.
+            "forge": envelope.forge,
             // A FACT ABOUT THE CALL, NOT ABOUT THE COMMAND (CLOUD-613).
             //
             // The same class `segments` below is: something the engine already
@@ -12581,6 +12623,7 @@ mod tests {
             last_message: None,
             transcript: None,
             mode: None,
+            forge: None,
         }
     }
 
@@ -12625,6 +12668,7 @@ mod tests {
             last_message: None,
             transcript: None,
             mode: None,
+            forge: None,
         }
     }
 
@@ -14089,6 +14133,51 @@ mod tests {
     ///
     /// Fails by: dropping a `Some(...)` arm to `None`, or inventing a `facts`
     /// key that no `Fact` variant names.
+    /// Fails by: a forge envelope's tokens not projected, or projected on an
+    /// event that is not a forge event (CLOUD-2689).
+    #[test]
+    fn a_forge_envelope_projects_its_tokens_and_no_other_event_does() {
+        let project = |envelope: &Envelope| -> serde_json::Value {
+            let document = call_document(
+                envelope,
+                &Facts::none(
+                    &crate::stop::StopFacts::default(),
+                    &crate::waiver::Live::new(),
+                ),
+            )
+            .expect("the document serializes");
+            serde_json::from_str(&document).expect("the document parses")
+        };
+        let forge = crate::forge_event::normalize_webhook(
+            "pull_request",
+            &serde_json::json!({
+                "action": "opened",
+                "pull_request": {"id": 1, "number": 2, "updated_at": "t"},
+                "repository": {"full_name": "o/r"}
+            }),
+        )
+        .expect("a catalog event");
+        let call = project(&forge);
+        assert_eq!(
+            call.pointer("/call/forge/event"),
+            Some(&serde_json::json!("pull_request"))
+        );
+        assert_eq!(
+            call.pointer("/call/forge/action"),
+            Some(&serde_json::json!("opened"))
+        );
+        let key = call
+            .pointer("/call/forge/key")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        assert_eq!(key.len(), 64);
+        assert!(key.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_eq!(
+            project(&envelope("git status")).pointer("/call/forge"),
+            Some(&serde_json::Value::Null)
+        );
+    }
+
     #[test]
     fn every_hook_resolvable_fact_is_projected_under_its_own_token() {
         let document = call_document(
@@ -18143,6 +18232,7 @@ deny contains "refused by themodule" if {
             last_message: None,
             transcript: None,
             mode: None,
+            forge: None,
         };
         assert!(
             policy.required_checks_for(&read).is_empty(),

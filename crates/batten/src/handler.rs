@@ -685,6 +685,8 @@ pub fn validate(handlers: &[Handler]) -> anyhow::Result<()> {
 /// repository declaring no handler for the event pays one slice scan and nothing
 /// else — no spawn, no pipe, no read. Called before any work, so the hot path
 /// stays what §4 promises: cheap when irrelevant.
+//MUTANT-SUITE crates/batten/src/handler.rs
+//MUTANT forge-matcher-ignored|s@^        .any(\x7chandler\x7c handler.event() == Some(event) \&\& handler.selects_tool(raw_tool))$@        .any(\x7chandler\x7c handler.event() == Some(event))@|a_forge_handler_selects_its_matching_event_only
 #[must_use]
 pub fn selects(handlers: &[Handler], event: Event, raw_tool: &str) -> bool {
     handlers
@@ -1370,6 +1372,19 @@ mod tests {
         assert!(row.selects_path(None));
         assert!(row.selects_path(Some("crates/batten/src/lib.rs")));
         assert!(!row.selects_path(Some("/root/.claude/plans/x.md")));
+    }
+
+    /// A row on `forge` selects by the normalized `<event>.<action>` through the
+    /// matcher column it already has (CLOUD-2689).
+    #[test]
+    fn a_forge_handler_selects_its_matching_event_only() {
+        let mut row = handler("forge-pr", "forge", &["true"]);
+        row.matcher = Some("^pull_request\\.opened$".to_owned());
+        let rows = [row];
+        assert!(validate(&rows).is_ok(), "{:?}", validate(&rows));
+        assert!(selects(&rows, Event::Forge, "pull_request.opened"));
+        assert!(!selects(&rows, Event::Forge, "issues.opened"));
+        assert!(!selects(&rows, Event::PostTool, "pull_request.opened"));
     }
 
     fn handler(id: &str, on: &str, run: &[&str]) -> Handler {

@@ -3867,7 +3867,20 @@ pub fn call_input_schema() -> Result<String> {
             facts.insert(fact.as_str().to_owned(), fact.schema_fragment());
         }
     }
-    let document = serde_json::json!({
+    let forge = serde_json::json!({
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "properties": {
+            "event": {"type": ["string", "null"]},
+            "action": {"type": ["string", "null"]},
+            "repo": {"type": ["string", "null"]},
+            "number": {"type": ["integer", "null"]},
+            "sha": {"type": ["string", "null"]},
+            "ref": {"type": ["string", "null"]},
+            "key": {"type": ["string", "null"]},
+        },
+    });
+    let mut document = serde_json::json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "batten mediated-call policy input",
         "description": "The document a `scope = \"mediated_call\"` Rego module reads as `input`. Companion to policy-input.schema.json, which describes the TREE surface: the two share no keys, and a module type checked against the wrong one is CLOUD-845's defect deliberately introduced. Generated from `Fact::ALL` filtered to `Surface::Hook` by `batten generate schema --surface policy-call` (CLOUD-879); edit the facts, never this file.",
@@ -3981,6 +3994,14 @@ pub fn call_input_schema() -> Result<String> {
             },
         },
     });
+    // CLOUD-2689: a forge event's tokens, never a body. Inserted rather than
+    // written inline: one more key exceeds `json!`'s recursion limit.
+    if let Some(call) = document
+        .pointer_mut("/properties/call/properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        call.insert("forge".to_owned(), forge);
+    }
     Ok(serde_json::to_string_pretty(&document)?)
 }
 

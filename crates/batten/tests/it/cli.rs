@@ -2779,8 +2779,11 @@ fn the_census_covers_every_normalized_event() {
     let mut covered: Vec<&str> = EVENTS.iter().map(|row| row.event.as_str()).collect();
     covered.sort_unstable();
     covered.dedup();
+    // A row is fed to a host as `hook_event_name`, and no host spells a forge
+    // event, so `host_emitted` exempts it; `forge_events.rs` pins its decision.
     let mut required: Vec<&str> = batten::hook::Event::ALL
         .iter()
+        .filter(|event| event.host_emitted())
         .map(|event| event.as_str())
         .collect();
     required.sort_unstable();
