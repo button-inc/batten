@@ -19694,6 +19694,21 @@ fn run_hook(
     let decision = settle_repair(&policy, &envelope, decision)
         .map_refusal(|refusal| refusal.read_through(&policy.redirects));
     let ceiling = policy.advisory.as_ref();
+    // THE HOST'S WORKTREE REQUEST (CLOUD-2581): after the verdict, before either
+    // writer of `out`, because WorktreeCreate's stdout is the new path and
+    // nothing else.
+    if let Some(code) = worktree_answer(
+        harness,
+        &envelope,
+        &raw,
+        &decision,
+        &mut advice,
+        ceiling,
+        out,
+        err,
+    )? {
+        return Ok(code);
+    }
     // A PRE-APPROVAL TAKES THE ADVICE INTO ITS OWN DOCUMENT (CLOUD-1949): two
     // documents on one stream is the collision above, with the grant as the
     // discarded one.
@@ -22327,6 +22342,110 @@ fn emit_channel(
         text
     };
     emit_advisory(harness, envelope, out, err, &text)
+}
+
+/// Answer Claude Code's `WorktreeCreate` / `WorktreeRemove` natively
+/// (CLOUD-2581), or `None` for every other event.
+///
+/// A refusal (`Deny` or `Ask`) writes its pointer to stderr, nothing to stdout,
+/// and exits 2, which the host reads as a failed request. Otherwise the action
+/// runs: create answers the new directory on stdout and NOTHING ELSE, so the
+/// call's advice goes to stderr as pointer lines rather than sharing the
+/// stream; remove answers nothing on stdout and exits 0. A branch the declared
+/// trunk does not carry survives a remove, as does every branch when no trunk
+/// resolves: fail closed on a delete.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the hook boundary's own state, threaded once into the one branch that \
+              must answer before either writer of `out`"
+)]
+//MUTANT-SUITE crates/batten/tests/it/worktree_hooks.rs
+//MUTANT worktree-deny-still-creates|s@^    if matches!(decision, hook::Decision::Deny(_) \x7c hook::Decision::Ask(_)) {$@    if false {@|a_handler_deny_creates_no_worktree
+//MUTANT worktree-create-prints-nothing|s@^            writeln!(out, "{}", dir.display())?;$@@|a_created_worktree_answers_with_its_path_alone
+fn worktree_answer(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    raw: &str,
+    decision: &hook::Decision,
+    advice: &mut Vec<advisory::Advice>,
+    ceiling: Option<&advisory::Channel>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let create = match envelope.event {
+        hook::Event::WorktreeCreate => true,
+        hook::Event::WorktreeRemove => false,
+        _ => return Ok(None),
+    };
+    if matches!(decision, hook::Decision::Deny(_) | hook::Decision::Ask(_)) {
+        if let hook::Decision::Deny(refusal) | hook::Decision::Ask(refusal) = decision {
+            // FULL, not the pointer arm: this host shows a failed worktree
+            // request once, and the row that refused it must be named there.
+            writeln!(err, "{}", refusal.render_finding(refusal::Arm::Full))?;
+        }
+        return Ok(Some(ExitCode::Violation));
+    }
+    let payload: serde_json::Value = serde_json::from_str(raw).unwrap_or_default();
+    let field = |key: &str| {
+        payload
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let answer = if create {
+        create_worktree(&field("cwd"), &field("name")).map(Some)
+    } else {
+        remove_worktree(&field("worktree_path")).map(|()| None)
+    };
+    let pending = std::mem::take(advice);
+    if !pending.is_empty() {
+        let mut sighter = HookSighter::new(harness, envelope);
+        let emission = advisory::admit(pending, ceiling, &mut sighter);
+        output::verdict(err, &closed_emission(emission, ceiling))?;
+    }
+    match answer {
+        Ok(Some(dir)) => {
+            writeln!(out, "{}", dir.display())?;
+            Ok(Some(ExitCode::Success))
+        }
+        Ok(None) => Ok(Some(ExitCode::Success)),
+        Err(why) => {
+            writeln!(err, "batten deny worktree action refused: {why}")?;
+            Ok(Some(ExitCode::Violation))
+        }
+    }
+}
+
+/// [`worktree_answer`]'s create: the main checkout's root and common dir from
+/// the payload's `cwd`, then [`gitwrite::link_worktree`].
+fn create_worktree(cwd: &str, name: &str) -> Result<std::path::PathBuf> {
+    let cwd = Path::new(cwd);
+    let top = git::repo_root(cwd)?;
+    let common = PathBuf::from(git::common_dir(cwd)?);
+    gitwrite::link_worktree(&common, &top, name)
+}
+
+/// [`worktree_answer`]'s remove: [`gitwrite::unlink_worktree`], then the branch
+/// only when the declared trunk carries it.
+//MUTANT-SUITE crates/batten/tests/it/worktree_hooks.rs
+//MUTANT worktree-remove-drops-unmerged-branch|s@^    let carried = gitwrite::carries(\&common, \&branch, \&trunk.tracking);$@    let carried = true;@|a_removed_worktree_keeps_a_branch_trunk_does_not_carry
+fn remove_worktree(worktree_path: &str) -> Result<()> {
+    let (common, branch) = gitwrite::unlink_worktree(Path::new(worktree_path))?;
+    let Some(branch) = branch else {
+        return Ok(());
+    };
+    let Some(top) = common.parent() else {
+        return Ok(());
+    };
+    let Ok(Some(trunk)) = worktree::declared_trunk(top) else {
+        return Ok(());
+    };
+    let carried = gitwrite::carries(&common, &branch, &trunk.tracking);
+    if carried {
+        gitwrite::delete_ref(&common, &branch)?;
+    }
+    Ok(())
 }
 
 fn emit_advisory(

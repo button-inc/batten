@@ -1284,8 +1284,34 @@ impl Wiring {
     ///
     /// Ordered by [`Event::ALL`] rather than by the table, so emission is
     /// byte-stable (§6) whatever order a row happens to list its names in.
+    /// Only the events [`Event::registered_by_default`] names: every admitted
+    /// event is [`Wiring::admits`]'s (CLOUD-2581).
+    //MUTANT-SUITE crates/batten/src/doctor.rs
+    //MUTANT optional-events-required|s@^            .filter(\x7c(event, _)\x7c event.registered_by_default())$@@|an_eight_event_wiring_stays_green_beside_the_optional_events
     #[must_use]
     pub fn registrations(&self, harness: Harness) -> Vec<(Event, &'static str)> {
+        let capabilities = harness.capabilities();
+        Event::ALL
+            .iter()
+            .filter(|event| capabilities.emits(**event))
+            .filter_map(|event| {
+                self.spellings
+                    .iter()
+                    .find(|(named, _)| named == event)
+                    .map(|(_, spelling)| (*event, *spelling))
+            })
+            .filter(|(event, _)| event.registered_by_default())
+            .collect()
+    }
+
+    /// Every event this host emits, with its name: what `doctor hooks` ADMITS
+    /// a registration under (CLOUD-2581).
+    ///
+    /// [`Wiring::registrations`] without its default filter. A registration
+    /// under an admitted event that is not registered by default is a consumer's
+    /// choice, never `hook-wiring-event-underived`.
+    #[must_use]
+    pub fn admits(&self, harness: Harness) -> Vec<(Event, &'static str)> {
         let capabilities = harness.capabilities();
         Event::ALL
             .iter()
@@ -1300,6 +1326,8 @@ impl Wiring {
     }
 }
 
+//MUTANT-SUITE crates/batten/src/doctor.rs
+//MUTANT claude-spellings-truncated|s@^    (Event::WorktreeRemove, "WorktreeRemove"),$@@|a_wiring_on_every_claude_event_is_green
 /// Claude Code's event spellings, which Codex CLI and Copilot's `PascalCase`
 /// dialect ship verbatim (M1) — so three wiring rows share this rather than
 /// carrying three copies that could drift apart.
@@ -1319,6 +1347,32 @@ const CLAUDE_SPELLINGS: &[(Event, &str)] = &[
     // Safe to share for the same reason, and only Claude lists it in its own
     // event set: a spelling is a NAME, not a registration.
     (Event::UserPromptSubmit, "UserPromptSubmit"),
+    // CLOUD-2581: the other 25 Claude Code events, each its host name.
+    (Event::PostToolFailure, "PostToolUseFailure"),
+    (Event::Notification, "Notification"),
+    (Event::UserPromptExpansion, "UserPromptExpansion"),
+    (Event::SessionEnd, "SessionEnd"),
+    (Event::StopFailure, "StopFailure"),
+    (Event::SubagentStart, "SubagentStart"),
+    (Event::SubagentStop, "SubagentStop"),
+    (Event::PreCompact, "PreCompact"),
+    (Event::PostCompact, "PostCompact"),
+    (Event::PreModelSwitch, "PreModelSwitch"),
+    (Event::PostModelSwitch, "PostModelSwitch"),
+    (Event::PermissionRequest, "PermissionRequest"),
+    (Event::PermissionDenied, "PermissionDenied"),
+    (Event::Setup, "Setup"),
+    (Event::TeammateIdle, "TeammateIdle"),
+    (Event::TaskCreated, "TaskCreated"),
+    (Event::Elicitation, "Elicitation"),
+    (Event::ElicitationResult, "ElicitationResult"),
+    (Event::WorktreeCreate, "WorktreeCreate"),
+    (Event::WorktreeRemove, "WorktreeRemove"),
+    (Event::InstructionsLoaded, "InstructionsLoaded"),
+    (Event::CwdChanged, "CwdChanged"),
+    (Event::FileChanged, "FileChanged"),
+    (Event::DirectoryAdded, "DirectoryAdded"),
+    (Event::MessageDisplay, "MessageDisplay"),
 ];
 
 /// The command a host's registration invokes.
@@ -1492,6 +1546,32 @@ const CLAUDE_EVENTS: &[Event] = &[
     // surveyed host emits it, and claiming it for the converged core would be
     // claiming something about hosts nobody surveyed.
     Event::UserPromptSubmit,
+    // CLOUD-2581: the rest of the 33 events Claude Code 2.1.319 emits.
+    Event::PostToolFailure,
+    Event::Notification,
+    Event::UserPromptExpansion,
+    Event::SessionEnd,
+    Event::StopFailure,
+    Event::SubagentStart,
+    Event::SubagentStop,
+    Event::PreCompact,
+    Event::PostCompact,
+    Event::PreModelSwitch,
+    Event::PostModelSwitch,
+    Event::PermissionRequest,
+    Event::PermissionDenied,
+    Event::Setup,
+    Event::TeammateIdle,
+    Event::TaskCreated,
+    Event::Elicitation,
+    Event::ElicitationResult,
+    Event::WorktreeCreate,
+    Event::WorktreeRemove,
+    Event::InstructionsLoaded,
+    Event::CwdChanged,
+    Event::FileChanged,
+    Event::DirectoryAdded,
+    Event::MessageDisplay,
 ];
 
 impl Harness {
@@ -2284,6 +2364,59 @@ pub enum Event {
     /// degrades to the operator's stream. Deny reaches the model; advice does
     /// not.
     UserPromptSubmit,
+    // CLOUD-2581: the rest of Claude Code's 33 hook events (measured on
+    // 2.1.319), appended for the discriminant reason above. All but the
+    // worktree pair carry no verdict and pass through until a rule needs one.
+    /// A tool call failed. Claude Code (CLOUD-2581).
+    PostToolFailure,
+    /// The host showed the user a notification. Claude Code (CLOUD-2581).
+    Notification,
+    /// A submitted prompt was expanded (a slash command or mention). Claude Code (CLOUD-2581).
+    UserPromptExpansion,
+    /// A session ended. Claude Code (CLOUD-2581).
+    SessionEnd,
+    /// A turn ended on an error rather than a stop. Claude Code (CLOUD-2581).
+    StopFailure,
+    /// A subagent started. Claude Code (CLOUD-2581).
+    SubagentStart,
+    /// A subagent finished. Claude Code (CLOUD-2581).
+    SubagentStop,
+    /// Before the context is compacted. Claude Code (CLOUD-2581).
+    PreCompact,
+    /// After the context was compacted. Claude Code (CLOUD-2581).
+    PostCompact,
+    /// Before the session's model changes. Claude Code (CLOUD-2581).
+    PreModelSwitch,
+    /// After the session's model changed. Claude Code (CLOUD-2581).
+    PostModelSwitch,
+    /// The host is about to ask the user for a permission. Claude Code (CLOUD-2581).
+    PermissionRequest,
+    /// A permission was denied. Claude Code (CLOUD-2581).
+    PermissionDenied,
+    /// The host's setup phase. Claude Code (CLOUD-2581).
+    Setup,
+    /// A teammate agent went idle. Claude Code (CLOUD-2581).
+    TeammateIdle,
+    /// A task was created. Claude Code (CLOUD-2581).
+    TaskCreated,
+    /// An MCP server asked the user for input. Claude Code (CLOUD-2581).
+    Elicitation,
+    /// The user answered an elicitation. Claude Code (CLOUD-2581).
+    ElicitationResult,
+    /// The host asks for a linked worktree; stdout answers with its path. Claude Code (CLOUD-2581).
+    WorktreeCreate,
+    /// The host asks for a linked worktree to be removed. Claude Code (CLOUD-2581).
+    WorktreeRemove,
+    /// An instructions file was loaded. Claude Code (CLOUD-2581).
+    InstructionsLoaded,
+    /// The session's working directory changed. Claude Code (CLOUD-2581).
+    CwdChanged,
+    /// A watched file changed. Claude Code (CLOUD-2581).
+    FileChanged,
+    /// A directory was added to the session. Claude Code (CLOUD-2581).
+    DirectoryAdded,
+    /// The host displayed a message. Claude Code (CLOUD-2581).
+    MessageDisplay,
 }
 
 impl Event {
@@ -2304,6 +2437,31 @@ impl Event {
         // `CONVERGED_EVENTS`. `Unrecognized` stays last because it is not a
         // moment.
         Event::UserPromptSubmit,
+        Event::PostToolFailure,
+        Event::Notification,
+        Event::UserPromptExpansion,
+        Event::SessionEnd,
+        Event::StopFailure,
+        Event::SubagentStart,
+        Event::SubagentStop,
+        Event::PreCompact,
+        Event::PostCompact,
+        Event::PreModelSwitch,
+        Event::PostModelSwitch,
+        Event::PermissionRequest,
+        Event::PermissionDenied,
+        Event::Setup,
+        Event::TeammateIdle,
+        Event::TaskCreated,
+        Event::Elicitation,
+        Event::ElicitationResult,
+        Event::WorktreeCreate,
+        Event::WorktreeRemove,
+        Event::InstructionsLoaded,
+        Event::CwdChanged,
+        Event::FileChanged,
+        Event::DirectoryAdded,
+        Event::MessageDisplay,
         Event::Unrecognized,
     ];
 
@@ -2352,9 +2510,61 @@ impl Event {
     /// and [`adjudicate`]'s arms still say the same thing.
     #[must_use]
     pub const fn carries_a_verdict(self) -> bool {
+        // CLOUD-2581's pass-through events carry no verdict either: allowed
+        // before any rule until a rule needs one. The worktree pair is absent on
+        // purpose, so a handler can refuse the host's worktree request.
         !matches!(
             self,
-            Event::Stop | Event::SessionStart | Event::ConfigChange | Event::TaskCompleted
+            Event::Stop
+                | Event::SessionStart
+                | Event::ConfigChange
+                | Event::TaskCompleted
+                | Event::PostToolFailure
+                | Event::Notification
+                | Event::UserPromptExpansion
+                | Event::SessionEnd
+                | Event::StopFailure
+                | Event::SubagentStart
+                | Event::SubagentStop
+                | Event::PreCompact
+                | Event::PostCompact
+                | Event::PreModelSwitch
+                | Event::PostModelSwitch
+                | Event::PermissionRequest
+                | Event::PermissionDenied
+                | Event::Setup
+                | Event::TeammateIdle
+                | Event::TaskCreated
+                | Event::Elicitation
+                | Event::ElicitationResult
+                | Event::InstructionsLoaded
+                | Event::CwdChanged
+                | Event::FileChanged
+                | Event::DirectoryAdded
+                | Event::MessageDisplay
+        )
+    }
+
+    /// Whether `generate hooks` and `wiring register` emit this event, and so
+    /// whether `doctor hooks` requires a registration for it (CLOUD-2581).
+    ///
+    /// `true` for exactly the eight events Batten registered before the other
+    /// 25 were derived. The rest are ADMITTED (a consumer may register them and
+    /// `doctor` stays green) but never REQUIRED, so an eight-event consumer gains
+    /// no findings, and the worktree pair never hands the host's own worktree
+    /// creation to Batten unasked. A row that needs one everywhere flips it here.
+    #[must_use]
+    pub const fn registered_by_default(self) -> bool {
+        matches!(
+            self,
+            Event::PreTool
+                | Event::PostTool
+                | Event::Stop
+                | Event::SessionStart
+                | Event::TaskCompleted
+                | Event::ConfigChange
+                | Event::PostToolBatch
+                | Event::UserPromptSubmit
         )
     }
 
@@ -2396,6 +2606,31 @@ impl Event {
             Event::ConfigChange => "config-change",
             Event::PostToolBatch => "post-tool-batch",
             Event::UserPromptSubmit => "user-prompt-submit",
+            Event::PostToolFailure => "post-tool-failure",
+            Event::Notification => "notification",
+            Event::UserPromptExpansion => "user-prompt-expansion",
+            Event::SessionEnd => "session-end",
+            Event::StopFailure => "stop-failure",
+            Event::SubagentStart => "subagent-start",
+            Event::SubagentStop => "subagent-stop",
+            Event::PreCompact => "pre-compact",
+            Event::PostCompact => "post-compact",
+            Event::PreModelSwitch => "pre-model-switch",
+            Event::PostModelSwitch => "post-model-switch",
+            Event::PermissionRequest => "permission-request",
+            Event::PermissionDenied => "permission-denied",
+            Event::Setup => "setup",
+            Event::TeammateIdle => "teammate-idle",
+            Event::TaskCreated => "task-created",
+            Event::Elicitation => "elicitation",
+            Event::ElicitationResult => "elicitation-result",
+            Event::WorktreeCreate => "worktree-create",
+            Event::WorktreeRemove => "worktree-remove",
+            Event::InstructionsLoaded => "instructions-loaded",
+            Event::CwdChanged => "cwd-changed",
+            Event::FileChanged => "file-changed",
+            Event::DirectoryAdded => "directory-added",
+            Event::MessageDisplay => "message-display",
             Event::Unrecognized => "unrecognized",
         }
     }
@@ -2418,6 +2653,31 @@ impl Event {
             "ConfigChange" => Event::ConfigChange,
             "PostToolBatch" => Event::PostToolBatch,
             "UserPromptSubmit" => Event::UserPromptSubmit,
+            "PostToolUseFailure" => Event::PostToolFailure,
+            "Notification" => Event::Notification,
+            "UserPromptExpansion" => Event::UserPromptExpansion,
+            "SessionEnd" => Event::SessionEnd,
+            "StopFailure" => Event::StopFailure,
+            "SubagentStart" => Event::SubagentStart,
+            "SubagentStop" => Event::SubagentStop,
+            "PreCompact" => Event::PreCompact,
+            "PostCompact" => Event::PostCompact,
+            "PreModelSwitch" => Event::PreModelSwitch,
+            "PostModelSwitch" => Event::PostModelSwitch,
+            "PermissionRequest" => Event::PermissionRequest,
+            "PermissionDenied" => Event::PermissionDenied,
+            "Setup" => Event::Setup,
+            "TeammateIdle" => Event::TeammateIdle,
+            "TaskCreated" => Event::TaskCreated,
+            "Elicitation" => Event::Elicitation,
+            "ElicitationResult" => Event::ElicitationResult,
+            "WorktreeCreate" => Event::WorktreeCreate,
+            "WorktreeRemove" => Event::WorktreeRemove,
+            "InstructionsLoaded" => Event::InstructionsLoaded,
+            "CwdChanged" => Event::CwdChanged,
+            "FileChanged" => Event::FileChanged,
+            "DirectoryAdded" => Event::DirectoryAdded,
+            "MessageDisplay" => Event::MessageDisplay,
             _ => Event::Unrecognized,
         }
     }
@@ -4707,6 +4967,33 @@ fn event_decides(event: Event) -> Option<Decision> {
         // design decision. CLOUD-312 owns the retirement of the two guards; when
         // a kind can key on this event, this is where it dispatches.
         | Event::UserPromptSubmit
+        // CLOUD-2581's 25: no rule kind selects for any of them yet. The worktree
+        // pair's verdict is its handlers', and its action is `run_hook`'s.
+        | Event::PostToolFailure
+        | Event::Notification
+        | Event::UserPromptExpansion
+        | Event::SessionEnd
+        | Event::StopFailure
+        | Event::SubagentStart
+        | Event::SubagentStop
+        | Event::PreCompact
+        | Event::PostCompact
+        | Event::PreModelSwitch
+        | Event::PostModelSwitch
+        | Event::PermissionRequest
+        | Event::PermissionDenied
+        | Event::Setup
+        | Event::TeammateIdle
+        | Event::TaskCreated
+        | Event::Elicitation
+        | Event::ElicitationResult
+        | Event::WorktreeCreate
+        | Event::WorktreeRemove
+        | Event::InstructionsLoaded
+        | Event::CwdChanged
+        | Event::FileChanged
+        | Event::DirectoryAdded
+        | Event::MessageDisplay
         // `Unrecognized`: the host said something this build cannot normalize.
         // Allow, loudly elsewhere — an unrecognized event is a fact about the
         // host, never a reason to refuse a call (CLOUD-45), and guessing which
@@ -16766,9 +17053,12 @@ deny contains "refused by themodule" if {
             // event rather than failing, which is right at runtime and wrong to
             // leave unnoticed.
             let capabilities = harness.capabilities();
+            // ADMITS, not registrations: an emitted event need not be registered
+            // by default, but it must be nameable (CLOUD-2581).
+            let admitted = wiring.admits(harness);
             for event in Event::ALL.iter().filter(|e| capabilities.emits(**e)) {
                 assert!(
-                    registrations.iter().any(|(named, _)| named == event),
+                    admitted.iter().any(|(named, _)| named == event),
                     "{} emits {event:?} but its wiring names no spelling for it, so the \
                      registration would be silently dropped",
                     harness.as_str()
