@@ -44,6 +44,9 @@
 #MUTANT recycled-pid-read-alive|s@^    recorded.is_empty() \x7c\x7c recorded == live$@    recorded.is_empty() \x7c\x7c !live.is_empty()@|a_live_pid_whose_cmdline_differs_from_the_record_reports_crashed_and_is_never_reaped
 #MUTANT undigested-entry-reads-dead|s@^    recorded.is_empty() \x7c\x7c recorded == live$@    !recorded.is_empty() \&\& recorded == live@|an_entry_without_a_digest_reads_alive_while_its_pid_exists
 #MUTANT register-digests-its-own-cmdline|s@cmdline_digest(pid).unwrap_or_default(),$@cmdline_digest("self").unwrap_or_default(),@|a_registrant_whose_program_is_not_in_its_cmdline_reads_alive
+MUTANT register-keeps-dead-siblings|s@^        let sibling = entry.task == task \&\& entry.pid != pid;$@        let sibling = entry.task == task \&\& entry.pid.is_empty();@|register_supersedes_its_tasks_dead_records
+MUTANT supersede-orphans-a-live-group|s@^        if sibling \&\& dead \&\& !group_exists(\&entry.pgid) {$@        if sibling \&\& dead {@|register_keeps_a_dead_sibling_whose_group_still_runs
+MUTANT task-read-unknown-field-silent|s@if !task::FIELDS.contains(\&field.as_str()) {$@if false {@|read_refuses_an_unknown_field_and_lists_the_fields
 */
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -1012,3 +1015,117 @@ fn outside_a_repository_a_write_is_could_not_look_rather_than_a_silent_success()
 // SUBSUMED — one property, one scan, one file.
 //
 // subsumed: "this task never sends a signal" crates/batten/tests/it/task_registry.rs the writer and the reader are now one module, so `the_reader_sends_no_signal` scans the file both halves live in. The shell needed two copies because they were two programs; a second case here would scan the same bytes twice
+
+// ---------------------------------------------------------------------------
+// CLOUD-2679: the consumer's shape, a refused unknown field, and a registration
+// that supersedes its task's dead records.
+// ---------------------------------------------------------------------------
+
+/// The lines `task alive` prints for `task`.
+fn lines_for(output: &Output, task: &str) -> Vec<String> {
+    stdout(output)
+        .lines()
+        .filter(|line| line.starts_with(&format!("{task} ")))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The consumer's report: a poller under `tools/batten`, a `.mjs` program, a
+/// relative spelling — no path match could enumerate it. Liveness reads the
+/// digest this registrant recorded, so whatever `program_root` says, it is
+/// alive. Fails at HEAD as `forge-events crashed(polling)`.
+#[test]
+fn the_consumer_shape_reads_alive_under_a_foreign_root() {
+    let repo = Fixture::at(scratch("task-alive-consumer-shape").join("repo"))
+        .config(
+            "version = 1\n\n[task]\nprogram_root = \"tools/batten\"\nrelaunch = [\"forge-events\"]\n",
+        )
+        .git()
+        .base_commit()
+        .build();
+    let pid = std::process::id().to_string();
+    let registered = task(&repo, &["register", "forge-events", &pid, "polling"]);
+    assert_eq!(registered.status.code(), Some(0), "{}", stderr(&registered));
+    let output = alive(&repo, &["--instant", "4000000000"]);
+    assert!(
+        stdout(&output).starts_with(&format!("forge-events polling {pid} ")),
+        "{}",
+        stdout(&output)
+    );
+}
+
+/// An unknown field is usage, exit 1, naming every field there is; a known one
+/// reads. Fails at HEAD as exit 0 and a blank line.
+#[test]
+fn read_refuses_an_unknown_field_and_lists_the_fields() {
+    let repo = registry_repo("task-read-unknown-field");
+    let registered = task(&repo, &["register", "land", "4242", "x"]);
+    assert_eq!(registered.status.code(), Some(0), "{}", stderr(&registered));
+
+    let refused = task(&repo, &["read", "4242", "started"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert_eq!(stdout(&refused), "");
+    assert!(
+        stderr(&refused).contains("started_at"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("cmdline_sha256"),
+        "{}",
+        stderr(&refused)
+    );
+
+    let known = task(&repo, &["read", "4242", "cmdline_sha256"]);
+    assert_eq!(known.status.code(), Some(0), "{}", stderr(&known));
+}
+
+/// A registration removes its task's record whose registrant AND group are
+/// gone: one record per container restart piled up. Off unix nothing is dead,
+/// so both records stay and neither reads crashed.
+#[test]
+fn register_supersedes_its_tasks_dead_records() {
+    let repo = registry_repo("task-register-supersedes");
+    let dead = unassignable_pid();
+    seed(&repo, "forge-events", &dead, "polling", 1000);
+    let pid = std::process::id().to_string();
+    let registered = task(&repo, &["register", "forge-events", &pid, "polling"]);
+    assert_eq!(registered.status.code(), Some(0), "{}", stderr(&registered));
+
+    let lines = lines_for(&alive(&repo, &["--instant", "4000000000"]), "forge-events");
+    if CORPSE_IS_DETECTABLE {
+        assert_eq!(lines.len(), 1, "the dead record is superseded: {lines:?}");
+    } else {
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines.iter().all(|line| !line.contains("crashed(")),
+            "{lines:?}"
+        );
+    }
+}
+
+/// THE GUARD, green at HEAD by design: a dead registrant whose GROUP still runs
+/// keeps its record, because forgetting it would hide that group from `land`'s
+/// reap (CLOUD-1148).
+#[test]
+fn register_keeps_a_dead_sibling_whose_group_still_runs() {
+    let repo = registry_repo("task-register-keeps-live-group");
+    let pid = std::process::id().to_string();
+    // This process's own group, as the writer records it.
+    let probe = task(&repo, &["register", "probe", &pid, "x"]);
+    assert_eq!(probe.status.code(), Some(0), "{}", stderr(&probe));
+    let group = field(&repo, &pid, "pgid");
+    assert!(!group.is_empty());
+    let dead = unassignable_pid();
+    seed_fields(
+        &repo,
+        &dead,
+        &[("task", "forge-events"), ("pgid", group.as_str())],
+    );
+    let registered = task(&repo, &["register", "forge-events", &pid, "polling"]);
+    assert_eq!(registered.status.code(), Some(0), "{}", stderr(&registered));
+    assert!(
+        entries(&repo).join(&dead).exists(),
+        "a record whose group still runs is kept"
+    );
+}
