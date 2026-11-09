@@ -496,6 +496,27 @@ pub enum Command {
         /// The sub-verb selected.
         command: TestCommand,
     },
+    /// Forge events into the hook surface (CLOUD-2690).
+    ///
+    /// APPENDED LAST, for the reason above.
+    Forge {
+        /// The sub-verb selected.
+        command: ForgeCommand,
+    },
+}
+
+/// `batten forge`'s sub-verbs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ForgeCommand {
+    /// One forge event payload on stdin, normalized, deduplicated and run
+    /// through the same handlers and rules as a harness hook (CLOUD-2690).
+    Intake {
+        /// The `X-GitHub-Event` name a webhook body arrived under.
+        event: Option<String>,
+        /// `wake`: stdin is a harness user-prompt-submit payload.
+        from: Option<String>,
+    },
 }
 
 /// Subcommands of `test` (CLOUD-2090).
@@ -4023,6 +4044,17 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "artifacts" => artifacts_of(matches).map(|command| Command::Artifacts { command }),
         "engine" => engine_of(matches).map(|command| Command::Engine { command }),
         "test" => test_of(matches).map(|command| Command::Test { command }),
+        "forge" => forge_of(matches).map(|command| Command::Forge { command }),
+        _ => None,
+    }
+}
+
+fn forge_of(matches: &ArgMatches) -> Option<ForgeCommand> {
+    match matches.subcommand()? {
+        ("intake", matches) => Some(ForgeCommand::Intake {
+            event: matches.get_one::<String>("event").cloned(),
+            from: matches.get_one::<String>("from").cloned(),
+        }),
         _ => None,
     }
 }

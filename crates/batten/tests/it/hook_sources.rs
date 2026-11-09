@@ -302,3 +302,25 @@ fn forge_is_in_no_harness_vocabulary_or_wiring() {
             .all(|(name, _)| !name.ends_with(":forge"))
     );
 }
+
+/// Every catalog name is taken by `forge intake` (CLOUD-2690), and
+/// `every_registered_disposition_names_a_declared_verb` holds the verb to
+/// `SURFACE`.
+#[test]
+fn every_forge_catalog_name_is_checked_by_forge_intake() {
+    let catalog: Vec<(String, HookDisposition)> = HookSource::Ci
+        .vocabulary()
+        .into_iter()
+        .filter(|(name, _)| !name.starts_with("poll:") && name != "socket")
+        .collect();
+    assert_eq!(catalog.len(), GITHUB_WEBHOOK_EVENTS.len());
+    for (name, disposition) in catalog {
+        assert_eq!(
+            disposition,
+            HookDisposition::Registered {
+                check: "forge intake"
+            },
+            "{name}"
+        );
+    }
+}
