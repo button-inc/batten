@@ -248,10 +248,11 @@ mutation = "never write it by hand — it records a human's answers, so put the 
 glob = ".serena/memories/**"
 mutation = "use Serena's memory tools — `write_memory` to create, `edit_memory` to change in place, `rename_memory` to move (it is the only route that rewrites `mem:` referrers)"
 read = "read_memory"
-# `read_server = "serena"` (CLOUD-2229) is HELD until the release that carries
-# it: `main` pins v0.0.214, which does not know the key, and a config naming a
-# key its pinned release cannot read is refused at landing (CLOUD-2063). It
-# returns with the pin that can read it.
+# The read is refused only where a declared source can reach `serena`
+# (CLOUD-2229). Held while `main` pinned v0.0.214, which could not read the key;
+# restored by CLOUD-2699 once the pin could. Without it, a session whose serena
+# connection died had every memory read refused toward a route it could not take.
+read_server = "serena"
 
 [[redirect]]
 glob = "policy/**"
