@@ -24,9 +24,13 @@ const ROW_LINE: &str = "id = \"tool select other\"";
 /// modules: without the modules the config does not load, and the landed floor
 /// admits any edit of the authority — which would pass every case vacuously.
 fn fixture(name: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(&without_session_handlers(include_str!(
-        "../../../../batten.toml"
-    )));
+    // Plus the retired substitution row (CLOUD-2698), the row every case edits.
+    let config = format!(
+        "{}{}",
+        without_session_handlers(include_str!("../../../../batten.toml")),
+        common::SUBSTITUTION_ROW
+    );
+    let staged = Fixture::new(name).config(&config);
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../policy");

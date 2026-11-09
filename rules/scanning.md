@@ -223,27 +223,23 @@ symptom. `mem:serena-setup` carries the four gates and how to tell them apart;
 the rule here is the disposition: **report the prompt as a config finding and
 keep using the instrument, never quietly downgrade the instrument.**
 
-`tool select other` in `batten.toml` is the authority on which utility over
-which path is refused, and on what it deliberately does not catch. Read it there;
-a second copy of that corpus here is the drift this file exists to avoid.
+## This rule is feedforward, on both axes
 
-## This rule is feedforward on suitability, and gated on substitution
-
-Two axes, and only one of them is a judgement — the earlier version of this
-section claimed neither was gated, which is how a reader learned to expect no
-refusal (CLOUD-998).
+Two axes, and neither is gated in this repository. Substitution was, by
+`tool select other`, until CLOUD-2698 retired that row.
 
 **Instrument suitability is feedforward.** There is no honest exit code over
 "text, syntax or names — did the agent pick the right class": the object a gate
 would have to decide over is a judgement, and non-negotiable rule 3 says a gate
 resolves to a command and an exit code, never a model verdict.
 
-**Substitution is gated.** Reaching for a shell text utility where the structured
-surface answers the question is decided by `tool select other`, a `pipeline`
-row over the command line — a real object, a real exit code. It is a deny, and
-its refusal points back here to choose between the classes above. So silence from
-that gate is not evidence you picked the right class; it only means you did not
-substitute.
+**Substitution is not gated (CLOUD-2698).** A shell text utility over a tracked
+path is not refused. The retired row assumed a structured tool beats its shell
+variant, and nothing measured that. In one session it refused about eight calls
+and none was the misuse it targeted: a `grep -v … > file` transform, line-range
+reads the structured read answers identically, and whole commands refused for
+one segment. The `pipeline` rule kind and the `tool run loose` class stay in the
+engine for a consumer that wants such a row.
 
 The mechanism over this file is correspondingly thin and is named for what it
 does. `crates/batten/tests/it/scanner_taxonomy.rs` asserts that this file still

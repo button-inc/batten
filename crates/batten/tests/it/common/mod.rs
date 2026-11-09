@@ -1280,6 +1280,38 @@ pub(crate) fn committed_protected_path() -> &'static str {
     }
 }
 
+/// The `pipeline` row this repository retired (CLOUD-2698), byte for byte as it
+/// was committed.
+///
+/// The ROW is gone from `batten.toml` by owner ruling; the `pipeline` kind and
+/// the `tool run loose` class it raised stay in the engine, because a consumer
+/// may still declare one. So the suites that exercise that kind and the refusal
+/// machinery over it carry the row as a fixture instead of borrowing it from
+/// the repository's policy.
+pub(crate) const SUBSTITUTION_ROW: &str = "
+[[rule]]
+id = \"tool select other\"
+kind = \"pipeline\"
+scope = \"mediated_call\"
+severity = \"deny\"
+substitutes = [\"cat\", \"head\", \"tail\", \"sed:-n\", \"grep\", \"rg\", \"find\", \"ls\", \"wc\"]
+reason = \"Use the structured surface this session offers: a range of one file, a pattern across the tree, paths by glob, or what a name resolves to; `rules/scanning.md` picks between them. After a pipe these utilities are allowed.\"
+";
+
+/// [`committed_fixture_with_protected`], plus [`SUBSTITUTION_ROW`]: this
+/// repository's rows with the retired substitution row declared, so the
+/// `pipeline` kind stays under test (CLOUD-2698).
+#[must_use]
+pub(crate) fn committed_fixture_with_substitution(name: &str) -> PathBuf {
+    let dir = committed_fixture_with_protected(name);
+    let path = dir.join("batten.toml");
+    let mut config = std::fs::read_to_string(&path).expect("read the fixture config");
+    config.push_str(SUBSTITUTION_ROW);
+    std::fs::write(&path, config).expect("write the fixture config");
+    git_in(&dir, &["commit", "-qam", "declare the substitution row"]);
+    dir
+}
+
 /// A fixture carrying the committed `batten.toml` and policy modules, with the
 /// protected-path set DECLARED — the engine's protected-path mechanism under
 /// this repository's own rows, independent of whether the owner has the

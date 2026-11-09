@@ -38,7 +38,13 @@ use std::path::PathBuf;
 use common::{StateHome as _, stdout};
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    // The committed rows plus the retired substitution row (CLOUD-2698), which
+    // `a_refused_call_is_never_preapproved` needs as its refusing row.
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        common::committed_fixture_with_substitution(&format!("preapprove-{}", std::process::id()))
+    })
+    .clone()
 }
 
 fn envelope(mode: &str, tool: &str, input: &serde_json::Value) -> String {
@@ -836,7 +842,7 @@ fn outside_plan_mode_a_write_is_not_the_presets_to_refuse() {
 }
 
 /// DENY FIRST. `grep` is on the engine's read-only floor, so the preset would
-/// grant it — and this repository's `tool run loose` refuses it through Bash.
+/// grant it — and the fixture's substitution row refuses it through Bash.
 /// The refusal must stand.
 #[test]
 fn a_refused_call_is_never_preapproved() {
