@@ -1,5 +1,5 @@
 #MUTANT-SUITE crates/batten/tests/it/forced_push.rs
-#MUTANT merge-subcommand-unread|s@^\tsubcommand(arguments) == "merge"$@\tfalse@|a_merge_of_the_trunk_into_a_branch_is_refused
+#MUTANT merge-subcommand-unread|s@^\tprogram.subcommand == "merge"$@\tfalse@|a_merge_of_the_trunk_into_a_branch_is_refused
 #MUTANT ff-only-unread|s@^\tword in {"--ff-only", "--abort", "--quit"}$@\tfalse@|a_fast_forward_merge_and_a_rebasing_pull_are_admitted
 # Linear history: a branch lands as a line, so nothing weaves one. The sibling of
 # `trunk-based`, and its own bundle so each enabling row names one class.
@@ -40,32 +40,20 @@ violation contains {
 	# engine resolved, through wrappers and shell grammar, never a word of the line.
 	some program in input.call.programs
 	program.name == "git"
-	weaves(program.arguments)
+	weaves(program)
 }
 
 # THE SUBCOMMAND, not membership. `"merge" in arguments` would fire on
-# `git commit -m merge` and `git log --grep merge`; the subcommand is the first
-# argument that is not a global option, and `-C <path>` / `-c <k=v>` take a value,
-# so the word after them is skipped too. The `git` preset reads it the same way.
-subcommand(arguments) := word if {
-	positions := [i | some i, word in arguments; not startswith(word, "-"); not value_of_global(arguments, i)]
-	count(positions) > 0
-	word := arguments[positions[0]]
+# `git commit -m merge` and `git log --grep merge`. The engine projects it past
+# git's own options (CLOUD-2354), so this module parses nothing.
+weaves(program) if {
+	program.subcommand == "merge"
+	not linear_merge(program.arguments)
 }
 
-value_of_global(arguments, i) if {
-	i > 0
-	arguments[i - 1] in {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
-}
-
-weaves(arguments) if {
-	subcommand(arguments) == "merge"
-	not linear_merge(arguments)
-}
-
-weaves(arguments) if {
-	subcommand(arguments) == "pull"
-	not linear_pull(arguments)
+weaves(program) if {
+	program.subcommand == "pull"
+	not linear_pull(program.arguments)
 }
 
 linear_merge(arguments) if {
@@ -92,7 +80,7 @@ linear_pull(arguments) if {
 test_a_merge_of_the_trunk_is_caught if {
 	some v in violation with input as {"call": {
 		"command": "git merge origin/main",
-		"programs": [{"program": "git", "name": "git", "arguments": ["merge", "origin/main"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["merge", "origin/main"], "subcommand": "merge", "global-options": [], "mediated": false}],
 	}}
 	v.rule == "commit write loose"
 }
@@ -100,7 +88,7 @@ test_a_merge_of_the_trunk_is_caught if {
 test_a_bare_pull_is_caught if {
 	some v in violation with input as {"call": {
 		"command": "git pull origin main",
-		"programs": [{"program": "git", "name": "git", "arguments": ["pull", "origin", "main"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["pull", "origin", "main"], "subcommand": "pull", "global-options": [], "mediated": false}],
 	}}
 	v.rule == "commit write loose"
 }
@@ -109,7 +97,7 @@ test_a_bare_pull_is_caught if {
 test_a_merge_later_in_a_list_is_caught if {
 	some v in violation with input as {"call": {
 		"command": "git fetch origin && git merge origin/main",
-		"programs": [{"program": "git", "name": "git", "arguments": ["fetch", "origin"], "mediated": false}, {"program": "git", "name": "git", "arguments": ["merge", "origin/main"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["fetch", "origin"], "subcommand": "fetch", "global-options": [], "mediated": false}, {"program": "git", "name": "git", "arguments": ["merge", "origin/main"], "subcommand": "merge", "global-options": [], "mediated": false}],
 	}}
 	v.rule == "commit write loose"
 }
@@ -117,7 +105,7 @@ test_a_merge_later_in_a_list_is_caught if {
 test_a_global_option_does_not_hide_the_subcommand if {
 	some v in violation with input as {"call": {
 		"command": "git -C /work merge origin/main",
-		"programs": [{"program": "git", "name": "git", "arguments": ["-C", "/work", "merge", "origin/main"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["-C", "/work", "merge", "origin/main"], "subcommand": "merge", "global-options": ["-C", "/work"], "mediated": false}],
 	}}
 	v.rule == "commit write loose"
 }
@@ -125,7 +113,7 @@ test_a_global_option_does_not_hide_the_subcommand if {
 test_a_pull_asking_for_the_merge_is_caught if {
 	some v in violation with input as {"call": {
 		"command": "git pull --rebase=false origin main",
-		"programs": [{"program": "git", "name": "git", "arguments": ["pull", "--rebase=false", "origin", "main"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["pull", "--rebase=false", "origin", "main"], "subcommand": "pull", "global-options": [], "mediated": false}],
 	}}
 	v.rule == "commit write loose"
 }
@@ -133,25 +121,25 @@ test_a_pull_asking_for_the_merge_is_caught if {
 test_a_fast_forward_merge_is_left_alone if {
 	count(violation) == 0 with input as {"call": {
 		"command": "git merge --ff-only origin/main",
-		"programs": [{"program": "git", "name": "git", "arguments": ["merge", "--ff-only", "origin/main"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["merge", "--ff-only", "origin/main"], "subcommand": "merge", "global-options": [], "mediated": false}],
 	}}
 }
 
 test_an_abort_is_left_alone if {
 	count(violation) == 0 with input as {"call": {
 		"command": "git merge --abort",
-		"programs": [{"program": "git", "name": "git", "arguments": ["merge", "--abort"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["merge", "--abort"], "subcommand": "merge", "global-options": [], "mediated": false}],
 	}}
 }
 
 test_a_rebasing_pull_is_left_alone if {
 	count(violation) == 0 with input as {"call": {
 		"command": "git pull --rebase origin main",
-		"programs": [{"program": "git", "name": "git", "arguments": ["pull", "--rebase", "origin", "main"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["pull", "--rebase", "origin", "main"], "subcommand": "pull", "global-options": [], "mediated": false}],
 	}}
 	count(violation) == 0 with input as {"call": {
 		"command": "git pull --rebase=interactive",
-		"programs": [{"program": "git", "name": "git", "arguments": ["pull", "--rebase=interactive"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["pull", "--rebase=interactive"], "subcommand": "pull", "global-options": [], "mediated": false}],
 	}}
 }
 
@@ -160,11 +148,11 @@ test_a_rebasing_pull_is_left_alone if {
 test_the_word_elsewhere_is_not_a_merge if {
 	count(violation) == 0 with input as {"call": {
 		"command": "git commit -m merge",
-		"programs": [{"program": "git", "name": "git", "arguments": ["commit", "-m", "merge"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["commit", "-m", "merge"], "subcommand": "commit", "global-options": [], "mediated": false}],
 	}}
 	count(violation) == 0 with input as {"call": {
 		"command": "git merge-base HEAD origin/main",
-		"programs": [{"program": "git", "name": "git", "arguments": ["merge-base", "HEAD", "origin/main"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["merge-base", "HEAD", "origin/main"], "subcommand": "merge-base", "global-options": [], "mediated": false}],
 	}}
 }
 

@@ -104,6 +104,12 @@ fn a_push_over_an_unread_red_check_is_refused() {
         out.contains("windows") && out.contains("macos"),
         "naming the unread failure AND the check still running\n{out}"
     );
+    // CLOUD-2354: directory `-c`, verb `push`, refused the same way.
+    let hidden = decision(&dir, "git -C -c push");
+    assert!(
+        hidden.contains("\"deny\"") && hidden.contains("job read unread"),
+        "a global option does not hide the push\n{hidden}"
+    );
 
     // ANTI-VACUITY: the same tree admits a call that is not a push, so the
     // refusal above is about the push and not about the record's existence.
