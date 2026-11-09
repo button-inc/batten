@@ -1848,6 +1848,13 @@ pub fn diagnose(dir: &Path) -> Report {
         },
     );
 
+    // THE WIRING CENSUS, ON THE SURFACES THE TREE AND THE LIVE SESSION OWN
+    // (CLOUD-2676). Merged `$HOME` findings are dropped and stay in `doctor
+    // hooks`: a world property in `diagnose` is what turned
+    // `this_repository_is_healthy` red once, and a user-level registration is
+    // exactly one.
+    checks.push(hook_wiring_check(dir));
+
     // The working-tree authority: `doctor` diagnoses the checkout in front of
     // it, so it does not take a base ref.
     let config_epoch = crate::epoch::compute(dir, None).ok();
@@ -1872,7 +1879,62 @@ pub struct WiringFinding {
     pub event: String,
     /// The stable reason id.
     pub reason: &'static str,
+    /// Which surface this is about, as a pointer token and never an absolute
+    /// path (CLOUD-2676): the repo-relative file for a committed finding,
+    /// `session-root:<file>` for the live session's root, `~/<file>` for a
+    /// merged one. `~/`-relative is byte-stable across machines.
+    pub file: String,
+    /// The one command that repairs this finding, from [`fix_for`].
+    pub fix: String,
 }
+
+/// The one-line repair for a wiring finding (CLOUD-2676).
+///
+/// Three groups. A missing file or registration is what `wiring register --all`
+/// adds; anything wrong WITH batten's entries is restored from the derivation,
+/// because `add_missing` only adds; a merged registration is `reclaim`'s.
+//MUTANT-SUITE crates/batten/src/doctor.rs
+//MUTANT wiring-fix-table-incomplete|s@^        FILE_MISSING \x7c EVENT_UNREGISTERED => "batten wiring register --all".to_owned(),$@        FILE_MISSING \x7c EVENT_UNREGISTERED => String::new(),@|every_reason_id_has_a_fix
+fn fix_for(reason: &str, harness: hook::Harness) -> String {
+    match reason {
+        FILE_MISSING | EVENT_UNREGISTERED => "batten wiring register --all".to_owned(),
+        EVENT_UNDERIVED
+        | EVENT_REGISTERED_N_TIMES
+        | MATCHER_NARROWS
+        | COMMAND_DRIFT
+        | SIBLING_REGISTERED
+        | FILE_UNREADABLE => {
+            format!("batten generate hooks --harness {}", harness.as_str())
+        }
+        MERGED_REGISTRATION | MERGED_SIBLING => "batten wiring reclaim".to_owned(),
+        _ => String::new(),
+    }
+}
+
+/// Plain `doctor`'s `hook-wiring` check: fails when any wiring finding remains
+/// after dropping the ones on a merged home surface (CLOUD-2676).
+//MUTANT-SUITE crates/batten/tests/it/doctor.rs
+//MUTANT doctor-skips-hook-wiring|s@^    checks.push(hook_wiring_check(dir));$@@|plain_doctor_fails_hook_wiring_on_an_unwired_checkout
+//MUTANT plain-doctor-reads-merged-home|s@^        .filter(\x7cfinding\x7c !finding.file.starts_with("~/"))$@@|plain_doctor_ignores_a_merged_home_registration
+fn hook_wiring_check(dir: &Path) -> Check {
+    let unwired = diagnose_hooks(dir)
+        .harnesses
+        .into_iter()
+        .flat_map(|harness| harness.findings)
+        .filter(|finding| !finding.file.starts_with("~/"))
+        .count();
+    if unwired == 0 {
+        Check::passed(HOOK_WIRING)
+    } else {
+        Check::failed(HOOK_WIRING, "hook-wiring-unwired")
+    }
+}
+
+/// Plain `doctor`'s wiring check name.
+const HOOK_WIRING: &str = "hook-wiring";
+
+/// The surface token the live session's root is reported under.
+const SESSION_ROOT_FILE: &str = "session-root:.claude/settings.json";
 
 /// One harness's wiring diagnosis.
 ///
@@ -1930,6 +1992,10 @@ pub struct HarnessWiring {
     /// reasons. What it adds is the ARITHMETIC, never a verdict: whether a sibling
     /// here is legitimate stays that consumer's judgement.
     pub merged_siblings: usize,
+    /// How many batten registrations the live session's root carries
+    /// (CLOUD-2676): `None` when no live session is rooted above the
+    /// repository, so there is no such surface to judge.
+    pub session_root_registrations: Option<usize>,
     /// How many of this host's merged surfaces were readable.
     ///
     /// Three-valued rather than two: a merged file that is absent is the
@@ -2153,7 +2219,12 @@ const FILE_UNREADABLE: &str = "hook-wiring-file-unreadable";
     clippy::too_many_lines,
     reason = "one harness's diagnosis reads as one sequence: locate the file, judge               batten's entries per derived event, then the rest of the surface. Splitting               it would thread `findings`, `registrations` and `siblings` through helpers               that exist only to satisfy a line count, and each of the three phases is               already commented as its own step."
 )]
-fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Option<HarnessWiring> {
+fn diagnose_harness(
+    dir: &Path,
+    harness: hook::Harness,
+    exclusive: bool,
+    session_root: Option<&Path>,
+) -> Option<HarnessWiring> {
     let wiring = harness.wiring()?;
     let path = match wiring.file {
         hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
@@ -2177,15 +2248,35 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
     // counter names, which is the collapse the split counters were added to
     // remove one level down. It would also break `MergedTally::partitions`: the
     // five must sum to `merge_surfaces().len()`, and five zeroes do not.
+    // THE LIVE SESSION'S ROOT (CLOUD-2676): a surface the running session
+    // loads, judged by the committed-surface rules. Claude Code's alone, the one
+    // host `wiring register` writes a session root for.
+    let rooted = session_root
+        .filter(|_| harness == hook::Harness::ClaudeCode)
+        .map(|root| diagnose_session_root(root, &derived));
+    let finish = |findings: &mut Vec<WiringFinding>, merged: Vec<WiringFinding>| {
+        for finding in findings.iter_mut() {
+            path.clone_into(&mut finding.file);
+        }
+        if let Some((root_findings, _)) = &rooted {
+            findings.extend(root_findings.iter().cloned());
+        }
+        findings.extend(merged);
+        for finding in findings.iter_mut() {
+            finding.fix = fix_for(finding.reason, harness);
+        }
+    };
+    let session_root_registrations = rooted.as_ref().map(|(_, count)| *count);
     let row = |mut findings: Vec<WiringFinding>, registrations, siblings| {
         let merged = diagnose_merged(dir, harness, &command, exclusive);
-        findings.extend(merged.findings);
+        finish(&mut findings, merged.findings);
         HarnessWiring {
             harness: harness.as_str(),
             registrations,
             siblings,
             merged: merged.commands,
             merged_siblings: merged.siblings,
+            session_root_registrations,
             merged_surfaces_read: merged.read,
             merged_surfaces_absent: merged.absent,
             merged_surfaces_unreadable: merged.unreadable,
@@ -2205,6 +2296,8 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
             vec![WiringFinding {
                 event: String::new(),
                 reason: FILE_MISSING,
+                file: String::new(),
+                fix: String::new(),
             }],
             0,
             0,
@@ -2215,6 +2308,8 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
             vec![WiringFinding {
                 event: String::new(),
                 reason: FILE_UNREADABLE,
+                file: String::new(),
+                fix: String::new(),
             }],
             0,
             0,
@@ -2244,6 +2339,8 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
                 findings.push(WiringFinding {
                     event: (*spelling).to_owned(),
                     reason: MATCHER_NARROWS,
+                    file: String::new(),
+                    fix: String::new(),
                 });
             }
             // STRUCTURAL, not a substring: `reaches_engine` states why, and the
@@ -2252,6 +2349,8 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
                 findings.push(WiringFinding {
                     event: (*spelling).to_owned(),
                     reason: COMMAND_DRIFT,
+                    file: String::new(),
+                    fix: String::new(),
                 });
             }
         }
@@ -2262,11 +2361,15 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
             findings.push(WiringFinding {
                 event: (*spelling).to_owned(),
                 reason: EVENT_UNREGISTERED,
+                file: String::new(),
+                fix: String::new(),
             });
         } else if here > 1 {
             findings.push(WiringFinding {
                 event: (*spelling).to_owned(),
                 reason: EVENT_REGISTERED_N_TIMES,
+                file: String::new(),
+                fix: String::new(),
             });
         }
     }
@@ -2290,6 +2393,8 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
                     findings.push(WiringFinding {
                         event: event.clone(),
                         reason: SIBLING_REGISTERED,
+                        file: String::new(),
+                        fix: String::new(),
                     });
                 }
             } else if !spellings.contains(&event.as_str()) {
@@ -2297,6 +2402,8 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
                 findings.push(WiringFinding {
                     event: event.clone(),
                     reason: EVENT_UNDERIVED,
+                    file: String::new(),
+                    fix: String::new(),
                 });
             } else if !derived
                 .iter()
@@ -2317,7 +2424,7 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
     // launcher file, and a check that went red for its absence would be red on
     // every developer's box for a state nobody can fix.
     let merged = diagnose_merged(dir, harness, &command, exclusive);
-    findings.extend(merged.findings);
+    finish(&mut findings, merged.findings);
 
     Some(HarnessWiring {
         harness: harness.as_str(),
@@ -2325,6 +2432,7 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
         siblings,
         merged: merged.commands,
         merged_siblings: merged.siblings,
+        session_root_registrations,
         merged_surfaces_read: merged.read,
         merged_surfaces_absent: merged.absent,
         merged_surfaces_unreadable: merged.unreadable,
@@ -2580,6 +2688,8 @@ fn merged_under(
                     tally.findings.push(WiringFinding {
                         event: event.clone(),
                         reason: MERGED_REGISTRATION,
+                        file: format!("~/{surface}"),
+                        fix: String::new(),
                     });
                 } else {
                     // THE SAME SELECTOR THE COMMITTED SIDE USES, deliberately:
@@ -2592,6 +2702,8 @@ fn merged_under(
                         tally.findings.push(WiringFinding {
                             event: event.clone(),
                             reason: MERGED_SIBLING,
+                            file: format!("~/{surface}"),
+                            fix: String::new(),
                         });
                     }
                 }
@@ -2599,6 +2711,50 @@ fn merged_under(
         }
     }
     tally
+}
+
+/// The live session root's Claude Code surface, judged as a committed one:
+/// missing is [`FILE_MISSING`], a derived event with no batten entry is
+/// [`EVENT_UNREGISTERED`]. Answers the findings and the batten registrations
+/// it counted under the derived events (CLOUD-2676).
+fn diagnose_session_root(
+    root: &Path,
+    derived: &[(hook::Event, &'static str)],
+) -> (Vec<WiringFinding>, usize) {
+    let finding = |event: &str, reason| WiringFinding {
+        event: event.to_owned(),
+        reason,
+        file: SESSION_ROOT_FILE.to_owned(),
+        fix: String::new(),
+    };
+    let surface = root.join(".claude").join("settings.json");
+    let Ok(raw) = std::fs::read_to_string(&surface) else {
+        return (vec![finding("", FILE_MISSING)], 0);
+    };
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return (vec![finding("", FILE_UNREADABLE)], 0);
+    };
+    let Some(events) = hook::Harness::ClaudeCode
+        .wiring()
+        .and_then(|wiring| committed_events(&document, wiring.file))
+    else {
+        return (vec![finding("", FILE_UNREADABLE)], 0);
+    };
+    let mut findings = Vec::new();
+    let mut registrations = 0;
+    for (_, spelling) in derived {
+        let ours = events.get(*spelling).map_or(0, |value| {
+            entries_under(value)
+                .into_iter()
+                .filter(|(_, entry)| entry.contains("batten"))
+                .count()
+        });
+        if ours == 0 {
+            findings.push(finding(spelling, EVENT_UNREGISTERED));
+        }
+        registrations += ours;
+    }
+    (findings, registrations)
 }
 
 /// Diagnose the hook wiring of every harness the core knows (CLOUD-777).
@@ -2630,9 +2786,18 @@ pub fn diagnose_hooks(dir: &Path) -> WiringReport {
         .and_then(|resolved| resolved.hook.as_ref().map(|hook| hook.exclusive))
         .unwrap_or(false);
     let declared = resolved.and_then(|resolved| resolved.wiring);
+    // Only a LIVE root strictly above the repository (CLOUD-2676): with no
+    // session, nothing loads a candidate root, and a root AT the repository is
+    // the committed file already judged.
+    let repo = crate::git::canonical(dir);
+    //MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
+    //MUTANT doctor-ignores-session-root|s@^        .filter(\x7croot\x7c \*root != repo \&\& repo.starts_with(root));$@        .filter(\x7c_\x7c false);@|doctor_reads_the_live_session_root
+    let session_root = wiring::live_session_root()
+        .map(|root| crate::git::canonical(&root))
+        .filter(|root| *root != repo && repo.starts_with(root));
     let harnesses: Vec<HarnessWiring> = hook::Harness::ALL
         .iter()
-        .filter_map(|harness| diagnose_harness(dir, *harness, exclusive))
+        .filter_map(|harness| diagnose_harness(dir, *harness, exclusive, session_root.as_deref()))
         .collect();
     WiringReport {
         version: config::VERSION,
@@ -3448,7 +3613,8 @@ mod tests {
             .filter(|check| !check.ok)
             .map(|check| check.name)
             .collect();
-        assert_eq!(failed, vec![CONFIG, GIT_REPO]);
+        // `hook-wiring` too: an unwired scratch dir is unwired (CLOUD-2676).
+        assert_eq!(failed, vec![CONFIG, GIT_REPO, HOOK_WIRING]);
     }
 
     #[test]
@@ -3634,6 +3800,28 @@ mod tests {
             );
         }
         serde_json::json!({ "hooks": events })
+    }
+
+    #[test]
+    fn every_reason_id_has_a_fix() {
+        // CLOUD-2676: every finding names its repair, by group.
+        let claude = hook::Harness::ClaudeCode;
+        let regenerate = "batten generate hooks --harness claude-code";
+        let table = [
+            (FILE_MISSING, "batten wiring register --all"),
+            (EVENT_UNREGISTERED, "batten wiring register --all"),
+            (EVENT_UNDERIVED, regenerate),
+            (EVENT_REGISTERED_N_TIMES, regenerate),
+            (MATCHER_NARROWS, regenerate),
+            (COMMAND_DRIFT, regenerate),
+            (SIBLING_REGISTERED, regenerate),
+            (FILE_UNREADABLE, regenerate),
+            (MERGED_REGISTRATION, "batten wiring reclaim"),
+            (MERGED_SIBLING, "batten wiring reclaim"),
+        ];
+        for (reason, fix) in table {
+            assert_eq!(fix_for(reason, claude), fix, "{reason}");
+        }
     }
 
     #[test]
@@ -4037,8 +4225,8 @@ mod tests {
             &serde_json::to_string_pretty(&wiring).unwrap(),
         );
 
-        let permissive =
-            diagnose_harness(&dir, harness, false).expect("claude-code declares a wiring surface");
+        let permissive = diagnose_harness(&dir, harness, false, None)
+            .expect("claude-code declares a wiring surface");
         assert!(
             permissive.ok,
             "undeclared: a sibling stays a count, not a failure — {:?}",
@@ -4046,8 +4234,8 @@ mod tests {
         );
         assert_eq!(permissive.siblings, 1);
 
-        let declared =
-            diagnose_harness(&dir, harness, true).expect("claude-code declares a wiring surface");
+        let declared = diagnose_harness(&dir, harness, true, None)
+            .expect("claude-code declares a wiring surface");
         assert!(!declared.ok, "declared: a sibling is a finding");
         // CONTAINMENT, NOT EQUALITY, and the reason is worth stating rather than
         // working around: `diagnose_harness` reads the MACHINE's `$HOME` for the
@@ -4274,7 +4462,8 @@ mod tests {
                 COMMAND_PROGRAMS,
                 PIN_RECORD,
                 HOOK_HANDLERS,
-                PLAN_SURFACE
+                PLAN_SURFACE,
+                HOOK_WIRING
             ]
         );
     }

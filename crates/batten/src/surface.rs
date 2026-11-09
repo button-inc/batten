@@ -2093,6 +2093,22 @@ const REGISTER_CHECK: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `--all` on `wiring register` (CLOUD-2676): also write every harness's
+/// committed surface under the repository, ungated by the disposable home.
+const REGISTER_ALL: FlagDecl = FlagDecl {
+    id: "all",
+    long: Some("all"),
+    short: None,
+    help: "Also register batten on every harness's committed wiring file",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 const CHECK: FlagDecl = FlagDecl {
     id: "check",
     long: Some("check"),
@@ -7305,7 +7321,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
-        flags: &[REGISTER_CHECK],
+        flags: &[REGISTER_CHECK, REGISTER_ALL],
     },
     // THE CLONE'S OWN COMMIT HOOKS (CLOUD-476), retiring the `mkdir -p` and two
     // `ln -sfn` that were `[tasks."session:git-hooks"]` (CLOUD-1991). Under
