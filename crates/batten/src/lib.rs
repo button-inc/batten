@@ -25828,6 +25828,7 @@ const UNADJUDICABLE: &str = "engine-cannot-adjudicate";
 
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 //MUTANT unloaded-sighted|s@^    if refusal.rule() == UNADJUDICABLE {$@    if false {@|the_unloaded_refusal_reason_reaches_the_harness
+//MUTANT unloaded-repeat-drops-cause|s@this call: {pointer}"$@this call: "@|a_repeated_load_refusal_still_names_its_cause_and_repair
 //MUTANT-SUITE crates/batten/tests/it/preapprove.rs
 //MUTANT grant-said-every-firing|s@^            let arm = arm_for(hook::HookSource::Harness, envelope, \&grant);$@            let arm = refusal::Arm::Full;@|a_grant_says_its_definition_once_per_window
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
