@@ -2535,6 +2535,161 @@ const EVENTS: &[EventRow] = &[
         state_decided: false,
     },
     EventRow {
+        event: batten::hook::Event::PostToolFailure,
+        spelling: "PostToolUseFailure",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::Notification,
+        spelling: "Notification",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::UserPromptExpansion,
+        spelling: "UserPromptExpansion",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::SessionEnd,
+        spelling: "SessionEnd",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::StopFailure,
+        spelling: "StopFailure",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::SubagentStart,
+        spelling: "SubagentStart",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::SubagentStop,
+        spelling: "SubagentStop",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PreCompact,
+        spelling: "PreCompact",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PostCompact,
+        spelling: "PostCompact",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PreModelSwitch,
+        spelling: "PreModelSwitch",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PostModelSwitch,
+        spelling: "PostModelSwitch",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PermissionRequest,
+        spelling: "PermissionRequest",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::PermissionDenied,
+        spelling: "PermissionDenied",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::Setup,
+        spelling: "Setup",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::TeammateIdle,
+        spelling: "TeammateIdle",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::TaskCreated,
+        spelling: "TaskCreated",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::Elicitation,
+        spelling: "Elicitation",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::ElicitationResult,
+        spelling: "ElicitationResult",
+        adjudicated: false,
+        state_decided: false,
+    },
+    // CLOUD-2581's worktree pair answers the host's request natively, and the
+    // census sends no `name` / `worktree_path`, so on claude-code the action
+    // refuses before any write (exit 2) and elsewhere the event is undeclared
+    // (exit 0). `state_decided` is the arm that admits both and still holds
+    // that the answer never names the payload's command.
+    EventRow {
+        event: batten::hook::Event::WorktreeCreate,
+        spelling: "WorktreeCreate",
+        adjudicated: false,
+        state_decided: true,
+    },
+    EventRow {
+        event: batten::hook::Event::WorktreeRemove,
+        spelling: "WorktreeRemove",
+        adjudicated: false,
+        state_decided: true,
+    },
+    EventRow {
+        event: batten::hook::Event::InstructionsLoaded,
+        spelling: "InstructionsLoaded",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::CwdChanged,
+        spelling: "CwdChanged",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::FileChanged,
+        spelling: "FileChanged",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::DirectoryAdded,
+        spelling: "DirectoryAdded",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::MessageDisplay,
+        spelling: "MessageDisplay",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
         event: batten::hook::Event::Unrecognized,
         spelling: "SomethingThisBuildDoesNotKnow",
         adjudicated: false,
