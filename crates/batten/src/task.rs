@@ -106,6 +106,24 @@ const fn default_min_lifetime_secs() -> u64 {
     3600
 }
 
+/// Every field a record carries, in the writer's order (CLOUD-2679): the one
+/// list `task read` checks a field name against, so an unknown name is refused
+/// rather than answered with an empty line. `Entry::render` is held to it by
+/// `the_field_list_is_the_records_own`.
+pub const FIELDS: [&str; 11] = [
+    "task",
+    "pid",
+    "pgid",
+    "phase",
+    "started_at",
+    "phase_since",
+    "tick",
+    "tick_at",
+    "sig",
+    "sig_at",
+    "cmdline_sha256",
+];
+
 /// One registered task, as the writer left it.
 ///
 /// Every field is a `String`, and that is deliberate rather than lazy: the record
@@ -324,6 +342,7 @@ pub(crate) fn process_group(pid: &str) -> String {
 /// The digest is of the pid it is GIVEN, never `/proc/self`: `batten task
 /// register <task> <pid>` runs on the registrant's behalf (CLOUD-1560).
 pub fn register(git_dir: &Path, task: &str, pid: &str, phase: &str, now: u64) {
+    supersede(git_dir, task, pid);
     let started = now.to_string();
     write_entry(
         git_dir,
@@ -338,6 +357,48 @@ pub fn register(git_dir: &Path, task: &str, pid: &str, phase: &str, now: u64) {
             ..Entry::default()
         },
     );
+}
+
+/// Remove every DEAD record of `task` under another pid before `pid` registers
+/// it (CLOUD-2679): one record per container restart piled up, because nothing
+/// removes a record whose process is gone and `alive` must not (CLOUD-901).
+///
+/// TWO CONDITIONS, BOTH REQUIRED. The registrant is gone by [`task_alive`],
+/// the predicate `alive` reads, AND its process group is gone too. The second
+/// keeps CLOUD-1148's invariant: a dead registrant whose group still runs is
+/// exactly what `land`'s reap exists to find, and forgetting its record would
+/// hide those processes from it. Off unix no group reads as gone, so nothing
+/// is superseded there.
+//MUTANT-SUITE crates/batten/tests/it/task_registry.rs
+//MUTANT register-keeps-dead-siblings|s@^        let sibling = entry.task == task \&\& entry.pid != pid;$@        let sibling = entry.task == task \&\& entry.pid.is_empty();@|register_supersedes_its_tasks_dead_records
+//MUTANT supersede-orphans-a-live-group|s@^        if sibling \&\& dead \&\& !group_exists(\&entry.pgid) {$@        if sibling \&\& dead {@|register_keeps_a_dead_sibling_whose_group_still_runs
+fn supersede(git_dir: &Path, task: &str, pid: &str) {
+    for entry in records(git_dir) {
+        let sibling = entry.task == task && entry.pid != pid;
+        let dead = !task_alive(&entry.pid, &entry.cmdline_sha256);
+        if sibling && dead && !group_exists(&entry.pgid) {
+            unregister(git_dir, &entry.pid);
+        }
+    }
+}
+
+/// `kill(-pgid, 0)`: whether any process is in the group, through the probe
+/// [`pid_exists`] uses, so EPERM reads as life there too. A group that will
+/// not parse is no group; off unix every group exists, so nothing is dropped.
+fn group_exists(pgid: &str) -> bool {
+    let Ok(raw) = pgid.parse::<i32>() else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        rustix::process::Pid::from_raw(raw)
+            .is_some_and(|group| lives(rustix::process::test_kill_process_group(group)))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = raw;
+        true
+    }
 }
 
 /// Which of the three per-value fields a push is aimed at.
@@ -1221,6 +1282,19 @@ mod tests {
     /// `#[cfg(unix)]` over the whole test would have left the Windows contract
     /// unstated, which is the mistake `a_reclaim_needs_two_sightings_of_one_dead_pid`
     /// below already calls out in as many words.
+    /// Fails by: a field the writer renders missing from [`FIELDS`], or one
+    /// listed that the writer does not render, which would refuse a real field
+    /// or admit a name that always reads empty.
+    #[test]
+    fn the_field_list_is_the_records_own() {
+        let rendered: Vec<String> = Entry::default()
+            .render()
+            .lines()
+            .filter_map(|line| line.split_once(": ").map(|(name, _)| name.to_owned()))
+            .collect();
+        assert_eq!(rendered, FIELDS.map(str::to_owned).to_vec());
+    }
+
     #[test]
     fn a_dead_registrant_is_abandoned_and_carries_its_group() {
         let dir = registry("abandoned-reports-the-dead");
