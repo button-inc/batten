@@ -493,6 +493,7 @@ mod wall_clock;
 mod wiring_disarm;
 mod wiring_reclaim;
 mod wiring_register;
+mod word_filters;
 mod workflow_shell_census;
 mod worktree_hooks;
 mod worktree_registration;

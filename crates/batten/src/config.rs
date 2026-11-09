@@ -5214,6 +5214,8 @@ fn default_rules() -> Vec<Rule> {
         requires_field: None,
         contains: None,
         unless_contains: None,
+        word: None,
+        unless_word: None,
         require_via: None,
         requires_key: None,
         reason: None,

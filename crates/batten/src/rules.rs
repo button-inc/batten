@@ -168,6 +168,10 @@ const SHAPE_PERMITS: &[&str] = &[
     // precondition row, where the same bytes would silently stop demanding a
     // receipt.
     "unless_contains",
+    // CLOUD-2669: one whole argv word, by anchored expression. `unless_word`
+    // switches a deny off, so it is `shape` only for `unless_contains`'s reason.
+    "word",
+    "unless_word",
     "require_via",
     "requires_key",
     "base",
@@ -1832,6 +1836,20 @@ pub struct Rule {
     /// is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unless_contains: Option<String>,
+    /// Narrow a [`RuleKind::Shape`] deny to a line whose argv carries a WORD
+    /// matching this expression (CLOUD-2669), anchored as `^(?:…)$`.
+    ///
+    /// The words are this line's argv after the effective program, minus its
+    /// redirections, unquoted by the segmenter: `-m "never use --no-verify"` is
+    /// one word and holds no `--no-verify` word, where `contains` sees one. A
+    /// regex rather than a literal so a bundled short flag (`-anm`) is
+    /// expressible; anchoring is what keeps it a word test.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub word: Option<String>,
+    /// The exempting polarity of [`Rule::word`]: a line whose argv carries a
+    /// matching word does not fire. Line-scoped, like `unless_contains`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unless_word: Option<String>,
     /// Narrow a [`RuleKind::Shape`] deny to a call that reached its program
     /// **without** the named mediator (CLOUD-271).
     ///
@@ -3669,6 +3687,16 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         ),
     },
     ColumnCensus {
+        field: "word",
+        declares: Declares::NotFactBearing("a condition over a fact another column declared"),
+    },
+    ColumnCensus {
+        field: "unless_word",
+        declares: Declares::NotFactBearing(
+            "a condition over a fact another column declared, in the exempting polarity",
+        ),
+    },
+    ColumnCensus {
         field: "require_via",
         declares: Declares::NotFactBearing("narrows how a requirement may be met"),
     },
@@ -4132,6 +4160,18 @@ impl Rule {
         if self.kind != RuleKind::Shape {
             return Ok(());
         }
+        // CLOUD-2669: compiled at load, anchored as the matcher anchors them, so
+        // an unparseable word expression never reaches adjudication.
+        for (field, shape) in [("word", &self.word), ("unless_word", &self.unless_word)] {
+            if let Some(shape) = shape.as_deref() {
+                Regex::new(&format!("^(?:{shape})$")).map_err(|err| {
+                    UsageError::raise(format!(
+                        "rule {}: `{field}` is not a valid regular expression: {err}",
+                        self.id
+                    ))
+                })?;
+            }
+        }
         // THREE KEYING COLUMNS NOW, EXACTLY ONE OF WHICH A ROW CARRIES
         // (CLOUD-924). Counted rather than matched as a tuple: a 2x2 match was
         // already at its readable limit and a 2x2x2 one would spell six
@@ -4364,9 +4404,10 @@ impl Rule {
     ///
     /// Shared by the `content` and `tool` arms of [`Rule::validate_shape_columns`]
     /// because the argument is identical one column over, and stating it twice is
-    /// how the two would drift when a sixth modifier lands. Each of the five
+    /// how the two would drift when an eighth modifier lands. Each of the seven
     /// names a COMMAND: `contains` and `unless_contains` are substring tests over
-    /// an argv in the two polarities, `require_via` is a via-shape test over the
+    /// an argv in the two polarities, `word` and `unless_word` the same over its
+    /// whole words, `require_via` is a via-shape test over the
     /// same argv, `requires_key` asks whether the work is keyed before a
     /// command may run, and `base` exists only to tell `requires_key` which
     /// commits to read. A write and a structured call carry no argv for any of
@@ -4380,6 +4421,8 @@ impl Rule {
         for (field, present) in [
             ("contains", self.contains.is_some()),
             ("unless_contains", self.unless_contains.is_some()),
+            ("word", self.word.is_some()), // the argv's own words
+            ("unless_word", self.unless_word.is_some()), // the argv's own words, exempting
             ("require_via", self.require_via.is_some()),
             ("requires_key", self.requires_key.is_some()),
             ("base", self.base.is_some()),
@@ -5009,7 +5052,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 59] {
+    fn columns(&self) -> [(&'static str, bool); 61] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -5041,6 +5084,8 @@ impl Rule {
             ("fix", self.fix.is_some()),
             ("contains", self.contains.is_some()),
             ("unless_contains", self.unless_contains.is_some()),
+            ("word", self.word.is_some()),
+            ("unless_word", self.unless_word.is_some()),
             ("require_via", self.require_via.is_some()),
             ("requires_key", self.requires_key.is_some()),
             ("reason", self.reason.is_some()),
@@ -6078,6 +6123,11 @@ impl Rule {
             .map(String::as_str)
     }
 }
+// CLOUD-2669: `refuse_command_modifiers` above, which a row inside the `impl`
+// cannot sit beside at column 0.
+//MUTANT-SUITE crates/batten/tests/it/word_filters.rs
+//MUTANT word-modifier-unrefused|s@^            ("word", self.word.is_some()), // the argv's own words$@@|a_word_column_on_a_content_row_fails_to_load
+//MUTANT-SUITE crates/batten/tests/it/record_families.rs
 
 /// Validate a whole `[[rule]]` table, and refuse a duplicated id.
 ///
@@ -15418,8 +15468,12 @@ mod tests {
     // One line per `Rule` column, and `Rule` has no `Default` on purpose — a
     // fixture that spreads one would stop naming the columns it leaves empty,
     // which is the census this literal is. The three columns whose blank value
-    // depends on the kind are filled by [`per_kind`], which keeps this literal
-    // under the length ceiling without an escape.
+    // depends on the kind are filled by [`per_kind`].
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one line per `Rule` column is the census; a literal that spread a \
+                  default to stay short would stop naming the columns it leaves empty"
+    )]
     fn blank(id: &str, kind: RuleKind) -> Rule {
         per_kind(Rule {
             review: Vec::new(),
@@ -15450,6 +15504,8 @@ mod tests {
             requires_field: None,
             contains: None,
             unless_contains: None,
+            word: None,
+            unless_word: None,
             require_via: None,
             requires_key: None,
             reason: None,
