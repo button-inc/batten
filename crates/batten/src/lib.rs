@@ -675,6 +675,9 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             cli::ForgeCommand::Intake { event, from } => {
                 run_forge_intake(event, from.as_deref(), mode, &overrides, out, err)
             }
+            cli::ForgeCommand::Poll { every } => {
+                run_forge_poll(every.as_deref(), mode, &overrides, out, err)
+            }
         },
     }
 }
@@ -691,9 +694,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
 /// its refusal is recorded in the findings store instead, and its faults are
 /// a stderr pointer.
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
-//MUTANT intake-skips-dispatch|s@^    let dispatched = dispatch_envelope(harness, instant, mode, overrides, input, out, err)?;$@    let dispatched = { drop(input); HookDispatch::undenied(ExitCode::Success) };@|intake_runs_handlers_and_exits_on_their_verdict
 //MUTANT wake-exit-propagated|s@^        Err(denied) if wake => {$@        Err(denied) if false => {@|a_wake_refusal_exits_zero_and_lands_in_the_findings_store
-//MUTANT forge-refusal-unrecorded|s@^        record_forge_refusal(\&root, \&recorded, deny, err);$@@|a_wake_refusal_exits_zero_and_lands_in_the_findings_store
 fn run_forge_intake(
     event: Option<String>,
     from: Option<&str>,
@@ -756,37 +757,25 @@ fn run_forge_intake(
         );
     };
     let ring = forge_event::ring_path(Path::new(&common));
-    let key = envelope
-        .forge
-        .as_ref()
-        .map(|forge| forge.key.clone())
-        .unwrap_or_default();
-    match forge_event::unseen(&ring, &key) {
-        Ok(true) => {}
-        Ok(false) => return Ok(ExitCode::Success),
-        Err(_) => return fault(ExitCode::Internal, "the seen ring cannot be read", err),
-    }
-    let recorded = envelope.clone();
-    let instant = std::time::SystemTime::now();
     let document = body.to_string();
-    let input = HookInput {
-        raw: &document,
+    let rendered = match intake_one(
+        &root,
+        &ring,
         envelope,
-        spilled: &[],
-        ran: None,
+        &document,
+        (mode, overrides),
+        out,
+        err,
+    )? {
+        Intake::Seen => return Ok(ExitCode::Success),
+        Intake::Unreadable => {
+            return fault(ExitCode::Internal, "the seen ring cannot be read", err);
+        }
+        Intake::Dispatched(rendered) => rendered,
     };
-    let harness = hook::Harness::ExitCode;
-    let dispatched = dispatch_envelope(harness, instant, mode, overrides, input, out, err)?;
-    // Appended only AFTER dispatch returns, so a crash replays the event.
-    if forge_event::remember(&ring, &key).is_err() {
-        writeln!(err, "forge intake: the seen ring could not be written")?;
-    }
-    if let Some(deny) = dispatched.deny.as_deref() {
-        record_forge_refusal(&root, &recorded, deny, err);
-    }
     // THE WAKE FORM NEVER REFUSES THE OPERATOR'S PROMPT: its refusal is the
-    // record above and a stderr line, and its exit is 0.
-    match dispatched.rendered {
+    // record and a stderr line, and its exit is 0.
+    match rendered {
         Ok(_) if wake => Ok(ExitCode::Success),
         Err(denied) if wake => {
             writeln!(err, "{denied}")?;
@@ -794,6 +783,198 @@ fn run_forge_intake(
         }
         rendered => rendered,
     }
+}
+
+/// What one forge event did at the door.
+enum Intake {
+    /// Its key is already in the ring, so nothing was dispatched.
+    Seen,
+    /// The ring could not be read: could-not-look.
+    Unreadable,
+    /// It was dispatched; this is the rendering, exactly as `render` returned it.
+    Dispatched(Result<ExitCode>),
+}
+
+/// One normalized forge event through the seen ring, the dispatcher and the
+/// findings store (CLOUD-2690): the step `forge intake` and `forge poll`
+/// share, so a pushed and a polled copy of one change fire once.
+//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
+//MUTANT intake-skips-dispatch|s@^    let dispatched = dispatch_envelope(harness, instant, mode, overrides, input, out, err)?;$@    let dispatched = { drop(input); HookDispatch::undenied(ExitCode::Success) };@|intake_runs_handlers_and_exits_on_their_verdict
+//MUTANT forge-refusal-unrecorded|s@^        record_forge_refusal(root, \&recorded, deny, err);$@@|a_wake_refusal_exits_zero_and_lands_in_the_findings_store
+fn intake_one(
+    root: &Path,
+    ring: &Path,
+    envelope: hook::Envelope,
+    document: &str,
+    (mode, overrides): (Mode, &Overrides),
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<Intake> {
+    let key = envelope
+        .forge
+        .as_ref()
+        .map(|forge| forge.key.clone())
+        .unwrap_or_default();
+    match forge_event::unseen(ring, &key) {
+        Ok(true) => {}
+        Ok(false) => return Ok(Intake::Seen),
+        Err(_) => return Ok(Intake::Unreadable),
+    }
+    let recorded = envelope.clone();
+    let instant = std::time::SystemTime::now();
+    let input = HookInput {
+        raw: document,
+        envelope,
+        spilled: &[],
+        ran: None,
+    };
+    let harness = hook::Harness::ExitCode;
+    let dispatched = dispatch_envelope(harness, instant, mode, overrides, input, out, err)?;
+    // Appended only AFTER dispatch returns, so a crash replays the event.
+    if forge_event::remember(ring, &key).is_err() {
+        writeln!(err, "forge intake: the seen ring could not be written")?;
+    }
+    if let Some(deny) = dispatched.deny.as_deref() {
+        record_forge_refusal(root, &recorded, deny, err);
+    }
+    Ok(Intake::Dispatched(dispatched.rendered))
+}
+
+/// `batten forge poll [--every <seconds>]` (CLOUD-2693): one round from the
+/// first available `[[forge.source]]`, each event through [`intake_one`], then
+/// the source's cursor saved. One round exits 0/1/2/3 on `--event`'s contract;
+/// `--every` loops, registered with `task` as `forge-poll` and ticking once
+/// per round, and a round's could-not-look is a pointer the loop survives.
+//MUTANT-SUITE crates/batten/tests/it/task_registry.rs
+//MUTANT forge-poll-unregistered|s@^    task::register(\&git_dir, "forge-poll", \&pid, "polling", now);$@    let _ = (\&git_dir, \&pid, now);@|forge_poll_every_registers_and_ticks
+fn run_forge_poll(
+    every: Option<&str>,
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let _memos = hook_call_memos();
+    let every = match every.map(str::parse::<u64>) {
+        None => None,
+        Some(Ok(seconds)) if seconds > 0 => Some(seconds),
+        Some(_) => {
+            return Err(UsageError::raise(
+                "forge poll: --every takes a whole number of seconds above 0".to_owned(),
+            ));
+        }
+    };
+    let Ok(root) = git::repo_root(Path::new(".")) else {
+        writeln!(err, "forge poll: not a repository")?;
+        return Ok(ExitCode::Internal);
+    };
+    let Some(seconds) = every else {
+        return forge_round(&root, mode, overrides, out, err);
+    };
+    let git_dir = git::git_dir(&root)?;
+    let pid = std::process::id().to_string();
+    let now = epoch_now();
+    task::register(&git_dir, "forge-poll", &pid, "polling", now);
+    let (unregister_dir, unregister_pid) = (git_dir.clone(), pid.clone());
+    exec::on_terminate(move || task::unregister(&unregister_dir, &unregister_pid));
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let mut round: u64 = 0;
+    loop {
+        if let Ok(ExitCode::Internal) = forge_round(&root, mode, overrides, out, err) {
+            writeln!(err, "forge poll: round {round} could not look")?;
+        }
+        round += 1;
+        task::push(
+            &git_dir,
+            &pid,
+            task::Signal::Tick,
+            &round.to_string(),
+            epoch_now(),
+        );
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a poll interval in seconds is far below f64's exact-integer range"
+        )]
+        pr_watch::pause_until(seconds as f64, &stop);
+    }
+}
+
+/// Seconds since the epoch, for the task registry's stamps.
+fn epoch_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
+/// One poll round: read, dispatch each event, save the cursor.
+//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
+//MUTANT cursor-unsaved|s@^    write_cursor(\&cursor_path, \&cursor)?;$@    let _ = (\&cursor_path, \&cursor);@|a_round_resumes_from_its_cursor
+fn forge_round(
+    root: &Path,
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    use forge_event::write_cursor;
+    let config = resolve::committed(root, overrides)?;
+    let forge = config.forge.unwrap_or_default();
+    let Ok(common) = git::common_dir(root) else {
+        writeln!(err, "forge poll: the git common dir does not resolve")?;
+        return Ok(ExitCode::Internal);
+    };
+    let slug = repo_slug(root).and_then(|slug| {
+        let (owner, repo) = slug.split_once('/')?;
+        Some((owner.to_owned(), repo.to_owned()))
+    });
+    let input = forge_event::RoundInput {
+        root,
+        common_dir: Path::new(&common),
+        mcp: config.mcp.as_ref(),
+        slug: slug.as_ref(),
+    };
+    let forge_event::Round::Read {
+        events,
+        cursor,
+        cursor_path,
+    } = forge_event::read_round(&forge, &input, err)?
+    else {
+        writeln!(err, "forge poll: no source is available")?;
+        return Ok(ExitCode::Internal);
+    };
+    let ring = forge_event::ring_path(Path::new(&common));
+    let mut refused = false;
+    for envelope in events {
+        // A polled event has no webhook body of its own: the handler reads its
+        // tokens (`input.call.forge`'s shape), never a payload (rule 4).
+        let document = serde_json::to_string(&envelope.forge).unwrap_or_default();
+        match intake_one(
+            root,
+            &ring,
+            envelope,
+            &document,
+            (mode, overrides),
+            out,
+            err,
+        )? {
+            Intake::Seen | Intake::Dispatched(Ok(ExitCode::Success)) => {}
+            Intake::Unreadable => {
+                writeln!(err, "forge poll: the seen ring cannot be read")?;
+                return Ok(ExitCode::Internal);
+            }
+            Intake::Dispatched(Ok(_)) => refused = true,
+            Intake::Dispatched(Err(denied)) => {
+                writeln!(err, "{denied}")?;
+                refused = true;
+            }
+        }
+    }
+    write_cursor(&cursor_path, &cursor)?;
+    Ok(if refused {
+        ExitCode::Violation
+    } else {
+        ExitCode::Success
+    })
 }
 
 /// Record a forge refusal in the findings store, where the drain delivers it

@@ -4849,6 +4849,7 @@ mod lap_tests {
             query: Vec::new(),
             probe: Vec::new(),
             nothing_graded: None,
+            source: Vec::new(),
         });
         let config = crate::pr_watch::Config {
             sha: String::from("0000000000000000000000000000000000000000"),
