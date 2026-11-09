@@ -459,6 +459,9 @@ token_enum! {
         /// A `&` job nothing in the same call waits on, where the harness has a
         /// supported background option instead (CLOUD-2667).
         Detach => "detach",
+        /// A mediated `git commit` whose message subject breaks
+        /// `[commit].subject_pattern` (CLOUD-2683).
+        CommitSubject => "commit-subject",
     }
 }
 
