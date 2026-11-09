@@ -2328,7 +2328,7 @@ fn diagnose_harness(
         let mut here = 0;
         for (matcher, entry) in events
             .get(*spelling)
-            .map(entries_under)
+            .map(|value| entries_under(value, harness.entry_shape()))
             .unwrap_or_default()
             .into_iter()
             .filter(|(_, entry)| entry.contains("batten"))
@@ -2382,7 +2382,7 @@ fn diagnose_harness(
     let admitted = wiring.admits(harness);
     let spellings: Vec<&str> = admitted.iter().map(|(_, spelling)| *spelling).collect();
     for (event, value) in events.iter() {
-        for (_, entry) in entries_under(value) {
+        for (_, entry) in entries_under(value, harness.entry_shape()) {
             if !entry.contains("batten") {
                 siblings += 1;
                 // COUNTED ALWAYS, REFUSED ONLY UNDER THE DECLARATION. The count
@@ -2675,7 +2675,7 @@ fn merged_under(
         // counter incremented one step too early makes them the same number.
         tally.read += 1;
         for (event, value) in events.iter() {
-            for (_, entry) in entries_under(value) {
+            for (_, entry) in entries_under(value, harness.entry_shape()) {
                 tally.commands += 1;
                 if entry.contains(command) || entry.contains("batten") {
                     tally.findings.push(WiringFinding {
@@ -2737,7 +2737,7 @@ fn diagnose_session_root(
     let mut registrations = 0;
     for (_, spelling) in derived {
         let ours = events.get(*spelling).map_or(0, |value| {
-            entries_under(value)
+            entries_under(value, hook::Harness::ClaudeCode.entry_shape())
                 .into_iter()
                 .filter(|(_, entry)| entry.contains("batten"))
                 .count()
