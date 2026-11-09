@@ -494,13 +494,21 @@ whatever this paragraph said.
 program per segment, resolved through environment assignments, wrapper programs
 and the shell grammar above — with `name` for the program reached through a
 path, `arguments` for what THAT program was handed, and `mediated` for whether
-the pin selected it. So the correct predicate is still short, and it correlates:
+the pin selected it. For `git`, `gh` and `mise` it also carries `subcommand`,
+the first bare word past the program's own value-taking options, and
+`global-options`, the words before it verbatim (CLOUD-2354); both are `null` for
+a program with no declared option table. So the correct predicate is still
+short, and it correlates:
 
 ```rego
 some program in input.call.programs
 program.name == "git"
-"push" in program.arguments
+program.subcommand == "push"
 ```
+
+Never `"push" in program.arguments`: membership fires on `git commit -m push`.
+And never parse the global options in Rego: the engine's table is the one copy,
+and a module that needs to judge them reads `global-options`.
 
 Reach for `arguments` rather than the segment's words whenever a flag has to be
 the program's own: a `git status` beside an `hg push --force` is two facts, and
