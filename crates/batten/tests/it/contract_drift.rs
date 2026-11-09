@@ -41,6 +41,14 @@ fn fixture(name: &str) -> std::path::PathBuf {
     std::fs::write(dir.join(".claude/settings.json"), "{\"hooks\":{}}\n").unwrap();
     std::fs::write(dir.join("mise-tasks/a-gate"), "#!/usr/bin/env bash\ntrue\n").unwrap();
     common::git_in(&dir, &["init", "-q"]);
+    // Batten is registered on every host's whole surface, as `init` leaves a
+    // consumer, so the doctor check behind session start has nothing to owe.
+    let wired = common::batten()
+        .current_dir(&dir)
+        .args(["wiring", "register", "--all"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(wired.status.code(), Some(0), "{}", common::stderr(&wired));
     common::git_in(&dir, &["add", "-A"]);
     common::git_in(&dir, &["commit", "-qm", "seed"]);
     dir
