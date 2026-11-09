@@ -2499,6 +2499,38 @@ const BENCH_CHECK: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `forge intake --event <name>` (CLOUD-2690): the `X-GitHub-Event` name a
+/// webhook body on stdin arrived under, because a body does not name itself.
+const INTAKE_EVENT: FlagDecl = FlagDecl {
+    id: "event",
+    long: Some("event"),
+    short: None,
+    help: "The X-GitHub-Event name the webhook body on stdin arrived under",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `forge intake --from wake` (CLOUD-2690): stdin is a harness
+/// user-prompt-submit payload carrying a `<event source="github">` element.
+const INTAKE_FROM: FlagDecl = FlagDecl {
+    id: "from",
+    long: Some("from"),
+    short: None,
+    help: "`wake`: stdin is a harness user-prompt-submit payload carrying the event",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const SLOW_BASE: FlagDecl = FlagDecl {
     id: "base",
     long: Some("base"),
@@ -8148,6 +8180,27 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Write,
         flags: &[JSON, SLOW_BASE],
+    },
+    // CLOUD-2690. THE FORGE'S DOOR: one event payload on stdin, normalized by
+    // `forge_event`, deduplicated by its seen ring, and dispatched through the
+    // same `dispatch_envelope` a harness hook takes. No server (CLOUD-204).
+    CommandDecl {
+        path: "forge",
+        id: "forge",
+        about: "Take forge events into the hook surface",
+        data_channel: false,
+        exits: EXITS_DISPATCHES,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    CommandDecl {
+        path: "forge intake",
+        id: "forge.intake",
+        about: "Run one forge event payload from stdin through the handlers and rules a harness hook gets",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[INTAKE_EVENT, INTAKE_FROM],
     },
     CommandDecl {
         path: "artifacts",
