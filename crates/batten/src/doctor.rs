@@ -2405,13 +2405,6 @@ fn diagnose_harness(
                     file: String::new(),
                     fix: String::new(),
                 });
-            } else if !derived
-                .iter()
-                .any(|(_, spelling)| *spelling == event.as_str())
-            {
-                // Admitted but not required: the consumer's own registration,
-                // counted like any other (CLOUD-2581).
-                registrations += 1;
             }
         }
     }
@@ -3871,8 +3864,10 @@ mod tests {
     }
 
     #[test]
-    fn an_eight_event_wiring_stays_green_beside_the_optional_events() {
-        // CLOUD-2581: admitting 33 must not REQUIRE 33. A literal list, so the
+    fn an_eight_event_wiring_owes_the_rest_of_the_surface() {
+        // Owner ruling 2026-11-09, over CLOUD-2581's admitted-vs-required split:
+        // Batten is registered on every event the host emits, so the eight it
+        // once registered by default leave 25 owed. A literal list, so the
         // fixture does not grow with `registrations()` the way
         // `complete_wiring` does.
         let eight = [
@@ -3886,8 +3881,18 @@ mod tests {
             "UserPromptSubmit",
         ];
         let row = claude_row("hooks-eight-events", &wiring_on(&eight));
-        assert!(row.ok, "{:?}", row.findings);
-        assert!(!reasons(&row).contains(&EVENT_UNREGISTERED));
+        assert!(!row.ok);
+        let owed: Vec<&WiringFinding> = row
+            .findings
+            .iter()
+            .filter(|finding| finding.reason == EVENT_UNREGISTERED)
+            .collect();
+        assert_eq!(owed.len(), 25, "{:?}", row.findings);
+        assert!(
+            owed.iter()
+                .all(|finding| finding.fix == "batten wiring register --all"),
+            "{owed:?}"
+        );
     }
 
     #[test]
