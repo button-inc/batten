@@ -1371,6 +1371,57 @@ const CLAUDE_SPELLINGS: &[(Event, &str)] = &[
     (Event::MessageDisplay, "MessageDisplay"),
 ];
 
+/// How one registration entry is shaped on a host's committed surface
+/// (CLOUD-2694).
+///
+/// Claude Code, Codex and Gemini nest the command one level down,
+/// `[{"hooks": [{"type": "command", "command": …}]}]`. Cursor and Copilot take
+/// one flat object per entry, which is what their docs show and the only shape
+/// either host reads: a nested entry there is a hook that can never fire.
+/// `write` is the key the command is written under; `read` is every key a
+/// reader counts (Copilot's `command` is a documented cross-platform fallback,
+/// but only `bash` is honoured under its cloud agent, so `bash` is written).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EntryShape {
+    /// `{"hooks": [{"type": "command", "command": …}]}`.
+    Nested,
+    /// `{"type": "command", "<write>": …}`.
+    Flat {
+        /// The key the command is written under.
+        write: &'static str,
+        /// Every key a reader accepts as the command.
+        read: &'static [&'static str],
+    },
+}
+
+/// Cursor's flat entry: `{"type": "command", "command": …}`.
+const CURSOR_ENTRY: EntryShape = EntryShape::Flat {
+    write: "command",
+    read: &["command"],
+};
+
+/// Copilot's flat entry: written under `bash`, read under `bash` or `command`.
+const COPILOT_ENTRY: EntryShape = EntryShape::Flat {
+    write: "bash",
+    read: &["bash", "command"],
+};
+
+impl Harness {
+    /// The entry shape this host reads (CLOUD-2694); the one function every
+    /// writer and reader asks, so render, register, doctor and reclaim agree.
+    //MUTANT-SUITE crates/batten/tests/it/harness_wiring.rs
+    //MUTANT flat-harness-rendered-nested|s@^            Harness::Cursor => CURSOR_ENTRY,$@            Harness::Cursor => EntryShape::Nested,@|a_flat_host_is_generated_flat
+    pub(crate) const fn entry_shape(self) -> EntryShape {
+        match self {
+            Harness::Cursor => CURSOR_ENTRY,
+            Harness::CopilotCli => COPILOT_ENTRY,
+            Harness::ClaudeCode | Harness::CodexCli | Harness::GeminiCli | Harness::ExitCode => {
+                EntryShape::Nested
+            }
+        }
+    }
+}
+
 /// The command a host's registration invokes.
 ///
 /// Neutral on purpose, and this is where non-negotiable rule 1 bites (CLOUD-62):
@@ -1429,13 +1480,25 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
     // backslash would otherwise emit JSON that does not parse.
     let command = json_string(&wiring_command(harness));
     let registrations = wiring.registrations(harness);
+    let shape = harness.entry_shape();
 
     // Built as lines with an explicit indent rather than through a map type:
     // key order is the contract here (§6 byte-stability), and a map would sort
     // or hash it. The indent is a parameter so the same body serves a whole file
     // and a key's value, which differ only by one level.
-    let entry = |spelling: &str, indent: &str| {
-        [
+    // ONE ENTRY IN THE SHAPE THE HOST READS (CLOUD-2694): flat on Cursor and
+    // Copilot, nested everywhere else.
+    let entry = |spelling: &str, indent: &str| match shape {
+        EntryShape::Flat { write, .. } => [
+            format!("{indent}{}: [", json_string(spelling)),
+            format!("{indent}  {{"),
+            format!("{indent}    \"type\": \"command\","),
+            format!("{indent}    {}: {command}", json_string(write)),
+            format!("{indent}  }}"),
+            format!("{indent}]"),
+        ]
+        .join("\n"),
+        EntryShape::Nested => [
             format!("{indent}{}: [", json_string(spelling)),
             format!("{indent}  {{"),
             format!("{indent}    \"hooks\": ["),
@@ -1447,7 +1510,7 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
             format!("{indent}  }}"),
             format!("{indent}]"),
         ]
-        .join("\n")
+        .join("\n"),
     };
 
     match wiring.file {
@@ -1466,7 +1529,17 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
                 .iter()
                 .map(|(_, spelling)| entry(spelling, "    "))
                 .collect();
-            format!("{{\n  \"hooks\": {{\n{}\n  }}\n}}", body.join(",\n"))
+            // A flat host's file carries `"version": 1` first, as both hosts
+            // document it (CLOUD-2694).
+            let version = if matches!(shape, EntryShape::Flat { .. }) {
+                "  \"version\": 1,\n"
+            } else {
+                ""
+            };
+            format!(
+                "{{\n{version}  \"hooks\": {{\n{}\n  }}\n}}",
+                body.join(",\n")
+            )
         }
     }
 }
@@ -18444,8 +18517,13 @@ deny contains "refused by themodule" if {
             };
             for (_, spelling) in wiring.registrations(*harness) {
                 rendered_any = true;
+                // Where the host's entry shape puts the command (CLOUD-2694).
+                let command = match harness.entry_shape() {
+                    EntryShape::Flat { write, .. } => &hooks[spelling][0][write],
+                    EntryShape::Nested => &hooks[spelling][0]["hooks"][0]["command"],
+                };
                 assert_eq!(
-                    hooks[spelling][0]["hooks"][0]["command"],
+                    *command,
                     Value::String(wiring_command(*harness)),
                     "{}: {spelling}",
                     harness.as_str()
