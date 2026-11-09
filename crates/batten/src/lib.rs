@@ -19569,6 +19569,7 @@ struct CallFacts {
     dispatch: facts::Look<()>,
     pinned: facts::Look<std::collections::BTreeSet<String>>,
     red_head: facts::Look<serde_json::Value>,
+    commit_subject: facts::Look<String>,
 }
 
 fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
@@ -19580,6 +19581,43 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
         dispatch: dispatch_facts(envelope),
         pinned: pinned_for(policy, envelope),
         red_head: red_head_for(policy, envelope),
+        commit_subject: commit_subject_for(policy, envelope),
+    }
+}
+
+//MUTANT-SUITE crates/batten/tests/it/commit.rs
+//MUTANT message-file-unread|s@^        Some(hook::CommitMessage::File(path)) => first_line(\&path),$@        Some(hook::CommitMessage::File(_)) => facts::Look::CouldNotLook,@|every_message_spelling_is_read
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+/// The subject of the message a mediated `git commit` names (CLOUD-2683),
+/// read only where `[commit]` is declared: a repository with no convention
+/// opens nothing. The parse is [`hook::commit_message`]'s; this half reads a
+/// `-F` file, bounded to its first line within 64 KiB.
+fn commit_subject_for(policy: &hook::Policy, envelope: &hook::Envelope) -> facts::Look<String> {
+    if policy.commit.is_none() || envelope.event != hook::Event::PreTool {
+        return facts::Look::CouldNotLook;
+    }
+    match hook::commit_message(envelope) {
+        None => facts::Look::CouldNotLook,
+        Some(hook::CommitMessage::Text(text)) => hook::commit_subject(&text),
+        Some(hook::CommitMessage::File(path)) => first_line(&path),
+    }
+}
+
+/// The subject of the message file at `path`: could-not-look where it is
+/// missing, unreadable, not UTF-8, or has no line end within 64 KiB.
+fn first_line(path: &std::path::Path) -> facts::Look<String> {
+    use std::io::Read as _;
+    let Ok(file) = std::fs::File::open(path) else {
+        return facts::Look::CouldNotLook;
+    };
+    let mut bytes = Vec::new();
+    if file.take(64 * 1024).read_to_end(&mut bytes).is_err() {
+        return facts::Look::CouldNotLook;
+    }
+    let complete = bytes.contains(&b'\n') || bytes.len() < 64 * 1024;
+    match String::from_utf8(bytes) {
+        Ok(text) if complete => hook::commit_subject(&text),
+        _ => facts::Look::CouldNotLook,
     }
 }
 
@@ -20027,6 +20065,7 @@ fn dispatch_envelope(
         singleton: &call.singleton,
         discards: &call.discards,
         unread_history: &call.unread_history,
+        commit_subject: &call.commit_subject,
         receipts: &receipts,
         keys: &keys,
         stop: &stop,

@@ -4006,6 +4006,9 @@ fn cursor_specialized_input(value: &Value) -> Value {
 /// ignores it — and `--config-from` is inherited for free.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
+    /// The resolved `[commit]` convention, which the commit-subject gate judges
+    /// a mediated commit's message against (CLOUD-2683). `None` arms nothing.
+    pub commit: Option<crate::commit::Commit>,
     /// The host this policy is being applied on, and through it the
     /// [`Capabilities`] row a rule may branch on (CLOUD-779).
     ///
@@ -4142,6 +4145,7 @@ impl Policy {
     #[must_use]
     pub fn declaring_nothing(harness: Harness) -> Policy {
         Policy {
+            commit: None,
             harness,
             shapes: Vec::new(),
             fail_on_warning: false,
@@ -4295,6 +4299,7 @@ impl Policy {
                 })
             },
             facts: resolved.facts.clone(),
+            commit: resolved.commit.clone(),
             mints: resolved.mints.clone(),
             recorders: resolved.recorders.clone(),
             patterns: resolved.patterns.clone(),
@@ -4913,6 +4918,9 @@ impl Policy {
             // is the case the unit tests over `policy::deny` cannot make.
             && self.bundles.is_empty()
             && (self.verbs.is_empty() || self.protected.is_empty())
+            // A declared `[commit]` convention arms the commit-subject gate
+            // (CLOUD-2683), which this short-circuit would otherwise never reach.
+            && self.commit.is_none()
     }
 
     /// This policy with every row whose declared hatch is in `set` removed
@@ -4932,6 +4940,7 @@ impl Policy {
     #[must_use]
     pub fn without_hatched(&self, set: &std::collections::BTreeSet<String>) -> Policy {
         Policy {
+            commit: self.commit.clone(),
             shapes: self
                 .shapes
                 .iter()
@@ -5210,6 +5219,13 @@ fn event_decides(event: Event) -> Option<Decision> {
 //MUTANT wait-reads-as-detached|s@^        .any(\x7clater\x7c waits_on(later, detached, jobs))$@        .any(\x7c_\x7c false)@|waiting_in_the_same_call_is_not_detached
 //MUTANT foreign-wait-admits|s@^    operands.is_empty() \x7c\x7c (jobs == 1 && operands.iter().all(\x7cword\x7c own_job_ref(word)))$@    true@|a_wait_on_another_job_is_detached
 //MUTANT subshell-wait-admits|s@^    if later.grouped != detached.grouped \x7c\x7c later.nested != detached.nested {$@    if false {@|a_wait_outside_the_subshell_is_detached
+// CLOUD-2683's commit-subject gate: `native_fired`, `commit_subject_gate`,
+// `segment_commit_message`, and the `cat_bodies` fill in `flatten_command`.
+//MUTANT-SUITE crates/batten/tests/it/commit.rs
+//MUTANT commit-subject-unjudged|s@^    if let Some(refusal) = commit_subject_gate(policy, facts) {$@    if let Some(refusal) = None::<Refusal> {@|a_mediated_commit_whose_subject_breaks_the_pattern_is_refused
+//MUTANT message-spelling-unread|s@^        if let Some(body) = cat_heredoc_body(word) {$@        if let Some(body) = None::<String> {@|every_message_spelling_is_read
+//MUTANT message-equals-unread|s@^        } else if let Some(body) = word.strip_prefix("--message=") {$@        } else if let Some(body) = None::<\&str> {@|every_message_spelling_is_read
+//MUTANT unreadable-message-refused|s@^        crate::facts::Look::CouldNotLook => return None,$@        crate::facts::Look::CouldNotLook => return Some(commit_subject_refusal()),@|an_unreadable_or_conforming_message_is_not_refused
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 /// The severity a compiled gate runs at here: [`crate::rules::native_grade`]
 /// over this policy's mediated rows (CLOUD-2291). Only the committed authority
@@ -5222,7 +5238,7 @@ fn native_grade(policy: &Policy, gate: NativeGate) -> RuleSeverity {
 /// grade says (CLOUD-2291). Lifted out of [`adjudicated_call_gates`], whose line
 /// budget the grading spent.
 fn native_denial(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Option<Decision> {
-    native_fired(envelope, facts)
+    native_fired(policy, envelope, facts)
         .into_iter()
         .find_map(|(gate, refusal)| {
             let severity = native_grade(policy, gate);
@@ -5233,7 +5249,7 @@ fn native_denial(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Opt
 /// The refusals of every compiled gate that fired at a reporting, non-blocking
 /// grade, delivered as advisories while the call is allowed (CLOUD-2291).
 fn native_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Refusal> {
-    native_fired(envelope, facts)
+    native_fired(policy, envelope, facts)
         .into_iter()
         .filter(|(gate, _)| {
             let severity = native_grade(policy, *gate);
@@ -5250,7 +5266,11 @@ fn native_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec
 /// [`native_advice`] differ only in which grades they take, so the deny and the
 /// advisory cannot disagree about when a gate fires. Facts first, grades after
 /// — the facts are already resolved and nearly always empty.
-fn native_fired(envelope: &Envelope, facts: &Facts<'_>) -> Vec<(NativeGate, Refusal)> {
+fn native_fired(
+    policy: &Policy,
+    envelope: &Envelope,
+    facts: &Facts<'_>,
+) -> Vec<(NativeGate, Refusal)> {
     let mut fired = Vec::new();
     // THE DESTRUCTIVE-RESET GATE (CLOUD-462), and its predicate is REACHABILITY
     // rather than the verb's spelling.
@@ -5304,7 +5324,138 @@ fn native_fired(envelope: &Envelope, facts: &Facts<'_>) -> Vec<(NativeGate, Refu
     if let Some(refusal) = detached_call(envelope) {
         fired.push((NativeGate::Detach, refusal));
     }
+    // THE COMMIT-SUBJECT GATE (CLOUD-2683), last: a bad subject loses nothing
+    // before landing, so every gate above outranks it.
+    if let Some(refusal) = commit_subject_gate(policy, facts) {
+        fired.push((NativeGate::CommitSubject, refusal));
+    }
     fired
+}
+
+/// The rule id the commit-subject gate refuses under (CLOUD-2683).
+pub const COMMIT_SUBJECT: &str = "commit-subject";
+
+/// A mediated commit whose subject `[commit].subject_pattern` refuses, judged
+/// by [`crate::commit::Commit::judge`], the one matcher. Armed only where the
+/// table is declared and the boundary read a subject; could-not-look allows.
+fn commit_subject_gate(policy: &Policy, facts: &Facts<'_>) -> Option<Refusal> {
+    let commit = policy.commit.as_ref()?;
+    let broken = match facts.commit_subject {
+        crate::facts::Look::Is(text) => commit
+            .judge(&[crate::commit::Subject {
+                label: "pending".to_owned(),
+                text: text.clone(),
+            }])
+            .is_ok_and(|findings| !findings.is_empty()),
+        crate::facts::Look::IsNot => false,
+        crate::facts::Look::CouldNotLook => return None,
+    };
+    broken.then(commit_subject_refusal)
+}
+
+/// The refusal names the gate and the pattern's key, never the subject text.
+fn commit_subject_refusal() -> Refusal {
+    Refusal::declared(
+        COMMIT_SUBJECT,
+        crate::verdict::Native::SubjectUnconventional,
+        &[crate::verdict::Subject::Artifact {
+            artifact: "[commit].subject_pattern".to_owned(),
+        }],
+        Fix::declared(Some(
+            "reword the subject to match `[commit].subject_pattern`",
+        )),
+    )
+}
+
+/// Where a mediated `git commit` takes its message from (CLOUD-2683).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommitMessage {
+    /// The message itself: `-m`, `--message`, a `cat` heredoc inside one, or
+    /// `-F -` fed by a heredoc or here-string.
+    Text(String),
+    /// A file `-F` names, resolved against the call's cwd and each `-C`.
+    File(PathBuf),
+}
+
+/// The message the first `git commit` in this call names, or `None` where it
+/// names none the boundary can read: the editor, `--amend --no-edit`, `-F -`
+/// fed by a file redirect, or a command that does not parse.
+#[must_use]
+pub fn commit_message(envelope: &Envelope) -> Option<CommitMessage> {
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    parsed
+        .iter()
+        .find_map(|segment| segment_commit_message(segment, envelope.cwd.as_deref()))
+}
+
+fn segment_commit_message(segment: &Segment, cwd: Option<&Path>) -> Option<CommitMessage> {
+    let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+    let handed = tokens.len().saturating_sub(segment.redirects.len());
+    let program = effective_program(&tokens[..handed])?;
+    if program_name(program_token(tokens[program])) != "git" {
+        return None;
+    }
+    let arguments: Vec<&str> = tokens[program + 1..handed].to_vec();
+    let verb = subcommand_index(&arguments, &GIT_VALUE_OPTIONS)?;
+    if arguments[verb] != "commit" {
+        return None;
+    }
+    let text = |operand: &str| {
+        let body = segment
+            .cat_bodies
+            .iter()
+            .find(|(spelled, _)| spelled == operand)
+            .map_or(operand, |(_, body)| body.as_str());
+        Some(CommitMessage::Text(body.to_owned()))
+    };
+    let file = |operand: &str| {
+        if operand == "-" {
+            let [fed] = segment.stdin_text.as_slice() else {
+                return None;
+            };
+            return Some(CommitMessage::Text(fed.clone()));
+        }
+        let mut path = cwd?.to_path_buf();
+        for (index, word) in arguments[..verb].iter().enumerate() {
+            if *word == "-C" {
+                path.push(arguments.get(index + 1)?);
+            }
+        }
+        path.push(operand);
+        Some(CommitMessage::File(path))
+    };
+    let rest = &arguments[verb + 1..];
+    for (index, word) in rest.iter().enumerate() {
+        let next = || rest.get(index + 1).copied();
+        if *word == "-m" || *word == "--message" {
+            return text(next()?);
+        } else if let Some(body) = word.strip_prefix("--message=") {
+            return text(body);
+        } else if *word == "-F" || *word == "--file" {
+            return file(next()?);
+        } else if let Some(path) = word.strip_prefix("--file=") {
+            return file(path);
+        } else if let Some(body) = word.strip_prefix("-m").filter(|body| !body.is_empty()) {
+            return text(body);
+        } else if let Some(path) = word.strip_prefix("-F").filter(|path| !path.is_empty()) {
+            return file(path);
+        }
+    }
+    None
+}
+
+/// The subject of `message`: its first line, or could-not-look where that line
+/// holds a `$`, a backtick or a backslash, any of which the shell may expand.
+#[must_use]
+pub fn commit_subject(message: &str) -> crate::facts::Look<String> {
+    let line = message.lines().next().unwrap_or_default();
+    if line.contains(['$', '`', '\\']) {
+        crate::facts::Look::CouldNotLook
+    } else {
+        crate::facts::Look::Is(line.to_owned())
+    }
 }
 
 /// The rule id the detach gate refuses under (CLOUD-2667).
@@ -5939,6 +6090,12 @@ pub struct Facts<'a> {
     /// blob and the receipt store — and only for a write to the authority.
     /// Could-not-look ALLOWS; empty is a real answer and allows.
     pub unread_history: &'a crate::facts::Look<Vec<String>>,
+    /// The subject of the message a mediated `git commit` names (CLOUD-2683).
+    ///
+    /// **Resolved at the boundary**, because `-F <file>` is a file read; the
+    /// judgement stays in [`native_fired`]. Could-not-look ALLOWS: no message, an
+    /// expansion in the first line, an unreadable file, or no `[commit]` table.
+    pub commit_subject: &'a crate::facts::Look<String>,
     /// What the agent reported for each agent-sourced check.
     pub sourced: &'a AgentFacts,
     /// What this call's write would land, before it happens (CLOUD-758).
@@ -6022,6 +6179,7 @@ impl<'a> Facts<'a> {
             // Could-not-look, never "every row read": a caller that resolved
             // nothing has not established what this context read (CLOUD-2144).
             unread_history: &crate::facts::Look::CouldNotLook,
+            commit_subject: &crate::facts::Look::CouldNotLook,
             // Could-not-look, never "an empty write". A `Facts::none` caller has
             // resolved nothing, which is a different claim from having looked
             // and found no content.
@@ -10277,6 +10435,10 @@ struct Segment {
     /// write to a registered policy module through exactly that shape was
     /// admitted while `python3 /dev/null <module>` was refused.
     stdin_text: Vec<String>,
+    /// Each word that is exactly a `cat` heredoc substitution, as `words`
+    /// spells it, with the heredoc's body (CLOUD-2683). Keyed by spelling, not
+    /// index: index alignment between `words` and the parse broke once.
+    cat_bodies: Vec<(String, String)>,
     /// Each CONSTITUENT command's own words, where a newline joined several into
     /// this one segment.
     ///
@@ -10852,10 +11014,16 @@ fn flatten_command(
         terminator: after,
         input_redirect: redirects.iter().any(binds_stdin),
         stdin_text: redirects.iter().filter_map(stdin_text).collect(),
+        cat_bodies: Vec::new(),
         construct,
         nested: false,
         grouped: false,
     };
+    for word in words {
+        if let Some(body) = cat_heredoc_body(word) {
+            segment.cat_bodies.push((unquote(&word_text(word)), body));
+        }
+    }
     let mut nested = nested_commands(words, redirects, source);
     if segment.words.iter().any(String::is_empty) {
         segment.words.retain(|word| !word.is_empty());
@@ -11038,6 +11206,49 @@ fn word_text(word: &rable::Node) -> String {
             value.clone()
         }
         _ => String::new(),
+    }
+}
+
+/// The body of a word that is exactly `$(cat <<EOF … EOF)`, bare or in double
+/// quotes (CLOUD-2683): one substitution, whose command is a lone `cat` with no
+/// assignment and one complete heredoc. Anything else is `None`.
+fn cat_heredoc_body(word: &rable::Node) -> Option<String> {
+    let rable::NodeKind::Word { parts, .. } = &word.kind else {
+        return None;
+    };
+    let quote = |node: &rable::Node| matches!(&node.kind, rable::NodeKind::WordLiteral { value } if value == "\"");
+    let substitution = match parts.as_slice() {
+        [only] => only,
+        [open, only, close] if quote(open) && quote(close) => only,
+        _ => return None,
+    };
+    let rable::NodeKind::CommandSubstitution { command, .. } = &substitution.kind else {
+        return None;
+    };
+    let rable::NodeKind::Command {
+        assignments,
+        words,
+        redirects,
+    } = &command.kind
+    else {
+        return None;
+    };
+    let [cat] = words.as_slice() else {
+        return None;
+    };
+    let [heredoc] = redirects.as_slice() else {
+        return None;
+    };
+    if !assignments.is_empty() || word_text(cat) != "cat" {
+        return None;
+    }
+    match &heredoc.kind {
+        rable::NodeKind::HereDoc {
+            content,
+            complete: true,
+            ..
+        } => Some(content.clone()),
+        _ => None,
     }
 }
 
@@ -12503,6 +12714,7 @@ mod tests {
                 sourced: &None,
                 singleton: &None,
                 unread_history: &crate::facts::Look::CouldNotLook,
+                commit_subject: &crate::facts::Look::CouldNotLook,
                 // Could-not-look: these unit cases resolve no repository, so
                 // they make no claim about what a reset would discard. The
                 // compiled tier `history_drop.rs` is where that fact is real.
@@ -12685,6 +12897,7 @@ mod tests {
     /// The same fixture with a declared `[[redirect]]` table (CLOUD-280).
     fn protected_policy_with(verbs: Vec<MutatingVerb>, redirects: Vec<Redirect>) -> Policy {
         Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -12748,6 +12961,7 @@ mod tests {
     /// ones out per case would bury the one field under test.
     fn ceiling_policy(rows: Vec<Rule>) -> Policy {
         Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -12819,6 +13033,7 @@ mod tests {
 
     fn gh_policy() -> Policy {
         Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13351,6 +13566,7 @@ mod tests {
     /// one site must leave the other site's cases red.
     fn program_only_shape_policy() -> Policy {
         Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -13518,6 +13734,7 @@ mod tests {
         let mut rule = shape("no-bare-cargo", "cargo", None);
         rule.require_via = Some(crate::rules::RequireVia::Mise);
         Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -14031,6 +14248,7 @@ mod tests {
         let mut rule = shape("gh-pr-merge", "gh pr merge", None);
         rule.severity = Some(RuleSeverity::Allow);
         let policy = Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -14068,6 +14286,7 @@ mod tests {
         let call = envelope("gh pr merge 42");
 
         let advisory = Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -14099,6 +14318,7 @@ mod tests {
         );
 
         let promoted = Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -14138,6 +14358,7 @@ mod tests {
         // to bottom, and any cleverer precedence would be a rule about rules the
         // config never states.
         let policy = Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -14189,6 +14410,7 @@ mod tests {
         let mut rule = shape("gh-pr-merge", "gh pr merge", None);
         rule.policy_url = Some("https://example.invalid/policy".to_owned());
         let policy = Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -14254,6 +14476,7 @@ mod tests {
         rule.reason = Some("run verify then linear-check, or just land".to_owned());
         rule.checks = Some(vec!["verify".to_owned(), "linear-check".to_owned()]);
         Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -14331,6 +14554,7 @@ mod tests {
             })
             .collect::<Vec<crate::verdict::DeclaredVerdict>>();
         Policy {
+            commit: None,
             harness: Harness::ExitCode,
             // A module fixture, so it protects nothing and has no membership
             // question for a root to change the answer to.
@@ -14927,6 +15151,7 @@ deny contains "refused by themodule" if {
         rule.reason = Some("pipe the issue payload to `mise run claim-check`".to_owned());
         rule.checks = Some(vec!["claim".to_owned()]);
         Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -15222,6 +15447,7 @@ deny contains "refused by themodule" if {
         rule.reason = Some("prove the toolchain first".to_owned());
         rule.checks = Some(vec!["toolchain".to_owned()]);
         Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -16766,6 +16992,7 @@ deny contains "refused by themodule" if {
             Decision::Allow
         );
         let no_paths = Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -16839,6 +17066,7 @@ deny contains "refused by themodule" if {
         // hardcoded path could not produce that.
         let verbs = vec![verb("rm", None)];
         let guarding = Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -16859,6 +17087,7 @@ deny contains "refused by themodule" if {
             redirects: Vec::new(),
         };
         let elsewhere = Policy {
+            commit: None,
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -19683,10 +19912,14 @@ deny contains "refused by themodule" if {
         use crate::facts::Look;
         let gates = |discards| {
             with_native_facts(&discards, &Look::CouldNotLook, |f| {
-                native_fired(&envelope(""), f)
-                    .into_iter()
-                    .map(|(gate, _)| gate)
-                    .collect::<Vec<_>>()
+                native_fired(
+                    &Policy::declaring_nothing(Harness::ExitCode),
+                    &envelope(""),
+                    f,
+                )
+                .into_iter()
+                .map(|(gate, _)| gate)
+                .collect::<Vec<_>>()
             })
         };
         assert_eq!(

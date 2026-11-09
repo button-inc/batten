@@ -655,6 +655,11 @@
           "description": "A `&` job nothing in the same call waits on, where the harness has a\nsupported background option instead (CLOUD-2667).",
           "type": "string",
           "const": "detach"
+        },
+        {
+          "description": "A mediated `git commit` whose message subject breaks\n`[commit].subject_pattern` (CLOUD-2683).",
+          "type": "string",
+          "const": "commit-subject"
         }
       ]
     },
