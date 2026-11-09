@@ -112,6 +112,13 @@ pub struct HookConfig {
     /// flag never refuses one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclusive: bool,
+    /// The git hooks this repository runs, by githooks(5) name, each the argv
+    /// batten passes git's own arguments and streams through to (CLOUD-2339).
+    ///
+    /// Every git hook links to the batten binary, which dispatches on argv[0];
+    /// a name with no row exits 0. One table, no directory walk (rule 6).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub git: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// One declared side effect.
