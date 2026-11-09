@@ -985,6 +985,7 @@ mod tests {
             // CLOUD-2690: the forge's door, one event payload on stdin.
             "forge".to_owned(),
             "forge intake".to_owned(),
+            "forge poll".to_owned(),
             // The schema is emitted by `generate`, not `config`: it is a
             // derivation of the config types, and §11 gives every
             // derivation the one emitter (CLOUD-244).

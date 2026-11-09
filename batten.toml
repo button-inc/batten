@@ -3947,7 +3947,7 @@ kind = "shape"
 scope = "mediated_call"
 severity = "deny"
 tool = "subscribe_pr_activity"
-reason = "No webhook babysitting. Run `mise run land` (backgrounded): it laps to the fast-forward by itself and stops only for a rebase conflict, a failed `verify` or red CI. Fetching CI on demand is fine."
+reason = "No webhook babysitting. To land, run `mise run land` (backgrounded): it stops only for a conflict, a failed `verify` or red CI. To watch forge events, run `batten forge poll --every N` as a `[[startup]]` row."
 
 # ONE PR ALL OF IT, AS A MECHANISM RATHER THAN A SENTENCE (CLOUD-1891).
 #
@@ -5432,6 +5432,10 @@ Linear = "mcp.linear.app"
 # from also matching every other server behind the same proxy host, which would
 # be `Ambiguous`.
 Claude_Code_Remote = "api.anthropic.com/v1/code/mcp/meta"
+# THE SESSION'S GITHUB MCP (CLOUD-2693), by the path that does not move when the
+# launcher rotates the server's key (CLOUD-1264): `forge poll`'s `mcp` source
+# resolves it here. A dispatch address only, never a grant.
+github = "/github/mcp"
 
 [mcp.source.credential]
 header = "Authorization"

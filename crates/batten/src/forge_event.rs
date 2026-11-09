@@ -627,6 +627,312 @@ fn attribute(tag: &str, name: &str) -> Option<String> {
     Some(tag[from..to].to_owned())
 }
 
+/// What one round read (CLOUD-2693).
+#[derive(Debug)]
+pub enum Round {
+    /// No declared source was available: could-not-look, never "no events".
+    CouldNotLook,
+    /// The events the first available source produced, the cursor to save
+    /// once they are dispatched, and where it is saved.
+    Read {
+        /// The envelopes to dispatch, in source order.
+        events: Vec<Envelope>,
+        /// The source's cursor after this round.
+        cursor: Cursor,
+        /// Where the cursor is saved.
+        cursor_path: std::path::PathBuf,
+    },
+}
+
+/// A source's position (CLOUD-2693): `last_id` for an `events` source, the
+/// tracked values per key for a `snapshot` one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Cursor {
+    /// The largest numeric Events API id dispatched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_id: Option<String>,
+    /// key -> pointer -> value, as last seen.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub tracked: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+}
+
+impl Cursor {
+    /// Whether an Events API item id is past this cursor. A non-numeric id is
+    /// always read; the ring absorbs a repeat.
+    #[must_use]
+    pub fn is_newer(&self, id: &str) -> bool {
+        match (
+            self.last_id
+                .as_deref()
+                .and_then(|last| last.parse::<u128>().ok()),
+            id.parse::<u128>(),
+        ) {
+            (Some(last), Ok(id)) => id > last,
+            _ => true,
+        }
+    }
+
+    fn advance(&mut self, id: &str) {
+        if self.is_newer(id) && id.parse::<u128>().is_ok() {
+            self.last_id = Some(id.to_owned());
+        }
+    }
+}
+
+/// A source's cursor file, beside the ring.
+#[must_use]
+pub fn cursor_path(common_dir: &std::path::Path, source: &str) -> std::path::PathBuf {
+    common_dir.join(RING_DIR).join(format!("{source}.json"))
+}
+
+fn read_cursor(path: &std::path::Path) -> std::io::Result<Option<Cursor>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(serde_json::from_str(&text).ok()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Save a cursor, written whole. Called only after the round's events are
+/// dispatched, so a crash replays (and the ring absorbs it) rather than drops.
+///
+/// # Errors
+///
+/// When the cursor cannot be written.
+pub fn write_cursor(path: &std::path::Path, cursor: &Cursor) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    crate::durable::replace(path, serde_json::to_string(cursor).unwrap_or_default())
+}
+
+/// The repository a round reads, as `(owner, repo)`.
+pub type Slug = (String, String);
+
+/// What a round needs from its caller.
+#[derive(Debug)]
+pub struct RoundInput<'a> {
+    /// The repository root a command runs in and an MCP wiring resolves from.
+    pub root: &'a std::path::Path,
+    /// The git common dir the cursors live under.
+    pub common_dir: &'a std::path::Path,
+    /// The committed `[mcp]` table, where one is declared.
+    pub mcp: Option<&'a crate::mcp::McpConfig>,
+    /// The forge remote, where one resolves.
+    pub slug: Option<&'a Slug>,
+}
+
+/// Read one round from the first available source (CLOUD-2693), naming each
+/// skipped one on `err` as `forge poll: source <id> absent`.
+///
+/// # Errors
+///
+/// A cursor that cannot be read, or a stream that will not take a line.
+//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
+//MUTANT source-order-reversed|s@^    for source in \&forge.source {$@    for source in forge.source.iter().rev() {@|the_first_available_source_wins
+//MUTANT absent-source-reads-empty|s@^    Ok(Round::CouldNotLook)$@    Ok(Round::Read { events: Vec::new(), cursor: Cursor::default(), cursor_path: input.common_dir.join("none") })@|an_absent_source_falls_through_and_none_is_could_not_look
+pub fn read_round(
+    forge: &crate::rest::Forge,
+    input: &RoundInput<'_>,
+    err: &mut dyn std::io::Write,
+) -> crate::Result<Round> {
+    for source in &forge.source {
+        if !available(source, input) {
+            writeln!(err, "forge poll: source {} absent", source.id)?;
+            continue;
+        }
+        let Some(document) = read_document(source, input) else {
+            writeln!(err, "forge poll: source {} could not be read", source.id)?;
+            return Ok(Round::CouldNotLook);
+        };
+        let cursor_path = cursor_path(input.common_dir, &source.id);
+        let cursor = read_cursor(&cursor_path)?;
+        let items = document.as_array().cloned().unwrap_or_default();
+        let (events, cursor) = match source.decode {
+            crate::rest::Decode::Events => decode_events(&items, cursor),
+            crate::rest::Decode::Snapshot => decode_snapshot(source, &items, cursor, input.slug),
+        };
+        return Ok(Round::Read {
+            events,
+            cursor,
+            cursor_path,
+        });
+    }
+    Ok(Round::CouldNotLook)
+}
+
+//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
+//MUTANT mcp-absence-unchecked|s@^        Mcp => input.mcp.is_some_and(answers),$@        Mcp => { let _ = answers; true }@|an_absent_source_falls_through_and_none_is_could_not_look
+fn available(source: &crate::rest::Source, input: &RoundInput<'_>) -> bool {
+    use crate::rest::SourceKind::{Command, Mcp};
+    let answers =
+        |mcp: &crate::mcp::McpConfig| crate::mcp::answers(mcp, input.root, &source.server);
+    match source.kind {
+        Mcp => input.mcp.is_some_and(answers),
+        Command => {
+            !source.available.is_empty()
+                && crate::exec::piped_argv(
+                    input.root,
+                    &source.available,
+                    "",
+                    crate::exec::Diagnostics::Drop,
+                    &[],
+                )
+                .is_some_and(|(code, _)| code == 0)
+        }
+    }
+}
+
+/// `{owner}` and `{repo}` filled into one word; `None` where the word needs a
+/// part the remote did not give.
+fn fill_word(word: &str, slug: Option<&Slug>) -> Option<String> {
+    let mut filled = word.to_owned();
+    for (name, part) in [
+        ("{owner}", slug.map(|(owner, _)| owner.as_str())),
+        ("{repo}", slug.map(|(_, repo)| repo.as_str())),
+    ] {
+        if filled.contains(name) {
+            filled = filled.replace(name, part?);
+        }
+    }
+    Some(filled)
+}
+
+fn read_document(source: &crate::rest::Source, input: &RoundInput<'_>) -> Option<Value> {
+    use crate::rest::SourceKind::{Command, Mcp};
+    match source.kind {
+        Mcp => {
+            let wiring = crate::mcp::wiring(input.mcp?, input.root, &source.server).ok()?;
+            let template = if source.arguments.is_empty() {
+                "{}"
+            } else {
+                source.arguments.as_str()
+            };
+            let arguments = crate::unsubscribe::fill_arguments(template, 0, "", input.slug)?;
+            let params = serde_json::json!({"name": source.method, "arguments": arguments});
+            let result = crate::mcp::dispatch(&wiring, "tools/call", &params).ok()?;
+            Some(crate::mcp::payload(&result).value)
+        }
+        Command => {
+            let argv = source
+                .run
+                .iter()
+                .map(|word| fill_word(word, input.slug))
+                .collect::<Option<Vec<_>>>()?;
+            let (code, stdout) = crate::exec::piped_argv(
+                input.root,
+                &argv,
+                "",
+                crate::exec::Diagnostics::Drop,
+                &[],
+            )?;
+            if code != 0 {
+                return None;
+            }
+            serde_json::from_str(&stdout).ok()
+        }
+    }
+}
+
+//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
+//MUTANT last-id-ignored|s@^        if !start.is_newer(\&item_id) {$@        if false {@|a_round_resumes_from_its_cursor
+fn decode_events(items: &[Value], cursor: Option<Cursor>) -> (Vec<Envelope>, Cursor) {
+    let mut cursor = cursor.unwrap_or_default();
+    let start = cursor.clone();
+    let mut events = Vec::new();
+    for item in items {
+        let item_id = text(item, &["/id"]).unwrap_or_default();
+        if !start.is_newer(&item_id) {
+            continue;
+        }
+        if let Some(envelope) = normalize_events_item(item) {
+            events.push(envelope);
+        }
+        cursor.advance(&item_id);
+    }
+    (events, cursor)
+}
+
+//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
+//MUTANT snapshot-baseline-emits|s@^    let baseline = cursor.is_none();$@    let baseline = false;@|a_snapshot_first_sight_is_baseline_and_changes_emit_their_track
+//MUTANT snapshot-new-key-silent|s@^            None if !baseline => source.new.iter().cloned().collect(),$@            None if !baseline => Vec::new(),@|a_snapshot_first_sight_is_baseline_and_changes_emit_their_track
+fn decode_snapshot(
+    source: &crate::rest::Source,
+    items: &[Value],
+    cursor: Option<Cursor>,
+    slug: Option<&Slug>,
+) -> (Vec<Envelope>, Cursor) {
+    let baseline = cursor.is_none();
+    let previous = cursor.unwrap_or_default();
+    let mut next = Cursor {
+        last_id: previous.last_id.clone(),
+        tracked: std::collections::BTreeMap::new(),
+    };
+    let mut events = Vec::new();
+    for item in items {
+        let Some(key) = text(item, &[source.key.as_str()]) else {
+            continue;
+        };
+        let values: std::collections::BTreeMap<String, String> = source
+            .track
+            .iter()
+            .map(|track| {
+                let value = text(item, &[track.pointer.as_str()]).unwrap_or_default();
+                (track.pointer.clone(), value)
+            })
+            .collect();
+        let actions: Vec<String> = match previous.tracked.get(&key) {
+            Some(seen) => source
+                .track
+                .iter()
+                .filter(|track| seen.get(&track.pointer) != values.get(&track.pointer))
+                .filter_map(|track| {
+                    track.action.clone().or_else(|| {
+                        let value = values.get(&track.pointer)?;
+                        track.values.get(value).cloned()
+                    })
+                })
+                .collect(),
+            None if !baseline => source.new.iter().cloned().collect(),
+            None => Vec::new(),
+        };
+        for action in actions {
+            if let Some(envelope) = snapshot_event(source, item, &key, &action, slug) {
+                events.push(envelope);
+            }
+        }
+        next.tracked.insert(key, values);
+    }
+    (events, next)
+}
+
+/// A webhook-shaped body for one snapshot change, normalized through the
+/// catalog so its key comes from the catalog's pointers. An object without an
+/// `id` takes its `key` value as one.
+fn snapshot_event(
+    source: &crate::rest::Source,
+    item: &Value,
+    key: &str,
+    action: &str,
+    slug: Option<&Slug>,
+) -> Option<Envelope> {
+    let mut object = item.clone();
+    if let Some(map) = object.as_object_mut() {
+        map.entry("id")
+            .or_insert_with(|| Value::String(key.to_owned()));
+    }
+    let mut body = serde_json::Map::new();
+    body.insert("action".to_owned(), Value::String(action.to_owned()));
+    body.insert(source.event.clone(), object);
+    if let Some((owner, repo)) = slug {
+        body.insert(
+            "repository".to_owned(),
+            serde_json::json!({"full_name": format!("{owner}/{repo}")}),
+        );
+    }
+    normalize_webhook(&source.event, &Value::Object(body))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

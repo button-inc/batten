@@ -134,6 +134,96 @@ pub struct Forge {
     /// renders reads it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub probe: Vec<Probe>,
+    /// Where forge events come from when nothing pushes them (CLOUD-2693):
+    /// rows tried in declaration order, the first available read each round.
+    /// The concrete rows are a consumer's config, never engine code (rule 1).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source: Vec<Source>,
+}
+
+/// One `[[forge.source]]` row (CLOUD-2693).
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Source {
+    /// The stable id its cursor and its pointer lines are named by.
+    pub id: String,
+    /// How the document is read.
+    pub kind: SourceKind,
+    /// How the document is decoded into events.
+    pub decode: Decode,
+    /// `mcp`: the server a `[[mcp.source]]` wiring resolves.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub server: String,
+    /// `mcp`: the tool method.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub method: String,
+    /// `mcp`: a JSON object template; `{owner}` and `{repo}` are filled from
+    /// the forge remote.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub arguments: String,
+    /// `command`: the argv whose stdout is the document; `{owner}` and `{repo}`
+    /// are filled per element.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub run: Vec<String>,
+    /// `command`: an argv that exits 0 when the source can be read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub available: Vec<String>,
+    /// `snapshot`: the catalog event each object is.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub event: String,
+    /// `snapshot`: a JSON pointer to each object's identity.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub key: String,
+    /// `snapshot`: the action a key first seen after the baseline round emits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new: Option<String>,
+    /// `snapshot`: the tracked fields whose change emits an action.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub track: Vec<Track>,
+}
+
+/// How a source is read.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceKind {
+    /// A tool call through a declared MCP server.
+    Mcp,
+    /// A declared program's stdout.
+    Command,
+}
+
+/// How a source's document is decoded.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Decode {
+    /// An array of Events API items.
+    Events,
+    /// An array of objects compared with the last round's.
+    Snapshot,
+}
+
+/// One tracked field of a `snapshot` source.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Track {
+    /// A JSON pointer into each object.
+    pub pointer: String,
+    /// The action any change of the pointed value emits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    /// The action each new value emits; a value not listed emits nothing.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub values: std::collections::BTreeMap<String, String>,
 }
 
 /// One `[[forge.probe]]` row: a claim the credential must carry, and the
@@ -1322,6 +1412,7 @@ mod tests {
                     query: Vec::new(),
                     probe: Vec::new(),
                     nothing_graded: None,
+                    source: Vec::new(),
                 },
                 env
             ),
@@ -1335,6 +1426,7 @@ mod tests {
                     query: Vec::new(),
                     probe: Vec::new(),
                     nothing_graded: None,
+                    source: Vec::new(),
                 },
                 env
             ),
@@ -1351,6 +1443,7 @@ mod tests {
                     query: Vec::new(),
                     probe: Vec::new(),
                     nothing_graded: None,
+                    source: Vec::new(),
                 },
                 |name| if name == "GH_TOKEN" {
                     Some(String::from("leaked"))
@@ -1373,6 +1466,7 @@ mod tests {
                     query: Vec::new(),
                     probe: Vec::new(),
                     nothing_graded: None,
+                    source: Vec::new(),
                 },
                 env
             ),
