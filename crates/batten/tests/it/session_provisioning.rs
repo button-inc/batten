@@ -259,6 +259,14 @@ fn bench(name: &str, rows: &[(&str, u64)]) -> Bench {
     }
     write(&repo, "batten.toml", &config);
     git_in(&repo, &["init", "-q", "-b", "main", "."]);
+    // Wired on every host's whole surface, as `init` leaves a consumer: a
+    // passing session start owes the doctor's wiring check nothing.
+    let wired = common::batten()
+        .current_dir(&repo)
+        .args(["wiring", "register", "--all"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(wired.status.code(), Some(0), "{}", common::stderr(&wired));
 
     Bench { repo }
 }

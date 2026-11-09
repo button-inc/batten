@@ -772,6 +772,8 @@ pub enum Applied {
 ///
 /// `links_host` is [`links_host`]'s answer: `false` leaves the declared link —
 /// the host's, not the repository's — unjudged and unwritten.
+//MUTANT-SUITE crates/batten/tests/it/provision.rs
+//MUTANT platform-unpack-ignored|s@^    let unpack = artifact.unpack.unwrap_or(entry.unpack);$@    let unpack = entry.unpack;@|a_platform_row_names_its_own_unpack
 pub fn apply(
     entry: &Provision,
     cache_root: &Path,
@@ -795,8 +797,6 @@ pub fn apply(
     // is, so a tampered cache is a mismatch rather than a shortcut past the
     // checksum.
     let artifact = entry.artifact()?;
-    //MUTANT-SUITE crates/batten/tests/it/provision.rs
-    //MUTANT platform-unpack-ignored|s@^    let unpack = artifact.unpack.unwrap_or(entry.unpack);$@    let unpack = entry.unpack;@|a_platform_row_names_its_own_unpack
     let unpack = artifact.unpack.unwrap_or(entry.unpack);
     if let Some(bytes) = cached_artifact_matching_pin(entry, cache_root, &artifact.sha256) {
         install(entry, unpack, cache_root, &bytes, links_host)?;

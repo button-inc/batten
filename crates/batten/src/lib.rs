@@ -3045,6 +3045,17 @@ fn run_init(
                      the first session start writes it",
                 )?,
             }
+            // BATTEN IS REGISTERED ON EVERY HOST'S WHOLE SURFACE FROM THE FIRST
+            // WRITE (owner ruling, 2026-11-09): a `[[hook.handler]]` fires only on
+            // an event batten itself is on, so a starter that left the wiring to
+            // a later step would be a config `doctor` refuses on arrival.
+            let wired = wiring::register_committed(Path::new("."), false)?;
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!("init: wired {} harness surface(s)", wired.len()),
+            )?;
             output::message(
                 mode,
                 Verbosity::Normal,

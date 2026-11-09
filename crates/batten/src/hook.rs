@@ -107,6 +107,8 @@ pub enum Harness {
     ExitCode,
 }
 
+//MUTANT-SUITE crates/batten/tests/it/cli.rs
+//MUTANT gemini-start-spelled-before-agent|s@^                    (Event::SessionStart, "SessionStart"),$@                    (Event::SessionStart, "BeforeAgent"),@|generated_hook_wiring_matches_its_golden_for_every_installable_harness
 impl Harness {
     /// Every harness, so anything ranging over them is derived rather than
     /// re-typed — the CLOUD-40 decision-channel matrix reads this, which is what
@@ -215,8 +217,6 @@ impl Harness {
                     // `SessionStart`, Gemini's own session-start event, never
                     // `BeforeAgent`, which Gemini documents as after-prompt,
                     // before planning (CLOUD-2676).
-                    //MUTANT-SUITE crates/batten/tests/it/cli.rs
-                    //MUTANT gemini-start-spelled-before-agent|s@^                    (Event::SessionStart, "SessionStart"),$@                    (Event::SessionStart, "BeforeAgent"),@|generated_hook_wiring_matches_its_golden_for_every_installable_harness
                     (Event::SessionStart, "SessionStart"),
                     // CLOUD-2695: `BeforeAgent` is Gemini's prompt-submit moment,
                     // and `PreCompress` its pre-compaction.
@@ -1296,6 +1296,8 @@ pub struct Wiring {
     pub project_dir_var: Option<&'static str>,
 }
 
+//MUTANT-SUITE crates/batten/src/doctor.rs
+//MUTANT registrations-short-of-the-surface|s@^        self.admits(harness)$@        self.admits(harness).into_iter().take(8).collect()@|an_eight_event_wiring_owes_the_rest_of_the_surface
 impl Wiring {
     /// The events to register, with this host's name for each.
     ///
@@ -1305,8 +1307,6 @@ impl Wiring {
     /// registered on 100% of each host's hook surface, because a consumer's
     /// `[[hook.handler]]` can only fire on an event Batten itself is on. So this
     /// is [`Wiring::admits`], and a wiring short of it is unregistered.
-    //MUTANT-SUITE crates/batten/src/doctor.rs
-    //MUTANT registrations-short-of-the-surface|s@^        self.admits(harness)$@        self.admits(harness).into_iter().take(8).collect()@|an_eight_event_wiring_owes_the_rest_of_the_surface
     #[must_use]
     pub fn registrations(&self, harness: Harness) -> Vec<(Event, &'static str)> {
         self.admits(harness)
@@ -1418,11 +1418,11 @@ const COPILOT_ENTRY: EntryShape = EntryShape::Flat {
     read: &["bash", "command"],
 };
 
+//MUTANT-SUITE crates/batten/tests/it/harness_wiring.rs
+//MUTANT flat-harness-rendered-nested|s@^            Harness::Cursor => CURSOR_ENTRY,$@            Harness::Cursor => EntryShape::Nested,@|a_flat_host_is_generated_flat
 impl Harness {
     /// The entry shape this host reads (CLOUD-2694); the one function every
     /// writer and reader asks, so render, register, doctor and reclaim agree.
-    //MUTANT-SUITE crates/batten/tests/it/harness_wiring.rs
-    //MUTANT flat-harness-rendered-nested|s@^            Harness::Cursor => CURSOR_ENTRY,$@            Harness::Cursor => EntryShape::Nested,@|a_flat_host_is_generated_flat
     pub(crate) const fn entry_shape(self) -> EntryShape {
         match self {
             Harness::Cursor => CURSOR_ENTRY,
@@ -1711,6 +1711,16 @@ const CLAUDE_EVENTS: &[Event] = &[
     Event::MessageDisplay,
 ];
 
+//MUTANT-SUITE crates/batten/src/doctor.rs
+//MUTANT cursor-events-converged-only|s@^                events: CURSOR_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
+//MUTANT-SUITE crates/batten/src/doctor.rs
+//MUTANT copilot-events-converged-only|s@^                events: COPILOT_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
+//MUTANT-SUITE crates/batten/src/doctor.rs
+//MUTANT gemini-events-converged-only|s@^                events: GEMINI_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
+//MUTANT-SUITE crates/batten/src/doctor.rs
+//MUTANT codex-events-converged-only|s@^                events: CODEX_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
+//MUTANT-SUITE crates/batten/tests/it/exit_code_handlers.rs
+//MUTANT exit-code-events-converged|s@^                events: Event::MOMENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|exit_code_runs_a_user_prompt_submit_handler
 impl Harness {
     /// This host's capability row.
     ///
@@ -1871,8 +1881,6 @@ impl Harness {
                 // found, and a name taken from a forum post is exactly what
                 // CLOUD-209's "assume it wrong without a fetch" refuses.
                 plan_tools: PlanTools::Unsurveyed("CLOUD-209"),
-                //MUTANT-SUITE crates/batten/src/doctor.rs
-                //MUTANT cursor-events-converged-only|s@^                events: CURSOR_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
                 events: CURSOR_EVENTS,
                 // The row that forced this column to become event-scoped
                 // (CLOUD-601). M1 records the verdict vocabulary as
@@ -1913,8 +1921,6 @@ impl Harness {
                 // Not fetched, like the rest of this host's tool surface — the
                 // same survey gap `operation_of` records for it.
                 plan_tools: PlanTools::Unsurveyed("CLOUD-209"),
-                //MUTANT-SUITE crates/batten/src/doctor.rs
-                //MUTANT copilot-events-converged-only|s@^                events: COPILOT_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
                 events: COPILOT_EVENTS,
                 // `Unknown`, not `No`, and not `Yes` either: M1 confirms the
                 // verdict exists and names the `preToolUse` output *fields*
@@ -1949,8 +1955,6 @@ impl Harness {
                 // Fetched 2026-09-01 from the vendor docs: `write_todos`, on by
                 // default and disableable with `"useWriteTodos": false`.
                 plan_tools: PlanTools::Surveyed(&["write_todos"]),
-                //MUTANT-SUITE crates/batten/src/doctor.rs
-                //MUTANT gemini-events-converged-only|s@^                events: GEMINI_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
                 events: GEMINI_EVENTS,
                 // Allow/deny only. A policy wanting confirmation must hard-deny
                 // here — degrading to *allow* would turn "ask a human" into "go
@@ -2016,8 +2020,6 @@ impl Harness {
             Harness::CodexCli => Capabilities {
                 // Fetched 2026-09-01: `update_plan`, the built-in plan tool.
                 plan_tools: PlanTools::Surveyed(&["update_plan"]),
-                //MUTANT-SUITE crates/batten/src/doctor.rs
-                //MUTANT codex-events-converged-only|s@^                events: CODEX_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
                 events: CODEX_EVENTS,
                 // Advertised in the output schema, marked "parsed but not
                 // supported yet" in the docs. Advertised is not available, and
@@ -2046,8 +2048,6 @@ impl Harness {
                 // Every moment, not the converged four: this is Batten's own
                 // envelope, so it carries whatever the core normalizes, and a
                 // handler keyed on any of them runs here (CLOUD-2674).
-                //MUTANT-SUITE crates/batten/tests/it/exit_code_handlers.rs
-                //MUTANT exit-code-events-converged|s@^                events: Event::MOMENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|exit_code_runs_a_user_prompt_submit_handler
                 events: Event::MOMENTS,
                 // Not a host: the channel is the exit status alone, which has no
                 // third value to carry an escalation. Measured, not unsurveyed.
@@ -2570,6 +2570,8 @@ pub enum Event {
     MessageDisplay,
 }
 
+//MUTANT-SUITE crates/batten/src/hook.rs
+//MUTANT moments-is-all|s@^        Some((Event::Unrecognized, moments)) => moments,$@        Some((Event::Unrecognized, _)) => Event::ALL,@|moments_is_every_event_but_unrecognized
 impl Event {
     /// Every event, so a census is derived rather than hand-maintained.
     pub const ALL: &'static [Event] = &[
@@ -2623,8 +2625,6 @@ impl Event {
     /// drop a real moment. The neutral exit-code adapter declares exactly this set
     /// (CLOUD-2674): it is Batten's own envelope, not a host, so a narrower row
     /// would be a statement about nobody.
-    //MUTANT-SUITE crates/batten/src/hook.rs
-    //MUTANT moments-is-all|s@^        Some((Event::Unrecognized, moments)) => moments,$@        Some((Event::Unrecognized, _)) => Event::ALL,@|moments_is_every_event_but_unrecognized
     pub const MOMENTS: &'static [Event] = match Event::ALL.split_last() {
         Some((Event::Unrecognized, moments)) => moments,
         _ => panic!("Event::ALL ends with Unrecognized"),
@@ -3873,6 +3873,10 @@ pub(crate) fn present_str(value: &Value, key: &str) -> Option<String> {
 /// Codex CLI and Copilot's `PascalCase` dialect ship verbatim. Only the two hosts
 /// that genuinely diverge get a table here, which is what keeps host vocabulary
 /// out of the harness-blind core.
+//MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
+//MUTANT gemini-before-agent-unrecognized|s@^            "BeforeAgent" => Some(Event::UserPromptSubmit),$@@|a_gemini_before_agent_reaches_a_prompt_handler
+//MUTANT-SUITE crates/batten/src/hook.rs
+//MUTANT cursor-subagent-stop-is-stop|s@^            "stop" => Some(Event::Stop),$@            "stop" \x7c "subagentStop" => Some(Event::Stop),@|cursors_renamed_events_normalize
 fn normalize_event(harness: Harness, raw: &str) -> Event {
     let renamed = match harness {
         // Gemini's names are the only structural gap in an otherwise
@@ -3884,8 +3888,6 @@ fn normalize_event(harness: Harness, raw: &str) -> Event {
             // member here even though the word differs.
             "AfterAgent" => Some(Event::Stop),
             // Its prompt-submit moment and its pre-compaction (CLOUD-2695).
-            //MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
-            //MUTANT gemini-before-agent-unrecognized|s@^            "BeforeAgent" => Some(Event::UserPromptSubmit),$@@|a_gemini_before_agent_reaches_a_prompt_handler
             "BeforeAgent" => Some(Event::UserPromptSubmit),
             "PreCompress" => Some(Event::PreCompact),
             _ => None,
@@ -3901,8 +3903,6 @@ fn normalize_event(harness: Harness, raw: &str) -> Event {
             // `subagentStop` is its own moment now (CLOUD-2695): the Stop-family
             // mapping predates the variant, and a subagent ending does not run
             // the end-of-turn gate on Claude Code either.
-            //MUTANT-SUITE crates/batten/src/hook.rs
-            //MUTANT cursor-subagent-stop-is-stop|s@^            "stop" => Some(Event::Stop),$@            "stop" \x7c "subagentStop" => Some(Event::Stop),@|cursors_renamed_events_normalize
             "stop" => Some(Event::Stop),
             "sessionStart" => Some(Event::SessionStart),
             "postToolUseFailure" => Some(Event::PostToolFailure),
