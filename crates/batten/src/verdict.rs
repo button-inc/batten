@@ -2163,7 +2163,7 @@ status. `&&` is fine -- it short-circuits, so a failure still propagates.",
     },
     VendoredVerdict {
         id: "turn watch dropped",
-        gloss: "detaching a verdict-bearing command orphans it from the tool call",
+        gloss: "detaching a command orphans it from the tool call",
         class: "`nohup` or a trailing `&` returns the call at once, the harness records it \
 complete, and the session loses the wake-up it would get when the work actually exits. \
 Backgrounding the tool call is the supported shape and keeps the notification; detaching \

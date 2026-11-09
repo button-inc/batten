@@ -5201,6 +5201,16 @@ fn event_decides(event: Event) -> Option<Decision> {
     }
 }
 
+// CLOUD-2667's detach gate, below in `native_fired`, `detached_call`, `waited_on`
+// and `waits_on`.
+//MUTANT-SUITE crates/batten/tests/it/detached_call.rs
+//MUTANT detach-needs-verdict-row|s@^    if let Some(refusal) = detached_call(envelope) {$@    if let Some(refusal) = None::<Refusal> {@|a_bare_ampersand_on_any_program_is_refused
+//MUTANT detach-graded-as-history|s@^        fired.push((NativeGate::Detach, refusal));$@        fired.push((NativeGate::History, refusal));@|a_native_detach_row_grades_the_gate
+//MUTANT detach-harness-blind|s@^    envelope.background_ceiling?;$@    let _ = envelope.background_ceiling;@|a_harness_without_a_background_option_is_not_refused
+//MUTANT wait-reads-as-detached|s@^        .any(\x7clater\x7c waits_on(later, detached, jobs))$@        .any(\x7c_\x7c false)@|waiting_in_the_same_call_is_not_detached
+//MUTANT foreign-wait-admits|s@^    operands.is_empty() \x7c\x7c (jobs == 1 && operands.iter().all(\x7cword\x7c own_job_ref(word)))$@    true@|a_wait_on_another_job_is_detached
+//MUTANT subshell-wait-admits|s@^    if later.grouped != detached.grouped \x7c\x7c later.nested != detached.nested {$@    if false {@|a_wait_outside_the_subshell_is_detached
+//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 /// The severity a compiled gate runs at here: [`crate::rules::native_grade`]
 /// over this policy's mediated rows (CLOUD-2291). Only the committed authority
 /// carries one (`resolve::apply_local`).
@@ -5211,17 +5221,19 @@ fn native_grade(policy: &Policy, gate: NativeGate) -> RuleSeverity {
 /// The first compiled gate that fired at a blocking grade, disposed as its
 /// grade says (CLOUD-2291). Lifted out of [`adjudicated_call_gates`], whose line
 /// budget the grading spent.
-fn native_denial(policy: &Policy, facts: &Facts<'_>) -> Option<Decision> {
-    native_fired(facts).into_iter().find_map(|(gate, refusal)| {
-        let severity = native_grade(policy, gate);
-        blocks(severity, policy.fail_on_warning).then(|| disposed_at(severity, refusal))
-    })
+fn native_denial(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Option<Decision> {
+    native_fired(envelope, facts)
+        .into_iter()
+        .find_map(|(gate, refusal)| {
+            let severity = native_grade(policy, gate);
+            blocks(severity, policy.fail_on_warning).then(|| disposed_at(severity, refusal))
+        })
 }
 
 /// The refusals of every compiled gate that fired at a reporting, non-blocking
 /// grade, delivered as advisories while the call is allowed (CLOUD-2291).
-fn native_advice(policy: &Policy, facts: &Facts<'_>) -> Vec<Refusal> {
-    native_fired(facts)
+fn native_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Refusal> {
+    native_fired(envelope, facts)
         .into_iter()
         .filter(|(gate, _)| {
             let severity = native_grade(policy, *gate);
@@ -5238,7 +5250,7 @@ fn native_advice(policy: &Policy, facts: &Facts<'_>) -> Vec<Refusal> {
 /// [`native_advice`] differ only in which grades they take, so the deny and the
 /// advisory cannot disagree about when a gate fires. Facts first, grades after
 /// — the facts are already resolved and nearly always empty.
-fn native_fired(facts: &Facts<'_>) -> Vec<(NativeGate, Refusal)> {
+fn native_fired(envelope: &Envelope, facts: &Facts<'_>) -> Vec<(NativeGate, Refusal)> {
     let mut fired = Vec::new();
     // THE DESTRUCTIVE-RESET GATE (CLOUD-462), and its predicate is REACHABILITY
     // rather than the verb's spelling.
@@ -5286,7 +5298,98 @@ fn native_fired(facts: &Facts<'_>) -> Vec<(NativeGate, Refusal)> {
     if let Some(refusal) = history_gate(facts) {
         fired.push((NativeGate::History, refusal));
     }
+    // THE DETACH GATE (CLOUD-2667): a `&` job the call does not wait on loses
+    // the session's wake-up whatever program it runs, so it is not left to a
+    // pipeline row that names only verdict-bearing programs.
+    if let Some(refusal) = detached_call(envelope) {
+        fired.push((NativeGate::Detach, refusal));
+    }
     fired
+}
+
+/// The rule id the detach gate refuses under (CLOUD-2667).
+pub const DETACHED_CALL: &str = "detached-call";
+
+/// A call that backgrounds a job with `&` and does not wait on it in the same
+/// call, on a harness with a supported background option (CLOUD-2667).
+///
+/// A harness without one has no better shape to name, so the gate never fires
+/// there. Pointer-only: the refusal carries a count of detached jobs, never the
+/// command. `nohup` alone is not detaching: a foreground `nohup x` blocks until
+/// `x` exits, and `nohup x &` is caught by its `&`.
+fn detached_call(envelope: &Envelope) -> Option<Refusal> {
+    envelope.background_ceiling?;
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    let backgrounded = |segment: &Segment| segment.terminator == Some(Separator::Background);
+    let jobs = parsed
+        .iter()
+        .filter(|segment| backgrounded(segment))
+        .count();
+    let detached = (0..parsed.len())
+        .filter(|&index| backgrounded(&parsed[index]) && !waited_on(&parsed, index, jobs))
+        .count();
+    (detached > 0).then(|| {
+        Refusal::declared(
+            DETACHED_CALL,
+            crate::verdict::Native::RunOrphaned,
+            &[crate::verdict::Subject::Count {
+                count: detached as u64,
+            }],
+            Fix::declared(Some(
+                "set `run_in_background` on the tool call; `a & b & wait` in one call is not detached",
+            )),
+        )
+    })
+}
+
+/// Whether a segment after `parsed[index]` waits on it.
+fn waited_on(parsed: &[Segment], index: usize, jobs: usize) -> bool {
+    let detached = &parsed[index];
+    parsed[index + 1..]
+        .iter()
+        .any(|later| waits_on(later, detached, jobs))
+}
+
+/// Whether `later` is a `wait` that covers `detached`: in the same subshell and
+/// substitution, and either waiting on every job or, where there is only one,
+/// naming it by an own-job reference.
+fn waits_on(later: &Segment, detached: &Segment, jobs: usize) -> bool {
+    if later.grouped != detached.grouped || later.nested != detached.nested {
+        return false;
+    }
+    let tokens: Vec<&str> = later.words.iter().map(String::as_str).collect();
+    let handed = tokens.len().saturating_sub(later.redirects.len());
+    let Some(program) = effective_program(&tokens[..handed]) else {
+        return false;
+    };
+    if program_token(tokens[program]) != "wait" {
+        return false;
+    }
+    let operands = &tokens[program + 1..handed];
+    operands.is_empty() || (jobs == 1 && operands.iter().all(|word| own_job_ref(word)))
+}
+
+/// A `wait` operand that can only name the call's own job: `-n`, `$!`, a
+/// job spec (`%`, `%%`, `%+`, `%1`) or a variable holding a pid. A literal pid
+/// names a job this call did not start.
+fn own_job_ref(word: &str) -> bool {
+    let name = |text: &str| {
+        text.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    matches!(word, "-n" | "$!" | "%" | "%%" | "%+")
+        || word
+            .strip_prefix('%')
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()))
+        || word
+            .strip_prefix("${")
+            .and_then(|rest| rest.strip_suffix('}'))
+            .is_some_and(name)
+        || word.strip_prefix('$').is_some_and(name)
 }
 
 /// The history gate (CLOUD-2144): a config row changed by a context that has
@@ -5320,7 +5423,7 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
     // gate that could still see it would be a second place the answer is made.
     let Facts { receipts, keys, .. } = *facts;
     // The three compiled gates, first and in their order (CLOUD-2291).
-    if let Some(denied) = native_denial(policy, facts) {
+    if let Some(denied) = native_denial(policy, envelope, facts) {
         return denied;
     }
     // The write gate, before the command gate and not inside it: a write tool
@@ -7955,7 +8058,7 @@ pub fn policy_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     // Under the chain's own conditions, so the warn side runs exactly where the
     // deny side does.
     let mut advice = if event_decides(envelope.event).is_none() && !policy.is_empty() {
-        native_advice(policy, facts)
+        native_advice(policy, envelope, facts)
     } else {
         Vec::new()
     };
@@ -19580,7 +19683,7 @@ deny contains "refused by themodule" if {
         use crate::facts::Look;
         let gates = |discards| {
             with_native_facts(&discards, &Look::CouldNotLook, |f| {
-                native_fired(f)
+                native_fired(&envelope(""), f)
                     .into_iter()
                     .map(|(gate, _)| gate)
                     .collect::<Vec<_>>()
@@ -19605,7 +19708,11 @@ deny contains "refused by themodule" if {
         let at = |rows: Vec<Rule>| {
             let policy = ceiling_policy(rows);
             with_native_facts(&Look::CouldNotLook, &unread(), |f| {
-                (native_denial(&policy, f), native_advice(&policy, f).len())
+                let call = envelope("");
+                (
+                    native_denial(&policy, &call, f),
+                    native_advice(&policy, &call, f).len(),
+                )
             })
         };
         let (denial, advice) = at(Vec::new());

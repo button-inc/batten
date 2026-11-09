@@ -160,6 +160,7 @@ mod decision_record;
 mod defects;
 mod derived_facts;
 mod design_audit;
+mod detached_call;
 mod dev_profile;
 mod digest_major_agreement;
 mod dist;
