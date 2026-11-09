@@ -5250,7 +5250,7 @@ expression: stdout_of(&output)
         {
           "path": "wiring gate",
           "id": "wiring.gate",
-          "about": "Link this clone's two commit hooks to a hook body the repository checks in",
+          "about": "Link every git hook in this clone to the running batten binary, or both commit hooks to a checked-in body",
           "effect": "write",
           "data_channel": false,
           "flags": [
@@ -5260,7 +5260,15 @@ expression: stdout_of(&output)
               "long": null,
               "takes_value": true,
               "positional": true,
-              "help": "The hook body to link, relative to the repository root"
+              "help": "A hook body to link both commit hooks to, relative to the repository root"
+            },
+            {
+              "name": "check",
+              "short": null,
+              "long": "check",
+              "takes_value": false,
+              "positional": false,
+              "help": "Exit non-zero if a git hook link is owed, and write nothing"
             }
           ],
           "subcommands": []
