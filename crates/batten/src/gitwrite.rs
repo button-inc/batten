@@ -1185,12 +1185,25 @@ fn union_of(ours: &[u8], theirs: &[u8]) -> Vec<u8> {
 /// the existing index already held, for a path this replay did not touch, and a
 /// fresh `stat(2)` for one it wrote.
 fn update_worktree(repo: &gix::Repository, was: gix::ObjectId, now: gix::ObjectId) -> Result<()> {
-    let Some(workdir) = repo.workdir().map(std::path::Path::to_path_buf) else {
+    if repo.workdir().is_none() {
         // A bare repository has nothing to update, and that is a fact about the
         // clone rather than a failure of the replay.
         return Ok(());
+    }
+    checkout_between(repo, tree_of(repo, was)?, tree_of(repo, now)?)
+}
+
+/// [`update_worktree`]'s body over two TREE ids (CLOUD-2581): a fresh checkout
+/// is the delta from the empty tree, so [`link_worktree`] reaches the same
+/// filter pipeline and stat-correct index a replay does.
+fn checkout_between(
+    repo: &gix::Repository,
+    before: gix::ObjectId,
+    after: gix::ObjectId,
+) -> Result<()> {
+    let Some(workdir) = repo.workdir().map(std::path::Path::to_path_buf) else {
+        return Ok(());
     };
-    let (before, after) = (tree_of(repo, was)?, tree_of(repo, now)?);
     let read = |id: gix::ObjectId| -> Result<gix::Tree<'_>> {
         repo.find_tree(id)
             .map_err(|err| anyhow::anyhow!("gitwrite: tree {id} will not read: {err}"))
@@ -1255,7 +1268,7 @@ fn update_worktree(repo: &gix::Repository, was: gix::ObjectId, now: gix::ObjectI
 
     let mut index = repo
         .index_from_tree(&after.id())
-        .map_err(|err| anyhow::anyhow!("gitwrite: no index for {now}: {err}"))?;
+        .map_err(|err| anyhow::anyhow!("gitwrite: no index for tree {}: {err}", after.id()))?;
     let (mut pipeline, _) = repo
         .filter_pipeline(None)
         .map_err(|err| anyhow::anyhow!("gitwrite: no filter pipeline: {err}"))?;
@@ -1282,6 +1295,137 @@ fn update_worktree(repo: &gix::Repository, was: gix::ObjectId, now: gix::ObjectI
     // does not carry has to be unlinked, or a rebase that deletes a file leaves
     // it on disk and the next `verify` compiles a file that is not in the commit.
     remove_gone(&workdir, &gone, gone_trees)
+}
+
+/// Create the linked worktree `name` for the host, at `<top>/.claude/worktrees/<name>`
+/// (CLOUD-2581), and answer its directory.
+///
+/// Native, because `git.rs::no_second_git_invoker_exists` forbids a `git`
+/// spawn: the branch `refs/heads/worktree-<id>` at the main checkout's `HEAD`,
+/// the admin directory `<common>/worktrees/<id>` with its `HEAD`, `commondir`
+/// and `gitdir`, the worktree's own `.git` file, and a checkout from the empty
+/// tree through [`checkout_between`]. `<id>` is `name` with `/` spelled `+`.
+/// A failure removes everything written before it.
+///
+/// # Errors
+///
+/// A `name` that is empty, absolute or carries a `..` segment; a target that
+/// exists; or any step that will not complete, named in the message.
+pub fn link_worktree(common: &Path, top: &Path, name: &str) -> Result<std::path::PathBuf> {
+    if name.is_empty() || name.starts_with('/') || name.split('/').any(|segment| segment == "..") {
+        return Err(anyhow::anyhow!(
+            "worktree name {name:?} is not a relative name"
+        ));
+    }
+    let id = name.replace('/', "+");
+    let branch = format!("refs/heads/worktree-{id}");
+    let dir = top.join(".claude").join("worktrees").join(name);
+    let admin = common.join("worktrees").join(&id);
+    if dir.exists() || admin.exists() {
+        return Err(anyhow::anyhow!("worktree {name} exists"));
+    }
+    let mut main = crate::git::open_for_write(top)?;
+    let head = main
+        .head_id()
+        .map_err(|err| anyhow::anyhow!("worktree: HEAD will not resolve: {err}"))?
+        .detach();
+    // `git worktree add` writes its branch's reflog under a fallback identity
+    // when none is configured; gix refuses unless the fallback is said.
+    {
+        let mut config = main.config_snapshot_mut();
+        let _ = config.set_value(
+            &gix::config::tree::gitoxide::Committer::NAME_FALLBACK,
+            "batten",
+        );
+        let _ = config.set_value(
+            &gix::config::tree::gitoxide::Committer::EMAIL_FALLBACK,
+            "batten@localhost",
+        );
+    }
+    let written = (|| -> Result<()> {
+        let name: gix::refs::FullName = branch
+            .as_str()
+            .try_into()
+            .map_err(|err| anyhow::anyhow!("worktree: {branch} is not a ref name: {err}"))?;
+        main.edit_reference(gix::refs::transaction::RefEdit {
+            change: gix::refs::transaction::Change::Update {
+                log: gix::refs::transaction::LogChange {
+                    mode: gix::refs::transaction::RefLog::AndReference,
+                    force_create_reflog: false,
+                    message: "batten: worktree create".into(),
+                },
+                expected: gix::refs::transaction::PreviousValue::MustNotExist,
+                new: gix::refs::Target::Object(head),
+            },
+            name,
+            deref: false,
+        })
+        .map_err(|err| anyhow::anyhow!("worktree: {branch} will not write: {err}"))?;
+        std::fs::create_dir_all(&admin)
+            .map_err(|err| anyhow::anyhow!("worktree: admin dir will not write: {err}"))?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|err| anyhow::anyhow!("worktree: directory will not write: {err}"))?;
+        let admin_files = [
+            ("HEAD", format!("ref: {branch}\n")),
+            ("commondir", "../..\n".to_owned()),
+            ("gitdir", format!("{}\n", dir.join(".git").display())),
+        ];
+        for (file, body) in admin_files {
+            std::fs::write(admin.join(file), body)
+                .map_err(|err| anyhow::anyhow!("worktree: admin {file} will not write: {err}"))?;
+        }
+        std::fs::write(dir.join(".git"), format!("gitdir: {}\n", admin.display()))
+            .map_err(|err| anyhow::anyhow!("worktree: .git will not write: {err}"))?;
+        let linked = crate::git::open_for_write(&dir)?;
+        let empty = gix::ObjectId::empty_tree(linked.object_hash());
+        checkout_between(&linked, empty, tree_of(&linked, head)?)
+    })();
+    if let Err(why) = written {
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&admin);
+        let _ = delete_ref(top, &branch);
+        return Err(why);
+    }
+    Ok(dir)
+}
+
+/// Remove the linked worktree at `worktree`: its directory, then its admin
+/// directory (CLOUD-2581). Answers the common dir and the branch the admin
+/// `HEAD` named, so the caller decides whether the branch goes too.
+///
+/// The common dir is read from the worktree's own `.git` file, never from the
+/// hook's cwd, which may be the worktree being removed.
+///
+/// # Errors
+///
+/// A worktree with no readable `.git` file or admin directory, or a removal the
+/// filesystem refuses.
+pub fn unlink_worktree(worktree: &Path) -> Result<(std::path::PathBuf, Option<String>)> {
+    let pointer = std::fs::read_to_string(worktree.join(".git")).map_err(|err| {
+        anyhow::anyhow!("worktree: {} has no .git file: {err}", worktree.display())
+    })?;
+    let admin = std::path::PathBuf::from(
+        pointer
+            .trim()
+            .strip_prefix("gitdir:")
+            .ok_or_else(|| anyhow::anyhow!("worktree: .git is not a gitdir pointer"))?
+            .trim(),
+    );
+    let commondir = std::fs::read_to_string(admin.join("commondir"))
+        .map_err(|err| anyhow::anyhow!("worktree: no commondir: {err}"))?;
+    let common = crate::git::canonical(&admin.join(commondir.trim()));
+    let branch = std::fs::read_to_string(admin.join("HEAD"))
+        .ok()
+        .and_then(|head| {
+            head.trim()
+                .strip_prefix("ref:")
+                .map(|named| named.trim().to_owned())
+        });
+    std::fs::remove_dir_all(worktree)
+        .map_err(|err| anyhow::anyhow!("worktree: directory will not remove: {err}"))?;
+    std::fs::remove_dir_all(&admin)
+        .map_err(|err| anyhow::anyhow!("worktree: admin dir will not remove: {err}"))?;
+    Ok((common, branch))
 }
 
 /// Unlink every deleted path, then prune the directories the base deleted.
