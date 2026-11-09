@@ -440,3 +440,40 @@ expires = "2027-03-31"
         String::from_utf8_lossy(&outcome.stderr)
     );
 }
+
+/// Gemini's `BeforeAgent` is its prompt-submit moment (CLOUD-2695): a handler
+/// on `user-prompt-submit` runs there, and its exit 2 is Gemini's documented
+/// block.
+#[test]
+fn a_gemini_before_agent_reaches_a_prompt_handler() {
+    let dir = scratch("handler-gemini-before-agent");
+    let repo = dir.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    write(
+        &repo,
+        "batten.toml",
+        r#"version = 1
+
+[[hook.handler]]
+id = "prompt-guard"
+on = "user-prompt-submit"
+run = ["sh", "-c", "echo blocked by fixture >&2; exit 2"]
+timeout_ms = 5000
+owner = "CLOUD-2695"
+expires = "2027-03-31"
+"#,
+    );
+    common::init_repo(&repo);
+    let payload = serde_json::json!({
+        "hook_event_name": "BeforeAgent",
+        "session_id": "s",
+        "cwd": repo,
+        "prompt": "x",
+    })
+    .to_string();
+    let output =
+        common::run_with_stdin(&repo, &["adjudicate", "--harness", "gemini-cli"], &payload);
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{err}");
+    assert!(err.contains("hook.handler.prompt-guard"), "{err}");
+}
