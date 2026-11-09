@@ -234,6 +234,21 @@ fn a_destructive_git_call_is_left_to_the_host() {
     }
 }
 
+/// CLOUD-2354: `-C -c` is directory `-c`, so the verb is `reset`. The preset's
+/// own copy of git's option table skipped `reset` as `-c`'s value and granted
+/// the hard reset; the engine's projected subcommand does not.
+#[test]
+fn a_global_option_never_hides_a_destructive_git_call() {
+    for call in ["git -C -c reset --hard HEAD~1", "git reset --hard HEAD~1"] {
+        assert!(
+            !granted("default", call),
+            "must be left to the host: {call}"
+        );
+    }
+    // Anti-vacuity: the same globals before a read are granted.
+    assert!(granted("default", "git -C -c status"));
+}
+
 /// The preset alone, so its own plan-mode guard is what decides: in this
 /// repository `claude-code-cloud`'s `plan write refused` denies a plan-mode write
 /// first, and a case over the committed config could not tell the guard was gone.

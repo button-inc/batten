@@ -8884,6 +8884,8 @@ pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
 //MUTANT redirect-handed-as-argument|s@^            let handed = tokens.len().saturating_sub(line.redirects.len());$@            let handed = tokens.len();@|program_reach_hands_no_redirection_to_the_program
 //MUTANT line-redirects-dropped|s@^                        redirects: segment.redirects,$@                        redirects: Vec::new(),@|a_joined_lines_redirects_stay_with_their_own_line
 //MUTANT segment-redirects-unprojected|s@^                        "redirects": segment.redirects,$@@|the_call_document_projects_a_segments_redirections
+//MUTANT subcommand-projection-unskipped|s@let verb = subcommand_index(&arguments, options);@let verb = subcommand_index(\&arguments, \&[]);@|each_git_entry_carries_its_subcommand_past_global_options
+//MUTANT global-options-unprojected|s@&arguments\[..verb.unwrap_or(arguments.len())\]@\&arguments[..0]@|each_git_entry_carries_its_subcommand_past_global_options
 fn program_reach(command: &str) -> Vec<serde_json::Value> {
     let crate::facts::Look::Is(parsed) = segments(command) else {
         return Vec::new();
@@ -8906,6 +8908,25 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
             let argv = &tokens[..handed];
             let index = effective_program(argv)?;
             let program = program_token(argv[index]);
+            let arguments: Vec<&str> = argv[index + 1..]
+                .iter()
+                .map(|token| program_token(token))
+                .collect();
+            // THE SUBCOMMAND, PROJECTED ONCE (CLOUD-2354): the first bare word
+            // past the program's own value-taking options, by the resolver the
+            // verdict matcher uses. Four presets each carried a Rego copy of
+            // git's option table, and they disagreed with git: `git -C -c reset`
+            // read `-c` as an option. `null` for a program with no table.
+            let options = global_value_options(program_name(program));
+            let verb = subcommand_index(&arguments, options);
+            let (subcommand, global_options) = if options.is_empty() {
+                (serde_json::Value::Null, serde_json::Value::Null)
+            } else {
+                (
+                    serde_json::json!(verb.map(|at| arguments[at])),
+                    serde_json::json!(&arguments[..verb.unwrap_or(arguments.len())]),
+                )
+            };
             Some(serde_json::json!({
                 "program": program,
                 // THE NAME AS WELL AS THE TOKEN, because they are different
@@ -8934,10 +8955,12 @@ fn program_reach(command: &str) -> Vec<serde_json::Value> {
                 // predicate is decided on. `(git push origin main --force)` was
                 // allowed with `--force)` here while the same flag written
                 // earlier denied.
-                "arguments": argv[index + 1..]
-                    .iter()
-                    .map(|token| program_token(token))
-                    .collect::<Vec<_>>(),
+                "arguments": arguments,
+                // The words before `subcommand`, verbatim, so a module can judge
+                // what they do (`-c core.pager=sh` runs a program) without
+                // parsing them. The whole argv where there is no subcommand.
+                "subcommand": subcommand,
+                "global-options": global_options,
                 "mediated": mediator_present(
                     crate::rules::RequireVia::Mise,
                     &argv[..index],
@@ -19927,6 +19950,29 @@ deny contains "refused by themodule" if {
         assert_eq!(reach[0]["program"], "./bin/tool");
         assert_eq!(reach[0]["name"], "tool");
         assert_eq!(reach[0]["arguments"], serde_json::json!(["--flag", "x"]));
+    }
+
+    /// A git, gh or mise entry carries its first verb past the program's own
+    /// value-taking options, and the words before it verbatim (CLOUD-2354).
+    ///
+    /// Fails by: an empty option table (`/repo` becomes the subcommand), an
+    /// empty `global-options`, or either key projected for a program with no
+    /// table.
+    #[test]
+    fn each_git_entry_carries_its_subcommand_past_global_options() {
+        let entry = |command: &str| program_reach(command).remove(0);
+        let pushed = entry("git -C /repo push origin");
+        assert_eq!(pushed["subcommand"], "push");
+        assert_eq!(pushed["global-options"], serde_json::json!(["-C", "/repo"]));
+        let version = entry("git --version");
+        assert_eq!(version["subcommand"], serde_json::Value::Null);
+        assert_eq!(version["global-options"], serde_json::json!(["--version"]));
+        let viewed = entry("gh -R o/r pr view 1");
+        assert_eq!(viewed["subcommand"], "pr");
+        assert_eq!(viewed["global-options"], serde_json::json!(["-R", "o/r"]));
+        let read = entry("cat f");
+        assert_eq!(read["subcommand"], serde_json::Value::Null);
+        assert_eq!(read["global-options"], serde_json::Value::Null);
     }
 
     /// A redirect into a file is a write; into a descriptor or `/dev/null`
