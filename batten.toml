@@ -4148,55 +4148,6 @@ delta_sources = ["**"]
 # inherit the gate for it in the same preset.
 reason = "Name a shell program `.sh` or `.bash`; make a sibling it builds at run time a file the tree carries; and write no more shell than the base, since the `[census.shell]` homes may only lose shell lines."
 
-# The substitution family of the same kind (CLOUD-864). Measured over one
-# session's transcript: 34 of 38 Bash calls had a first-class tool that does the
-# job, and `Read`/`Grep`/`Glob` were used ZERO times — 15 `head -N`, 13 `grep`,
-# 12 `ls`, 5 `cat`, 5 `sed -n`, 2 `find -name`.
-#
-# THE ROW IS ON THIS KIND BECAUSE OF WHAT DISTINGUISHES THE TWO CASES, and there
-# is no other kind that can hold it. `grep pat crates/` answers a question `Grep`
-# answers better; `git ls-files | grep crates/batten` is a filter over another
-# command's output that no tool replaces. Same program, same operand, opposite
-# verdicts — only the POSITION separates them. A `shape` row cannot see it:
-# `matching_shape_rows` iterates every segment with no index in scope, so it
-# would refuse the filter too. This kind is already defined over what surrounds a
-# command, which is exactly the fact in question.
-#
-# The list is the consumer's, like `filters` above. Another repository's `awk` may
-# have no better answer available; here every one of these has one.
-#
-# WHAT IT DELIBERATELY DOES NOT CATCH, so nobody reads silence as coverage: a
-# path reached through a shell variable (`grep "$p" "$d"` names no path the
-# parser can see, and guessing would refuse work over an unnameable target); the
-# native `Grep`/`Read` tools, which arrive as structured input rather than a
-# command line; and anything outside the repository, which keeps the
-# `>/tmp/x.log` form the row above MANDATES allowed.
-[[rule]]
-id = "tool select other"
-kind = "pipeline"
-scope = "mediated_call"
-severity = "deny"
-#
-# `sed:-n` is QUALIFIED and the rest are not, on a distinction the corpus makes
-# and a bare name cannot. `sed -n '1,40p' f` prints a range — `Read(offset,
-# limit)`, and the single most-measured shape here. `sed 's/a/b/' f` transforms
-# the stream, which no first-class tool does, so refusing it would tell the
-# caller "a tool answers this directly" when none does. The other eight read a
-# file or list paths in every mode they have, so they need no qualifier.
-#
-# `wc` stays unqualified deliberately: `wc -l f` has no range-read equivalent,
-# but a count over a pattern answers the question that reaches for it, and the
-# reason text names that capability.
-substitutes = ["cat", "head", "tail", "sed:-n", "grep", "rg", "find", "ls", "wc"]
-#
-# THE REASON NAMES CAPABILITIES, NEVER PRODUCTS (CLOUD-998). It used to name
-# `Read(offset, limit)`, `Grep`, `Glob` and Serena's symbol tools as literals.
-# That is wrong wherever a session does not carry them — the structured surface
-# is not guaranteed present, and a remedy naming an absent tool is unactionable
-# in exactly the session that most needs one. The four questions below are what
-# is invariant; which instrument answers them is whatever the session has.
-reason = "Use the structured surface this session offers: a range of one file, a pattern across the tree, paths by glob, or what a name resolves to; `rules/scanning.md` picks between them. After a pipe these utilities are allowed."
-
 [[rule]]
 id = "verdict guard missing"
 kind = "pipeline"
