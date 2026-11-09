@@ -271,3 +271,47 @@ fn a_closing_paren_does_not_invent_a_deny_either() {
     assert_allowed("(hg push --force)");
     assert_allowed("binary=$(which gh)");
 }
+
+/// CLOUD-2691: `+` is git's per-ref force, so a refspec carrying it is a force
+/// push however it is otherwise spelled.
+#[test]
+fn a_refspec_force_denies() {
+    assert_preset_denies("git push origin +HEAD:main");
+    assert_preset_denies("git push origin +feature");
+    assert_preset_allows("git push origin HEAD:main");
+}
+
+/// A bundled short force is an honest spelling; `-of` is a push option named
+/// `f`, and the lease is the sanctioned flag.
+#[test]
+fn a_bundled_short_force_denies() {
+    for command in [
+        "git push -fu origin main",
+        "git push -uf origin main",
+        "git push -4f origin main",
+    ] {
+        assert_preset_denies(command);
+    }
+    for command in [
+        "git push -u origin main",
+        "git push -of origin main",
+        "git push --force-with-lease origin main",
+    ] {
+        assert_preset_allows(command);
+    }
+}
+
+/// `push` must be git's subcommand: `git stash push` carries no refspec.
+#[test]
+fn a_push_word_outside_the_subcommand_is_not_a_push() {
+    assert_preset_allows("git stash push -m +wip");
+    assert_preset_allows("git stash push -- +file");
+}
+
+/// A word an option consumes is its value, never a force.
+#[test]
+fn a_push_option_value_is_not_a_force() {
+    assert_preset_allows("git push -o +opt origin main");
+    assert_preset_allows("git push --push-option +opt origin main");
+    assert_preset_allows("git push -uo +opt origin main");
+}

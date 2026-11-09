@@ -107,6 +107,20 @@ fn call(command: &str) -> String {
         "a fixture whose first word is not plainly the program needs the real \
          projection: use tests/preset_segments.rs"
     );
+    // The projected subcommand (CLOUD-2354), by the same fixture-guard rule: the
+    // first argument is it, and a fixture with an option before it is refused
+    // rather than parsed, because the engine's option table is the one parser.
+    let tabled = matches!(program, "git" | "gh");
+    let first = words.get(1).copied();
+    assert!(
+        !tabled || first.is_none_or(|word| !word.starts_with('-')),
+        "a fixture with a global option needs the real projection: use tests/preset_segments.rs"
+    );
+    let (subcommand, global_options) = if tabled {
+        (serde_json::json!(first), serde_json::json!([]))
+    } else {
+        (serde_json::Value::Null, serde_json::Value::Null)
+    };
     serde_json::json!({"call": {
         "command": command,
         "segments": [{"words": words, "raw": command, "terminator": null}],
@@ -115,6 +129,8 @@ fn call(command: &str) -> String {
             "name": program,
             "arguments": &words[1..],
             "mediated": false,
+            "subcommand": subcommand,
+            "global-options": global_options,
         }],
         "operation": "run",
         "event": "pre_tool",
