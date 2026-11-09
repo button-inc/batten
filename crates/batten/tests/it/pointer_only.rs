@@ -2255,6 +2255,15 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-2693: a zero interval is a usage error, named and dispatching
+    // nothing. (With no `[[forge.source]]` the round would be could-not-look,
+    // exit 3, which this corpus reads as proving nothing.)
+    Verb {
+        path: "forge poll",
+        args: &["--every", "0"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The derivations' writer (CLOUD-1991). Driven with `--schema` alone, into a
     // directory of the corpus's own: the verb writes files and says where, one
     // `<kind>=<path>` line, and reads nothing of the caller's tree to do it — the

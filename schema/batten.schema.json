@@ -2172,6 +2172,21 @@
         "class"
       ]
     },
+    "Decode": {
+      "description": "How a source's document is decoded.",
+      "oneOf": [
+        {
+          "description": "An array of Events API items.",
+          "type": "string",
+          "const": "events"
+        },
+        {
+          "description": "An array of objects compared with the last round's.",
+          "type": "string",
+          "const": "snapshot"
+        }
+      ]
+    },
     "Defects": {
       "description": "The `[defects]` table: where the ledger lives and what may be in it.\n\nBoth keys are consumer facts. The crate carries neither a path nor a class\ntoken (non-negotiable rule 1) — a taxonomy is a description of one team's\nfailure modes, not an engine fact.",
       "type": "object",
@@ -2756,6 +2771,13 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/Query"
+          }
+        },
+        "source": {
+          "description": "Where forge events come from when nothing pushes them (CLOUD-2693):\nrows tried in declaration order, the first available read each round.\nThe concrete rows are a consumer's config, never engine code (rule 1).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Source2"
           }
         }
       },
@@ -5934,6 +5956,102 @@
         "path"
       ]
     },
+    "Source2": {
+      "description": "One `[[forge.source]]` row (CLOUD-2693).",
+      "type": "object",
+      "properties": {
+        "arguments": {
+          "description": "`mcp`: a JSON object template; `{owner}` and `{repo}` are filled from\nthe forge remote.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "available": {
+          "description": "`command`: an argv that exits 0 when the source can be read.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
+        "decode": {
+          "description": "How the document is decoded into events.",
+          "$ref": "#/$defs/Decode"
+        },
+        "event": {
+          "description": "`snapshot`: the catalog event each object is.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "id": {
+          "description": "The stable id its cursor and its pointer lines are named by.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "key": {
+          "description": "`snapshot`: a JSON pointer to each object's identity.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "kind": {
+          "description": "How the document is read.",
+          "$ref": "#/$defs/SourceKind"
+        },
+        "method": {
+          "description": "`mcp`: the tool method.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "new": {
+          "description": "`snapshot`: the action a key first seen after the baseline round emits.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "run": {
+          "description": "`command`: the argv whose stdout is the document; `{owner}` and `{repo}`\nare filled per element.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
+        "server": {
+          "description": "`mcp`: the server a `[[mcp.source]]` wiring resolves.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "track": {
+          "description": "`snapshot`: the tracked fields whose change emits an action.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Track"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "decode"
+      ]
+    },
+    "SourceKind": {
+      "description": "How a source is read.",
+      "oneOf": [
+        {
+          "description": "A tool call through a declared MCP server.",
+          "type": "string",
+          "const": "mcp"
+        },
+        {
+          "description": "A declared program's stdout.",
+          "type": "string",
+          "const": "command"
+        }
+      ]
+    },
     "Span": {
       "description": "One duration a `[[forge.query]]` row derives from its instants (CLOUD-843).",
       "type": "object",
@@ -6218,6 +6336,37 @@
         "tool",
         "version",
         "input"
+      ]
+    },
+    "Track": {
+      "description": "One tracked field of a `snapshot` source.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "The action any change of the pointed value emits.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "pointer": {
+          "description": "A JSON pointer into each object.",
+          "type": "string",
+          "maxLength": 1536
+        },
+        "values": {
+          "description": "The action each new value emits; a value not listed emits nothing.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "pointer"
       ]
     },
     "TranscriptConfig": {
