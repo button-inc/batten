@@ -839,3 +839,59 @@ fn the_same_wiring_without_a_matcher_is_clean() {
         diagnosis(&repo)
     );
 }
+
+#[test]
+fn a_missing_surface_names_its_file_and_fix() {
+    // CLOUD-2676: a finding names the file it is about and the one command
+    // that repairs it, so it is acted on rather than traced.
+    let repo = common::scratch("harness-wiring-file-and-fix").join("repo");
+    std::fs::create_dir_all(&repo).expect("the fixture");
+    common::init_repo(&repo);
+    common::write(&repo, "batten.toml", "version = 1\n");
+    let home = common::scratch("harness-wiring-file-and-fix-home");
+    let seeded = common::batten()
+        .current_dir(&repo)
+        .args(["wiring", "register", "--all"])
+        .env("HOME", &home)
+        .env_remove("BATTEN_ENVIRONMENT")
+        .env_remove("CLAUDE_PID")
+        .output()
+        .expect("the binary runs");
+    assert!(seeded.status.success());
+    std::fs::remove_file(repo.join(".cursor/hooks.json")).expect("the cursor surface was written");
+
+    let run = |args: &[&str]| {
+        common::batten()
+            .current_dir(&repo)
+            .args(args)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_PID")
+            .output()
+            .expect("the binary runs")
+    };
+    let json = run(&["doctor", "hooks", "--json"]);
+    let report: serde_json::Value = serde_json::from_slice(&json.stdout).expect("json parses");
+    let cursor = report["harnesses"]
+        .as_array()
+        .expect("harnesses")
+        .iter()
+        .find(|harness| harness["harness"] == "cursor")
+        .expect("cursor is diagnosed");
+    assert_eq!(
+        cursor["findings"],
+        serde_json::json!([{
+            "event": "",
+            "reason": "hook-wiring-file-missing",
+            "file": ".cursor/hooks.json",
+            "fix": "batten wiring register --all",
+        }]),
+        "{cursor}"
+    );
+    let human = common::stdout(&run(&["doctor", "hooks"]));
+    assert!(
+        human
+            .lines()
+            .any(|line| line.ends_with(".cursor/hooks.json: run batten wiring register --all")),
+        "{human}"
+    );
+}

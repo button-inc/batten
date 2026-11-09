@@ -29,7 +29,7 @@
       ]
     }
   ],
-  "BeforeAgent": [
+  "SessionStart": [
     {
       "hooks": [
         {

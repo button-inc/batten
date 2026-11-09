@@ -212,7 +212,12 @@ impl Harness {
                     (Event::PreTool, "BeforeTool"),
                     (Event::PostTool, "AfterTool"),
                     (Event::Stop, "AfterAgent"),
-                    (Event::SessionStart, "BeforeAgent"),
+                    // `SessionStart`, Gemini's own session-start event, never
+                    // `BeforeAgent`, which Gemini documents as after-prompt,
+                    // before planning (CLOUD-2676).
+                    //MUTANT-SUITE crates/batten/tests/it/cli.rs
+                    //MUTANT gemini-start-spelled-before-agent|s@^                    (Event::SessionStart, "SessionStart"),$@                    (Event::SessionStart, "BeforeAgent"),@|generated_hook_wiring_matches_its_golden_for_every_installable_harness
+                    (Event::SessionStart, "SessionStart"),
                 ],
                 project_dir_var: None,
             }),
