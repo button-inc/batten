@@ -6629,16 +6629,11 @@ fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
             // the resolved program — otherwise the wrapper that orphans the run
             // is the one token the parser hides.
             let detached_here = tokens.contains(&"nohup");
-            // NORMALISED, and the operand window is normalised with it: a grouped
-            // command's closing paren lands on the LAST token, which is a matched
-            // operand whenever the command takes no trailing argument, so
-            // `(mise run land)` would otherwise not match where `(mise run land x)`
-            // did.
-            let words: Vec<&str> = tokens[program_index + 1..]
-                .iter()
-                .map(|token| program_token(token))
-                .filter(|token| !token.starts_with('-'))
-                .collect();
+            // No bare word matches nothing, so skipping the line preserves the
+            // behaviour of the flag-dropping list this replaced.
+            let Some(words) = verdict_words(&tokens, program_index) else {
+                continue;
+            };
             if !verdicts
                 .iter()
                 .any(|entry| entry.matches(program_token(tokens[program_index]), &words))
@@ -7169,6 +7164,8 @@ fn outside_repository(path: &Path, root: &Path) -> bool {
 // CLOUD-986's arm in `pipeline_rules`, declared here because this is where the
 // file's `pipeline_shapes.rs` suite begins.
 //MUTANT newline-sequence-unread|s@^            if !last_line {$@            if false {@|a_verdict_followed_by_a_newline_has_its_status_replaced
+//MUTANT verdict-globals-unskipped|s@^    let start = subcommand_index(&argv, options)?;$@    let start = subcommand_index(\&argv, \&[])?;@|a_verdict_behind_a_global_option_is_still_refused
+//MUTANT verdict-nested-globals-unskipped|s@subcommand_index(rest, options)@subcommand_index(rest, \&[])@|a_verdict_behind_a_global_option_is_still_refused
 fn followed_cd(
     segment: &Segment,
     line: &SegmentLine,
@@ -11240,6 +11237,51 @@ fn subcommand_index(arguments: &[&str], value_options: &[&str]) -> Option<usize>
 const MISE_VALUE_OPTIONS: [&str; 10] = [
     "-C", "--cd", "-E", "--env", "-j", "--jobs", "-s", "--shell", "-t", "--tool",
 ];
+
+/// The words a verdict row's `subcommands` are matched against: the
+/// subcommand, then the nested verb and what follows it, flags dropped.
+///
+/// NORMALISED first, and the operand window with it: a grouped command's
+/// closing paren lands on the LAST token, which is a matched operand whenever
+/// the command takes no trailing argument, so `(mise run land)` would otherwise
+/// not match where `(mise run land x)` did.
+///
+/// PAST THE PROGRAM'S OWN LEADING OPTIONS (CLOUD-2666), at both the subcommand
+/// and the nested verb: dropping `-`-prefixed tokens left `-C`'s value as the
+/// subcommand, so `git -C /tmp push | tail` and `gh pr -R o/r comment | tail`
+/// matched no verdict row at all. `None` where the argv holds no bare word.
+fn verdict_words<'a>(tokens: &[&'a str], program_index: usize) -> Option<Vec<&'a str>> {
+    let argv: Vec<&str> = tokens[program_index + 1..]
+        .iter()
+        .map(|token| program_token(token))
+        .collect();
+    let options = global_value_options(program_token(tokens[program_index]));
+    let start = subcommand_index(&argv, options)?;
+    let rest = &argv[start + 1..];
+    let nested_at = subcommand_index(rest, options).unwrap_or(rest.len());
+    Some(
+        std::iter::once(argv[start])
+            .chain(rest[nested_at..].iter().copied())
+            .filter(|token| !token.starts_with('-'))
+            .collect(),
+    )
+}
+
+/// `gh`'s options that consume the next word and may precede the subcommand or
+/// the nested verb (CLOUD-2666): `gh -R o/r pr comment` and `gh pr -R o/r
+/// comment` are one call. A declared stopgap, as [`GIT_VALUE_OPTIONS`] is.
+const GH_VALUE_OPTIONS: [&str; 2] = ["-R", "--repo"];
+
+/// The value-taking options `program` accepts ahead of its subcommand, for
+/// [`subcommand_index`]. Empty for a program this file has no list for.
+fn global_value_options(program: &str) -> &'static [&'static str] {
+    match program {
+        "git" => &GIT_VALUE_OPTIONS,
+        "mise" => &MISE_VALUE_OPTIONS,
+        "gh" => &GH_VALUE_OPTIONS,
+        _ => &[],
+    }
+}
 
 /// The singleton task this call would start a second copy of (CLOUD-438).
 ///
