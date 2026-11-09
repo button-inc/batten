@@ -546,7 +546,7 @@ fn matches_cmdline(program_root: &str, task: &str, cmdline: &str) -> bool {
 /// reader useless on Windows rather than wrong there, which is the side to be on.
 /// The parse decides on every platform; only the probe is under `cfg`
 /// (CLOUD-2509).
-fn pid_exists(pid: &str) -> bool {
+pub(crate) fn pid_exists(pid: &str) -> bool {
     let Ok(raw) = pid.parse::<i32>() else {
         return false;
     };

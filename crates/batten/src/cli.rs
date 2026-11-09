@@ -1501,11 +1501,15 @@ pub enum WiringCommand {
         /// Decide whether a repair is owed, and remove nothing.
         check: bool,
     },
-    /// Link this clone's two commit hooks to a hook body the repository checks
-    /// in (CLOUD-1991, retiring `[tasks."session:git-hooks"]`).
+    /// Link every git hook in this clone to the running batten binary
+    /// (CLOUD-2339), or, given a body, the two commit hooks to that hook body
+    /// the repository checks in (CLOUD-1991).
     Gate {
-        /// The hook body, relative to the repository root.
-        body: String,
+        /// The hook body, relative to the repository root; absent links the
+        /// binary itself.
+        body: Option<String>,
+        /// Decide whether a link is owed, and write nothing.
+        check: bool,
     },
     /// Register batten on the session root when a session is rooted above this
     /// repository (CLOUD-2111). Last, so no existing variant's discriminant moves.
@@ -2774,7 +2778,8 @@ fn wiring_of(matches: &ArgMatches) -> Option<WiringCommand> {
             all: flag(matches, "all"),
         }),
         ("gate", matches) => Some(WiringCommand::Gate {
-            body: matches.get_one::<String>("body")?.clone(),
+            body: matches.get_one::<String>("body").cloned(),
+            check: flag(matches, "check"),
         }),
         _ => None,
     }
