@@ -626,3 +626,25 @@ fn a_regex_alternation_is_a_pattern_however_much_it_looks_like_a_path() {
     // have opened the hole this row exists to close.
     assert_denied("ls mise-tasks/*.sh");
 }
+
+/// A verdict program's own leading options do not hide its subcommand
+/// (CLOUD-2666). Dropping every `-`-prefixed token left `-C`'s value as the
+/// subcommand, so each of these four matched no verdict row and was allowed.
+/// The cause class is asserted, not the exit code alone: no push gate refuses
+/// these, so only the verdict row can name them.
+#[test]
+fn a_verdict_behind_a_global_option_is_still_refused() {
+    for command in [
+        "git -C /tmp push origin x 2>&1 | tail",
+        "git -c core.pager=cat push | tail",
+        "gh -R o/r pr comment 1 -b x | tail",
+        "gh pr -R o/r comment 1 -b x | tail",
+    ] {
+        let cause = cause_backgrounded(command);
+        assert!(cause.contains("verdict read dropped"), "{command}: {cause}");
+    }
+    // Queries stay allowed, so the case discriminates against a matcher that
+    // refuses every `-C` or `-R`.
+    assert_allowed("git -C /tmp log | tail");
+    assert_allowed("gh -R o/r pr view 42 | tail -3");
+}
