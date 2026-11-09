@@ -4595,6 +4595,7 @@ verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
 complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from register" -l check -d 'Exit non-zero if a registration is owed, and write nothing'
+complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from register" -l all -d 'Also register batten on every harness\'s committed wiring file'
 complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from register" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from register" -l silent -d 'Say nothing but a verdict or a usage error'
 complete -c batten -n "__fish_batten_using_subcommand wiring; and __fish_seen_subcommand_from register" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
