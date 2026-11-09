@@ -3990,6 +3990,8 @@ pub fn call_input_schema() -> Result<String> {
 ///
 /// * `forge` (CLOUD-2689): a forge event's tokens, never a body.
 /// * a segment's `redirects` (CLOUD-2670): the suffix of its `words`.
+/// * a program's `subcommand` and `global-options` (CLOUD-2354): its first verb
+///   past its own value-taking options, and the words before it.
 fn extend_call_schema(document: &mut serde_json::Value) {
     let forge = serde_json::json!({
         "type": ["object", "null"],
@@ -4017,6 +4019,19 @@ fn extend_call_schema(document: &mut serde_json::Value) {
         segment.insert(
             "redirects".to_owned(),
             serde_json::json!({"type": "array", "items": {"type": "string"}}),
+        );
+    }
+    if let Some(program) = document
+        .pointer_mut("/properties/call/properties/programs/items/properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        program.insert(
+            "subcommand".to_owned(),
+            serde_json::json!({"type": ["string", "null"]}),
+        );
+        program.insert(
+            "global-options".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": {"type": "string"}}),
         );
     }
 }

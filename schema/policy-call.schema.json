@@ -96,6 +96,15 @@
                   "null"
                 ]
               },
+              "global-options": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
               "mediated": {
                 "type": "boolean"
               },
@@ -107,6 +116,12 @@
               },
               "reads-only": {
                 "type": "boolean"
+              },
+              "subcommand": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             },
             "type": "object"

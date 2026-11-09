@@ -13,7 +13,8 @@
 #MUTANT git-read-form-writes|s@^\tnot some_writing_flag(verb.rest)$@\ttrue@|a_plan_mode_git_with_global_options_is_allowed
 #MUTANT git-pager-cluster-unread|s@^\tcontains(argument, "O")$@\tfalse@|a_plan_mode_git_with_global_options_is_allowed
 #MUTANT git-pager-abbreviation-unread|s@^\tsome prefix in {"--output", "--op", "--ext"}$@\tsome prefix in {"--output", "--ext"}@|a_plan_mode_git_with_global_options_is_allowed
-#MUTANT git-global-option-unread|s@^\tnot git_option_value(arguments, i)$@\ti == 0@|a_plan_mode_git_with_global_options_is_allowed
+#MUTANT git-global-option-unread|s@^git_global_word(globals, j) if git_option_value(globals, j)$@git_global_word(globals, j) if false@|a_plan_mode_git_with_global_options_is_allowed
+#MUTANT git-program-global-unread|s@^\tnot some_unsafe_global(program\["global-options"\])$@\ttrue@|a_plan_mode_git_with_global_options_is_allowed
 # A call that only reads is never put to the operator (CLOUD-1949).
 #
 # The host halts on a permission prompt, and a halted session is the failure the
@@ -170,7 +171,7 @@ reads(program) if {
 # the file itself, which no shell redirect check sees.
 reads(program) if {
 	program.name == "git"
-	verb := git_verb(program.arguments)
+	verb := git_verb(program)
 	git_read_verb(verb)
 	not some_writing_flag(verb.rest)
 }
@@ -201,44 +202,43 @@ git_reads_as("branch", rest) if {
 	}
 }
 
-# GIT'S GLOBAL OPTIONS COME BEFORE THE SUBCOMMAND, so the subcommand is the first
-# word after them, never `arguments[0]` (CLOUD-2418): `git -C /x status` read
-# `-C` as its verb and was refused in plan mode.
+# GIT'S GLOBAL OPTIONS COME BEFORE THE SUBCOMMAND, so the verb is the one the
+# engine projects past them, never `arguments[0]` (CLOUD-2418), and never a
+# copy of git's option table here (CLOUD-2354): `program.subcommand`, with the
+# words before it in `program["global-options"]`.
 #
-# ONLY OPTIONS THAT CANNOT RUN A PROGRAM ARE SKIPPED, by name. `-c core.pager=…`,
-# `-c core.fsmonitor=…`, `--config-env` and `--exec-path` each hand git a program
-# to run, so a call carrying one is never a read: its option is not skipped, and
-# the word after it is no read verb.
-git_verb(arguments) := {"name": word, "rest": array.slice(arguments, i + 1, count(arguments))} if {
-	some i, word in arguments
-	not startswith(word, "-")
-	not git_option_value(arguments, i)
-	not some_word_before_is_not_global(arguments, i)
+# ONLY OPTIONS THAT CANNOT RUN A PROGRAM MAY PRECEDE A READ, by name.
+# `-c core.pager=…`, `-c core.fsmonitor=…`, `--config-env` and `--exec-path`
+# each hand git a program to run, so a call carrying one is never a read.
+git_verb(program) := {
+	"name": program.subcommand,
+	"rest": array.slice(program.arguments, count(program["global-options"]) + 1, count(program.arguments)),
+} if {
+	not some_unsafe_global(program["global-options"])
 }
 
-some_word_before_is_not_global(arguments, i) if {
-	some j, _ in arguments
-	j < i
-	not git_global_word(arguments, j)
+some_unsafe_global(globals) if {
+	some j, _ in globals
+	not git_global_word(globals, j)
 }
 
 # Word `j` is a global option that runs nothing, or the value of `-C`.
-git_global_word(arguments, j) if arguments[j] in {
+git_global_word(globals, j) if globals[j] in {
 	"-C", "--no-pager", "-P", "--no-optional-locks", "--literal-pathspecs",
 	"--no-replace-objects", "--bare",
 }
 
-git_global_word(arguments, j) if {
+git_global_word(globals, j) if {
 	some prefix in {"--git-dir=", "--work-tree=", "--namespace="}
-	startswith(arguments[j], prefix)
+	startswith(globals[j], prefix)
 }
 
-git_global_word(arguments, j) if git_option_value(arguments, j)
+git_global_word(globals, j) if git_option_value(globals, j)
 
 # Word `i` is the separate value of `-C`.
-git_option_value(arguments, i) if {
+git_option_value(globals, i) if {
 	i > 0
-	arguments[i - 1] == "-C"
+	globals[i - 1] == "-C"
 }
 
 # `--output` writes a file; `-O` hands matches to a pager program and
@@ -283,7 +283,7 @@ test_a_read_pipeline_is_preapproved if {
 		"segments": [{"words": ["cd", "/x"]}, {"words": ["git", "status"]}, {"words": ["head"]}],
 		"programs": [
 			{"name": "cd", "arguments": ["/x"], "reads-only": false},
-			{"name": "git", "arguments": ["status"], "reads-only": false},
+			{"name": "git", "arguments": ["status"], "subcommand": "status", "global-options": [], "reads-only": false},
 			{"name": "head", "arguments": [], "reads-only": true},
 		],
 	}}
@@ -360,56 +360,64 @@ test_printenv_and_ps_are_reads if {
 	}
 }
 
-git_call(arguments) := {"call": {
+# The projected keys are written by hand, never computed: computing them here
+# would be a copy of the engine's parser (CLOUD-2354). One case is
+# `[global-options, subcommand, rest]`.
+git_call(case) := {"call": {
 	"event": "pre-tool",
 	"tool": "Bash",
 	"command": concat(" ", array.concat(["git"], arguments)),
 	"segments": [{"words": array.concat(["git"], arguments)}],
-	"programs": [{"name": "git", "arguments": arguments, "reads-only": false}],
-}}
+	"programs": [{
+		"name": "git", "arguments": arguments, "reads-only": false,
+		"subcommand": case[1], "global-options": case[0],
+	}],
+}} if {
+	arguments := array.concat(array.concat(case[0], [case[1]]), case[2])
+}
 
 test_git_global_options_come_before_the_verb if {
-	every arguments in [
-		["-C", "/x", "status", "--short"],
-		["--git-dir=/x/.git", "log", "-1"],
-		["--no-pager", "-C", "/x", "diff"],
-		["stash", "list"],
-		["branch", "--show-current"],
-		["branch"],
-		["remote", "-v"],
-		["config", "--get", "user.name"],
+	every case in [
+		[["-C", "/x"], "status", ["--short"]],
+		[["--git-dir=/x/.git"], "log", ["-1"]],
+		[["--no-pager", "-C", "/x"], "diff", []],
+		[[], "stash", ["list"]],
+		[[], "branch", ["--show-current"]],
+		[[], "branch", []],
+		[[], "remote", ["-v"]],
+		[[], "config", ["--get", "user.name"]],
 	] {
-		"call read now" in preapprove with input as git_call(arguments)
+		"call read now" in preapprove with input as git_call(case)
 	}
 }
 
 test_git_global_options_never_hide_a_writer if {
-	every arguments in [
-		["-C", "/x", "commit", "-m", "x"],
-		["-C", "status", "commit"],
-		["-c", "core.pager=sh -c x", "log"],
-		["-c", "core.fsmonitor=x", "status"],
-		["--exec-path=/x", "status"],
-		["--config-env=core.pager=X", "log"],
-		["stash"],
-		["stash", "pop"],
-		["branch", "new-branch"],
-		["branch", "-D", "old"],
-		["remote", "add", "o", "u"],
-		["remote", "-v", "add", "o", "u"],
-		["stash", "show", "-p", "--output=x"],
-		["stash", "list", "--output=x"],
-		["config", "user.name", "x"],
-		["config", "alias.zz", "--list"],
-		["grep", "-Osh", "x"],
-		["grep", "--open-files-in-pager=./x", "y"],
-		["grep", "-iOsh", "x"],
-		["grep", "--open=sh", "x"],
-		["-C", "/x", "grep", "--op=sh", "x"],
-		["diff", "--ext"],
-		["remote", "show", "origin"],
+	every case in [
+		[["-C", "/x"], "commit", ["-m", "x"]],
+		[["-C", "status"], "commit", []],
+		[["-c", "core.pager=sh -c x"], "log", []],
+		[["-c", "core.fsmonitor=x"], "status", []],
+		[["--exec-path=/x"], "status", []],
+		[["--config-env=core.pager=X"], "log", []],
+		[[], "stash", []],
+		[[], "stash", ["pop"]],
+		[[], "branch", ["new-branch"]],
+		[[], "branch", ["-D", "old"]],
+		[[], "remote", ["add", "o", "u"]],
+		[[], "remote", ["-v", "add", "o", "u"]],
+		[[], "stash", ["show", "-p", "--output=x"]],
+		[[], "stash", ["list", "--output=x"]],
+		[[], "config", ["user.name", "x"]],
+		[[], "config", ["alias.zz", "--list"]],
+		[[], "grep", ["-Osh", "x"]],
+		[[], "grep", ["--open-files-in-pager=./x", "y"]],
+		[[], "grep", ["-iOsh", "x"]],
+		[[], "grep", ["--open=sh", "x"]],
+		[["-C", "/x"], "grep", ["--op=sh", "x"]],
+		[[], "diff", ["--ext"]],
+		[[], "remote", ["show", "origin"]],
 	] {
-		count(preapprove) == 0 with input as git_call(arguments)
+		count(preapprove) == 0 with input as git_call(case)
 	}
 }
 
@@ -419,6 +427,6 @@ test_a_git_writer_is_not if {
 		"tool": "Bash",
 		"command": "git commit -m x",
 		"segments": [{"words": ["git", "commit", "-m", "x"]}],
-		"programs": [{"name": "git", "arguments": ["commit", "-m", "x"], "reads-only": false}],
+		"programs": [{"name": "git", "arguments": ["commit", "-m", "x"], "subcommand": "commit", "global-options": [], "reads-only": false}],
 	}}
 }

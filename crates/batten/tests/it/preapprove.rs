@@ -780,6 +780,8 @@ fn a_plan_mode_git_with_global_options_is_allowed() {
         "git --no-pager --git-dir=/home/user/batten/.git log --oneline -1",
         "git stash list",
         "git branch --show-current",
+        // CLOUD-2354: directory `-c`, verb `status`.
+        "git -C -c status",
         "echo landed",
     ] {
         let read = shell("plan", line);
