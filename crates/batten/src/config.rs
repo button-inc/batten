@@ -2829,6 +2829,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     if let Some(hook) = &config.hook {
         crate::action::validate(&hook.actions)?;
         crate::handler::validate(&hook.handlers)?;
+        crate::githook::validate(&hook.git)?;
     }
     // And the rule table, which used to be validated only by the runner that
     // happened to evaluate it (CLOUD-48). That was defensible while the tree
