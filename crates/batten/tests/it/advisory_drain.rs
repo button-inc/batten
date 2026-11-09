@@ -437,7 +437,7 @@ fn the_advisory_reaches_the_model_in_band_where_the_host_delivers_it() {
         "and it is not ALSO on stderr — two copies of one notice is two channels to keep in step"
     );
 
-    let neutral = hook_as(&repo, &home, "exit-code", &post_tool("s2"));
+    let neutral = hook_as(&repo, &home, "exit-code", &post_tool_batch("s2"));
     assert_eq!(neutral.status.code(), Some(0));
     assert!(
         advisory_context(&neutral).is_none(),
@@ -484,15 +484,15 @@ fn a_post_tool_use_is_silent_where_the_host_names_the_batch() {
 
 #[test]
 fn a_host_without_the_batch_event_still_coalesces_post_tool_wakes() {
-    // §7(b). The window is DEMOTED to the fallback, not deleted: the neutral
-    // `exit-code` adapter declares the converged core and no batch event, so
+    // §7(b). The window is DEMOTED to the fallback, not deleted: `codex-cli`
+    // declares the converged core and no batch event, so
     // `degrade` hands it `PostToolUse` and four wakes inside one window are one
     // drain — the same guarantee, reached the way CLOUD-79 built it.
     let (repo, home) =
         drained_fixture("drain-fallback-window", "\n[drain]\ninterval_ms = 600000\n");
     let mut emitted = 0;
     for _ in 0..4 {
-        if !payload(&hook_as(&repo, &home, "exit-code", &post_tool("batch"))).is_empty() {
+        if !payload(&hook_as(&repo, &home, "codex-cli", &post_tool("batch"))).is_empty() {
             emitted += 1;
         }
     }
@@ -517,9 +517,9 @@ fn the_capability_table_decides_the_wake_event_not_the_drain() {
     );
     // The host that does not: the same bytes are its boundary.
     assert_eq!(
-        payload(&hook_as(&repo, &home, "exit-code", &post_tool("s1"))).len(),
+        payload(&hook_as(&repo, &home, "codex-cli", &post_tool("s1"))).len(),
         1,
-        "exit-code declares no batch event, so PostToolUse degrades to the wake"
+        "codex-cli declares no batch event, so PostToolUse degrades to the wake"
     );
 }
 
@@ -531,7 +531,7 @@ fn a_batch_payload_to_a_host_that_does_not_name_it_does_not_drain() {
     // `Event::normalize` knowing the spelling must not be mistaken for the host
     // declaring the event.
     let (repo, home) = drained_fixture("drain-batch-undeclared", "");
-    let output = hook_as(&repo, &home, "exit-code", &post_tool_batch("s1"));
+    let output = hook_as(&repo, &home, "codex-cli", &post_tool_batch("s1"));
     assert_eq!(output.status.code(), Some(0));
     assert!(
         payload(&output).is_empty(),

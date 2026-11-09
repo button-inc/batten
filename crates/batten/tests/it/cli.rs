@@ -10071,9 +10071,11 @@ fn a_declared_action_fires_on_its_event_with_the_substituted_argv() {
 
 #[test]
 fn a_host_without_the_capability_fires_nothing_and_still_answers() {
-    // Acceptance (b). `task-completed` is Claude-only, so the neutral exit-code
-    // adapter must spawn nothing — and must still answer its contract, because
-    // an absent capability is a fact about the host, never an error.
+    // Acceptance (b). `task-completed` is Claude-only among the surveyed hosts,
+    // so `codex-cli` must spawn nothing — and must still answer its contract,
+    // because an absent capability is a fact about the host, never an error.
+    // Not exit-code: that is Batten's own envelope and carries every moment
+    // (CLOUD-2674).
     let dir = action_repo(
         "action-uncapable",
         "task-completed",
@@ -10081,7 +10083,7 @@ fn a_host_without_the_capability_fires_nothing_and_still_answers() {
     );
     let output = run_hook_in(
         &dir,
-        "exit-code",
+        "codex-cli",
         &serde_json::json!({ "hook_event_name": "TaskCompleted" }).to_string(),
     );
     assert_eq!(output.status.code(), Some(0), "allow, never an error");
