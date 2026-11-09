@@ -8954,7 +8954,7 @@ fn run_wiring(
             dry_run,
             check,
         } => run_wiring_reclaim(*yes, *dry_run, *check, mode, overrides, err),
-        cli::WiringCommand::Register { check } => run_wiring_register(*check, mode, err),
+        cli::WiringCommand::Register { check, all } => run_wiring_register(*check, *all, mode, err),
         cli::WiringCommand::Gate { body } => {
             let linked = wiring::link_commit_gate(Path::new("."), body)?;
             output::message(
@@ -8997,12 +8997,36 @@ fn run_wiring(
 /// # Errors
 ///
 /// Whatever [`wiring::register`] could not write.
-fn run_wiring_register(check: bool, mode: Mode, err: &mut dyn Write) -> Result<ExitCode> {
+fn run_wiring_register(
+    check: bool,
+    all: bool,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
     let repo = git::canonical(hook_authority_root());
-    let roots = match std::env::var("CLAUDE_PID")
-        .ok()
-        .and_then(|pid| std::fs::read_link(format!("/proc/{pid}/cwd")).ok())
-    {
+    // THE COMMITTED HALF FIRST, AND UNGATED (CLOUD-2676): these are tracked
+    // repository files, so neither the disposable-home gate nor the no-session
+    // return below applies to them.
+    let mut owed = false;
+    if all {
+        for (harness, events) in wiring::register_committed(&repo, check)? {
+            let verb = if check { "owed" } else { "registered" };
+            for event in &events {
+                output::message(
+                    mode,
+                    output::Verbosity::Normal,
+                    err,
+                    &format!(
+                        "wiring register: {}:{event} {verb} on the committed surface",
+                        harness.as_str()
+                    ),
+                )?;
+            }
+            owed |= !events.is_empty();
+        }
+    }
+    // One resolution, shared with `doctor` (CLOUD-2676).
+    let roots = match wiring::live_session_root() {
         Some(root) => vec![root],
         // Only where the environment says the home is disposable: that is the
         // container a setup script provisions, and the only place a write would
@@ -9019,10 +9043,12 @@ fn run_wiring_register(check: bool, mode: Mode, err: &mut dyn Write) -> Result<E
                 err,
                 "wiring register: no session root resolves, so no registration is owed",
             )?;
+            if check && owed {
+                return Ok(ExitCode::Violation);
+            }
             return Ok(ExitCode::Success);
         }
     };
-    let mut owed = false;
     for root in &roots {
         let done = wiring::register(root, &repo, check)?;
         let verb = if done.written { "registered" } else { "owed" };
@@ -29987,11 +30013,13 @@ fn run_doctor_hooks(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
                 )?;
                 continue;
             }
+            // `<harness> <event> <reason> <file>: run <fix>` (CLOUD-2676): the
+            // file and the repair, so a finding is acted on rather than traced.
             for finding in &harness.findings {
                 writeln!(
                     out,
-                    "{} {} {}",
-                    harness.harness, finding.event, finding.reason
+                    "{} {} {} {}: run {}",
+                    harness.harness, finding.event, finding.reason, finding.file, finding.fix
                 )?;
             }
         }

@@ -1512,6 +1512,8 @@ pub enum WiringCommand {
     Register {
         /// Decide whether a registration is owed, and write nothing.
         check: bool,
+        /// Also register on every harness's committed surface (CLOUD-2676).
+        all: bool,
     },
 }
 
@@ -2769,6 +2771,7 @@ fn wiring_of(matches: &ArgMatches) -> Option<WiringCommand> {
         }),
         ("register", matches) => Some(WiringCommand::Register {
             check: flag(matches, "check"),
+            all: flag(matches, "all"),
         }),
         ("gate", matches) => Some(WiringCommand::Gate {
             body: matches.get_one::<String>("body")?.clone(),

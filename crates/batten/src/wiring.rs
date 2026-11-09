@@ -582,6 +582,81 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
     Ok(out)
 }
 
+/// The live session's root: the cwd of the harness process `$CLAUDE_PID`
+/// names, or `None` outside a session (CLOUD-2676).
+///
+/// The one resolution both `wiring register` and `doctor` read, so the file
+/// one writes is the file the other judges.
+#[must_use]
+pub fn live_session_root() -> Option<PathBuf> {
+    std::env::var("CLAUDE_PID")
+        .ok()
+        .and_then(|pid| std::fs::read_link(format!("/proc/{pid}/cwd")).ok())
+}
+
+/// Register batten on every harness's COMMITTED surface under `repo`, in
+/// `Harness::ALL` order (CLOUD-2676), and answer what each owed.
+///
+/// These are tracked repository files, so unlike [`register`] nothing here is
+/// gated on a disposable home. Through [`add_missing`], so a second run adds
+/// nothing; `check` writes nothing. A surface that will not parse is left
+/// alone and owes nothing, as [`register`] leaves one.
+///
+/// # Errors
+///
+/// When a surface parsed and cannot be written back.
+//MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
+//MUTANT register-all-skips-harness|s@^        let Some(wiring) = harness.wiring() else {$@        let Some(wiring) = harness.wiring().filter(\x7c_\x7c *harness != hook::Harness::Cursor) else {@|register_all_writes_every_committed_surface
+pub fn register_committed(repo: &Path, check: bool) -> Result<Vec<(hook::Harness, Vec<String>)>> {
+    let mut owed = Vec::new();
+    for harness in hook::Harness::ALL {
+        let Some(wiring) = harness.wiring() else {
+            continue;
+        };
+        let surface = match wiring.file {
+            hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
+        };
+        let path = repo.join(surface);
+        let mut document = match std::fs::read_to_string(&path) {
+            Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
+                Ok(document) if document.is_object() => document,
+                _ => continue,
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                serde_json::Value::Object(serde_json::Map::new())
+            }
+            Err(_) => continue,
+        };
+        let spellings: Vec<&str> = wiring
+            .registrations(*harness)
+            .into_iter()
+            .map(|(_, spelling)| spelling)
+            .collect();
+        let events = add_missing(
+            &mut document,
+            wiring.file,
+            &spellings,
+            &hook::wiring_command(*harness),
+        );
+        if events.is_empty() {
+            continue;
+        }
+        if !check {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let staged = path.with_extension("json.batten-tmp");
+            crate::durable::replace(
+                &staged,
+                format!("{}\n", serde_json::to_string_pretty(&document)?),
+            )?;
+            std::fs::rename(&staged, &path)?;
+        }
+        owed.push((*harness, events));
+    }
+    Ok(owed)
+}
+
 /// Add batten's registration under every event in `spellings` that carries
 /// none, and return those events in the order given.
 ///

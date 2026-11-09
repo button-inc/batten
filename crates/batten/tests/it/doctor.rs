@@ -93,7 +93,28 @@ fn scratch(name: &str, git: bool, config: Option<&str>) -> PathBuf {
     if let Some(text) = config {
         common::write(&dir, "batten.toml", text);
     }
+    if git {
+        seed_wiring(&dir);
+    }
     dir
+}
+
+/// Write every harness's committed wiring, so plain `doctor`'s `hook-wiring`
+/// check judges a wired fixture (CLOUD-2676). No session and no disposable
+/// home, so only the committed half can write.
+fn seed_wiring(dir: &Path) {
+    let output = batten()
+        .args(["wiring", "register", "--all"])
+        .current_dir(dir)
+        .env_remove("CLAUDE_PID")
+        .env_remove("BATTEN_ENVIRONMENT")
+        .output()
+        .expect("run batten wiring register --all");
+    assert!(
+        output.status.success(),
+        "seeding the wiring failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn doctor(dir: &Path, extra: &[&str]) -> Output {
@@ -102,6 +123,7 @@ fn doctor(dir: &Path, extra: &[&str]) -> Output {
     command.args(extra);
     command
         .current_dir(dir)
+        .env_remove("CLAUDE_PID")
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_CONFIG_FROM")
@@ -538,7 +560,7 @@ fn a_healthy_repository_exits_zero() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         stdout(&output),
-        "config ok\ngit-repo ok\ncommand-programs ok\npin-record ok\nhook-handlers ok\nplan-surface ok\ndoctor: 6 check(s), 0 failed\n"
+        "config ok\ngit-repo ok\ncommand-programs ok\npin-record ok\nhook-handlers ok\nplan-surface ok\nhook-wiring ok\ndoctor: 7 check(s), 0 failed\n"
     );
 }
 
@@ -641,11 +663,14 @@ fn every_check_is_reported_not_just_the_first_failure() {
     // the same thing in every scratch repository. What it can fail on is a
     // harness declaring neither a fetched spelling nor the row that owes the
     // survey (CLOUD-472), which is a defect in the crate and not in a tree.
-    assert!(text.contains("doctor: 6 check(s), 2 failed"), "got: {text}");
+    //
+    // `hook-wiring` is the third (CLOUD-2676): a directory with no wiring files
+    // is unwired, whatever else it lacks.
+    assert!(text.contains("doctor: 7 check(s), 3 failed"), "got: {text}");
     // AND EACH FAILURE IS LABELLED ON STDERR (CLOUD-2078), where an agent reads
     // it: the class and the check it names, one finding per failing check.
     let said = common::stderr(&output);
-    for check in ["config", "git-repo"] {
+    for check in ["config", "git-repo", "hook-wiring"] {
         assert!(
             said.lines()
                 .any(|line| line.contains("workspace state broken") && line.contains(check)),
@@ -847,7 +872,8 @@ fn json_is_valid_and_carries_every_check() {
             "command-programs",
             "pin-record",
             "hook-handlers",
-            "plan-surface"
+            "plan-surface",
+            "hook-wiring"
         ]
     );
 }
@@ -1479,4 +1505,64 @@ fn the_gap_record_holds_no_argument_text() {
     assert!(!stored.contains(secret), "the argv is not: {stored}");
     assert!(!stored.contains("tools/x.py"), "nor any operand: {stored}");
     assert!(!gaps(&dir).contains(secret));
+}
+
+// --- plain doctor judges the hook wiring (CLOUD-2676) --------------------------
+
+#[test]
+fn plain_doctor_fails_hook_wiring_on_an_unwired_checkout() {
+    // Built by hand rather than through `scratch`, which seeds the wiring.
+    let dir = common::scratch_outside_tree("batten-doctor-e2e", "hook-wiring-unwired");
+    common::git_in(&dir, &["init", "-q"]);
+    common::write(&dir, "batten.toml", "version = 1\n");
+    let output = doctor(&dir, &[]);
+    let out = stdout(&output);
+    assert!(
+        out.contains("hook-wiring failed hook-wiring-unwired"),
+        "plain doctor runs the wiring census: {out}"
+    );
+    assert_eq!(output.status.code(), Some(1), "{out}");
+}
+
+#[test]
+fn plain_doctor_ignores_a_merged_home_registration() {
+    let dir = scratch("hook-wiring-merged-home", true, Some("version = 1\n"));
+    let home = common::scratch_outside_tree("batten-doctor-e2e", "hook-wiring-home");
+    common::write(
+        &home,
+        ".claude/settings.json",
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"batten adjudicate --harness claude-code"}]}]}}"#,
+    );
+    let plain = doctor_with_home(&dir, &home, &[]);
+    let out = stdout(&plain);
+    assert!(out.contains("hook-wiring ok"), "{out}");
+    assert_eq!(plain.status.code(), Some(0), "{out}");
+
+    let hooks = doctor_with_home(&dir, &home, &["hooks", "--json"]);
+    assert_eq!(hooks.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_str(&stdout(&hooks)).unwrap();
+    let merged = report["harnesses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|harness| harness["findings"].as_array().unwrap().iter())
+        .any(|finding| {
+            finding["reason"] == "hook-wiring-merged-registration"
+                && finding["file"] == "~/.claude/settings.json"
+        });
+    assert!(merged, "doctor hooks keeps the merged finding: {report}");
+}
+
+fn doctor_with_home(dir: &Path, home: &Path, extra: &[&str]) -> Output {
+    batten()
+        .arg("doctor")
+        .args(extra)
+        .current_dir(dir)
+        .env("HOME", home)
+        .env_remove("CLAUDE_PID")
+        .env_remove("BATTEN_STRICTNESS")
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .env_remove("BATTEN_CONFIG_FROM")
+        .output()
+        .expect("run batten doctor")
 }

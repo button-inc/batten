@@ -5299,6 +5299,14 @@ expression: stdout_of(&output)
           "data_channel": false,
           "flags": [
             {
+              "name": "all",
+              "short": null,
+              "long": "all",
+              "takes_value": false,
+              "positional": false,
+              "help": "Also register batten on every harness's committed wiring file"
+            },
+            {
               "name": "check",
               "short": null,
               "long": "check",
