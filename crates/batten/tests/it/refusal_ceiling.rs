@@ -54,7 +54,17 @@ use std::path::{Path, PathBuf};
 use common::{Fixture, run_with_stdin, stderr};
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    // The committed rows plus the retired substitution row (CLOUD-2698): this
+    // suite exercises the `pipeline` kind, which the repository no longer
+    // declares. Per PROCESS, since nextest runs each case in its own.
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        common::committed_fixture_with_substitution(&format!(
+            "refusal-ceiling-{}",
+            std::process::id()
+        ))
+    })
+    .clone()
 }
 
 /// The session the real-root repeats fire under: this suite's own context, so
@@ -222,7 +232,8 @@ fn a_routed_read_of_every_committed_memory_is_within_the_declared_ceiling() {
     // because the longest name is the one that breaches — measured at 101 bytes
     // against a 96-byte ceiling while the tool rode as a third subject.
     let ceiling = declared_ceiling();
-    let memories = root().join(".serena/memories");
+    // The real tree's memories: `root()` is a fixture of the committed config.
+    let memories = common::at_root(".serena/memories");
     let mut measured = 0_usize;
     let mut over: Vec<(usize, String)> = Vec::new();
     for entry in std::fs::read_dir(&memories).expect("the committed memories are listable") {
@@ -295,11 +306,17 @@ fn no_refusal_lost_its_pointer() {
 /// stated reason: naming a consumer's policy filenames inside `crates/**` is
 /// non-negotiable rule 1, and `source name other` computes that.
 fn fixture(name: &str) -> PathBuf {
-    stage(name, &common::without_session_handlers(COMMITTED))
+    stage(name, &common::without_session_handlers(&committed()))
 }
 
 /// The committed config, as every fixture here stages it.
 const COMMITTED: &str = include_str!("../../../../batten.toml");
+
+/// [`COMMITTED`] plus the retired substitution row (CLOUD-2698): the row this
+/// suite's corpus refuses under.
+fn committed() -> String {
+    format!("{COMMITTED}{}", common::SUBSTITUTION_ROW)
+}
 
 /// [`fixture`] for a case that sends a `SessionStart`, with the committed
 /// config's session provisioning removed: every `[[startup]]` row and every
@@ -319,7 +336,7 @@ const COMMITTED: &str = include_str!("../../../../batten.toml");
 //MUTANT session-start-handlers-kept|s@^            \.retain(\x7crow\x7c row\.get("on")\.and_then(toml_edit::Item::as_str) != Some("session-start"));$@            .retain(\x7c_\x7c true);@|the_session_fixture_carries_no_session_provisioning
 fn session_fixture(name: &str) -> PathBuf {
     let mut config: toml_edit::DocumentMut =
-        COMMITTED.parse().expect("the committed config is TOML");
+        committed().parse().expect("the committed config is TOML");
     config.remove("startup");
     if let Some(handlers) = config
         .get_mut("hook")

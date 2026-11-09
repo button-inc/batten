@@ -128,13 +128,13 @@ look up a definition no longer in context. That line, verbatim:
 A real deny reason, on its first firing in a window:
 
 ```text
-batten deny tool run loose at batten.toml head; read rules/scanning.md — tool select other: a shell text utility stood in for the structured file surface. ... Do: ... Don't: ...
+batten deny path read routed at .serena/memories/core.md read_memory; run batten policy explain protected-mutation — protected-mutation: this path declares its own read route, named after it. ... Do: ... Don't: ...
 ```
 
 and on every later firing in that window:
 
 ```text
-batten deny tool run loose at batten.toml head; read rules/scanning.md
+batten deny path read routed at .serena/memories/core.md read_memory; run batten policy explain protected-mutation
 ```
 
 `batten` says the line is this gate's and not the host's; `deny`, `warn` or
