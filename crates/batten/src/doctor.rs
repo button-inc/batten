@@ -2271,9 +2271,13 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
         }
     }
 
-    // Everything else on the surface: a batten entry under an event the
-    // derivation does not emit, and the sibling count.
-    let spellings: Vec<&str> = derived.iter().map(|(_, spelling)| *spelling).collect();
+    // Everything else on the surface: a batten entry under an event the host
+    // does not emit, and the sibling count. Judged against what the derivation
+    // ADMITS (every event the host emits), not what it registers by default:
+    // a consumer that puts Batten on the whole surface is not underived
+    // (CLOUD-2581). `derived` above stays the required set.
+    let admitted = wiring.admits(harness);
+    let spellings: Vec<&str> = admitted.iter().map(|(_, spelling)| *spelling).collect();
     for (event, value) in events.iter() {
         for (_, entry) in entries_under(value) {
             if !entry.contains("batten") {
@@ -2294,6 +2298,13 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
                     event: event.clone(),
                     reason: EVENT_UNDERIVED,
                 });
+            } else if !derived
+                .iter()
+                .any(|(_, spelling)| *spelling == event.as_str())
+            {
+                // Admitted but not required: the consumer's own registration,
+                // counted like any other (CLOUD-2581).
+                registrations += 1;
             }
         }
     }
@@ -3610,6 +3621,85 @@ mod tests {
             claude_spellings().len() + 1,
             "the underived entry is a registration too"
         );
+    }
+
+    /// One batten registration under each of `spellings`.
+    fn wiring_on(spellings: &[&str]) -> serde_json::Value {
+        let command = hook::wiring_command(hook::Harness::ClaudeCode);
+        let mut events = serde_json::Map::new();
+        for spelling in spellings {
+            events.insert(
+                (*spelling).to_owned(),
+                serde_json::json!([{ "hooks": [{ "type": "command", "command": command }] }]),
+            );
+        }
+        serde_json::json!({ "hooks": events })
+    }
+
+    #[test]
+    fn a_wiring_on_every_claude_event_is_green() {
+        // CLOUD-2581. The 33 names Claude Code 2.1.319's binary lists, typed
+        // here rather than read from `admits()`, so a truncated table cannot be
+        // followed by its own test.
+        let every = [
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "PostToolBatch",
+            "Notification",
+            "UserPromptSubmit",
+            "UserPromptExpansion",
+            "SessionStart",
+            "SessionEnd",
+            "Stop",
+            "StopFailure",
+            "SubagentStart",
+            "SubagentStop",
+            "PreCompact",
+            "PostCompact",
+            "PreModelSwitch",
+            "PostModelSwitch",
+            "PermissionRequest",
+            "PermissionDenied",
+            "Setup",
+            "TeammateIdle",
+            "TaskCreated",
+            "TaskCompleted",
+            "Elicitation",
+            "ElicitationResult",
+            "ConfigChange",
+            "WorktreeCreate",
+            "WorktreeRemove",
+            "InstructionsLoaded",
+            "CwdChanged",
+            "FileChanged",
+            "DirectoryAdded",
+            "MessageDisplay",
+        ];
+        let row = claude_row("hooks-every-event", &wiring_on(&every));
+        assert!(row.ok, "{:?}", row.findings);
+        assert!(reasons(&row).is_empty());
+        assert_eq!(row.registrations, 33);
+    }
+
+    #[test]
+    fn an_eight_event_wiring_stays_green_beside_the_optional_events() {
+        // CLOUD-2581: admitting 33 must not REQUIRE 33. A literal list, so the
+        // fixture does not grow with `registrations()` the way
+        // `complete_wiring` does.
+        let eight = [
+            "PreToolUse",
+            "PostToolUse",
+            "Stop",
+            "SessionStart",
+            "TaskCompleted",
+            "ConfigChange",
+            "PostToolBatch",
+            "UserPromptSubmit",
+        ];
+        let row = claude_row("hooks-eight-events", &wiring_on(&eight));
+        assert!(row.ok, "{:?}", row.findings);
+        assert!(!reasons(&row).contains(&EVENT_UNREGISTERED));
     }
 
     #[test]
