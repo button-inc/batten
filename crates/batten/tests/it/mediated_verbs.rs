@@ -51,7 +51,10 @@ fn root() -> PathBuf {
     static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     // Per PROCESS: nextest runs each case in its own, and a shared name races.
     ROOT.get_or_init(|| {
-        common::committed_fixture_with_protected(&format!("mediated-verbs-{}", std::process::id()))
+        common::committed_fixture_with_substitution(&format!(
+            "mediated-verbs-{}",
+            std::process::id()
+        ))
     })
     .clone()
 }

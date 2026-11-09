@@ -33,7 +33,17 @@ use std::path::PathBuf;
 use common::{run, run_with_stdin, stderr};
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    // The committed rows plus the retired substitution row (CLOUD-2698): this
+    // suite exercises the `pipeline` kind, which the repository no longer
+    // declares. Per PROCESS, since nextest runs each case in its own.
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        common::committed_fixture_with_substitution(&format!(
+            "pipeline-shapes-{}",
+            std::process::id()
+        ))
+    })
+    .clone()
 }
 
 fn payload(command: &str) -> String {
