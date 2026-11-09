@@ -924,8 +924,19 @@ fn cursor_row(name: &str, body: &serde_json::Value) -> serde_json::Value {
         .expect("cursor is diagnosed")
 }
 
-/// The four spellings Cursor registers.
-const CURSOR_EVENTS: [&str; 4] = ["preToolUse", "afterFileEdit", "stop", "sessionStart"];
+/// The nine spellings Cursor registers (CLOUD-2695: every documented event
+/// Batten has a variant for, and Batten is on all of them).
+const CURSOR_EVENTS: [&str; 9] = [
+    "preToolUse",
+    "afterFileEdit",
+    "postToolUseFailure",
+    "stop",
+    "sessionStart",
+    "sessionEnd",
+    "subagentStart",
+    "subagentStop",
+    "preCompact",
+];
 
 fn unregistered(row: &serde_json::Value) -> Vec<serde_json::Value> {
     row["findings"]
@@ -974,7 +985,7 @@ fn a_hand_written_flat_cursor_file_is_registered() {
         &serde_json::json!({"version": 1, "hooks": hooks}),
     );
     assert!(unregistered(&row).is_empty(), "{row}");
-    assert_eq!(row["registrations"], 4, "{row}");
+    assert_eq!(row["registrations"], CURSOR_EVENTS.len(), "{row}");
 }
 
 #[test]
@@ -988,7 +999,7 @@ fn a_nested_cursor_file_reads_unregistered() {
     }
     let row = cursor_row("cursor-nested-unread", &serde_json::json!({"hooks": hooks}));
     let owed = unregistered(&row);
-    assert_eq!(owed.len(), 4, "{row}");
+    assert_eq!(owed.len(), CURSOR_EVENTS.len(), "{row}");
     assert!(
         owed.iter()
             .all(|finding| finding["fix"] == "batten wiring register --all"),

@@ -38,5 +38,45 @@
         }
       ]
     }
+  ],
+  "BeforeAgent": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten adjudicate --harness gemini-cli"
+        }
+      ]
+    }
+  ],
+  "Notification": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten adjudicate --harness gemini-cli"
+        }
+      ]
+    }
+  ],
+  "SessionEnd": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten adjudicate --harness gemini-cli"
+        }
+      ]
+    }
+  ],
+  "PreCompress": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten adjudicate --harness gemini-cli"
+        }
+      ]
+    }
   ]
 }
