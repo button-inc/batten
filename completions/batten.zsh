@@ -9353,6 +9353,102 @@ esac
     ;;
 esac
 ;;
+(forge)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__forge_commands" \
+"*::: :->forge" \
+&& ret=0
+
+    case $state in
+    (forge)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-forge-command-$line[1]:"
+        case $line[1] in
+            (intake)
+_arguments "${_arguments_options[@]}" : \
+'--event=[The X-GitHub-Event name the webhook body on stdin arrived under]:event:_default' \
+'--from=[\`wake\`\: stdin is a harness user-prompt-submit payload carrying the event]:from:_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__forge__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-forge-help-command-$line[1]:"
+        case $line[1] in
+            (intake)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (artifacts)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -10915,6 +11011,26 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(forge)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__forge_commands" \
+"*::: :->forge" \
+&& ret=0
+
+    case $state in
+    (forge)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-forge-command-$line[1]:"
+        case $line[1] in
+            (intake)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (artifacts)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__artifacts_commands" \
@@ -11005,6 +11121,7 @@ _batten_commands() {
 'census:Count what this repository declares it is retiring, as pointers' \
 'engine:Report and record which engine this binary is, against a config'\''s pin' \
 'test:Judge this branch'\''s tests against their base revision' \
+'forge:Take forge events into the hook surface' \
 'artifacts:Write the committed derivations of the command surface' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -11901,6 +12018,37 @@ _batten__subcmd__exec_commands() {
     local commands; commands=()
     _describe -t commands 'batten exec commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__forge_commands] )) ||
+_batten__subcmd__forge_commands() {
+    local commands; commands=(
+'intake:Run one forge event payload from stdin through the handlers and rules a harness hook gets' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten forge commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__forge__subcmd__help_commands] )) ||
+_batten__subcmd__forge__subcmd__help_commands() {
+    local commands; commands=(
+'intake:Run one forge event payload from stdin through the handlers and rules a harness hook gets' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten forge help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__forge__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__forge__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten forge help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__forge__subcmd__help__subcmd__intake_commands] )) ||
+_batten__subcmd__forge__subcmd__help__subcmd__intake_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten forge help intake commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__forge__subcmd__intake_commands] )) ||
+_batten__subcmd__forge__subcmd__intake_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten forge intake commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__generate_commands] )) ||
 _batten__subcmd__generate_commands() {
     local commands; commands=(
@@ -12037,6 +12185,7 @@ _batten__subcmd__help_commands() {
 'census:Count what this repository declares it is retiring, as pointers' \
 'engine:Report and record which engine this binary is, against a config'\''s pin' \
 'test:Judge this branch'\''s tests against their base revision' \
+'forge:Take forge events into the hook surface' \
 'artifacts:Write the committed derivations of the command surface' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -12449,6 +12598,18 @@ _batten__subcmd__help__subcmd__engine__subcmd__update_commands() {
 _batten__subcmd__help__subcmd__exec_commands() {
     local commands; commands=()
     _describe -t commands 'batten help exec commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__forge_commands] )) ||
+_batten__subcmd__help__subcmd__forge_commands() {
+    local commands; commands=(
+'intake:Run one forge event payload from stdin through the handlers and rules a harness hook gets' \
+    )
+    _describe -t commands 'batten help forge commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__forge__subcmd__intake_commands] )) ||
+_batten__subcmd__help__subcmd__forge__subcmd__intake_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help forge intake commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__generate_commands] )) ||
 _batten__subcmd__help__subcmd__generate_commands() {

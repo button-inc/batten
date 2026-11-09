@@ -671,6 +671,171 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 replay::run(&root, &base, json, out)
             }
         },
+        Some(Command::Forge { command }) => match command {
+            cli::ForgeCommand::Intake { event, from } => {
+                run_forge_intake(event, from.as_deref(), mode, &overrides, out, err)
+            }
+        },
+    }
+}
+
+/// `batten forge intake` (CLOUD-2690): one forge event payload on stdin,
+/// normalized, deduplicated against the seen ring, and dispatched through
+/// [`dispatch_envelope`] as [`hook::Harness::ExitCode`] — the handlers,
+/// actions and rules a harness hook gets, and no second dispatcher.
+///
+/// The `--event` form exits on the exit-code contract: 0 dispatched or seen,
+/// 1 an unknown event or an unreadable payload, 2 a handler or rule refused,
+/// 3 could-not-look. The `--from wake` form runs as a user-prompt-submit
+/// handler, where 2 would deny the operator's prompt, so it ALWAYS exits 0;
+/// its refusal is recorded in the findings store instead, and its faults are
+/// a stderr pointer.
+//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
+//MUTANT intake-skips-dispatch|s@^    let dispatched = dispatch_envelope(harness, instant, mode, overrides, input, out, err)?;$@    let dispatched = { drop(input); HookDispatch::undenied(ExitCode::Success) };@|intake_runs_handlers_and_exits_on_their_verdict
+//MUTANT wake-exit-propagated|s@^        Err(denied) if wake => {$@        Err(denied) if false => {@|a_wake_refusal_exits_zero_and_lands_in_the_findings_store
+//MUTANT forge-refusal-unrecorded|s@^        record_forge_refusal(\&root, \&recorded, deny, err);$@@|a_wake_refusal_exits_zero_and_lands_in_the_findings_store
+fn run_forge_intake(
+    event: Option<String>,
+    from: Option<&str>,
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let _memos = hook_call_memos();
+    let wake = match from {
+        None => false,
+        Some("wake") => true,
+        Some(other) => {
+            return Err(UsageError::raise(format!(
+                "forge intake: --from {other} is not a form; the one form is `wake`"
+            )));
+        }
+    };
+    // A fault on the wake form is a pointer and exit 0: the operator's prompt
+    // is never what a forge fault refuses.
+    let fault = |code: ExitCode, reason: &str, err: &mut dyn Write| -> Result<ExitCode> {
+        writeln!(err, "forge intake: {reason}")?;
+        Ok(if wake { ExitCode::Success } else { code })
+    };
+    let mut raw = String::new();
+    if std::io::stdin().read_to_string(&mut raw).is_err() {
+        return fault(ExitCode::Usage, "stdin is not text", err);
+    }
+    let parsed = if wake {
+        forge_event::wake_event(&raw)
+    } else {
+        let Some(name) = event else {
+            return Err(UsageError::raise(
+                "forge intake: name the event with --event <name>, or read a wake with --from wake"
+                    .to_owned(),
+            ));
+        };
+        serde_json::from_str::<serde_json::Value>(&raw)
+            .ok()
+            .map(|body| (name, body))
+    };
+    let Some((name, body)) = parsed else {
+        return fault(ExitCode::Usage, "no readable forge event on stdin", err);
+    };
+    let Some(envelope) = forge_event::normalize_webhook(&name, &body) else {
+        return fault(
+            ExitCode::Usage,
+            &format!("`{name}` is no GitHub webhook event"),
+            err,
+        );
+    };
+    let Ok(root) = git::repo_root(Path::new(".")) else {
+        return fault(ExitCode::Internal, "not a repository", err);
+    };
+    let Ok(common) = git::common_dir(&root) else {
+        return fault(
+            ExitCode::Internal,
+            "the git common dir does not resolve",
+            err,
+        );
+    };
+    let ring = forge_event::ring_path(Path::new(&common));
+    let key = envelope
+        .forge
+        .as_ref()
+        .map(|forge| forge.key.clone())
+        .unwrap_or_default();
+    match forge_event::unseen(&ring, &key) {
+        Ok(true) => {}
+        Ok(false) => return Ok(ExitCode::Success),
+        Err(_) => return fault(ExitCode::Internal, "the seen ring cannot be read", err),
+    }
+    let recorded = envelope.clone();
+    let instant = std::time::SystemTime::now();
+    let document = body.to_string();
+    let input = HookInput {
+        raw: &document,
+        envelope,
+        spilled: &[],
+        ran: None,
+    };
+    let harness = hook::Harness::ExitCode;
+    let dispatched = dispatch_envelope(harness, instant, mode, overrides, input, out, err)?;
+    // Appended only AFTER dispatch returns, so a crash replays the event.
+    if forge_event::remember(&ring, &key).is_err() {
+        writeln!(err, "forge intake: the seen ring could not be written")?;
+    }
+    if let Some(deny) = dispatched.deny.as_deref() {
+        record_forge_refusal(&root, &recorded, deny, err);
+    }
+    // THE WAKE FORM NEVER REFUSES THE OPERATOR'S PROMPT: its refusal is the
+    // record above and a stderr line, and its exit is 0.
+    match dispatched.rendered {
+        Ok(_) if wake => Ok(ExitCode::Success),
+        Err(denied) if wake => {
+            writeln!(err, "{denied}")?;
+            Ok(ExitCode::Success)
+        }
+        rendered => rendered,
+    }
+}
+
+/// Record a forge refusal in the findings store, where the drain delivers it
+/// at the next batch boundary of any session in this checkout (CLOUD-2690).
+/// `record_ripcord`'s shape and contract: a record that cannot be written is a
+/// stderr pointer and never changes the exit.
+fn record_forge_refusal(root: &Path, envelope: &hook::Envelope, deny: &str, err: &mut dyn Write) {
+    let key = envelope.forge.as_ref().map(|forge| forge.key.as_str());
+    // BOUND HERE, unlike the ripcord's read: `forge intake` is a write verb,
+    // and a refusal no store holds is one the drain can never deliver.
+    let recorded = store::resolve(root)
+        .ok()
+        .and_then(|opened| store::commit(opened).ok())
+        .map(|bound| bound.dir)
+        .zip(git::head_commit(root).ok())
+        .map(|(dir, head)| {
+            let advisory = findings::Advisory {
+                rule: "forge-intake".to_owned(),
+                identity: crate::identity::StoredIdentity::new(
+                    crate::identity::FindingKind::Sequence,
+                    crate::identity::sequence_fingerprint("forge-intake", deny, key),
+                ),
+                tier: crate::severity::AdvisoryTier::Caution,
+                path: format!("forge:{}", envelope.raw_tool),
+                line: None,
+                check: findings::Check::Reevaluate,
+                remediation: findings::Remediation::NoFix(format!(
+                    "a forge event was refused by {deny}; read that rule or handler"
+                )),
+            };
+            findings::record_sequence(
+                &dir,
+                &findings::Context::new(format!("forge/{}", envelope.raw_tool)),
+                &head,
+                None,
+                &advisory,
+                findings::Observation::Observed(1),
+                findings::FINDINGS_SCHEMA,
+            )
+        });
+    if !matches!(recorded, Some(Ok(_))) {
+        let _ = writeln!(err, "forge intake: persisted:false");
     }
 }
 
@@ -19345,7 +19510,7 @@ fn run_hook(
     if let Some(code) = followed.answer {
         return Ok(code);
     }
-    let Some((raw, mut envelope, spilled, _spool)) = decode_payload(harness, payload, mode, err)?
+    let Some((raw, envelope, spilled, _spool)) = decode_payload(harness, payload, mode, err)?
     else {
         return Ok(ExitCode::Success);
     };
@@ -19358,6 +19523,72 @@ fn run_hook(
     // to a protected path was allowed. A target outside the tree is untouched.
     // Seeded from this session's authority first (CLOUD-2204), and every record
     // a backgrounded call owes is written before anything below reads one.
+    dispatch_envelope(
+        harness,
+        instant,
+        mode,
+        overrides,
+        HookInput {
+            raw: &raw,
+            envelope,
+            spilled: &spilled,
+            ran: followed.ran,
+        },
+        out,
+        err,
+    )?
+    .rendered
+}
+
+/// One decoded call, as [`dispatch_envelope`] takes it: the host's bytes, the
+/// envelope they decoded to, what spilled to the spool, and the engine a
+/// follow already ran.
+struct HookInput<'a> {
+    raw: &'a str,
+    envelope: hook::Envelope,
+    spilled: &'a [stream_input::Spilled],
+    ran: Option<&'a Path>,
+}
+
+/// What a dispatched envelope answered: the rendering's result, exactly as
+/// `render` returned it (a deny on the exit-code contract is an `Err(Denial)`
+/// `main` reports), and the rule or handler behind a rendered deny
+/// (CLOUD-2690's `record_forge_refusal` reads it; `run_hook` propagates the
+/// rendering unchanged, so its output is byte-identical).
+struct HookDispatch {
+    rendered: Result<ExitCode>,
+    deny: Option<String>,
+}
+
+impl HookDispatch {
+    /// An answer no rule or handler refused.
+    const fn undenied(code: ExitCode) -> Self {
+        Self {
+            rendered: Ok(code),
+            deny: None,
+        }
+    }
+}
+
+/// `run_hook`'s tail, extracted (CLOUD-2690): everything from settling the
+/// envelope to rendering the decision, so `forge intake` dispatches through
+/// exactly the Facts, config load, handlers, actions and `adjudicate` a
+/// harness hook gets. Nothing is rebuilt; there is no second dispatcher.
+fn dispatch_envelope(
+    harness: hook::Harness,
+    instant: std::time::SystemTime,
+    mode: Mode,
+    overrides: &Overrides,
+    input: HookInput<'_>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<HookDispatch> {
+    let HookInput {
+        raw,
+        mut envelope,
+        spilled,
+        ran,
+    } = input;
     settle_envelope(overrides, &mut envelope);
     // The capability table, consulted before anything keys on the event
     // (CLOUD-45). A host that does not declare this event fires nothing and
@@ -19369,7 +19600,7 @@ fn run_hook(
     // is reachable it is the ordinary state rather than news.
     if let Some(note) = undeclared_event_note(harness, &harness.capabilities(), envelope.event) {
         output::message(mode, Verbosity::Verbose, err, &note)?;
-        return Ok(ExitCode::Success);
+        return Ok(HookDispatch::undenied(ExitCode::Success));
     }
     rearm_unlanded(&envelope);
     // The advisory drain rides the BATCH boundary (CLOUD-79), and which event
@@ -19434,7 +19665,7 @@ fn run_hook(
     // become the reason work stops; the retry will simply deny again with the
     // same `Fix::Run`, which is the safe direction and a visible one.
     if envelope.event == hook::Event::PostTool {
-        post_tool(harness, &envelope, &spilled, overrides, out, &mut advice)?;
+        post_tool(harness, &envelope, spilled, overrides, out, &mut advice)?;
     }
     // THE SAME CORRECTION AGAIN, ONE SELECTOR LATER (CLOUD-924). The paragraph
     // above records CLOUD-312 finding that "command-less" had stopped meaning
@@ -19511,10 +19742,10 @@ fn run_hook(
     let (policy, waivers, pruning) = if adjudicable {
         // Built in the arm that uses it: the handoff is the config load's input,
         // and the other arm loads nothing.
-        let handoff = Handoff::new(&raw, followed.ran);
+        let handoff = Handoff::new(raw, ran);
         match hook_config_or_floor(overrides, harness, &envelope, handoff, mode, out, err)? {
             Ok(loaded) => loaded,
-            Err(code) => return Ok(code),
+            Err(code) => return Ok(HookDispatch::undenied(code)),
         }
     } else {
         (hook::Policy::declaring_nothing(harness), Vec::new(), None)
@@ -19639,7 +19870,7 @@ fn run_hook(
     // handler can — running the ones that cannot first keeps the ordering a
     // reader would guess. Before, because `decide` owns stdout and a handler's
     // refusal has to reach the same rendering the engine's own does.
-    let handled = dispatch_handlers(&envelope, &raw, overrides, &mut advice);
+    let handled = dispatch_handlers(&envelope, raw, overrides, &mut advice);
     // THE END-OF-TURN NUDGE (CLOUD-1051), and it is a SEPARATE call from
     // `adjudicate` rather than a widening of it. `adjudicate` returns `Allow` at
     // `Stop` before any rule is read — CLOUD-889's runaway removed by
@@ -19653,10 +19884,10 @@ fn run_hook(
     // being read. A turn already handed a handler's advice has been told
     // something more specific, so the module's line is appended only to a silent
     // buffer.
-    let block = fill_turn_advice(&policy, &envelope, &facts, overrides, &raw, &mut advice);
+    let block = fill_turn_advice(&policy, &envelope, &facts, overrides, raw, &mut advice);
     // The one Stop that can block (CLOUD-2441): see `unlanded_stop_block`.
     if refused_stop(harness, block, &mut advice, err)? {
-        return Ok(ExitCode::Violation);
+        return Ok(HookDispatch::undenied(ExitCode::Violation));
     }
     // THE DECISION IS RESOLVED BEFORE THE ADVISORY IS SPOKEN (CLOUD-1175), and
     // that ordering is the whole fix rather than a tidy-up.
@@ -19723,14 +19954,14 @@ fn run_hook(
     if let Some(code) = worktree_answer(
         harness,
         &envelope,
-        &raw,
+        raw,
         &decision,
         &mut advice,
         ceiling,
         out,
         err,
     )? {
-        return Ok(code);
+        return Ok(HookDispatch::undenied(code));
     }
     // A PRE-APPROVAL TAKES THE ADVICE INTO ITS OWN DOCUMENT (CLOUD-1949): two
     // documents on one stream is the collision above, with the grant as the
@@ -19741,7 +19972,12 @@ fn run_hook(
         context: context.as_deref(),
         updated_input: grant_rewrite(&decision, &policy, &envelope, &facts),
     };
-    render(harness, &envelope, decision, &rendering, mode, out, err)
+    let deny = match &decision {
+        hook::Decision::Deny(refusal) => Some(refusal.rule().to_owned()),
+        _ => None,
+    };
+    let rendered = render(harness, &envelope, decision, &rendering, mode, out, err);
+    Ok(HookDispatch { rendered, deny })
 }
 
 /// A REPAIRED CALL IS AN ALLOW THAT OWES A RECORD (CLOUD-1639), and the record
@@ -19857,12 +20093,15 @@ fn undeclared_event_note(
 ///   declared. One config load per session, not per call;
 /// * a `PreTool` call naming a tool is the shape a tool-keyed row exists to
 ///   judge, and without it such a row was loaded for no call that could match.
+//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
+//MUTANT forge-not-adjudicable|s@^        \x7c\x7c envelope.event == hook::Event::Forge$@@|a_forge_rule_refuses_through_intake
 fn is_adjudicable(envelope: &hook::Envelope) -> bool {
     !envelope.command.is_empty()
         || envelope.writes.is_some()
         || envelope.event == hook::Event::Stop
         || envelope.event == hook::Event::SessionStart
         || (envelope.event == hook::Event::PreTool && !envelope.raw_tool.is_empty())
+        || envelope.event == hook::Event::Forge
 }
 
 /// The mediated call's bytes off stdin, or `None` where the call must simply

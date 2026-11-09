@@ -1719,6 +1719,8 @@ const CLAUDE_EVENTS: &[Event] = &[
 //MUTANT gemini-events-converged-only|s@^                events: GEMINI_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
 //MUTANT-SUITE crates/batten/src/doctor.rs
 //MUTANT codex-events-converged-only|s@^                events: CODEX_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
+//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
+//MUTANT forge-undeclared-on-exit-code|s@^                events: Event::MOMENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|intake_runs_handlers_and_exits_on_their_verdict
 //MUTANT-SUITE crates/batten/tests/it/exit_code_handlers.rs
 //MUTANT exit-code-events-converged|s@^                events: Event::MOMENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|exit_code_runs_a_user_prompt_submit_handler
 impl Harness {
@@ -2308,6 +2310,14 @@ pub const GIT_HOOKS: &[(&str, HookDisposition)] = &[
     ("update", unsupported("server-side")),
 ];
 
+/// The verb that takes a catalog event (CLOUD-2690).
+const INTAKE: &str = "forge intake";
+
+/// A catalog event's door (CLOUD-2690).
+//MUTANT-SUITE crates/batten/tests/it/hook_sources.rs
+//MUTANT catalog-left-unsupported|s@^const BY_INTAKE: HookDisposition = HookDisposition::Registered { check: INTAKE };$@const BY_INTAKE: HookDisposition = unsupported("no-intake");@|every_forge_catalog_name_is_checked_by_forge_intake
+const BY_INTAKE: HookDisposition = HookDisposition::Registered { check: INTAKE };
+
 /// What batten reads from the forge, and the ingress shape it refuses to be
 /// (CLOUD-204: no server). Payload intake is a verb reading stdin, so `webhook`
 /// left this table when the catalog joined it (CLOUD-2689).
@@ -2319,13 +2329,13 @@ const CI_READS: &[(&str, HookDisposition)] = &[
 ];
 
 /// The forge's whole vocabulary: the polls, then one entry per catalog event
-/// (CLOUD-2689). Unsupported until a verb takes the payload.
+/// (CLOUD-2689), each taken by `forge intake` (CLOUD-2690).
 fn ci_vocabulary() -> Vec<(String, HookDisposition)> {
     let mut entries = owned(CI_READS);
     entries.extend(
         crate::forge_event::CATALOG
             .iter()
-            .map(|row| (row.name.to_owned(), unsupported("no-intake"))),
+            .map(|row| (row.name.to_owned(), BY_INTAKE)),
     );
     entries
 }
@@ -5034,6 +5044,8 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
 // them would restore the silence — an eighth `Event` would land in a wildcard
 // nobody wrote for it, which is what registering on every surface makes likely
 // rather than hypothetical.
+//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
+//MUTANT forge-modules-unread|s@^        return policy_rules(policy, envelope, facts);$@        return Decision::Allow;@|a_forge_rule_refuses_through_intake
 #[allow(clippy::match_same_arms)]
 fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
     // The end-of-turn gate (CLOUD-85), and it no longer DENIES (CLOUD-889).
@@ -5078,6 +5090,12 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     // So the match below is exhaustive with no wildcard: an eighth `Event` fails
     // to compile here until somebody says what it decides. Each arm's comment is
     // the answer, not decoration — that is the whole of what this replaced.
+    // A FORGE EVENT IS JUDGED BY THE MODULES ALONE (CLOUD-2690). It carries a
+    // verdict, so a rule over `input.call.forge` decides; it names no command
+    // and no write, and the command and write gates stay `pre-tool`'s.
+    if envelope.event == Event::Forge {
+        return policy_rules(policy, envelope, facts);
+    }
     if let Some(decided) = event_decides(envelope.event) {
         return decided;
     }
@@ -5171,8 +5189,9 @@ fn event_decides(event: Event) -> Option<Decision> {
         | Event::FileChanged
         | Event::DirectoryAdded
         | Event::MessageDisplay
-        // `Forge` (CLOUD-2689): the native gate chain is `pre-tool`'s alone; a
-        // forge event is judged by rules and handlers through `forge intake`.
+        // `Forge` (CLOUD-2690): the native gate chain is `pre-tool`'s alone.
+        // A forge event is judged by the policy modules, in their own arm of
+        // `adjudicated_gates`, before this table is read.
         | Event::Forge
         // `Unrecognized`: the host said something this build cannot normalize.
         // Allow, loudly elsewhere — an unrecognized event is a fact about the

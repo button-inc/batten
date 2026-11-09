@@ -2246,6 +2246,15 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-2690: with nothing on stdin there is no event, so the verb names
+    // the fault and dispatches nothing; a dispatched event's output is the
+    // exit-code adapter's own pointer.
+    Verb {
+        path: "forge intake",
+        args: &["--event", "pull_request"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The derivations' writer (CLOUD-1991). Driven with `--schema` alone, into a
     // directory of the corpus's own: the verb writes files and says where, one
     // `<kind>=<path>` line, and reads nothing of the caller's tree to do it — the

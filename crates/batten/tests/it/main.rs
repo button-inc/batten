@@ -195,6 +195,7 @@ mod fix_declared;
 mod fixture_forks;
 mod fixture_repos;
 mod forced_push;
+mod forge_events;
 mod forge_facts;
 mod forge_query;
 mod forge_read_first;

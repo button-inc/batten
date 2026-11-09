@@ -504,6 +504,129 @@ fn envelope(row: &CatalogRow, payload: &Value, repo: Option<String>) -> Envelope
     }
 }
 
+/// The seen ring's size: the last this many keys (CLOUD-2690). It must cover
+/// a full re-read of every source's window: the Events API returns at most 300
+/// events a repository and up to three pollers plus intake can replay one, so
+/// at least 1,200 keys; 4096 is the next power of two with margin. A const,
+/// not `[forge]` config (rule 6).
+pub const SEEN_RING_KEYS: usize = 4096;
+
+/// The directory the ring lives in, under the git COMMON dir: a forge event
+/// belongs to the repository, so a per-worktree ring would fire one event once
+/// per worktree (CLOUD-2690).
+pub const RING_DIR: &str = "batten-forge-events";
+
+/// The ring file under a git common dir.
+#[must_use]
+pub fn ring_path(common_dir: &std::path::Path) -> std::path::PathBuf {
+    common_dir.join(RING_DIR).join("seen")
+}
+
+/// Whether `key` is NEW to the ring at `ring`: false once it was dispatched.
+/// A ring that does not exist yet holds nothing; one that will not read is
+/// could-not-look, never "new".
+///
+/// # Errors
+///
+/// When the ring exists and cannot be read.
+//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
+//MUTANT seen-ring-unread|s@^    if ring.contains(\&key) {$@    if false {@|a_replayed_payload_dispatches_once
+pub fn unseen(ring_file: &std::path::Path, key: &str) -> std::io::Result<bool> {
+    let ring = read_ring(ring_file)?;
+    let key = key.to_owned();
+    if ring.contains(&key) {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Append `key` to the ring, keeping the last [`SEEN_RING_KEYS`], written
+/// whole (a temporary file, then a rename). Called only AFTER dispatch
+/// returns, so a crash replays an event rather than dropping it.
+///
+/// # Errors
+///
+/// When the ring cannot be read or written.
+pub fn remember(ring_file: &std::path::Path, key: &str) -> std::io::Result<()> {
+    let mut ring = read_ring(ring_file)?;
+    ring.push(key.to_owned());
+    let keep = ring.len().saturating_sub(SEEN_RING_KEYS);
+    let text: String = ring[keep..].iter().fold(String::new(), |mut text, key| {
+        text.push_str(key);
+        text.push('\n');
+        text
+    });
+    if let Some(parent) = ring_file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    crate::durable::replace(ring_file, text)
+}
+
+fn read_ring(ring_file: &std::path::Path) -> std::io::Result<Vec<String>> {
+    match std::fs::read_to_string(ring_file) {
+        Ok(text) => Ok(text.lines().map(str::to_owned).collect()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
+}
+
+/// How a wake element opens: the cloud connector's PR wake shape.
+const WAKE_OPEN: &str = "<event source=\"github\"";
+
+/// The forge event a harness user-prompt-submit payload carries, as `(catalog
+/// name, body)` (CLOUD-2690).
+///
+/// Stdin is JSON with a string `prompt` (the field Claude Code and Codex send
+/// at this event), else raw text. In that text, the first element opening with
+/// `<event source="github"` is the event: its `kind` attribute names it, and
+/// its body is the JSON between the first `{` and the last `}` before
+/// `</event>` (a connector's leading comment is skipped). A `kind` spelled
+/// `<event>.<action>` names the catalog event and, where the body carries no
+/// `action`, supplies it.
+#[must_use]
+pub fn wake_event(stdin: &str) -> Option<(String, Value)> {
+    let prompt = serde_json::from_str::<Value>(stdin)
+        .ok()
+        .and_then(|document| {
+            document
+                .get("prompt")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        });
+    wake_element(prompt.as_deref().unwrap_or(stdin))
+}
+
+//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
+//MUTANT wake-element-ignored|s@^    let start = text.find(WAKE_OPEN)?;$@    let start = None::<usize>?;@|a_wake_envelope_dispatches_once_and_its_webhook_twin_does_not
+fn wake_element(text: &str) -> Option<(String, Value)> {
+    let start = text.find(WAKE_OPEN)?;
+    let rest = &text[start..];
+    let tag_end = rest.find('>')?;
+    let kind = attribute(&rest[..tag_end], "kind")?;
+    let element = &rest[tag_end + 1..];
+    let element = &element[..element.find("</event>").unwrap_or(element.len())];
+    let body = &element[element.find('{')?..=element.rfind('}')?];
+    let mut body: Value = serde_json::from_str(body).ok()?;
+    let (name, action) = match kind.split_once('.') {
+        Some((name, action)) => (name.to_owned(), Some(action.to_owned())),
+        None => (kind, None),
+    };
+    if let (Some(action), Some(object)) = (action, body.as_object_mut()) {
+        object
+            .entry("action")
+            .or_insert_with(|| Value::String(action));
+    }
+    Some((name, body))
+}
+
+/// One `name="value"` attribute of an opening tag.
+fn attribute(tag: &str, name: &str) -> Option<String> {
+    let open = format!("{name}=\"");
+    let from = tag.find(&open)? + open.len();
+    let to = tag[from..].find('"')? + from;
+    Some(tag[from..to].to_owned())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
