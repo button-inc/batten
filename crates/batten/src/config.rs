@@ -2970,8 +2970,8 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     if let Some(prune) = &config.prune {
         prune.validate()?;
     }
-    // Same reason: a `[task] program_root` that names no directory corroborates
-    // no live task, so it would read every pid alive and hide each crash.
+    // Same reason: a `[task] program_root` that names no directory is refused
+    // where the error can name the key.
     if let Some(task) = &config.task {
         task.validate()?;
     }

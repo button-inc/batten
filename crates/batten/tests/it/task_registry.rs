@@ -14,7 +14,7 @@
 //! gate's verdict.
 //!
 //! **THE SECOND TIER, AND IT IS NOT OPTIONAL.** `task.rs`'s own `mod tests` pins
-//! the predicates — the corroboration match, the render, the field reader — over
+//! the predicates — the render, the field reader — over
 //! values handed to them. What it cannot pin is that the VERB builds the input
 //! those predicates read: a module whose `alive` resolved the wrong git dir
 //! would pass every unit case and report "nothing registered" forever. That
@@ -36,6 +36,15 @@
 //! so seeding a record under its real name is the one fixture that cannot be
 //! wrong about itself.
 
+// The rows this suite kills, declared beside the code they mutate and mirrored
+// here so a board obligation naming this file binds (CLOUD-1560):
+/*
+#MUTANT-SUITE crates/batten/tests/it/task_registry.rs
+#MUTANT identity-rederived-from-path|s@^    recorded.is_empty() \x7c\x7c recorded == live$@    recorded.is_empty() \&\& recorded == live@|a_registrant_whose_program_is_not_in_its_cmdline_reads_alive
+#MUTANT recycled-pid-read-alive|s@^    recorded.is_empty() \x7c\x7c recorded == live$@    recorded.is_empty() \x7c\x7c !live.is_empty()@|a_live_pid_whose_cmdline_differs_from_the_record_reports_crashed_and_is_never_reaped
+#MUTANT undigested-entry-reads-dead|s@^    recorded.is_empty() \x7c\x7c recorded == live$@    !recorded.is_empty() \&\& recorded == live@|an_entry_without_a_digest_reads_alive_while_its_pid_exists
+#MUTANT register-digests-its-own-cmdline|s@cmdline_digest(pid).unwrap_or_default(),$@cmdline_digest("self").unwrap_or_default(),@|a_registrant_whose_program_is_not_in_its_cmdline_reads_alive
+*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -48,8 +57,9 @@ use common::{Fixture, batten, scratch, stderr, stdout, unassignable_pid};
 
 /// A repository with a registry to read, and nothing in it yet.
 ///
-/// Its config declares THIS process's program root (CLOUD-2370): the one
-/// authority `task alive` reads, so the live cases corroborate against it.
+/// Its config declares THIS process's program root (CLOUD-2370). Liveness no
+/// longer reads it (CLOUD-1560), so a live case passing here cannot be a path
+/// match: the record's cmdline digest is the only identity consulted.
 fn registry_repo(name: &str) -> PathBuf {
     let (root, _) = this_process();
     Fixture::at(scratch(name).join("repo"))
@@ -119,6 +129,36 @@ fn seed(repo: &Path, task: &str, pid: &str, phase: &str, started: u64) {
         ),
     )
     .expect("a record");
+}
+
+/// Seed one record in the CURRENT writer's eleven fields (CLOUD-1560), each
+/// defaulted the way [`seed`] writes it and `overrides` replacing by name.
+fn seed_fields(repo: &Path, pid: &str, overrides: &[(&str, &str)]) {
+    use std::fmt::Write as _;
+    let defaults = [
+        ("task", "land"),
+        ("pid", pid),
+        ("pgid", pid),
+        ("phase", "verify"),
+        ("started_at", "1000"),
+        ("phase_since", "1000"),
+        ("tick", ""),
+        ("tick_at", ""),
+        ("sig", ""),
+        ("sig_at", ""),
+        ("cmdline_sha256", ""),
+    ];
+    let mut body = String::new();
+    for (name, value) in defaults {
+        let value = overrides
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map_or(value, |(_, value)| *value);
+        writeln!(body, "{name}: {value}").unwrap();
+    }
+    let dir = entries(repo);
+    std::fs::create_dir_all(&dir).expect("a registry");
+    std::fs::write(dir.join(pid), body).expect("a record");
 }
 
 /// This process, as the registry would have to describe it to corroborate.
@@ -273,36 +313,33 @@ fn a_record_whose_process_is_gone_reports_crashed_on_every_read() {
 }
 
 #[test]
-fn a_live_pid_that_is_not_this_task_reports_crashed_and_is_never_reaped() {
+fn a_live_pid_whose_cmdline_differs_from_the_record_reports_crashed_and_is_never_reaped() {
     // CLOUD-901, and the asymmetry is the whole of it. Pids recycle — this clone
     // measurably wrapped its pid space inside 20 minutes — so a live pid alone is
-    // not evidence. But `task_alive` collapses "the process is gone" and "the
-    // process is not this task" into one `false`, and reaping on the second made
-    // a READ VERB DESTROY THE STATE IT READS: measured, one call reported a live
-    // `land` as crashed AND erased its entry, so the follow-up call reported
-    // nothing registered — a different lie, caused by the first.
+    // not evidence. A recycled pid runs a different cmdline, so its digest does
+    // not match the one the registrant recorded (CLOUD-1560). The record names
+    // THIS process's own task name, so a path match would read it alive: only
+    // the digest can make it crashed.
     //
-    // So `kill -0` alone licenses deletion. A future corroboration bug then costs
-    // a wrong word, never the evidence.
-    let repo = registry_repo("task-alive-miscorroborated");
+    // And reaping on that made a READ VERB DESTROY THE STATE IT READS: measured,
+    // one call reported a live `land` as crashed AND erased its entry. So
+    // `kill -0` alone licenses deletion; a mismatch costs a word, never evidence.
+    let repo = registry_repo("task-alive-recycled");
+    let (_, name) = this_process();
     let pid = std::process::id().to_string();
-    seed(&repo, "somethingelse", &pid, "verify", 1000);
+    let other = "0".repeat(64);
+    seed_fields(
+        &repo,
+        &pid,
+        &[("task", name.as_str()), ("cmdline_sha256", other.as_str())],
+    );
 
     let output = alive(&repo, &["--instant", "1000"]);
 
-    // THE CORROBORATION IS LINUX'S, AND THE ENGINE ALREADY SAYS SO. `task_alive`
-    // reads `/proc/<pid>/cmdline`, and its own doc records the direction: "an
-    // unevaluable corroboration reads as ALIVE — which also keeps the reader
-    // honest off Linux, where /proc/<pid>/cmdline does not exist at all." So the
-    // mismatch this row is about is only DETECTABLE where that file is, and
-    // asserting the crashed verdict everywhere states the Linux contract as
-    // universal — which the `windows` job read as `somethingelse verify …`.
-    //
-    // Split rather than `cfg`-gated away, for the reason its two siblings in
-    // `task.rs` and `singleton.rs` carry: gating the test leaves the off-Linux
-    // contract unstated, and an unstated contract is the hole that ships the next
-    // one. `target_os` rather than `unix`, because macOS has no `/proc` either —
-    // the discriminator is the FILE, not the family.
+    // THE DIGEST IS LINUX'S: `/proc/<pid>/cmdline` is the file, and off Linux
+    // it does not exist, so the comparison is unevaluable and reads ALIVE —
+    // the direction a wrongly CRASHED verdict cannot be. Split rather than
+    // gated, so the off-Linux contract is stated.
     #[cfg(target_os = "linux")]
     assert!(
         stdout(&output).contains("crashed(verify)"),
@@ -310,22 +347,50 @@ fn a_live_pid_that_is_not_this_task_reports_crashed_and_is_never_reaped() {
         stdout(&output)
     );
     #[cfg(not(target_os = "linux"))]
-    // Unevaluable, so the safe direction wins and the entry reads as the task it
-    // claims to be. That is the deliberate answer rather than a gap: a live task
-    // misreported as dead licenses the duplicate-landing incident the registry
-    // exists to prevent, which is the asymmetry the engine's doc argues.
     assert!(
-        stdout(&output).contains("somethingelse verify"),
+        stdout(&output).contains(&format!("{name} verify")),
         "got: {}",
         stdout(&output)
     );
-
-    // PLATFORM-INDEPENDENT, and deliberately outside the split: whichever word the
-    // corroboration produces, it never licenses deletion. That is CLOUD-901's
-    // actual invariant, and it must hold on every target.
     assert!(
         entries(&repo).join(&pid).exists(),
-        "an unmatched corroboration is a wrong word, never a reason to delete evidence"
+        "a mismatched cmdline is a wrong word, never a reason to delete evidence"
+    );
+}
+
+/// THE #848 SHAPE (CLOUD-1560): the live registrant's cmdline names nothing of
+/// the task it registered — this test binary registered as `land` — so a
+/// liveness that re-derived identity from a program path reads it dead.
+/// Registered through the verb, so the digest is the one `register` writes.
+#[test]
+fn a_registrant_whose_program_is_not_in_its_cmdline_reads_alive() {
+    let repo = registry_repo("task-alive-retired-program");
+    let pid = std::process::id().to_string();
+    let registered = task(&repo, &["register", "land", &pid, "verify"]);
+    assert_eq!(registered.status.code(), Some(0), "{}", stderr(&registered));
+    let output = alive(&repo, &["--instant", "4000000000"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        stdout(&output).starts_with(&format!("land verify {pid} ")),
+        "a live registrant is alive whatever its program is called: {}",
+        stdout(&output)
+    );
+}
+
+/// AN ENTRY AN OLDER BINARY WROTE carries no digest, and reads alive while its
+/// pid exists (CLOUD-1560): it is reaped only once its pid is gone, never on a
+/// comparison it cannot make, so the format change cannot reap a live lap the
+/// previous binary started.
+#[test]
+fn an_entry_without_a_digest_reads_alive_while_its_pid_exists() {
+    let repo = registry_repo("task-alive-undigested");
+    let pid = std::process::id().to_string();
+    seed(&repo, "somethingelse", &pid, "verify", 1000);
+    let output = alive(&repo, &["--instant", "1000"]);
+    assert!(
+        stdout(&output).contains(&format!("somethingelse verify {pid}")),
+        "got: {}",
+        stdout(&output)
     );
 }
 
@@ -527,32 +592,21 @@ fn the_reader_sends_no_signal() {
 }
 
 #[test]
-fn the_program_root_is_required_rather_than_defaulted() {
-    // Non-negotiable rule 1, now in the committed config (CLOUD-2370). A default
-    // would be one consumer's layout promoted to the engine's, and it would fail
-    // SILENTLY everywhere else: an unmatched corroboration reads as alive, so a
-    // wrong root produces a registry that never reports a crash and looks like
-    // one with nothing to report.
-    //
-    // Exit 3: a config with no `[task] program_root` is could-not-look. The
-    // invocation is well formed, so it is not `1`, and nothing was judged, so it
-    // is not `2`.
+fn task_alive_reads_no_program_root() {
+    // CLOUD-1560: liveness compares the digest each registrant recorded, so a
+    // config with no `[task]` table is not could-not-look any more.
     let repo = Fixture::at(scratch("task-alive-no-root").join("repo"))
         .config("version = 1\n")
         .git()
         .base_commit()
         .build();
     let output = alive(&repo, &[]);
-    assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("program_root"),
-        "naming the key it needed: {}",
-        stderr(&output)
-    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "alive: nothing registered\n");
 }
 
-/// THE FLAG ANSWERS WHERE THE CONFIG DECLARES NO ROOT (CLOUD-2370), so a manifest
-/// written for a release that predates `[task]` keeps working until its pin does.
+/// THE FLAG IS ACCEPTED AND UNREAD (CLOUD-1560), so a manifest written for a
+/// release that predates the change keeps parsing; CLOUD-2463 retires it.
 #[test]
 fn the_flag_answers_where_the_config_declares_no_root() {
     let repo = Fixture::at(scratch("task-alive-flag-root").join("repo"))
@@ -568,25 +622,7 @@ fn the_flag_answers_where_the_config_declares_no_root() {
     assert_eq!(
         stdout(&output),
         format!("{name} verify {pid} 60s in-phase 60s\n"),
-        "the flag's root corroborates the live task: {}",
-        stderr(&output)
-    );
-}
-
-/// A BLANK ROOT IS REFUSED AT LOAD (CLOUD-2370): it corroborates no live task,
-/// so the config does not resolve and `alive` answers could-not-look.
-#[test]
-fn a_blank_program_root_is_no_root() {
-    let repo = Fixture::at(scratch("task-alive-blank-root").join("repo"))
-        .config("version = 1\n\n[task]\nprogram_root = \"\"\n")
-        .git()
-        .base_commit()
-        .build();
-    let output = alive(&repo, &[]);
-    assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("did not resolve"),
-        "the blank root is refused with the config, not read as a registry: {}",
+        "an undigested live pid reads alive, the flag notwithstanding: {}",
         stderr(&output)
     );
 }
