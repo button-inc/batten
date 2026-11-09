@@ -3867,19 +3867,6 @@ pub fn call_input_schema() -> Result<String> {
             facts.insert(fact.as_str().to_owned(), fact.schema_fragment());
         }
     }
-    let forge = serde_json::json!({
-        "type": ["object", "null"],
-        "additionalProperties": false,
-        "properties": {
-            "event": {"type": ["string", "null"]},
-            "action": {"type": ["string", "null"]},
-            "repo": {"type": ["string", "null"]},
-            "number": {"type": ["integer", "null"]},
-            "sha": {"type": ["string", "null"]},
-            "ref": {"type": ["string", "null"]},
-            "key": {"type": ["string", "null"]},
-        },
-    });
     let mut document = serde_json::json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "batten mediated-call policy input",
@@ -3994,15 +3981,44 @@ pub fn call_input_schema() -> Result<String> {
             },
         },
     });
-    // CLOUD-2689: a forge event's tokens, never a body. Inserted rather than
-    // written inline: one more key exceeds `json!`'s recursion limit.
+    extend_call_schema(&mut document);
+    Ok(serde_json::to_string_pretty(&document)?)
+}
+
+/// The keys `call_input_schema` adds after its `json!` document is built: one
+/// more key inline exceeds the macro's recursion limit.
+///
+/// * `forge` (CLOUD-2689): a forge event's tokens, never a body.
+/// * a segment's `redirects` (CLOUD-2670): the suffix of its `words`.
+fn extend_call_schema(document: &mut serde_json::Value) {
+    let forge = serde_json::json!({
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "properties": {
+            "event": {"type": ["string", "null"]},
+            "action": {"type": ["string", "null"]},
+            "repo": {"type": ["string", "null"]},
+            "number": {"type": ["integer", "null"]},
+            "sha": {"type": ["string", "null"]},
+            "ref": {"type": ["string", "null"]},
+            "key": {"type": ["string", "null"]},
+        },
+    });
     if let Some(call) = document
         .pointer_mut("/properties/call/properties")
         .and_then(serde_json::Value::as_object_mut)
     {
         call.insert("forge".to_owned(), forge);
     }
-    Ok(serde_json::to_string_pretty(&document)?)
+    if let Some(segment) = document
+        .pointer_mut("/properties/call/properties/segments/items/properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        segment.insert(
+            "redirects".to_owned(),
+            serde_json::json!({"type": "array", "items": {"type": "string"}}),
+        );
+    }
 }
 
 /// A reference expression as a dotted path: `batten.trunk_based`, `violation`.

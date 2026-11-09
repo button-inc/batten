@@ -148,6 +148,12 @@
               "raw": {
                 "type": "string"
               },
+              "redirects": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "terminator": {
                 "type": [
                   "string",

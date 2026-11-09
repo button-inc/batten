@@ -508,9 +508,12 @@ reading the whole segment merges them into a refusal nobody can act on.
 
 `input.call.segments` is still `hook::segments` projected — the same quote-aware
 tokenizer `shape` and `pipeline` rows are decided by — one entry per list
-element, each carrying `words`, `raw`, the `terminator` that followed it
+element, each carrying `words`, `redirects` (the redirection tokens, which are
+the suffix of `words` — CLOUD-2670), `raw`, the `terminator` that followed it
 (`"&&"`, `";"`, `"||"`, `"|"`, `"&"`, or `null` where the command ended), and
-`input-redirect`. Read it for the SPAN's own structure, which is what those
+`input-redirect`. A program's `arguments` exclude its redirections: they are
+what it was handed, and a redirection is never handed to the program. Read it
+for the SPAN's own structure, which is what those
 fields are: what the element's status is handed to, whether it binds stdin, what
 was literally written. A program is not one of them.
 

@@ -294,8 +294,8 @@ test_a_redirected_reader_is_not if {
 		"event": "pre-tool",
 		"tool": "Bash",
 		"command": "echo x > f",
-		"segments": [{"words": ["echo", "x", ">", "f"], "output-redirect": true}],
-		"programs": [{"name": "echo", "arguments": ["x", ">", "f"], "reads-only": true}],
+		"segments": [{"words": ["echo", "x", ">", "f"], "redirects": [">", "f"], "output-redirect": true}],
+		"programs": [{"name": "echo", "arguments": ["x"], "reads-only": true}],
 	}}
 }
 
