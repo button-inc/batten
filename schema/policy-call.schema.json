@@ -19,6 +19,57 @@
           "type": "string"
         },
         "final-message": {},
+        "forge": {
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "event": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "key": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "number": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "ref": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "repo": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sha": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "operation": {
           "type": "string"
         },
