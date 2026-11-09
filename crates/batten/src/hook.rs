@@ -1289,24 +1289,15 @@ impl Wiring {
     ///
     /// Ordered by [`Event::ALL`] rather than by the table, so emission is
     /// byte-stable (§6) whatever order a row happens to list its names in.
-    /// Only the events [`Event::registered_by_default`] names: every admitted
-    /// event is [`Wiring::admits`]'s (CLOUD-2581).
+    /// EVERY event the host emits (owner ruling, 2026-11-09): Batten is
+    /// registered on 100% of each host's hook surface, because a consumer's
+    /// `[[hook.handler]]` can only fire on an event Batten itself is on. So this
+    /// is [`Wiring::admits`], and a wiring short of it is unregistered.
     //MUTANT-SUITE crates/batten/src/doctor.rs
-    //MUTANT optional-events-required|s@^            .filter(\x7c(event, _)\x7c event.registered_by_default())$@@|an_eight_event_wiring_stays_green_beside_the_optional_events
+    //MUTANT registrations-short-of-the-surface|s@^        self.admits(harness)$@        self.admits(harness).into_iter().take(8).collect()@|an_eight_event_wiring_owes_the_rest_of_the_surface
     #[must_use]
     pub fn registrations(&self, harness: Harness) -> Vec<(Event, &'static str)> {
-        let capabilities = harness.capabilities();
-        Event::ALL
-            .iter()
-            .filter(|event| capabilities.emits(**event))
-            .filter_map(|event| {
-                self.spellings
-                    .iter()
-                    .find(|(named, _)| named == event)
-                    .map(|(_, spelling)| (*event, *spelling))
-            })
-            .filter(|(event, _)| event.registered_by_default())
-            .collect()
+        self.admits(harness)
     }
 
     /// Every event this host emits, with its name: what `doctor hooks` ADMITS
@@ -2547,29 +2538,6 @@ impl Event {
                 | Event::FileChanged
                 | Event::DirectoryAdded
                 | Event::MessageDisplay
-        )
-    }
-
-    /// Whether `generate hooks` and `wiring register` emit this event, and so
-    /// whether `doctor hooks` requires a registration for it (CLOUD-2581).
-    ///
-    /// `true` for exactly the eight events Batten registered before the other
-    /// 25 were derived. The rest are ADMITTED (a consumer may register them and
-    /// `doctor` stays green) but never REQUIRED, so an eight-event consumer gains
-    /// no findings, and the worktree pair never hands the host's own worktree
-    /// creation to Batten unasked. A row that needs one everywhere flips it here.
-    #[must_use]
-    pub const fn registered_by_default(self) -> bool {
-        matches!(
-            self,
-            Event::PreTool
-                | Event::PostTool
-                | Event::Stop
-                | Event::SessionStart
-                | Event::TaskCompleted
-                | Event::ConfigChange
-                | Event::PostToolBatch
-                | Event::UserPromptSubmit
         )
     }
 
