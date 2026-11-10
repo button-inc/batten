@@ -1650,6 +1650,29 @@ pub fn run_registered(
             });
             continue;
         }
+        // ONE SOURCE THAT ALREADY PASSED IS NOT MUTATED AGAIN (CLOUD-2588, per
+        // source): the whole-change record answers only when EVERY source
+        // passed, so one survivor anywhere re-ran all of them — measured on
+        // #1276, 800-odd mutants per lap where a few files had moved. The key
+        // is the whole-change key's material over this one path, so its hunks
+        // and its declared suites move it; unsharded only, since a shard judges
+        // part of a source, and never under `$CI` ([`ChangePass::of`]).
+        let one = (
+            base.to_owned(),
+            std::collections::BTreeSet::from([source.clone()]),
+        );
+        let pass = local
+            .is_none()
+            .then(|| ChangePass::of(root, Some(&one), &[], &[]))
+            .flatten();
+        if pass.as_ref().is_some_and(ChangePass::passed) {
+            let _ = writeln!(
+                progress,
+                "mutate sweep: source {position}/{assigned} {source} passed under the same key, \
+                 so it is not run again"
+            );
+            continue;
+        }
         let output = runs.join(index.to_string());
         let _ = fs::remove_dir_all(&output);
         let args = source_args(&patch, source, &output, local, &scope);
@@ -1680,6 +1703,11 @@ pub fn run_registered(
         let found = outcome.findings(kind, source, &ran);
         for finding in &found {
             let _ = writeln!(progress, "mutate sweep: {finding}");
+        }
+        if found.is_empty()
+            && let Some(pass) = &pass
+        {
+            pass.record();
         }
         result.mutants += outcome.ran;
         result.findings.extend(found);
