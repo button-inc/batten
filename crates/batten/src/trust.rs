@@ -3888,9 +3888,12 @@ fn ci_weakenings(base: Option<&crate::ci::Ci>, working: Option<&crate::ci::Ci>) 
 /// reviewer needs. The gate refuses an absent table loudly on its own (exit 1),
 /// which is a second signal rather than a reason for this one to stay quiet.
 ///
-/// The `identity` beneath the lists is not compared: which name and email a
-/// repository holds itself accountable to is that repository's own decision, and
-/// two identities cannot be ranked.
+/// The `identity` beneath the lists is not compared, and its REMOVAL is not a
+/// weakening (CLOUD-2659): who answers for a commit is resolved at run time from
+/// the person making it, never from a committed name, so the table is no longer
+/// a repository's decision and its absence ranks below nothing.
+//MUTANT-SUITE crates/batten/src/trust.rs
+//MUTANT identity-removal-weakens|s@^    found // the identity is not compared (CLOUD-2659)$@    if base.identity.is_some() \&\& working.is_some_and(\x7cw\x7c w.identity.is_none()) { found.push(Weakening::new(WeakeningKind::AttributionDenyRemoved, "attribution.identity", "present", "absent")); }\n    found@|removing_the_committed_identity_is_not_a_weakening
 fn attribution_weakenings(
     base: Option<&crate::attribution::Attribution>,
     working: Option<&crate::attribution::Attribution>,
@@ -3915,7 +3918,7 @@ fn attribution_weakenings(
         &keyed("attribution.trailer_allow", &base.trailer_allow),
         &keyed("attribution.trailer_allow", candidate),
     ));
-    found
+    found // the identity is not compared (CLOUD-2659)
 }
 
 /// The three deny lists, keyed as `batten.toml` spells them.
@@ -6598,6 +6601,16 @@ mod tests {
     }
 
     const ATTRIBUTION: &str = "\n[attribution]\nidentity_deny = [\"vendor\", \"other\"]\ntrailer_deny = [\"Co-Made-By\"]\nbody_deny = [\"advert\"]\ntrailer_allow = [\"Signed-off-by\"]\n\n[attribution.identity]\nname = \"A Person\"\nemail = \"person@example.invalid\"\n";
+
+    #[test]
+    fn removing_the_committed_identity_is_not_a_weakening() {
+        let without = ATTRIBUTION
+            .split("\n[attribution.identity]")
+            .next()
+            .unwrap_or_default();
+        assert_ne!(without, ATTRIBUTION);
+        assert!(weakenings(&config(ATTRIBUTION), &config(without)).is_empty());
+    }
 
     #[test]
     fn shrinking_a_deny_list_or_widening_the_carve_out_is_a_weakening() {
