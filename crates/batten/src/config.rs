@@ -114,6 +114,17 @@ pub enum Strictness {
     Strict,
 }
 
+/// Who takes the last step to the landing target (CLOUD-2656).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LandedBy {
+    /// The agent lands its own work with `batten land`.
+    #[default]
+    Agent,
+    /// A person merges what the agent pushed.
+    Person,
+}
+
 /// A parsed, validated `batten.toml`.
 ///
 /// `deny_unknown_fields` makes an unrecognised key a hard error (§8): the config
@@ -574,6 +585,12 @@ pub struct Config {
     /// them together would give one key two meanings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub must_land_on: Option<String>,
+    /// Who takes the last step to the landing target (CLOUD-2656): the agent
+    /// (`land`), or a person who merges what the agent pushed. Absent is
+    /// `"agent"`, today's behaviour. A fact about the repository's process, so
+    /// authority-only: neither value is a raise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landed_by: Option<LandedBy>,
     /// Side effects this repository attaches to hook events (CLOUD-91), the
     /// house-style §9 extension surface: `[[hook.action]]` names an event and a
     /// command already on the operator's PATH, so repo-specific cleanup or
@@ -1730,7 +1747,7 @@ pub fn parse_base(text: &str, source: &str) -> Result<Config> {
 /// cannot disagree.
 ///
 /// `deny_unknown_fields` is what makes the refusal total and free: every
-/// authority-only key (`epoch`, `marker`, `verb`, `budget`, `must_land_on`,
+/// authority-only key (`epoch`, `marker`, `verb`, `budget`, `must_land_on`, `landed_by`,
 /// `judge`, `ci`, `defects`, `provision`, `transcript`, `design`) becomes a hard
 /// parse error here rather than a silently discarded tightening. A hand-maintained
 /// refusal list would be a second authority, and would drift the moment a field
@@ -5036,6 +5053,7 @@ impl Config {
             outcome: Vec::new(),
             hook_output: None,
             must_land_on: None,
+            landed_by: None,
             // An authority that cannot be read attaches no side effects. The
             // safe direction is unambiguous here: firing a command an
             // unreadable config might have declared is the one outcome nobody

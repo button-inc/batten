@@ -667,6 +667,9 @@ pub struct Resolved {
     /// The ref work must land on (CLOUD-51), as the authority states it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub must_land_on: Option<String>,
+    /// Who takes the last step (CLOUD-2656), as the authority states it, else
+    /// the agent.
+    pub landed_by: crate::config::LandedBy,
     /// The hook actions (CLOUD-91), as the authority states it. Not layered,
     /// and the one key where that is a security property rather than a
     /// consistency one: an action is a command, so a local file able to add one
@@ -1803,6 +1806,7 @@ fn assemble(
         refusal: repo.refusal.clone(),
         hook_output: repo.hook_output.clone(),
         must_land_on: repo.must_land_on.clone(),
+        landed_by: repo.landed_by.unwrap_or_default(),
         hook: repo.hook.clone(),
         startup: repo.startup.clone(),
         wiring: repo.wiring.clone(),
@@ -1952,6 +1956,7 @@ fn attribution(
         // the weakening the committed-bytes comparison exists to catch.
         ("hook_output", authority_set(repo.hook_output.is_some())),
         ("must_land_on", authority_set(repo.must_land_on.is_some())),
+        ("landed_by", authority_set(repo.landed_by.is_some())),
         ("hook", authority_set(repo.hook.is_some())),
         ("transcript", authority_set(repo.transcript.is_some())),
         ("attribution", authority_set(repo.attribution.is_some())),

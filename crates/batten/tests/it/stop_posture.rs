@@ -446,6 +446,94 @@ fn shallow_completion_fixture(name: &str) -> (PathBuf, PathBuf) {
     (repo, home)
 }
 
+/// [`unlanded_fixture`] in a repository that declares `landed_by = "person"`
+/// (CLOUD-2656), with a bare remote holding `main`, and `work` pushed with `-u`
+/// when `pushed`.
+fn person_fixture(name: &str, pushed: bool) -> (PathBuf, PathBuf) {
+    let (repo, home) = unlanded_fixture(name);
+    let config = fs::read_to_string(repo.join("batten.toml")).expect("config");
+    fs::write(
+        repo.join("batten.toml"),
+        config.replacen(
+            "must_land_on = \"main\"",
+            "must_land_on = \"main\"\nlanded_by = \"person\"",
+            1,
+        ),
+    )
+    .expect("write config");
+    common::git_in(&repo, &["add", "batten.toml"]);
+    common::git_in(&repo, &["commit", "-q", "-m", "chore: a person merges"]);
+    let remote = repo.parent().expect("fixture root").join("remote.git");
+    common::git_in(
+        repo.parent().expect("fixture root"),
+        &["init", "-q", "--bare", "remote.git"],
+    );
+    common::git_in(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote.to_str().expect("utf-8 path"),
+        ],
+    );
+    common::git_in(&repo, &["push", "-q", "origin", "main"]);
+    if pushed {
+        common::git_in(&repo, &["push", "-q", "-u", "origin", "work"]);
+    }
+    (repo, home)
+}
+
+/// A PUSHED BRANCH IN A PERSON-MERGES REPOSITORY HEARS THE MERGE IS HELD
+/// (CLOUD-2656), and is not sent to `land`.
+#[test]
+fn a_person_landed_pushed_branch_hears_the_merge_is_held() {
+    let (repo, home) = person_fixture("stop-person-pushed", true);
+    let first = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let said = stdout_of(&first);
+    assert!(said.contains("commit merge held"), "{said}");
+    assert!(!said.contains("batten land lap"), "{said}");
+}
+
+/// ...and its Stop is never refused (CLOUD-2656).
+#[test]
+fn a_person_landed_pushed_branch_is_not_refused() {
+    let (repo, home) = person_fixture("stop-person-pushed-free", true);
+    let stop = || hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let said = stdout_of(&stop());
+    assert!(said.contains("commit merge held"), "{said}");
+    let second = stop();
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+}
+
+/// AN UNPUSHED BRANCH IS REFUSED NAMING THE PUSH (CLOUD-2656): the agent's last
+/// step in a person-merges repository is the push, never `land`.
+#[test]
+fn a_person_landed_unpushed_branch_is_refused_naming_the_push() {
+    let (repo, home) = person_fixture("stop-person-unpushed", true);
+    common::write(&repo, "src/c.rs", "pub fn later() {}\n");
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-q", "-m", "add c"]);
+    let stop = || hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let first = stop();
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "the first Stop is the advisory"
+    );
+    assert!(stdout_of(&first).contains("commit push missing"));
+    let second = stop();
+    let stderr = String::from_utf8_lossy(&second.stderr).into_owned();
+    assert_eq!(second.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("commit push missing"), "{stderr}");
+    assert!(stderr.contains("git push"), "{stderr}");
+}
+
 /// A SHALLOW CLONE SAYS ONCE THAT IT COULD NOT LOOK (CLOUD-2655): the first
 /// signalled Stop names `commit ship unknown` and the unshallow, the second is
 /// silent, and neither refuses.

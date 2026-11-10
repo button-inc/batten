@@ -24490,6 +24490,10 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
     // `UserPromptSubmit` — the operator is back, so the level is worth reporting
     // once more. Its own file, never `unlanded-nudged`: that one is
     // `turn mint ahead`'s "this claim was told" and must not be cleared.
+    // Keyed on the claim AND its step (CLOUD-2656), so the push that turns
+    // `push` into `merge-held` speaks once more.
+    let step = claim_step(git_dir.as_deref(), &branch, &key);
+    let key = format!("{key} {}", step.as_str());
     let spoken = git_dir
         .as_deref()
         .map(|dir| recorder::record_path(dir, UNLANDED_SPOKEN, &branch, None));
@@ -24499,14 +24503,7 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
     if let Some(path) = spoken.as_deref() {
         let _ = crate::durable::append(path, &key);
     }
-    Some(refusal::Refusal::engine(
-        verdict::Native::CommitShipMissing,
-        &[
-            verdict::artifact(completion::RULE_ID),
-            verdict::Subject::Count { count },
-        ],
-        refusal::Fix::None,
-    ))
+    Some(step_refusal(step, count))
 }
 
 /// Re-arm the unlanded pointer when the operator has spoken (CLOUD-2332).
@@ -24698,6 +24695,12 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
         let _ = std::fs::remove_file(&dispatched);
         return None;
     }
+    // A held merge and a shallow target are never refused (CLOUD-2656).
+    let step = claim_step(Some(&git_dir), &branch, &key);
+    if !step.refusable() {
+        return None;
+    }
+    let key = format!("{key} {}", step.as_str());
     let spoken = recorder::record_path(&git_dir, UNLANDED_SPOKEN, &branch, None);
     let refused = recorder::record_path(&git_dir, UNLANDED_REFUSED, &branch, None);
     if !already_marked(Some(&spoken), &key) || already_marked(Some(&refused), &key) {
@@ -24711,14 +24714,7 @@ fn unlanded_stop_block() -> Option<refusal::Refusal> {
     // An unwritable receipt would refuse every Stop, which is CLOUD-889's loop:
     // a refusal that cannot record itself is not issued.
     crate::durable::append(&refused, &key).ok()?;
-    Some(refusal::Refusal::engine(
-        verdict::Native::CommitShipMissing,
-        &[
-            verdict::artifact(completion::RULE_ID),
-            verdict::Subject::Count { count },
-        ],
-        refusal::Fix::None,
-    ))
+    Some(step_refusal(step, count))
 }
 
 /// The receipt naming every crashed record the watchdog has spoken about
@@ -27889,7 +27885,7 @@ fn register_completion(
     } else {
         completion::assess(signal, landing.as_ref().map(|(landing, _)| landing))
     };
-    record_unlanded_step(repo, stream.session.as_deref(), &outcome);
+    record_unlanded_step(repo, config, stream.session.as_deref(), &outcome);
 
     let Some(observation) = outcome.observation() else {
         // Not signalled: nothing to write. Reported on the top rung, because a
@@ -27969,24 +27965,7 @@ fn register_completion(
     Ok(())
 }
 
-/// What the Stop owes a completion outcome (CLOUD-2655): land it, or deepen
-/// the clone so it can be looked at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Step {
-    /// The work is not on the target.
-    Land,
-    /// The clone is too shallow to say.
-    Shallow,
-}
-
-impl Step {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Land => "land",
-            Self::Shallow => "shallow",
-        }
-    }
-}
+use completion::Step;
 
 /// The receipt family carrying the Stop's step for this claim (CLOUD-2655).
 /// Branch-keyed, so `land::retire_branch` sweeps it with the rest.
@@ -27996,7 +27975,14 @@ const UNLANDED_STEP: &str = "unlanded-step";
 /// outcome owes no step. Written at the mint because the store cannot carry a
 /// could-not-look on an identity with no record. Fail-silent, like every
 /// Stop-path receipt.
-fn record_unlanded_step(repo: &Path, session: Option<&str>, outcome: &completion::Outcome) {
+//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
+//MUTANT landed-by-person-ignored|s@completion::next_step(config.landed_by, @completion::next_step(config::LandedBy::Agent, @|a_person_landed_pushed_branch_hears_the_merge_is_held
+fn record_unlanded_step(
+    repo: &Path,
+    config: &resolve::Resolved,
+    session: Option<&str>,
+    outcome: &completion::Outcome,
+) {
     let Some(branch) = git::current_branch(repo).ok().flatten() else {
         return;
     };
@@ -28005,7 +27991,12 @@ fn record_unlanded_step(repo: &Path, session: Option<&str>, outcome: &completion
     };
     let path = recorder::record_path(&git_dir, UNLANDED_STEP, &branch, None);
     let step = match outcome {
-        completion::Outcome::Raised { .. } => Some(Step::Land),
+        // Who lands decides the step (CLOUD-2656); push state is read only in
+        // person mode, so the agent default costs nothing new.
+        completion::Outcome::Raised { .. } => {
+            let push = push_state(repo, config.landed_by);
+            Some(completion::next_step(config.landed_by, push))
+        }
         completion::Outcome::NotComputable { reason } if *reason == worktree::SHALLOW => {
             Some(Step::Shallow)
         }
@@ -28022,17 +28013,58 @@ fn record_unlanded_step(repo: &Path, session: Option<&str>, outcome: &completion
     let _ = crate::durable::replace(&path, format!("{fingerprint} {}\n", step.as_str()));
 }
 
+/// Where the claim's commits are relative to its upstream (CLOUD-2656). Read
+/// only in person mode; any failure is could-not-look, never pushed.
+fn push_state(repo: &Path, landed_by: config::LandedBy) -> completion::PushState {
+    if landed_by == config::LandedBy::Agent {
+        return completion::PushState::NotComputable;
+    }
+    let Ok(upstream) = git::upstream_of_head(repo) else {
+        return completion::PushState::NotComputable;
+    };
+    let Some(upstream) = upstream else {
+        return completion::PushState::NoUpstream;
+    };
+    let shallow = git::is_shallow(repo).unwrap_or(true);
+    match worktree::landing_or_shallow(repo, &upstream, shallow) {
+        Ok(Some(landing)) if landing.is_landed() => completion::PushState::Pushed,
+        Ok(Some(_)) => completion::PushState::Unpushed,
+        _ => completion::PushState::NotComputable,
+    }
+}
+
 /// This branch's recorded step and its claim fingerprint, if any.
 fn unlanded_step(git_dir: &Path, branch: &str) -> Option<(String, Step)> {
     let path = recorder::record_path(git_dir, UNLANDED_STEP, branch, None);
     let text = std::fs::read_to_string(path).ok()?;
     let (key, step) = text.trim().split_once(' ')?;
-    let step = match step {
-        "shallow" => Step::Shallow,
-        "land" => Step::Land,
-        _ => return None,
+    Some((key.to_owned(), Step::parse(step)?))
+}
+
+/// The step recorded for the claim `key`; an absent or mismatched receipt is
+/// `land`, today's behaviour.
+fn claim_step(git_dir: Option<&Path>, branch: &str, key: &str) -> Step {
+    git_dir
+        .and_then(|dir| unlanded_step(dir, branch))
+        .filter(|(recorded, _)| recorded == key)
+        .map_or(Step::Land, |(_, step)| step)
+}
+
+/// The refusal a claim's step speaks under (CLOUD-2656).
+fn step_refusal(step: Step, count: u64) -> refusal::Refusal {
+    let (class, fact) = match step {
+        Step::Push => (verdict::Native::CommitPushMissing, Some("unpushed")),
+        Step::NoUpstream => (verdict::Native::CommitPushMissing, Some("no-upstream")),
+        Step::PushUnknown | Step::Shallow => (verdict::Native::CommitShipUnknown, None),
+        Step::MergeHeld => (verdict::Native::CommitMergeHeld, None),
+        _ => (verdict::Native::CommitShipMissing, None),
     };
-    Some((key.to_owned(), step))
+    let mut subjects = vec![verdict::artifact(completion::RULE_ID)];
+    if let Some(fact) = fact {
+        subjects.push(verdict::artifact(fact));
+    }
+    subjects.push(verdict::Subject::Count { count });
+    refusal::Refusal::engine(class, &subjects, refusal::Fix::None)
 }
 
 /// The Stop's could-not-look notice on a shallow clone (CLOUD-2655): said once

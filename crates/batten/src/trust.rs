@@ -1859,6 +1859,14 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[WeakeningKind::MustLandOnRemoved]),
     },
     FieldCoverage {
+        field: "landed_by",
+        coverage: Coverage::NoMonotoneReading(
+            "who takes the last step is a fact about the repository's process (CLOUD-2656): \
+             `person` drops the refusal of a pushed branch, `agent` sends an agent to a merge a \
+             person-merges repository forbids, so neither direction is a raise",
+        ),
+    },
+    FieldCoverage {
         field: "hook",
         coverage: Coverage::Compared(&[WeakeningKind::HandlerRemoved]),
     },
