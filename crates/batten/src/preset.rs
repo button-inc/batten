@@ -100,7 +100,7 @@ impl PresetModule {
     /// shipped rule for a file would let the caller under judgement rewrite the
     /// rules it is judged by. Only the sweep's own suite build enables it, so the
     /// suite runs against a mutated module without recompiling the crate per row
-    /// (`MUTANT_OVERLAY_*`, `mise.toml`).
+    /// (`MUTANT_OVERLAY_*`, declared by the consumer's task runner).
     #[must_use]
     pub fn text(&self) -> std::borrow::Cow<'static, str> {
         #[cfg(feature = "preset-overlay")]
