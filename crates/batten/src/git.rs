@@ -8773,6 +8773,26 @@ mod tests {
         assert_eq!(iso_utc(1_577_934_245), "2020-01-02T03:04:05Z");
         assert_eq!(iso_utc(1_622_548_800), "2021-06-01T12:00:00Z");
     }
+
+    /// Fails by: an existing target walked past its own directory, a missing
+    /// one not walked up to its nearest existing ancestor, or a file placed by
+    /// itself rather than by its directory (CLOUD-2672).
+    #[test]
+    fn a_target_is_placed_by_its_nearest_existing_directory() {
+        let repo = crate::scratch::scratch("git-placement-walk");
+        crate::gitwrite::init_on_main(&repo).unwrap();
+        let src = repo.join("src");
+        fs::create_dir_all(&src).unwrap();
+        crate::durable::replace(repo.join("batten.toml"), "version = 1\n").unwrap();
+        crate::durable::replace(src.join("batten.toml"), "version = 1\n").unwrap();
+        crate::durable::replace(src.join("a.rs"), "").unwrap();
+        let here = Placement::Root(canonical(&src));
+        assert_eq!(placement(&src.join("a.rs"), "batten.toml"), here);
+        assert_eq!(
+            placement(&src.join("new").join("b.rs"), "batten.toml"),
+            here
+        );
+    }
 }
 
 /*

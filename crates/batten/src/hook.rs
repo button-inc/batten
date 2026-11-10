@@ -21884,4 +21884,53 @@ deny contains "refused by themodule" if {
             1
         );
     }
+
+    /// Fails by: Claude Code's session-owner variable unnamed or misnamed, or
+    /// one claimed for a host never surveyed.
+    #[test]
+    fn only_claude_code_names_a_session_owner_variable() {
+        assert_eq!(
+            Harness::ClaudeCode.session_owner_email_var(),
+            Some("CLAUDE_CODE_USER_EMAIL")
+        );
+        assert_eq!(Harness::Cursor.session_owner_email_var(), None);
+    }
+
+    /// Fails by: a githooks(5) name not recognised, or any name recognised.
+    #[test]
+    fn a_git_hook_name_is_recognised_and_no_other() {
+        assert!(is_git_hook("pre-commit"));
+        assert!(!is_git_hook("pre-cmmit"));
+    }
+
+    /// Fails by: Gemini's pre-compaction left unmapped (CLOUD-2695).
+    #[test]
+    fn geminis_pre_compress_is_pre_compact() {
+        assert_eq!(
+            normalize_event(Harness::GeminiCli, "PreCompress"),
+            Event::PreCompact
+        );
+    }
+
+    /// Fails by: a budget set selected by a write that is not at `PreTool`
+    /// (CLOUD-2661).
+    #[test]
+    fn only_a_pre_tool_write_selects_a_budget_set() {
+        let mut policy = Policy::declaring_nothing(Harness::ExitCode);
+        policy.budget = Some(crate::budget::Budget(std::collections::BTreeMap::from([(
+            "always".to_owned(),
+            crate::budget::BudgetSet {
+                files: vec!["CLAUDE.md".to_owned()],
+                max_tokens: 1,
+                max_lines: None,
+                max_bytes_per_file: None,
+                embedded: vec![],
+            },
+        )])));
+        let write = write_envelope("Write", "CLAUDE.md");
+        assert_eq!(policy.budget_sets_for(&write), vec!["always"]);
+        let mut after = write_envelope("Write", "CLAUDE.md");
+        after.event = Event::PostTool;
+        assert!(policy.budget_sets_for(&after).is_empty());
+    }
 }
