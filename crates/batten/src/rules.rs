@@ -15763,129 +15763,21 @@ mod tests {
         traversals: serde_json::Value::Null,
     };
 
-    // One line per `Rule` column, and `Rule` has no `Default` on purpose — a
-    // fixture that spreads one would stop naming the columns it leaves empty,
-    // which is the census this literal is. The three columns whose blank value
-    // depends on the kind are filled by [`per_kind`].
-    #[allow(
-        clippy::too_many_lines,
-        reason = "one line per `Rule` column is the census; a literal that spread a \
-                  default to stay short would stop naming the columns it leaves empty"
-    )]
+    // The row a config would carry with only `id` and `kind` written: every
+    // other column at its serde default, exactly as a consumer's blank row
+    // loads. Built through serde rather than a literal listing every column,
+    // which had outgrown the function-length lint; the census a new column owes
+    // is `Rule::columns` and its classification test, not this fixture. The
+    // three columns whose blank value depends on the kind are filled by
+    // [`per_kind`].
     fn blank(id: &str, kind: RuleKind) -> Rule {
-        per_kind(Rule {
-            review: Vec::new(),
-            id: id.to_owned(),
-            kind,
-            glob: None,
-            // Filled by `per_kind`.
-            severity: None,
-            scope: kind.scopes()[0],
-            pattern: None,
-            regex: None,
-            exclude: None,
-            content: None,
-            tool: None,
-            measures: None,
-            counts: None,
-            max: None,
-            resolves: Vec::new(),
-            when_absent: None,
-            when_present: None,
-            when_value: None,
-            while_marker: None,
-            while_unpushed: false,
-            key_from: None,
-            key_base: None,
-            key_shape: None,
-            max_age: None,
-            requires_field: None,
-            contains: None,
-            unless_contains: None,
-            word: None,
-            unless_word: None,
-            on: None,
-            require_via: None,
-            requires_key: None,
-            reason: None,
-            policy_url: None,
-            bypass_env: None,
-            check: None,
-            fix: None,
-            produces: None,
-            exclude_paths: Vec::new(),
-            symbols: false,
-            run: None,
-            verbatim: None,
-            identity_key: None,
-            direction: None,
-            base: None,
-            retires_with: None,
-            conserves: None,
-            admits_with: None,
-            per_file: false,
-            format: None,
-            node: None,
-            derives: None,
-            cites: None,
-            reads: None,
-            module: None,
-            bundle: None,
-            preset: None,
-            // No preset, so nothing here reads a CI provider (CLOUD-1625).
-            provider: None,
-            except: Vec::new(),
-            gate: None,
-            documents: Vec::new(),
-            requires_path: Vec::new(),
-            sources: Vec::new(),
-            lines: Vec::new(),
-            line_sources: Vec::new(),
-            invocations: Vec::new(),
-            invocation_sources: Vec::new(),
-            uses: Vec::new(),
-            use_sources: Vec::new(),
-            git: Vec::new(),
-            refs: Vec::new(),
-            ranges: Vec::new(),
-            commits: Vec::new(),
-            staged: Vec::new(),
-            history: Vec::new(),
-            tags: Vec::new(),
-            git_config: Vec::new(),
-            index: Vec::new(),
-            state: Vec::new(),
-            forge: Vec::new(),
-            tools: Vec::new(),
-            plan: Vec::new(),
-            minted: Vec::new(),
-            captured: Vec::new(),
-            tasks: Vec::new(),
-            extract: Vec::new(),
-            landing: Vec::new(),
-            delta_sources: Vec::new(),
-            external: Vec::new(),
-            predicate_severity: None,
-            criteria: None,
-            tier: None,
-            // Both filled by `per_kind`.
-            no_fix_reason: None,
-            checks: None,
-            // Left `None` even where the kind permits it, unlike `checks` above:
-            // a receipt fixture needs SOME receipt named to be valid, and
-            // `checks` above already supplies one. Filling both would make every
-            // blank receipt row carry an alternation no case asked for, and a
-            // fixture that quietly exercises a column is how a test passes for a
-            // reason its author did not choose.
-            checks_any: None,
-            key: None,
-            trigger: None,
-            verdict: None,
-            filters: None,
-            substitutes: None,
-            interprets: None,
-            no_retry_reason: None,
-        })
+        let row: Rule = serde_json::from_value(serde_json::json!({
+            "id": id,
+            "kind": kind,
+            "scope": kind.scopes()[0],
+        }))
+        .expect("an id, a kind and a scope are a whole blank row");
+        per_kind(row)
     }
 
     /// The columns whose blank value depends on `rule.kind`, each filled only for

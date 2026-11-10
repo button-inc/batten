@@ -605,10 +605,6 @@ fn tar_gz(entries: &[(&str, &[u8])]) -> Vec<u8> {
 /// One raw tar entry: a file (path, bytes) or a symlink (path, target).
 enum Raw<'a> {
     File(&'a str, &'a [u8]),
-    #[cfg_attr(
-        not(unix),
-        expect(dead_code, reason = "only the unix cases build a symlink entry")
-    )]
     Link(&'a str, &'a str),
 }
 
@@ -672,9 +668,12 @@ impl Env {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn a_subtree_entry_runs_its_binary_beside_its_files() {
+    // A `#!` script and a symlink are the subject: unix only, decided in the case.
+    if !cfg!(unix) {
+        return;
+    }
     let env = Env::new("provision-subtree");
     let archive = tar_gz_raw(&[
         Raw::File("tool-1.0/bin/tool", TOOL),
@@ -738,9 +737,12 @@ fn an_entry_climbing_out_of_the_tree_is_refused() {
     assert!(!env.entry().join("artifact").exists());
 }
 
-#[cfg(unix)]
 #[test]
 fn a_symlink_climbing_out_of_the_tree_is_refused() {
+    // A `#!` script and a symlink are the subject: unix only, decided in the case.
+    if !cfg!(unix) {
+        return;
+    }
     let env = Env::new("provision-subtree-link-escape");
     let archive = tar_gz_raw(&[
         Raw::File("tool-1.0/bin/tool", TOOL),
@@ -797,9 +799,12 @@ fn a_bin_path_missing_after_strip_is_refused() {
     assert!(!env.entry().join("artifact").exists());
 }
 
-#[cfg(unix)]
 #[test]
 fn a_subtree_entry_links_a_launcher_onto_path() {
+    // A `#!` script and a symlink are the subject: unix only, decided in the case.
+    if !cfg!(unix) {
+        return;
+    }
     let env = Env::new("provision-subtree-link");
     let (url, sha) = env.artifact("tool.tar.gz", &tool_tarball(b"payload\n"));
     let dest = env.home.join("linked");

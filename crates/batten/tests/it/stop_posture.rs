@@ -464,10 +464,7 @@ fn person_fixture(name: &str, pushed: bool) -> (PathBuf, PathBuf) {
     common::git_in(&repo, &["add", "batten.toml"]);
     common::git_in(&repo, &["commit", "-q", "-m", "chore: a person merges"]);
     let remote = repo.parent().expect("fixture root").join("remote.git");
-    common::git_in(
-        repo.parent().expect("fixture root"),
-        &["init", "-q", "--bare", "remote.git"],
-    );
+    batten::gitwrite::init_bare_on_main(&remote).expect("a bare remote");
     common::git_in(
         &repo,
         &[

@@ -88,7 +88,7 @@ use common::{at_root, batten, stdout};
 fn scratch(name: &str, git: bool, config: Option<&str>) -> PathBuf {
     let dir = common::scratch_outside_tree("batten-doctor-e2e", name);
     if git {
-        common::git_in(&dir, &["init", "-q"]);
+        batten::gitwrite::init_on_main(&dir).expect("a repository on main");
     }
     if let Some(text) = config {
         common::write(&dir, "batten.toml", text);

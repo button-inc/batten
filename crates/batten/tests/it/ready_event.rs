@@ -35,7 +35,7 @@ kind = "shape"
 scope = "mediated_call"
 severity = "deny"
 on = "pull-request-ready"
-requires_key = '(?i)\bCLOUD-[0-9]+\b'
+requires_key = '(?i)\bACME-[0-9]+\b'
 base = "origin/main"
 reason = "name the issue before readying"
 "#;
@@ -202,7 +202,7 @@ fn an_on_shape_row_refuses_an_unkeyed_ready_on_both_routes() {
     // admits the connector undraft.
     git_in(
         &dir,
-        &["commit", "-q", "--allow-empty", "-m", "fix: CLOUD-1 x"],
+        &["commit", "-q", "--allow-empty", "-m", "fix: ACME-1 x"],
     );
     allowed(&dir, &undraft);
 }

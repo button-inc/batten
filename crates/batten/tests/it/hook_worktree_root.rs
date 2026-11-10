@@ -397,7 +397,7 @@ fn two_repositories(name: &str, a: &str, b: &str) -> (PathBuf, PathBuf, PathBuf)
     for (sub, config) in [("a", a), ("b", b)] {
         let dir = parent.join(sub);
         std::fs::create_dir_all(&dir).expect("create repository");
-        git_in(&dir, &["init", "-q", "-b", "main"]);
+        batten::gitwrite::init_on_main(&dir).expect("a repository on main");
         std::fs::write(dir.join("batten.toml"), config).expect("write config");
         std::fs::write(dir.join("f"), "x\n").expect("write file");
         git_in(&dir, &["add", "-A"]);
@@ -587,7 +587,7 @@ fn a_reach_out_of_the_home_is_refused_only_where_the_home_arms_it() {
 fn an_unplaceable_target_is_refused_where_reach_is_armed() {
     let (parent, a, b) = two_repositories("reach-unplaceable", &armed(), DECLARES_NOTHING);
     let bare = parent.join("bare.git");
-    git_in(&parent, &["init", "-q", "--bare", "bare.git"]);
+    batten::gitwrite::init_bare_on_main(&parent.join("bare.git")).expect("a bare repository");
     std::fs::create_dir_all(a.join("sub")).expect("a subdirectory of the home");
     let _ = bash(&a, &a, "unplaceable", "ls");
     for command in [
