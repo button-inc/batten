@@ -684,7 +684,7 @@ fn a_batten_verb_beside_a_push_is_not_preapproved() {
 fn a_plan_mode_write_is_refused() {
     assert_plan_refused(&shell("plan", "python3 x.py"));
     assert_plan_refused(&shell("plan", "batten override spend --admission x"));
-    assert_plan_refused(&shell("plan", "git status && git commit -m x"));
+    assert_plan_refused(&shell("plan", "git status && git commit -m 'fix: x'"));
 }
 
 /// CLOUD-2289: `issue read loose` routes a Linear read to `batten mcp call`, so
@@ -788,7 +788,10 @@ fn a_plan_mode_git_with_global_options_is_allowed() {
         assert_not_plan_refused(&read);
         assert_granted_by(&read, "call read now");
     }
-    assert_plan_refused(&shell("plan", "git -C /home/user/batten commit -m x"));
+    assert_plan_refused(&shell(
+        "plan",
+        "git -C /home/user/batten commit -m 'fix: x'",
+    ));
     assert_plan_refused(&shell("plan", "git branch new-branch"));
     // A global option that hands git a program to run is never a read.
     assert_plan_refused(&shell("plan", "git -c core.pager=sh log"));
@@ -948,4 +951,132 @@ fn a_preapproval_carries_the_calls_advice_in_one_document() {
             .is_some_and(|text| text.contains("fixture list nudged")),
         "the advice must ride the grant: {inner}"
     );
+}
+
+/// CLOUD-2206: a plan-mode read is admitted and granted; its write twin is
+/// refused. Every operand names no repository path, so the `tool select other`
+/// substitute row, which routes a read of a tracked path to the host's read
+/// tools, stays out of the way.
+fn reads_and_writes(reads: &[&str], writes: &[&str]) {
+    for line in reads {
+        let read = shell("plan", line);
+        assert_not_plan_refused(&read);
+        assert_granted_by(&read, "call read now");
+    }
+    for line in writes {
+        assert_plan_refused(&shell("plan", line));
+    }
+}
+
+#[test]
+fn a_plan_mode_sort_read_is_allowed_and_its_writes_are_refused() {
+    reads_and_writes(
+        &["sort f"],
+        &["sort -o g f", "sort --compress-program=sh f"],
+    );
+}
+
+#[test]
+fn a_plan_mode_find_read_is_allowed_and_its_actions_are_refused() {
+    reads_and_writes(
+        &["find . -name x -print"],
+        &["find . -name x -delete", "find . -exec rm {} \\;"],
+    );
+}
+
+#[test]
+fn a_plan_mode_awk_read_is_allowed_and_its_writes_are_refused() {
+    reads_and_writes(
+        &["awk 1 f", "git ls-tree -r -l HEAD | awk '{print $4}'"],
+        &["awk '{print > \"g\"}' f", "awk 'BEGIN{system(\"rm f\")}'"],
+    );
+}
+
+#[test]
+fn a_plan_mode_sed_print_is_allowed_and_its_writes_are_refused() {
+    reads_and_writes(
+        &["sed -n 1p f", "sed -n 1,20p f"],
+        &["sed -i s/x/y/ f", "sed -n '1w out' f"],
+    );
+}
+
+#[test]
+fn a_plan_mode_gh_read_is_allowed_and_its_writes_are_refused() {
+    reads_and_writes(
+        &["gh api repos/a/b", "gh release list", "gh pr view 1"],
+        &[
+            "gh api -X POST repos/a/b",
+            "gh api --method PATCH repos/a/b",
+            "gh api repos/a/b -f x=y",
+            "gh label create x",
+            "gh co list",
+            "gh -R a/b pr view 1",
+        ],
+    );
+}
+
+#[test]
+fn a_plan_mode_curl_get_is_allowed_and_its_writes_are_refused() {
+    reads_and_writes(
+        &["curl -sS https://example.com"],
+        &[
+            "curl -X POST https://example.com",
+            "curl -d x https://example.com",
+            "curl -o out https://example.com",
+        ],
+    );
+}
+
+#[test]
+fn a_plan_mode_git_network_read_is_allowed_and_its_writes_are_refused() {
+    reads_and_writes(
+        &[
+            "git fetch",
+            "git fetch origin main",
+            "git ls-remote origin",
+            "git remote show origin",
+        ],
+        &[
+            "git fetch origin main:main",
+            "git pull",
+            "git push",
+            "git ls-remote -u sh origin",
+            "git ls-remote --upload-pack=sh origin",
+            "git fetch -u origin",
+            "git fetch 'ext::sh -c x'",
+        ],
+    );
+}
+
+#[test]
+fn a_plan_mode_read_loop_is_allowed_and_a_writing_loop_is_refused() {
+    reads_and_writes(
+        &["git ls-files | while read f; do head -c2 \"$f\"; done"],
+        &["git ls-files | while read f; do rm \"$f\"; done"],
+    );
+}
+
+/// Loading a skill writes nothing; a plan-mode `Write` is still not granted.
+#[test]
+fn a_plan_mode_skill_is_allowed_and_a_write_tool_is_not() {
+    let skill = envelope("plan", "Skill", &serde_json::json!({"skill": "batten"}));
+    assert_not_plan_refused(&skill);
+    assert_granted_by(&skill, "call read now");
+    assert_not_granted(&envelope(
+        "plan",
+        "Write",
+        &serde_json::json!({"file_path": "README.md", "content": "x"}),
+    ));
+}
+
+/// The substitute row routes a read of a tracked path to the host's read
+/// tools before plan mode is asked, so these surface its class, not plan
+/// mode's. Records the routing; kills no mutant.
+#[test]
+fn a_plan_mode_substitute_on_a_repo_path_is_routed_not_plan_refused() {
+    for line in ["sed -n 1p README.md", "find crates -name '*.rego' -print"] {
+        let (_, reason) = verdict(&shell("plan", line)).unwrap_or_default();
+        assert!(reason.contains("tool select other"), "{line}: {reason}");
+        assert!(!reason.contains("plan write refused"), "{line}: {reason}");
+    }
 }
