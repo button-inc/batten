@@ -1,97 +1,95 @@
-//! Rust carries no hand-written mutation marker (CLOUD-2253).
+//! The Rust tier is cargo-mutants' alone (CLOUD-2253): the tree-level half.
 //!
-//! cargo-mutants generates and judges every Rust mutant itself (`mutant:rust`),
-//! and reads no marker in the source: a row, a `MUTANT-SUITE`, `-OWNER` or
-//! `-EXEMPT` line in a `.rs` file is never run and only reads as coverage. 868
-//! rows and 408 suite lines accumulated that way. A Rust obligation names the
-//! runner instead (`"mutation": "cargo-mutants"`).
-//!
-//! A marker is either a `//MUTANT…` line, or a `#MUTANT…` / `MUTANT…` line
-//! inside a `/* */` block, the two shapes rows were carried in. A `#MUTANT` row
-//! in a string literal is another language's fixture text and passes.
+//! The marker and argv refusals are the build's (`build.rs` over
+//! `batten::mutation_markers`), so nothing compiles that carries one. These are
+//! the facts about the tree a build of one crate cannot see: every tracked `.rs`
+//! is owned by cargo-mutants under the registry `mise.toml` declares, and the
+//! `preset-overlay` feature is enabled by the sweep alone.
 
 use std::path::Path;
 
 use crate::common;
 
-/// Whether `line`, inside a `/* */` block or not, is a mutation marker.
-fn is_marker(line: &str, in_block: bool) -> bool {
-    let line = line.trim_start();
-    line.starts_with("//MUTANT")
-        || (in_block && (line.starts_with("#MUTANT") || line.starts_with("MUTANT")))
-}
-
-/// Every tracked `.rs` line under `root` carrying a mutation marker, as
-/// `path:line`.
-fn rust_markers(root: &Path) -> Vec<String> {
-    let tracked = batten::git::tracked_paths(root).expect("the tracked set");
-    let mut found = Vec::new();
-    // Exactly `rs`, as rustc reads it: a `.RS` file is no source of rows.
-    let sources = tracked
-        .iter()
-        .filter(|path| Path::new(path).extension().is_some_and(|ext| ext == "rs"));
-    for path in sources {
-        let Ok(text) = std::fs::read_to_string(root.join(path)) else {
-            continue;
-        };
-        let mut in_block = false;
-        for (at, line) in text.lines().enumerate() {
-            match line.trim() {
-                "/*" => in_block = true,
-                "*/" => in_block = false,
-                _ if is_marker(line, in_block) => found.push(format!("{path}:{}", at + 1)),
-                _ => {}
-            }
-        }
-    }
-    found
-}
-
-/// No tracked Rust source declares a hand-written mutation marker.
+/// EVERY TRACKED RUST SOURCE IS CARGO-MUTANTS', by the registry `mise.toml`
+/// declares, so the sweep refuses a hand-written row in any of them
+/// (`runner-owned`) wherever it is written. Fails by: a glob that leaves a `.rs`
+/// file (a bench, an example, a new crate) to the declared runner, which would
+/// quietly accept rows there.
 #[test]
-fn no_rust_source_declares_a_hand_written_mutation_marker() {
-    let found = rust_markers(&common::at_root("."));
+fn every_tracked_rust_source_is_owned_by_cargo_mutants() {
+    let root = common::at_root(".");
+    let manifest = std::fs::read_to_string(root.join("mise.toml")).expect("the manifest reads");
+    let declared = manifest
+        .lines()
+        .find_map(|line| line.strip_prefix("MUTANT_RUNNERS = \""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .expect("mise.toml declares the runner registry in [env]");
+    let registry = batten::mutate::Registry::parse(declared).expect("the registry parses");
+    let tracked = batten::git::tracked_paths(&root).expect("the tracked set");
+    let unowned: Vec<&String> = tracked
+        .iter()
+        .filter(|path| Path::new(path).extension().is_some_and(|ext| ext == "rs"))
+        .filter(|path| registry.owner(path).ok() != Some(batten::mutate::RunnerKind::CargoMutants))
+        .collect();
     assert!(
-        found.is_empty(),
-        "cargo-mutants owns every Rust source and reads no marker, so one here \
-         is never run; delete it, and bind a Ready obligation to \
-         `cargo-mutants`: {}",
-        found.join(", ")
+        unowned.is_empty(),
+        "every Rust source is cargo-mutants' alone: {unowned:?}"
     );
 }
 
-/// THE ANTI-VACUITY HALF. A reader that found nothing would pass the case above
-/// over a tree full of markers, so the predicate is shown finding each shape at
-/// any indent, and passing another language's row in a string literal.
+/// The tracked files under `root` whose text contains `needle`, sorted.
+fn files_naming(root: &Path, needle: &str) -> Vec<String> {
+    let tracked = batten::git::tracked_paths(root).expect("the tracked set");
+    let mut found: Vec<String> = tracked
+        .into_iter()
+        .filter(|path| {
+            std::fs::read_to_string(root.join(path)).is_ok_and(|text| text.contains(needle))
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+/// `preset-overlay` NEVER SHIPS: it lets a file replace a shipped rule, so only
+/// the mutation sweep's suite build enables it. Fails by: the feature reaching a
+/// default feature set, a release workflow, a dist config or any task but the
+/// sweep's.
 #[test]
-fn every_marker_shape_is_found_at_any_indent() {
-    let repo = common::scratch_repo("mutant-rows-rust");
-    let source = [
-        "//MUTANT-SUITE tests/a.rs",
-        "//MUTANT top|s/a/b/|case",
-        "fn f() {",
-        "    //MUTANT nested|s/a/b/|case",
-        "    let fixture = \"",
-        "    #MUTANT rego|s/a/b/|case",
-        "\";",
-        "}",
-        "/*",
-        "#MUTANT-SUITE tests/a.rs",
-        "MUTANT bare|s/a/b/|case",
-        "*/",
-        "",
-    ]
-    .join("\n");
-    common::write(&repo, "src/a.rs", &source);
-    common::git_in(&repo, &["add", "-A"]);
-    assert_eq!(
-        rust_markers(&repo),
-        [
-            "src/a.rs:1",
-            "src/a.rs:2",
-            "src/a.rs:4",
-            "src/a.rs:10",
-            "src/a.rs:11"
-        ]
+fn the_preset_overlay_is_enabled_by_the_sweep_alone() {
+    let root = common::at_root(".");
+    let allowed = [
+        // The asked ledger records what was said, never what is enabled.
+        ".batten/asked.jsonl",
+        "crates/batten/Cargo.toml",
+        "crates/batten/src/mutate.rs",
+        "crates/batten/src/preset.rs",
+        "crates/batten/tests/it/mutant_rows.rs",
+        "mise.toml",
+    ];
+    let naming = files_naming(&root, "preset-overlay");
+    let stray: Vec<&String> = naming
+        .iter()
+        .filter(|path| !allowed.contains(&path.as_str()))
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "preset-overlay named outside the sweep: {stray:?}"
+    );
+    let manifest = std::fs::read_to_string(root.join("crates/batten/Cargo.toml")).expect("reads");
+    assert!(
+        !manifest
+            .lines()
+            .any(|line| line.trim_start().starts_with("default") && line.contains("preset-overlay")),
+        "preset-overlay in the default feature set"
+    );
+    let tasks = std::fs::read_to_string(root.join("mise.toml")).expect("reads");
+    let enabling: Vec<&str> = tasks
+        .lines()
+        .filter(|line| line.contains("preset-overlay") && !line.trim_start().starts_with('#'))
+        .collect();
+    assert_eq!(enabling.len(), 1, "one task enables it: {enabling:?}");
+    assert!(
+        enabling[0].contains("MUTANT_OVERLAY_FEATURES"),
+        "and it is the sweep's: {enabling:?}"
     );
 }
