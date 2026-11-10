@@ -1135,6 +1135,9 @@ pub fn of_rule(
 //MUTANT-SUITE crates/batten/tests/it/advisory_drain.rs
 //MUTANT remedy-reranked|s@^        if self.severity != Severity::Remedy {$@        if true {@|a_drained_rules_remedy_rides_its_first_drain_only
 //MUTANT-SUITE crates/batten/src/hook.rs
+//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
+//MUTANT spill-route-prescribes-field|s@^        self.routes.clear();$@@|a_spill_note_names_no_field_route
+//MUTANT-SUITE crates/batten/src/hook.rs
 impl Refusal {
     /// Build a refusal. The [`Fix`] is required, which is the contract.
     pub fn new(rule: impl Into<String>, reason: impl Into<String>, fix: Fix) -> Refusal {
@@ -1223,6 +1226,19 @@ impl Refusal {
             precondition: None,
         });
         self
+    }
+
+    /// [`Refusal::with_document_route`] as the ONLY route, and no fix (CLOUD-2284).
+    ///
+    /// For a pointer whose store is not a JSON document: the class's own
+    /// `--field` route refuses there, so every route it printed failed. The fix
+    /// is cleared too, or `remedy` would print that command once it is no
+    /// longer a route target.
+    #[must_use]
+    pub fn with_only_document_route(mut self, path: &str) -> Refusal {
+        self.routes.clear();
+        self.fix = Fix::None;
+        self.with_document_route(path)
     }
 
     /// Mark this refusal's subjects as separate tree findings at `paths`, so
