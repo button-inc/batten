@@ -1542,6 +1542,8 @@ pub enum Native by id {
     ProvisionPinOther => "provision pin other",
     /// The Stop ladder's unlanded rung.
     CommitShipMissing => "commit ship missing",
+    /// The Stop ladder's unlanded rung, on a clone too shallow to look.
+    CommitShipUnknown => "commit ship unknown",
     /// The Stop ladder's filed-set rung.
     IssueListUnclear => "issue list unclear",
     /// A `[[hook.handler]]` reported on this call.
@@ -2706,6 +2708,15 @@ the landing target. This is said once per claim until the operator speaks again:
 held on purpose is a state, not an omission, and repeating it every turn displaces the \
 operator's own words (CLOUD-2332).",
         routes: &[run("land run first", "batten land lap")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit ship unknown",
+        gloss: "the clone is shallow, so where these commits are cannot be computed",
+        class: "A shallow clone stops every history walk at its boundary, so whether the \
+turn's commits are on the landing target could not be computed; that is could-not-look, \
+never landed. Said once per claim until the operator speaks again (CLOUD-2655).",
+        routes: &[run("unshallow run first", "git fetch --unshallow")],
         applicability: Applicability::Advice,
     },
     VendoredVerdict {

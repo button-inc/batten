@@ -408,6 +408,60 @@ fn completion_fixture(name: &str, diverge: bool) -> (PathBuf, PathBuf) {
     (repo, home)
 }
 
+/// A `--depth 1` clone of [`completion_fixture`]'s repository, landing on
+/// `origin/main`, with one local commit on `work` (CLOUD-2655). `main` carries
+/// two commits, so the clone's history stops at a boundary.
+fn shallow_completion_fixture(name: &str) -> (PathBuf, PathBuf) {
+    let (origin, home) = completion_fixture(name, false);
+    common::git_in(&origin, &["checkout", "-q", "main"]);
+    let config = fs::read_to_string(origin.join("batten.toml")).expect("config");
+    fs::write(
+        origin.join("batten.toml"),
+        config.replacen(
+            "must_land_on = \"main\"",
+            "must_land_on = \"origin/main\"",
+            1,
+        ),
+    )
+    .expect("write config");
+    common::git_in(&origin, &["add", "-A"]);
+    common::git_in(&origin, &["commit", "-q", "-m", "chore: land on origin"]);
+    let root = origin.parent().expect("fixture root").to_path_buf();
+    let url = format!("file://{}", origin.display());
+    common::git_in(
+        &root,
+        &[
+            "clone", "-q", "--depth", "1", "--branch", "main", &url, "clone",
+        ],
+    );
+    let repo = root.join("clone");
+    common::git_in(&repo, &["config", "user.name", "Fixture Author"]);
+    common::git_in(&repo, &["config", "user.email", "fixture@example.com"]);
+    common::git_in(&repo, &["checkout", "-q", "-b", "work"]);
+    common::write(&repo, "src/b.rs", "pub fn added() {}\n");
+    common::git_in(&repo, &["add", "src/b.rs"]);
+    common::git_in(&repo, &["commit", "-q", "-m", "add b"]);
+    let session = fs::read_to_string(origin.join("session.jsonl")).expect("transcript");
+    common::write(&repo, "session.jsonl", &session);
+    (repo, home)
+}
+
+/// A SHALLOW CLONE SAYS ONCE THAT IT COULD NOT LOOK (CLOUD-2655): the first
+/// signalled Stop names `commit ship unknown` and the unshallow, the second is
+/// silent, and neither refuses.
+#[test]
+fn a_shallow_clone_stop_says_once_it_could_not_look() {
+    let (repo, home) = shallow_completion_fixture("stop-shallow");
+    let first = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let said = stdout_of(&first);
+    assert!(said.contains("commit ship unknown"), "{said}");
+    assert!(said.contains("git fetch --unshallow"), "{said}");
+    let second = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    assert_eq!(second.status.code(), Some(0), "{}", stdout_of(&second));
+    let again = stdout_of(&second);
+    assert!(!again.contains("commit ship unknown"), "{again}");
+}
+
 /// `batten hook` against an isolated state home, so the store this writes and
 /// reads is the fixture's own.
 fn hook_in(dir: &Path, home: &Path, payload: &str) -> Output {

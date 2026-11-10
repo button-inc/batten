@@ -24433,7 +24433,10 @@ fn record_state(overrides: &Overrides) {
 /// nudge form. Only an observed, positive count is a finding.
 //MUTANT unlanded-pointer-repeats|s@^    if already_marked(spoken.as_deref(), \&key) {$@    if false \&\& already_marked(spoken.as_deref(), \&key) {@|an_unchanged_unlanded_pointer_is_spoken_once_across_stops
 fn unlanded_pointer() -> Option<refusal::Refusal> {
-    let UnlandedClaim { branch, key, count } = unlanded_claim()?;
+    // No observed claim may still be a claim nobody could look at (CLOUD-2655).
+    let Some(UnlandedClaim { branch, key, count }) = unlanded_claim() else {
+        return unlanded_unknown_pointer();
+    };
 
     // ONCE PER CLAIM, AND THE KEY IS NOT ONE THE REMEDY CAN MINT (CLOUD-890).
     //
@@ -27864,17 +27867,29 @@ fn register_completion(
     // stopping point. Not an optimisation: an unsignalled session's outcome is
     // already decided, and asking git anyway would let a misconfigured target
     // fail a scan whose verdict never depended on it.
+    let mut shallow = false;
     let landing = match signal {
         None => None,
         Some(_) => match worktree::land_target(repo, config.must_land_on.as_deref())? {
-            Some(target) => Some((
-                git::landing(repo, &target, "HEAD", git::Window::DEFAULT)?,
-                target,
-            )),
+            Some(target) => {
+                let clone_is_shallow = git::is_shallow(repo)?;
+                let landing = worktree::landing_or_shallow(repo, &target, clone_is_shallow)?;
+                shallow = landing.is_none();
+                landing.map(|landing| (landing, target))
+            }
             None => None,
         },
     };
-    let outcome = completion::assess(signal, landing.as_ref().map(|(landing, _)| landing));
+    // A shallow clone is could-not-look (CLOUD-2655), built here: `assess` only
+    // knows the no-target reason.
+    let outcome = if shallow {
+        completion::Outcome::NotComputable {
+            reason: worktree::SHALLOW,
+        }
+    } else {
+        completion::assess(signal, landing.as_ref().map(|(landing, _)| landing))
+    };
+    record_unlanded_step(repo, stream.session.as_deref(), &outcome);
 
     let Some(observation) = outcome.observation() else {
         // Not signalled: nothing to write. Reported on the top rung, because a
@@ -27952,6 +27967,101 @@ fn register_completion(
         ),
     )?;
     Ok(())
+}
+
+/// What the Stop owes a completion outcome (CLOUD-2655): land it, or deepen
+/// the clone so it can be looked at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Step {
+    /// The work is not on the target.
+    Land,
+    /// The clone is too shallow to say.
+    Shallow,
+}
+
+impl Step {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Land => "land",
+            Self::Shallow => "shallow",
+        }
+    }
+}
+
+/// The receipt family carrying the Stop's step for this claim (CLOUD-2655).
+/// Branch-keyed, so `land::retire_branch` sweeps it with the rest.
+const UNLANDED_STEP: &str = "unlanded-step";
+
+/// Write `<fingerprint> <step>` for this claim, or remove the receipt where the
+/// outcome owes no step. Written at the mint because the store cannot carry a
+/// could-not-look on an identity with no record. Fail-silent, like every
+/// Stop-path receipt.
+fn record_unlanded_step(repo: &Path, session: Option<&str>, outcome: &completion::Outcome) {
+    let Some(branch) = git::current_branch(repo).ok().flatten() else {
+        return;
+    };
+    let Ok(git_dir) = git::git_dir(repo) else {
+        return;
+    };
+    let path = recorder::record_path(&git_dir, UNLANDED_STEP, &branch, None);
+    let step = match outcome {
+        completion::Outcome::Raised { .. } => Some(Step::Land),
+        completion::Outcome::NotComputable { reason } if *reason == worktree::SHALLOW => {
+            Some(Step::Shallow)
+        }
+        _ => None,
+    };
+    let Some(step) = step else {
+        let _ = std::fs::remove_file(path);
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let fingerprint = completion::identity(session).fingerprint.to_hex();
+    let _ = crate::durable::replace(&path, format!("{fingerprint} {}\n", step.as_str()));
+}
+
+/// This branch's recorded step and its claim fingerprint, if any.
+fn unlanded_step(git_dir: &Path, branch: &str) -> Option<(String, Step)> {
+    let path = recorder::record_path(git_dir, UNLANDED_STEP, branch, None);
+    let text = std::fs::read_to_string(path).ok()?;
+    let (key, step) = text.trim().split_once(' ')?;
+    let step = match step {
+        "shallow" => Step::Shallow,
+        "land" => Step::Land,
+        _ => return None,
+    };
+    Some((key.to_owned(), step))
+}
+
+/// The Stop's could-not-look notice on a shallow clone (CLOUD-2655): said once
+/// per claim and step until the operator speaks, and never a refusal, because
+/// nothing was proven at risk.
+//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
+//MUTANT shallow-stop-silent|s@^    let Some((key, Step::Shallow)) = step else {$@    let Some((key, Step::Land)) = step else {@|a_shallow_clone_stop_says_once_it_could_not_look
+//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
+fn unlanded_unknown_pointer() -> Option<refusal::Refusal> {
+    let branch = git::current_branch(Path::new(".")).ok().flatten()?;
+    let git_dir = git::git_dir(Path::new(".")).ok()?;
+    let step = unlanded_step(&git_dir, &branch);
+    let Some((key, Step::Shallow)) = step else {
+        return None;
+    };
+    let key = format!("{key} {}", Step::Shallow.as_str());
+    let spoken = recorder::record_path(&git_dir, UNLANDED_SPOKEN, &branch, None);
+    if already_marked(Some(&spoken), &key) {
+        return None;
+    }
+    if let Some(parent) = spoken.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = crate::durable::append(&spoken, &key);
+    Some(refusal::Refusal::engine(
+        verdict::Native::CommitShipUnknown,
+        &[verdict::artifact(completion::RULE_ID)],
+        refusal::Fix::None,
+    ))
 }
 
 /// Register every guardrail bypass the session recorded (CLOUD-98).

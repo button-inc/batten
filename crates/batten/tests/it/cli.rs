@@ -8307,6 +8307,88 @@ fn worktree_status(dir: &std::path::Path) -> Output {
     common::run(dir, &["worktree", "status"])
 }
 
+/// A `--depth 1` clone of a repository whose `branch` has two commits, so the
+/// clone's history stops at a boundary with a missing parent (CLOUD-2655). The
+/// origin declares `must_land_on = target`; the clone then commits once more.
+fn shallow_clone(name: &str, target: &str, branch: &str) -> PathBuf {
+    let origin = worktree_repo(&format!("{name}-origin"), target);
+    if branch != "main" {
+        git_in(&origin, &["checkout", "-q", "-b", branch]);
+    }
+    commit_file(&origin, "second.txt", "two\n", "second");
+    let parent = common::scratch(name);
+    let url = format!("file://{}", origin.display());
+    git_in(
+        &parent,
+        &[
+            "clone", "-q", "--depth", "1", "--branch", branch, &url, "clone",
+        ],
+    );
+    let clone = parent.join("clone");
+    assert_eq!(
+        git_in(&clone, &["rev-parse", "--is-shallow-repository"]),
+        "true"
+    );
+    git_in(&clone, &["config", "user.name", "Fixture Author"]);
+    git_in(&clone, &["config", "user.email", "fixture@example.com"]);
+    clone
+}
+
+/// The repro: a new local branch in a shallow clone. Could-not-look, naming the
+/// unshallow, never exit 3 (CLOUD-2655).
+#[test]
+fn a_shallow_clone_reports_could_not_look_and_names_the_unshallow() {
+    let clone = shallow_clone("worktree-shallow", "origin/main", "main");
+    git_in(&clone, &["checkout", "-q", "-b", "work"]);
+    commit_file(&clone, "local.txt", "local\n", "local");
+    let output = worktree_status(&clone);
+    let text = common::stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{text} {}",
+        common::stderr(&output)
+    );
+    assert!(
+        text.contains("unlanded: not-computable (the clone is shallow; `git fetch --unshallow`"),
+        "{text}"
+    );
+}
+
+/// A tracking branch in a shallow clone: whether its work is upstream could not
+/// be computed, and that is never read as pushed (CLOUD-2655).
+#[test]
+fn a_shallow_upstream_is_not_computable_never_pushed() {
+    let clone = shallow_clone("worktree-shallow-upstream", "origin/feat", "feat");
+    commit_file(&clone, "local.txt", "local\n", "local");
+    let output = worktree_status(&clone);
+    let text = common::stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "{text} {}",
+        common::stderr(&output)
+    );
+    assert!(text.contains("unpushed: not-computable"), "{text}");
+}
+
+/// An unresolvable target is a config error on a shallow clone too: only a
+/// failed walk is could-not-look (CLOUD-2655).
+#[test]
+fn a_shallow_clone_with_an_unresolvable_target_is_still_a_usage_error() {
+    let clone = shallow_clone("worktree-shallow-nope", "origin/nope", "main");
+    git_in(&clone, &["checkout", "-q", "-b", "work"]);
+    commit_file(&clone, "local.txt", "local\n", "local");
+    let output = worktree_status(&clone);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{} {}",
+        common::stdout(&output),
+        common::stderr(&output)
+    );
+}
+
 #[test]
 fn a_dirty_tree_is_at_risk_and_names_the_count_not_the_paths() {
     let dir = worktree_repo("worktree-dirty", "main");

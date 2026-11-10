@@ -315,6 +315,7 @@ mod tests {
             uncommitted: 0,
             unpushed: None,
             no_upstream: None,
+            upstream_not_computable: None,
             unlanded: Unlanded::Landed,
         }
     }

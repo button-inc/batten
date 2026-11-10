@@ -1338,6 +1338,12 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         ],
     },
     VendoredDoc {
+        id: "commit ship unknown",
+        why: Some("A shallow clone cannot say whether committed work is on the target"),
+        act: &["deepen the clone with `git fetch --unshallow`, then stop again"],
+        dont: &["read could-not-look as landed"],
+    },
+    VendoredDoc {
         id: "issue list unclear",
         why: Some("A row filed mid-task is either new work or this task deferred"),
         act: &[
