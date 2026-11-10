@@ -600,6 +600,309 @@ fn tar_gz(entries: &[(&str, &[u8])]) -> Vec<u8> {
     encoder.finish().unwrap()
 }
 
+// --- subtrees (CLOUD-2682) ------------------------------------------------------
+
+/// One raw tar entry: a file (path, bytes) or a symlink (path, target).
+enum Raw<'a> {
+    File(&'a str, &'a [u8]),
+    Link(&'a str, &'a str),
+}
+
+/// A gzipped tarball whose names are written raw, so a `..` survives:
+/// `append_data` refuses one, which is the entry these cases need.
+fn tar_gz_raw(entries: &[Raw<'_>]) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    for entry in entries {
+        let mut header = tar::Header::new_old();
+        let (name, data): (&str, &[u8]) = match entry {
+            Raw::File(name, data) => (name, data),
+            Raw::Link(name, _) => (name, &[]),
+        };
+        header.as_old_mut().name[..name.len()].copy_from_slice(name.as_bytes());
+        header.set_mode(0o755);
+        header.set_size(data.len() as u64);
+        match entry {
+            Raw::File(..) => header.set_entry_type(tar::EntryType::Regular),
+            Raw::Link(_, target) => {
+                header.set_entry_type(tar::EntryType::Symlink);
+                header.set_link_name_literal(target).unwrap();
+            }
+        }
+        header.set_cksum();
+        builder.append(&header, data).unwrap();
+    }
+    let tar = builder.into_inner().unwrap();
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut encoder, &tar).unwrap();
+    encoder.finish().unwrap()
+}
+
+/// A tool whose binary reads a file beside its own real path, plus an
+/// in-tree symlink: Node's `npm` shape.
+const TOOL: &[u8] = b"#!/bin/sh\ncat \"$(dirname \"$0\")/../lib/data\"\n";
+
+fn tool_tarball(data: &[u8]) -> Vec<u8> {
+    tar_gz_raw(&[
+        Raw::File("tool-1.0/bin/tool", TOOL),
+        Raw::File("tool-1.0/lib/data", data),
+    ])
+}
+
+/// `manifest` plus subtree keys.
+fn subtree_manifest(url: &str, sha: &str, keys: &str) -> String {
+    format!("{}unpack = \"tar_gz\"\n{keys}", manifest(url, sha))
+}
+
+impl Env {
+    /// The entry's cache directory.
+    fn entry(&self) -> PathBuf {
+        self.state_dir().join("provision/demo/1.2.3")
+    }
+
+    /// Every path under the cache, for "nothing escaped".
+    fn cache_paths(&self) -> Vec<String> {
+        self.cache_contents()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect()
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_subtree_entry_runs_its_binary_beside_its_files() {
+    let env = Env::new("provision-subtree");
+    let archive = tar_gz_raw(&[
+        Raw::File("tool-1.0/bin/tool", TOOL),
+        Raw::File("tool-1.0/lib/data", b"payload\n"),
+        Raw::Link("tool-1.0/bin/alias", "tool"),
+    ]);
+    let (url, sha) = env.artifact("tool.tar.gz", &archive);
+    env.config(&subtree_manifest(
+        &url,
+        &sha,
+        "strip = 1\nbin = \"bin/tool\"\n",
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the fixture IS a spawn of the cached binary, and only a real run shows it reads the files beside its own path (CLOUD-2682)"
+    )]
+    let ran = std::process::Command::new(env.entry().join("tree/bin/tool"))
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), "payload\n");
+    assert!(
+        env.entry().join("tree/bin/alias").is_file(),
+        "the in-tree link resolves"
+    );
+}
+
+#[test]
+fn an_entry_climbing_out_of_the_tree_is_refused() {
+    let env = Env::new("provision-subtree-escape");
+    let archive = tar_gz_raw(&[
+        Raw::File("a/../../escape", b"out"),
+        Raw::File("a/tool", TOOL),
+    ]);
+    let (url, sha) = env.artifact("tool.tar.gz", &archive);
+    env.config(&subtree_manifest(
+        &url,
+        &sha,
+        "strip = 0\nbin = \"a/tool\"\n",
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !env.cache_paths()
+            .iter()
+            .any(|path| path.ends_with("escape")),
+        "{:?}",
+        env.cache_paths()
+    );
+    assert!(!env.entry().join("artifact").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_climbing_out_of_the_tree_is_refused() {
+    let env = Env::new("provision-subtree-link-escape");
+    let archive = tar_gz_raw(&[
+        Raw::File("tool-1.0/bin/tool", TOOL),
+        Raw::Link("tool-1.0/bin/out", "../../../outside"),
+    ]);
+    let (url, sha) = env.artifact("tool.tar.gz", &archive);
+    env.config(&subtree_manifest(
+        &url,
+        &sha,
+        "strip = 1\nbin = \"bin/tool\"\n",
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!env.entry().join("tree").exists());
+}
+
+#[test]
+fn a_zip_entry_climbing_out_is_refused() {
+    let env = Env::new("provision-subtree-zip-escape");
+    let archive = zip(&[("../escape", b"out".as_slice()), ("tool", TOOL)]);
+    let (url, sha) = env.artifact("tool.zip", &archive);
+    env.config(&format!(
+        "{}unpack = \"zip\"\nbin = \"tool\"\n",
+        manifest(&url, &sha)
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn a_bin_path_missing_after_strip_is_refused() {
+    let env = Env::new("provision-subtree-no-bin");
+    let (url, sha) = env.artifact("tool.tar.gz", &tool_tarball(b"payload\n"));
+    env.config(&subtree_manifest(
+        &url,
+        &sha,
+        "strip = 0\nbin = \"bin/tool\"\n",
+    ));
+    let output = env.run(&["provision", "apply"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("bin/tool"), "{stderr}");
+    assert!(!env.entry().join("tree").exists());
+    assert!(!env.entry().join("artifact").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_subtree_entry_links_a_launcher_onto_path() {
+    let env = Env::new("provision-subtree-link");
+    let (url, sha) = env.artifact("tool.tar.gz", &tool_tarball(b"payload\n"));
+    let dest = env.home.join("linked");
+    env.config(&subtree_manifest(
+        &url,
+        &sha,
+        &format!(
+            "strip = 1\nbin = \"bin/tool\"\nlink = '{}'\n",
+            dest.display()
+        ),
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the fixture IS a spawn of the linked launcher, and only a real run shows it reaches the tree through the kernel's `#!` handling (CLOUD-2682)"
+    )]
+    let ran = std::process::Command::new(dest.join("demo"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout),
+        "payload\n",
+        "{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+}
+
+#[test]
+fn a_reinstalled_subtree_replaces_the_old_tree() {
+    let env = Env::new("provision-subtree-reinstall");
+    let (url, sha) = env.artifact("one.tar.gz", &tool_tarball(b"one"));
+    env.config(&subtree_manifest(
+        &url,
+        &sha,
+        "strip = 1\nbin = \"bin/tool\"\n",
+    ));
+    assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
+    let (url, sha) = env.artifact("two.tar.gz", &tool_tarball(b"two"));
+    env.config(&subtree_manifest(
+        &url,
+        &sha,
+        "strip = 1\nbin = \"bin/tool\"\n",
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read(env.entry().join("tree/lib/data")).unwrap(), b"two");
+    let leftovers: Vec<String> = fs::read_dir(env.entry())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".tree."))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[test]
+fn a_platform_row_names_its_own_strip_and_bin() {
+    let env = Env::new("provision-subtree-platform");
+    let archive = zip(&[
+        ("tool-1.0/tool", TOOL),
+        ("tool-1.0/data", b"data".as_slice()),
+    ]);
+    let (url, sha) = env.artifact("tool.zip", &archive);
+    let host = batten::provision::platform_key();
+    env.config(&format!(
+        "version = 1\n\n[[provision]]\nname = \"demo\"\nversion = \"1.2.3\"\n\
+         binary = \"demo\"\nunpack = \"tar_gz\"\nbin = \"wrong\"\n\n\
+         [provision.platforms.{host}]\nurl = '{url}'\nsha256 = \"{sha}\"\n\
+         unpack = \"zip\"\nstrip = 1\nbin = \"tool\"\n"
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read(env.entry().join("tree/tool")).unwrap(), TOOL);
+    assert_eq!(fs::read(env.entry().join("tree/data")).unwrap(), b"data");
+}
+
+#[test]
+fn a_subtree_key_without_an_archive_is_refused_at_load() {
+    let env = Env::new("provision-subtree-no-archive");
+    env.config(&format!(
+        "{}bin = \"bin/tool\"\n",
+        manifest("file:///nonexistent/tool", &"0".repeat(64))
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 // --- byte-stability -------------------------------------------------------------
 
 #[test]
