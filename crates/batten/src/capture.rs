@@ -4020,8 +4020,8 @@ mod tests {
     }
 
     /// Fails by: any leaf's section placed on the wrong lines, counted at the
-    /// wrong size, taken from the wrong spill, or a null or an empty object
-    /// treated as the other.
+    /// wrong size, taken from the wrong spill, a null or an empty object
+    /// treated as the other, or an empty array walked to nothing.
     #[test]
     fn a_result_view_places_every_leaf_and_streams_its_spill() {
         let repo = contained_repo("capture-result-view");
@@ -4030,7 +4030,7 @@ mod tests {
         let decoy = repo.parent().unwrap().join("decoy");
         std::fs::write(&decoy, "decoy").unwrap();
         let result = serde_json::json!({
-            "a": {"b": "one\ntwo", "e": {}, "n": null},
+            "a": {"b": "one\ntwo", "e": {}, "k": [], "n": null},
             "s": "MARK",
             "t": "plain"
         });
@@ -4045,13 +4045,14 @@ mod tests {
             vec![
                 ("/a/b", 2, 3, 7),
                 ("/a/e", 5, 5, 2),
-                ("/s", 7, 9, 5),
-                ("/t", 11, 11, 5)
+                ("/a/k", 7, 7, 2),
+                ("/s", 9, 11, 5),
+                ("/t", 13, 13, 5)
             ]
         );
         assert_eq!(
             std::fs::read_to_string(path).unwrap(),
-            "## /a/b\none\ntwo\n## /a/e\n{}\n## /s\nx\ny\nz\n## /t\nplain\n"
+            "## /a/b\none\ntwo\n## /a/e\n{}\n## /a/k\n[]\n## /s\nx\ny\nz\n## /t\nplain\n"
         );
     }
 
