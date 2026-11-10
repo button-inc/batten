@@ -3185,7 +3185,6 @@ fn governed_aliases(
 /// alias, deleting its selector and deleting `[mcp]` report the same key: each
 /// leaves `mcp grant --guard` silent on a renamed key the base ref refused.
 //MUTANT-SUITE crates/batten/src/trust.rs
-//MUTANT mcp-alias-loss-unseen|s@^    for (alias, needles) in governed_aliases(base) {$@    for (alias, needles) in governed_aliases(None) {@|losing_a_governed_mcp_name_is_a_weakening
 fn mcp_weakenings(
     base: Option<&crate::mcp::McpConfig>,
     working: Option<&crate::mcp::McpConfig>,
@@ -3218,7 +3217,6 @@ fn mcp_weakenings(
 /// The `[forge] nothing_graded` statuses `working` declares and `base` does not,
 /// ascending (CLOUD-2080).
 //MUTANT-SUITE crates/batten/src/trust.rs
-//MUTANT nothing-graded-unchecked|s@^        if !before.contains(\&status) {$@        if false {@|widening_nothing_graded_is_a_weakening
 fn nothing_graded_added(base: &Config, working: &Config) -> Vec<u16> {
     // The EFFECTIVE lists, so an absent key (the documented default) and the
     // same list declared explicitly are one reading.

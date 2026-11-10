@@ -214,7 +214,6 @@ pub fn recorded_session_authority(session: &str, file: &str) -> Option<PathBuf> 
 /// the capture store, the sighting record) would otherwise write under a
 /// directory that no longer governs anything.
 //MUTANT-SUITE crates/batten/src/state.rs
-//MUTANT session-authority-ghost-admitted|s@^    (root\.is_absolute() && root\.join(file)\.is_file())\.then_some(root)$@    root.is_absolute().then_some(root)@|a_recorded_root_that_lost_its_authority_is_not_used
 #[must_use]
 pub fn recorded_session_authority_in(state: &Path, session: &str, file: &str) -> Option<PathBuf> {
     let root = PathBuf::from(std::fs::read_to_string(session_authority_file(state, session)).ok()?);

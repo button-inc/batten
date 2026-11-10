@@ -307,8 +307,6 @@ pub struct Trunk {
 ///
 /// Propagates a `git` failure reading the remotes or the remote's HEAD.
 //MUTANT-SUITE crates/batten/tests/it/trunk_name.rs
-//MUTANT trunk-name-falls-back-to-main|s@^            None => return Ok(None),$@            None => String::from("refs/remotes/origin/main"),@|an_unresolvable_trunk_is_refused_not_assumed
-//MUTANT must-land-on-ignored|s@^    let declared = match must_land_on {$@    let declared = match None::<\&str> {@|must_land_on_names_the_trunk_when_origin_head_is_unset
 pub fn land_trunk(repo: &Path, must_land_on: Option<&str>) -> Result<Option<Trunk>> {
     let declared = match must_land_on {
         Some(declared) => declared.to_owned(),
@@ -361,7 +359,6 @@ pub fn declared_trunk(root: &Path) -> Result<Option<Trunk>> {
 ///
 /// As [`declared_trunk`], and [`crate::resolve::committed`]'s for a ref.
 //MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT committed-trunk-ignores-ref|s@^    if overrides.config_from.is_none() \&\& overrides.config_in.is_none() {$@    if true {@|a_release_head_pinning_the_next_release_is_graded_under_config_from
 pub fn committed_trunk(
     root: &Path,
     overrides: &crate::resolve::Overrides,

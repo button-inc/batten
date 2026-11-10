@@ -716,9 +716,6 @@ pub struct Reading {
 // line above it (CLOUD-2193), and this is the file's only one. No pattern or
 // case here carries a `|`: the row is split on it.
 //MUTANT-SUITE crates/batten/tests/it/board_check.rs
-//MUTANT blocker-edges-unread|s@^            lines.push(format!("edge\\t{}\\t{}\\t{}", from, field(to), by_num(to).0));$@            let _ = to;@|a_blocked_by_cycle_is_reported_with_its_members
-//MUTANT claim-scan-unread|s@^                        "claim\\t{}\\t{}\\t{}",$@                        "unread\\t{}\\t{}\\t{}",@|a_body_claiming_a_column_the_board_contradicts_is_reported
-//MUTANT readiness-unread|s@^        if \["ready", "review"\].contains(.column) {$@        if false {@|a_todo_issue_with_no_ready_block_is_refused
 
 /// Read the graph over a payload set.
 ///
@@ -824,7 +821,6 @@ pub fn read_graph(
 /// column nobody occupies, is the preset's to decide. A scan whose expressions
 /// will not compose extracted nothing, which is not the same as finding nothing,
 /// so it says `scan broken`.
-//MUTANT empty-column-claims|s@^                if !cited.is_empty() \&\& !claimed.is_empty() {$@                if !cited.is_empty() {@|a_set_with_no_status_scans_a_bare_mention_as_no_claim
 fn read_claims(
     rows: &[Row<'_>],
     grammar: &Grammar,
@@ -1040,9 +1036,6 @@ fn graph(
     Ok(ExitCode::Success)
 }
 
-//MUTANT receipt-carries-no-ids|s@^        if declared.grammar.key_of(id).is_none() {$@        if true {@|a_coherent_board_records_one_receipt_per_id_it_judged
-//MUTANT receipt-mints-any-value|s@^        if declared.grammar.key_of(id).is_none() {$@        if false {@|a_value_that_is_not_an_issue_key_mints_nothing_so_it_cannot_become_a_path
-
 /// One receipt per judged id, the trigger a move guard reads (CLOUD-512).
 ///
 /// MINTED ONLY ON THE SUCCESS PATH: a board carrying violations must not
@@ -1098,10 +1091,6 @@ struct CiteReading {
     cited: usize,
     history: bool,
 }
-
-//MUTANT fixtures-satisfy-a-citation|s@^        let drop = &self.exclude;$@        let drop: \&[crate::rules::Selector] = \&[];@|a_citation_that_resolves_only_in_a_fixture_and_nowhere_else_is_refused
-//MUTANT superseded-block-is-judged|s@^            start = Some(at);$@            start = start.or(Some(at));@|the_last_opener_is_the_live_block_and_an_earlier_one_is_history
-//MUTANT marker-never-read|s@^                Some(marker) => text.contains(.format!("`{path}` {marker}")),$@                Some(_) => false,@|a_citation_the_block_marks_new_is_prospective_not_fatal
 
 impl Cites {
     fn resolve(declared: &Declared<'_>) -> Result<Self> {

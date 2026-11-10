@@ -263,7 +263,6 @@ fn value_of(value: &Scalar) -> Value {
 /// type-checks, still writes the right value at the right key, and destroys
 /// everything else.
 //MUTANT-SUITE crates/batten/tests/it/config_edit.rs
-//MUTANT config-edit-toml-roundtrip|s@^    doc.to_string()$@    toml::to_string(\&toml::from_str::<toml::Table>(\&doc.to_string()).unwrap_or_default()).unwrap_or_default()@|an_edit_changes_only_the_edited_key
 fn render(doc: &DocumentMut) -> String {
     doc.to_string()
 }

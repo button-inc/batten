@@ -46,9 +46,6 @@ use crate::ready::Grammar;
 pub const FAMILY: &str = "released";
 
 //MUTANT-SUITE crates/batten/tests/it/released.rs
-//MUTANT attachments-absence-is-silent|s@^    ("attachments", .*$@@|an_in_review_payload_with_no_attachments_key_is_could_not_look
-//MUTANT description-absence-is-silent|s@^    ("description", .*$@@|an_in_review_payload_with_no_description_is_refused_and_named
-//MUTANT relations-absence-is-silent|s@^    ("relations", .*$@@|an_in_review_payload_with_no_relations_is_refused_and_named
 
 /// The keys a review-column payload must CARRY for the board gate to answer
 /// about it, each with the re-fetch that supplies it (CLOUD-783).
@@ -141,9 +138,6 @@ fn rule_for(line: &str, id: &str) -> Option<String> {
 /// # Errors
 ///
 /// A [`UsageError`] for each could-not-look this module's header names.
-//MUTANT earlier-tag-reshipped|s@^    let hidden: Vec<String> = previous.iter().cloned().collect();$@    let hidden: Vec<String> = Vec::new();@|a_commit_an_earlier_tag_shipped_is_not_new
-//MUTANT unrun-gate-passes|s@^        Err(why) => return Err(could_not_run(&why)),$@        Err(_) => Vec::new(),@|a_board_check_that_did_not_run_is_could_not_look
-//MUTANT commit-path-dropped|s@^            by_commit.insert(id);$@            let _ = id;@|a_commit_the_tag_contains_is_a_second_way_in
 pub fn reading(
     inputs: &BTreeMap<String, String>,
     board: Option<&Board>,

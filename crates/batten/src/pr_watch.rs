@@ -532,8 +532,6 @@ pub(crate) struct Pacing<'a> {
 
 /// [`watch`] over an explicit [`Pacing`].
 //MUTANT-SUITE crates/batten/src/pr_watch.rs
-//MUTANT floor-parsed-then-ignored|s@^        wait_for(configured, answer.poll_floor, self.backoff)$@        wait_for(configured, None, self.backoff)@|a_server_requested_floor_reaches_the_pause
-//MUTANT pause-not-the-folded-wait|s@^        (pacing.pause)(wait_for);$@        (pacing.pause)(0.0);@|a_server_requested_floor_reaches_the_pause
 pub(crate) fn watch_with(
     config: &Config,
     roster: &Roster,

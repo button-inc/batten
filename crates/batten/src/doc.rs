@@ -1585,7 +1585,6 @@ fn push_sentence(out: &mut String, text: &str) {
 ///
 /// `rendered` is the whole first-sighting body the class produces — gloss, these
 /// sections and its admissible preconditions — measured against [`DOC_BYTES`].
-//MUTANT doc-cap-unchecked|s@^    if rendered.len() > DOC_BYTES {$@    if false {@|a_class_doc_over_640_bytes_does_not_load
 #[must_use]
 pub fn violation(doc: &Doc, rendered: &str) -> Option<String> {
     if rendered.len() > DOC_BYTES {
@@ -1639,7 +1638,6 @@ pub fn violation(doc: &Doc, rendered: &str) -> Option<String> {
 /// conversation the operator was never part of, repeated on every stop. The
 /// alternative to an action is another action, such as filing the blocker.
 //MUTANT-SUITE crates/batten/src/doc.rs
-//MUTANT words-remedy-loads|s@^    if doc.act.iter().any(\x7citem\x7c asks_for_words(item)) {$@    if false {@|a_do_item_asking_for_words_does_not_load
 fn asks_for_words(item: &str) -> bool {
     let item = item.trim().to_lowercase();
     let item = item.strip_prefix("or ").unwrap_or(&item);

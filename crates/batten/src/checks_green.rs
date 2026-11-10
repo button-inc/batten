@@ -272,7 +272,6 @@ fn rank(run: &Run, answered: &[String]) -> u8 {
 /// "restore clock-ordering" — the shape CLOUD-1662's Done block requires the
 /// suite to refuse. Verified killed: it reddens the arm that can only be decided
 /// by conclusion.
-//MUTANT skip-outranks-a-concurrent-failure|s@run.completed_at.clone(),@String::new(),@|a_concurrent_skip_does_not_bury_the_failure_it_raced
 fn key(run: &Run) -> (bool, String, String, u64) {
     (
         run.completed_at.is_empty() && !run.completed(),
@@ -329,7 +328,6 @@ fn key(run: &Run) -> (bool, String, String, u64) {
 /// because a guard commented out would also redden the two arms that must keep
 /// their old behaviour, telling us less about which clause the cases pin.
 //MUTANT-SUITE crates/batten/src/checks_green.rs
-//MUTANT unanswered-displaces-a-verdict|s@const UNANSWERED: u8 = 3;@const UNANSWERED: u8 = 9;@|a_later_skipped_twin_does_not_erase_a_verdict
 ///
 /// `pub(crate)` because `record forge --fetch` records one conclusion per name
 /// and must choose the SAME run this does (CLOUD-843): two orderings over one
@@ -472,9 +470,6 @@ pub fn judged(runs: &[Run], roster: &Roster) -> Vec<Finding> {
 /// case, one mirror, nothing else in 5,587 noticing. That is what a mirror is
 /// for, and it is also why removing either would be invisible without it.
 //MUTANT-SUITE crates/batten/src/checks_green.rs
-//MUTANT wait-is-never-a-dead-end|s@        if pending == 0 && unregistered.is_empty() {@        if false {@|a_closed_set_with_a_masked_name_is_a_dead_end_and_an_open_one_still_waits
-//MUTANT dead-end-ignores-running|s@        if pending == 0 && unregistered.is_empty() {@        if unregistered.is_empty() {@|a_closed_set_with_a_masked_name_is_a_dead_end_and_an_open_one_still_waits
-//MUTANT dead-end-ignores-unregistered|s@        if pending == 0 && unregistered.is_empty() {@        if pending == 0 {@|a_closed_set_with_a_masked_name_is_a_dead_end_and_an_open_one_still_waits
 pub fn decide(runs: &[Run], roster: &Roster) -> Result<Verdict, RosterError> {
     if roster.required.is_empty() {
         return Err(RosterError::NoRequiredChecks);

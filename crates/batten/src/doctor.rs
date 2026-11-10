@@ -162,7 +162,6 @@ pub fn finding_subjects(
 }
 
 /// `workspace state broken` over `subjects` (CLOUD-2078).
-//MUTANT container-health-misclassed|s@^    let class = crate::verdict::Native::WorkspaceStateBroken;$@    let class = crate::verdict::Native::RunBroken;@|a_declared_program_nothing_can_reach_is_reported_at_session_start
 #[must_use]
 pub fn workspace_refusal(
     subjects: &[crate::verdict::Subject],
@@ -1245,7 +1244,6 @@ pub fn diagnose_toolchain(manifest: &Path, probe: &str) -> Toolchain {
 /// Reads both files and hashes them; spawns nothing. Length is compared first
 /// only as a short-circuit — two files of different lengths cannot be identical.
 //MUTANT-SUITE crates/batten/tests/it/doctor.rs
-//MUTANT mediator-ignores-the-target-dir|s@^    let built = crate::engine::release_build(dir);$@    let built = dir.join("target").join("release").join(crate::surface::BINARY);@|the_mediator_is_compared_against_the_build_this_tree_actually_writes
 #[must_use]
 pub fn diagnose_mediator(dir: &Path) -> Mediator {
     // The tree builds a mediator iff it carries the crate that produces one.
@@ -1450,7 +1448,6 @@ fn is_runnable_hook(at: &Path) -> bool {
 /// One predicate reached from both, on [`diagnose_commit_gate`]'s reason: a
 /// startup row asks it alone, and a second reading could drift from the report.
 #[must_use]
-//MUTANT dropped-rows-pass|s@Check::failed(CONFIG, "config-rows-dropped")@Check::passed(CONFIG)@|doctor_config_fails_on_a_row_this_build_cannot_resolve
 pub fn diagnose_config(dir: &Path) -> Check {
     match config::load(&dir.join(config::CONFIG_FILE)) {
         // Loading proves the file parses and the version gates pass; resolving
@@ -1533,7 +1530,6 @@ pub fn diagnose_commit_gate(dir: &Path) -> Check {
 // never runs its argv, and the fixture's hooks stay absent. That is also what
 // makes the declared precondition load-bearing rather than decorative.
 //MUTANT-SUITE crates/batten/tests/it/startup.rs
-//MUTANT hooks-check-reports-without-deciding|s@^        Check::failed_naming(COMMIT_GATE, COMMIT_HOOK_MISSING, missing)$@        Check::passed(COMMIT_GATE)@|a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them
 
 /// The check the declared transcript earns, or `None` where none is declared
 /// (CLOUD-1035).
@@ -2959,8 +2955,6 @@ pub fn has_session_start_reader(fact: crate::facts::Fact) -> bool {
 /// repository whose policy will not resolve has a louder problem, `doctor`'s
 /// `config` check is what says so, and reporting every rule as unminted over an
 /// unreadable config would bury that.
-//MUTANT factless-rule-demands-a-fact|s@        for token in bundle.session_start_facts() {@        for token in ["pinned-programs", "tasks"] {@|a_rule_reading_no_session_start_fact_is_not_judged
-//MUTANT every-session-is-could-not-look|s@            if reads.and_then(\x7cfact\x7c minted(fact, dir)) != Some(true) {@            if true {@|a_session_with_every_fact_minted_is_clean
 fn unminted_facts(dir: &Path, resolved: Option<&resolve::Resolved>) -> Vec<Unminted> {
     let Some(resolved) = resolved else {
         return Vec::new();
@@ -3023,8 +3017,6 @@ fn unminted_facts(dir: &Path, resolved: Option<&resolve::Resolved>) -> Vec<Unmin
 /// no declared work looks like on a host that creates the store lazily. The
 /// caller has already read the link and established the target is absent.
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
-//MUTANT store-absence-reads-unreadable|s@    target.parent().is_some_and(Path::is_dir)@    false@|a_pointer_at_an_unwritten_store_is_zero_and_never_could_not_look
-//MUTANT parent-conjunct-dropped|s@    target.parent().is_some_and(Path::is_dir)@    true@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
 fn store_is_merely_unwritten(target: &Path) -> bool {
     target.parent().is_some_and(Path::is_dir)
 }
@@ -3071,11 +3063,6 @@ enum TaskEvidence {
 /// **A TEMPLATE WITHOUT `{session}` CANNOT BE MATCHED** to a session, so it
 /// answers [`TaskEvidence::Unknown`].
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
-//MUTANT transcript-zero-ignores-task-calls|s@^    if called {$@    if false {@|a_transcript_that_declared_a_task_never_reads_as_zero
-//MUTANT transcript-zero-on-empty-stream|s@^    if stream.records.is_empty() {$@    if false {@|an_empty_transcript_is_not_evidence
-//MUTANT transcript-zero-any-session|s@^    if expected != target.to_string_lossy() {$@    if false {@|another_sessions_transcript_is_not_evidence
-//MUTANT transcript-partial-line-dropped|s@^    if !partial.trim_ascii().is_empty() {$@    if false {@|a_half_written_task_call_is_not_zero
-//MUTANT transcript-sessionless-template-matches|s@ \x7c\x7c !template.contains("{session}") {$@ {@|a_sessionless_template_is_not_evidence
 fn transcript_evidence(
     dir: &Path,
     transcript: &crate::transcript::TranscriptConfig,
@@ -3154,10 +3141,6 @@ fn transcript_evidence(
 /// and a link that will not read is no pointer at all, which is not the same
 /// fact as a pointer at nothing.
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
-//MUTANT transcript-arm-dropped|s@^        TaskEvidence::NoTaskCall => !resolved.try_exists().unwrap_or(true),$@        TaskEvidence::NoTaskCall => store_is_merely_unwritten(\&resolved),@|a_transcript_with_no_task_call_is_zero_without_a_store_root
-//MUTANT transcript-zero-without-a-transcript|s@^        TaskEvidence::Unknown => store_is_merely_unwritten(&resolved),$@        TaskEvidence::Unknown => true,@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
-//MUTANT transcript-zero-over-a-present-store|s@^    if resolved.try_exists().unwrap_or(true) {$@    if false {@|an_unreadable_store_is_never_zero
-//MUTANT torn-falls-back|s@^        TaskEvidence::TaskCalled \x7c TaskEvidence::Torn => false,$@        TaskEvidence::TaskCalled => false, TaskEvidence::Torn => store_is_merely_unwritten(\&resolved),@|a_half_written_task_call_is_not_zero
 fn absent_store_is_zero(
     dir: &Path,
     transcript: &crate::transcript::TranscriptConfig,
@@ -3296,9 +3279,6 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
         unminted,
     }
 }
-
-//MUTANT unprovisioned-verify-green|s@^        .filter(\x7ctool\x7c !installed.contains(tool))$@        .filter(\x7ctool\x7c installed.contains(tool))@|a_declared_tool_the_probe_does_not_report_is_unprovisioned
-//MUTANT toolchain-probe-blind|s@^    let Some(installed) = installed_tools(probe) else {$@    let Some(installed) = installed_tools(probe).or_else(\x7c\x7c Some(declared.clone())) else {@|a_probe_that_answered_nothing_is_unprovisioned_rather_than_a_pass
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

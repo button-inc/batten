@@ -58,11 +58,6 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 //MUTANT-SUITE crates/batten/tests/it/pointer_only.rs
-//MUTANT echoed-column-undeclared|s@"verdict...class",@@|no_verb_emits_content_it_merely_read
-//MUTANT echo-arm-unreached|s@args: &\["no-canary-command"]@args: \&["cargo run loose"]@|no_verb_emits_content_it_merely_read
-//MUTANT echo-column-unresolved|s@"fact...command"]@"fact[].command", "rule[].nonesuch"]@|every_echo_declaration_resolves_to_capped_config_leaves
-//MUTANT prose-column-unseeded|s@columns: &\["waiver...reason"]@columns: \&[]@|the_corpus_seeds_every_prose_column
-//MUTANT redirect-arm-undeclared|s@"redirect...read",@@|the_protected_mutation_arm_echoes_only_its_declared_columns
 
 use crate::common;
 

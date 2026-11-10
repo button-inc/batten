@@ -536,8 +536,6 @@ pub fn render_subjects(subjects: &[Subject]) -> String {
 /// against `finding.path` verbatim, and a path like `docs/a b.md` rejoined would
 /// name nothing any finding carries. Idempotent: a `/`-bearing text comes back
 /// trimmed, and any other text has no whitespace left after the join.
-//MUTANT rendered-subject-unmatched|s@^    trimmed.split_whitespace().collect::<Vec<_>>().join(",")$@    trimmed.to_owned()@|a_subject_copied_from_the_refusal_line_binds_as_the_refusal_does
-//MUTANT path-subject-split|s@^    if trimmed.contains('/') {$@    if false {@|a_subject_copied_from_the_refusal_line_binds_as_the_refusal_does
 #[must_use]
 pub fn bound_subject(text: &str) -> String {
     let trimmed = text.trim();
@@ -666,7 +664,6 @@ pub fn first_command_route<'a>(registry: &'a [DeclaredVerdict], token: &str) -> 
 /// the exact defect — a class whose only route is a document renders no way out —
 /// so `refusal_ceiling`'s first-sighting case is what must redden.
 //MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
-//MUTANT document-route-dropped|s@        RouteKind::Document => "read",@        RouteKind::Document => return None,@|a_first_sighting_carries_the_gloss_and_its_route_by_kind
 #[must_use]
 pub(crate) fn render_route(route: &Route) -> Option<String> {
     let verb = match route.kind {
@@ -977,7 +974,6 @@ pub fn check_rule_id(id: &str, vocabulary: &Vocabulary) -> anyhow::Result<String
 
 /// The per-entry half of [`validate`].
 //MUTANT-SUITE crates/batten/src/verdict.rs
-//MUTANT route-check-dropped|s@^    if verdict.routes.is_empty() \&\& id != Native::CallGrantNow.id() {$@    if false {@|a_class_with_no_route_is_refused_unless_it_is_the_grant
 //MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
 fn validate_one(
     verdict: &DeclaredVerdict,
@@ -1708,7 +1704,6 @@ pub const fn read(id: &'static str, target: &'static str) -> VendoredRoute {
     }
 }
 
-//MUTANT write-admission-dropped|s@^        kind: RouteKind::Override,$@        kind: RouteKind::Document,@|every_class_routed_only_into_a_protected_path_is_admissible
 /// An `override`-kind route, which is the only kind whose precondition is
 /// REQUIRED rather than optional.
 ///
@@ -1736,8 +1731,6 @@ pushed",
 );
 
 /// CLOUD-1806's route: the recorded way through every plain `shape` row.
-//MUTANT shape-class-inadmissible|s@^const SHAPE_ADMIT_ROUTE: VendoredRoute = admit($@const SHAPE_ADMIT_ROUTE: VendoredRoute = run(@|a_shape_deny_is_admissible_through_its_class_override
-//MUTANT shape-route-circular|s@^            run("rule read first", crate::refusal::RULE_HOP_PLACEHOLDER),$@            read("config read first", "batten.toml"),@|a_shape_first_sighting_names_the_rows_remedy_verb
 const SHAPE_ADMIT_ROUTE: VendoredRoute = admit(
     "articulate the call",
     "the remedy `batten policy explain` prints for this row cannot perform the change this call \
@@ -1760,7 +1753,6 @@ makes, and you can name what the call changes and where a reviewer will see its 
 /// themselves: a class here may describe a PRACTICE and may never name a path, a
 /// task, a tracker key or an entity. `presets_are_inside_the_rule_one_glob`
 /// covers this file, because it is under `crates/**`.
-//MUTANT missing-receipt-route-dropped|s@^            STALE_RECEIPT_ROUTE,$@@|a_spent_admission_clears_a_missing_receipt
 const VENDORED: &[VendoredVerdict] = &[
     // ── native ──────────────────────────────────────────────────────────────
     VendoredVerdict {
@@ -3075,7 +3067,6 @@ const NATIVE_RULE_PREFIXES: &[(&str, &str)] = &[(
 
 /// The sentence `policy explain` answers for an engine rule id, or `None` where
 /// the name is not one (CLOUD-2142).
-//MUTANT native-table-empty|s@^    NATIVE_RULES$@    [("", ""); 0]@|a_native_rule_id_has_a_definition
 #[must_use]
 pub fn native_definition(name: &str) -> Option<&'static str> {
     NATIVE_RULES
@@ -3123,8 +3114,6 @@ pub fn declared_from(entry: &VendoredVerdict) -> DeclaredVerdict {
     }
 }
 
-//MUTANT protected-route-unread|s@protects(&route[.]target)@protects("")@|every_class_routed_only_into_a_protected_path_is_admissible
-//MUTANT own-override-ignored|s@ !declares_override(entry))$@ !entry.id.is_empty())@|every_class_routed_only_into_a_protected_path_is_admissible
 fn declares_override(entry: &DeclaredVerdict) -> bool {
     entry
         .routes

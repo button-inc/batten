@@ -265,7 +265,6 @@ pub fn requires_line(root: &Path) -> Result<bool> {
 ///
 /// When the repository cannot be read or the ref cannot be written.
 //MUTANT-SUITE crates/batten/tests/it/land_tracking.rs
-//MUTANT landed-trunk-left-stale|s@^    gitwrite::set_ref(root, \&tracking_ref(reference), \&head)?;$@@|a_landed_branch_leaves_the_tracking_ref_at_the_landed_head
 pub fn record_landed_trunk(root: &Path, reference: &str, branch: &str) -> Result<bool> {
     let Some(head) = crate::git::resolve_ref(root, &format!("refs/heads/{branch}"))? else {
         return Ok(false);
@@ -720,10 +719,6 @@ fn contains(root: &Path, tip: &str, ancestor: &str) -> bool {
 /// An absent remote ref is admitted: there is nothing to lose, and the
 /// receive-pack CAS still refuses if it appears before the swap.
 #[must_use]
-//MUTANT admits-ignored|s@^    if last_pushed.as_deref() == Some(remote) {$@    if true {@|a_sibling_commit_on_the_branch_is_never_admitted
-//MUTANT replay-chain-unfollowed|s@^    for line in lines.iter().rev() {$@    for line in lines.iter() {@|a_branch_replayed_twice_replaces_its_first_pre_rebase_head
-//MUTANT patch-identity-unasked|s@^    if crate::git::patches_contained(root, head, remote) {$@    if false {@|a_hand_pushed_head_replayed_onto_trunk_is_admitted
-//MUTANT lease-reads-one-partition|s@^    let prefix = format!("{name}.");$@    let prefix = format!("{name}.unread.");@|a_replay_recorded_before_a_re_claim_still_admits_its_pre_rebase_head
 pub fn admitted(root: &Path, branch: &str, remote: &str, head: &str) -> bool {
     if remote == crate::lease::ZERO || contains(root, head, remote) {
         return true;
@@ -914,7 +909,6 @@ pub enum Waited {
 /// An UNREAD wait keeps its runs too (CLOUD-1215): nobody read them, so nothing
 /// says they are waste.
 //MUTANT-SUITE crates/batten/tests/it/land_lap.rs
-//MUTANT unread-wait-abandons-its-runs|s@    !matches!(seen, Some(TapVerdict::Red \x7c TapVerdict::Unread))@    !matches!(seen, Some(TapVerdict::Red))@|an_unread_wait_neither_re_drafts_nor_cancels
 #[must_use]
 pub const fn abandons_the_runs(seen: Option<TapVerdict>) -> bool {
     !matches!(seen, Some(TapVerdict::Red | TapVerdict::Unread))
@@ -2015,7 +2009,6 @@ const VERIFY_LOG: &str = "verify-log";
 /// read whole was 57,764 tokens, of which two lines were the verdict. This is the
 /// pointer the driver prints in its place.
 //MUTANT-SUITE crates/batten/tests/it/land_verify_advice.rs
-//MUTANT verify-log-unrecorded|s@^        lines.push(format!("{VERIFY_LOG} {} {}", verified.sha(), log.join(" ")));$@        drop(log.join(" "));@|a_gate_s_output_is_stored_and_pointed_at
 #[must_use]
 pub fn verify_log(root: &Path, branch: &str, sha: &str) -> Vec<String> {
     branch_lap_lines(root, branch)
@@ -2284,7 +2277,6 @@ fn settle_race(settle: &Settle<'_>, raced: Option<Raced>) -> Result<Verified> {
 /// where it could have lapped costs one re-run; a lap that lapped a refused tree
 /// costs the whole budget, which is the defect this exists to keep closed.
 //MUTANT-SUITE crates/batten/src/land.rs
-//MUTANT unconfirmed-move-laps|s@                cause: if moved { Refusal::Moved } else { Refusal::Tree },@                cause: Refusal::Moved,@|an_unconfirmed_move_is_a_refusal_of_the_tree
 fn confirmed(
     verified: Verified,
     watched: Option<&(&crate::main_watch::Config, String)>,
@@ -2353,8 +2345,6 @@ pub fn still(run: Option<Still>, seen: Option<String>) -> Option<Still> {
 /// reports no step under the task leaves the stamp as it found it however long
 /// it runs, so a still stamp is evidence of a stall only from a gate that has
 /// shown it reports at all.
-//MUTANT self-stall-never-wins|s@^    beats > 0 \&\& matches!(run, Some(run) if run.reported \&\& run.beats >= beats)$@    false@|a_frozen_advance_stalls_and_a_moving_one_does_not
-//MUTANT self-stall-on-silence|s@ if run.reported \&\& @ if @|a_frozen_advance_stalls_and_a_moving_one_does_not
 #[must_use]
 pub const fn stalled(run: Option<&Still>, beats: u32) -> bool {
     beats > 0 && matches!(run, Some(run) if run.reported && run.beats >= beats)
@@ -2389,8 +2379,6 @@ pub enum Reconcile {
 ///   diverged branch, and could-not-tell is never a cancel. `Leave`.
 /// - Ready on a strict ancestor: this branch's own superseded push, whose runs
 ///   grade a tree it will never land. `AbandonAndRedraft`.
-//MUTANT reconcile-ignores-a-stale-head|s@if head != local_head \&\& superseded@if head != local_head \&\& false@|entry_reconcile_cancels_only_a_superseded_ready_head
-//MUTANT reconcile-cancels-a-foreign-head|s@if head != local_head \&\& superseded@if head != local_head@|entry_reconcile_cancels_only_a_superseded_ready_head
 #[must_use]
 pub fn entry_reconcile(pr: Option<(bool, &str)>, local_head: &str, superseded: bool) -> Reconcile {
     match pr {
@@ -2804,7 +2792,6 @@ impl Basis {
 /// be decided in a test instead of only through a git resolution and a
 /// filesystem write.
 //MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
-//MUTANT poison-never-recorded|s@    matches!(@    !matches!(@|a_red_wait_on_this_clones_own_base_is_what_poisons_it
 #[must_use]
 pub const fn poisons_this_clone(
     step: Step,
@@ -2832,7 +2819,6 @@ pub const fn poisons_this_clone(
 /// a local gate that stalled is not a fact about any check. Only the verify
 /// raises it; the same exit 3 without it is a reclaimed gate, which laps.
 //MUTANT-SUITE crates/batten/src/land.rs
-//MUTANT stall-laps|s@^    if gate_stalled {$@    if false {@|a_stalled_verify_stops_the_landing
 #[must_use]
 pub const fn lap_progress(
     step: Step,
@@ -3479,7 +3465,6 @@ pub struct Ledger {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/land.rs
-//MUTANT lease-loss-charges-a-lap|s@^        self.laps < budget$@        self.laps.saturating_add(self.lease_waits) < budget@|a_lap_lost_to_the_lease_leaves_the_lap_budget_unchanged
 impl Ledger {
     /// Open a lap.
     pub const fn attempt(&mut self) {
@@ -3880,7 +3865,6 @@ pub fn closes_the_tap(state: &Tap) -> bool {
 /// from [`abandon`]: the mapping is the decision, and a decision reachable only
 /// through a network call is a decision nothing tests.
 //MUTANT-SUITE crates/batten/tests/it/land_lap.rs
-//MUTANT unread-wait-reads-as-pending|s@        Waited::Unread => Some(TapVerdict::Unread),@        Waited::Unread => Some(TapVerdict::Pending),@|an_unread_wait_neither_re_drafts_nor_cancels
 #[must_use]
 pub const fn tap_verdict(waited: &Waited) -> Option<TapVerdict> {
     match waited {

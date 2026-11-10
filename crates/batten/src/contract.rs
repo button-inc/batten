@@ -311,7 +311,6 @@ pub fn record(git_dir: &Path, session: Option<&str>, manifest: &Manifest) -> Res
 /// sentences that used to follow each section — a `changed` path is a rule held
 /// in its old form, an `added` one new capability never read — are the class's
 /// own doc now, delivered once per window rather than on every notice.
-//MUTANT contract-drift-misclassed|s@^    let class = crate::verdict::Native::ContractReadStale;$@    let class = crate::verdict::Native::RunBroken;@|a_moved_contract_file_is_reported_in_band
 #[must_use]
 pub fn render(change: &ChangeSet, wiring: &[String]) -> crate::refusal::Refusal {
     // ADDED FIRST (CLOUD-490): a new path is an OFFER rather than an

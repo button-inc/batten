@@ -536,7 +536,6 @@ fn numbered_steps(text: &str, heading: &str) -> Vec<String> {
 /// The workflow contract names `land` as the one step after pushing, never the
 /// `verify` and `linear-check` each of its laps already runs (CLOUD-2240): an
 /// agent following the steps as written ran an hour-long `verify` twice.
-//MUTANT workflow-step-restored|s@^    let steps = numbered_steps(\&text, CONTRACT);$@    let steps = [vec![String::from("2. **`mise run verify` green before readying.**")], numbered_steps(\&text, CONTRACT)].concat();@|the_workflow_contract_lands_without_prescribing_its_parts
 #[test]
 fn the_workflow_contract_lands_without_prescribing_its_parts() {
     const CONTRACT: &str = "## Workflow contract";

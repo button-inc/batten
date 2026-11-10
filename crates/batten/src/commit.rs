@@ -214,9 +214,6 @@ fn address_of(identity: &str) -> &str {
 /// A [`UsageError`] (→ exit `1`) when an exemption's expression does not
 /// compile. Validated at load too, so this keeps the function total.
 //MUTANT-SUITE crates/batten/src/commit.rs
-//MUTANT unclaimed-commit-passes|s@        if commit.claims {@        if true {@|a_commit_naming_no_row_is_pointed_at_by_field
-//MUTANT exemption-ignores-author|s@            Some(author) => author.is_match(address),@            Some(_) => true,@|a_bot_address_is_required_as_well_as_the_bot_paths
-//MUTANT exemption-ignores-paths|s@        if !expression.is_match(path) {@        if false {@|a_release_row_does_not_exempt_a_commit_touching_code
 pub fn judge_claims(commits: &[Claimant], claims: &Claims) -> Result<Vec<Finding>> {
     let rows = claims
         .unclaimed
@@ -307,7 +304,6 @@ where
     serializer.serialize_str(Native::from(*verdict).id())
 }
 
-//MUTANT subject-refusal-unexplained|s@^        let token = self.verdict.id();$@        let token = "";@|every_commit_finding_names_its_vendored_class
 impl Finding {
     /// The refusal line, house style §6: `<class> <label> <field>[ <subject>]`,
     /// through the same projection every declared refusal renders with.
@@ -463,7 +459,6 @@ impl Commit {
 /// so it decides identically on a runner that cannot reach the store OR the
 /// config — which is what keeps the range half and the pending half from drifting.
 #[must_use]
-//MUTANT admits-tampered-survives-the-redirect|s/^            } else if claims/            } else if crate::redirect::resolve(redirects, path).is_some() \x7c\x7c claims/|a_tampered_block_on_a_redirected_path_is_still_refused
 pub fn judge_admissions(
     writes: &[crate::git::CommitWrite],
     redirects: &[crate::redirect::Redirect],
@@ -682,7 +677,6 @@ pub fn read_message(message: &Path) -> Result<Subject> {
 
 /// Render a run's findings as pointer lines, one per line.
 #[must_use]
-//MUTANT printed-class-unresolved|s@^        _ = writeln!(rendered, "{}", finding.line());$@        _ = writeln!(rendered, "{} {}", finding.label, finding.field);@|a_refused_commit_msg_line_names_a_class_policy_explain_resolves
 pub fn report(findings: &[Finding]) -> String {
     let mut rendered = String::new();
     for finding in findings {

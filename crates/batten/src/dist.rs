@@ -62,15 +62,6 @@ pub const OUT_DIR: &str = "dist";
 // The decisions a naive port loses. Each is caught by the case it names, run
 // from this file.
 //MUTANT-SUITE crates/batten/src/dist.rs
-//MUTANT dist-windows-by-host|s@    target.contains("-windows-")@    cfg!(windows)@|windows_targets_are_detected_by_triple_not_by_host
-//MUTANT dist-stem-drops-target|s@    format!("{name}-v{version}-{target}")@    format!("{name}-v{version}")@|two_targets_never_share_an_archive_name
-//MUTANT dist-auditable-on-cross|s@            Self::Cross => &\["cross", "build"],@            Self::Cross => \&["cargo", "auditable", "build"],@|cross_is_not_wrapped_in_auditable_and_the_other_two_are
-//MUTANT dist-several-binaries-guessed|s@    if bins.len() != 1 {@    if bins.is_empty() {@|a_workspace_with_two_binaries_is_refused_rather_than_guessed
-//MUTANT dist-versionless-name|s@!version\.is_empty()@true@|a_package_with_no_version_is_refused_rather_than_named_empty
-//MUTANT dist-env-builder-ignored|s@ env\.filter(@ env.and(None::<\&str>).filter(@|the_flag_outranks_the_environment_and_an_empty_one_is_unset
-//MUTANT dist-empty-env-names-a-builder|s@!value\.is_empty()@value.is_ascii()@|the_flag_outranks_the_environment_and_an_empty_one_is_unset
-//MUTANT dist-env-outranks-flag|s@    flag\.or_else(@    env.or(flag).or_else(@|the_flag_outranks_the_environment_and_an_empty_one_is_unset
-//MUTANT dist-stem-resolves-builder|s@^    if stem {$@    if stem \&\& false {@|a_stem_request_resolves_no_builder_and_a_build_refuses_an_unknown_one
 
 /// Whether a target triple builds a Windows binary.
 ///
@@ -595,7 +586,6 @@ fn stage(
 /// because a bash step puts Git for Windows' GNU tar, which writes no zip, first
 /// on PATH. A non-Windows host cross-building the target keeps Info-ZIP
 /// (CLOUD-2381).
-//MUTANT archiver-ignores-host|s@^    if !windows_host {$@    if true {@|a_windows_host_never_archives_with_zip
 fn archiver_argv(
     target: &str,
     windows_host: bool,

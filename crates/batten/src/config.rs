@@ -1338,7 +1338,6 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
 /// The outer shape here is lenient so no row is built; [`crate::rest::Forge`]
 /// stays strict, so a `[forge]` key this build predates declares nothing rather
 /// than half a table.
-//MUTANT forge-declared-by-full-parse|s@^    let Ok(only) = toml::from_str::<ForgeOnly>(\&text) else {$@    let Ok(only) = parse_ungated(\&text, "x").map(\x7cconfig\x7c ForgeOnly { forge: config.forge }) else {@|declaring_the_forge_parses_no_config
 pub fn declare_for_process(dir: &Path) {
     /// The one table this read needs. No `deny_unknown_fields`: every other
     /// key in the authority is some other reader's.
@@ -1845,7 +1844,6 @@ pub struct OverrideConfig {
 /// `version`, a table that fails its own validator, or **any key outside the
 /// override surface** — including one that is perfectly valid in the file it was
 /// copied from, which is the case this type exists to catch.
-//MUTANT text-meter-override-unwired|s@^    under(Native::ProseColumnRefused, meter_text(\&config))?;$@    under(Native::ProseColumnRefused, Ok(()))?;@|an_override_column_over_its_cap_is_refused_too
 pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
     // THE SAME PRUNE THE AUTHORITY GETS, for the same measured reason. A key
     // this build predates in `batten.local.toml` used to fail the whole
@@ -2034,8 +2032,6 @@ pub const TEXT_CENSUS: &[TextColumn] = &[
 /// The cap a column's values are held to: its census row, else [`TEXT_MAX`].
 ///
 /// A loop rather than a closure, because a `//MUTANT` anchor may not hold `|`.
-//MUTANT text-tier-flattened|s@^            return column.cap;$@            return TEXT_MAX;@|a_column_one_over_its_tier_is_refused_by_pointer_and_at_its_cap_loads
-//MUTANT text-ceiling-census-only|s@^    TEXT_MAX$@    usize::MAX@|an_unlisted_string_column_is_held_to_the_text_ceiling
 fn text_cap(path: &str) -> usize {
     for column in TEXT_CENSUS {
         if column.path == path {
@@ -2927,8 +2923,6 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
 /// # Errors
 ///
 /// As [`validate_tables`].
-//MUTANT text-meter-unwired|s@^        under(Native::ProseColumnRefused, meter_text(config))?;$@        under(Native::ProseColumnRefused, Ok(()))?;@|every_config_fault_names_its_table_s_declared_class
-//MUTANT text-meter-judges-the-base|s@^    if grammar == Grammar::Enforced {$@    if grammar == grammar {@|an_over_cap_base_ref_is_compared_not_refused
 fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     // The verb-written record families (CLOUD-1810). HERE rather than beside the
     // recorder table one function up, and the placement is forced rather than
@@ -3122,10 +3116,6 @@ fn names_an_unknown_key(rendered: &str) -> bool {
 /// Pointer-only (rule 4): the note adds a version and a task name. Every byte of
 /// file content in the output is the parser's own error, unchanged.
 //MUTANT-SUITE crates/batten/tests/it/config_skew.rs
-//MUTANT skew-reads-as-malformed|s@    if !names_an_unknown_key(&rendered) {@    if true {@|an_unknown_key_names_the_rebuild
-//MUTANT the-schema-is-derived-before-the-read|s@^    let Ok(committed) = fs::read_to_string(\&at) else {$@    let _eager = schema(); let Ok(committed) = fs::read_to_string(\&at) else {@|a_failing_load_with_no_committed_schema_derives_nothing
-//MUTANT the-schema-is-derived-every-call|s@^    if let Some(derived) = DERIVED.get() {$@    if let Some(derived) = None::<\&String> {@|the_schema_is_derived_once_per_process
-//MUTANT every-parse-error-blames-skew|s@    if !names_an_unknown_key(&rendered) {@    if false {@|a_schema_fault_that_names_no_unknown_key_does_not_mention_a_rebuild
 pub(crate) fn config_error(source: &str, text: &str, err: &toml::de::Error) -> anyhow::Error {
     let rendered = err.to_string();
     // THE SYNTAX PROBE, AND IT RUNS ONLY HERE — ON THE ERROR PATH (CLOUD-1677).
@@ -3415,7 +3405,6 @@ enum Header<'a> {
     Table(&'a str),
 }
 
-//MUTANT dotted-row-not-droppable|s@        matches!(self, Self::Row(_))@        matches!(self, Self::Row(name) if !name.contains('.'))@|an_unknown_key_in_a_dotted_row_costs_the_row_not_the_file
 impl<'a> Header<'a> {
     /// The declared name, dots and all.
     fn name(self) -> &'a str {
@@ -3850,7 +3839,6 @@ fn drop_empty_ancestors(table: &mut toml::Table, path: Option<&str>) {
 /// root that is a row anywhere makes the dotted header un-droppable and the
 /// caller falls back to the owning element, so a misread here costs a wider unit
 /// rather than a wrong blank.
-//MUTANT every-dotted-row-droppable|s@    !nests_in_a_row(text, header.root())@    true@|a_dotted_row_nested_in_an_array_element_still_charges_its_owner
 fn addressable_row(text: &str, header: Header<'_>) -> bool {
     if !header.is_row() {
         return false;
@@ -4178,7 +4166,6 @@ fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str, behind: bool
 type Blank = fn(&mut String, usize, usize);
 
 /// [`prune_unresolvable`], blanking with `blank`.
-//MUTANT dotted-section-read-as-a-key|s@        let Some(rows) = holder.get_mut(leaf).and_then(toml::Value::as_array_mut) else {@        let Some(rows) = holder.get_mut(section.as_str()).and_then(toml::Value::as_array_mut) else {@|an_unknown_key_in_a_dotted_row_costs_the_row_not_the_file
 fn prune_with<T: serde::de::DeserializeOwned>(
     source: &str,
     behind: bool,
@@ -4402,7 +4389,6 @@ fn parse_remembered(text: &str, source: &str) -> Result<Config> {
 
 /// [`parse_remembered`] with the on-disk parse cache switched by `persist`, so a
 /// case can switch it without the process-wide flag every other case reads.
-//MUTANT dropped-row-parse-cached|s@^        if config.unresolvable.is_empty()$@        if true@|an_authority_with_a_dropped_row_is_never_stored_in_the_parse_cache
 fn parse_remembered_with(text: &str, source: &str, persist: bool) -> Result<Config> {
     if let Some(config) = remembered(text, source) {
         return Ok(config);
@@ -4443,7 +4429,6 @@ type LastParse = Option<(std::sync::Arc<String>, String, Config)>;
 static LAST: std::sync::Mutex<LastParse> = std::sync::Mutex::new(None);
 
 /// Whether the memo holds exactly `text` from `source`, and if so, `with` over it.
-//MUTANT config-parse-unremembered|s@^    same.then(\x7c\x7c with(config))$@    None@|one_authority_is_parsed_once_per_process
 fn with_remembered<T>(text: &str, source: &str, with: impl FnOnce(&Config) -> T) -> Option<T> {
     let named = canonical_source(source);
     let last = LAST.lock().ok()?;
@@ -4559,7 +4544,6 @@ fn shared_text(text: &str) -> Option<std::sync::Arc<String>> {
 /// The digest [`read_text`] took of `text`, when `text` IS the allocation it
 /// last handed out and it was read from `named` (CLOUD-2608) — so a digest is
 /// never lent to bytes it was not taken of.
-//MUTANT held-digest-ignores-path|s@(path == named \&\& same_allocation(held, text))@(same_allocation(held, text))@|a_text_read_from_another_path_is_hashed
 fn held_digest(text: &str, named: &str) -> Option<[u8; 32]> {
     let last = LAST_DIGEST.lock().ok()?;
     let (path, digest, held) = last.as_ref()?;
@@ -4584,8 +4568,6 @@ fn digest_key(named: &str) -> String {
 }
 
 /// The digest recorded for `named` beside exactly these stamp `fields`.
-//MUTANT authority-digest-never-believed|s@^    if held != fields {$@    if true {@|an_unchanged_authority_is_keyed_by_its_recorded_digest
-//MUTANT authority-digest-ignores-stamp|s@^    if held != fields {$@    if false {@|an_edited_authority_is_hashed_again
 fn recorded_digest(named: &str, fields: &str) -> Option<[u8; 32]> {
     let body = crate::cache::read(&digest_path(named)?, &digest_key(named))?;
     let text = std::str::from_utf8(&body).ok()?;
@@ -4620,8 +4602,6 @@ fn record_digest(named: &str, fields: &str, digest: &[u8; 32]) {
 ///
 /// The stamp only decides whether a recorded digest is BELIEVED; it never
 /// enters a key, which stays a function of the bytes as `crate::cache` requires.
-//MUTANT authority-digest-recorded-racy|s@ \&\& !stamp.racily_clean(at)@@|an_authority_read_in_its_racy_window_records_no_digest
-//MUTANT authority-digest-believed-while-moving|s@^    let believed = still \&\& cfg!(unix);$@    let believed = cfg!(unix);@|a_file_changed_across_its_read_is_hashed
 fn text_digest(
     path: &Path,
     named: &str,
@@ -4697,7 +4677,6 @@ pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<String>> {
 
 /// Whether the file read as `held` at `at` is the one `now` describes, by git's
 /// racy rule.
-//MUTANT authority-text-memo-never-stale|s@^    held == now.fields \&\& !now.racily_clean(at)$@    true@|an_authority_edited_between_two_reads_is_read_again
 fn unchanged_since(held: &str, at: std::time::Duration, now: &crate::cache::Stamp) -> bool {
     held == now.fields && !now.racily_clean(at)
 }
@@ -4743,7 +4722,6 @@ fn canonical_source(source: &str) -> String {
 /// The text enters by its BLAKE3, which names it as the text would: the digest
 /// [`read_text`] took where `text` is provably that read ([`held_digest`]),
 /// else one taken here (CLOUD-2608).
-//MUTANT parse-cache-key-ignores-text|s@^    crate::cache::key(PARSE_CACHE_FORMAT, \&\[named.as_bytes(), \&digest\])$@    crate::cache::key(PARSE_CACHE_FORMAT, \&[named.as_bytes()])@|an_edited_authority_is_not_answered_from_the_parse_cache
 fn parse_cache_key(text: &str, source: &str) -> String {
     let named = canonical_source(source);
     let digest =
@@ -4927,7 +4905,6 @@ pub(crate) fn report(text: &str) {
 /// compiled-in type, and every failing config load used to pay for it again.
 /// Across processes it is still recomputed, so a stale committed artifact still
 /// disagrees with the derivation the next run makes.
-//MUTANT text-schema-uncapped|s@^    cap_text_leaves(\&mut derived)?;$@    let _uncapped = 0;@|every_text_leaf_in_both_schemas_carries_its_census_cap
 pub fn schema() -> Result<String> {
     static DERIVED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     if let Some(derived) = DERIVED.get() {

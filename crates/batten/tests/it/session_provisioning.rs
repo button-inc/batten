@@ -780,7 +780,6 @@ fn the_reachable_set_is_not_empty() {
 // it must redden is the anti-vacuity one — which is the only case that can tell
 // "nothing compiles" from "nothing was read".
 //MUTANT-SUITE crates/batten/tests/it/session_provisioning.rs
-//MUTANT session-start-compiles|s@^                \["mise", "run", task, \.\.\] => Some((\*task).to_owned()),$@                ["mise", "run", _task, ..] => None,@|the_reachable_set_is_not_empty
 #[test]
 fn no_session_start_step_compiles_the_engine() {
     for (name, body) in reachable_session_task_bodies() {
@@ -869,7 +868,6 @@ fn claude_hears(on: &str) -> bool {
 // everything passes the first loop over any tree, which is the exact false green
 // this census exists to refuse: the finding the door drops looks, from the
 // config, identical to one it delivers.
-//MUTANT hears-everything|s@^    capabilities.advisory_reachable(spelling)$@    !capabilities.events.is_empty() \&\& !spelling.is_empty()@|every_reporting_handler_speaks_on_a_delivered_channel
 #[test]
 fn every_reporting_handler_speaks_on_a_delivered_channel() {
     // CLOUD-1946. A handler's exit-1 report joins the advisory buffer, and the

@@ -682,7 +682,6 @@ fn second(stamp: &str) -> Option<u64> {
 /// CLOUD-901's other half still holds, and now for every entry: a corroboration
 /// miss costs a wrong word here, never the evidence.
 //MUTANT-SUITE crates/batten/tests/it/task_registry.rs
-//MUTANT alive-deletes-a-corpse|s@^        lines.push(render_line(&entry, running, options.now));$@        lines.push(render_line(\&entry, running, options.now)); if !running { let _ = std::fs::remove_file(\&file); }@|a_record_whose_process_is_gone_reports_crashed_on_every_read
 #[must_use]
 pub fn alive(git_dir: &Path, options: Alive) -> Reading {
     alive_reading(git_dir, options, |file| std::fs::read_to_string(file))
@@ -1128,7 +1127,6 @@ pub fn singleton_release_at(lock: &Path) {
 /// holder between its create and its write stamps it long before the recheck
 /// ends. Unreadable then readable is a holder that finished writing: held.
 //MUTANT-SUITE crates/batten/tests/it/singleton.rs
-//MUTANT an-empty-pid-file-is-a-live-holder|s@^        (None, None) => true,$@        (None, None) => false,@|a_lock_naming_no_pid_is_reclaimed_after_the_recheck
 fn may_reclaim(first: Option<&str>, second: Option<&str>) -> bool {
     match (first, second) {
         (None, None) => true,

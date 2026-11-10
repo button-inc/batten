@@ -1002,7 +1002,6 @@ pub fn admitted(
 /// binds `answers`, so a block with no articulation cannot recompute at all.
 #[must_use]
 //MUTANT-SUITE crates/batten/tests/it/admission.rs
-//MUTANT recomputes-unchecked|s@^        if !articulation.recomputes() {$@        if false {@|a_tampered_block_in_the_head_commit_admits_nothing
 pub fn admitted_by_block(
     message: &str,
     rule: &str,

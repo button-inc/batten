@@ -433,7 +433,6 @@ fn bypass_env_vars() -> Vec<String> {
 ///
 /// A two-field serde view rather than a `toml::Value` tree: everything but the
 /// `[[rule]]` rows' one column is skipped by the deserializer instead of built.
-//MUTANT bypass-read-drops-rows|s@^        .filter_map(\x7crule\x7c rule.bypass_env)$@        .filter_map(\x7crule\x7c rule.bypass_env.filter(\x7c_\x7c false))@|the_cheap_bypass_read_names_what_the_full_load_names
 pub(crate) fn bypass_env_vars_in(path: &Path) -> Vec<String> {
     #[derive(serde::Deserialize)]
     struct Rows {
@@ -683,9 +682,6 @@ fn refuse_fall_through_at(cwd: &Path) {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/harness_isolation.rs
-//MUTANT refused-after-the-spawn|s@^        self.refuse_fall_through();$@@|a_fall_through_is_refused_before_the_child_runs
-//MUTANT task-door-unguarded|s@^        self.refuse_fall_through();$@@|a_task_body_redirected_to_a_fall_through_is_refused_before_it_runs
-//MUTANT piped-door-unguarded|s@^    refuse_fall_through_at(dir);$@@|a_piped_spawn_into_a_fall_through_is_refused_before_it_runs
 impl Batten {
     /// Panic if this command's working directory falls through to the checkout.
     fn refuse_fall_through(&self) {

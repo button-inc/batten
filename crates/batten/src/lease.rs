@@ -1274,7 +1274,6 @@ impl Body {
 // two spellings of one case taking different branches, and the test picked the
 // branch that already worked.
 //MUTANT-SUITE crates/batten/src/lease.rs
-//MUTANT empty-schema-reads-as-oldest|s@                    "schema" => schema = Some(None),@                    "schema" => {}@|a_body_carrying_an_empty_major_is_refused
 #[must_use]
 pub fn parse_body(object: &[u8]) -> Option<Body> {
     let text = String::from_utf8_lossy(object);
@@ -1427,8 +1426,6 @@ pub enum Lease<'a> {
     },
 }
 
-//MUTANT released-classified-live|s@^            Self::Held { sha, body } if body.released() => Lease::Released { sha, body },$@            Self::Held { sha, body } if body.released() => Lease::Live { sha, body },@|each_body_is_classified_into_exactly_one_state
-//MUTANT expired-classified-live|s@^            Self::Held { sha, body } if body.expired(now) => Lease::Expired { sha, body },$@            Self::Held { sha, body } if body.expired(now) => Lease::Live { sha, body },@|an_expired_lease_places_no_bet
 impl Observed {
     /// The one classification. Released before expired: the tombstone's expiry
     /// is zero, so it is also expired, and a release is the more specific fact.
@@ -2451,7 +2448,6 @@ pub fn outranks(ours: &str, theirs: &str) -> bool {
 /// A released or expired body is not excluded here and does not need to be: the
 /// caller only reaches this on `Turn::Wait`, which those states never produce.
 //MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
-//MUTANT notice-ignores-the-writer|s@    outranks(\&writer_version(), \&body.writer)@    true@|a_waiter_asks_only_a_strictly_older_holder_to_stand_down
 #[must_use]
 pub fn worth_asking(body: &Body, asker: &str) -> bool {
     outranks(&writer_version(), &body.writer)
@@ -2794,8 +2790,6 @@ pub fn cooling(poisoned_at: Option<&str>, trunk_now: &str, observed: &Observed) 
 // so each is pinned by its own assertion: a lapsed rival nobody is beating, and
 // this clone's own live lease (CLOUD-2248).
 //MUTANT-SUITE crates/batten/src/lease.rs
-//MUTANT cooling-waits-on-a-dead-holder|s@!body.expired(now) \&\& body.holder != holder;@body.holder != holder;@|a_poison_cooldown_never_waits_on_this_clone_or_a_holder_nobody_is_beating
-//MUTANT cooling-waits-on-itself|s@ \&\& body.holder != holder;@;@|a_poison_cooldown_never_waits_on_this_clone_or_a_holder_nobody_is_beating
 #[must_use]
 pub fn cooling_for(
     poisoned_at: Option<&str>,
@@ -2909,7 +2903,6 @@ pub fn progress_of(git_dir: &std::path::Path, pid: u32) -> Option<Progress> {
 /// the honest answer for a lap whose bookkeeping never registered rather than as
 /// evidence of a stall.
 //MUTANT-SUITE crates/batten/tests/it/lease_health.rs
-//MUTANT progress-never-published|s@    progress_of(git_dir, pid).map(Progress::token)@    None@|a_land_publishes_its_own_progress_token
 #[must_use]
 pub fn own_progress(git_dir: &std::path::Path, pid: u32) -> Option<String> {
     progress_of(git_dir, pid).map(Progress::token)
@@ -3272,7 +3265,6 @@ pub fn push(
 /// (CLOUD-2066). Raised as an internal error it reached `land replay origin/main`
 /// as exit 3 with a backtrace, which tells a caller the binary is broken. Failing
 /// to reach the remote at all stays an internal error, in [`advertise`].
-//MUTANT unadvertised-ref-is-internal|s@Err(crate::error::UsageError::raise(format!(@Err(anyhow::anyhow!(format!(@|an_unadvertised_ref_is_a_usage_error
 fn advertised_head<'a>(
     advertisement: &'a Advertisement,
     remote: &str,

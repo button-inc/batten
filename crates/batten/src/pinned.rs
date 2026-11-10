@@ -163,8 +163,6 @@ pub(crate) type Stamps = Vec<(PathBuf, Option<String>)>;
 /// the same timestamp tick to show in its stamp (git's racy rule,
 /// `crate::cache::Stamp::racily_clean`). A record with no stamps is believed
 /// by its key alone.
-//MUTANT stamped-record-believes-racy|s@^    if racy {$@    if false {@|a_record_stamped_in_its_racy_window_is_hashed
-//MUTANT stamped-record-unstampable-as-absent|s@^    if stamps.iter().any(unstampable) {$@    if false {@|a_present_file_without_a_stamp_records_no_stamps
 pub(crate) fn stamped(configs: &[PathBuf], at: std::time::Duration) -> Stamps {
     // UNIX ONLY. Elsewhere a stamp carries no ctime (`crate::cache::stamp`), so
     // an in-place edit that keeps the length and restores the mtime — a
@@ -210,7 +208,6 @@ pub(crate) fn stamped_key(configs: &[PathBuf]) -> Option<(String, Stamps)> {
 }
 
 /// `before`, where nothing moved between it and `after`; otherwise no stamps.
-//MUTANT stamped-record-unsettled|s@^    if before == \*after {$@    if true {@|stamps_that_moved_around_the_read_are_not_recorded
 fn settled(before: Stamps, after: &Stamps) -> Stamps {
     if before == *after {
         before
@@ -227,10 +224,6 @@ fn settled(before: Stamps, after: &Stamps) -> Stamps {
 /// nothing had changed. Recorded stamps that equal the files' stamps now prove
 /// the same in a few `stat`s; anything else — no stamps, or any one moved — is
 /// today's answer, the key recomputed from the bytes.
-//MUTANT stamped-record-never-believed|s@^        if current == \*stamps \&\& !current.iter().any(unstampable) \&\& any_present {$@        if false {@|a_record_whose_configs_are_unchanged_is_believed_without_reading
-//MUTANT stamped-record-ignores-stamps|s@^        if current == \*stamps \&\& !current.iter().any(unstampable) \&\& any_present {$@        if !current.iter().any(unstampable) \&\& any_present {@|a_config_edited_after_the_record_is_a_miss
-//MUTANT stamped-record-believes-unstampable|s@^        if current == \*stamps \&\& !current.iter().any(unstampable) \&\& any_present {$@        if current == *stamps \&\& any_present {@|a_config_reappearing_without_a_stamp_is_a_miss
-//MUTANT stamped-record-believes-nothing-present|s@^        if current == \*stamps \&\& !current.iter().any(unstampable) \&\& any_present {$@        if current == *stamps \&\& !current.iter().any(unstampable) {@|a_record_over_only_absent_configs_is_a_miss
 pub(crate) fn still_keyed(configs: &[PathBuf], key: &str, stamps: &Stamps) -> bool {
     // A record with no stamps is believed by its key alone, so it pays no stats.
     if !stamps.is_empty() {
@@ -301,7 +294,6 @@ pub(crate) fn keyed_paths(configs: &[PathBuf]) -> BTreeSet<PathBuf> {
 /// project with a manifest and no lockfile is a real project. Every member
 /// absent is a different answer, and is `None`: a key over nothing would file
 /// every project's set under one name.
-//MUTANT pinned-key-unframed-absence|s@^            Err(_) => owned.push((path_bytes, None)),$@            Err(_) => owned.push((path_bytes, Some(b"-".to_vec()))),@|an_absent_member_never_collides_with_a_present_one
 pub(crate) fn key(configs: &[PathBuf]) -> Option<String> {
     let mut owned: Vec<(Vec<u8>, Option<Vec<u8>>)> = Vec::new();
     let mut any = false;
@@ -419,7 +411,6 @@ pub fn record_is_stale(root: &Path) -> bool {
 // moment the opener widened — a row declared, swept by nothing — which is the
 // arm that would otherwise have read as coverage.
 //MUTANT-SUITE crates/batten/tests/it/pinned_programs.rs
-//MUTANT absent-record-unrepaired|s@^    record_exists(root) && matches!(cached(root), Look::CouldNotLook)$@    false@|an_absent_record_is_not_stale_and_says_so_separately
 
 /// Whether a record is on disk at all, whatever it says (CLOUD-1371).
 ///

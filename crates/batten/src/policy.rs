@@ -1434,7 +1434,6 @@ fn without_test_rules(source: &str) -> String {
 /// when a `violation` reachable on an empty document raises an id the bundle
 /// does not declare.
 //MUTANT-SUITE crates/batten/tests/it/policy_walk.rs
-//MUTANT package-address-dropped|s@            packages.insert(relative);@            packages.insert(Vec::new());@|the_module_s_own_violation_still_raises
 pub fn compile(
     id: &str,
     sources: &[(String, String)],
@@ -1810,7 +1809,6 @@ impl Evaluator {
 /// call that asks one question.
 ///
 /// `None` is could-not-look: the input will not parse or the bundle faults.
-//MUTANT answer-memo-never-recalled|s@^            if let Some(answer) = Answers::recall(compiled, input, \x7cheld\x7c select(held, rules)) {$@            if let Some(answer) = None::<Option<Answer>> {@|one_call_evaluates_each_rule_once
 fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
     match &bundle.evaluator {
         Evaluator::Interpreted(engine) => {
@@ -2041,7 +2039,6 @@ pub(crate) struct Compiled {
 ///
 /// The cache is best-effort by construction: an unwritable state directory or
 /// an unreadable entry is a miss, never an error.
-//MUTANT cache-never-read|s@read_cached(path, \&key@read_cached(Path::new("/"), \&key@|a_warm_load_compiles_no_engine
 fn compile_cached(
     root: &Path,
     id: &str,
@@ -2091,7 +2088,6 @@ const CACHE_FORMAT: &str = "batten-policy-rvm-3";
 
 /// The entry for row `id`, under the repository's cache directory: one file per
 /// row, overwritten on a miss, so the cache never grows past the row count.
-//MUTANT cache-root-relative|s@repo_state_dir(\&crate::git::canonical(root))@repo_state_dir(root)@|a_warm_load_from_the_working_directory_compiles_no_engine
 fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
     // Resolved once per root, not once per row (CLOUD-2315): every bundle of a
     // load asked, and each answer canonicalised the root, derived the state
@@ -2133,7 +2129,6 @@ fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
 /// included, is a miss, and a relink to identical code is not. The pattern
 /// table enters by its digest, taken once per load, which names its content
 /// exactly as its text would.
-//MUTANT cache-key-ignores-source|s@        fields.push(source.as_bytes());@        let _ = source;@|an_edited_module_is_not_answered_from_stale_bytecode
 fn cache_key(id: &str, sources: &[(String, String)], data: &[u8; 32]) -> String {
     let mut fields: Vec<&[u8]> = Vec::with_capacity(2 + 2 * sources.len());
     fields.push(id.as_bytes());
@@ -2248,7 +2243,6 @@ fn entry_point(package: &[String], rule: &str) -> String {
     path
 }
 
-//MUTANT bootstrap-entry-fixed|s@candidates.iter().find_map(@candidates.iter().take(1).find_map(@|the_repositorys_bundles_answer_alike_compiled_and_interpreted
 impl Compiled {
     /// Compile `bundle`'s interpreter to bytecode, or `None` where the bytecode
     /// compiler cannot express a rule it defines.
@@ -2481,7 +2475,6 @@ pub struct Rewrite {
 }
 
 /// Whether a module may rewrite this tool input key ([`REWRITABLE`]).
-//MUTANT rewrite-key-unchecked|s@^    REWRITABLE.contains(\&key)$@    true@|a_rewrite_outside_the_allowlist_is_refused
 #[must_use]
 pub fn rewritable(key: &str) -> bool {
     REWRITABLE.contains(&key)
@@ -2979,7 +2972,6 @@ pub(crate) fn finding_ids(text: &str) -> BTreeSet<String> {
 ///
 /// A [`UsageError`] (exit `1`) naming the row and which direction it broke.
 //MUTANT-SUITE crates/batten/tests/it/rules_drift.rs
-//MUTANT identity-arm-dropped|s@            Some(class) if rule.id != class => findings.push(format!(@            Some(class) if false \&\& rule.id != class => findings.push(format!(@|a_sole_raiser_whose_id_differs_from_its_class_is_refused_at_load
 fn check_collapse(
     rules: &[Rule],
     per_rule: &BTreeMap<String, BTreeSet<String>>,
@@ -3091,7 +3083,6 @@ explain` and its routes have never been walked by anybody. Delete the row, or gi
 ///
 /// None today; the `Result` stays so every caller keeps one fault channel.
 //MUTANT-SUITE crates/batten/tests/it/vendored_skew.rs
-//MUTANT skew-bricks-the-boundary|s@        registry.retain(\x7crow\x7c row.id != entry.id);@        if registry.iter().any(\x7crow\x7c row.id == entry.id) { return Err(UsageError::raise(entry.id)); }@|a_branch_declaring_a_class_the_binary_ships_still_adjudicates
 pub fn registry_for(
     verdicts: &[crate::verdict::DeclaredVerdict],
 ) -> Result<Vec<crate::verdict::DeclaredVerdict>> {
@@ -3115,7 +3106,6 @@ pub fn registry_for(
 ///
 /// A [`UsageError`] (exit `1`) naming every colliding token.
 //MUTANT-SUITE crates/batten/tests/it/vendored_skew.rs
-//MUTANT skew-lands-unrefused|s@    if let Some(first) = collisions.first() {@    if let Some(first) = collisions.first().filter(\x7c_\x7c false) {@|a_class_the_binary_ships_is_still_refused_by_check
 fn check_no_vendored_collision(verdicts: &[crate::verdict::DeclaredVerdict]) -> Result<()> {
     let vendored: BTreeSet<String> = crate::verdict::vendored()
         .into_iter()

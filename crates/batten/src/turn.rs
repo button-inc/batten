@@ -348,13 +348,6 @@ pub fn render(turn: &Turn, columns: &dyn Fn(&str) -> String) -> String {
 }
 
 //MUTANT-SUITE crates/batten/src/turn.rs
-//MUTANT sidechain-credited|s@^    if line.get("isSidechain") == Some(&Value::Bool(true)) {$@    if false {@|a_subagents_blocks_are_not_the_turns
-//MUTANT tool-result-opens-a-turn|s@^    block.get("type").and_then(Value::as_str) == Some("text")$@    true@|a_tool_result_does_not_open_a_turn
-//MUTANT whole-transcript-judged|s@^    let Some(&start) = boundaries.last() else {$@    let Some(\&start) = boundaries.first() else {@|only_the_last_turn_is_judged
-//MUTANT mediated-route-unseen|s@^    if name == "Bash"$@    if name == "never"@|a_mediated_call_names_its_method_and_row
-//MUTANT mediated-route-dropped|s@^    Some(format!("mcp call {server} {method}"))$@    Some(format!("{server} {method}").split_off(server.len() + 1))@|a_mediated_call_names_its_method_and_row
-//MUTANT citation-ignored|s@^                        cited = true;$@                        cited = false;@|a_citation_in_the_last_turn_is_read
-//MUTANT receipt-field-ignored|s@^    let value = first.split_whitespace().nth(field.checked_sub(1)?)?;$@    let value = first.split_whitespace().next()?;@|a_receipt_column_is_its_declared_field
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

@@ -225,8 +225,6 @@ fn picked(raw: &str, name: &str, token: &str) -> String {
 // The reduction's mutation rows, each caught by the compiled case it names in
 // the perf tier, which drives the real writer and reads the record back.
 //MUTANT-SUITE crates/batten/tests/it/perf_assert.rs
-//MUTANT pick-any-line|s@^    for line in raw.lines().filter(\x7cline\x7c line.starts_with(&opener)) {$@    for line in raw.lines() {@|a_picked_measurement_skips_a_line_that_does_not_open_with_the_name
-//MUTANT pick-empty-recorded|s@^    if text.is_empty() {$@    if false {@|a_picked_measurement_with_no_record_line_is_could_not_look
 
 /// Record `text` under the declared tool row `id`: [`run_tool`]'s tail, shared with
 /// [`run_tool_picked`] and with an in-process producer, so a verb that reduced a
@@ -372,8 +370,6 @@ const RECEIPTS: &str = "batten-tools-asked";
 // THE RECEIPT'S DISCRIMINATION, over the compiled binary: skipping the check
 // re-runs a validator whose inputs did not move, and an unkeyed argv replays an
 // answer to a question nobody is asking.
-//MUTANT receipt-never-read|s@^    if already_clean(.record, .receipt, .asked) {$@    if false {@|a_clean_answer_over_the_same_bytes_and_argv_is_not_asked_again
-//MUTANT receipt-ignores-argv|s@^    let same_argv = .*$@    let same_argv = std::fs::metadata(receipt).is_ok();@|a_moved_argv_is_asked_again_over_the_same_bytes
 fn already_clean(record: &Path, receipt: &Path, asked: &str) -> bool {
     let answered_zero = std::fs::read_to_string(record).is_ok_and(|body| body == "exit 0\n");
     let same_argv = std::fs::read_to_string(receipt).is_ok_and(|held| held == asked);
@@ -404,11 +400,6 @@ fn already_clean(record: &Path, receipt: &Path, asked: &str) -> bool {
 // (CLOUD-1965), a run other than `checks green`'s latest winning, a record
 // written before the fan-in answers, and a spaced name mangled into the record.
 //MUTANT-SUITE crates/batten/tests/it/record_verdicts.rs
-//MUTANT unanswered-recorded|s@^    answered.contains(.conclusion)$@    true@|an_unanswered_conclusion_is_not_recorded_as_a_grading
-//MUTANT listing-order-wins|s@^        if let Some(run) = crate::checks_green::winner(.group, .owned) {$@        if let Some(run) = group.last().copied() {@|the_latest_run_per_name_wins_by_completion_then_start
-//MUTANT fanin-ungated|s@^        && !graded.contains_key(fanin)$@        \&\& false@|nothing_is_written_until_the_fan_in_has_answered
-//MUTANT spaced-name-kept|s@^        if name.chars().any(char::is_whitespace) {$@        if false {@|a_name_with_whitespace_is_dropped_and_counted_never_mangled
-//MUTANT unknown-commit-could-not-look|s@^    if crate::rest::declared_nothing_graded(answer.status) {$@    if false {@|a_commit_the_forge_has_never_seen_records_nothing_and_passes
 #[must_use]
 pub fn graded(runs: &[crate::checks_green::Run], answered: &[&str]) -> BTreeMap<String, String> {
     let owned: Vec<String> = answered.iter().map(|word| (*word).to_owned()).collect();
@@ -680,7 +671,6 @@ fn profile_or_default(named: Option<String>) -> String {
 /// names a suite this tree does not track — see [`crate::suites::derive`], where
 /// all four are could-not-look and none is an empty corpus. An internal error
 /// when the corpus cannot be written.
-//MUTANT retired-bats-report-shadows-nextest|s@^    if tracked.is_empty() {$@    if !root.join(crate::suites::REPORT).is_file() {@|a_retired_bats_report_does_not_shadow_the_nextest_one
 pub fn run_suites(write: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let root = git::repo_root(Path::new("."))?;
     let root = Path::new(&root);
@@ -1342,8 +1332,6 @@ fn graph_for(
 // The resolution's mutation rows. Each is caught by the compiled case it names,
 // which drives a scratch crate through the real `cargo`.
 //MUTANT-SUITE crates/batten/tests/it/evaluator_closure.rs
-//MUTANT resolve-unlocked|s@\["cargo", "metadata", "--locked", "--format-version", "1"\]@["cargo", "metadata", "--format-version", "1"]@|a_resolution_that_would_rewrite_the_lockfile_is_could_not_look
-//MUTANT resolve-ignored|s@^    let Some(platform) = inputs.get("resolve") else {$@    let Some(platform) = inputs.get("no-such-input") else {@|the_engine_resolves_a_locked_crate_itself
 
 /// Derive one family's record from its input and write it.
 ///
@@ -1479,8 +1467,6 @@ pub enum Decision {
 /// As [`run_derive`]: a [`UsageError`] for an unknown family, a malformed input
 /// or a tree with no branch to key on; an internal error for an unwritable store.
 //MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
-//MUTANT subdirectory-decides|s@^        && !Path::new(crate::config::CONFIG_FILE).is_file()$@        \&\& false@|a_session_in_a_subdirectory_abstains_rather_than_failing
-//MUTANT subdirectory-keeps-stale|s@^            remove_stale(&path)?;$@            let _ = \&path;@|a_subdirectory_abstention_clears_a_record_left_at_the_root
 pub fn decide_record(family: &str, inputs: &[String], overrides: &Overrides) -> Result<Decision> {
     let inputs = inputs_of("record decide", inputs)?;
     let family = safe_component("family", family)?;

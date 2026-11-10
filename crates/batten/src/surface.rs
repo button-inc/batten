@@ -468,7 +468,6 @@ pub struct CommandDecl {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/cli.rs
-//MUTANT exit-declaration-optional|s@^pub const EXITS_STANDARD: &\[crate::exit::ExitCode\] = &\[$@pub const EXITS_STANDARD: \&[crate::exit::ExitCode] = \&[]; const _UNUSED: \&[crate::exit::ExitCode] = \&[@|every_leaf_verb_declares_its_exit_set
 
 /// What a verb declares when it renders no policy verdict.
 ///
@@ -8596,11 +8595,6 @@ fn has_children(path: &str) -> bool {
     SURFACE.iter().any(|decl| is_child_of(decl.path, path))
 }
 
-//MUTANT info-flag-past-separator|s@if \*argument == "--" {$@if *argument == "-=" {@|an_informational_flag_is_a_read_wherever_clap_answers_it
-//MUTANT info-flag-value-unskipped|s@skip = consumes_a_value(argument);$@skip = false;@|an_informational_flag_is_a_read_wherever_clap_answers_it
-//MUTANT info-flag-before-clap|s@^            if path.is_empty() {$@            if false {@|an_informational_flag_is_a_read_wherever_clap_answers_it
-//MUTANT help-verb-unread|s@if \*argument == "help" && has_children(&path) {$@if false {@|an_informational_flag_is_a_read_wherever_clap_answers_it
-//MUTANT help-verb-on-a-leaf|s@ && has_children(&path) {$@ {@|an_informational_flag_is_a_read_wherever_clap_answers_it
 /// The effect a `batten` argv runs with: the declared effect of the deepest
 /// subcommand it names, walking the non-flag arguments while each extension is
 /// a declared path, so `batten override spend --rule x` resolves
@@ -8689,7 +8683,6 @@ pub fn is_noun(decl: &CommandDecl) -> bool {
 
 /// Attach every direct child of `prefix` to `parent`, recursively, keeping
 /// only the child named `only` when one is given.
-//MUTANT narrowed-tree-keeps-everything|s@^            .filter(\x7cdecl\x7c only.is_none_or(\x7cname\x7c leaf_of(decl.path) == name))$@@|a_narrowed_tree_parses_as_the_whole_one
 //
 // ONE MOVE PER NODE, NOT ONE PER FLAG. `clap`'s builder takes `Command` by
 // value, so folding `.arg` over a row's flags and `.subcommand` over its

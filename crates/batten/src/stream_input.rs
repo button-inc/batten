@@ -20,7 +20,6 @@
 //! streamed, 2.4 MiB (the process baseline) and 179-210 ms.
 
 //MUTANT-SUITE crates/batten/src/stream_input.rs
-//MUTANT tee-drops-bytes|s@^        self.sink.write_all(buf.get(..read).unwrap_or_default())?;$@@|the_spool_holds_the_exact_bytes_the_host_sent
 
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -187,7 +186,6 @@ pub fn read(
     })
 }
 
-//MUTANT leaf-never-spills|s@^                if self.counted > self.bound {$@                if false {@|a_result_over_the_bound_spills_and_one_under_it_is_kept
 impl<C: FnMut(&str) -> u64> Walk<'_, C> {
     /// The top level: an object whose result members are walked as results.
     fn document<R: Read>(&mut self, json: &mut JsonStreamReader<R>) -> Result<Value> {

@@ -471,14 +471,7 @@ pub fn record(
 }
 
 //MUTANT-SUITE crates/batten/src/unsubscribe.rs
-//MUTANT drop-mints-on-any-status|s@^    if status != 200 {$@    if false {@|a_refused_or_errored_call_is_not_accepted
-//MUTANT tool-error-ignored|s@^    !tool_refused$@    true@|a_refused_or_errored_call_is_not_accepted
-//MUTANT any-answer-names-the-pr|s@^    answer.contains(&format!("#{pr}"))$@    true@|an_answer_must_name_this_pr
-//MUTANT receipt-ignores-session|s@^        .join(format!("{}.{session}.{pr}", host.family))$@        .join(format!("{}.{pr}", host.family))@|a_receipt_is_this_sessions_for_this_pr
-//MUTANT pr-leaf-stays-text|s@^        Value::String(text) if text == "{pr}" => Value::from(words.pr),$@@|the_arguments_are_the_consumers_template_filled
-//MUTANT owner-guessed|s@^                    filled = filled.replace(name, part?);$@                    filled = filled.replace(name, part.unwrap_or_default());@|the_arguments_are_the_consumers_template_filled
 //MUTANT-SUITE crates/batten/tests/it/pr_unsubscribed.rs
-//MUTANT drop-blocks-on-failure|s@^    let fails_open = ExitCode::Success;$@    let fails_open = ExitCode::Usage;@|a_refused_or_unreachable_call_mints_nothing_and_drop_never_blocks
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

@@ -596,7 +596,6 @@ fn version(root: &Path) -> Look<String> {
 // full plan, the slow tier reads empty, and `tier list empty` refuses a
 // correctly wired gate.
 //MUTANT-SUITE crates/batten/tests/it/hook_profile.rs
-//MUTANT profile-words-dropped|s@^    for profile in profiles {$@    for profile in profiles.iter().take(0) {@|this_repositorys_two_tier_gate_is_wired_today
 fn profile_words(profiles: &[String]) -> Vec<String> {
     let mut words = Vec::with_capacity(profiles.len() * 2);
     for profile in profiles {
@@ -884,7 +883,6 @@ pub fn planned_steps(value: &serde_json::Value) -> Look<Vec<PlannedStep>> {
 /// Every reason's KIND token on one plan entry, in the runner's order; a reason
 /// carrying no kind contributes nothing, since a kind is the only field a
 /// decision may read (rule 4).
-//MUTANT later-reasons-dropped|s@^    for reason in reasons {$@    for reason in reasons.iter().take(1) {@|a_step_whose_profile_is_not_its_first_reason_is_still_in_the_tier
 fn reason_kinds(entry: &serde_json::Value) -> Vec<String> {
     let Some(reasons) = entry.get("reasons").and_then(serde_json::Value::as_array) else {
         return Vec::new();

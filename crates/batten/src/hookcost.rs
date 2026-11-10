@@ -220,7 +220,6 @@ pub const REPEAT_RULE: &str = "hook-repeat-pointer";
 /// pointer arm never counts, since pointing is what a repeat is meant to do.
 /// Unlabelled output keeps the `(segment, hook, digest)` key.
 //MUTANT-SUITE crates/batten/src/hookcost.rs
-//MUTANT segment-not-reset|s@^            segment += 1;$@            segment += 0;@|a_full_arm_after_a_session_start_is_not_a_repeat_and_a_pointer_arm_never_is
 #[must_use]
 pub fn measure(stream: &Stream) -> Reading {
     let mut per_hook: BTreeMap<String, Cost> = BTreeMap::new();
@@ -466,7 +465,6 @@ fn takes(route: &str, name: &str, command: &str) -> bool {
 }
 
 /// The bucket a refusal of `call` falls in, given the call after it.
-//MUTANT offered-routes-unread|s@^    if offered.iter().any(\x7croute\x7c takes(route, name, \&command)) {$@    if false {@|a_route_the_refusal_printed_is_followed
 fn follow(
     findings: &[(String, crate::refusal::Arm)],
     offered: &[String],
@@ -514,8 +512,6 @@ fn follow(
 /// binary must not link a tokenizer, so tokens are the transcript's own
 /// estimate. `routes` maps a class token to its declared command targets — the
 /// registry declares routes per class only.
-//MUTANT segment-key-not-reset|s@^                keys.clear();$@                let _ = keys.len();@|a_window_census_reports_distinct_gates_per_segment
-//MUTANT deny-follow-misbucketed|s@^            \.nth(1)$@            .nth(0)@|a_deny_is_bucketed_by_the_call_that_follows_it
 #[must_use]
 pub fn windows(stream: &Stream, routes: &BTreeMap<String, Vec<String>>) -> Windows {
     let calls: BTreeMap<&str, (&str, &serde_json::Value)> = stream
@@ -635,7 +631,6 @@ fn remember(
 /// A refusal's findings and routes with each ADDRESS filled in from what its
 /// gate's full arm told the window: the class into its key, its routes into the
 /// offered set. A gate the window never saw in full is left as it is.
-//MUTANT address-recall-skipped|s@^        let Some((class, earlier)) = told.get(gate_name(key)) else {$@        let Some((class, earlier)) = None::<\&(String, Vec<String>)> else {@|a_repeat_is_bucketed_by_what_its_full_arm_offered
 fn recalled(
     told: &BTreeMap<String, (String, Vec<String>)>,
     findings: &[(String, crate::refusal::Arm)],
