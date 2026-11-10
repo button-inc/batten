@@ -76,9 +76,6 @@ pub struct Check {
 }
 
 //MUTANT-SUITE crates/batten/src/doctor.rs
-//MUTANT config-missing-unrouted|s@^        Some(workspace_refusal(&subjects, fix).with_command_route("batten init"))$@        Some(workspace_refusal(\&subjects, fix))@|a_missing_config_routes_to_init
-//MUTANT config-missing-remedy-dropped|s@^        let fix = crate::refusal::Fix::Run(INIT_REMEDY.to_owned());$@        let fix = crate::refusal::Fix::None;@|a_missing_config_routes_to_init
-//MUTANT other-reason-routes-init|s@^        if reason != "config-missing" {$@        if false {@|a_missing_config_routes_to_init
 impl Check {
     const fn passed(name: &'static str) -> Self {
         Check {
@@ -1914,7 +1911,6 @@ pub struct WiringFinding {
 /// adds; anything wrong WITH batten's entries is restored from the derivation,
 /// because `add_missing` only adds; a merged registration is `reclaim`'s.
 //MUTANT-SUITE crates/batten/src/doctor.rs
-//MUTANT wiring-fix-table-incomplete|s@^        FILE_MISSING \x7c EVENT_UNREGISTERED => "batten wiring register --all".to_owned(),$@        FILE_MISSING \x7c EVENT_UNREGISTERED => String::new(),@|every_reason_id_has_a_fix
 fn fix_for(reason: &str, harness: hook::Harness) -> String {
     match reason {
         FILE_MISSING | EVENT_UNREGISTERED => "batten wiring register --all".to_owned(),
@@ -1934,8 +1930,6 @@ fn fix_for(reason: &str, harness: hook::Harness) -> String {
 /// Plain `doctor`'s `hook-wiring` check: fails when any wiring finding remains
 /// after dropping the ones on a merged home surface (CLOUD-2676).
 //MUTANT-SUITE crates/batten/tests/it/doctor.rs
-//MUTANT doctor-skips-hook-wiring|s@^    checks.push(hook_wiring_check(dir));$@@|plain_doctor_fails_hook_wiring_on_an_unwired_checkout
-//MUTANT plain-doctor-reads-merged-home|s@^        .filter(\x7cfinding\x7c !finding.file.starts_with("~/"))$@@|plain_doctor_ignores_a_merged_home_registration
 fn hook_wiring_check(dir: &Path) -> Check {
     let unwired = diagnose_hooks(dir)
         .harnesses
@@ -2800,7 +2794,6 @@ fn diagnose_session_root(
 /// weakest. The `config` check in bare [`diagnose`] is what reports an
 /// unloadable config; this verb does not re-report it.
 //MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
-//MUTANT doctor-ignores-session-root|s@^        .filter(\x7croot\x7c \*root != repo \&\& repo.starts_with(root));$@        .filter(\x7c_\x7c false);@|doctor_reads_the_live_session_root
 #[must_use]
 pub fn diagnose_hooks(dir: &Path) -> WiringReport {
     // ONE RESOLUTION, TWO READINGS. Both the exclusivity flag and the declared

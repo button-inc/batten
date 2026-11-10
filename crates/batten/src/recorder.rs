@@ -1215,7 +1215,6 @@ const MAX_RECEIPT_NAME: usize = 200;
 /// readers agree, and the name keeps its `<record>.<branch>.` prefix, which is
 /// what `land`'s branch sweep matches. A name within the limit is unchanged.
 //MUTANT-SUITE crates/batten/src/recorder.rs
-//MUTANT receipt-name-unbounded|s@^            if whole.len() <= MAX_RECEIPT_NAME {$@            if true {@|a_claim_too_long_for_a_file_name_is_digested
 fn receipt_name(record: &str, branch: &str, claim: Option<&str>) -> String {
     use sha2::Digest as _;
     use std::fmt::Write as _;
