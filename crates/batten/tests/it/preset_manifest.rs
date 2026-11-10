@@ -182,6 +182,11 @@ fn a_preset_reading_a_provider_is_refused_where_the_row_names_none() {
         stderr.contains("no provider"),
         "and names what the row declared, so a reader sees which half to change: {stderr}"
     );
+    // CLOUD-2658: and the repair, spelled as the column takes it.
+    assert!(
+        stderr.contains("provider = \"github-actions\""),
+        "the refusal names the key that repairs it: {stderr}"
+    );
 }
 
 /// The same preset loads once the row declares the provider its modules read.
