@@ -1532,37 +1532,62 @@ pub fn pointer(path: &Path, index: &[ViewField], stored: &[&Capture]) -> crate::
 /// tokens of everything under it summed. A pointer naming every leaf grows with
 /// the payload it exists to keep out of the window (a sed edit's diff named each
 /// of its hundreds of lines); the view still carries every leaf's own heading.
+///
+/// A LONE LEAF KEEPS ITS OWN POINTER: cutting is for a pointer that would
+/// otherwise name many, and an MCP answer's one `/0/text` cut to `/` named the
+/// whole response instead of the field it spilled.
 fn coalesced(index: &[ViewField]) -> Vec<ViewField> {
-    let mut fields: Vec<ViewField> = Vec::new();
+    // Each address with the original pointer of its first leaf and how many it
+    // holds, so a group of one can give its pointer back.
+    let mut fields: Vec<(ViewField, String, usize)> = Vec::new();
     for field in index {
-        let address: String = field
-            .pointer
-            .split('/')
-            .skip(1)
+        // A LEADING index is part of the address — an MCP answer is a content
+        // array, and `/0/text` is its field — so the cut applies after it.
+        let mut segments = field.pointer.split('/').skip(1).peekable();
+        let lead = segments
+            .next_if(|segment| segment.parse::<usize>().is_ok())
+            .map(|index| format!("/{index}"))
+            .unwrap_or_default();
+        let address: String = segments
             .take_while(|segment| segment.parse::<usize>().is_err())
             .take(2)
-            .fold(String::new(), |address, segment| {
-                format!("{address}/{segment}")
-            });
+            .fold(lead, |address, segment| format!("{address}/{segment}"));
         let address = if address.is_empty() {
             String::from("/")
         } else {
             address
         };
         match fields.last_mut() {
-            Some(last) if last.pointer == address => {
+            Some((last, _, held)) if last.pointer == address => {
                 last.from = last.from.min(field.from);
                 last.to = last.to.max(field.to);
                 last.bytes += field.bytes;
                 last.tokens += field.tokens;
+                *held += 1;
             }
-            _ => fields.push(ViewField {
-                pointer: address,
-                ..field.clone()
-            }),
+            _ => fields.push((
+                ViewField {
+                    pointer: address,
+                    ..field.clone()
+                },
+                field.pointer.clone(),
+                1,
+            )),
         }
     }
     fields
+        .into_iter()
+        .map(|(group, leaf, held)| {
+            if held == 1 {
+                ViewField {
+                    pointer: leaf,
+                    ..group
+                }
+            } else {
+                group
+            }
+        })
+        .collect()
 }
 
 /// [`pointer`], rendered as the one line a channel of lines carries.
@@ -3123,10 +3148,17 @@ mod tests {
             named,
             [
                 (String::from("/diff/files"), 2, 6, 30, 6),
-                (String::from("/file/content"), 8, 9, 10, 2),
-                (String::from("/"), 11, 13, 20, 4),
+                // A lone leaf under its address keeps its own pointer.
+                (String::from("/file/content/text"), 8, 9, 10, 2),
+                // A leading index is part of the address.
+                (String::from("/0/stdout"), 11, 11, 10, 2),
+                (String::from("/1/stdout"), 13, 13, 10, 2),
             ]
         );
+        // AND AN MCP ANSWER'S FIELDS are named, never cut to the root.
+        let answer = coalesced(&[field("/0/type", 2, 2), field("/0/text", 3, 2004)]);
+        let pointers: Vec<&str> = answer.iter().map(|f| f.pointer.as_str()).collect();
+        assert_eq!(pointers, ["/0/type", "/0/text"]);
     }
 
     #[test]
