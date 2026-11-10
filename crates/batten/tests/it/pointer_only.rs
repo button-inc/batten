@@ -2498,9 +2498,9 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
-    // A count of jobs, or a refusal naming the undeclared cost variable.
+    // A refusal naming the undeclared per-job cost, before anything is spawned.
     Verb {
-        path: "mutate jobs",
+        path: "mutate cargo",
         args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,

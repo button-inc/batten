@@ -2645,18 +2645,18 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
-          "path": "mutate census",
-          "id": "mutate.census",
-          "about": "Report every gate in the tree that is neither mutation-enforced nor carrying a filed exemption",
-          "effect": "read",
+          "path": "mutate cargo",
+          "id": "mutate.cargo",
+          "about": "Run cargo-mutants over the change since $MUTANT_CHANGED_SINCE on as many jobs as this machine holds",
+          "effect": "write",
           "data_channel": false,
           "flags": [],
           "subcommands": []
         },
         {
-          "path": "mutate jobs",
-          "id": "mutate.jobs",
-          "about": "Print how many cargo-mutants jobs this machine holds at the tree's declared per-job cost",
+          "path": "mutate census",
+          "id": "mutate.census",
+          "about": "Report every gate in the tree that is neither mutation-enforced nor carrying a filed exemption",
           "effect": "read",
           "data_channel": false,
           "flags": [],
@@ -5577,10 +5577,6 @@ expression: stdout_of(&output)
     {
       "id": "mutate.census",
       "path": "mutate census"
-    },
-    {
-      "id": "mutate.jobs",
-      "path": "mutate jobs"
     },
     {
       "id": "payload",
