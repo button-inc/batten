@@ -11,6 +11,19 @@ defects to an agent on a clone that predates them, and each is the change:
 Repairing any of them back is the regression. Four gates now refuse the repair,
 listed at the bottom with their bypasses so a refusal can be told from a defect.
 
+## Where `verify` goes: two opposite misreads, both measured on #1276 (2026-11-10)
+
+- **While building, a standalone `verify` follows every pushed row**,
+  backgrounded, and its findings are fixed in that row. Clippy plus the row's
+  targeted tests is not `verify`: it skips the whole suite, `batten-check`,
+  `cross-check` and `mutant:changed`. A 42-row bundle pushed that way for hours
+  carried sixteen `batten-check` findings and a Windows build break, all found
+  only at `land`.
+- **To land, `mise run land` is the ONE step after pushing.** Each lap runs
+  `verify`, so a standalone `verify` before it runs the same gate twice and
+  doubles every loop. A lap that stops and says to run it again is run again,
+  with nothing in front of it: no pre-check, no wait.
+
 ## The lap
 
 fetch → rebase → `verify` → `verified` → push → `ci-wait` ∥ `main-watch` →
