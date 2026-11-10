@@ -1496,29 +1496,76 @@ pub fn result_view(
     result_view_spilled(repo_root, capture, result, &[])
 }
 
-/// A view of stored text streams, one section per named stream, keyed by
-/// `key` (CLOUD-2284): the same view [`result_view`] writes for a bounded
-/// result, so a gate log or an advisory overflow is named the way every bounded
-/// tool result is.
+/// THE ONE POINTER TO STORED OUTPUT (CLOUD-2284), and every site that stores
+/// output in place of printing it builds its line here: a bounded or spilled
+/// tool result, an `mcp call` reduction, a gate log, an advisory overflow and a
+/// captured `exec`. One function, so no two of them can drift.
 ///
-/// # Errors
-///
-/// As [`result_view`].
-pub fn streams_view(
-    repo_root: &Path,
-    key: &Capture,
-    streams: &[(&str, &[u8])],
-) -> Result<(PathBuf, Vec<ViewField>)> {
-    let document: serde_json::Map<String, serde_json::Value> = streams
+/// Each subject is a view field with its lines, bytes and tokens, then each
+/// stored capture's handle; the view is the only route, read in one hop with
+/// offset and limit. No command is named: `--field` alone prints a header, and
+/// a spilled leaf is no JSON document, so a command was a route that chained.
+#[must_use]
+pub fn pointer(path: &Path, index: &[ViewField], stored: &[&Capture]) -> crate::refusal::Refusal {
+    let subjects: Vec<crate::verdict::Subject> = index
         .iter()
-        .map(|(name, bytes)| {
-            (
-                (*name).to_owned(),
-                serde_json::Value::String(String::from_utf8_lossy(bytes).into_owned()),
-            )
+        .map(|field| {
+            crate::verdict::artifact(&format!(
+                "{}:{}-{}({}B {}T)",
+                field.pointer, field.from, field.to, field.bytes, field.tokens
+            ))
         })
+        .chain(
+            stored
+                .iter()
+                .map(|capture| crate::verdict::artifact(&capture.handle())),
+        )
         .collect();
-    result_view(repo_root, key, &serde_json::Value::Object(document))
+    crate::refusal::Refusal::engine(
+        crate::verdict::Native::OutputPointNow,
+        &subjects,
+        crate::refusal::Fix::None,
+    )
+    .with_only_document_route(&path.display().to_string())
+    .with_severity(crate::refusal::Severity::Note)
+}
+
+/// [`pointer`], rendered as the one line a channel of lines carries.
+#[must_use]
+pub fn pointer_line(path: &Path, index: &[ViewField], stored: &[&Capture]) -> String {
+    pointer(path, index, stored).render_finding(crate::refusal::Arm::Pointer)
+}
+
+/// Stored text captures as [`pointer`]'s line, over a view with one section
+/// per stream (`/stdout`, `/stderr`, `/advisory`), keyed by the first: the same
+/// view [`result_view`] writes for a bounded result. `None` when a capture will
+/// not read, or every stream was empty.
+#[must_use]
+pub fn streams_pointer(repo_root: &Path, captures: &[Capture]) -> Option<String> {
+    let mut document = serde_json::Map::new();
+    for capture in captures {
+        let bytes = read(repo_root, capture).ok()?;
+        document.insert(
+            capture.stream.to_owned(),
+            serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned()),
+        );
+    }
+    let key = captures.first()?;
+    let (path, index) = result_view(repo_root, key, &serde_json::Value::Object(document)).ok()?;
+    let stored: Vec<&Capture> = captures.iter().collect();
+    (!index.is_empty()).then(|| pointer_line(&path, &index, &stored))
+}
+
+impl From<Handle> for Capture {
+    /// The capture a parsed handle names. Its byte count is not in the handle,
+    /// and nothing that addresses a capture by handle reads it.
+    fn from(handle: Handle) -> Self {
+        Capture {
+            stream: handle.stream.as_str(),
+            bytes: 0,
+            digest: handle.digest,
+        }
+    }
 }
 
 /// [`result_view`], where some text leaves were spilled to files by the
