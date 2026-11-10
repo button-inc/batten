@@ -620,6 +620,35 @@ fn an_update_never_moves_a_pin_backward() {
     assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
 }
 
+/// AN UPDATE PRINTS WHAT IT CROSSES BEFORE IT MOVES THE PIN (CLOUD-2660): the
+/// same block `engine outdated` prints, ahead of the config path.
+#[test]
+fn an_update_prints_the_breaking_counts_before_it_moves_the_pin() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-update-breaking");
+    pin_worktree(&home, "v8.8.8");
+    let named = home.join("bin");
+    let named_str = named.display().to_string();
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    serve_breaking_changelog(&home);
+    let output = engine_verb(
+        "update",
+        &home,
+        std::slice::from_ref(&named),
+        &with_named(&served, &named_str),
+    );
+    assert!(
+        output.status.success(),
+        "{}{}",
+        stdout(&output),
+        common::stderr(&output)
+    );
+    let said = stdout(&output);
+    assert!(said.starts_with(&breaking_block(&served)), "{said}");
+}
+
 /// THE UPDATE INSTALLS ITS OWN TARGET (CLOUD-2418), whatever
 /// `BATTEN_VERSION_FROM_REF` would pick: `engine install` re-derives its
 /// release from the ref, so handing off to it installed `main`'s v8.8.8 under a
@@ -1013,9 +1042,14 @@ fn outdated_exits_by_the_pins_distance_from_main() {
     pin_worktree(&home, "v8.8.8");
     let behind = batten_in(&home, &["engine", "outdated"], &env);
     assert_eq!(behind.status.code(), Some(2), "{}", common::stderr(&behind));
+    // The tag's changelog is not served, so `main`'s was read and is the one
+    // pointed at (CLOUD-2660).
     assert_eq!(
         stdout(&behind),
-        format!("v8.8.8 → {WANTED}\nv9.9.9 {MAIN_DATE}\n")
+        format!(
+            "v8.8.8 → {WANTED}\nv9.9.9 {MAIN_DATE} breaking 0\n{}/blob/main/crates/batten/CHANGELOG.md?plain=1#L5-L9\n",
+            served_repository(&served)
+        )
     );
 
     common::write(&home, "batten.toml", "version = 1\n");
@@ -1148,8 +1182,60 @@ fn a_lagging_changelog_dates_main_from_its_own_tag() {
     assert_eq!(behind.status.code(), Some(2), "{}", common::stderr(&behind));
     assert_eq!(
         stdout(&behind),
-        format!("v8.8.8 → {WANTED}\nv9.9.9 {MAIN_DATE}\n")
+        format!(
+            "v8.8.8 → {WANTED}\nv9.9.9 {MAIN_DATE} breaking 0\n{}/blob/{WANTED}/crates/batten/CHANGELOG.md?plain=1#L3-L3\n",
+            served_repository(&served)
+        )
     );
+}
+
+/// The repository `served` names, as the engine reads `BATTEN_RELEASES`.
+fn served_repository(served: &[(String, String)]) -> String {
+    served
+        .iter()
+        .find(|(name, _)| name == "BATTEN_RELEASES")
+        .map(|(_, value)| value.clone())
+        .expect("the host names its repository")
+}
+
+/// The changelog at `WANTED`'s tag the breaking-count cases read (CLOUD-2660):
+/// 9.1.0 carries two breaking entries, the others none. Even lines are blank.
+const BREAKING_CHANGELOG: &str = "# Changelog\n\n## [Unreleased]\n\n## [9.9.9](https://example.invalid) - 2020-02-01\n\n### Fixed\n\n- a fix\n\n## [9.1.0](https://example.invalid) - 2020-01-20\n\n### Changed\n\n- [**breaking**] one\n- [**breaking**] two\n\n## [9.0.0](https://example.invalid) - 2020-01-10\n\n### Added\n\n- a thing\n\n## [8.8.8](https://example.invalid) - 2020-01-01\n";
+
+/// Serve [`BREAKING_CHANGELOG`] at `WANTED`'s tag.
+fn serve_breaking_changelog(home: &Path) {
+    let dir = home
+        .join("www")
+        .join(REPO)
+        .join(WANTED)
+        .join("crates")
+        .join("batten");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("CHANGELOG.md"), BREAKING_CHANGELOG).unwrap();
+}
+
+/// The block both verbs print for [`BREAKING_CHANGELOG`].
+fn breaking_block(served: &[(String, String)]) -> String {
+    format!(
+        "v8.8.8 → {WANTED}\nv9.1.0 2020-01-20 breaking 2\nv9.0.0 2020-01-10 breaking 0\nv9.9.9 2020-02-01 breaking 0\n{}/blob/{WANTED}/crates/batten/CHANGELOG.md?plain=1#L5-L22\n",
+        served_repository(served)
+    )
+}
+
+/// BREAKING RELEASES LEAD, AND ONE LINE POINTS AT THEIR SECTIONS (CLOUD-2660):
+/// a count per release and a pointer, never the notes.
+#[test]
+fn outdated_breaking_releases_lead_and_point_at_their_sections() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-outdated-breaking");
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    serve_breaking_changelog(&home);
+    pin_worktree(&home, "v8.8.8");
+    let behind = batten_in(&home, &["engine", "outdated"], &served_env(&served));
+    assert_eq!(behind.status.code(), Some(2), "{}", common::stderr(&behind));
+    assert_eq!(stdout(&behind), breaking_block(&served));
 }
 
 /// A MALFORMED PIN IS NAMED AS ONE (CLOUD-2418), with the words every other

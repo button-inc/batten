@@ -1334,6 +1334,7 @@ fn say_follow_once(
 //MUTANT update-ignores-workflow-literal|s@^    if !stale.is_empty() {$@    if false {@|a_workflow_literal_the_update_cannot_rewrite_refuses_and_writes_nothing
 //MUTANT update-installs-what-the-ref-pins|s@^    let installed = install_wanted(want, Some(root), &repository, out)?;$@    let installed = engine_install(out)?;@|an_update_installs_its_target_whatever_the_ref_pins
 //MUTANT update-keeps-the-fresh-record|s@^        cleared = record::clear_kind("engine update", "engine-fresh", families);$@@|an_update_clears_the_engine_fresh_record
+//MUTANT update-notes-unprinted|s@^        write_distance(out, \&repository, \&current, \&notes)?;$@@|an_update_prints_the_breaking_counts_before_it_moves_the_pin
 fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let root = git::worktree_root(Path::new("."))?;
     let path = root.join(config::CONFIG_FILE);
@@ -1370,10 +1371,11 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let repository = releases_repository();
     let latest = engine::ref_release(&repository, "main")?;
     let target = if engine::is_newer(&latest, &current)? {
-        latest
+        latest.clone()
     } else {
-        current
+        current.clone()
     };
+    let moving = target != current;
     // ONE FETCH OF THE MANIFEST, AND ONLY WHEN A COPY NEEDS A DIGEST: the copy
     // cached beside the release, which `engine gate` judges by too.
     let cache = state::repo_state_dir(&root)?;
@@ -1413,6 +1415,11 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
             source: None,
         }),
     )?;
+    // THE BEHIND BLOCK BEFORE THE PIN MOVES (CLOUD-2660): what the update crosses,
+    // breaking entries first. A changelog that will not answer costs only this.
+    if moving && let Ok(notes) = distance_from(&repository, &current, &latest) {
+        write_distance(out, &repository, &current, &notes)?;
+    }
     let mut cleared: Result<()> = Ok(());
     if synced != text {
         // THE PRINTED PATH IS THE WRITE, AND IT STANDS whatever the install
@@ -1511,18 +1518,30 @@ const NO_UPDATE_NOTICE: &str = "BATTEN_NO_UPDATE_NOTICE";
 struct Distance {
     latest: String,
     newer: Vec<engine::Heading>,
+    /// The ref whose changelog was read (CLOUD-2660), so the pointer and the
+    /// counts come from the same text.
+    read_at: String,
 }
 
 /// The releases between `tag` and `main`'s pin. The changelog is read only
 /// when the pin is behind.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT lagging-release-undated|s@^    let own = engine::ref_changelog(repository, &latest)$@    let own = engine::ref_changelog(repository, "main")@|a_lagging_changelog_dates_main_from_its_own_tag
 fn distance(repository: &str, tag: &str) -> Result<Distance> {
     let latest = engine::ref_release(repository, "main")?;
+    distance_from(repository, tag, &latest)
+}
+
+/// The releases between `tag` and `latest`, already read (CLOUD-2660: `engine
+/// update` has `latest` in hand).
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT lagging-release-undated|s@^    let own = engine::ref_changelog(repository, &latest)$@    let own = engine::ref_changelog(repository, "main")@|a_lagging_changelog_dates_main_from_its_own_tag
+//MUTANT notes-ref-unfollowed|s@^        (engine::ref_changelog(repository, \&main)?, main)$@        (engine::ref_changelog(repository, \&main)?, latest.clone())@|outdated_exits_by_the_pins_distance_from_main
+fn distance_from(repository: &str, tag: &str, latest: &str) -> Result<Distance> {
+    let latest = latest.to_owned();
     if !engine::is_newer(&latest, tag)? {
         return Ok(Distance {
             latest,
             newer: Vec::new(),
+            read_at: "main".to_owned(),
         });
     }
     // THE CHANGELOG AT `latest`'S OWN TAG (CLOUD-2418): it carries every release
@@ -1533,12 +1552,49 @@ fn distance(repository: &str, tag: &str) -> Result<Distance> {
     let own = engine::ref_changelog(repository, &latest)
         .ok()
         .filter(|headings| headings.iter().any(|heading| heading.version == version));
-    let headings = match own {
-        Some(headings) => headings,
-        None => engine::ref_changelog(repository, "main")?,
+    let (headings, read_at) = if let Some(headings) = own {
+        (headings, latest.clone())
+    } else {
+        let main = "main".to_owned();
+        (engine::ref_changelog(repository, &main)?, main)
     };
     let newer = engine::releases_between(&headings, tag, &latest)?;
-    Ok(Distance { latest, newer })
+    Ok(Distance {
+        latest,
+        newer,
+        read_at,
+    })
+}
+
+/// The behind block (CLOUD-2660): `tag → latest`, one `v<x> <date> breaking
+/// <n>` line per release, breaking releases first and each group oldest first,
+/// then one pointer at their sections. A pointer, never the notes.
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT breaking-not-first|s@^    rows.sort_by_key(\x7cheading\x7c heading.breaking.unwrap_or(0) == 0);$@@|outdated_breaking_releases_lead_and_point_at_their_sections
+//MUTANT outdated-notes-unpointed|s@^    writeln!(out, "{notes}")?;$@@|outdated_breaking_releases_lead_and_point_at_their_sections
+fn write_distance(
+    out: &mut dyn Write,
+    repository: &str,
+    tag: &str,
+    found: &Distance,
+) -> Result<()> {
+    writeln!(out, "{tag} → {}", found.latest)?;
+    let mut rows: Vec<&engine::Heading> = found.newer.iter().collect();
+    rows.sort_by_key(|heading| heading.breaking.unwrap_or(0) == 0);
+    for heading in rows {
+        let breaking = heading
+            .breaking
+            .map_or_else(|| "-".to_owned(), |count| count.to_string());
+        writeln!(
+            out,
+            "v{} {} breaking {breaking}",
+            heading.version,
+            heading.date.as_deref().unwrap_or("-")
+        )?;
+    }
+    let notes = engine::notes_url(repository, &found.read_at, &found.newer);
+    writeln!(out, "{notes}")?;
+    Ok(())
 }
 
 /// [`distance`] bounded by [`NOTICE_LOOKUP`]: `None` for a lookup that failed
@@ -1765,7 +1821,8 @@ fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
             return Ok(ExitCode::Violation);
         }
     };
-    let found = match distance(&releases_repository(), &tag) {
+    let repository = releases_repository();
+    let found = match distance(&repository, &tag) {
         Ok(found) => found,
         Err(why) => {
             let blind =
@@ -1779,15 +1836,7 @@ fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
     if found.newer.is_empty() {
         return Ok(ExitCode::Success);
     }
-    writeln!(out, "{tag} → {}", found.latest)?;
-    for heading in &found.newer {
-        writeln!(
-            out,
-            "v{} {}",
-            heading.version,
-            heading.date.as_deref().unwrap_or("-")
-        )?;
-    }
+    write_distance(out, &repository, &tag, &found)?;
     Ok(ExitCode::Violation)
 }
 
