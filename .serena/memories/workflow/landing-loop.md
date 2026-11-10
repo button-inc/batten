@@ -408,9 +408,6 @@ provably reach the value the code reads, the run measured nothing.
   roster change.
 - **The `fast-forward` bot reads TRUNK's `CI_REQUIRED_CHECKS`**, not the head's. A
   roster change lands before the job it describes goes away.
-- **`step run` hides a failing step's output.** Rerun the underlying command:
-  `cargo nextest run --workspace --no-fail-fast` for `test:cargo`, and
-  `batten semver check` for `semver`.
 - **A new preset needs the FULL suite before `land`.** `policy_presets`
   (`PRESET_SCOPES`) and `scratch_names` caught registration gaps that every
   targeted tier passed. `semver` catches a changed `pub` signature, which needs
@@ -420,10 +417,13 @@ provably reach the value the code reads, the run measured nothing.
   `truncate_handle.rs` holds every `set_len` to an inline `.write(true)` handle.
   A clippy `disallowed-methods` ban is the wrong shape here: its per-site waiver
   is what `waiver add refused` forbids.
-- **A `#MUTANT` script may not contain `|`.** `mutate` splits a row on every pipe.
-  Anchor patterns `^…$` to the code line, because `cargo fmt` re-indents, and an
-  unanchored pattern then matches only its own declaration and "survives" while
-  testing nothing.
+- **Rust mutation is cargo-mutants', never a hand-written row** (CLOUD-2253).
+  `MUTANT_RUNNERS` gives it every Rust source, a `//MUTANT` row in a `.rs` file
+  is never run, and `mutant_rows.rs` refuses one. A Rust Ready obligation names
+  `"mutation": "cargo-mutants"`. Read <https://mutants.rs/> before changing how
+  it runs: copy mode, `-j`, `--iterate`, `--shard` and `.cargo/mutants.toml` are
+  its own, and a wrapper re-implementing one is the defect. Hand-written
+  `#MUTANT` rows are for Rego and the manifests only, split on every `|`.
 
 ## Measured 2026-10-20 (CLOUD-2376)
 
