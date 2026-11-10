@@ -1037,6 +1037,12 @@ impl RuleKind {
                 // trees — see the column's own doc for why that asymmetry is
                 // forced rather than chosen.
                 "admits_with",
+                // CLOUD-2663: the token measure `policy budget` uses, as the
+                // counted unit in place of `pattern` or `regex`; exactly one of the
+                // three is refused in `validate_forbid_predicate`.
+                "counts",
+                // CLOUD-2663: each matched file judged against its own base count.
+                "per_file",
                 "reason",
                 "policy_url",
                 "no_fix_reason",
@@ -2173,6 +2179,17 @@ pub struct Rule {
     /// against two trees, since "newly added" means "absent from base".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub admits_with: Option<String>,
+    /// Judge a ratchet per matched file rather than on the sum (CLOUD-2663).
+    ///
+    /// Each path present at `base` is held to its OWN base count, so one file
+    /// shrinking can no longer pay for another growing. A path absent at base is
+    /// not judged: a per-file ceiling is that file's count at base, and a file
+    /// the branch creates has none. A path deleted since base counts `0`.
+    ///
+    /// Refused with `retires_with` and `conserves`, which both buy an AGGREGATE
+    /// decrease that a per-file row does not have.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub per_file: bool,
     /// How to parse the documents a [`RuleKind::Document`] row selects. Required
     /// by that kind, rejected by every other.
     ///
@@ -3818,6 +3835,10 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         declares: Declares::NotFactBearing("an admission's shape on the other side of the count"),
     },
     ColumnCensus {
+        field: "per_file",
+        declares: Declares::NotFactBearing("the grain a ratchet's count is judged at"),
+    },
+    ColumnCensus {
         field: "format",
         declares: Declares::NotFactBearing(
             "how a declared document is parsed, not whether one is acquired",
@@ -5173,7 +5194,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 62] {
+    fn columns(&self) -> [(&'static str, bool); 63] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -5220,6 +5241,7 @@ impl Rule {
             ("retires_with", self.retires_with.is_some()),
             ("conserves", self.conserves.is_some()),
             ("admits_with", self.admits_with.is_some()),
+            ("per_file", self.per_file),
             ("format", self.format.is_some()),
             ("node", self.node.is_some()),
             ("derives", self.derives.is_some()),
@@ -6103,8 +6125,45 @@ impl Rule {
         }
     }
 
+    /// A ratchet's `counts` and `per_file` columns (CLOUD-2663).
+    fn validate_ratchet_measure(&self) -> anyhow::Result<()> {
+        if self.kind != RuleKind::Ratchet {
+            return Ok(());
+        }
+        if let Some(unit) = self.counts {
+            if unit != CeilingUnit::Tokens {
+                return Err(UsageError::raise(format!(
+                    "rule {}: a ratchet counts `tokens` or a literal; `counts = {unit:?}` \
+                     measures a call, not a file",
+                    self.id
+                )));
+            }
+            if self.pattern.is_some() || self.regex.is_some() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `counts`, `pattern` and `regex` are alternatives; a ratchet \
+                     counts exactly one",
+                    self.id
+                )));
+            }
+        }
+        if self.per_file && (self.retires_with.is_some() || self.conserves.is_some()) {
+            return Err(UsageError::raise(format!(
+                "rule {}: `per_file` judges each file on its own, and `retires_with` and \
+                 `conserves` buy an aggregate decrease a per-file row does not have",
+                self.id
+            )));
+        }
+        Ok(())
+    }
+
     fn validate_forbid_predicate(&self) -> anyhow::Result<()> {
         if !matches!(self.kind, RuleKind::Forbid | RuleKind::Ratchet) {
+            return Ok(());
+        }
+        self.validate_ratchet_measure()?;
+        if self.kind == RuleKind::Ratchet && self.counts.is_some() {
+            // The token measure stands in for both literal columns, and
+            // `validate_ratchet_measure` has refused it beside either.
             return Ok(());
         }
         match (self.pattern.is_some(), self.regex.is_some()) {
@@ -10799,6 +10858,33 @@ fn fingerprint_of(violation: &crate::policy::Violation) -> String {
     }
 }
 
+/// What one file counts under a ratchet row.
+///
+/// # Errors
+///
+/// Returns an error when `regex` does not compile; `validate` has refused that
+/// at load, so this is the belt to its suspenders.
+//MUTANT ratchet-regex-uncounted|s@^            (Some(expression), _) => expression.find_iter(text).count(),$@            (Some(_), _) => 0,@|a_ratchet_regex_counts_every_spelling_of_the_token
+//MUTANT ratchet-tokens-uncounted|s@^            (None, None) if tokens => crate::budget::estimate_tokens(\&crate::budget::loaded(text)),$@            (None, None) if tokens => 0,@|a_token_ratchet_counts_what_the_budget_counts
+fn ratchet_tally(rule: &Rule) -> anyhow::Result<impl Fn(&str) -> usize + '_> {
+    // THE COUNTED TOKEN: a literal, or an expression for one a literal cannot spell
+    // (CLOUD-2059). `validate` admits exactly one and has compiled the expression,
+    // so the `None` arm is unreachable and counts nothing.
+    let expression = rule.regex.as_deref().map(Regex::new).transpose()?;
+    // Or the token measure `policy budget` takes per file (CLOUD-2663): the same
+    // function over the same loaded text, so the ratchet and the budget cannot
+    // disagree about one file.
+    let tokens = rule.counts == Some(CeilingUnit::Tokens);
+    Ok(
+        move |text: &str| match (&expression, rule.pattern.as_deref()) {
+            (Some(expression), _) => expression.find_iter(text).count(),
+            (None, Some(pattern)) => text.matches(pattern).count(),
+            (None, None) if tokens => crate::budget::estimate_tokens(&crate::budget::loaded(text)),
+            (None, None) => 0,
+        },
+    )
+}
+
 /// Evaluate a [`RuleKind::Ratchet`]: count at the base rev, count in the working
 /// tree, and report if the aggregate moved the banned way.
 ///
@@ -10811,7 +10897,7 @@ fn fingerprint_of(violation: &crate::policy::Violation) -> String {
 /// Returns a [`UsageError`] (→ exit `1`) when `base` names a rev git cannot
 /// resolve — never a pass. A ratchet that cannot see its own baseline has not
 /// established that the count held.
-//MUTANT ratchet-regex-uncounted|s@^        (Some(expression), _) => expression.find_iter(text).count(),$@        (Some(_), _) => 0,@|a_ratchet_regex_counts_every_spelling_of_the_token
+//MUTANT ratchet-per-file-summed|s@^    if rule.per_file {$@    if false {@|a_per_file_ratchet_refuses_growth_another_file_paid_for
 fn ratchet_rule(
     rule: &Rule,
     root: &Path,
@@ -10829,15 +10915,7 @@ fn ratchet_rule(
         // Unreachable: the census requires both for this kind.
         return Ok(());
     };
-    // THE COUNTED TOKEN: a literal, or an expression for one a literal cannot spell
-    // (CLOUD-2059). `validate` admits exactly one and has compiled the expression,
-    // so the `None` arm is unreachable and counts nothing.
-    let expression = rule.regex.as_deref().map(Regex::new).transpose()?;
-    let tally = |text: &str| match (&expression, rule.pattern.as_deref()) {
-        (Some(expression), _) => expression.find_iter(text).count(),
-        (None, Some(pattern)) => text.matches(pattern).count(),
-        (None, None) => 0,
-    };
+    let tally = ratchet_tally(rule)?;
 
     // THE COUNT IS TAKEN AT THE MERGE BASE, NOT AT THE DECLARED REF'S TIP
     // (CLOUD-405). The question a ratchet asks is "did THIS change move the
@@ -10967,6 +11045,21 @@ fn ratchet_rule(
         &subjects,
         findings,
     );
+
+    // PER FILE, NO AGGREGATE (CLOUD-2663): each path is judged on its own base
+    // count, and the sum is never asked, so one file shrinking cannot pay for
+    // another growing.
+    if rule.per_file {
+        per_file_findings(
+            rule,
+            direction,
+            &base_counts,
+            &working_counts,
+            &working_declared,
+            findings,
+        );
+        return Ok(());
+    }
 
     if !direction.violated(base_count, working_count) {
         return Ok(());
@@ -11269,6 +11362,47 @@ fn ratchet_finding(
         ),
         reason: None,
     });
+}
+
+/// One finding per path whose own count moved the banned way (CLOUD-2663).
+///
+/// Judged over the union of base and working paths. A path absent at base has
+/// no ceiling and is skipped; a path absent now counts `0`, so a deletion is a
+/// fall exactly as the aggregate reads it. A rising path that declares the
+/// `admits_with` token is admitted, and one that does not is refused with the
+/// same blocker an aggregate row prints.
+//MUTANT ratchet-per-file-new-path-judged|s@^        let Some(\&was) = base_counts.get(path) else {$@        let was = base_counts.get(path).copied().unwrap_or(0); if false {@|a_per_file_ratchet_does_not_judge_a_path_new_at_base
+//MUTANT ratchet-per-file-deletion-skipped|s@^        let now = working_counts.get(path).copied().unwrap_or(0);$@        let Some(\&now) = working_counts.get(path) else { continue };@|a_per_file_non_decreasing_ratchet_refuses_a_deleted_file
+fn per_file_findings(
+    rule: &Rule,
+    direction: Direction,
+    base_counts: &BTreeMap<String, usize>,
+    working_counts: &BTreeMap<&str, usize>,
+    working_declared: &BTreeSet<&str>,
+    findings: &mut Vec<Finding>,
+) {
+    let paths: BTreeSet<&str> = base_counts
+        .keys()
+        .map(String::as_str)
+        .chain(working_counts.keys().copied())
+        .collect();
+    for path in paths {
+        let Some(&was) = base_counts.get(path) else {
+            continue;
+        };
+        let now = working_counts.get(path).copied().unwrap_or(0);
+        if !direction.violated(was, now) {
+            continue;
+        }
+        let mut blockers = BTreeSet::new();
+        if rule.admits_with.is_some() && now > was {
+            if working_declared.contains(path) {
+                continue;
+            }
+            blockers.insert(format!("{GROWTH_UNDECLARED} {path}"));
+        }
+        ratchet_finding(rule, path, was, now, &blockers, findings);
+    }
 }
 
 /// Which files grew without declaring a reason (CLOUD-929).
@@ -15098,6 +15232,43 @@ mod tests {
             .validate()
             .is_err()
         );
+        // CLOUD-2663: `counts = "tokens"` stands in for the literal, alone.
+        let tokens = Rule {
+            pattern: None,
+            counts: Some(CeilingUnit::Tokens),
+            ..base.clone()
+        };
+        assert!(tokens.validate().is_ok());
+        for refused in [
+            Rule {
+                pattern: Some("#[test]".to_owned()),
+                ..tokens.clone()
+            },
+            Rule {
+                counts: Some(CeilingUnit::TrackedArtifacts),
+                ..tokens.clone()
+            },
+            Rule {
+                per_file: true,
+                retires_with: Some("# subject:".to_owned()),
+                ..base.clone()
+            },
+            Rule {
+                per_file: true,
+                conserves: Some(ledger_vocabulary()),
+                ..base.clone()
+            },
+        ] {
+            assert!(refused.validate().is_err(), "{refused:?}");
+        }
+        assert!(
+            Rule {
+                per_file: true,
+                ..base.clone()
+            }
+            .validate()
+            .is_ok()
+        );
         // Same for the other half of §9's duality: a ratchet runs nothing.
         assert!(
             Rule {
@@ -15652,6 +15823,7 @@ mod tests {
             retires_with: None,
             conserves: None,
             admits_with: None,
+            per_file: false,
             format: None,
             node: None,
             derives: None,
@@ -21071,6 +21243,125 @@ violation contains {
         assert_eq!(
             ratchet_run(ratchet_row(Direction::NonDecreasing), &held),
             (Vec::new(), Vec::new())
+        );
+    }
+
+    fn md_row(per_file: bool) -> Rule {
+        Rule {
+            glob: Some(String::from("docs/*.md")),
+            counts: Some(CeilingUnit::Tokens),
+            direction: Some(Direction::NonIncreasing),
+            base: Some(String::from("HEAD")),
+            per_file,
+            ..blank("r", RuleKind::Ratchet)
+        }
+    }
+
+    /// A token ratchet counts exactly what `policy budget` counts per file, over
+    /// loaded text: growth inside an HTML comment is not growth.
+    ///
+    /// Fails by: the tokens arm counting nothing.
+    #[test]
+    fn a_token_ratchet_counts_what_the_budget_counts() {
+        let base_text = "# Title\n\nSome body text here.\n";
+        let n = crate::budget::estimate_tokens(&crate::budget::loaded(base_text));
+        assert!(n > 0);
+        let grown = format!("{base_text}12345678");
+        let dir = ratchet_repo(
+            "rules-ratchet-tokens-grew",
+            &[("docs/a.md", base_text)],
+            &[("docs/a.md", &grown)],
+        );
+        assert_eq!(
+            ratchet_run(md_row(false), &dir),
+            (vec![format!("docs/*.md {n}->{}", n + 2)], Vec::new())
+        );
+        let commented = format!("{base_text}<!-- a long comment the loader drops -->\n");
+        let dir = ratchet_repo(
+            "rules-ratchet-tokens-comment",
+            &[("docs/a.md", base_text)],
+            &[("docs/a.md", &commented)],
+        );
+        assert_eq!(ratchet_run(md_row(false), &dir), (Vec::new(), Vec::new()));
+    }
+
+    /// One file shrinking does not pay for another growing on a per-file row.
+    ///
+    /// Fails by: the per-file branch skipped, judging the sum.
+    #[test]
+    fn a_per_file_ratchet_refuses_growth_another_file_paid_for() {
+        let a = "aaaaaaaaaaaaaaaaaaaaaaaa";
+        let b = "bbbbbbbbbbbbbbbb";
+        let dir = ratchet_repo(
+            "rules-ratchet-per-file",
+            &[("docs/a.md", a), ("docs/b.md", b)],
+            &[("docs/a.md", &a[..16]), ("docs/b.md", &format!("{b}bbbb"))],
+        );
+        assert_eq!(ratchet_run(md_row(false), &dir), (Vec::new(), Vec::new()));
+        assert_eq!(
+            ratchet_run(md_row(true), &dir),
+            (vec![String::from("docs/b.md 4->5")], Vec::new())
+        );
+    }
+
+    /// A file the branch creates has no ceiling on a per-file row.
+    ///
+    /// Fails by: judging a new path against a base count of zero.
+    #[test]
+    fn a_per_file_ratchet_does_not_judge_a_path_new_at_base() {
+        let dir = ratchet_repo(
+            "rules-ratchet-per-file-new",
+            &[("docs/a.md", "aaaaaaaa")],
+            &[("docs/new.md", "nnnnnnnnnnnnnnnn")],
+        );
+        assert_eq!(ratchet_run(md_row(true), &dir), (Vec::new(), Vec::new()));
+    }
+
+    /// A deleted file is a fall to zero on a per-file row.
+    ///
+    /// Fails by: skipping a path absent from the working tree.
+    #[test]
+    fn a_per_file_non_decreasing_ratchet_refuses_a_deleted_file() {
+        let dir = ratchet_repo(
+            "rules-ratchet-per-file-deleted",
+            &[("t.bats", TWO_CASES), ("u.bats", ONE_CASE)],
+            &[("t.bats", "")],
+        );
+        let rule = Rule {
+            per_file: true,
+            ..ratchet_row(Direction::NonDecreasing)
+        };
+        assert_eq!(
+            ratchet_run(rule, &dir),
+            (vec![String::from("t.bats 2->0")], Vec::new())
+        );
+    }
+
+    /// A per-file rise that declares the `admits_with` token is admitted; a silent
+    /// one is refused with the aggregate's blocker.
+    #[test]
+    fn a_per_file_ratchet_admits_a_declared_rise_only() {
+        let declared = ratchet_repo(
+            "rules-ratchet-per-file-declared",
+            &[("docs/a.md", "aaaaaaaa")],
+            &[("docs/a.md", "aaaaaaaa\nadmits: x\n")],
+        );
+        let rule = || Rule {
+            admits_with: Some(String::from("admits:")),
+            ..md_row(true)
+        };
+        assert_eq!(ratchet_run(rule(), &declared), (Vec::new(), Vec::new()));
+        let silent = ratchet_repo(
+            "rules-ratchet-per-file-silent",
+            &[("docs/a.md", "aaaaaaaa")],
+            &[("docs/a.md", "aaaaaaaa\nmore text\n")],
+        );
+        assert_eq!(
+            ratchet_run(rule(), &silent),
+            (
+                vec![format!("docs/a.md 2->4 [{GROWTH_UNDECLARED} docs/a.md]")],
+                Vec::new()
+            )
         );
     }
 

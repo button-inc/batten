@@ -1536,6 +1536,10 @@
           ],
           "maxLength": 1536
         },
+        "per_file": {
+          "description": "Judge a ratchet per matched file rather than on the sum (CLOUD-2663).\n\nEach path present at `base` is held to its OWN base count, so one file\nshrinking can no longer pay for another growing. A path absent at base is\nnot judged: a per-file ceiling is that file's count at base, and a file\nthe branch creates has none. A path deleted since base counts `0`.\n\nRefused with `retires_with` and `conserves`, which both buy an AGGREGATE\ndecrease that a per-file row does not have.",
+          "type": "boolean"
+        },
         "plan": {
           "description": "The adopted gate runner's EFFECTIVE plan, per declared surface\n(CLOUD-949).\n\nEach row becomes an entry of `input.tree.plan` under its own `id`,\ncarrying what the runner said it would run — acquired from the runner\nitself, never re-derived from its config, because the runner owns its\nselector and a second derivation is a second authority on which files a\nstep runs over.\n\n**Acquired fresh rather than read back, which is the difference from\n`tools`.** A verdict is a statement about bytes that have a digest; a plan\nis a statement about a WORKING TREE, whose dirty and index state move\nwithout HEAD. Keying a stored plan would mean comparing every binding\nfield before trusting it, and a comparison a caller can forget is the\nstaleness class this avoids by simply taking the plan now.",
           "type": "array",
