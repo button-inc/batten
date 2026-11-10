@@ -600,10 +600,8 @@ pub fn wake_event(stdin: &str) -> Option<(String, Value)> {
 //MUTANT wake-element-ignored|s@^    let start = text.find(WAKE_OPEN)?;$@    let start = None::<usize>?;@|a_wake_envelope_dispatches_once_and_its_webhook_twin_does_not
 fn wake_element(text: &str) -> Option<(String, Value)> {
     let start = text.find(WAKE_OPEN)?;
-    let rest = &text[start..];
-    let tag_end = rest.find('>')?;
-    let kind = attribute(&rest[..tag_end], "kind")?;
-    let element = &rest[tag_end + 1..];
+    let (tag, element) = text[start..].split_once('>')?;
+    let kind = attribute(tag, "kind")?;
     let element = &element[..element.find("</event>").unwrap_or(element.len())];
     let body = &element[element.find('{')?..=element.rfind('}')?];
     let mut body: Value = serde_json::from_str(body).ok()?;
@@ -999,5 +997,16 @@ mod tests {
         for row in CATALOG {
             assert!(!row.id.is_empty(), "{} names no subject id", row.name);
         }
+    }
+
+    /// Fails by: a read error other than an absent file taken as an empty ring
+    /// or no cursor.
+    #[test]
+    fn only_an_absent_ring_or_cursor_reads_as_empty() {
+        let dir = crate::scratch::scratch("forge-event-read-errors");
+        assert!(read_ring(&dir.join("absent")).unwrap().is_empty());
+        assert!(read_cursor(&dir.join("absent")).unwrap().is_none());
+        assert!(read_ring(&dir).is_err());
+        assert!(read_cursor(&dir).is_err());
     }
 }
