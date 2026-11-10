@@ -803,6 +803,9 @@ pub enum Fact {
     /// A file read and one stat per failed run under `$GIT_DIR`. `null` when no
     /// record exists — the branch owes no push a read.
     RedHead,
+    /// Each pathspec a `git checkout`/`git restore` names, and whether it is
+    /// literal, tracked and clean (CLOUD-2684).
+    PathspecStatus,
 }
 
 /// [`Fact::Receipts`] — a file and two git refs (`hook.rs`'s receipt read).
@@ -1545,6 +1548,10 @@ pub const DISPATCH_CLEARED: Class = Class::new(Cost::Read, Surface::Hook);
 /// `$GIT_DIR` (CLOUD-2270). A read, asked of the mediated call it gates.
 pub const RED_HEAD: Class = Class::new(Cost::Read, Surface::Hook);
 
+/// [`Fact::PathspecStatus`]: one index and status read, only on a
+/// checkout or restore call (CLOUD-2684).
+pub const PATHSPEC_STATUS: Class = Class::new(Cost::Read, Surface::Hook);
+
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
@@ -1592,6 +1599,7 @@ impl Fact {
         Fact::Pinned,
         Fact::DispatchCleared,
         Fact::RedHead,
+        Fact::PathspecStatus,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -1642,6 +1650,7 @@ impl Fact {
             Fact::Pinned => "pinned-programs",
             Fact::DispatchCleared => "dispatch-cleared",
             Fact::RedHead => "red-head",
+            Fact::PathspecStatus => "pathspec-status",
         }
     }
 
@@ -1700,6 +1709,7 @@ impl Fact {
             Fact::Pinned => PINNED,
             Fact::DispatchCleared => DISPATCH_CLEARED,
             Fact::RedHead => RED_HEAD,
+            Fact::PathspecStatus => PATHSPEC_STATUS,
         }
     }
 
@@ -1788,6 +1798,7 @@ impl Fact {
             | Fact::RecordsBlocked
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::PathspecStatus
             | Fact::Instant => false,
         }
     }
@@ -1958,7 +1969,8 @@ impl Fact {
             | Fact::DispatchCleared
             // CLOUD-2270. Hook-only: what a push over this head owes is a
             // question about the call, and a tree walk has none.
-            | Fact::RedHead => None,
+            | Fact::RedHead
+            | Fact::PathspecStatus => None,
         }
     }
 
@@ -2071,6 +2083,7 @@ impl Fact {
             | Fact::Extracted => Self::described_schema_fragment(self),
             Fact::Pinned => Self::pinned_schema_fragment(),
             Fact::RedHead => Self::red_head_schema_fragment(),
+            Fact::PathspecStatus => Self::pathspec_status_schema_fragment(),
             // The git and landing families delegate (CLOUD-880). Extracted
             // because this function hit its own 100-line ceiling when `Landing`
             // arrived, and the ceiling is right: a match arm per fact is readable
@@ -2367,6 +2380,7 @@ impl Fact {
             | Fact::RecordsBlocked
             | Fact::Pinned
             | Fact::RedHead
+            | Fact::PathspecStatus
             | Fact::Review => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact scalar_schema_fragment does not own",
             }),
@@ -2458,6 +2472,7 @@ impl Fact {
             | Fact::Captured
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::PathspecStatus
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
             }),
@@ -2487,6 +2502,31 @@ impl Fact {
     /// The schema fragment for [`Fact::RedHead`] (CLOUD-2270): the record's
     /// shape, stated so `opa check -s` refuses a module that walks `failed`
     /// without reading the `null` a branch with no red head carries.
+    fn pathspec_status_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::PathspecStatus (CLOUD-2684) -- one entry per pathspec of every `git checkout`/`git restore` program in the call, or null when the call has none or one cannot be placed. `path` is repo-relative; `literal` is false for `.`, pathspec magic, a glob or a directory; `tracked` that the index holds a path under it; `clean` that HEAD, the index and the worktree agree there. Paths only, never content.",
+            "properties": {
+                "pathspecs": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "literal": {"type": "boolean"},
+                            "tracked": {"type": "boolean"},
+                            "clean": {"type": "boolean"},
+                        },
+                        "required": ["path", "literal", "tracked", "clean"],
+                        "additionalProperties": false,
+                    },
+                },
+            },
+            "required": ["pathspecs"],
+            "additionalProperties": false,
+        })
+    }
+
     fn red_head_schema_fragment() -> serde_json::Value {
         serde_json::json!({
             "type": ["object", "null"],
@@ -2646,6 +2686,7 @@ impl Fact {
             | Fact::Landing
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::PathspecStatus
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact keyed_read_schema_fragment does not own",
             }),
@@ -2870,6 +2911,7 @@ impl Fact {
             | Fact::GitIndex
             | Fact::DispatchCleared
             | Fact::RedHead
+            | Fact::PathspecStatus
             | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
@@ -2934,6 +2976,7 @@ impl Fact {
             | Fact::RecordsBlocked
             | Fact::Instant
             | Fact::RedHead
+            | Fact::PathspecStatus
             | Fact::Pinned => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact repository_schema_fragment does not own",
             }),

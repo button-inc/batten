@@ -37,9 +37,9 @@ use batten::facts::{
     AGENT_SOURCED, BASE_DELTA, CAPTURED, COMMIT_META, Class, Cost, DISPATCH_CLEARED, DOCUMENT,
     EXTERNAL, EXTRACTED, FORGE, Fact, GIT_CONFIG, GIT_HEAD, GIT_HISTORY, GIT_INDEX, GIT_RANGE,
     GIT_REF, GIT_REMOTE, GIT_STATUS, GIT_TAGS, GIT_WORKTREES, INSTANT, INVOCATIONS, KEYS, LANDING,
-    LINES, Look, MINTED, PINNED, PLAN, PRODUCED, PROSPECTIVE, RECEIPTS, RECORDS, RECORDS_BLOCKED,
-    RED_HEAD, REVIEW, STAGED, STATE, STOP, SYMBOLS, Surface, TASKS, TOOL_VERDICT, TRACKED,
-    TRAVERSALS, USES, WAIVED,
+    LINES, Look, MINTED, PATHSPEC_STATUS, PINNED, PLAN, PRODUCED, PROSPECTIVE, RECEIPTS, RECORDS,
+    RECORDS_BLOCKED, RED_HEAD, REVIEW, STAGED, STATE, STOP, SYMBOLS, Surface, TASKS, TOOL_VERDICT,
+    TRACKED, TRAVERSALS, USES, WAIVED,
 };
 
 #[test]
@@ -165,6 +165,8 @@ fn every_fact_returns_its_stated_const() {
             Fact::DispatchCleared => DISPATCH_CLEARED,
             // CLOUD-2270. One record read and a stat per failed run.
             Fact::RedHead => RED_HEAD,
+            // CLOUD-2684. One index and status read, only on a checkout/restore.
+            Fact::PathspecStatus => PATHSPEC_STATUS,
         }
     };
 
@@ -173,7 +175,7 @@ fn every_fact_returns_its_stated_const() {
     // rather than quietly shrinking the census.
     assert_eq!(
         Fact::ALL.len(),
-        44,
+        45,
         "the census covers every fact; update this count deliberately when the \
          model gains or loses one"
     );

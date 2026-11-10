@@ -2,6 +2,11 @@
 #MUTANT git-ungranted|s@^\tgit_call(program)$@\tfalse@|an_everyday_git_call_is_granted
 #MUTANT destructive-granted|s@^\tnot destructive(program)$@\ttrue@|a_destructive_git_call_is_left_to_the_host
 #MUTANT reset-subcommand-unread|s@^\tprogram.subcommand == "reset"$@\tfalse@|a_global_option_never_hides_a_destructive_git_call
+#MUTANT clean-restore-ungranted|s@^\tcount(status.pathspecs) > 0$@\tfalse@|a_checkout_of_a_clean_tracked_file_is_granted
+#MUTANT dirty-restore-granted|s@^\t\tp.clean == true$@\t\ttrue@|a_checkout_of_a_dirty_file_is_left_to_the_host
+#MUTANT bare-restore-granted|s@^\tprogram.subcommand == "restore"$@\tfalse@|a_bare_restore_of_a_dirty_file_is_left_to_the_host
+#MUTANT untracked-restore-granted|s@^\t\tp.tracked == true$@\t\ttrue@|a_checkout_of_an_untracked_path_is_left_to_the_host
+#MUTANT glob-restore-granted|s@^\t\tp.literal == true$@\t\ttrue@|a_globbed_or_directory_pathspec_is_left_to_the_host
 #MUTANT plan-granted|s@^\tnot input.call\["permission-mode"\] == "plan"$@\ttrue@|a_git_write_is_not_granted_in_plan_mode
 # Every git call batten allows is put to no one (CLOUD-2057).
 #
@@ -46,6 +51,7 @@ granted(program) if {
 	git_call(program)
 	not destructive(program)
 	not pushes_to_trunk(program)
+	not discards(program, object.get(input, ["facts", "pathspec-status"], null))
 }
 
 granted(program) if program.name == "cd"
@@ -114,11 +120,31 @@ destructive(program) if {
 	has(program.arguments, "--hard")
 }
 
-# Discarding working-tree changes: a pathspec after `--`, or `.`.
-destructive(program) if {
-	program.subcommand in {"checkout", "restore"}
+# DISCARDING WORKING-TREE CHANGES, decided by what is at the paths
+# (CLOUD-2684): a checkout or restore of literal, tracked, clean pathspecs loses
+# nothing, so it is granted; anything else is left to the host. The fact is the
+# engine's `pathspec-status`, `null` where the call names no such program or one
+# it cannot place, and `null` never reads as clean. A restore needs no `--`.
+discards(program, status) if {
+	program.subcommand == "checkout"
 	some word in program.arguments
 	word in {"--", "."}
+	not clean_pathspecs(status)
+}
+
+discards(program, status) if {
+	program.subcommand == "restore"
+	not clean_pathspecs(status)
+}
+
+clean_pathspecs(status) if {
+	is_array(status.pathspecs)
+	count(status.pathspecs) > 0
+	every p in status.pathspecs {
+		p.literal == true
+		p.tracked == true
+		p.clean == true
+	}
 }
 
 destructive(program) if {
@@ -252,4 +278,34 @@ test_a_refspec_onto_the_trunk_is_left_to_the_host if {
 test_a_push_to_a_branch_is_granted_beside_a_trunk if {
 	"program grant now" in preapprove with input as call("auto", "git push -u origin feat", [git([], "push", ["-u", "origin", "feat"])])
 		with data.batten.patterns as trunk
+}
+
+# CLOUD-2684: a clean, tracked, literal pathspec is granted; anything else, and
+# an absent fact, is left to the host.
+pathspec_call(command, programs, status) := {
+	"call": {
+		"event": "pre-tool", "tool": "Bash", "permission-mode": "default",
+		"command": command,
+		"segments": [{"words": split(command, " ")}],
+		"programs": programs,
+	},
+	"facts": {"pathspec-status": status},
+}
+
+clean_f := {"pathspecs": [{"path": "f", "literal": true, "tracked": true, "clean": true}]}
+
+test_a_clean_checkout_is_granted if {
+	"program grant now" in preapprove with input as pathspec_call("git checkout HEAD -- f", [git([], "checkout", ["HEAD", "--", "f"])], clean_f)
+}
+
+test_a_dirty_restore_is_left_to_the_host if {
+	count(preapprove) == 0 with input as pathspec_call("git restore f", [git([], "restore", ["f"])], {"pathspecs": [{"path": "f", "literal": true, "tracked": true, "clean": false}]})
+}
+
+test_a_restore_with_no_fact_is_left_to_the_host if {
+	count(preapprove) == 0 with input as call("default", "git restore f", [git([], "restore", ["f"])])
+}
+
+test_a_directory_checkout_is_left_to_the_host if {
+	count(preapprove) == 0 with input as pathspec_call("git checkout HEAD -- docs", [git([], "checkout", ["HEAD", "--", "docs"])], {"pathspecs": [{"path": "docs", "literal": false, "tracked": true, "clean": true}]})
 }
