@@ -3471,6 +3471,11 @@
           "description": "A mediated `git commit` whose message subject breaks\n`[commit].subject_pattern` (CLOUD-2683).",
           "type": "string",
           "const": "commit-subject"
+        },
+        {
+          "description": "A call that reaches a repository other than its session's home\n(CLOUD-2672). Opt-in: armed only where the home declares a row.",
+          "type": "string",
+          "const": "repository-reach"
         }
       ]
     },

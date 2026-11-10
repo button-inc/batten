@@ -5108,7 +5108,9 @@ fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     if let Some(decided) = event_decides(envelope.event) {
         return decided;
     }
-    if policy.is_empty() {
+    // An empty JUDGING policy still owes the home's reach gate (CLOUD-2672),
+    // which a target repository with no rows cannot lower by having none.
+    if policy.is_empty() && reach_refusal(facts.reach).is_none() {
         return Decision::Allow;
     }
     adjudicated_call_gates(policy, envelope, facts)
@@ -5230,7 +5232,14 @@ fn event_decides(event: Event) -> Option<Decision> {
 /// The severity a compiled gate runs at here: [`crate::rules::native_grade`]
 /// over this policy's mediated rows (CLOUD-2291). Only the committed authority
 /// carries one (`resolve::apply_local`).
-fn native_grade(policy: &Policy, gate: NativeGate) -> RuleSeverity {
+///
+/// `repository-reach` is graded by the HOME's rows (CLOUD-2672), which the
+/// boundary read into [`Reach::grade`]: a target's config cannot arm or lower a
+/// gate that exists to keep a session at home.
+fn native_grade(policy: &Policy, gate: NativeGate, facts: &Facts<'_>) -> RuleSeverity {
+    if gate == NativeGate::RepositoryReach {
+        return facts.reach.grade.unwrap_or(RuleSeverity::Allow);
+    }
     crate::rules::native_grade(&policy.shapes, gate)
 }
 
@@ -5241,7 +5250,7 @@ fn native_denial(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Opt
     native_fired(policy, envelope, facts)
         .into_iter()
         .find_map(|(gate, refusal)| {
-            let severity = native_grade(policy, gate);
+            let severity = native_grade(policy, gate, facts);
             blocks(severity, policy.fail_on_warning).then(|| disposed_at(severity, refusal))
         })
 }
@@ -5252,7 +5261,7 @@ fn native_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec
     native_fired(policy, envelope, facts)
         .into_iter()
         .filter(|(gate, _)| {
-            let severity = native_grade(policy, *gate);
+            let severity = native_grade(policy, *gate, facts);
             severity != RuleSeverity::Allow && !blocks(severity, policy.fail_on_warning)
         })
         .map(|(_, refusal)| refusal)
@@ -5329,7 +5338,67 @@ fn native_fired(
     if let Some(refusal) = commit_subject_gate(policy, facts) {
         fired.push((NativeGate::CommitSubject, refusal));
     }
+    // THE REACH GATE (CLOUD-2672), graded by the home and `allow` until armed.
+    if let Some(refusal) = reach_refusal(facts.reach) {
+        fired.push((NativeGate::RepositoryReach, refusal));
+    }
     fired
+}
+
+/// Where a call stands and what it reaches, as the boundary placed it
+/// (CLOUD-2672).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reach {
+    /// The call's start directory, canonical.
+    pub cwd: Option<String>,
+    /// The sorted, unique canonical roots of every target; empty when none is
+    /// in a repository, and `None` when one cannot be placed.
+    pub roots: Option<Vec<String>>,
+    /// The session's home, canonical, or `None` where it has none.
+    pub home: Option<String>,
+    /// The home's `repository-reach` grade, `None` where the home arms none.
+    pub grade: Option<RuleSeverity>,
+}
+
+/// The reach of a call nothing placed: no directory, no root, no home.
+pub static NO_REACH: Reach = Reach {
+    cwd: None,
+    roots: Some(Vec::new()),
+    home: None,
+    grade: None,
+};
+
+// CLOUD-2672's projection, in `call_document`.
+//MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
+//MUTANT call-roots-unprojected|s@^        call.insert("roots".to_owned(), serde_json::json!(facts.reach.roots));$@        call.insert("roots".to_owned(), serde_json::Value::Array(Vec::new()));@|a_policy_sees_the_call_cwd_roots_and_home
+//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
+/// The rule id the reach gate refuses under (CLOUD-2672).
+pub const REPOSITORY_REACH: &str = "repository-reach";
+
+/// A call that leaves the home, or cannot be placed, where the home arms the
+/// gate. A target in no repository passes; containment fails closed.
+fn reach_refusal(reach: &Reach) -> Option<Refusal> {
+    reach.grade.filter(|grade| *grade != RuleSeverity::Allow)?;
+    let home = reach.home.as_deref()?;
+    let elsewhere = match &reach.roots {
+        None => Some("an unplaceable target"),
+        Some(roots) => roots.iter().map(String::as_str).find(|root| *root != home),
+    }?;
+    Some(Refusal::declared(
+        REPOSITORY_REACH,
+        crate::verdict::Native::CallReachLoose,
+        &[
+            crate::verdict::Subject::Artifact {
+                artifact: home.to_owned(),
+            },
+            crate::verdict::Subject::Artifact {
+                artifact: elsewhere.to_owned(),
+            },
+        ],
+        Fix::declared(Some(
+            "work there from a session homed in it, or `batten override request --rule repository-reach`",
+        )),
+    ))
 }
 
 /// The rule id the commit-subject gate refuses under (CLOUD-2683).
@@ -6096,6 +6165,9 @@ pub struct Facts<'a> {
     /// judgement stays in [`native_fired`]. Could-not-look ALLOWS: no message, an
     /// expansion in the first line, an unreadable file, or no `[commit]` table.
     pub commit_subject: &'a crate::facts::Look<String>,
+    /// Where this call stands and what it reaches (CLOUD-2672), placed at the
+    /// boundary because placing a directory asks git.
+    pub reach: &'a Reach,
     /// What the agent reported for each agent-sourced check.
     pub sourced: &'a AgentFacts,
     /// What this call's write would land, before it happens (CLOUD-758).
@@ -6180,6 +6252,7 @@ impl<'a> Facts<'a> {
             // nothing has not established what this context read (CLOUD-2144).
             unread_history: &crate::facts::Look::CouldNotLook,
             commit_subject: &crate::facts::Look::CouldNotLook,
+            reach: &NO_REACH,
             // Could-not-look, never "an empty write". A `Facts::none` caller has
             // resolved nothing, which is a different claim from having looked
             // and found no content.
@@ -7451,6 +7524,130 @@ fn followed_cd(
     shell_resolved(target, current)
 }
 
+/// The directories a call acts on (CLOUD-2672), or `None` where one of them
+/// cannot be placed.
+///
+/// Only a tool call has targets; every other event is judged by the session's
+/// home. A structured call's target is its `file_path`, `notebook_path` or
+/// `path`, joined to `start` when relative, or `start` itself where it names
+/// none. A shell call's are `start`, advanced through each followed `cd` or
+/// `pushd`; every top-level `cd`/`pushd` operand whatever its terminator; and
+/// each `git -C`, `--git-dir` and `--work-tree` operand.
+#[must_use]
+pub fn call_targets(envelope: &Envelope, start: &Path) -> Option<Vec<std::path::PathBuf>> {
+    if !matches!(
+        envelope.event,
+        Event::PreTool | Event::PostTool | Event::PermissionRequest
+    ) {
+        return Some(Vec::new());
+    }
+    if envelope.command.is_empty() {
+        let named = ["/file_path", "/notebook_path", "/path"]
+            .iter()
+            .find_map(|pointer| envelope.input.pointer(pointer).and_then(Value::as_str));
+        return Some(vec![
+            named.map_or_else(|| start.to_path_buf(), |path| start.join(path)),
+        ]);
+    }
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    let mut current = start.to_path_buf();
+    let mut operands = Vec::new();
+    for (_, segment, line) in per_line(&parsed) {
+        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+        let handed = &tokens[..tokens.len().saturating_sub(line.redirects.len())];
+        if is_cd_segment(handed) {
+            let dir = placed_cd(segment, handed, &current)?;
+            operands.push(dir.clone());
+            if !segment.grouped
+                && !segment.nested
+                && matches!(segment.terminator, Some(Separator::And | Separator::Semi))
+            {
+                current = dir;
+            }
+            continue;
+        }
+        operands.extend(git_dir_operands(handed, &current));
+    }
+    // The directory in effect, after every followed `cd`, judges first: `cd B
+    // && x` acts in B, while a trailing `cd B` only names B.
+    Some(std::iter::once(current).chain(operands).collect())
+}
+
+/// A segment whose program, read through `command`, `builtin` and the
+/// keywords that may stand before it, is `cd` or `pushd`.
+fn is_cd_segment(tokens: &[&str]) -> bool {
+    tokens
+        .iter()
+        .find(|word| {
+            !matches!(
+                **word,
+                "command" | "builtin" | "if" | "then" | "do" | "{" | "!"
+            )
+        })
+        .is_some_and(|word| matches!(*word, "cd" | "pushd"))
+}
+
+/// The directory a `cd`/`pushd` segment names, or `None` where it cannot be
+/// placed: a prefix before it, a flag, `-`, an expansion or a glob, or a
+/// group or substitution around it.
+fn placed_cd(segment: &Segment, tokens: &[&str], current: &Path) -> Option<std::path::PathBuf> {
+    if segment.grouped || segment.nested || segment.construct.is_some() {
+        return None;
+    }
+    let [verb, target] = tokens else {
+        return None;
+    };
+    if !matches!(*verb, "cd" | "pushd")
+        || !placeable(target)
+        || target.starts_with('-')
+        || target.contains(['*', '?', '['])
+    {
+        return None;
+    }
+    shell_resolved(target, Some(current))
+}
+
+/// The directories a git program's own options point it at: `-C <dir>`, and
+/// `--git-dir`/`--work-tree` in either spelling. A `.git` directory names its
+/// checkout.
+fn git_dir_operands(tokens: &[&str], current: &Path) -> Vec<std::path::PathBuf> {
+    let Some(program) = effective_program(tokens) else {
+        return Vec::new();
+    };
+    if program_name(program_token(tokens[program])) != "git" {
+        return Vec::new();
+    }
+    let arguments = &tokens[program + 1..];
+    let end = subcommand_index(arguments, &GIT_VALUE_OPTIONS).unwrap_or(arguments.len());
+    let mut operands = Vec::new();
+    let mut index = 0;
+    while index < end {
+        let word = arguments[index];
+        let value = match word {
+            "-C" | "--git-dir" | "--work-tree" => arguments.get(index + 1).copied(),
+            _ => word
+                .strip_prefix("--git-dir=")
+                .or_else(|| word.strip_prefix("--work-tree=")),
+        };
+        if let Some(dir) = value.and_then(|value| shell_resolved(value, Some(current))) {
+            let named_git_dir = dir.file_name().is_some_and(|name| name == ".git");
+            operands.push(if named_git_dir {
+                dir.parent().map_or(dir.clone(), Path::to_path_buf)
+            } else {
+                dir
+            });
+        }
+        index += if GIT_VALUE_OPTIONS.contains(&word) {
+            2
+        } else {
+            1
+        };
+    }
+    operands
+}
+
 /// A shell word naming a path, resolved against the directory in effect, or
 /// `None` when it is relative and no directory is known.
 ///
@@ -8215,7 +8412,9 @@ pub fn policy_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     // A compiled gate graded `warn` speaks here, beside the modules (CLOUD-2291).
     // Under the chain's own conditions, so the warn side runs exactly where the
     // deny side does.
-    let mut advice = if event_decides(envelope.event).is_none() && !policy.is_empty() {
+    let mut advice = if event_decides(envelope.event).is_none()
+        && (!policy.is_empty() || reach_refusal(facts.reach).is_some())
+    {
         native_advice(policy, envelope, facts)
     } else {
         Vec::new()
@@ -8843,7 +9042,7 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             projected_facts.insert(fact.as_str().to_owned(), value);
         }
     }
-    serde_json::to_string(&serde_json::json!({
+    let mut document = serde_json::json!({
         "call": {
             "event": envelope.event.as_str(),
             "operation": envelope.operation.as_str(),
@@ -9015,7 +9214,16 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             "permission-mode": envelope.mode,
         },
         "facts": projected_facts,
-    }))
+    });
+    // WHERE THE CALL STANDS AND WHAT IT REACHES (CLOUD-2672), inserted after the
+    // build for `extend_call_schema`'s reason: one more key inline exceeds the
+    // macro's recursion limit.
+    if let Some(call) = document.get_mut("call").and_then(Value::as_object_mut) {
+        call.insert("cwd".to_owned(), serde_json::json!(facts.reach.cwd));
+        call.insert("roots".to_owned(), serde_json::json!(facts.reach.roots));
+        call.insert("home".to_owned(), serde_json::json!(facts.reach.home));
+    }
+    serde_json::to_string(&document)
 }
 
 /// The program a token names, with any path it was reached through dropped.
@@ -12715,6 +12923,7 @@ mod tests {
                 singleton: &None,
                 unread_history: &crate::facts::Look::CouldNotLook,
                 commit_subject: &crate::facts::Look::CouldNotLook,
+                reach: &NO_REACH,
                 // Could-not-look: these unit cases resolve no repository, so
                 // they make no claim about what a reset would discard. The
                 // compiled tier `history_drop.rs` is where that fact is real.
