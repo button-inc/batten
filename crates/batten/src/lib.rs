@@ -120,8 +120,6 @@ pub mod mcp_posture;
 pub mod mint;
 pub mod minted;
 pub mod mutate;
-#[cfg(test)]
-mod mutation_markers;
 pub mod o200k;
 pub mod outcome;
 pub mod output;
@@ -31123,6 +31121,10 @@ pub fn land_ready_owes(
         _ => Ok(None),
     }
 }
+
+/// The build script's marker scanner, compiled here only so its own unit tests run.
+#[cfg(test)]
+mod mutation_markers;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
