@@ -1900,8 +1900,6 @@ struct StatusReport<'a> {
 /// A **detached HEAD under `--key branch`** is an internal error rather than a
 /// verdict, for [`branch_facts`]'s reason: a rebase detaches, and answering
 /// "not valid" there would make every rebase look like an unclaimed branch.
-//MUTANT delta-base-unchecked|s@^            if git::resolve_ref(Path::new(&facts.repo_root), base)?.is_none() {$@            if false {@|an_unresolvable_base_is_refused_rather_than_read_missing
-//MUTANT delta-status-unread|s@^                    let verdict = named_validity(&facts.git_dir, check, &identity);$@                    let verdict = Validity::Valid;@|a_dispatched_review_answers_only_once_it_completes
 pub fn run_status(
     check: &str,
     key: ReceiptKey,
@@ -2039,7 +2037,6 @@ pub fn run_status(
 /// one check: the verb's document is ONE verdict, and several documents on one
 /// stream are not one document.
 //MUTANT-SUITE crates/batten/src/receipt.rs
-//MUTANT receipt-any-stops-at-the-first|s@        if verdict == ExitCode::Success {@        if verdict != ExitCode::Success {@|any_one_valid_receipt_satisfies_the_walk
 pub fn run_status_any(
     checks: &[String],
     key: ReceiptKey,

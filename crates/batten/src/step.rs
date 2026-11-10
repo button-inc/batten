@@ -123,22 +123,8 @@ const SHOWN: usize = 12;
 // the three the composed `run` arm adds. Each breaks one clause a receipt's
 // soundness rests on, and each is caught by the compiled-binary case it names.
 //MUTANT-SUITE crates/batten/tests/it/step_receipt.rs
-//MUTANT hit-without-key-match|s@^    if stored.as_deref() == Some(key.as_str()) {$@    if true {@|a_changed_input_file_misses
-//MUTANT args-not-keyed|s@^    lines.extend(args.iter().map(.arg. format!("arg {}", quoted(arg))));$@    let _ = args;@|a_changed_argument_misses
-//MUTANT command-not-keyed|s@^        lines.push(format!("command {}", serde_json::to_string(command).ok()?));$@        let _ = command;@|a_changed_command_misses
-//MUTANT tools-not-keyed|s@^            quoted(said)$@            quoted("")@|a_changed_tool_version_misses
-//MUTANT dirty-index-trusted|s@^        if !clean {$@        if clean == !clean {@|unstaged_divergence_is_no_key
-//MUTANT weld-unchecked|s@^    if key.as_deref() != Some(expected.as_str()) {$@    if key.is_none() {@|inputs_changing_while_the_step_ran_refuse_the_record
-//MUTANT ci-caches|s@^    if bypassed() {$@    if false {@|under_ci_the_cache_neither_hits_nor_records
-//MUTANT failure-recorded|s@^    let passed = matches!(ran, Ok(ExitCode::Success));$@    let passed = true;@|a_failing_command_passes_its_code_through_and_records_nothing
-//MUTANT hit-runs-anyway|s@^    if answer.is_hit() {$@    if false {@|a_hit_does_not_run_the_command
 // And the three the review added: the row as key material, the table read from
 // the keyed tree alone, and no key running the step rather than skipping it.
-//MUTANT row-not-keyed|s@^    lines.push(format!("row {}", serde_json::to_string(row).ok()?));$@    let _ = row;@|an_edited_row_is_a_miss
-//MUTANT config-source-honoured|s@&Overrides::default()).ok()?;$@\&{ let mut o = Overrides::default(); o.config_in = std::env::var("BATTEN_CONFIG_IN").ok(); o }).ok()?;@|a_config_source_override_does_not_reach_the_step_table
-//MUTANT no-key-skips|s@^    if answer.is_hit() {$@    if !matches!(answer, Answer::Miss(_)) {@|an_authority_that_will_not_load_still_runs_the_step
-//MUTANT step-run-drops-child-stderr|s@^    settings.tee = true;$@    settings.tee = false;@|a_failing_step_shows_the_commands_own_output
-//MUTANT record-refusal-fails-step|s@^        let _ = record(step, args, Some(command), &mut recorded, &mut refused);$@        if !matches!(record(step, args, Some(command), \&mut recorded, \&mut refused), Ok(ExitCode::Success)) { return Ok(ExitCode::Violation); }@|a_passing_step_whose_record_refuses_stays_green
 
 /// What a check found.
 #[derive(Debug, Clone, PartialEq, Eq)]

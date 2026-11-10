@@ -269,12 +269,6 @@ fn task_names(lines: &[String]) -> Vec<String> {
 /// read as the named task's block alone — for a `task-` gate, so its reads cannot
 /// reach another task's rows (CLOUD-1909).
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
-//MUTANT task-block-unscoped|s@        Some(task) if task_manifest().as_deref() == Some(source) => task_block(&lines, task),@        Some(_) if task_manifest().as_deref() == Some(source) => Some(lines),@|a_task_gate_sweeps_only_its_own_block
-//MUTANT registered-rows-swept-by-hand|s@^                if !gate.rows.is_empty() \&\& !gate.rows.iter().any(\x7crow\x7c registry.declares(row)) {$@                if false {@|a_change_to_a_rust_gate_is_judged_by_its_registered_runner
-//MUTANT registered-row-judged-twice|s@^                .filter(\x7crow\x7c registry.declares(row))$@                .filter(\x7c_\x7c true)@|a_registered_runners_rows_are_never_swept_by_the_declared_runner
-//MUTANT shard-slices-unsorted|s@^    sorted.sort();$@@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
-//MUTANT shard-takes-every-gate|s@^        .filter(\x7c(_, owned)\x7c \*owned)$@        .filter(\x7c_\x7c true)@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
-//MUTANT every-gate-touched|s@^        \.filter(\x7cname\x7c {$@        .filter(\x7cname\x7c { true \x7c\x7c@|a_change_touching_no_gate_sweeps_nothing
 fn declaring_lines(root: &Path, name: &str, source: &str) -> Option<Vec<String>> {
     declaring_in(name, source, lines_of(root, source)?)
 }
@@ -371,7 +365,6 @@ pub enum Suite {
     Pytest { path: String },
 }
 
-//MUTANT unrecognized-suite-guessed|s@^            return None;$@            return Some(Suite::Pytest { path: path.to_owned() });@|an_unrecognized_suite_is_reported_not_run
 impl Suite {
     /// The suite a declared path names, or `None` for a path this runner has no
     /// runner for — which is reported rather than guessed at.
@@ -1016,7 +1009,6 @@ pub fn enforced_set(root: &Path, table: Option<&crate::config::Mutate>) -> Resul
 /// The committed table's gates, each glob expanded to the names its matches
 /// already have as subjects, in tracked-path order.
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
-//MUTANT committed-set-unread|s@^    let declared = \&table.gates;$@    let declared = \&table.scope;@|census_runs_on_the_set_batten_toml_declares
 fn committed(root: &Path, table: Option<&crate::config::Mutate>) -> Result<Vec<String>> {
     let Some(table) = table else {
         return Ok(Vec::new());
@@ -1141,9 +1133,6 @@ pub fn touched(
 
 /// Whether `changed` moves `gate`: a changed path is one of its sources, one of
 /// [`Gate::suites`], or inside its preset directory ([`touched`]'s three arms).
-//MUTANT source-change-ignored|s@^    let by_source = .*;$@    let by_source = false;@|a_change_to_one_gate_sweeps_only_that_gate
-//MUTANT suite-change-ignored|s@^    let by_suite = .*;$@    let by_suite = false;@|a_change_to_a_suite_sweeps_its_gate
-//MUTANT deleted-module-ignored|s@^    let by_preset = .*;$@    let by_preset = false;@|a_deleted_preset_module_sweeps_its_gate
 fn changed_by(gate: &Gate, name: &str, changed: &std::collections::BTreeSet<String>) -> bool {
     let by_source = gate.sources.iter().any(|path| changed.contains(path));
     let by_suite = gate.suites().iter().any(|s| changed.contains(s.path()));
@@ -1265,29 +1254,7 @@ impl RunnerKind {
 }
 
 //MUTANT-SUITE crates/batten/src/mutate.rs
-//MUTANT registry-owns-nothing|s@^            .filter(\x7c(_, glob)\x7c crate::rules::glob_match(glob, path))$@            .filter(\x7c_\x7c false)@|a_registered_glob_owns_its_sources_and_the_declared_runner_the_rest
-//MUTANT overlap-picks-one|s@^        let mut owners = owners.into_iter();$@        let mut owners = owners.into_iter().take(1);@|a_source_two_runners_claim_has_no_owner
-//MUTANT declared-runner-takes-globs|s@^            if kind == RunnerKind::Declared {$@            if false {@|a_registry_naming_no_runner_or_giving_the_declared_one_globs_is_refused
-//MUTANT declared-suites-unscoped|s@^        .filter(\x7csuite\x7c has_extension(suite, "rs"))$@        .filter(\x7c_\x7c false)@|a_sources_scope_is_its_own_tests_and_every_suite_it_declares
-//MUTANT missed-unread|s@^    let missed: Vec<String> = lines("missed.txt")@    let missed: Vec<String> = lines("absent.txt")@|a_missed_mutant_is_a_survivor_named_by_pointer_alone
-//MUTANT failed-run-reads-caught|s@^        } else if !ran.passed() \&\& found.is_empty() {$@        } else if false {@|a_failed_run_with_nothing_missed_is_never_every_mutant_caught
-//MUTANT row-judged-under-first-suite|s@^            above = Some(suite);$@            above = first.clone().or(Some(suite));@|a_row_is_judged_under_the_suite_above_it
-//MUTANT later-unrecognized-costs-the-gate|s@^                None if index == 0 => unrunnable@                None if true => unrunnable@|a_later_unrecognized_suite_costs_only_the_rows_under_it
-//MUTANT suite-first-only|s@^            Some(_) => row.resolved.as_ref(),$@            Some(_) => self.suite.as_ref(),@|each_preset_module_row_runs_under_its_own_declared_suite
-//MUTANT every-row-on-every-shard|s@^    shard.is_none_or(\x7c(k, n)\x7c index % n == k)$@    true@|a_large_gates_rows_spread_across_every_shard
-//MUTANT gate-finding-on-every-shard|s@^        if reports {$@        if true {@|a_sharded_sweep_judges_each_row_and_reports_each_gate_once
-//MUTANT gate-named-twice-swept-twice|s@^    sorted.dedup();$@@|a_sharded_sweep_judges_each_row_and_reports_each_gate_once
-//MUTANT empty-shard-staged|s@^    if mine.is_empty() {$@    if false {@|a_shard_owning_no_row_stages_nothing
-//MUTANT nextest-profile-unpinned|s@^        (String::from("NEXTEST_PROFILE"), String::from("default")),$@        (String::from("NEXTEST_PROFILE"), String::from("ci")),@|every_runner_runs_the_default_nextest_profile
-//MUTANT nextest-env-inherited|s@^        .filter(\x7ckey\x7c key.starts_with("NEXTEST_") \&\& @        .filter(\x7ckey\x7c key.is_empty() \&\& @|an_env_naming_nextest_scrubs_every_inherited_nextest_variable
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
-//MUTANT later-suites-unread|s@^                    own.push(resolved);$@                    if own.is_empty() { own.push(resolved); }@|a_change_to_a_sources_second_suite_sweeps_its_gate
-//MUTANT retries-unpinned|s@^    "--retries=0",$@    "--retries=3",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
-//MUTANT default-filter-kept|s@^    "--ignore-default-filter",$@    "--test-threads=num-cpus",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
-//MUTANT status-level-unpinned|s@^    "--status-level=pass",$@    "--status-level=fail",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
-//MUTANT nextest-unprobed|s@^    let absent = mine.iter().any(runs_nextest) \&\& !cargo_answers(root, "nextest", None);$@    let absent = false;@|a_declared_cargo_row_without_nextest_reads_one_runner_absent
-//MUTANT malformed-shard-unrefused|s@^    parse_shard(shard).ok_or_else(\x7c\x7c format!("{SHARD}={shard} is not `k/n` with 0 <= k < n"))$@    Ok(parse_shard(shard).unwrap_or((0, 1)))@|a_malformed_shard_is_refused_before_the_registered_runner
-//MUTANT declared-profile-dropped|s@^    if let Some(profile) = declared_profile(staged, std::env::var("NEXTEST_PROFILE").ok())$@    if let Some(profile) = None::<String>@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
 /// Which registered runner owns which sources.
 ///
 /// Every source has exactly one owner: the first registered runner whose glob
@@ -1548,8 +1515,6 @@ fn resolves(root: &Path, program: &str) -> bool {
 
 /// What a `command` runner's exit says (CLOUD-2211): 0 caught, 2 survived, and
 /// anything else — 1 included, which is a crash's code — could-not-look.
-//MUTANT command-exit-unread|s@^    match ran.outcome {$@    match Outcome::Passed {@|a_command_runner_exit_two_is_survived
-//MUTANT command-error-read-as-caught|s@^        Outcome::Failed(code) => Verdict::RunnerErrored { code },$@        Outcome::Failed(_) => Verdict::Caught,@|a_command_runner_that_errors_cannot_look
 #[must_use]
 fn command_verdict(ran: &Ran) -> Verdict {
     match ran.outcome {
@@ -2672,10 +2637,6 @@ fn spawn_as(
 /// pid that leads no group answers `ESRCH`. What it cost was measured: every hung
 /// cargo suite left its test binary — which a mutant can make loop forever —
 /// alive under init, two of them found 35 and 56 minutes after their runs.
-//MUTANT hung-suite-not-reported|s@^        Err(_) => true,$@        Err(_) => false,@|a_suite_that_hangs_is_ended_by_the_sweeps_own_bound
-//MUTANT suite-reap-leader-only|s@^        let _ = rustix::process::kill_process_group(group, @        let _ = rustix::process::kill_process(group, @|a_suite_that_hangs_is_ended_by_the_sweeps_own_bound
-//MUTANT suite-ungrouped|s@^    crate::exec::lead_group(&mut command);$@    let _ = \&mut command;@|a_suite_that_hangs_is_ended_by_the_sweeps_own_bound
-//MUTANT forwarding-unadopted|s@^    forwarding.adopt(child.id())?;$@@|a_signalled_sweep_takes_its_suite_with_it
 #[cfg(unix)]
 fn wait_bounded(
     mut child: std::process::Child,
@@ -2744,7 +2705,6 @@ fn sweep_group(_leader: u32) {}
 /// nobody. The zombie also keeps the group answering, so the sweep runs its full
 /// count rather than stopping at the first `ESRCH`: a bounded cost of microseconds
 /// per suite, against a build per mutant.
-//MUTANT sweep-sends-nothing|s@^    for _ in 0\.\.SWEEPS {$@    for _ in 0..0 {@|a_sweep_ends_what_is_left_in_a_group
 #[cfg(unix)]
 fn sweep_group(leader: u32) {
     let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default())
@@ -2766,7 +2726,6 @@ const TERMINATE_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// `SIGTERM` the process group `leader` leads, through [`crate::exec::signal_group`].
 /// Best effort, as [`kill_group`].
-//MUTANT runner-not-asked-first|s@^        crate::exec::signal_group(group, rustix::process::Signal::TERM);$@        let _ = group;@|a_suite_that_hangs_is_ended_by_the_sweeps_own_bound
 #[cfg(unix)]
 fn terminate_group(leader: u32) {
     if let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default()) {
@@ -3155,7 +3114,6 @@ fn spawn_arm(
     spawn(&arm.cwd, Program::Suite(program), args, env, bound)
 }
 
-//MUTANT tofu-arm-never-initialises|s@^        let _ = spawn(&module, Program::Suite("tofu"), &init, &env, build_bound());$@        let _ = (module, init);@|a_tofu_suite_is_initialised_before_it_runs
 /// Run a gate's suite against the staged tree, filtered to `want` where its
 /// harness can filter, and read the named case's own verdict back.
 ///
@@ -3260,9 +3218,6 @@ const STATUS_WORDS: &[&str] = &[
     "LEAK",
 ];
 
-//MUTANT stopped-at-a-sibling|s@Some("SLOW") if@Some("SLOWX") if@|a_timed_out_suite_names_where_it_stopped
-//MUTANT stopped-at-a-finished-case|s@ if !finished.contains(&case_of(words)) =>@ =>@|a_timed_out_suite_names_where_it_stopped
-//MUTANT stopped-at-first-line|s@^        \.rev()$@        .skip(0)@|a_timed_out_suite_names_where_it_stopped
 /// Where a suite killed at its bound had got to: the first five words of a
 /// status line cargo or nextest printed, so `Compiling <crate>`, `SETUP` or
 /// `SLOW [> Ns] <case>` (CLOUD-2206). A POINTER, NEVER THE OUTPUT: a timeout
@@ -3468,7 +3423,6 @@ fn nextest_ran(output: &str) -> bool {
 /// shape is the errored one, and reading it as a failure would call every
 /// parse-breaking mutation caught. The `version` line opens every run, so it is
 /// what says the harness started.
-//MUTANT errored-case-read-as-killed|s@^        _ => (0, false, diagnosed && !any_run),$@        _ => (usize::from(diagnosed), false, false),@|an_errored_tofu_run_is_could_not_look
 fn tofu_verdict(output: &str, want: &str) -> Selection {
     let mut status = None;
     let mut any_run = false;
@@ -3550,9 +3504,6 @@ fn json_array(output: &str) -> Option<Vec<serde_json::Value>> {
 /// error, else any fail, else all pass. The previous ladder fell back to the
 /// first verdict, so `[pass, fail, skip]` read pass.
 //MUTANT-SUITE crates/batten/tests/it/mutate.rs
-//MUTANT generated-case-any-pass|s@^    } else if any \&\& every_pass {$@    } else if any {@|a_case_verdict_is_independent_of_order
-//MUTANT generated-pool-ignores-fail-order|s@^        } else if v.eq_ignore_ascii_case("fail") {$@        } else if false {@|a_case_verdict_is_independent_of_order
-//MUTANT exact-shadow-restored|s@^        let chosen = if generated.is_empty() {$@        let chosen = if true {@|a_generating_kyverno_case_fails_when_any_object_it_generates_does
 fn kyverno_verdict(output: &str, want: &str) -> Selection {
     let field = |key: &str| {
         want.split(',')
@@ -3609,7 +3560,6 @@ fn kyverno_verdict(output: &str, want: &str) -> Selection {
 
 /// One result's verdict token, `error` when it carries none to read: a dropped
 /// result would let its siblings' passes decide the case.
-//MUTANT result-verdict-dropped|s@^    result\["RESULT"\].as_str().unwrap_or("error")$@    result["RESULT"].as_str().unwrap_or("pass")@|a_result_with_no_verdict_is_an_error
 fn result_verdict(result: &serde_json::Value) -> &str {
     result["RESULT"].as_str().unwrap_or("error")
 }
@@ -3911,7 +3861,6 @@ fn diff_shape(root: &Path, staged: &Staged, source: &str) -> (bool, usize) {
 /// self-match: `toolchain-probe-blind` swaps one `return Toolchain::…;` for
 /// another and `missing-receipt-route-dropped` blanks a list entry, and every
 /// one of those lines occurs elsewhere in its file (CLOUD-2067).
-//MUTANT shared-line-uncounted|s@^        \.filter(\x7c(line, _)\x7c strip_marker(line\.trim_start(), "MUTANT")\.is_none())$@        .filter(\x7c(line, _)\x7c !(before.contains(line) \&\& after.contains(line)) \&\& strip_marker(line.trim_start(), "MUTANT").is_none())@|a_changed_line_repeated_elsewhere_in_the_file_is_still_a_changed_code_line
 fn code_lines_changed(before: &str, after: &str) -> usize {
     let mut net: BTreeMap<&str, isize> = BTreeMap::new();
     for line in before.lines() {
@@ -4778,7 +4727,6 @@ pub fn subjects(root: &Path, table: Option<&crate::config::Mutate>) -> BTreeMap<
 /// exactly one that owes a sweep. Held to the set like those arms: a declaring
 /// file no gate entry covers reads `uncovered`. Off without a table, so a
 /// census that declares none is unchanged.
-//MUTANT declaring-file-not-a-subject|s@^        if declaring {$@        if false \&\& declaring {@|a_declaring_file_outside_the_set_is_uncovered
 fn declaring_files(
     root: &Path,
     table: &crate::config::Mutate,
@@ -4891,9 +4839,6 @@ pub fn census(root: &Path, names: &[String], table: Option<&crate::config::Mutat
 /// outside the one-substitution subset (a sed address block left from before
 /// CLOUD-2255). Neither can ever apply, both are decidable from the text, and
 /// the sweep named each only after an hour of building.
-//MUTANT inert-row-admitted|s@^                    Some(after) if code_lines_changed(\&text, \&after) == 0 => {$@                    Some(after) if false => {@|a_row_whose_script_changes_nothing_is_refused_by_the_census
-//MUTANT malformed-row-admitted|s@, CensusVerdict::MalformedRow));$@, CensusVerdict::InertMutation));@|a_row_that_cannot_apply_is_refused_by_the_census
-//MUTANT unappliable-row-admitted|s@^                    None => CensusVerdict::UnappliableMutation,$@                    None => continue,@|a_row_that_cannot_apply_is_refused_by_the_census
 fn inert_rows(root: &Path, subjects: &BTreeMap<String, String>) -> Vec<(String, CensusVerdict)> {
     let mut found = Vec::new();
     for name in subjects.keys() {

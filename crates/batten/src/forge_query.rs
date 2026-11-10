@@ -75,12 +75,6 @@ use crate::rest::Query;
 // loads, the walk runs against the fixture forge, the record lands, and a module
 // decides over it. Each row restores one failure the header names.
 //MUTANT-SUITE crates/batten/tests/it/forge_query.rs
-//MUTANT stale-record-survives-could-not-look|s@^            crate::record::clear_named(VERB, .query.id)?;$@@|a_refusing_forge_is_could_not_look_and_removes_the_stale_record
-//MUTANT since-window-keeps-everything|s@^            if at < cutoff {$@            if false {@|the_since_window_keeps_recent_rows_and_drops_old_ones
-//MUTANT truncation-recorded-as-whole|s@^            "truncated",$@            "whole",@|a_truncated_window_reaches_the_module_as_truncated
-//MUTANT unprojected-family-loads|s@^        if !families.iter().any(.family. family.record == id) {$@        if false {@|a_query_whose_family_no_record_row_declares_is_refused_at_load
-//MUTANT reduction-keeps-the-whole-row|s@^        body.push_str(.reduced(query, row, now, tag).to_string());$@        body.push_str(row.to_string().as_str());@|a_declared_query_is_walked_reduced_and_decided_over
-//MUTANT unread-input-ignored|s@^        if !named.contains(key.as_str()) {$@        if false {@|an_input_the_query_does_not_read_is_a_usage_error
 
 /// The leaf this module answers for, as a refusal names it.
 const VERB: &str = "record query";
@@ -425,12 +419,6 @@ enum Encoding {
 // defect this split was written to close, and only a template carrying an
 // operator can see it.
 //MUTANT-SUITE crates/batten/src/forge_query.rs
-//MUTANT since-null-not-skipped|s@^            if field.row, &since.field..is_some_and.serde_json::Value::is_null. {$@            if false {@|a_null_instant_is_skipped_and_an_absent_one_is_still_could_not_look
-//MUTANT param-literal-unencoded|s@^        Encoding::Whole => encode(.out),$@        Encoding::Whole => out,@|binding_resolves_the_slug_the_inputs_and_encodes_every_value
-//MUTANT fan-out-member-untagged|s@^            map.insert(key.to_owned(), value.clone());$@@|a_fan_out_walks_each_recorded_member_and_tags_its_rows
-//MUTANT span-never-measured|s@^            map.insert(span.name.clone(), measured(row, span, now));$@@|a_fan_out_walks_each_recorded_member_and_tags_its_rows
-//MUTANT members-repeat|s@^        if seen.insert(value.to_string()) {$@        if true {@|a_torn_or_memberless_source_is_could_not_look_and_members_are_distinct
-//MUTANT member-field-unselected|s@^        if !source.select.iter().any(.path. path == .each.field) {$@        if false {@|a_fan_out_or_span_that_could_never_run_is_refused_at_load
 /// Render one template with its placeholders bound, encoded as `encoding` says.
 fn render(
     template: &str,

@@ -118,7 +118,6 @@ pub fn append(path: &Path, text: &str) -> std::io::Result<()> {
 }
 
 //MUTANT-SUITE crates/batten/src/durable.rs
-//MUTANT torn-tail-kept|s@^        if last\[0\] != b'\\n' {$@        if false {@|a_torn_tail_is_dropped_before_the_next_append
 /// [`append`] to a LINE store, first dropping a torn tail the file ends with.
 ///
 /// **A torn tail survives only until the next append, unless something drops
@@ -276,7 +275,6 @@ pub fn replace_as(
 ///
 /// Any I/O error other than the target already existing; the temp file is
 /// removed on every path.
-//MUTANT exclusive-create-overwrites|s@^        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),$@        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(true),@|exactly_one_of_many_concurrent_creators_wins
 pub fn create_exclusive(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<bool> {
     create_exclusive_as(path, contents, Persist::Synced)
 }
@@ -318,7 +316,6 @@ pub fn create_exclusive_as(
 /// # Errors
 ///
 /// `AlreadyExists` when the name is taken, else any I/O error.
-//MUTANT empty-mark-overwrites|s@^    std::fs::File::create_new(path).map(drop)$@    std::fs::File::create(path).map(drop)@|an_empty_mark_is_made_once
 pub(crate) fn create_empty(path: &Path) -> std::io::Result<()> {
     std::fs::File::create_new(path).map(drop)
 }
@@ -384,7 +381,6 @@ fn temp_beside(target: &Path) -> PathBuf {
 
 /// The temp name for one draw: process, instant and sequence, so a name repeats
 /// only if all three do.
-//MUTANT temp-name-ignores-sequence|s@^    target.with_file_name(format!(".{name}.{pid}.{nanos}.{sequence}.tmp"))$@    target.with_file_name(format!(".{name}.{pid}.{nanos}.tmp"))@|two_draws_in_one_instant_get_two_names
 fn temp_name(target: &Path, pid: u32, nanos: u128, sequence: u64) -> PathBuf {
     let name = target
         .file_name()

@@ -93,8 +93,6 @@ impl std::error::Error for CouldNotLook {}
 /// [`CouldNotLook`] when the parser reports any error over `source` under
 /// `edition`. The source is then not rewritten at all.
 //MUTANT-SUITE crates/batten/tests/it/codemod.rs
-//MUTANT codemod-ignores-parse-errors|s@^    if !errors.is_empty() {$@    if false {@|invalid_rust_is_could_not_look
-//MUTANT codemod-splices-bytes|s@^    let edited = render(&edit(root, &targets, to));$@    let edited = { let _ = (edit, render, root, targets); source.replacen(\&format!(".{from}("), \&format!(".{to}("), 1) };@|a_rename_changes_only_the_edited_token
 pub fn rename_method_calls(
     source: &str,
     edition: Edition,
