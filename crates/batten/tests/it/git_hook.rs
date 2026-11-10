@@ -425,6 +425,23 @@ fn a_declared_pre_push_receives_gits_arguments_and_stdin() {
     );
 }
 
+/// Fails by: a failing hook command's own words stored and never shown, so
+/// the person committing sees only that it failed, not why (CLOUD-2284).
+#[test]
+fn a_failing_hook_commands_output_reaches_the_caller() {
+    let fixture = Dispatch::new("failing", &[]);
+    common::write(
+        &fixture.dir,
+        "batten.toml",
+        "version = 1\n\n[hook.git]\npre-commit = [\"sh\", \"-c\", \"echo why-it-failed >&2; exit 3\"]\n",
+    );
+    let output = fixture.run("pre-commit", &[], "", None);
+    assert_ne!(output.status.code(), Some(0));
+    let said = common::stderr(&output);
+    assert!(said.contains("why-it-failed"), "{said}");
+    assert!(said.contains("hook-command-failed"), "{said}");
+}
+
 #[test]
 fn an_undeclared_hook_name_exits_zero_and_runs_nothing() {
     let fixture = Dispatch::new("undeclared", &[("pre-commit", "pc")]);

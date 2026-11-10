@@ -1496,6 +1496,31 @@ pub fn result_view(
     result_view_spilled(repo_root, capture, result, &[])
 }
 
+/// A view of stored text streams, one section per named stream, keyed by
+/// `key` (CLOUD-2284): the same view [`result_view`] writes for a bounded
+/// result, so a gate log or an advisory overflow is named the way every bounded
+/// tool result is.
+///
+/// # Errors
+///
+/// As [`result_view`].
+pub fn streams_view(
+    repo_root: &Path,
+    key: &Capture,
+    streams: &[(&str, &[u8])],
+) -> Result<(PathBuf, Vec<ViewField>)> {
+    let document: serde_json::Map<String, serde_json::Value> = streams
+        .iter()
+        .map(|(name, bytes)| {
+            (
+                (*name).to_owned(),
+                serde_json::Value::String(String::from_utf8_lossy(bytes).into_owned()),
+            )
+        })
+        .collect();
+    result_view(repo_root, key, &serde_json::Value::Object(document))
+}
+
 /// [`result_view`], where some text leaves were spilled to files by the
 /// streamed read (CLOUD-2224): a leaf holding one of `spills`' markers has its
 /// section copied from that file in chunks, its lines counted as they pass, so

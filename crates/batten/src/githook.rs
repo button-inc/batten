@@ -81,7 +81,14 @@ fn run(name: &str, rest: &[String], err: &mut dyn Write) -> ExitCode {
     let mut command = argv.clone();
     command.extend(rest.iter().cloned());
     let published = [(GATE_PID.to_owned(), std::process::id().to_string())];
-    match exec::classify_in_env(&root, &command, &[], &exec::ExecConfig::DEFAULT, &published) {
+    // TEED, AS `step run` IS (CLOUD-2091, CLOUD-2284): stored alone, a failing
+    // command's words reached nobody — this line names no handle, and git shows
+    // the person committing only what the hook printed.
+    let settings = exec::ExecConfig {
+        tee: true,
+        ..exec::ExecConfig::DEFAULT
+    };
+    match exec::classify_in_env(&root, &command, &[], &settings, &published) {
         Ok((0, ..)) => ExitCode::Success,
         Ok(_) => {
             let _ = writeln!(err, "batten deny hook-command-failed at {name}");

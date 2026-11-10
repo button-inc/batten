@@ -168,24 +168,30 @@ impl Sighter for Unsighted {
     }
 }
 
-/// The widest handle a closing line can name, reserved while admitting so the
-/// line itself never pushes an emission past its ceiling.
-const WIDEST_HANDLE: &str =
-    "advisory:0000000000000000000000000000000000000000000000000000000000000000";
+/// The widest pointer a closing line can carry, reserved while admitting so the
+/// line itself never pushes an emission past its ceiling: the `output point now`
+/// line every stored output takes (CLOUD-2284), over a long view path.
+fn widest_pointer() -> String {
+    format!(
+        "batten note output point now at /advisory:999999-999999(999999999B 999999999T); \
+         read /{}.md",
+        "x".repeat(255)
+    )
+}
 
 /// The line closing an emission the ceiling cut, so a partial report cannot
 /// read as a complete one: how many entries were withheld, the ceiling, and the
-/// handle returning exactly them — or that they could not be stored.
+/// pointer to a view of exactly them — or that they could not be stored.
 ///
 /// **A truncated report that reads as complete is the false green in advisory
 /// form**, and a count with no way to the rest is a truncation that calls
 /// itself a summary (CLOUD-2175).
 #[must_use]
-pub fn suppressed_line(suppressed: usize, ceiling: usize, handle: Option<&str>) -> String {
-    match handle {
-        Some(handle) => format!(
+pub fn suppressed_line(suppressed: usize, ceiling: usize, pointer: Option<&str>) -> String {
+    match pointer {
+        Some(pointer) => format!(
             "advisory: {suppressed} further finding(s) past the declared channel ceiling of \
-             {ceiling} token(s); run batten capture show {handle}"
+             {ceiling} token(s); {pointer}"
         ),
         None => format!(
             "advisory: {suppressed} further finding(s) past the declared channel ceiling of \
@@ -287,8 +293,8 @@ pub fn admit(
         })
     };
     let whole = within(&probes);
-    let reserve =
-        ceiling.map(|held| suppressed_line(ordered.len(), held.max_tokens, Some(WIDEST_HANDLE)));
+    let reserve = ceiling
+        .map(|held| suppressed_line(ordered.len(), held.max_tokens, Some(&widest_pointer())));
 
     let mut admitted: Vec<String> = Vec::new();
     let mut overflow: Vec<String> = Vec::new();
@@ -551,9 +557,13 @@ mod tests {
     #[test]
     fn the_closing_line_counts_the_cut_and_names_where_it_went() {
         assert_eq!(
-            suppressed_line(2, 30, Some("advisory:abc")),
+            suppressed_line(
+                2,
+                30,
+                Some("batten note output point now at /advisory:1-2(9B 3T); read /v.md")
+            ),
             "advisory: 2 further finding(s) past the declared channel ceiling of 30 \
-             token(s); run batten capture show advisory:abc"
+             token(s); batten note output point now at /advisory:1-2(9B 3T); read /v.md"
         );
         assert_eq!(
             suppressed_line(1, 5, None),

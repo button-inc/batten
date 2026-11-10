@@ -5304,6 +5304,32 @@ fn view_pointer(path: &Path, index: &[capture::ViewField]) -> String {
     view_refusal(path, index).render_finding(refusal::Arm::Pointer)
 }
 
+/// Stored text captures, named by `<stream>:<digest>` handles, as the one
+/// `output point now` pointer every stored output takes (CLOUD-2284): a view
+/// with one section per stream, each with its lines, bytes and tokens. `None`
+/// when a handle will not parse or read, or every stream was empty.
+//MUTANT-SUITE crates/batten/tests/it/land_verify_advice.rs
+fn stored_streams_pointer(root: &Path, handles: &[String]) -> Option<String> {
+    let mut held = Vec::new();
+    for text in handles {
+        let handle = capture::Handle::parse(text).ok()?;
+        let stored = capture::Capture {
+            stream: handle.stream.as_str(),
+            bytes: 0,
+            digest: handle.digest,
+        };
+        let bytes = capture::read(root, &stored).ok()?;
+        held.push((stored, bytes));
+    }
+    let (key, _) = held.first()?;
+    let streams: Vec<(&str, &[u8])> = held
+        .iter()
+        .map(|(stored, bytes)| (stored.stream, bytes.as_slice()))
+        .collect();
+    let (path, index) = capture::streams_view(root, key, &streams).ok()?;
+    (!index.is_empty()).then(|| view_pointer(&path, &index))
+}
+
 /// The `output point now` finding [`view_pointer`] renders, for a channel that
 /// carries findings rather than lines.
 fn view_refusal(path: &Path, index: &[capture::ViewField]) -> refusal::Refusal {
@@ -15057,12 +15083,8 @@ fn run_land_verify_seen(
     // THE GATE'S LOG AS A POINTER (CLOUD-2223): its bytes are stored, never
     // streamed, and this is the one line that names where.
     let log = land::verify_log(root, branch, verified.sha());
-    if let Some(first) = log.first() {
-        writeln!(
-            out,
-            "land: gate log {}; run batten capture show {first} --raw",
-            log.join(" ")
-        )?;
+    if let Some(pointer) = stored_streams_pointer(root, &log) {
+        writeln!(out, "land: gate log {pointer}")?;
     }
     match verified {
         land::Verified::Clean(head) => {
@@ -21598,7 +21620,7 @@ impl advisory::Sighter for HookSighter<'_> {
 
 /// An emission's text, closed with where its overflow went when the ceiling
 /// cut it (CLOUD-2175): the overflow is stored whole in the capture store and
-/// the closing line names the handle that returns exactly it.
+/// the closing line names its view, as every stored output is named (CLOUD-2284).
 fn closed_emission(emission: advisory::Emission, ceiling: Option<&advisory::Channel>) -> String {
     let Some(ceiling) = ceiling.filter(|_| emission.suppressed > 0) else {
         return emission.text;
@@ -21606,21 +21628,19 @@ fn closed_emission(emission: advisory::Emission, ceiling: Option<&advisory::Chan
     // NO CALL ROW (CLOUD-2397): an overflow is the hook's own words, read now or
     // not at all, so it is left row-less — kept through the eviction grace for
     // the read the closing line invites, and taken first after it.
-    let handle = git::repo_root(hook_session_home())
-        .ok()
-        .and_then(|root| {
-            capture::store(
-                &root,
-                capture::Stream::Advisory,
-                emission.overflow.as_bytes(),
-            )
-            .ok()
-        })
-        .map(|stored| format!("{}:{}", capture::Stream::Advisory.as_str(), stored.digest));
+    let pointer = git::repo_root(hook_session_home()).ok().and_then(|root| {
+        let stored = capture::store(
+            &root,
+            capture::Stream::Advisory,
+            emission.overflow.as_bytes(),
+        )
+        .ok()?;
+        stored_streams_pointer(&root, &[stored.handle()])
+    });
     format!(
         "{}\n\n{}",
         emission.text,
-        advisory::suppressed_line(emission.suppressed, ceiling.max_tokens, handle.as_deref())
+        advisory::suppressed_line(emission.suppressed, ceiling.max_tokens, pointer.as_deref())
     )
 }
 
