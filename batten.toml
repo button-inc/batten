@@ -4336,6 +4336,24 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "class 3 (prose): state the rule and the evidence in this repo's terms; naming who else does it is not evaluable by a reader (mem:prior-art-and-issue-hygiene)"
 
+# Rule 3's scope, kept from drifting back (owner ruling, 2026-11-10). The rule
+# forbids the GATED model's verdict — the harness's, or any whose context the
+# agent reaches — and never a model Batten runs pinned and deterministic
+# (house-style, principle 3). Its unqualified spelling read as "no model
+# anywhere" to every agent that restated it, about forty times across the tree,
+# and that reading ruled out the Batten-managed classifier CLOUD-1921 builds.
+# The qualified spelling is `gated-model`; a line naming the old phrase only to
+# quote this row is excluded by its leading key.
+[[rule]]
+id = "prose name loose"
+kind = "forbid"
+glob = "**"
+regex = "(^|[^-a-z])model (verdicts?|judgements?)"
+exclude = "^(regex|exclude) = "
+severity = "deny"
+scope = "tree"
+no_fix_reason = "class 3 (prose): say which model — `gated-model` for the harness's own judgement, or name the Batten-managed model (mem:doctrine/model-verdict)"
+
 # Non-negotiable rule 1 as a standing gate, not prose (CLOUD-7). "The core stays
 # repo-agnostic … a grep for a specific consumer's names must return zero hits"
 # was discharged once, by hand, when the crate landed (CLOUD-26) — which leaves a
@@ -8087,7 +8105,7 @@ severity = "deny"
 # triggered rules file carry both failure directions. It catches DELETION and
 # DRIFT, which is the whole failure mode when the remedy is words. Whether a given
 # session actually claimed before branching is NOT a property of the tree, and a
-# rule resolving to that would be the model verdict non-negotiable rule 3 forbids.
+# rule resolving to that would be the gated-model verdict non-negotiable rule 3 forbids.
 #
 # `line_sources` IS LOAD-BEARING, not decoration. Without it the engine builds no
 # lines for these two paths, every clause reads undefined, and the module loads
@@ -14531,7 +14549,7 @@ class = """
 The agent said it would do this and is landing without having done it. The gate \
 reads a status TOKEN and nothing else: it does not judge whether the entry was \
 worth doing, whether its text is honest, or whether the work behind `completed` \
-happened — those are model verdicts and no gate here makes one. Three exits, and \
+happened — those are gated-model verdicts and no gate here makes one. Three exits, and \
 two of them are free: finish it, withdraw it deliberately so the store records \
 that the decision was made, or spend an admission saying why it is not this \
 branch's to finish. The store is written by `batten record plan` rather than \
@@ -16937,7 +16955,7 @@ Refuses ABSENCE and nothing else. A declared id missing from the review store \
 means the vendored prompt has not been shown to run over this subject, which is \
 a comparison of two digests — a record keyed to another prompt, or to bytes that \
 have since changed, lives under a different name and does not answer. What the \
-agent CONCLUDED is never read: refusing on that would be a model verdict wearing \
+agent CONCLUDED is never read: refusing on that would be a gated-model verdict wearing \
 an exit code, which non-negotiable rule 3 forbids, and the fact is shaped so it \
 cannot be written. A review that ran and pointed at something is as clean as one \
 that pointed at nothing, deliberately — pricing findings is how you buy an agent \

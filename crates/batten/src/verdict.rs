@@ -3130,7 +3130,7 @@ fn declares_override(entry: &DeclaredVerdict) -> bool {
 ///   because the kind cannot tell a read from an edit. That reading is safe:
 ///   this refuses nothing, and its only discharge is an admission that exists.
 /// - `command` and `issue` routes count as unblocked — whether running one
-///   clears the refusal is a model verdict (rule 3), which
+///   clears the refusal is a gated-model verdict (rule 3), which
 ///   `policy/verdict-routes-resolve.rego` disclaims too.
 /// - There is no load-time arm. The blocker is vendored and a consumer cannot
 ///   redeclare it, so the predicate over `consumer ∪ vendored()` is empty

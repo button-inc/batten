@@ -161,9 +161,12 @@ borrowing one.
   wrote. `check` on built-in defaults is still _planned_ (CLOUD-70) — today it
   requires a `batten.toml` in the working directory, which is what makes `init`
   the first command a new repository runs.
-- **Gates decide, they do not estimate.** A predicate that only approximates its
-  own question — a model judgement, or a match over open-ended content — may
-  advise; it never blocks.
+- **Gates decide, they do not estimate.** A gate never blocks on the judgement
+  of the model it gates — the agent's own, or an external judge's; those may
+  advise. A Batten-managed model is a command and may decide: pinned by digest,
+  deterministic, run inside `batten`, its text kept in the engine with only a
+  typed label reaching a module, a remedy that is an action, and precision
+  measured on a committed corpus.
 - **Consumer #1 is Batten itself** — its own checked-in `batten.toml` runs
   against its own repository.
 

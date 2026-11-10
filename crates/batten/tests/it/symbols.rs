@@ -368,7 +368,7 @@ fn an_unreadable_stream_is_could_not_look_and_never_an_empty_census() {
 ///
 /// It catches **deletion and drift in the prose** and nothing else. Whether the
 /// measurement is right is not a property of the tree, and a case claiming to
-/// decide that would be the model verdict non-negotiable rule 3 forbids.
+/// decide that would be the gated-model verdict non-negotiable rule 3 forbids.
 /// **The region is the HEADER, not the file, and the first spelling of this case
 /// proved why.** Asserted over the whole source, the deny arm failed on its own
 /// needle and the allow arm passed on its own — a case that reddens because of

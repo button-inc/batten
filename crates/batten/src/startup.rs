@@ -48,7 +48,7 @@
 //! # Gates decide, never estimate (non-negotiable rule 3)
 //!
 //! A row's `check` resolves to a command and an exit code over a real object.
-//! There is no model verdict, no heuristic, and no "looks fine". A check that
+//! There is no gated-model verdict, no heuristic, and no "looks fine". A check that
 //! could not be SPAWNED is a could-not-look and is reported as such — never as
 //! passing, which would be the false green this whole tool exists to refuse, and
 //! never as a reason to repair, which would make an unreadable check into a

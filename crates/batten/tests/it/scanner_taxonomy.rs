@@ -18,7 +18,7 @@
 //!
 //! It does **not** catch a misused instrument. Which of text, syntax or names a
 //! question belongs to is a judgement, and non-negotiable rule 3 says a gate
-//! resolves to a command and an exit code, never a model verdict — so that axis
+//! resolves to a command and an exit code, never a gated-model verdict — so that axis
 //! is feedforward, the rule says so on its own row, and a §7 claiming otherwise
 //! here would be the same defect CLOUD-844 is about.
 //!

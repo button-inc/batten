@@ -1414,7 +1414,7 @@ pub const SYMBOLS: Class = Class::new(Cost::Effect, Surface::Check);
 pub const PLAN: Class = Class::new(Cost::Effect, Surface::Check);
 
 /// [`Fact::Review`] — **the second occupant of [`Cost::Effect`]**, and the one
-/// that had to state why an LLM in the resolution path is not a model verdict in
+/// that had to state why an LLM in the resolution path is not a gated-model verdict in
 /// a gate.
 ///
 /// `effect` x `check`, both halves for [`SYMBOLS`]' reasons: resolving it RUNS A
@@ -1432,7 +1432,7 @@ pub const PLAN: Class = Class::new(Cost::Effect, Surface::Check);
 /// The distinction is what makes this fact legal at all. A gate reading this
 /// fact refuses **ABSENCE** — no record for this (prompt, subject) pair — which
 /// is a comparison of two digests and is as deterministic as any other fact
-/// here. A gate refusing on what the agent CONCLUDED would be a model verdict
+/// here. A gate refusing on what the agent CONCLUDED would be a gated-model verdict
 /// wearing an exit code, and `review-dispatched.rego` is written so it cannot
 /// express one: the findings reach the module as pointers, and a pointer carries
 /// no claim to weigh.
@@ -2283,7 +2283,7 @@ impl Fact {
             // emits `null` for both did-not-look answers, and a schema typing
             // this as a bare object refuses the module that handles them.
             "type": ["object", "null"],
-            "description": "Fact::Review (CLOUD-472). Declared id -> the record that a VENDORED agent prompt was dispatched over that id's subject. The second Cost::Effect fact. KEYED BY (prompt digest, subject digest): the prompt is compiled into this binary so its digest is a constant of the build, and the subject's digest is the bytes reviewed -- so editing the ticket body or pushing a commit leaves the record under a different name where it does not answer. A declared id ABSENT from this map was never dispatched, and that absence is the only thing a gate may refuse on; an id PRESENT with an empty `findings` array ran and pointed at nothing. `null` is could-not-look. WHAT THE AGENT CONCLUDED IS NEVER HERE AS PROSE -- `findings` carries pointers, because a gate deciding on an agent's judgement would be a model verdict wearing an exit code, which non-negotiable rule 3 forbids.",
+            "description": "Fact::Review (CLOUD-472). Declared id -> the record that a VENDORED agent prompt was dispatched over that id's subject. The second Cost::Effect fact. KEYED BY (prompt digest, subject digest): the prompt is compiled into this binary so its digest is a constant of the build, and the subject's digest is the bytes reviewed -- so editing the ticket body or pushing a commit leaves the record under a different name where it does not answer. A declared id ABSENT from this map was never dispatched, and that absence is the only thing a gate may refuse on; an id PRESENT with an empty `findings` array ran and pointed at nothing. `null` is could-not-look. WHAT THE AGENT CONCLUDED IS NEVER HERE AS PROSE -- `findings` carries pointers, because a gate deciding on an agent's judgement would be a gated-model verdict wearing an exit code, which non-negotiable rule 3 forbids.",
             "additionalProperties": {
                 "type": "object",
                 "properties": {

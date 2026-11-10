@@ -231,7 +231,7 @@ Two axes, and neither is gated in this repository. Substitution was, by
 **Instrument suitability is feedforward.** There is no honest exit code over
 "text, syntax or names — did the agent pick the right class": the object a gate
 would have to decide over is a judgement, and non-negotiable rule 3 says a gate
-resolves to a command and an exit code, never a model verdict.
+resolves to a command and an exit code, never a gated-model verdict.
 
 **Substitution is not gated (CLOUD-2698).** A shell text utility over a tracked
 path is not refused. The retired row assumed a structured tool beats its shell

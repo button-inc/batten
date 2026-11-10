@@ -61,7 +61,7 @@
 //!
 //! Non-negotiable rule 3. The predicate is **every declared question answered
 //! non-emptily ⇒ issue**, never "is this justification good", which is exactly the
-//! model verdict a gate may not contain. The forcing function is articulation, not
+//! gated-model verdict a gate may not contain. The forcing function is articulation, not
 //! approval — the cost is thinking, not asking.
 
 use std::collections::BTreeMap;
@@ -1102,7 +1102,7 @@ pub fn questions_for(entry: &crate::verdict::DeclaredVerdict) -> Option<Vec<Ques
 ///
 /// **The gate never adjudicates the reason** (non-negotiable rule 3): the
 /// predicate is presence and well-formedness, never quality. An answer is
-/// well-formed when it is not blank — anything stronger is a model verdict, and a
+/// well-formed when it is not blank — anything stronger is a gated-model verdict, and a
 /// gate containing one would be worse than today's password.
 #[must_use]
 pub fn unanswered<'a>(

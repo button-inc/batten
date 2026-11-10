@@ -3061,7 +3061,7 @@ pub struct Envelope {
     ///
     /// **A HOST FACT, never an inference from the user's prose.** Whether a turn
     /// may write is something the harness states; reading intent out of what the
-    /// user typed would be a model verdict, which non-negotiable rule 3 forbids.
+    /// user typed would be a gated-model verdict, which non-negotiable rule 3 forbids.
     /// So this is the token the host sent and nothing else — the same
     /// echo-the-host's-spelling posture [`Envelope::raw_event`] takes.
     ///
