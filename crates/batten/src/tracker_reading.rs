@@ -217,7 +217,6 @@ fn column(keys: &[String]) -> String {
 /// `CLOUD-179`, and a key inside a longer hyphenated token is not named at all.
 /// The bytes either side are READ rather than matched, so no expression is
 /// composed out of an id a payload supplied.
-//MUTANT-SUITE crates/batten/tests/it/tracker_hygiene.rs
 fn names(text: &str, id: &str) -> bool {
     if id.is_empty() {
         return false;

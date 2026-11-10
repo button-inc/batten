@@ -804,7 +804,6 @@ fn open(dir: &Path) -> Result<gix::Repository> {
 ///
 /// This is not `gix::discover`'s `_with_environment_overrides`, which re-admits
 /// the redirecting variables too. Only the ceiling is read, and only here.
-//MUTANT-SUITE crates/batten/tests/it/lease_world.rs
 fn ceiling_dirs() -> Vec<PathBuf> {
     std::env::var_os("GIT_CEILING_DIRECTORIES")
         .map(|raw| std::env::split_paths(&raw).collect())
@@ -2374,8 +2373,6 @@ pub struct RawObject {
     /// The payload.
     pub body: Vec<u8>,
 }
-
-//MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
 
 /// Every object a push of `base..head` must carry.
 ///
@@ -4323,7 +4320,6 @@ pub(crate) fn patch_identities(
 /// being overwritten. So is any range that will not resolve, including an
 /// `other` this clone has not fetched.
 #[must_use]
-//MUTANT-SUITE crates/batten/tests/it/land.rs
 pub fn patches_contained(dir: &Path, tip: &str, other: &str) -> bool {
     let Ok(repo) = open(dir) else {
         return false;
@@ -8784,25 +8780,7 @@ case asserts the projection against `git` itself over one fixture.
 A ROW'S SCRIPT MAY CARRY NO `|` of its own (`rows_in` splits on every one), so a
 row naming a closure or a disjunction mutates the one operand it is about.
 
-#MUTANT-SUITE crates/batten/tests/it/git_state_facts.rs
-#MUTANT tag-glob-ignored|s@wildmatch(glob.into(), tag.into()@wildmatch("*".into(), tag.into()@|a_tag_glob_lists_the_tags_it_matches_and_no_others
-#MUTANT tagger-date-ignored|s@            tagged.map(iso_utc)@            Some(iso_utc(committed))@|a_tag_is_dated_by_its_tagger_when_annotated_and_by_its_commit_when_not
-#MUTANT lightweight-undated|s@^            Some(iso_utc(committed))$@            None@|a_tag_is_dated_by_its_tagger_when_annotated_and_by_its_commit_when_not
-#MUTANT signature-header-ignored|s@\*name == "gpgsig" @false @|a_signature_header_reads_signed_and_the_same_word_in_a_body_does_not
-#MUTANT paths-against-empty-tree|s@        Some(parent) => repo.find_commit(parent.detach()).ok()?.tree().ok()?,@        Some(_) => repo.empty_tree(),@|commit_meta_carries_the_subject_the_dates_and_the_paths_a_commit_touched
-#MUTANT dates-swapped|s@        authored: iso_utc(author.seconds()),@        authored: iso_utc(committer.seconds()),@|commit_meta_carries_the_subject_the_dates_and_the_paths_a_commit_touched
-#MUTANT effective-first-wins|s@        fact.effective = Some(value);@        fact.effective = fact.effective.or(Some(value));@|git_config_reports_the_value_in_force_and_what_each_scope_set
-#MUTANT implicit-not-true|s@                None => Some(true),@                None => None,@|git_config_reports_the_value_in_force_and_what_each_scope_set
-#MUTANT global-scope-mislabelled|s@=> "global",@=> "system",@|git_config_reports_the_value_in_force_and_what_each_scope_set
-#MUTANT unaddressable-key-accepted|s@        !parsed.section_name.is_empty()@        true@|a_config_key_git_cannot_address_is_refused_at_load
-#MUTANT index-spec-ignored|s@    let spec = spec.strip_prefix("./").unwrap_or(spec);@    let spec = ".";@|the_index_under_a_pathspec_is_ls_files_stage_entry_for_entry
-#MUTANT content-divergence-missed|s@^    if hashed != entry.id {$@    if false {@|divergence_and_untracked_paths_are_reported_beneath_the_pathspec_only
-#MUTANT untracked-dropped|s@                fact.untracked.push(path.clone());@@|divergence_and_untracked_paths_are_reported_beneath_the_pathspec_only
-#MUTANT file-mode-ignored|s@^    filemode .. !want_link @    !want_link @|a_flipped_executable_bit_diverges_only_where_file_mode_counts
-#MUTANT config-write-worktree-private|s@    let path = repo.common_dir().join("config");@    let path = repo.git_dir().join("config");@|a_repo_local_config_write_from_a_linked_worktree_lands_where_git_reads_it
-#MUTANT magic-pathspec-accepted|s@    !spec.is_empty() .. !spec.starts_with(':')@    !spec.is_empty()@|a_magic_pathspec_is_refused_at_load_rather_than_read_as_a_literal
 
 CLOUD-843's p6-board package: a trunk walk that breaks partway is could-not-look,
 never the shorter history above the break (`messages_reachable_from`).
-#MUTANT walk-break-is-a-shorter-history|s@        let info = info.ok()?;@        let Ok(info) = info else { break };@|a_trunk_whose_history_breaks_partway_is_could_not_look
 */

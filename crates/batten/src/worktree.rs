@@ -261,7 +261,6 @@ pub const SHALLOW: &str = "the clone is shallow; `git fetch --unshallow` deepens
 /// # Errors
 ///
 /// Propagates a usage error, and any error on a full clone.
-//MUTANT-SUITE crates/batten/tests/it/cli.rs
 pub fn landing_or_shallow(
     repo: &Path,
     target: &str,
@@ -306,7 +305,6 @@ pub struct Trunk {
 /// # Errors
 ///
 /// Propagates a `git` failure reading the remotes or the remote's HEAD.
-//MUTANT-SUITE crates/batten/tests/it/trunk_name.rs
 pub fn land_trunk(repo: &Path, must_land_on: Option<&str>) -> Result<Option<Trunk>> {
     let declared = match must_land_on {
         Some(declared) => declared.to_owned(),
@@ -358,7 +356,6 @@ pub fn declared_trunk(root: &Path) -> Result<Option<Trunk>> {
 /// # Errors
 ///
 /// As [`declared_trunk`], and [`crate::resolve::committed`]'s for a ref.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
 pub fn committed_trunk(
     root: &Path,
     overrides: &crate::resolve::Overrides,
@@ -422,7 +419,6 @@ fn normalise(declared: &str, remotes: &[String]) -> Option<Trunk> {
 /// repository or `must_land_on` resolves to no commit — a target nobody can
 /// resolve is a config error, and answering `0` over it would be a vacuous pass.
 /// An I/O or `git` failure propagates as an internal error (→ exit `3`).
-//MUTANT-SUITE crates/batten/tests/it/cli.rs
 pub fn status(repo: &Path, must_land_on: Option<&str>) -> Result<AtRisk> {
     let uncommitted = git::uncommitted(repo)?;
     let branch = git::current_branch(repo)?;

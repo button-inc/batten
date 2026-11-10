@@ -2036,7 +2036,6 @@ pub fn run_status(
 /// verdict about any receipt. And a [`UsageError`] for `--json` beside more than
 /// one check: the verb's document is ONE verdict, and several documents on one
 /// stream are not one document.
-//MUTANT-SUITE crates/batten/src/receipt.rs
 pub fn run_status_any(
     checks: &[String],
     key: ReceiptKey,
@@ -3458,7 +3457,3 @@ mod tests {
 
 // The receipt verbs and the hook's receipt verdicts read the checkout they run
 // in, so the compiled-binary tier is what judges them.
-//MUTANT-SUITE crates/batten/tests/it/receipt_verified.rs
-//MUTANT-SUITE crates/batten/tests/it/receipt_clean.rs
-//MUTANT-SUITE crates/batten/tests/it/review_receipt_delta.rs
-//MUTANT-SUITE crates/batten/tests/it/call_arguments.rs

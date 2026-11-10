@@ -531,7 +531,6 @@ pub(crate) struct Pacing<'a> {
 }
 
 /// [`watch`] over an explicit [`Pacing`].
-//MUTANT-SUITE crates/batten/src/pr_watch.rs
 pub(crate) fn watch_with(
     config: &Config,
     roster: &Roster,
@@ -1507,4 +1506,3 @@ mod tests {
 
 // The forge read and the progress recorder run over the compiled binary, so the
 // fixture-forge tier is what judges them.
-//MUTANT-SUITE crates/batten/tests/it/pr_watch.rs

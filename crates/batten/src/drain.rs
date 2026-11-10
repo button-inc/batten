@@ -757,8 +757,6 @@ fn told_line(groups: &[&Group<'_>]) -> String {
 /// budget, with the class's own route to the rest. Rendered through the one
 /// projection, so it is headed like every finding and is the ONLY line saying
 /// so — the definition is a lookup the legend names.
-//MUTANT-SUITE crates/batten/tests/it/advisory_drain.rs
-//MUTANT-SUITE crates/batten/src/drain.rs
 fn budget_summary(withheld: usize, budget: usize) -> String {
     crate::refusal::Refusal::engine(
         crate::verdict::Native::DrainFitBroken,

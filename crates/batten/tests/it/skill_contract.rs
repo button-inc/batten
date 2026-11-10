@@ -397,10 +397,6 @@ fn authored_verb_findings(
 // hand at implementation). It is INERT under the sweep — `mutate` never resolves a
 // gate to a test file (`rebase.rs` records why a row is declared here anyway) —
 // so this block is the binding `obligations-bound` reads, not coverage CI runs.
-/*
-#MUTANT-SUITE crates/batten/tests/it/skill_contract.rs
-#MUTANT authored-skill-verbs-unchecked|s@^    for skill in authored_skills(root) {$@    for skill in authored_skills(root).into_iter().filter(|s| s.ends_with("/batten/SKILL.md")) {@|a_second_authored_skill_naming_a_fictional_verb_is_reported
-*/
 
 // --- fixtures -------------------------------------------------------------------
 

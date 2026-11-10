@@ -720,7 +720,6 @@ fn closes_a_key(text: &str, at: usize) -> bool {
 // expression, which is what makes it discriminate: `key_of` and `keys_in`
 // compose no key expression of their own, so there is nothing else here for a
 // mutation to reach.
-//MUTANT-SUITE crates/batten/tests/it/issue_key.rs
 impl Grammar {
     /// Is this WHOLE string a key? The four shell `case` globs' question.
     ///

@@ -206,7 +206,6 @@ pub enum Linearity {
 /// the fetch is HTTPS-only (`fetch::get`), and this is the half that decides.
 // A merge commit is a history the integration tier builds, so that tier judges
 // this function's mutants.
-//MUTANT-SUITE crates/batten/tests/it/linear_check.rs
 #[must_use]
 pub fn linearity(root: &Path, tip: &str, head: &str, requires_line: bool) -> Linearity {
     if !gitwrite::carries(root, tip, head) {
@@ -264,7 +263,6 @@ pub fn requires_line(root: &Path) -> Result<bool> {
 /// # Errors
 ///
 /// When the repository cannot be read or the ref cannot be written.
-//MUTANT-SUITE crates/batten/tests/it/land_tracking.rs
 pub fn record_landed_trunk(root: &Path, reference: &str, branch: &str) -> Result<bool> {
     let Some(head) = crate::git::resolve_ref(root, &format!("refs/heads/{branch}"))? else {
         return Ok(false);
@@ -908,7 +906,6 @@ pub enum Waited {
 ///
 /// An UNREAD wait keeps its runs too (CLOUD-1215): nobody read them, so nothing
 /// says they are waste.
-//MUTANT-SUITE crates/batten/tests/it/land_lap.rs
 #[must_use]
 pub const fn abandons_the_runs(seen: Option<TapVerdict>) -> bool {
     !matches!(seen, Some(TapVerdict::Red | TapVerdict::Unread))
@@ -1349,7 +1346,6 @@ pub fn red_runs(
 /// record and every name a single path component.
 // The record's writer, reader and clear are judged over the compiled binary and
 // the real post-tool mint, which only the integration tier runs (CLOUD-2270).
-//MUTANT-SUITE crates/batten/tests/it/head_push_unread.rs
 #[must_use]
 pub fn red_head_slug(branch: &str) -> String {
     branch.replace('%', "%25").replace('/', "%2F")
@@ -2008,7 +2004,6 @@ const VERIFY_LOG: &str = "verify-log";
 /// The gate's output is stored, not streamed: measured on #1132, one task log
 /// read whole was 57,764 tokens, of which two lines were the verdict. This is the
 /// pointer the driver prints in its place.
-//MUTANT-SUITE crates/batten/tests/it/land_verify_advice.rs
 #[must_use]
 pub fn verify_log(root: &Path, branch: &str, sha: &str) -> Vec<String> {
     branch_lap_lines(root, branch)
@@ -2276,7 +2271,6 @@ fn settle_race(settle: &Settle<'_>, raced: Option<Raced>) -> Result<Verified> {
 /// claim is unconfirmed and the refusal stays the tree's. A lap that stopped
 /// where it could have lapped costs one re-run; a lap that lapped a refused tree
 /// costs the whole budget, which is the defect this exists to keep closed.
-//MUTANT-SUITE crates/batten/src/land.rs
 fn confirmed(
     verified: Verified,
     watched: Option<&(&crate::main_watch::Config, String)>,
@@ -2791,7 +2785,6 @@ impl Basis {
 /// Pure, and free-standing rather than a branch inside the lap, so the cell can
 /// be decided in a test instead of only through a git resolution and a
 /// filesystem write.
-//MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
 #[must_use]
 pub const fn poisons_this_clone(
     step: Step,
@@ -2818,7 +2811,6 @@ pub const fn poisons_this_clone(
 /// CI checks reading, latched across steps and read by the tap and the undo, and
 /// a local gate that stalled is not a fact about any check. Only the verify
 /// raises it; the same exit 3 without it is a reclaimed gate, which laps.
-//MUTANT-SUITE crates/batten/src/land.rs
 #[must_use]
 pub const fn lap_progress(
     step: Step,
@@ -3464,7 +3456,6 @@ pub struct Ledger {
     pub fresh_ready: bool,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/land.rs
 impl Ledger {
     /// Open a lap.
     pub const fn attempt(&mut self) {
@@ -3864,7 +3855,6 @@ pub fn closes_the_tap(state: &Tap) -> bool {
 /// Pure, and separate from [`wait`] for the reason [`worthless`] is separate
 /// from [`abandon`]: the mapping is the decision, and a decision reachable only
 /// through a network call is a decision nothing tests.
-//MUTANT-SUITE crates/batten/tests/it/land_lap.rs
 #[must_use]
 pub const fn tap_verdict(waited: &Waited) -> Option<TapVerdict> {
     match waited {

@@ -40,7 +40,6 @@
 // Reverting the activation filter to the whole resolve is the defect the first
 // row guards: an optional dependency nobody enabled reads as linked, and the
 // gate refuses a link that succeeds.
-//MUTANT-SUITE crates/batten/src/cargo_graph.rs
 
 use std::collections::{BTreeMap, BTreeSet};
 

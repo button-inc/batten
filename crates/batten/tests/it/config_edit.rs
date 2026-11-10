@@ -21,7 +21,6 @@
 //
 // The obligation CLOUD-1575's Ready block binds. The row itself is swept from
 // `crates/batten/src/config_edit.rs`, the file it mutates:
-// MUTANT config-edit-toml-roundtrip|see `config_edit::render`|an_edit_changes_only_the_edited_key
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

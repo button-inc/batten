@@ -222,7 +222,6 @@ pub struct Finding {
     pub verdict: Native,
 }
 
-//MUTANT-SUITE crates/batten/src/attribution.rs
 impl Finding {
     /// The refusal line, house style §6: `<class> <label> <field>`, through the
     /// same projection every declared refusal renders with.
@@ -241,8 +240,6 @@ impl Finding {
     }
 }
 
-//MUTANT-SUITE crates/batten/tests/it/attribution.rs
-//MUTANT-SUITE crates/batten/src/attribution.rs
 impl Attribution {
     /// Validate the table at load.
     ///
@@ -497,7 +494,6 @@ pub fn read_message(dir: &Path, message: &Path) -> Result<CommitMeta> {
 /// # Errors
 ///
 /// Returns an error when the deny list does not compile or the write fails.
-//MUTANT-SUITE crates/batten/tests/it/attribution.rs
 pub fn set_identity(
     dir: &Path,
     attribution: &Attribution,

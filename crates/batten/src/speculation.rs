@@ -468,7 +468,6 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
 /// (the ref moved, the worktree refused, say on another process's index lock) has
 /// its ref put back on `bet_head`, so the branch and [`BASE_REF`] still agree and
 /// [`recover`] can adopt the bet.
-//MUTANT-SUITE crates/batten/tests/it/land_signal.rs
 pub fn arm(root: &Path, branch: &str, undo: &str, bet_head: &str) {
     let (at, name, unwind_to, left) = (
         root.to_path_buf(),
@@ -499,7 +498,6 @@ pub fn arm(root: &Path, branch: &str, undo: &str, bet_head: &str) {
 }
 
 /// The bet settled, so a signal has nothing left to unwind.
-//MUTANT-SUITE crates/batten/tests/it/land_signal.rs
 pub fn disarm() {
     crate::exec::clear_on_terminate();
 }
@@ -620,7 +618,6 @@ pub fn bettable<'a>(
 // because the branch comparison beside it already looks like the whole
 // predicate. Dropping it restores the measured defect exactly: our own hold on
 // another branch becomes bettable again.
-//MUTANT-SUITE crates/batten/src/speculation.rs
 
 #[cfg(test)]
 // Panicking on a failed assertion is how a test fails loudly; these are the

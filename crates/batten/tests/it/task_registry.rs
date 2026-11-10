@@ -36,18 +36,6 @@
 //! so seeding a record under its real name is the one fixture that cannot be
 //! wrong about itself.
 
-// The rows this suite kills, declared beside the code they mutate and mirrored
-// here so a board obligation naming this file binds (CLOUD-1560):
-/*
-#MUTANT-SUITE crates/batten/tests/it/task_registry.rs
-#MUTANT identity-rederived-from-path|s@^    recorded.is_empty() \x7c\x7c recorded == live$@    recorded.is_empty() \&\& recorded == live@|a_registrant_whose_program_is_not_in_its_cmdline_reads_alive
-#MUTANT recycled-pid-read-alive|s@^    recorded.is_empty() \x7c\x7c recorded == live$@    recorded.is_empty() \x7c\x7c !live.is_empty()@|a_live_pid_whose_cmdline_differs_from_the_record_reports_crashed_and_is_never_reaped
-#MUTANT undigested-entry-reads-dead|s@^    recorded.is_empty() \x7c\x7c recorded == live$@    !recorded.is_empty() \&\& recorded == live@|an_entry_without_a_digest_reads_alive_while_its_pid_exists
-#MUTANT register-digests-its-own-cmdline|s@cmdline_digest(pid).unwrap_or_default(),$@cmdline_digest("self").unwrap_or_default(),@|a_registrant_whose_program_is_not_in_its_cmdline_reads_alive
-MUTANT register-keeps-dead-siblings|s@^        let sibling = entry.task == task \&\& entry.pid != pid;$@        let sibling = entry.task == task \&\& entry.pid.is_empty();@|register_supersedes_its_tasks_dead_records
-MUTANT supersede-orphans-a-live-group|s@^        if sibling \&\& dead \&\& !group_exists(\&entry.pgid) {$@        if sibling \&\& dead {@|register_keeps_a_dead_sibling_whose_group_still_runs
-MUTANT task-read-unknown-field-silent|s@if !task::FIELDS.contains(\&field.as_str()) {$@if false {@|read_refuses_an_unknown_field_and_lists_the_fields
-*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

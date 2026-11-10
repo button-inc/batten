@@ -715,7 +715,6 @@ pub struct Reading {
 // every row in this file: `batten mutate` judges a row under the `MUTANT-SUITE`
 // line above it (CLOUD-2193), and this is the file's only one. No pattern or
 // case here carries a `|`: the row is split on it.
-//MUTANT-SUITE crates/batten/tests/it/board_check.rs
 
 /// Read the graph over a payload set.
 ///

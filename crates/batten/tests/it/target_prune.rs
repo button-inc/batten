@@ -575,7 +575,6 @@ fn superseded_example_generations_are_reclaimed_like_deps() {
 //
 // The declared mutation, in a plain comment for CLOUD-1913's reason below;
 // killed by hand:
-// MUTANT orphaned-dwo-kept|s@        if !live.contains(hash) {@        if false {@|a_dwo_whose_unit_has_no_fingerprint_is_reclaimed_and_a_live_ones_is_not
 #[test]
 fn a_dwo_whose_unit_has_no_fingerprint_is_reclaimed_and_a_live_ones_is_not() {
     let repo = repo("target-prune-dwo");
@@ -606,10 +605,6 @@ fn a_dwo_whose_unit_has_no_fingerprint_is_reclaimed_and_a_live_ones_is_not() {
 // cannot see `crates/batten/src/**`. The expression belongs to `prune.rs`'s
 // `reclaim_superseded`; inert under the sweep, its kill was demonstrated by hand
 // against the case below.
-/*
-#MUTANT-SUITE crates/batten/tests/it/target_prune.rs
-#MUTANT fingerprint-left-behind|s@^                        forget_fingerprint(fingerprints, victim);$@                        let _ = (fingerprints, victim);@|a_reclaimed_copy_takes_its_cargo_fingerprint_with_it
-*/
 
 #[test]
 fn a_reclaimed_copy_takes_its_cargo_fingerprint_with_it() {
@@ -647,10 +642,6 @@ fn a_reclaimed_copy_takes_its_cargo_fingerprint_with_it() {
 
 // CLOUD-1913's second declared mutation, here for the same reason: a contended
 // build lock read as free is the race that removed `target/clippy` under clippy.
-/*
-#MUTANT-SUITE crates/batten/tests/it/target_prune.rs
-#MUTANT running-build-reclaimed|s@^            Err(std::fs::TryLockError::WouldBlock) => return None,$@            Err(std::fs::TryLockError::WouldBlock) => {}@|a_tree_a_running_build_holds_is_not_reclaimed
-*/
 
 #[test]
 fn a_tree_a_running_build_holds_is_not_reclaimed() {

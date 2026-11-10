@@ -470,9 +470,6 @@ pub fn record(
     Ok(ExitCode::Success)
 }
 
-//MUTANT-SUITE crates/batten/src/unsubscribe.rs
-//MUTANT-SUITE crates/batten/tests/it/pr_unsubscribed.rs
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

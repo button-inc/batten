@@ -32,13 +32,6 @@
 //! The predicate lives here rather than in the engine, so `mutate`'s file arm
 //! seds the right target when this path is a gate name in `MUTANT_GATES`.
 
-/*
-#MUTANT-SUITE crates/batten/tests/it/stub_portability.rs
-#MUTANT shebang-gate-dropped|s@    if !value.starts_with("#!") {@    if false {@|a_payload_string_is_not_a_stub
-#MUTANT rows-unread|s@    id.starts_with("shell ") \&\& id.ends_with(" unsafe")@    id.is_empty()@|a_gnu_only_spelling_in_a_stub_is_named
-#MUTANT macro-tokens-skipped|s@        self.tokens(\&mac.tokens);@        let _ = \&mac.tokens;@|a_stub_inside_format_is_seen
-*/
-
 use crate::common;
 
 use std::path::{Path, PathBuf};

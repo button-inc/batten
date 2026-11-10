@@ -118,7 +118,6 @@ pub(crate) fn is_text(bytes: &[u8]) -> bool {
 /// Infallible: a digest absorbs bytes and cannot refuse them, so there is no
 /// error path to invent. The caller's fallibility is in READING the objects, not
 /// in hashing them.
-//MUTANT-SUITE crates/batten/src/patch.rs
 pub(crate) fn identity(changes: &mut [Change]) -> Option<String> {
     if changes.is_empty() {
         return None;

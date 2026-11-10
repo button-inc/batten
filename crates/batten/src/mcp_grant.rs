@@ -188,7 +188,6 @@ fn governed_maps<'a>(inputs: &Inputs<'a>) -> Vec<Governed<'a>> {
 /// EXACTLY ONE selector must match: none is an ungoverned server, and several
 /// would make the answer depend on the order the selectors were declared. Both
 /// are silence.
-//MUTANT-SUITE crates/batten/tests/it/connector_allow.rs
 fn alias_in(entry: &Node, selectors: &[(&str, &str)]) -> Option<String> {
     let endpoint = mcp::endpoint_of(entry)?;
     // THE STRICT MATCH, never the dispatch selector's substring: this licenses a

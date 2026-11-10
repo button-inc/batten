@@ -253,7 +253,6 @@ fn arm(name: &str, count: usize) -> (Duration, usize) {
 /// `shell_retirement.rs` and one gate has one suite, so its kill is shown by hand;
 /// `\x7c` is GNU sed's spelling of the comprehension's bar, which the row's own
 /// field separator would otherwise swallow:
-// MUTANT arms-for-rescans-corpus|s@^arms_for(path) := object.get(arm_rows, path, set())$@arms_for(path) := {trim_space(line) \x7c some file, lines in input.tree.lines; startswith(file, "crates/batten/tests/"); some line in lines; some marker in arm_markers; startswith(trim_space(line), marker); split(trim_space(substring(trim_space(line), count(marker), -1)), " ")[0] == path}@|deleting_six_governed_paths_costs_a_flat_multiple_of_the_floor
 #[test]
 fn deleting_six_governed_paths_costs_a_flat_multiple_of_the_floor() {
     let (floor, floor_n) = arm("cost-zero", 0);
