@@ -1,0 +1,10 @@
+# cargo-mutants' configuration (https://mutants.rs/, CLOUD-2253). Rust mutation
+# is cargo-mutants' alone; `mutant:changed` runs it over the branch's diff.
+
+# `[profile.mutants]` in Cargo.toml: no debug info for a mutant's build.
+profile = "mutants"
+test_tool = "nextest"
+# The suite asks git about its own tree, so each build copy carries `.git`.
+copy_vcs = true
+# Ignored files (`target/` among them) are not copied into a build directory.
+gitignore = true
