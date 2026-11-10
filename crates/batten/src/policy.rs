@@ -3501,7 +3501,7 @@ fn claim_ids(
 /// can never fire, two that contradict, a cycle — and nothing decided any of
 /// them. At 33 committed rows that was still tractable by reading; it does not
 /// stay tractable, and "read it carefully" is not a gate: non-negotiable rule 3
-/// makes a model verdict inadmissible, so the alternative to a decidable
+/// makes a gated-model verdict inadmissible, so the alternative to a decidable
 /// mechanism here is not careful review, it is nothing.
 ///
 /// # Why the sweep has to be DRIVEN

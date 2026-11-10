@@ -17,7 +17,7 @@
 //! * **It is declared and inspectable.** The artifact is one JSON document with a
 //!   schema, listing rule ids, hex fingerprints and counts. Nothing is suppressed
 //!   that the file does not name.
-//! * **It mints only behind a computable predicate** ([`mintable`]) — no model
+//! * **It mints only behind a computable predicate** ([`mintable`]) — no gated-model
 //!   verdict, no server state, no "is this reasonable".
 //! * **Its staleness is loud** — an entry with nothing behind it is an ordinary
 //!   [`Finding`] on the `0/1/2/3` table (§7), not a warning line somebody can

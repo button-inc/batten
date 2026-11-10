@@ -232,7 +232,7 @@ CLOUD-1139's measured harm reintroduced through the fix for this one.
 `policy/claim-order-is-stated.rego` is the gate, and it decides what a gate can:
 whether AGENTS.md still states the order and whether this file still carries both
 failure directions. Whether a given session actually claimed before branching is
-not a property of the tree, and a gate resolving to that would be the model
+not a property of the tree, and a gate resolving to that would be the gated-model
 verdict non-negotiable rule 3 forbids.
 
 ## The lifecycle tasks

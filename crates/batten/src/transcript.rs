@@ -13,8 +13,9 @@
 //! a tool call's `name` and `input`, a result's `is_error` boolean, and a hook
 //! decision's `exitCode`. That last one matters most: a host records its hook
 //! runs structurally, so "was this call denied" is `exit_code == 2` against the
-//! one §7 table — not a substring match on an error message. A predicate built
-//! on prose would be a classifier wearing a gate's clothes.
+//! one §7 table — not a substring match on an error message. This module
+//! reduces events; text read anywhere in the engine leaves it only as a typed
+//! fact, never as a span (`rules/policy-modules.md`).
 //!
 //! The free-text payload is **never interpreted and never emitted**. A
 //! transcript is the single richest source of secrets the engine can be pointed

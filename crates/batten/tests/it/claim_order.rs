@@ -25,7 +25,7 @@
 //! # What this row does NOT decide
 //!
 //! Whether a given session actually claimed before branching. That is not a
-//! property of the tree, and a rule resolving to it would be the model verdict
+//! property of the tree, and a rule resolving to it would be the gated-model verdict
 //! non-negotiable rule 3 forbids. The prose carries the position; this keeps the
 //! prose from evaporating.
 
