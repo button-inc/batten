@@ -1249,26 +1249,90 @@ pub struct Heading {
     pub version: semver::Version,
     /// The release's date, when the heading carries one.
     pub date: Option<String>,
+    /// How many of its entries are marked breaking (CLOUD-2660); `None` for a
+    /// release no changelog carries.
+    pub breaking: Option<usize>,
+    /// Its section's lines, 1-based, heading to last non-blank line; `None` for
+    /// a release no changelog carries.
+    pub span: Option<(usize, usize)>,
 }
 
-/// Every release heading in a changelog body, in the order it lists them.
+/// The marker release-plz puts on a breaking entry.
+pub const BREAKING: &str = "[**breaking**]";
+
+/// The version and date a `## [x.y.z](…) - YYYY-MM-DD` line names, or `None`
+/// for any other line.
+fn heading_of(line: &str) -> Option<(semver::Version, Option<String>)> {
+    let (version, tail) = line.strip_prefix("## [")?.split_once(']')?;
+    let version = semver::Version::parse(version).ok()?;
+    let date = tail
+        .rsplit_once(" - ")
+        .map(|(_, date)| date.trim())
+        .filter(|date| crate::waiver::Date::parse(date).is_ok())
+        .map(str::to_owned);
+    Some((version, date))
+}
+
+/// Every release section in a changelog body, in the order it lists them, each
+/// with its breaking count and line span (CLOUD-2660).
 ///
 /// A line that is not a version heading — `## [Unreleased]`, prose, a deeper
-/// heading — is not a release and is skipped.
+/// heading — is not a release. ANY `## ` line, parsed or not, closes the open
+/// section, so an unparsed heading never merges its entries into the release
+/// above it.
+//MUTANT-SUITE crates/batten/src/engine.rs
+//MUTANT unparsed-heading-merges-section|s@^        if line.starts_with("## ") {$@        if heading_of(line).is_some() {@|an_unparsed_heading_ends_the_section_above_it
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT outdated-breaking-uncounted|s@^            if line.contains(BREAKING) {$@            if false {@|outdated_breaking_releases_lead_and_point_at_their_sections
+//MUTANT section-span-takes-blank|s@^            if !line.trim().is_empty() {$@            if true {@|outdated_breaking_releases_lead_and_point_at_their_sections
 #[must_use]
-pub fn changelog_headings(text: &str) -> Vec<Heading> {
-    text.lines()
-        .filter_map(|line| {
-            let (version, tail) = line.strip_prefix("## [")?.split_once(']')?;
-            let version = semver::Version::parse(version).ok()?;
-            let date = tail
-                .rsplit_once(" - ")
-                .map(|(_, date)| date.trim())
-                .filter(|date| crate::waiver::Date::parse(date).is_ok())
-                .map(str::to_owned);
-            Some(Heading { version, date })
-        })
-        .collect()
+pub fn changelog_sections(text: &str) -> Vec<Heading> {
+    let mut sections = Vec::new();
+    let mut open: Option<Heading> = None;
+    for (index, line) in text.lines().enumerate() {
+        let number = index + 1;
+        if line.starts_with("## ") {
+            sections.extend(open.take());
+            open = heading_of(line).map(|(version, date)| Heading {
+                version,
+                date,
+                breaking: Some(0),
+                span: Some((number, number)),
+            });
+            continue;
+        }
+        if let Some(heading) = open.as_mut() {
+            if line.contains(BREAKING) {
+                heading.breaking = heading.breaking.map(|count| count + 1);
+            }
+            if !line.trim().is_empty() {
+                heading.span = heading.span.map(|(start, _)| (start, number));
+            }
+        }
+    }
+    sections.extend(open);
+    sections
+}
+
+/// Where a reader finds the listed releases' sections (CLOUD-2660): the
+/// changelog at `reference`, the ref whose text was read, spanning the
+/// smallest heading line to the largest section end. `?plain=1` because a
+/// rendered `.md` blob ignores `#L` anchors.
+//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
+//MUTANT section-end-unspanned|s@^    let last = spans.iter().map(\x7cspan\x7c span.1).max();$@    let last = first;@|outdated_breaking_releases_lead_and_point_at_their_sections
+#[must_use]
+pub fn notes_url(repository: &str, reference: &str, newer: &[Heading]) -> String {
+    let base = format!(
+        "{}/blob/{reference}/{CHANGELOG}?plain=1",
+        repository.trim_end_matches('/')
+    );
+    let spans: Vec<(usize, usize)> = newer.iter().filter_map(|heading| heading.span).collect();
+    let first = spans.iter().map(|span| span.0).min();
+    let last = spans.iter().map(|span| span.1).max();
+    match (first, last) {
+        (Some(first), Some(last)) => format!("{base}#L{first}-L{last}"),
+        _ => base,
+    }
 }
 
 /// The changelog headings `reference` carries, read off the raw-file host
@@ -1287,7 +1351,7 @@ pub fn ref_changelog(repository: &str, reference: &str) -> Result<Vec<Heading>> 
             answer.status
         ));
     }
-    Ok(changelog_headings(&String::from_utf8_lossy(&answer.body)))
+    Ok(changelog_sections(&String::from_utf8_lossy(&answer.body)))
 }
 
 /// The releases newer than `pin` and no newer than `latest`, oldest first.
@@ -1311,6 +1375,8 @@ pub fn releases_between(headings: &[Heading], pin: &str, latest: &str) -> Result
         newer.push(Heading {
             version: latest,
             date: None,
+            breaking: None,
+            span: None,
         });
     }
     Ok(newer)
@@ -1974,11 +2040,24 @@ mod tests {
         );
     }
 
+    /// An unparsed heading closes the section above it (CLOUD-2660): its
+    /// breaking entry is never counted against the release before it.
+    #[test]
+    fn an_unparsed_heading_ends_the_section_above_it() {
+        let sections = changelog_sections(
+            "## [1.3.0](x) - 2020-03-01\n- fix\n## [v1.2.0]\n- [**breaking**] x\n## [1.1.0](x) - 2020-01-01\n",
+        );
+        let newest = sections.first().expect("1.3.0 parses");
+        assert_eq!(newest.version.to_string(), "1.3.0");
+        assert_eq!(newest.breaking, Some(0));
+        assert_eq!(newest.span, Some((1, 2)));
+    }
+
     /// A changelog that lags only its newest release still counts it
     /// (CLOUD-2279): three behind is never read as two.
     #[test]
     fn a_changelog_missing_its_newest_heading_still_counts_it() -> Result<()> {
-        let headings = changelog_headings(
+        let headings = changelog_sections(
             "## [1.2.0](x) - 2026-02-01\n\n## [1.1.0](x) - 2026-01-01\n\n## [1.0.0](x) - 2025-12-01\n",
         );
         let newer = releases_between(&headings, "v1.0.0", "v1.3.0")?;
@@ -2542,6 +2621,8 @@ mod tests {
         let heading = |version: &str| Heading {
             version: release_version(version).unwrap_or_else(|_| semver::Version::new(0, 0, 0)),
             date: None,
+            breaking: None,
+            span: None,
         };
         let versions = |found: Vec<Heading>| -> Vec<String> {
             found.iter().map(|h| h.version.to_string()).collect()
