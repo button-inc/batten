@@ -139,6 +139,99 @@ pub enum Outcome {
     },
 }
 
+/// Whether the claim's commits are on their upstream (CLOUD-2656).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PushState {
+    /// Every commit is on the upstream.
+    Pushed,
+    /// The upstream lacks some of them.
+    Unpushed,
+    /// The branch tracks nothing.
+    NoUpstream,
+    /// It could not be computed (a shallow clone): never read as pushed.
+    NotComputable,
+}
+
+/// What the Stop owes an unlanded claim (CLOUD-2655, CLOUD-2656).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Step {
+    /// The agent lands it.
+    Land,
+    /// The clone is too shallow to say whether it landed.
+    Shallow,
+    /// Push it: a person merges, and the upstream lacks it.
+    Push,
+    /// Set an upstream and push: a person merges, and it tracks nothing.
+    NoUpstream,
+    /// Whether it is pushed could not be computed.
+    PushUnknown,
+    /// Pushed, and a person merges it: nothing is owed here.
+    MergeHeld,
+}
+
+//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
+//MUTANT person-pushed-stop-refused|s@^            Step::Land \x7c Step::Push \x7c Step::NoUpstream \x7c Step::PushUnknown$@            Step::Land \x7c Step::Push \x7c Step::NoUpstream \x7c Step::PushUnknown \x7c Step::MergeHeld@|a_person_landed_pushed_branch_is_not_refused
+//MUTANT person-unpushed-unrefused|s@^            Step::Land \x7c Step::Push \x7c Step::NoUpstream \x7c Step::PushUnknown$@            Step::Land@|a_person_landed_unpushed_branch_is_refused_naming_the_push
+impl Step {
+    /// The receipt's spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Land => "land",
+            Self::Shallow => "shallow",
+            Self::Push => "push",
+            Self::NoUpstream => "no-upstream",
+            Self::PushUnknown => "push-unknown",
+            Self::MergeHeld => "merge-held",
+        }
+    }
+
+    /// The step a receipt spells, or `None` for a spelling this build does not
+    /// know.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        [
+            Self::Land,
+            Self::Shallow,
+            Self::Push,
+            Self::NoUpstream,
+            Self::PushUnknown,
+            Self::MergeHeld,
+        ]
+        .into_iter()
+        .find(|step| step.as_str() == text)
+    }
+
+    /// Whether an ignored pointer about this step refuses the next Stop. A held
+    /// merge and a shallow target are never refused: nothing here is owed.
+    #[must_use]
+    pub const fn refusable(self) -> bool {
+        matches!(
+            self,
+            Step::Land | Step::Push | Step::NoUpstream | Step::PushUnknown
+        )
+    }
+}
+
+/// The step a raised claim owes, given who lands and where the commits are
+/// (CLOUD-2656). Under `"agent"` it is always `land`, today's behaviour.
+//MUTANT-SUITE crates/batten/src/completion.rs
+//MUTANT person-unknown-pushed|s@PushState::NotComputable => Step::PushUnknown,@PushState::NotComputable => Step::MergeHeld,@|a_push_nobody_could_compute_is_never_read_as_pushed
+#[must_use]
+pub const fn next_step(landed_by: crate::config::LandedBy, push: PushState) -> Step {
+    match landed_by {
+        crate::config::LandedBy::Agent => Step::Land,
+        crate::config::LandedBy::Person => match push {
+            PushState::Pushed => Step::MergeHeld,
+            PushState::Unpushed => Step::Push,
+            PushState::NoUpstream => Step::NoUpstream,
+            PushState::NotComputable => Step::PushUnknown,
+        },
+    }
+}
+
 /// The token a landing target that does not resolve is reported under.
 ///
 /// A fixed string rather than a formatted one: it reaches a report, and §6's
@@ -340,6 +433,19 @@ pub fn no_fix_reason(target: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A push nobody could compute refuses like an unpushed one (CLOUD-2656).
+    #[test]
+    fn a_push_nobody_could_compute_is_never_read_as_pushed() {
+        let step = next_step(crate::config::LandedBy::Person, PushState::NotComputable);
+        assert_eq!(step, Step::PushUnknown);
+        assert!(step.refusable());
+        assert!(!next_step(crate::config::LandedBy::Person, PushState::Pushed).refusable());
+        assert_eq!(
+            next_step(crate::config::LandedBy::Agent, PushState::Pushed),
+            Step::Land
+        );
+    }
     use crate::hook::RecordShape;
     use crate::transcript::parse;
 

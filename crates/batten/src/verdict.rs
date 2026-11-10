@@ -1544,6 +1544,11 @@ pub enum Native by id {
     CommitShipMissing => "commit ship missing",
     /// The Stop ladder's unlanded rung, on a clone too shallow to look.
     CommitShipUnknown => "commit ship unknown",
+    /// The Stop ladder's unlanded rung, where a person merges and the work is
+    /// not pushed.
+    CommitPushMissing => "commit push missing",
+    /// The Stop ladder's unlanded rung, where a person merges what is pushed.
+    CommitMergeHeld => "commit merge held",
     /// The Stop ladder's filed-set rung.
     IssueListUnclear => "issue list unclear",
     /// A `[[hook.handler]]` reported on this call.
@@ -2717,6 +2722,28 @@ operator's own words (CLOUD-2332).",
 turn's commits are on the landing target could not be computed; that is could-not-look, \
 never landed. Said once per claim until the operator speaks again (CLOUD-2655).",
         routes: &[run("unshallow run first", "git fetch --unshallow")],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit push missing",
+        gloss: "the claim's commits exist only in this clone",
+        class: "This repository declares `landed_by = \"person\"`: a person merges what the \
+agent pushed, so the agent's last step is the push. These commits are not on the branch's \
+upstream, or the branch tracks none, and a container reclaim loses them. The second subject \
+names which (CLOUD-2656).",
+        routes: &[
+            run("push run first", "git push"),
+            run("upstream set first", "git push -u <remote> HEAD"),
+        ],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
+        id: "commit merge held",
+        gloss: "the work is pushed and a person merges it",
+        class: "This repository declares `landed_by = \"person\"`, and the claim's commits \
+are on the branch's upstream: the merge is a person's step, not this session's. Said once; \
+the Stop is not refused (CLOUD-2656).",
+        routes: &[read("config read first", "batten.toml")],
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
