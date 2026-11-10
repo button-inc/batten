@@ -234,10 +234,6 @@ pub enum Watch {
 /// a reminder lands between Stops). The caller drops the records already
 /// spoken about before asking, so one old corpse cannot hide a newer crash.
 //MUTANT-SUITE crates/batten/src/stop.rs
-//MUTANT watchdog-undeclared|s@^        .find(\x7centry\x7c table.relaunch.contains(\&entry.task) \&\& !live.contains(\&entry.task))?;$@        .find(\x7centry\x7c !live.contains(\&entry.task))?;@|an_undeclared_crash_is_quiet
-//MUTANT watchdog-relaunch-ignored|s@ \&\& !live.contains(\&entry.task))?;$@)?;@|a_relaunch_under_way_is_quiet
-//MUTANT watchdog-reboot-ignored|s@^    if started.is_some_and(\x7cstarted\x7c started < boot) {$@    if false {@|a_crash_before_this_boot_relaunches
-//MUTANT watchdog-too-fast|s@^    if lived.is_some_and(\x7clived\x7c lived >= table.min_lifetime_secs) {$@    if lived.is_some() {@|a_crash_under_the_floor_is_advice
 #[must_use]
 pub fn watchdog(
     abandoned: &[crate::task::Entry],

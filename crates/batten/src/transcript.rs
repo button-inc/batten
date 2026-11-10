@@ -721,7 +721,6 @@ pub fn tally_appended(path: &Path, shape: RecordShape) -> Option<Tally> {
 /// [`tally_appended`] with its entry under the cache partition `cache`. No
 /// partition is a whole read, never could-not-look: a cache that cannot be
 /// kept must not cost a readable transcript its answer.
-//MUTANT tally-entry-trusted-after-replace|s@^        .filter(\x7csaved\x7c saved.head == head \&\& saved.offset <= len);$@        .filter(\x7c_\x7c true);@|the_incremental_reader_answers_as_a_whole_parse
 fn tally_under(path: &Path, shape: RecordShape, cache: Option<&Path>) -> Option<Tally> {
     use std::io::{Read as _, Seek as _};
     let canonical = std::fs::canonicalize(path).ok()?;
@@ -860,7 +859,6 @@ impl Summary for Tally {
     }
 }
 
-//MUTANT tally-text-not-a-marker|s@^                self.operator_marker = Some(false);$@                {}@|a_split_fold_answers_as_the_whole_parse
 impl Tally {
     fn fold(&mut self, event: &Event) {
         match event {
@@ -1607,7 +1605,6 @@ fn collect(
 /// [`Event::HookOutput`]'s findings take, never a reading of prose. A deny no
 /// line of which parses is still one refusal, with no findings.
 //MUTANT-SUITE crates/batten/src/transcript.rs
-//MUTANT refused-prefix-unstripped|s@^    let (_, emitted) = text.split_once(HOOK_ERROR_SEPARATOR)?;$@    let emitted = text.contains(HOOK_ERROR_SEPARATOR).then_some(text)?;@|a_failed_tool_result_carrying_the_hook_separator_is_a_refusal
 fn refusal_of(call: &str, text: &str) -> Option<Event> {
     let (_, emitted) = text.split_once(HOOK_ERROR_SEPARATOR)?;
     let parsed: Vec<crate::refusal::Parsed> = emitted

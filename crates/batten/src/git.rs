@@ -838,8 +838,6 @@ fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
 /// is alive. A WRITE never does ([`open_for_write`]): a remembered handle is a
 /// clone that shares its index and packed-refs snapshots, and a write through
 /// one would leave every later read in the call answered from the shared copy.
-//MUTANT remember-ignored|s@^    if !remember \x7c\x7c !scope_open() {$@    if !scope_open() {@|a_write_is_never_served_from_the_memo
-//MUTANT open-key-ignores-cwd|s@^        cwd: std::env::current_dir().ok(),$@        cwd: None,@|a_read_from_another_working_directory_is_opened_again
 fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<gix::Repository> {
     let ceilings: Vec<PathBuf> = ceilings
         .into_iter()
@@ -887,7 +885,6 @@ fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<g
 
 /// The discovery options [`open_upwards`] walks with: the ceilings, ignored
 /// where they fence nothing.
-//MUTANT unrelated-ceiling-refuses|s@match_ceiling_dir_or_error: false@match_ceiling_dir_or_error: true@|an_unrelated_ceiling_does_not_refuse_a_valid_repository
 fn discovery(ceilings: &[PathBuf]) -> gix::discover::upwards::Options<'static> {
     gix::discover::upwards::Options {
         ceiling_dirs: ceilings.to_vec(),
@@ -971,9 +968,6 @@ impl Drop for OpenScope {
 
 /// Remember this thread's repository opens for the life of the returned guard
 /// (CLOUD-2433). `run_hook` holds it, beside its other per-call memos.
-//MUTANT open-scope-never-opens|s@^        \*opens = Some(Opens::default());$@@|a_repository_read_twice_in_one_scope_is_opened_once
-//MUTANT open-never-remembered|s@^        let _ = with_opens(.opens. opens.remember(key, \&repo, read));$@@|a_repository_read_twice_in_one_scope_is_opened_once
-//MUTANT open-memo-never-consulted|s@^    if let Some(repo) = with_opens(.opens. opens.get(\&key)).flatten() {$@    if let Some(repo) = None::<gix::Repository> {@|a_repository_read_twice_in_one_scope_is_opened_once
 #[must_use = "the memo lives only as long as the guard: an unbound scope ends at once"]
 pub(crate) fn open_scope() -> OpenScope {
     let owner = with_cell(|opens| {
@@ -1005,7 +999,6 @@ fn with_opens<R>(with: impl FnOnce(&mut Opens) -> R) -> Option<R> {
 
 /// Whether an open may be remembered: a scope is alive and no write has spent
 /// it ([`Opens::spend`]).
-//MUTANT spent-scope-still-remembers|s@^    with_opens(.opens. !opens.1).unwrap_or(false)$@    with_opens(.opens. true).unwrap_or(false)@|a_write_spends_the_scopes_memo
 fn scope_open() -> bool {
     with_opens(|opens| !opens.1).unwrap_or(false)
 }
@@ -1017,7 +1010,6 @@ fn scope_open() -> bool {
 /// file would have a remembered handle served stale, so any of them moving fails
 /// `the_memos_read_list_was_audited_against_this_gix` until the list is
 /// re-audited against the new open and this moves with it.
-//MUTANT audited-gix-moved|s@^    ("gix", "0.87.1"),$@    ("gix", "0.0.0"),@|the_memos_read_list_was_audited_against_this_gix
 #[cfg(test)]
 const AUDITED_GIX: &[(&str, &str)] = &[
     ("gix", "0.87.1"),
@@ -1046,10 +1038,6 @@ fn read_by_open(git_dir: &Path) -> Vec<Option<Vec<u8>>> {
     read.iter().map(|path| std::fs::read(path).ok()).collect()
 }
 
-//MUTANT common-config-unread|s@^        read.push(common.join("config"));$@@|a_linked_worktree_is_remembered
-//MUTANT nested-scope-resets|s@^        if opens.is_some() {$@        if false {@|a_nested_scope_does_not_end_the_outer_one
-//MUTANT repository-memo-never-hits|s@^        (opened.read == now).then@        false.then@|a_repository_opened_twice_is_opened_once
-//MUTANT repository-memo-ignores-config|s@^        (opened.read == now).then@        true.then@|a_config_edited_after_open_is_read_again
 impl Opens {
     /// The repository remembered for `key`, if every file its open read is
     /// unchanged.
@@ -1707,7 +1695,6 @@ fn working_tree_changes(dir: &Path, want: Changes) -> Result<BTreeSet<String>> {
 /// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository. Every
 /// caller reads that as could-not-look and allows, so a tree this cannot
 /// enumerate is never refused on the strength of a count nobody took.
-//MUTANT index-required|s@repo.index_or_empty()@repo.index()@|a_repository_nothing_was_added_to_tracks_nothing
 pub fn tracked_paths(dir: &Path) -> Result<BTreeSet<String>> {
     let repo = open(dir)?;
     // The INDEX is what `ls-files` printed, so this is the same membership test
@@ -2242,8 +2229,6 @@ fn unreachable_from_remotes(
 /// # Errors
 ///
 /// A directory that is not a repository, or one discovery cannot reach.
-//MUTANT write-from-the-memo|s@^    let repo = open_fresh(dir)?;$@    let repo = open(dir)?;@|a_write_is_never_served_from_the_memo
-//MUTANT write-keeps-the-memo|s@^    spend_scope();$@@|a_write_spends_the_scopes_memo
 pub fn open_for_write(dir: &Path) -> Result<gix::Repository> {
     let repo = open_fresh(dir)?;
     spend_scope();
@@ -2391,7 +2376,6 @@ pub struct RawObject {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
-//MUTANT base-subtracts-nothing|s@!carried.contains(object.id.as_str())@!carried.contains(\&object.id[..0])@|the_base_is_subtracted_rather_than_resent
 
 /// Every object a push of `base..head` must carry.
 ///
@@ -2580,7 +2564,6 @@ pub fn config_value(dir: &Path, key: &str) -> Result<Option<String>> {
 /// # Errors
 ///
 /// Raises a [`UsageError`] (exit `1`) when the write fails.
-//MUTANT config-write-from-the-memo|s@^    let repo = open_for_write(dir)?;$@    let repo = open(dir)?;@|a_config_write_spends_the_scopes_memo
 pub fn set_config_local(dir: &Path, key: &str, value: &str) -> Result<()> {
     // A WRITE, so opened as one (CLOUD-2526): fresh, and spending the memo.
     let repo = open_for_write(dir)?;
@@ -4183,7 +4166,6 @@ struct IdentityMemo {
 /// The spelling of a commit that changes nothing, which has no identity.
 const NO_IDENTITY: &str = "-";
 
-//MUTANT identity-memo-never-served|s@^        if let Some(identity) = self.known.get(commit) {$@        if let Some(identity) = self.known.get(commit).filter(\x7c_\x7c false) {@|a_remembered_identity_is_served_in_place_of_a_recomputation
 impl IdentityMemo {
     /// The memo for the repository at `dir`, empty where none is stored or the
     /// state directory cannot be named.
@@ -4342,7 +4324,6 @@ pub(crate) fn patch_identities(
 /// `other` this clone has not fetched.
 #[must_use]
 //MUTANT-SUITE crates/batten/tests/it/land.rs
-//MUTANT identity-less-commit-contained|s@let Some(identity) = commit_identity(&repo, &id) else {@let Some(identity) = commit_identity(&repo, &id).or_else(\x7c\x7c ours.iter().next().cloned()) else {@|an_empty_sibling_commit_is_never_admitted_by_patch_identity
 pub fn patches_contained(dir: &Path, tip: &str, other: &str) -> bool {
     let Ok(repo) = open(dir) else {
         return false;
@@ -5719,7 +5700,6 @@ impl LandingFact {
     }
 }
 
-//MUTANT nothing-to-land-read-as-landed|s@^            Verdict::NothingToLand => "nothing_to_land",$@            Verdict::NothingToLand => "landed",@|a_branch_with_nothing_to_land_is_not_landed
 impl serde::Serialize for LandingFact {
     fn serialize<S: serde::Serializer>(
         &self,

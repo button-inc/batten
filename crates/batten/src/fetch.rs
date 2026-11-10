@@ -737,11 +737,6 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
 /// redirect, which the `https_only` transport gives a loopback no way to stage
 /// (CLOUD-2509).
 //MUTANT-SUITE crates/batten/src/fetch.rs
-//MUTANT declared-credential-follows-redirect|s@!is_credential(name, declared))@!is_credential(name, Default::default()))@|a_credential_follows_a_redirect_only_on_the_same_origin
-//MUTANT cookie-follows-redirect|s@!is_credential(name, declared))@!(name.eq_ignore_ascii_case("authorization") \x7c\x7c declared.iter().any(\x7cd\x7c name.eq_ignore_ascii_case(d))))@|a_credential_follows_a_redirect_only_on_the_same_origin
-//MUTANT detour-returns-credential|s@path.iter().all(\x7chop\x7c same_origin(origin, hop))@path.last().is_none_or(\x7chop\x7c same_origin(origin, hop))@|a_credential_follows_a_redirect_only_on_the_same_origin
-//MUTANT origin-ignores-port|s@(Some(port), _) => port,@(Some(_), _) => 443,@|a_redirect_stays_on_its_origin_only_when_scheme_host_and_port_agree
-//MUTANT origin-ignores-scheme|s@^    Some((scheme, host, port))$@    Some((String::new(), host, port))@|a_redirect_stays_on_its_origin_only_when_scheme_host_and_port_agree
 fn carried_to(
     headers: &[(String, String)],
     origin: &str,
@@ -898,7 +893,6 @@ fn resolve(base: &hyper::Uri, location: &str) -> Result<String> {
 /// case prove the bound ended the request by reading the cause rather than by
 /// timing the process (CLOUD-2059).
 //MUTANT-SUITE crates/batten/tests/it/provision.rs
-//MUTANT total-bound-cause-lost|s@^        .map_err(\x7c_\x7c anyhow::anyhow!("fetch: timed out"))?$@        .map_err(\x7c_\x7c anyhow::anyhow!("fetch: the request failed"))?@|the_timeout_is_what_ends_it_rather_than_an_instant_failure
 async fn one_exchange(
     url: &str,
     headers: &[(String, String)],

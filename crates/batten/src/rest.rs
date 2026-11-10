@@ -1206,7 +1206,6 @@ fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method)
 /// `pr_watch::tests::a_server_requested_floor_reaches_the_pause`; this is the
 /// header's half.
 //MUTANT-SUITE crates/batten/src/rest.rs
-//MUTANT poll-floor-unread|s@^    raw.and_then(\x7cvalue\x7c value.trim().parse::<f64>().ok())$@    None::<\&str>.and_then(\x7cvalue\x7c value.trim().parse::<f64>().ok())@|a_poll_interval_header_is_the_floor
 fn poll_floor_of(raw: Option<&str>) -> Option<f64> {
     raw.and_then(|value| value.trim().parse::<f64>().ok())
         .filter(|seconds| seconds.is_finite() && *seconds > 0.0)

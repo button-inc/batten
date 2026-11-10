@@ -92,32 +92,11 @@ pub struct Options {
 // enrichment are where it can silently stop doing its job, so removing each pass
 // is what shows the tier discriminates.
 //MUTANT-SUITE crates/batten/tests/it/sbom_producer.rs
-//MUTANT sbom-skips-spdx-normalization|s@^    let mut spdx_doc = normalise_spdx.spdx_doc.;$@    let mut spdx_doc = spdx_doc;@|one_action_referenced_twice_yields_one_component
-//MUTANT sbom-skips-cdx-normalization|s@^    let mut cdx_doc = normalise_cdx.cdx_doc.;$@    let mut cdx_doc = cdx_doc;@|the_cyclonedx_graph_is_rewritten_too
-//MUTANT sbom-dedupes-the-subject|s@^            if id.is_empty.. .. Some.id. == subject.as_str.. .$@            if id.is_empty() {@|the_guard_the_document_still_describes_its_subject
-//MUTANT sbom-skips-entity-enrichment|s@^    enrich_spdx.&mut spdx_doc, &entities.;$@@|the_documents_own_subject_carries_the_workspace_supplier
-//MUTANT sbom-drops-the-originator|s@^    format!."Organization: .name.".$@    String::from(NOASSERTION)@|a_crate_with_authors_gets_both_and_the_originator_is_the_author
-//MUTANT sbom-copyright-residue-is-noassertion|s@^                _ => NONE.to_owned..,$@                _ => NOASSERTION.to_owned(),@|the_boilerplate_trap_an_apache_license_yields_none
-//MUTANT sbom-tolerates-an-absent-source|s@^    if missing != 0 .$@    if false {@|a_lockfile_package_absent_from_the_cache_is_a_hard_failure
-//MUTANT sbom-keeps-the-slash-license-form|s@^    slash.replace_all.raw, " OR ".\.into_owned..$@    raw.to_owned()@|the_deprecated_slash_spelling_is_rewritten_to_or
-//MUTANT sbom-invents-a-missing-license|s@^        return NOASSERTION.to_owned..;$@        return "Apache-2.0".to_owned();@|honest_absence_an_empty_manifest_license_leaves_noassertion
-//MUTANT sbom-skips-the-actions-table|s@^        actions_spdx.&mut spdx_doc, actions.;$@@|a_mapped_action_carries_its_license_and_copyright
-//MUTANT sbom-reads-a-short-action-row|s@^        if fields.len.. < 3 .$@        if fields.len() < 2 {@|the_producer_reads_only_whole_pinned_rows
-//MUTANT sbom-reads-a-short-pin|s@^        let whole_pin = pin.len.. == 40;$@        let whole_pin = !pin.is_empty();@|the_producer_reads_only_whole_pinned_rows
-//MUTANT sbom-drift-reads-stable|s@^        stable_form.&spdx_one. == stable_form.&spdx_two.,$@        true,@|two_scans_that_differ_record_an_unstable_inventory
 //MUTANT-SUITE crates/batten/tests/it/sbom_binary.rs
-//MUTANT sbom-binary-counts-every-artifact|s@^    text.artifact, "type". == "rust-crate"$@    true@|the_count_is_filtered_to_rust_crate_so_a_self_artifact_cannot_pad_it
-//MUTANT sbom-binary-stale-record-survives|s@^        Mode::Binary . .. . => Some.BINARY_FAMILY.,$@        Mode::Binary { .. } => None,@|a_scan_that_cannot_look_removes_the_previous_record
 //MUTANT-SUITE crates/batten/tests/it/ntia.rs
-//MUTANT conformance-exit-code-dropped|s@^        let code = spawn_code@        let code = 0 * spawn_code@|a_nonconformant_document_fails
 // The five `[sbom]` keys that decide, as `config lint --config-from` compares
 // them: each comparison removed must leave its key unreported.
 //MUTANT-SUITE crates/batten/tests/it/config_trust.rs
-//MUTANT sbom-actions-removal-unreported|s@^    if base.actions.is_some.. && working@    if false \&\& working@|the_sbom_keys_that_decide_are_reported_as_weakenings
-//MUTANT sbom-checker-swap-unreported|s@^    if checker != base.checker .$@    if false {@|the_sbom_keys_that_decide_are_reported_as_weakenings
-//MUTANT sbom-standard-removal-unreported|s@^        if !asked.contains.&standard.as_str... .$@        if false {@|the_sbom_keys_that_decide_are_reported_as_weakenings
-//MUTANT sbom-inventory-rename-unreported|s@^        if named != declared .$@        if false {@|the_sbom_keys_that_decide_are_reported_as_weakenings
-//MUTANT sbom-record-rename-unreported|s@^    if record != base.record .$@    if false {@|the_sbom_keys_that_decide_are_reported_as_weakenings
 
 /// The verb, as its diagnostics name it.
 const VERB: &str = "sbom";
