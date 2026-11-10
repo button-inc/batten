@@ -4680,64 +4680,6 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
-          "path": "singleton detach",
-          "id": "singleton.detach",
-          "about": "Run a command in the background under a task's lock, and report the previous run's failure",
-          "effect": "unclassified",
-          "data_channel": false,
-          "flags": [
-            {
-              "name": "attached",
-              "short": null,
-              "long": "attached",
-              "takes_value": false,
-              "positional": false,
-              "help": "Run as the background copy the announcing invocation starts: take the lock, run the command, record a failure"
-            },
-            {
-              "name": "command",
-              "short": null,
-              "long": null,
-              "takes_value": true,
-              "positional": true,
-              "help": "The command to run in the background, after `--`"
-            },
-            {
-              "name": "log",
-              "short": null,
-              "long": "log",
-              "takes_value": true,
-              "positional": false,
-              "help": "Where the background run's whole output is written"
-            },
-            {
-              "name": "marker",
-              "short": null,
-              "long": "marker",
-              "takes_value": true,
-              "positional": false,
-              "help": "Where a failed run's pointers wait, announced and cleared by the next invocation"
-            },
-            {
-              "name": "pattern",
-              "short": null,
-              "long": "pattern",
-              "takes_value": true,
-              "positional": false,
-              "help": "The `[[pattern]]` row whose matching output lines are the failure's pointers"
-            },
-            {
-              "name": "task",
-              "short": null,
-              "long": null,
-              "takes_value": true,
-              "positional": true,
-              "help": "The task's name, which is what the lock is keyed by"
-            }
-          ],
-          "subcommands": []
-        },
-        {
           "path": "singleton release",
           "id": "singleton.release",
           "about": "Drop a task's lock, which its exit trap does and a kill cannot",

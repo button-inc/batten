@@ -3970,7 +3970,7 @@ run = "batten startup --repair"
 # check never linked its own target. Appended to `darwin_link`, the triple is its
 # `$1`: the `ci-slow-needed` shape.
 #
-# ONE LINE JOINED BY `;`, on the `cross-turn` precedent below:
+# ONE LINE JOINED BY `;`:
 # `inline-task-bodies-not-growing` is `non_increasing` with no `admits_with`, so
 # a new ''' body is refused outright.
 #
@@ -4069,26 +4069,6 @@ run = [
   "cargo run --quiet -p batten -- step run darwin-link --arg {{usage.target}} -- cargo zigbuild --workspace --profile darwin-link --target {{usage.target}}",
 ]
 
-[tasks."cross-turn"]
-description = "One turn's cross-triple type-check, detached — reports the previous run's failure and never blocks the turn"
-# ONE ARGV SINCE CLOUD-1991: `batten singleton detach` is the whole shape the
-# one-liner spelled with `&`, `grep`, `head` and `sed`. It announces the previous
-# run's failure on STDOUT (the handler's advisory channel) and clears it, so one
-# failure is said once; it starts an attached copy and returns, so the turn never
-# waits on cargo; the copy takes the `cross-turn` lock for its OWN pid — a second
-# copy is refused by the lock, never by a process probe — runs `cross-check` with
-# the whole output in the log, and on a failure leaves at most three pointer
-# lines plus the log's path. Which lines are pointers is the
-# `compiler-error-pointer` `[[pattern]]` row, which tolerates the colour escapes
-# `CARGO_TERM_COLOR = "always"` puts between `: ` and `error`. Bare `batten`,
-# the handler's own rule: nothing on a turn compiles. `singleton detach` is newer
-# than every release until CLOUD-1991 ships, so it resolves only through
-# `_.path`'s `target/release`, which `session:batten` builds at session start;
-# where that build failed, this handler fails every turn — loudly, never as a
-# pass — until it succeeds or a release carries the verb (`session:git-hooks`
-# records the same dependency).
-run = "batten singleton detach cross-turn --marker target/cross-turn.fail --log target/cross-turn.log --pattern compiler-error-pointer -- mise run cross-check"
-
 [tasks.cross-check]
 description = "Type-check for other targets from Linux (no macOS runner needed)"
 # The `rustup target add` below is not idempotent against a half-installed
@@ -4150,7 +4130,7 @@ description = "Type-check for other targets from Linux (no macOS runner needed)"
 #     (CLOUD-397). Registry dependencies build with `--cap-lints allow`, so only
 #     workspace code is held to it.
 #   * `--message-format=short` is one `path:line:col: error: …` per diagnostic,
-#     which is the shape `cross-turn` reads pointers from (CLOUD-1731).
+#     so a failure names its line and not a page of context.
 run = [
   "mise run target-ensure x86_64-pc-windows-gnu",
   "mise run target-ensure x86_64-unknown-linux-musl",

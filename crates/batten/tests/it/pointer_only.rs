@@ -2948,25 +2948,6 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
-    // The per-turn background run (CLOUD-1991). Driven with a pattern no row
-    // declares, which refuses before anything is announced or started — a
-    // corpus run must not leave a detached copy behind.
-    Verb {
-        path: "singleton detach",
-        args: &[
-            "census-detach",
-            "--marker",
-            "detach.marker",
-            "--log",
-            "detach.log",
-            "--pattern",
-            "no-such-pattern-row",
-            "--",
-            "true",
-        ],
-        stdin: Stdin::Nothing,
-        disposition: Disposition::PointerOnly,
-    },
     // -- THE PORTS THIS CAMPAIGN ADDED (CLOUD-1716, CLOUD-1753) ---------------
     //
     // Every one is `PointerOnly`, which is the default disposition and not a

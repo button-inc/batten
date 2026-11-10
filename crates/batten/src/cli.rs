@@ -762,8 +762,9 @@ pub enum HkCommand {
 /// No `hold`: this process cannot hold anything, because it exits immediately.
 /// `acquire` and `release` act on the CALLER's behalf and the caller's exit trap
 /// owns the release, exactly as `land-lock`'s verbs act for the `land` that
-/// invoked them. `detach` is the one exception, and it holds through the copy
-/// it starts rather than through itself.
+/// invoked them. There is no `detach`: a process started past the harness is
+/// invisible to it and dies with the container (CLOUD-1731's per-turn run,
+/// retired).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SingletonCommand {
@@ -780,26 +781,6 @@ pub enum SingletonCommand {
     Release {
         /// The task's name.
         task: String,
-    },
-    /// Run a command in the background as this task, and report the previous
-    /// run's failure (CLOUD-1991, retiring `[tasks.cross-turn]`).
-    ///
-    /// The one verb here that HOLDS: not this process, which announces, clears
-    /// and returns, but the attached copy it starts, which takes the lock for
-    /// its own pid, runs the command, and releases.
-    Detach {
-        /// The task's name, which is what the lock is keyed by.
-        task: String,
-        /// Where a failed run's pointers wait for the next invocation.
-        marker: String,
-        /// Where the run's whole output is written.
-        log: String,
-        /// The `[[pattern]]` row selecting a pointer line from the output.
-        pattern: String,
-        /// This invocation IS the background copy: take the lock and run.
-        attached: bool,
-        /// The command, after `--`.
-        command: Vec<String>,
     },
 }
 
@@ -3393,17 +3374,6 @@ fn singleton_of(matches: &ArgMatches) -> Option<SingletonCommand> {
         }),
         ("release", matches) => Some(SingletonCommand::Release {
             task: matches.get_one::<String>("task").cloned()?,
-        }),
-        ("detach", matches) => Some(SingletonCommand::Detach {
-            task: matches.get_one::<String>("task").cloned()?,
-            marker: matches.get_one::<String>("marker").cloned()?,
-            log: matches.get_one::<String>("log").cloned()?,
-            pattern: matches.get_one::<String>("pattern").cloned()?,
-            attached: flag(matches, "attached"),
-            command: matches
-                .get_many::<String>("command")?
-                .cloned()
-                .collect::<Vec<_>>(),
         }),
         _ => None,
     }
