@@ -3874,10 +3874,8 @@ fn prebuilt_dir(root: &Path) -> PathBuf {
 /// did not need it — never the other way round.
 fn embedded_paths(target: &Path, staged: &Path) -> Vec<String> {
     let mut found = std::collections::BTreeSet::new();
-    // Cargo writes absolute, canonical paths.
-    let staged = staged
-        .canonicalize()
-        .unwrap_or_else(|_| staged.to_path_buf());
+    // Cargo writes absolute paths canonically.
+    let staged = crate::git::canonical(staged);
     // RELATIVE TO THE WORKSPACE ROOT, AND UNNORMALISED: rustc runs there and
     // writes `include_str!`'s path as it resolved it — measured,
     // `tests/../mise-tasks/toy.sh` — so a path is anchored on the staged tree and
@@ -4715,14 +4713,16 @@ pub enum CargoRun {
 /// AN ARGV, NEVER A HARNESS. Copy mode, timeouts, the baseline and the verdict
 /// files are cargo-mutants' own (`.cargo/mutants.toml` carries the rest); this
 /// assembles what a task body would otherwise spell in shell, and reads back
-/// only the exit.
+/// only the exit. `runner` is the provisioned binary, run as cargo runs a
+/// subcommand: its own name's suffix, `mutants`, first.
 ///
 /// # Errors
 ///
 /// No `base` to compare against, a patch that cannot be written to `diff`, or
-/// cargo that cannot be spawned.
+/// a `runner` that cannot be spawned.
 pub fn cargo_mutants(
     root: &Path,
+    runner: &Path,
     registry: &Registry,
     base: &str,
     jobs: usize,
@@ -4756,9 +4756,10 @@ pub fn cargo_mutants(
     if let Some((k, n)) = shard {
         args.extend([String::from("--shard"), format!("{k}/{n}")]);
     }
+    let runner = runner.to_string_lossy();
     let ran = spawn_as(
         root,
-        Program::Cargo,
+        Program::Command(&runner),
         &args,
         &[],
         runner_bound(),
@@ -4896,7 +4897,16 @@ mod tests {
         let registry = Registry::parse("cargo-mutants=src/*.rs").expect("parses");
         let diff = root.join("state").join("change.diff");
         assert_eq!(
-            cargo_mutants(&root, &registry, "HEAD", 1, None, &diff).expect("judged"),
+            cargo_mutants(
+                &root,
+                Path::new("cargo-mutants"),
+                &registry,
+                "HEAD",
+                1,
+                None,
+                &diff
+            )
+            .expect("judged"),
             CargoRun::NothingOwned
         );
         assert!(!diff.exists(), "no diff is written for nothing to run");

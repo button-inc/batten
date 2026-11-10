@@ -1858,12 +1858,9 @@ description = "Gate: every mutant cargo-mutants makes of this branch's Rust chan
 # `--in-diff`, adds `--shard` from `MUTANT_SHARD`, and runs cargo-mutants itself;
 # every shard keeps its baseline, which is what derives the timeout.
 env = { NEXTEST_PROFILE = "mutants", MUTANT_JOB_DISK_MB = "4300", MUTANT_JOB_MEMORY_MB = "4000" }
-# THE HOST BINARY APPLIES THE PIN, because only it links onto PATH: a checkout's
-# build fills the cache and leaves the host's links alone (`provision::links_host`).
-run = [
-  "batten provision apply",
-  "cargo run --quiet -p batten -- mutate cargo",
-]
+# The verb applies the pin and runs the cached binary, so nothing is linked onto
+# PATH and no task step precedes it.
+run = "cargo run --quiet -p batten -- mutate cargo"
 
 [tasks."mutant-census"]
 description = "Gate: every gate in the tree is either mutation-enforced or carries a filed exemption (CLOUD-480)"
