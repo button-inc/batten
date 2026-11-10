@@ -2984,6 +2984,12 @@ const NATIVE_RULES: &[(&str, &str)] = &[
          arms the gate; work there in its own session, or request an override to cross.",
     ),
     (
+        "budget-call",
+        "The budget gate: this write would grow a `[budget.*]` set past a ceiling it \
+         declares, measured as `policy budget` measures it; shrink the write, or raise the \
+         set's ceiling in a separate change.",
+    ),
+    (
         "detached-call",
         "The detach gate: a `&` job this call does not wait on returns before its work \
          does, and the session's wake-up with it; set the host's background option on the \
