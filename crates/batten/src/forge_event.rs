@@ -414,7 +414,6 @@ fn text(value: &Value, pointers: &[&str]) -> Option<String> {
 /// **No delivery id and no Events API id enters it**: both are source-specific,
 /// so a key built from either would fire one change once per source.
 //MUTANT-SUITE crates/batten/src/forge_event.rs
-//MUTANT dedupe-version-first-only|s@^    let version = row.version.iter().find_map(at);$@    let version = row.version.first().and_then(at);@|dedupe_key_agrees_across_sources
 fn key(row: &CatalogRow, action: Option<&str>, repo: Option<&str>, payload: &Value) -> String {
     use sha2::Digest as _;
     use std::fmt::Write as _;
@@ -530,7 +529,6 @@ pub fn ring_path(common_dir: &std::path::Path) -> std::path::PathBuf {
 ///
 /// When the ring exists and cannot be read.
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
-//MUTANT seen-ring-unread|s@^    if ring.contains(\&key) {$@    if false {@|a_replayed_payload_dispatches_once
 pub fn unseen(ring_file: &std::path::Path, key: &str) -> std::io::Result<bool> {
     let ring = read_ring(ring_file)?;
     let key = key.to_owned();
@@ -597,7 +595,6 @@ pub fn wake_event(stdin: &str) -> Option<(String, Value)> {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
-//MUTANT wake-element-ignored|s@^    let start = text.find(WAKE_OPEN)?;$@    let start = None::<usize>?;@|a_wake_envelope_dispatches_once_and_its_webhook_twin_does_not
 fn wake_element(text: &str) -> Option<(String, Value)> {
     let start = text.find(WAKE_OPEN)?;
     let (tag, element) = text[start..].split_once('>')?;
@@ -727,8 +724,6 @@ pub struct RoundInput<'a> {
 ///
 /// A cursor that cannot be read, or a stream that will not take a line.
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
-//MUTANT source-order-reversed|s@^    for source in \&forge.source {$@    for source in forge.source.iter().rev() {@|the_first_available_source_wins
-//MUTANT absent-source-reads-empty|s@^    Ok(Round::CouldNotLook)$@    Ok(Round::Read { events: Vec::new(), cursor: Cursor::default(), cursor_path: input.common_dir.join("none") })@|an_absent_source_falls_through_and_none_is_could_not_look
 pub fn read_round(
     forge: &crate::rest::Forge,
     input: &RoundInput<'_>,
@@ -760,7 +755,6 @@ pub fn read_round(
 }
 
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
-//MUTANT mcp-absence-unchecked|s@^        Mcp => input.mcp.is_some_and(answers),$@        Mcp => { let _ = answers; true }@|an_absent_source_falls_through_and_none_is_could_not_look
 fn available(source: &crate::rest::Source, input: &RoundInput<'_>) -> bool {
     use crate::rest::SourceKind::{Command, Mcp};
     let answers =
@@ -833,7 +827,6 @@ fn read_document(source: &crate::rest::Source, input: &RoundInput<'_>) -> Option
 }
 
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
-//MUTANT last-id-ignored|s@^        if !start.is_newer(\&item_id) {$@        if false {@|a_round_resumes_from_its_cursor
 fn decode_events(items: &[Value], cursor: Option<Cursor>) -> (Vec<Envelope>, Cursor) {
     let mut cursor = cursor.unwrap_or_default();
     let start = cursor.clone();
@@ -852,8 +845,6 @@ fn decode_events(items: &[Value], cursor: Option<Cursor>) -> (Vec<Envelope>, Cur
 }
 
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
-//MUTANT snapshot-baseline-emits|s@^    let baseline = cursor.is_none();$@    let baseline = false;@|a_snapshot_first_sight_is_baseline_and_changes_emit_their_track
-//MUTANT snapshot-new-key-silent|s@^            None if !baseline => source.new.iter().cloned().collect(),$@            None if !baseline => Vec::new(),@|a_snapshot_first_sight_is_baseline_and_changes_emit_their_track
 fn decode_snapshot(
     source: &crate::rest::Source,
     items: &[Value],

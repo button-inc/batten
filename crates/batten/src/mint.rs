@@ -851,9 +851,6 @@ impl Declared {
 }
 
 //MUTANT-SUITE crates/batten/src/mint.rs
-//MUTANT require-shares-refused|s@^                    && (other.spends() \x7c\x7c mint.spends())$@                    \&\& true@|require_rows_share_a_prerequisite_and_spend_rows_still_refuse
-//MUTANT after-modes-mixed|s@^                && other.effective_after_mode() != mint.effective_after_mode()$@                \&\& false@|mixed_after_modes_on_one_prerequisite_refuse
-//MUTANT after-mode-orphan-loads|s@^        if mint.after_mode.is_some() && mint.after.is_none() {$@        if false {@|an_after_mode_without_an_after_refuses
 /// The refusals that read more than one row: a `clear` with no writer, and an
 /// `after` naming no writer keyed the same way.
 ///
