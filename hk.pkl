@@ -129,6 +129,10 @@ local gate = new Mapping<String, Step> {
         "mise.toml",
         "hk.pkl",
         "batten.toml",
+        // cargo-mutants' own configuration and the nextest profile it runs
+        // under: a change to either changes every mutant's verdict.
+        ".cargo/mutants.toml",
+        ".config/nextest.toml",
       )
     check = "mise run mutant:changed"
   }
