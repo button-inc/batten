@@ -377,6 +377,15 @@ pub struct Measured {
 fn run_arm(dir: &Path, steps: &[String], binary: &Path) -> Result<(Vec<u8>, i32)> {
     let mut output = Vec::new();
     let mut exit = 0;
+    // THE STATE STORE IS THE ARM'S OWN, AND ITS SPELLING IS NOT MEASURED. A stored
+    // output's pointer names its view by absolute path, and that prefix is the
+    // machine's: measured, the committed table could not be reproduced from a
+    // copy of the tree because the run there wrote under a longer root. Beside
+    // the fixture, never in it, so `check` sees no stray file; replaced by the
+    // variable's name before counting, so the figure is the same on every host.
+    let state = dir.with_extension("state");
+    let spelled = state.to_string_lossy().into_owned();
+    let published = [(String::from("XDG_DATA_HOME"), Some(spelled.clone()))];
     for step in steps {
         let step = step.replace("$BATTEN", &binary.to_string_lossy());
         // THROUGH THE PLACED ADAPTER (review of #928). Running the step sequence
@@ -393,9 +402,9 @@ fn run_arm(dir: &Path, steps: &[String], binary: &Path) -> Result<(Vec<u8>, i32)
         // exactly what it decided before.
         let argv = ["sh", "-c", step.as_str()].map(ToOwned::to_owned);
         let (code, text) =
-            crate::exec::piped_argv(dir, &argv, "", crate::exec::Diagnostics::Keep, &[])
+            crate::exec::piped_argv(dir, &argv, "", crate::exec::Diagnostics::Keep, &published)
                 .with_context(|| format!("token-bench: could not run `{step}`"))?;
-        output.extend_from_slice(text.as_bytes());
+        output.extend_from_slice(text.replace(&spelled, "$XDG_DATA_HOME").as_bytes());
         exit = code;
     }
     Ok((output, exit))
