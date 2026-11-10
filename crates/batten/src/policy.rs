@@ -1218,6 +1218,8 @@ fn compile_for(
 /// Lifted out of [`load`] whole rather than inlined: `clippy::too_many_lines`
 /// refuses the flat function, and moving a nameable step is the remedy this
 /// crate already takes for that lint instead of raising a cap.
+//MUTANT-SUITE crates/batten/tests/it/preset_manifest.rs
+//MUTANT provider-key-unnamed|s@^        let repair = provider_repair(\&reads);$@        let repair = String::new();@|a_preset_reading_a_provider_is_refused_where_the_row_names_none
 fn preset_sources(
     rule: &Rule,
     manifest: &crate::preset::Manifest,
@@ -1280,10 +1282,11 @@ fn preset_sources(
     // declared — so the reader can see which half to change.
     if sources.is_empty() {
         let reads: Vec<&str> = manifest.providers_at(rule.scope);
+        let repair = provider_repair(&reads);
         return Err(UsageError::raise(format!(
             "rule `{}` enables the preset `{name}` at scope `{}`, but every module \
              there reads {}, and this row declares {} — on another provider those \
-             modules match nothing and would report a clean tree they never read",
+             modules match nothing and would report a clean tree they never read{repair}",
             rule.id,
             rule.scope.as_str(),
             reads.join(" and "),
@@ -1291,6 +1294,21 @@ fn preset_sources(
         )));
     }
     Ok(sources)
+}
+
+/// The repair a provider refusal ends with (CLOUD-2658): the column and the
+/// values the preset's modules read, so the reader does not have to know the
+/// key. Empty when no module names a provider.
+fn provider_repair(reads: &[&str]) -> String {
+    let values: Vec<String> = reads
+        .iter()
+        .filter(|read| **read != "no provider")
+        .map(|read| format!("provider = \"{read}\""))
+        .collect();
+    if values.is_empty() {
+        return String::new();
+    }
+    format!("; declare it on the row as {}", values.join(" or "))
 }
 
 /// Read one row's declared module text, from the working tree or from a ref.
