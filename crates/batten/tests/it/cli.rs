@@ -4941,6 +4941,11 @@ fn captures_in(home: &std::path::Path) -> Vec<String> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
+            // A view is a derived reading of a capture, rewritten from it on
+            // demand, never a capture of its own.
+            if path.is_dir() && path.file_name().is_some_and(|name| name == "views") {
+                continue;
+            }
             if path.is_dir() {
                 stack.push(path);
             } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -5231,11 +5236,16 @@ fn every_format_is_byte_stable_over_the_same_run() {
         for style in ["interleave", "timed", "keep-order"] {
             let mut seen = Vec::new();
             for run in 0..2 {
-                let (output, _) = exec_cmd(
+                let (output, home) = exec_cmd(
                     &format!("exec-stable-{format}-{style}-{run}-home"),
                     &["exec", "--format", format, "--style", style, "--", &program],
                 );
-                seen.push(String::from_utf8_lossy(&output.stderr).into_owned());
+                // Each run has its own state home, so the view the pointer
+                // names sits under a different directory; the rest is the run.
+                seen.push(
+                    String::from_utf8_lossy(&output.stderr)
+                        .replace(&home.display().to_string(), "<home>"),
+                );
             }
             assert_eq!(
                 seen[0], seen[1],
@@ -11504,10 +11514,10 @@ fn capture_only_reports_handles_instead_of_the_childs_bytes() {
         .find(|line| line.contains("output point now at /"))
         .unwrap_or_else(|| panic!("the capture is pointed at: {report}"));
     assert!(pointer.contains("T)"), "{pointer}");
-    let view = pointer
-        .rsplit_once("; read ")
-        .map(|(_, path)| path.trim())
-        .unwrap_or_else(|| panic!("the pointer names its view: {pointer}"));
+    let view = pointer.rsplit_once("; read ").map_or_else(
+        || panic!("the pointer names its view: {pointer}"),
+        |(_, path)| path.trim(),
+    );
     assert!(
         std::fs::read_to_string(view)
             .unwrap_or_default()

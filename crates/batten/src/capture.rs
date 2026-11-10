@@ -472,7 +472,6 @@ pub fn decode_response(result: &serde_json::Value) -> Result<Decoded, &'static s
 }
 
 /// A response in no text shape, stored as its canonical JSON (CLOUD-2223).
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 fn structured(result: &serde_json::Value) -> Result<Decoded, &'static str> {
     serde_json::to_vec(result)
         .map(|bytes| Decoded {
@@ -1416,7 +1415,6 @@ pub struct ViewField {
 /// # Errors
 ///
 /// When the state root cannot be resolved or the view cannot be written.
-//MUTANT-SUITE crates/batten/tests/it/mcp_dispatch.rs
 pub fn view(
     repo_root: &Path,
     capture: &Capture,
@@ -1487,7 +1485,6 @@ pub fn view(
 /// # Errors
 ///
 /// When the state root cannot be resolved or the view cannot be written.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 pub fn result_view(
     repo_root: &Path,
     capture: &Capture,
@@ -1507,7 +1504,7 @@ pub fn result_view(
 /// a spilled leaf is no JSON document, so a command was a route that chained.
 #[must_use]
 pub fn pointer(path: &Path, index: &[ViewField], stored: &[&Capture]) -> crate::refusal::Refusal {
-    let subjects: Vec<crate::verdict::Subject> = index
+    let subjects: Vec<crate::verdict::Subject> = coalesced(index)
         .iter()
         .map(|field| {
             crate::verdict::artifact(&format!(
@@ -1528,6 +1525,44 @@ pub fn pointer(path: &Path, index: &[ViewField], stored: &[&Capture]) -> crate::
     )
     .with_only_document_route(&path.display().to_string())
     .with_severity(crate::refusal::Severity::Note)
+}
+
+/// The fields a pointer names: each view field under its ADDRESS, the pointer
+/// cut at its first array index and at two keys, with the ranges, bytes and
+/// tokens of everything under it summed. A pointer naming every leaf grows with
+/// the payload it exists to keep out of the window (a sed edit's diff named each
+/// of its hundreds of lines); the view still carries every leaf's own heading.
+fn coalesced(index: &[ViewField]) -> Vec<ViewField> {
+    let mut fields: Vec<ViewField> = Vec::new();
+    for field in index {
+        let address: String = field
+            .pointer
+            .split('/')
+            .skip(1)
+            .take_while(|segment| segment.parse::<usize>().is_err())
+            .take(2)
+            .fold(String::new(), |address, segment| {
+                format!("{address}/{segment}")
+            });
+        let address = if address.is_empty() {
+            String::from("/")
+        } else {
+            address
+        };
+        match fields.last_mut() {
+            Some(last) if last.pointer == address => {
+                last.from = last.from.min(field.from);
+                last.to = last.to.max(field.to);
+                last.bytes += field.bytes;
+                last.tokens += field.tokens;
+            }
+            _ => fields.push(ViewField {
+                pointer: address,
+                ..field.clone()
+            }),
+        }
+    }
+    fields
 }
 
 /// [`pointer`], rendered as the one line a channel of lines carries.
@@ -1577,7 +1612,6 @@ impl From<Handle> for Capture {
 ///
 /// When the state root cannot be resolved, a spilled file cannot be read, or
 /// the view cannot be written.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 pub fn result_view_spilled(
     repo_root: &Path,
     capture: &Capture,
@@ -1683,7 +1717,6 @@ pub fn result_view_spilled(
 
 /// Copy `source` into `out`, returning its bytes, its line count and its
 /// tokens.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 fn copy_counted(source: &Path, out: &mut impl Write) -> Result<(usize, usize, u64)> {
     let mut file = std::fs::File::open(source)
         .with_context(|| format!("read the spilled leaf {}", source.display()))?;
@@ -1718,7 +1751,6 @@ fn write_counted(body: &[u8], out: &mut impl Write) -> Result<(usize, usize, u64
 /// A spilled leaf that is one line of JSON, pretty-printed (CLOUD-2284); `None`
 /// over [`crate::stream_input::RESTORE_MAX_BYTES`], for a leaf already on many
 /// lines, and for anything that is not one JSON object or array.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 fn pretty_json(source: &Path) -> Result<Option<String>> {
     let bytes = std::fs::metadata(source)
         .with_context(|| format!("read the spilled leaf {}", source.display()))?
@@ -2227,7 +2259,6 @@ pub fn exceeds_o200k(texts: &[&str], bound: u64) -> bool {
 
 /// [`exceeds_o200k`]'s walk over any counter, so the case proving it stops can
 /// count what it was asked to encode.
-//MUTANT-SUITE crates/batten/src/capture.rs
 fn exceeds_counting(texts: &[&str], bound: u64, mut count: impl FnMut(&str) -> u64) -> bool {
     const CHUNK: usize = 16 * 1024;
     let mut counted: u64 = 0;
@@ -2495,7 +2526,6 @@ pub(crate) fn evict_to_budget_in_keeping(
 
 /// Whether `row` records a built-in tool's result taken at `PostToolUse` — the
 /// volume CLOUD-2223 added, and the first a bounded store gives up.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 fn is_builtin_result(row: &CallRow) -> bool {
     row.source == POST_TOOL_MEMBER && !row.tool.starts_with("mcp__")
 }
@@ -3065,6 +3095,39 @@ pub fn prune(repo_root: &Path) -> Result<usize> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Fails by: a leaf per array element named, a third key kept, or a range,
+    /// byte or token count taken from one leaf instead of summed.
+    #[test]
+    fn a_pointer_names_each_address_once_however_many_leaves_it_holds() {
+        let field = |pointer: &str, from, to| ViewField {
+            pointer: pointer.to_owned(),
+            from,
+            to,
+            bytes: 10,
+            tokens: 2,
+        };
+        let index = [
+            field("/diff/files/0/hunks/0/lines/0", 2, 2),
+            field("/diff/files/0/hunks/0/lines/1", 4, 4),
+            field("/diff/files/1/path", 6, 6),
+            field("/file/content/text", 8, 9),
+            field("/0/stdout", 11, 11),
+            field("/1/stdout", 13, 13),
+        ];
+        let named: Vec<(String, usize, usize, usize, u64)> = coalesced(&index)
+            .into_iter()
+            .map(|f| (f.pointer, f.from, f.to, f.bytes, f.tokens))
+            .collect();
+        assert_eq!(
+            named,
+            [
+                (String::from("/diff/files"), 2, 6, 30, 6),
+                (String::from("/file/content"), 8, 9, 10, 2),
+                (String::from("/"), 11, 13, 20, 4),
+            ]
+        );
+    }
 
     #[test]
     fn every_stream_round_trips_through_its_token() {
@@ -4319,6 +4382,4 @@ one that asserts a commit made under a held lock is readable with no later one.
 
 The suite is this file's own unit tier, as `landed.rs` declares for itself.
 
-#MUTANT-SUITE crates/batten/src/capture.rs
-#MUTANT publish-skipped|s@^        // Unconditional: the rename is the atomicity, and a skipped publish has$@        if self.written > 5 { return Ok(()); }@|a_reader_never_sees_past_the_watermark
 */

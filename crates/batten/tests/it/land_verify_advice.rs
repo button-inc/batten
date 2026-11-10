@@ -516,9 +516,9 @@ fn gate_log_view(said: &str) -> String {
         !line.contains("--raw") && !line.contains("--field"),
         "the view is the only route: {line}"
     );
-    let view = line
-        .rsplit_once("; read ")
-        .map(|(_, path)| path.trim())
-        .unwrap_or_else(|| panic!("the line names its view: {line}"));
+    let view = line.rsplit_once("; read ").map_or_else(
+        || panic!("the line names its view: {line}"),
+        |(_, path)| path.trim(),
+    );
     std::fs::read_to_string(view).unwrap_or_else(|err| panic!("read {view}: {err}"))
 }
