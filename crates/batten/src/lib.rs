@@ -20123,6 +20123,7 @@ fn dispatch_envelope(
     // its module stay — this drops the call, not the capability.
     let stop = stop::StopFacts::default();
     let prospective = prospective_for(&policy, &envelope);
+    let budgeted = budgeted_for(&policy, &envelope);
     // The reading manifest (CLOUD-925), resolved here because the tracked set is
     // a property of a checkout and `adjudicate` is contractually pure.
     //
@@ -20145,6 +20146,7 @@ fn dispatch_envelope(
         waived: &waived,
         sourced: &agent_sourced,
         prospective: &prospective,
+        budgeted: &budgeted,
         manifest,
         pinned: &call.pinned,
         tasks: &tasks,
@@ -23278,6 +23280,90 @@ fn manifest_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::Manif
         &rule.resolves,
         &tracked,
     ))
+}
+
+/// Each `[budget.*]` set this write would change, measured before and after
+/// (CLOUD-2661). Nothing is read for a write no set selects. Every read is
+/// bounded: the target, then the set's literal members, each capped, and a
+/// member that cannot be read leaves the totals unjudged, never refused.
+//MUTANT-SUITE crates/batten/tests/it/budget_at_call.rs
+//MUTANT budget-new-file-unjudged|s@^        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,$@        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return facts::Look::CouldNotLook,@|a_write_creating_a_file_over_its_per_file_ceiling_is_refused
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+fn budgeted_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::BudgetFacts {
+    let names = policy.budget_sets_for(envelope);
+    let (Some(budget), Some(target)) = (&policy.budget, envelope.writes.as_deref()) else {
+        return facts::Look::CouldNotLook;
+    };
+    if names.is_empty() {
+        return facts::Look::CouldNotLook;
+    }
+    let root = hook_authority_root();
+    let current = match read_capped(&root.join(target)) {
+        Ok(text) => Some(text),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return facts::Look::CouldNotLook,
+    };
+    let projected = ["/content", "/new_source"]
+        .iter()
+        .find_map(|key| {
+            envelope
+                .input
+                .pointer(key)
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(ToOwned::to_owned);
+    let projected = match projected {
+        Some(text) => text,
+        None => match hook::landed_from(current.as_deref().unwrap_or(""), &envelope.input) {
+            facts::Look::Is(text) => text,
+            facts::Look::IsNot | facts::Look::CouldNotLook => return facts::Look::CouldNotLook,
+        },
+    };
+    let mut measures = Vec::new();
+    for name in names {
+        let Some(set) = budget.0.get(name) else {
+            continue;
+        };
+        let members = set_members(root, set, target, current.is_some());
+        measures.push(budget::project(
+            name,
+            set,
+            current.as_deref(),
+            &projected,
+            members.as_ref(),
+        ));
+    }
+    facts::Look::Is(measures)
+}
+
+/// Every OTHER member of a set whose totals can be judged at the call: all
+/// `files` entries literal, no `embedded` entry, each member readable, and an
+/// absent target counted only where a literal entry names it exactly.
+fn set_members(
+    root: &Path,
+    set: &budget::BudgetSet,
+    target: &str,
+    target_exists: bool,
+) -> Option<std::collections::BTreeMap<String, String>> {
+    if !set.embedded.is_empty() || !set.files.iter().all(|entry| budget::literal_entry(entry)) {
+        return None;
+    }
+    if !target_exists && !set.files.iter().any(|entry| entry == target) {
+        return None;
+    }
+    let mut members = std::collections::BTreeMap::new();
+    for entry in set.files.iter().filter(|entry| entry.as_str() != target) {
+        members.insert(entry.clone(), read_capped(&root.join(entry)).ok()?);
+    }
+    Some(members)
+}
+
+/// A file's text, refused past the prospective read's 1 MiB cap.
+fn read_capped(path: &Path) -> std::io::Result<String> {
+    if std::fs::metadata(path).is_ok_and(|meta| meta.len() > 1 << 20) {
+        return Err(std::io::Error::other("over the read cap"));
+    }
+    std::fs::read_to_string(path)
 }
 
 fn prospective_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::ProspectiveFacts {
