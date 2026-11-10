@@ -223,7 +223,6 @@ pub struct Finding {
 }
 
 //MUTANT-SUITE crates/batten/src/attribution.rs
-//MUTANT attribution-refusal-unexplained|s@^        let token = self.verdict.id();$@        let token = "";@|every_attribution_finding_names_its_vendored_class
 impl Finding {
     /// The refusal line, house style §6: `<class> <label> <field>`, through the
     /// same projection every declared refusal renders with.

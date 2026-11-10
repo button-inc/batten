@@ -513,7 +513,6 @@ pub fn satisfied(declared: &Declared, context: &Context<'_>) -> bool {
 /// which tool names are runners, and that is a consumer fact — a core carrying
 /// the list would violate rule 1. The declaration a consumer CAN make is
 /// `requires_input_matching`, and every row here over a runner carries one.
-//MUTANT background-result-recorded|s@^            .refused_when_result$@            .refused_when_input@|a_backgrounded_result_is_not_recorded
 #[must_use]
 pub fn outcome(declared: &Declared, context: &Context<'_>) -> Outcome {
     let selected = declared

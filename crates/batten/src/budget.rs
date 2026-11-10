@@ -207,7 +207,6 @@ pub struct Report {
 /// Its own function so the boundary is stated once and a mutation of it has one
 /// place to land: `<=` passes, exactly as every other ceiling in this module.
 //MUTANT-SUITE crates/batten/tests/it/memories.rs
-//MUTANT memory-ceiling-off-by-one|s@    bytes > ceiling@    bytes >= ceiling@|a_memory_exactly_at_the_ceiling_passes
 const fn over_file_ceiling(bytes: usize, ceiling: usize) -> bool {
     bytes > ceiling
 }

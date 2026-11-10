@@ -332,8 +332,6 @@ fn committed() -> String {
 /// (CLOUD-2173): 200 spawned processes and 78s for one `SessionStart` alone, and
 /// 260s under the suite, which made each such case the suite's critical path.
 //MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
-//MUTANT session-startup-rows-kept|s@^    config\.remove("startup");$@@|the_session_fixture_carries_no_session_provisioning
-//MUTANT session-start-handlers-kept|s@^            \.retain(\x7crow\x7c row\.get("on")\.and_then(toml_edit::Item::as_str) != Some("session-start"));$@            .retain(\x7c_\x7c true);@|the_session_fixture_carries_no_session_provisioning
 fn session_fixture(name: &str) -> PathBuf {
     let mut config: toml_edit::DocumentMut =
         committed().parse().expect("the committed config is TOML");

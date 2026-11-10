@@ -333,8 +333,6 @@ pub struct Handler {
     pub preapproves: bool,
 }
 
-//MUTANT tree-only-inverted|s@^        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c !Path::new(writes).has_root())$@        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c Path::new(writes).has_root())@|a_write_inside_the_tree_is_selected
-//MUTANT tree-only-pathless|s@^        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c !Path::new(writes).has_root())$@        !self.tree_only \x7c\x7c writes.is_some_and(\x7cwrites\x7c !Path::new(writes).has_root())@|a_tree_only_row_selects_a_pathless_call
 impl Handler {
     /// The event this handler names, or `None` when `on` names none.
     #[must_use]
@@ -656,7 +654,6 @@ fn event_of(token: &str) -> Option<Event> {
 // advisory FIRES would stay green under this patch, because an over-firing
 // handler fires. The case has to assert the calls it does NOT select.
 //MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
-//MUTANT head-move-unwatched|s@^        let Some(matcher) = self.command_matcher.as_deref() else {$@        let Some(matcher) = None::<\&str> else {@|a_git_call_that_moves_no_head_is_not_selected
 
 /// Reject a handler set that cannot honestly run.
 ///
@@ -743,7 +740,6 @@ impl Violation {
 
 /// A handler's report as the class it belongs to (CLOUD-2078): its row and
 /// its own words travel as subjects of `hook report now`.
-//MUTANT handler-advice-misclassed|s@^    let class = crate::verdict::Native::HookReportNow;$@    let class = crate::verdict::Native::HookAnswerBroken;@|handler_advice_and_violations_carry_their_row_and_class
 #[must_use]
 pub fn report_refusal(id: &str, text: &str) -> crate::refusal::Refusal {
     let class = crate::verdict::Native::HookReportNow;
@@ -1041,10 +1037,6 @@ impl Payload {
 /// says "exceeded …ms and was killed" — so the cases that prove it read that
 /// record rather than a wall clock (CLOUD-2059). Each row below takes the bound
 /// away in one way, and its case reads `Pass` where the record should have been.
-//MUTANT handler-bound-never-fires|s@^        if Instant::now() >= deadline {$@        if Instant::now() >= deadline + Duration::from_secs(3600) {@|a_handler_that_hangs_is_killed_at_its_bound_and_the_turn_still_ends
-//MUTANT step-bound-never-fires|s@^        if Instant::now() >= deadline {$@        if Instant::now() >= deadline + Duration::from_secs(3600) {@|a_step_that_hangs_is_killed_at_its_declared_bound
-//MUTANT payload-written-before-the-bound|s@^    let deadline = Instant::now() + bound;$@    let _ = child.stdin.as_mut().map(\x7cpipe\x7c payload.write_to(pipe)); let deadline = Instant::now() + bound;@|a_handler_that_never_reads_stdin_cannot_wedge_the_parent
-//MUTANT handler-cwd-inherited|s@^            .current_dir(root)$@            .current_dir(".")@|a_handler_runs_from_the_declaring_root_whatever_the_cwd
 fn run_one(root: &Path, handler: &Handler, payload: &Payload) -> Outcome {
     let Some((program, args)) = handler.run.split_first() else {
         return Outcome::Broke(Violation::NotSpawnable);

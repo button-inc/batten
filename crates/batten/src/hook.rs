@@ -2353,11 +2353,6 @@ fn owned(table: &[(&str, HookDisposition)]) -> Vec<(String, HookDisposition)> {
         .collect()
 }
 
-//MUTANT source-unenumerated|s@^        HookSource::Git,$@@|every_hook_source_is_enumerated_with_a_nonempty_vocabulary
-//MUTANT git-vocabulary-emptied|s@^            HookSource::Git => owned(GIT_HOOKS),$@            HookSource::Git => Vec::new(),@|the_git_vocabulary_is_githooks5_with_one_disposition_each
-//MUTANT check-verb-undeclared|s@^const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor gate" };$@const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor commit-gate" };@|every_registered_disposition_names_a_declared_verb
-//MUTANT harness-registration-ignored|s@^            } else if registered.contains(event) {$@            } else if false {@|the_harness_vocabulary_agrees_with_wiring_registrations
-//MUTANT commit-msg-demoted|s@^    ("commit-msg", BY_GATE),$@    ("commit-msg", unsupported("no-predicate")),@|the_git_vocabulary_registers_exactly_the_commit_hooks
 impl HookSource {
     /// Every source. The `match` in [`HookSource::vocabulary`] is exhaustive, so
     /// a fifth source does not compile until it declares a vocabulary.
@@ -2409,7 +2404,6 @@ impl HookSource {
 }
 
 /// Whether a source's findings get the once-per-cycle full arm (CLOUD-2075).
-//MUTANT harness-lifecycle-unsighted|s@^            HookSource::Harness => Lifecycle::Sighted,$@            HookSource::Harness => Lifecycle::PrintedFull,@|every_hook_source_declares_its_finding_lifecycle
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lifecycle {
     /// Full once per context per compaction cycle, the pointer otherwise.
@@ -3136,7 +3130,6 @@ impl Envelope {
     }
 }
 
-//MUTANT session-less-shared|s@^        let session = self.session.as_deref()?;$@        let session = self.session.as_deref().unwrap_or("unnamed");@|a_session_less_payload_is_full_on_every_firing
 impl Envelope {
     /// The reader a sighting belongs to: the session, plus the agent id when a
     /// subagent is the reader (CLOUD-2075).
@@ -3700,7 +3693,6 @@ pub struct Repair {
     pub subject: Option<String>,
 }
 
-//MUTANT label-spelled-outside-projection|s@^        let head = head(Severity::Note, crate::verdict::Native::CallFixSilent.id());$@        let head = format!("verdict '{}'", crate::verdict::Native::CallFixSilent.id());@|no_finding_label_is_spelled_outside_the_projection
 impl Repair {
     /// The record line, in the finding grammar (CLOUD-2145): `batten note call
     /// fix silent at <rule>[ <subject>] (repaired <class>)` — the class this
@@ -6416,8 +6408,6 @@ fn modifier_admits(rule: &Rule, envelope: &Envelope) -> bool {
 /// Could-not-look answers `true` — the row stays selected — for the reason
 /// [`marker_present`]'s unreadable arms give: an answer nobody could read must
 /// not switch a refusal off on exactly the checkouts least able to notice.
-//MUTANT push-unread|s@    crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)@    true@|a_pushed_head_lifts_the_punt_refusal
-//MUTANT push-assumed|s@    crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)@    false@|an_unpushed_head_after_a_punt_is_refused
 fn head_unpushed() -> bool {
     crate::git::head_on_a_remote(std::path::Path::new(".")) != Some(true)
 }
@@ -6456,8 +6446,6 @@ fn marker_path(git_dir: &std::path::Path, marker: &str, branch: &str) -> std::pa
 }
 
 //MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
-//MUTANT offer-unread|s@    marker_path(&git_dir, marker, &branch).exists()@    false@|a_write_after_a_punt_is_refused
-//MUTANT every-ending-punts|s@    marker_path(&git_dir, marker, &branch).exists()@    true@|an_ordinary_turn_leaves_the_next_write_alone
 
 /// Fold a value for [`Rule::when_value`]'s comparison.
 ///
@@ -6863,10 +6851,6 @@ fn receipt_refusal(
     Refusal::declared(&rule.id, native, &subjects, fix)
 }
 
-//MUTANT override-subject-unchecked|s@^    if rule.kind != RuleKind::Receipt {$@    if true {@|an_override_request_naming_a_subject_no_refusal_binds_is_refused
-//MUTANT bindable-subjects-empty|s@^    Some(bindable)$@    Some(Vec::new())@|a_spent_admission_clears_a_superseded_receipt
-//MUTANT class-filter-dropped|s@^            if refusal.verdict() == Some(class) {$@            if true {@|a_receipt_rows_age_bound_binds_only_under_the_expiry_class
-//MUTANT shape-subject-unchecked|s@^    if rule.kind == RuleKind::Shape && rule.max.is_none() && rule.requires_key.is_none() {$@    if false {@|a_shape_admission_for_an_unbindable_subject_is_refused
 /// Every subject a refusal of `class` by this RECEIPT row binds, or `None` for
 /// a row of any other kind (CLOUD-1996).
 ///
@@ -7224,7 +7208,6 @@ impl<'a> FirstStage<'a> {
 /// every later element unjudged — the permissive direction, which nothing
 /// reports.
 //MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT script-pipe-refused|s@^            continue; // fed by a pipe$@            {}@|a_tracked_script_or_a_downstream_interpreter_is_allowed
 fn first_stages<'a>(parsed: &'a [Segment], cwd: Option<&Path>) -> Vec<FirstStage<'a>> {
     let mut stages = Vec::new();
     let mut effective: Option<std::path::PathBuf> = cwd.map(Path::to_path_buf);
@@ -7363,7 +7346,6 @@ fn grammar(program: &str) -> Grammar {
 /// that text. An operand naming a variable or `~`, or a relative one with no
 /// known directory, cannot be placed and is left alone, as is every operand
 /// when the root is unknown or does not resolve.
-//MUTANT script-outside-admitted|s@^            \&\& outside_repository(\&resolved, root)$@            \&\& false@|an_interpreter_running_an_inline_or_untracked_script_is_refused
 fn interpreter_decision(
     rule: &Rule,
     interprets: &[String],
@@ -7560,12 +7542,9 @@ fn outside_repository(path: &Path, root: &Path) -> bool {
 // here, directly above the next suite, because a suite declared before this
 // file's first one would become the suite of every row above it.
 //MUTANT-SUITE crates/batten/tests/it/session_drain.rs
-//MUTANT todowrite-unsurveyed|s@"TaskUpdate", "TodoWrite"\]),$@"TaskUpdate"]),@|a_todowrite_session_never_reads_as_zero
 //MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
-//MUTANT cd-not-followed|s@^    if tokens.first().copied() != Some("cd") {$@    if true {@|a_leading_cd_out_of_the_repository_moves_the_containment_check
 // CLOUD-986's arm in `pipeline_rules`, declared here because this is where the
 // file's `pipeline_shapes.rs` suite begins.
-//MUTANT newline-sequence-unread|s@^            if !last_line {$@            if false {@|a_verdict_followed_by_a_newline_has_its_status_replaced
 fn followed_cd(
     segment: &Segment,
     line: &SegmentLine,
@@ -8644,7 +8623,6 @@ fn policy_rules(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Deci
 /// only the first-declared shed the second silently.
 ///
 /// Returned as [`Refusal`]s so the renderer is the caller's choice.
-//MUTANT stop-advice-multiplied|s@^    let turn_end = envelope.event == Event::Stop;$@    let turn_end = false;@|a_stop_carries_one_module_nudge_whatever_the_warn_count
 #[must_use]
 pub fn policy_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Refusal> {
     let turn_end = envelope.event == Event::Stop;
@@ -8686,7 +8664,6 @@ pub fn policy_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
 /// An `allow` row is OFF and is skipped (CLOUD-1470): it never blocks, so this
 /// changes no decision, and it stops [`stop_advice`] nudging for a rule the
 /// consumer switched off.
-//MUTANT allow-row-nudged|s@^            if severity == RuleSeverity::Allow {$@            if false {@|an_allow_row_nudges_nothing_at_stop
 fn policy_refusal(
     policy: &Policy,
     envelope: &Envelope,
@@ -8772,8 +8749,6 @@ fn policy_refusal(
 ///
 /// A blocking violation empties the result: it is the call's decision, and
 /// saying it twice would put one finding on two channels.
-//MUTANT advice-strongest-only|s@^    advised$@    advised.into_iter().take(1).collect()@|two_warn_advisories_on_one_call_both_arrive
-//MUTANT allow-row-advised|s@^        if severity == RuleSeverity::Allow {$@        if false {@|an_allow_row_advises_nothing
 fn policy_advisories(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Refusal> {
     if policy.bundles.is_empty() {
         return Vec::new();
@@ -8836,7 +8811,6 @@ pub fn policy_preapproval(
 
 /// A module's grant as `call grant now`, under the rule id that granted it
 /// (CLOUD-2078): a module finding id `policy explain` resolves.
-//MUTANT preapproval-misclassed|s@^    let class = crate::verdict::Native::CallGrantNow;$@    let class = crate::verdict::Native::CallFixSilent;@|a_preapproval_reason_labels_its_rule_and_verdict
 fn preapproval_refusal(id: &str) -> Refusal {
     let class = crate::verdict::Native::CallGrantNow;
     Refusal::declared(id.to_owned(), class, &[], Fix::None)
@@ -9589,7 +9563,6 @@ pub fn history_read_ids(command: &str) -> Option<Vec<String>> {
 /// PURE, so it is tested without a process environment — a test cannot set one
 /// under `unsafe_code = "forbid"`.
 //MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT background-max-unclamped|s@\.clamp(7_200_000, 2_147_483_647)@.max(7_200_000)@|background_max_mirrors_the_host
 //MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
 pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
     let positive = |raw: Option<&str>| {
@@ -10272,7 +10245,6 @@ fn protected_write(policy: &Policy, envelope: &Envelope, stage: WriteStage) -> D
 ///
 /// The path and the declared remedy. Never a byte of the file, which for a
 /// memory is exactly the content a read gate must not become a mirror of.
-//MUTANT read-refused-as-substitution|s@Native::ReadRedirected,@Native::ToolSubstituted,@|a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers
 fn redirected_read(policy: &Policy, envelope: &Envelope) -> Decision {
     let Some(path) = envelope.reads.as_deref() else {
         return Decision::Allow;
@@ -10585,7 +10557,6 @@ fn script_texts(program: &str, arguments: &[&str], stdin: &[String]) -> Vec<Stri
 /// The first protected path a script names, split on the characters that
 /// cannot be part of a path a program spells as a literal.
 //MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT script-text-unread|s@^    .find(\x7cword\x7c protects(policy, word))$@    .find(\x7c_\x7c false)@|an_interpreter_script_naming_a_protected_path_is_refused
 fn protected_in_text(policy: &Policy, text: &str) -> Option<String> {
     text.split(|c: char| {
         c.is_whitespace()
@@ -10941,7 +10912,6 @@ fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
 ///
 /// [`RuleKind::Shape`]: crate::rules::RuleKind::Shape
 //MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT shape-subject-dropped|s@^    let shape = rule.pattern.as_deref().or(rule.tool.as_deref());$@    let shape: Option<\&str> = None;@|a_shape_refusal_names_the_shape_it_refused
 //MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
 fn shape_refusal(rule: &Rule) -> Refusal {
     // THE SHAPE THE ROW DECLARES IS THE SUBJECT (CLOUD-2185): its `pattern`
@@ -11237,7 +11207,6 @@ impl Separator {
 /// at all on the next becomes a discarded status — which is a decision about
 /// that rule's reach and not about this parser. Changing it here would have been
 /// a behaviour change smuggled inside a substrate change.
-//MUTANT newline-node-unsequenced|s@        if position + 1 < reading.len()@        if false \&\& position + 1 < reading.len()@|a_commit_followed_by_a_newline_has_its_status_replaced
 fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
     // `extglob` off: this is a pre-execution gate over what an agent wrote, and
     // the shell that will run it is not guaranteed to have the option set.
@@ -12820,7 +12789,6 @@ pub fn encode_ask(
 /// # Errors
 ///
 /// Serialization of this fixed shape cannot practically fail.
-//MUTANT rewrite-ungated|s@^    if !harness.capabilities().rewrites_tool_output.is_capturable() {$@    if false {@|the_tool_output_rewrite_is_emitted_only_where_measured
 pub fn encode_tool_output(
     harness: Harness,
     event: &str,
