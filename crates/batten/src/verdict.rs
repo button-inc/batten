@@ -2872,10 +2872,10 @@ are in the journal and the subjects count them.",
 store is one line of JSON, so the read route is the view: the same document laid out field by \
 field, each subject naming a field, the view lines holding it and its size. Read only the lines \
 you need; the raw connector returns the same bytes into the window again.",
-        routes: &[run(
-            "field show first",
-            "batten capture show <handle> --field /<name>",
-        )],
+        // THE VIEW, NOT `--field` (CLOUD-2284): `--field` alone prints only a
+        // size header, and a spilled leaf is no JSON document at all, so the
+        // command never reached the content the note pointed at.
+        routes: &[read("output read first", "the view the note names")],
         applicability: Applicability::Advice,
     },
     VendoredVerdict {

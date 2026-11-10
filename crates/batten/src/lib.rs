@@ -5311,8 +5311,8 @@ fn view_refusal(path: &Path, index: &[capture::ViewField]) -> refusal::Refusal {
         .iter()
         .map(|field| {
             verdict::artifact(&format!(
-                "{}:{}-{}({}B)",
-                field.pointer, field.from, field.to, field.bytes
+                "{}:{}-{}({}B {}T)",
+                field.pointer, field.from, field.to, field.bytes, field.tokens
             ))
         })
         .collect();
@@ -5321,7 +5321,7 @@ fn view_refusal(path: &Path, index: &[capture::ViewField]) -> refusal::Refusal {
         &subjects,
         refusal::Fix::None,
     )
-    .with_document_route(&path.display().to_string())
+    .with_only_document_route(&path.display().to_string())
     .with_severity(refusal::Severity::Note)
 }
 
@@ -9673,7 +9673,12 @@ fn parse_line(range: &str, half: usize) -> Result<usize> {
             "capture show: {range:?} is not a line range — write `FROM:TO`, both 1-indexed"
         ))
     };
-    let (from, to) = range.split_once(':').ok_or_else(bad)?;
+    // `FROM-TO` TOO (CLOUD-2284): it is how an `output point now` subject spells
+    // a field's view lines, so the range the note prints is one this reads.
+    let (from, to) = range
+        .split_once(':')
+        .or_else(|| range.split_once('-'))
+        .ok_or_else(bad)?;
     let chosen = if half == 0 { from } else { to };
     let value: usize = chosen.trim().parse().map_err(|_| bad())?;
     if value == 0 {
@@ -22228,8 +22233,7 @@ fn point_at_spills(
         &subjects,
         refusal::Fix::None,
     )
-    // THE VIEW IS THE ONLY ROUTE (CLOUD-2284): a spilled leaf is not a JSON
-    // document, so the class's `--field` route refuses on it.
+    // THE VIEW IS THE ONLY ROUTE (CLOUD-2284), as for every bounded result.
     .with_only_document_route(&path.display().to_string())
     .with_severity(refusal::Severity::Note);
     let line = pointer.render_finding(refusal::Arm::Pointer);
@@ -31485,16 +31489,29 @@ mod tests {
                 tokens: 10,
             },
         ];
+        // THE VIEW IS THE ROUTE FOR EVERY BOUNDED RESULT (CLOUD-2284), as it is
+        // for a spill: `--field` alone prints only a size header, so the hint
+        // as printed reached no content.
         let line = view_pointer(Path::new("/s/views/d.md"), &index);
         assert!(
-            line.starts_with("batten note output point now at /id:2-2(5B) /description:4-7(40B);"),
+            line.starts_with(
+                "batten note output point now at /id:2-2(5B 2T) /description:4-7(40B 10T);"
+            ),
             "{line}"
         );
-        assert!(
-            line.contains("; run batten capture show <handle> --field /<name>"),
-            "{line}"
-        );
+        assert!(!line.contains("--field"), "{line}");
         assert!(line.ends_with("; read /s/views/d.md"), "{line}");
+    }
+
+    /// Fails by: the `FROM-TO` range an `output point now` subject prints
+    /// refused by `capture show --lines`, or either spelling misread.
+    #[test]
+    fn a_line_range_reads_in_either_spelling() {
+        for range in ["2:89", "2-89"] {
+            assert_eq!(parse_line(range, 0).unwrap(), 2, "{range}");
+            assert_eq!(parse_line(range, 1).unwrap(), 89, "{range}");
+        }
+        assert!(parse_line("2", 0).is_err());
     }
 
     /// CLOUD-2205's bound, as a pure function over fabricated paths, so the
