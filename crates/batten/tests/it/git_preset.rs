@@ -191,7 +191,7 @@ fn an_everyday_git_call_is_granted() {
     for call in [
         "git status",
         "git add f",
-        "git commit -m x",
+        "git commit -m 'fix: x'",
         "git commit -F f",
         "git fetch origin",
         "git switch -c feat",

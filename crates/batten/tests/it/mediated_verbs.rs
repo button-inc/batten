@@ -418,10 +418,10 @@ fn a_command_describing_a_shape_is_not_that_shape() {
     // this hold, and it is worth pinning at this surface because every one of
     // these strings is something this repository's own commits legitimately say.
     assert_allowed(&format!(
-        "git commit -m \"explain why cp x {GUARDED} is refused\""
+        "git commit -m \"docs: explain why cp x {GUARDED} is refused\""
     ));
     assert_allowed(&format!(
-        "git commit -m \"note that sed -i over {GUARDED} denies\""
+        "git commit -m \"docs: note that sed -i over {GUARDED} denies\""
     ));
 }
 

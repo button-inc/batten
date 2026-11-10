@@ -2961,6 +2961,18 @@ const NATIVE_RULES: &[(&str, &str)] = &[
          call naming every row, mints the read.",
     ),
     (
+        "detached-call",
+        "The detach gate: a `&` job this call does not wait on returns before its work \
+         does, and the session's wake-up with it; set the host's background option on the \
+         call, or `wait` for the job in the same call.",
+    ),
+    (
+        "commit-subject",
+        "The commit-subject gate: the message this commit names has a subject \
+         `[commit].subject_pattern` refuses, judged before the commit exists; reword the \
+         subject to match the pattern.",
+    ),
+    (
         "singleton-held",
         "The singleton gate: a live process already holds this task's lock, and a second run \
          would race it; `batten task alive` reports what the holder is doing.",

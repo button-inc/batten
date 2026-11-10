@@ -318,8 +318,8 @@ fn a_command_describing_the_shape_is_not_the_shape() {
     // A commit message, an issue body, or documentation naming one of these
     // shapes is prose. The parser's quote handling is what makes this hold, and
     // it is pinned here because this repository's own commits say these things.
-    assert_allowed("git commit -m \"never run mise run verify | tail -6\"");
-    assert_allowed("git commit -m \"the nohup mise run land & shape is refused\"");
+    assert_allowed("git commit -m \"docs: never run mise run verify | tail -6\"");
+    assert_allowed("git commit -m \"docs: the nohup mise run land & shape is refused\"");
     assert_allowed("echo \"mise run verify | tail\" > /tmp/notes.md");
 }
 
