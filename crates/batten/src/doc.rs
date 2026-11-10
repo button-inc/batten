@@ -1344,6 +1344,21 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["read could-not-look as landed"],
     },
     VendoredDoc {
+        id: "commit push missing",
+        why: Some("A person merges here, so work only in this clone is lost on reclaim"),
+        act: &[
+            "push it with `git push`",
+            "with no upstream, `git push -u <remote> HEAD` sets one",
+        ],
+        dont: &["run `batten land lap`: a person merges in this repository"],
+    },
+    VendoredDoc {
+        id: "commit merge held",
+        why: Some("The repository declares that a person merges pushed work"),
+        act: &["leave the merge to the person `landed_by` names"],
+        dont: &["merge or land it yourself"],
+    },
+    VendoredDoc {
         id: "issue list unclear",
         why: Some("A row filed mid-task is either new work or this task deferred"),
         act: &[

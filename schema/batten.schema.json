@@ -274,6 +274,17 @@
         }
       ]
     },
+    "landed_by": {
+      "description": "Who takes the last step to the landing target (CLOUD-2656): the agent\n(`land`), or a person who merges what the agent pushed. Absent is\n`\"agent\"`, today's behaviour. A fact about the repository's process, so\nauthority-only: neither value is a raise.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LandedBy"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "lease": {
       "description": "The landing mechanism's own paths, for the CI-side staleness read\n(CLOUD-1148 §2).\n\nAbsent is could-not-look and exempts everything, which matches the\nprecondition's whole posture: it fails open at every unknown, because a\nreading it cannot take would stop every job in the fleet where waving one\nmatrix through costs one matrix.",
       "anyOf": [
@@ -3161,6 +3172,21 @@
         }
       },
       "additionalProperties": false
+    },
+    "LandedBy": {
+      "description": "Who takes the last step to the landing target (CLOUD-2656).",
+      "oneOf": [
+        {
+          "description": "The agent lands its own work with `batten land`.",
+          "type": "string",
+          "const": "agent"
+        },
+        {
+          "description": "A person merges what the agent pushed.",
+          "type": "string",
+          "const": "person"
+        }
+      ]
     },
     "Lease": {
       "description": "The landing lease's own configuration (CLOUD-1148 §2).",
