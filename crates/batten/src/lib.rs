@@ -17780,8 +17780,8 @@ fn run_mutate(
     let anchor = hook_authority_root();
     let resolved = anchor.canonicalize().unwrap_or_else(|_| anchor.to_owned());
     let root: &Path = &resolved;
-    if command == cli::MutateCommand::Jobs {
-        return run_mutate_jobs(root, out, err);
+    if command == cli::MutateCommand::Cargo {
+        return run_mutate_cargo(root, out, err);
     }
     let declared = match mutate_table(root, err)? {
         Ok(declared) => declared,
@@ -17824,18 +17824,46 @@ fn run_mutate(
             let command = table.map_or(&[][..], |table| table.command.as_slice());
             run_mutate_sweep(root, names, command, out, err)
         }
-        cli::MutateCommand::Jobs => run_mutate_jobs(root, out, err),
+        cli::MutateCommand::Cargo => run_mutate_cargo(root, out, err),
     }
 }
 
-/// `batten mutate jobs`: the machine measured, divided by the tree's declared
-/// per-job cost. The floor is the disk collector's own, so the jobs never
-/// spend the room it exists to keep.
-fn run_mutate_jobs(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+/// `batten mutate cargo`: cargo-mutants over the change since
+/// `$MUTANT_CHANGED_SINCE`, on as many jobs as the machine holds at the tree's
+/// declared per-job cost, its exit read onto the house contract: missed mutants
+/// are a violation, a timeout or a failed baseline could not look.
+///
+/// The disk floor is the collector's own, so the jobs never spend the room it
+/// exists to keep.
+fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let cost = match mutate::JobCost::declared() {
         Ok(cost) => cost,
         Err(reason) => {
-            writeln!(err, "::error:: mutate jobs: {reason:#}")?;
+            writeln!(err, "::error:: mutate cargo: {reason:#}")?;
+            return Ok(ExitCode::Usage);
+        }
+    };
+    let Some(base) = mutate::changed_since() else {
+        writeln!(
+            err,
+            "::error:: mutate cargo: `MUTANT_CHANGED_SINCE` names no base"
+        )?;
+        return Ok(ExitCode::Usage);
+    };
+    let shard = match mutate::shard_set(std::env::var(mutate::SHARD).ok())
+        .map(|shard| mutate::shard_parsed(&shard))
+        .transpose()
+    {
+        Ok(shard) => shard,
+        Err(reason) => {
+            writeln!(err, "::error:: mutate cargo: {reason}")?;
+            return Ok(ExitCode::Usage);
+        }
+    };
+    let registry = match mutate::Registry::from_env() {
+        Ok(registry) => registry,
+        Err(reason) => {
+            writeln!(err, "::error:: mutate cargo: {reason:#}")?;
             return Ok(ExitCode::Usage);
         }
     };
@@ -17843,9 +17871,26 @@ fn run_mutate_jobs(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Res
         .and_then(|declared| declared.free_band())
         .unwrap_or(prune::DEFAULT_FREE_BAND)
         .0;
-    let machine = mutate::Machine::probe(floor)?;
-    writeln!(out, "{}", mutate::job_count(machine, cost))?;
-    Ok(ExitCode::Success)
+    let jobs = mutate::job_count(mutate::Machine::probe(floor)?, cost);
+    let diff = state::repo_state_dir(root)?
+        .join("mutate")
+        .join("change.diff");
+    match mutate::cargo_mutants(root, &registry, &base, jobs, shard, &diff)? {
+        mutate::CargoRun::NothingOwned => {
+            writeln!(
+                out,
+                "mutate cargo: no source cargo-mutants owns changed since {base}"
+            )?;
+            Ok(ExitCode::Success)
+        }
+        mutate::CargoRun::Ran { sources, outcome } => {
+            writeln!(
+                out,
+                "mutate cargo: {sources} changed source(s) judged by cargo-mutants on {jobs} job(s)"
+            )?;
+            Ok(mutate::cargo_exit(outcome))
+        }
+    }
 }
 
 /// `batten mutate sweep`: the declared runner over the narrowed set, or the one

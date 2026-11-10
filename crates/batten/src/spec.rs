@@ -658,9 +658,6 @@ mod tests {
                 // it, which is the fail-safe reading for a consumer treating an
                 // allowlist entry as a prefix (CLOUD-121).
                 "mutate census".to_owned(),
-                // `mutate jobs` reads the machine — cores, a volume's free
-                // space, memory — and prints a count. No spawn, no write.
-                "mutate jobs".to_owned(),
                 // CLOUD-479. `payload field` is a decoder, not a mediator: it
                 // reads stdin, projects one allowlisted field, and renders no
                 // verdict — so `read` is the honest classification and the
@@ -1120,8 +1117,8 @@ mod tests {
             // refuses an `ask`, and a `write` noun is what a consumer reading
             // an allowlist entry as a prefix should find (CLOUD-121).
             "mutate".to_owned(),
+            "mutate cargo".to_owned(),
             "mutate census".to_owned(),
-            "mutate jobs".to_owned(),
             "mutate sweep".to_owned(),
             // CLOUD-479. `payload field` is a decoder, not a mediator: it
             // reads stdin, projects one allowlisted field, and renders no
