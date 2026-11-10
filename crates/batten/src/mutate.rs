@@ -4337,19 +4337,112 @@ fn cgroup_remaining_mb(root: &Path) -> Option<u64> {
     (limit < 1 << 50).then(|| limit.saturating_sub(usage) / (1024 * 1024))
 }
 
+/// What `batten mutate cargo` did with a change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CargoRun {
+    /// No source the registry gives cargo-mutants changed: nothing was run.
+    NothingOwned,
+    /// cargo-mutants ran over this many changed sources and exited so.
+    Ran {
+        /// The changed sources cargo-mutants owns.
+        sources: usize,
+        /// How its run ended.
+        outcome: Outcome,
+    },
+}
+
+/// Run cargo-mutants itself over the change since `base`: `--in-diff` of the
+/// sources `registry` gives it, `--jobs` as sized, `--iterate`, and `--shard`
+/// where one is asked for, its output streamed as it judges.
+///
+/// AN ARGV, NEVER A HARNESS. Copy mode, timeouts, the baseline and the verdict
+/// files are cargo-mutants' own (`.cargo/mutants.toml` carries the rest); this
+/// assembles what a task body would otherwise spell in shell, and reads back
+/// only the exit.
+///
+/// # Errors
+///
+/// No `base` to compare against, a patch that cannot be written to `diff`, or
+/// cargo that cannot be spawned.
+pub fn cargo_mutants(
+    root: &Path,
+    registry: &Registry,
+    base: &str,
+    jobs: usize,
+    shard: Option<(usize, usize)>,
+    diff: &Path,
+) -> Result<CargoRun> {
+    let Some(delta) = crate::git::base_delta(root, base, &[String::from("**")], false)? else {
+        bail!("mutate cargo: no {base} to compare against");
+    };
+    let changed: std::collections::BTreeSet<String> =
+        delta.added.into_iter().chain(delta.edited).collect();
+    let sources = owned_changes(root, &changed, registry, RunnerKind::CargoMutants);
+    if sources.is_empty() {
+        return Ok(CargoRun::NothingOwned);
+    }
+    let patch = in_diff_patch(root, base, &sources)?;
+    if let Some(dir) = diff.parent() {
+        fs::create_dir_all(dir)
+            .with_context(|| format!("mutate cargo: create {}", dir.display()))?;
+    }
+    crate::durable::replace(diff, patch)
+        .with_context(|| format!("mutate cargo: write {}", diff.display()))?;
+    let mut args = vec![
+        String::from("mutants"),
+        String::from("--in-diff"),
+        diff.to_string_lossy().into_owned(),
+        String::from("--jobs"),
+        jobs.to_string(),
+        String::from("--iterate"),
+    ];
+    if let Some((k, n)) = shard {
+        args.extend([String::from("--shard"), format!("{k}/{n}")]);
+    }
+    let ran = spawn_as(
+        root,
+        Program::Cargo,
+        &args,
+        &[],
+        runner_bound(),
+        Said::Streamed,
+    )?;
+    Ok(CargoRun::Ran {
+        sources: sources.len(),
+        outcome: ran.outcome,
+    })
+}
+
+/// cargo-mutants' exit read onto the house contract (§6): 0 every mutant
+/// caught, 1 its usage error, 2 a missed mutant; 3 a timeout, 4 a failed
+/// baseline, a signal or the bound decided nothing, so could not look.
+#[must_use]
+pub const fn cargo_exit(outcome: Outcome) -> crate::exit::ExitCode {
+    use crate::exit::ExitCode;
+    match outcome {
+        Outcome::Passed => ExitCode::Success,
+        Outcome::Failed(Some(1)) => ExitCode::Usage,
+        Outcome::Failed(Some(2)) => ExitCode::Violation,
+        Outcome::Failed(_) | Outcome::TimedOut => ExitCode::Internal,
+    }
+}
+
 /// How many cargo-mutants jobs this machine holds (`--jobs`).
 ///
-/// Each job's build is itself parallel, so the book's advice — a few jobs, not
-/// one per core — is the core term: half the cores. Disk and memory each
-/// allow as many jobs as their headroom has room for. Never below one: one job
-/// is cargo-mutants' own default, and the disk collector is what keeps a single
-/// job inside the floor.
+/// A job per core at most, and as many as disk and memory each have room for.
+/// NOT HALF THE CORES: a mutant's build is the incremental rebuild of the one
+/// crate it mutates, which is mostly serial (a lap measured 4.1 h of build to
+/// 1.0 h of test), so one job leaves cores idle; the memory term is what keeps
+/// parallel builds from oversubscribing. Never below one: one job is
+/// cargo-mutants' own default, and the disk collector keeps it inside the floor.
 #[must_use]
 pub fn job_count(machine: Machine, cost: JobCost) -> usize {
     let fit = |have: u64, need: u64| {
         usize::try_from(have.checked_div(need).unwrap_or(u64::MAX)).unwrap_or(usize::MAX)
     };
-    (machine.cores / 2)
+    machine
+        .cores
         .min(fit(machine.disk_headroom_mb, cost.disk_mb))
         .min(fit(machine.memory_mb, cost.memory_mb))
         .max(1)
@@ -4373,10 +4466,10 @@ mod tests {
         }
     }
 
-    /// Fails by: a job per core instead of half, or a term ignored.
+    /// Fails by: the cores divided, or any term ignored.
     #[test]
     fn the_scarcest_resource_sizes_the_jobs() {
-        assert_eq!(job_count(machine(8, 100_000, 100_000), COST), 4);
+        assert_eq!(job_count(machine(8, 100_000, 100_000), COST), 8);
         assert_eq!(job_count(machine(8, 6_000, 100_000), COST), 3);
         assert_eq!(job_count(machine(8, 100_000, 6_000), COST), 2);
     }
@@ -4389,7 +4482,49 @@ mod tests {
             disk_mb: 0,
             memory_mb: 0,
         };
-        assert_eq!(job_count(machine(6, 0, 0), free), 3);
+        assert_eq!(job_count(machine(6, 0, 0), free), 6);
+    }
+
+    /// Fails by: a missed mutant read as anything but a violation, or a timeout
+    /// or failed baseline read as a verdict.
+    #[test]
+    fn cargo_mutants_exits_read_onto_the_contract() {
+        use crate::exit::ExitCode;
+        assert_eq!(cargo_exit(Outcome::Passed), ExitCode::Success);
+        assert_eq!(cargo_exit(Outcome::Failed(Some(1))), ExitCode::Usage);
+        assert_eq!(cargo_exit(Outcome::Failed(Some(2))), ExitCode::Violation);
+        for undecided in [
+            Outcome::Failed(Some(3)),
+            Outcome::Failed(Some(4)),
+            Outcome::Failed(None),
+            Outcome::TimedOut,
+        ] {
+            assert_eq!(cargo_exit(undecided), ExitCode::Internal, "{undecided:?}");
+        }
+    }
+
+    /// Fails by: cargo-mutants spawned, or its diff written, for a change it
+    /// owns no source of.
+    #[test]
+    fn a_change_cargo_mutants_owns_nothing_of_runs_nothing() {
+        let root = fixture("cargo-run-unowned");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        put(&root, "src/a.rs", "fn a() {}\n");
+        put(&root, "notes.txt", "one\n");
+        crate::gitwrite::commit_paths(
+            &root,
+            &[String::from("src/a.rs"), String::from("notes.txt")],
+            "base",
+        )
+        .expect("commit");
+        put(&root, "notes.txt", "two\n");
+        let registry = Registry::parse("cargo-mutants=src/*.rs").expect("parses");
+        let diff = root.join("state").join("change.diff");
+        assert_eq!(
+            cargo_mutants(&root, &registry, "HEAD", 1, None, &diff).expect("judged"),
+            CargoRun::NothingOwned
+        );
+        assert!(!diff.exists(), "no diff is written for nothing to run");
     }
 
     /// Fails by: the first field read, kilobytes reported as megabytes.

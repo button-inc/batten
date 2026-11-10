@@ -2880,7 +2880,7 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
-(jobs)
+(cargo)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
@@ -2954,7 +2954,7 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
-(jobs)
+(cargo)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -10015,7 +10015,7 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
-(jobs)
+(cargo)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -12921,20 +12921,20 @@ _batten__subcmd__help__subcmd__mcp__subcmd__spawn_commands() {
 _batten__subcmd__help__subcmd__mutate_commands() {
     local commands; commands=(
 'sweep:Apply every declared mutation to its source and report the ones its declared suite did not catch' \
-'jobs:Print how many cargo-mutants jobs this machine holds at the tree'\''s declared per-job cost' \
+'cargo:Run cargo-mutants over the change since \$MUTANT_CHANGED_SINCE on as many jobs as this machine holds' \
 'census:Report every gate in the tree that is neither mutation-enforced nor carrying a filed exemption' \
     )
     _describe -t commands 'batten help mutate commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__mutate__subcmd__cargo_commands] )) ||
+_batten__subcmd__help__subcmd__mutate__subcmd__cargo_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help mutate cargo commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__mutate__subcmd__census_commands] )) ||
 _batten__subcmd__help__subcmd__mutate__subcmd__census_commands() {
     local commands; commands=()
     _describe -t commands 'batten help mutate census commands' commands "$@"
-}
-(( $+functions[_batten__subcmd__help__subcmd__mutate__subcmd__jobs_commands] )) ||
-_batten__subcmd__help__subcmd__mutate__subcmd__jobs_commands() {
-    local commands; commands=()
-    _describe -t commands 'batten help mutate jobs commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__mutate__subcmd__sweep_commands] )) ||
 _batten__subcmd__help__subcmd__mutate__subcmd__sweep_commands() {
@@ -14117,11 +14117,16 @@ _batten__subcmd__mcp__subcmd__spawn_commands() {
 _batten__subcmd__mutate_commands() {
     local commands; commands=(
 'sweep:Apply every declared mutation to its source and report the ones its declared suite did not catch' \
-'jobs:Print how many cargo-mutants jobs this machine holds at the tree'\''s declared per-job cost' \
+'cargo:Run cargo-mutants over the change since \$MUTANT_CHANGED_SINCE on as many jobs as this machine holds' \
 'census:Report every gate in the tree that is neither mutation-enforced nor carrying a filed exemption' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten mutate commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__mutate__subcmd__cargo_commands] )) ||
+_batten__subcmd__mutate__subcmd__cargo_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten mutate cargo commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__mutate__subcmd__census_commands] )) ||
 _batten__subcmd__mutate__subcmd__census_commands() {
@@ -14132,11 +14137,16 @@ _batten__subcmd__mutate__subcmd__census_commands() {
 _batten__subcmd__mutate__subcmd__help_commands() {
     local commands; commands=(
 'sweep:Apply every declared mutation to its source and report the ones its declared suite did not catch' \
-'jobs:Print how many cargo-mutants jobs this machine holds at the tree'\''s declared per-job cost' \
+'cargo:Run cargo-mutants over the change since \$MUTANT_CHANGED_SINCE on as many jobs as this machine holds' \
 'census:Report every gate in the tree that is neither mutation-enforced nor carrying a filed exemption' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten mutate help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__mutate__subcmd__help__subcmd__cargo_commands] )) ||
+_batten__subcmd__mutate__subcmd__help__subcmd__cargo_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten mutate help cargo commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__mutate__subcmd__help__subcmd__census_commands] )) ||
 _batten__subcmd__mutate__subcmd__help__subcmd__census_commands() {
@@ -14148,20 +14158,10 @@ _batten__subcmd__mutate__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten mutate help help commands' commands "$@"
 }
-(( $+functions[_batten__subcmd__mutate__subcmd__help__subcmd__jobs_commands] )) ||
-_batten__subcmd__mutate__subcmd__help__subcmd__jobs_commands() {
-    local commands; commands=()
-    _describe -t commands 'batten mutate help jobs commands' commands "$@"
-}
 (( $+functions[_batten__subcmd__mutate__subcmd__help__subcmd__sweep_commands] )) ||
 _batten__subcmd__mutate__subcmd__help__subcmd__sweep_commands() {
     local commands; commands=()
     _describe -t commands 'batten mutate help sweep commands' commands "$@"
-}
-(( $+functions[_batten__subcmd__mutate__subcmd__jobs_commands] )) ||
-_batten__subcmd__mutate__subcmd__jobs_commands() {
-    local commands; commands=()
-    _describe -t commands 'batten mutate jobs commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__mutate__subcmd__sweep_commands] )) ||
 _batten__subcmd__mutate__subcmd__sweep_commands() {

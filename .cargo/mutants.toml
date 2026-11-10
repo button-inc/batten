@@ -8,3 +8,5 @@ test_tool = "nextest"
 copy_vcs = true
 # Ignored files (`target/` among them) are not copied into a build directory.
 gitignore = true
+# Where `mutant:rust` keeps its verdict files, which `--iterate` reads back.
+output = "target/mutants"

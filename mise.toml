@@ -1821,28 +1821,29 @@ description = "Gate: every mutant cargo-mutants makes of this branch's Rust chan
 # the Rust verdicts, or a lap returns one runner's survivors and the next lap the
 # other's. `--continue-on-error` runs each and fails if either did, one at a
 # time so they do not compete for the box.
+# ONE DECLARATION FOR BOTH RUNNERS: the change they judge, and which runner owns
+# which source. A subtask inherits the environment `mise run` hands it.
+env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNERS = "cargo-mutants=crates/*/src/**/*.rs,crates/*/build.rs,crates/*/tests/**/*.rs" }
 run = "mise run --continue-on-error --jobs 1 mutant:declared ::: mutant:rust"
 
 [tasks."mutant:declared"]
 description = "Gate: every declared Rego, Pkl or manifest gate this branch touched has a mutation its suite catches"
-env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNERS = "cargo-mutants=crates/*/src/**/*.rs,crates/*/build.rs,crates/*/tests/**/*.rs" }
 run = "cargo run --quiet -p batten -- mutate sweep"
 
 [tasks."mutant:rust"]
 description = "Gate: every mutant cargo-mutants makes of this branch's Rust change since origin/main is caught"
-# THE PER-JOB COST IS THE TREE'S, THE MACHINE IS MEASURED: `batten mutate jobs`
+# THE PER-JOB COST IS THE TREE'S, THE MACHINE IS MEASURED: `batten mutate cargo`
 # divides cores, temp-volume headroom above the collector's floor, and memory by
 # one copy's cold mutants-profile build, measured on CLOUD-1414: 3,872 MB of
-# target beside a ~370 MB copy, and a 3.5 GB peak rustc.
+# target beside a ~370 MB copy, and a 3.5 GB peak rustc. It writes the change as
+# `--in-diff`, adds `--shard` from `MUTANT_SHARD`, and runs cargo-mutants itself;
+# every shard keeps its baseline, which is what derives the timeout.
 env = { NEXTEST_PROFILE = "mutants", MUTANT_JOB_DISK_MB = "4300", MUTANT_JOB_MEMORY_MB = "4000" }
 # THE HOST BINARY APPLIES THE PIN, because only it links onto PATH: a checkout's
 # build fills the cache and leaves the host's links alone (`provision::links_host`).
-# The baseline stays on every shard: it is what derives cargo-mutants' timeout.
 run = [
   "batten provision apply",
-  "mkdir -p target/mutants",
-  "git diff --no-color --no-ext-diff origin/main...HEAD > target/mutants/change.diff",
-  "jobs=$(cargo run --quiet -p batten -- mutate jobs) && cargo mutants --in-diff target/mutants/change.diff --output target/mutants --iterate --jobs \"$jobs\" ${MUTANT_SHARD:+--shard $MUTANT_SHARD}",
+  "cargo run --quiet -p batten -- mutate cargo",
 ]
 
 [tasks."mutant-census"]
