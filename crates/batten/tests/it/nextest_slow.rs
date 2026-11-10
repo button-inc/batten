@@ -171,6 +171,14 @@ fn an_absent_runner_config_is_refused() {
 fn a_declaration_without_terminate_after_is_refused() {
     let root = repo("nextest-slow-report-only", Some(REPORT_ONLY));
     assert_eq!(rules_fired(&root), vec![UNBOUNDED.to_owned()]);
+    // A PERIOD WITH NO MULTIPLIER is just as unbounded, and it is the shape that
+    // reaches the `terminate-after` test at all: the string form above fails on
+    // its missing `period` first.
+    let root = repo(
+        "nextest-slow-period-only",
+        Some("[profile.default]\nslow-timeout = { period = \"10s\" }\n"),
+    );
+    assert_eq!(rules_fired(&root), vec![UNBOUNDED.to_owned()]);
 }
 
 /// THE RATCHET, over the engine. A period above the committed ceiling is refused.
