@@ -253,9 +253,20 @@ fn toy_repo(name: &str, rows: &[&str]) -> PathBuf {
 
 /// Run a verb of `mutate` in `root` with the enforced set `gates`.
 fn run(root: &Path, verb: &str, gates: &str) -> (i32, String, String) {
+    run_with(root, verb, gates, &[])
+}
+
+/// [`run`], with `extra` variables for the sweep and every child it starts.
+fn run_with(
+    root: &Path,
+    verb: &str,
+    gates: &str,
+    extra: &[(&str, &Path)],
+) -> (i32, String, String) {
     let answer = common::batten()
         .args(["mutate", verb])
         .current_dir(root)
+        .envs(extra.iter().copied())
         .env("MUTANT_GATES", gates)
         // Declared explicitly rather than inherited, so a case's verdict does not
         // depend on whether the runner happened to export the repository's own
@@ -1141,6 +1152,82 @@ fn a_mutation_its_suite_catches_is_a_pass() {
         !err.contains("mutate sweep: building the cargo suites"),
         "the second sweep builds nothing: {err}"
     );
+}
+
+/// A build script cargo reruns on EVERY build — it watches a path that does not
+/// exist — and that counts its runs into `$TOY_BUILD_COUNTER`.
+#[cfg(unix)]
+const ALWAYS_STALE_BUILD: &str = r#"fn main() {
+    println!("cargo:rerun-if-changed=no-such-path");
+    if let Some(path) = std::env::var_os("TOY_BUILD_COUNTER") {
+        use std::io::Write as _;
+        let mut counter = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .expect("open the counter");
+        writeln!(counter, "built").expect("count the build");
+    }
+}
+"#;
+
+/// ONE BUILD JUDGES EVERY ROW, whatever cargo's fingerprint says. Two rows over a
+/// non-Rust gate, in a package whose build script is stale on every build: the
+/// sweep builds once up front and each row runs the recorded binaries, so the
+/// script runs exactly once. Fails by: any row asking cargo to build, which reran
+/// this script per row — and the library with it, 75s a row in this repository's
+/// own sweep when a missing `rerun-if-changed` path did the same.
+#[cfg(unix)]
+#[test]
+fn a_row_runs_the_one_build_and_never_compiles() {
+    let root = toy_repo(
+        "one-build",
+        &[
+            CAUGHT,
+            "#MUTANT comparison-flipped|s/-le/-ge/|over_the_limit",
+        ],
+    );
+    write(&root, "build.rs", ALWAYS_STALE_BUILD);
+    track(&root);
+    let counter = common::scratch("mutate-one-build-counter").join("builds");
+    let (code, out, err) = run_with(&root, "sweep", "toy", &[("TOY_BUILD_COUNTER", &counter)]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+    let builds = fs::read_to_string(&counter).unwrap_or_default();
+    assert_eq!(
+        builds.lines().count(),
+        1,
+        "the build script ran once per build; two rows must cost one build\n{err}"
+    );
+}
+
+/// A SUBJECT THE BUILD EMBEDS IS STILL JUDGED MUTATED. The case reads the gate
+/// through `include_str!`, so the recorded binaries carry the unmutated text and
+/// only a rebuild sees the row's mutation. Fails by: reusing the binaries for a
+/// subject cargo's dep-info names, which reads the mutant as surviving.
+#[cfg(unix)]
+#[test]
+fn a_row_whose_subject_the_build_embeds_is_rebuilt() {
+    let root = toy_repo(
+        "embedded-subject",
+        &["#MUTANT limit-embedded|s/^LIMIT=10$/LIMIT=999/|embedded_limit_is_ten"],
+    );
+    let suite = format!(
+        "{}{}",
+        toy_suite("toy.sh", ""),
+        case(
+            "embedded_limit_is_ten",
+            "assert!(include_str!(\"../mise-tasks/toy.sh\").contains(\"\\nLIMIT=10\\n\"));"
+        ),
+    );
+    write(&root, "tests/toy.rs", &suite);
+    track(&root);
+    let (code, out, err) = sweep(&root, "toy");
+    assert_eq!(
+        code, 0,
+        "an embedded subject's mutation must be caught\n{out}{err}"
+    );
+    assert!(out.contains("every one caught"), "{out}");
 }
 
 #[cfg(unix)]
