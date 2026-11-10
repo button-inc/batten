@@ -1197,12 +1197,44 @@ pub fn append_all(
 /// of what the call produced.
 #[must_use]
 pub fn blocked_path(git_dir: &Path, branch: &str, claim: Option<&str>) -> std::path::PathBuf {
+    git_dir
+        .join("batten-receipts")
+        .join(receipt_name("recorder-blocked", branch, claim))
+}
+
+/// The longest receipt name written whole (CLOUD-2706), well under the
+/// 255-byte component limit every filesystem here has.
+const MAX_RECEIPT_NAME: usize = 200;
+
+/// `<record>.<branch>.<claim>`, or `<record>.<branch>` for an unclaimed branch.
+///
+/// **A CLAIM TOO LONG FOR A FILE NAME IS DIGESTED (CLOUD-2706).** The claim joins
+/// every key the branch claimed, and one PR carrying a bundle of rows is the
+/// shape the workflow prescribes: 34 keys passed the 255-byte limit and every
+/// claim-keyed write exited 3. The digest is deterministic, so writers and
+/// readers agree, and the name keeps its `<record>.<branch>.` prefix, which is
+/// what `land`'s branch sweep matches. A name within the limit is unchanged.
+//MUTANT-SUITE crates/batten/src/recorder.rs
+//MUTANT receipt-name-unbounded|s@^            if whole.len() <= MAX_RECEIPT_NAME {$@            if true {@|a_claim_too_long_for_a_file_name_is_digested
+fn receipt_name(record: &str, branch: &str, claim: Option<&str>) -> String {
+    use sha2::Digest as _;
+    use std::fmt::Write as _;
     let branch = branch.replace('/', "-");
-    let name = match claim {
-        Some(claim) => format!("recorder-blocked.{branch}.{claim}"),
-        None => format!("recorder-blocked.{branch}"),
-    };
-    git_dir.join("batten-receipts").join(name)
+    match claim {
+        Some(claim) => {
+            let whole = format!("{record}.{branch}.{claim}");
+            if whole.len() <= MAX_RECEIPT_NAME {
+                return whole;
+            }
+            let digest = sha2::Sha256::digest(claim.as_bytes());
+            let hex = digest.iter().take(8).fold(String::new(), |mut hex, byte| {
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            });
+            format!("{record}.{branch}.claim-{hex}")
+        }
+        None => format!("{record}.{branch}"),
+    }
 }
 
 /// Where a branch-keyed record lives.
@@ -1229,12 +1261,9 @@ pub fn record_path(
     branch: &str,
     claim: Option<&str>,
 ) -> std::path::PathBuf {
-    let branch = branch.replace('/', "-");
-    let name = match claim {
-        Some(claim) => format!("{record}.{branch}.{claim}"),
-        None => format!("{record}.{branch}"),
-    };
-    git_dir.join("batten-receipts").join(name)
+    git_dir
+        .join("batten-receipts")
+        .join(receipt_name(record, branch, claim))
 }
 
 /// Whether the snapshot already carries a line matching EVERY named column.
@@ -1282,6 +1311,30 @@ fn append(path: &Path, line: &str) -> Option<()> {
 )]
 mod outcome_tests {
     use super::*;
+
+    /// A claim of a whole bundle of keys stays a legal file name (CLOUD-2706).
+    #[test]
+    fn a_claim_too_long_for_a_file_name_is_digested() {
+        let keys: Vec<String> = (1560..1594).map(|n| format!("CLOUD-{n}")).collect();
+        let claim = keys.join("-");
+        let name = |claim: &str| {
+            record_path(
+                Path::new("/g"),
+                "pr-unsubscribed",
+                "claude/bundle",
+                Some(claim),
+            )
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+        };
+        let long = name(&claim);
+        assert!(long.len() <= MAX_RECEIPT_NAME, "{long}");
+        assert!(long.starts_with("pr-unsubscribed.claude-bundle."), "{long}");
+        assert_eq!(long, name(&claim), "the same claim names the same file");
+        assert_ne!(long, name(&format!("{claim}-CLOUD-9999")));
+        assert_eq!(name("CLOUD-1"), "pr-unsubscribed.claude-bundle.CLOUD-1");
+    }
 
     fn declared(requires: &[&str], matching: &[(&str, &str)]) -> Declared {
         Declared {
