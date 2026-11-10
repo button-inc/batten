@@ -92,6 +92,29 @@ pub struct PresetModule {
 }
 
 impl PresetModule {
+    /// The source an engine compiles: the embedded one, or under the
+    /// `preset-overlay` feature the mutated copy a mutation sweep wrote to
+    /// `$BATTEN_PRESET_OVERLAY/<preset>/<module>.rego`, where one is there.
+    ///
+    /// A BUILD FEATURE, NEVER A RUNTIME SWITCH ALONE: a variable that swapped a
+    /// shipped rule for a file would let the caller under judgement rewrite the
+    /// rules it is judged by. Only the sweep's own suite build enables it, so the
+    /// suite runs against a mutated module without recompiling the crate per row
+    /// (`MUTANT_OVERLAY_*`, `mise.toml`).
+    #[must_use]
+    pub fn text(&self) -> std::borrow::Cow<'static, str> {
+        #[cfg(feature = "preset-overlay")]
+        if let Some(dir) = std::env::var_os("BATTEN_PRESET_OVERLAY")
+            && let Some(relative) = self.pointer.strip_prefix("<preset:")
+            && let Ok(text) = std::fs::read_to_string(
+                std::path::Path::new(&dir).join(relative.replacen('>', "", 1)),
+            )
+        {
+            return std::borrow::Cow::Owned(text);
+        }
+        std::borrow::Cow::Borrowed(self.source)
+    }
+
     /// The module's name: its file stem, as a row's `except` and
     /// `batten preset eject` spell it (CLOUD-2290).
     #[must_use]
@@ -199,7 +222,7 @@ impl Manifest {
         self.modules
             .iter()
             .filter(|module| module.scope == scope)
-            .map(|module| (module.pointer.to_owned(), module.source.to_owned()))
+            .map(|module| (module.pointer.to_owned(), module.text().into_owned()))
             .collect()
     }
 
@@ -235,7 +258,7 @@ impl Manifest {
                 Some(reads) => provider == Some(reads),
             })
             .filter(|module| !except.iter().any(|name| name == module.name()))
-            .map(|module| (module.pointer.to_owned(), module.source.to_owned()))
+            .map(|module| (module.pointer.to_owned(), module.text().into_owned()))
             .collect()
     }
 
@@ -2437,7 +2460,7 @@ pub fn mode_sources() -> Vec<(String, String)> {
                 .modules
                 .iter()
                 .filter(|module| MODE.iter().any(|name| module.pointer.ends_with(name)))
-                .map(|module| (module.pointer.to_owned(), module.source.to_owned()))
+                .map(|module| (module.pointer.to_owned(), module.text().into_owned()))
                 .collect()
         })
         .unwrap_or_default()

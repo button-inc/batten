@@ -277,8 +277,17 @@ fn strip_marker(line: &str, marker: &str) -> Option<String> {
 /// What `no-suite` names for a gate none of whose sources declares a suite.
 const UNDECLARED: &str = "undeclared";
 
-/// Where a preset's modules live, relative to the repository root.
-const PRESETS: &str = "crates/batten/src/policy/presets";
+/// Where the consumer keeps its presets, one directory per preset of `.rego`
+/// modules, relative to the repository root: `$MUTANT_PRESETS`, read as
+/// `MUTANT_TASKS` is, beside the rest of the sweep's scope. Unset, there is no
+/// preset arm: the crate names no directory of a consumer's (rule 1,
+/// CLOUD-2711).
+fn presets_dir() -> Option<String> {
+    std::env::var("MUTANT_PRESETS")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_owned())
+        .filter(|value| !value.is_empty())
+}
 
 /// One declared mutation: `#MUTANT <slug>|<script>|<case>`.
 ///
@@ -531,6 +540,14 @@ pub enum Verdict {
     RunnerAbsent,
     /// Two registered runners claim one source, so which judged it is unknown.
     RunnerOverlap,
+    /// A declared row in a source a registered runner owns (CLOUD-2253). That
+    /// runner judges the source and never reads the row, so the row is
+    /// coverage-shaped nothing: refused, never skipped. 868 such rows
+    /// accumulated in Rust while the sweep passed over them in silence.
+    RunnerOwned {
+        /// The runner that owns the source.
+        runner: &'static str,
+    },
     /// A `command` runner exited with neither 0 (caught) nor 2 (survived), or
     /// ran out of time, so it said nothing about the mutants (CLOUD-2211).
     ///
@@ -598,6 +615,7 @@ impl fmt::Display for Verdict {
             Verdict::SelfMutatingRow => write!(out, "self-mutating-row"),
             Verdict::RunnerAbsent => write!(out, "runner-absent"),
             Verdict::RunnerOverlap => write!(out, "runner-overlap"),
+            Verdict::RunnerOwned { runner } => write!(out, "runner-owned ({runner})"),
             Verdict::RunnerErrored { code: Some(code) } => {
                 write!(out, "runner-errored (exit {code})")
             }
@@ -803,14 +821,18 @@ pub fn sources_for(root: &Path, name: &str) -> Vec<String> {
     if root.join(&module).is_file() {
         return vec![module];
     }
-    let dir = root.join(PRESETS).join(name);
-    let mut found: Vec<String> = std::fs::read_dir(&dir)
-        .map(|entries| {
+    let mut found: Vec<String> = presets_dir()
+        .and_then(|presets| {
+            std::fs::read_dir(root.join(&presets).join(name))
+                .ok()
+                .map(|entries| (presets, entries))
+        })
+        .map(|(presets, entries)| {
             entries
                 .filter_map(std::result::Result::ok)
                 .filter_map(|entry| {
                     let file = entry.file_name().to_string_lossy().into_owned();
-                    has_extension(&file, "rego").then(|| format!("{PRESETS}/{name}/{file}"))
+                    has_extension(&file, "rego").then(|| format!("{presets}/{name}/{file}"))
                 })
                 .collect()
         })
@@ -860,7 +882,12 @@ fn is_source_path(name: &str) -> bool {
 /// to nothing is exactly the drift the census exists to find.
 #[must_use]
 pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
-    let sources = sources_for(root, name);
+    gate_of(root, name, &sources_for(root, name))
+}
+
+/// The gate `name` is over `sources`, or `None` for no source: [`resolve`]'s
+/// reading, apart from where the sources were found.
+fn gate_of(root: &Path, name: &str, sources: &[String]) -> Option<Gate> {
     if sources.is_empty() {
         return None;
     }
@@ -870,7 +897,7 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
     let mut unrunnable = None;
     let mut own_suites = BTreeMap::new();
     let mut owner = None;
-    for source in &sources {
+    for source in sources {
         let Some(lines) = declaring_lines(root, name, source) else {
             continue;
         };
@@ -921,7 +948,7 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
     }
     Some(Gate {
         name: name.to_owned(),
-        sources,
+        sources: sources.to_vec(),
         suite,
         unrunnable,
         own_suites,
@@ -1021,7 +1048,7 @@ fn committed(root: &Path, table: Option<&crate::config::Mutate>) -> Result<Vec<S
 /// [`sources_for`] would take it to this very file: a module whose stem a shell
 /// task also carries resolves to the task, and gets its path instead.
 fn subject_name(root: &Path, path: &str) -> String {
-    let presets = format!("{PRESETS}/");
+    let presets = presets_dir().map(|presets| format!("{presets}/"));
     let candidates = [
         path.strip_prefix("mise-tasks/")
             .and_then(|rest| rest.strip_suffix(".sh"))
@@ -1029,7 +1056,9 @@ fn subject_name(root: &Path, path: &str) -> String {
         path.strip_prefix("policy/")
             .and_then(|rest| rest.strip_suffix(".rego"))
             .map(str::to_owned),
-        path.strip_prefix(&presets)
+        presets
+            .as_deref()
+            .and_then(|presets| path.strip_prefix(presets))
             .and_then(|rest| rest.split_once('/'))
             .map(|(name, _)| name.to_owned()),
     ];
@@ -1061,10 +1090,9 @@ fn subject_name(root: &Path, path: &str) -> String {
 /// so a module the change removed is no longer among the gate's sources, and a
 /// match on sources alone let the deletion pass unswept (review of #1099).
 ///
-/// A gate none of whose rows the DECLARED runner owns is not touched: another
-/// registered runner owns every source it mutates ([`Registry::owner`]) and
-/// judges the change itself ([`run_registered`]). A row is never judged by two
-/// runners, and never by none.
+/// A gate whose rows another registered runner owns is touched like any other,
+/// so the sweep reaches its rows and refuses each as `runner-owned`: a row is
+/// never judged by two runners, and never passed over by both.
 ///
 /// A name that resolves to nothing is KEPT. Narrowing it away would turn the
 /// sweep's `no-such-gate` report into silence; could-not-look widens here as it
@@ -1075,17 +1103,11 @@ pub fn touched(
     names: &[String],
     changed: &std::collections::BTreeSet<String>,
     code_changed: &std::collections::BTreeSet<String>,
-    registry: &Registry,
 ) -> Vec<String> {
     names
         .iter()
         .filter(|name| {
-            resolve(root, name).is_none_or(|gate| {
-                if !gate.rows.is_empty() && !gate.rows.iter().any(|row| registry.declares(row)) {
-                    return false;
-                }
-                changed_by(&gate, name, changed, code_changed)
-            })
+            resolve(root, name).is_none_or(|gate| changed_by(&gate, name, changed, code_changed))
         })
         .cloned()
         .collect()
@@ -1105,8 +1127,10 @@ fn changed_by(
         .suites()
         .iter()
         .any(|s| code_changed.contains(s.path()));
-    let dir = format!("{PRESETS}/{name}/");
-    let by_preset = changed.iter().any(|path| path.starts_with(&dir));
+    let by_preset = presets_dir().is_some_and(|presets| {
+        let dir = format!("{presets}/{name}/");
+        changed.iter().any(|path| path.starts_with(&dir))
+    });
     by_source || by_suite || by_preset
 }
 
@@ -2389,6 +2413,67 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
     ]
 }
 
+/// Where a consumer's suite reads a mutated source from instead of the staged
+/// tree, declared by three variables together (CLOUD-2253):
+///
+/// - `MUTANT_PRESETS` ([`presets_dir`]): a module under it is mutated in a copy
+///   under [`Overlay::dir`], and the staged tree keeps the original;
+/// - `MUTANT_OVERLAY_ENV`: the variable that names [`Overlay::dir`] to the suite;
+/// - `MUTANT_OVERLAY_FEATURES`: the cargo features a suite is built with so it
+///   reads that copy.
+///
+/// FOR A SOURCE A BUILD EMBEDS. A file the crate `include_str!`s is a build
+/// input, so mutating it in the staged tree recompiled the crate twice per row
+/// (the mutation, then its restore): measured on #1276, ~41 s a row, nearly all
+/// build. The overlay leaves the build's inputs untouched, so the suite built
+/// once runs every row, against exactly the mutated bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Overlay {
+    root: String,
+    env: String,
+    features: String,
+    dir: PathBuf,
+}
+
+impl Overlay {
+    /// The overlay the environment declares for the tree at `root`, or `None`
+    /// where any of the three variables is unset or blank.
+    #[must_use]
+    pub fn declared(root: &Path) -> Option<Self> {
+        let read = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .map(|value| value.trim().trim_end_matches('/').to_owned())
+                .filter(|value| !value.is_empty())
+        };
+        Some(Self {
+            root: presets_dir()?,
+            env: read("MUTANT_OVERLAY_ENV")?,
+            features: read("MUTANT_OVERLAY_FEATURES")?,
+            dir: target_dir(root).join("mutate-overlay"),
+        })
+    }
+
+    /// Where the mutated copy of `source` is written, or `None` for a source
+    /// outside [`Overlay::root`], which is mutated in place.
+    #[must_use]
+    pub fn path_of(&self, source: &str) -> Option<PathBuf> {
+        source
+            .strip_prefix(&self.root)
+            .and_then(|rest| rest.strip_prefix('/'))
+            .filter(|rest| !rest.is_empty())
+            .map(|rest| self.dir.join(rest))
+    }
+}
+
+/// The `--features` every cargo invocation of a sweep carries, so the build it
+/// pays once is the one every row runs.
+fn overlay_features(root: &Path) -> Vec<String> {
+    Overlay::declared(root).map_or_else(Vec::new, |overlay| {
+        vec![String::from("--features"), overlay.features]
+    })
+}
+
 /// The environment a nextest run in `staged` carries: [`suite_env`], with the
 /// inherited `NEXTEST_PROFILE` kept where `staged` declares that profile
 /// ([`declared_profile`]).
@@ -2397,6 +2482,9 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
 /// this env reaches, because it names nextest's profile ([`scrubbed`]).
 fn nextest_env(root: &Path, staged: &Path) -> Vec<(String, String)> {
     let mut env = suite_env(root);
+    if let Some(overlay) = Overlay::declared(root) {
+        env.push((overlay.env, overlay.dir.to_string_lossy().into_owned()));
+    }
     if let Some(profile) = declared_profile(staged, std::env::var("NEXTEST_PROFILE").ok())
         && let Some((_, value)) = env.iter_mut().find(|(key, _)| key == "NEXTEST_PROFILE")
     {
@@ -2533,7 +2621,8 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selecti
         // mutated source must be recompiled, and paying that inside the
         // per-case bound is how a slow compile reads as `suite-did-not-run`.
         // A build that fails here is left for the timed run to report.
-        let build = vec![String::from("test"), String::from("--no-run")];
+        let mut build = vec![String::from("test"), String::from("--no-run")];
+        build.extend(overlay_features(root));
         let _ = spawn(dir, Program::Cargo, &build, &env, build_bound());
     }
     if let Suite::Tofu { path } = suite {
@@ -2549,7 +2638,10 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selecti
         let init = ["init", "-backend=false", "-input=false", "-no-color"].map(String::from);
         let _ = spawn(&module, Program::Suite("tofu"), &init, &env, build_bound());
     }
-    let (cwd, argv) = invocation(dir, suite, want, &junit);
+    let (cwd, mut argv) = invocation(dir, suite, want, &junit);
+    if matches!(suite, Suite::Cargo { .. }) {
+        argv.extend(overlay_features(root));
+    }
     // DECLARED AS AN ARM (CLOUD-1714), which is what makes this module an
     // INSTANCE of the harness rather than a second copy of it. The arm carries
     // what it takes to run the thing once — where, what, and under which
@@ -3072,7 +3164,7 @@ fn total_cases(root: &Path, suite: &Suite) -> usize {
 ///
 /// `None` when it applied, else `unappliable-mutation`: a source that does not
 /// read, or a script outside the one-substitution subset.
-fn apply(staged: &Staged, row: &Row) -> Result<Option<Verdict>> {
+fn apply(staged: &Staged, overlay: Option<&Overlay>, row: &Row) -> Result<Option<Verdict>> {
     let path = staged.dir().join(&row.source);
     let Ok(before) = std::fs::read_to_string(&path) else {
         return Ok(Some(Verdict::UnappliableMutation));
@@ -3080,7 +3172,16 @@ fn apply(staged: &Staged, row: &Row) -> Result<Option<Verdict>> {
     let Some(after) = substitute(&before, &row.script) else {
         return Ok(Some(Verdict::UnappliableMutation));
     };
-    crate::durable::replace(&path, after)
+    // Into the overlay for a source a build embeds, so the staged tree, the
+    // build's input, never moves ([`Overlay`]).
+    let target = overlay
+        .and_then(|overlay| overlay.path_of(&row.source))
+        .unwrap_or(path);
+    if let Some(dir) = target.parent() {
+        fs::create_dir_all(dir)
+            .with_context(|| format!("mutate: could not create {}", dir.display()))?;
+    }
+    crate::durable::replace(&target, after)
         .with_context(|| format!("mutate: could not write the mutated {}", row.source))?;
     Ok(None)
 }
@@ -3230,9 +3331,17 @@ fn sed_replacement(replacement: &str) -> String {
 /// gate's behaviour is untouched, and the mutation SURVIVES every run while
 /// reading as enforced coverage. Measured: `board-write-record`'s
 /// `overlap-frozen-at-write-time` had done exactly that for its whole life.
-fn diff_shape(root: &Path, staged: &Staged, source: &str) -> (bool, usize) {
+fn diff_shape(
+    root: &Path,
+    staged: &Staged,
+    overlay: Option<&Overlay>,
+    source: &str,
+) -> (bool, usize) {
     let before = std::fs::read_to_string(root.join(source)).unwrap_or_default();
-    let after = std::fs::read_to_string(staged.dir().join(source)).unwrap_or_default();
+    let mutated = overlay
+        .and_then(|overlay| overlay.path_of(source))
+        .unwrap_or_else(|| staged.dir().join(source));
+    let after = std::fs::read_to_string(mutated).unwrap_or_default();
     if before == after {
         return (false, 0);
     }
@@ -3279,6 +3388,12 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
     // this row's suite may compose over it.
     staged.restore(root)?;
     staged.stage_subject(root, &row.source)?;
+    // The previous row's mutated copy goes with its subject: a clean run must
+    // read the embedded module.
+    let overlay = Overlay::declared(root);
+    if let Some(overlay) = &overlay {
+        let _ = fs::remove_dir_all(&overlay.dir);
+    }
     if declares_own_case(root, row)
         && let Some(verdict) = judge_by_module(root, staged, row)?
     {
@@ -3334,10 +3449,10 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
         });
     }
 
-    if let Some(refused) = apply(staged, row)? {
+    if let Some(refused) = apply(staged, overlay.as_ref(), row)? {
         return Ok(refused);
     }
-    let (changed, code_lines) = diff_shape(root, staged, &row.source);
+    let (changed, code_lines) = diff_shape(root, staged, overlay.as_ref(), &row.source);
     if !changed {
         return Ok(Verdict::InertMutation);
     }
@@ -3397,10 +3512,11 @@ fn judge_by_module(root: &Path, staged: &mut Staged, row: &Row) -> Result<Option
         Ok(None) => return Ok(None),
         Err(_) => return Ok(Some(Verdict::SuiteDidNotRun { want })),
     }
-    if let Some(refused) = apply(staged, row)? {
+    // IN PLACE: this tier reads the staged file itself and builds nothing.
+    if let Some(refused) = apply(staged, None, row)? {
         return Ok(Some(refused));
     }
-    let (changed, code_lines) = diff_shape(root, staged, &row.source);
+    let (changed, code_lines) = diff_shape(root, staged, None, &row.source);
     if !changed {
         return Ok(Some(Verdict::InertMutation));
     }
@@ -3694,7 +3810,8 @@ fn build_if_owed(
             progress,
             "mutate sweep: building the cargo suites the rows run under"
         );
-        let args = vec![String::from("test"), String::from("--no-run")];
+        let mut args = vec![String::from("test"), String::from("--no-run")];
+        args.extend(overlay_features(root));
         let _ = spawn(
             staged.dir(),
             Program::Cargo,
@@ -3764,6 +3881,31 @@ fn gate_stopped(root: &Path, gate: &Gate) -> Option<Verdict> {
     // no declaration is a failure, not a skip. Without this the sweep
     // reports success over a set it never touched.
     gate.rows.is_empty().then_some(Verdict::NoMutantDeclared)
+}
+
+/// Every row of `runnable` a registered runner owns, as `runner-owned`.
+///
+/// REFUSED, NEVER PASSED OVER: a row another runner owns is never read by it,
+/// and filtering it out in silence is how 868 hand-written Rust rows read as
+/// coverage (CLOUD-2253).
+fn runner_owned(registry: &Registry, runnable: &[(&String, Gate)]) -> Vec<Finding> {
+    runnable
+        .iter()
+        .flat_map(|(name, gate)| {
+            gate.rows
+                .iter()
+                .filter(|row| !registry.declares(row))
+                .filter_map(move |row| {
+                    let owner = registry.owner(&row.source).ok()?;
+                    Some(Finding {
+                        gate: (*name).clone(),
+                        slug: Some(row.slug.clone()),
+                        verdict: Verdict::RunnerOwned { runner: owner.id() },
+                        owner: gate.owner.clone(),
+                    })
+                })
+        })
+        .collect()
 }
 
 /// One shard's rows of one gate, as [`sweep_shard`] numbers them.
@@ -3836,6 +3978,7 @@ pub fn sweep_shard(
     }
     // THE SHARD'S ROWS, numbered across the runnable gates in sorted order, so
     // one numbering partitions the rows between the shards.
+    findings.extend(runner_owned(registry, &runnable));
     let mine: Vec<(&String, &Gate, &Row)> = runnable
         .iter()
         .flat_map(|(name, gate)| {
@@ -3942,6 +4085,9 @@ pub enum CensusVerdict {
     /// A declared row whose script is outside the one-substitution subset the
     /// runner applies ([`substitute`]), so it can never be applied.
     UnappliableMutation,
+    /// A subject declaring rows in a source a registered runner owns, which
+    /// that runner judges without reading them ([`Verdict::RunnerOwned`]).
+    RunnerOwned,
 }
 
 impl fmt::Display for CensusVerdict {
@@ -3954,6 +4100,7 @@ impl fmt::Display for CensusVerdict {
             CensusVerdict::InertMutation => "inert-mutation",
             CensusVerdict::MalformedRow => "malformed-row",
             CensusVerdict::UnappliableMutation => "unappliable-mutation",
+            CensusVerdict::RunnerOwned => "runner-owned",
         };
         out.write_str(word)
     }
@@ -4023,14 +4170,16 @@ pub fn subjects(root: &Path, table: Option<&crate::config::Mutate>) -> BTreeMap<
             }
         }
     }
-    if let Ok(entries) = std::fs::read_dir(root.join(PRESETS)) {
+    if let Some(presets) = presets_dir()
+        && let Ok(entries) = std::fs::read_dir(root.join(&presets))
+    {
         for entry in entries.filter_map(std::result::Result::ok) {
             if !entry.path().is_dir() {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().into_owned();
             if !sources_for(root, &name).is_empty() {
-                found.insert(name.clone(), format!("{PRESETS}/{name}"));
+                found.insert(name.clone(), format!("{presets}/{name}"));
             }
         }
     }
@@ -4124,9 +4273,33 @@ fn exemption_is_filed(row: &str) -> bool {
 /// row's defect, and the prose is in the file the pointer points at
 /// (non-negotiable rule 4).
 #[must_use]
-pub fn census(root: &Path, names: &[String], table: Option<&crate::config::Mutate>) -> Census {
+pub fn census(
+    root: &Path,
+    names: &[String],
+    table: Option<&crate::config::Mutate>,
+    registry: &Registry,
+) -> Census {
     let subjects = subjects(root, table);
     let mut findings = Vec::new();
+    // A ROW NO RUNNER WILL EVER READ (CLOUD-2253): a subject declaring rows in a
+    // source a registered runner owns. Reported whatever the set says, because
+    // neither declaring nor exempting it makes the row run.
+    // Every gate the census knows, discovered or named in the set: a `.rs` path
+    // named as a gate is no discovered subject, and is exactly where a Rust row
+    // would be declared.
+    let known: std::collections::BTreeSet<&String> = subjects.keys().chain(names.iter()).collect();
+    for name in known {
+        for source in sources_for(root, name) {
+            let owned = registry
+                .owner(&source)
+                .is_ok_and(|owner| owner != RunnerKind::Declared)
+                && lines_of(root, &source)
+                    .is_some_and(|lines| !rows_in(&lines, &source).is_empty());
+            if owned {
+                findings.push((source, CensusVerdict::RunnerOwned));
+            }
+        }
+    }
     for (name, path) in &subjects {
         let in_set = names.iter().any(|declared| declared == name);
         // Through the block for a `task-` gate (CLOUD-1909): an exemption written
@@ -4481,6 +4654,25 @@ mod tests {
             memory_mb: 0,
         };
         assert_eq!(job_count(machine(6, 0, 0), free), 6);
+    }
+
+    /// Fails by: a source outside the root, or the root itself, given an overlay
+    /// path, or the path not mirroring the source under the root.
+    #[test]
+    fn an_overlay_mirrors_only_the_sources_under_its_root() {
+        let overlay = Overlay {
+            root: String::from("crates/x/presets"),
+            env: String::from("X_OVERLAY"),
+            features: String::from("overlay"),
+            dir: PathBuf::from("/t/mutate-overlay"),
+        };
+        assert_eq!(
+            overlay.path_of("crates/x/presets/git/a.rego"),
+            Some(PathBuf::from("/t/mutate-overlay/git/a.rego"))
+        );
+        assert_eq!(overlay.path_of("crates/x/presetsy/a.rego"), None);
+        assert_eq!(overlay.path_of("crates/x/presets"), None);
+        assert_eq!(overlay.path_of("policy/a.rego"), None);
     }
 
     /// Fails by: a missed mutant read as anything but a violation, or a timeout
@@ -5109,7 +5301,8 @@ mod tests {
             std::thread::current().id()
         ));
         let _ = std::fs::remove_dir_all(&root);
-        let dir = root.join(PRESETS).join("probe");
+        let presets = "presets";
+        let dir = root.join(presets).join("probe");
         std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("mkdir: {e}"));
         for (file, text) in [
             (
@@ -5124,8 +5317,11 @@ mod tests {
         ] {
             std::fs::write(dir.join(file), text).unwrap_or_else(|e| panic!("write: {e}"));
         }
-        let Some(gate) = resolve(&root, "probe") else {
-            panic!("the preset directory resolves to a gate");
+        let sources: Vec<String> = ["a.rego", "b.rego", "c.rego"]
+            .map(|file| format!("{presets}/probe/{file}"))
+            .to_vec();
+        let Some(gate) = gate_of(&root, "probe", &sources) else {
+            panic!("the preset's modules make a gate");
         };
         let _ = std::fs::remove_dir_all(&root);
         let suite_of = |slug: &str| {

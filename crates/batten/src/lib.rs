@@ -120,6 +120,8 @@ pub mod mcp_posture;
 pub mod mint;
 pub mod minted;
 pub mod mutate;
+#[cfg(test)]
+mod mutation_markers;
 pub mod o200k;
 pub mod outcome;
 pub mod output;
@@ -17590,12 +17592,7 @@ struct Narrowed {
 /// a flag would change the public `MutateCommand` — measured, `cargo
 /// semver-checks` read it as three major breaks (a removed `Copy`, a unit variant
 /// changing kind).
-fn narrow_to_change(
-    root: &Path,
-    names: Vec<String>,
-    registry: &mutate::Registry,
-    err: &mut dyn Write,
-) -> Result<Narrowed> {
+fn narrow_to_change(root: &Path, names: Vec<String>, err: &mut dyn Write) -> Result<Narrowed> {
     let Some(base) = mutate::changed_since() else {
         return Ok(Narrowed {
             names,
@@ -17623,7 +17620,7 @@ fn narrow_to_change(
     let code_changed: std::collections::BTreeSet<String> =
         delta.code_changed.iter().cloned().collect();
     Ok(Narrowed {
-        names: mutate::touched(root, &names, &changed, &code_changed, registry),
+        names: mutate::touched(root, &names, &changed, &code_changed),
         change: Some((base, changed)),
     })
 }
@@ -17799,7 +17796,14 @@ fn run_mutate(
     };
     match command {
         cli::MutateCommand::Census => {
-            let census = mutate::census(root, &names, table);
+            let registry = match mutate::Registry::from_env() {
+                Ok(registry) => registry,
+                Err(reason) => {
+                    writeln!(err, "::error:: mutate census: {reason:#}")?;
+                    return Ok(ExitCode::Usage);
+                }
+            };
+            let census = mutate::census(root, &names, table, &registry);
             for (subject, verdict) in &census.findings {
                 writeln!(out, "{subject} {verdict}")?;
             }
@@ -17912,7 +17916,7 @@ fn run_mutate_sweep(
                 return Ok(ExitCode::Usage);
             }
         };
-    let narrowed = narrow_to_change(root, names, &registry, err)?;
+    let narrowed = narrow_to_change(root, names, err)?;
     // ONE SHARD IS A SLICE OF BOTH HALVES (CLOUD-1746). The declared runner's
     // gates cost a suite build per mutant, and 94 of them across 14 touched gates
     // ran the `ci` job past its 87-minute bound on #1132; so `$MUTANT_SHARD`
