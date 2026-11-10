@@ -1371,10 +1371,10 @@ pub fn link_worktree(common: &Path, top: &Path, name: &str) -> Result<std::path:
             ("gitdir", format!("{}\n", dir.join(".git").display())),
         ];
         for (file, body) in admin_files {
-            std::fs::write(admin.join(file), body)
+            crate::durable::replace(admin.join(file), body)
                 .map_err(|err| anyhow::anyhow!("worktree: admin {file} will not write: {err}"))?;
         }
-        std::fs::write(dir.join(".git"), format!("gitdir: {}\n", admin.display()))
+        crate::durable::replace(dir.join(".git"), format!("gitdir: {}\n", admin.display()))
             .map_err(|err| anyhow::anyhow!("worktree: .git will not write: {err}"))?;
         let linked = crate::git::open_for_write(&dir)?;
         let empty = gix::ObjectId::empty_tree(linked.object_hash());
@@ -1636,6 +1636,25 @@ pub fn init_on_main(dir: &Path) -> Result<()> {
         anyhow::anyhow!("gitwrite: could not initialise {}: {err}", dir.display())
     })?;
     crate::durable::replace(dir.join(".git/HEAD"), "ref: refs/heads/main\n").map_err(|err| {
+        anyhow::anyhow!(
+            "gitwrite: could not point {}'s HEAD at main: {err}",
+            dir.display()
+        )
+    })
+}
+
+/// Make `dir` an empty BARE repository whose `HEAD` names `main`, in-process:
+/// [`init_on_main`] for a repository with no working tree, such as a remote a
+/// suite pushes to.
+///
+/// # Errors
+///
+/// A directory that will not initialise, or a `HEAD` that will not write.
+pub fn init_bare_on_main(dir: &Path) -> Result<()> {
+    gix::init_bare(dir).map_err(|err| {
+        anyhow::anyhow!("gitwrite: could not initialise {}: {err}", dir.display())
+    })?;
+    crate::durable::replace(dir.join("HEAD"), "ref: refs/heads/main\n").map_err(|err| {
         anyhow::anyhow!(
             "gitwrite: could not point {}'s HEAD at main: {err}",
             dir.display()

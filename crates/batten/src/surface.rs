@@ -8208,6 +8208,9 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Unclassified,
         flags: &[],
     },
+    // unreached: "forge intake" CLOUD-2702 its caller is `forge poll`, in process,
+    // and this clone starts that from `[[forge.source]]` rows the pinned engine
+    // cannot read yet; a consumer's own hook or task is the other caller.
     CommandDecl {
         path: "forge intake",
         id: "forge.intake",
@@ -8219,6 +8222,8 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     // CLOUD-2693. Where events come from when nothing pushes them: the first
     // available `[[forge.source]]`, read once or every N seconds.
+    // unreached: "forge poll" CLOUD-2702 this clone registers it as a task once
+    // the engine pin names a release that reads `[[forge.source]]`.
     CommandDecl {
         path: "forge poll",
         id: "forge.poll",
