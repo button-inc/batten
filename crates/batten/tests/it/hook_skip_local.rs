@@ -148,7 +148,7 @@ fn an_ordinary_command_is_allowed() {
     // refuses every command, which would name this row every time.
     allowed("git commit -m 'fix: an ordinary commit'");
     allowed_backgrounded("mise run ci");
-    allowed("RUST_LOG=debug git commit -m 'another variable is not this one'");
+    allowed("RUST_LOG=debug git commit -m 'fix: another variable is not this one'");
 }
 
 #[test]
