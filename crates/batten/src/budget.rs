@@ -1173,3 +1173,101 @@ mod tests {
         assert!(directory.downcast_ref::<UsageError>().is_none());
     }
 }
+
+// --- CLOUD-2661: a budget judged at the call --------------------------------
+
+/// Whether a `files` entry names one path rather than a pattern: none of the
+/// characters globset treats as syntax.
+#[must_use]
+pub fn literal_entry(entry: &str) -> bool {
+    !entry.contains(['*', '?', '[', '{', '\\'])
+}
+
+/// Whether a measure grew: a call that holds or shrinks an over-budget set is
+/// its repair, and refusing it would wedge the agent.
+//MUTANT-SUITE crates/batten/tests/it/budget_at_call.rs
+//MUTANT budget-repair-refused|s@^    projected > current$@    projected != current@|an_edit_that_shrinks_an_over_budget_set_is_admitted
+#[must_use]
+pub const fn grew(current: usize, projected: usize) -> bool {
+    projected > current
+}
+
+/// One set's measures before and after a call, as [`project`] counted them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallMeasure {
+    /// The set's name, `<name>` in `[budget.<name>]`.
+    pub name: String,
+    /// The set's (tokens, lines) at current and projected, or `None` where the
+    /// totals cannot be judged at the call (a glob, an `embedded` entry, or a
+    /// member that could not be read).
+    pub totals: Option<((usize, usize), (usize, usize))>,
+    /// The target's loaded bytes at current and projected.
+    pub bytes: (usize, usize),
+    /// The set's ceilings.
+    pub max_tokens: usize,
+    /// The set's line ceiling, if any.
+    pub max_lines: Option<usize>,
+    /// The set's per-file byte ceiling, if any.
+    pub max_bytes_per_file: Option<usize>,
+}
+
+/// Measure a set at a call that writes `target`: `current` its text now
+/// (`None` where it does not exist), `projected` the text the call lands, and
+/// `members` every OTHER member's text, or `None` where the totals cannot be
+/// judged. Counted as [`measure`] counts, over [`loaded`] text.
+//MUTANT budget-projection-ignored|s@^    let after = counts(projected);$@    let after = counts(current.unwrap_or(projected));@|the_projection_not_the_disk_is_what_is_counted
+#[must_use]
+pub fn project(
+    name: &str,
+    set: &BudgetSet,
+    current: Option<&str>,
+    projected: &str,
+    members: Option<&BTreeMap<String, String>>,
+) -> CallMeasure {
+    let counts = |text: &str| {
+        let loaded = loaded(text);
+        (estimate_tokens(&loaded), count_lines(&loaded), loaded.len())
+    };
+    let before = counts(current.unwrap_or(""));
+    let after = counts(projected);
+    let totals = members.map(|members| {
+        let (tokens, lines) = members.values().fold((0, 0), |(tokens, lines), text| {
+            let (more_tokens, more_lines, _) = counts(text);
+            (tokens + more_tokens, lines + more_lines)
+        });
+        (
+            (tokens + before.0, lines + before.1),
+            (tokens + after.0, lines + after.1),
+        )
+    });
+    CallMeasure {
+        name: name.to_owned(),
+        totals,
+        bytes: (before.2, after.2),
+        max_tokens: set.max_tokens,
+        max_lines: set.max_lines,
+        max_bytes_per_file: set.max_bytes_per_file,
+    }
+}
+
+/// The first ceiling the call breaches AND grows past, as (projected, max).
+#[must_use]
+pub fn breach(measure: &CallMeasure) -> Option<(usize, usize)> {
+    let over = |current: usize, projected: usize, max: usize| {
+        (projected > max && grew(current, projected)).then_some((projected, max))
+    };
+    if let Some(((tokens, lines), (after_tokens, after_lines))) = measure.totals {
+        if let Some(hit) = over(tokens, after_tokens, measure.max_tokens) {
+            return Some(hit);
+        }
+        if let Some(hit) = measure
+            .max_lines
+            .and_then(|max| over(lines, after_lines, max))
+        {
+            return Some(hit);
+        }
+    }
+    measure
+        .max_bytes_per_file
+        .and_then(|max| over(measure.bytes.0, measure.bytes.1, max))
+}
