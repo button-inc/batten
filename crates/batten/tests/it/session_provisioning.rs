@@ -827,11 +827,11 @@ fn every_handler_row_is_read() {
     assert!(
         rows.len() > DECLARED.len(),
         "the scan reads the handler table: the provisioning rows plus the \
-         user-prompt-submit and pre-tool rows that predate them, found {}",
+         stop and pre-tool rows beside them, found {}",
         rows.len()
     );
     assert!(
-        rows.iter().any(|row| row.on == "user-prompt-submit"),
+        rows.iter().any(|row| row.on == "stop"),
         "a row on another event is read too, so `session_rows` is filtering \
          rather than being all there is"
     );

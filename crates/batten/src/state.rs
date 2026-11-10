@@ -154,9 +154,7 @@ pub fn derive_repo_name(repo_root: &Path) -> Result<String> {
     // THE NAME OF THE CANONICAL ROOT, as the digest below already is: an anchor
     // spelled `.` (every verb that starts from its cwd) has no final component,
     // and four call sites each resolved it themselves before this one did.
-    let canonical = repo_root
-        .canonicalize()
-        .unwrap_or_else(|_| repo_root.to_owned());
+    let canonical = crate::git::canonical(repo_root);
     let name = canonical
         .file_name()
         .and_then(|name| name.to_str())
