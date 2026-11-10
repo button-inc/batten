@@ -167,6 +167,23 @@ impl Harness {
     /// reversing it would have to invent which of the four to register.
     #[must_use]
     pub fn wiring(self) -> Option<Wiring> {
+        self.wiring_row()
+    }
+
+    /// The variable this host sets to the session owner's email (CLOUD-2659).
+    ///
+    /// Beside [`Wiring::project_dir_var`], the precedent for a per-host variable
+    /// name. Measured for Claude Code in a cloud container; every other host is
+    /// `None` until surveyed, which is could-not-look, not "sets none".
+    #[must_use]
+    pub const fn session_owner_email_var(self) -> Option<&'static str> {
+        match self {
+            Self::ClaudeCode => Some("CLAUDE_CODE_USER_EMAIL"),
+            _ => None,
+        }
+    }
+
+    fn wiring_row(self) -> Option<Wiring> {
         match self {
             // The host merges hooks across its settings files and defines no
             // hooks-only project file, so batten owns a KEY here, never the

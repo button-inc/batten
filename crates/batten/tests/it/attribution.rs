@@ -23,18 +23,14 @@ use std::process::Output;
 use common::{batten, git_command, git_in, scratch, stderr, stdout, write};
 
 /// A policy whose literals name nobody real.
-const POLICY: &str = r#"version = 1
+const POLICY: &str = r"version = 1
 
 [attribution]
 identity_deny = ['^Vendorbot <', '@no-reply\.example>$']
 trailer_deny = ['^Co-Authored-By:.*Vendorbot', '^Vendorbot-Session:', '^Assisted-by:']
 body_deny = ['[Gg]enerated with']
 trailer_allow = []
-
-[attribution.identity]
-name = "Accountable Human"
-email = "human@example.test"
-"#;
+";
 
 /// A fixture repository with `POLICY` committed and one base commit.
 fn fixture(name: &str) -> PathBuf {
@@ -460,22 +456,57 @@ fn json_carries_the_pointer_and_no_payload() {
 
 // --- the fixer -----------------------------------------------------------------
 
-/// Run the fixer with the global and system config scopes fenced off.
+/// Run the fixer with every input it resolves from fenced off (CLOUD-2659).
 ///
-/// The fixer reads the identity as git *resolves* it, which is the whole point —
-/// the defect is an identity inherited from a wider scope. That makes the ambient
-/// global config an input, so a case that did not fence it would be asserting
-/// about whatever identity the developer's machine happens to carry. Measured:
-/// this container's global identity is itself a vendor one, which silently turned
-/// the "unset" case into the "left alone" case.
-fn identity(dir: &Path) -> Output {
-    batten()
+/// The fixer reads the identity as git *resolves* it, the session owner from the
+/// host's variable, and the forge user over REST — so each is an input, and a
+/// case that did not fence it would be asserting about whatever the developer's
+/// machine carries. The forge always answers from `forge`, so no case reaches
+/// the network; `extra` sets back what a case needs.
+fn identity_with(dir: &Path, forge: &[(&str, u16, &str)], extra: &[(&str, &str)]) -> Output {
+    use std::fmt::Write as _;
+    let fixture = dir.parent().expect("a scratch parent").join(format!(
+        "{}-forge",
+        dir.file_name().expect("named").to_string_lossy()
+    ));
+    std::fs::create_dir_all(&fixture).expect("forge fixture");
+    let mut routes = String::new();
+    for (n, (needle, status, body)) in forge.iter().enumerate() {
+        std::fs::write(
+            fixture.join(format!("route.{n}")),
+            format!("HTTP/1.1 {status} X\n\n{body}"),
+        )
+        .expect("route");
+        let _ = writeln!(routes, "{needle}\troute.{n}");
+    }
+    std::fs::write(fixture.join("routes"), routes).expect("routes");
+    let mut command = batten();
+    command
         .args(["attribution", "identity"])
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .output()
-        .expect("run batten")
+        .env("BATTEN_REST_FIXTURE", &fixture);
+    for var in [
+        "CLAUDE_CODE_USER_EMAIL",
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+        "GIT_CONFIG_COUNT",
+        "EMAIL",
+    ] {
+        command.env_remove(var);
+    }
+    for (var, value) in extra {
+        command.env(var, value);
+    }
+    command.output().expect("run batten")
+}
+
+/// The fixer with a forge that declines (401) and no owner.
+fn identity(dir: &Path) -> Output {
+    identity_with(dir, &[("/user", 401, "{}")], &[])
 }
 
 /// A repo-local config value, or the empty string when the key is unset.
@@ -492,39 +523,118 @@ fn local(dir: &Path, key: &str) -> String {
         .to_owned()
 }
 
+const OWNER: (&str, &str) = ("CLAUDE_CODE_USER_EMAIL", "owner@example.test");
+const OWNER_USER: (&str, u16, &str) = (
+    "/user",
+    200,
+    r#"{"login":"owner","id":7,"name":"Owner Person","email":null}"#,
+);
+
+/// A table without `[attribution.identity]` loads and judges (CLOUD-2659).
 #[test]
-fn an_unset_identity_is_written() {
-    let dir = fixture("attribution-identity-unset");
-    git_in(&dir, &["config", "--unset", "user.name"]);
-    git_in(&dir, &["config", "--unset", "user.email"]);
-    let out = identity(&dir);
-    assert_eq!(out.status.code(), Some(0));
-    assert_eq!(local(&dir, "user.name"), "Accountable Human");
-    assert_eq!(local(&dir, "user.email"), "human@example.test");
-    assert!(stderr(&out).contains("was: unset"));
+fn an_attribution_table_without_identity_loads_and_judges() {
+    let dir = fixture("attribution-no-identity");
+    let base = base_of(&dir);
+    let clean = commit_clean(&dir, "fix(x): clean");
+    assert_eq!(check_range(&dir, &base, &clean).status.code(), Some(0));
+    let head = commit_authored_by(&dir, "Vendorbot", "bot@no-reply.example", "fix(x): vendor");
+    assert_eq!(check_range(&dir, &base, &head).status.code(), Some(2));
 }
 
 #[test]
-fn a_denied_identity_is_overwritten_and_the_value_is_not_echoed() {
-    let dir = fixture("attribution-identity-denied");
+fn a_denied_identity_is_replaced_by_the_session_owner() {
+    let dir = fixture("attribution-identity-owner");
     git_in(&dir, &["config", "user.name", "Vendorbot"]);
     git_in(&dir, &["config", "user.email", "bot@no-reply.example"]);
-    let out = identity(&dir);
-    assert_eq!(out.status.code(), Some(0));
-    assert_eq!(local(&dir, "user.name"), "Accountable Human");
+    let out = identity_with(&dir, &[OWNER_USER], &[OWNER]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(local(&dir, "user.email"), "owner@example.test");
+    assert_eq!(local(&dir, "user.name"), "Owner Person");
     assert!(stderr(&out).contains("was: denied"));
     assert!(!stderr(&out).contains("no-reply.example"));
 }
 
 #[test]
+fn with_no_session_owner_the_forge_user_is_written() {
+    let dir = fixture("attribution-identity-forge");
+    git_in(&dir, &["config", "--unset", "user.name"]);
+    git_in(&dir, &["config", "--unset", "user.email"]);
+    let out = identity_with(
+        &dir,
+        &[(
+            "/user",
+            200,
+            r#"{"login":"octo","id":1,"name":null,"email":null}"#,
+        )],
+        &[],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(local(&dir, "user.name"), "octo");
+    assert_eq!(local(&dir, "user.email"), "1+octo@users.noreply.github.com");
+    assert!(stderr(&out).contains("was: unset"));
+}
+
+#[test]
+fn a_denied_forge_user_is_not_written() {
+    let dir = fixture("attribution-identity-forge-denied");
+    git_in(&dir, &["config", "--unset", "user.name"]);
+    git_in(&dir, &["config", "--unset", "user.email"]);
+    let out = identity_with(
+        &dir,
+        &[(
+            "/user",
+            200,
+            r#"{"login":"Vendorbot","id":2,"name":null,"email":null}"#,
+        )],
+        &[],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(local(&dir, "user.name"), "");
+    assert_eq!(local(&dir, "user.email"), "");
+    assert!(!stderr(&out).contains("Vendorbot"));
+}
+
+#[test]
+fn nothing_resolved_is_one_and_writes_nothing() {
+    let dir = fixture("attribution-identity-unresolved");
+    git_in(&dir, &["config", "--unset", "user.name"]);
+    git_in(&dir, &["config", "--unset", "user.email"]);
+    let out = identity(&dir);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(local(&dir, "user.name"), "");
+    assert_eq!(local(&dir, "user.email"), "");
+    assert!(stderr(&out).contains("no accountable identity resolved"));
+}
+
+#[test]
+fn an_env_carried_vendor_identity_is_refused_by_name() {
+    let dir = fixture("attribution-identity-env-override");
+    let out = identity_with(
+        &dir,
+        &[OWNER_USER],
+        &[
+            OWNER,
+            ("GIT_AUTHOR_NAME", "Vendorbot"),
+            ("GIT_AUTHOR_EMAIL", "bot@no-reply.example"),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let said = stderr(&out);
+    assert!(said.contains("GIT_AUTHOR_NAME"), "{said}");
+    assert!(said.contains("GIT_AUTHOR_EMAIL"), "{said}");
+    assert!(!said.contains("no-reply.example"), "{said}");
+    assert_eq!(local(&dir, "user.email"), "owner@example.test");
+}
+
+#[test]
 fn an_accountable_identity_is_left_exactly_as_the_contributor_set_it() {
     // The case that matters most. A fixer that always overwrites would replace a
-    // real contributor's name with a configured default on every session start,
-    // asserting the opposite of what the record says accountability is.
+    // real contributor's name on every session start, asserting the opposite of
+    // what the record says accountability is.
     let dir = fixture("attribution-identity-accountable");
     git_in(&dir, &["config", "user.name", "Someone Real"]);
     git_in(&dir, &["config", "user.email", "someone@example.test"]);
-    let out = identity(&dir);
+    let out = identity_with(&dir, &[OWNER_USER], &[OWNER]);
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(local(&dir, "user.name"), "Someone Real");
     assert_eq!(local(&dir, "user.email"), "someone@example.test");
@@ -536,11 +646,14 @@ fn the_fixer_is_idempotent() {
     let dir = fixture("attribution-identity-idempotent");
     git_in(&dir, &["config", "user.name", "Vendorbot"]);
     git_in(&dir, &["config", "user.email", "bot@no-reply.example"]);
-    assert_eq!(identity(&dir).status.code(), Some(0));
-    let second = identity(&dir);
+    assert_eq!(
+        identity_with(&dir, &[OWNER_USER], &[OWNER]).status.code(),
+        Some(0)
+    );
+    let second = identity_with(&dir, &[OWNER_USER], &[OWNER]);
     assert_eq!(second.status.code(), Some(0));
     assert!(stderr(&second).contains("left as configured"));
-    assert_eq!(local(&dir, "user.name"), "Accountable Human");
+    assert_eq!(local(&dir, "user.name"), "Owner Person");
 }
 
 #[test]
@@ -550,7 +663,10 @@ fn a_commit_made_after_the_fixer_passes_the_gate() {
     let dir = fixture("attribution-identity-pair");
     git_in(&dir, &["config", "user.name", "Vendorbot"]);
     git_in(&dir, &["config", "user.email", "bot@no-reply.example"]);
-    assert_eq!(identity(&dir).status.code(), Some(0));
+    assert_eq!(
+        identity_with(&dir, &[OWNER_USER], &[OWNER]).status.code(),
+        Some(0)
+    );
     let base = base_of(&dir);
     git_in(
         &dir,

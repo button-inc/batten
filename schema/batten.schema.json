@@ -785,8 +785,15 @@
           }
         },
         "identity": {
-          "description": "The accountable identity `--set-identity` writes into the repo-local git\nconfig.",
-          "$ref": "#/$defs/Identity"
+          "description": "A committed accountable identity: still parsed, NEVER consulted\n(CLOUD-2659).\n\nWho answers for a commit is the person making it, and a name committed\nhere reaches every clone, so `attribution identity` resolves the person at\nrun time instead (git, the session owner, the forge user). Optional so a\ntable without it loads; kept parseable so a consumer that still carries\none does not break. A present table is still refused with a blank half.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Identity"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "identity_deny": {
           "description": "Patterns refused in the `author` and `committer` identity fields.\n\nBoth fields, because the environment sets both and a repair reaching only\n`author` leaves the vendor identity on every commit's `committer` — absent\nfrom `git log`'s default format and fully public regardless.",
@@ -825,8 +832,7 @@
       "required": [
         "identity_deny",
         "trailer_deny",
-        "body_deny",
-        "identity"
+        "body_deny"
       ]
     },
     "Backend": {

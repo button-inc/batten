@@ -19206,12 +19206,15 @@ fn run_attribution_check(
 
 fn run_attribution_identity(overrides: &Overrides, err: &mut dyn Write) -> Result<ExitCode> {
     let policy = attribution_policy(overrides)?;
-    let outcome = attribution::set_identity(Path::new("."), &policy)?;
+    // The process environment, read here so the resolver takes it as an input
+    // and a case can fence it (CLOUD-2659).
+    let env = |var: &str| std::env::var(var).ok().filter(|value| !value.is_empty());
+    let outcome = attribution::set_identity(Path::new("."), &policy, &env)?;
     // The report goes to stderr: this is a statement about what Batten did to the
     // clone, not a verdict about the repository, and §6 keeps those channels
     // apart.
-    writeln!(err, "{}", outcome.line(&policy.identity))?;
-    Ok(ExitCode::Success)
+    writeln!(err, "{}", outcome.line())?;
+    Ok(outcome.exit())
 }
 
 /// What a fail-open boundary says on its way out.
