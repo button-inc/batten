@@ -299,15 +299,6 @@ on its row; this section is the pointer, not the argument.
   extra PR is a whole CI matrix and a whole lap. This line used to read "an
   efficiency, not a commandment", and that hatch is what let a plan split one
   bundle into two PRs against AGENTS.md's "one PR all of it" (2026-09-25).
-- **The wait is working time** (2026-09-26). While `land` holds the tree —
-  a 20-40 min `verify`, then CI — prepare the next change in a separate
-  worktree (`git worktree add ../<name> -b <branch> origin/main`): read the
-  code, draft the edit, run its unit tests there. The tree coming back should
-  mean committing, not starting to read. An agent that idles through a lap
-  pays the lap twice. **The worktree shares the main checkout's `target/`**
-  (`CARGO_TARGET_DIR=<main>/target`), and `land` runs from the main checkout
-  only: two warm targets exceed this box's disk floor, which is how a worktree
-  `land` failed on 2026-09-26.
 - **A slow local check gets CHEAPER; it never moves to CI** (2026-09-26). CI
   confirms, it never discovers (AGENTS.md, "Workflow contract"), so "make
   `verify` faster by running X only in CI" is not an option to weigh or to
