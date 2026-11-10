@@ -410,7 +410,20 @@ filed_override := [
 # that no row was cited for it.
 test_an_override_citing_no_row_is_refused if {
 	count(violation) == 1 with input as tree({".config/nextest.toml": unfiled_override})
+	count(violation) == 1 with input as tree({".config/nextest.toml": unfiled_scheduling})
 }
+
+# A SCHEDULING override (`threads-required`, `test-group`) citing no row is the
+# same refusal, and the only shape that reaches the scheduling-key arm: the
+# override above sets `slow-timeout`.
+unfiled_scheduling := [
+	"[profile.default]",
+	"slow-timeout = { period = \"10s\", terminate-after = 30 }",
+	"",
+	"[[profile.default.overrides]]",
+	"filter = 'test(something_heavy)'",
+	"threads-required = 4",
+]
 
 # AND THE SAME OVERRIDE WITH A ROW IS CLEAN, which is what shows the refusal turns
 # on the missing reason rather than on the override existing at all. Without this
