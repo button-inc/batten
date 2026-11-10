@@ -246,6 +246,26 @@ fn a_branch_that_adds_a_wired_verb_is_clean() {
     );
 }
 
+/// A verb whose output a task captures with `$(…)` is called: the `)` closing
+/// the substitution is the call's tail, as a space or a quote is. Fails by:
+/// `)` dropped from `CALL_TAIL`, which refused every caller written that way.
+#[test]
+fn a_verb_called_inside_a_command_substitution_is_reached() {
+    let root = repo(
+        "dead-capability-substituted",
+        &[],
+        &decl("mutate jobs"),
+        &[(
+            "mise.toml",
+            "run = \"jobs=$(cargo run --quiet -p batten -- mutate jobs) && cargo mutants --jobs $jobs\"\n",
+        )],
+    );
+    assert!(
+        predicates(&root).is_empty(),
+        "a verb called inside $(...) is reached"
+    );
+}
+
 /// An ADDED verb with no caller but a declaration. This is the parallel-verb
 /// state CLOUD-1335 argued for, and refusing it outright is what would push an
 /// author to wire a fake caller.
