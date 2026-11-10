@@ -113,17 +113,9 @@ fn a_gate_s_output_is_stored_and_pointed_at() {
         !said.contains("payload-line-from-the-gate"),
         "the log is not streamed: {said}"
     );
-    let handle = said
-        .split("run batten capture show ")
-        .nth(1)
-        .and_then(|rest| rest.split_whitespace().next())
-        .unwrap_or_else(|| panic!("the lap names the log: {said}"))
-        .to_owned();
-    let shown = common::run(&dir, &["capture", "show", &handle, "--raw"]);
     assert!(
-        String::from_utf8_lossy(&shown.stdout).contains("payload-line-from-the-gate"),
-        "the handle gives the output back: {}",
-        common::stderr(&shown)
+        gate_log_view(&said).contains("payload-line-from-the-gate"),
+        "the view gives the output back: {said}"
     );
 }
 
@@ -503,17 +495,30 @@ fn the_gate_that_refused_is_shown_saying_why() {
     let dir = repo("verify-advice-tee", true);
     let gate = failing_gate(&dir, "'tests/primitives.rs:1171 a real finding'");
     let (_, said) = verify(&dir, &gate);
-    let handle = said
-        .split("run batten capture show ")
-        .nth(1)
-        .and_then(|rest| rest.split_whitespace().next())
-        .unwrap_or_else(|| panic!("the lap points at the gate's log: {said}"))
-        .to_owned();
-    let shown = common::run(&dir, &["capture", "show", &handle, "--raw"]);
     assert!(
-        String::from_utf8_lossy(&shown.stdout).contains("a real finding"),
-        "the operator can read what the gate said: {}{}",
-        String::from_utf8_lossy(&shown.stdout),
-        common::stderr(&shown)
+        gate_log_view(&said).contains("a real finding"),
+        "the operator can read what the gate said: {said}"
     );
+}
+
+/// The view the lap's `land: gate log` line names, read whole (CLOUD-2284).
+///
+/// Fails by: the line pointing at its log by any route but the view every
+/// stored output takes, or naming a stream without its lines and tokens.
+fn gate_log_view(said: &str) -> String {
+    let line = said
+        .lines()
+        .find(|line| line.starts_with("land: gate log "))
+        .unwrap_or_else(|| panic!("the lap names the log: {said}"));
+    assert!(line.contains("output point now at /"), "{line}");
+    assert!(line.contains("T)"), "each stream names its tokens: {line}");
+    assert!(
+        !line.contains("--raw") && !line.contains("--field"),
+        "the view is the only route: {line}"
+    );
+    let view = line
+        .rsplit_once("; read ")
+        .map(|(_, path)| path.trim())
+        .unwrap_or_else(|| panic!("the line names its view: {line}"));
+    std::fs::read_to_string(view).unwrap_or_else(|err| panic!("read {view}: {err}"))
 }
