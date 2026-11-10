@@ -270,6 +270,40 @@ fn doctor_reads_the_live_session_root() {
     let _ = session.wait();
 }
 
+/// Fails by: a live session rooted beside the repository, rather than above
+/// it, judged as the repository's session root.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: a live session is a PROCESS whose cwd `/proc/<pid>/cwd` reads, which has no in-process form"
+)]
+fn a_session_rooted_beside_the_repository_is_not_its_session_root() {
+    let (home, repo) = layout("wiring-register-beside-root");
+    let beside = repo
+        .parent()
+        .expect("the clone has a parent")
+        .join("elsewhere");
+    std::fs::create_dir_all(&beside).expect("a sibling directory");
+    let mut session = std::process::Command::new("cat")
+        .current_dir(&beside)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("cat runs");
+    let output = doctor_hooks(&home, &repo, Some(session.id()));
+    let _ = session.kill();
+    let _ = session.wait();
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("doctor hooks --json parses");
+    let claude = report["harnesses"]
+        .as_array()
+        .expect("harnesses")
+        .iter()
+        .find(|harness| harness["harness"] == "claude-code")
+        .expect("claude-code is diagnosed");
+    assert!(claude["session_root_registrations"].is_null(), "{claude}");
+}
+
 #[test]
 fn register_all_writes_flat_hosts_flat() {
     // CLOUD-2694: Copilot's file seeded with v0.0.220's nested batten entry is
