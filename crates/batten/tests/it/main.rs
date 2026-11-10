@@ -90,6 +90,7 @@ mod board_state_claim;
 mod board_sweep;
 mod bot_lane;
 mod branch_age;
+mod budget_at_call;
 mod bundle;
 mod bypass_precondition;
 mod bypass_scrub;

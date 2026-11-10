@@ -223,6 +223,29 @@
         "agent-sourced": {
           "description": "Fact::AgentSourced -- what a command the AGENT ran said (CLOUD-776), or null."
         },
+        "budgeted": {
+          "description": "Fact::Budgeted (CLOUD-2661) -- each `[budget.*]` set this write would change, by name, with whether the call breaches a ceiling it grows past; null when no set selects the call. Counts only, never content.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "breach": {
+                "type": "boolean"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "breach"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "dispatch-cleared": {
           "description": "Fact::DispatchCleared (CLOUD-1978). TRUE when this call is a session-management method (`create_session`, `send_message`) whose prompt's SHA-256 has BOTH a passing `batten lint brief` receipt and the owner's approval receipt; FALSE for any other call or any prompt missing either receipt; NULL when the receipt store could not be located. Keyed by the prompt's own bytes, so a prompt edited after approval is false. A boolean and nothing else: no byte of the prompt reaches this document.",
           "type": [
