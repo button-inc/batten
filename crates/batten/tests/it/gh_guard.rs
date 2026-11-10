@@ -358,8 +358,9 @@ fn a_blocked_command_emits_a_deny_decision() {
 #[test]
 fn an_allowed_command_emits_no_decision() {
     // Silence is the contract: a document per allowed call would put a line in
-    // front of the agent on every tool use.
-    let out = decision("gh pr view 63 --json state");
+    // front of the agent on every tool use. Not a read, which the plan-mode
+    // preset now grants out loud (CLOUD-2206).
+    let out = decision("gh pr checkout 63");
     assert!(
         !out.contains("permissionDecision"),
         "an allowed command must emit no decision document\n{out}"
