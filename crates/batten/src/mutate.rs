@@ -1824,6 +1824,9 @@ pub struct Ran {
     pub outcome: Outcome,
     /// Its combined output, which is scanned for case lines and never reported.
     pub output: String,
+    /// Its standard output alone, for a program whose answer is a document
+    /// (nextest's binary list, cargo's metadata) that stderr would corrupt.
+    pub stdout: String,
 }
 
 impl Ran {
@@ -2228,7 +2231,8 @@ fn finish(
     err_path: &Path,
     capture: &Path,
 ) -> Ran {
-    let mut output = fs::read_to_string(out_path).unwrap_or_default();
+    let stdout = fs::read_to_string(out_path).unwrap_or_default();
+    let mut output = stdout.clone();
     output.push_str(&fs::read_to_string(err_path).unwrap_or_default());
     // Best effort: a capture left behind is a few bytes under the system temp
     // directory, and failing a sweep over housekeeping would trade a real
@@ -2242,7 +2246,11 @@ fn finish(
     } else {
         Outcome::Failed(status.code())
     };
-    Ran { outcome, output }
+    Ran {
+        outcome,
+        output,
+        stdout,
+    }
 }
 
 /// Distinguishes concurrent captures within one process; the pid separates
@@ -2604,8 +2612,25 @@ fn spawn_arm(
 /// invoking task provides, exactly as `sed` and `cargo` do, so one missing
 /// program used to end the whole sweep with an error naming nothing about the
 /// gates it never reached.
-fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selection {
+fn run_suite(
+    staged: &Staged,
+    root: &Path,
+    suite: &Suite,
+    row: &Row,
+    prebuilt: Option<&Prebuilt>,
+) -> Selection {
+    let want = row.want.as_str();
     let dir = staged.dir();
+    let cargo = matches!(suite, Suite::Cargo { .. });
+    // No recorded build means the one build failed: nothing to run against, and
+    // a rebuild here is the per-row cost [`Prebuilt`] exists to rule out.
+    if cargo && prebuilt.is_none() {
+        return Selection::default();
+    }
+    // The recorded binaries, unless they embed this row's subject outside the
+    // overlay — then only a rebuild sees the mutation ([`Prebuilt`]).
+    let overlaid = Overlay::declared(root).is_some_and(|o| o.path_of(&row.source).is_some());
+    let reuse = prebuilt.filter(|built| cargo && (overlaid || !built.embeds(&row.source)));
     let env = nextest_env(root, dir);
     // Where a `JUnit` report lands for the one arm whose verdict is a file
     // rather than a stream. Beside the captures, never inside the tree under
@@ -2616,11 +2641,12 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selecti
         CAPTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     let _ = fs::remove_file(&junit);
-    if matches!(suite, Suite::Cargo { .. }) {
-        // BUILT UNDER THE BUILD BOUND FIRST, THEN TIMED (review of #962). A
-        // mutated source must be recompiled, and paying that inside the
-        // per-case bound is how a slow compile reads as `suite-did-not-run`.
-        // A build that fails here is left for the timed run to report.
+    if cargo && reuse.is_none() {
+        // AN EMBEDDED SUBJECT ONLY: BUILT UNDER THE BUILD BOUND FIRST, THEN TIMED
+        // (review of #962). A mutated embedded source must be recompiled, and
+        // paying that inside the per-case bound is how a slow compile reads as
+        // `suite-did-not-run`. A build that fails here is left for the timed run
+        // to report.
         let mut build = vec![String::from("test"), String::from("--no-run")];
         build.extend(overlay_features(root));
         let _ = spawn(dir, Program::Cargo, &build, &env, build_bound());
@@ -2639,7 +2665,9 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selecti
         let _ = spawn(&module, Program::Suite("tofu"), &init, &env, build_bound());
     }
     let (cwd, mut argv) = invocation(dir, suite, want, &junit);
-    if matches!(suite, Suite::Cargo { .. }) {
+    if let Some(built) = reuse {
+        argv.extend(built.reuse_args());
+    } else if cargo {
         argv.extend(overlay_features(root));
     }
     // DECLARED AS AN ARM (CLOUD-1714), which is what makes this module an
@@ -3378,7 +3406,13 @@ fn code_lines_changed(before: &str, after: &str) -> usize {
 }
 
 /// Judge one row.
-fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result<Verdict> {
+fn judge_row(
+    root: &Path,
+    staged: &mut Staged,
+    gate: &Gate,
+    row: &Row,
+    prebuilt: Option<&Prebuilt>,
+) -> Result<Verdict> {
     if let Some(why) = row.want.strip_prefix("\u{0}malformed:") {
         return Ok(Verdict::MalformedRow {
             why: why.to_owned(),
@@ -3416,7 +3450,7 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
     // assertion that never holds, a fixture that never builds — is red either
     // way, and every mutation aimed at it reads as caught. Costs one extra
     // filtered run per row, which is what an anti-vacuity term is worth.
-    let clean = run_suite(staged, root, suite, &row.want);
+    let clean = run_suite(staged, root, suite, row, prebuilt);
     // AND HOW FAR THE RUN GOT IS READ BEFORE EITHER (CLOUD-1860, CLOUD-2160),
     // for the same reason one rung up: a killed or errored run selects no case
     // and exits non-zero, so it satisfies both tests below while meaning
@@ -3460,7 +3494,7 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
         return Ok(Verdict::SelfMutatingRow);
     }
 
-    let mutated = run_suite(staged, root, suite, &row.want);
+    let mutated = run_suite(staged, root, suite, row, prebuilt);
     // THE SAME GUARD, AND HERE IT IS THE DANGEROUS DIRECTION. The clean run's
     // timeout costs a could-not-look reported under the wrong name; this one
     // would be read as evidence. A killed run exits non-zero, so without this
@@ -3779,11 +3813,143 @@ impl ChangeInputs {
     }
 }
 
-/// BUILD ONCE, BEFORE ANY ROW IS TIMED (CLOUD-1910). Best effort: a build that
-/// fails leaves every Cargo row to report `suite-did-not-run` on its own, which
-/// is the honest verdict, so nothing is decided here. NOT AT ALL when every
-/// Cargo row is already recorded caught (CLOUD-2253): the build is minutes and
-/// no row would use it.
+/// The one suite build every Cargo row runs against, written by
+/// [`build_if_owed`].
+///
+/// **A ROW NEVER ASKS CARGO TO BUILD.** The rows of this runner are
+/// Rego, Pkl and manifests, and a mutation of one changes no Rust, so a row that
+/// recompiles is paying for nothing. Leaving that to cargo's freshness check was
+/// a convention, and one `rerun-if-changed` naming a missing path broke it
+/// silently: every row rebuilt the library, 75s where the row took 1-6s. Each row
+/// instead hands nextest the binaries this build recorded, so a rebuild cannot
+/// happen whatever the fingerprint says.
+///
+/// **EXCEPT A SUBJECT THE BUILD EMBEDS**, which reused binaries would judge
+/// unmutated. Which subjects those are is READ, from the dep-info and build
+/// script output cargo wrote, never listed by hand; the preset overlay covers the
+/// ones it can, and the rest rebuild, row by row, because only a rebuild sees the
+/// mutation.
+struct Prebuilt {
+    /// nextest's `binaries-only` list, as `--binaries-metadata` reads it.
+    binaries: PathBuf,
+    /// `cargo metadata`'s answer, as `--cargo-metadata` reads it.
+    metadata: PathBuf,
+    /// Staged-tree paths the build read, and directories a build script watches.
+    embedded: Vec<String>,
+}
+
+impl Prebuilt {
+    /// Whether a mutation of `source` is invisible to the recorded binaries.
+    fn embeds(&self, source: &str) -> bool {
+        self.embedded.iter().any(|path| {
+            source == path
+                || source
+                    .strip_prefix(path.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
+    }
+
+    /// The arguments that make a nextest run use the recorded binaries.
+    fn reuse_args(&self) -> [String; 4] {
+        [
+            String::from("--binaries-metadata"),
+            self.binaries.to_string_lossy().into_owned(),
+            String::from("--cargo-metadata"),
+            self.metadata.to_string_lossy().into_owned(),
+        ]
+    }
+}
+
+/// Where [`Prebuilt`]'s documents live: beside the binaries they describe.
+fn prebuilt_dir(root: &Path) -> PathBuf {
+    root.join(SUITE_TARGET).join("mutate-reuse")
+}
+
+/// Every staged-tree path cargo recorded reading, and every directory a build
+/// script asked to be rerun over, under `target`.
+///
+/// Dep-info lists each input as its own `path:` line; a build script's
+/// `rerun-if-changed` is in its `output`. Both are read wholesale: a stale file
+/// left by an older build can only name MORE paths, which rebuilds a row that
+/// did not need it — never the other way round.
+fn embedded_paths(target: &Path, staged: &Path) -> Vec<String> {
+    let mut found = std::collections::BTreeSet::new();
+    // Cargo writes absolute, canonical paths.
+    let staged = staged
+        .canonicalize()
+        .unwrap_or_else(|_| staged.to_path_buf());
+    // RELATIVE TO THE WORKSPACE ROOT, AND UNNORMALISED: rustc runs there and
+    // writes `include_str!`'s path as it resolved it — measured,
+    // `tests/../mise-tasks/toy.sh` — so a path is anchored on the staged tree and
+    // its `..` folded before it is compared with a row's subject.
+    let relative = |path: &str| {
+        let mut resolved = PathBuf::new();
+        for part in staged.join(path.trim()).components() {
+            match part {
+                std::path::Component::ParentDir => {
+                    resolved.pop();
+                }
+                std::path::Component::CurDir => {}
+                other => resolved.push(other),
+            }
+        }
+        resolved
+            .strip_prefix(&staged)
+            .ok()
+            .map(|rest| rest.to_string_lossy().into_owned())
+            .filter(|rest| !rest.is_empty())
+    };
+    let deps = target.join("debug").join("deps");
+    for entry in fs::read_dir(&deps).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "d") {
+            continue;
+        }
+        let text = fs::read_to_string(&path).unwrap_or_default();
+        for line in text.lines() {
+            if let Some(input) = line.strip_suffix(':') {
+                found.extend(relative(&input.replace("\\ ", " ")));
+            }
+        }
+    }
+    let build = target.join("debug").join("build");
+    for entry in fs::read_dir(&build).into_iter().flatten().flatten() {
+        let text = fs::read_to_string(entry.path().join("output")).unwrap_or_default();
+        for line in text.lines() {
+            let watched = line
+                .strip_prefix("cargo:rerun-if-changed=")
+                .or_else(|| line.strip_prefix("cargo::rerun-if-changed="));
+            found.extend(watched.and_then(relative));
+        }
+    }
+    found.into_iter().collect()
+}
+
+/// Run `args` in `staged` and keep its standard output at `into`.
+fn record_document(
+    root: &Path,
+    staged: &Staged,
+    program: Program<'_>,
+    args: &[String],
+    into: &Path,
+) -> Option<()> {
+    let ran = spawn(
+        staged.dir(),
+        program,
+        args,
+        &nextest_env(root, staged.dir()),
+        build_bound(),
+    )
+    .ok()?;
+    let document = ran.stdout.lines().find(|line| line.starts_with('{'))?;
+    (ran.passed() && fs::write(into, document).is_ok()).then_some(())
+}
+
+/// BUILD ONCE, BEFORE ANY ROW IS TIMED (CLOUD-1910), and record the build so no
+/// row repeats it ([`Prebuilt`]). Best effort: a build that fails answers `None`,
+/// and every Cargo row then reports `suite-did-not-run` without spawning, which
+/// is the honest verdict. NOT AT ALL when every Cargo row is already recorded
+/// caught (CLOUD-2253): the build is minutes and no row would use it.
 ///
 /// SAID ON `progress` WHEN IT BUILDS: the build is minutes, so a sweep that
 /// paid it says so, and a sweep that skipped it is told apart by its silence.
@@ -3794,7 +3960,7 @@ fn build_if_owed(
     caught: &std::collections::HashSet<String>,
     staged: &Staged,
     progress: &mut dyn std::io::Write,
-) {
+) -> Option<Prebuilt> {
     let owed = names
         .iter()
         .filter_map(|name| resolve(root, name))
@@ -3805,21 +3971,40 @@ fn build_if_owed(
                     && matches!(gate.suite_for(row), Some(Suite::Cargo { .. }))
             })
         });
-    if owed {
-        let _ = writeln!(
-            progress,
-            "mutate sweep: building the cargo suites the rows run under"
-        );
-        let mut args = vec![String::from("test"), String::from("--no-run")];
-        args.extend(overlay_features(root));
-        let _ = spawn(
-            staged.dir(),
-            Program::Cargo,
-            &args,
-            &nextest_env(root, staged.dir()),
-            build_bound(),
-        );
+    // A record from an earlier sweep describes binaries this one may not have.
+    let dir = prebuilt_dir(root);
+    let _ = fs::remove_dir_all(&dir);
+    if !owed {
+        return None;
     }
+    let _ = writeln!(
+        progress,
+        "mutate sweep: building the cargo suites the rows run under"
+    );
+    fs::create_dir_all(&dir).ok()?;
+    let prebuilt = Prebuilt {
+        binaries: dir.join("binaries.json"),
+        metadata: dir.join("cargo-metadata.json"),
+        embedded: Vec::new(),
+    };
+    let mut list = [
+        "nextest",
+        "list",
+        "--list-type",
+        "binaries-only",
+        "--message-format",
+        "json",
+    ]
+    .map(String::from)
+    .to_vec();
+    list.extend(overlay_features(root));
+    record_document(root, staged, Program::Cargo, &list, &prebuilt.binaries)?;
+    let metadata = ["metadata", "--format-version", "1", "--no-deps"].map(String::from);
+    record_document(root, staged, Program::Cargo, &metadata, &prebuilt.metadata)?;
+    Some(Prebuilt {
+        embedded: embedded_paths(&root.join(SUITE_TARGET), staged.dir()),
+        ..prebuilt
+    })
 }
 
 /// Sweep the enforced set.
@@ -4014,7 +4199,7 @@ pub fn sweep_shard(
     let record = work.join(CAUGHT_RECORD);
     let caught = recorded_caught(&record);
     let mut staged = Staged::new(root, work)?;
-    build_if_owed(root, &holding, registry, &caught, &staged, progress);
+    let prebuilt = build_if_owed(root, &holding, registry, &caught, &staged, progress);
     let mut declared = 0;
     for (name, gate, row) in mine {
         declared += 1;
@@ -4028,7 +4213,7 @@ pub fn sweep_shard(
             continue;
         }
         let started = std::time::Instant::now();
-        let verdict = judge_row(root, &mut staged, gate, row)?;
+        let verdict = judge_row(root, &mut staged, gate, row, prebuilt.as_ref())?;
         if verdict == Verdict::Caught {
             record_caught(&record, &key);
         }
@@ -5845,7 +6030,7 @@ mod tests {
         let names = [String::from("probe")];
         let said = |registry: &Registry, caught: &std::collections::HashSet<String>| {
             let mut progress = Vec::new();
-            build_if_owed(&root, &names, registry, caught, &staged, &mut progress);
+            let _ = build_if_owed(&root, &names, registry, caught, &staged, &mut progress);
             String::from_utf8(progress).expect("utf-8")
         };
         let none = std::collections::HashSet::new();
