@@ -25,7 +25,7 @@
 # wrote the record knows none of them (non-negotiable rule 1).
 #
 #MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
-#MUTANT class-split-removed|s@^	call\[1\] == "-"$@	true@|a_comment_alone_is_not_a_home
+#MUTANT class-split-removed|s@^	call\[1\] == "-"$@	true@|an_update_to_a_closed_row_is_not_a_home
 #MUTANT terminal-row-is-a-home|s@^	regex.match(data.batten.patterns\["finding-open-column"\], call\[2\])$@	true@|an_annotation_on_a_terminal_row_still_reports
 #MUTANT citation-never-fires|s@^	field("cited") == "true"$@	false@|a_cited_finding_with_no_durable_write_fires
 #MUTANT durable-write-unseen|s@^	regex.match(data.batten.patterns\["finding-home-durable"\], call\[0\])$@	false@|a_durable_write_clears_it_under_any_server_alias
@@ -133,6 +133,12 @@ test_a_new_row_is_a_home if {
 
 test_a_comment_alone_is_not_a_home if {
 	found := violation with input as turn("true", ["call\tmcp__L__save_comment\t-\t-"])
+		with data.batten.patterns as vocabulary
+	count(found) == 1
+}
+
+test_an_update_to_a_closed_row_is_not_a_home if {
+	found := violation with input as turn("true", ["call\tmcp__L__save_issue\tABC-1\tdone"])
 		with data.batten.patterns as vocabulary
 	count(found) == 1
 }
