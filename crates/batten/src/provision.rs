@@ -2108,6 +2108,7 @@ fn stripped(path: &Path, strip: usize) -> Result<Option<PathBuf>> {
 
 /// Whether `link`, read from the directory `parent` (both relative to the tree
 /// root), stays inside the tree.
+#[cfg(unix)]
 fn lexically_inside(parent: &Path, link: &Path) -> bool {
     let mut depth = parent
         .components()
