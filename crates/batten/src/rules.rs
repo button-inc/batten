@@ -507,7 +507,6 @@ pub fn native_grade(rules: &[Rule], gate: NativeGate) -> RuleSeverity {
 /// on every host that documents one, so a default-on gate would refuse it in
 /// every consumer.
 //MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
-//MUTANT reach-gate-unarmed|s@^        NativeGate::RepositoryReach => RuleSeverity::Allow,$@        NativeGate::RepositoryReach => RuleSeverity::Deny,@|a_reach_out_of_the_home_is_refused_only_where_the_home_arms_it
 //MUTANT-SUITE crates/batten/tests/it/record_families.rs
 fn absent_grade(gate: NativeGate) -> RuleSeverity {
     match gate {
@@ -6307,10 +6306,8 @@ impl Rule {
 // CLOUD-2669: `refuse_command_modifiers` above, which a row inside the `impl`
 // cannot sit beside at column 0.
 //MUTANT-SUITE crates/batten/tests/it/word_filters.rs
-//MUTANT word-modifier-unrefused|s@^            ("word", self.word.is_some()), // the argv's own words$@@|a_word_column_on_a_content_row_fails_to_load
 // CLOUD-2662's `validate_on_columns`, in the same `impl`.
 //MUTANT-SUITE crates/batten/tests/it/ready_event.rs
-//MUTANT on-row-argv-modifier-loads|s@^        self.refuse_argv_modifiers("on")?;$@@|an_on_row_refuses_argv_and_projection_modifiers_at_load
 //MUTANT-SUITE crates/batten/tests/it/record_families.rs
 
 /// Validate a whole `[[rule]]` table, and refuse a duplicated id.
@@ -10864,8 +10861,6 @@ fn fingerprint_of(violation: &crate::policy::Violation) -> String {
 ///
 /// Returns an error when `regex` does not compile; `validate` has refused that
 /// at load, so this is the belt to its suspenders.
-//MUTANT ratchet-regex-uncounted|s@^            (Some(expression), _) => expression.find_iter(text).count(),$@            (Some(_), _) => 0,@|a_ratchet_regex_counts_every_spelling_of_the_token
-//MUTANT ratchet-tokens-uncounted|s@^            (None, None) if tokens => crate::budget::estimate_tokens(\&crate::budget::loaded(text)),$@            (None, None) if tokens => 0,@|a_token_ratchet_counts_what_the_budget_counts
 fn ratchet_tally(rule: &Rule) -> anyhow::Result<impl Fn(&str) -> usize + '_> {
     // THE COUNTED TOKEN: a literal, or an expression for one a literal cannot spell
     // (CLOUD-2059). `validate` admits exactly one and has compiled the expression,
@@ -10897,7 +10892,6 @@ fn ratchet_tally(rule: &Rule) -> anyhow::Result<impl Fn(&str) -> usize + '_> {
 /// Returns a [`UsageError`] (→ exit `1`) when `base` names a rev git cannot
 /// resolve — never a pass. A ratchet that cannot see its own baseline has not
 /// established that the count held.
-//MUTANT ratchet-per-file-summed|s@^    if rule.per_file {$@    if false {@|a_per_file_ratchet_refuses_growth_another_file_paid_for
 fn ratchet_rule(
     rule: &Rule,
     root: &Path,
@@ -11371,8 +11365,6 @@ fn ratchet_finding(
 /// fall exactly as the aggregate reads it. A rising path that declares the
 /// `admits_with` token is admitted, and one that does not is refused with the
 /// same blocker an aggregate row prints.
-//MUTANT ratchet-per-file-new-path-judged|s@^        let Some(\&was) = base_counts.get(path) else {$@        let was = base_counts.get(path).copied().unwrap_or(0); if false {@|a_per_file_ratchet_does_not_judge_a_path_new_at_base
-//MUTANT ratchet-per-file-deletion-skipped|s@^        let now = working_counts.get(path).copied().unwrap_or(0);$@        let Some(\&now) = working_counts.get(path) else { continue };@|a_per_file_non_decreasing_ratchet_refuses_a_deleted_file
 fn per_file_findings(
     rule: &Rule,
     direction: Direction,

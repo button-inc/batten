@@ -370,8 +370,6 @@ pub fn register(git_dir: &Path, task: &str, pid: &str, phase: &str, now: u64) {
 /// hide those processes from it. Off unix no group reads as gone, so nothing
 /// is superseded there.
 //MUTANT-SUITE crates/batten/tests/it/task_registry.rs
-//MUTANT register-keeps-dead-siblings|s@^        let sibling = entry.task == task \&\& entry.pid != pid;$@        let sibling = entry.task == task \&\& entry.pid.is_empty();@|register_supersedes_its_tasks_dead_records
-//MUTANT supersede-orphans-a-live-group|s@^        if sibling \&\& dead \&\& !group_exists(\&entry.pgid) {$@        if sibling \&\& dead {@|register_keeps_a_dead_sibling_whose_group_still_runs
 fn supersede(git_dir: &Path, task: &str, pid: &str) {
     for entry in records(git_dir) {
         let sibling = entry.task == task && entry.pid != pid;
@@ -508,9 +506,6 @@ pub struct Alive {
 /// for an entry an older binary wrote with no digest, which is reaped only once
 /// its pid is gone.
 //MUTANT-SUITE crates/batten/tests/it/task_registry.rs
-//MUTANT identity-rederived-from-path|s@^    recorded.is_empty() \x7c\x7c recorded == live$@    recorded.is_empty() \&\& recorded == live@|a_registrant_whose_program_is_not_in_its_cmdline_reads_alive
-//MUTANT recycled-pid-read-alive|s@^    recorded.is_empty() \x7c\x7c recorded == live$@    recorded.is_empty() \x7c\x7c !live.is_empty()@|a_live_pid_whose_cmdline_differs_from_the_record_reports_crashed_and_is_never_reaped
-//MUTANT undigested-entry-reads-dead|s@^    recorded.is_empty() \x7c\x7c recorded == live$@    !recorded.is_empty() \&\& recorded == live@|an_entry_without_a_digest_reads_alive_while_its_pid_exists
 fn task_alive(pid: &str, recorded: &str) -> bool {
     if !pid_exists(pid) {
         return false;

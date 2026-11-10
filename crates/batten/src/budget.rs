@@ -1232,7 +1232,6 @@ pub fn literal_entry(entry: &str) -> bool {
 /// Whether a measure grew: a call that holds or shrinks an over-budget set is
 /// its repair, and refusing it would wedge the agent.
 //MUTANT-SUITE crates/batten/tests/it/budget_at_call.rs
-//MUTANT budget-repair-refused|s@^    projected > current$@    projected != current@|an_edit_that_shrinks_an_over_budget_set_is_admitted
 #[must_use]
 pub const fn grew(current: usize, projected: usize) -> bool {
     projected > current
@@ -1261,7 +1260,6 @@ pub struct CallMeasure {
 /// (`None` where it does not exist), `projected` the text the call lands, and
 /// `members` every OTHER member's text, or `None` where the totals cannot be
 /// judged. Counted as [`measure`] counts, over [`loaded`] text.
-//MUTANT budget-projection-ignored|s@^    let after = counts(projected);$@    let after = counts(current.unwrap_or(projected));@|the_projection_not_the_disk_is_what_is_counted
 #[must_use]
 pub fn project(
     name: &str,

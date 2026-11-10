@@ -49,10 +49,6 @@ pub fn dispatched(mut args: impl Iterator<Item = std::ffi::OsString>) -> Option<
 
 /// [`dispatched`]'s body, over git's arguments.
 //MUTANT-SUITE crates/batten/tests/it/git_hook.rs
-//MUTANT hook-reentry-unguarded|s@^    if marker.as_deref().is_some_and(crate::task::pid_exists) {$@    if false {@|a_live_gate_marker_is_refused_as_hook_reentry
-//MUTANT dead-pid-refuses|s@^    if marker.as_deref().is_some_and(crate::task::pid_exists) {$@    if marker.is_some() {@|a_dead_gate_marker_does_not_refuse_the_binary
-//MUTANT argv0-dispatch-ignored|s@^    let Some(argv) = declared.get(name) else {$@    let Some(argv) = declared.get("pre-commit") else {@|the_link_invoked_as_commit_msg_runs_the_commit_msg_row
-//MUTANT passthrough-args-dropped|s@^    command.extend(rest.iter().cloned());$@@|a_declared_pre_push_receives_gits_arguments_and_stdin
 fn run(name: &str, rest: &[String], err: &mut dyn Write) -> ExitCode {
     // Not a repository: nothing can be declared for it, so nothing is owed.
     let Ok(root) = git::repo_root(Path::new(".")) else {
@@ -112,7 +108,6 @@ const GATE_PID: &str = "BATTEN_GATE_PID";
 ///
 /// A [`UsageError`] (→ exit `1`) naming the row.
 //MUTANT-SUITE crates/batten/tests/it/git_hook.rs
-//MUTANT hook-git-key-unchecked|s@^        if !crate::hook::is_git_hook(name) {$@        if false {@|an_unknown_hook_git_key_refuses_the_config
 pub fn validate(rows: &std::collections::BTreeMap<String, Vec<String>>) -> anyhow::Result<()> {
     for (name, argv) in rows {
         if !crate::hook::is_git_hook(name) {

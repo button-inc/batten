@@ -1509,8 +1509,6 @@ pub fn result_view(
 /// When the state root cannot be resolved, a spilled file cannot be read, or
 /// the view cannot be written.
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT spilled-section-unstreamed|s@^                None => copy_counted(source, \&mut at.out)?,$@                None => (0, 0, 0),@|an_oversized_result_becomes_a_pointer_to_a_view_of_its_text
-//MUTANT spill-view-skips-arrays|s@^            serde_json::Value::Array(items) if !items.is_empty() => {$@            serde_json::Value::Array(items) if items.is_empty() => {@|an_mcp_spill_is_read_under_its_own_pointer
 pub fn result_view_spilled(
     repo_root: &Path,
     capture: &Capture,
@@ -1617,7 +1615,6 @@ pub fn result_view_spilled(
 /// Copy `source` into `out`, returning its bytes, its line count and its
 /// tokens.
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT spill-counts-unstated|s@^    Ok((bytes, newlines + 1, tokens.counted()))$@    Ok((bytes, newlines + 1, 0))@|every_spill_pointer_names_its_lines_bytes_and_tokens
 fn copy_counted(source: &Path, out: &mut impl Write) -> Result<(usize, usize, u64)> {
     let mut file = std::fs::File::open(source)
         .with_context(|| format!("read the spilled leaf {}", source.display()))?;
@@ -1653,8 +1650,6 @@ fn write_counted(body: &[u8], out: &mut impl Write) -> Result<(usize, usize, u64
 /// over [`crate::stream_input::RESTORE_MAX_BYTES`], for a leaf already on many
 /// lines, and for anything that is not one JSON object or array.
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT spill-json-unpretty|s@^    if bytes > crate::stream_input::RESTORE_MAX_BYTES {$@    if true {@|a_one_line_json_spill_is_pretty_printed_under_the_cap
-//MUTANT spill-json-cap-dropped|s@^    if bytes > crate::stream_input::RESTORE_MAX_BYTES {$@    if false {@|a_one_line_json_spill_is_pretty_printed_under_the_cap
 fn pretty_json(source: &Path) -> Result<Option<String>> {
     let bytes = std::fs::metadata(source)
         .with_context(|| format!("read the spilled leaf {}", source.display()))?

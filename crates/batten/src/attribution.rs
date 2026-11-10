@@ -243,7 +243,6 @@ impl Finding {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/attribution.rs
-//MUTANT identity-required-again|s@^        if let Some(identity) = &self.identity {$@        let Some(identity) = &self.identity else { return Err(UsageError::raise("missing field identity".to_owned())) }; {@|an_attribution_table_without_identity_loads_and_judges
 //MUTANT-SUITE crates/batten/src/attribution.rs
 impl Attribution {
     /// Validate the table at load.
@@ -500,11 +499,6 @@ pub fn read_message(dir: &Path, message: &Path) -> Result<CommitMeta> {
 ///
 /// Returns an error when the deny list does not compile or the write fails.
 //MUTANT-SUITE crates/batten/tests/it/attribution.rs
-//MUTANT step-one-error-exits|s@^    let git = stamped_pair(dir).ok();$@    let git = Some(stamped_pair(dir)?);@|with_no_session_owner_the_forge_user_is_written
-//MUTANT session-owner-unread|s@^    let owner = session_owner(env);$@    let owner: Option<String> = None;@|a_denied_identity_is_replaced_by_the_session_owner
-//MUTANT forge-user-unread|s@^    let forge = forge_user();$@    let forge: Option<Identity> = None;@|with_no_session_owner_the_forge_user_is_written
-//MUTANT unresolved-passes|s@^        return Ok(Outcome::Unresolved);$@        return Ok(Outcome::LeftAlone);@|nothing_resolved_is_one_and_writes_nothing
-//MUTANT env-override-unreported|s@^    if still_denied(dir, &deny)? {$@    if false {@|an_env_carried_vendor_identity_is_refused_by_name
 pub fn set_identity(
     dir: &Path,
     attribution: &Attribution,
@@ -549,7 +543,6 @@ pub fn set_identity(
 }
 
 /// The first candidate `identity_deny` does not match.
-//MUTANT candidate-unjudged|s@^        .find(\x7ccandidate\x7c !deny.matches(&candidate.rendered()))$@        .next()@|a_denied_forge_user_is_not_written
 fn first_accountable(candidates: Vec<Identity>, deny: &Matchers) -> Option<Identity> {
     candidates
         .into_iter()

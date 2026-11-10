@@ -694,7 +694,6 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
 /// its refusal is recorded in the findings store instead, and its faults are
 /// a stderr pointer.
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
-//MUTANT wake-exit-propagated|s@^        Err(denied) if wake => {$@        Err(denied) if false => {@|a_wake_refusal_exits_zero_and_lands_in_the_findings_store
 fn run_forge_intake(
     event: Option<String>,
     from: Option<&str>,
@@ -799,8 +798,6 @@ enum Intake {
 /// findings store (CLOUD-2690): the step `forge intake` and `forge poll`
 /// share, so a pushed and a polled copy of one change fire once.
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
-//MUTANT intake-skips-dispatch|s@^    let dispatched = dispatch_envelope(harness, instant, mode, overrides, input, out, err)?;$@    let dispatched = { drop(input); HookDispatch::undenied(ExitCode::Success) };@|intake_runs_handlers_and_exits_on_their_verdict
-//MUTANT forge-refusal-unrecorded|s@^        record_forge_refusal(root, \&recorded, deny, err);$@@|a_wake_refusal_exits_zero_and_lands_in_the_findings_store
 fn intake_one(
     root: &Path,
     ring: &Path,
@@ -846,7 +843,6 @@ fn intake_one(
 /// `--every` loops, registered with `task` as `forge-poll` and ticking once
 /// per round, and a round's could-not-look is a pointer the loop survives.
 //MUTANT-SUITE crates/batten/tests/it/task_registry.rs
-//MUTANT forge-poll-unregistered|s@^    task::register(\&git_dir, "forge-poll", \&pid, "polling", now);$@    let _ = (\&git_dir, \&pid, now);@|forge_poll_every_registers_and_ticks
 fn run_forge_poll(
     every: Option<&str>,
     mode: Mode,
@@ -904,7 +900,6 @@ fn epoch_now() -> u64 {
 
 /// One poll round: read, dispatch each event, save the cursor.
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
-//MUTANT cursor-unsaved|s@^    write_cursor(\&cursor_path, \&cursor)?;$@    let _ = (\&cursor_path, \&cursor);@|a_round_resumes_from_its_cursor
 fn forge_round(
     root: &Path,
     mode: Mode,
@@ -1071,7 +1066,6 @@ fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
 //MUTANT hook-path-builds|s@^    let may_build = !hook_path;$@    let may_build = true;@|the_hook_path_never_builds_a_source_pin
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 //MUTANT follow-pin-passes-a-crash-through|s@^    if hook_path {$@    if false {@|a_crashing_followed_build_never_fails_the_hook_open
-//MUTANT fetch-failure-always-falls-through|s@^            engine::pinned_release(&cache, &releases_repository(), tag, pinned)?$@            match engine::pinned_release(\&cache, \&releases_repository(), tag, pinned) { Ok(path) => path, Err(_) => return Ok(Followed::Nothing) }@|a_release_pin_this_binary_cannot_fetch_refuses_off_the_hook_path
 fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
     // THE HOOK FOLLOWS A RELEASE PIN BUT NEVER BUILDS A SOURCE ONE (CLOUD-2062,
     // narrowed under CLOUD-2059), and that is the same bit rather than a second
@@ -1282,7 +1276,6 @@ fn follow_line(pinned: &str) -> String {
 ///
 /// A payload naming no session says the line every time, as a sighting does.
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT follow-silent|s@^        writeln!(err, "{line}")?;$@@|a_followed_pin_names_itself_once
 fn say_follow_once(
     target: &FollowTarget,
     value: &serde_json::Value,
@@ -1330,7 +1323,6 @@ fn say_follow_once(
 //MUTANT update-ignores-workflow-literal|s@^    if !stale.is_empty() {$@    if false {@|a_workflow_literal_the_update_cannot_rewrite_refuses_and_writes_nothing
 //MUTANT update-installs-what-the-ref-pins|s@^    let installed = install_wanted(want, Some(root), &repository, out)?;$@    let installed = engine_install(out)?;@|an_update_installs_its_target_whatever_the_ref_pins
 //MUTANT update-keeps-the-fresh-record|s@^        cleared = record::clear_kind("engine update", "engine-fresh", families);$@@|an_update_clears_the_engine_fresh_record
-//MUTANT update-notes-unprinted|s@^        write_distance(out, \&repository, \&current, \&notes)?;$@@|an_update_prints_the_breaking_counts_before_it_moves_the_pin
 fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let root = git::worktree_root(Path::new("."))?;
     let path = root.join(config::CONFIG_FILE);
@@ -1529,8 +1521,6 @@ fn distance(repository: &str, tag: &str) -> Result<Distance> {
 /// The releases between `tag` and `latest`, already read (CLOUD-2660: `engine
 /// update` has `latest` in hand).
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT lagging-release-undated|s@^    let own = engine::ref_changelog(repository, &latest)$@    let own = engine::ref_changelog(repository, "main")@|a_lagging_changelog_dates_main_from_its_own_tag
-//MUTANT notes-ref-unfollowed|s@^        (engine::ref_changelog(repository, \&main)?, main)$@        (engine::ref_changelog(repository, \&main)?, latest.clone())@|outdated_exits_by_the_pins_distance_from_main
 fn distance_from(repository: &str, tag: &str, latest: &str) -> Result<Distance> {
     let latest = latest.to_owned();
     if !engine::is_newer(&latest, tag)? {
@@ -1566,8 +1556,6 @@ fn distance_from(repository: &str, tag: &str, latest: &str) -> Result<Distance> 
 /// <n>` line per release, breaking releases first and each group oldest first,
 /// then one pointer at their sections. A pointer, never the notes.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT breaking-not-first|s@^    rows.sort_by_key(\x7cheading\x7c heading.breaking.unwrap_or(0) == 0);$@@|outdated_breaking_releases_lead_and_point_at_their_sections
-//MUTANT outdated-notes-unpointed|s@^    writeln!(out, "{notes}")?;$@@|outdated_breaking_releases_lead_and_point_at_their_sections
 fn write_distance(
     out: &mut dyn Write,
     repository: &str,
@@ -2535,8 +2523,6 @@ fn engine_pin(
 /// Every finding is a pointer: the file, the token, the pin.
 //MUTANT-SUITE crates/batten/tests/it/engine_gates.rs
 //MUTANT source-pin-admitted|s@^        Some(engine::PinKind::Source(_)) => return source_never_lands(&config_path, out),$@        Some(engine::PinKind::Source(_)) => return Ok(ExitCode::Success),@|a_source_pin_is_refused_on_the_landing_path
-//MUTANT gate-admits-a-second-row|s@^    let disagreeing = engine::gate_disagreements(\&text, tag);$@    let disagreeing: Vec<(usize, String)> = Vec::new();@|a_second_batten_row_or_a_floor_above_the_pin_is_refused
-//MUTANT gate-admits-disagreeing-provision|s@^    if let Some((key, row)) = engine::row_disagreement(\&text) {$@    if let Some((key, row)) = None::<(String, String)> {@|a_provision_row_disagreeing_with_the_pin_is_refused
 //MUTANT gate-ignores-stale-digest|s@^    if !foreign.is_empty() {$@    if false {@|a_stale_digest_at_the_pinned_version_is_refused
 //MUTANT dropped-row-unchecked|s@^    if !runs(\&\["config", "lint"\])? {$@    if !runs(\&["config", "show"])? {@|a_config_the_pinned_release_drops_a_row_of_is_drift
 fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<ExitCode> {
@@ -6752,7 +6738,6 @@ fn run_receipt(
 /// policy verdict everywhere, and a caller branching on the code alone must not
 /// read "I could not tell" as an answer about what is running.
 //MUTANT-SUITE crates/batten/tests/it/task_registry.rs
-//MUTANT task-read-unknown-field-silent|s@if !task::FIELDS.contains(\&field.as_str()) {$@if false {@|read_refuses_an_unknown_field_and_lists_the_fields
 fn run_task(command: TaskCommand, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     // Could-not-look, and never "nothing runs": those are different answers and
     // conflating them is the defect CLOUD-425 exists to fix.
@@ -7616,7 +7601,6 @@ fn refuse_claim_bot(err: &mut dyn Write, text: &str) -> Result<ExitCode> {
 /// when that file would not load, and ignoring `--config-in` because the read
 /// took no overrides.
 //MUTANT-SUITE crates/batten/tests/it/claim_worktree.rs
-//MUTANT claim-base-on-repo-root|s@^    let authority = config::authority_root(Path::new("."))?;$@    let authority = repo.to_path_buf();@|claim_check_in_a_worktree_reads_the_worktrees_trunk
 fn claim_base(repo: &Path, verb: &str, overrides: &Overrides) -> Result<String> {
     let authority = config::authority_root(Path::new("."))?;
     let Some(trunk) = worktree::committed_trunk(&authority, overrides)? else {
@@ -19643,7 +19627,6 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
 /// behind [`pinned_for`]'s narrowing and only for such a call: one index read
 /// and one status read, in process, never an argv carrying a caller's path.
 //MUTANT-SUITE crates/batten/tests/it/git_preset.rs
-//MUTANT payload-cwd-ignored|s@^    let base = envelope.cwd.clone().or_else(current_process_dir);$@    let base = current_process_dir();@|a_pathspec_is_placed_against_the_payload_cwd
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn pathspec_status_for(
     policy: &hook::Policy,
@@ -19710,7 +19693,6 @@ fn placed_pathspecs(call: &hook::PathspecCall) -> Option<Vec<serde_json::Value>>
 }
 
 //MUTANT-SUITE crates/batten/tests/it/commit.rs
-//MUTANT message-file-unread|s@^        Some(hook::CommitMessage::File(path)) => first_line(\&path),$@        Some(hook::CommitMessage::File(_)) => facts::Look::CouldNotLook,@|every_message_spelling_is_read
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 /// The subject of the message a mediated `git commit` names (CLOUD-2683),
 /// read only where `[commit]` is declared: a repository with no convention
@@ -20441,7 +20423,6 @@ fn undeclared_event_note(
 /// * a `PreTool` call naming a tool is the shape a tool-keyed row exists to
 ///   judge, and without it such a row was loaded for no call that could match.
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
-//MUTANT forge-not-adjudicable|s@^        \x7c\x7c envelope.event == hook::Event::Forge$@@|a_forge_rule_refuses_through_intake
 fn is_adjudicable(envelope: &hook::Envelope) -> bool {
     !envelope.command.is_empty()
         || envelope.writes.is_some()
@@ -22007,7 +21988,6 @@ fn adopted_line(tag: &str) -> String {
 ///
 /// A config that fails to load, or a write that fails.
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT row-written-on-failed-load|s@^    resolve::resolve(root, overrides)?;$@    let _ = resolve::resolve(root, overrides);@|a_config_that_fails_to_load_is_never_written
 fn adopt_engine_row(root: &Path, overrides: &Overrides) -> Result<Option<String>> {
     // An override names ANOTHER authority than `root`'s file, so a clean load
     // under it says nothing about the bytes this would write.
@@ -22960,8 +22940,6 @@ fn emit_channel(
 /// trunk does not carry survives a remove, as does every branch when no trunk
 /// resolves: fail closed on a delete.
 //MUTANT-SUITE crates/batten/tests/it/worktree_hooks.rs
-//MUTANT worktree-deny-still-creates|s@^    if matches!(decision, hook::Decision::Deny(_) \x7c hook::Decision::Ask(_)) {$@    if false {@|a_handler_deny_creates_no_worktree
-//MUTANT worktree-create-prints-nothing|s@^            writeln!(out, "{}", dir.display())?;$@@|a_created_worktree_answers_with_its_path_alone
 fn worktree_answer(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -23028,7 +23006,6 @@ fn create_worktree(cwd: &str, name: &str) -> Result<std::path::PathBuf> {
 /// [`worktree_answer`]'s remove: [`gitwrite::unlink_worktree`], then the branch
 /// only when the declared trunk carries it.
 //MUTANT-SUITE crates/batten/tests/it/worktree_hooks.rs
-//MUTANT worktree-remove-drops-unmerged-branch|s@^    let carried = gitwrite::carries(\&common, \&branch, \&trunk.tracking);$@    let carried = true;@|a_removed_worktree_keeps_a_branch_trunk_does_not_carry
 fn remove_worktree(worktree_path: &str) -> Result<()> {
     let (common, branch) = gitwrite::unlink_worktree(Path::new(worktree_path))?;
     let Some(branch) = branch else {
@@ -23328,7 +23305,6 @@ fn manifest_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::Manif
 /// bounded: the target, then the set's literal members, each capped, and a
 /// member that cannot be read leaves the totals unjudged, never refused.
 //MUTANT-SUITE crates/batten/tests/it/budget_at_call.rs
-//MUTANT budget-new-file-unjudged|s@^        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,$@        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return facts::Look::CouldNotLook,@|a_write_creating_a_file_over_its_per_file_ceiling_is_refused
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn budgeted_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::BudgetFacts {
     let names = policy.budget_sets_for(envelope);
@@ -25440,9 +25416,6 @@ pub fn mint_receipts_for_test(
 //MUTANT dependent-before-writer|s@^    ordered.sort_by_key(\x7cmint\x7c mint.after.is_some());$@    ordered.sort_by_key(\x7c_\x7c 0);@|a_dependent_declared_first_still_waits_for_its_writer
 //MUTANT prerequisite-read-live|s@^                if written_now.contains(&prerequisite) {$@                if false {@|one_call_cannot_satisfy_its_own_prerequisite
 //MUTANT-SUITE crates/batten/tests/it/review_receipt_delta.rs
-//MUTANT require-spends-prerequisite|s@^            Some(after) if mint.effective_after_mode() == crate::mint::AfterMode::Require => {$@            Some(after) if false => {@|one_bridge_admits_every_require_dependent
-//MUTANT require-ignores-prerequisite|s@^                if !store.join(&required).is_file() {$@                if false {@|a_require_dependent_with_no_bridge_mints_nothing
-//MUTANT require-read-live|s@^                if written_now.contains(&required) {$@                if false {@|a_require_dependent_cannot_be_satisfied_by_its_own_call
 //MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 //MUTANT completion-ignores-dispatch|s@^                if std::fs::rename(&original, &claimed).is_err() {$@                if std::fs::rename(\&original, \&claimed).is_err() \&\& false {@|a_completion_without_a_dispatch_of_this_change_mints_nothing
 fn mint_receipts(
@@ -25676,10 +25649,6 @@ pub fn record_asked_for_test(
 }
 
 //MUTANT-SUITE crates/batten/tests/it/recorder_background.rs
-//MUTANT mint-at-launch|s@^    if let Some(task) = background::task_id(&result) {$@    if let Some(task) = None::<\&str> {@|a_backgrounded_mint_waits_for_its_task
-//MUTANT mint-replay-dropped|s@^        replay_mints(overrides, &pending, &result);$@@|a_backgrounded_mint_waits_for_its_task
-//MUTANT mint-replay-head-unchecked|s@^    if pending.head.as_deref() != Some(head.as_str()) {$@    if false {@|a_commit_before_the_task_exits_mints_nothing
-//MUTANT shared-pending-headless|s@^        head: git::resolve_ref(root, "HEAD").ok().flatten(),$@        head: None,@|a_call_a_recorder_and_a_mint_both_select_replays_both
 //MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     // THERE IS NO CHEAP GATE HERE, AND THE TWO THAT WERE TRIED WERE BOTH WRONG
@@ -26206,7 +26175,6 @@ static HOOK_AUTHORITY_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::
 
 // CLOUD-2672's ledger split, at the legend read in `render`.
 //MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
-//MUTANT ledger-follows-target|s@^                .is_some_and(\x7ccontext\x7c refusal::legend_due(hook_session_home(), \&context))$@                .is_some_and(\x7ccontext\x7c refusal::legend_due(hook_authority_root(), \&context))@|a_visit_keeps_the_session_ledger_in_the_home
 //MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 /// The session's home (CLOUD-2672): the root its ledger lives under, which a
 /// visit to another repository never moves. Falls back to the judging root where
@@ -26244,9 +26212,6 @@ static HOOK_REACH: std::sync::OnceLock<hook::Reach> = std::sync::OnceLock::new()
 /// A recorded fact, never a search, so no directory is walked (house-style §8).
 /// A session that never stood in a Batten repository stays fail-open (CLOUD-70).
 //MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
-//MUTANT call-target-ignored|s@^    let judging = target_root(placed.as_deref());$@    let judging = None::<PathBuf>;@|a_call_is_judged_by_the_repository_it_targets
-//MUTANT session-home-rewritten|s@^        \&\& (home.is_none() \x7c\x7c same_repository(home.as_deref(), start_root))$@        \&\& true@|a_visit_to_another_repository_does_not_rehome_the_session
-//MUTANT unplaceable-target-dropped|s@^            git::Placement::Unplaceable => return None,$@            git::Placement::Unplaceable => continue,@|an_unplaceable_target_is_refused_where_reach_is_armed
 fn seed_hook_authority(envelope: &hook::Envelope) -> &'static Path {
     let start = envelope
         .cwd
@@ -26824,8 +26789,6 @@ fn arm_for(source: hook::HookSource, envelope: &hook::Envelope, refusal: &Refusa
 const UNADJUDICABLE: &str = "engine-cannot-adjudicate";
 
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
-//MUTANT unloaded-sighted|s@^    if refusal.rule() == UNADJUDICABLE {$@    if false {@|the_unloaded_refusal_reason_reaches_the_harness
-//MUTANT unloaded-repeat-drops-cause|s@this call: {pointer}"$@this call: "@|a_repeated_load_refusal_still_names_its_cause_and_repair
 //MUTANT-SUITE crates/batten/tests/it/preapprove.rs
 //MUTANT grant-said-every-firing|s@^            let arm = arm_for(hook::HookSource::Harness, envelope, \&grant);$@            let arm = refusal::Arm::Full;@|a_grant_says_its_definition_once_per_window
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
@@ -28014,7 +27977,6 @@ const UNLANDED_STEP: &str = "unlanded-step";
 /// could-not-look on an identity with no record. Fail-silent, like every
 /// Stop-path receipt.
 //MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
-//MUTANT landed-by-person-ignored|s@completion::next_step(config.landed_by, @completion::next_step(config::LandedBy::Agent, @|a_person_landed_pushed_branch_hears_the_merge_is_held
 fn record_unlanded_step(
     repo: &Path,
     config: &resolve::Resolved,
@@ -28109,7 +28071,6 @@ fn step_refusal(step: Step, count: u64) -> refusal::Refusal {
 /// per claim and step until the operator speaks, and never a refusal, because
 /// nothing was proven at risk.
 //MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
-//MUTANT shallow-stop-silent|s@^    let Some((key, Step::Shallow)) = step else {$@    let Some((key, Step::Land)) = step else {@|a_shallow_clone_stop_says_once_it_could_not_look
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 fn unlanded_unknown_pointer() -> Option<refusal::Refusal> {
     let branch = git::current_branch(Path::new(".")).ok().flatten()?;

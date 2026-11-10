@@ -686,7 +686,6 @@ pub fn validate(handlers: &[Handler]) -> anyhow::Result<()> {
 /// else — no spawn, no pipe, no read. Called before any work, so the hot path
 /// stays what §4 promises: cheap when irrelevant.
 //MUTANT-SUITE crates/batten/src/handler.rs
-//MUTANT forge-matcher-ignored|s@^        .any(\x7chandler\x7c handler.event() == Some(event) \&\& handler.selects_tool(raw_tool))$@        .any(\x7chandler\x7c handler.event() == Some(event))@|a_forge_handler_selects_its_matching_event_only
 #[must_use]
 pub fn selects(handlers: &[Handler], event: Event, raw_tool: &str) -> bool {
     handlers

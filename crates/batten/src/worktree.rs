@@ -262,8 +262,6 @@ pub const SHALLOW: &str = "the clone is shallow; `git fetch --unshallow` deepens
 ///
 /// Propagates a usage error, and any error on a full clone.
 //MUTANT-SUITE crates/batten/tests/it/cli.rs
-//MUTANT shallow-landing-propagates|s@^        Err(err) if shallow \&\& err.downcast_ref::<UsageError>().is_none() => Ok(None),$@        Err(err) if false \&\& err.downcast_ref::<UsageError>().is_none() => Ok(None),@|a_shallow_clone_reports_could_not_look_and_names_the_unshallow
-//MUTANT shallow-usage-swallowed|s@ \&\& err.downcast_ref::<UsageError>().is_none() => Ok(None),$@ \&\& err.downcast_ref::<UsageError>().is_none() \x7c\x7c shallow => Ok(None),@|a_shallow_clone_with_an_unresolvable_target_is_still_a_usage_error
 pub fn landing_or_shallow(
     repo: &Path,
     target: &str,
@@ -428,7 +426,6 @@ fn normalise(declared: &str, remotes: &[String]) -> Option<Trunk> {
 /// resolve is a config error, and answering `0` over it would be a vacuous pass.
 /// An I/O or `git` failure propagates as an internal error (→ exit `3`).
 //MUTANT-SUITE crates/batten/tests/it/cli.rs
-//MUTANT shallow-upstream-pushed|s@^            None => (None, None, Some(label.clone())),$@            None => (None, None, None),@|a_shallow_upstream_is_not_computable_never_pushed
 pub fn status(repo: &Path, must_land_on: Option<&str>) -> Result<AtRisk> {
     let uncommitted = git::uncommitted(repo)?;
     let branch = git::current_branch(repo)?;

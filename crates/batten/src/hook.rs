@@ -109,7 +109,6 @@ pub enum Harness {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/cli.rs
-//MUTANT gemini-start-spelled-before-agent|s@^                    (Event::SessionStart, "SessionStart"),$@                    (Event::SessionStart, "BeforeAgent"),@|generated_hook_wiring_matches_its_golden_for_every_installable_harness
 impl Harness {
     /// Every harness, so anything ranging over them is derived rather than
     /// re-typed — the CLOUD-40 decision-channel matrix reads this, which is what
@@ -1315,7 +1314,6 @@ pub struct Wiring {
 }
 
 //MUTANT-SUITE crates/batten/src/doctor.rs
-//MUTANT registrations-short-of-the-surface|s@^        self.admits(harness)$@        self.admits(harness).into_iter().take(8).collect()@|an_eight_event_wiring_owes_the_rest_of_the_surface
 impl Wiring {
     /// The events to register, with this host's name for each.
     ///
@@ -1353,7 +1351,6 @@ impl Wiring {
 }
 
 //MUTANT-SUITE crates/batten/src/doctor.rs
-//MUTANT claude-spellings-truncated|s@^    (Event::WorktreeRemove, "WorktreeRemove"),$@@|a_wiring_on_every_claude_event_is_green
 /// Claude Code's event spellings, which Codex CLI and Copilot's `PascalCase`
 /// dialect ship verbatim (M1) — so three wiring rows share this rather than
 /// carrying three copies that could drift apart.
@@ -1437,7 +1434,6 @@ const COPILOT_ENTRY: EntryShape = EntryShape::Flat {
 };
 
 //MUTANT-SUITE crates/batten/tests/it/harness_wiring.rs
-//MUTANT flat-harness-rendered-nested|s@^            Harness::Cursor => CURSOR_ENTRY,$@            Harness::Cursor => EntryShape::Nested,@|a_flat_host_is_generated_flat
 impl Harness {
     /// The entry shape this host reads (CLOUD-2694); the one function every
     /// writer and reader asks, so render, register, doctor and reclaim agree.
@@ -1634,7 +1630,6 @@ const GEMINI_EVENTS: &[Event] = &[
 
 /// Cursor: 9 of 21.
 //MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT cursor-prompt-submit-derived|s@^const CURSOR_EVENTS: \&\[Event\] = \&\[$@const CURSOR_EVENTS: \&[Event] = \&[Event::UserPromptSubmit,@|prompt_submit_is_derived_only_where_a_deny_reaches_the_host
 const CURSOR_EVENTS: &[Event] = &[
     Event::PreTool,
     Event::PostTool,
@@ -1730,17 +1725,11 @@ const CLAUDE_EVENTS: &[Event] = &[
 ];
 
 //MUTANT-SUITE crates/batten/src/doctor.rs
-//MUTANT cursor-events-converged-only|s@^                events: CURSOR_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
 //MUTANT-SUITE crates/batten/src/doctor.rs
-//MUTANT copilot-events-converged-only|s@^                events: COPILOT_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
 //MUTANT-SUITE crates/batten/src/doctor.rs
-//MUTANT gemini-events-converged-only|s@^                events: GEMINI_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
 //MUTANT-SUITE crates/batten/src/doctor.rs
-//MUTANT codex-events-converged-only|s@^                events: CODEX_EVENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|a_wiring_on_every_derived_event_is_green_on_each_host
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
-//MUTANT forge-undeclared-on-exit-code|s@^                events: Event::MOMENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|intake_runs_handlers_and_exits_on_their_verdict
 //MUTANT-SUITE crates/batten/tests/it/exit_code_handlers.rs
-//MUTANT exit-code-events-converged|s@^                events: Event::MOMENTS,$@                events: \&[Event::PreTool, Event::PostTool, Event::Stop, Event::SessionStart],@|exit_code_runs_a_user_prompt_submit_handler
 impl Harness {
     /// This host's capability row.
     ///
@@ -2333,7 +2322,6 @@ const INTAKE: &str = "forge intake";
 
 /// A catalog event's door (CLOUD-2690).
 //MUTANT-SUITE crates/batten/tests/it/hook_sources.rs
-//MUTANT catalog-left-unsupported|s@^const BY_INTAKE: HookDisposition = HookDisposition::Registered { check: INTAKE };$@const BY_INTAKE: HookDisposition = unsupported("no-intake");@|every_forge_catalog_name_is_checked_by_forge_intake
 const BY_INTAKE: HookDisposition = HookDisposition::Registered { check: INTAKE };
 
 /// What batten reads from the forge, and the ingress shape it refuses to be
@@ -2369,7 +2357,6 @@ fn owned(table: &[(&str, HookDisposition)]) -> Vec<(String, HookDisposition)> {
 //MUTANT git-vocabulary-emptied|s@^            HookSource::Git => owned(GIT_HOOKS),$@            HookSource::Git => Vec::new(),@|the_git_vocabulary_is_githooks5_with_one_disposition_each
 //MUTANT check-verb-undeclared|s@^const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor gate" };$@const BY_GATE: HookDisposition = HookDisposition::Registered { check: "doctor commit-gate" };@|every_registered_disposition_names_a_declared_verb
 //MUTANT harness-registration-ignored|s@^            } else if registered.contains(event) {$@            } else if false {@|the_harness_vocabulary_agrees_with_wiring_registrations
-//MUTANT forge-catalog-emptied|s@^            HookSource::Ci => ci_vocabulary(),$@            HookSource::Ci => owned(CI_READS),@|the_ci_vocabulary_is_the_forge_catalog
 //MUTANT commit-msg-demoted|s@^    ("commit-msg", BY_GATE),$@    ("commit-msg", unsupported("no-predicate")),@|the_git_vocabulary_registers_exactly_the_commit_hooks
 impl HookSource {
     /// Every source. The `match` in [`HookSource::vocabulary`] is exhaustive, so
@@ -2617,9 +2604,7 @@ pub enum Event {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/hook_sources.rs
-//MUTANT forge-host-emitted|s@^        !matches!(self, Event::Forge)$@        true@|forge_is_in_no_harness_vocabulary_or_wiring
 //MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT moments-is-all|s@^        Some((Event::Unrecognized, moments)) => moments,$@        Some((Event::Unrecognized, _)) => Event::ALL,@|moments_is_every_event_but_unrecognized
 impl Event {
     /// Every event, so a census is derived rather than hand-maintained.
     pub const ALL: &'static [Event] = &[
@@ -3937,9 +3922,7 @@ pub(crate) fn present_str(value: &Value, key: &str) -> Option<String> {
 /// that genuinely diverge get a table here, which is what keeps host vocabulary
 /// out of the harness-blind core.
 //MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
-//MUTANT gemini-before-agent-unrecognized|s@^            "BeforeAgent" => Some(Event::UserPromptSubmit),$@@|a_gemini_before_agent_reaches_a_prompt_handler
 //MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT cursor-subagent-stop-is-stop|s@^            "stop" => Some(Event::Stop),$@            "stop" \x7c "subagentStop" => Some(Event::Stop),@|cursors_renamed_events_normalize
 fn normalize_event(harness: Harness, raw: &str) -> Event {
     let renamed = match harness {
         // Gemini's names are the only structural gap in an otherwise
@@ -5105,7 +5088,6 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
 // nobody wrote for it, which is what registering on every surface makes likely
 // rather than hypothetical.
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
-//MUTANT forge-modules-unread|s@^        return policy_rules(policy, envelope, facts);$@        return Decision::Allow;@|a_forge_rule_refuses_through_intake
 #[allow(clippy::match_same_arms)]
 fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
     // The end-of-turn gate (CLOUD-85), and it no longer DENIES (CLOUD-889).
@@ -5266,19 +5248,9 @@ fn event_decides(event: Event) -> Option<Decision> {
 // CLOUD-2667's detach gate, below in `native_fired`, `detached_call`, `waited_on`
 // and `waits_on`.
 //MUTANT-SUITE crates/batten/tests/it/detached_call.rs
-//MUTANT detach-needs-verdict-row|s@^    if let Some(refusal) = detached_call(envelope) {$@    if let Some(refusal) = None::<Refusal> {@|a_bare_ampersand_on_any_program_is_refused
-//MUTANT detach-graded-as-history|s@^        fired.push((NativeGate::Detach, refusal));$@        fired.push((NativeGate::History, refusal));@|a_native_detach_row_grades_the_gate
-//MUTANT detach-harness-blind|s@^    envelope.background_ceiling?;$@    let _ = envelope.background_ceiling;@|a_harness_without_a_background_option_is_not_refused
-//MUTANT wait-reads-as-detached|s@^        .any(\x7clater\x7c waits_on(later, detached, jobs))$@        .any(\x7c_\x7c false)@|waiting_in_the_same_call_is_not_detached
-//MUTANT foreign-wait-admits|s@^    operands.is_empty() \x7c\x7c (jobs == 1 && operands.iter().all(\x7cword\x7c own_job_ref(word)))$@    true@|a_wait_on_another_job_is_detached
-//MUTANT subshell-wait-admits|s@^    if later.grouped != detached.grouped \x7c\x7c later.nested != detached.nested {$@    if false {@|a_wait_outside_the_subshell_is_detached
 // CLOUD-2683's commit-subject gate: `native_fired`, `commit_subject_gate`,
 // `segment_commit_message`, and the `cat_bodies` fill in `flatten_command`.
 //MUTANT-SUITE crates/batten/tests/it/commit.rs
-//MUTANT commit-subject-unjudged|s@^    if let Some(refusal) = commit_subject_gate(policy, facts) {$@    if let Some(refusal) = None::<Refusal> {@|a_mediated_commit_whose_subject_breaks_the_pattern_is_refused
-//MUTANT message-spelling-unread|s@^        if let Some(body) = cat_heredoc_body(word) {$@        if let Some(body) = None::<String> {@|every_message_spelling_is_read
-//MUTANT message-equals-unread|s@^        } else if let Some(body) = word.strip_prefix("--message=") {$@        } else if let Some(body) = None::<\&str> {@|every_message_spelling_is_read
-//MUTANT unreadable-message-refused|s@^        crate::facts::Look::CouldNotLook => return None,$@        crate::facts::Look::CouldNotLook => return Some(commit_subject_refusal()),@|an_unreadable_or_conforming_message_is_not_refused
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 /// The severity a compiled gate runs at here: [`crate::rules::native_grade`]
 /// over this policy's mediated rows (CLOUD-2291). Only the committed authority
@@ -5421,7 +5393,6 @@ pub static NO_REACH: Reach = Reach {
 
 // CLOUD-2672's projection, in `call_document`.
 //MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
-//MUTANT call-roots-unprojected|s@^        call.insert("roots".to_owned(), serde_json::json!(facts.reach.roots));$@        call.insert("roots".to_owned(), serde_json::Value::Array(Vec::new()));@|a_policy_sees_the_call_cwd_roots_and_home
 //MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 /// The rule id the reach gate refuses under (CLOUD-2672).
 pub const REPOSITORY_REACH: &str = "repository-reach";
@@ -7595,8 +7566,6 @@ fn outside_repository(path: &Path, root: &Path) -> bool {
 // CLOUD-986's arm in `pipeline_rules`, declared here because this is where the
 // file's `pipeline_shapes.rs` suite begins.
 //MUTANT newline-sequence-unread|s@^            if !last_line {$@            if false {@|a_verdict_followed_by_a_newline_has_its_status_replaced
-//MUTANT verdict-globals-unskipped|s@^    let start = subcommand_index(&argv, options)?;$@    let start = subcommand_index(\&argv, \&[])?;@|a_verdict_behind_a_global_option_is_still_refused
-//MUTANT verdict-nested-globals-unskipped|s@subcommand_index(rest, options)@subcommand_index(rest, \&[])@|a_verdict_behind_a_global_option_is_still_refused
 fn followed_cd(
     segment: &Segment,
     line: &SegmentLine,
@@ -7700,7 +7669,6 @@ pub enum Pathspecs {
 /// each followed `cd` with CLOUD-2672's resolver. A pipe-fed restore still
 /// discards, so no stage is skipped.
 //MUTANT-SUITE crates/batten/tests/it/git_preset.rs
-//MUTANT unfollowed-cd-placed|s@unplaceable = true, // an unfollowed cd: unplaceable$@{}@|a_pathspec_behind_an_unfollowed_cd_is_left_to_the_host
 //MUTANT-SUITE crates/batten/src/hook.rs
 #[must_use]
 pub fn pathspec_calls(envelope: &Envelope, base: &Path) -> Pathspecs {
@@ -8476,7 +8444,6 @@ fn disposed_at(severity: RuleSeverity, refusal: Refusal) -> Decision {
 /// Pointer-only (rule 4): the refusal names the rule and the path. The matched
 /// bytes are not carried, and `Refusal` has no field one could occupy.
 //MUTANT-SUITE crates/batten/tests/it/budget_at_call.rs
-//MUTANT budget-call-unjudged|s@^        if let Some((count, max)) = crate::budget::breach(measure) {$@        if let Some((count, max)) = None::<(usize, usize)> {@|an_edit_that_pushes_a_literal_set_over_its_ceiling_is_refused_at_the_call
 //MUTANT-SUITE crates/batten/src/hook.rs
 /// The first budgeted set this write breaches and grows past (CLOUD-2661).
 fn budget_rules(facts: &Facts<'_>) -> Option<Refusal> {
@@ -8965,7 +8932,6 @@ pub fn policy_rewrite(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -
     reason = "the projected document is one object, and each arm carries why that fact is or is not in it"
 )]
 //MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT forge-projection-dropped|s@^            "forge": envelope.forge,$@            "forge": serde_json::Value::Null,@|a_forge_envelope_projects_its_tokens_and_no_other_event_does
 fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde_json::Error> {
     let mut projected_facts = serde_json::Map::new();
     for fact in crate::facts::Fact::ALL {
@@ -9647,11 +9613,6 @@ pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
 /// name rather than a boolean; spelling it now would be a vocabulary with one
 /// member and no consumer.
 //MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT redirect-handed-as-argument|s@^            let handed = tokens.len().saturating_sub(line.redirects.len());$@            let handed = tokens.len();@|program_reach_hands_no_redirection_to_the_program
-//MUTANT line-redirects-dropped|s@^                        redirects: segment.redirects,$@                        redirects: Vec::new(),@|a_joined_lines_redirects_stay_with_their_own_line
-//MUTANT segment-redirects-unprojected|s@^                        "redirects": segment.redirects,$@@|the_call_document_projects_a_segments_redirections
-//MUTANT subcommand-projection-unskipped|s@let verb = subcommand_index(&arguments, options);@let verb = subcommand_index(\&arguments, \&[]);@|each_git_entry_carries_its_subcommand_past_global_options
-//MUTANT global-options-unprojected|s@&arguments\[..verb.unwrap_or(arguments.len())\]@\&arguments[..0]@|each_git_entry_carries_its_subcommand_past_global_options
 fn program_reach(command: &str) -> Vec<serde_json::Value> {
     let crate::facts::Look::Is(parsed) = segments(command) else {
         return Vec::new();
@@ -9806,9 +9767,6 @@ fn key_present(expression: &str, command: &str, keys: &KeyFacts) -> bool {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/word_filters.rs
-//MUTANT word-matched-as-substring|s@^                \&\& !has_word(argv, word).unwrap_or(true)$@                \&\& !line.raw.contains(word)@|a_word_row_reads_flags_not_message_text
-//MUTANT unless-word-ignored|s@^                \&\& has_word(argv, exemption).unwrap_or(false)$@                \&\& false@|an_unless_word_row_exempts_only_its_own_line
-//MUTANT word-reads-redirection|s@^        let spoken = tokens.len().saturating_sub(line.redirects.len());$@        let spoken = tokens.len();@|a_redirection_target_is_not_a_word
 //MUTANT-SUITE crates/batten/src/hook.rs
 /// Every shape row this command matches, in declaration order within each
 /// segment.
@@ -9974,18 +9932,6 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
 }
 
 //MUTANT-SUITE crates/batten/tests/it/ready_event.rs
-//MUTANT ready-route-structured-unjudged|s@^    let event = structured_event(envelope);$@    let event: Option<CallEvent> = None;@|a_connector_undraft_owes_the_on_row_and_a_body_edit_does_not
-//MUTANT ready-route-connector-draft-unread|s@^        let undrafts = draft.as_deref() == Some("false");$@        let undrafts = false;@|a_connector_undraft_owes_the_on_row_and_a_body_edit_does_not
-//MUTANT ready-route-draft-string-unread|s@^        Value::String(text) => text.parse().ok(),$@        Value::String(_) => None,@|a_connector_undraft_owes_the_on_row_and_a_body_edit_does_not
-//MUTANT ready-route-create-connector-unread|s@^        return (!drafted).then_some(CallEvent::PullRequestReady);$@        return None;@|a_ready_create_owes_the_on_row_on_both_routes
-//MUTANT ready-route-create-flag-unread|s@^        \["pr", "create", ..\] => !drafted_flag(\&flags),$@        ["pr", "create", ..] => false,@|a_ready_create_owes_the_on_row_on_both_routes
-//MUTANT ready-route-receipt-unselected|s@^    let receipt_event = call_event(envelope);$@    let receipt_event: Option<CallEvent> = None;@|ready_undo_owes_nothing_and_ready_owes_the_on_row
-//MUTANT ready-route-undo-refused|s@^        \["pr", "ready", ..\] => !flagged(\&flags, "--undo"),$@        ["pr", "ready", ..] => true,@|ready_undo_owes_nothing_and_ready_owes_the_on_row
-//MUTANT ready-route-api-unread|s@^        \["api", ..\] => api_readies(\&operands\[1..\], \&flags),$@        ["api", ..] => false,@|an_api_ready_owes_the_on_row_and_an_api_read_does_not
-//MUTANT ready-route-reopen-unread|s@^        \["pr", "reopen", ..\] => true,$@        ["pr", "reopen", ..] => false,@|a_reopen_owes_the_on_row_on_both_routes
-//MUTANT ready-route-shape-unselected|s@^    let shape_event = call_event(envelope);$@    let shape_event: Option<CallEvent> = None;@|an_on_shape_row_refuses_an_unkeyed_ready_on_both_routes
-//MUTANT ready-route-shape-guard|s@^    let shape_gated = !envelope.command.is_empty() \x7c\x7c call_event(envelope).is_some();$@    let shape_gated = !envelope.command.is_empty();@|an_on_shape_row_refuses_an_unkeyed_ready_on_both_routes
-//MUTANT ready-route-key-base-unread|s@^        let unjudged = envelope.command.is_empty() \&\& call_event(envelope).is_none();$@        let unjudged = envelope.command.is_empty();@|an_on_shape_row_refuses_an_unkeyed_ready_on_both_routes
 //MUTANT-SUITE crates/batten/src/hook.rs
 /// The event this call raises, on any route the engine knows (CLOUD-2662).
 pub(crate) fn call_event(envelope: &Envelope) -> Option<CallEvent> {

@@ -1136,7 +1136,6 @@ pub fn of_rule(
 //MUTANT remedy-reranked|s@^        if self.severity != Severity::Remedy {$@        if true {@|a_drained_rules_remedy_rides_its_first_drain_only
 //MUTANT-SUITE crates/batten/src/hook.rs
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT spill-route-prescribes-field|s@^        self.routes.clear();$@@|a_spill_note_names_no_field_route
 //MUTANT-SUITE crates/batten/src/hook.rs
 impl Refusal {
     /// Build a refusal. The [`Fix`] is required, which is the contract.

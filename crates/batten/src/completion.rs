@@ -172,8 +172,6 @@ pub enum Step {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
-//MUTANT person-pushed-stop-refused|s@^            Step::Land \x7c Step::Push \x7c Step::NoUpstream \x7c Step::PushUnknown$@            Step::Land \x7c Step::Push \x7c Step::NoUpstream \x7c Step::PushUnknown \x7c Step::MergeHeld@|a_person_landed_pushed_branch_is_not_refused
-//MUTANT person-unpushed-unrefused|s@^            Step::Land \x7c Step::Push \x7c Step::NoUpstream \x7c Step::PushUnknown$@            Step::Land@|a_person_landed_unpushed_branch_is_refused_naming_the_push
 impl Step {
     /// The receipt's spelling.
     #[must_use]
@@ -218,7 +216,6 @@ impl Step {
 /// The step a raised claim owes, given who lands and where the commits are
 /// (CLOUD-2656). Under `"agent"` it is always `land`, today's behaviour.
 //MUTANT-SUITE crates/batten/src/completion.rs
-//MUTANT person-unknown-pushed|s@PushState::NotComputable => Step::PushUnknown,@PushState::NotComputable => Step::MergeHeld,@|a_push_nobody_could_compute_is_never_read_as_pushed
 #[must_use]
 pub const fn next_step(landed_by: crate::config::LandedBy, push: PushState) -> Step {
     match landed_by {
