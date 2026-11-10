@@ -523,7 +523,9 @@ pub(crate) fn batten() -> Batten {
         "MUTANT_PRESETS",
         "MUTANT_OVERLAY_ENV",
         "MUTANT_OVERLAY_FEATURES",
-        "BATTEN_PRESET_OVERLAY",
+        // NOT the overlay variable itself: it is how a mutated preset reaches the
+        // `batten` a suite spawns, and scrubbing it judged every preset row
+        // against the embedded, unmutated text (85 false survivors).
     ] {
         command.env_remove(name);
     }

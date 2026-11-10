@@ -50,6 +50,31 @@ fn files_naming(root: &Path, needle: &str) -> Vec<String> {
     found
 }
 
+/// THE OVERLAY VARIABLE REACHES THE `batten` A SUITE SPAWNS. A suite judges a
+/// preset row through a child `batten`, and that child reads the mutant only
+/// through the overlay variable. Fails by: the test harness scrubbing it, which
+/// judged every preset row against the embedded text — 85 false survivors.
+#[test]
+fn the_overlay_reaches_the_batten_a_suite_spawns() {
+    // The variable the sweep declares as its overlay, read from the task, so a
+    // rename cannot leave this case asserting about a name nothing sets.
+    let tasks = std::fs::read_to_string(common::at_root("mise.toml")).expect("reads");
+    let Some(name) = tasks.lines().find_map(|line| {
+        let rest = line.split("MUTANT_OVERLAY_ENV = \"").nth(1)?;
+        rest.split('"').next()
+    }) else {
+        panic!("mise.toml declares MUTANT_OVERLAY_ENV");
+    };
+    let command = common::batten();
+    let removed = command
+        .get_envs()
+        .any(|(key, value)| key == name && value.is_none());
+    assert!(
+        !removed,
+        "`common::batten` strips {name}, so every suite judges the embedded preset, never the mutant"
+    );
+}
+
 /// `preset-overlay` NEVER SHIPS: it lets a file replace a shipped rule, so only
 /// the mutation sweep's suite build enables it. Fails by: the feature reaching a
 /// default feature set, a release workflow, a dist config or any task but the
