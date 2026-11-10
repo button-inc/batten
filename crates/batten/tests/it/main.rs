@@ -482,7 +482,6 @@ mod traversal_chain;
 mod truncate_handle;
 mod trunk_name;
 mod trunk_watch;
-mod turn_cross_check;
 mod use_graph;
 mod vendored_skew;
 mod verdict;
