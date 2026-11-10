@@ -108,7 +108,6 @@ pub fn without_engine_line(config: &str) -> String {
 /// `batten.toml` changed outside its `engine` line. `verify` runs G1 in
 /// published mode on the pin; `is_ancestor` answers whether a tag commit is the
 /// head or reachable from it. Neither is called for an inherited pin.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
 pub fn judge(
     base: &Side,
     head: &Side,

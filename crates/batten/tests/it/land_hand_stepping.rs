@@ -378,6 +378,4 @@ reaches `mcp_dispatch.rs`'s. `test name undefined` is satisfied and the sweep ha
 is not; naming that here keeps the declaration from reading as coverage it does
 not have.
 
-#MUTANT fresh-rebase-allowed|s@"git rebase --continue"@"git rebase origin/main"@|continuing_a_conflicted_rebase_is_left_alone
-#MUTANT reason-claims-warn|s@--resolve <path>`: merge each conflicted path in@is left unstated in@|the_refusal_names_the_route_out_of_a_conflict
 */

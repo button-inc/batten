@@ -122,7 +122,6 @@ const SHOWN: usize = 12;
 // The cache's mutation rows, carried from the retired task's six and widened by
 // the three the composed `run` arm adds. Each breaks one clause a receipt's
 // soundness rests on, and each is caught by the compiled-binary case it names.
-//MUTANT-SUITE crates/batten/tests/it/step_receipt.rs
 // And the three the review added: the row as key material, the table read from
 // the keyed tree alone, and no key running the step rather than skipping it.
 

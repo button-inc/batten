@@ -327,7 +327,6 @@ fn key(run: &Run) -> (bool, String, String, u64) {
 /// than the predicate because a row's script may carry no `|` of its own, and
 /// because a guard commented out would also redden the two arms that must keep
 /// their old behaviour, telling us less about which clause the cases pin.
-//MUTANT-SUITE crates/batten/src/checks_green.rs
 ///
 /// `pub(crate)` because `record forge --fetch` records one conclusion per name
 /// and must choose the SAME run this does (CLOUD-843): two orderings over one
@@ -469,7 +468,6 @@ pub fn judged(runs: &[Run], roster: &Roster) -> Vec<Finding> {
 /// So each conjunct is caught, and the middle row is the one worth reading: one
 /// case, one mirror, nothing else in 5,587 noticing. That is what a mirror is
 /// for, and it is also why removing either would be invisible without it.
-//MUTANT-SUITE crates/batten/src/checks_green.rs
 pub fn decide(runs: &[Run], roster: &Roster) -> Result<Verdict, RosterError> {
     if roster.required.is_empty() {
         return Err(RosterError::NoRequiredChecks);

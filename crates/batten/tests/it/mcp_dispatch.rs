@@ -689,10 +689,6 @@ fn a_successful_envelope_is_still_a_result_and_not_a_refusal() {
     );
 }
 
-/*
-#MUTANT error-message-dropped|s@            .and_then(serde_json::Value::as_str)@            .and_then(|_unread| None::<\&str>)@|a_refusal_carries_the_servers_own_message_and_not_only_its_code
-*/
-
 // --- a failed result is not a success (CLOUD-1645) ---------------------------
 //
 // THE SAME TIER AND THE SAME REASON AS THE BLOCK ABOVE: no listener. `outcome` is

@@ -3115,7 +3115,6 @@ fn names_an_unknown_key(rendered: &str) -> bool {
 ///
 /// Pointer-only (rule 4): the note adds a version and a task name. Every byte of
 /// file content in the output is the parser's own error, unchanged.
-//MUTANT-SUITE crates/batten/tests/it/config_skew.rs
 pub(crate) fn config_error(source: &str, text: &str, err: &toml::de::Error) -> anyhow::Error {
     let rendered = err.to_string();
     // THE SYNTAX PROBE, AND IT RUNS ONLY HERE — ON THE ERROR PATH (CLOUD-1677).
@@ -5384,7 +5383,6 @@ pub struct AuthoritySite {
 ///
 /// As [`crate::git::repo_root`]: not a directory, not inside a repository, or a
 /// layout with no working tree to root.
-//MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
 pub fn authority_root(start: &Path) -> Result<PathBuf> {
     if let Ok(worktree) = crate::git::worktree_root(start)
         && worktree.join(CONFIG_FILE).is_file()

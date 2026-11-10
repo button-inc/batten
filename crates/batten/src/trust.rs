@@ -3184,7 +3184,6 @@ fn governed_aliases(
 /// Keyed on the effective governed set rather than on the list, so deleting the
 /// alias, deleting its selector and deleting `[mcp]` report the same key: each
 /// leaves `mcp grant --guard` silent on a renamed key the base ref refused.
-//MUTANT-SUITE crates/batten/src/trust.rs
 fn mcp_weakenings(
     base: Option<&crate::mcp::McpConfig>,
     working: Option<&crate::mcp::McpConfig>,
@@ -3216,7 +3215,6 @@ fn mcp_weakenings(
 /// comparing them has them adjacent.
 /// The `[forge] nothing_graded` statuses `working` declares and `base` does not,
 /// ascending (CLOUD-2080).
-//MUTANT-SUITE crates/batten/src/trust.rs
 fn nothing_graded_added(base: &Config, working: &Config) -> Vec<u16> {
     // The EFFECTIVE lists, so an absent key (the documented default) and the
     // same list declared explicitly are one reading.
@@ -3898,7 +3896,6 @@ fn ci_weakenings(base: Option<&crate::ci::Ci>, working: Option<&crate::ci::Ci>) 
 /// weakening (CLOUD-2659): who answers for a commit is resolved at run time from
 /// the person making it, never from a committed name, so the table is no longer
 /// a repository's decision and its absence ranks below nothing.
-//MUTANT-SUITE crates/batten/src/trust.rs
 fn attribution_weakenings(
     base: Option<&crate::attribution::Attribution>,
     working: Option<&crate::attribution::Attribution>,
@@ -7633,7 +7630,6 @@ mod tests {
 
     #[test]
     fn a_marker_mint_a_receipt_row_also_reads_is_still_a_weakening() {
-        // MUTANT: dropping the `checks` arm of the exemption's reader test lets
         // this mint pass as marker-only while it satisfies a receipt row.
         let reader = receipt_rule("ready", "").replace("[\"verify\"]", "[\"pr-open\"]");
         let base = parse(&format!("version = 1\n{MARKER_DENY}{reader}"));
@@ -7769,7 +7765,4 @@ Each undoes one half of `BoardSweepRefusalWidened`, and the named case is the
 one that stops discriminating. The named case is this file's own unit tier, so
 the declared suite is this file, `landed.rs`'s reason.
 
-#MUTANT-SUITE crates/batten/src/trust.rs
-#MUTANT sweep-refusal-widening-unread|s@sweep_refusals(working, base)@sweep_refusals(base, base)@|dropping_a_sweep_gate_or_adding_an_abstention_is_a_weakening
-#MUTANT sweep-abstention-to-refusal-flagged|s@gate.refuses.iter().chain(gate.abstains.iter())@gate.refuses.iter().chain(gate.refuses.iter())@|dropping_a_sweep_gate_or_adding_an_abstention_is_a_weakening
 */

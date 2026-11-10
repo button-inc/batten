@@ -531,8 +531,6 @@ reading as coverage it does not have.
 (The globs are spelled out in words above because a Rust block comment NESTS,
 and a literal star after a slash opens a second one.)
 
-#MUTANT claimed-arm-unread|s@"CLOUD-1120\\n"@""@|a_key_closed_by_a_commit_on_main_is_behind_git
-#MUTANT done-not-advanced|s@"CLOUD-1110", "Done"@"CLOUD-1110", "Todo"@|a_declined_key_released_to_done_is_refused
 */
 
 /// POINTER-ONLY (rule 4). The sweep reads a board and three evidence files and

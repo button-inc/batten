@@ -64,10 +64,6 @@
 //! records the identical gap. Until it lands the named case is proven by
 //! `verify` rather than by a survivor.
 
-/*
-#MUTANT same-commit-spend-passes|s@                .any(|line| line.trim_start().starts_with(token.as_str()))@                .any(|_unread| false)@|a_commit_that_adds_an_arm_and_spends_it_is_refused
-#MUTANT unparseable-parent-reads-empty|s@^        return None;$@        return Some(arms);@|a_commit_whose_parent_config_cannot_be_parsed_is_unjudged
-*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

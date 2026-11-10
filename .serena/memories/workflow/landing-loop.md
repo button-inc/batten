@@ -422,7 +422,10 @@ provably reach the value the code reads, the run measured nothing.
   is never run, and `mutant_rows.rs` refuses one. A Rust Ready obligation names
   `"mutation": "cargo-mutants"`. Read <https://mutants.rs/> before changing how
   it runs: copy mode, `-j`, `--iterate`, `--shard` and `.cargo/mutants.toml` are
-  its own, and a wrapper re-implementing one is the defect. Hand-written
+  its own, and a wrapper re-implementing one is the defect. `mutant:rust` runs
+  it; `batten mutate jobs` sizes `-j` from the machine and the declared
+  `MUTANT_JOB_*_MB`. A compiler cache buys nothing here: each copy's root is
+  random, so sccache's keys never match (0 of 714, CLOUD-1414). Hand-written
   `#MUTANT` rows are for Rego and the manifests only, split on every `|`.
 
 ## Measured 2026-10-20 (CLOUD-2376)

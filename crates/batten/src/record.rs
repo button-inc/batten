@@ -224,7 +224,6 @@ fn picked(raw: &str, name: &str, token: &str) -> String {
 
 // The reduction's mutation rows, each caught by the compiled case it names in
 // the perf tier, which drives the real writer and reads the record back.
-//MUTANT-SUITE crates/batten/tests/it/perf_assert.rs
 
 /// Record `text` under the declared tool row `id`: [`run_tool`]'s tail, shared with
 /// [`run_tool_picked`] and with an in-process producer, so a verb that reduced a
@@ -399,7 +398,6 @@ fn already_clean(record: &Path, receipt: &Path, asked: &str) -> bool {
 // the fixture forge: an unanswered conclusion recorded as a grading
 // (CLOUD-1965), a run other than `checks green`'s latest winning, a record
 // written before the fan-in answers, and a spaced name mangled into the record.
-//MUTANT-SUITE crates/batten/tests/it/record_verdicts.rs
 #[must_use]
 pub fn graded(runs: &[crate::checks_green::Run], answered: &[&str]) -> BTreeMap<String, String> {
     let owned: Vec<String> = answered.iter().map(|word| (*word).to_owned()).collect();
@@ -1331,7 +1329,6 @@ fn graph_for(
 
 // The resolution's mutation rows. Each is caught by the compiled case it names,
 // which drives a scratch crate through the real `cargo`.
-//MUTANT-SUITE crates/batten/tests/it/evaluator_closure.rs
 
 /// Derive one family's record from its input and write it.
 ///
@@ -1466,7 +1463,6 @@ pub enum Decision {
 ///
 /// As [`run_derive`]: a [`UsageError`] for an unknown family, a malformed input
 /// or a tree with no branch to key on; an internal error for an unwritable store.
-//MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
 pub fn decide_record(family: &str, inputs: &[String], overrides: &Overrides) -> Result<Decision> {
     let inputs = inputs_of("record decide", inputs)?;
     let family = safe_component("family", family)?;

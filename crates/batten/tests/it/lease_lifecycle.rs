@@ -127,10 +127,6 @@
 // changed: "PRESSURE: two waiters against one holder produce exactly ONE winner" crates/batten/src/lease.rs kind:verb
 // changed: "PRESSURE: the lease passes to exactly one waiter after release, not both" crates/batten/src/lease.rs kind:verb
 
-/*
-#MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
-#MUTANT rebuild-the-lease-time-inline|s@        time: crate::git::utc_at(seconds),@        time: gix::date::Time { seconds, offset: 3600 },@|a_lease_object_is_stamped_in_utc
-*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

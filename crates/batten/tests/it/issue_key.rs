@@ -53,10 +53,6 @@
 //! `mise run mutant` APPLIES it rather than only binding it — the gap
 //! `crates/batten/tests/it/commit_arm_sequencing.rs` records for its own row.
 
-/*
-#MUTANT-SUITE crates/batten/tests/it/issue_key.rs
-#MUTANT case-insensitive-key-accepted|s@^            Regex::new(&row.regex)@            Regex::new(\&format!("(?i){}", row.regex))@|the_committed_reader_refuses_the_lowercase_spelling
-*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

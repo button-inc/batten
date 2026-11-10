@@ -21,7 +21,6 @@
 //! * **The receipt is per context.** One file per (row, context), so one
 //!   session's read never admits another's edit, and a compaction drops this
 //!   context's reads because what was read left the window with it.
-//MUTANT-SUITE crates/batten/tests/it/history_gate.rs
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

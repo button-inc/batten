@@ -123,7 +123,6 @@ const OUT_DIR_VAR: &str = "BENCH_OUT_DIR";
 ///
 /// The cost is three times the runs, paid only by a commit that touches crate
 /// source, a manifest or the lockfile — [`Decision`] skips clean otherwise.
-//MUTANT-SUITE crates/batten/tests/it/perf_pair.rs
 const DEFAULT_RUNS: &str = "300";
 /// Warmups, moved with [`DEFAULT_RUNS`] and measured in the same pair of nulls.
 const DEFAULT_WARMUP: &str = "30";
@@ -981,8 +980,6 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Re
     }
     Ok(cleaned)
 }
-
-//MUTANT-SUITE crates/batten/src/perf.rs
 
 /// The file in a shared target dir naming the arm last built into it.
 const LAST_ARM: &str = "perf-last-arm";
@@ -2948,7 +2945,6 @@ impl Residency {
 /// also keeps the script free of the `|` the row itself is split on — a script
 /// carrying `||` reads as eight fields where three are wanted.
 #[must_use]
-//MUTANT-SUITE crates/batten/tests/it/refusal_render_bench.rs
 pub const fn first_sighting(strategy: Strategy, residency: Residency) -> bool {
     // A cold firing is a first sighting under every strategy; a warm one is a
     // first sighting exactly when the strategy does not treat it as a repeat.
@@ -3389,7 +3385,6 @@ pub fn median_seconds(samples: &[u64]) -> Option<u64> {
     sorted.get(at).copied()
 }
 
-//MUTANT-SUITE crates/batten/src/perf.rs
 /// The verdict over a median, with the retired body's integer arithmetic: the
 /// ceiling is `budget + slack` and the floor `budget / loose_factor`.
 #[must_use]

@@ -485,7 +485,6 @@ const MAX_REDIRECTS: u8 = 10;
 ///
 /// Lower case first, then upper, which is the order every other client in this
 /// class resolves them in.
-//MUTANT-SUITE crates/batten/tests/it/doctor.rs
 fn proxy_for(host: &str) -> Option<hyper::Uri> {
     let no_proxy = ["no_proxy", "NO_PROXY"]
         .into_iter()
@@ -736,7 +735,6 @@ async fn exchange(call: &Call<'_>) -> Result<Response> {
 /// Apart from the exchange so the narrowing tests without a live HTTPS
 /// redirect, which the `https_only` transport gives a loopback no way to stage
 /// (CLOUD-2509).
-//MUTANT-SUITE crates/batten/src/fetch.rs
 fn carried_to(
     headers: &[(String, String)],
     origin: &str,
@@ -892,7 +890,6 @@ fn resolve(base: &hyper::Uri, location: &str) -> Result<String> {
 /// The total bound's expiry is RECORDED as its own cause, which is what lets a
 /// case prove the bound ended the request by reading the cause rather than by
 /// timing the process (CLOUD-2059).
-//MUTANT-SUITE crates/batten/tests/it/provision.rs
 async fn one_exchange(
     url: &str,
     headers: &[(String, String)],

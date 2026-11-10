@@ -92,7 +92,6 @@ impl std::error::Error for CouldNotLook {}
 ///
 /// [`CouldNotLook`] when the parser reports any error over `source` under
 /// `edition`. The source is then not rewritten at all.
-//MUTANT-SUITE crates/batten/tests/it/codemod.rs
 pub fn rename_method_calls(
     source: &str,
     edition: Edition,

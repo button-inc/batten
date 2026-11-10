@@ -467,8 +467,6 @@ pub struct CommandDecl {
     pub flags: &'static [FlagDecl],
 }
 
-//MUTANT-SUITE crates/batten/tests/it/cli.rs
-
 /// What a verb declares when it renders no policy verdict.
 ///
 /// `1` and `3` are on every row that runs at all: clap rejects a malformed
@@ -5303,6 +5301,20 @@ pub const SURFACE: &[CommandDecl] = &[
     // the enforced set and wrote no exemption would make the first greener and
     // the second red, and is indistinguishable from doing the work if only the
     // first runs.
+    // The `--jobs` cargo-mutants is given, sized here rather than in a task
+    // body: the machine a lap runs on is measured (cores, the temp volume's
+    // headroom above the collector's floor, memory left to the cgroup) and the
+    // tree's declared per-job cost divides it. `read`: it opens `/proc` and
+    // `/sys` and prints a count, a pointer by construction.
+    CommandDecl {
+        path: "mutate jobs",
+        id: "mutate.jobs",
+        about: "Print how many cargo-mutants jobs this machine holds at the tree's declared per-job cost",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Read,
+        flags: &[],
+    },
     CommandDecl {
         path: "mutate census",
         id: "mutate.census",
