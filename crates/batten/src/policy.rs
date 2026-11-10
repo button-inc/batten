@@ -4011,6 +4011,19 @@ fn extend_call_schema(document: &mut serde_json::Value) {
         .and_then(serde_json::Value::as_object_mut)
     {
         call.insert("forge".to_owned(), forge);
+        // CLOUD-2672: where the call stands, what it reaches, and its home.
+        call.insert(
+            "cwd".to_owned(),
+            serde_json::json!({"type": ["string", "null"]}),
+        );
+        call.insert(
+            "roots".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": {"type": "string"}}),
+        );
+        call.insert(
+            "home".to_owned(),
+            serde_json::json!({"type": ["string", "null"]}),
+        );
     }
     if let Some(segment) = document
         .pointer_mut("/properties/call/properties/segments/items/properties")

@@ -1586,6 +1586,9 @@ pub enum Native by id {
     ///
     /// **APPENDED LAST**, for [`Native::ProseColumnRefused`]'s reason.
     ScriptRunLoose => "script run loose",
+    /// A call reached a repository other than its session's home, where the
+    /// home arms the reach gate (CLOUD-2672). Appended last, as above.
+    CallReachLoose => "call reach loose",
 }
 }
 
@@ -2857,6 +2860,21 @@ rebuilds it.",
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
+        id: "call reach loose",
+        gloss: "the call acts on a repository other than the session's home, which arms the reach gate",
+        class: "A session is homed in the first repository it stood in that carries an authority, and a \
+visit never moves the home (CLOUD-2672). Where the home declares a `repository-reach` native row, a \
+call whose targets (a structured call's path; a shell call's directories, `cd`/`pushd` operands and \
+`git -C`/`--git-dir`/`--work-tree` operands) place in another repository is refused, and so is one \
+whose targets cannot be placed at all. A directory in no repository passes. The subjects are the \
+home and the root reached, never a file's contents.",
+        routes: &[run(
+            "override request first",
+            "batten override request --rule repository-reach",
+        )],
+        applicability: Applicability::Advice,
+    },
+    VendoredVerdict {
         id: "script run loose",
         gloss: "a script interpreter ran a script file that lives outside the repository",
         class: "A call to an interpreter the row's `interprets` column declares whose script operand \
@@ -2959,6 +2977,11 @@ const NATIVE_RULES: &[(&str, &str)] = &[
         "The history gate: a write changes a config row this context has not read the \
          history of at its current digest; `batten policy explain '<id>' --history`, one \
          call naming every row, mints the read.",
+    ),
+    (
+        "repository-reach",
+        "The reach gate: this call acts on a repository other than the session's home, which \
+         arms the gate; work there in its own session, or request an override to cross.",
     ),
     (
         "detached-call",

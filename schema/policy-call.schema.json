@@ -15,6 +15,12 @@
           ]
         },
         "command": {},
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "event": {
           "type": "string"
         },
@@ -67,6 +73,12 @@
           },
           "type": [
             "object",
+            "null"
+          ]
+        },
+        "home": {
+          "type": [
+            "string",
             "null"
           ]
         },
@@ -127,6 +139,15 @@
             "type": "object"
           },
           "type": "array"
+        },
+        "roots": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "run-in-background": {
           "type": [

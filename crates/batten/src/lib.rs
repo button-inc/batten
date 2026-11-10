@@ -19633,7 +19633,7 @@ fn unread_history(envelope: &hook::Envelope) -> facts::Look<Vec<String>> {
     {
         return facts::Look::CouldNotLook;
     }
-    let root = hook_authority_root();
+    let root = hook_session_home();
     let (Some(context), Ok(git_dir)) = (envelope.context(), git::git_dir(root)) else {
         return facts::Look::CouldNotLook;
     };
@@ -20066,6 +20066,7 @@ fn dispatch_envelope(
         discards: &call.discards,
         unread_history: &call.unread_history,
         commit_subject: &call.commit_subject,
+        reach: hook_reach(),
         receipts: &receipts,
         keys: &keys,
         stop: &stop,
@@ -20226,7 +20227,7 @@ fn push_repair_record(
         return;
     };
     let record = match envelope.context() {
-        Some(context) => refusal::with_legend(hook_authority_root(), &context, &repair.line_text()),
+        Some(context) => refusal::with_legend(hook_session_home(), &context, &repair.line_text()),
         None => repair.line_text(),
     };
     advice.push(advisory::Advice::rendered(
@@ -21563,7 +21564,7 @@ impl<'a> HookSighter<'a> {
 impl advisory::Sighter for HookSighter<'_> {
     fn peek(&self, refusal: &Refusal) -> refusal::Arm {
         match (self.reached, self.envelope.context()) {
-            (true, Some(context)) => refusal::peek(hook_authority_root(), &context, refusal),
+            (true, Some(context)) => refusal::peek(hook_session_home(), &context, refusal),
             _ => refusal::Arm::Full,
         }
     }
@@ -21587,7 +21588,7 @@ fn closed_emission(emission: advisory::Emission, ceiling: Option<&advisory::Chan
     // NO CALL ROW (CLOUD-2397): an overflow is the hook's own words, read now or
     // not at all, so it is left row-less — kept through the eviction grace for
     // the read the closing line invites, and taken first after it.
-    let handle = git::repo_root(hook_authority_root())
+    let handle = git::repo_root(hook_session_home())
         .ok()
         .and_then(|root| {
             capture::store(
@@ -21610,7 +21611,7 @@ fn closed_emission(emission: advisory::Emission, ceiling: Option<&advisory::Chan
 /// to mark it in, which is the session-less payload every other store skips too.
 fn legend_for(envelope: &hook::Envelope, text: String) -> String {
     match envelope.context() {
-        Some(context) => refusal::with_legend(hook_authority_root(), &context, &text),
+        Some(context) => refusal::with_legend(hook_session_home(), &context, &text),
         None => text,
     }
 }
@@ -21727,7 +21728,7 @@ fn stamp_session(envelope: &hook::Envelope) {
     if envelope.event != hook::Event::SessionStart {
         return;
     }
-    let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+    let Ok(git_dir) = git::git_dir(hook_session_home()) else {
         return;
     };
     // `RECEIPT_DIR` under the PER-WORKTREE directory, which is where
@@ -21954,7 +21955,7 @@ fn report_container_health(
     if envelope.event != hook::Event::SessionStart {
         return;
     }
-    let here = hook_authority_root();
+    let here = hook_session_home();
     // A tree with no consumer has nothing to be misconfigured FOR, which is
     // `refresh_pinned`'s narrowing and for the same reason.
     if !here.join(config::CONFIG_FILE).exists() {
@@ -22009,7 +22010,7 @@ fn expire_wiring_record(envelope: &hook::Envelope) {
     if envelope.event != hook::Event::SessionStart {
         return;
     }
-    let _ = wiring::clear_at_load(hook_authority_root());
+    let _ = wiring::clear_at_load(hook_session_home());
 }
 
 /// Close this context's sighting epoch at a `SessionStart` that loses the window
@@ -22034,7 +22035,7 @@ fn expire_sightings(envelope: &hook::Envelope) {
     };
     match envelope.start_source.as_deref() {
         Some("resume" | "fork") => {}
-        _ => refusal::forget_sightings(hook_authority_root(), &context),
+        _ => refusal::forget_sightings(hook_session_home(), &context),
     }
 }
 
@@ -22051,7 +22052,7 @@ fn expire_history_reads(envelope: &hook::Envelope) {
     if envelope.event != hook::Event::SessionStart || carried {
         return;
     }
-    let (Some(context), Ok(git_dir)) = (envelope.context(), git::git_dir(hook_authority_root()))
+    let (Some(context), Ok(git_dir)) = (envelope.context(), git::git_dir(hook_session_home()))
     else {
         return;
     };
@@ -22189,7 +22190,7 @@ fn point_at_spills(
             _ => {}
         }
     }
-    let root = git::repo_root(hook_authority_root()).ok()?;
+    let root = git::repo_root(hook_session_home()).ok()?;
     let mut stored = Vec::new();
     for spill in spilled {
         let leaf = capture::store_file(&root, capture::Stream::Response, &spill.path).ok()?;
@@ -22305,7 +22306,7 @@ fn reads_a_view(envelope: &hook::Envelope) -> bool {
     else {
         return false;
     };
-    let Ok(root) = git::repo_root(hook_authority_root()) else {
+    let Ok(root) = git::repo_root(hook_session_home()) else {
         return false;
     };
     capture::is_view(&root, Path::new(path))
@@ -22327,7 +22328,7 @@ fn collapse_seen_output(envelope: &hook::Envelope) -> Option<serde_json::Value> 
     if !runs_engine(&envelope.command) {
         return None;
     }
-    let root = hook_authority_root();
+    let root = hook_session_home();
     let mut rewritten = envelope.result.clone();
     let mut changed = false;
     for stream in ["stdout", "stderr"] {
@@ -22423,7 +22424,7 @@ fn bound_result(
     // No repository, no store: the bound needs somewhere to put the bytes it
     // takes out of the window, and minting a state root under the cwd is what
     // `capture_response` refuses for the same reason.
-    let root = git::repo_root(hook_authority_root()).ok()?;
+    let root = git::repo_root(hook_session_home()).ok()?;
     let bytes = serde_json::to_vec(result).ok()?;
     let stored = capture::store(&root, capture::Stream::Response, &bytes).ok()?;
     record_stored(&root, envelope, harness, capture::POST_TOOL_MEMBER, &stored);
@@ -22442,7 +22443,7 @@ fn forget_drain_result(envelope: &hook::Envelope) {
     let Some(session) = envelope.session.as_deref() else {
         return;
     };
-    let Ok(repo) = git::repo_root(hook_authority_root()) else {
+    let Ok(repo) = git::repo_root(hook_session_home()) else {
         return;
     };
     let Ok(resolved) = store::resolve(&repo) else {
@@ -23304,7 +23305,7 @@ fn drain_advisories(
     // and where the repository is — so in a linked worktree with no committed
     // authority of its own the drain returned early while the store it wanted was
     // bound perfectly well one directory up.
-    let here = hook_authority_root();
+    let here = hook_session_home();
     if !here.join(config::CONFIG_FILE).exists() {
         return Ok(());
     }
@@ -23752,7 +23753,7 @@ fn record_history_reads(envelope: &hook::Envelope) {
     {
         return;
     }
-    let root = hook_authority_root();
+    let root = hook_session_home();
     let (Some(context), Ok(git_dir)) = (envelope.context(), git::git_dir(root)) else {
         return;
     };
@@ -23846,7 +23847,7 @@ fn stop_nudges(
     // make `doctor session` answer could-not-look over a session it watched, which
     // is the distinction CLOUD-1372 spent a rule on. Only the SPEAKING half is
     // suppressed.
-    let root = &hook_authority_root();
+    let root = &hook_session_home();
     // THE TRANSCRIPT SEAM, and it is a WRITE this routine owes rather than a rule
     // (CLOUD-990). `[transcript].path` names one fixed repo-relative path because
     // the key is the committed authority and is deliberately unlayerable — a
@@ -24937,7 +24938,7 @@ fn stop_handler_advice(overrides: &Overrides, raw: &str) -> Vec<refusal::Refusal
         return Vec::new();
     };
     let dispatched = handler::dispatch(
-        hook_authority_root(),
+        hook_session_home(),
         &table.handlers,
         hook::Event::Stop,
         "",
@@ -25585,7 +25586,7 @@ fn capture_response(
     // resolves through `hook_authority_root`, and a capture written under one
     // root while its budget is read from another is two authorities for one
     // call.
-    let Ok(root) = git::repo_root(hook_authority_root()) else {
+    let Ok(root) = git::repo_root(hook_session_home()) else {
         note(capture::STATE_ROOT_UNRESOLVED);
         return;
     };
@@ -25715,7 +25716,7 @@ fn record_absent_response(
     harness: hook::Harness,
     advice: &mut Vec<advisory::Advice>,
 ) {
-    let Ok(root) = git::repo_root(hook_authority_root()) else {
+    let Ok(root) = git::repo_root(hook_session_home()) else {
         return;
     };
     record_absence(&root, envelope, harness, capture::RESPONSE_ABSENT, advice);
@@ -25869,7 +25870,7 @@ fn collect_before_admitting(
 /// capture must not fail because config did not parse, so an unreadable
 /// authority means the engine defaults rather than an error.
 fn capture_budget() -> Option<capture::CaptureConfig> {
-    let text = std::fs::read_to_string(hook_authority_root().join(config::CONFIG_FILE)).ok()?;
+    let text = std::fs::read_to_string(hook_session_home().join(config::CONFIG_FILE)).ok()?;
     let parsed: config::Config = toml::from_str(&text).ok()?;
     parsed.capture
 }
@@ -25930,41 +25931,163 @@ fn hook_authority_root() -> &'static Path {
 
 static HOOK_AUTHORITY_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
-/// Pin [`hook_authority_root`] for this call from the session, before any reader
-/// asks (CLOUD-2204).
+// CLOUD-2672's ledger split, at the legend read in `render`.
+//MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
+//MUTANT ledger-follows-target|s@^                .is_some_and(\x7ccontext\x7c refusal::legend_due(hook_session_home(), \&context))$@                .is_some_and(\x7ccontext\x7c refusal::legend_due(hook_authority_root(), \&context))@|a_visit_keeps_the_session_ledger_in_the_home
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+/// The session's home (CLOUD-2672): the root its ledger lives under, which a
+/// visit to another repository never moves. Falls back to the judging root where
+/// the call resolved no home, so a reader is never left without a store.
+fn hook_session_home() -> &'static Path {
+    HOOK_SESSION_HOME
+        .get()
+        .map_or_else(hook_authority_root, PathBuf::as_path)
+}
+
+static HOOK_SESSION_HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Where this call stands and what it reaches, as [`seed_hook_authority`]
+/// placed it (CLOUD-2672).
+fn hook_reach() -> &'static hook::Reach {
+    HOOK_REACH.get().unwrap_or(&hook::NO_REACH)
+}
+
+static HOOK_REACH: std::sync::OnceLock<hook::Reach> = std::sync::OnceLock::new();
+
+/// Pin the call's two roots before any reader asks (CLOUD-2204, CLOUD-2672).
 ///
-/// **The cwd is where the shell happens to stand, not which repository governs
-/// the session.** A host launched above its checkouts (`/home/user` holding
-/// `batten/` and `marketing/`, the ordinary multi-repository cloud session)
-/// snaps the shell back to that parent whenever a `cd` leaves a working
-/// directory, and from there [`anchor`] resolves no authority. Measured
-/// 2026-10-11: every call after that point was judged by
-/// `Policy::declaring_nothing` — `forge read first` never routed a bare,
-/// proxied `gh api` write to the memory saying why it 403s — and nothing said
-/// the gates had gone dark.
+/// **The judging root is the call's target.** A call is judged by the first of
+/// its targets (`hook::call_targets`) that places in a repository holding an
+/// authority, and otherwise by its session's home. The start directory is the
+/// payload's `cwd` where the host sent one, the process's otherwise.
 ///
-/// So a call whose cwd resolves an authority records it for its session, and a
-/// call whose cwd resolves none is judged by the one its session last stood in.
+/// **The home is where the session started, and a visit does not move it.** It
+/// is written by the first call whose START directory places an authority; a
+/// later call re-homes it only from the same repository (a linked worktree of
+/// it, CLOUD-2532) or when the home lost its authority. So the session's ledger
+/// (sightings, captures, history reads) stays in one store, while what a call
+/// is judged by, and the receipts it mints, follow the repository it acts on.
+///
 /// A recorded fact, never a search, so no directory is walked (house-style §8).
 /// A session that never stood in a Batten repository stays fail-open (CLOUD-70).
 //MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
-//MUTANT session-authority-ignored|s@^    if let Some(root) = state::recorded_session_authority(session, config::CONFIG_FILE) {$@    if let Some(root) = None::<PathBuf> {@|a_call_outside_the_repository_is_judged_by_the_session_authority
+//MUTANT call-target-ignored|s@^    let judging = target_root(placed.as_deref());$@    let judging = None::<PathBuf>;@|a_call_is_judged_by_the_repository_it_targets
+//MUTANT session-home-rewritten|s@^        \&\& (home.is_none() \x7c\x7c same_repository(home.as_deref(), start_root))$@        \&\& true@|a_visit_to_another_repository_does_not_rehome_the_session
+//MUTANT unplaceable-target-dropped|s@^            git::Placement::Unplaceable => return None,$@            git::Placement::Unplaceable => continue,@|an_unplaceable_target_is_refused_where_reach_is_armed
 fn seed_hook_authority(envelope: &hook::Envelope) -> &'static Path {
-    let Some(session) = envelope.session.as_deref() else {
-        return hook_authority_root();
-    };
-    let here = anchor();
-    if here.join(config::CONFIG_FILE).is_file() {
-        let _ = state::record_session_authority(session, &git::canonical(&here));
-        // Pinned here too, so the readers below do not resolve `anchor` again:
-        // a second git spawn on the hottest path for an answer already in hand.
-        let _ = HOOK_AUTHORITY_ROOT.set(here);
-        return hook_authority_root();
+    let start = envelope
+        .cwd
+        .clone()
+        .filter(|dir| dir.is_dir())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let start_root = authority_placed(&start);
+    let home = session_home(envelope.session.as_deref(), start_root.as_deref());
+    let placed = hook::call_targets(envelope, &start).and_then(|targets| placed_roots(&targets));
+    let judging = target_root(placed.as_deref());
+    if let Some(root) = judging.or_else(|| home.clone()) {
+        // The anchor's own spelling where it names the same directory, so a
+        // session standing at its root keeps the relative `.` every pointer is
+        // rendered against.
+        let here = anchor();
+        let pinned = if git::canonical(&here) == root {
+            here
+        } else {
+            root
+        };
+        let _ = HOOK_AUTHORITY_ROOT.set(pinned);
     }
-    if let Some(root) = state::recorded_session_authority(session, config::CONFIG_FILE) {
-        let _ = HOOK_AUTHORITY_ROOT.set(root);
+    if let Some(home) = &home {
+        let _ = HOOK_SESSION_HOME.set(home.clone());
     }
+    let _ = HOOK_REACH.set(reach_of(&start, placed.as_deref(), home.as_deref()));
     hook_authority_root()
+}
+
+/// The root a directory places in, where that root carries the authority.
+fn authority_placed(dir: &Path) -> Option<PathBuf> {
+    match git::placement(dir, config::CONFIG_FILE) {
+        git::Placement::Root(root) if root.join(config::CONFIG_FILE).is_file() => Some(root),
+        _ => None,
+    }
+}
+
+/// The session's home: recorded by the first call whose start directory places
+/// an authority, and moved only within the same repository or off a ghost.
+fn session_home(session: Option<&str>, start_root: Option<&Path>) -> Option<PathBuf> {
+    let Some(session) = session else {
+        return start_root.map(Path::to_path_buf);
+    };
+    let home = state::recorded_session_authority(session, config::CONFIG_FILE);
+    if let Some(start_root) = start_root
+        && (home.is_none() || same_repository(home.as_deref(), start_root))
+    {
+        let _ = state::record_session_authority(session, start_root);
+        return Some(start_root.to_path_buf());
+    }
+    home
+}
+
+/// Whether `home` and `root` are checkouts of one repository: one common dir.
+fn same_repository(home: Option<&Path>, root: &Path) -> bool {
+    home.is_some_and(|home| {
+        matches!(
+            (git::common_dir(home), git::common_dir(root)),
+            (Ok(left), Ok(right)) if left == right
+        )
+    })
+}
+
+/// Each target's root, in target order, or `None` where one cannot be placed.
+/// A target in no repository has no root and is skipped.
+fn placed_roots(targets: &[PathBuf]) -> Option<Vec<PathBuf>> {
+    let mut roots = Vec::new();
+    for target in targets {
+        match git::placement(target, config::CONFIG_FILE) {
+            git::Placement::Root(root) => roots.push(root),
+            git::Placement::Outside => {}
+            git::Placement::Unplaceable => return None,
+        }
+    }
+    Some(roots)
+}
+
+/// The first placed root that carries an authority.
+fn target_root(placed: Option<&[PathBuf]>) -> Option<PathBuf> {
+    placed?
+        .iter()
+        .find(|root| root.join(config::CONFIG_FILE).is_file())
+        .cloned()
+}
+
+/// The reach the policy input and the reach gate read. The home's config is
+/// read only for a call that leaves the home or cannot be placed, so a call at
+/// home costs no second load.
+fn reach_of(start: &Path, placed: Option<&[PathBuf]>, home: Option<&Path>) -> hook::Reach {
+    let text = |path: &Path| path.to_string_lossy().into_owned();
+    let roots = placed.map(|placed| {
+        let mut roots: Vec<String> = placed.iter().map(|root| text(root)).collect();
+        roots.sort();
+        roots.dedup();
+        roots
+    });
+    let outward = home.is_some_and(|home| {
+        roots
+            .as_ref()
+            .is_none_or(|roots| roots.iter().any(|root| *root != text(home)))
+    });
+    let grade = home.filter(|_| outward).and_then(|home| {
+        let loaded = config::load(&home.join(config::CONFIG_FILE)).ok()?;
+        Some(rules::native_grade(
+            &loaded.rules,
+            rules::NativeGate::RepositoryReach,
+        ))
+    });
+    hook::Reach {
+        cwd: Some(text(&git::canonical(start))),
+        roots,
+        home: home.map(text),
+        grade,
+    }
 }
 
 fn load_policy(
@@ -26418,7 +26541,7 @@ fn arm_for(source: hook::HookSource, envelope: &hook::Envelope, refusal: &Refusa
     }
     match (source.finding_lifecycle(), envelope.context()) {
         (hook::Lifecycle::Sighted, Some(context)) => {
-            refusal::sight(hook_authority_root(), &context, refusal)
+            refusal::sight(hook_session_home(), &context, refusal)
         }
         (hook::Lifecycle::Sighted, None) | (hook::Lifecycle::PrintedFull, _) => refusal::Arm::Full,
     }
@@ -26489,7 +26612,7 @@ fn render(
         hook::Decision::Deny(refusal) => {
             // A refusal its rule asked to be counted (CLOUD-2292). A write at
             // the boundary like the one below; the rule decides, not the engine.
-            doctor::record_gap(hook_authority_root(), &refusal);
+            doctor::record_gap(hook_session_home(), &refusal);
             // THE EFFECT IS HERE AND THE RENDERING IS NOT (CLOUD-1386).
             // `render_finding` projects and stays pure; consulting-and-marking
             // the context's store is a write, and a write belongs at the boundary
@@ -26499,7 +26622,7 @@ fn render(
             // earns the epoch's legend unconditionally (CLOUD-2145).
             let legend = envelope
                 .context()
-                .is_some_and(|context| refusal::legend_due(hook_authority_root(), &context))
+                .is_some_and(|context| refusal::legend_due(hook_session_home(), &context))
                 .then_some(refusal::LEGEND);
             let rendered = refusal.render_finding(arm);
             let reason = match legend {

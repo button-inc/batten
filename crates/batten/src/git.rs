@@ -456,6 +456,64 @@ pub fn canonical(path: &Path) -> PathBuf {
     plain(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
 }
 
+/// Where a call's target sits (CLOUD-2672).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Placement {
+    /// Inside a working tree, judged by this root: the directory itself where
+    /// it holds the authority, else its worktree's, else its repository's.
+    Root(PathBuf),
+    /// In no repository at all.
+    Outside,
+    /// A repository this cannot root: one with no working tree, or a discovery
+    /// that failed for any reason but "none here".
+    Unplaceable,
+}
+
+/// Place `target` (CLOUD-2672). A target that does not exist yet is placed by
+/// its nearest existing ancestor, a lexical walk up the path, and a file by its
+/// directory; then git's own discovery, never a config search.
+///
+/// **gix's error is kept**, because `repo_root`'s untyped one cannot tell "in no
+/// repository" from "in one this cannot root", and only the first allows.
+#[must_use]
+pub fn placement(target: &Path, file: &str) -> Placement {
+    let mut probe = target.to_path_buf();
+    while !probe.exists() {
+        if !probe.pop() {
+            return Placement::Outside;
+        }
+    }
+    // Resolved BEFORE a file is stepped up from, so a symlink names the
+    // repository its target lives in, not the one holding the link.
+    let mut probe = canonical(&probe);
+    if !probe.is_dir() {
+        probe.pop();
+    }
+    match gix::discover::upwards_opts(&probe, discovery(&ceiling_dirs())) {
+        Ok((found, _)) => {
+            if found
+                .into_repository_and_work_tree_directories()
+                .1
+                .is_none()
+            {
+                return Placement::Unplaceable;
+            }
+            if probe.join(file).is_file() {
+                return Placement::Root(probe);
+            }
+            crate::config::authority_root(&probe).map_or(Placement::Unplaceable, |root| {
+                Placement::Root(canonical(&root))
+            })
+        }
+        Err(
+            gix::discover::upwards::Error::NoGitRepository { .. }
+            | gix::discover::upwards::Error::NoGitRepositoryWithinCeiling { .. }
+            | gix::discover::upwards::Error::NoGitRepositoryWithinFs { .. },
+        ) => Placement::Outside,
+        Err(_) => Placement::Unplaceable,
+    }
+}
+
 /// Resolve the root of THIS WORKING TREE — the checkout `start` is actually in.
 ///
 /// # THE SIBLING TO [`repo_root`], AND CHOOSING BETWEEN THEM IS THE WHOLE POINT

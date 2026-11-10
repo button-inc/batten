@@ -1459,6 +1459,17 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["delete `target/` by hand, which drops the units the next build needs"],
     },
     VendoredDoc {
+        id: "call reach loose",
+        why: Some(
+            "A session's ledger, captures and grants live in its home, so a call reaching another repository acts outside them",
+        ),
+        act: &[
+            "work in the other repository from a session homed there",
+            "or request an override for this crossing with `batten override request`",
+        ],
+        dont: &["respell the path or `cd` through a symlink to reach the same repository"],
+    },
+    VendoredDoc {
         id: "script run loose",
         why: Some(
             "A script file carries its writes in its own body, where no edit guard looks, so it walks around all of them",
