@@ -224,7 +224,10 @@ impl Outcome {
         }
         let subjects =
             crate::doctor::finding_subjects(&self.id, self.reason.unwrap_or("failed"), &[]);
-        Some(crate::doctor::workspace_refusal(&subjects))
+        Some(crate::doctor::workspace_refusal(
+            &subjects,
+            crate::refusal::Fix::None,
+        ))
     }
 
     fn passed(id: &str) -> Self {
