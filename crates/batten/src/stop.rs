@@ -233,7 +233,6 @@ pub enum Watch {
 /// crashed record, which `stop_hook_active` cannot provide (it resets whenever
 /// a reminder lands between Stops). The caller drops the records already
 /// spoken about before asking, so one old corpse cannot hide a newer crash.
-//MUTANT-SUITE crates/batten/src/stop.rs
 #[must_use]
 pub fn watchdog(
     abandoned: &[crate::task::Entry],

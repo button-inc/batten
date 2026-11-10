@@ -1213,7 +1213,6 @@ const MAX_RECEIPT_NAME: usize = 200;
 /// claim-keyed write exited 3. The digest is deterministic, so writers and
 /// readers agree, and the name keeps its `<record>.<branch>.` prefix, which is
 /// what `land`'s branch sweep matches. A name within the limit is unchanged.
-//MUTANT-SUITE crates/batten/src/recorder.rs
 fn receipt_name(record: &str, branch: &str, claim: Option<&str>) -> String {
     use sha2::Digest as _;
     use std::fmt::Write as _;

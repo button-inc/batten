@@ -108,7 +108,6 @@ pub enum Harness {
     ExitCode,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/cli.rs
 impl Harness {
     /// Every harness, so anything ranging over them is derived rather than
     /// re-typed — the CLOUD-40 decision-channel matrix reads this, which is what
@@ -1313,7 +1312,6 @@ pub struct Wiring {
     pub project_dir_var: Option<&'static str>,
 }
 
-//MUTANT-SUITE crates/batten/src/doctor.rs
 impl Wiring {
     /// The events to register, with this host's name for each.
     ///
@@ -1350,7 +1348,6 @@ impl Wiring {
     }
 }
 
-//MUTANT-SUITE crates/batten/src/doctor.rs
 /// Claude Code's event spellings, which Codex CLI and Copilot's `PascalCase`
 /// dialect ship verbatim (M1) — so three wiring rows share this rather than
 /// carrying three copies that could drift apart.
@@ -1433,7 +1430,6 @@ const COPILOT_ENTRY: EntryShape = EntryShape::Flat {
     read: &["bash", "command"],
 };
 
-//MUTANT-SUITE crates/batten/tests/it/harness_wiring.rs
 impl Harness {
     /// The entry shape this host reads (CLOUD-2694); the one function every
     /// writer and reader asks, so render, register, doctor and reclaim agree.
@@ -1629,7 +1625,6 @@ const GEMINI_EVENTS: &[Event] = &[
 ];
 
 /// Cursor: 9 of 21.
-//MUTANT-SUITE crates/batten/src/hook.rs
 const CURSOR_EVENTS: &[Event] = &[
     Event::PreTool,
     Event::PostTool,
@@ -1724,12 +1719,6 @@ const CLAUDE_EVENTS: &[Event] = &[
     Event::MessageDisplay,
 ];
 
-//MUTANT-SUITE crates/batten/src/doctor.rs
-//MUTANT-SUITE crates/batten/src/doctor.rs
-//MUTANT-SUITE crates/batten/src/doctor.rs
-//MUTANT-SUITE crates/batten/src/doctor.rs
-//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
-//MUTANT-SUITE crates/batten/tests/it/exit_code_handlers.rs
 impl Harness {
     /// This host's capability row.
     ///
@@ -2321,7 +2310,6 @@ pub const GIT_HOOKS: &[(&str, HookDisposition)] = &[
 const INTAKE: &str = "forge intake";
 
 /// A catalog event's door (CLOUD-2690).
-//MUTANT-SUITE crates/batten/tests/it/hook_sources.rs
 const BY_INTAKE: HookDisposition = HookDisposition::Registered { check: INTAKE };
 
 /// What batten reads from the forge, and the ingress shape it refuses to be
@@ -2597,8 +2585,6 @@ pub enum Event {
     Forge,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/hook_sources.rs
-//MUTANT-SUITE crates/batten/src/hook.rs
 impl Event {
     /// Every event, so a census is derived rather than hand-maintained.
     pub const ALL: &'static [Event] = &[
@@ -3913,8 +3899,6 @@ pub(crate) fn present_str(value: &Value, key: &str) -> Option<String> {
 /// Codex CLI and Copilot's `PascalCase` dialect ship verbatim. Only the two hosts
 /// that genuinely diverge get a table here, which is what keeps host vocabulary
 /// out of the harness-blind core.
-//MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
-//MUTANT-SUITE crates/batten/src/hook.rs
 fn normalize_event(harness: Harness, raw: &str) -> Event {
     let renamed = match harness {
         // Gemini's names are the only structural gap in an otherwise
@@ -5079,7 +5063,6 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
 // them would restore the silence — an eighth `Event` would land in a wildcard
 // nobody wrote for it, which is what registering on every surface makes likely
 // rather than hypothetical.
-//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 #[allow(clippy::match_same_arms)]
 fn adjudicated_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
     // The end-of-turn gate (CLOUD-85), and it no longer DENIES (CLOUD-889).
@@ -5239,11 +5222,8 @@ fn event_decides(event: Event) -> Option<Decision> {
 
 // CLOUD-2667's detach gate, below in `native_fired`, `detached_call`, `waited_on`
 // and `waits_on`.
-//MUTANT-SUITE crates/batten/tests/it/detached_call.rs
 // CLOUD-2683's commit-subject gate: `native_fired`, `commit_subject_gate`,
 // `segment_commit_message`, and the `cat_bodies` fill in `flatten_command`.
-//MUTANT-SUITE crates/batten/tests/it/commit.rs
-//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 /// The severity a compiled gate runs at here: [`crate::rules::native_grade`]
 /// over this policy's mediated rows (CLOUD-2291). Only the committed authority
 /// carries one (`resolve::apply_local`).
@@ -5384,8 +5364,6 @@ pub static NO_REACH: Reach = Reach {
 };
 
 // CLOUD-2672's projection, in `call_document`.
-//MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
-//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 /// The rule id the reach gate refuses under (CLOUD-2672).
 pub const REPOSITORY_REACH: &str = "repository-reach";
 
@@ -6445,8 +6423,6 @@ fn marker_path(git_dir: &std::path::Path, marker: &str, branch: &str) -> std::pa
         .join(format!("{marker}.{}", branch.replace('/', "-")))
 }
 
-//MUTANT-SUITE crates/batten/tests/it/punt_receipt.rs
-
 /// Fold a value for [`Rule::when_value`]'s comparison.
 ///
 /// Case-insensitive, and the three separators a tracker's state parameter treats
@@ -7207,7 +7183,6 @@ impl<'a> FirstStage<'a> {
 /// the bare `grep` was refused, because an early return on the assignment left
 /// every later element unjudged — the permissive direction, which nothing
 /// reports.
-//MUTANT-SUITE crates/batten/src/hook.rs
 fn first_stages<'a>(parsed: &'a [Segment], cwd: Option<&Path>) -> Vec<FirstStage<'a>> {
     let mut stages = Vec::new();
     let mut effective: Option<std::path::PathBuf> = cwd.map(Path::to_path_buf);
@@ -7541,8 +7516,6 @@ fn outside_repository(path: &Path, root: &Path) -> bool {
 // `Harness::capabilities`'s Claude Code `plan_tools` row (CLOUD-2400). Declared
 // here, directly above the next suite, because a suite declared before this
 // file's first one would become the suite of every row above it.
-//MUTANT-SUITE crates/batten/tests/it/session_drain.rs
-//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
 // CLOUD-986's arm in `pipeline_rules`, declared here because this is where the
 // file's `pipeline_shapes.rs` suite begins.
 fn followed_cd(
@@ -7647,8 +7620,6 @@ pub enum Pathspecs {
 /// The checkout and restore programs of a call, walked from `base` through
 /// each followed `cd` with CLOUD-2672's resolver. A pipe-fed restore still
 /// discards, so no stage is skipped.
-//MUTANT-SUITE crates/batten/tests/it/git_preset.rs
-//MUTANT-SUITE crates/batten/src/hook.rs
 #[must_use]
 pub fn pathspec_calls(envelope: &Envelope, base: &Path) -> Pathspecs {
     let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
@@ -8422,8 +8393,6 @@ fn disposed_at(severity: RuleSeverity, refusal: Refusal) -> Decision {
 ///
 /// Pointer-only (rule 4): the refusal names the rule and the path. The matched
 /// bytes are not carried, and `Refusal` has no field one could occupy.
-//MUTANT-SUITE crates/batten/tests/it/budget_at_call.rs
-//MUTANT-SUITE crates/batten/src/hook.rs
 /// The first budgeted set this write breaches and grows past (CLOUD-2661).
 fn budget_rules(facts: &Facts<'_>) -> Option<Refusal> {
     let crate::facts::Look::Is(measures) = facts.budgeted else {
@@ -8905,7 +8874,6 @@ pub fn policy_rewrite(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -
     clippy::too_many_lines,
     reason = "the projected document is one object, and each arm carries why that fact is or is not in it"
 )]
-//MUTANT-SUITE crates/batten/src/hook.rs
 fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde_json::Error> {
     let mut projected_facts = serde_json::Map::new();
     for fact in crate::facts::Fact::ALL {
@@ -9562,8 +9530,6 @@ pub fn history_read_ids(command: &str) -> Option<Vec<String>> {
 ///
 /// PURE, so it is tested without a process environment — a test cannot set one
 /// under `unsafe_code = "forbid"`.
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
 pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
     let positive = |raw: Option<&str>| {
         raw.and_then(|text| text.trim().parse::<u64>().ok())
@@ -9585,7 +9551,6 @@ pub(crate) fn background_max(max: Option<&str>, default: Option<&str>) -> u64 {
 /// The day a second mediator exists this becomes a set and the key becomes a
 /// name rather than a boolean; spelling it now would be a vocabulary with one
 /// member and no consumer.
-//MUTANT-SUITE crates/batten/src/hook.rs
 fn program_reach(command: &str) -> Vec<serde_json::Value> {
     let crate::facts::Look::Is(parsed) = segments(command) else {
         return Vec::new();
@@ -9739,8 +9704,6 @@ fn key_present(expression: &str, command: &str, keys: &KeyFacts) -> bool {
     evidence.iter().any(|text| pattern.is_match(text))
 }
 
-//MUTANT-SUITE crates/batten/tests/it/word_filters.rs
-//MUTANT-SUITE crates/batten/src/hook.rs
 /// Every shape row this command matches, in declaration order within each
 /// segment.
 ///
@@ -9904,8 +9867,6 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
     matched
 }
 
-//MUTANT-SUITE crates/batten/tests/it/ready_event.rs
-//MUTANT-SUITE crates/batten/src/hook.rs
 /// The event this call raises, on any route the engine knows (CLOUD-2662).
 pub(crate) fn call_event(envelope: &Envelope) -> Option<CallEvent> {
     if envelope.command.is_empty() {
@@ -10556,7 +10517,6 @@ fn script_texts(program: &str, arguments: &[&str], stdin: &[String]) -> Vec<Stri
 
 /// The first protected path a script names, split on the characters that
 /// cannot be part of a path a program spells as a literal.
-//MUTANT-SUITE crates/batten/src/hook.rs
 fn protected_in_text(policy: &Policy, text: &str) -> Option<String> {
     text.split(|c: char| {
         c.is_whitespace()
@@ -10911,8 +10871,6 @@ fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
 /// blank from rendering a fix clause that says nothing.
 ///
 /// [`RuleKind::Shape`]: crate::rules::RuleKind::Shape
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
 fn shape_refusal(rule: &Rule) -> Refusal {
     // THE SHAPE THE ROW DECLARES IS THE SUBJECT (CLOUD-2185): its `pattern`
     // (`cargo`, `gh pr merge`) or its `tool`. That is config, never the caller's

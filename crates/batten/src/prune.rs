@@ -254,7 +254,6 @@ impl Readings {
 /// It does not try to tell current from stale: cargo keeps every generation's
 /// fingerprint, so "has a fingerprint" would mark everything live and reclaim
 /// nothing, which is CLOUD-766's disk exhaustion back.
-//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
 pub(crate) fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
     let mut pruned = 0;
     let mut bytes = 0;
@@ -532,7 +531,6 @@ const RECLAIMED_KINDS: &[&str] = &["rlib", "rmeta", "so"];
 /// toolchain or flag change is a real new generation of the same unit, and
 /// keying on it would leave the old toolchain's output unreclaimable. `local` and
 /// `deps` are left out because they are what changes between generations.
-//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
 const UNIT_IDENTITY: &[&str] = &["target", "path", "profile", "features", "compile_kind"];
 
 /// Every unit identity recorded under a profile's `.fingerprint`, by hash.
@@ -751,7 +749,6 @@ pub fn sampler(path: PathBuf) -> Result<impl FnMut() -> Result<u64> + Send> {
 ///
 /// **The committed file, never a layered view.** `[prune]` is authority-only, so
 /// there is no override for this read to miss.
-//MUTANT-SUITE crates/batten/src/prune.rs
 #[must_use]
 pub fn declared_alone(dir: &Path) -> Option<Prune> {
     let text = std::fs::read_to_string(dir.join(crate::config::CONFIG_FILE)).ok()?;
@@ -781,7 +778,6 @@ const BUILD_LOCK: &str = ".cargo-lock";
 /// same lock blocking, so a build starting mid-reclaim waits, then finds a tree
 /// that is simply colder. A lock that cannot be opened is no lock at all — a tree
 /// cargo never built into, which is exactly what the pass already handled.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 pub(crate) fn claim(root: &Path, path: &Path) -> Result<Vec<std::fs::File>, PathBuf> {
     let enclosing = path.ancestors().take_while(|dir| dir.starts_with(root));
     let nested = PROFILE_DIRS.iter().map(|profile| path.join(profile));

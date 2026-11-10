@@ -779,7 +779,6 @@ fn the_reachable_set_is_not_empty() {
 // zero bodies. So the mutation makes the extraction yield nothing, and the case
 // it must redden is the anti-vacuity one — which is the only case that can tell
 // "nothing compiles" from "nothing was read".
-//MUTANT-SUITE crates/batten/tests/it/session_provisioning.rs
 #[test]
 fn no_session_start_step_compiles_the_engine() {
     for (name, body) in reachable_session_task_bodies() {

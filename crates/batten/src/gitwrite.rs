@@ -1432,7 +1432,6 @@ pub fn unlink_worktree(worktree: &Path) -> Result<(std::path::PathBuf, Option<St
 /// the failures are reported together afterwards: returning on the first is what
 /// left 50 files behind (CLOUD-1948), and a partial worktree is worse than a loud
 /// one because it reads as the branch's own untracked work.
-//MUTANT-SUITE crates/batten/tests/it/rebase.rs
 fn remove_gone(
     workdir: &Path,
     gone: &std::collections::BTreeSet<Vec<u8>>,
@@ -1942,7 +1941,6 @@ pub fn diff3(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<String> {
 /// The patch identities a replay drops rather than re-applies (CLOUD-1586,
 /// CLOUD-2086): the base's, and on a bet's unwind the upstream's too. Split out
 /// of [`replay_range`] to keep that function a readable length.
-//MUTANT-SUITE crates/batten/tests/it/rebase.rs
 fn drop_set(
     dir: &Path,
     branch: &str,
@@ -2439,9 +2437,9 @@ mod tests {
     #[test]
     fn a_bare_repository_is_initialised_on_main() {
         let dir = crate::scratch::scratch("gitwrite-bare-main");
-        init_bare_on_main(&dir).unwrap();
+        init_bare_on_main(&dir).unwrap_or_else(|err| panic!("{err}"));
         assert_eq!(
-            std::fs::read_to_string(dir.join("HEAD")).unwrap(),
+            std::fs::read_to_string(dir.join("HEAD")).unwrap_or_else(|err| panic!("{err}")),
             "ref: refs/heads/main\n"
         );
     }
@@ -2451,20 +2449,26 @@ mod tests {
     #[test]
     fn a_worktree_name_must_be_relative_and_its_target_new() {
         let top = crate::scratch::scratch("gitwrite-link-names");
-        init_on_main(&top).unwrap();
-        commit_paths(&top, &[], "seed").unwrap();
+        init_on_main(&top).unwrap_or_else(|err| panic!("{err}"));
+        commit_paths(&top, &[], "seed").unwrap_or_else(|err| panic!("{err}"));
         let common = top.join(".git");
         for name in ["", "/abs", "a/../b"] {
-            let refused = link_worktree(&common, &top, name).unwrap_err();
+            let refused = link_worktree(&common, &top, name)
+                .err()
+                .unwrap_or_else(|| panic!("must be refused"));
             assert!(
                 refused.to_string().contains("not a relative name"),
                 "{name:?}: {refused}"
             );
         }
-        std::fs::create_dir_all(top.join(".claude").join("worktrees").join("dir")).unwrap();
-        std::fs::create_dir_all(common.join("worktrees").join("admin")).unwrap();
+        std::fs::create_dir_all(top.join(".claude").join("worktrees").join("dir"))
+            .unwrap_or_else(|err| panic!("{err}"));
+        std::fs::create_dir_all(common.join("worktrees").join("admin"))
+            .unwrap_or_else(|err| panic!("{err}"));
         for name in ["dir", "admin"] {
-            let refused = link_worktree(&common, &top, name).unwrap_err();
+            let refused = link_worktree(&common, &top, name)
+                .err()
+                .unwrap_or_else(|| panic!("must be refused"));
             assert!(refused.to_string().contains("exists"), "{name}: {refused}");
         }
     }
@@ -2475,13 +2479,13 @@ mod tests {
     #[test]
     fn a_linked_worktree_round_trips_its_directory_common_dir_and_branch() {
         let top = crate::scratch::scratch("gitwrite-link-round-trip");
-        init_on_main(&top).unwrap();
-        commit_paths(&top, &[], "seed").unwrap();
+        init_on_main(&top).unwrap_or_else(|err| panic!("{err}"));
+        commit_paths(&top, &[], "seed").unwrap_or_else(|err| panic!("{err}"));
         let common = top.join(".git");
-        let dir = link_worktree(&common, &top, "feat").unwrap();
+        let dir = link_worktree(&common, &top, "feat").unwrap_or_else(|err| panic!("{err}"));
         assert_eq!(dir, top.join(".claude").join("worktrees").join("feat"));
         assert!(dir.join(".git").is_file());
-        let (answered, branch) = unlink_worktree(&dir).unwrap();
+        let (answered, branch) = unlink_worktree(&dir).unwrap_or_else(|err| panic!("{err}"));
         assert_eq!(answered, crate::git::canonical(&common));
         assert_eq!(branch.as_deref(), Some("refs/heads/worktree-feat"));
         assert!(!dir.exists());

@@ -705,7 +705,6 @@ pub fn window_over(
 // replaced — a stop that ends nothing, and a stop that ends the walk but is then
 // judged by `total_count` and reported truncated. The third drops the prefix the
 // truncated arm now carries, which a count-only assertion cannot see.
-//MUTANT-SUITE crates/batten/tests/it/forge_window.rs
 #[must_use]
 pub fn window_until(
     git_dir: &Path,

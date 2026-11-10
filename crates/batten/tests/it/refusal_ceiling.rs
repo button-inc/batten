@@ -331,7 +331,6 @@ fn committed() -> String {
 /// reclaim -y`, a forge probe over the network. Measured 2026-10-08
 /// (CLOUD-2173): 200 spawned processes and 78s for one `SessionStart` alone, and
 /// 260s under the suite, which made each such case the suite's critical path.
-//MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
 fn session_fixture(name: &str) -> PathBuf {
     let mut config: toml_edit::DocumentMut =
         committed().parse().expect("the committed config is TOML");

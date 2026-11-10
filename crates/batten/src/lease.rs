@@ -1273,7 +1273,6 @@ impl Body {
 // existed because `schema: tomorrow` contains `": "` and reaches the match arm —
 // two spellings of one case taking different branches, and the test picked the
 // branch that already worked.
-//MUTANT-SUITE crates/batten/src/lease.rs
 #[must_use]
 pub fn parse_body(object: &[u8]) -> Option<Body> {
     let text = String::from_utf8_lossy(object);
@@ -2447,7 +2446,6 @@ pub fn outranks(ours: &str, theirs: &str) -> bool {
 ///
 /// A released or expired body is not excluded here and does not need to be: the
 /// caller only reaches this on `Turn::Wait`, which those states never produce.
-//MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
 #[must_use]
 pub fn worth_asking(body: &Body, asker: &str) -> bool {
     outranks(&writer_version(), &body.writer)
@@ -2789,7 +2787,6 @@ pub fn cooling(poisoned_at: Option<&str>, trunk_now: &str, observed: &Observed) 
 // Each rival clause, dropped. Either alone clears the measured self-deadlock,
 // so each is pinned by its own assertion: a lapsed rival nobody is beating, and
 // this clone's own live lease (CLOUD-2248).
-//MUTANT-SUITE crates/batten/src/lease.rs
 #[must_use]
 pub fn cooling_for(
     poisoned_at: Option<&str>,
@@ -2902,7 +2899,6 @@ pub fn progress_of(git_dir: &std::path::Path, pid: u32) -> Option<Progress> {
 /// `None` wherever there is nothing to read, which [`progress_of`] documents as
 /// the honest answer for a lap whose bookkeeping never registered rather than as
 /// evidence of a stall.
-//MUTANT-SUITE crates/batten/tests/it/lease_health.rs
 #[must_use]
 pub fn own_progress(git_dir: &std::path::Path, pid: u32) -> Option<String> {
     progress_of(git_dir, pid).map(Progress::token)
@@ -3601,7 +3597,6 @@ pub enum Carries {
 ///
 /// [`crate::rest::Answer::is_reading`] is the one test, and this file's own
 /// siblings already take it.
-//MUTANT-SUITE crates/batten/tests/it/lease_world.rs
 #[must_use]
 fn forge_read(path: &str) -> String {
     crate::rest::get(path, None).map_or_else(String::new, |answer| {

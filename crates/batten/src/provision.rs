@@ -702,7 +702,6 @@ pub fn status_on(entries: &[Provision], cache_root: &Path, host: Host<'_>) -> Re
 /// installed, it alone provisions the host. The cache is the repository's own,
 /// so a build of it still fills it — the scanner a gate needs stays reachable.
 #[must_use]
-//MUTANT-SUITE crates/batten/src/provision.rs
 pub fn links_host(exe: &Path, repo_root: &Path) -> bool {
     !exe.starts_with(repo_root)
 }
@@ -765,7 +764,6 @@ pub fn link_dir(dest: &str, host: Host<'_>) -> Result<PathBuf> {
 }
 
 /// [`link_dir`] over `dest` already expanded to `declared`.
-//MUTANT link-ignores-path|s@ host.on_path, host.writable)$@ \&[], host.writable)@|a_declared_link_off_path_follows_engine_installs_fallback
 fn placed(dest: &str, declared: PathBuf, host: Host<'_>) -> PathBuf {
     if !dest.starts_with("~/") {
         return declared;
@@ -837,7 +835,6 @@ fn link_of(entry: &Provision, host: Host<'_>) -> Result<Option<Link>> {
 /// FREE MEANS NOTHING AT THE NAME, not even a dangling symlink: `exists`
 /// follows the link, and a package manager's symlink into a keg it is midway
 /// through upgrading is still that package manager's name.
-//MUTANT fallback-claims-a-foreign-name|s@^    fs::symlink_metadata(\&linked).is_err()$@    true@|a_fallback_never_takes_a_name_another_tool_owns
 fn claimable(dir: &Path, entry: &Provision, cache_root: &Path) -> bool {
     let linked = dir.join(entry.cached_name());
     fs::symlink_metadata(&linked).is_err()
@@ -982,7 +979,6 @@ struct Subtree {
 
 /// This host's [`Subtree`], or `None` for a single-file entry. A platform row's
 /// `strip` and `bin` override the entry's, as its `unpack` does.
-//MUTANT-SUITE crates/batten/tests/it/provision.rs
 fn subtree_of(entry: &Provision, artifact: &Artifact) -> Option<Subtree> {
     let bin = artifact.bin.as_deref().or(entry.bin.as_deref());
     let strip = artifact.strip.or(entry.strip).unwrap_or(0);
@@ -1116,7 +1112,6 @@ pub enum Applied {
 ///
 /// `links_host` is [`links_host`]'s answer: `false` leaves the declared link —
 /// the host's, not the repository's — unjudged and unwritten.
-//MUTANT-SUITE crates/batten/tests/it/provision.rs
 pub fn apply(
     entry: &Provision,
     cache_root: &Path,
@@ -1360,7 +1355,6 @@ const LAUNCHER_VERB: &str = "provision-exec";
 ///
 /// `dir` is already resolved, by [`link_dir`] on the host [`status_on`] judges
 /// (CLOUD-2617).
-//MUTANT-SUITE crates/batten/tests/it/provision.rs
 fn link_into(
     entry: &Provision,
     dir: &Path,
@@ -2364,7 +2358,6 @@ fn expand_home(dest: &str) -> Result<PathBuf> {
 /// Staged beside and renamed in, never written in place: a running process
 /// keeps its open files, and a failed extraction leaves the old tree and the
 /// artifact as they were.
-//MUTANT-SUITE crates/batten/tests/it/provision.rs
 fn install_tree(dir: &Path, unpack: Unpack, subtree: &Subtree, bytes: &[u8]) -> Result<PathBuf> {
     fs::create_dir_all(dir).context("create the provision cache directory")?;
     let pid = std::process::id();
@@ -2398,7 +2391,6 @@ fn install_tree(dir: &Path, unpack: Unpack, subtree: &Subtree, bytes: &[u8]) -> 
 }
 
 /// The staged tree's binary must be a file, and is made executable.
-//MUTANT-SUITE crates/batten/tests/it/provision.rs
 fn staged_bin(staged: &Path, subtree: &Subtree) -> Result<()> {
     let bin = &subtree.bin;
     if !staged.join(bin).is_file() {
@@ -2428,7 +2420,6 @@ fn climbs_out(path: &Path) -> anyhow::Error {
 
 /// `path` with its first `strip` components dropped, `None` when nothing is
 /// left; a root, prefix or `..` component is refused.
-//MUTANT-SUITE crates/batten/tests/it/provision.rs
 fn stripped(path: &Path, strip: usize) -> Result<Option<PathBuf>> {
     let mut parts = Vec::new();
     for component in path.components() {
@@ -2465,7 +2456,6 @@ fn lexically_inside(parent: &Path, link: &Path) -> bool {
 
 /// Write one archive entry under `tree` (CLOUD-2682), the one rule set the tar
 /// and zip loops share.
-//MUTANT-SUITE crates/batten/tests/it/provision.rs
 fn place(
     tree: &Path,
     strip: usize,
@@ -2513,7 +2503,6 @@ fn place(
 
 /// A symlink whose target stays inside the tree (CLOUD-2682): relative, and
 /// resolved lexically from its own directory.
-//MUTANT-SUITE crates/batten/tests/it/provision.rs
 #[cfg(unix)]
 fn place_symlink(parent: &Path, target: &Path, link: &Path, raw: &Path) -> Result<()> {
     let link_target = link.to_path_buf();
@@ -2583,7 +2572,6 @@ fn extract_tree_tar(bytes: &[u8], tree: &Path, subtree: &Subtree) -> Result<()> 
 }
 
 /// Extract a zip archive as a subtree (CLOUD-2682).
-//MUTANT-SUITE crates/batten/tests/it/provision.rs
 fn extract_tree_zip(bytes: &[u8], tree: &Path, subtree: &Subtree) -> Result<()> {
     let mut archive =
         zip::ZipArchive::new(std::io::Cursor::new(bytes)).context("read the zip archive")?;
@@ -2760,7 +2748,6 @@ fn body_of(url: &str, response: crate::fetch::Response) -> Result<Vec<u8>> {
 /// refusing at load rather than at fetch time: it can never match, so every
 /// apply would fail with a mismatch that blames the artifact for a typo in the
 /// config.
-//MUTANT-SUITE crates/batten/tests/it/provision.rs
 pub fn validate(entries: &[Provision]) -> Result<()> {
     let mut seen: Vec<&str> = Vec::new();
     for entry in entries {
@@ -4363,4 +4350,3 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
 
 // The launcher and probe suite over the compiled binary: its subprocess cases
 // reach the credential verdicts and the HTTPS fetch no unit case can.
-//MUTANT-SUITE crates/batten/tests/it/provision.rs

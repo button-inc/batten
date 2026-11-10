@@ -253,7 +253,6 @@ fn merged(entries: Vec<Advice>) -> Vec<Advice> {
 ///
 /// Even where it alone exceeds the ceiling: a channel that could emit nothing
 /// would turn a budget into a mute switch.
-//MUTANT-SUITE crates/batten/src/advisory.rs
 #[must_use]
 pub fn admit(
     entries: Vec<Advice>,

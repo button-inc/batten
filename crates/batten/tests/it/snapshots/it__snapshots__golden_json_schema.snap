@@ -2654,6 +2654,15 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "mutate jobs",
+          "id": "mutate.jobs",
+          "about": "Print how many cargo-mutants jobs this machine holds at the tree's declared per-job cost",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
+          "subcommands": []
+        },
+        {
           "path": "mutate sweep",
           "id": "mutate.sweep",
           "about": "Apply every declared mutation to its source and report the ones its declared suite did not catch",
@@ -5568,6 +5577,10 @@ expression: stdout_of(&output)
     {
       "id": "mutate.census",
       "path": "mutate census"
+    },
+    {
+      "id": "mutate.jobs",
+      "path": "mutate jobs"
     },
     {
       "id": "payload",

@@ -58,7 +58,6 @@ const DISPOSABLE: &str = "disposable";
 /// The read itself is judged over the compiled binary (CLOUD-2497): the reclaim
 /// suite runs one bench declared disposable and one not, and each repairs only
 /// as its declaration licenses.
-//MUTANT-SUITE crates/batten/tests/it/wiring_reclaim.rs
 #[must_use]
 pub fn disposable() -> bool {
     licenses(std::env::var(KEY).ok().as_deref())

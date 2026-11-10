@@ -160,7 +160,6 @@ pub fn propose(marked: &str) -> Option<Proposal> {
 /// THE MUTANT NEUTERS `comment_only`'s GUARD rather than appending a catch-all
 /// arm here: a row is split on `|`, so a closure's `||` in the sed would make it
 /// a five-field row that never runs (`mem:toolchain-and-hooks`).
-//MUTANT-SUITE crates/batten/tests/it/land_propose.rs
 fn resolve_region(ours: &[&str], base: &[&str], theirs: &[&str]) -> Option<(String, Shape)> {
     comment_only(ours, base, theirs)
         .or_else(|| list_union(ours, base, theirs))

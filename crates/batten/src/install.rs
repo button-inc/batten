@@ -495,7 +495,6 @@ impl Lock {
 /// it, and keeps it only if it answered. The script used to guess from a
 /// `/lib/ld-musl-*` loader, which handed a gnu binary to every host with no libc
 /// or too old a glibc.
-//MUTANT-SUITE crates/batten/tests/it/install_web.rs
 #[must_use]
 pub fn render_bootstrap(name: &str, repository: &str, lock: &Lock) -> String {
     let asset = bootstrap_asset(name);
@@ -591,7 +590,6 @@ pub const SYSTEM_BIN_DIRS: &[&str] = &["/usr/local/bin", "/opt/homebrew/bin"];
 /// directory, so the runner a setup provisions follows the same PATH fallback
 /// rather than landing where the same shell cannot resolve it.
 /// `BATTEN_INSTALL_DIR` and `XDG_BIN_HOME` steer only `engine install`.
-//MUTANT-SUITE crates/batten/src/install.rs
 #[must_use]
 pub fn destination(
     named: Option<std::path::PathBuf>,

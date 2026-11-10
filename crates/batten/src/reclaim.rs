@@ -37,7 +37,6 @@
 // it (CLOUD-2193), and a Rust suite selects the runner rather than a target, so
 // the rows whose case lives in `tests/it/reclaim_census.rs` or
 // `tests/it/reclaim_report_once.rs` select it by libtest substring under this one.
-//MUTANT-SUITE crates/batten/src/reclaim.rs
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

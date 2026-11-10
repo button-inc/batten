@@ -219,7 +219,6 @@ pub const REPEAT_RULE: &str = "hook-repeat-pointer";
 /// findings is judged per finding: a full arm counts per `(segment, key)`, and a
 /// pointer arm never counts, since pointing is what a repeat is meant to do.
 /// Unlabelled output keeps the `(segment, hook, digest)` key.
-//MUTANT-SUITE crates/batten/src/hookcost.rs
 #[must_use]
 pub fn measure(stream: &Stream) -> Reading {
     let mut per_hook: BTreeMap<String, Cost> = BTreeMap::new();

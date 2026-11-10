@@ -61,7 +61,6 @@ pub const OUT_DIR: &str = "dist";
 
 // The decisions a naive port loses. Each is caught by the case it names, run
 // from this file.
-//MUTANT-SUITE crates/batten/src/dist.rs
 
 /// Whether a target triple builds a Windows binary.
 ///

@@ -204,7 +204,16 @@ fn an_everyday_git_call_is_granted() {
         "git log",
         "git reset --soft HEAD~1",
     ] {
-        assert!(granted("auto", call), "must be pre-approved: {call}");
+        // By THIS preset's rule: in auto mode `call grant now` answers a
+        // non-destructive shell line too, and would hide the git grant's loss.
+        let reason = decision("auto", call)
+            .filter(|(word, _)| word == "allow")
+            .map(|(_, reason)| reason)
+            .unwrap_or_default();
+        assert!(
+            reason.contains("program grant now"),
+            "must be pre-approved by the git preset: {call}: {reason}"
+        );
     }
 }
 

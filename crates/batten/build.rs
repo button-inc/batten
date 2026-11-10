@@ -13,7 +13,6 @@
 //!
 //! No test target compiles this file; what it writes is judged where it is
 //! read, by `o200k`'s parity case against tiktoken itself.
-//MUTANT-SUITE crates/batten/src/o200k.rs
 
 use std::io::Write as _;
 
