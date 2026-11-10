@@ -5255,6 +5255,7 @@ fn default_rules() -> Vec<Rule> {
         retires_with: None,
         conserves: None,
         admits_with: None,
+        per_file: false,
         format: None,
         node: None,
         derives: None,
