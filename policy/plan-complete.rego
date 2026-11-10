@@ -26,7 +26,7 @@
 #
 # WHAT IT DOES NOT DO (rule 3): it reads a status token and nothing else. It does
 # not judge whether an entry was worth doing, whether its text is honest, or
-# whether the work behind `completed` happened. Those are model verdicts and no
+# whether the work behind `completed` happened. Those are gated-model verdicts and no
 # gate here makes one. The author closes the entry, drops it, or spends an
 # admission whose articulation says why it is not this branch's to finish — and
 # that articulation is hash-bound into the commit message, where a reviewer reads
