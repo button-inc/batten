@@ -1053,7 +1053,7 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
     // measured failure that opened this row, where every clause was present and
     // none had been pressure-tested. This asks a different question that shape
     // cannot answer: has a PARTICULAR vendored prompt run over these exact bytes?
-    // It is a comparison of two digests, so no model verdict reaches the exit
+    // It is a comparison of two digests, so no gated-model verdict reaches the exit
     // code (rule 3), and it cannot be satisfied by better prose because the prose
     // is the input to the hash.
     //
@@ -1254,9 +1254,9 @@ fn check_bump(
 /// often is noise a reader can weigh, where a `deny` that fires often stops the
 /// fleet — which is why the obligation attaches to `deny` alone.
 ///
-/// Presence and shape only, never whether the number is good: judging an
-/// acceptable false-positive rate is a model verdict and rule 3 forbids it. The
-/// author reports; the reader decides.
+/// Presence and shape only, never whether the number is good: a rate is only
+/// judged against a declared threshold, and a Ready block declares none, so
+/// there is nothing to compare it with. The author reports; the reader decides.
 fn check_replay(
     grammar: &Grammar,
     block: &str,
