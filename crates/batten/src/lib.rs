@@ -25082,6 +25082,7 @@ fn resolve_backgrounded(overrides: &Overrides, envelope: &hook::Envelope) {
     for (pending, stdout) in background::resolve(&git_dir, transcript, now_unix()) {
         let result = serde_json::json!({"stdout": stdout, "stderr": ""});
         write_records_for(overrides, &pending.tool, &pending.input, &result);
+        replay_mints(overrides, &pending, &result);
     }
 }
 
@@ -25192,12 +25193,7 @@ fn defer_backgrounded(
             )
     });
     if selected {
-        let pending = background::Pending {
-            tool: raw_tool.to_owned(),
-            input: input.clone(),
-            at: now_unix(),
-        };
-        let _ = background::defer(&git_dir, id, &pending);
+        let _ = background::defer(&git_dir, id, &pending_for(root, raw_tool, input));
     }
 }
 
@@ -25536,6 +25532,12 @@ pub fn record_asked_for_test(
     record_asked_at(harness, raw_tool, result, root, 0)
 }
 
+//MUTANT-SUITE crates/batten/tests/it/recorder_background.rs
+//MUTANT mint-at-launch|s@^    if let Some(task) = background::task_id(&result) {$@    if let Some(task) = None::<\&str> {@|a_backgrounded_mint_waits_for_its_task
+//MUTANT mint-replay-dropped|s@^        replay_mints(overrides, &pending, &result);$@@|a_backgrounded_mint_waits_for_its_task
+//MUTANT mint-replay-head-unchecked|s@^    if pending.head.as_deref() != Some(head.as_str()) {$@    if false {@|a_commit_before_the_task_exits_mints_nothing
+//MUTANT shared-pending-headless|s@^        head: git::resolve_ref(root, "HEAD").ok().flatten(),$@        head: None,@|a_call_a_recorder_and_a_mint_both_select_replays_both
+//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     // THERE IS NO CHEAP GATE HERE, AND THE TWO THAT WERE TRIED WERE BOTH WRONG
     // (CLOUD-1484).
@@ -25583,6 +25585,24 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
         return;
     };
+    // A BACKGROUNDED CALL HAS NOT RUN YET (CLOUD-2677). Its result names a task,
+    // so a mint here would record a check that never ran. It is deferred to the
+    // task's notification and replayed then, pinned to the HEAD it launched on.
+    if let Some(task) = background::task_id(&result) {
+        defer_mints(&policy, &envelope.raw_tool, &envelope.input, task);
+        return;
+    }
+    mint_with_policy(&policy, &envelope.raw_tool, &envelope.input, &result);
+}
+
+/// Every mint a call owes, under `policy`: the one path into `mint_receipts`,
+/// for a foreground call and a replayed background one alike (CLOUD-2677).
+fn mint_with_policy(
+    policy: &hook::Policy,
+    raw_tool: &str,
+    input: &serde_json::Value,
+    result: &serde_json::Value,
+) {
     let declared = policy.declared_mints();
     // NO ROW NAMES THIS TOOL, NOTHING IS BUILT (CLOUD-2315). `mint_receipts`
     // skips every row whose tool does not select this call, so the grammar
@@ -25591,7 +25611,7 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     // first; a call some row names is untouched.
     if !declared
         .iter()
-        .any(|mint| rules::selects_tool_name(&mint.tool, &envelope.raw_tool))
+        .any(|mint| rules::selects_tool_name(&mint.tool, raw_tool))
     {
         return;
     }
@@ -25607,14 +25627,51 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     // `[[pattern]]` table cannot build a grammar has no verdict, so an
     // `{authority:…}` piece records `-` rather than a template failing whole.
     let grammar = ready::Grammar::from_compiled(&policy.compiled_patterns()).ok();
-    mint_receipts(
-        declared,
-        &envelope.raw_tool,
-        &envelope.input,
-        &result,
-        root,
-        grammar.as_ref(),
-    );
+    mint_receipts(declared, raw_tool, input, result, root, grammar.as_ref());
+}
+
+/// Keep a backgrounded call for [`replay_mints`] when some declared mint
+/// selects it; nothing is minted at launch either way (CLOUD-2677).
+fn defer_mints(policy: &hook::Policy, raw_tool: &str, input: &serde_json::Value, task: &str) {
+    let selected = policy.declared_mints().iter().any(|mint| {
+        rules::selects_tool_name(&mint.tool, raw_tool) && crate::mint::selects(mint, input)
+    });
+    if !selected {
+        return;
+    }
+    let root = hook_authority_root();
+    let Ok(git_dir) = git::git_dir(root) else {
+        return;
+    };
+    let _ = background::defer(&git_dir, task, &pending_for(root, raw_tool, input));
+}
+
+/// The one constructor of a deferred call, so a recorder's deferral and a
+/// mint's write the same entry, HEAD included (CLOUD-2677).
+fn pending_for(root: &Path, raw_tool: &str, input: &serde_json::Value) -> background::Pending {
+    background::Pending {
+        tool: raw_tool.to_owned(),
+        input: input.clone(),
+        at: now_unix(),
+        head: git::resolve_ref(root, "HEAD").ok().flatten(),
+    }
+}
+
+/// Mint over a deferred call whose task completed, only if HEAD is still the
+/// commit it launched on: a moved HEAD means the task checked other bytes, and
+/// the gate asks again (CLOUD-2677).
+fn replay_mints(overrides: &Overrides, pending: &background::Pending, raw: &serde_json::Value) {
+    let Ok(Some(head)) = git::resolve_ref(hook_authority_root(), "HEAD") else {
+        return;
+    };
+    if pending.head.as_deref() != Some(head.as_str()) {
+        return;
+    }
+    let result = facts::payload_in(raw).unwrap_or(serde_json::Value::Null);
+    let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
+        return;
+    };
+    mint_with_policy(&policy, &pending.tool, &pending.input, &result);
 }
 
 /// Persist this post-tool response as a local capture (CLOUD-919).

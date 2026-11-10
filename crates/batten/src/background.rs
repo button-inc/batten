@@ -60,6 +60,11 @@ pub struct Pending {
     pub input: serde_json::Value,
     /// When it was deferred, in Unix seconds.
     pub at: u64,
+    /// The commit HEAD named when the call launched (CLOUD-2677). A mint over
+    /// the call is replayed only if HEAD is still there when the task exits;
+    /// `None`, written by a binary that minted at launch, never replays one.
+    #[serde(default)]
+    pub head: Option<String>,
 }
 
 /// The task id a result names, when it names one.
@@ -173,6 +178,7 @@ fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
 /// is kept until [`STALE_AFTER`].
 //MUTANT-SUITE crates/batten/tests/it/recorder_background.rs
 //MUTANT background-output-unfollowed|s@^                    resolved.push((pending, text));$@@|a_backgrounded_fetch_records_its_output_when_the_task_exits
+//MUTANT failed-task-replayed|s@^                if exit.completed$@                if true@|a_failed_backgrounded_check_mints_nothing
 #[must_use]
 pub fn resolve(git_dir: &Path, transcript: Option<&Path>, now: u64) -> Vec<(Pending, String)> {
     let dir = git_dir.join(DIR);
@@ -269,6 +275,7 @@ mod tests {
             tool: String::from("Bash"),
             input: serde_json::json!({}),
             at,
+            head: None,
         };
         defer(&git_dir, "kept", &pending(now - 86_400)).expect("defer the kept entry");
         defer(&git_dir, "dropped", &pending(now - 86_401)).expect("defer the dropped entry");
