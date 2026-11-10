@@ -75,6 +75,10 @@ pub struct Check {
     pub subjects: Vec<String>,
 }
 
+//MUTANT-SUITE crates/batten/src/doctor.rs
+//MUTANT config-missing-unrouted|s@^        Some(workspace_refusal(&subjects, fix).with_command_route("batten init"))$@        Some(workspace_refusal(\&subjects, fix))@|a_missing_config_routes_to_init
+//MUTANT config-missing-remedy-dropped|s@^        let fix = crate::refusal::Fix::Run(INIT_REMEDY.to_owned());$@        let fix = crate::refusal::Fix::None;@|a_missing_config_routes_to_init
+//MUTANT other-reason-routes-init|s@^        if reason != "config-missing" {$@        if false {@|a_missing_config_routes_to_init
 impl Check {
     const fn passed(name: &'static str) -> Self {
         Check {
@@ -129,7 +133,15 @@ impl Check {
     pub fn finding(&self) -> Option<crate::refusal::Refusal> {
         let reason = self.reason?;
         let subjects = finding_subjects(self.name, reason, &self.subjects);
-        Some(workspace_refusal(&subjects))
+        // A MISSING CONFIG IS NOT A BROKEN ONE (CLOUD-2657): `startup --repair`
+        // repairs what a config declares, and there is none, so the class's own
+        // routes would loop. The route keeps `run batten init` on every firing;
+        // the fix replaces the class's `Do:` on the full arm.
+        if reason != "config-missing" {
+            return Some(workspace_refusal(&subjects, crate::refusal::Fix::None));
+        }
+        let fix = crate::refusal::Fix::Run(INIT_REMEDY.to_owned());
+        Some(workspace_refusal(&subjects, fix).with_command_route("batten init"))
     }
 }
 
@@ -155,10 +167,18 @@ pub fn finding_subjects(
 /// `workspace state broken` over `subjects` (CLOUD-2078).
 //MUTANT container-health-misclassed|s@^    let class = crate::verdict::Native::WorkspaceStateBroken;$@    let class = crate::verdict::Native::RunBroken;@|a_declared_program_nothing_can_reach_is_reported_at_session_start
 #[must_use]
-pub fn workspace_refusal(subjects: &[crate::verdict::Subject]) -> crate::refusal::Refusal {
+pub fn workspace_refusal(
+    subjects: &[crate::verdict::Subject],
+    fix: crate::refusal::Fix,
+) -> crate::refusal::Refusal {
     let class = crate::verdict::Native::WorkspaceStateBroken;
-    crate::refusal::Refusal::engine(class, subjects, crate::refusal::Fix::None)
+    crate::refusal::Refusal::engine(class, subjects, fix)
 }
+
+/// The full arm's `Do:` for a missing config (CLOUD-2657). Plain words, and a
+/// different text from the `batten init` route, since a fix equal to a route's
+/// target is dropped as already said.
+const INIT_REMEDY: &str = "run batten init to write the missing batten.toml, then batten doctor";
 
 /// One `diagnose` check. A stable reason id, never the error text, so the
 /// rendering carries no filesystem path.
@@ -4730,10 +4750,34 @@ mod probe_tests {
         String::from_utf8(out).expect("utf-8")
     }
 
+    /// A missing config routes to `batten init`, and only a missing one.
+    #[test]
+    fn a_missing_config_routes_to_init() {
+        use crate::refusal::Arm;
+        let missing = Check::failed(CONFIG, "config-missing")
+            .finding()
+            .expect("a failing check");
+        let pointer = missing.render_finding(Arm::Pointer);
+        assert!(pointer.ends_with("; run batten init"), "{pointer}");
+        let full = missing.render_finding(Arm::Full);
+        assert!(
+            full.contains("Do: run batten init to write the missing batten.toml"),
+            "{full}"
+        );
+        let invalid = Check::failed(CONFIG, "config-invalid")
+            .finding()
+            .expect("a failing check")
+            .render_finding(Arm::Pointer);
+        assert!(!invalid.contains("batten init"), "{invalid}");
+    }
+
     #[test]
     fn only_a_counted_refusal_is_recorded_as_a_gap() {
         let root = repository("doctor-record-gap", None);
-        let refusal = workspace_refusal(&finding_subjects("config", "config-missing", &[]));
+        let refusal = workspace_refusal(
+            &finding_subjects("config", "config-missing", &[]),
+            crate::refusal::Fix::None,
+        );
         record_gap(&root, &refusal.clone().counted(false));
         assert_eq!(gaps(&root), "");
         record_gap(&root, &refusal.counted(true));
