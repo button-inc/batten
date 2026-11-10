@@ -1423,7 +1423,7 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         why: Some("A head the declared gate refuses is not one to push"),
         act: &[
             "fix the cause the line names",
-            "run `batten land verify` again",
+            "run `batten land lap` again",
         ],
         dont: &["push around the gate"],
     },
@@ -1432,7 +1432,7 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         why: Some("A head red in CI is not one to land"),
         act: &[
             "reproduce each named check locally and fix it",
-            "run `batten land verify` again",
+            "run `batten land lap` again",
         ],
         dont: &["re-run CI on the same head to see if it passes"],
     },

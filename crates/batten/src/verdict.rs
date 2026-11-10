@@ -2824,7 +2824,7 @@ replay --resolve`, which re-runs the replay from its base with your bytes for th
         gloss: "the configured gate refused this head",
         class: "`land` verifies a head before it pushes, with the gate the repository \
 declares. A refusal names its cause; nothing was pushed.",
-        routes: &[run("land verify first", "batten land verify")],
+        routes: &[run("land run first", "batten land lap")],
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
@@ -2833,7 +2833,7 @@ declares. A refusal names its cause; nothing was pushed.",
         class: "`land` waits on the required checks of the head it pushed, and stops on the \
 first failure. The subjects name the head and each failing check; the same checks run \
 locally.",
-        routes: &[run("land verify first", "batten land verify")],
+        routes: &[run("land run first", "batten land lap")],
         applicability: Applicability::Advice,
     },
     VendoredVerdict {
@@ -3739,5 +3739,20 @@ mod tests {
             },
         ]);
         assert_eq!(rendered, "a.rs b.rs:3 4 ntia-check");
+    }
+
+    /// Fails by: a red head's class routed to the loop's inner gate, so a
+    /// stopped lap is followed by a standalone `verify` and then the lap that
+    /// runs the same gate again, instead of by the lap alone (CLOUD-2707).
+    #[test]
+    fn a_red_head_routes_back_to_the_lap_not_its_inner_gate() {
+        let registry = vendored();
+        for class in ["check run red", "job run red"] {
+            assert_eq!(
+                command_routes(&registry, class),
+                vec!["batten land lap"],
+                "{class}"
+            );
+        }
     }
 }
