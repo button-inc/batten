@@ -243,6 +243,46 @@
         "keys": {
           "description": "Fact::Keys -- the tracker-key evidence, or null for could-not-look."
         },
+        "pathspec-status": {
+          "additionalProperties": false,
+          "description": "Fact::PathspecStatus (CLOUD-2684) -- one entry per pathspec of every `git checkout`/`git restore` program in the call, or null when the call has none or one cannot be placed. `path` is repo-relative; `literal` is false for `.`, pathspec magic, a glob or a directory; `tracked` that the index holds a path under it; `clean` that HEAD, the index and the worktree agree there. Paths only, never content.",
+          "properties": {
+            "pathspecs": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "clean": {
+                    "type": "boolean"
+                  },
+                  "literal": {
+                    "type": "boolean"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "tracked": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "path",
+                  "literal",
+                  "tracked",
+                  "clean"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "pathspecs"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "pinned-programs": {
           "description": "Fact::Pinned (CLOUD-1028) -- the program NAMES the project's pin puts on PATH, sorted, or null for could-not-look. Names only: what a program is for, and every byte it would print, is somebody else's fact.",
           "items": {

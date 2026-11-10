@@ -6223,6 +6223,8 @@ pub struct Facts<'a> {
     /// shape (CLOUD-2270). Anything but `Is` projects `null`, which a module
     /// reads as "no push over this head owes a read".
     pub red_head: &'a crate::facts::Look<serde_json::Value>,
+    /// Each pathspec a checkout or restore names, with its status (CLOUD-2684).
+    pub pathspec_status: &'a crate::facts::Look<serde_json::Value>,
 }
 
 impl<'a> Facts<'a> {
@@ -6277,6 +6279,7 @@ impl<'a> Facts<'a> {
             // Could-not-look, never "no red head": a caller that resolved
             // nothing has not read the branch's record.
             red_head: &crate::facts::Look::CouldNotLook,
+            pathspec_status: &crate::facts::Look::CouldNotLook,
         }
     }
 }
@@ -7575,6 +7578,145 @@ pub fn call_targets(envelope: &Envelope, start: &Path) -> Option<Vec<std::path::
     Some(std::iter::once(current).chain(operands).collect())
 }
 
+/// One `git checkout`/`git restore` program: the directory it runs in and the
+/// pathspecs it names, as written (CLOUD-2684).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathspecCall {
+    /// The directory the program runs in: the call's directory after every
+    /// followed `cd`, joined with each `-C`.
+    pub dir: std::path::PathBuf,
+    /// The pathspecs, relative to `dir`.
+    pub pathspecs: Vec<String>,
+}
+
+/// What a call's checkout and restore programs name (CLOUD-2684).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pathspecs {
+    /// The call runs no checkout or restore.
+    Absent,
+    /// One of them cannot be placed: an unfollowed `cd`, an expansion, a
+    /// `--git-dir`/`--work-tree`, a `--pathspec-from-file`, or a `.` checkout
+    /// with no `--` (argv cannot tell a ref from a path).
+    Unplaceable,
+    /// Every one of them, placed.
+    Placed(Vec<PathspecCall>),
+}
+
+/// The checkout and restore programs of a call, walked from `base` through
+/// each followed `cd` with CLOUD-2672's resolver. A pipe-fed restore still
+/// discards, so no stage is skipped.
+//MUTANT-SUITE crates/batten/tests/it/git_preset.rs
+//MUTANT unfollowed-cd-placed|s@unplaceable = true, // an unfollowed cd: unplaceable$@{}@|a_pathspec_behind_an_unfollowed_cd_is_left_to_the_host
+//MUTANT-SUITE crates/batten/src/hook.rs
+#[must_use]
+pub fn pathspec_calls(envelope: &Envelope, base: &Path) -> Pathspecs {
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return Pathspecs::Absent;
+    };
+    let mut current = base.to_path_buf();
+    let mut calls = Vec::new();
+    let (mut found, mut unplaceable) = (false, false);
+    for (_, segment, line) in per_line(&parsed) {
+        let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+        let handed = &tokens[..tokens.len().saturating_sub(line.redirects.len())];
+        if is_cd_segment(handed) {
+            match placed_cd(segment, handed, &current) {
+                Some(dir) => {
+                    if !segment.grouped
+                        && !segment.nested
+                        && matches!(segment.terminator, Some(Separator::And | Separator::Semi))
+                    {
+                        current = dir;
+                    }
+                }
+                None => unplaceable = true, // an unfollowed cd: unplaceable
+            }
+            continue;
+        }
+        match git_pathspecs(handed, &current) {
+            Pathspecs::Absent => {}
+            Pathspecs::Unplaceable => (found, unplaceable) = (true, true),
+            Pathspecs::Placed(mut placed) => {
+                found = true;
+                calls.append(&mut placed);
+            }
+        }
+    }
+    match (found, unplaceable) {
+        (false, _) => Pathspecs::Absent,
+        (true, true) => Pathspecs::Unplaceable,
+        (true, false) => Pathspecs::Placed(calls),
+    }
+}
+
+/// One segment's checkout or restore, if it runs one.
+fn git_pathspecs(tokens: &[&str], current: &Path) -> Pathspecs {
+    let expands = |word: &str| word.contains(['$', '`']);
+    let Some(program) = effective_program(tokens) else {
+        return Pathspecs::Absent;
+    };
+    if program_name(program_token(tokens[program])) != "git" {
+        return Pathspecs::Absent;
+    }
+    let arguments = &tokens[program + 1..];
+    let Some(verb) = subcommand_index(arguments, &GIT_VALUE_OPTIONS) else {
+        return Pathspecs::Absent;
+    };
+    let subcommand = arguments[verb];
+    if !matches!(subcommand, "checkout" | "restore") {
+        return Pathspecs::Absent;
+    }
+    let mut dir = current.to_path_buf();
+    for (index, word) in arguments[..verb].iter().enumerate() {
+        if word.starts_with("--git-dir") || word.starts_with("--work-tree") {
+            return Pathspecs::Unplaceable;
+        }
+        if *word == "-C" {
+            let Some(value) = arguments.get(index + 1).filter(|value| !expands(value)) else {
+                return Pathspecs::Unplaceable;
+            };
+            dir = shell_resolved(value, Some(&dir)).unwrap_or(dir);
+        }
+    }
+    let rest = &arguments[verb + 1..];
+    if rest
+        .iter()
+        .any(|word| word.starts_with("--pathspec-from-file"))
+    {
+        return Pathspecs::Unplaceable;
+    }
+    let dash = rest.iter().position(|word| *word == "--");
+    let after = dash.map_or(&[][..], |at| &rest[at + 1..]);
+    let mut pathspecs: Vec<&str> = Vec::new();
+    if subcommand == "checkout" {
+        if dash.is_none() && rest.contains(&".") {
+            return Pathspecs::Unplaceable;
+        }
+    } else {
+        let before = &rest[..dash.unwrap_or(rest.len())];
+        let mut index = 0;
+        while index < before.len() {
+            let word = before[index];
+            if matches!(word, "-s" | "--source") {
+                index += 2;
+                continue;
+            }
+            if !word.starts_with('-') {
+                pathspecs.push(word);
+            }
+            index += 1;
+        }
+    }
+    pathspecs.extend(after.iter().copied());
+    if pathspecs.iter().any(|word| expands(word)) {
+        return Pathspecs::Unplaceable;
+    }
+    Pathspecs::Placed(vec![PathspecCall {
+        dir,
+        pathspecs: pathspecs.into_iter().map(str::to_owned).collect(),
+    }])
+}
+
 /// A segment whose program, read through `command`, `builtin` and the
 /// keywords that may stand before it, is `cd` or `pushd`.
 fn is_cd_segment(tokens: &[&str]) -> bool {
@@ -8761,6 +8903,14 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             }),
             // THE RECORD OR `null` (CLOUD-2270): no record and a record nobody
             // could read both owe a push nothing a module can act on.
+            // THE ENTRIES OR `null` (CLOUD-2684): no checkout/restore, or one
+            // this cannot place, and the preset leaves the call to the host.
+            crate::facts::Fact::PathspecStatus => Some(match facts.pathspec_status {
+                crate::facts::Look::Is(status) => status.clone(),
+                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                    serde_json::Value::Null
+                }
+            }),
             crate::facts::Fact::RedHead => Some(match facts.red_head {
                 crate::facts::Look::Is(record) => record.clone(),
                 crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
@@ -12935,6 +13085,7 @@ mod tests {
                 pinned: &crate::facts::Look::CouldNotLook,
                 dispatch: &crate::facts::Look::CouldNotLook,
                 red_head: &crate::facts::Look::CouldNotLook,
+                pathspec_status: &crate::facts::Look::CouldNotLook,
             },
         )
     }
