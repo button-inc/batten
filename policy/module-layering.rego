@@ -905,6 +905,11 @@ declared_modules := {
 	# `step`'s class of effect, and writes the runner's files through `durable`.
 	# It decides nothing, so its `rules` and `hook` edges are forbidden below.
 	"ci_step",
+	# `forge_event` arrived with the your-counselling bundle: it shapes one forge
+	# webhook delivery into the `forge` hook event the handlers select on.
+	# `githook` arrived with it: argv[0] dispatch makes batten every git hook,
+	# routing through `[hook.git]`, an entry point like `main`.
+	"forge_event", "githook",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

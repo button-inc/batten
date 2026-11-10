@@ -24,7 +24,7 @@ fn fixture(name: &str, config: &str, files: &[(&str, &str)]) -> PathBuf {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
     }
-    common::git_in(&dir, &["init", "-q"]);
+    common::init_repo(&dir);
     common::git_in(&dir, &["add", "-A"]);
     common::git_in(&dir, &["commit", "-qm", "seed"]);
     dir
