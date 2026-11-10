@@ -3166,6 +3166,8 @@ pub(crate) const BRANCH_KEYED_RECEIPTS: &[&str] = &[
     "filed-set-nudged",
     "unlanded-nudged",
     "unlanded-spoken",
+    // The Stop's step for this claim (CLOUD-2655): land, or deepen the clone.
+    "unlanded-step",
     // The Stop refusal's bound and its dispatch excuse (CLOUD-2441): left behind,
     // a reused branch name would inherit a spent refusal or a free Stop.
     "unlanded-refused",
