@@ -151,7 +151,13 @@ pub fn repo_state_dir_under(data_dir: &Path, repo_root: &Path) -> Result<PathBuf
 /// the root is relative — the digest is a statement about *where* this checkout
 /// is, which a relative path cannot make.
 pub fn derive_repo_name(repo_root: &Path) -> Result<String> {
-    let name = repo_root
+    // THE NAME OF THE CANONICAL ROOT, as the digest below already is: an anchor
+    // spelled `.` (every verb that starts from its cwd) has no final component,
+    // and four call sites each resolved it themselves before this one did.
+    let canonical = repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.to_owned());
+    let name = canonical
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| {
@@ -160,7 +166,7 @@ pub fn derive_repo_name(repo_root: &Path) -> Result<String> {
                 repo_root.display()
             ))
         })?;
-    let digest = crate::identity::checkout_fingerprint(repo_root)?.to_hex();
+    let digest = crate::identity::checkout_fingerprint(&canonical)?.to_hex();
     Ok(format!("{name}-{}", &digest[..CHECKOUT_DIGEST_LEN]))
 }
 
@@ -213,7 +219,6 @@ pub fn recorded_session_authority(session: &str, file: &str) -> Option<PathBuf> 
 /// own absence test because every other reader of the authority root (receipts,
 /// the capture store, the sighting record) would otherwise write under a
 /// directory that no longer governs anything.
-//MUTANT-SUITE crates/batten/src/state.rs
 #[must_use]
 pub fn recorded_session_authority_in(state: &Path, session: &str, file: &str) -> Option<PathBuf> {
     let root = PathBuf::from(std::fs::read_to_string(session_authority_file(state, session)).ok()?);
@@ -382,6 +387,17 @@ mod tests {
         assert!(
             err.downcast_ref::<UsageError>().is_some(),
             "a rootless path is bad input, not an internal failure"
+        );
+    }
+
+    /// Fails by: an anchor spelled `.` refused, or named differently from the
+    /// absolute spelling of the same directory, which would split one store.
+    #[test]
+    fn a_relative_anchor_names_the_store_its_absolute_spelling_does() {
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(
+            derive_repo_name(Path::new(".")).unwrap(),
+            derive_repo_name(&cwd).unwrap()
         );
     }
 
