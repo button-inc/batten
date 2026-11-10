@@ -1785,51 +1785,46 @@ description = "Gate: every declared gate has a mutation its own suite is PROVEN 
 run = "cargo run --quiet -p batten -- mutate sweep"
 
 [tasks."mutant:changed"]
-description = "Gate: every enforced gate this branch touched since origin/main has a mutation its own suite is PROVEN to catch (CLOUD-2072)"
-# BACK ON ADMISSION, CARGO-MUTANTS INCLUDED (CLOUD-1746, the owner's 2026-10-16
-# ruling: the changed diff's mutants run at landing, with local and CI parity).
-# `hk.pkl`'s `mutant:changed` step runs it in `verify`, so a change's mutants run
-# here first. CI runs the same task in its own `mutants` job as a `MUTANT_SHARD`
-# matrix, the cargo-mutants book's PR recipe, and carves it out of the `ci` job
-# with `HK_SKIP_STEPS`, as `batten-check` is. So CI's confirmation costs a shard's
-# wall time on top of the local run, not a second serial run. The whole sweep is
-# the schedule's (`mutant`), never admission's.
-# `mutant`'s sweep NARROWED TO THE CHANGE, which is what puts it on the landing
-# path that the whole sweep stays off. The owner's 2026-10-02 ruling: tests run
-# at admission, and a schedule is for drift. The whole sweep is a proof about
-# every suite and costs a cold build per gate; a gate this branch did not touch
-# cannot have been weakened by it, so admission pays only for the gates whose
-# source or suite the diff names (`mutate::touched`).
+description = "Gate: every mutant cargo-mutants makes of this branch's Rust change is caught, and every declared Rego, Pkl or manifest gate it touched has a mutation its suite catches"
+# ON ADMISSION, AT LANDING (CLOUD-1746, the owner's 2026-10-16 ruling, with
+# local and CI parity). `hk.pkl`'s `mutant:changed` step runs it in `verify`; CI
+# runs the same task in its `mutants` job as a `MUTANT_SHARD` matrix and carves it
+# out of the `ci` job with `HK_SKIP_STEPS`. The whole sweep is `mutant`'s, on a
+# schedule.
 #
-# NO RUST ROW IS SWEPT HERE. A gate whose rows mutate `.rs` is left to `cargo
-# mutants --in-diff` (CLOUD-1746), the publisher's own admission recipe; sweeping
-# it by hand as well would stand a second Rust mutation system at admission. Those
-# rows stay in the whole sweep until cargo-mutants gates, then retire.
+# TWO RUNNERS, EACH OVER WHAT IT OWNS:
 #
-# THE BASE RIDES `MUTANT_CHANGED_SINCE`, beside `MUTANT_GATES` in `[env]`.
+# * RUST IS CARGO-MUTANTS', RUN AS ITS BOOK SAYS AND WRAPPED BY NOTHING
+#   (https://mutants.rs/, CLOUD-2253). `--in-diff` over the branch's diff;
+#   `--iterate` skips what an earlier run caught, so a lap re-tests only what
+#   moved; `--jobs 2`, the book's starting count, each in its own copy of the
+#   tree; `--shard` in CI, where the `ci` job has already run the suite, so a
+#   shard skips the baseline and states its timeout as the book requires: 900s,
+#   because a surviving mutant runs the whole suite (669s measured) and a
+#   shorter bound would report it as a timeout. Locally the baseline sets the
+#   timeout at five times its own run. Its settings are `.cargo/mutants.toml`'s: the
+#   `[profile.mutants]` build, nextest, and `.git` in each copy. The nextest
+#   profile `mutants` stops at a mutant's first failing case and never retries.
+#   `provision apply` puts the pinned binary on PATH first (`batten.toml`).
+# * EVERYTHING ELSE IS `batten mutate sweep`'s: the hand-written `#MUTANT` rows of
+#   Rego, Pkl and manifests, which no tool mutates (CLOUD-2070), narrowed to the
+#   gates the diff touched.
 #
-# COULD-NOT-LOOK WIDENS. With no `origin/main` to diff against, the verb sweeps
-# every enforced gate and says so on stderr, as `ci suites` does: too wide shows
-# in the bill, too narrow has no symptom.
+# `MUTANT_RUNNERS` IS THE OWNERSHIP DECLARATION, NOT A RUNNER: it tells the
+# declared sweep which sources are cargo-mutants' (so it never judges one), and
+# `obligations-bound.rego` reads it to accept a Ready block's `cargo-mutants`
+# obligation for those files.
 #
 # `origin/main` IS A TIP DIFF, for `git::base_delta`'s stated reason: `verify`
 # asserts the branch is rebased on it, and CI's `ci` job fetches it first.
-#
-# THE RUNNER REGISTRY (CLOUD-1746). `MUTANT_RUNNERS` gives every Rust source to
-# cargo-mutants, so the declared runner here judges the Rego, Pkl and manifest
-# rows, the same set locally and in `ci.yml`'s `ci` job. cargo-mutants runs
-# because this task sets `MUTANT_RUNNER=cargo-mutants`, from the pin that
-# `batten.toml`'s `[[provision]]` row ships (CLOUD-2345), which the sweep applies
-# itself. The 16-shard matrix tried on #1132 ran it where `verify` never did,
-# and was removed for that. This one confirms what `verify` already ran.
-# THE GLOBS ARE WHAT SHIPS AND WHAT TESTS IT: each crate's `src/`, `build.rs`
-# and `tests/`, whose cases a Ready block's `cargo-mutants` obligation names
-# (`obligations-bound.rego` reads ownership from this line). `examples/`
-# is measurement tooling no test target compiles, which cargo-mutants could only
-# report as `no-suite` on every run (measured on #1132); left unowned, the
-# declared runner judges it, and it declares no rows.
-env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNER = "cargo-mutants", MUTANT_RUNNERS = "cargo-mutants=crates/*/src/**/*.rs,crates/*/build.rs,crates/*/tests/**/*.rs" }
-run = "cargo run --quiet -p batten -- mutate sweep"
+env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNERS = "cargo-mutants=crates/*/src/**/*.rs,crates/*/build.rs,crates/*/tests/**/*.rs", NEXTEST_PROFILE = "mutants" }
+run = [
+  "cargo run --quiet -p batten -- mutate sweep",
+  "cargo run --quiet -p batten -- provision apply",
+  "mkdir -p target/mutants",
+  "git diff --no-color --no-ext-diff origin/main...HEAD > target/mutants/change.diff",
+  "cargo mutants --in-diff target/mutants/change.diff --output target/mutants --iterate --jobs 2 ${MUTANT_SHARD:+--shard $MUTANT_SHARD --baseline=skip --timeout 900}",
+]
 
 [tasks."mutant-census"]
 description = "Gate: every gate in the tree is either mutation-enforced or carries a filed exemption (CLOUD-480)"

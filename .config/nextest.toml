@@ -162,3 +162,11 @@ path = "junit.xml"
 #MUTANT narrow-profile-undeclared|s@^\[profile\.narrow\]$@[profile.narrow-gone]@|a_subset_gate_never_overwrites_the_full_suites_report
 #MUTANT narrow-report-renamed|s@^\[profile\.narrow\]$@[profile.narrow]\njunit = { path = "narrow.xml" }@|every_report_lands_where_record_suites_reads_it
 [profile.narrow]
+
+# cargo-mutants' runs (CLOUD-2253), selected by `mutant:changed`'s
+# `NEXTEST_PROFILE`. A mutant is decided by its first failing case, so the run
+# stops there, and a retry would turn a caught mutant into a flake read as
+# missed. Every other key, the setup script included, is `default`'s.
+[profile.mutants]
+fail-fast = true
+retries = 0
