@@ -7,7 +7,7 @@
 #   from `input.tree.review` was never dispatched — the prompt has not been shown
 #   to run over this subject — and that is a comparison of two digests, which is
 #   a thing a gate may decide. What the agent CONCLUDED is not, and refusing on
-#   it would be a model verdict wearing an exit code (non-negotiable rule 3). The
+#   it would be a gated-model verdict wearing an exit code (non-negotiable rule 3). The
 #   fact is shaped so that cannot be written: `findings` are `{path, line,
 #   clause}` pointers with no field prose could occupy.
 #
