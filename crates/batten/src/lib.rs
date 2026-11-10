@@ -17879,7 +17879,16 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
     let diff = state::repo_state_dir(root)?
         .join("mutate")
         .join("change.diff");
-    match mutate::cargo_mutants(root, &registry, &base, jobs, shard, &diff)? {
+    // FROM THE PROVISION CACHE, NEVER `PATH`: the engine runs the pinned bytes
+    // itself, so the row needs no `link` (only the task runner's carries one).
+    let Some(runner) = provisioned_binary("cargo-mutants", &Overrides::default()) else {
+        writeln!(
+            err,
+            "::error:: mutate cargo: no [[provision]] row ships cargo-mutants, or it could not be applied; run `batten provision apply`"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    match mutate::cargo_mutants(root, &runner, &registry, &base, jobs, shard, &diff)? {
         mutate::CargoRun::NothingOwned => {
             writeln!(
                 out,
