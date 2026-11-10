@@ -462,6 +462,9 @@ token_enum! {
         /// A mediated `git commit` whose message subject breaks
         /// `[commit].subject_pattern` (CLOUD-2683).
         CommitSubject => "commit-subject",
+        /// A call that reaches a repository other than its session's home
+        /// (CLOUD-2672). Opt-in: armed only where the home declares a row.
+        RepositoryReach => "repository-reach",
     }
 }
 
@@ -480,7 +483,22 @@ pub fn native_grade(rules: &[Rule], gate: NativeGate) -> RuleSeverity {
         .filter(|rule| rule.kind == RuleKind::Native && rule.gate == Some(gate))
         .map(Rule::severity)
         .max()
-        .unwrap_or(RuleSeverity::Deny)
+        .unwrap_or(absent_grade(gate))
+}
+
+/// The grade of a gate no row names: `deny`, so no addition lowers a gate it
+/// does not name, EXCEPT `repository-reach` (CLOUD-2672), which is `allow` until
+/// a row arms it. A session spanning several repositories is the ordinary case
+/// on every host that documents one, so a default-on gate would refuse it in
+/// every consumer.
+//MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
+//MUTANT reach-gate-unarmed|s@^        NativeGate::RepositoryReach => RuleSeverity::Allow,$@        NativeGate::RepositoryReach => RuleSeverity::Deny,@|a_reach_out_of_the_home_is_refused_only_where_the_home_arms_it
+//MUTANT-SUITE crates/batten/tests/it/record_families.rs
+fn absent_grade(gate: NativeGate) -> RuleSeverity {
+    match gate {
+        NativeGate::RepositoryReach => RuleSeverity::Allow,
+        _ => RuleSeverity::Deny,
+    }
 }
 
 /// The columns a [`RuleKind::Reference`] row accepts (CLOUD-2005): its `cites`
