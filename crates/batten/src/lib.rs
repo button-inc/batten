@@ -15209,7 +15209,7 @@ fn run_land_verify_seen(
 ///   recoveries. The base ref is the lap's and a hand-driven verify has none,
 ///   so it is `Option` rather than a guess that would reach the wrong ref in a
 ///   repository whose trunk is spelled differently (non-negotiable rule 1).
-/// - **Tree**: reproduce and fix locally.
+/// - **Tree**: fix the cause the gate log names, then run the lap again.
 //MUTANT verify-refusal-misclassed|s@^    let class = verdict::Native::CheckRunRed;$@    let class = verdict::Native::JobRunRed;@|a_refused_gate_renders_its_verdict_with_its_cause
 fn verify_refusal(
     sha: &str,
@@ -15233,7 +15233,11 @@ fn verify_refusal(
                 short(base)
             )
         }
-        (land::Refusal::Tree, None) => String::from("reproduce and fix locally."),
+        (land::Refusal::Tree, None) => {
+            // NOT "REPRODUCE" (CLOUD-2707): the gate already ran here and the lap
+            // printed its log's handle, so reproducing it is the same gate twice.
+            String::from("fix the cause the gate log names, then run the lap again.")
+        }
     };
     let class = verdict::Native::CheckRunRed;
     refusal::Refusal::engine(class, &[verdict::artifact(sha)], refusal::Fix::Run(advice))

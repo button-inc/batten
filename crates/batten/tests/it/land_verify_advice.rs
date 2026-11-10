@@ -208,7 +208,7 @@ fn the_classifier_is_read_from_the_worktree_being_judged_not_the_main_checkout()
         "the row read back must be the worktree's, remedy and all: {said}"
     );
     assert!(
-        !said.contains("reproduce and fix locally"),
+        !said.contains("fix the cause the gate log names, then run the lap again"),
         "the main checkout declares no row; reading it is what produced this \
          advice for a failure the branch did not cause: {said}"
     );
@@ -252,7 +252,7 @@ fn a_worktree_declaring_nothing_is_not_handed_the_main_checkouts_classifier() {
 
     assert_eq!(code, 2, "{said}");
     assert!(
-        said.contains("reproduce and fix locally"),
+        said.contains("fix the cause the gate log names, then run the lap again"),
         "this worktree declares no row, so nothing may be blamed on the \
          machine: {said}"
     );
@@ -291,7 +291,7 @@ fn a_refusal_the_declared_row_matches_is_named_as_the_environment() {
     );
     // THE ASSERTION THAT FAILED BEFORE THIS LANDED.
     assert!(
-        !said.contains("reproduce and fix locally"),
+        !said.contains("fix the cause the gate log names, then run the lap again"),
         "advice for a defect this branch did not write: {said}"
     );
 }
@@ -309,7 +309,7 @@ fn a_refusal_matching_no_declared_row_still_says_reproduce_it_locally() {
 
     assert_eq!(code, 2, "{said}");
     assert!(
-        said.contains("reproduce and fix locally"),
+        said.contains("fix the cause the gate log names, then run the lap again"),
         "an ordinary refusal keeps the advice that is right for it: {said}"
     );
     assert!(
@@ -334,7 +334,7 @@ fn a_consumer_declaring_no_rows_classifies_nothing_as_the_environment() {
 
     assert_eq!(code, 2, "{said}");
     assert!(
-        said.contains("reproduce and fix locally"),
+        said.contains("fix the cause the gate log names, then run the lap again"),
         "with no declared row the ordinary advice stands: {said}"
     );
     assert!(
@@ -406,7 +406,7 @@ fn a_refusal_over_a_borrowed_tree_names_the_base_and_offers_both_recoveries() {
     );
     // The advice that is wrong here must not also be present.
     assert!(
-        !said.contains("reproduce and fix locally"),
+        !said.contains("fix the cause the gate log names, then run the lap again"),
         "pointing at a defect the author did not write: {said}"
     );
 }
@@ -422,7 +422,10 @@ fn a_refusal_with_no_bet_outstanding_gets_the_ordinary_advice() {
     let (code, said) = verify(&dir, &gate);
 
     assert_eq!(code, 2, "{said}");
-    assert!(said.contains("reproduce and fix locally"), "{said}");
+    assert!(
+        said.contains("fix the cause the gate log names, then run the lap again"),
+        "{said}"
+    );
     assert!(
         !said.contains("this tree is SPECULATIVE"),
         "there is no borrowed base to blame: {said}"
@@ -458,7 +461,7 @@ fn a_gate_exiting_2_over_an_unmoved_base_is_a_refusal_of_the_tree() {
         "a refused tree is a verdict, never the race: {said}"
     );
     assert!(
-        said.contains("reproduce and fix locally"),
+        said.contains("fix the cause the gate log names, then run the lap again"),
         "a verdict about the tree gets the tree's advice: {said}"
     );
 }
@@ -480,7 +483,7 @@ fn a_refused_gate_renders_its_verdict_with_its_cause() {
         .find(|line| line.contains("batten deny check run red"))
         .unwrap_or_else(|| panic!("the stop names its class: {said}"));
     assert!(
-        line.contains("reproduce and fix locally"),
+        line.contains("fix the cause the gate log names, then run the lap again"),
         "the cause rides the same line: {line}"
     );
     assert!(
