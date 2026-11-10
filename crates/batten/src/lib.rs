@@ -25313,6 +25313,11 @@ pub fn mint_receipts_for_test(
 //MUTANT dispatch-not-spent|s@^                clear_minted(&claimed)$@                std::fs::rename(\&claimed, \&original)@|a_dispatched_review_answers_only_once_it_completes
 //MUTANT dependent-before-writer|s@^    ordered.sort_by_key(\x7cmint\x7c mint.after.is_some());$@    ordered.sort_by_key(\x7c_\x7c 0);@|a_dependent_declared_first_still_waits_for_its_writer
 //MUTANT prerequisite-read-live|s@^                if written_now.contains(&prerequisite) {$@                if false {@|one_call_cannot_satisfy_its_own_prerequisite
+//MUTANT-SUITE crates/batten/tests/it/review_receipt_delta.rs
+//MUTANT require-spends-prerequisite|s@^            Some(after) if mint.effective_after_mode() == crate::mint::AfterMode::Require => {$@            Some(after) if false => {@|one_bridge_admits_every_require_dependent
+//MUTANT require-ignores-prerequisite|s@^                if !store.join(&required).is_file() {$@                if false {@|a_require_dependent_with_no_bridge_mints_nothing
+//MUTANT require-read-live|s@^                if written_now.contains(&required) {$@                if false {@|a_require_dependent_cannot_be_satisfied_by_its_own_call
+//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 //MUTANT completion-ignores-dispatch|s@^                if std::fs::rename(&original, &claimed).is_err() {$@                if std::fs::rename(\&original, \&claimed).is_err() \&\& false {@|a_completion_without_a_dispatch_of_this_change_mints_nothing
 fn mint_receipts(
     declared: &[crate::mint::Declared],
@@ -25430,6 +25435,18 @@ fn mint_receipts(
         // takes it.
         let claim = match mint.after.as_deref() {
             None => None,
+            // CHECKED, NEVER SPENT (CLOUD-2680): a bridge on file under this
+            // row's key admits every `require` dependent over the same change.
+            Some(after) if mint.effective_after_mode() == crate::mint::AfterMode::Require => {
+                let required = format!("{after}.{suffix}");
+                if written_now.contains(&required) {
+                    continue;
+                }
+                if !store.join(&required).is_file() {
+                    continue;
+                }
+                None
+            }
             Some(after) => {
                 let prerequisite = format!("{after}.{suffix}");
                 if written_now.contains(&prerequisite) {

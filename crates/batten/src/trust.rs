@@ -7391,6 +7391,7 @@ mod tests {
             selects: None,
             requires: requires.iter().map(|path| (*path).to_owned()).collect(),
             after: None,
+            after_mode: None,
             mode: crate::mint::MintMode::Replace,
             body: "{id} {now}".to_owned(),
         }
