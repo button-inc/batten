@@ -2438,4 +2438,57 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// Fails by: a bare repository left uninitialised, or its `HEAD` not
+    /// naming `main`.
+    #[test]
+    fn a_bare_repository_is_initialised_on_main() {
+        let dir = crate::scratch::scratch("gitwrite-bare-main");
+        init_bare_on_main(&dir).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("HEAD")).unwrap(),
+            "ref: refs/heads/main\n"
+        );
+    }
+
+    /// Fails by: any one malformed name admitted, or a target whose directory
+    /// or admin directory alone exists reused (CLOUD-2581).
+    #[test]
+    fn a_worktree_name_must_be_relative_and_its_target_new() {
+        let top = crate::scratch::scratch("gitwrite-link-names");
+        init_on_main(&top).unwrap();
+        commit_paths(&top, &[], "seed").unwrap();
+        let common = top.join(".git");
+        for name in ["", "/abs", "a/../b"] {
+            let refused = link_worktree(&common, &top, name).unwrap_err();
+            assert!(
+                refused.to_string().contains("not a relative name"),
+                "{name:?}: {refused}"
+            );
+        }
+        std::fs::create_dir_all(top.join(".claude").join("worktrees").join("dir")).unwrap();
+        std::fs::create_dir_all(common.join("worktrees").join("admin")).unwrap();
+        for name in ["dir", "admin"] {
+            let refused = link_worktree(&common, &top, name).unwrap_err();
+            assert!(refused.to_string().contains("exists"), "{name}: {refused}");
+        }
+    }
+
+    /// Fails by: a well-formed name refused, a created worktree answered by any
+    /// path but its own, or a removal answering any common dir or branch but
+    /// the ones it created (CLOUD-2581).
+    #[test]
+    fn a_linked_worktree_round_trips_its_directory_common_dir_and_branch() {
+        let top = crate::scratch::scratch("gitwrite-link-round-trip");
+        init_on_main(&top).unwrap();
+        commit_paths(&top, &[], "seed").unwrap();
+        let common = top.join(".git");
+        let dir = link_worktree(&common, &top, "feat").unwrap();
+        assert_eq!(dir, top.join(".claude").join("worktrees").join("feat"));
+        assert!(dir.join(".git").is_file());
+        let (answered, branch) = unlink_worktree(&dir).unwrap();
+        assert_eq!(answered, crate::git::canonical(&common));
+        assert_eq!(branch.as_deref(), Some("refs/heads/worktree-feat"));
+        assert!(!dir.exists());
+    }
 }
