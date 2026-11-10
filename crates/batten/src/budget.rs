@@ -1172,6 +1172,52 @@ mod tests {
         let directory = embedded_value(&dir, "set", &decl("dir.json")).unwrap_err();
         assert!(directory.downcast_ref::<UsageError>().is_none());
     }
+
+    /// Fails by: a call that holds a measure counted as growing it.
+    #[test]
+    fn only_a_strictly_larger_projection_grew() {
+        assert!(grew(5, 6));
+        assert!(!grew(5, 5));
+        assert!(!grew(5, 4));
+    }
+
+    /// Fails by: any one member, the current text or the projection dropped
+    /// from, or combined other than by sum into, the set's totals.
+    #[test]
+    fn a_projection_totals_every_member_with_each_side_of_the_call() {
+        let set = BudgetSet {
+            files: vec!["a.md".to_owned()],
+            max_tokens: 1_000,
+            max_lines: None,
+            max_bytes_per_file: None,
+            embedded: vec![],
+        };
+        let counted = |text: &str| {
+            let text = loaded(text);
+            (estimate_tokens(&text), count_lines(&text))
+        };
+        let members = BTreeMap::from([
+            ("b.md".to_owned(), "aaaaaaaaaaaa\n".to_owned()),
+            ("c.md".to_owned(), "bbbbbbbbbbbbbbbb\nc\n".to_owned()),
+        ]);
+        let (current, projected) = ("dddddddd\n", "eeeeeeeeeeeeeeeeeeee\nf\ng\n");
+        let parts = [
+            counted("aaaaaaaaaaaa\n"),
+            counted("bbbbbbbbbbbbbbbb\nc\n"),
+            counted(current),
+            counted(projected),
+        ];
+        assert!(parts.iter().all(|&(tokens, lines)| tokens > 0 && lines > 0));
+        let others = (parts[0].0 + parts[1].0, parts[0].1 + parts[1].1);
+        let measure = project("set", &set, Some(current), projected, Some(&members));
+        assert_eq!(
+            measure.totals,
+            Some((
+                (others.0 + parts[2].0, others.1 + parts[2].1),
+                (others.0 + parts[3].0, others.1 + parts[3].1),
+            ))
+        );
+    }
 }
 
 // --- CLOUD-2661: a budget judged at the call --------------------------------

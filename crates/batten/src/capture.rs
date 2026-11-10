@@ -4056,6 +4056,19 @@ mod tests {
         );
     }
 
+    /// Fails by: a leaf of exactly the cap refused as over it.
+    #[test]
+    fn a_json_leaf_exactly_at_the_cap_is_pretty_printed() {
+        let repo = contained_repo("capture-pretty-cap");
+        let leaf = repo.parent().unwrap().join("leaf");
+        let cap = usize::try_from(crate::stream_input::RESTORE_MAX_BYTES).unwrap();
+        let text = format!("[\"{}\"]", "x".repeat(cap - 4));
+        assert_eq!(text.len(), cap);
+        std::fs::write(&leaf, &text).unwrap();
+        let pretty = pretty_json(&leaf).unwrap().expect("at the cap is under it");
+        assert!(pretty.lines().count() > 1);
+    }
+
     /// Fails by: a view recognised outside the store's `views`, or a non-view
     /// file inside it.
     #[test]

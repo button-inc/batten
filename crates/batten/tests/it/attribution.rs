@@ -574,6 +574,26 @@ fn with_no_session_owner_the_forge_user_is_written() {
     assert!(stderr(&out).contains("was: unset"));
 }
 
+/// Fails by: a forge user's public email dropped for the noreply form, or an
+/// empty one taken as an address.
+#[test]
+fn a_forge_user_with_a_public_email_is_written_with_it() {
+    let dir = fixture("attribution-identity-forge-email");
+    git_in(&dir, &["config", "--unset", "user.name"]);
+    git_in(&dir, &["config", "--unset", "user.email"]);
+    let out = identity_with(
+        &dir,
+        &[(
+            "/user",
+            200,
+            r#"{"login":"octo","id":1,"name":"Octo Cat","email":"octo@example.test"}"#,
+        )],
+        &[],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(local(&dir, "user.email"), "octo@example.test");
+}
+
 #[test]
 fn a_denied_forge_user_is_not_written() {
     let dir = fixture("attribution-identity-forge-denied");
@@ -624,6 +644,29 @@ fn an_env_carried_vendor_identity_is_refused_by_name() {
     assert!(said.contains("GIT_AUTHOR_EMAIL"), "{said}");
     assert!(!said.contains("no-reply.example"), "{said}");
     assert_eq!(local(&dir, "user.email"), "owner@example.test");
+}
+
+/// Fails by: an env-carried config key named whether or not it is an identity
+/// key, or an identity key left unnamed.
+#[test]
+fn only_an_identity_key_carried_in_env_config_is_named() {
+    let dir = fixture("attribution-identity-env-config");
+    let out = identity_with(
+        &dir,
+        &[OWNER_USER],
+        &[
+            OWNER,
+            ("GIT_CONFIG_COUNT", "2"),
+            ("GIT_CONFIG_KEY_0", "User.Email"),
+            ("GIT_CONFIG_VALUE_0", "bot@no-reply.example"),
+            ("GIT_CONFIG_KEY_1", "core.editor"),
+            ("GIT_CONFIG_VALUE_1", "true"),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+    let said = stderr(&out);
+    assert!(said.contains("GIT_CONFIG_KEY_0"), "{said}");
+    assert!(!said.contains("GIT_CONFIG_KEY_1"), "{said}");
 }
 
 #[test]
