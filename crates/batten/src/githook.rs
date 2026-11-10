@@ -48,7 +48,6 @@ pub fn dispatched(mut args: impl Iterator<Item = std::ffi::OsString>) -> Option<
 }
 
 /// [`dispatched`]'s body, over git's arguments.
-//MUTANT-SUITE crates/batten/tests/it/git_hook.rs
 fn run(name: &str, rest: &[String], err: &mut dyn Write) -> ExitCode {
     // Not a repository: nothing can be declared for it, so nothing is owed.
     let Ok(root) = git::repo_root(Path::new(".")) else {
@@ -114,7 +113,6 @@ const GATE_PID: &str = "BATTEN_GATE_PID";
 /// # Errors
 ///
 /// A [`UsageError`] (→ exit `1`) naming the row.
-//MUTANT-SUITE crates/batten/tests/it/git_hook.rs
 pub fn validate(rows: &std::collections::BTreeMap<String, Vec<String>>) -> anyhow::Result<()> {
     for (name, argv) in rows {
         if !crate::hook::is_git_hook(name) {

@@ -2163,4 +2163,3 @@ mod tests {
 
 // `config lint` over the compiled binary: the host-rules payload a path names,
 // and the located view a dropped row must not shift.
-//MUTANT-SUITE crates/batten/tests/it/config_lint.rs

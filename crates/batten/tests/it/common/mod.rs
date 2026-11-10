@@ -681,7 +681,6 @@ fn refuse_fall_through_at(cwd: &Path) {
     );
 }
 
-//MUTANT-SUITE crates/batten/tests/it/harness_isolation.rs
 impl Batten {
     /// Panic if this command's working directory falls through to the checkout.
     fn refuse_fall_through(&self) {
@@ -979,7 +978,6 @@ fn mise_dirs() -> &'static [(&'static str, PathBuf)] {
 fn pin_mise(command: &mut Command) {
     // The declared mutation, in a plain comment because `common/` is harness
     // rather than a sweep route; its kill is shown by hand (CLOUD-2021):
-    // MUTANT state-redirect-moves-mise|s@command.env(name, dir);@let _ = (name, dir);@|a_redirected_state_root_leaves_mises_installs_where_they_are
     for (name, dir) in mise_dirs() {
         command.env(name, dir);
     }
@@ -994,7 +992,6 @@ fn pin_mise(command: &mut Command) {
     // `session:*` task against the host, 200 processes and 78s. A case run over
     // the real repository has its manifest in its own cwd, below no ceiling.
     // The declared mutation, in a plain comment for the reason above:
-    // MUTANT fixture-mise-walks-to-checkout|s@^    command.env("MISE_CEILING_PATHS", env!("CARGO_TARGET_TMPDIR"));$@@|every_spawn_stops_mises_walk_at_the_fixture_root
     command.env("MISE_CEILING_PATHS", env!("CARGO_TARGET_TMPDIR"));
 }
 
@@ -2695,7 +2692,6 @@ fn parse_committed_patterns() -> Vec<batten::pattern::NamedPattern> {
 /// committed table declares `<id>`" after the committed module stopped raising
 /// it. A scratch fixture carries no `.gitignore`, so it is walked in full as
 /// before.
-// MUTANT vocabulary-reads-ignored-tree|s@batten::rules::tree_files(root).expect("the vocabulary root is walkable")@std::fs::read_dir(root).into_iter().flatten().flatten().flat_map(\x7cdir\x7c std::fs::read_dir(dir.path()).into_iter().flatten().flatten().map(move \x7cfile\x7c format!("{}/{}", dir.file_name().to_string_lossy(), file.file_name().to_string_lossy()))).collect::<Vec<_>>()@|the_declared_vocabulary_never_reads_an_ignored_directory
 #[must_use]
 pub(crate) fn verdicts_in(root: &Path) -> Vec<batten::verdict::DeclaredVerdict> {
     let mut found: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();

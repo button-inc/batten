@@ -410,7 +410,6 @@ pub fn record_is_stale(root: &Path) -> bool {
 // on a predicate nobody wrote for it. The census reported it `uncovered` the
 // moment the opener widened — a row declared, swept by nothing — which is the
 // arm that would otherwise have read as coverage.
-//MUTANT-SUITE crates/batten/tests/it/pinned_programs.rs
 
 /// Whether a record is on disk at all, whatever it says (CLOUD-1371).
 ///

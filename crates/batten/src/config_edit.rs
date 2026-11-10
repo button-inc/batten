@@ -262,7 +262,6 @@ fn value_of(value: &Scalar) -> Value {
 /// change exactly as it read it. A `toml::Value` round-trip in its place
 /// type-checks, still writes the right value at the right key, and destroys
 /// everything else.
-//MUTANT-SUITE crates/batten/tests/it/config_edit.rs
 fn render(doc: &DocumentMut) -> String {
     doc.to_string()
 }

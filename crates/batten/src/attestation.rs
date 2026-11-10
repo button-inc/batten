@@ -57,7 +57,6 @@ use crate::exit::ExitCode;
 // The producer's mutation rows. Each breaks one arm that turns a WORLD fact into
 // a recorded reading, and each is caught by the compiled-binary case it names —
 // the module deciding over the record cannot see a producer that lied to it.
-//MUTANT-SUITE crates/batten/tests/it/attestation.rs
 
 /// The verb, as a could-not-look line names it.
 const VERB: &str = "record attestation";

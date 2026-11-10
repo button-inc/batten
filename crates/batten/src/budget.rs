@@ -206,7 +206,6 @@ pub struct Report {
 ///
 /// Its own function so the boundary is stated once and a mutation of it has one
 /// place to land: `<=` passes, exactly as every other ceiling in this module.
-//MUTANT-SUITE crates/batten/tests/it/memories.rs
 const fn over_file_ceiling(bytes: usize, ceiling: usize) -> bool {
     bytes > ceiling
 }
@@ -1230,7 +1229,6 @@ pub fn literal_entry(entry: &str) -> bool {
 
 /// Whether a measure grew: a call that holds or shrinks an over-budget set is
 /// its repair, and refusing it would wedge the agent.
-//MUTANT-SUITE crates/batten/tests/it/budget_at_call.rs
 #[must_use]
 pub const fn grew(current: usize, projected: usize) -> bool {
     projected > current

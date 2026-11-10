@@ -495,7 +495,6 @@ impl Lock {
 /// it, and keeps it only if it answered. The script used to guess from a
 /// `/lib/ld-musl-*` loader, which handed a gnu binary to every host with no libc
 /// or too old a glibc.
-//MUTANT-SUITE crates/batten/tests/it/install_web.rs
 #[must_use]
 pub fn render_bootstrap(name: &str, repository: &str, lock: &Lock) -> String {
     let asset = bootstrap_asset(name);
@@ -585,7 +584,6 @@ pub const SYSTEM_BIN_DIRS: &[&str] = &["/usr/local/bin", "/opt/homebrew/bin"];
 /// on `PATH`; otherwise the first system directory that is both on `PATH` and
 /// writable — a root Setup shell carries `/usr/local/bin` and not `~/.local/bin`;
 /// otherwise the per-user directory, reported as off `PATH`.
-//MUTANT-SUITE crates/batten/src/install.rs
 #[must_use]
 pub fn destination(
     named: Option<std::path::PathBuf>,

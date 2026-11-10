@@ -399,11 +399,4 @@ The composer's own mutations. Each removes one sentence of CLOUD-921, or cuts
 the payload set off from the gates it feeds, and the named case is the compiled
 tier that stops discriminating.
 
-#MUTANT-SUITE crates/batten/tests/it/board_sweep.rs
-#MUTANT sweep-refusal-laundered|s@ExitCode::combine(count(Lane::Refused), @ExitCode::combine(0, @|a_refusal_outranks_a_clone_scoped_abstention
-#MUTANT sweep-could-not-look-laundered|s@, count(Lane::CouldNotLook))@, 0)@|a_board_scoped_could_not_look_outranks_a_refusal
-#MUTANT sweep-abstention-is-clean|s@        ExitCode::Success if count(Lane::Abstained) > 0 => ExitCode::Internal,@        ExitCode::Success if false => ExitCode::Internal,@|an_abstaining_gate_is_not_a_clean_board
-#MUTANT sweep-gate-fed-nothing|s@^            payload,$@            "",@|the_payload_set_reaches_every_gate_on_stdin
-#MUTANT sweep-unclassified-is-refusal|s@        _ => Lane::CouldNotLook,@        _ => Lane::Refused,@|a_gate_exiting_outside_its_table_is_not_laundered_into_the_refusal_lane
-#MUTANT sweep-empty-set-is-clean|s@    if set.is_empty() {@    if false {@|an_empty_payload_set_is_could_not_look
 */

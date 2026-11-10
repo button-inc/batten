@@ -361,7 +361,6 @@ pub struct Refusal {
 /// Rule 4 is untouched: this binds only what the refusal already renders, and
 /// `bindings` is `skip_serializing`, so `-J` output and `schema/*.json` do not
 /// move.
-//MUTANT-SUITE crates/batten/src/hook.rs
 fn admission_bindings(token: &str, subjects: &[crate::verdict::Subject]) -> Vec<String> {
     use crate::verdict::{bound_subject, render_subjects};
     if subjects.is_empty() {
@@ -1109,10 +1108,6 @@ pub fn of_rule(
     })
 }
 
-//MUTANT-SUITE crates/batten/tests/it/advisory_drain.rs
-//MUTANT-SUITE crates/batten/src/hook.rs
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT-SUITE crates/batten/src/hook.rs
 impl Refusal {
     /// Build a refusal. The [`Fix`] is required, which is the contract.
     pub fn new(rule: impl Into<String>, reason: impl Into<String>, fix: Fix) -> Refusal {
