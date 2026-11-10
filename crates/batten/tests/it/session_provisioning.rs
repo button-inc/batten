@@ -842,7 +842,7 @@ fn every_handler_row_is_read() {
 /// has probed, stated so the census below can be exact rather than lenient.
 /// CLOUD-1961 owns emptying it; a row leaving this list is what closing the gap
 /// looks like, in `ADVISORY_GAPS`' shape one table over.
-const UNHEARD: [&str; 2] = ["turn-cross-check", "head-move-mediator-check"];
+const UNHEARD: [&str; 1] = ["head-move-mediator-check"];
 
 /// Whether Claude Code carries an advisory emitted on the event a row names.
 ///
