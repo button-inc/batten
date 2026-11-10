@@ -17620,8 +17620,10 @@ fn narrow_to_change(
         .chain(delta.deleted.iter())
         .cloned()
         .collect();
+    let code_changed: std::collections::BTreeSet<String> =
+        delta.code_changed.iter().cloned().collect();
     Ok(Narrowed {
-        names: mutate::touched(root, &names, &changed, registry),
+        names: mutate::touched(root, &names, &changed, &code_changed, registry),
         change: Some((base, changed)),
     })
 }

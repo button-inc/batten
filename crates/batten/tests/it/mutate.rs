@@ -1541,10 +1541,27 @@ fn a_change_to_one_gate_sweeps_only_that_gate() {
 #[test]
 fn a_change_to_a_suite_sweeps_its_gate() {
     let root = two_gate_repo("since-suite");
-    write(&root, "tests/other.rs", &other_suite("// edited\n"));
+    write(&root, "tests/other.rs", &other_suite("fn helper() {}\n"));
     let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
     assert_ne!(code, 0, "{out}{err}");
     assert!(out.contains("other/pipefail-dropped SURVIVED"), "{out}");
+}
+
+/// A COMMENT CANNOT WEAKEN A SUITE, so a comment-only edit to one touches no
+/// gate. Fails by: the suite arm reading raw bytes, which re-swept every gate
+/// naming a suite whose comments moved (134 rows on #1276, from deleting
+/// markers).
+#[cfg(unix)]
+#[test]
+fn a_comment_edit_to_a_suite_sweeps_nothing() {
+    let root = two_gate_repo("since-suite-comment");
+    write(&root, "tests/other.rs", &other_suite("// a comment\n"));
+    let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("no enforced gate's source or suite changed since HEAD"),
+        "{out}{err}"
+    );
 }
 
 /// Fails by: only a source's FIRST `MUTANT-SUITE` counting as its suite, so a
@@ -1568,7 +1585,7 @@ fn a_change_to_a_sources_second_suite_sweeps_its_gate() {
     write(
         &root,
         "tests/extra.rs",
-        "#[test]\nfn extra_holds() {}\n// edited\n",
+        "#[test]\nfn extra_holds() {}\nfn helper() {}\n",
     );
     let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
     assert_ne!(code, 0, "{out}{err}");
@@ -1682,57 +1699,33 @@ fn a_change_whose_patch_moved_is_swept_again() {
     assert!(out.contains("every one caught"), "{out}");
 }
 
+/// A COMMENT EDIT TO A ROW'S SUITE KEEPS THE ROW'S CATCH: its key carries the
+/// suite's code, and a comment cannot weaken it. Fails by: the suite keyed by
+/// its raw bytes, so every recorded row re-ran after a comment moved.
+#[test]
+fn a_comment_edit_to_a_suite_keeps_its_rows_caught() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = passed_change("pass-suite-comment");
+    let suite = format!("{}// a comment\n", toy_suite("toy.sh", ""));
+    write(&root, "tests/toy.rs", &suite);
+    let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(err.contains("caught (recorded)"), "{out}{err}");
+}
+
 /// The base moved a row's SUITE under an unchanged patch, as a rebase does:
-/// the rows' keys carry the suite's bytes, so the change runs again.
+/// the rows' keys carry the suite's code, so the change runs again.
 #[test]
 fn a_change_whose_suite_moved_under_it_is_swept_again() {
     if !cfg!(unix) {
         return;
     }
     let root = passed_change("pass-suite-moved");
-    let suite = format!("{}// moved on the base\n", toy_suite("toy.sh", ""));
+    let suite = format!("{}fn moved_on_the_base() {{}}\n", toy_suite("toy.sh", ""));
     write(&root, "tests/toy.rs", &suite);
     common::git_in(&root, &["add", "tests/toy.rs"]);
-    common::git_in(&root, &["commit", "-m", "the base moves the suite"]);
-    let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
-    assert_eq!(code, 0, "{out}{err}");
-    assert!(!out.contains(NOT_RUN_AGAIN), "{out}");
-}
-
-/// The base moved a suite a changed SOURCE declares, under an unchanged patch:
-/// that suite is the scope cargo-mutants runs over the source, so the key
-/// carries its bytes and the change runs again.
-#[test]
-fn a_change_whose_declared_suite_moved_under_it_is_swept_again() {
-    if !cfg!(unix) {
-        return;
-    }
-    let root = ignoring_target("pass-declared-suite");
-    write(
-        &root,
-        "src/extra.rs",
-        "//MUTANT-SUITE tests/extra_suite.rs\n",
-    );
-    write(
-        &root,
-        "tests/extra_suite.rs",
-        "#[test]\nfn extra_holds() {}\n",
-    );
-    track(&root);
-    common::git_in(&root, &["commit", "-m", "a source and its suite"]);
-    edit_toy(&root);
-    write(
-        &root,
-        "src/extra.rs",
-        "//MUTANT-SUITE tests/extra_suite.rs\n// edited\n",
-    );
-    sweep_recorded(&root);
-    write(
-        &root,
-        "tests/extra_suite.rs",
-        "#[test]\nfn extra_holds() {}\n// moved on the base\n",
-    );
-    common::git_in(&root, &["add", "tests/extra_suite.rs"]);
     common::git_in(&root, &["commit", "-m", "the base moves the suite"]);
     let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
     assert_eq!(code, 0, "{out}{err}");
@@ -1833,7 +1826,7 @@ fn a_failing_change_is_never_recorded() {
         return;
     }
     let root = ignoring_target("pass-failing");
-    write(&root, "tests/other.rs", &other_suite("// edited\n"));
+    write(&root, "tests/other.rs", &other_suite("fn helper() {}\n"));
     for _ in 0..2 {
         let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
         assert_ne!(code, 0, "{out}{err}");

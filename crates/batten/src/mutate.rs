@@ -1050,8 +1050,11 @@ fn subject_name(root: &Path, path: &str) -> String {
 /// the gates a pull request touched rather than on a schedule over all of them.
 ///
 /// A gate is touched when a changed path is one of its sources, or one of
-/// [`Gate::suites`]: a weaker suite is the commonest way a gate stops
-/// discriminating, so a change to the suite alone must re-sweep its rows.
+/// [`Gate::suites`] whose CODE changed (`code_changed`, the paths whose
+/// non-comment remainder moved): a weaker suite is the commonest way a gate stops
+/// discriminating, so a change to the suite alone must re-sweep its rows, and a
+/// comment edit to one cannot weaken it. A source is read whole, comments
+/// included, because a gate's rows are comment lines in it.
 ///
 /// A changed path inside a PRESET gate's directory touches that gate too, and
 /// that is what reaches a DELETED module: `resolve` reads the tree as it is now,
@@ -1071,6 +1074,7 @@ pub fn touched(
     root: &Path,
     names: &[String],
     changed: &std::collections::BTreeSet<String>,
+    code_changed: &std::collections::BTreeSet<String>,
     registry: &Registry,
 ) -> Vec<String> {
     names
@@ -1080,18 +1084,27 @@ pub fn touched(
                 if !gate.rows.is_empty() && !gate.rows.iter().any(|row| registry.declares(row)) {
                     return false;
                 }
-                changed_by(&gate, name, changed)
+                changed_by(&gate, name, changed, code_changed)
             })
         })
         .cloned()
         .collect()
 }
 
-/// Whether `changed` moves `gate`: a changed path is one of its sources, one of
-/// [`Gate::suites`], or inside its preset directory ([`touched`]'s three arms).
-fn changed_by(gate: &Gate, name: &str, changed: &std::collections::BTreeSet<String>) -> bool {
+/// Whether the change moves `gate`: a changed path is one of its sources, a
+/// [`Gate::suites`] entry whose code changed, or inside its preset directory
+/// ([`touched`]'s three arms).
+fn changed_by(
+    gate: &Gate,
+    name: &str,
+    changed: &std::collections::BTreeSet<String>,
+    code_changed: &std::collections::BTreeSet<String>,
+) -> bool {
     let by_source = gate.sources.iter().any(|path| changed.contains(path));
-    let by_suite = gate.suites().iter().any(|s| changed.contains(s.path()));
+    let by_suite = gate
+        .suites()
+        .iter()
+        .any(|s| code_changed.contains(s.path()));
     let dir = format!("{PRESETS}/{name}/");
     let by_preset = changed.iter().any(|path| path.starts_with(&dir));
     by_source || by_suite || by_preset
@@ -1570,19 +1583,6 @@ fn runner_bound() -> std::time::Duration {
             .filter(|seconds| *seconds > 0)
             .unwrap_or(21_600),
     )
-}
-
-/// The Rust suites `source` declares with `MUTANT-SUITE`, trimmed, in order:
-/// what [`scope_of`] judges it by beyond its own tests, and what a
-/// [`ChangePass`] key carries, so the two cannot name different scopes.
-fn declared_suites(root: &Path, source: &str) -> Vec<String> {
-    lines_of(root, source)
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|line| strip_marker(line, SUITE))
-        .map(|suite| suite.trim().to_owned())
-        .filter(|suite| has_extension(suite, "rs"))
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -3442,14 +3442,19 @@ fn unreported(run: &Selection, suite: &Suite, row: &Row) -> Option<Verdict> {
 /// full sweep the confirmation.
 const CAUGHT_RECORD: &str = "caught.tsv";
 
-/// A row's key: its script, the bytes it mutates, and the bytes of its suite.
+/// A row's key: its script, the bytes it mutates, and its suite's CODE, the
+/// non-comment remainder [`crate::git::without_comments`] reads, so a comment
+/// edit to the suite keeps the row it already saw caught. The source is keyed
+/// whole: its rows are comments in it.
 fn row_key(root: &Path, gate: &Gate, row: &Row) -> String {
     let mut material = row.script.clone().into_bytes();
     material.push(0);
     material.extend(std::fs::read(root.join(&row.source)).unwrap_or_default());
     material.push(0);
     if let Some(suite) = gate.suite_for(row) {
-        material.extend(std::fs::read(root.join(suite.path())).unwrap_or_default());
+        let path = suite.path();
+        let text = std::fs::read_to_string(root.join(path)).unwrap_or_default();
+        material.extend(crate::git::without_comments(path, &text).into_bytes());
     }
     crate::provision::digest(&material)
 }
@@ -3598,15 +3603,12 @@ impl ChangeInputs {
     ///   change, most rebases onto a busy trunk, keys alike while the context
     ///   lines still place the change; or, where no patch can be written
     ///   (non-UTF-8 working bytes), the path and a digest of those bytes;
-    /// - what judges it: the bytes of every [`declared_suites`] entry of a
-    ///   changed source, the scope cargo-mutants runs beyond the source's own
-    ///   inline tests (keyed only where a hunk's context reaches them;
-    ///   CLOUD-2591 owns the rest of the file), and each
-    ///   narrowed gate's name and its rows' [`row_key`]s, which carry the bytes
-    ///   of the sources and suites a declared row runs against.
+    /// - what judges it: each narrowed gate's name and its rows' [`row_key`]s,
+    ///   which carry the bytes of the sources a declared row mutates and the
+    ///   code of the suites it runs against.
     ///
-    /// So a base that moved a suite under an unchanged patch is a key that
-    /// moved, for either runner.
+    /// So a base that moved a suite's code under an unchanged patch is a key
+    /// that moved.
     fn key(&self) -> Option<String> {
         let Self {
             root,
@@ -3647,10 +3649,6 @@ impl ChangeInputs {
             } else {
                 put(path.as_bytes());
                 put(crate::provision::digest(&bytes).as_bytes());
-            }
-            for suite in declared_suites(root, path) {
-                put(suite.as_bytes());
-                put(&fs::read(root.join(&suite)).unwrap_or_default());
             }
         }
         for name in names {

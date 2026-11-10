@@ -3504,7 +3504,7 @@ pub struct BaseDelta {
 /// classified line-by-line without tracking state, and guessing fails in the
 /// refusing direction — so a file using them reads as code, which is the safe
 /// half.
-fn without_comments(path: &str, text: &str) -> String {
+pub(crate) fn without_comments(path: &str, text: &str) -> String {
     let prefix = match path.rsplit_once('.').map(|(_, ext)| ext) {
         // Markdown is prose end to end; there is no non-comment remainder.
         Some("md") => return String::new(),
