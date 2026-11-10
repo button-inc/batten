@@ -584,7 +584,7 @@ pub struct ArmSequence {
 /// spirit — but that is a review question, and a gate demanding a merge between
 /// the two would be refusing ordinary work. Narrow on purpose.
 ///
-/// # No model verdict reaches the exit code
+/// # No gated-model verdict reaches the exit code
 ///
 /// Both sides are sets of strings the caller read out of the diff and the config.
 /// A line counts as a spend when, trimmed, it STARTS WITH the arm's token — which
