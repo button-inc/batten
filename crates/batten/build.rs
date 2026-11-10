@@ -107,6 +107,12 @@ fn refuse_hand_rolled_mutation(manifest: &Path) -> Built {
     let mut sources = Vec::new();
     for dir in ["src", "tests", "benches", "examples"] {
         let root = manifest.join(dir);
+        // ONLY A DIRECTORY THAT EXISTS IS WATCHED: cargo reads a missing
+        // `rerun-if-changed` path as stale on every build, which reran this
+        // script and rebuilt the library on every mutation row (75s a row).
+        if !root.is_dir() {
+            continue;
+        }
         println!("cargo:rerun-if-changed={}", root.display());
         rust_files(&root, &mut sources);
     }
