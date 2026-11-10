@@ -22,7 +22,7 @@
 #
 # WHAT IT CANNOT DECIDE, stated so no §7 overclaims it. Whether a given session
 # actually claimed before branching is not a property of the tree, and a gate
-# resolving to that would be the model verdict rule 3 forbids. This is the same
+# resolving to that would be the gated-model verdict rule 3 forbids. This is the same
 # division `rules/scanning.md` records for its own case: the prose carries
 # the position, and the gate keeps the prose from evaporating.
 #
