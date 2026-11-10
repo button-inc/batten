@@ -675,6 +675,21 @@
         }
       ]
     },
+    "AfterMode": {
+      "description": "How a `[[mint]]` row's `after` prerequisite is met (CLOUD-2680).",
+      "oneOf": [
+        {
+          "description": "The prerequisite is consumed by the record it admits.",
+          "type": "string",
+          "const": "spend"
+        },
+        {
+          "description": "The prerequisite is checked and left on file.",
+          "type": "string",
+          "const": "require"
+        }
+      ]
+    },
     "Applicability": {
       "description": "What the boundary may DO about a class, beyond naming it (CLOUD-1639).\n\n**Every refusal in this tree is advice**: a class, its pointers, and routes\nthe agent must walk itself. Two outcomes the field treats as first-class are\nunrepresentable — *repaired, re-run* and *repaired, proceed* — and\n[`crate::rules::Rule::fix`] has existed for them since CLOUD-81, executed by\nnothing.\n\n# THE DEFAULT IS `advice`, AND THAT IS WHAT MAKES THIS ADDITIVE\n\nAbsent means today's behaviour, so 200-odd declared classes keep it without\nrestating it and no consumer config changes meaning under an engine that\ngained this column. `Retry` and `Silent` are opt-in per class and each owes\nsomething extra at load — see [`validate`].\n\n# WHY `retry` IS THE DEFAULT POSTURE FOR A REPAIR AND `silent` THE EXCEPTION\n\nNot a preference. pre-commit's hook that modifies files FAILS the run and the\ncaller re-runs over the new bytes — there is no silent path (SRC-041); Ruff\nmakes the caller choose with `--exit-non-zero-on-fix` (SRC-047); Kubernetes\nmutating webhooks apply silently but write `auditAnnotations` (SRC-042). **No\nsurveyed system applies silently and leaves no record.** Measured on agents:\nfeedback-then-retry converged 86.6% against 79.8% for block-and-retry at no\nutility loss, while silent server-side rewrite converged 96.9% and cost 22.3%\nutility (SRC-059). So `Silent` owes a stated reason and a record, and\n[`validate`] refuses one that declares neither.",
       "oneOf": [
@@ -1714,6 +1729,17 @@
             "null"
           ],
           "maxLength": 1536
+        },
+        "after_mode": {
+          "description": "How `after` is met (CLOUD-2680): `spend` (the default) consumes the\nprerequisite, so one dispatch answers one completion; `require` only\nchecks it is on file, so one bridge admits every dependent over the same\nchange. Absent never serializes.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AfterMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "body": {
           "description": "The record's bytes, as a template over the closed placeholder vocabulary\n[`Piece`] documents.",
