@@ -84,10 +84,21 @@ fn recorded(root: &Path) -> Option<String> {
 
 /// One hook call, with `transcript` named the way the host names it.
 fn hook(root: &Path, event: &str, response: &serde_json::Value, transcript: &Path) {
+    hook_running(root, event, FETCH, response, transcript);
+}
+
+/// [`hook`], for a call running `command` (CLOUD-2677).
+fn hook_running(
+    root: &Path,
+    event: &str,
+    command: &str,
+    response: &serde_json::Value,
+    transcript: &Path,
+) {
     let payload = serde_json::json!({
         "hook_event_name": event,
         "tool_name": "Bash",
-        "tool_input": {"command": FETCH},
+        "tool_input": {"command": command},
         "tool_response": response,
         "transcript_path": transcript,
     });
@@ -165,4 +176,106 @@ fn an_unreadable_output_records_nothing() {
     .expect("notify");
     hook(&root, "PreToolUse", &serde_json::Value::Null, &transcript);
     assert_eq!(recorded(&root), None);
+}
+
+// --- CLOUD-2677: a mint over a backgrounded call waits for its task ---------
+
+/// [`repo`], plus a mint over a Bash call running exactly `selects`.
+fn mint_repo(name: &str, selects: &str) -> PathBuf {
+    let root = repo(name);
+    let config = std::fs::read_to_string(root.join("batten.toml")).expect("authority");
+    let config = format!(
+        "{config}\n[[mint]]\nname = \"gates-passed\"\ntool = \"Bash\"\nkey = \"branch\"\n\
+         selects_at = \"command\"\nselects = \"{selects}\"\nmode = \"replace\"\n\
+         body = \"{{git:HEAD}} {{now}}\"\n"
+    );
+    std::fs::write(root.join("batten.toml"), config).expect("add the mint");
+    root
+}
+
+/// The mint's receipt, keyed on the branch so a commit does not move it.
+fn minted(root: &Path) -> Option<String> {
+    let git_dir = common::git_in(root, &["rev-parse", "--absolute-git-dir"]);
+    std::fs::read_to_string(Path::new(git_dir.trim()).join("batten-receipts/gates-passed.work"))
+        .ok()
+}
+
+/// A launch, then the task's exit as the transcript reports it, then the next
+/// hook call that reads the transcript.
+fn launch(root: &Path, command: &str, id: &str, transcript: &Path) {
+    std::fs::write(transcript, "").expect("transcript");
+    hook_running(root, "PostToolUse", command, &backgrounded(id), transcript);
+}
+
+fn exit(root: &Path, command: &str, id: &str, status: &str, out: &str, transcript: &Path) {
+    let output = root.join(format!("{id}.output"));
+    std::fs::write(&output, out).expect("output");
+    std::fs::write(transcript, notification(id, &output, status) + "\n").expect("notify");
+    hook_running(
+        root,
+        "PreToolUse",
+        command,
+        &serde_json::Value::Null,
+        transcript,
+    );
+}
+
+const STATUS: &str = "batten receipt status";
+
+#[test]
+fn a_backgrounded_mint_waits_for_its_task() {
+    let root = mint_repo("mint-waits", STATUS);
+    let transcript = root.join("transcript.jsonl");
+    launch(&root, STATUS, "m1", &transcript);
+    assert_eq!(
+        minted(&root),
+        None,
+        "nothing has run yet, so nothing is minted"
+    );
+    exit(&root, STATUS, "m1", "completed", "ok\n", &transcript);
+    assert!(minted(&root).is_some(), "the task completed over its HEAD");
+}
+
+#[test]
+fn a_commit_before_the_task_exits_mints_nothing() {
+    let root = mint_repo("mint-head-moved", STATUS);
+    let transcript = root.join("transcript.jsonl");
+    launch(&root, STATUS, "m2", &transcript);
+    common::git_in(
+        &root,
+        &["commit", "--quiet", "--allow-empty", "-m", "moved"],
+    );
+    exit(&root, STATUS, "m2", "completed", "ok\n", &transcript);
+    assert_eq!(minted(&root), None, "the task checked a HEAD that moved");
+}
+
+#[test]
+fn a_failed_backgrounded_check_mints_nothing() {
+    let root = mint_repo("mint-failed", STATUS);
+    let transcript = root.join("transcript.jsonl");
+    launch(&root, STATUS, "m3", &transcript);
+    exit(&root, STATUS, "m3", "failed", "ok\n", &transcript);
+    assert_eq!(minted(&root), None);
+}
+
+#[test]
+fn a_call_a_recorder_and_a_mint_both_select_replays_both() {
+    let root = mint_repo("mint-and-record", FETCH);
+    let transcript = root.join("transcript.jsonl");
+    launch(&root, FETCH, "m4", &transcript);
+    assert_eq!(recorded(&root), None);
+    assert_eq!(minted(&root), None);
+    exit(
+        &root,
+        FETCH,
+        "m4",
+        "completed",
+        "Consolidated.\n\nCloses CLOUD-1295\n",
+        &transcript,
+    );
+    assert_eq!(recorded(&root).as_deref(), Some("closes 1:CLOUD-1295\n"));
+    assert!(
+        minted(&root).is_some(),
+        "the shared entry carried the launch HEAD"
+    );
 }
