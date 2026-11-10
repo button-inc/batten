@@ -1524,6 +1524,37 @@ fn a_repointing_that_also_changes_the_rest_of_the_line_is_refused() {
         "dropping ` 2>/dev/null` alongside the repointing is a second edit: {:?}",
         findings(&root)
     );
+    // A SUFFIX CHANGED TO ONE OF THE SAME LENGTH, so the span between the kept
+    // prefix and the suffix is exactly the retired path: only the suffix test can
+    // tell this from a clean repointing.
+    let root = repo(
+        "span-drift-same-length",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "mise-tasks/caller.sh",
+                "#!/usr/bin/env bash\n\"$(dirname \"$0\")/old-gate.sh\" --qq\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "mise-tasks/caller.sh",
+                    "#!/usr/bin/env bash\nmise run old-gate --zz\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger_running("mise-tasks/old-gate.sh", "mise run old-gate"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).contains(&"shell retire other".to_owned()),
+        "changing the argument alongside the repointing is a second edit: {:?}",
+        findings(&root)
+    );
 }
 
 /// N4 — THE LOAD-BEARING NEGATIVE. Without the "span is a reference to a deleted
@@ -1954,5 +1985,36 @@ fn a_bats_case_spending_a_surviving_binding_is_refused() {
         findings(&root),
         vec![String::from("shell retire other")],
         "the binding is still there, so nothing about this case is going away"
+    );
+    // AND ANOTHER VARIABLE'S BINDING DYING IS NOT THIS ONE'S: the removal drops a
+    // second binding that also names the retired path, and keeps `HOOK`'s, so
+    // only the binding's own name tells the two apart.
+    let two = BIND_SUITE.replacen(
+        "\tHOOK=",
+        "\tOTHER=\"$BATS_TEST_DIRNAME/../mise-tasks/old-gate.sh\"\n\tHOOK=",
+        1,
+    );
+    let root = repo(
+        "bats-bind-other-dies",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            ("mise-tasks/other.sh", GATE),
+            ("tests/binding.bats", &two),
+        ],
+        &Head {
+            written: &[
+                ("tests/binding.bats", BIND_SUITE_BINDING_KEPT),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger("mise-tasks/old-gate.sh"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert_eq!(
+        findings(&root),
+        vec![String::from("shell retire other")],
+        "`HOOK`'s binding survives, so the case spending it is not going away"
     );
 }
