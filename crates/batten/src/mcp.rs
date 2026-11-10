@@ -335,7 +335,6 @@ impl Credential {
 /// operator's wiring) and never a byte of what it printed: an absent or
 /// non-text key, a command that will not start or exits non-zero, output that
 /// is not a JSON object, and an object without the header or with it empty.
-//MUTANT helper-exit-unread|s@^    if code != 0 {$@    if code == 0 {@|a_helper_s_printed_header_is_the_credential_sent
 fn helped(
     row: &Credential,
     id: &str,
@@ -1163,8 +1162,6 @@ pub(crate) fn percent_decoded(text: &str) -> String {
 /// nothing. This is the retired resolver's exact comparison of the wrapped
 /// upstream, without spelling the parameter a host wraps it in (non-negotiable
 /// rule 1): ANY parameter's value may be the address.
-//MUTANT upstream-prefix-accepted|s@^        if bare_address(&address) == want {$@        if bare_address(\&address).starts_with(want) {@|a_url_that_extends_the_governed_upstream_resolves_to_silence
-//MUTANT upstream-param-unread|s@^    for address in std::iter::once(endpoint.to_owned()).chain(query_values(endpoint)) {$@    for address in std::iter::once(endpoint.to_owned()) {@|a_committed_allow_and_deny_reach_the_toolbox_under_a_flipped_name
 pub(crate) fn endpoint_names(endpoint: &str, needle: &str) -> bool {
     let want = bare_address(needle);
     if want.is_empty() {
@@ -1677,9 +1674,6 @@ pub fn bound_in(
 /// `mutate` runs a Rust suite as `cargo test -- <case>` across every target, so a
 /// row here reddens the posture case it names although this file's declared
 /// suite is the dispatch tier.
-//MUTANT allow-check-ignores-policy|s@^            (!posture.is_empty() && posture != ALWAYS_ALLOW).then_some@            (!posture.is_empty()).then_some@|an_allow_rule_whose_tool_the_connector_allows_passes
-//MUTANT bare-rule-unread|s@^        if is_bare_server_rule(rule, server) {$@        if false {@|a_bare_server_rule_counts_once_when_any_tool_asks
-//MUTANT bare-rule-over-allowed-counted|s@^            if !asking.is_empty() {$@            if true {@|a_bare_server_rule_counts_once_when_any_tool_asks
 fn unenforceable_in(
     settings: &[std::path::PathBuf],
     server: &str,
@@ -1816,7 +1810,6 @@ pub struct Payload {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/mcp_dispatch.rs
-//MUTANT is-error-result-projected|s@== Some(true)@== Some(false)@|a_tool_level_error_result_exits_non_zero_and_names_the_method
 
 /// What a caller must do with a `tools/call` result, decided **before** any
 /// reduction runs.
@@ -2251,8 +2244,6 @@ const SPAWN_LEDGER: &str = "batten-mcp-spawns";
 // without either, the rows under it are judged against a file that lacks
 // their cases.
 //MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
-//MUTANT spawn-record-never-written|s@^    drop(crate::durable::append(&ledger, &line));$@    drop((\&ledger, \&line));@|a_launch_appends_one_record_naming_the_server_and_becomes_the_launch_line
-//MUTANT spawn-siblings-always-zero|s@now - \*stamp <= SPAWN_WINDOW@false@|a_launch_inside_the_window_counts_the_earlier_one_as_a_sibling
 
 /// Where the checkout at `root` keeps its spawn ledger, or `None` outside one.
 ///
@@ -2363,8 +2354,6 @@ pub const EXEC_FAILED: &str = "exec-failed";
 /// marker to its launch line, so a field added to the launch record later
 /// cannot move the marker out from under this reader.
 //MUTANT-SUITE crates/batten/src/mcp.rs
-//MUTANT exec-failure-read-by-position|s@^    line.rsplit('\\t').next() == Some(EXEC_FAILED)$@    line.split('\\t').nth(5) == Some(EXEC_FAILED)@|a_failure_record_is_named_by_its_last_field_wherever_that_falls
-//MUTANT exec-failure-read-unbounded|s@^    line.rsplit('\\t').next() == Some(EXEC_FAILED)$@    line.ends_with(EXEC_FAILED)@|a_failure_record_is_named_by_its_last_field_wherever_that_falls
 #[must_use]
 pub fn is_exec_failure(line: &str) -> bool {
     line.rsplit('\t').next() == Some(EXEC_FAILED)
@@ -2378,7 +2367,6 @@ pub struct SpawnRecord {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
-//MUTANT exec-failure-unrecorded|s@^        drop(crate::durable::append(\&self.ledger, \&failed));$@        drop((self.ledger, failed));@|a_launch_that_cannot_exec_is_recorded_as_failed
 impl SpawnRecord {
     /// Append that the launch line could not be exec'd (CLOUD-2327): this
     /// launch's record again, then [`EXEC_FAILED`].

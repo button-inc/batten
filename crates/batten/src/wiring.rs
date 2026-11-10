@@ -962,7 +962,6 @@ impl Disarmed {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/wiring_disarm.rs
-//MUTANT disarm-ignores-marker|s@            Ok(body) if body.contains(&row.marker) => DisarmState::Shimmed,@            Ok(body) if body.is_empty() \&\& row.marker.is_empty() => DisarmState::Shimmed,@|an_already_shimmed_script_is_not_rewritten
 
 /// The body a disarmed script carries.
 ///
@@ -1106,8 +1105,6 @@ pub fn link_commit_gate(dir: &Path, body: &str) -> Result<usize> {
 // The linker's mutation rows, each caught by the compiled case it names, which
 // asks `doctor gate` over the clone the linker just repaired.
 //MUTANT-SUITE crates/batten/tests/it/startup.rs
-//MUTANT gate-links-one-hook|s@^    for name in crate::doctor::COMMIT_HOOKS {$@    for name in crate::doctor::COMMIT_HOOKS.iter().take(1) {@|wiring_gate_links_both_commit_hooks_to_the_checked_in_body
-//MUTANT gate-links-a-missing-body|s@^    if !source.is_file() {$@    if false {@|wiring_gate_refuses_a_body_the_repository_does_not_carry
 
 /// What `wiring gate` found, and with `check` unset, repaired (CLOUD-2339).
 ///

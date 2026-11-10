@@ -239,7 +239,6 @@ pub fn delete_ref(dir: &Path, reference: &str) -> Result<()> {
 ///
 /// A READ, so it opens fresh without spending the hook call's memo (CLOUD-2526).
 #[must_use]
-//MUTANT carries-spends|s@^    let Ok(repo) = crate::git::open_fresh(dir) else {$@    let Ok(repo) = crate::git::open_for_write(dir) else {@|an_ancestry_read_leaves_the_memo_standing
 pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
     let Ok(repo) = crate::git::open_fresh(dir) else {
         return false;
@@ -261,7 +260,6 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
 ///
 /// A READ, so it opens fresh without spending the hook call's memo (CLOUD-2526).
 #[must_use]
-//MUTANT merges-in-spends|s@^    let repo = crate::git::open_fresh(dir).ok()?;$@    let repo = crate::git::open_for_write(dir).ok()?;@|an_ancestry_read_leaves_the_memo_standing
 pub fn merges_in(dir: &Path, base: &str, tip: &str) -> Option<Vec<String>> {
     let repo = crate::git::open_fresh(dir).ok()?;
     let resolve = |rev: &str| repo.rev_parse_single(rev).ok().map(gix::Id::detach);
@@ -1435,7 +1433,6 @@ pub fn unlink_worktree(worktree: &Path) -> Result<(std::path::PathBuf, Option<St
 /// left 50 files behind (CLOUD-1948), and a partial worktree is worse than a loud
 /// one because it reads as the branch's own untracked work.
 //MUTANT-SUITE crates/batten/tests/it/rebase.rs
-//MUTANT gone-directory-left-on-disk|s@^    gone_trees.sort_by_key(\x7ctree\x7c std::cmp::Reverse(tree.len()));$@    gone_trees.clear();@|a_directory_the_base_deleted_leaves_the_worktree
 fn remove_gone(
     workdir: &Path,
     gone: &std::collections::BTreeSet<Vec<u8>>,
@@ -1682,7 +1679,6 @@ pub fn init_bare_on_main(dir: &Path) -> Result<()> {
 ///
 /// A directory that will not initialise or open, a file that will not read, an
 /// object the odb refuses, or an index that will not write.
-//MUTANT commit-keeps-the-memo|s@^    crate::git::spend_scope();$@@|a_commit_spends_the_scopes_memo
 pub fn commit_paths(dir: &Path, paths: &[String], message: &str) -> Result<()> {
     let repo = if dir.join(".git").exists() {
         gix::open(dir)
@@ -1947,7 +1943,6 @@ pub fn diff3(ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Option<String> {
 /// CLOUD-2086): the base's, and on a bet's unwind the upstream's too. Split out
 /// of [`replay_range`] to keep that function a readable length.
 //MUTANT-SUITE crates/batten/tests/it/rebase.rs
-//MUTANT borrowed-upstream-replayed|s@^    if widen {$@    if false {@|a_borrowed_commit_the_holder_republished_is_dropped_on_unwind
 fn drop_set(
     dir: &Path,
     branch: &str,

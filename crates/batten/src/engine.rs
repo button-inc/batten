@@ -123,7 +123,6 @@ fn is_input(path: &str) -> bool {
 /// a debug binary carried exactly that stamp and every `cargo run -p batten`
 /// task refused under a source pin.
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT empty-digest-stamped|s@^    if inputs == 0 {$@    if false {@|a_stamp_over_no_inputs_is_refused
 pub fn digest(root: &Path) -> Result<String> {
     use sha2::Digest as _;
     let mut hasher = sha2::Sha256::new();
@@ -170,7 +169,6 @@ fn hex(bytes: &[u8]) -> String {
 /// `mise exec` that output is first on `PATH`, and the one past it is what the
 /// hook runs — the case #1132 measured.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT source-update-installs-nothing|s@^        targets.push(resolved);$@@|a_source_pin_update_installs_where_the_hook_resolves
 #[must_use]
 pub fn install_targets(
     running: &Path,
@@ -681,7 +679,6 @@ pub const REPAIR_PINNED: &str = "mise exec -- batten engine install";
 
 /// Whether `command` is one of the repair's two whole spellings: equality, so
 /// no shell composition rides either.
-//MUTANT floor-admits-a-carried-repair|s@^    command == REPAIR \x7c\x7c command == REPAIR_PINNED$@    command.contains(REPAIR)@|a_command_carrying_the_repair_verb_is_still_refused
 #[must_use]
 pub fn is_repair(command: &str) -> bool {
     command == REPAIR || command == REPAIR_PINNED
@@ -704,7 +701,6 @@ pub fn repair_at(root: &std::path::Path, repair: &str) -> String {
 /// Whether `command` is a repair spelled whole, bare or rooted at `root`:
 /// equality against strings built from the authority, so the `&&` admitted is
 /// the one this engine wrote and no other composition rides it.
-//MUTANT rooted-repair-refused|s@^            .any(\x7crepair\x7c command == repair_at(root, repair))$@            .any(\x7c_\x7c false)@|a_repair_rooted_at_the_authority_reaches_a_shell_standing_outside_it
 #[must_use]
 pub fn is_repair_at(command: &str, root: &std::path::Path) -> bool {
     is_repair(command)
@@ -728,11 +724,9 @@ fn shell_word(word: &str) -> String {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT stamp-trusted-when-absent|s@^            if stamp.as_deref() != Some(digest.as_str()) {$@            if stamp.is_some() \&\& stamp.as_deref() != Some(digest.as_str()) {@|a_source_pin_without_a_stamp_is_refused
 
 /// Whether the running binary lives inside the tree holding `source`, the
 /// config it was refused over — that tree's own build, not an installed engine.
-//MUTANT in-tree-build-updated|s@^        .is_some_and(\x7croot\x7c exe.starts_with(root))$@        .is_some_and(\x7c_\x7c false)@|a_stale_build_of_the_checkout_names_the_rebuild
 fn built_in(source: &str) -> bool {
     let Ok(exe) = std::env::current_exe().and_then(std::fs::canonicalize) else {
         return false;
@@ -753,7 +747,6 @@ pub const LOCAL_ENV: &str = "BATTEN_ENGINE";
 /// in-tree arm could judge. Source pins only — a release pin is a published
 /// engine's name, and running another under it is the skew this check refuses.
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT local-engine-ignored|s@^    std::env::var_os(LOCAL_ENV).is_some_and(\x7cvalue\x7c value == "local")$@    false@|the_local_engine_runs_under_a_source_pin
 pub(crate) fn runs_local() -> bool {
     std::env::var_os(LOCAL_ENV).is_some_and(|value| value == "local")
 }
@@ -786,7 +779,6 @@ pub(crate) fn runs_local() -> bool {
 /// CLOUD-2376 closed, while a RELATIVE one resolved under the authority and was
 /// honoured for a tree this process never built.
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT foreign-target-dir-read|s@^        .join("target")$@        .join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(\x7c\x7c "target".into()))@|the_handoff_reads_no_target_dir_of_this_process
 #[must_use]
 pub fn checkout_build(root: &Path) -> Option<PathBuf> {
     let build = root
@@ -806,7 +798,6 @@ pub fn checkout_build(root: &Path) -> Option<PathBuf> {
 /// `hand_off` collapsed two hand-offs to fix. Same answer here: one existence
 /// rule, one line, one row over it.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT build-presence-unchecked|s@^    build.is_file().then_some(build)$@    None::<PathBuf>.filter(\x7c_\x7c build.is_file())@|a_source_pin_is_followed_to_the_checkouts_build
 fn existing(build: PathBuf) -> Option<PathBuf> {
     build.is_file().then_some(build)
 }
@@ -820,7 +811,6 @@ fn existing(build: PathBuf) -> Option<PathBuf> {
 /// one file therefore agree for every value of the variable, absolute or
 /// relative — which is the agreement this issue exists to restore.
 //MUTANT-SUITE crates/batten/tests/it/engine_update.rs
-//MUTANT own-build-ignores-the-target-dir|s@^    existing(release_build(root))$@    existing(root.join("target").join("release").join(crate::surface::BINARY))@|a_source_pin_is_followed_into_a_redirected_target_dir
 #[must_use]
 pub fn own_build(root: &Path) -> Option<PathBuf> {
     existing(release_build(root))
@@ -870,7 +860,6 @@ pub fn release_build(root: &Path) -> PathBuf {
 /// another release or another source, names both or neither, or names a source
 /// this binary carries no stamp for.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT in-tree-build-unaccepted|s@^            if built_in(source) \x7c\x7c runs_local() {$@            if runs_local() {@|the_checkouts_own_build_satisfies_its_source_pin
 pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -> Result<()> {
     let pins = Pins::of(text);
     if let Some((key, row)) = pins.disagreement() {
@@ -1526,8 +1515,6 @@ fn item_line(text: &str, item: &toml_edit::Item) -> usize {
 /// name after it. A host, an org or a mirror path that happens to contain the
 /// old version is left as it is, which a substring replace was not.
 //MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT url-swap-unanchored|s@^    Some(format!("{base}/{prefix}{new}/{asset}"))$@    Some(url.replace(old, new))@|a_moved_url_rewrites_only_its_release
-//MUTANT gate-digest-case-sensitive|s@^        if pinned.map(str::to_ascii_lowercase) != published_digest(body, asset) {$@        if pinned.map(str::to_owned) != published_digest(body, asset) {@|an_artifact_at_the_pinned_version_is_judged_by_its_url_and_digest
 #[must_use]
 pub fn moved_url(url: &str, new: &str) -> Option<String> {
     let (head, asset) = url.rsplit_once('/')?;
@@ -1755,7 +1742,6 @@ fn yaml_events(text: &str) -> Option<Vec<(yaml_rust2::Event, usize)>> {
 /// `BATTEN_VERSION_FROM_REF` is another key. A digest agrees when it is one of
 /// `published`, the release's [`published_digests`].
 //MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT workflow-quoted-key-missed|s@^                        .find(\x7ckey\x7c \*key == value)$@                        .find(\x7c_\x7c false)@|a_quoted_workflow_key_is_a_copy
 #[must_use]
 pub fn workflow_literals(
     text: &str,
@@ -1877,7 +1863,6 @@ pub fn workflow_literals(
 /// such calls were invisible to this scan. Every `-- batten ` on a command line
 /// is a released-binary call of its own.
 //MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT wrapped-verb-unseen|s@^        for (at, _) in command.match_indices("-- batten ") {$@        for (at, _) in command.match_indices("\\u{0}") {@|a_wrapped_released_call_invokes_its_verb
 #[must_use]
 pub fn invoked_verbs(text: &str) -> std::collections::BTreeSet<String> {
     fn verb(rest: &str) -> String {

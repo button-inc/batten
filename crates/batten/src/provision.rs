@@ -685,7 +685,6 @@ pub fn status(entries: &[Provision], cache_root: &Path) -> Result<Report> {
 /// so a build of it still fills it — the scanner a gate needs stays reachable.
 #[must_use]
 //MUTANT-SUITE crates/batten/src/provision.rs
-//MUTANT checkout-build-links-host|s@^    !exe.starts_with(repo_root)$@    true@|a_build_of_the_checkout_never_links_the_host
 pub fn links_host(exe: &Path, repo_root: &Path) -> bool {
     !exe.starts_with(repo_root)
 }

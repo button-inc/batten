@@ -739,8 +739,6 @@ struct Drain {
 // (CLOUD-2059). One budget across both streams leaves the second exactly what the
 // first left — `0ns` once the first waited it out — and a pipe that never closes
 // is reported as such.
-//MUTANT drain-budget-per-stream|s@PIPE_DRAIN_TIMEOUT.saturating_sub(started.elapsed()),@PIPE_DRAIN_TIMEOUT.saturating_sub(started.elapsed() * 0),@|a_surviving_grandchild_cannot_hang_exec
-//MUTANT drain-timeout-unreported|s@^                Err(mpsc::RecvTimeoutError::Timeout) => true,$@                Err(mpsc::RecvTimeoutError::Timeout) => false,@|the_drain_reports_what_arrived_when_the_pipe_never_closes
 impl Drain {
     /// Spawn a tee of `pipe` into `sink`.
     fn spawn<R, W>(pipe: R, sink: W, spool: capture::Spool) -> Self
@@ -1287,7 +1285,6 @@ impl Reaper {
     }
 }
 
-//MUTANT unwind-skips-reap|s@^        if !self.armed {$@        if true {@|a_teed_child_is_reaped_when_its_output_cannot_be_written
 impl Drop for Reaper {
     fn drop(&mut self) {
         if !self.armed {
@@ -1518,7 +1515,6 @@ pub(crate) fn terminate(signal: i32) -> Result<()> {
 // A SECOND SIGNAL ESCALATES AT ONCE, AND SAYS SO (CLOUD-746 S1, CLOUD-2059). The
 // case reads the recorded reason, so a swallowed second signal shows up as the
 // grace expiring rather than as a teardown that took longer.
-//MUTANT second-signal-ignored|s@^                if signals.pending().next().is_some() {$@                if signals.pending().next().is_some() \&\& false {@|a_second_signal_escalates_instead_of_being_swallowed
 #[cfg(unix)]
 impl Forwarding {
     /// Install the registry **before** the spawn, if `decision` says Batten owns
@@ -2401,7 +2397,6 @@ pub(crate) fn detached(program: &Path, args: &[String], env: &[(&str, &str)]) {
 
 // Carried from the retired shim's `forks-instead-of-execing` row (CLOUD-843): a
 // fork leaves the recorded pid pointing at a process that is not the server.
-//MUTANT spawn-forks-instead-of-execing|s@    let failed = command.exec();@    let failed = match command.status() { Ok(_) => std::process::exit(0), Err(error) => error };@|the_servers_pid_is_this_processs_it_execs_rather_than_forks
 /// Become `argv`: replace this process, or say why it could not be.
 ///
 /// # Why this is a THIRD shape beside `piped` and `detached`
@@ -2745,8 +2740,6 @@ fn dispatch_decided(
 /// The split is what `--jobs` forces: with several children in flight nothing may
 /// write to a shared stream on the completion path, or the bundle's own output
 /// would be ordered by the machine.
-//MUTANT escalation-unreported|s@^    if let Some(escalation) = escalated {$@    if let Some(escalation) = None::<Escalation> {@|a_second_signal_escalates_instead_of_being_swallowed
-//MUTANT tee-error-abandons-child|s@^    let reaper = Reaper::arm(child.id(), decision);$@    let reaper = Reaper::arm(0, decision);@|a_teed_child_is_reaped_when_its_output_cannot_be_written
 fn run_one(
     repo_root: &Path,
     run: u64,

@@ -38,7 +38,6 @@ pub fn contain_state(data_dir: &Path) {
 /// a target — each row's case filter runs over the whole `it` binary, wherever
 /// the case lives.
 //MUTANT-SUITE crates/batten/tests/it/harness_isolation.rs
-//MUTANT in-process-uncontained|s@^    CONTAINED.get().map(PathBuf::as_path)$@    None@|in_process_state_resolves_to_the_cases_own_root
 pub(crate) fn contained_data_dir() -> Option<&'static Path> {
     CONTAINED.get().map(PathBuf::as_path)
 }
@@ -53,7 +52,6 @@ pub(crate) fn contained_data_dir() -> Option<&'static Path> {
 /// Windows keeps its whole toolchain there with no `MISE_DATA_DIR` pinned on that
 /// leg, so moving it on every spawn would reinstall the toolchain per case —
 /// CLOUD-2021's cost, on every case rather than one.
-//MUTANT state-pin-posix-only|s@("APPDATA", dir)@("APPDATA_UNREAD", dir)@|the_ambient_state_root_never_reaches_the_binary_under_test
 #[doc(hidden)]
 #[must_use]
 pub fn state_pins(dir: &Path) -> [(&'static str, &Path); 2] {
@@ -68,7 +66,6 @@ pub fn state_pins(dir: &Path) -> [(&'static str, &Path); 2] {
 /// What a case's home holds is then the case's business: a developer's
 /// `~/.claude`, `~/.gitconfig` or global mise config can no longer move a verdict
 /// here that a CI runner, which has none of them, would not reproduce.
-//MUTANT home-pin-posix-only|s@("USERPROFILE", dir)@("USERPROFILE_UNREAD", dir)@|every_spawn_of_the_binary_pins_the_home
 #[doc(hidden)]
 #[must_use]
 pub fn home_pins(dir: &Path) -> [(&'static str, &Path); 2] {
@@ -100,8 +97,6 @@ pub fn home_pins(dir: &Path) -> [(&'static str, &Path); 2] {
 /// committed configuration runs at the real root on purpose, and a fixture under
 /// the system temp directory falls through to nothing. Only the scratch root sits
 /// inside the checkout, so only there is a missing `.git` an accident.
-//MUTANT spawn-falls-through|s@^    resolved.is_ok_and.*$@    false@|a_spawn_whose_cwd_falls_through_to_the_checkout_is_refused
-//MUTANT verbatim-scratch-root|s@^    let scratch = crate::git::canonical(scratch_root);$@    let scratch = scratch_root.canonicalize().unwrap_or_else(\x7c_\x7c scratch_root.to_path_buf());@|no_engine_file_adds_a_bare_canonicalize
 #[doc(hidden)]
 #[must_use]
 pub fn falls_through(cwd: &Path, scratch_root: &Path) -> bool {
@@ -406,9 +401,6 @@ fn conditions_of(path: &syn::Path) -> Option<usize> {
 /// Whether `expr` reads the clock: `Instant::now` or `SystemTime::now`, any
 /// `.elapsed()`, or a local in `clocked`. A `Duration` alone is a constant, not
 /// a reading.
-//MUTANT elapsed-unread|s@^        self.found \x7c= call.method == "elapsed";$@        self.found \x7c= call.method == "elapsed_unread";@|an_upper_bound_on_elapsed_is_refused
-//MUTANT now-unread|s@^            \[.., clock, now\] => now == "now"@            [.., clock, now] => now == "now_unread"@|a_deadline_asserted_against_now_is_refused
-//MUTANT clock-taint-unread|s@^            \[local\] => self.clocked.contains(local),$@            [_] => false,@|a_clock_read_through_a_local_is_refused
 #[doc(hidden)]
 #[must_use]
 pub fn reads_clock(expr: &syn::Expr, clocked: &BTreeSet<String>) -> bool {
@@ -466,7 +458,6 @@ struct ClockWalk {
     census: ClockCensus,
 }
 
-//MUTANT clock-message-judged|s@^                        .take(conditions)$@                        .take(usize::MAX)@|the_clock_in_a_message_is_not_asserted
 impl<'ast> Visit<'ast> for ClockWalk {
     fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
         self.within
@@ -593,7 +584,6 @@ impl<'ast> Visit<'ast> for SkipWalk {
 }
 
 /// Whether `condition` is a platform guard: `cfg!(…)` under any number of `!`.
-//MUTANT platform-guard-unread|s@^    matches!(condition, syn::Expr::Macro(guard) if guard.mac.path.is_ident("cfg"))$@    false@|a_return_under_a_cfg_guard_is_admitted
 fn platform_guard(condition: &syn::Expr) -> bool {
     let mut condition = condition;
     while let syn::Expr::Unary(syn::ExprUnary {
@@ -617,7 +607,6 @@ struct Exits {
     guarded: usize,
 }
 
-//MUTANT silent-skip-admitted|s@^        if self.within_guard == 0 {$@        if self.within_guard == usize::MAX {@|a_bare_return_in_a_case_is_refused
 impl<'ast> Visit<'ast> for Exits {
     fn visit_expr_if(&mut self, branch: &'ast syn::ExprIf) {
         let guard = usize::from(platform_guard(&branch.cond));

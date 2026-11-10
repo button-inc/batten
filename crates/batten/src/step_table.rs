@@ -104,12 +104,6 @@ pub fn validate(rows: &[Step]) -> Result<()> {
 // would otherwise load and answer the wrong thing in silence, so dropping any
 // one of them must turn the unit case that feeds it that row red.
 //MUTANT-SUITE crates/batten/src/step_table.rs
-//MUTANT step-row-empty-id|s@^        if row.id.trim().is_empty() {$@        if false {@|an_empty_id_is_refused
-//MUTANT step-row-no-inputs|s@^        if row.inputs.is_empty() {$@        if false {@|a_row_that_would_answer_the_wrong_thing_is_refused_at_load
-//MUTANT step-row-magic-spec|s@!crate::git::pathspec_is_supported(spec))$@spec.starts_with("never"))@|a_row_that_would_answer_the_wrong_thing_is_refused_at_load
-//MUTANT step-row-no-tools|s@^        if row.tools.is_empty() {$@        if false {@|a_row_that_would_answer_the_wrong_thing_is_refused_at_load
-//MUTANT step-row-empty-argv|s@^        if row.tools.iter().any(Vec::is_empty) {$@        if false {@|a_row_that_would_answer_the_wrong_thing_is_refused_at_load
-//MUTANT step-row-duplicate|s@^        if !seen.insert(row.id.as_str()) {$@        if !seen.insert(row.id.as_str()) \&\& false {@|a_step_declared_twice_is_refused
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

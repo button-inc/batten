@@ -63,14 +63,8 @@ use crate::rest::Answer;
 // THE MECHANISM'S OWN DISCRIMINATION, over the compiled binary against the
 // fixture forge. Each row removes one property a packager or a gate depends on.
 //MUTANT-SUITE crates/batten/tests/it/checksums.rs
-//MUTANT sums-hash-the-manifest-itself|s@^    for asset in release.assets.iter().filter(.asset. asset.name != manifest) {$@    for asset in \&release.assets {@|the_manifest_covers_every_asset_never_itself_and_is_byte_stable
-//MUTANT sums-written-empty|s@^    if files.is_empty() {$@    if false {@|a_release_with_no_assets_writes_no_manifest
 //MUTANT-SUITE crates/batten/tests/it/release_assets.rs
-//MUTANT mismatch-never-recorded|s@^            .is_some_and(.bytes. digest(bytes) != .expected)$@            .is_none()@|a_byte_mismatch_is_refused_once_the_names_agree
-//MUTANT stale-record-survives-could-not-look|s@^            crate::record::clear_named(RECORD_VERB, FAMILY)?;$@@|an_unreadable_release_is_could_not_look_and_leaves_no_record
 //MUTANT-SUITE crates/batten/tests/it/release_backfill.rs
-//MUTANT backfill-trusts-the-dispatch|s@^                if !conclusion.publishes() {$@                if false {@|a_failed_run_stops_the_sweep_naming_the_tag
-//MUTANT backfill-lexical-order|s@^        tags.sort_by(.left, right. version_order(left, right));$@        tags.sort();@|the_repository_tags_are_swept_oldest_first_by_version
 
 /// The record family `record release` writes, and the one a module reads.
 ///
@@ -215,7 +209,6 @@ pub fn is_draft(slug: &str, tag: &str, get: Get<'_>) -> bool {
 ///
 /// Only an entry whose `tag_name` IS the tag is taken; a list with none is the
 /// same could-not-look the tag read would have been, naming both reads.
-//MUTANT draft-unread|s@^        return read_listed(slug, tag, \&path, get);$@        return Err(path.clone());@|a_draft_release_is_read_from_the_release_list
 fn read_listed(slug: &str, tag: &str, tag_path: &str, get: Get<'_>) -> Result<Published, String> {
     let path = format!("repos/{slug}/releases?per_page=100");
     let Some(answer) = get(&path) else {

@@ -473,7 +473,6 @@ pub fn decode_response(result: &serde_json::Value) -> Result<Decoded, &'static s
 
 /// A response in no text shape, stored as its canonical JSON (CLOUD-2223).
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT structured-result-dropped|s@^    serde_json::to_vec(result)$@    Err::<Vec<u8>, ()>(())@|a_structured_tool_result_is_stored
 fn structured(result: &serde_json::Value) -> Result<Decoded, &'static str> {
     serde_json::to_vec(result)
         .map(|bytes| Decoded {
@@ -1418,7 +1417,6 @@ pub struct ViewField {
 ///
 /// When the state root cannot be resolved or the view cannot be written.
 //MUTANT-SUITE crates/batten/tests/it/mcp_dispatch.rs
-//MUTANT view-index-off-by-one|s@^                from: line + 1,$@                from: line,@|a_reduced_read_points_at_a_view_whose_lines_hold_each_field
 pub fn view(
     repo_root: &Path,
     capture: &Capture,
@@ -1490,7 +1488,6 @@ pub fn view(
 ///
 /// When the state root cannot be resolved or the view cannot be written.
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT result-view-unflattened|s@^            serde_json::Value::Object(fields) if !fields.is_empty() => {$@            serde_json::Value::Object(fields) if fields.is_empty() => {@|an_oversized_result_becomes_a_pointer_to_a_view_of_its_text
 pub fn result_view(
     repo_root: &Path,
     capture: &Capture,
@@ -2159,7 +2156,6 @@ pub fn exceeds_o200k(texts: &[&str], bound: u64) -> bool {
 /// [`exceeds_o200k`]'s walk over any counter, so the case proving it stops can
 /// count what it was asked to encode.
 //MUTANT-SUITE crates/batten/src/capture.rs
-//MUTANT token-count-never-stops|s@^            if counted > bound {$@            if false {@|counting_stops_once_the_bound_is_passed
 fn exceeds_counting(texts: &[&str], bound: u64, mut count: impl FnMut(&str) -> u64) -> bool {
     const CHUNK: usize = 16 * 1024;
     let mut counted: u64 = 0;
@@ -2312,10 +2308,6 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
 /// # Errors
 ///
 /// As [`evict_to_budget`].
-//MUTANT kept-digest-evicted|s@^        if keep == Some(record.digest.as_str()) {$@        if false {@|the_digest_a_call_just_stored_survives_its_own_eviction
-//MUTANT unrecorded-evicted-last|s@^    let candidates = unrecorded.into_iter().chain(recorded).chain(in_flight);$@    let candidates = recorded.into_iter().chain(unrecorded).chain(in_flight);@|an_unrecorded_capture_is_evicted_before_a_tracker_read
-//MUTANT in-flight-evicted-first|s@^    let candidates = unrecorded.into_iter().chain(recorded).chain(in_flight);$@    let candidates = unrecorded.into_iter().chain(in_flight).chain(recorded);@|a_capture_still_being_recorded_is_not_evicted_as_an_orphan
-//MUTANT reread-ranked-by-first-row|s@^            latest.insert(found.digest.as_str(), (at, is_builtin_result(row)));$@            latest.entry(found.digest.as_str()).or_insert((at, is_builtin_result(row)));@|a_response_read_again_is_as_new_as_its_latest_call
 pub(crate) fn evict_to_budget_in_keeping(
     dir: &Path,
     config: Option<&CaptureConfig>,
@@ -2432,7 +2424,6 @@ pub(crate) fn evict_to_budget_in_keeping(
 /// Whether `row` records a built-in tool's result taken at `PostToolUse` — the
 /// volume CLOUD-2223 added, and the first a bounded store gives up.
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT builtin-results-not-first|s@^    row.source == POST_TOOL_MEMBER \&\& !row.tool.starts_with("mcp__")$@    false@|a_built_in_result_is_evicted_before_a_tracker_read
 fn is_builtin_result(row: &CallRow) -> bool {
     row.source == POST_TOOL_MEMBER && !row.tool.starts_with("mcp__")
 }

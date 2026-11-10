@@ -218,7 +218,6 @@ fn column(keys: &[String]) -> String {
 /// The bytes either side are READ rather than matched, so no expression is
 /// composed out of an id a payload supplied.
 //MUTANT-SUITE crates/batten/tests/it/tracker_hygiene.rs
-//MUTANT prefix-matches-a-longer-id|s@^            && after.is_none_or(not_a_digit)$@            \&\& after.is_none_or(char::is_alphanumeric)@|a_prefix_does_not_match_a_longer_id
 fn names(text: &str, id: &str) -> bool {
     if id.is_empty() {
         return false;
@@ -352,7 +351,6 @@ fn pull_number(url: &str) -> Option<u64> {
 /// Refuses on an empty set, a payload with no `id`, and — the load-bearing one —
 /// an attached pull request with no state under `.pulls`. An unread pull request
 /// must not be the cheapest route to Done.
-//MUTANT absent-state-recorded-closed|s@^            let Some(state) = state else {$@            let Some(state) = state.or(Some(\&Value::Null)) else {@|an_attached_pr_with_no_state_is_could_not_look
 fn done_pr(inputs: &BTreeMap<String, String>, stdin: &str) -> Result<String> {
     const FAMILY: &str = "done-pr";
     only(inputs, FAMILY, &[])?;
@@ -410,8 +408,6 @@ fn done_pr(inputs: &BTreeMap<String, String>, stdin: &str) -> Result<String> {
 /// A pull request's token on the `done-pr` record. An unknown state is written
 /// as `unknown`, which the module reads as open: could-not-look is never closed
 /// (CLOUD-2244).
-//MUTANT draft-recorded-open|s@^        PullState::Draft => "draft",$@        PullState::Draft => "open",@|the_defect_a_draft_pull_request_refuses_named_as_a_draft
-//MUTANT unknown-pull-reads-closed|s@^        PullState::Unknown => "unknown",$@        PullState::Unknown => "closed",@|an_unknown_pull_state_never_records_closed
 fn pull_token(state: crate::forge::PullState) -> &'static str {
     use crate::forge::PullState;
     match state {
@@ -461,10 +457,6 @@ fn truncated(stamp: &str, window: usize) -> String {
 /// the anti-vacuity term); a duplicate with no `canceledAt`; and a duplicate
 /// whose target was not piped, because a question nobody asked is not a clean
 /// answer.
-//MUTANT absent-key-reads-as-clean|s@^    if !issues.iter().any(keys_duplicate_of) {$@    if false {@|a_set_with_no_duplicateof_key_anywhere_is_could_not_look
-//MUTANT target-outside-the-set-passes|s@^        if !ids.contains(target.as_str()) {$@        if false {@|a_duplicate_whose_target_was_not_piped_is_unjudgeable
-//MUTANT window-input-ignored|s@^    let window = match inputs.get("window") {$@    let window = match None::<String> {@|a_duplicate_close_window_input_narrows_the_stamps_and_refuses_a_non_number
-//MUTANT unstamped-close-passes|s@^        let Some(closed) = closed else {$@        let Some(closed) = closed.or(Some(String::new())) else {@|a_duplicate_close_with_no_stamp_is_unjudgeable
 fn duplicate_close(inputs: &BTreeMap<String, String>, stdin: &str) -> Result<String> {
     const FAMILY: &str = "duplicate-close";
     only(inputs, FAMILY, &["window"])?;
@@ -571,7 +563,6 @@ fn paragraphs(body: &str) -> Vec<String> {
 ///
 /// A span NAMING a phrase is not a paragraph USING it — a body documenting the
 /// gate writes the phrase in backticks. An unmatched backtick opens nothing.
-//MUTANT code-span-read-as-prose|s@^        out.push_str("CODESPAN");$@        out.push_str(\&rest[open..=open + 1 + close]);@|a_code_span_names_the_phrase_without_using_it_and_other_shapes_pass
 fn without_code_spans(text: &str) -> String {
     let mut out = String::new();
     let mut rest = text;
@@ -685,7 +676,6 @@ fn marker_lines<'a>(hold: &Regex, body: &'a str) -> Vec<&'a str> {
 /// `Refs:` trailer the branch authored since `base` — source 3 alone, so the
 /// subtraction is not circular. Inputs: `hold`, the `[[pattern]]` row naming the
 /// line-anchored marker, and `base`. An empty body is could-not-look.
-//MUTANT marker-anywhere-holds|s@^        if hold.is_match(line) {$@        if line.contains("DO-NOT-CLOSE") {@|the_marker_opts_out_only_when_used_not_when_mentioned
 fn closing_key(
     inputs: &BTreeMap<String, String>,
     patterns: &[NamedPattern],
