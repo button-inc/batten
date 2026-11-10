@@ -172,6 +172,8 @@ const SHAPE_PERMITS: &[&str] = &[
     // switches a deny off, so it is `shape` only for `unless_contains`'s reason.
     "word",
     "unless_word",
+    // CLOUD-2662: an event the engine resolves on every route it knows.
+    "on",
     "require_via",
     "requires_key",
     "base",
@@ -191,6 +193,8 @@ const SHAPE_PERMITS: &[&str] = &[
 const RECEIPT_PERMITS: &[&str] = &[
     "pattern",
     "tool",
+    // CLOUD-2662: the third selector, an event rather than a spelling.
+    "on",
     "checks",
     "checks_any",
     "key",
@@ -223,6 +227,17 @@ const RECEIPT_PERMITS: &[&str] = &[
     "severity",
     "no_retry_reason",
 ];
+
+/// An event a call raises, which the engine resolves on every route it knows
+/// (CLOUD-2662). A row names the event, never the routes: `gh pr ready`, a
+/// non-draft `gh pr create`, a reopen, the ready mutation through `gh api`, and
+/// the forge connector's create and undraft all raise `pull-request-ready`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum CallEvent {
+    /// A call that can leave a pull request open and not a draft.
+    PullRequestReady,
+}
 
 /// The kind of predicate a [`Rule`] applies to its matched files.
 ///
@@ -1874,6 +1889,11 @@ pub struct Rule {
     /// matching word does not fire. Line-scoped, like `unless_contains`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unless_word: Option<String>,
+    /// Select a `shape` or `receipt` row by the event a call raises rather than
+    /// by its spelling (CLOUD-2662). One selector of `pattern`, `content`,
+    /// `tool` and `on` per row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<CallEvent>,
     /// Narrow a [`RuleKind::Shape`] deny to a call that reached its program
     /// **without** the named mediator (CLOUD-271).
     ///
@@ -3721,6 +3741,10 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         ),
     },
     ColumnCensus {
+        field: "on",
+        declares: Declares::NotFactBearing("selects by an event the engine resolves"),
+    },
+    ColumnCensus {
         field: "require_via",
         declares: Declares::NotFactBearing("narrows how a requirement may be met"),
     },
@@ -4204,6 +4228,7 @@ impl Rule {
             ("pattern", self.pattern.is_some()),
             ("content", self.content.is_some()),
             ("tool", self.tool.is_some()),
+            ("on", self.on.is_some()),
         ]
         .into_iter()
         .filter_map(|(name, present)| present.then_some(name))
@@ -4216,6 +4241,10 @@ impl Rule {
                 self.id,
                 keys.join(" and ")
             )));
+        }
+        if self.on.is_some() {
+            self.validate_on_columns()?;
+            return self.validate_ceiling();
         }
         if let Some(selector) = self.tool.as_deref() {
             // Refused at load rather than at adjudication, where an empty
@@ -4442,21 +4471,59 @@ impl Rule {
     ///
     /// A [`UsageError`] (→ exit `1`) naming the first modifier present.
     fn refuse_command_modifiers(&self, keyed_on: &str) -> anyhow::Result<()> {
+        self.refuse_argv_modifiers(keyed_on)?;
+        for (field, present) in [
+            ("requires_key", self.requires_key.is_some()),
+            ("base", self.base.is_some()),
+        ] {
+            if present {
+                return Err(self.modifier_refused(keyed_on, field));
+            }
+        }
+        Ok(())
+    }
+
+    /// The modifiers that read the command's ARGV (CLOUD-2662): refused on a
+    /// row keyed by anything that names none, which an `on` row does not either,
+    /// since its routes include structured calls.
+    fn refuse_argv_modifiers(&self, keyed_on: &str) -> anyhow::Result<()> {
         for (field, present) in [
             ("contains", self.contains.is_some()),
             ("unless_contains", self.unless_contains.is_some()),
             ("word", self.word.is_some()), // the argv's own words
             ("unless_word", self.unless_word.is_some()), // the argv's own words, exempting
             ("require_via", self.require_via.is_some()),
-            ("requires_key", self.requires_key.is_some()),
-            ("base", self.base.is_some()),
         ] {
             if present {
-                return Err(UsageError::raise(format!(
-                    "rule {}: kind \"shape\" keyed on `{keyed_on}` cannot carry `{field}`; \
-                     that column narrows a command line, and this row names none",
-                    self.id
-                )));
+                return Err(self.modifier_refused(keyed_on, field));
+            }
+        }
+        Ok(())
+    }
+
+    fn modifier_refused(&self, keyed_on: &str, field: &str) -> anyhow::Error {
+        UsageError::raise(format!(
+            "rule {}: kind \"{}\" keyed on `{keyed_on}` cannot carry `{field}`; \
+             that column narrows a command line, and this row names none",
+            self.id,
+            self.kind.as_str()
+        ))
+    }
+
+    /// The columns an `on` row may not carry (CLOUD-2662): the argv modifiers,
+    /// and the per-call projections, which differ per route (`input-draft` is
+    /// absent on every shell call) and so would silently drop whole routes.
+    /// `requires_key`, `base` and the branch modifiers read the branch, which
+    /// every route has, and stay.
+    fn validate_on_columns(&self) -> anyhow::Result<()> {
+        self.refuse_argv_modifiers("on")?;
+        for (field, present) in [
+            ("when_absent", self.when_absent.is_some()),
+            ("when_present", self.when_present.is_some()),
+            ("when_value", self.when_value.is_some()),
+        ] {
+            if present {
+                return Err(self.modifier_refused("on", field));
             }
         }
         Ok(())
@@ -4521,14 +4588,11 @@ impl Rule {
         }
     }
 
-    fn validate_receipt_columns(&self) -> anyhow::Result<()> {
-        if self.kind != RuleKind::Receipt {
-            return Ok(());
-        }
-        // `key = "branch"` was refused from this same spot until the
-        // branch-keyed store existed; every refusal here has that one's
-        // reasoning — a column that reads as configured and decides nothing is
-        // the defect this kind was added to close.
+    /// A receipt row's selectors (CLOUD-2662): exactly one of `pattern`, `tool`
+    /// and `on` on a command-triggered row, and no command selector on a
+    /// write-triggered one. Split from [`Rule::validate_receipt_columns`], whose
+    /// line budget the third selector spent.
+    fn validate_receipt_selectors(&self) -> anyhow::Result<()> {
         match self.receipt_trigger() {
             // A command-triggered row selecting on NOTHING matches every
             // mediated call, turning a precondition into a universal gate.
@@ -4536,7 +4600,9 @@ impl Rule {
             // (CLOUD-924): both name what the row is about, one by command line
             // and one by the tool a structured call names — and CLOUD-312's rows
             // 1-3 are precisely the second shape.
-            ReceiptTrigger::Command if self.pattern.is_none() && self.tool.is_none() => {
+            ReceiptTrigger::Command
+                if self.pattern.is_none() && self.tool.is_none() && self.on.is_none() =>
+            {
                 return Err(UsageError::raise(format!(
                     "rule {}: kind \"receipt\" with `trigger = \"command\"` (the default) requires `pattern` (the command whose precondition this is) or `tool` (the tool a structured call names)",
                     self.id
@@ -4545,7 +4611,17 @@ impl Rule {
             // Both columns key on one call, and a row carrying both is two
             // selectors where a reader can see one — `validate_shape_columns`'
             // argument, on the kind that shares the columns.
-            ReceiptTrigger::Command if self.pattern.is_some() && self.tool.is_some() => {
+            ReceiptTrigger::Command
+                if [
+                    self.pattern.is_some(),
+                    self.tool.is_some(),
+                    self.on.is_some(),
+                ]
+                .into_iter()
+                .filter(|present| *present)
+                .count()
+                    > 1 =>
+            {
                 return Err(UsageError::raise(format!(
                     "rule {}: kind \"receipt\" carries both `pattern` and `tool`; a row is keyed on a command line or on the tool a call names, never on both",
                     self.id
@@ -4556,6 +4632,12 @@ impl Rule {
             // refused here: a write tool has a name, and keying a write-triggered
             // row to one is how a precondition narrows from every write to the
             // writes a particular tool makes.
+            ReceiptTrigger::Write if self.on.is_some() => {
+                return Err(UsageError::raise(format!(
+                    "rule {}: kind \"receipt\" with `trigger = \"write\"` cannot carry `on`; the event is a call, not a write",
+                    self.id
+                )));
+            }
             ReceiptTrigger::Write if self.pattern.is_some() || self.contains.is_some() => {
                 return Err(UsageError::raise(format!(
                     "rule {}: kind \"receipt\" with `trigger = \"write\"` takes neither `pattern` nor `contains` — a write has no command line for either to match",
@@ -4564,6 +4646,21 @@ impl Rule {
             }
             _ => {}
         }
+        if self.on.is_some() {
+            self.validate_on_columns()?;
+        }
+        Ok(())
+    }
+
+    fn validate_receipt_columns(&self) -> anyhow::Result<()> {
+        if self.kind != RuleKind::Receipt {
+            return Ok(());
+        }
+        // `key = "branch"` was refused from this same spot until the
+        // branch-keyed store existed; every refusal here has that one's
+        // reasoning — a column that reads as configured and decides nothing is
+        // the defect this kind was added to close.
+        self.validate_receipt_selectors()?;
         // THE `named` KEY AND ITS PROJECTION TRAVEL TOGETHER (CLOUD-987), and
         // both halves are refused because each is a different silent failure.
         //
@@ -5076,7 +5173,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 61] {
+    fn columns(&self) -> [(&'static str, bool); 62] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -5110,6 +5207,7 @@ impl Rule {
             ("unless_contains", self.unless_contains.is_some()),
             ("word", self.word.is_some()),
             ("unless_word", self.unless_word.is_some()),
+            ("on", self.on.is_some()),
             ("require_via", self.require_via.is_some()),
             ("requires_key", self.requires_key.is_some()),
             ("reason", self.reason.is_some()),
@@ -6151,6 +6249,9 @@ impl Rule {
 // cannot sit beside at column 0.
 //MUTANT-SUITE crates/batten/tests/it/word_filters.rs
 //MUTANT word-modifier-unrefused|s@^            ("word", self.word.is_some()), // the argv's own words$@@|a_word_column_on_a_content_row_fails_to_load
+// CLOUD-2662's `validate_on_columns`, in the same `impl`.
+//MUTANT-SUITE crates/batten/tests/it/ready_event.rs
+//MUTANT on-row-argv-modifier-loads|s@^        self.refuse_argv_modifiers("on")?;$@@|an_on_row_refuses_argv_and_projection_modifiers_at_load
 //MUTANT-SUITE crates/batten/tests/it/record_families.rs
 
 /// Validate a whole `[[rule]]` table, and refuse a duplicated id.
@@ -15531,6 +15632,7 @@ mod tests {
             unless_contains: None,
             word: None,
             unless_word: None,
+            on: None,
             require_via: None,
             requires_key: None,
             reason: None,

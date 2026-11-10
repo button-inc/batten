@@ -132,6 +132,16 @@
         }
       ]
     },
+    "CallEvent": {
+      "description": "An event a call raises, which the engine resolves on every route it knows\n(CLOUD-2662). A row names the event, never the routes: `gh pr ready`, a\nnon-draft `gh pr create`, a reopen, the ready mutation through `gh api`, and\nthe forge connector's create and undraft all raise `pull-request-ready`.",
+      "oneOf": [
+        {
+          "description": "A call that can leave a pull request open and not a draft.",
+          "type": "string",
+          "const": "pull-request-ready"
+        }
+      ]
+    },
     "CaptureQuery": {
       "description": "One `[[rule.captured]]` row: what to reduce out of an already-captured\nresponse, and how (CLOUD-1188).\n\n**The row declares a reduction, not a read.** That asymmetry with every other\ndeclared-read family here is the point: the others name a subject and the\nmodule decides what to make of it, and this one cannot, because the subject is\na tracker payload and handing a module one would put its prose on the policy\ninput. Rule 4 is therefore decided by the declaration's shape rather than by\nevery consumer remembering it.",
       "type": "object",
@@ -1506,6 +1516,17 @@
             "null"
           ],
           "maxLength": 1536
+        },
+        "on": {
+          "description": "Select a `shape` or `receipt` row by the event a call raises rather than\nby its spelling (CLOUD-2662). One selector of `pattern`, `content`,\n`tool` and `on` per row.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CallEvent"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "pattern": {
           "description": "The literal shape this rule bans — one meaning, two domains.\n\nFor [`RuleKind::Forbid`] it is a substring banned from matched *files*.\nFor [`RuleKind::Shape`] it is a banned *command line*: the first word is\nthe effective program (matched after wrapper look-through) and the rest\nare the adjacent non-flag words that must follow it, so\n`pattern = \"gh pr merge\"` reads exactly as a reviewer would say it aloud.\nRequired by both kinds, rejected by [`RuleKind::Command`].",
