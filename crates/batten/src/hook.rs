@@ -8474,12 +8474,20 @@ fn budget_rules(facts: &Facts<'_>) -> Option<Refusal> {
     None
 }
 
+/// The id the budget gate's refusal leads with (CLOUD-2661): one native id, so
+/// `policy explain` resolves it whatever the set is called; the set itself is
+/// the first subject.
+pub const BUDGET_CALL: &str = "budget-call";
+
 /// A budget refusal: the set and both counts, pointer-only.
 fn budget_refusal(name: &str, count: usize, max: usize) -> Refusal {
     Refusal::declared(
-        format!("budget.{name}"),
+        BUDGET_CALL,
         crate::verdict::Native::CeilingExceeded,
         &[
+            crate::verdict::Subject::Artifact {
+                artifact: format!("budget.{name}"),
+            },
             crate::verdict::Subject::Count {
                 count: count as u64,
             },
