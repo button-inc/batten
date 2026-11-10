@@ -653,7 +653,6 @@ fn event_of(token: &str) -> Option<Event> {
 // The survivor is what makes it a finding: a suite that only asserted the
 // advisory FIRES would stay green under this patch, because an over-firing
 // handler fires. The case has to assert the calls it does NOT select.
-//MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
 
 /// Reject a handler set that cannot honestly run.
 ///
@@ -682,7 +681,6 @@ pub fn validate(handlers: &[Handler]) -> anyhow::Result<()> {
 /// repository declaring no handler for the event pays one slice scan and nothing
 /// else — no spawn, no pipe, no read. Called before any work, so the hot path
 /// stays what §4 promises: cheap when irrelevant.
-//MUTANT-SUITE crates/batten/src/handler.rs
 #[must_use]
 pub fn selects(handlers: &[Handler], event: Event, raw_tool: &str) -> bool {
     handlers

@@ -506,8 +506,6 @@ pub fn native_grade(rules: &[Rule], gate: NativeGate) -> RuleSeverity {
 /// a row arms it. A session spanning several repositories is the ordinary case
 /// on every host that documents one, so a default-on gate would refuse it in
 /// every consumer.
-//MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
-//MUTANT-SUITE crates/batten/tests/it/record_families.rs
 fn absent_grade(gate: NativeGate) -> RuleSeverity {
     match gate {
         NativeGate::RepositoryReach => RuleSeverity::Allow,
@@ -6305,10 +6303,7 @@ impl Rule {
 }
 // CLOUD-2669: `refuse_command_modifiers` above, which a row inside the `impl`
 // cannot sit beside at column 0.
-//MUTANT-SUITE crates/batten/tests/it/word_filters.rs
 // CLOUD-2662's `validate_on_columns`, in the same `impl`.
-//MUTANT-SUITE crates/batten/tests/it/ready_event.rs
-//MUTANT-SUITE crates/batten/tests/it/record_families.rs
 
 /// Validate a whole `[[rule]]` table, and refuse a duplicated id.
 ///
@@ -8022,7 +8017,6 @@ fn recorder_blocked(git_dir: &std::path::Path, branch: &str) -> BTreeMap<String,
 // The second replaces the declaration with a hardcoded name, which is the
 // ambient sweep this table exists to refuse — it passes the present case and
 // only a case asserting that an UNDECLARED family stays unprojected can see it.
-//MUTANT-SUITE crates/batten/tests/it/record_families.rs
 fn recorder_records(
     git_dir: &std::path::Path,
     branch: &str,
@@ -9945,7 +9939,6 @@ fn captured_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, serde_
 /// ask, so [`crate::facts::Look::CouldNotLook`] is the arm. Both project `null`
 /// today, which is exactly why the distinction has to be right here rather than
 /// in whichever arm happens to render the same.
-//MUTANT-SUITE crates/batten/tests/it/hook_latency.rs
 fn effect_facts(
     rules: &[Rule],
     root: &Path,

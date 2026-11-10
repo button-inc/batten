@@ -139,30 +139,9 @@ const EXEMPT: &str = "MUTANT-EXEMPT ";
 /// declaration.
 const OPENERS: &[&str] = &["//", "#"];
 
-/// Where a Rust source lives, relative to the repository root.
-///
-/// A gate name is kebab and a Rust module is snake, so the name is transliterated
-/// rather than matched: `sources_for` is the one place that mapping happens.
-const ENGINE: &str = "crates/batten/src";
-
-/// The namespace an engine subject's name carries.
-///
-/// **A PREFIX RATHER THAN THE BARE MODULE NAME, BECAUSE THE NAMES COLLIDE.**
-/// `mise-tasks/doctor.sh` is a gate called `doctor` and `crates/batten/src/
-/// doctor.rs` transliterates to `doctor` too — so a bare name would have made
-/// `subjects` overwrite the shell gate's row with the module's, and left
-/// `sources_for` still resolving the shell task, which means the module's
-/// declared mutations would never be applied while reading as declared. A
-/// coverage-shaped nothing, from a name clash, in the verb whose whole job is
-/// refusing exactly that.
-///
-/// Caught while landing CLOUD-1369, whose own worked example is `doctor.rs`, so
-/// the collision was the first thing the route hit rather than a hypothetical.
-const ENGINE_PREFIX: &str = "engine-";
-
 /// The namespace an inline task's name carries (CLOUD-1909).
 ///
-/// **A PREFIX FOR `ENGINE_PREFIX`'s REASON, one file over.** The retirement
+/// **A PREFIX, BECAUSE NAMES COLLIDE ACROSS A RETIREMENT.** The retirement
 /// campaign keeps a program's name when it moves the body inline, so
 /// `mise-tasks/<name>.sh` and `[tasks."<name>"]` routinely name the same gate
 /// across a retirement. A bare name would resolve the shell program and leave the
@@ -268,7 +247,6 @@ fn task_names(lines: &[String]) -> Vec<String> {
 /// Every source but the manifest is read whole, exactly as before. The manifest is
 /// read as the named task's block alone — for a `task-` gate, so its reads cannot
 /// reach another task's rows (CLOUD-1909).
-//MUTANT-SUITE crates/batten/tests/it/mutate.rs
 fn declaring_lines(root: &Path, name: &str, source: &str) -> Option<Vec<String>> {
     declaring_in(name, source, lines_of(root, source)?)
 }
@@ -825,22 +803,6 @@ pub fn sources_for(root: &Path, name: &str) -> Vec<String> {
     if root.join(&module).is_file() {
         return vec![module];
     }
-    // THE ENGINE ARM (CLOUD-1369), and its POSITION is what keeps it additive: a
-    // name that resolved to a shell task or a module before still resolves to
-    // exactly that, so no landed gate changes meaning by growing a same-named
-    // Rust neighbour.
-    //
-    // A gate name is kebab and a Rust module is snake, so the name is
-    // transliterated here — the one place that mapping lives, because a second
-    // spelling of it is the second authority this file already refuses for argv.
-    // The `engine-` prefix is what keeps `doctor` (the shell gate) and
-    // `engine-doctor` (the module) from being one name; see `ENGINE_PREFIX`.
-    if let Some(module) = name.strip_prefix(ENGINE_PREFIX) {
-        let engine = format!("{ENGINE}/{}.rs", module.replace('-', "_"));
-        if root.join(&engine).is_file() {
-            return vec![engine];
-        }
-    }
     let dir = root.join(PRESETS).join(name);
     let mut found: Vec<String> = std::fs::read_dir(&dir)
         .map(|entries| {
@@ -859,7 +821,7 @@ pub fn sources_for(root: &Path, name: &str) -> Vec<String> {
     if !found.is_empty() {
         return found;
     }
-    // THE INLINE-TASK ARM (CLOUD-1909), LAST OF ALL, for the engine arm's reason:
+    // THE INLINE-TASK ARM (CLOUD-1909), LAST OF ALL, so it stays additive:
     // a name that resolved to anything before still resolves to exactly that, so
     // no landed gate changes meaning by growing a same-named task block.
     if let Some(task) = name.strip_prefix(TASK_PREFIX)
@@ -1008,7 +970,6 @@ pub fn enforced_set(root: &Path, table: Option<&crate::config::Mutate>) -> Resul
 
 /// The committed table's gates, each glob expanded to the names its matches
 /// already have as subjects, in tracked-path order.
-//MUTANT-SUITE crates/batten/tests/it/mutate.rs
 fn committed(root: &Path, table: Option<&crate::config::Mutate>) -> Result<Vec<String>> {
     let Some(table) = table else {
         return Ok(Vec::new());
@@ -1053,15 +1014,13 @@ fn committed(root: &Path, table: Option<&crate::config::Mutate>) -> Result<Vec<S
 }
 
 /// The name a tracked file already has as a subject: `X` for `policy/X.rego`,
-/// the task name for `mise-tasks/X.sh`, `engine-x` for an engine module, the
-/// preset for a preset's module — and its own path, the file arm's name, for a
+/// the task name for `mise-tasks/X.sh`, the preset for a preset's module — and its own path, the file arm's name, for a
 /// file no other arm names.
 ///
 /// **CHECKED BY RESOLVING IT BACK**, so a name is only offered where
 /// [`sources_for`] would take it to this very file: a module whose stem a shell
 /// task also carries resolves to the task, and gets its path instead.
 fn subject_name(root: &Path, path: &str) -> String {
-    let engine = format!("{ENGINE}/");
     let presets = format!("{PRESETS}/");
     let candidates = [
         path.strip_prefix("mise-tasks/")
@@ -1070,9 +1029,6 @@ fn subject_name(root: &Path, path: &str) -> String {
         path.strip_prefix("policy/")
             .and_then(|rest| rest.strip_suffix(".rego"))
             .map(str::to_owned),
-        path.strip_prefix(&engine)
-            .and_then(|rest| rest.strip_suffix(".rs"))
-            .map(|stem| format!("{ENGINE_PREFIX}{}", stem.replace('_', "-"))),
         path.strip_prefix(&presets)
             .and_then(|rest| rest.split_once('/'))
             .map(|(name, _)| name.to_owned()),
@@ -1253,8 +1209,6 @@ impl RunnerKind {
     }
 }
 
-//MUTANT-SUITE crates/batten/src/mutate.rs
-//MUTANT-SUITE crates/batten/tests/it/mutate.rs
 /// Which registered runner owns which sources.
 ///
 /// Every source has exactly one owner: the first registered runner whose glob
@@ -1266,9 +1220,6 @@ pub struct Registry {
     owns: Vec<(RunnerKind, String)>,
     /// The `command` runner's argv, from committed `[mutate] command`.
     command: Vec<String>,
-    /// The directory a committed `[[provision]]` row installed a registered
-    /// runner's program into ([`Registry::with_provisioned`]).
-    provisioned: Option<PathBuf>,
 }
 
 impl Registry {
@@ -1313,19 +1264,6 @@ impl Registry {
             owns,
             ..Self::default()
         })
-    }
-
-    /// Run every registered runner's program from `dir` first: the pinned
-    /// cargo-mutants a `[[provision]]` row ships, which a CI runner holds nowhere
-    /// on its `PATH` (CLOUD-2345). `None` leaves the inherited `PATH` deciding.
-    ///
-    /// A VALUE ON THE REGISTRY, NOT A PROCESS-WIDE CELL (CLOUD-2466 item 6): the
-    /// `OnceLock` this replaces kept only its first value, so a second registry in
-    /// one process ran the first one's directory.
-    #[must_use]
-    pub fn with_provisioned(mut self, dir: Option<PathBuf>) -> Self {
-        self.provisioned = dir;
-        self
     }
 
     /// Attach the `command` runner's committed argv (CLOUD-2211).
@@ -1436,61 +1374,40 @@ pub fn owned_changes(
 /// beside it and reported as its own [`NEXTEST`] finding (CLOUD-2466 item 4).
 #[must_use]
 pub fn unresolvable(root: &Path, registry: &Registry) -> Vec<Finding> {
-    let provisioned = registry.provisioned.as_deref();
-    absent_runners(
-        registry,
-        |subcommand| cargo_answers(root, subcommand, provisioned),
-        // A LOOKUP, NEVER A PROBE RUN: the consumer's program has no
-        // `--version` contract, and running it would be the sweep itself.
-        |program| resolves(root, program),
-    )
-    .into_iter()
-    .map(runner_absent)
-    .collect()
+    // A LOOKUP, NEVER A PROBE RUN: the consumer's program has no `--version`
+    // contract, and running it would be the sweep itself.
+    absent_runners(registry, |program| resolves(root, program))
+        .into_iter()
+        .map(runner_absent)
+        .collect()
 }
 
-/// The runners `registry` needs whose program does not answer, by id: `cargo`
-/// says whether `cargo <subcommand>` answers, `command` whether a `command`
-/// runner's program resolves.
-fn absent_runners(
-    registry: &Registry,
-    cargo: impl Fn(&str) -> bool,
-    command: impl Fn(&str) -> bool,
-) -> Vec<&'static str> {
-    let mut absent = Vec::new();
-    for kind in registry.registered() {
-        let answers = match kind {
-            RunnerKind::Declared => true,
-            RunnerKind::CargoMutants => cargo("mutants"),
-            RunnerKind::Command => registry
+/// The runners `registry` needs whose program does not answer, by id: `command`
+/// says whether a `command` runner's program resolves.
+fn absent_runners(registry: &Registry, command: impl Fn(&str) -> bool) -> Vec<&'static str> {
+    registry
+        .registered()
+        .into_iter()
+        .filter(|kind| match kind {
+            // The declared runner is this module; cargo-mutants runs as itself.
+            RunnerKind::Declared | RunnerKind::CargoMutants => false,
+            RunnerKind::Command => !registry
                 .command
                 .first()
                 .is_some_and(|program| command(program)),
-        };
-        if !answers {
-            absent.push(kind.id());
-        }
-        if kind == RunnerKind::CargoMutants && !cargo("nextest") {
-            absent.push(NEXTEST);
-        }
-    }
-    absent
+        })
+        .map(RunnerKind::id)
+        .collect()
 }
 
-/// The runner every Cargo suite runs under, as its `runner-absent` names it.
+/// The runner every declared Cargo suite runs under, as its `runner-absent`
+/// names it.
 pub const NEXTEST: &str = "cargo-nextest";
 
-/// `cargo <subcommand> --version` answers from `root`, on `provisioned`'s `PATH`.
-fn cargo_answers(root: &Path, subcommand: &str, provisioned: Option<&Path>) -> bool {
+/// `cargo <subcommand> --version` answers from `root`.
+fn cargo_answers(root: &Path, subcommand: &str) -> bool {
     let args = [subcommand, "--version"].map(String::from);
-    spawn(
-        root,
-        Program::Cargo,
-        &args,
-        &runner_path(provisioned),
-        HOUSEKEEPING_BOUND,
-    )
-    .is_ok_and(|ran| ran.passed())
+    spawn(root, Program::Cargo, &args, &[], HOUSEKEEPING_BOUND).is_ok_and(|ran| ran.passed())
 }
 
 /// The could-not-look finding for a runner whose program does not answer.
@@ -1545,51 +1462,26 @@ fn run_command(root: &Path, registry: &Registry, sources: &[String]) -> Result<O
     }))
 }
 
-/// Where a sweep runs: the checkout, the base its change is measured from, the
-/// committed registry, and the scratch directory a staged copy lives under.
-#[derive(Debug, Clone, Copy)]
-pub struct Site<'a> {
-    /// The checkout.
-    pub root: &'a Path,
-    /// The base the change is measured from.
-    pub base: &'a str,
-    /// The committed runner registry.
-    pub registry: &'a Registry,
-    /// The scratch directory the staged copy and each run's output live under.
-    pub work: &'a Path,
-}
-
-/// Run `kind` over the sources it owns that changed since `base`.
-///
-/// For cargo-mutants, one invocation per source, `--in-diff` over the change
-/// and `--in-place` in the staged copy (the book's CI recipe; the copy is a
-/// repository, so a suite asking git about its tree is answered). Each run's
-/// tests are that source's own unit tests plus every suite it declares with
-/// `MUTANT-SUITE` ([`test_scope`]), so the obligation a row already states is
-/// what bounds the cost.
+/// Judge a change for `kind`: every changed path two runners claim is a
+/// `runner-overlap`, and the `command` runner runs once over the sources it
+/// owns (cargo-mutants runs as itself; the declared runner is the sweep).
 ///
 /// # Errors
 ///
-/// A tree that cannot be staged, or a diff that cannot be written; a `shard`
-/// that is not `k/n` with `k < n`, which [`shard_parsed`] never yields.
+/// The `command` runner cannot be spawned; a `shard` that is not `k/n` with
+/// `k < n`, which [`shard_parsed`] never yields.
 pub fn run_registered(
-    site: &Site<'_>,
+    root: &Path,
+    registry: &Registry,
     changed: &std::collections::BTreeSet<String>,
     kind: RunnerKind,
     shard: Option<(usize, usize)>,
-    progress: &mut dyn std::io::Write,
 ) -> Result<Registered> {
     if let Some((k, n)) = shard
         && shard_bounded(k, n).is_none()
     {
         bail!("mutate: shard {k}/{n} is not `k/n` with 0 <= k < n");
     }
-    let Site {
-        root,
-        base,
-        registry,
-        work,
-    } = *site;
     let mut result = Registered::default();
     for path in changed {
         if let Err(reason) = registry.owner(path) {
@@ -1604,188 +1496,14 @@ pub fn run_registered(
     }
     let sources = owned_changes(root, changed, registry, kind);
     result.sources = sources.len();
-    if kind == RunnerKind::Declared || sources.is_empty() {
-        return Ok(result);
-    }
-    if kind == RunnerKind::Command {
+    // ONLY THE `command` RUNNER IS RUN HERE. cargo-mutants runs as itself
+    // (`cargo mutants --in-diff`), and the declared runner is the sweep.
+    if kind == RunnerKind::Command && !sources.is_empty() {
         result
             .findings
             .extend(run_command(root, registry, &sources)?);
-        return Ok(result);
-    }
-    let diff = in_diff_patch(root, base, &sources).with_context(|| {
-        format!("mutate: the change since {base} cannot be named to cargo-mutants")
-    })?;
-    let staged = Staged::new(root, work.to_path_buf())?;
-    let runs = work.join("cargo-mutants");
-    fs::create_dir_all(&runs)
-        .with_context(|| format!("mutate: could not create {}", runs.display()))?;
-    let patch = runs.join("change.diff");
-    crate::durable::replace(&patch, diff)
-        .with_context(|| format!("mutate: could not write {}", patch.display()))?;
-    let env = nextest_env(root, staged.dir(), registry.provisioned.as_deref());
-    let shards = shard_plan(staged.dir(), &patch, &sources, shard, &env)?;
-    let assigned = shards.iter().filter(|on| **on != Place::Off).count();
-    let mut position = 0usize;
-    for (index, (source, on)) in sources.iter().zip(shards).enumerate() {
-        // A source with no mutant on this shard is not run here at all: no
-        // build, no suite, no finding, which another shard carries.
-        let local = match on {
-            Place::Off => continue,
-            Place::On(local) => shard.map(|(_, n)| (local, n)),
-            Place::Unsharded => None,
-        };
-        position += 1;
-        // ONE READ OF THE SCOPE: the filterset and the target selectors are
-        // both this list's, so it is built once per source.
-        let scope = scope_of(root, source);
-        if scope.is_empty() {
-            result.findings.push(Finding {
-                gate: kind.id().to_owned(),
-                slug: Some(source.clone()),
-                verdict: Verdict::NoSuite {
-                    suite: String::from("no cargo target compiles it"),
-                },
-                owner: None,
-            });
-            continue;
-        }
-        let output = runs.join(index.to_string());
-        let _ = fs::remove_dir_all(&output);
-        let args = source_args(&patch, source, &output, local, &scope);
-        let started = std::time::Instant::now();
-        let _ = writeln!(
-            progress,
-            "mutate sweep: source {position}/{assigned} {source} starting"
-        );
-        let ran = spawn_as(
-            staged.dir(),
-            Program::Cargo,
-            &args,
-            &env,
-            runner_bound(),
-            Said::Streamed,
-        )?;
-        let outcome = read_outcomes(&output.join("mutants.out"));
-        // ONE LINE PER SOURCE (CLOUD-2253's progress, for this runner), AND ITS
-        // FINDINGS AS IT ENDS: on #1132 fifteen shards ran 111 minutes each,
-        // were stopped at their bound, and their logs held nothing of what they
-        // had judged, because every finding waited for the last source.
-        let _ = writeln!(
-            progress,
-            "mutate sweep: source {position}/{assigned} {source} {} mutant(s) {}s",
-            outcome.ran,
-            started.elapsed().as_secs()
-        );
-        let found = outcome.findings(kind, source, &ran);
-        for finding in &found {
-            let _ = writeln!(progress, "mutate sweep: {finding}");
-        }
-        result.mutants += outcome.ran;
-        result.findings.extend(found);
     }
     Ok(result)
-}
-
-/// Where one source's run sits on the sweep's shard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Place {
-    /// The sweep is not sharded: the source runs whole.
-    Unsharded,
-    /// No mutant of the source is on this shard: it is not run here.
-    Off,
-    /// The source runs its own `--shard <local>/<n>`.
-    On(usize),
-}
-
-/// Each source's [`Place`] on `shard`: [`Place::Unsharded`] where the sweep is
-/// not sharded, else [`source_shards`] over the change's listed mutants.
-fn shard_plan(
-    staged: &Path,
-    patch: &Path,
-    sources: &[String],
-    shard: Option<(usize, usize)>,
-    env: &[(String, String)],
-) -> Result<Vec<Place>> {
-    let Some((k, n)) = shard else {
-        return Ok(vec![Place::Unsharded; sources.len()]);
-    };
-    let mut list = vec![
-        String::from("mutants"),
-        String::from("--list"),
-        String::from("--no-shuffle"),
-        String::from("--in-diff"),
-        patch.to_string_lossy().into_owned(),
-    ];
-    for source in sources {
-        list.extend([String::from("--file"), source.clone()]);
-    }
-    let listed = spawn(staged, Program::Cargo, &list, env, build_bound())?;
-    if !listed.passed() {
-        bail!("mutate: cargo-mutants could not list the change's mutants");
-    }
-    Ok(source_shards(&mutant_counts(&listed.output, sources), k, n)
-        .into_iter()
-        .map(|local| local.map_or(Place::Off, Place::On))
-        .collect())
-}
-
-/// One source's cargo-mutants argv; `local` is its `--shard` as `(k, n)`, and
-/// `scope` its [`scope_of`], which names both the filterset and the targets.
-fn source_args(
-    patch: &Path,
-    source: &str,
-    output: &Path,
-    local: Option<(usize, usize)>,
-    scope: &[(String, Option<String>)],
-) -> Vec<String> {
-    let mut args = vec![
-        String::from("mutants"),
-        String::from("--in-place"),
-        String::from("--no-shuffle"),
-        String::from("--in-diff"),
-        patch.to_string_lossy().into_owned(),
-        String::from("--file"),
-        source.to_owned(),
-        String::from("--test-tool"),
-        String::from("nextest"),
-        String::from("--output"),
-        output.to_string_lossy().into_owned(),
-    ];
-    // ONLY THE TARGETS THE SCOPE RUNS ARE BUILT ([`targets_of`]): `--cargo-arg`
-    // reaches both the build and the test invocation, so what is compiled per
-    // mutant is what the filterset below can select, and nothing else.
-    args.extend(
-        targets_of(scope)
-            .iter()
-            .map(|target| format!("--cargo-arg={target}")),
-    );
-    // A SHARD SKIPS THE BASELINE, as the book's CI recipe does
-    // (mutants.rs/shards.html). One invocation per source meant every shard
-    // built and tested 157 unmutated baselines, most for sources with no
-    // mutant in that shard: measured on #1132, the shards ran past their
-    // 120-minute bound and only one finished. The book's precondition is a
-    // suite already green on the unmutated tree; `--timeout` stands in for the
-    // per-mutant bound the baseline would have measured.
-    if let Some((k, n)) = local {
-        args.extend([
-            String::from("--shard"),
-            format!("{k}/{n}"),
-            String::from("--sharding"),
-            String::from("round-robin"),
-            String::from("--baseline=skip"),
-            String::from("--timeout"),
-            SHARD_MUTANT_TIMEOUT_SECS.to_string(),
-        ]);
-    }
-    // `-v`: a line per mutant as it is judged, caught ones included, so the
-    // log says how far a run got against what it was given. The arguments after
-    // `--` reach only the test phase's `cargo nextest run`, which is where the
-    // verdict flags belong: `--cargo-arg` would hand them to the build as well.
-    args.extend([String::from("-v"), String::from("--")]);
-    args.extend(NEXTEST_VERDICT_FLAGS.map(String::from));
-    args.extend([String::from("-E"), terms_of(scope)]);
-    args
 }
 
 /// The nextest settings that decide a verdict, chosen by the sweep on BOTH of
@@ -1811,19 +1529,6 @@ const NEXTEST_VERDICT_FLAGS: [&str; 4] = [
     "--status-level=pass",
     "--fail-fast",
 ];
-
-/// One mutant's test bound in a sharded run, which skips the baseline that
-/// would otherwise measure it: the book's CI recipe's `--timeout 300`.
-///
-/// **Deliberately NOT extended to the unsharded run (CLOUD-2376).** It was, on
-/// the theory that a bound measured on the unmutated suite can be shorter than a
-/// slow catch. The measurement refuted it: with `--timeout 300` the
-/// `collect.rs:1319` mutant still ran the full 300s, where its baseline tests in
-/// 9s. It does not catch slowly — it HANGS, on a test deadlock the mutation
-/// opens, and a larger bound only buys a more expensive way to learn that. The
-/// unsharded run keeps the measured bound, which reports the same verdict five
-/// times sooner.
-const SHARD_MUTANT_TIMEOUT_SECS: u64 = 300;
 
 /// The shard a `$MUTANT_SHARD` of `value` asks for: none when it is unset or
 /// blank, else its raw text for [`parse_shard`] to read or refuse.
@@ -1856,44 +1561,6 @@ const fn shard_bounded(k: usize, n: usize) -> Option<(usize, usize)> {
     if k < n { Some((k, n)) } else { None }
 }
 
-/// The `--shard` each source's own run takes on shard `k` of `n`, so the
-/// matrix shares the whole change's mutants evenly: mutant `g` of the change,
-/// counted across the sources in order, belongs to shard `g % n`, which is
-/// `--sharding round-robin` within one source run offset by the mutants before
-/// it. `None` for a source with no mutant on this shard, which is not run.
-///
-/// ONE RUN PER SOURCE SHARDED ALONE PILED THE WORK ON THE LOW SHARDS: cargo-mutants'
-/// default `slice` hands a source of five mutants to shards 0 to 4, so on #1132
-/// shard 0 drew a mutant from nearly every one of 158 sources, ran past its
-/// 120-minute bound and reported nothing, while shard 15 finished in an hour.
-#[must_use]
-pub fn source_shards(counts: &[usize], k: usize, n: usize) -> Vec<Option<usize>> {
-    let mut before = 0usize;
-    counts
-        .iter()
-        .map(|&count| {
-            let local = (k + n - before % n) % n;
-            before += count;
-            (local < count).then_some(local)
-        })
-        .collect()
-}
-
-/// How many mutants cargo-mutants' `--list` names in each of `sources`, from
-/// its `<path>:<line>:<col>: <mutation>` lines.
-fn mutant_counts(listing: &str, sources: &[String]) -> Vec<usize> {
-    sources
-        .iter()
-        .map(|source| {
-            let prefix = format!("{source}:");
-            listing
-                .lines()
-                .filter(|line| line.starts_with(&prefix))
-                .count()
-        })
-        .collect()
-}
-
 /// How long one registered run over one source may take: a build per mutant.
 fn runner_bound() -> std::time::Duration {
     std::time::Duration::from_secs(
@@ -1903,193 +1570,6 @@ fn runner_bound() -> std::time::Duration {
             .filter(|seconds| *seconds > 0)
             .unwrap_or(21_600),
     )
-}
-
-/// What one cargo-mutants run wrote to its `mutants.out`.
-#[derive(Debug, Default, PartialEq, Eq)]
-struct Outcomes {
-    /// Every mutant it ran, whatever became of it.
-    ran: usize,
-    /// `path:line:col` of each mutant no test caught.
-    missed: Vec<String>,
-    /// `path:line:col` of each mutant whose tests ran out of time.
-    timeout: Vec<String>,
-    /// Whether the unmutated baseline failed, so no catch means anything.
-    baseline_failed: bool,
-}
-
-/// The pointer of one `mutants.out` line, `path:line:col`, never the mutation's
-/// text, which quotes the source (rule 4).
-fn pointer_of(line: &str) -> Option<String> {
-    let mut fields = line.splitn(4, ':');
-    let path = fields.next()?;
-    let row = fields.next()?;
-    let column = fields.next()?;
-    (row.parse::<u32>().is_ok() && column.parse::<u32>().is_ok())
-        .then(|| format!("{path}:{row}:{column}"))
-}
-
-/// Read a run's outcome files. Absent files are empty: a run that never got as
-/// far as writing them is told apart by [`Outcomes::findings`] from its exit.
-fn read_outcomes(dir: &Path) -> Outcomes {
-    let lines = |name: &str| -> Vec<String> {
-        fs::read_to_string(dir.join(name))
-            .unwrap_or_default()
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(str::to_owned)
-            .collect()
-    };
-    let caught = lines("caught.txt").len();
-    let unviable = lines("unviable.txt").len();
-    let missed: Vec<String> = lines("missed.txt")
-        .iter()
-        .filter_map(|l| pointer_of(l))
-        .collect();
-    let timeout: Vec<String> = lines("timeout.txt")
-        .iter()
-        .filter_map(|l| pointer_of(l))
-        .collect();
-    let baseline_failed = fs::read_to_string(dir.join("outcomes.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|json| {
-            json.get("outcomes")?.as_array().map(|outcomes| {
-                outcomes.iter().any(|outcome| {
-                    outcome.get("scenario").and_then(serde_json::Value::as_str) == Some("Baseline")
-                        && outcome.get("summary").and_then(serde_json::Value::as_str)
-                            != Some("Success")
-                })
-            })
-        })
-        .unwrap_or(false);
-    Outcomes {
-        ran: caught + unviable + missed.len() + timeout.len(),
-        missed,
-        timeout,
-        baseline_failed,
-    }
-}
-
-impl Outcomes {
-    /// The findings one run over `source` amounts to.
-    ///
-    /// A run that failed with nothing missed and nothing timed out decided
-    /// nothing: a failed baseline is `case-already-red`, anything else is
-    /// `suite-did-not-run`. Neither may read as every mutant caught.
-    fn findings(&self, kind: RunnerKind, source: &str, ran: &Ran) -> Vec<Finding> {
-        let at = |slug: &str, verdict: Verdict| Finding {
-            gate: kind.id().to_owned(),
-            slug: Some(slug.to_owned()),
-            verdict,
-            owner: None,
-        };
-        let mut found: Vec<Finding> = self
-            .missed
-            .iter()
-            .map(|pointer| {
-                at(
-                    pointer,
-                    Verdict::Survived {
-                        want: String::from("in-diff"),
-                    },
-                )
-            })
-            .chain(
-                self.timeout
-                    .iter()
-                    .map(|pointer| at(pointer, Verdict::SuiteTimedOut { seconds: 0 })),
-            )
-            .collect();
-        if ran.outcome == Outcome::TimedOut {
-            found.push(at(
-                source,
-                Verdict::SuiteTimedOut {
-                    seconds: runner_bound().as_secs(),
-                },
-            ));
-        } else if !ran.passed() && found.is_empty() {
-            found.push(at(
-                source,
-                if self.baseline_failed {
-                    Verdict::CaseAlreadyRed {
-                        want: String::from("baseline"),
-                    }
-                } else {
-                    Verdict::SuiteDidNotRun {
-                        want: String::from("cargo mutants"),
-                    }
-                },
-            ));
-        }
-        found
-    }
-}
-
-/// The nextest filterset of the tests that judge `source`: its own tests, and
-/// every Rust suite it declares with `MUTANT-SUITE`, each inside its package.
-///
-/// `None` when no cargo target compiles the source and it declares no suite, so
-/// nothing could be named. A source no test target compiles (`build.rs`) is
-/// judged by the suites it declares: what it generates is what they read.
-#[must_use]
-pub fn test_scope(root: &Path, source: &str) -> Option<String> {
-    let scope = scope_of(root, source);
-    (!scope.is_empty()).then(|| terms_of(&scope))
-}
-
-/// A [`scope_of`]'s filterset: its terms, alternated.
-fn terms_of(scope: &[(String, Option<String>)]) -> String {
-    scope
-        .iter()
-        .map(|(term, _)| term.as_str())
-        .collect::<Vec<_>>()
-        .join(" | ")
-}
-
-/// The cargo target selectors that build exactly the test binaries a
-/// [`scope_of`] names, each once, in order: `--lib`, `--bins`, `--bin=<b>`,
-/// `--test=<t>`.
-///
-/// THE BUILD IS THE WHOLE COST OF A MUTANT, and this is what bounds it
-/// (CLOUD-1746). Measured on this tree, a mutant's tests ran in 0s and its
-/// build in 27-41s, because `cargo nextest run` with no selector compiles every
-/// test target of the package — the library twice (as a dependency and under
-/// `cfg(test)`), every integration target and every example — whichever of them
-/// the filterset then runs. A scope of one module's unit tests needs only
-/// `--lib` (20-27s); a declared `tests/<t>` suite adds `--test=<t>`, and cargo
-/// builds the package's binaries for an integration target by itself.
-fn targets_of(scope: &[(String, Option<String>)]) -> Vec<String> {
-    let mut targets: Vec<String> = Vec::new();
-    for target in scope.iter().filter_map(|(_, target)| target.as_ref()) {
-        if !targets.contains(target) {
-            targets.push(target.clone());
-        }
-    }
-    targets
-}
-
-/// Each `(filterset term, cargo target selector)` judging `source`: its own
-/// tests, then every Rust suite it declares with `MUTANT-SUITE`, each once. A
-/// suite in another package carries no selector.
-fn scope_of(root: &Path, source: &str) -> Vec<(String, Option<String>)> {
-    let mut scope: Vec<(String, Option<String>)> = tests_of(root, source)
-        .into_iter()
-        .map(|(term, target)| (term, Some(target)))
-        .collect();
-    let home = package_of(root, source).map(|(package, _)| package);
-    for suite in declared_suites(root, source) {
-        if let Some((term, target)) = tests_of(root, &suite)
-            && !scope.iter().any(|(known, _)| *known == term)
-        {
-            // A SUITE IN ANOTHER PACKAGE NAMES NO TARGET HERE: cargo-mutants
-            // builds the mutated package, where `--test=<t>` of a sibling's
-            // target is a build error rather than a narrower build.
-            let home_package = package_of(root, &suite).map(|(package, _)| package) == home;
-            scope.push((term, home_package.then_some(target)));
-        }
-    }
-    scope
 }
 
 /// The Rust suites `source` declares with `MUTANT-SUITE`, trimmed, in order:
@@ -2103,77 +1583,6 @@ fn declared_suites(root: &Path, source: &str) -> Vec<String> {
         .map(|suite| suite.trim().to_owned())
         .filter(|suite| has_extension(suite, "rs"))
         .collect()
-}
-
-/// The filterset term naming the tests compiled from `path`, inside its
-/// package, and the cargo selector of the target that compiles them.
-///
-/// Cargo's own layout decides it, never this repository's: `src/lib.rs` is the
-/// library's whole unit-test set and `src/a/b.rs` its `a::b::` module;
-/// `tests/<t>.rs` and `tests/<t>/main.rs` are the target `<t>`, and
-/// `tests/<t>/<m>.rs` its `<m>::` module.
-fn tests_of(root: &Path, path: &str) -> Option<(String, String)> {
-    let (package, dir) = package_of(root, path)?;
-    let relative = Path::new(path)
-        .strip_prefix(&dir)
-        .ok()?
-        .to_string_lossy()
-        .replace('\\', "/");
-    let stem = relative.strip_suffix(".rs")?;
-    let (term, target) = if let Some(module) = stem.strip_prefix("src/") {
-        let module = module.strip_suffix("/mod").unwrap_or(module);
-        match module {
-            "lib" => (String::from("kind(lib)"), String::from("--lib")),
-            "main" => (String::from("kind(bin)"), String::from("--bins")),
-            _ => match module.strip_prefix("bin/") {
-                Some(binary) => {
-                    // `src/bin/<name>/main.rs` is the binary `<name>`, as
-                    // `src/bin/<name>.rs` is: cargo's layout, never this repo's.
-                    let binary = binary.strip_suffix("/main").unwrap_or(binary);
-                    (format!("binary({binary})"), format!("--bin={binary}"))
-                }
-                None => (
-                    format!("kind(lib) & test(/^{}::/)", module.replace('/', "::")),
-                    String::from("--lib"),
-                ),
-            },
-        }
-    } else {
-        let test = stem.strip_prefix("tests/")?;
-        let (target, module) = match test.split_once('/') {
-            None => (test, None),
-            Some((target, "main")) => (target, None),
-            Some((target, module)) => (target, Some(module)),
-        };
-        let term = match module {
-            None => format!("binary({target})"),
-            Some(module) => format!(
-                "binary({target}) & test(/^{}::/)",
-                module.replace('/', "::")
-            ),
-        };
-        (term, format!("--test={target}"))
-    };
-    Some((format!("(package({package}) & {term})"), target))
-}
-
-/// The package whose manifest is nearest above `path`, and that manifest's
-/// directory, repo-relative.
-fn package_of(root: &Path, path: &str) -> Option<(String, PathBuf)> {
-    let mut dir = Path::new(path).parent();
-    while let Some(candidate) = dir {
-        if let Ok(text) = fs::read_to_string(root.join(candidate).join("Cargo.toml"))
-            && let Ok(manifest) = text.parse::<toml::Table>()
-            && let Some(name) = manifest
-                .get("package")
-                .and_then(|package| package.get("name"))
-                .and_then(toml::Value::as_str)
-        {
-            return Some((name.to_owned(), candidate.to_path_buf()));
-        }
-        dir = candidate.parent();
-    }
-    None
 }
 
 // ---------------------------------------------------------------------------
@@ -2982,18 +2391,17 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
 
 /// The environment a nextest run in `staged` carries: [`suite_env`], with the
 /// inherited `NEXTEST_PROFILE` kept where `staged` declares that profile
-/// ([`declared_profile`]), and `PATH` led by `provisioned` ([`runner_path`]).
+/// ([`declared_profile`]).
 ///
 /// [`spawn_as`] scrubs every OTHER inherited `NEXTEST_*` variable from a child
 /// this env reaches, because it names nextest's profile ([`scrubbed`]).
-fn nextest_env(root: &Path, staged: &Path, provisioned: Option<&Path>) -> Vec<(String, String)> {
+fn nextest_env(root: &Path, staged: &Path) -> Vec<(String, String)> {
     let mut env = suite_env(root);
     if let Some(profile) = declared_profile(staged, std::env::var("NEXTEST_PROFILE").ok())
         && let Some((_, value)) = env.iter_mut().find(|(key, _)| key == "NEXTEST_PROFILE")
     {
         *value = profile;
     }
-    env.extend(runner_path(provisioned));
     env
 }
 
@@ -3025,20 +2433,6 @@ fn scrubbed(inherited: impl IntoIterator<Item = String>, env: &[(String, String)
         .into_iter()
         .filter(|key| key.starts_with("NEXTEST_") && !env.iter().any(|(set, _)| set == key))
         .collect()
-}
-
-/// `PATH` with `provisioned` ahead of the inherited one, or nothing where it is
-/// `None`, so the inherited `PATH` passes through unchanged.
-fn runner_path(provisioned: Option<&Path>) -> Vec<(String, String)> {
-    let Some(dir) = provisioned else {
-        return Vec::new();
-    };
-    let inherited = std::env::var_os("PATH").unwrap_or_default();
-    let paths = std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&inherited));
-    std::env::join_paths(paths).map_or_else(
-        |_| Vec::new(),
-        |joined| vec![(String::from("PATH"), joined.to_string_lossy().into_owned())],
-    )
 }
 
 /// How far a run got, in the order `judge_row` must read it — every state but
@@ -3124,7 +2518,7 @@ fn spawn_arm(
 /// gates it never reached.
 fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selection {
     let dir = staged.dir();
-    let env = nextest_env(root, dir, None);
+    let env = nextest_env(root, dir);
     // Where a `JUnit` report lands for the one arm whose verdict is a file
     // rather than a stream. Beside the captures, never inside the tree under
     // judgement.
@@ -3503,7 +2897,6 @@ fn json_array(output: &str) -> Option<Vec<serde_json::Value>> {
 /// **THE CASE'S VERDICT IS A FUNCTION OF THE SET** ([`case_verdict`]): any
 /// error, else any fail, else all pass. The previous ladder fell back to the
 /// first verdict, so `[pass, fail, skip]` read pass.
-//MUTANT-SUITE crates/batten/tests/it/mutate.rs
 fn kyverno_verdict(output: &str, want: &str) -> Selection {
     let field = |key: &str| {
         want.split(',')
@@ -4308,7 +3701,7 @@ fn build_if_owed(
             staged.dir(),
             Program::Cargo,
             &args,
-            &nextest_env(root, staged.dir(), None),
+            &nextest_env(root, staged.dir()),
             build_bound(),
         );
     }
@@ -4392,7 +3785,7 @@ fn without_absent_nextest<'a>(
     let runs_nextest = |(_, gate, row): &ShardRow<'_>| {
         !declares_own_case(root, row) && matches!(gate.suite_for(row), Some(Suite::Cargo { .. }))
     };
-    let absent = mine.iter().any(runs_nextest) && !cargo_answers(root, "nextest", None);
+    let absent = mine.iter().any(runs_nextest) && !cargo_answers(root, "nextest");
     if !absent {
         return (mine, None);
     }
@@ -4570,13 +3963,9 @@ impl fmt::Display for CensusVerdict {
 
 /// What a census run answered.
 ///
-/// `#[non_exhaustive]` for [`crate::doctor::SessionReport`]'s reason, and adding
-/// it is CLOUD-1369's own bill coming due: this struct was constructible, so the
-/// `engine_undeclared` field below is `constructible_struct_adds_field` and
-/// `semver` refused the branch until a commit declared the break. Its two sibling
-/// report types already carry the attribute; this one did not, which is why a
-/// report type gaining a field — the most ordinary change such a type has — was a
-/// breaking one. Marking it now is what stops the next field costing the same.
+/// `#[non_exhaustive]` for [`crate::doctor::SessionReport`]'s reason: a report
+/// type gaining a field is the most ordinary change it has, and must not be a
+/// breaking one.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Census {
@@ -4584,11 +3973,6 @@ pub struct Census {
     pub findings: Vec<(String, CensusVerdict)>,
     /// How many subjects were censused.
     pub subjects: usize,
-    /// How many engine modules carry no declaration at all (CLOUD-1369).
-    ///
-    /// The population `subjects` deliberately does not admit, reported so the
-    /// retrofit backlog has a size. Never a finding — see [`engine_undeclared`].
-    pub engine_undeclared: usize,
 }
 
 /// Whether a `mise-tasks/` program describes itself as a gate.
@@ -4641,45 +4025,6 @@ pub fn subjects(root: &Path, table: Option<&crate::config::Mutate>) -> BTreeMap<
             }
         }
     }
-    // THE ENGINE, OPT-IN BY DECLARATION (CLOUD-1369) — and the opt-in is the
-    // design rather than a softer version of it.
-    //
-    // `mise-tasks/` is already opt-in by the same shape: a program is censused
-    // only if its own `#MISE description` calls it a gate, because that directory
-    // holds programs that refuse and programs that measure, and only the first
-    // kind owes a mutation. `crates/batten/src` is the same population problem
-    // one language over — most modules are plumbing, and a census that demanded a
-    // mutation from every one of them would report ~50 uncovered subjects on the
-    // day the route landed. CLOUD-1369 puts that retrofit out of scope in its own
-    // words: this row buys the ROUTE.
-    //
-    // SO A DECLARING MODULE IS A SUBJECT AND IS HELD TO THE SET. That is what
-    // stops the opt-in being a way out: a module that declares rows and is not in
-    // `$MUTANT_GATES` reads `uncovered`, because rows nobody sweeps are the
-    // coverage-shaped nothing this whole verb exists to refuse.
-    //
-    // What sizes the backlog is `engine_undeclared` below — a COUNT, not a
-    // finding, because a number is a sensor and a finding is a gate. Reporting
-    // the population without refusing it is how the next author learns the size
-    // without this change having to close it.
-    if let Ok(entries) = std::fs::read_dir(root.join(ENGINE)) {
-        for entry in entries.filter_map(std::result::Result::ok) {
-            let file = entry.file_name().to_string_lossy().into_owned();
-            let Some(stem) = file.strip_suffix(".rs") else {
-                continue;
-            };
-            let path = format!("{ENGINE}/{file}");
-            let declares = lines_of(root, &path).is_some_and(|lines| {
-                !rows_in(&lines, &path).is_empty()
-                    || [SUITE, OWNER, EXEMPT]
-                        .iter()
-                        .any(|marker| declared(&lines, marker).is_some())
-            });
-            if declares {
-                found.insert(format!("{ENGINE_PREFIX}{}", stem.replace('_', "-")), path);
-            }
-        }
-    }
     if let Ok(entries) = std::fs::read_dir(root.join(PRESETS)) {
         for entry in entries.filter_map(std::result::Result::ok) {
             if !entry.path().is_dir() {
@@ -4691,8 +4036,8 @@ pub fn subjects(root: &Path, table: Option<&crate::config::Mutate>) -> BTreeMap<
             }
         }
     }
-    // INLINE TASKS, OPT-IN BY DECLARATION (CLOUD-1909), on the engine arm's terms
-    // above: most of the manifest's tasks run, build or report and owe nothing, so
+    // INLINE TASKS, OPT-IN BY DECLARATION (CLOUD-1909): most of
+    // the manifest's tasks run, build or report and owe nothing, so
     // a block is a subject only once it declares something — and then it is held
     // to the set, so a row nobody sweeps reads `uncovered` rather than covered.
     if let Some((manifest, lines)) =
@@ -4721,7 +4066,7 @@ pub fn subjects(root: &Path, table: Option<&crate::config::Mutate>) -> BTreeMap<
 /// `MUTANT-EXEMPT` line at column zero and is no other arm's subject, keyed by
 /// its path, which is the file arm's name for it.
 ///
-/// **ON THE ENGINE AND INLINE-TASK ARMS' TERMS, AND ONLY UNDER A TABLE.** A
+/// **ON THE INLINE-TASK ARM'S TERMS, AND ONLY UNDER A TABLE.** A
 /// consumer's gates live wherever its tree keeps them — `.tf`, YAML, `.rego`,
 /// `.py` — so no directory list can find them, and a file that declares rows is
 /// exactly one that owes a sweep. Held to the set like those arms: a declaring
@@ -4819,7 +4164,6 @@ pub fn census(root: &Path, names: &[String], table: Option<&crate::config::Mutat
     Census {
         findings,
         subjects: subjects.len(),
-        engine_undeclared: engine_undeclared(root, &subjects),
     }
 }
 
@@ -4890,42 +4234,205 @@ fn row_line(text: &str, slug: &str) -> usize {
         .map_or(0, |index| index + 1)
 }
 
-/// How many engine modules carry no declaration at all.
-///
-/// **A COUNT, AND DELIBERATELY NOT A FINDING** (CLOUD-1369). `subjects` admits an
-/// engine module only once it declares something, so an un-declared one produces
-/// no verdict — which would leave the population invisible and make "the backlog
-/// is what the census will then report" untrue. This is that report.
-///
-/// A number is a sensor and a finding is a gate, and the split is what lets the
-/// route land green while still saying how much is uncovered. Whoever retrofits
-/// the declarations gets the size from here; nothing here refuses anything.
-///
-/// Pointer-only by construction (rule 4): a count names no module.
-///
-/// The censused set is passed in rather than re-derived, because `subjects` walks
-/// three directories and reads every candidate: computing it per entry would make
-/// this quadratic in the size of the engine for a number nobody decides on.
-#[must_use]
-fn engine_undeclared(root: &Path, censused: &BTreeMap<String, String>) -> usize {
-    let Ok(entries) = std::fs::read_dir(root.join(ENGINE)) else {
-        return 0;
-    };
-    entries
-        .filter_map(std::result::Result::ok)
-        .filter(|entry| {
-            let file = entry.file_name().to_string_lossy().into_owned();
-            file.strip_suffix(".rs").is_some_and(|stem| {
-                !censused.contains_key(&format!("{ENGINE_PREFIX}{}", stem.replace('_', "-")))
-            })
+/// What one cargo-mutants job costs, as the repository declares it: the
+/// `MUTANT_JOB_DISK_MB` and `MUTANT_JOB_MEMORY_MB` a copy's build was measured
+/// to take. A property of THIS tree's build, so it is declared beside the task
+/// that runs it; the machine's side is measured at run time by [`Machine::probe`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JobCost {
+    /// Megabytes one copy and its target directory reach.
+    pub disk_mb: u64,
+    /// Megabytes one copy's build peaks at.
+    pub memory_mb: u64,
+}
+
+impl JobCost {
+    /// The declared cost, from the environment.
+    ///
+    /// # Errors
+    ///
+    /// Either variable absent or not a whole number of megabytes: a job count
+    /// sized against a guessed cost is the hardcoding this replaces.
+    pub fn declared() -> Result<Self> {
+        let read = |name: &str| -> Result<u64> {
+            let raw =
+                std::env::var(name).map_err(|_| anyhow::anyhow!("`{name}` is not declared"))?;
+            raw.trim()
+                .parse()
+                .map_err(|_| anyhow::anyhow!("`{name}` is not a whole number of megabytes"))
+        };
+        Ok(Self {
+            disk_mb: read("MUTANT_JOB_DISK_MB")?,
+            memory_mb: read("MUTANT_JOB_MEMORY_MB")?,
         })
-        .count()
+    }
+}
+
+/// What this machine has left for jobs, measured where they will run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Machine {
+    /// Cores this process may use (cgroup quota included).
+    pub cores: usize,
+    /// Free megabytes on the volume the copies are made in, above the
+    /// collector's floor.
+    pub disk_headroom_mb: u64,
+    /// Megabytes available to this process: `MemAvailable`, or the cgroup's
+    /// remaining limit where that is smaller.
+    pub memory_mb: u64,
+}
+
+impl Machine {
+    /// Measure the machine. Copies go to the temp directory (cargo-mutants'
+    /// own default), so that is the volume whose headroom counts.
+    ///
+    /// # Errors
+    ///
+    /// The temp volume's free space cannot be read.
+    pub fn probe(floor_mb: u64) -> Result<Self> {
+        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+        let free_mb = crate::prune::sampler(std::env::temp_dir())?()?;
+        let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+        let available = mem_available_mb(&meminfo);
+        let cgroup = cgroup_remaining_mb(Path::new("/sys/fs/cgroup"));
+        let memory_mb = match (available, cgroup) {
+            (Some(a), Some(c)) => a.min(c),
+            (Some(a), None) => a,
+            (None, Some(c)) => c,
+            (None, None) => u64::MAX,
+        };
+        Ok(Self {
+            cores,
+            disk_headroom_mb: free_mb.saturating_sub(floor_mb),
+            memory_mb,
+        })
+    }
+}
+
+/// `MemAvailable` from a `/proc/meminfo` body, in megabytes.
+fn mem_available_mb(meminfo: &str) -> Option<u64> {
+    meminfo.lines().find_map(|line| {
+        let kb = line
+            .strip_prefix("MemAvailable:")?
+            .trim()
+            .strip_suffix("kB")?;
+        kb.trim().parse::<u64>().ok().map(|kb| kb / 1024)
+    })
+}
+
+/// The cgroup's limit minus its usage, in megabytes, v2 then v1; `None` where
+/// neither is readable or the limit is unbounded.
+fn cgroup_remaining_mb(root: &Path) -> Option<u64> {
+    let read = |name: &str| -> Option<String> {
+        std::fs::read_to_string(root.join(name))
+            .ok()
+            .map(|text| text.trim().to_owned())
+    };
+    let (limit, usage) = read("memory.max").zip(read("memory.current")).or_else(|| {
+        read("memory/memory.limit_in_bytes").zip(read("memory/memory.usage_in_bytes"))
+    })?;
+    let limit: u64 = limit.parse().ok()?;
+    let usage: u64 = usage.parse().ok()?;
+    // v1 spells "unbounded" as a page-rounded i64::MAX; anything past a
+    // petabyte is that, not a limit.
+    (limit < 1 << 50).then(|| limit.saturating_sub(usage) / (1024 * 1024))
+}
+
+/// How many cargo-mutants jobs this machine holds (`--jobs`).
+///
+/// Each job's build is itself parallel, so the book's advice — a few jobs, not
+/// one per core — is the core term: half the cores. Disk and memory each
+/// allow as many jobs as their headroom has room for. Never below one: one job
+/// is cargo-mutants' own default, and the disk collector is what keeps a single
+/// job inside the floor.
+#[must_use]
+pub fn job_count(machine: Machine, cost: JobCost) -> usize {
+    let fit = |have: u64, need: u64| {
+        usize::try_from(have.checked_div(need).unwrap_or(u64::MAX)).unwrap_or(usize::MAX)
+    };
+    (machine.cores / 2)
+        .min(fit(machine.disk_headroom_mb, cost.disk_mb))
+        .min(fit(machine.memory_mb, cost.memory_mb))
+        .max(1)
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    const COST: JobCost = JobCost {
+        disk_mb: 2_000,
+        memory_mb: 3_000,
+    };
+
+    fn machine(cores: usize, disk_headroom_mb: u64, memory_mb: u64) -> Machine {
+        Machine {
+            cores,
+            disk_headroom_mb,
+            memory_mb,
+        }
+    }
+
+    /// Fails by: a job per core instead of half, or a term ignored.
+    #[test]
+    fn the_scarcest_resource_sizes_the_jobs() {
+        assert_eq!(job_count(machine(8, 100_000, 100_000), COST), 4);
+        assert_eq!(job_count(machine(8, 6_000, 100_000), COST), 3);
+        assert_eq!(job_count(machine(8, 100_000, 6_000), COST), 2);
+    }
+
+    /// Fails by: zero jobs on a full disk, or a zero cost dividing by zero.
+    #[test]
+    fn a_starved_machine_still_runs_one_job() {
+        assert_eq!(job_count(machine(1, 0, 0), COST), 1);
+        let free = JobCost {
+            disk_mb: 0,
+            memory_mb: 0,
+        };
+        assert_eq!(job_count(machine(6, 0, 0), free), 3);
+    }
+
+    /// Fails by: the first field read, kilobytes reported as megabytes.
+    #[test]
+    fn available_memory_is_read_in_megabytes() {
+        let meminfo =
+            "MemTotal:       16384000 kB\nMemFree:  100 kB\nMemAvailable:    8192000 kB\n";
+        assert_eq!(mem_available_mb(meminfo), Some(8_000));
+        assert_eq!(mem_available_mb("MemTotal: 1 kB\n"), None);
+    }
+
+    /// Fails by: usage ignored, v1 not read, or v1's unbounded limit taken as one.
+    #[test]
+    fn the_cgroup_limit_is_what_remains_of_it() {
+        let v2 = crate::scratch::scratch("mutate-cgroup-v2");
+        std::fs::write(v2.join("memory.max"), format!("{}\n", 10u64 << 30)).unwrap();
+        std::fs::write(v2.join("memory.current"), format!("{}\n", 4u64 << 30)).unwrap();
+        assert_eq!(cgroup_remaining_mb(&v2), Some(6 * 1024));
+
+        let v1 = crate::scratch::scratch("mutate-cgroup-v1");
+        std::fs::create_dir(v1.join("memory")).unwrap();
+        std::fs::write(
+            v1.join("memory/memory.limit_in_bytes"),
+            (2u64 << 30).to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            v1.join("memory/memory.usage_in_bytes"),
+            (1u64 << 30).to_string(),
+        )
+        .unwrap();
+        assert_eq!(cgroup_remaining_mb(&v1), Some(1024));
+
+        std::fs::write(
+            v1.join("memory/memory.limit_in_bytes"),
+            "9223372036854771712",
+        )
+        .unwrap();
+        assert_eq!(cgroup_remaining_mb(&v1), None);
+
+        std::fs::write(v2.join("memory.max"), "max\n").unwrap();
+        assert_eq!(cgroup_remaining_mb(&v2), None);
+    }
 
     /// Fails by: the first status line reported instead of the last, or a
     /// non-status line (a case's own output) taken for one, or the whole line
@@ -4968,37 +4475,6 @@ mod tests {
         );
     }
 
-    /// Fails by: the provisioned runner's directory dropped, or put after the
-    /// inherited `PATH`, so a CI runner with no cargo-mutants reads
-    /// `runner-absent` and a host's own version runs instead of the pin; or a
-    /// registry without one changing `PATH` at all.
-    #[test]
-    fn a_provisioned_runner_directory_leads_every_runner_path() {
-        let dir = PathBuf::from("/provisioned/cargo-mutants");
-        let registry = Registry::default().with_provisioned(Some(dir.clone()));
-        assert_eq!(registry.provisioned.as_deref(), Some(dir.as_path()));
-        let env = nextest_env(Path::new("/repo"), Path::new("/staged"), Some(&dir));
-        let path = env
-            .iter()
-            .find(|(key, _)| key == "PATH")
-            .map(|(_, value)| value.clone())
-            .expect("a provisioned directory sets PATH");
-        assert_eq!(
-            std::env::split_paths(&path).next(),
-            Some(dir.clone()),
-            "the provisioned directory must come first: {path}"
-        );
-        assert_eq!(
-            runner_path(Some(&dir)).len(),
-            1,
-            "unresolvable reads the same PATH"
-        );
-        assert!(
-            runner_path(None).is_empty(),
-            "no provisioned directory leaves PATH inherited"
-        );
-    }
-
     /// Fails by: an inherited `NEXTEST_*` variable left on a nextest child, so
     /// `NEXTEST_RETRIES` reads a killing case's flaky pass as a survivor; one the
     /// env sets itself removed; or a child that names no profile (the consumer's
@@ -5024,33 +4500,17 @@ mod tests {
         );
     }
 
-    /// Fails by: a cargo-mutants registry whose nextest does not answer read as
-    /// resolvable (every source then fails inside the run), nextest reported
-    /// absent where it answers, or demanded of a runner that never runs it.
+    /// Fails by: cargo-mutants, which runs as itself, reported absent, or a
+    /// `command` runner whose program does not resolve read as resolvable.
     #[test]
-    fn cargo_mutants_needs_nextest_and_no_other_runner_does() {
-        let answering =
-            |programs: &'static [&'static str]| move |sub: &str| programs.contains(&sub);
+    fn only_a_command_runner_is_probed() {
         let cargo_mutants = Registry::parse("cargo-mutants=**/*.rs").expect("parses");
-        assert_eq!(
-            absent_runners(&cargo_mutants, answering(&["mutants"]), |_| true),
-            [NEXTEST]
-        );
-        assert!(
-            absent_runners(&cargo_mutants, answering(&["mutants", "nextest"]), |_| true).is_empty()
-        );
-        assert_eq!(
-            absent_runners(&cargo_mutants, answering(&[]), |_| true),
-            ["cargo-mutants", NEXTEST]
-        );
+        assert!(absent_runners(&cargo_mutants, |_| false).is_empty());
         let command = Registry::parse("command=**/*.rs")
             .and_then(|registry| registry.with_command(&[String::from("./mutscore.sh")]))
             .expect("parses");
-        assert!(absent_runners(&command, answering(&[]), |_| true).is_empty());
-        assert_eq!(
-            absent_runners(&command, answering(&[]), |_| false),
-            ["command"]
-        );
+        assert!(absent_runners(&command, |_| true).is_empty());
+        assert_eq!(absent_runners(&command, |_| false), ["command"]);
     }
 
     /// Fails by: an inherited profile kept that the staged tree does not
@@ -5336,37 +4796,6 @@ mod tests {
         );
     }
 
-    /// THE MATRIX SHARES THE CHANGE, NOT EACH SOURCE: every mutant of every
-    /// source lands on exactly one shard, and no shard carries more than one
-    /// more than another.
-    #[test]
-    fn each_mutant_of_the_change_lands_on_exactly_one_shard_evenly() {
-        let counts = [5usize, 0, 40, 1, 1, 17, 3];
-        let n = 16;
-        let mut per_shard = vec![0usize; n];
-        for (source, &count) in counts.iter().enumerate() {
-            let mut covered = 0;
-            for (k, load) in per_shard.iter_mut().enumerate() {
-                if let Some(local) = source_shards(&counts, k, n)[source] {
-                    assert!(local < count, "a run is only asked of a source with work");
-                    let ran = (count - local).div_ceil(n);
-                    covered += ran;
-                    *load += ran;
-                }
-            }
-            assert_eq!(covered, count, "source {source}'s mutants, each once");
-        }
-        let (least, most) = (
-            per_shard.iter().min().copied().unwrap_or_default(),
-            per_shard.iter().max().copied().unwrap_or_default(),
-        );
-        assert!(most - least <= 1, "evenly: {per_shard:?}");
-        assert_eq!(parse_shard(" 3/16 "), Some((3, 16)));
-        for bad in ["16/16", "0/0", "3", "x/16"] {
-            assert_eq!(parse_shard(bad), None, "{bad}");
-        }
-    }
-
     /// Fails by: a set `$MUTANT_SHARD` read as unset, which sweeps every row on
     /// every shard, or a blank one read as a shard to refuse.
     #[test]
@@ -5377,19 +4806,6 @@ mod tests {
             shard_set(Some(String::from("1/4"))),
             Some(String::from("1/4"))
         );
-    }
-
-    #[test]
-    fn a_listing_counts_each_sources_mutants_by_its_path() {
-        let listing = "crates/a/src/x.rs:1:1: replace f -> u8 with 0\n\
-                       crates/a/src/x.rs:2:5: replace + with -\n\
-                       crates/a/src/xy.rs:3:1: replace g with ()\n";
-        let sources = [
-            String::from("crates/a/src/x.rs"),
-            String::from("crates/a/src/xy.rs"),
-            String::from("crates/a/src/z.rs"),
-        ];
-        assert_eq!(mutant_counts(listing, &sources), vec![2, 1, 0]);
     }
 
     #[test]
@@ -5410,202 +4826,6 @@ mod tests {
         };
         assert!(registry.owner("crates/a/src/lib.rs").is_err());
         assert!(registry.declares(&row_from("crates/a/src/lib.rs")));
-    }
-
-    #[test]
-    fn a_sources_scope_is_its_own_tests_and_every_suite_it_declares() {
-        let root = std::env::temp_dir().join(format!("batten-scope-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("crates/k/src/a")).expect("dirs");
-        fs::create_dir_all(root.join("crates/k/tests/it")).expect("dirs");
-        fs::write(
-            root.join("crates/k/Cargo.toml"),
-            "[package]\nname = \"k\"\n",
-        )
-        .expect("manifest");
-        fs::write(
-            root.join("crates/k/src/a/b.rs"),
-            "//MUTANT-SUITE crates/k/tests/it/flows.rs\n//MUTANT-SUITE tests/x.bats\n",
-        )
-        .expect("source");
-        fs::write(root.join("crates/k/src/lib.rs"), "").expect("lib");
-        assert_eq!(
-            test_scope(&root, "crates/k/src/a/b.rs").as_deref(),
-            Some(
-                "(package(k) & kind(lib) & test(/^a::b::/)) | (package(k) & binary(it) & \
-                 test(/^flows::/))"
-            )
-        );
-        assert_eq!(
-            test_scope(&root, "crates/k/src/lib.rs").as_deref(),
-            Some("(package(k) & kind(lib))")
-        );
-        assert_eq!(test_scope(&root, "elsewhere/x.rs"), None);
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    /// Fails by: a target the scope runs left unbuilt (its cases then select
-    /// nothing), or every target built again (the cost this exists to cut).
-    #[test]
-    fn a_sources_build_is_exactly_the_targets_its_scope_runs() {
-        let root = std::env::temp_dir().join(format!("batten-targets-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("crates/k/src/a")).expect("dirs");
-        fs::create_dir_all(root.join("crates/k/src/bin")).expect("dirs");
-        fs::create_dir_all(root.join("crates/k/tests/it")).expect("dirs");
-        fs::write(
-            root.join("crates/k/Cargo.toml"),
-            "[package]\nname = \"k\"\n",
-        )
-        .expect("manifest");
-        // A sibling package: its suite is filtered for, never a `--test` here.
-        fs::create_dir_all(root.join("crates/o/tests")).expect("dirs");
-        fs::write(
-            root.join("crates/o/Cargo.toml"),
-            "[package]\nname = \"o\"\n",
-        )
-        .expect("manifest");
-        fs::write(
-            root.join("crates/k/src/a/b.rs"),
-            [
-                "crates/k/tests/it/flows.rs",
-                "crates/k/tests/it/more.rs",
-                "crates/k/tests/solo.rs",
-                "crates/k/src/lib.rs",
-                "crates/o/tests/elsewhere.rs",
-            ]
-            .map(|suite| format!("//{SUITE}{suite}\n"))
-            .concat(),
-        )
-        .expect("source");
-        fs::write(root.join("crates/k/src/main.rs"), "").expect("main");
-        fs::write(root.join("crates/k/src/bin/tool.rs"), "").expect("bin");
-        fs::create_dir_all(root.join("crates/k/src/bin/dir")).expect("dirs");
-        fs::write(root.join("crates/k/src/bin/dir/main.rs"), "").expect("bin");
-        let test_targets = |root: &Path, source: &str| targets_of(&scope_of(root, source));
-        assert_eq!(
-            test_targets(&root, "crates/k/src/a/b.rs"),
-            ["--lib", "--test=it", "--test=solo"]
-        );
-        assert!(
-            terms_of(&scope_of(&root, "crates/k/src/a/b.rs")).contains("package(o)"),
-            "the sibling's suite is still in the filterset"
-        );
-        assert_eq!(test_targets(&root, "crates/k/src/main.rs"), ["--bins"]);
-        assert_eq!(
-            test_targets(&root, "crates/k/src/bin/tool.rs"),
-            ["--bin=tool"]
-        );
-        assert_eq!(
-            test_targets(&root, "crates/k/src/bin/dir/main.rs"),
-            ["--bin=dir"]
-        );
-        assert_eq!(
-            test_targets(&root, "crates/k/tests/it/main.rs"),
-            ["--test=it"]
-        );
-        assert!(test_targets(&root, "elsewhere/x.rs").is_empty());
-        let args = source_args(
-            Path::new("change.diff"),
-            "crates/k/src/a/b.rs",
-            Path::new("out"),
-            None,
-            &scope_of(&root, "crates/k/src/a/b.rs"),
-        );
-        for target in [
-            "--cargo-arg=--lib",
-            "--cargo-arg=--test=it",
-            "--cargo-arg=--test=solo",
-        ] {
-            assert!(args.iter().any(|arg| arg == target), "{target} in {args:?}");
-        }
-        assert_eq!(
-            args.iter()
-                .filter(|arg| arg.starts_with("--cargo-arg="))
-                .count(),
-            3
-        );
-        // The test tool stops at a mutant's first failure (CLOUD-2595).
-        let tool = args
-            .iter()
-            .position(|arg| arg == "--")
-            .map(|at| &args[at + 1..]);
-        assert!(
-            tool.is_some_and(|tool| tool.iter().any(|arg| arg == "--fail-fast")),
-            "{args:?}"
-        );
-        assert!(
-            suite_env(&root)
-                .iter()
-                .any(|(key, value)| key == "CARGO_PROFILE_TEST_DEBUG" && value == "0"),
-            "every runner over the shared target builds without debug info"
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    fn ran(ok: bool) -> Ran {
-        Ran {
-            outcome: if ok {
-                Outcome::Passed
-            } else {
-                Outcome::Failed(Some(1))
-            },
-            output: String::new(),
-        }
-    }
-
-    #[test]
-    fn a_missed_mutant_is_a_survivor_named_by_pointer_alone() {
-        let dir = std::env::temp_dir().join(format!("batten-outcomes-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("dir");
-        fs::write(
-            dir.join("caught.txt"),
-            "src/a.rs:3:5: replace f -> bool with true\n",
-        )
-        .expect("caught");
-        fs::write(dir.join("missed.txt"), "src/a.rs:9:1: replace g with ()\n").expect("missed");
-        let outcomes = read_outcomes(&dir);
-        assert_eq!(outcomes.ran, 2);
-        let found = outcomes.findings(RunnerKind::CargoMutants, "src/a.rs", &ran(false));
-        assert_eq!(found.len(), 1);
-        assert_eq!(
-            found[0].to_string(),
-            "cargo-mutants/src/a.rs:9:1 SURVIVED (in-diff)"
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_failed_run_with_nothing_missed_is_never_every_mutant_caught() {
-        let dir = std::env::temp_dir().join(format!("batten-baseline-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("dir");
-        fs::write(
-            dir.join("outcomes.json"),
-            r#"{"outcomes":[{"scenario":"Baseline","summary":"Failure"}]}"#,
-        )
-        .expect("outcomes");
-        let found = read_outcomes(&dir).findings(RunnerKind::CargoMutants, "src/a.rs", &ran(false));
-        assert_eq!(found.len(), 1);
-        assert!(found[0].verdict.could_not_look(), "{}", found[0]);
-        assert_eq!(
-            found[0].to_string(),
-            "cargo-mutants/src/a.rs case-already-red (baseline)"
-        );
-        let none = std::env::temp_dir().join(format!("batten-nothing-{}", std::process::id()));
-        let found =
-            read_outcomes(&none).findings(RunnerKind::CargoMutants, "src/a.rs", &ran(false));
-        assert_eq!(
-            found[0].to_string(),
-            "cargo-mutants/src/a.rs suite-did-not-run (cargo mutants)"
-        );
-        assert!(
-            read_outcomes(&none)
-                .findings(RunnerKind::CargoMutants, "src/a.rs", &ran(true))
-                .is_empty()
-        );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     /// The sweep's cargo cache is not the repository's, and this is the gate on
@@ -6076,48 +5296,6 @@ mod tests {
         assert_eq!(sweep.unlooked(), 2);
     }
 
-    /// Fails by: a line whose row or column is not a number read as a pointer.
-    #[test]
-    fn an_outcome_line_is_a_pointer_only_when_line_and_column_are_numbers() {
-        assert_eq!(
-            pointer_of("src/a.rs:3:5: replace f with ()").as_deref(),
-            Some("src/a.rs:3:5")
-        );
-        assert_eq!(pointer_of("src/a.rs:x:5: replace f with ()"), None);
-        assert_eq!(pointer_of("src/a.rs:3:y: replace f with ()"), None);
-    }
-
-    /// Fails by: an outcome file dropped from (or subtracted out of) `ran`, or a
-    /// failed MUTANT scenario read as a failed baseline.
-    #[test]
-    fn every_outcome_file_counts_toward_ran_and_only_a_failed_baseline_is_one() {
-        let dir = fixture("outcome-counts");
-        let lines = |n: usize| {
-            (1..=n)
-                .map(|i| format!("src/a.rs:{i}:1: replace f with ()"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        fs::write(dir.join("caught.txt"), lines(3)).expect("caught");
-        fs::write(dir.join("unviable.txt"), lines(2)).expect("unviable");
-        fs::write(dir.join("missed.txt"), lines(1)).expect("missed");
-        fs::write(dir.join("timeout.txt"), "src/a.rs:9:9: replace g with ()\n").expect("timeout");
-        fs::write(
-            dir.join("outcomes.json"),
-            r#"{"outcomes":[{"scenario":"Mutant","summary":"MissedMutant"},{"scenario":"Baseline","summary":"Success"}]}"#,
-        )
-        .expect("outcomes");
-        assert_eq!(
-            read_outcomes(&dir),
-            Outcomes {
-                ran: 7,
-                missed: vec![String::from("src/a.rs:1:1")],
-                timeout: vec![String::from("src/a.rs:9:9")],
-                baseline_failed: false,
-            }
-        );
-    }
-
     /// Fails by: a root-level suite's directory read as empty, or any line
     /// that merely starts `test ` (the summary) or holds ` ... ` counted as a
     /// case.
@@ -6278,31 +5456,6 @@ mod tests {
         assert!(resolves(&root, "bin/tool.sh"));
         assert!(!resolves(&root, "bin/absent.sh"));
         assert!(!resolves(&root, "batten-no-program-is-called-this"));
-    }
-
-    /// Fails by: an engine module that declares rows but no suite (or the
-    /// reverse) left out of the census, or the undeclared count read as a
-    /// constant or as the declared ones.
-    #[test]
-    fn an_engine_module_is_a_subject_by_any_declaration_and_the_rest_are_counted() {
-        let root = fixture("engine-subjects");
-        put(
-            &root,
-            &format!("{ENGINE}/rows_only.rs"),
-            &format!("//{ROW}a|s@x@y@|case\n"),
-        );
-        put(
-            &root,
-            &format!("{ENGINE}/suite_only.rs"),
-            &format!("//{SUITE}crates/batten/tests/it/x.rs\n"),
-        );
-        for plain in ["plain_a.rs", "plain_b.rs", "plain_c.rs"] {
-            put(&root, &format!("{ENGINE}/{plain}"), "fn f() {}\n");
-        }
-        let found = subjects(&root, None);
-        let names: Vec<&str> = found.keys().map(String::as_str).collect();
-        assert_eq!(names, ["engine-rows-only", "engine-suite-only"]);
-        assert_eq!(engine_undeclared(&root, &found), 3);
     }
 
     /// Fails by: the declaration arm reading outside its `scope` (or only
@@ -6551,29 +5704,20 @@ mod tests {
         assert_eq!(kept, set, "an unchanged file is not rewritten");
     }
 
-    /// Fails by: a shard outside `0 <= k < n` reaching the plan, where `n = 0`
-    /// divides by zero and `k >= n` judges a shard that does not exist; or a
-    /// valid one refused.
+    /// Fails by: a shard outside `0 <= k < n` accepted, where `n = 0` divides
+    /// by zero and `k >= n` judges a shard that does not exist; or a valid one
+    /// refused.
     #[test]
     fn a_registered_run_refuses_a_shard_shard_parsed_never_yields() {
-        // Nothing is staged: a bad shard is refused first, and the declared
-        // runner over an empty change returns before it reads either path.
         let root = fixture("registered-shard-bounds");
-        let registry = Registry::default();
-        let site = Site {
-            root: &root,
-            base: "HEAD",
-            registry: &registry,
-            work: &root,
-        };
         let changed = std::collections::BTreeSet::new();
         let run = |shard| {
             run_registered(
-                &site,
+                &root,
+                &Registry::default(),
                 &changed,
                 RunnerKind::Declared,
                 shard,
-                &mut std::io::sink(),
             )
         };
         assert!(run(Some((0, 1))).is_ok(), "0/1 is a shard");
@@ -6582,65 +5726,34 @@ mod tests {
         }
     }
 
-    /// Fails by: the declared runner carried past its early return, every
-    /// source's plan dropped so nothing is judged, or a listing that failed
-    /// read as an empty shard.
+    /// Fails by: a runner other than `command` spawning anything, or the owned
+    /// sources miscounted.
     #[test]
-    fn a_registered_run_returns_early_for_the_declared_runner_and_plans_every_source() {
+    fn only_the_command_runner_runs_and_every_owned_source_is_counted() {
         let root = fixture("registered");
-        crate::gitwrite::init_on_main(&root).expect("a repository");
         put(&root, "elsewhere/x.rs", "fn f() {}\n");
-        crate::gitwrite::commit_paths(&root, &[String::from("elsewhere/x.rs")], "base")
-            .expect("commit");
-        put(&root, "elsewhere/x.rs", "fn f() {\n    let _ = 1;\n}\n");
         let changed = std::collections::BTreeSet::from([String::from("elsewhere/x.rs")]);
-        let run =
-            |registry: &Registry, kind: RunnerKind, shard: Option<(usize, usize)>, name: &str| {
-                let work = fixture(name);
-                let site = Site {
-                    root: &root,
-                    base: "HEAD",
-                    registry,
-                    work: &work,
-                };
-                run_registered(&site, &changed, kind, shard, &mut std::io::sink())
-            };
-        let declared = run(
+        let declared = run_registered(
+            &root,
             &Registry::default(),
+            &changed,
             RunnerKind::Declared,
             None,
-            "registered-declared",
         )
         .expect("the declared runner returns at once");
         assert_eq!((declared.sources, declared.findings), (1, Vec::new()));
         let owned = Registry::parse("cargo-mutants=elsewhere/*.rs").expect("parses");
-        let unsharded = run(
+        let cargo_mutants = run_registered(
+            &root,
             &owned,
+            &changed,
             RunnerKind::CargoMutants,
-            None,
-            "registered-unsharded",
+            Some((0, 1)),
         )
-        .expect("an unsharded run");
+        .expect("cargo-mutants is never spawned here");
         assert_eq!(
-            unsharded.findings,
-            vec![Finding {
-                gate: String::from("cargo-mutants"),
-                slug: Some(String::from("elsewhere/x.rs")),
-                verdict: Verdict::NoSuite {
-                    suite: String::from("no cargo target compiles it"),
-                },
-                owner: None,
-            }]
-        );
-        assert!(
-            run(
-                &owned,
-                RunnerKind::CargoMutants,
-                Some((0, 1)),
-                "registered-sharded",
-            )
-            .is_err(),
-            "a listing that fails is an error, never an empty plan"
+            (cargo_mutants.sources, cargo_mutants.findings),
+            (1, Vec::new())
         );
     }
 

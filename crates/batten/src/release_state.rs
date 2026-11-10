@@ -41,7 +41,6 @@ pub enum Step {
 /// # Errors
 ///
 /// The refusal pointer, for a published release.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
 pub fn discard(found: &Found) -> Result<Vec<Step>, String> {
     const PUBLISHED: &str = "it is published; a published release is never discarded";
     match found {
@@ -242,7 +241,6 @@ pub enum CutOrLand {
 /// open draft's target is landed; any other head is cut as before, which is what
 /// keeps the bake from looping — its own CI completing on the release branch
 /// would otherwise discard the draft it was baked from.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
 #[must_use]
 pub fn cut_or_land(draft_target: Option<&str>, head: &Head, tag: &str, sums: &str) -> CutOrLand {
     if draft_target.is_some_and(|target| baked_onto(head, target, tag, sums)) {

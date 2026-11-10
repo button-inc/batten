@@ -1136,7 +1136,6 @@ fn wire(etag: Option<&str>, body: Option<&[u8]>, chosen: Method) -> Wire {
     }
 }
 
-//MUTANT-SUITE crates/batten/tests/it/gh_preflight.rs
 fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method) -> Option<Answer> {
     let now = crate::now_unix();
     let url = format!("{API}/{path}");
@@ -1205,7 +1204,6 @@ fn exchange(path: &str, etag: Option<&str>, body: Option<&[u8]>, chosen: Method)
 /// on elapsed wall time, which the clock census now refuses. The loop's half is
 /// `pr_watch::tests::a_server_requested_floor_reaches_the_pause`; this is the
 /// header's half.
-//MUTANT-SUITE crates/batten/src/rest.rs
 fn poll_floor_of(raw: Option<&str>) -> Option<f64> {
     raw.and_then(|value| value.trim().parse::<f64>().ok())
         .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
@@ -1728,8 +1726,3 @@ mod tests {
 // spawned binary: a GET a poll reads, a DELETE a release check makes, the asset
 // bytes a checksum manifest hashes, a JSON POST and PATCH a bot lane writes,
 // and the credential an attestation must hold before it asks.
-//MUTANT-SUITE crates/batten/tests/it/pr_watch.rs
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT-SUITE crates/batten/tests/it/checksums.rs
-//MUTANT-SUITE crates/batten/tests/it/bot_lane.rs
-//MUTANT-SUITE crates/batten/tests/it/attestation.rs

@@ -1604,7 +1604,6 @@ fn collect(
 /// [`crate::refusal::parse_finding`] — the same grammar parse
 /// [`Event::HookOutput`]'s findings take, never a reading of prose. A deny no
 /// line of which parses is still one refusal, with no findings.
-//MUTANT-SUITE crates/batten/src/transcript.rs
 fn refusal_of(call: &str, text: &str) -> Option<Event> {
     let (_, emitted) = text.split_once(HOOK_ERROR_SEPARATOR)?;
     let parsed: Vec<crate::refusal::Parsed> = emitted

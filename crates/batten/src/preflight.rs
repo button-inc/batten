@@ -117,7 +117,6 @@ fn classify(answer: Option<&Answer>) -> Found {
 /// # Errors
 ///
 /// A malformed table (see [`validate`]) and a failed write.
-//MUTANT-SUITE crates/batten/tests/it/gh_preflight.rs
 pub fn run(
     probes: &[Probe],
     slug: Option<&str>,

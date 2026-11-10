@@ -1218,7 +1218,6 @@ fn compile_for(
 /// Lifted out of [`load`] whole rather than inlined: `clippy::too_many_lines`
 /// refuses the flat function, and moving a nameable step is the remedy this
 /// crate already takes for that lint instead of raising a cap.
-//MUTANT-SUITE crates/batten/tests/it/preset_manifest.rs
 fn preset_sources(
     rule: &Rule,
     manifest: &crate::preset::Manifest,
@@ -1433,7 +1432,6 @@ fn without_test_rules(source: &str) -> String {
 /// the smoke query, when `rules` answers a shape that is not a set of ids, or
 /// when a `violation` reachable on an empty document raises an id the bundle
 /// does not declare.
-//MUTANT-SUITE crates/batten/tests/it/policy_walk.rs
 pub fn compile(
     id: &str,
     sources: &[(String, String)],
@@ -2971,7 +2969,6 @@ pub(crate) fn finding_ids(text: &str) -> BTreeSet<String> {
 /// # Errors
 ///
 /// A [`UsageError`] (exit `1`) naming the row and which direction it broke.
-//MUTANT-SUITE crates/batten/tests/it/rules_drift.rs
 fn check_collapse(
     rules: &[Rule],
     per_rule: &BTreeMap<String, BTreeSet<String>>,
@@ -3082,7 +3079,6 @@ explain` and its routes have never been walked by anybody. Delete the row, or gi
 /// # Errors
 ///
 /// None today; the `Result` stays so every caller keeps one fault channel.
-//MUTANT-SUITE crates/batten/tests/it/vendored_skew.rs
 pub fn registry_for(
     verdicts: &[crate::verdict::DeclaredVerdict],
 ) -> Result<Vec<crate::verdict::DeclaredVerdict>> {
@@ -3105,7 +3101,6 @@ pub fn registry_for(
 /// # Errors
 ///
 /// A [`UsageError`] (exit `1`) naming every colliding token.
-//MUTANT-SUITE crates/batten/tests/it/vendored_skew.rs
 fn check_no_vendored_collision(verdicts: &[crate::verdict::DeclaredVerdict]) -> Result<()> {
     let vendored: BTreeSet<String> = crate::verdict::vendored()
         .into_iter()

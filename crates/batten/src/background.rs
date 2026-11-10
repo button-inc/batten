@@ -176,7 +176,6 @@ fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
 /// An answered entry is removed whether or not its output could be read: the
 /// task has ended, so waiting longer cannot change the answer. An unanswered one
 /// is kept until [`STALE_AFTER`].
-//MUTANT-SUITE crates/batten/tests/it/recorder_background.rs
 #[must_use]
 pub fn resolve(git_dir: &Path, transcript: Option<&Path>, now: u64) -> Vec<(Pending, String)> {
     let dir = git_dir.join(DIR);

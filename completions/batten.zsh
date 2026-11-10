@@ -2880,6 +2880,35 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(jobs)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (census)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -2922,6 +2951,10 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-mutate-help-command-$line[1]:"
         case $line[1] in
             (sweep)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(jobs)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -4658,41 +4691,6 @@ trace\:"Add everything"))' \
 ':task -- The task'\''s name, which is what the lock is keyed by:_default' \
 && ret=0
 ;;
-(detach)
-_arguments "${_arguments_options[@]}" : \
-'--marker=[Where a failed run'\''s pointers wait, announced and cleared by the next invocation]:marker:_default' \
-'--log=[Where the background run'\''s whole output is written]:log:_default' \
-'--pattern=[The \`\[\[pattern\]\]\` row whose matching output lines are the failure'\''s pointers]:pattern:_default' \
-'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
-standard\:"The default\: a finding is a violation"
-strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
-'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
-'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
-'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
-quiet\:"Suppress ordinary progress; keep warnings"
-normal\:"The default"
-verbose\:"Explain what is being checked"
-debug\:"Add resolution detail"
-trace\:"Add everything"))' \
-'--attached[Run as the background copy the announcing invocation starts\: take the lock, run the command, record a failure]' \
-'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
-'*--silent[Say nothing but a verdict or a usage error]' \
-'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
-'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
-'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
-'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
-'*--debug[Add resolution detail]' \
-'*--trace[Add everything]' \
-'--no-color[Never colour stderr, whatever it is attached to]' \
-'--no-input[Never prompt; treat the run as unattended]' \
-'-y[Confirm a destructive operation that would otherwise refuse]' \
-'--yes[Confirm a destructive operation that would otherwise refuse]' \
-'-h[Print help (see more with '\''--help'\'')]' \
-'--help[Print help (see more with '\''--help'\'')]' \
-':task -- The task'\''s name, which is what the lock is keyed by:_default' \
-'*::command -- The command to run in the background, after `--`:_default' \
-&& ret=0
-;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__singleton__subcmd__help_commands" \
@@ -4710,10 +4708,6 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (release)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(detach)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -10021,6 +10015,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(jobs)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (census)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -10310,10 +10308,6 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (release)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(detach)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -12927,6 +12921,7 @@ _batten__subcmd__help__subcmd__mcp__subcmd__spawn_commands() {
 _batten__subcmd__help__subcmd__mutate_commands() {
     local commands; commands=(
 'sweep:Apply every declared mutation to its source and report the ones its declared suite did not catch' \
+'jobs:Print how many cargo-mutants jobs this machine holds at the tree'\''s declared per-job cost' \
 'census:Report every gate in the tree that is neither mutation-enforced nor carrying a filed exemption' \
     )
     _describe -t commands 'batten help mutate commands' commands "$@"
@@ -12935,6 +12930,11 @@ _batten__subcmd__help__subcmd__mutate_commands() {
 _batten__subcmd__help__subcmd__mutate__subcmd__census_commands() {
     local commands; commands=()
     _describe -t commands 'batten help mutate census commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__mutate__subcmd__jobs_commands] )) ||
+_batten__subcmd__help__subcmd__mutate__subcmd__jobs_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help mutate jobs commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__mutate__subcmd__sweep_commands] )) ||
 _batten__subcmd__help__subcmd__mutate__subcmd__sweep_commands() {
@@ -13450,7 +13450,6 @@ _batten__subcmd__help__subcmd__singleton_commands() {
     local commands; commands=(
 'acquire:Take a task'\''s lock for a pid, or refuse naming the process that holds it' \
 'release:Drop a task'\''s lock, which its exit trap does and a kill cannot' \
-'detach:Run a command in the background under a task'\''s lock, and report the previous run'\''s failure' \
     )
     _describe -t commands 'batten help singleton commands' commands "$@"
 }
@@ -13458,11 +13457,6 @@ _batten__subcmd__help__subcmd__singleton_commands() {
 _batten__subcmd__help__subcmd__singleton__subcmd__acquire_commands() {
     local commands; commands=()
     _describe -t commands 'batten help singleton acquire commands' commands "$@"
-}
-(( $+functions[_batten__subcmd__help__subcmd__singleton__subcmd__detach_commands] )) ||
-_batten__subcmd__help__subcmd__singleton__subcmd__detach_commands() {
-    local commands; commands=()
-    _describe -t commands 'batten help singleton detach commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__singleton__subcmd__release_commands] )) ||
 _batten__subcmd__help__subcmd__singleton__subcmd__release_commands() {
@@ -14123,6 +14117,7 @@ _batten__subcmd__mcp__subcmd__spawn_commands() {
 _batten__subcmd__mutate_commands() {
     local commands; commands=(
 'sweep:Apply every declared mutation to its source and report the ones its declared suite did not catch' \
+'jobs:Print how many cargo-mutants jobs this machine holds at the tree'\''s declared per-job cost' \
 'census:Report every gate in the tree that is neither mutation-enforced nor carrying a filed exemption' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -14137,6 +14132,7 @@ _batten__subcmd__mutate__subcmd__census_commands() {
 _batten__subcmd__mutate__subcmd__help_commands() {
     local commands; commands=(
 'sweep:Apply every declared mutation to its source and report the ones its declared suite did not catch' \
+'jobs:Print how many cargo-mutants jobs this machine holds at the tree'\''s declared per-job cost' \
 'census:Report every gate in the tree that is neither mutation-enforced nor carrying a filed exemption' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -14152,10 +14148,20 @@ _batten__subcmd__mutate__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten mutate help help commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__mutate__subcmd__help__subcmd__jobs_commands] )) ||
+_batten__subcmd__mutate__subcmd__help__subcmd__jobs_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten mutate help jobs commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__mutate__subcmd__help__subcmd__sweep_commands] )) ||
 _batten__subcmd__mutate__subcmd__help__subcmd__sweep_commands() {
     local commands; commands=()
     _describe -t commands 'batten mutate help sweep commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__mutate__subcmd__jobs_commands] )) ||
+_batten__subcmd__mutate__subcmd__jobs_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten mutate jobs commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__mutate__subcmd__sweep_commands] )) ||
 _batten__subcmd__mutate__subcmd__sweep_commands() {
@@ -15298,7 +15304,6 @@ _batten__subcmd__singleton_commands() {
     local commands; commands=(
 'acquire:Take a task'\''s lock for a pid, or refuse naming the process that holds it' \
 'release:Drop a task'\''s lock, which its exit trap does and a kill cannot' \
-'detach:Run a command in the background under a task'\''s lock, and report the previous run'\''s failure' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten singleton commands' commands "$@"
@@ -15308,17 +15313,11 @@ _batten__subcmd__singleton__subcmd__acquire_commands() {
     local commands; commands=()
     _describe -t commands 'batten singleton acquire commands' commands "$@"
 }
-(( $+functions[_batten__subcmd__singleton__subcmd__detach_commands] )) ||
-_batten__subcmd__singleton__subcmd__detach_commands() {
-    local commands; commands=()
-    _describe -t commands 'batten singleton detach commands' commands "$@"
-}
 (( $+functions[_batten__subcmd__singleton__subcmd__help_commands] )) ||
 _batten__subcmd__singleton__subcmd__help_commands() {
     local commands; commands=(
 'acquire:Take a task'\''s lock for a pid, or refuse naming the process that holds it' \
 'release:Drop a task'\''s lock, which its exit trap does and a kill cannot' \
-'detach:Run a command in the background under a task'\''s lock, and report the previous run'\''s failure' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten singleton help commands' commands "$@"
@@ -15327,11 +15326,6 @@ _batten__subcmd__singleton__subcmd__help_commands() {
 _batten__subcmd__singleton__subcmd__help__subcmd__acquire_commands() {
     local commands; commands=()
     _describe -t commands 'batten singleton help acquire commands' commands "$@"
-}
-(( $+functions[_batten__subcmd__singleton__subcmd__help__subcmd__detach_commands] )) ||
-_batten__subcmd__singleton__subcmd__help__subcmd__detach_commands() {
-    local commands; commands=()
-    _describe -t commands 'batten singleton help detach commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__singleton__subcmd__help__subcmd__help_commands] )) ||
 _batten__subcmd__singleton__subcmd__help__subcmd__help_commands() {

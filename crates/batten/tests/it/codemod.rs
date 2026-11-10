@@ -12,8 +12,6 @@
 //
 // The obligations CLOUD-1580's Ready block binds. The rows themselves are swept
 // from `crates/batten/src/codemod.rs`, the file they mutate:
-// MUTANT codemod-splices-bytes|see `codemod::rename_method_calls`|a_rename_changes_only_the_edited_token
-// MUTANT codemod-ignores-parse-errors|see `codemod::rename_method_calls`|invalid_rust_is_could_not_look
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

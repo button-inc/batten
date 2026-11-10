@@ -663,7 +663,6 @@ pub fn first_command_route<'a>(registry: &'a [DeclaredVerdict], token: &str) -> 
 /// is about, and it lives in this function. Dropping the `document` arm restores
 /// the exact defect — a class whose only route is a document renders no way out —
 /// so `refusal_ceiling`'s first-sighting case is what must redden.
-//MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
 #[must_use]
 pub(crate) fn render_route(route: &Route) -> Option<String> {
     let verb = match route.kind {
@@ -973,8 +972,6 @@ pub fn check_rule_id(id: &str, vocabulary: &Vocabulary) -> anyhow::Result<String
 }
 
 /// The per-entry half of [`validate`].
-//MUTANT-SUITE crates/batten/src/verdict.rs
-//MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
 fn validate_one(
     verdict: &DeclaredVerdict,
     grammar: Option<&Vocabulary>,

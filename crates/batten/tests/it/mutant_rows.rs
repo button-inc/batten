@@ -1,24 +1,29 @@
-//! Rust carries no hand-rolled `//MUTANT` row (CLOUD-2253).
+//! Rust carries no hand-written mutation marker (CLOUD-2253).
 //!
-//! `MUTANT_RUNNERS` gives every Rust source to cargo-mutants, and
-//! `mutate::Registry::declares` leaves a registered runner's rows unswept, so a
-//! row in a `.rs` file is never run. 868 of them accumulated on `main` while
-//! reading as coverage. A Rust obligation names the runner instead
-//! (`"mutation": "cargo-mutants"`, `policy/obligations-bound.rego`).
+//! cargo-mutants generates and judges every Rust mutant itself (`mutant:rust`),
+//! and reads no marker in the source: a row, a `MUTANT-SUITE`, `-OWNER` or
+//! `-EXEMPT` line in a `.rs` file is never run and only reads as coverage. 868
+//! rows and 408 suite lines accumulated that way. A Rust obligation names the
+//! runner instead (`"mutation": "cargo-mutants"`).
 //!
-//! `//MUTANT-SUITE` stays: cargo-mutants reads it to scope each mutant's tests.
-//! A `#MUTANT` row is another language's, carried here as fixture text.
+//! A marker is either a `//MUTANT…` line, or a `#MUTANT…` / `MUTANT…` line
+//! inside a `/* */` block, the two shapes rows were carried in. A `#MUTANT` row
+//! in a string literal is another language's fixture text and passes.
 
 use std::path::Path;
 
 use crate::common;
 
-const ROW: &str = "//MUTANT ";
+/// Whether `line`, inside a `/* */` block or not, is a mutation marker.
+fn is_marker(line: &str, in_block: bool) -> bool {
+    let line = line.trim_start();
+    line.starts_with("//MUTANT")
+        || (in_block && (line.starts_with("#MUTANT") || line.starts_with("MUTANT")))
+}
 
-/// Every tracked `.rs` line under `root` carrying a Rust mutation row, at any
-/// indent, as `path:line`.
-//MUTANT-SUITE crates/batten/tests/it/mutant_rows.rs
-fn rust_rows(root: &Path) -> Vec<String> {
+/// Every tracked `.rs` line under `root` carrying a mutation marker, as
+/// `path:line`.
+fn rust_markers(root: &Path) -> Vec<String> {
     let tracked = batten::git::tracked_paths(root).expect("the tracked set");
     let mut found = Vec::new();
     // Exactly `rs`, as rustc reads it: a `.RS` file is no source of rows.
@@ -29,33 +34,37 @@ fn rust_rows(root: &Path) -> Vec<String> {
         let Ok(text) = std::fs::read_to_string(root.join(path)) else {
             continue;
         };
+        let mut in_block = false;
         for (at, line) in text.lines().enumerate() {
-            if line.trim_start().starts_with(ROW) {
-                found.push(format!("{path}:{}", at + 1));
+            match line.trim() {
+                "/*" => in_block = true,
+                "*/" => in_block = false,
+                _ if is_marker(line, in_block) => found.push(format!("{path}:{}", at + 1)),
+                _ => {}
             }
         }
     }
     found
 }
 
-/// No tracked Rust source declares a hand-rolled mutation row.
+/// No tracked Rust source declares a hand-written mutation marker.
 #[test]
-fn no_rust_source_declares_a_hand_rolled_mutation_row() {
-    let found = rust_rows(&common::at_root("."));
+fn no_rust_source_declares_a_hand_written_mutation_marker() {
+    let found = rust_markers(&common::at_root("."));
     assert!(
         found.is_empty(),
-        "cargo-mutants owns every Rust source (`MUTANT_RUNNERS`), so a \
-         `//MUTANT` row there is never run; delete it, and bind a Ready \
-         obligation to `cargo-mutants`: {}",
+        "cargo-mutants owns every Rust source and reads no marker, so one here \
+         is never run; delete it, and bind a Ready obligation to \
+         `cargo-mutants`: {}",
         found.join(", ")
     );
 }
 
 /// THE ANTI-VACUITY HALF. A reader that found nothing would pass the case above
-/// over a tree full of rows, so the predicate is shown finding one at column 0
-/// and one indented, and passing a suite line and another language's marker.
+/// over a tree full of markers, so the predicate is shown finding each shape at
+/// any indent, and passing another language's row in a string literal.
 #[test]
-fn a_rust_row_at_any_indent_is_found() {
+fn every_marker_shape_is_found_at_any_indent() {
     let repo = common::scratch_repo("mutant-rows-rust");
     let source = [
         "//MUTANT-SUITE tests/a.rs",
@@ -66,13 +75,23 @@ fn a_rust_row_at_any_indent_is_found() {
         "    #MUTANT rego|s/a/b/|case",
         "\";",
         "}",
+        "/*",
+        "#MUTANT-SUITE tests/a.rs",
+        "MUTANT bare|s/a/b/|case",
+        "*/",
         "",
     ]
     .join("\n");
     common::write(&repo, "src/a.rs", &source);
     common::git_in(&repo, &["add", "-A"]);
     assert_eq!(
-        rust_rows(&repo),
-        vec!["src/a.rs:2".to_owned(), "src/a.rs:4".to_owned()]
+        rust_markers(&repo),
+        [
+            "src/a.rs:1",
+            "src/a.rs:2",
+            "src/a.rs:4",
+            "src/a.rs:10",
+            "src/a.rs:11"
+        ]
     );
 }

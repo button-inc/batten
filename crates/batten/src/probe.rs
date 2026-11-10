@@ -64,5 +64,3 @@ pub fn run(command: &[String]) -> Result<Ran> {
     })?;
     Ok(Ran { status, log })
 }
-
-//MUTANT-SUITE crates/batten/tests/it/evaluator_io_probe.rs

@@ -245,7 +245,6 @@ const GITHUB_WEBHOOK_EVENTS: [&str; 73] = [
 
 /// The `ci` vocabulary is the polls, `socket`, and exactly the catalog
 /// (CLOUD-2689). Fails at HEAD, which had five names.
-//MUTANT-SUITE crates/batten/tests/it/hook_sources.rs
 #[test]
 fn the_ci_vocabulary_is_the_forge_catalog() {
     let vocabulary = HookSource::Ci.vocabulary();

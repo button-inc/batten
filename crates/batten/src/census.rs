@@ -212,7 +212,6 @@ const QUOTES: [&str; 2] = ["\"\"\"", "'''"];
 /// The grammar's mutation rows. Each one breaks a clause the ban's own module
 /// carries, so a census that lost it would count differently from the gate; each
 /// is caught by the unit case it names, run from this file.
-//MUTANT-SUITE crates/batten/src/census.rs
 #[must_use]
 pub fn code_line(line: &str) -> bool {
     let text = line.trim();
@@ -526,7 +525,6 @@ fn manifest_entries(path: &str, lines: &[&str], manifest: &Manifest) -> Vec<Mani
 ///
 /// An exempt file is set apart and never totalled; the row below reads the
 /// exempt list as empty, and the compiled tier's pinned totals go red.
-//MUTANT-SUITE crates/batten/tests/it/census_shell.rs
 ///
 /// `tracked` is the tree's tracked paths, which is where workflows and shell
 /// files are found; a declared manifest is read by its path whether or not it

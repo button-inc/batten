@@ -276,7 +276,6 @@ pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 // `#[expect]` rather than `#[allow]` for `rules/rust.md`'s reason: it is
 // self-cleaning in both directions, so if the table ever shrinks back under the
 // ceiling this annotation goes red rather than quietly outliving its cause.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 #[expect(
     clippy::too_many_lines,
     reason = "a dispatch table's length is its verb count; splitting it scatters the surface"
@@ -692,7 +691,6 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
 /// handler, where 2 would deny the operator's prompt, so it ALWAYS exits 0;
 /// its refusal is recorded in the findings store instead, and its faults are
 /// a stderr pointer.
-//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 fn run_forge_intake(
     event: Option<String>,
     from: Option<&str>,
@@ -796,7 +794,6 @@ enum Intake {
 /// One normalized forge event through the seen ring, the dispatcher and the
 /// findings store (CLOUD-2690): the step `forge intake` and `forge poll`
 /// share, so a pushed and a polled copy of one change fire once.
-//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 fn intake_one(
     root: &Path,
     ring: &Path,
@@ -841,7 +838,6 @@ fn intake_one(
 /// the source's cursor saved. One round exits 0/1/2/3 on `--event`'s contract;
 /// `--every` loops, registered with `task` as `forge-poll` and ticking once
 /// per round, and a round's could-not-look is a pointer the loop survives.
-//MUTANT-SUITE crates/batten/tests/it/task_registry.rs
 fn run_forge_poll(
     every: Option<&str>,
     mode: Mode,
@@ -898,7 +894,6 @@ fn epoch_now() -> u64 {
 }
 
 /// One poll round: read, dispatch each event, save the cursor.
-//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 fn forge_round(
     root: &Path,
     mode: Mode,
@@ -1025,7 +1020,6 @@ const ENGINE_UPDATED: &str = "BATTEN_ENGINE_UPDATED";
 /// does not choose the RELEASE that judges it (CLOUD-31), and a stale binary
 /// still follows the release the ref names. A source pin, the ref's as the
 /// tree's, is still followed to this checkout's own build, as it was before.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
 fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
     let dir = overrides.config_in.as_deref().map_or(root, Path::new);
     if let Some(judging_ref) = overrides.config_from.as_deref() {
@@ -1058,8 +1052,6 @@ fn pin_text(root: &Path, overrides: &Overrides) -> Option<String> {
 /// `batten.toml`, there is no pin to honour and the verb runs as it is. The
 /// FETCH is not best-effort — a pin that cannot be fetched is reported, since
 /// running anyway would decide under the very engine the pin refuses.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 fn follow_pin(hook_path: bool, overrides: &Overrides) -> Result<Followed> {
     // THE HOOK FOLLOWS A RELEASE PIN BUT NEVER BUILDS A SOURCE ONE (CLOUD-2062,
     // narrowed under CLOUD-2059), and that is the same bit rather than a second
@@ -1269,7 +1261,6 @@ fn follow_line(pinned: &str) -> String {
 /// compacted session hears it again.
 ///
 /// A payload naming no session says the line every time, as a sighting does.
-//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 fn say_follow_once(
     target: &FollowTarget,
     value: &serde_json::Value,
@@ -1310,7 +1301,6 @@ fn say_follow_once(
 /// the right pin and a re-runnable `engine install`. It is never put back: an
 /// install can fail after it has replaced a binary, and a restored pin would
 /// then disagree with the engine on disk.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let root = git::worktree_root(Path::new("."))?;
     let path = root.join(config::CONFIG_FILE);
@@ -1508,7 +1498,6 @@ fn distance(repository: &str, tag: &str) -> Result<Distance> {
 
 /// The releases between `tag` and `latest`, already read (CLOUD-2660: `engine
 /// update` has `latest` in hand).
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 fn distance_from(repository: &str, tag: &str, latest: &str) -> Result<Distance> {
     let latest = latest.to_owned();
     if !engine::is_newer(&latest, tag)? {
@@ -1543,7 +1532,6 @@ fn distance_from(repository: &str, tag: &str, latest: &str) -> Result<Distance> 
 /// The behind block (CLOUD-2660): `tag → latest`, one `v<x> <date> breaking
 /// <n>` line per release, breaking releases first and each group oldest first,
 /// then one pointer at their sections. A pointer, never the notes.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 fn write_distance(
     out: &mut dyn Write,
     repository: &str,
@@ -1587,7 +1575,6 @@ fn distance_bounded(repository: &str, tag: &str) -> Option<Distance> {
 /// THE KEY IS READ RAW, by [`engine::top_level`], never through a load: a
 /// notice exists for a pin that is behind, and a config this engine cannot
 /// load must not silence it.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 fn notice_enabled(root: &Path, text: &str) -> bool {
     let var = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     if var("CI").is_some() {
@@ -1755,7 +1742,6 @@ fn notice_once(ask: &Outdated, out: &mut dyn Write) -> Result<()> {
 /// answer. Two runs leave it as it is: a `--notice` inside its window, which
 /// looks at nothing, and a run that fails before it reads the pin (no worktree,
 /// no branch), which cannot name the record it would clear.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 fn engine_outdated(ask: &Outdated, out: &mut dyn Write) -> Result<ExitCode> {
     if ask.notice {
         // BEST-EFFORT, AND SO DISCARDED: a store it cannot write, a worktree it
@@ -1818,7 +1804,6 @@ fn set_str(item: &mut toml_edit::Item, new: &str) {
 /// and its `sha256` read off the release's `SHA256SUMS` by the URL's asset name.
 /// Each is written only where it differs, so a current artifact is left as it
 /// is and a stale one is repaired whatever its row's `version` says.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 fn sync_artifact(
     artifact: &mut dyn toml_edit::TableLike,
     new: &str,
@@ -1904,7 +1889,6 @@ fn sync_artifacts(
 /// A config `toml_edit` will not read, a tag that is not a version, or an asset
 /// the release publishes no digest for. Nothing is written by this function;
 /// the caller writes only its whole answer.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 fn sync_declarations(text: &str, tag: &str, sums: &dyn Fn() -> Result<String>) -> Result<String> {
     let version = engine::release_version(tag)?;
     let bare = version.to_string();
@@ -1990,7 +1974,6 @@ fn worktree_pin(root: Option<&Path>) -> Option<engine::Pin> {
 /// is refused by name and nothing is installed: the pin is the one authority, and
 /// a named version silently outranking it was how a cached script installed
 /// something no `batten.toml` asked for.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 fn install_want(
     named: Option<&str>,
     by_ref: Option<String>,
@@ -2084,7 +2067,6 @@ fn named_env(name: &str) -> Option<String> {
 ///
 /// Off `PATH` is a refusal, as it always was: every hook registration names
 /// `batten` bare, so a binary the shell cannot resolve is not installed.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 fn engine_install(out: &mut dyn Write) -> Result<ExitCode> {
     let repository = releases_repository();
     let root = git::worktree_root(Path::new(".")).ok();
@@ -2262,7 +2244,6 @@ fn runs_here(dir: &Path, binary: &[u8]) -> bool {
 /// CLOUD-2226): built from the checkout, or copied from the running binary when
 /// it already carries that stamp, then swapped in by rename and stamped, so a
 /// crash leaves the old binary.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 fn install_source(root: &Path, want: &str, out: &mut dyn Write) -> Result<ExitCode> {
     let binary = std::env::current_exe()?;
     if engine::runs_local() {
@@ -2495,7 +2476,6 @@ fn engine_pin(
 /// - No pin is nothing to judge.
 ///
 /// Every finding is a pointer: the file, the token, the pin.
-//MUTANT-SUITE crates/batten/tests/it/engine_gates.rs
 fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<ExitCode> {
     let config_path = root.join(config::CONFIG_FILE);
     let text = std::fs::read_to_string(&config_path)?;
@@ -4057,7 +4037,6 @@ fn collect_dead_refs(repo: &Path, store_dir: &Path) -> Result<usize> {
 
 /// The drain scan lock, now held, or `None` where another drain holds it
 /// (CLOUD-2536).
-//MUTANT-SUITE crates/batten/tests/it/hook_latency.rs
 fn take_drain_scan_lock(git_dir: &Path) -> std::io::Result<Option<std::fs::File>> {
     let scan_lock = open_drain_lock(&git_dir.join(DRAIN_SCAN_LOCK))?;
     match fs4::FileExt::try_lock(&scan_lock) {
@@ -4583,7 +4562,6 @@ fn run_capture(
 /// transport.
 // The rows below this one are judged under the suite they were before
 // (CLOUD-2193: a row runs under the declaration above it).
-//MUTANT-SUITE crates/batten/tests/it/engine_gates.rs
 fn provisioned_launch(command: &[String], overrides: &Overrides) -> Option<Vec<String>> {
     let (program, rest) = command.split_first()?;
     if program.contains(['/', '\\']) || rules::on_path_verbatim(program).is_some() {
@@ -4598,7 +4576,6 @@ fn provisioned_launch(command: &[String], overrides: &Overrides) -> Option<Vec<S
 /// The installed path of the committed `[[provision]]` row shipping `binary`,
 /// applied first (checksum-verified, cache first); `None` where no row ships it
 /// or it cannot be applied.
-//MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
 fn provisioned_binary(binary: &str, overrides: &Overrides) -> Option<PathBuf> {
     let ProvisionSite {
         config,
@@ -5253,7 +5230,6 @@ fn run_target(
 /// # Errors
 ///
 /// Free space that cannot be read is could-not-look.
-//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
 fn collect_on_demand(
     here: &Path,
     declared: &prune::Prune,
@@ -5303,7 +5279,6 @@ struct ShowRequest<'a> {
 /// line selectors address it — and any other value is pretty-printed JSON. A
 /// capture that is not JSON, or a pointer that names nothing, is a usage error:
 /// the caller asked about a field that is not there.
-//MUTANT-SUITE crates/batten/tests/it/cli.rs
 fn field_text(parsed: &capture::Handle, bytes: &[u8], pointer: &str) -> Result<Vec<u8>> {
     let document: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| {
         UsageError::raise(format!(
@@ -6463,7 +6438,6 @@ fn parse_run(line: &str) -> Option<checks_green::Run> {
 /// a head no workflow has registered for — "not yet", which a caller polls on
 /// forever rather than hearing that it could not look.
 //
-//MUTANT-SUITE crates/batten/tests/it/checks_green.rs
 fn checks_green_fetch(
     sha: &str,
     repo: Option<String>,
@@ -6662,7 +6636,6 @@ fn run_receipt(
 /// contract has one meaning per code and no per-verb exception — `2` is the
 /// policy verdict everywhere, and a caller branching on the code alone must not
 /// read "I could not tell" as an answer about what is running.
-//MUTANT-SUITE crates/batten/tests/it/task_registry.rs
 fn run_task(command: TaskCommand, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     // Could-not-look, and never "nothing runs": those are different answers and
     // conflating them is the defect CLOUD-425 exists to fix.
@@ -7362,7 +7335,6 @@ fn refuse_claim_bot(err: &mut dyn Write, text: &str) -> Result<ExitCode> {
 /// judged the claim by another branch's `batten.toml` — refusing it outright
 /// when that file would not load, and ignoring `--config-in` because the read
 /// took no overrides.
-//MUTANT-SUITE crates/batten/tests/it/claim_worktree.rs
 fn claim_base(repo: &Path, verb: &str, overrides: &Overrides) -> Result<String> {
     let authority = config::authority_root(Path::new("."))?;
     let Some(trunk) = worktree::committed_trunk(&authority, overrides)? else {
@@ -9246,7 +9218,6 @@ fn run_wiring_register(
 /// Every directory a session could be rooted at above `repo` without loading
 /// the user-level surface: each strict ancestor, nearest first, skipping `home`
 /// and every ancestor of it (CLOUD-2205).
-//MUTANT-SUITE crates/batten/src/lib.rs
 fn candidate_session_roots(repo: &Path, home: Option<PathBuf>) -> Vec<PathBuf> {
     let home = home.map(|home| git::canonical(&home));
     let mut roots = Vec::new();
@@ -10523,7 +10494,6 @@ fn run_override_spend(
     }
 }
 
-//MUTANT-SUITE crates/batten/tests/it/admission.rs
 /// The [`admission::Anchor`] a `(rule, subject)` pair is answered about
 /// (CLOUD-1125).
 ///
@@ -12392,7 +12362,6 @@ struct Reaped {
 /// group here gets no grace at all: its leader is already dead, so a survivor is
 /// not a leaf mid-exit. A GROUP TERM IS A REQUEST, NOT A FACT (CLOUD-434): the
 /// second pass is the observation that tells the two apart.
-//MUTANT-SUITE crates/batten/src/lib.rs
 fn reap_abandoned(git_dir: &Path) -> Reaped {
     let abandoned = task::abandoned(git_dir);
     let own_group = task::process_group(&std::process::id().to_string());
@@ -14662,7 +14631,6 @@ pub const RUSTC_WRAPPER_PROBE: &str = "--batten-wrapper-probe";
 ///
 /// `None` when this process is not a wrapped compile: the binary parses its
 /// own arguments as ever.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 #[must_use]
 pub fn rustc_wrapped(
     args: impl Iterator<Item = std::ffi::OsString>,
@@ -14730,7 +14698,6 @@ fn guard_compile(rustc_args: &[std::ffi::OsString]) {
     let _ = collect::collect_if_pressed(&repo, &pruning, &kept, &mut free, Some(deadline), false);
 }
 
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn run_land_verify(
     root: &Path,
     bet: &speculation::Bet,
@@ -17672,6 +17639,16 @@ fn run_registered_runner(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    if mutate::RunnerKind::parse(id) == Some(mutate::RunnerKind::CargoMutants) {
+        writeln!(
+            err,
+            "::error:: mutate: {} names `{id}`, which runs as itself (`cargo mutants \
+             --in-diff`) and never through this verb; it owns its sources here only so the \
+             declared runner leaves them alone",
+            mutate::RUNNER
+        )?;
+        return Ok(ExitCode::Usage);
+    }
     let Some(kind) =
         mutate::RunnerKind::parse(id).filter(|kind| registry.registered().contains(kind))
     else {
@@ -17683,7 +17660,7 @@ fn run_registered_runner(
         )?;
         return Ok(ExitCode::Usage);
     };
-    let Some((base, changed)) = change else {
+    let Some((_, changed)) = change else {
         writeln!(
             err,
             "::error:: mutate: `{id}` judges a change, and MUTANT_CHANGED_SINCE names no base \
@@ -17691,15 +17668,6 @@ fn run_registered_runner(
         )?;
         return Ok(ExitCode::Internal);
     };
-    // THE PINNED RUNNER, NOT WHATEVER `PATH` HOLDS (CLOUD-2345): a CI runner has
-    // no cargo-mutants at all, and a host's may be another version. Applied for
-    // every registered runner rather than gated on the kind: the directory only
-    // answers `cargo mutants`, so another runner is unaffected by it. Where no row
-    // ships it, the inherited `PATH` decides and `unresolvable` reports absence.
-    let registry = &registry.clone().with_provisioned(
-        provisioned_binary("cargo-mutants", &Overrides::default())
-            .and_then(|binary| binary.parent().map(Path::to_path_buf)),
-    );
     let absent = mutate::unresolvable(root, registry);
     if !absent.is_empty() {
         for finding in &absent {
@@ -17707,15 +17675,7 @@ fn run_registered_runner(
         }
         return Ok(ExitCode::Internal);
     }
-    let work = mutate::work_dir(root);
-    std::fs::create_dir_all(&work)?;
-    let site = mutate::Site {
-        root,
-        base: &base,
-        registry,
-        work: &work,
-    };
-    let run = match mutate::run_registered(&site, &changed, kind, shard, err) {
+    let run = match mutate::run_registered(root, registry, &changed, kind, shard) {
         Ok(run) => run,
         Err(reason) => {
             writeln!(err, "::error:: mutate: {reason}")?;
@@ -17734,18 +17694,12 @@ fn run_registered_runner(
     let shard = shard
         .map(|(k, n)| format!(" (shard {k}/{n})"))
         .unwrap_or_default();
-    if code == ExitCode::Success && kind == mutate::RunnerKind::Command {
+    if code == ExitCode::Success {
         // A command runner reports no count, so none is printed (CLOUD-2211).
         writeln!(
             out,
             "mutate sweep: {} changed source(s) by {id}{shard}, every one caught",
             run.sources
-        )?;
-    } else if code == ExitCode::Success {
-        writeln!(
-            out,
-            "mutate sweep: {} mutant(s) across {} changed source(s) by {id}{shard}, every one caught",
-            run.mutants, run.sources
         )?;
     } else {
         writeln!(
@@ -17826,6 +17780,9 @@ fn run_mutate(
     let anchor = hook_authority_root();
     let resolved = anchor.canonicalize().unwrap_or_else(|_| anchor.to_owned());
     let root: &Path = &resolved;
+    if command == cli::MutateCommand::Jobs {
+        return run_mutate_jobs(root, out, err);
+    }
     let declared = match mutate_table(root, err)? {
         Ok(declared) => declared,
         Err(code) => return Ok(code),
@@ -17845,16 +17802,10 @@ fn run_mutate(
                 writeln!(out, "{subject} {verdict}")?;
             }
             if census.findings.is_empty() {
-                // THE UNDECLARED ENGINE COUNT RIDES THE CLEAN LINE (CLOUD-1369),
-                // because a route that landed with nothing reporting its
-                // population would make "the backlog is what the census will
-                // then report" false. A count is a sensor: it names no module
-                // (rule 4) and it refuses nothing, so the exit code is unmoved.
                 writeln!(
                     out,
-                    "mutate census: {} gate(s), every one enforced or exempt by a filed row; {} \
-                     engine module(s) declare nothing and are outside the censused set",
-                    census.subjects, census.engine_undeclared
+                    "mutate census: {} gate(s), every one enforced or exempt by a filed row",
+                    census.subjects
                 )?;
                 return Ok(ExitCode::Success);
             }
@@ -17873,7 +17824,28 @@ fn run_mutate(
             let command = table.map_or(&[][..], |table| table.command.as_slice());
             run_mutate_sweep(root, names, command, out, err)
         }
+        cli::MutateCommand::Jobs => run_mutate_jobs(root, out, err),
     }
+}
+
+/// `batten mutate jobs`: the machine measured, divided by the tree's declared
+/// per-job cost. The floor is the disk collector's own, so the jobs never
+/// spend the room it exists to keep.
+fn run_mutate_jobs(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let cost = match mutate::JobCost::declared() {
+        Ok(cost) => cost,
+        Err(reason) => {
+            writeln!(err, "::error:: mutate jobs: {reason:#}")?;
+            return Ok(ExitCode::Usage);
+        }
+    };
+    let floor = prune::declared_alone(root)
+        .and_then(|declared| declared.free_band())
+        .unwrap_or(prune::DEFAULT_FREE_BAND)
+        .0;
+    let machine = mutate::Machine::probe(floor)?;
+    writeln!(out, "{}", mutate::job_count(machine, cost))?;
+    Ok(ExitCode::Success)
 }
 
 /// `batten mutate sweep`: the declared runner over the narrowed set, or the one
@@ -17966,7 +17938,6 @@ fn run_mutate_sweep(
 ///
 /// Admits where no band is declared or free space cannot be read: the
 /// fail-open direction every disk arm takes.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn disk_admits(root: &Path, step: &str, err: &mut dyn Write) -> Result<bool> {
     let Some(prune) = resolve::resolve(root, &Overrides::default())
         .ok()
@@ -18051,7 +18022,6 @@ const SINGLETON_WAIT: std::time::Duration = std::time::Duration::from_mins(20);
 /// A batten singleton held by a live process other than this one, by task
 /// name: the background build a below-floor step may wait for. This process's
 /// own lock (`land`'s, taken under its pid) is never one.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn foreign_singleton(root: &Path) -> Option<String> {
     let git_dir = crate::git::git_dir(root).ok()?;
     let own = std::process::id().to_string();
@@ -18079,13 +18049,16 @@ fn run_declared_sweep(
         for kind in registry.registered() {
             let owned = mutate::owned_changes(root, changed, registry, kind);
             if !owned.is_empty() {
+                let judge = if kind == mutate::RunnerKind::CargoMutants {
+                    String::from("`cargo mutants --in-diff`")
+                } else {
+                    format!("`{}={}`", mutate::RUNNER, kind.id())
+                };
                 writeln!(
                     out,
-                    "mutate sweep: {} changed source(s) owned by {} — judged by `{}={}`",
+                    "mutate sweep: {} changed source(s) owned by {} — judged by {judge}",
                     owned.len(),
                     kind.id(),
-                    mutate::RUNNER,
-                    kind.id()
                 )?;
             }
         }
@@ -19376,8 +19349,6 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
 /// The status of every pathspec a checkout or restore names (CLOUD-2684),
 /// behind [`pinned_for`]'s narrowing and only for such a call: one index read
 /// and one status read, in process, never an argv carrying a caller's path.
-//MUTANT-SUITE crates/batten/tests/it/git_preset.rs
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn pathspec_status_for(
     policy: &hook::Policy,
     envelope: &hook::Envelope,
@@ -19442,8 +19413,6 @@ fn placed_pathspecs(call: &hook::PathspecCall) -> Option<Vec<serde_json::Value>>
     Some(entries)
 }
 
-//MUTANT-SUITE crates/batten/tests/it/commit.rs
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 /// The subject of the message a mediated `git commit` names (CLOUD-2683),
 /// read only where `[commit]` is declared: a repository with no convention
 /// opens nothing. The parse is [`hook::commit_message`]'s; this half reads a
@@ -20072,8 +20041,6 @@ fn dispatch_envelope(
 /// the key resolved, and structurally cannot carry the repair's command line or
 /// its output. ONLY `silent` arrives: a `retry` repair is a `Deny` carrying
 /// `call retry now`, because the call as made did not happen.
-//MUTANT-SUITE crates/batten/tests/it/repaired_arms.rs
-//MUTANT-SUITE crates/batten/tests/it/admission.rs
 fn push_repair_record(
     decision: &hook::Decision,
     envelope: &hook::Envelope,
@@ -20170,7 +20137,6 @@ fn undeclared_event_note(
 ///   declared. One config load per session, not per call;
 /// * a `PreTool` call naming a tool is the shape a tool-keyed row exists to
 ///   judge, and without it such a row was loaded for no call that could match.
-//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 fn is_adjudicable(envelope: &hook::Envelope) -> bool {
     !envelope.command.is_empty()
         || envelope.writes.is_some()
@@ -20196,7 +20162,6 @@ fn is_adjudicable(envelope: &hook::Envelope) -> bool {
 /// that did not run, and the silent version of that is byte-identical to a clean
 /// allow — the false green this engine exists to catch, in the one place nobody
 /// would think to look.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 fn read_payload(mode: Mode, err: &mut dyn Write) -> Result<Option<Payload>> {
     // STREAMED, NEVER HELD WHOLE (CLOUD-2224). Measured: reading a 50 MB payload
     // whole peaked at 150 MiB; streamed, at the process baseline. The bound is
@@ -20270,7 +20235,6 @@ struct Payload {
 /// hands a declared handler the payload as it arrived. Re-reading stdin for it is
 /// not an option — the stream is consumed — and re-serializing the envelope would
 /// hand a handler a document the host never sent.
-//MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
 fn decode_payload(
     harness: hook::Harness,
     payload: Payload,
@@ -20380,7 +20344,6 @@ impl Drop for Spool {
 /// [`hook::Envelope::writes`] is already repository-relative at this boundary
 /// (`relativise_writes`), so the comparison is against the two file names this
 /// crate owns — never a consumer string, which would be non-negotiable rule 1.
-//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 fn recoverable_without_rules(envelope: &hook::Envelope) -> bool {
     // NO `command.is_empty()` GUARD, AND ITS ABSENCE IS THE DECISION. A `Bash`
     // envelope is `Operation::Execute` with no write, so it lands on `_ => false`
@@ -20507,7 +20470,6 @@ fn is_source_excerpt(line: &str) -> bool {
 /// are this crate's own constants, not a consumer's (non-negotiable rule 1), and
 /// rebuilding is named without a command because which command rebuilds is the
 /// consumer's.
-//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 fn unadjudicable_remedy() -> Fix {
     // ROOTED AT THE AUTHORITY JUDGED BY (CLOUD-2218), so the named command runs
     // from wherever the shell stands; the floor admits exactly these strings.
@@ -20720,7 +20682,6 @@ impl Follow<'_> {
 /// # Errors
 ///
 /// Only a write of the child's accepted answer to `out`.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 fn hand_off<'a>(
     root: &Path,
     argv: &'a [String],
@@ -20783,8 +20744,6 @@ fn hand_off<'a>(
 /// read and the config repair.
 ///
 /// [`ExitCode::decided`]: exit::ExitCode::decided
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<Option<ExitCode>> {
     if std::env::var_os(ENGINE_UPDATED).is_some() {
         return Ok(None);
@@ -21198,7 +21157,6 @@ fn admitted(
     pull_ripcord(envelope, admit_mediated(decision, out)?, out, err)
 }
 
-//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 fn pull_ripcord(
     envelope: &hook::Envelope,
     decision: hook::Decision,
@@ -21712,7 +21670,6 @@ fn adopted_line(tag: &str) -> String {
 /// # Errors
 ///
 /// A config that fails to load, or a write that fails.
-//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 fn adopt_engine_row(root: &Path, overrides: &Overrides) -> Result<Option<String>> {
     // An override names ANOTHER authority than `root`'s file, so a clean load
     // under it says nothing about the bytes this would write.
@@ -21913,7 +21870,6 @@ fn runs_engine(command: &str) -> bool {
 
 /// What the model reads of a post-tool result: the seen-finding collapse and
 /// the result bound (CLOUD-2223), emitted as ONE document.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 fn rewrite_post_tool(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -21992,7 +21948,6 @@ fn post_tool(
 /// (CLOUD-2224): the result keeps the host's shape and loses only the bulk the
 /// streamed read never held. `None` with no repository to store into, which
 /// leaves the marker as `bound_result` leaves an over-bound leaf: unrewritten.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 fn point_at_spills(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -22046,7 +22001,6 @@ fn point_at_spills(
 /// Counted from the files in chunks, stopping once past the bound; a file whose
 /// bytes alone prove it over (an `o200k` token is at most 128 bytes) is never
 /// read. At or under the default, nothing spilled can be within it.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 fn spills_within_bound(result: &serde_json::Value, spilled: &[stream_input::Spilled]) -> bool {
     fn inline(value: &serde_json::Value, into: &mut u64) {
         match value {
@@ -22093,7 +22047,6 @@ fn spills_within_bound(result: &serde_json::Value, spilled: &[stream_input::Spil
 
 /// Whether this call reads a capture view, the route the bound's own pointer
 /// prints (CLOUD-2228): such a read is never bounded again.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 fn reads_a_view(envelope: &hook::Envelope) -> bool {
     let Some(path) = envelope
         .input
@@ -22158,7 +22111,6 @@ fn collapse_seen_output(envelope: &hook::Envelope) -> Option<serde_json::Value> 
 ///
 /// CHEAP WHEN SMALL: the size is read before config, and only a result over the
 /// inline threshold pays for reading the declared bound.
-//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
 fn bound_result(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -22630,7 +22582,6 @@ fn emit_channel(
 /// stream; remove answers nothing on stdout and exits 0. A branch the declared
 /// trunk does not carry survives a remove, as does every branch when no trunk
 /// resolves: fail closed on a delete.
-//MUTANT-SUITE crates/batten/tests/it/worktree_hooks.rs
 fn worktree_answer(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -22696,7 +22647,6 @@ fn create_worktree(cwd: &str, name: &str) -> Result<std::path::PathBuf> {
 
 /// [`worktree_answer`]'s remove: [`gitwrite::unlink_worktree`], then the branch
 /// only when the declared trunk carries it.
-//MUTANT-SUITE crates/batten/tests/it/worktree_hooks.rs
 fn remove_worktree(worktree_path: &str) -> Result<()> {
     let (common, branch) = gitwrite::unlink_worktree(Path::new(worktree_path))?;
     let Some(branch) = branch else {
@@ -22995,8 +22945,6 @@ fn manifest_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::Manif
 /// (CLOUD-2661). Nothing is read for a write no set selects. Every read is
 /// bounded: the target, then the set's literal members, each capped, and a
 /// member that cannot be read leaves the totals unjudged, never refused.
-//MUTANT-SUITE crates/batten/tests/it/budget_at_call.rs
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn budgeted_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::BudgetFacts {
     let names = policy.budget_sets_for(envelope);
     let (Some(budget), Some(target)) = (&policy.budget, envelope.writes.as_deref()) else {
@@ -24215,7 +24163,6 @@ fn unlanded_pointer() -> Option<refusal::Refusal> {
 /// re-arming on one is the loop this exists to end. Fail-silent like every
 /// Stop-path write: a marker that will not clear costs one pointer, never the
 /// prompt.
-//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 fn rearm_unlanded(envelope: &hook::Envelope) {
     if envelope.event == hook::Event::PostTool {
         note_land_dispatch(envelope);
@@ -24495,7 +24442,6 @@ fn land_under_way() -> LandMotion {
 /// Cheapest first: no declared task, or no crashed one, returns before the
 /// boot time or the receipt is written. Everything it cannot read says nothing,
 /// as every failure on this routine does.
-//MUTANT-SUITE crates/batten/tests/it/stop_watchdog.rs
 fn watchdog_stop(
     root: &Path,
     landing: LandMotion,
@@ -24636,8 +24582,6 @@ fn already_marked(seen: Option<&Path>, key: &str) -> bool {
 /// Stop, to bound a channel that repeated full text. The projection bounds the
 /// full text once per context per window now, and a pointer withheld is a
 /// pointer the reader needed, so both stores and their writes are gone.
-//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
-//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, Vec<String>)> {
     let config = resolve::resolve(root, overrides).ok()?;
     // THE ROW IS FOUND BY WHAT IT PUBLISHES, NEVER BY ITS ID. A literal id here
@@ -24743,7 +24687,6 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
 }
 
 /// Whether the newest stored read of `key` says the row is closed.
-//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 fn row_closed(authority: &Path, key: &str) -> bool {
     // THE ROOT THE WRITER STORED UNDER: `capture_response` keys the store by
     // `git::repo_root` of the authority, never the authority path itself.
@@ -25091,8 +25034,6 @@ pub fn mint_receipts_for_test(
 /// authority — [`mcp::payload`] for JSON-RPC content blocks, [`facts::payload_in`]
 /// for the harness envelope. Every failure is silent, as the mint boundary has
 /// always been: the gate that reads the receipt simply denies again.
-//MUTANT-SUITE crates/batten/tests/it/review_receipt_delta.rs
-//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 fn mint_receipts(
     declared: &[crate::mint::Declared],
     tool: &str,
@@ -25322,8 +25263,6 @@ pub fn record_asked_for_test(
     record_asked_at(harness, raw_tool, result, root, 0)
 }
 
-//MUTANT-SUITE crates/batten/tests/it/recorder_background.rs
-//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     // THERE IS NO CHEAP GATE HERE, AND THE TWO THAT WERE TRIED WERE BOTH WRONG
     // (CLOUD-1484).
@@ -25700,7 +25639,6 @@ fn push_capture_notice(advice: &mut Vec<advisory::Advice>, reason: &str) {
 /// Under `BATTEN_DISK_TRACE=1` a pre-tool call prints `disk-call <tool>
 /// <free_before_mb> <free_after_mb>` to stderr, band declared or not: the trace
 /// is what sizes the band.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn collect_before_admitting(
     envelope: &hook::Envelope,
     pruning: Option<&prune::Prune>,
@@ -25843,8 +25781,6 @@ fn hook_authority_root() -> &'static Path {
 static HOOK_AUTHORITY_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 // CLOUD-2672's ledger split, at the legend read in `render`.
-//MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 /// The session's home (CLOUD-2672): the root its ledger lives under, which a
 /// visit to another repository never moves. Falls back to the judging root where
 /// the call resolved no home, so a reader is never left without a store.
@@ -25880,7 +25816,6 @@ static HOOK_REACH: std::sync::OnceLock<hook::Reach> = std::sync::OnceLock::new()
 ///
 /// A recorded fact, never a search, so no directory is walked (house-style §8).
 /// A session that never stood in a Batten repository stays fail-open (CLOUD-70).
-//MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
 fn seed_hook_authority(envelope: &hook::Envelope) -> &'static Path {
     let start = envelope
         .cwd
@@ -26455,9 +26390,6 @@ fn arm_for(source: hook::HookSource, envelope: &hook::Envelope, refusal: &Refusa
 /// The id the hook refuses every call under when its config will not load.
 const UNADJUDICABLE: &str = "engine-cannot-adjudicate";
 
-//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
-//MUTANT-SUITE crates/batten/tests/it/preapprove.rs
-//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 fn render(
     harness: hook::Harness,
     envelope: &hook::Envelope,
@@ -27641,7 +27573,6 @@ const UNLANDED_STEP: &str = "unlanded-step";
 /// outcome owes no step. Written at the mint because the store cannot carry a
 /// could-not-look on an identity with no record. Fail-silent, like every
 /// Stop-path receipt.
-//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 fn record_unlanded_step(
     repo: &Path,
     config: &resolve::Resolved,
@@ -27735,8 +27666,6 @@ fn step_refusal(step: Step, count: u64) -> refusal::Refusal {
 /// The Stop's could-not-look notice on a shallow clone (CLOUD-2655): said once
 /// per claim and step until the operator speaks, and never a refusal, because
 /// nothing was proven at risk.
-//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
-//MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs
 fn unlanded_unknown_pointer() -> Option<refusal::Refusal> {
     let branch = git::current_branch(Path::new(".")).ok().flatten()?;
     let git_dir = git::git_dir(Path::new(".")).ok()?;
@@ -28399,7 +28328,6 @@ fn uncut(slug: &str, tag: &str, get: release::Get<'_>) -> bool {
 /// `absent_refuses` is whether a release the forge has positively not cut is a
 /// refusal on the caller's surface (CLOUD-2518), decided by the caller because
 /// only it knows whether the release must already exist there.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
 fn release_verdict(
     tag: &str,
     draft: bool,
@@ -28553,7 +28481,6 @@ fn run_release_path(
 
 /// Post `verdict` as the `release-path` status on `sha`: `None` when posted,
 /// or the exit code of a post that failed.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
 fn post_release_path(
     slug: &str,
     sha: &str,
@@ -28600,7 +28527,6 @@ fn post_release_path(
 ///
 /// `sealing` is whether the caller is `--seal`, the one surface an uncut
 /// release is judged on (CLOUD-2518).
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
 fn release_path_verdict(
     here: &Path,
     sha: &str,
@@ -28676,7 +28602,6 @@ fn release_path_verdict(
 /// The names `policy/release-assets.rego` demands that release `tag` lacks: the
 /// release's record written, then that one rule run over it (CLOUD-2033). The
 /// set is the module's, never restated.
-//MUTANT-SUITE crates/batten/tests/it/release_assets.rs
 fn release_assets_missing(
     tag: &str,
     mode: Mode,
@@ -29994,7 +29919,6 @@ fn claimed_fork_point(here: &Path, overrides: &Overrides) -> Option<String> {
 
 /// `batten config`'s verbs. `config lint`'s exact output is pinned over the
 /// compiled binary, so its suite judges a mutant here (CLOUD-2303).
-//MUTANT-SUITE crates/batten/tests/it/config_lint.rs
 fn run_config(
     command: &ConfigCommand,
     overrides: &Overrides,
@@ -30585,7 +30509,6 @@ fn run_diagnose(json: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<
 /// the stdout data lines are untouched, and what an agent reads carries the
 /// labels. Full for the first item of each class in the invocation, the
 /// pointer for the rest, so one invocation states a definition once.
-//MUTANT-SUITE crates/batten/tests/it/doctor.rs
 fn print_labelled(err: &mut dyn Write, findings: &[refusal::Refusal]) -> Result<()> {
     let mut stated = std::collections::BTreeSet::new();
     for finding in findings {
@@ -30889,7 +30812,6 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
 /// ONE CLASSED FINDING (CLOUD-2078): `commit port blocked`, the branch, the
 /// target, the commit, the count and each path as subjects, and the route out
 /// as its remedy — so the stop is one line a reader parses like every other.
-//MUTANT-SUITE crates/batten/tests/it/rebase.rs
 #[must_use]
 pub fn land_conflict_stop(
     branch: &str,

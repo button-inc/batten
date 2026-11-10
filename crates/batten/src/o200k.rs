@@ -129,7 +129,6 @@ fn dfa() -> Option<&'static regex_automata::dfa::sparse::DFA<&'static [u8]>> {
 /// ends `\s+(?!\S)|\s+`; the DFA has `\s+` alone, so a whitespace run with no
 /// newline, two or more characters long and followed by a non-space, gives up
 /// its last character to the next piece — exactly what the lookahead does.
-//MUTANT-SUITE crates/batten/src/o200k.rs
 fn pieces<'a>(
     dfa: &'a regex_automata::dfa::sparse::DFA<&'static [u8]>,
     text: &'a str,

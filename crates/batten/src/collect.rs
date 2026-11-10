@@ -65,8 +65,6 @@ pub struct Pass {
     pub held: Held,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
 impl Collected {
     /// The lap-record lines: `disk-collected <freed_mb> <units> <free_after_mb>`,
     /// the unlink cost (CLOUD-1945's figure), then one `disk-held <lock>` per
@@ -150,7 +148,6 @@ pub enum Kept {
 /// A PROGRAM THE TABLE NAMES ONLY BY NAME IS KEPT BY NAME. macOS gives each
 /// process's path only through `kern.procargs2`, which no safe crate reaches
 /// (see [`processes`]), so there a running program is [`Kept::Named`].
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 #[must_use]
 pub fn engine_kept() -> Vec<Kept> {
     let table = processes().unwrap_or_default();
@@ -315,7 +312,6 @@ fn proc_table() -> Option<(u64, u64, impl Iterator<Item = PathBuf>)> {
 
 /// The `/proc` layouts [`processes`] and [`group_orphaned`] read, as pure
 /// functions so every platform's suite checks them.
-//MUTANT-SUITE crates/batten/src/collect.rs
 #[cfg(any(target_os = "linux", target_os = "android", test))]
 mod proc_stat {
     /// Field 22 of a `/proc/<pid>/stat` line, `starttime`: read after the LAST
@@ -418,7 +414,6 @@ mod proc_stat {
 ///
 /// Where there is no `/proc` to read a group's members from, none is ever proven
 /// the orphan's and nothing is reaped. Only the read is under `cfg` (CLOUD-2509).
-//MUTANT-SUITE crates/batten/tests/it/process_group.rs
 pub(crate) fn group_orphaned(pgid: &str, registrant: &str, alive_at: u64) -> bool {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
@@ -475,7 +470,6 @@ fn orphaned_in<S: AsRef<str>>(
 
 /// The Darwin layout [`processes`] reads, as a pure function so every
 /// platform's suite checks it; only the `sysctl` call is macOS's own.
-//MUTANT-SUITE crates/batten/src/collect.rs
 #[cfg(any(target_os = "macos", test))]
 mod darwin {
     use super::Process;
@@ -532,7 +526,6 @@ mod darwin {
 const WINDOWS_PROCESSES: &str = "Get-Process | ForEach-Object { try { $_.Path + \"`t\" + $_.StartTime.ToFileTimeUtc() } catch {} }";
 
 /// The listing's layout, as a pure function so every platform's suite checks it.
-//MUTANT-SUITE crates/batten/src/collect.rs
 #[cfg(any(windows, test))]
 mod windows_table {
     use super::Process;
@@ -601,7 +594,6 @@ pub fn live_since(trees: &[PathBuf]) -> Option<SystemTime> {
 
 /// The earliest start among `processes` that are builds: a [`BUILD_PROGRAMS`]
 /// program, or an executable under one of `trees` (a test binary it runs).
-//MUTANT-SUITE crates/batten/src/collect.rs
 #[must_use]
 pub fn earliest_build_start(processes: &[Process], trees: &[PathBuf]) -> Option<SystemTime> {
     let trees: Vec<PathBuf> = trees
@@ -681,7 +673,6 @@ struct Unit {
 
 /// Every unit under `tree`, at any depth: every `.fingerprint` directory, nested
 /// target triples and build trees included.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn units_in(tree: &Path, fingerprints: Vec<PathBuf>, wholes: &[PathBuf]) -> Vec<Unit> {
     let mut units = Vec::new();
     // SCRATCH IS ONE UNIT EACH, RANKED BY [`whole_units`]: a test suite builds
@@ -735,7 +726,6 @@ fn units_in(tree: &Path, fingerprints: Vec<PathBuf>, wholes: &[PathBuf]) -> Vec<
 /// class. Ranked with the units by last use, behind the same profile lock and
 /// the same working set, so the edit loop's own cache is never the one taken —
 /// the defect the retired escalation had, dropping `incremental` first.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn caches_in(tree: &Path, profile: &Path) -> Vec<Unit> {
     let Ok(entries) = std::fs::read_dir(profile.join("incremental")) else {
         return Vec::new();
@@ -757,7 +747,6 @@ fn caches_in(tree: &Path, profile: &Path) -> Vec<Unit> {
 /// Does a live run read this unit with no build lock held: the test scratch it
 /// writes, or an executable it may launch (a file with no extension, or `.exe`)?
 /// Libraries, metadata and caches are read only by a compile, under the lock.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn read_by_a_run(unit: &Unit) -> bool {
     unit.whole
         || unit.artifacts.iter().any(|artifact| {
@@ -782,7 +771,6 @@ const STAGED: &str = "mutate";
 /// dependencies of the profiles the next lap built. A build tree is a
 /// fingerprint directory's grandparent — `replay` for `replay/debug` — and its
 /// `tmp/` is the scratch cargo gave that build's suites.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn wholes_in(tree: &Path, fingerprints: &[PathBuf]) -> Vec<PathBuf> {
     let mut scratch: Vec<PathBuf> = std::iter::once(tree.join(SCRATCH))
         .chain(
@@ -905,7 +893,6 @@ fn newest_write(path: &Path) -> SystemTime {
 /// freshest build ranked least recently used: measured on #1132, a collection
 /// right after `cargo test` built removed the test binary nextest was about to
 /// run, and 2,087 cases failed to exec it.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn last_use(fingerprint: &Path) -> SystemTime {
     std::fs::read_dir(fingerprint)
         .into_iter()
@@ -925,7 +912,6 @@ fn last_use(fingerprint: &Path) -> SystemTime {
 type ArtifactIndex = std::collections::HashMap<String, Vec<PathBuf>>;
 
 /// List a profile's `deps/`, `examples/` and top-level files once.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn artifact_index(profile: &Path) -> ArtifactIndex {
     let mut index = ArtifactIndex::new();
     for dir in [
@@ -969,7 +955,6 @@ fn artifacts_of(index: &ArtifactIndex, profile: &Path, name: &str, hash: &str) -
 
 /// Remove `path`, file or tree, counting a file's blocks only when this was its
 /// last name. Returns the bytes actually freed.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn remove_counted(path: &Path) -> u64 {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         return 0;
@@ -1023,7 +1008,6 @@ fn allocation(path: &Path, meta: &std::fs::Metadata) -> (u64, u64) {
 
 /// Whether `path` is one of the kept files: by device and inode, or by a
 /// [`Kept::Named`] its file name begins with.
-//MUTANT-SUITE crates/batten/src/collect.rs
 fn is_kept(path: &Path, kept: &[Kept]) -> bool {
     let named = kept.iter().any(|kept| match kept {
         Kept::Named(name) => path
@@ -1063,7 +1047,6 @@ fn lock_tree(tree: &Path, wait: bool) -> Option<std::fs::File> {
 
 /// Set every fingerprint file's atime to its mtime under `tree`, so the next
 /// read by cargo records a fresh atime despite `relatime`.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 pub fn rearm(tree: &Path) {
     for fingerprints in crate::prune::directories_named(tree, ".fingerprint") {
         let Ok(units) = std::fs::read_dir(&fingerprints) else {
@@ -1118,7 +1101,6 @@ pub struct Request<'a> {
 ///
 /// Scratch is not a profile: each fixture keeps its own time, so one fresh
 /// fixture does not shield every stale one beside it.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn ranked(mut live: Vec<Unit>, scratch: Vec<Unit>) -> Vec<Unit> {
     let mut built: std::collections::HashMap<PathBuf, SystemTime> =
         std::collections::HashMap::new();
@@ -1150,7 +1132,6 @@ pub fn collect(request: &Request<'_>) -> Pass {
 
 /// [`collect`]'s pass and its `disk-pass` trace line, composed whether or not
 /// the trace is asked for, so a case reads the counts the trace reports.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 fn pass_of(request: &Request<'_>) -> (Pass, String) {
     let past = |deadline: Option<Instant>| deadline.is_some_and(|at| Instant::now() >= at);
     let mut held = Held::default();
@@ -1308,7 +1289,6 @@ pub fn collect_if_pressed(
 /// The trees a collection ranks together: the checkout's `[prune] root` and
 /// each linked worktree's. Measured 2026-10-11: a sibling worktree's `target/`
 /// filled the volume, and nothing the main checkout collected could see it.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 #[must_use]
 pub fn trees(repo: &Path, prune: &crate::prune::Prune) -> Vec<PathBuf> {
     std::iter::once(repo.to_path_buf())
@@ -1323,8 +1303,6 @@ pub fn trees(repo: &Path, prune: &crate::prune::Prune) -> Vec<PathBuf> {
 /// The watcher ([`crate::disk_watch::watch`]) calls this below the minimum, on
 /// its own collection thread; the hook calls it through [`collect_if_pressed`].
 /// `None` where the band is undeclared.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
 pub fn collect_toward_max(
     repo: &Path,
     prune: &crate::prune::Prune,

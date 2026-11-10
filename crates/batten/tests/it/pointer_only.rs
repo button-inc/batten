@@ -57,7 +57,6 @@
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-//MUTANT-SUITE crates/batten/tests/it/pointer_only.rs
 
 use crate::common;
 
@@ -2495,6 +2494,13 @@ const CENSUS: &[Verb] = &[
     },
     Verb {
         path: "mutate sweep",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // A count of jobs, or a refusal naming the undeclared cost variable.
+    Verb {
+        path: "mutate jobs",
         args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,

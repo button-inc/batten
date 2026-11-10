@@ -1809,8 +1809,6 @@ pub struct Payload {
     pub unwrapped: bool,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/mcp_dispatch.rs
-
 /// What a caller must do with a `tools/call` result, decided **before** any
 /// reduction runs.
 ///
@@ -2243,7 +2241,6 @@ const SPAWN_LEDGER: &str = "batten-mcp-spawns";
 // (CLOUD-2193), so both `mcp_spawn.rs` declarations in this file are needed:
 // without either, the rows under it are judged against a file that lacks
 // their cases.
-//MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
 
 /// Where the checkout at `root` keeps its spawn ledger, or `None` outside one.
 ///
@@ -2353,7 +2350,6 @@ pub const EXEC_FAILED: &str = "exec-failed";
 /// Read from the LAST field, where [`SpawnRecord::exec_failed`] appends the
 /// marker to its launch line, so a field added to the launch record later
 /// cannot move the marker out from under this reader.
-//MUTANT-SUITE crates/batten/src/mcp.rs
 #[must_use]
 pub fn is_exec_failure(line: &str) -> bool {
     line.rsplit('\t').next() == Some(EXEC_FAILED)
@@ -2366,7 +2362,6 @@ pub struct SpawnRecord {
     line: String,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
 impl SpawnRecord {
     /// Append that the launch line could not be exec'd (CLOUD-2327): this
     /// launch's record again, then [`EXEC_FAILED`].

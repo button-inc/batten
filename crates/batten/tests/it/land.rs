@@ -24,15 +24,6 @@
 //! binary; what is untested until here is the join between what a lap RECORDS and
 //! what a module READS.
 
-/*
-#MUTANT-SUITE crates/batten/tests/it/land.rs
-#MUTANT a-truncated-reading-reads-as-closed|s@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}&page={number}",@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}",@|a_truncated_reading_is_not_read_as_closed
-#MUTANT dead-end-believed-before-the-ready-registers|s@^    before_ready.is_none_or(|seen| {$@    true || before_ready.is_none_or(|seen| {@|a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_runs
-#MUTANT dead-end-confirmed-by-a-sibling|s@run\.name == finding\.check \&\& @@|a_sibling_s_new_run_does_not_confirm_a_dead_end_on_the_fan_in
-#MUTANT dead-end-confirmed-by-one-masked-name|s@masked\.iter()\.all(@masked.iter().any(@|a_sibling_s_new_run_does_not_confirm_a_dead_end_on_the_fan_in
-#MUTANT red-head-runs-cancelled|s@^    !matches!(seen, Some(TapVerdict::Red \| TapVerdict::Unread))$@    true@|a_red_head_s_other_runs_finish_and_every_other_stop_cancels
-*/
-
 #![cfg(unix)]
 
 use crate::common;

@@ -123,7 +123,6 @@ pub(crate) fn entries_under(
 }
 
 /// The commands one entry registers, in `shape`.
-//MUTANT-SUITE crates/batten/tests/it/harness_wiring.rs
 fn entry_commands(entry: &serde_json::Value, shape: hook::EntryShape) -> Vec<&str> {
     match shape {
         hook::EntryShape::Flat { read, .. } => flat_command(entry, read).into_iter().collect(),
@@ -467,7 +466,6 @@ fn write_at_load(dir: &Path, rows: &[AtLoadRow]) -> Result<bool> {
 /// generator never emits. Leaving the husk would also make the census read
 /// `read: 1, commands: 0`, which is a real disposition and would now be a lie
 /// about how the file got there.
-//MUTANT-SUITE crates/batten/src/wiring.rs
 fn prune_siblings(
     document: &mut serde_json::Value,
     file: hook::WiringFile,
@@ -666,7 +664,6 @@ pub fn live_session_root() -> Option<PathBuf> {
 /// # Errors
 ///
 /// When a surface parsed and cannot be written back.
-//MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
 pub fn register_committed(repo: &Path, check: bool) -> Result<Vec<(hook::Harness, Vec<String>)>> {
     let mut owed = Vec::new();
     for harness in hook::Harness::ALL {
@@ -723,7 +720,6 @@ pub fn register_committed(repo: &Path, check: bool) -> Result<Vec<(hook::Harness
 ///
 /// An event already registering a batten command is left exactly as it is, so
 /// a second run adds nothing — the property the `[[startup]]` check relies on.
-//MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
 fn add_missing(
     document: &mut serde_json::Value,
     file: hook::WiringFile,
@@ -961,8 +957,6 @@ impl Disarmed {
     }
 }
 
-//MUTANT-SUITE crates/batten/tests/it/wiring_disarm.rs
-
 /// The body a disarmed script carries.
 ///
 /// Two lines, and the second is both the exit and the marker: a shim whose
@@ -1104,7 +1098,6 @@ pub fn link_commit_gate(dir: &Path, body: &str) -> Result<usize> {
 
 // The linker's mutation rows, each caught by the compiled case it names, which
 // asks `doctor gate` over the clone the linker just repaired.
-//MUTANT-SUITE crates/batten/tests/it/startup.rs
 
 /// What `wiring gate` found, and with `check` unset, repaired (CLOUD-2339).
 ///
@@ -1155,7 +1148,6 @@ impl GateReport {
 /// A [`crate::error::UsageError`] when `dir` is not in a repository or its
 /// hooks directory does not resolve; an internal error when the directory
 /// cannot be created or a hook cannot be replaced.
-//MUTANT-SUITE crates/batten/tests/it/startup.rs
 pub fn link_git_hooks(dir: &Path, check: bool) -> Result<GateReport> {
     let root = git::repo_root(dir)?;
     let Some(hooks) = crate::doctor::hooks_dir(dir) else {

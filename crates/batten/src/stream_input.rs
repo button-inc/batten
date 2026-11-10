@@ -19,8 +19,6 @@
 //! CLOUD-2224): reading a 50 MB payload whole peaked at 150 MiB and 248-284 ms;
 //! streamed, 2.4 MiB (the process baseline) and 179-210 ms.
 
-//MUTANT-SUITE crates/batten/src/stream_input.rs
-
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 

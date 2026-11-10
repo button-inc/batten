@@ -1289,7 +1289,6 @@ pub fn capture_fingerprint(stream: &str, bytes: &[u8]) -> Fingerprint {
 ///
 /// When the reader fails, the sink fails, or it yields a different count than
 /// `len` — a digest over a length the bytes do not have would name nothing.
-//MUTANT-SUITE crates/batten/src/identity.rs
 pub fn capture_fingerprint_streamed(
     stream: &str,
     len: u64,

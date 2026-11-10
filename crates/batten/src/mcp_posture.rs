@@ -75,7 +75,6 @@ pub fn run(inputs: &Inputs<'_>, session: &Session, err: &mut dyn Write) -> Resul
 ///
 /// One finding per governed name, with a count. A name whose wiring this host
 /// did not inject answers nothing — no generated config means no verdict.
-//MUTANT-SUITE crates/batten/tests/it/mcp_attach.rs
 fn unenforceable(inputs: &Inputs<'_>, settings: &str) -> Vec<String> {
     let mut findings = Vec::new();
     for alias in &inputs.config.permission_aliases {

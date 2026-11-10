@@ -171,7 +171,6 @@ pub enum Step {
     MergeHeld,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 impl Step {
     /// The receipt's spelling.
     #[must_use]
@@ -215,7 +214,6 @@ impl Step {
 
 /// The step a raised claim owes, given who lands and where the commits are
 /// (CLOUD-2656). Under `"agent"` it is always `land`, today's behaviour.
-//MUTANT-SUITE crates/batten/src/completion.rs
 #[must_use]
 pub const fn next_step(landed_by: crate::config::LandedBy, push: PushState) -> Step {
     match landed_by {

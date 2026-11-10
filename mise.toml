@@ -687,7 +687,7 @@ CI_VERDICT_STEPS = "Run mise run ,Run mise exec -- "
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = ".config/nextest.toml,action.yml,agentic-experiment-record,answer-the-operator,claude-code-cloud,claude-code-plan,awk-regex,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,linear-history,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,red-head,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,stop-posture,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,run-arg-shape,branch-age,evaluator-closure,evaluator-io-probe,agent-spawn,macos-link,ntia,release-tracking,sbom-actions,task-callable,transcript-corpus,release-assets,durable-write,spawn-factory,turn-ask,turn-defer,ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,hk-fix-selection.pkl,supply-chain,sweep-exit-table,tracker-hygiene,task-duplicate-close-check,release-hygiene,hook-profile,finding-sink,check-verdict,git,forge-read-first,batten.toml,task-verify,task-alive,.github/workflows/release-plz.yml,.github/workflows/release-land.yml,.github/workflows/release-artifacts.yml,.github/workflows/renovate.yml"
+MUTANT_GATES = ".config/nextest.toml,action.yml,agentic-experiment-record,answer-the-operator,claude-code-cloud,claude-code-plan,awk-regex,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,linear-history,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,red-head,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,stop-posture,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,run-arg-shape,branch-age,evaluator-closure,evaluator-io-probe,agent-spawn,macos-link,ntia,release-tracking,sbom-actions,task-callable,transcript-corpus,release-assets,durable-write,spawn-factory,turn-ask,turn-defer,ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,hk-fix-selection.pkl,supply-chain,sweep-exit-table,tracker-hygiene,task-duplicate-close-check,release-hygiene,hook-profile,finding-sink,check-verdict,git,forge-read-first,batten.toml,task-verify,task-alive,.github/workflows/release-plz.yml,.github/workflows/release-land.yml,.github/workflows/release-artifacts.yml,.github/workflows/renovate.yml,engine-hygiene"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -1830,12 +1830,19 @@ run = "cargo run --quiet -p batten -- mutate sweep"
 
 [tasks."mutant:rust"]
 description = "Gate: every mutant cargo-mutants makes of this branch's Rust change since origin/main is caught"
-env = { NEXTEST_PROFILE = "mutants" }
+# THE PER-JOB COST IS THE TREE'S, THE MACHINE IS MEASURED: `batten mutate jobs`
+# divides cores, temp-volume headroom above the collector's floor, and memory by
+# one copy's cold mutants-profile build, measured on CLOUD-1414: 3,872 MB of
+# target beside a ~370 MB copy, and a 3.5 GB peak rustc.
+env = { NEXTEST_PROFILE = "mutants", MUTANT_JOB_DISK_MB = "4300", MUTANT_JOB_MEMORY_MB = "4000" }
+# THE HOST BINARY APPLIES THE PIN, because only it links onto PATH: a checkout's
+# build fills the cache and leaves the host's links alone (`provision::links_host`).
+# The baseline stays on every shard: it is what derives cargo-mutants' timeout.
 run = [
-  "cargo run --quiet -p batten -- provision apply",
+  "batten provision apply",
   "mkdir -p target/mutants",
   "git diff --no-color --no-ext-diff origin/main...HEAD > target/mutants/change.diff",
-  "cargo mutants --in-diff target/mutants/change.diff --output target/mutants --iterate --jobs 2 ${MUTANT_SHARD:+--shard $MUTANT_SHARD --baseline=skip --timeout 900}",
+  "jobs=$(cargo run --quiet -p batten -- mutate jobs) && cargo mutants --in-diff target/mutants/change.diff --output target/mutants --iterate --jobs \"$jobs\" ${MUTANT_SHARD:+--shard $MUTANT_SHARD}",
 ]
 
 [tasks."mutant-census"]

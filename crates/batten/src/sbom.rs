@@ -91,12 +91,8 @@ pub struct Options {
 // the Rust that replaced it, plus the arms the verb added. The normaliser and the
 // enrichment are where it can silently stop doing its job, so removing each pass
 // is what shows the tier discriminates.
-//MUTANT-SUITE crates/batten/tests/it/sbom_producer.rs
-//MUTANT-SUITE crates/batten/tests/it/sbom_binary.rs
-//MUTANT-SUITE crates/batten/tests/it/ntia.rs
 // The five `[sbom]` keys that decide, as `config lint --config-from` compares
 // them: each comparison removed must leave its key unreported.
-//MUTANT-SUITE crates/batten/tests/it/config_trust.rs
 
 /// The verb, as its diagnostics name it.
 const VERB: &str = "sbom";

@@ -165,7 +165,6 @@ fn differs(base: &str, head: &str) -> bool {
 
 /// What changed between a file's base and head text.
 #[must_use]
-//MUTANT-SUITE crates/batten/src/replay.rs
 pub fn compare(base: &str, head: &str) -> Changed {
     let index = |source: &str| -> BTreeMap<String, TestFn> {
         tests_in(source)
@@ -669,7 +668,6 @@ const COMPILE_FAILED: &str = "could not compile";
 /// every test, as it failed every per-test build of the one spliced tree. A run
 /// that named the test nowhere and did not fail to compile is could-not-look,
 /// never a finding: a refusal the replay never measured would read as one it did.
-//MUTANT-SUITE crates/batten/tests/it/test_replay.rs
 fn passes(outcome: Option<&(i32, String)>, test: &str) -> Result<bool> {
     let Some((code, output)) = outcome else {
         bail!("test replay: could not replay {test}: {}", said(outcome));

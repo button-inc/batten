@@ -121,7 +121,6 @@ pub fn render(rows: &[Row]) -> String {
 
 /// The nextest table: one row per MODULE, which is what a row names there — a
 /// bats row is a file, a nextest row is a module path inside one test binary.
-//MUTANT-SUITE crates/batten/src/suites.rs
 fn nextest_table(rows: &[Row]) -> String {
     table(
         rows,

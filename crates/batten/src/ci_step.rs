@@ -304,7 +304,6 @@ pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> R
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
-//MUTANT-SUITE crates/batten/src/ci_step.rs
 mod tests {
     use super::*;
 

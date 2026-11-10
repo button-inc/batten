@@ -75,7 +75,6 @@ pub struct Check {
     pub subjects: Vec<String>,
 }
 
-//MUTANT-SUITE crates/batten/src/doctor.rs
 impl Check {
     const fn passed(name: &'static str) -> Self {
         Check {
@@ -1243,7 +1242,6 @@ pub fn diagnose_toolchain(manifest: &Path, probe: &str) -> Toolchain {
 ///
 /// Reads both files and hashes them; spawns nothing. Length is compared first
 /// only as a short-circuit — two files of different lengths cannot be identical.
-//MUTANT-SUITE crates/batten/tests/it/doctor.rs
 #[must_use]
 pub fn diagnose_mediator(dir: &Path) -> Mediator {
     // The tree builds a mediator iff it carries the crate that produces one.
@@ -1529,7 +1527,6 @@ pub fn diagnose_commit_gate(dir: &Path) -> Check {
 // loop, where a check stuck on `ok` reports the row provisioned, `--repair`
 // never runs its argv, and the fixture's hooks stay absent. That is also what
 // makes the declared precondition load-bearing rather than decorative.
-//MUTANT-SUITE crates/batten/tests/it/startup.rs
 
 /// The check the declared transcript earns, or `None` where none is declared
 /// (CLOUD-1035).
@@ -1906,7 +1903,6 @@ pub struct WiringFinding {
 /// Three groups. A missing file or registration is what `wiring register --all`
 /// adds; anything wrong WITH batten's entries is restored from the derivation,
 /// because `add_missing` only adds; a merged registration is `reclaim`'s.
-//MUTANT-SUITE crates/batten/src/doctor.rs
 fn fix_for(reason: &str, harness: hook::Harness) -> String {
     match reason {
         FILE_MISSING | EVENT_UNREGISTERED => "batten wiring register --all".to_owned(),
@@ -1925,7 +1921,6 @@ fn fix_for(reason: &str, harness: hook::Harness) -> String {
 
 /// Plain `doctor`'s `hook-wiring` check: fails when any wiring finding remains
 /// after dropping the ones on a merged home surface (CLOUD-2676).
-//MUTANT-SUITE crates/batten/tests/it/doctor.rs
 fn hook_wiring_check(dir: &Path) -> Check {
     let unwired = diagnose_hooks(dir)
         .harnesses
@@ -2789,7 +2784,6 @@ fn diagnose_session_root(
 /// to keep out of the engine, and it would do it exactly where the evidence is
 /// weakest. The `config` check in bare [`diagnose`] is what reports an
 /// unloadable config; this verb does not re-report it.
-//MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
 #[must_use]
 pub fn diagnose_hooks(dir: &Path) -> WiringReport {
     // ONE RESOLUTION, TWO READINGS. Both the exclusivity flag and the declared
@@ -3016,7 +3010,6 @@ fn unminted_facts(dir: &Path, resolved: Option<&resolve::Resolved>) -> Vec<Unmin
 /// machine with only the per-session leaf missing, which is what a session with
 /// no declared work looks like on a host that creates the store lazily. The
 /// caller has already read the link and established the target is absent.
-//MUTANT-SUITE crates/batten/tests/it/session_drain.rs
 fn store_is_merely_unwritten(target: &Path) -> bool {
     target.parent().is_some_and(Path::is_dir)
 }
@@ -3062,7 +3055,6 @@ enum TaskEvidence {
 ///
 /// **A TEMPLATE WITHOUT `{session}` CANNOT BE MATCHED** to a session, so it
 /// answers [`TaskEvidence::Unknown`].
-//MUTANT-SUITE crates/batten/tests/it/session_drain.rs
 fn transcript_evidence(
     dir: &Path,
     transcript: &crate::transcript::TranscriptConfig,
@@ -3140,7 +3132,6 @@ fn transcript_evidence(
 /// either arm: a target that exists and still will not list is could-not-look,
 /// and a link that will not read is no pointer at all, which is not the same
 /// fact as a pointer at nothing.
-//MUTANT-SUITE crates/batten/tests/it/session_drain.rs
 fn absent_store_is_zero(
     dir: &Path,
     transcript: &crate::transcript::TranscriptConfig,
@@ -4974,7 +4965,5 @@ mod probe_tests {
 
 // The compiled-binary suite over `doctor`: the mediator comparison reads the
 // `PATH` a subprocess is handed, and the merged-surface count the home it is.
-//MUTANT-SUITE crates/batten/tests/it/doctor.rs
 // The session-start chain over the binary: which facts a registered rule reads
 // and whether this session minted them.
-//MUTANT-SUITE crates/batten/tests/it/doctor_session.rs

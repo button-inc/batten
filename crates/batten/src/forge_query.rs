@@ -74,7 +74,6 @@ use crate::rest::Query;
 // the mutation has to survive the whole path a consumer depends on: the row
 // loads, the walk runs against the fixture forge, the record lands, and a module
 // decides over it. Each row restores one failure the header names.
-//MUTANT-SUITE crates/batten/tests/it/forge_query.rs
 
 /// The leaf this module answers for, as a refusal names it.
 const VERB: &str = "record query";
@@ -418,7 +417,6 @@ enum Encoding {
 // The unit tier's own row: a parameter's LITERAL text left unencoded is the
 // defect this split was written to close, and only a template carrying an
 // operator can see it.
-//MUTANT-SUITE crates/batten/src/forge_query.rs
 /// Render one template with its placeholders bound, encoded as `encoding` says.
 fn render(
     template: &str,

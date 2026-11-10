@@ -62,9 +62,6 @@ use crate::rest::Answer;
 
 // THE MECHANISM'S OWN DISCRIMINATION, over the compiled binary against the
 // fixture forge. Each row removes one property a packager or a gate depends on.
-//MUTANT-SUITE crates/batten/tests/it/checksums.rs
-//MUTANT-SUITE crates/batten/tests/it/release_assets.rs
-//MUTANT-SUITE crates/batten/tests/it/release_backfill.rs
 
 /// The record family `record release` writes, and the one a module reads.
 ///

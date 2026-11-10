@@ -369,7 +369,6 @@ pub fn register(git_dir: &Path, task: &str, pid: &str, phase: &str, now: u64) {
 /// exactly what `land`'s reap exists to find, and forgetting its record would
 /// hide those processes from it. Off unix no group reads as gone, so nothing
 /// is superseded there.
-//MUTANT-SUITE crates/batten/tests/it/task_registry.rs
 fn supersede(git_dir: &Path, task: &str, pid: &str) {
     for entry in records(git_dir) {
         let sibling = entry.task == task && entry.pid != pid;
@@ -505,7 +504,6 @@ pub struct Alive {
 /// comparison reads as ALIVE: off Linux, where there is no cmdline to read, and
 /// for an entry an older binary wrote with no digest, which is reaped only once
 /// its pid is gone.
-//MUTANT-SUITE crates/batten/tests/it/task_registry.rs
 fn task_alive(pid: &str, recorded: &str) -> bool {
     if !pid_exists(pid) {
         return false;
@@ -681,7 +679,6 @@ fn second(stamp: &str) -> Option<u64> {
 ///
 /// CLOUD-901's other half still holds, and now for every entry: a corroboration
 /// miss costs a wrong word here, never the evidence.
-//MUTANT-SUITE crates/batten/tests/it/task_registry.rs
 #[must_use]
 pub fn alive(git_dir: &Path, options: Alive) -> Reading {
     alive_reading(git_dir, options, |file| std::fs::read_to_string(file))
@@ -788,7 +785,6 @@ pub fn abandoned(git_dir: &Path) -> Vec<Entry> {
 /// The registry split in one read: `(running, abandoned)`, each record probed
 /// once, so a registrant exiting mid-read lands in exactly one half. The Stop
 /// watchdog reads the first half as a relaunch already under way (CLOUD-2370).
-//MUTANT-SUITE crates/batten/tests/it/stop_watchdog.rs
 #[must_use]
 pub fn partition(git_dir: &Path) -> (Vec<Entry>, Vec<Entry>) {
     records(git_dir)
@@ -1126,7 +1122,6 @@ pub fn singleton_release_at(lock: &Path) {
 /// unreadable-twice is the corroboration standing in for `!pid_exists`, since a
 /// holder between its create and its write stamps it long before the recheck
 /// ends. Unreadable then readable is a holder that finished writing: held.
-//MUTANT-SUITE crates/batten/tests/it/singleton.rs
 fn may_reclaim(first: Option<&str>, second: Option<&str>) -> bool {
     match (first, second) {
         (None, None) => true,

@@ -17,20 +17,6 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-// The engine-side rows this suite kills, declared beside the code they mutate
-// (`src/lib.rs`) and mirrored here so a board obligation naming this file binds:
-/*
-#MUTANT-SUITE crates/batten/tests/it/preapprove.rs
-#MUTANT preapprove-before-refusal|s@^            decided => decided,$@            decided => hook::policy_preapproval(policy, envelope, facts).map_or(decided, hook::Decision::Preapproved),@|a_refused_call_is_never_preapproved
-#MUTANT advice-beside-the-grant|s@^    if !matches!(decision, hook::Decision::Preapproved(_)) || advice.is_empty() {$@    if true {@|a_preapproval_carries_the_calls_advice_in_one_document
-*/
-// And the rows `write-is-preapproved.rego` declares (CLOUD-2002), mirrored for
-// the same reason:
-/*
-#MUTANT write-mode-unchecked|s@^\tinput.call\["permission-mode"\] == "auto"$@\ttrue@|an_edit_is_not_preapproved_in_default_mode
-#MUTANT write-destructive-granted|s@^\t\tnot destructive_program(program)$@\t\ttrue@|a_destructive_shell_write_is_left_to_the_host_in_auto
-*/
-
 use crate::common;
 
 use std::path::PathBuf;
@@ -624,13 +610,20 @@ fn an_edit_and_a_shell_write_are_preapproved_in_auto() {
 /// THE CASE `write-mode-unchecked` KILLS: outside auto mode the host's own
 /// prompt stands.
 #[test]
+///
+/// The same write auto mode grants, so the engine's own decision is Allow and
+/// the preapprove rule is asked: a write the engine refuses never reaches it,
+/// and would pass here with the mode check deleted.
 fn an_edit_is_not_preapproved_in_default_mode() {
-    let edit = envelope(
-        "default",
-        "Edit",
-        &serde_json::json!({ "file_path": "README.md", "old_string": "a", "new_string": "b" }),
-    );
-    assert_not_granted(&edit);
+    let write = |mode| {
+        envelope(
+            mode,
+            "Write",
+            &serde_json::json!({ "file_path": "/tmp/batten-preapprove/notes.txt", "content": "x" }),
+        )
+    };
+    assert_granted_by(&write("auto"), "call grant now");
+    assert_not_granted(&write("default"));
 }
 
 /// THE CASE `write-destructive-granted` KILLS: a line carrying `rm` is the

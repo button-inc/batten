@@ -595,7 +595,6 @@ fn version(root: &Path) -> Look<String> {
 // THE PROFILE WORDS REACH THE RUNNER (CLOUD-843): dropped, the fast plan is the
 // full plan, the slow tier reads empty, and `tier list empty` refuses a
 // correctly wired gate.
-//MUTANT-SUITE crates/batten/tests/it/hook_profile.rs
 fn profile_words(profiles: &[String]) -> Vec<String> {
     let mut words = Vec::with_capacity(profiles.len() * 2);
     for profile in profiles {

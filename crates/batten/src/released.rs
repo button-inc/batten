@@ -45,8 +45,6 @@ use crate::ready::Grammar;
 /// The record family this module writes, and the key the module reads.
 pub const FAMILY: &str = "released";
 
-//MUTANT-SUITE crates/batten/tests/it/released.rs
-
 /// The keys a review-column payload must CARRY for the board gate to answer
 /// about it, each with the re-fetch that supplies it (CLOUD-783).
 ///

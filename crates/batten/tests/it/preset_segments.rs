@@ -192,6 +192,11 @@ fn another_tool_is_not_judged_wherever_it_sits() {
     // flag is not its business — in a list as much as alone.
     assert_allowed("hg push --force");
     assert_allowed("cd /tmp && hg push --force");
+    // `gh` is projected a subcommand as git is (CLOUD-2354), so `push` reaches
+    // the module and only the program anchor tells the two apart; `hg` has no
+    // subcommand at all and would pass with the anchor deleted.
+    assert_allowed("gh push --force origin main");
+    assert_allowed("cd /tmp && gh push --force origin main");
 }
 
 #[test]

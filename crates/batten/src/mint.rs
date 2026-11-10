@@ -850,7 +850,6 @@ impl Declared {
     }
 }
 
-//MUTANT-SUITE crates/batten/src/mint.rs
 /// The refusals that read more than one row: a `clear` with no writer, and an
 /// `after` naming no writer keyed the same way.
 ///

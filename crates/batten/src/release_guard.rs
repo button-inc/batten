@@ -33,7 +33,6 @@ pub struct Facts {
 }
 
 /// Every item still owed, each a pointer; empty when the server gate holds.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
 #[must_use]
 pub fn owed(facts: &Facts) -> Vec<String> {
     let mut owed = Vec::new();

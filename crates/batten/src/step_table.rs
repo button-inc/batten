@@ -103,7 +103,6 @@ pub fn validate(rows: &[Step]) -> Result<()> {
 // The validator's mutation rows, one per refusal. Each clause is a row that
 // would otherwise load and answer the wrong thing in silence, so dropping any
 // one of them must turn the unit case that feeds it that row red.
-//MUTANT-SUITE crates/batten/src/step_table.rs
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

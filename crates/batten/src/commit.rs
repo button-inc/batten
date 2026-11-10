@@ -213,7 +213,6 @@ fn address_of(identity: &str) -> &str {
 ///
 /// A [`UsageError`] (→ exit `1`) when an exemption's expression does not
 /// compile. Validated at load too, so this keeps the function total.
-//MUTANT-SUITE crates/batten/src/commit.rs
 pub fn judge_claims(commits: &[Claimant], claims: &Claims) -> Result<Vec<Finding>> {
     let rows = claims
         .unclaimed

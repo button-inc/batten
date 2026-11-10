@@ -113,7 +113,6 @@ pub enum Verdict {
 
 /// The state check: a draft when `draft` is asked, otherwise published,
 /// immutable, and tagged at its target.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
 fn judge_state(release: &Release, draft: bool, refused: &mut Vec<Refusal>) -> Result<(), String> {
     if draft {
         if !release.draft {

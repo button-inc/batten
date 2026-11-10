@@ -413,7 +413,6 @@ fn text(value: &Value, pointers: &[&str]) -> Option<String> {
 ///
 /// **No delivery id and no Events API id enters it**: both are source-specific,
 /// so a key built from either would fire one change once per source.
-//MUTANT-SUITE crates/batten/src/forge_event.rs
 fn key(row: &CatalogRow, action: Option<&str>, repo: Option<&str>, payload: &Value) -> String {
     use sha2::Digest as _;
     use std::fmt::Write as _;
@@ -528,7 +527,6 @@ pub fn ring_path(common_dir: &std::path::Path) -> std::path::PathBuf {
 /// # Errors
 ///
 /// When the ring exists and cannot be read.
-//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 pub fn unseen(ring_file: &std::path::Path, key: &str) -> std::io::Result<bool> {
     let ring = read_ring(ring_file)?;
     let key = key.to_owned();
@@ -594,7 +592,6 @@ pub fn wake_event(stdin: &str) -> Option<(String, Value)> {
     wake_element(prompt.as_deref().unwrap_or(stdin))
 }
 
-//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 fn wake_element(text: &str) -> Option<(String, Value)> {
     let start = text.find(WAKE_OPEN)?;
     let (tag, element) = text[start..].split_once('>')?;
@@ -723,7 +720,6 @@ pub struct RoundInput<'a> {
 /// # Errors
 ///
 /// A cursor that cannot be read, or a stream that will not take a line.
-//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 pub fn read_round(
     forge: &crate::rest::Forge,
     input: &RoundInput<'_>,
@@ -754,7 +750,6 @@ pub fn read_round(
     Ok(Round::CouldNotLook)
 }
 
-//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 fn available(source: &crate::rest::Source, input: &RoundInput<'_>) -> bool {
     use crate::rest::SourceKind::{Command, Mcp};
     let answers =
@@ -826,7 +821,6 @@ fn read_document(source: &crate::rest::Source, input: &RoundInput<'_>) -> Option
     }
 }
 
-//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 fn decode_events(items: &[Value], cursor: Option<Cursor>) -> (Vec<Envelope>, Cursor) {
     let mut cursor = cursor.unwrap_or_default();
     let start = cursor.clone();
@@ -844,7 +838,6 @@ fn decode_events(items: &[Value], cursor: Option<Cursor>) -> (Vec<Envelope>, Cur
     (events, cursor)
 }
 
-//MUTANT-SUITE crates/batten/tests/it/forge_events.rs
 fn decode_snapshot(
     source: &crate::rest::Source,
     items: &[Value],

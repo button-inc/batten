@@ -6,14 +6,6 @@
 //! never the running engine, and never a unit a live build has used. The watcher spans the
 //! whole run it is hosted by; the hook collects before each mediated call.
 
-// The rows this suite kills, declared beside the code they mutate and mirrored
-// here so a board obligation naming this file binds:
-/*
-#MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-#MUTANT reclaim-under-held-lock|s@^            Err(std::fs::TryLockError::WouldBlock) => return None,$@            Err(std::fs::TryLockError::WouldBlock) => {}@|a_tree_a_build_holds_is_never_collected
-#MUTANT reclaim-unlink-unmeasured|s@^            format!("disk-unlink-ms {}", self.wall_ms),$@@|the_arm_watches_past_the_gate
-#MUTANT arm-ends-with-the-gate|s@^    while !stop.load(Ordering::Relaxed) {$@    for _ in 0..1 {@|the_arm_watches_past_the_gate
-*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

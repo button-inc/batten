@@ -882,6 +882,8 @@ pub enum MutateCommand {
     /// Report every gate that is neither enforced nor carrying a filed
     /// exemption, in both directions.
     Census,
+    /// Print how many cargo-mutants jobs this machine holds.
+    Jobs,
 }
 
 /// Subcommands of `task`.
@@ -2742,6 +2744,7 @@ fn mutate_of(matches: &ArgMatches) -> Option<MutateCommand> {
     match matches.subcommand()? {
         ("sweep", _) => Some(MutateCommand::Sweep),
         ("census", _) => Some(MutateCommand::Census),
+        ("jobs", _) => Some(MutateCommand::Jobs),
         _ => None,
     }
 }

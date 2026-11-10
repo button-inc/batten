@@ -110,7 +110,6 @@ pub struct Redirect {
 
 /// The table with every `read` dropped whose `read_server` `resolves` says no
 /// source can reach (CLOUD-2229): a refusal must name a route that can be taken.
-//MUTANT-SUITE crates/batten/src/redirect.rs
 #[must_use]
 pub fn offered(table: &[Redirect], resolves: impl Fn(&str) -> bool) -> Vec<Redirect> {
     table

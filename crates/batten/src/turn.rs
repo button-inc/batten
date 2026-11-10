@@ -347,8 +347,6 @@ pub fn render(turn: &Turn, columns: &dyn Fn(&str) -> String) -> String {
     body
 }
 
-//MUTANT-SUITE crates/batten/src/turn.rs
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

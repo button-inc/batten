@@ -417,7 +417,6 @@ fn peak_concurrency(runs: &[Run]) -> i64 {
 // THE PRODUCER'S OWN DISCRIMINATION, each over the compiled binary against the
 // fixture forge so the mutation has to survive the whole path: flags, the walk,
 // the join, the store. Each row restores a failure the retired suite caught.
-//MUTANT-SUITE crates/batten/tests/it/land_divergence.rs
 #[must_use]
 pub fn divergence(spec: &Divergence, slug: &str, git_dir: &Path, fetch: Transport<'_>) -> Produced {
     let mut unreadable = 0_u64;
@@ -593,7 +592,6 @@ fn classify(job: &Value, verdict_steps: &[String]) -> (&'static str, String) {
 // declared here so the whole-file sweep's admission scope runs them too: the rows
 // below select by case name, but a survivor the sweep measures over the scope
 // alone stays live while the suite that kills it is left undeclared.
-//MUTANT-SUITE crates/batten/tests/it/nonverdict.rs
 #[must_use]
 pub fn nonverdict(spec: &Nonverdict, slug: &str, git_dir: &Path, fetch: Transport<'_>) -> Produced {
     let per_page = spec.window.to_string();

@@ -70,7 +70,6 @@ pub enum PinKind {
 pub const MALFORMED_PIN: &str =
     "`engine` names exactly one of `release` (a release tag, `v0.0.217`) or `source`";
 
-//MUTANT-SUITE crates/batten/src/engine.rs
 impl Pin {
     /// What this pin names.
     ///
@@ -122,7 +121,6 @@ fn is_input(path: &str) -> bool {
 /// SHA-256's empty value, `e3b0c442…`, which names no source; measured on #1132,
 /// a debug binary carried exactly that stamp and every `cargo run -p batten`
 /// task refused under a source pin.
-//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 pub fn digest(root: &Path) -> Result<String> {
     use sha2::Digest as _;
     let mut hasher = sha2::Sha256::new();
@@ -168,7 +166,6 @@ fn hex(bytes: &[u8]) -> String {
 /// binary under `root` is cargo's output, not an installed engine. Under
 /// `mise exec` that output is first on `PATH`, and the one past it is what the
 /// hook runs — the case #1132 measured.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 #[must_use]
 pub fn install_targets(
     running: &Path,
@@ -261,7 +258,6 @@ pub fn stamp(binary: &Path, digest: &str) -> Result<()> {
 /// row, read where no row exists; [`check`] refuses one that disagrees with the
 /// row ([`row_disagreement`]). Top-level keys precede the first table header in
 /// TOML, so an `engine` line past it belongs to some table and is not the pin.
-//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 #[must_use]
 pub fn declared(text: &str) -> Option<Pin> {
     Pins::of(text).declared()
@@ -307,7 +303,6 @@ impl Pins {
 }
 
 // The rows below `declared` are judged by the install suite, as before it.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 
 /// The release the first `[[provision]] name = "batten"` row names, as a tag
 /// (`v0.0.216`), read with `toml_edit` and no validator (CLOUD-2595).
@@ -346,7 +341,6 @@ fn artifact_digest(artifact: &dyn toml_edit::TableLike) -> Option<String> {
 /// not one of its own `[provision.…]` subtables, and only that slice meets
 /// `toml_edit`. A block that will not parse is passed over, so a malformed
 /// neighbour can no more hide the pin than a later release's check can.
-//MUTANT-SUITE crates/batten/src/engine.rs
 fn batten_row(text: &str) -> Option<toml_edit::Table> {
     // Each block is parsed as it closes, and the first batten row ends the scan.
     let parsed = |block: &str| {
@@ -437,7 +431,6 @@ fn platform_artifact<'row>(
 /// So the triple's own table answers first; the `<os>-<arch>` one only when its
 /// URL names this engine's asset; otherwise `None`, and the follow verifies
 /// against the release's `SHA256SUMS`.
-//MUTANT-SUITE crates/batten/src/engine.rs
 #[must_use]
 pub fn followed_digest(text: &str) -> Option<String> {
     let row = batten_row(text)?;
@@ -499,8 +492,6 @@ pub fn row_disagreement(text: &str) -> Option<(String, String)> {
 ///
 /// A `.zip` target has no `unpack` spelling a provision row can carry, so it is
 /// left to the `SHA256SUMS` fallback the follow keeps for an unlisted platform.
-//MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 #[must_use]
 pub fn adopted(text: &str, repository: &str, tag: &str, sums: &str) -> Option<String> {
     if declared(text).is_some() {
@@ -637,7 +628,6 @@ fn platform_of(target: &str) -> Option<String> {
 }
 
 // The rows below are judged by the install suite, as before this block.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 
 /// One top-level key of a config, read from its raw text without parsing the
 /// rest (CLOUD-2279): the scan [`declared`] makes, for any key.
@@ -723,8 +713,6 @@ fn shell_word(word: &str) -> String {
     }
 }
 
-//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-
 /// Whether the running binary lives inside the tree holding `source`, the
 /// config it was refused over — that tree's own build, not an installed engine.
 fn built_in(source: &str) -> bool {
@@ -746,7 +734,6 @@ pub const LOCAL_ENV: &str = "BATTEN_ENGINE";
 /// and an in-process load names its source by label rather than by a path the
 /// in-tree arm could judge. Source pins only — a release pin is a published
 /// engine's name, and running another under it is the skew this check refuses.
-//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 pub(crate) fn runs_local() -> bool {
     std::env::var_os(LOCAL_ENV).is_some_and(|value| value == "local")
 }
@@ -778,7 +765,6 @@ pub(crate) fn runs_local() -> bool {
 /// the tree stopped `follow_pin` finding its own build, reinstating the drift
 /// CLOUD-2376 closed, while a RELATIVE one resolved under the authority and was
 /// honoured for a tree this process never built.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 #[must_use]
 pub fn checkout_build(root: &Path) -> Option<PathBuf> {
     let build = root
@@ -797,7 +783,6 @@ pub fn checkout_build(root: &Path) -> Option<PathBuf> {
 /// stayed green while proving less than it read as proving, which is the defect
 /// `hand_off` collapsed two hand-offs to fix. Same answer here: one existence
 /// rule, one line, one row over it.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 fn existing(build: PathBuf) -> Option<PathBuf> {
     build.is_file().then_some(build)
 }
@@ -810,7 +795,6 @@ fn existing(build: PathBuf) -> Option<PathBuf> {
 /// that same root with this process's environment inherited. The two ends of
 /// one file therefore agree for every value of the variable, absolute or
 /// relative — which is the agreement this issue exists to restore.
-//MUTANT-SUITE crates/batten/tests/it/engine_update.rs
 #[must_use]
 pub fn own_build(root: &Path) -> Option<PathBuf> {
     existing(release_build(root))
@@ -859,7 +843,6 @@ pub fn release_build(root: &Path) -> PathBuf {
 /// A [`UsageError`] naming both identities and the update, when the pin names
 /// another release or another source, names both or neither, or names a source
 /// this binary carries no stamp for.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 pub fn check(text: &str, source: &str, stamp: impl FnOnce() -> Option<String>) -> Result<()> {
     let pins = Pins::of(text);
     if let Some((key, row)) = pins.disagreement() {
@@ -1055,8 +1038,6 @@ pub fn verify(archive: &[u8], sums: &str, asset: &str) -> Result<()> {
 /// Refuse an archive whose SHA-256 is not `want`, naming `whose` digest it was:
 /// the release's `SHA256SUMS`, or the consumer's batten row (CLOUD-2595). The
 /// one comparison every download passes, whichever side vouched for the bytes.
-//MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
 fn verify_digest(archive: &[u8], want: &str, asset: &str, whose: &str) -> Result<()> {
     let got = crate::receipt::hex_sha256(archive);
     if got != want {
@@ -1068,7 +1049,6 @@ fn verify_digest(archive: &[u8], want: &str, asset: &str, whose: &str) -> Result
 }
 
 // The rows below are judged by this module's own unit suite, as before.
-//MUTANT-SUITE crates/batten/src/engine.rs
 
 /// The engine binary of release `tag`, fetched from `repository` for this build's
 /// own target and checked against that release's `SHA256SUMS` (CLOUD-2062).
@@ -1137,7 +1117,6 @@ pub fn fetch_release_for(
 }
 
 // The rows below are judged by this module's own unit suite, as before.
-//MUTANT-SUITE crates/batten/src/engine.rs
 
 /// The gnu build of a musl Linux `target`'s platform, or `None` for any other.
 #[must_use]
@@ -1259,8 +1238,6 @@ fn heading_of(line: &str) -> Option<(semver::Version, Option<String>)> {
 /// heading — is not a release. ANY `## ` line, parsed or not, closes the open
 /// section, so an unparsed heading never merges its entries into the release
 /// above it.
-//MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 #[must_use]
 pub fn changelog_sections(text: &str) -> Vec<Heading> {
     let mut sections = Vec::new();
@@ -1294,7 +1271,6 @@ pub fn changelog_sections(text: &str) -> Vec<Heading> {
 /// changelog at `reference`, the ref whose text was read, spanning the
 /// smallest heading line to the largest section end. `?plain=1` because a
 /// rendered `.md` blob ignores `#L` anchors.
-//MUTANT-SUITE crates/batten/tests/it/engine_install.rs
 #[must_use]
 pub fn notes_url(repository: &str, reference: &str, newer: &[Heading]) -> String {
     let base = format!(
@@ -1514,7 +1490,6 @@ fn item_line(text: &str, item: &toml_edit::Item) -> usize {
 /// segment (`…/download/v8.8.8/`), whose `v` is kept as written, and the asset
 /// name after it. A host, an org or a mirror path that happens to contain the
 /// old version is left as it is, which a substring replace was not.
-//MUTANT-SUITE crates/batten/src/engine.rs
 #[must_use]
 pub fn moved_url(url: &str, new: &str) -> Option<String> {
     let (head, asset) = url.rsplit_once('/')?;
@@ -1741,7 +1716,6 @@ fn yaml_events(text: &str) -> Option<Vec<(yaml_rust2::Event, usize)>> {
 /// expression (`${{ … }}`) is not one, and a longer key such as
 /// `BATTEN_VERSION_FROM_REF` is another key. A digest agrees when it is one of
 /// `published`, the release's [`published_digests`].
-//MUTANT-SUITE crates/batten/src/engine.rs
 #[must_use]
 pub fn workflow_literals(
     text: &str,
@@ -1862,7 +1836,6 @@ pub fn workflow_literals(
 /// lane call a verb its pin does not carry. Measured on #1132: three of four
 /// such calls were invisible to this scan. Every `-- batten ` on a command line
 /// is a released-binary call of its own.
-//MUTANT-SUITE crates/batten/src/engine.rs
 #[must_use]
 pub fn invoked_verbs(text: &str) -> std::collections::BTreeSet<String> {
     fn verb(rest: &str) -> String {

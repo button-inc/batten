@@ -26,7 +26,6 @@
 //! prose per 90k window over a design point of 24 distinct gates. Rationale and
 //! precedent are not interaction: they stay in the class paragraph, which
 //! `explain` prints, and no section may cite an issue key.
-//MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
 
 use serde::{Deserialize, Serialize};
 
@@ -1637,7 +1636,6 @@ pub fn violation(doc: &Doc, rendered: &str) -> Option<String> {
 /// the agent writing status lines to the hook as if it were the person: a
 /// conversation the operator was never part of, repeated on every stop. The
 /// alternative to an action is another action, such as filing the blocker.
-//MUTANT-SUITE crates/batten/src/doc.rs
 fn asks_for_words(item: &str) -> bool {
     let item = item.trim().to_lowercase();
     let item = item.strip_prefix("or ").unwrap_or(&item);

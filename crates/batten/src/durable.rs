@@ -117,7 +117,6 @@ pub fn append(path: &Path, text: &str) -> std::io::Result<()> {
     file.sync_all()
 }
 
-//MUTANT-SUITE crates/batten/src/durable.rs
 /// [`append`] to a LINE store, first dropping a torn tail the file ends with.
 ///
 /// **A torn tail survives only until the next append, unless something drops

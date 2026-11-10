@@ -83,7 +83,6 @@ impl std::fmt::Debug for DiskWatch<'_> {
 ///
 /// A repository with no declared band returns at once with no lines: the arm is
 /// off, as it is for a consumer with no `[prune]`.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
 pub fn watch<'scope>(
     scope: &'scope std::thread::Scope<'scope, '_>,
     watch: DiskWatch<'scope>,

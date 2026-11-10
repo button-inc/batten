@@ -1001,7 +1001,6 @@ pub fn admitted(
 /// enforces with `State::Spent`. That gap is closed one field over: the address
 /// binds `answers`, so a block with no articulation cannot recompute at all.
 #[must_use]
-//MUTANT-SUITE crates/batten/tests/it/admission.rs
 pub fn admitted_by_block(
     message: &str,
     rule: &str,
