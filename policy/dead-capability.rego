@@ -232,9 +232,9 @@ harness_json(path) if {
 #
 # Keeping the LEADING space is what separates the two: a call has a space before
 # the verb because something invoked it, and a `path:` literal has a quote there.
-# So the tail may be a space, a quote, or the end of the text, and the head may
-# not.
-CALL_TAIL := {" ", "\"", "'", "`"}
+# So the tail may be a space, a quote, a `)` closing the `$(…)` or `(…)` the call
+# ran in, or the end of the text, and the head may not.
+CALL_TAIL := {" ", "\"", "'", "`", ")"}
 
 invokes(text, verb) if {
 	some tail in CALL_TAIL
