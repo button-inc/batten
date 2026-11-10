@@ -605,6 +605,10 @@ fn tar_gz(entries: &[(&str, &[u8])]) -> Vec<u8> {
 /// One raw tar entry: a file (path, bytes) or a symlink (path, target).
 enum Raw<'a> {
     File(&'a str, &'a [u8]),
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "only the unix cases build a symlink entry")
+    )]
     Link(&'a str, &'a str),
 }
 
