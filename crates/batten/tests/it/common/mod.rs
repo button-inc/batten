@@ -520,6 +520,10 @@ pub(crate) fn batten() -> Batten {
         batten::mutate::RUNNERS,
         batten::mutate::RUNNER,
         batten::mutate::SHARD,
+        "MUTANT_PRESETS",
+        "MUTANT_OVERLAY_ENV",
+        "MUTANT_OVERLAY_FEATURES",
+        "BATTEN_PRESET_OVERLAY",
     ] {
         command.env_remove(name);
     }

@@ -65,6 +65,13 @@ disallowed_types = "deny"
 # each carries its verdict, so this level is load-bearing today rather than
 # written down against a future.
 disallowed_methods = "deny"
+# NO DAEMON, EVER, AND NO SITE MAY OPT OUT (`forbid`, which `#[expect]` cannot
+# lower). A child spawned and never waited for is the shape a detach takes:
+# `singleton detach` ran one, the harness lost sight of it, and a container with
+# nothing visible running is reaped (retired on #1276). Long-running work is the
+# harness's background task, never this binary's orphan. The daemonize
+# primitives themselves are `clippy.toml`'s `disallowed-methods`.
+zombie_processes = "forbid"
 
 [workspace.dependencies]
 anyhow = "1"

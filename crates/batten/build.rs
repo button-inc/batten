@@ -13,8 +13,17 @@
 //!
 //! No test target compiles this file; what it writes is judged where it is
 //! read, by `o200k`'s parity case against tiktoken itself.
+//!
+//! It also REFUSES TO BUILD a crate carrying a hand-written Rust mutation
+//! marker or a second cargo-mutants argv ([`mutation_markers`], CLOUD-2253):
+//! the Rust tier is cargo-mutants' alone, and a build is the one step nothing
+//! skips.
 
 use std::io::Write as _;
+use std::path::{Path, PathBuf};
+
+#[path = "src/mutation_markers.rs"]
+mod mutation_markers;
 
 /// The two special tokens: never produced by ordinary encoding, so never in
 /// the merge table.
@@ -24,7 +33,21 @@ type Built = Result<(), Box<dyn std::error::Error>>;
 
 fn main() -> Built {
     println!("cargo:rerun-if-changed=build.rs");
-    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").ok_or("cargo sets OUT_DIR")?);
+    let manifest = PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").ok_or("cargo sets CARGO_MANIFEST_DIR")?,
+    );
+    refuse_hand_rolled_mutation(&manifest)?;
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").ok_or("cargo sets OUT_DIR")?);
+    // THE TABLES ARE BUILT ONCE PER `OUT_DIR`, which cargo keys on this package
+    // and its dependencies: the scan above reruns this script on every source
+    // edit, and rebuilding a 200k-entry table each time would put seconds on
+    // every build for bytes that cannot have changed.
+    if ["o200k.bin", "o200k_dfa.bin", "o200k_pattern.rs"]
+        .iter()
+        .all(|file| out.join(file).is_file())
+    {
+        return Ok(());
+    }
     let bpe = tiktoken_rs::o200k_base()?;
     let mut entries: Vec<(Vec<u8>, u32)> = (0..=200_018_u32)
         .filter(|rank| !SPECIAL_RANKS.contains(rank))
@@ -75,4 +98,77 @@ fn main() -> Built {
         tiktoken_rs::O200K_BASE_PAT_STR
     )?;
     Ok(())
+}
+
+/// Refuse the build where the crate's Rust carries a mutation marker anywhere, or
+/// builds a cargo-mutants argv outside its one site ([`mutation_markers`]).
+/// Pointers only: `path:line`, never the line (rule 4).
+fn refuse_hand_rolled_mutation(manifest: &Path) -> Built {
+    let mut sources = Vec::new();
+    for dir in ["src", "tests", "benches", "examples"] {
+        let root = manifest.join(dir);
+        println!("cargo:rerun-if-changed={}", root.display());
+        rust_files(&root, &mut sources);
+    }
+    sources.push(manifest.join("build.rs"));
+    let mut markers = Vec::new();
+    let mut argv_sites = Vec::new();
+    for path in &sources {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let relative = path
+            .strip_prefix(manifest)
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        markers.extend(
+            mutation_markers::marker_lines(&text)
+                .into_iter()
+                .map(|line| format!("{relative}:{line}")),
+        );
+        let argv = text.matches(mutation_markers::CARGO_MUTANTS_ARGV).count();
+        if argv > 0 {
+            argv_sites.push((relative, argv));
+        }
+    }
+    if !markers.is_empty() {
+        return Err(format!(
+            "hand-written Rust mutation marker(s) at {}: cargo-mutants owns every Rust source and \
+             reads none of them (CLOUD-2253); delete them",
+            markers.join(", ")
+        )
+        .into());
+    }
+    let one_site = argv_sites.len() == 1
+        && argv_sites[0] == (mutation_markers::CARGO_MUTANTS_SITE.to_owned(), 1);
+    if !one_site {
+        let sites: Vec<String> = argv_sites
+            .iter()
+            .map(|(path, count)| format!("{path} ({count})"))
+            .collect();
+        return Err(format!(
+            "a cargo-mutants argv is built at [{}], not once in {}: cargo-mutants runs as \
+             itself through `mutate::cargo_mutants`, never a second harness (CLOUD-2253)",
+            sites.join(", "),
+            mutation_markers::CARGO_MUTANTS_SITE
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Every `.rs` file under `dir`, recursively; a missing directory is none.
+fn rust_files(dir: &Path, into: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            rust_files(&path, into);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            into.push(path);
+        }
+    }
 }

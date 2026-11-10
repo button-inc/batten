@@ -130,6 +130,10 @@ use common::{stderr, stdout};
 /// `Selection`, which every arm produces.
 // Unix only, with `toy_repo`: the gate is a bash program the tier executes, and
 // off unix nothing reaches it (`-D warnings` refuses a const nothing reads).
+/// Where the toy repositories keep presets, as this repository's `[env]`
+/// declares its own: the crate names no preset directory (CLOUD-2711).
+const PRESETS: &str = "crates/batten/src/policy/presets";
+
 const TOY_GATE: &str = r#"#!/usr/bin/env bash
 #MISE description="Gate: the toy"
 #MUTANT-SUITE tests/toy.rs
@@ -258,6 +262,7 @@ fn run(root: &Path, verb: &str, gates: &str) -> (i32, String, String) {
         // `[env]` (CLOUD-1909). A toy with no manifest resolves no `task-` gate
         // either way.
         .env("MUTANT_TASKS", "mise.toml")
+        .env("MUTANT_PRESETS", PRESETS)
         // A PROFILE NO TOY DECLARES, as a consumer's `[env]` may export (this
         // repository's did under CI until CLOUD-2588), so every case whose Cargo
         // row reaches nextest proves an undeclared
@@ -1488,7 +1493,8 @@ fn narrowed_sweep(root: &Path, gates: &str, base: &str) -> common::Batten {
         .current_dir(root)
         .env("MUTANT_GATES", gates)
         .env("MUTANT_CHANGED_SINCE", base)
-        .env("MUTANT_TASKS", "mise.toml");
+        .env("MUTANT_TASKS", "mise.toml")
+        .env("MUTANT_PRESETS", PRESETS);
     command
 }
 
@@ -1957,6 +1963,40 @@ fn cargo_mutants_is_never_spawned_by_the_sweep() {
     assert!(!out.contains("runner-absent"), "{out}{err}");
 }
 
+/// A RUST ROW IS REFUSED, NEVER PASSED OVER (CLOUD-2253): a gate named by a
+/// `.rs` path whose row cargo-mutants' registry owns is `runner-owned` in both
+/// the sweep and the census. Fails by: the row filtered out in silence, which is
+/// how 868 hand-written Rust rows read as coverage.
+#[test]
+fn a_row_in_a_source_cargo_mutants_owns_is_refused() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = two_gate_repo("runner-owned-row");
+    let rust = [
+        "//MUTANT-SUITE tests/other.rs",
+        "//MUTANT ignored|s@^fn a@fn b@|other_keeps_its_limit",
+        "fn a() {}",
+        "",
+    ]
+    .join("\n");
+    write(&root, "src/owned.rs", &rust);
+    track(&root);
+    for verb in ["sweep", "census"] {
+        let answer = common::batten()
+            .args(["mutate", verb])
+            .current_dir(&root)
+            .env("MUTANT_GATES", "toy,other,src/owned.rs")
+            .env("MUTANT_TASKS", "mise.toml")
+            .env("MUTANT_RUNNERS", "cargo-mutants=**/*.rs")
+            .output()
+            .expect("run batten mutate");
+        let (out, err) = (stdout(&answer), stderr(&answer));
+        assert_eq!(answer.status.code(), Some(2), "{verb}: {out}{err}");
+        assert!(out.contains("runner-owned"), "{verb}: {out}{err}");
+    }
+}
+
 /// A `command` runner (CLOUD-2211) over the changed Rust gate: `[mutate]
 /// command` names a stub that records its argv and exits `code`.
 fn sweep_command(name: &str, code: i32) -> (PathBuf, i32, String, String) {
@@ -2097,7 +2137,7 @@ fn an_unresolvable_base_sweeps_every_gate() {
 #[test]
 fn a_deleted_preset_module_sweeps_its_gate() {
     let root = toy_repo("since-preset-delete", &[CAUGHT]);
-    let dir = "crates/batten/src/policy/presets/demo";
+    let dir = format!("{PRESETS}/demo");
     write(
         &root,
         &format!("{dir}/a.rego"),
@@ -2914,6 +2954,32 @@ fn a_policy_module_is_censused_unconditionally_so_a_migration_cannot_shrink_the_
     assert!(out.contains("policy/some-rule.rego uncovered"), "{out}");
 }
 
+/// THE PRESET DIRECTORY IS THE CONSUMER'S (CLOUD-2711): a preset outside the one
+/// `MUTANT_PRESETS` declares is no subject at all. Fails by: the crate naming its
+/// own preset directory again, which censused this repository's layout in
+/// every consumer.
+#[cfg(unix)]
+#[test]
+fn a_preset_outside_the_declared_directory_is_no_subject() {
+    let root = toy("census-preset-elsewhere");
+    write(
+        &root,
+        &format!("{PRESETS}/some-preset/rule.rego"),
+        "package batten.some_preset\n",
+    );
+    track(&root);
+    let answer = common::batten()
+        .args(["mutate", "census"])
+        .current_dir(&root)
+        .env("MUTANT_GATES", "nothing")
+        .env("MUTANT_TASKS", "mise.toml")
+        .env("MUTANT_PRESETS", "presets")
+        .output()
+        .expect("run batten mutate");
+    let out = stdout(&answer);
+    assert!(!out.contains("some-preset"), "{out}");
+}
+
 #[test]
 fn a_preset_is_censused_too_so_the_one_class_a_pattern_row_cannot_reach_is_visible() {
     // CLOUD-1267's widening, and it is the census half of the same hole: a
@@ -2922,7 +2988,7 @@ fn a_preset_is_censused_too_so_the_one_class_a_pattern_row_cannot_reach_is_visib
     let root = toy("census-preset");
     write(
         &root,
-        "crates/batten/src/policy/presets/some-preset/rule.rego",
+        &format!("{PRESETS}/some-preset/rule.rego"),
         "package batten.some_preset\n",
     );
     track(&root);

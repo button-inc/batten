@@ -327,6 +327,16 @@ uv = "0.12.5"                     # the installer the pipx: backend runs; ntia-c
 
 [env]
 CARGO_TERM_COLOR = "always"
+# WHICH MUTATION RUNNER OWNS WHICH SOURCE, declared once for every task that
+# reads it: the sweep, `mutate cargo`, and the census in `verify`, which refuses
+# a hand-written row in a source cargo-mutants owns (`runner-owned`). Every
+# tracked `.rs` must match a cargo-mutants glob, and `mutant_rows.rs` holds the
+# tree to that, so the Rust tier is cargo-mutants' alone (CLOUD-2253). Test
+# children never inherit it: `common::batten` removes it.
+MUTANT_RUNNERS = "cargo-mutants=**/*.rs"
+# WHERE THIS REPOSITORY'S PRESETS LIVE, which the crate does not name (rule 1,
+# CLOUD-2711): the sweep and the census read a preset gate's modules from here.
+MUTANT_PRESETS = "crates/batten/src/policy/presets"
 # WHERE THIS REPOSITORY KEEPS ITS TASK PROGRAMS, read by `alive` and by `land`'s
 # reap of an abandoned landing's process groups (CLOUD-2366). The engine may not
 # spell a consumer's directory (non-negotiable rule 1), so it reads this; before
@@ -1782,7 +1792,10 @@ description = "Gate: every declared gate has a mutation its own suite is PROVEN 
 # `lock-currency` were separated along. What a commit CAN move is the gates it
 # touched, and `mutant:changed` sweeps exactly those at admission (CLOUD-2072);
 # the census is the other half that runs in the gate.
-run = "cargo run --quiet -p batten -- mutate sweep"
+#
+# THROUGH `mutant:declared`, so the sweep's environment is declared once: with no
+# `MUTANT_CHANGED_SINCE` it narrows to nothing and sweeps every gate.
+run = "mise run mutant:declared"
 
 [tasks."mutant:changed"]
 description = "Gate: every mutant cargo-mutants makes of this branch's Rust change is caught, and every declared Rego, Pkl or manifest gate it touched has a mutation its suite catches"
@@ -1821,13 +1834,19 @@ description = "Gate: every mutant cargo-mutants makes of this branch's Rust chan
 # the Rust verdicts, or a lap returns one runner's survivors and the next lap the
 # other's. `--continue-on-error` runs each and fails if either did, one at a
 # time so they do not compete for the box.
-# ONE DECLARATION FOR BOTH RUNNERS: the change they judge, and which runner owns
-# which source. A subtask inherits the environment `mise run` hands it.
-env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNERS = "cargo-mutants=crates/*/src/**/*.rs,crates/*/build.rs,crates/*/tests/**/*.rs" }
+# THE CHANGE BOTH RUNNERS JUDGE, declared once: a subtask inherits the
+# environment `mise run` hands it. Ownership is `[env]`'s `MUTANT_RUNNERS`.
+env = { MUTANT_CHANGED_SINCE = "origin/main" }
 run = "mise run --continue-on-error --jobs 1 mutant:declared ::: mutant:rust"
 
 [tasks."mutant:declared"]
 description = "Gate: every declared Rego, Pkl or manifest gate this branch touched has a mutation its suite catches"
+# A PRESET IS MUTATED IN AN OVERLAY, NEVER IN PLACE: the crate `include_str!`s
+# it, so an in-place mutation recompiled the crate twice per row (~41 s a row on
+# #1276). The suite is built once with `preset-overlay` and reads the mutated
+# copy from `BATTEN_PRESET_OVERLAY` (`mutate::Overlay`, `PresetModule::text`);
+# the overlay's root is `[env]`'s `MUTANT_PRESETS`.
+env = { MUTANT_OVERLAY_ENV = "BATTEN_PRESET_OVERLAY", MUTANT_OVERLAY_FEATURES = "preset-overlay" }
 run = "cargo run --quiet -p batten -- mutate sweep"
 
 [tasks."mutant:rust"]

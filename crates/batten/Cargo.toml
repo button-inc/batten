@@ -89,6 +89,11 @@ probe-evaluator-io = ["regorus/http"]
 # probed at run time, so the default build states it does not run them and a
 # build that asks for them fails on a missing ref instead of passing (CLOUD-2059).
 live-remote = []
+# A mutation sweep's suite build only (`MUTANT_OVERLAY_FEATURES`): presets read
+# their source from `$BATTEN_PRESET_OVERLAY` where a mutated copy is there, so
+# a row runs without recompiling the crate. Never in a shipped build: it is the
+# feature that lets a file replace a shipped rule (`PresetModule::text`).
+preset-overlay = []
 
 [dependencies]
 anyhow.workspace = true
