@@ -10283,7 +10283,8 @@ pub(crate) fn tree_document(
             | crate::facts::Fact::DispatchCleared
             // CLOUD-2270: hook-surface; its question is about a push.
             | crate::facts::Fact::RedHead
-            | crate::facts::Fact::PathspecStatus => continue,
+            | crate::facts::Fact::PathspecStatus
+            | crate::facts::Fact::Budgeted => continue,
         };
         tree.insert(key.to_owned(), value);
     }
