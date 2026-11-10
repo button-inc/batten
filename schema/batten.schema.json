@@ -725,10 +725,27 @@
       "description": "One platform's artifact: where it comes from, and what it must hash to.",
       "type": "object",
       "properties": {
+        "bin": {
+          "description": "This platform's [`Provision::bin`], when it is not the entry's: Node's\nLinux tarball has `bin/node`, its Windows zip `node.exe` at the top.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
         "sha256": {
           "description": "The SHA-256 of the artifact, lowercase hex.",
           "type": "string",
           "maxLength": 1536
+        },
+        "strip": {
+          "description": "This platform's [`Provision::strip`], when it is not the entry's.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
         },
         "unpack": {
           "description": "This platform's archive format, when it is not the entry's.\n\nA tool commonly ships a tarball for every Unix target and a zip for\nWindows (uv, zizmor and actionlint all do), so one entry-wide\n[`Provision::unpack`] could not pin all five platforms. Absent means the\nentry's.",
@@ -3940,6 +3957,14 @@
           "$ref": "#/$defs/Backend",
           "default": "native"
         },
+        "bin": {
+          "description": "The binary's path inside the archive after `strip` (CLOUD-2682). Set,\nthe whole archive is extracted to `<entry>/tree/` and the binary is\n`tree/<bin>`, beside the files it reads; unset, one file is matched by\nname, as before.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
         "binary": {
           "description": "The binary's name inside the artifact, and the name it is cached under.",
           "type": "string",
@@ -3979,6 +4004,15 @@
             "null"
           ],
           "maxLength": 1536
+        },
+        "strip": {
+          "description": "Leading path components dropped from every archive entry, as `tar\n--strip-components` (CLOUD-2682). Requires [`Provision::bin`].",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
         },
         "unpack": {
           "description": "What the artifact is, and therefore how to get the binary out of it.",
