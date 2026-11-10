@@ -186,6 +186,59 @@ fn pieces<'a>(
     })
 }
 
+/// The window [`Chunked`] counts in.
+const WINDOW: usize = 64 * 1024;
+
+/// `o200k_base` tokens over a byte stream, counted in consecutive 64 KiB
+/// windows (CLOUD-2284), so the count is a function of the bytes alone and not
+/// of how reads split them. A window ends on a character: an incomplete tail
+/// waits for the next.
+#[derive(Debug, Default)]
+pub struct Chunked {
+    window: Vec<u8>,
+    counted: u64,
+}
+
+impl Chunked {
+    /// Add `bytes` to the stream.
+    pub fn feed(&mut self, mut bytes: &[u8]) {
+        while !bytes.is_empty() {
+            let room = WINDOW.saturating_sub(self.window.len()).max(1);
+            let (take, rest) = bytes.split_at(room.min(bytes.len()));
+            self.window.extend_from_slice(take);
+            bytes = rest;
+            if self.window.len() >= WINDOW {
+                self.flush();
+            }
+        }
+    }
+
+    /// Count the window up to its last whole character, keeping the rest.
+    fn flush(&mut self) {
+        let whole = match std::str::from_utf8(&self.window) {
+            Err(cut) if cut.error_len().is_none() && cut.valid_up_to() > 0 => cut.valid_up_to(),
+            _ => self.window.len(),
+        };
+        let rest = self.window.split_off(whole);
+        self.counted += tokens(&String::from_utf8_lossy(&self.window));
+        self.window = rest;
+    }
+
+    /// Every token fed so far, the open window included.
+    #[must_use]
+    pub fn counted(&self) -> u64 {
+        self.counted + tokens(&String::from_utf8_lossy(&self.window))
+    }
+}
+
+/// [`Chunked`] over one slice: the same count a stream of these bytes gets.
+#[must_use]
+pub fn chunked_tokens(bytes: &[u8]) -> u64 {
+    let mut chunked = Chunked::default();
+    chunked.feed(bytes);
+    chunked.counted()
+}
+
 /// How many `o200k_base` tokens `text` is.
 ///
 /// A DFA that cannot load (it is a build-time constant, so this does not

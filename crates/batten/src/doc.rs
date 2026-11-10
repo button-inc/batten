@@ -1508,7 +1508,7 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         ),
         act: &[
             "read the view at the lines the subject names, with an offset and a limit",
-            "or `batten capture show <handle> --field /<name>` for one field",
+            "or the route the line names, where it names one",
         ],
         dont: &["re-fetch the row through the raw connector"],
     },

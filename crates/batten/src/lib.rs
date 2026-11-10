@@ -22337,8 +22337,8 @@ fn point_at_spills(
         .iter()
         .map(|field| {
             verdict::artifact(&format!(
-                "{}:{}-{}({}B)",
-                field.pointer, field.from, field.to, field.bytes
+                "{}:{}-{}({}B {}T)",
+                field.pointer, field.from, field.to, field.bytes, field.tokens
             ))
         })
         .collect();
@@ -22352,7 +22352,9 @@ fn point_at_spills(
         &subjects,
         refusal::Fix::None,
     )
-    .with_document_route(&path.display().to_string())
+    // THE VIEW IS THE ONLY ROUTE (CLOUD-2284): a spilled leaf is not a JSON
+    // document, so the class's `--field` route refuses on it.
+    .with_only_document_route(&path.display().to_string())
     .with_severity(refusal::Severity::Note);
     let line = pointer.render_finding(refusal::Arm::Pointer);
     let mut bounded = result.clone();
@@ -22396,7 +22398,8 @@ fn spills_within_bound(result: &serde_json::Value, spilled: &[stream_input::Spil
             return false;
         };
         let mut chunk = vec![0_u8; 64 * 1024];
-        let mut carry = Vec::new();
+        // THE ONE STREAM COUNTER (CLOUD-2284), the view's own.
+        let mut tokens = o200k::Chunked::default();
         loop {
             let Ok(read) = std::io::Read::read(&mut file, &mut chunk) else {
                 return false;
@@ -22404,19 +22407,12 @@ fn spills_within_bound(result: &serde_json::Value, spilled: &[stream_input::Spil
             if read == 0 {
                 break;
             }
-            carry.extend_from_slice(chunk.get(..read).unwrap_or_default());
-            // A CHUNK ENDS ON A CHARACTER: the tail of a split one waits.
-            let whole = match std::str::from_utf8(&carry) {
-                Ok(_) => carry.len(),
-                Err(cut) => cut.valid_up_to(),
-            };
-            let (text, rest) = carry.split_at(whole);
-            counted += o200k::tokens(std::str::from_utf8(text).unwrap_or_default());
-            carry = rest.to_vec();
-            if counted > configured {
+            tokens.feed(chunk.get(..read).unwrap_or_default());
+            if counted + tokens.counted() > configured {
                 return false;
             }
         }
+        counted += tokens.counted();
     }
     counted <= configured
 }
@@ -31666,12 +31662,14 @@ mod tests {
                 from: 2,
                 to: 2,
                 bytes: 5,
+                tokens: 2,
             },
             capture::ViewField {
                 pointer: "/description".to_owned(),
                 from: 4,
                 to: 7,
                 bytes: 40,
+                tokens: 10,
             },
         ];
         let line = view_pointer(Path::new("/s/views/d.md"), &index);

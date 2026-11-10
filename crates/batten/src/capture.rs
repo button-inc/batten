@@ -1393,6 +1393,9 @@ pub struct ViewField {
     pub to: usize,
     /// The content's length in bytes.
     pub bytes: usize,
+    /// The content's `o200k_base` tokens, as [`crate::o200k::chunked_tokens`]
+    /// counts them (CLOUD-2284).
+    pub tokens: u64,
 }
 
 /// Write a line-addressable view of a stored JSON object beside the store, and
@@ -1458,6 +1461,7 @@ pub fn view(
                 from: line + 1,
                 to: line + lines,
                 bytes: body.len(),
+                tokens: crate::o200k::chunked_tokens(body.as_bytes()),
             });
         }
         text.push_str(&body);
@@ -1505,7 +1509,8 @@ pub fn result_view(
 /// When the state root cannot be resolved, a spilled file cannot be read, or
 /// the view cannot be written.
 //MUTANT-SUITE crates/batten/tests/it/result_bound.rs
-//MUTANT spilled-section-unstreamed|s@^            copy_counted(source, \&mut at.out)?$@            (0, 0)@|an_oversized_result_becomes_a_pointer_to_a_view_of_its_text
+//MUTANT spilled-section-unstreamed|s@^                None => copy_counted(source, \&mut at.out)?,$@                None => (0, 0, 0),@|an_oversized_result_becomes_a_pointer_to_a_view_of_its_text
+//MUTANT spill-view-skips-arrays|s@^            serde_json::Value::Array(items) if !items.is_empty() => {$@            serde_json::Value::Array(items) if items.is_empty() => {@|an_mcp_spill_is_read_under_its_own_pointer
 pub fn result_view_spilled(
     repo_root: &Path,
     capture: &Capture,
@@ -1524,6 +1529,15 @@ pub fn result_view_spilled(
                 for (key, child) in fields {
                     let escaped = key.replace('~', "~0").replace('/', "~1");
                     walk(&format!("{pointer}/{escaped}"), child, at)?;
+                }
+                return Ok(());
+            }
+            // ARRAYS ARE WALKED TOO (CLOUD-2284): an MCP content array is
+            // `[{"type": "text", "text": …}]`, and written whole it put its
+            // text under `## /` as one escaped line, the spill marker inside.
+            serde_json::Value::Array(items) if !items.is_empty() => {
+                for (index, child) in items.iter().enumerate() {
+                    walk(&format!("{pointer}/{index}"), child, at)?;
                 }
                 return Ok(());
             }
@@ -1551,17 +1565,22 @@ pub fn result_view_spilled(
         let pointer = if pointer.is_empty() { "/" } else { pointer };
         writeln!(at.out, "## {pointer}")?;
         at.line += 1;
-        let (bytes, lines) = if let Some(source) = spilled {
-            copy_counted(source, &mut at.out)?
+        let (bytes, lines, tokens) = if let Some(source) = spilled {
+            // One-line JSON is pretty-printed under the cap (CLOUD-2284), so a
+            // line range means something; above it the leaf streams as it was.
+            match pretty_json(source)? {
+                Some(pretty) => write_counted(pretty.as_bytes(), &mut at.out)?,
+                None => copy_counted(source, &mut at.out)?,
+            }
         } else {
-            at.out.write_all(body.as_bytes())?;
-            (body.len(), body.matches('\n').count() + 1)
+            write_counted(body.as_bytes(), &mut at.out)?
         };
         at.index.push(ViewField {
             pointer: pointer.to_owned(),
             from: at.line + 1,
             to: at.line + lines,
             bytes,
+            tokens,
         });
         at.out.write_all(b"\n")?;
         at.line += lines;
@@ -1595,12 +1614,16 @@ pub fn result_view_spilled(
     Ok((path, at.index))
 }
 
-/// Copy `source` into `out`, returning its bytes and its line count.
-fn copy_counted(source: &Path, out: &mut impl Write) -> Result<(usize, usize)> {
+/// Copy `source` into `out`, returning its bytes, its line count and its
+/// tokens.
+//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
+//MUTANT spill-counts-unstated|s@^    Ok((bytes, newlines + 1, tokens.counted()))$@    Ok((bytes, newlines + 1, 0))@|every_spill_pointer_names_its_lines_bytes_and_tokens
+fn copy_counted(source: &Path, out: &mut impl Write) -> Result<(usize, usize, u64)> {
     let mut file = std::fs::File::open(source)
         .with_context(|| format!("read the spilled leaf {}", source.display()))?;
     let mut chunk = vec![0_u8; 64 * 1024];
     let (mut bytes, mut newlines) = (0usize, 0usize);
+    let mut tokens = crate::o200k::Chunked::default();
     loop {
         let read = std::io::Read::read(&mut file, &mut chunk)?;
         if read == 0 {
@@ -1611,9 +1634,50 @@ fn copy_counted(source: &Path, out: &mut impl Write) -> Result<(usize, usize)> {
             .iter()
             .fold(0, |count, byte| count + usize::from(*byte == b'\n'));
         bytes += read;
+        tokens.feed(piece);
         out.write_all(piece)?;
     }
-    Ok((bytes, newlines + 1))
+    Ok((bytes, newlines + 1, tokens.counted()))
+}
+
+/// Write a rendered section, returning what [`copy_counted`] returns.
+fn write_counted(body: &[u8], out: &mut impl Write) -> Result<(usize, usize, u64)> {
+    out.write_all(body)?;
+    let newlines = body
+        .iter()
+        .fold(0, |count, byte| count + usize::from(*byte == b'\n'));
+    Ok((body.len(), newlines + 1, crate::o200k::chunked_tokens(body)))
+}
+
+/// A spilled leaf that is one line of JSON, pretty-printed (CLOUD-2284); `None`
+/// over [`crate::stream_input::RESTORE_MAX_BYTES`], for a leaf already on many
+/// lines, and for anything that is not one JSON object or array.
+//MUTANT-SUITE crates/batten/tests/it/result_bound.rs
+//MUTANT spill-json-unpretty|s@^    if bytes > crate::stream_input::RESTORE_MAX_BYTES {$@    if true {@|a_one_line_json_spill_is_pretty_printed_under_the_cap
+//MUTANT spill-json-cap-dropped|s@^    if bytes > crate::stream_input::RESTORE_MAX_BYTES {$@    if false {@|a_one_line_json_spill_is_pretty_printed_under_the_cap
+fn pretty_json(source: &Path) -> Result<Option<String>> {
+    let bytes = std::fs::metadata(source)
+        .with_context(|| format!("read the spilled leaf {}", source.display()))?
+        .len();
+    if bytes > crate::stream_input::RESTORE_MAX_BYTES {
+        return Ok(None);
+    }
+    let raw = std::fs::read(source)
+        .with_context(|| format!("read the spilled leaf {}", source.display()))?;
+    let Ok(text) = std::str::from_utf8(&raw) else {
+        return Ok(None);
+    };
+    let line = text.strip_suffix('\n').unwrap_or(text);
+    if line.contains('\n') {
+        return Ok(None);
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return Ok(None);
+    };
+    if !(value.is_object() || value.is_array()) {
+        return Ok(None);
+    }
+    Ok(Some(serde_json::to_string_pretty(&value)?))
 }
 
 /// Where the view of the capture `digest` lives in the store `dir`.
