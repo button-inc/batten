@@ -16,6 +16,9 @@ Read on demand, never all of them.
 - `mem:evidence-hierarchy` — **before acting on anything a doc comment, a
   `CLOUD-*` row, a PR body or a handoff asserts**, and before citing one as the
   reason for a decision. The board audited at ~38% wrong; comments are no better.
+- `mem:doctrine/model-verdict` — **citing rule 3**, or calling something a
+  classifier, estimate or judgement as the reason no gate can exist; designing a
+  gate over prose, a transcript, a skill or an artifact.
 - `mem:decision/adr-process` — recording a decision; about to add a `status:`,
   `superseded-by:` or version suffix to any document.
 - `mem:decision/landing-architecture` — touching `land.rs`, `lease.rs`,

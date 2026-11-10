@@ -333,7 +333,7 @@ its spelling, so it is worth the extra sentence.** A declared id ABSENT from the
 map was never dispatched, and that absence is the ONLY thing a predicate over it
 may refuse on. Its `findings` are pointers — `{path, line, clause}`, with no
 field an agent's prose could occupy — and a module refusing on what the agent
-CONCLUDED would be a model verdict wearing an exit code, which non-negotiable
+CONCLUDED would be a gated-model verdict wearing an exit code, which non-negotiable
 rule 3 forbids. `forge-verdict-required` refuses the opposite arm for a reason
 that does not carry: the forge is a third party that may legitimately not have
 judged yet, where a review this branch was supposed to dispatch and did not is
@@ -412,29 +412,27 @@ mediated path parses no manifest (CLOUD-856); and `input.facts.extracted` is a
 declared extractor's COUNT over this session's transcript — an integer over
 typed events, never a byte of the session (CLOUD-1172).
 
-**`extracted` WILL NOT GROW AN ARM THAT READS PROSE, AND THAT IS A DECIDED
-REFUSAL RATHER THAN AN UNBUILT FEATURE** (CLOUD-1254). The count landed for two
-named programs and carries neither, so the temptation is to widen it until it
-does. It cannot be widened, and the reason is one level down rather than in this
-family: `transcript.rs`'s own header states that every event is built from a
+**TEXT NEVER CROSSES INTO A MODULE; THE ENGINE MAY READ IT** (CLOUD-1254,
+CLOUD-1921). `transcript.rs`'s header states that every event is built from a
 TYPED field — a call's `name`, a result's `is_error` boolean, a hook's
 `exitCode` — and that _"the free-text payload is never interpreted and never
 emitted"_, because a transcript is the richest source of secrets the engine can
-be pointed at. So the stream a member reduces holds no prose to match.
+be pointed at. That is a rule about what a MODULE receives, and it holds: no
+span of session text, no score, no vector reaches `input.*`.
 
-`finding-sink-check` is the measured instance and its first arm is a regex over
-assistant prose (`[[pattern]] finding-citation`, which `record decide
-turn-writes` applies in `crates/batten/src/turn.rs` and keeps only as a
-boolean), joined per turn against that turn's own tool calls with a negated arm. An extraction expressing
-that join would have to retain the prose to match it — and a predicate built on
-prose is a classifier wearing a gate's clothes, which is non-negotiable rule 3
-and which `transcript.rs` refuses at its own header. The refusal is therefore
-about the SUBSTRATE, not about the reduction's shape: a count of stranded turns
-would be a perfectly admissible RESULT, and there is nothing to compute it from.
+It is not a rule that the engine never reads text. `record decide turn-writes`
+already applies `[[pattern]] finding-citation` to assistant prose in
+`crates/batten/src/turn.rs` and keeps only a boolean. That shape — the engine
+reads, reduces to a typed fact, the module decides over the fact — is the
+admissible one, and a Batten-managed classifier is the same shape with a better
+reducer: pinned by digest, deterministic, its text kept in the engine, only a
+label from a closed set reaching the module (CLOUD-1921). Rule 3 forbids the
+GATED model's judgement, never a model Batten runs (house-style, principle 3;
+`mem:doctrine/model-verdict`).
 
-Read this the way the missing INSTANT key below is read. It is not a gap for the
-next author to close; it is a route already walked to its end, and the thing at
-the end is a rule refusing it.
+So `extracted` may grow an arm whose result is typed — a count of stranded turns,
+a label — however its reducer reads. What it may never grow is an arm whose
+RESULT carries the text.
 
 `programs` is the ARGV ALREADY READ (CLOUD-1028), and it is NOT `segments` under
 another name: one entry per segment, each carrying the EFFECTIVE program, the

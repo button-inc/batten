@@ -1520,9 +1520,9 @@ fn a_deny_gate_owes_a_replay_and_a_warn_gate_does_not() {
     // fires often stops the fleet, which is why the obligation attaches to `deny`
     // alone.
     //
-    // PRESENCE AND SHAPE ONLY, NEVER WHETHER THE NUMBER IS GOOD: judging an
-    // acceptable false-positive rate is a model verdict. The author reports; the
-    // reader decides.
+    // PRESENCE AND SHAPE ONLY, NEVER WHETHER THE NUMBER IS GOOD: a Ready block
+    // declares no threshold to compare it with. The author reports; the reader
+    // decides.
     let dir = pre_release("ready-replay");
 
     let unmeasured =

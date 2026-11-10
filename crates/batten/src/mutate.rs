@@ -113,7 +113,7 @@ use anyhow::{Context as _, Result, bail};
 ///
 /// The measured cost was not the gap itself: CLOUD-1349's "shown able to fail"
 /// was performed BY HAND — predicate edited to a constant, suite re-run, result
-/// read by eye, edit reverted — which is a model verdict standing where
+/// read by eye, edit reverted — which is a gated-model verdict standing where
 /// non-negotiable rule 3 wants a command and an exit code. The revert then took
 /// the uncommitted implementation with it.
 ///

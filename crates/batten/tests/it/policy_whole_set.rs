@@ -5,7 +5,7 @@
 //! decided any of them. Row order decides a mediated call and nothing says so;
 //! cross-row validation was one check wide. At 33 committed rows that was still
 //! tractable by reading, and "read it carefully" is not a gate — non-negotiable
-//! rule 3 makes a model verdict inadmissible, so the alternative to a decidable
+//! rule 3 makes a gated-model verdict inadmissible, so the alternative to a decidable
 //! mechanism is nothing.
 //!
 //! # The caveat that is the whole engineering problem

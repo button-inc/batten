@@ -10849,7 +10849,7 @@ fn anchor_among(
 /// # It never grades an answer
 ///
 /// Non-negotiable rule 3. The predicate is presence and non-emptiness; anything
-/// stronger is a model verdict inside a gate, which would be worse than today's
+/// stronger is a gated-model verdict inside a gate, which would be worse than today's
 /// password.
 ///
 /// # Errors
@@ -23711,7 +23711,7 @@ fn stop_nudges(
     //
     // MECHANICAL, NEVER AN INFERENCE FROM PROSE. The host declares the mode; this
     // reads it. Deciding from the user's wording whether they "meant" a read-only
-    // turn would be the model verdict non-negotiable rule 3 forbids.
+    // turn would be the gated-model verdict non-negotiable rule 3 forbids.
     //
     // ABOVE THE SEAM WRITES ON PURPOSE? NO — deliberately below them. The links
     // and the state mint are the engine's own record rather than advice to the
