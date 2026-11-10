@@ -183,6 +183,16 @@ pub struct Provision {
     /// What the artifact is, and therefore how to get the binary out of it.
     #[serde(default)]
     pub unpack: Unpack,
+    /// Leading path components dropped from every archive entry, as `tar
+    /// --strip-components` (CLOUD-2682). Requires [`Provision::bin`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strip: Option<usize>,
+    /// The binary's path inside the archive after `strip` (CLOUD-2682). Set,
+    /// the whole archive is extracted to `<entry>/tree/` and the binary is
+    /// `tree/<bin>`, beside the files it reads; unset, one file is matched by
+    /// name, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bin: Option<String>,
     /// The binary's name inside the artifact, and the name it is cached under.
     pub binary: String,
     /// A directory to ALSO place the binary in, so it reaches `PATH`.
@@ -430,6 +440,13 @@ pub struct Artifact {
     /// entry's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unpack: Option<Unpack>,
+    /// This platform's [`Provision::strip`], when it is not the entry's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strip: Option<usize>,
+    /// This platform's [`Provision::bin`], when it is not the entry's: Node's
+    /// Linux tarball has `bin/node`, its Windows zip `node.exe` at the top.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bin: Option<String>,
 }
 
 impl Provision {
@@ -469,6 +486,8 @@ impl Provision {
                 url: url.clone(),
                 sha256: sha256.clone(),
                 unpack: None,
+                strip: None,
+                bin: None,
             });
         }
         self.platforms.get(platform).cloned().ok_or_else(|| {
@@ -952,6 +971,43 @@ fn launcher_interpreter(bytes: &[u8]) -> Option<&str> {
     (verb == LAUNCHER_VERB).then_some(interpreter)
 }
 
+/// The directory a subtree entry is extracted into, under its entry dir.
+const TREE_DIR: &str = "tree";
+
+/// A subtree entry's effective `strip` and `bin` on this host (CLOUD-2682).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Subtree {
+    strip: usize,
+    bin: PathBuf,
+}
+
+/// This host's [`Subtree`], or `None` for a single-file entry. A platform row's
+/// `strip` and `bin` override the entry's, as its `unpack` does.
+//MUTANT-SUITE crates/batten/tests/it/provision.rs
+//MUTANT platform-bin-ignored|s@^    let bin = artifact.bin.as_deref().or(entry.bin.as_deref());$@    let bin = entry.bin.as_deref();@|a_platform_row_names_its_own_strip_and_bin
+fn subtree_of(entry: &Provision, artifact: &Artifact) -> Option<Subtree> {
+    let bin = artifact.bin.as_deref().or(entry.bin.as_deref());
+    let strip = artifact.strip.or(entry.strip).unwrap_or(0);
+    bin.map(|bin| Subtree {
+        strip,
+        bin: PathBuf::from(bin),
+    })
+}
+
+/// Where `entry`'s binary is cached under `dir`: `tree/<bin>` for a subtree,
+/// `bin/<name>` otherwise. One answer for `install`, freshness and
+/// [`binary_path`].
+fn cached_binary(dir: &Path, entry: &Provision) -> PathBuf {
+    match entry
+        .artifact()
+        .ok()
+        .and_then(|artifact| subtree_of(entry, &artifact))
+    {
+        Some(subtree) => dir.join(TREE_DIR).join(subtree.bin),
+        None => dir.join(BIN_DIR).join(entry.cached_name()),
+    }
+}
+
 fn freshness_of(entry: &Provision, cache_root: &Path, link: Option<&Link>) -> Result<Freshness> {
     // A SHARED DIRECTORY'S NAME MUST BE BATTEN'S, and that is asked FIRST: it
     // is the one verdict no apply can change, so a cold cache must not answer
@@ -963,7 +1019,7 @@ fn freshness_of(entry: &Provision, cache_root: &Path, link: Option<&Link>) -> Re
         return Ok(Freshness::Foreign);
     }
     let dir = entry_dir(cache_root, entry);
-    let binary = dir.join(BIN_DIR).join(entry.cached_name());
+    let binary = cached_binary(&dir, entry);
     if !binary.is_file() {
         return Ok(Freshness::Missing);
     }
@@ -1008,7 +1064,7 @@ fn freshness_of(entry: &Provision, cache_root: &Path, link: Option<&Link>) -> Re
         // the manifest USED to declare. That is the same second-run shape the
         // link check above records: the change never appears on the run that
         // makes it.
-        if !launcher_declares(&linked, entry) {
+        if !launcher_declares(&linked, entry, &binary) {
             return Ok(Freshness::Missing);
         }
     }
@@ -1125,8 +1181,9 @@ fn apply_with(
     // checksum.
     let artifact = entry.artifact()?;
     let unpack = artifact.unpack.unwrap_or(entry.unpack);
+    let subtree = subtree_of(entry, &artifact);
     if let Some(bytes) = cached_artifact_matching_pin(entry, cache_root, &artifact.sha256) {
-        install(entry, unpack, cache_root, &bytes, link)?;
+        install(entry, unpack, subtree.as_ref(), cache_root, &bytes, link)?;
         return Ok(Applied::Installed);
     }
     let bytes = fetch(&artifact.url)?;
@@ -1148,7 +1205,7 @@ fn apply_with(
         return Err(crate::Denial::raise(&refusal, crate::refusal::Arm::Full));
     }
 
-    install(entry, unpack, cache_root, &bytes, link)?;
+    install(entry, unpack, subtree.as_ref(), cache_root, &bytes, link)?;
     Ok(Applied::Installed)
 }
 
@@ -1161,11 +1218,30 @@ fn apply_with(
 fn install(
     entry: &Provision,
     unpack: Unpack,
+    subtree: Option<&Subtree>,
     cache_root: &Path,
     bytes: &[u8],
     link: Option<&Link>,
 ) -> Result<()> {
     let dir = entry_dir(cache_root, entry);
+    // A SUBTREE ENTRY (CLOUD-2682): the tree, then the link, then the artifact
+    // last, the same crash order as the single file below.
+    if let Some(subtree) = subtree {
+        let cached = install_tree(&dir, unpack, subtree, bytes)?;
+        // Recorded in a shared directory as the single file's link is below.
+        if let Some(link) = link {
+            let linked = link.dir.join(entry.cached_name());
+            if link.shared {
+                record_intent(cache_root, entry, &linked)?;
+            }
+            link_into(entry, &link.dir, &cached, &[], Some(subtree))?;
+            if link.shared {
+                record_written(cache_root, entry, &linked)?;
+            }
+        }
+        crate::durable::replace(dir.join(ARTIFACT), bytes).context("write the cached artifact")?;
+        return Ok(());
+    }
     let bin_dir = dir.join(BIN_DIR);
     fs::create_dir_all(&bin_dir).context("create the provision cache directory")?;
 
@@ -1223,7 +1299,7 @@ fn install(
         if link.shared {
             record_intent(cache_root, entry, &linked)?;
         }
-        link_into(entry, &link.dir, &cached, &binary)?;
+        link_into(entry, &link.dir, &cached, &binary, None)?;
         if link.shared {
             record_written(cache_root, entry, &linked)?;
         }
@@ -1287,7 +1363,15 @@ const LAUNCHER_VERB: &str = "provision-exec";
 ///
 /// `dir` is already resolved, by [`link_dir`] on the host [`status_on`] judges
 /// (CLOUD-2617).
-fn link_into(entry: &Provision, dir: &Path, cached: &Path, binary: &[u8]) -> Result<()> {
+//MUTANT-SUITE crates/batten/tests/it/provision.rs
+//MUTANT subtree-link-copied|s@^    let written = if entry.env.is_empty() \&\& subtree.is_none() {$@    let written = if entry.env.is_empty() {@|a_subtree_entry_links_a_launcher_onto_path
+fn link_into(
+    entry: &Provision,
+    dir: &Path,
+    cached: &Path,
+    binary: &[u8],
+    subtree: Option<&Subtree>,
+) -> Result<()> {
     fs::create_dir_all(dir).context("create the linked binary's directory")?;
     let name = entry.cached_name();
     let path = dir.join(&name);
@@ -1295,7 +1379,9 @@ fn link_into(entry: &Provision, dir: &Path, cached: &Path, binary: &[u8]) -> Res
     // other's staging file, and dot-prefixed so a directory listing of `PATH`
     // does not offer it as a command.
     let staged = dir.join(format!(".{name}.{}.tmp", std::process::id()));
-    let written = if entry.env.is_empty() {
+    // A SUBTREE IS LAUNCHED, NEVER COPIED (CLOUD-2682): its binary reads the
+    // files beside its real path, and a copy on `PATH` has none beside it.
+    let written = if entry.env.is_empty() && subtree.is_none() {
         crate::durable::replace(&staged, binary).context("write the linked binary")
     } else {
         launcher(entry, cached).and_then(|bytes| {
@@ -1320,8 +1406,14 @@ fn link_into(entry: &Provision, dir: &Path, cached: &Path, binary: &[u8]) -> Res
 /// [`link_dir`]. This keeps the form the unix-only relink case was written
 /// against, so that case runs unchanged.
 #[cfg(all(test, unix))]
-fn link_onto_path(entry: &Provision, dest: &str, cached: &Path, binary: &[u8]) -> Result<()> {
-    link_into(entry, &expand_home(dest)?, cached, binary)
+fn link_onto_path(
+    entry: &Provision,
+    dest: &str,
+    cached: &Path,
+    binary: &[u8],
+    subtree: Option<&Subtree>,
+) -> Result<()> {
+    link_into(entry, &expand_home(dest)?, cached, binary, subtree)
 }
 
 /// The bytes of the launcher that stands in for a tool needing an environment.
@@ -1427,7 +1519,7 @@ fn relaunches_a_present_interpreter(linked: &Path) -> bool {
 /// answered above, and re-linking does not fix a permissions failure. A body
 /// that will not parse is `false`, because that is precisely the launcher
 /// [`exec_launcher`] refuses and tells the operator to rewrite.
-fn launcher_declares(linked: &Path, entry: &Provision) -> bool {
+fn launcher_declares(linked: &Path, entry: &Provision, cached: &Path) -> bool {
     let Ok(bytes) = fs::read(linked) else {
         return true;
     };
@@ -1440,7 +1532,14 @@ fn launcher_declares(linked: &Path, entry: &Provision) -> bool {
     let Ok(declared) = serde_json::to_value(&entry.env) else {
         return false;
     };
-    carried.get("env") == Some(&declared)
+    // AND THE BINARY IT NAMES (CLOUD-2682): switching an entry between a single
+    // file and a subtree moves the cached binary, and a launcher naming the old
+    // one must re-link rather than read fresh.
+    let exec_matches = carried
+        .get("exec")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|exec| Path::new(exec) == cached);
+    carried.get("env") == Some(&declared) && exec_matches
 }
 
 /// Become the tool a launcher stands for, with the environment its row declares.
@@ -2264,6 +2363,265 @@ fn expand_home(dest: &str) -> Result<PathBuf> {
     Ok(expanded)
 }
 
+/// Extract a subtree archive into `<dir>/tree/` and return the cached binary
+/// (CLOUD-2682).
+///
+/// Staged beside and renamed in, never written in place: a running process
+/// keeps its open files, and a failed extraction leaves the old tree and the
+/// artifact as they were.
+//MUTANT-SUITE crates/batten/tests/it/provision.rs
+//MUTANT tree-aside-kept|s@^    let _ = fs::remove_dir_all(\&aside);$@@|a_reinstalled_subtree_replaces_the_old_tree
+fn install_tree(dir: &Path, unpack: Unpack, subtree: &Subtree, bytes: &[u8]) -> Result<PathBuf> {
+    fs::create_dir_all(dir).context("create the provision cache directory")?;
+    let pid = std::process::id();
+    let staged = dir.join(format!(".tree.{pid}.tmp"));
+    let _ = fs::remove_dir_all(&staged);
+    fs::create_dir_all(&staged).context("create the staged tree")?;
+    let extracted = match unpack {
+        Unpack::TarGz => extract_tree_tar(bytes, &staged, subtree),
+        Unpack::Zip => extract_tree_zip(bytes, &staged, subtree),
+        _ => Err(UsageError::raise(
+            "a subtree needs an archive, and this row unpacks none".to_owned(),
+        )),
+    }
+    .and_then(|()| staged_bin(&staged, subtree));
+    if let Err(err) = extracted {
+        let _ = fs::remove_dir_all(&staged);
+        return Err(err);
+    }
+    let tree = dir.join(TREE_DIR);
+    let aside = dir.join(format!(".tree.{pid}.old"));
+    if fs::symlink_metadata(&tree).is_ok() {
+        fs::rename(&tree, &aside).context("move the old tree aside")?;
+    }
+    if let Err(err) = fs::rename(&staged, &tree) {
+        let _ = fs::rename(&aside, &tree);
+        let _ = fs::remove_dir_all(&staged);
+        return Err(err).context("move the extracted tree into place");
+    }
+    let _ = fs::remove_dir_all(&aside);
+    Ok(tree.join(&subtree.bin))
+}
+
+/// The staged tree's binary must be a file, and is made executable.
+//MUTANT-SUITE crates/batten/tests/it/provision.rs
+//MUTANT bin-path-unchecked|s@^    if !staged.join(bin).is_file() {$@    if false {@|a_bin_path_missing_after_strip_is_refused
+fn staged_bin(staged: &Path, subtree: &Subtree) -> Result<()> {
+    let bin = &subtree.bin;
+    if !staged.join(bin).is_file() {
+        return Err(UsageError::raise(format!(
+            "the archive has no file at `bin = \"{}\"` after `strip = {}`",
+            bin.display(),
+            subtree.strip
+        )));
+    }
+    make_executable(&staged.join(bin))
+}
+
+/// What one archive entry is, for [`place`].
+enum Kind {
+    Dir,
+    File { executable: bool },
+    Symlink(PathBuf),
+}
+
+/// An entry that would land outside the tree: refused, never skipped.
+fn climbs_out(path: &Path) -> anyhow::Error {
+    UsageError::raise(format!(
+        "the archive entry {} climbs out of the tree, so nothing was installed",
+        path.display()
+    ))
+}
+
+/// `path` with its first `strip` components dropped, `None` when nothing is
+/// left; a root, prefix or `..` component is refused.
+//MUTANT-SUITE crates/batten/tests/it/provision.rs
+//MUTANT strip-escape-admitted|s@^            _ => return Err(climbs_out(path)),$@            _ => {}@|an_entry_climbing_out_of_the_tree_is_refused
+//MUTANT strip-ignored|s@^    Ok((parts.len() > strip).then(\x7c\x7c parts\[strip..\].iter().collect()))$@    Ok(Some(parts.iter().collect()))@|a_subtree_entry_runs_its_binary_beside_its_files
+fn stripped(path: &Path, strip: usize) -> Result<Option<PathBuf>> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(part) => parts.push(part),
+            std::path::Component::CurDir => {}
+            _ => return Err(climbs_out(path)),
+        }
+    }
+    Ok((parts.len() > strip).then(|| parts[strip..].iter().collect()))
+}
+
+/// Whether `link`, read from the directory `parent` (both relative to the tree
+/// root), stays inside the tree.
+fn lexically_inside(parent: &Path, link: &Path) -> bool {
+    let mut depth = parent
+        .components()
+        .filter(|part| matches!(part, std::path::Component::Normal(_)))
+        .count();
+    for part in link.components() {
+        match part {
+            std::path::Component::Normal(_) => depth += 1,
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => match depth.checked_sub(1) {
+                Some(up) => depth = up,
+                None => return false,
+            },
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Write one archive entry under `tree` (CLOUD-2682), the one rule set the tar
+/// and zip loops share.
+//MUTANT-SUITE crates/batten/tests/it/provision.rs
+//MUTANT subtree-unextracted|s@^    let target = tree.join(\&rel);$@    if rel.as_path() != bin { return Ok(()); } let target = tree.join(\&rel);@|a_subtree_entry_runs_its_binary_beside_its_files
+fn place(
+    tree: &Path,
+    strip: usize,
+    bin: &Path,
+    raw: &Path,
+    kind: Kind,
+    reader: &mut dyn Read,
+) -> Result<()> {
+    let Some(rel) = stripped(raw, strip)? else {
+        return Ok(());
+    };
+    let target = tree.join(&rel);
+    let root = tree.canonicalize().context("resolve the staged tree")?;
+    let Some(parent) = target.parent() else {
+        return Err(climbs_out(raw));
+    };
+    fs::create_dir_all(parent).context("create an archive entry's directory")?;
+    let parent = parent
+        .canonicalize()
+        .context("resolve an archive entry's directory")?;
+    if !parent.starts_with(&root) {
+        return Err(climbs_out(raw));
+    }
+    let Some(name) = target.file_name() else {
+        return Err(climbs_out(raw));
+    };
+    let target = parent.join(name);
+    // A later entry never writes through an earlier link.
+    if fs::symlink_metadata(&target).is_ok_and(|meta| !meta.is_dir()) {
+        fs::remove_file(&target).context("replace an archive entry")?;
+    }
+    match kind {
+        Kind::Dir => fs::create_dir_all(&target).context("create an archive directory")?,
+        Kind::File { executable } => {
+            let mut out = fs::File::create(&target).context("write an archive file")?;
+            std::io::copy(reader, &mut out).context("write an archive file")?;
+            set_mode(&target, executable || rel.as_path() == bin)?;
+        }
+        Kind::Symlink(link) => {
+            let inside = rel.parent().unwrap_or_else(|| Path::new(""));
+            place_symlink(inside, &target, &link, raw)?;
+        }
+    }
+    Ok(())
+}
+
+/// A symlink whose target stays inside the tree (CLOUD-2682): relative, and
+/// resolved lexically from its own directory.
+//MUTANT-SUITE crates/batten/tests/it/provision.rs
+//MUTANT symlink-escape-admitted|s@^    if !lexically_inside(parent, \&link_target) {$@    if false {@|a_symlink_climbing_out_of_the_tree_is_refused
+#[cfg(unix)]
+fn place_symlink(parent: &Path, target: &Path, link: &Path, raw: &Path) -> Result<()> {
+    let link_target = link.to_path_buf();
+    if !lexically_inside(parent, &link_target) {
+        return Err(climbs_out(raw));
+    }
+    std::os::unix::fs::symlink(&link_target, target).context("write an archive link")
+}
+
+#[cfg(not(unix))]
+fn place_symlink(_parent: &Path, _target: &Path, _link: &Path, raw: &Path) -> Result<()> {
+    Err(UsageError::raise(format!(
+        "the archive entry {} is a symlink, which this host's tree does not admit",
+        raw.display()
+    )))
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, executable: bool) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = if executable { 0o755 } else { 0o644 };
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+        .context("set an archive file's mode")
+}
+
+#[cfg(not(unix))]
+fn set_mode(_path: &Path, _executable: bool) -> Result<()> {
+    Ok(())
+}
+
+/// Extract a gzipped tarball as a subtree (CLOUD-2682).
+fn extract_tree_tar(bytes: &[u8], tree: &Path, subtree: &Subtree) -> Result<()> {
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
+    for entry in archive.entries().context("read the tar archive")? {
+        let mut entry = entry.context("read a tar entry")?;
+        let raw = entry
+            .path()
+            .context("decode a tar entry path")?
+            .into_owned();
+        let kind = entry.header().entry_type();
+        let kind = match kind {
+            tar::EntryType::Directory => Kind::Dir,
+            tar::EntryType::Symlink => Kind::Symlink(
+                entry
+                    .link_name()
+                    .context("decode a tar link target")?
+                    .ok_or_else(|| climbs_out(&raw))?
+                    .into_owned(),
+            ),
+            tar::EntryType::XHeader
+            | tar::EntryType::XGlobalHeader
+            | tar::EntryType::GNULongName
+            | tar::EntryType::GNULongLink => continue,
+            other if other.is_file() => Kind::File {
+                executable: entry.header().mode().is_ok_and(|mode| mode & 0o111 != 0),
+            },
+            other => {
+                return Err(UsageError::raise(format!(
+                    "the archive entry {} is a {other:?}, which a provision tree does not admit",
+                    raw.display()
+                )));
+            }
+        };
+        place(tree, subtree.strip, &subtree.bin, &raw, kind, &mut entry)?;
+    }
+    Ok(())
+}
+
+/// Extract a zip archive as a subtree (CLOUD-2682).
+//MUTANT-SUITE crates/batten/tests/it/provision.rs
+//MUTANT zip-escape-admitted|s@^            return Err(climbs_out(Path::new(\&\*entry.name().unwrap_or_default())));$@            continue;@|a_zip_entry_climbing_out_is_refused
+fn extract_tree_zip(bytes: &[u8], tree: &Path, subtree: &Subtree) -> Result<()> {
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(bytes)).context("read the zip archive")?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).context("read a zip entry")?;
+        let Some(raw) = entry.enclosed_name() else {
+            return Err(climbs_out(Path::new(&*entry.name().unwrap_or_default())));
+        };
+        let kind = if entry.is_dir() {
+            Kind::Dir
+        } else if entry.is_symlink() {
+            let mut link = String::new();
+            entry
+                .read_to_string(&mut link)
+                .context("read a zip link target")?;
+            Kind::Symlink(PathBuf::from(link))
+        } else {
+            Kind::File {
+                executable: entry.unix_mode().is_some_and(|mode| mode & 0o111 != 0),
+            }
+        };
+        place(tree, subtree.strip, &subtree.bin, &raw, kind, &mut entry)?;
+    }
+    Ok(())
+}
+
 /// Extract the entry named `binary` from a zip archive, by file name as
 /// [`extract`] does for a tarball.
 fn extract_zip(bytes: &[u8], binary: &str) -> Result<Vec<u8>> {
@@ -2414,6 +2772,8 @@ fn body_of(url: &str, response: crate::fetch::Response) -> Result<Vec<u8>> {
 /// refusing at load rather than at fetch time: it can never match, so every
 /// apply would fail with a mismatch that blames the artifact for a typo in the
 /// config.
+//MUTANT-SUITE crates/batten/tests/it/provision.rs
+//MUTANT subtree-keys-unvalidated|s@^        validate_subtree(entry)?;$@@|a_subtree_key_without_an_archive_is_refused_at_load
 pub fn validate(entries: &[Provision]) -> Result<()> {
     let mut seen: Vec<&str> = Vec::new();
     for entry in entries {
@@ -2437,6 +2797,64 @@ pub fn validate(entries: &[Provision]) -> Result<()> {
         seen.push(&entry.name);
 
         validate_artifact_spelling(entry)?;
+        validate_subtree(entry)?;
+    }
+    Ok(())
+}
+
+/// `strip` and `bin`, on the entry and on each platform row (CLOUD-2682).
+///
+/// Refused at load: either key where nothing is unpacked; `strip` without
+/// `bin`; a `bin` that is empty, absolute or climbs with `..`; and `bin` with
+/// `link` where the launcher, a `#!` file, cannot run.
+fn validate_subtree(entry: &Provision) -> Result<()> {
+    let mut rows: Vec<(&str, Unpack, Option<usize>, Option<&str>)> = Vec::new();
+    if entry.platforms.is_empty() {
+        rows.push(("the entry", entry.unpack, entry.strip, entry.bin.as_deref()));
+    }
+    for (key, artifact) in &entry.platforms {
+        rows.push((
+            key.as_str(),
+            artifact.unpack.unwrap_or(entry.unpack),
+            artifact.strip.or(entry.strip),
+            artifact.bin.as_deref().or(entry.bin.as_deref()),
+        ));
+    }
+    let refuse = |row: &str, why: &str| {
+        Err(UsageError::raise(format!(
+            "provision {}: {row}: {why}",
+            entry.name
+        )))
+    };
+    for (row, unpack, strip, bin) in rows {
+        if (strip.is_some() || bin.is_some()) && unpack == Unpack::None {
+            return refuse(
+                row,
+                "`strip` and `bin` extract from an archive, and this row unpacks none",
+            );
+        }
+        if strip.is_some() && bin.is_none() {
+            return refuse(row, "`strip` shapes a subtree, and only `bin` asks for one");
+        }
+        let Some(bin) = bin else {
+            continue;
+        };
+        let path = Path::new(bin);
+        let climbs = path
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)));
+        if bin.trim().is_empty() || path.is_absolute() || climbs {
+            return refuse(
+                row,
+                "`bin` is a relative path inside the archive, with no `..`",
+            );
+        }
+        if entry.link.is_some() && cfg!(not(unix)) {
+            return refuse(
+                row,
+                "a subtree's `link` is a `#!` launcher, which this host cannot run",
+            );
+        }
     }
     Ok(())
 }
@@ -2602,9 +3020,10 @@ fn check_sha256(name: &str, where_: &str, sha256: &str) -> Result<()> {
 /// Propagates [`cache_root`]'s failure to resolve the out-of-tree state
 /// directory.
 pub fn binary_path(repo_root: &Path, entry: &Provision) -> Result<PathBuf> {
-    Ok(entry_dir(&cache_root(repo_root)?, entry)
-        .join(BIN_DIR)
-        .join(entry.cached_name()))
+    Ok(cached_binary(
+        &entry_dir(&cache_root(repo_root)?, entry),
+        entry,
+    ))
 }
 
 #[cfg(test)]
@@ -3187,6 +3606,8 @@ mod tests {
             sha256: Some(sha.to_owned()),
             platforms: BTreeMap::new(),
             unpack: Unpack::None,
+            strip: None,
+            bin: None,
             binary: "tool".to_owned(),
             link: None,
             env: Vec::new(),
@@ -3227,21 +3648,25 @@ mod tests {
         .expect("write the launcher");
 
         assert!(
-            launcher_declares(&linked, &declared),
+            launcher_declares(&linked, &declared, Path::new("/cache/bin/tool")),
             "the launcher this entry just wrote carries this entry's environment"
         );
 
         let mut edited = declared.clone();
         edited.env = vec![rule("OTHER_TOKEN")];
         assert!(
-            !launcher_declares(&linked, &edited),
+            !launcher_declares(&linked, &edited, Path::new("/cache/bin/tool")),
             "an edited row must reach the tool, and it only can if the cache reports stale"
         );
 
         // A body that will not parse is the launcher `exec_launcher` refuses and
         // tells the operator to rewrite, so it is stale rather than fresh.
         std::fs::write(&linked, b"#!/x provision-exec\nnot json\n").expect("write a broken one");
-        assert!(!launcher_declares(&linked, &declared));
+        assert!(!launcher_declares(
+            &linked,
+            &declared,
+            Path::new("/cache/bin/tool")
+        ));
     }
 
     /// THE RE-LINK MUST SURVIVE A TARGET THAT IS IN USE, which is what making
@@ -3287,7 +3712,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("a scratch directory");
         let dest = dir.display().to_string();
-        link_onto_path(&declared, &dest, Path::new("/cache/bin/tool"), &[]).expect("first link");
+        link_onto_path(&declared, &dest, Path::new("/cache/bin/tool"), &[], None)
+            .expect("first link");
 
         let linked = dir.join("tool");
         let inode = |path: &Path| {
@@ -3299,7 +3725,8 @@ mod tests {
 
         let mut relinked = declared.clone();
         relinked.env = vec![rule("OTHER_TOKEN")];
-        link_onto_path(&relinked, &dest, Path::new("/cache/bin/tool"), &[]).expect("the re-link");
+        link_onto_path(&relinked, &dest, Path::new("/cache/bin/tool"), &[], None)
+            .expect("the re-link");
         assert_ne!(
             before,
             inode(&linked),
@@ -3307,7 +3734,7 @@ mod tests {
              executed would have refused them with ETXTBSY"
         );
         assert!(
-            launcher_declares(&linked, &relinked),
+            launcher_declares(&linked, &relinked, Path::new("/cache/bin/tool")),
             "and the file on PATH carries what the re-link declared"
         );
 
@@ -3337,6 +3764,8 @@ mod tests {
                         url: format!("file:///dev/null/{platform}"),
                         sha256: (*sha).to_owned(),
                         unpack: None,
+                        strip: None,
+                        bin: None,
                     },
                 )
             })
