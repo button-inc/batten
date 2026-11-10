@@ -52,7 +52,8 @@ use crate::redirect::{self, Redirect};
 use crate::refusal::{Fix, Refusal};
 use crate::resolve::Resolved;
 use crate::rules::{
-    CeilingUnit, NativeGate, PathSet, ReceiptKey, ReceiptTrigger, Rule, RuleKind, RuleScope,
+    CallEvent, CeilingUnit, NativeGate, PathSet, ReceiptKey, ReceiptTrigger, Rule, RuleKind,
+    RuleScope,
 };
 use crate::severity::{self, ReportLevel, RuleSeverity};
 use crate::verbs::{MutatingVerb, OperandScope};
@@ -3541,7 +3542,7 @@ impl Field {
             Field::InputDraft => envelope
                 .input
                 .get("draft")
-                .and_then(Value::as_bool)
+                .and_then(draft_flag)
                 .map(|flag| flag.to_string()),
         };
         value.filter(|text| !text.is_empty())
@@ -4740,7 +4741,10 @@ impl Policy {
     /// tie-break everywhere else on this surface.
     #[must_use]
     pub fn key_base_for(&self, envelope: &Envelope) -> Option<&str> {
-        if envelope.event != Event::PreTool || envelope.command.is_empty() {
+        // A structured call that raises an event an `on` row keys on is judged,
+        // so its key evidence is owed too (CLOUD-2662).
+        let unjudged = envelope.command.is_empty() && call_event(envelope).is_none();
+        if envelope.event != Event::PreTool || unjudged {
             return None;
         }
         // The column test BEFORE the command parse, so "a repository declaring
@@ -5830,7 +5834,9 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
     // An `Ask` short-circuits exactly as a `Deny` does: the row matched, and what
     // it asked for is the answer. Falling through would let a second row overrule
     // an escalation the first one wanted, which declaration order decides.
-    if !envelope.command.is_empty() {
+    // An `on` shape row is judged here on a structured call too (CLOUD-2662).
+    let shape_gated = !envelope.command.is_empty() || call_event(envelope).is_some();
+    if shape_gated {
         match shape_rules(policy, envelope, &envelope.command, keys) {
             decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
             Decision::Allow
@@ -6469,13 +6475,31 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
             matched.push(rule);
         }
     }
+    // THE EVENT-KEYED ROWS (CLOUD-2662), selected on every route the engine
+    // knows raises the event, before the command walk so a structured call
+    // reaches them too.
+    let receipt_event = call_event(envelope);
+    if receipt_event.is_some() {
+        for rule in &policy.shapes {
+            if rule.kind != RuleKind::Receipt
+                || rule.on != receipt_event
+                || !blocks(rule.severity(), policy.fail_on_warning)
+                || !modifier_admits(rule, envelope)
+            {
+                continue;
+            }
+            if !matched.iter().any(|seen| std::ptr::eq(*seen, rule)) {
+                matched.push(rule);
+            }
+        }
+    }
     // ABSTAIN RATHER THAN CLEAR (CLOUD-1381). A command this build cannot parse
     // is one whose shape is unknown, so no row is SELECTED over it — the same
     // abstention a module with no `missing` clause gets. Selecting rows from a
     // shape nobody could read is the silent under-denial the row is about, and
     // refusing outright is not available either: `3` never blocks a call.
     let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
-        return Vec::new();
+        return matched;
     };
     // PER LINE, and this walk is the one where missing it is WORST (CLOUD-1287).
     // A receipt row is a PRECONDITION — `gh pr ready` demands a verify receipt —
@@ -6555,6 +6579,9 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
 /// not a tidiness: this gate sees a row only if that row's own `tool` selected
 /// this call.
 fn tool_receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> Decision {
+    // THE STRUCTURED ROUTE of an `on` row (CLOUD-2662); a shell call's is
+    // `receipt_rules`, after the shape gate, as this header's order requires.
+    let event = structured_event(envelope);
     // Both non-answers allow, and for the same reason [`receipt_rules`] gives
     // them one arm: a boundary that had no question to ask and a boundary that
     // could not ask reach the same verdict here, and neither is evidence a
@@ -6569,7 +6596,7 @@ fn tool_receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts
     for rule in &policy.shapes {
         if rule.kind != RuleKind::Receipt
             || !blocks(rule.severity(), policy.fail_on_warning)
-            || !rule.selects_tool(&envelope.raw_tool)
+            || !(rule.selects_tool(&envelope.raw_tool) || on_selects(rule, event))
         {
             continue;
         }
@@ -9689,8 +9716,21 @@ fn key_present(expression: &str, command: &str, keys: &KeyFacts) -> bool {
 /// supposed to fire.
 fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a Rule> {
     let mut matched: Vec<&Rule> = Vec::new();
+    // THE EVENT-KEYED ROWS (CLOUD-2662), before the walk, on every route.
+    let shape_event = call_event(envelope);
+    if shape_event.is_some() {
+        for rule in &policy.shapes {
+            if rule.kind == RuleKind::Shape
+                && rule.on == shape_event
+                && blocks(rule.severity(), policy.fail_on_warning)
+                && modifier_admits(rule, envelope)
+            {
+                matched.push(rule);
+            }
+        }
+    }
     let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
-        return Vec::new();
+        return matched;
     };
     // PER LINE (CLOUD-1287). A shape row keyed on a program is evaded outright by
     // writing an innocuous first line: `words` concatenates across the newline, so
@@ -9811,6 +9851,173 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
         }
     }
     matched
+}
+
+//MUTANT-SUITE crates/batten/tests/it/ready_event.rs
+//MUTANT ready-route-structured-unjudged|s@^    let event = structured_event(envelope);$@    let event: Option<CallEvent> = None;@|a_connector_undraft_owes_the_on_row_and_a_body_edit_does_not
+//MUTANT ready-route-connector-draft-unread|s@^        let undrafts = draft.as_deref() == Some("false");$@        let undrafts = false;@|a_connector_undraft_owes_the_on_row_and_a_body_edit_does_not
+//MUTANT ready-route-draft-string-unread|s@^        Value::String(text) => text.parse().ok(),$@        Value::String(_) => None,@|a_connector_undraft_owes_the_on_row_and_a_body_edit_does_not
+//MUTANT ready-route-create-connector-unread|s@^        return (!drafted).then_some(CallEvent::PullRequestReady);$@        return None;@|a_ready_create_owes_the_on_row_on_both_routes
+//MUTANT ready-route-create-flag-unread|s@^        \["pr", "create", ..\] => !drafted_flag(\&flags),$@        ["pr", "create", ..] => false,@|a_ready_create_owes_the_on_row_on_both_routes
+//MUTANT ready-route-receipt-unselected|s@^    let receipt_event = call_event(envelope);$@    let receipt_event: Option<CallEvent> = None;@|ready_undo_owes_nothing_and_ready_owes_the_on_row
+//MUTANT ready-route-undo-refused|s@^        \["pr", "ready", ..\] => !flagged(\&flags, "--undo"),$@        ["pr", "ready", ..] => true,@|ready_undo_owes_nothing_and_ready_owes_the_on_row
+//MUTANT ready-route-api-unread|s@^        \["api", ..\] => api_readies(\&operands\[1..\], \&flags),$@        ["api", ..] => false,@|an_api_ready_owes_the_on_row_and_an_api_read_does_not
+//MUTANT ready-route-reopen-unread|s@^        \["pr", "reopen", ..\] => true,$@        ["pr", "reopen", ..] => false,@|a_reopen_owes_the_on_row_on_both_routes
+//MUTANT ready-route-shape-unselected|s@^    let shape_event = call_event(envelope);$@    let shape_event: Option<CallEvent> = None;@|an_on_shape_row_refuses_an_unkeyed_ready_on_both_routes
+//MUTANT ready-route-shape-guard|s@^    let shape_gated = !envelope.command.is_empty() \x7c\x7c call_event(envelope).is_some();$@    let shape_gated = !envelope.command.is_empty();@|an_on_shape_row_refuses_an_unkeyed_ready_on_both_routes
+//MUTANT ready-route-key-base-unread|s@^        let unjudged = envelope.command.is_empty() \&\& call_event(envelope).is_none();$@        let unjudged = envelope.command.is_empty();@|an_on_shape_row_refuses_an_unkeyed_ready_on_both_routes
+//MUTANT-SUITE crates/batten/src/hook.rs
+/// The event this call raises, on any route the engine knows (CLOUD-2662).
+pub(crate) fn call_event(envelope: &Envelope) -> Option<CallEvent> {
+    if envelope.command.is_empty() {
+        connector_event(envelope)
+    } else {
+        shell_event(envelope)
+    }
+}
+
+/// [`call_event`] on the structured route only: `None` for any shell call.
+fn structured_event(envelope: &Envelope) -> Option<CallEvent> {
+    if envelope.command.is_empty() {
+        connector_event(envelope)
+    } else {
+        None
+    }
+}
+
+/// Whether `rule` is keyed on `event`, which it must name.
+fn on_selects(rule: &Rule, event: Option<CallEvent>) -> bool {
+    rule.on.is_some() && rule.on == event
+}
+
+/// A JSON draft flag, as a bool or its exact string spelling.
+fn draft_flag(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(flag) => Some(*flag),
+        Value::String(text) => text.parse().ok(),
+        _ => None,
+    }
+}
+
+/// The forge connector's routes: a create that is not a draft (absent counts
+/// as ready, the forge's default), and an update that undrafts or reopens.
+fn connector_event(envelope: &Envelope) -> Option<CallEvent> {
+    let raw = &envelope.raw_tool;
+    let draft = Field::InputDraft.read(envelope);
+    if crate::rules::selects_tool_name("create_pull_request", raw) {
+        let drafted = draft.as_deref() == Some("true");
+        return (!drafted).then_some(CallEvent::PullRequestReady);
+    }
+    if crate::rules::selects_tool_name("update_pull_request", raw) {
+        let undrafts = draft.as_deref() == Some("false");
+        let reopens = draft.as_deref() != Some("true")
+            && Field::InputState
+                .read(envelope)
+                .is_some_and(|state| comparable(&state) == "open");
+        return (undrafts || reopens).then_some(CallEvent::PullRequestReady);
+    }
+    None
+}
+
+/// The shell routes, per line over the line's own unquoted words with its
+/// redirections dropped, split into operands and flags.
+fn shell_event(envelope: &Envelope) -> Option<CallEvent> {
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    per_line(&parsed)
+        .into_iter()
+        .any(|(_, _, line)| line_readies(line))
+        .then_some(CallEvent::PullRequestReady)
+}
+
+fn line_readies(line: &SegmentLine) -> bool {
+    let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+    let handed = &tokens[..tokens.len().saturating_sub(line.redirects.len())];
+    let Some(program) = effective_program(handed) else {
+        return false;
+    };
+    if program_name(program_token(handed[program])) != "gh" {
+        return false;
+    }
+    let (flags, operands) = gh_flags_and_operands(&handed[program + 1..]);
+    match operands.as_slice() {
+        ["pr", "ready", ..] => !flagged(&flags, "--undo"),
+        ["pr", "create", ..] => !drafted_flag(&flags),
+        ["pr", "reopen", ..] => true,
+        ["api", ..] => api_readies(&operands[1..], &flags),
+        _ => false,
+    }
+}
+
+/// gh's options that take the next word as their value. A value is an operand
+/// whatever it spells: `--title "--draft"` names a title, not the flag.
+const GH_VALUE_FLAGS: [&str; 22] = [
+    "-t",
+    "--title",
+    "-b",
+    "--body",
+    "-F",
+    "--body-file",
+    "-B",
+    "--base",
+    "-H",
+    "--head",
+    "-a",
+    "--assignee",
+    "-l",
+    "--label",
+    "-m",
+    "--milestone",
+    "-r",
+    "--reviewer",
+    "-R",
+    "--repo",
+    "-X",
+    "--method",
+];
+
+/// A gh argv split into flags and operands, a value flag's value an operand.
+fn gh_flags_and_operands<'a>(arguments: &[&'a str]) -> (Vec<&'a str>, Vec<&'a str>) {
+    let (mut flags, mut operands) = (Vec::new(), Vec::new());
+    let mut value_next = false;
+    for token in arguments {
+        let word = program_token(token);
+        if value_next || !word.starts_with('-') {
+            operands.push(word);
+            value_next = false;
+        } else {
+            flags.push(word);
+            value_next = GH_VALUE_FLAGS.contains(&word);
+        }
+    }
+    (flags, operands)
+}
+
+fn flagged(flags: &[&str], flag: &str) -> bool {
+    flags
+        .iter()
+        .any(|word| *word == flag || *word == format!("{flag}=true"))
+}
+
+fn drafted_flag(flags: &[&str]) -> bool {
+    flagged(flags, "--draft") || flags.contains(&"-d")
+}
+
+/// `gh api` raises the event when it names the ready mutation, the REST ready
+/// route, or a GraphQL query the hook cannot read (from a file).
+fn api_readies(operands: &[&str], flags: &[&str]) -> bool {
+    operands
+        .iter()
+        .any(|word| word.contains("markPullRequestReadyForReview"))
+        || operands.iter().any(|word| {
+            word.split('?')
+                .next()
+                .is_some_and(|path| path.ends_with("/ready_for_review"))
+        })
+        || (operands.contains(&"graphql")
+            && (flags.iter().any(|flag| flag.starts_with("--input"))
+                || operands.iter().any(|word| word.contains("=@"))))
 }
 
 /// Whether any word of `argv`, normalised by [`program_token`], matches `shape`
@@ -13132,6 +13339,7 @@ mod tests {
             unless_contains: None,
             word: None,
             unless_word: None,
+            on: None,
             require_via: None,
             requires_key: None,
             reason: Some(format!("use the sanctioned path for {id}")),
