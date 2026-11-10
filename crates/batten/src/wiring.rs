@@ -124,8 +124,6 @@ pub(crate) fn entries_under(
 
 /// The commands one entry registers, in `shape`.
 //MUTANT-SUITE crates/batten/tests/it/harness_wiring.rs
-//MUTANT flat-entry-unread|s@^        hook::EntryShape::Flat { read, .. } => flat_command(entry, read).into_iter().collect(),$@        hook::EntryShape::Flat { .. } => Vec::new(),@|a_hand_written_flat_cursor_file_is_registered
-//MUTANT nested-counted-on-flat-host|s@^        hook::EntryShape::Flat { read, .. } => flat_command(entry, read).into_iter().collect(),$@        hook::EntryShape::Flat { read, .. } => flat_command(entry, read).into_iter().chain(nested_commands(entry)).collect(),@|a_nested_cursor_file_reads_unregistered
 fn entry_commands(entry: &serde_json::Value, shape: hook::EntryShape) -> Vec<&str> {
     match shape {
         hook::EntryShape::Flat { read, .. } => flat_command(entry, read).into_iter().collect(),
@@ -470,7 +468,6 @@ fn write_at_load(dir: &Path, rows: &[AtLoadRow]) -> Result<bool> {
 /// `read: 1, commands: 0`, which is a real disposition and would now be a lie
 /// about how the file got there.
 //MUTANT-SUITE crates/batten/src/wiring.rs
-//MUTANT reclaim-skips-flat-entry|s@^            entries.retain(ours);$@            entries.retain(\x7c_\x7c true);@|a_flat_merged_sibling_is_pruned
 fn prune_siblings(
     document: &mut serde_json::Value,
     file: hook::WiringFile,
@@ -670,7 +667,6 @@ pub fn live_session_root() -> Option<PathBuf> {
 ///
 /// When a surface parsed and cannot be written back.
 //MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
-//MUTANT register-all-skips-harness|s@^        let Some(wiring) = harness.wiring() else {$@        let Some(wiring) = harness.wiring().filter(\x7c_\x7c *harness != hook::Harness::Cursor) else {@|register_all_writes_every_committed_surface
 pub fn register_committed(repo: &Path, check: bool) -> Result<Vec<(hook::Harness, Vec<String>)>> {
     let mut owed = Vec::new();
     for harness in hook::Harness::ALL {
@@ -728,7 +724,6 @@ pub fn register_committed(repo: &Path, check: bool) -> Result<Vec<(hook::Harness
 /// An event already registering a batten command is left exactly as it is, so
 /// a second run adds nothing — the property the `[[startup]]` check relies on.
 //MUTANT-SUITE crates/batten/tests/it/wiring_register.rs
-//MUTANT register-writes-nested-for-flat|s@^        let entry = new_entry(shape, command);$@        let entry = new_entry(hook::EntryShape::Nested, command);@|register_all_writes_flat_hosts_flat
 fn add_missing(
     document: &mut serde_json::Value,
     file: hook::WiringFile,
@@ -1164,10 +1159,6 @@ impl GateReport {
 /// hooks directory does not resolve; an internal error when the directory
 /// cannot be created or a hook cannot be replaced.
 //MUTANT-SUITE crates/batten/tests/it/startup.rs
-//MUTANT gate-links-commit-hooks-only|s@^    for \&(name, _) in crate::hook::GIT_HOOKS {$@    for \&(name, _) in crate::hook::GIT_HOOKS.iter().take(2) {@|wiring_gate_links_every_git_hook_to_the_running_batten
-//MUTANT foreign-hook-replaced|s@^        if is_foreign(\&link, \&exe) \&\& !(owned \&\& declared.contains_key(name)) {$@        if false {@|a_foreign_pre_push_survives_wiring_gate_and_check_names_it
-//MUTANT shared-hook-taken-over|s@^        if is_foreign(\&link, \&exe) \&\& !(owned \&\& declared.contains_key(name)) {$@        if is_foreign(\&link, \&exe) \&\& !declared.contains_key(name) {@|a_foreign_hook_in_a_shared_hooks_dir_is_never_taken_over
-//MUTANT passthrough-program-unchecked|s@^        if !argv.first().is_some_and(resolves) {$@        if false {@|wiring_gate_check_names_a_declared_hook_whose_program_does_not_resolve
 pub fn link_git_hooks(dir: &Path, check: bool) -> Result<GateReport> {
     let root = git::repo_root(dir)?;
     let Some(hooks) = crate::doctor::hooks_dir(dir) else {

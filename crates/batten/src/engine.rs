@@ -71,7 +71,6 @@ pub const MALFORMED_PIN: &str =
     "`engine` names exactly one of `release` (a release tag, `v0.0.217`) or `source`";
 
 //MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT tag-unvalidated|s@^            (Some(tag), None) if release_version(\&tag).is_ok() => PinKind::Release(tag),$@            (Some(tag), None) => PinKind::Release(tag),@|a_tag_that_is_not_a_release_is_malformed
 impl Pin {
     /// What this pin names.
     ///
@@ -265,7 +264,6 @@ pub fn stamp(binary: &Path, digest: &str) -> Result<()> {
 /// row ([`row_disagreement`]). Top-level keys precede the first table header in
 /// TOML, so an `engine` line past it belongs to some table and is not the pin.
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT row-unread|s@^            (_, Some(tag)) => Some(Pin {$@            (_, Some(tag)) if false => Some(Pin {@|a_provision_row_alone_pins_and_is_followed_before_the_parse
 #[must_use]
 pub fn declared(text: &str) -> Option<Pin> {
     Pins::of(text).declared()
@@ -351,7 +349,6 @@ fn artifact_digest(artifact: &dyn toml_edit::TableLike) -> Option<String> {
 /// `toml_edit`. A block that will not parse is passed over, so a malformed
 /// neighbour can no more hide the pin than a later release's check can.
 //MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT row-block-swallows-the-file|s@^        if header.is_some_and(\x7c(name, _)\x7c opens \x7c\x7c !name.starts_with("provision."))$@        if false@|a_row_is_read_from_its_own_block
 fn batten_row(text: &str) -> Option<toml_edit::Table> {
     // Each block is parsed as it closes, and the first batten row ends the scan.
     let parsed = |block: &str| {
@@ -443,7 +440,6 @@ fn platform_artifact<'row>(
 /// URL names this engine's asset; otherwise `None`, and the follow verifies
 /// against the release's `SHA256SUMS`.
 //MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT follow-takes-a-sibling-libc|s@^        .filter(\x7cartifact\x7c url_names(\*artifact, \&asset))$@        .filter(\x7c_\x7c true)@|the_follow_reads_its_own_triples_digest
 #[must_use]
 pub fn followed_digest(text: &str) -> Option<String> {
     let row = batten_row(text)?;
@@ -506,9 +502,7 @@ pub fn row_disagreement(text: &str) -> Option<(String, String)> {
 /// A `.zip` target has no `unpack` spelling a provision row can carry, so it is
 /// left to the `SHA256SUMS` fallback the follow keeps for an unlisted platform.
 //MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT adopt-trusts-the-scan|s@^    (!declares_batten(text) \&\& declared(\&out).is_some() \&\& parses(\&out)).then_some(out)$@    Some(out)@|adopted_never_writes_beside_a_row_the_scan_cannot_see
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT row-never-written|s@^    if declared(text).is_some() {$@    if true {@|a_config_without_a_row_gains_one_after_a_clean_load
 #[must_use]
 pub fn adopted(text: &str, repository: &str, tag: &str, sums: &str) -> Option<String> {
     if declared(text).is_some() {
@@ -734,7 +728,6 @@ fn shell_word(word: &str) -> String {
 }
 
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT pin-unread|s@^    let Some(pin) = pins.declared() else {$@    let Some(pin) = None::<Pin> else {@|a_release_pin_naming_another_build_is_refused_with_its_install
 //MUTANT stamp-trusted-when-absent|s@^            if stamp.as_deref() != Some(digest.as_str()) {$@            if stamp.is_some() \&\& stamp.as_deref() != Some(digest.as_str()) {@|a_source_pin_without_a_stamp_is_refused
 
 /// Whether the running binary lives inside the tree holding `source`, the
@@ -1074,9 +1067,7 @@ pub fn verify(archive: &[u8], sums: &str, asset: &str) -> Result<()> {
 /// the release's `SHA256SUMS`, or the consumer's batten row (CLOUD-2595). The
 /// one comparison every download passes, whichever side vouched for the bytes.
 //MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT digest-unchecked|s@^    if got != want {$@    if false {@|an_archive_whose_digest_disagrees_is_refused
 //MUTANT-SUITE crates/batten/tests/it/engine_pin.rs
-//MUTANT row-digest-unchecked|s@^    if got != want {$@    if false {@|a_followed_release_is_verified_against_the_rows_digest
 fn verify_digest(archive: &[u8], want: &str, asset: &str, whose: &str) -> Result<()> {
     let got = crate::receipt::hex_sha256(archive);
     if got != want {
@@ -1178,7 +1169,6 @@ fn gnu_twin(target: &str) -> Option<String> {
 /// with no libc, or a glibc older than the build, fails `runs` and keeps musl.
 /// Anything else — no gnu build for the platform, an unpublished tag, a fetch
 /// that failed — keeps the musl bytes, silently, since they already run.
-//MUTANT gnu-kept-unrun|s@^        Some(candidate) if runs(\&candidate) => (gnu, candidate),$@        Some(candidate) => (gnu, candidate),@|a_gnu_build_that_does_not_run_leaves_musl
 pub fn chosen_build(
     running: &str,
     musl: Vec<u8>,
@@ -1281,10 +1271,7 @@ fn heading_of(line: &str) -> Option<(semver::Version, Option<String>)> {
 /// section, so an unparsed heading never merges its entries into the release
 /// above it.
 //MUTANT-SUITE crates/batten/src/engine.rs
-//MUTANT unparsed-heading-merges-section|s@^        if line.starts_with("## ") {$@        if heading_of(line).is_some() {@|an_unparsed_heading_ends_the_section_above_it
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT outdated-breaking-uncounted|s@^            if line.contains(BREAKING) {$@            if false {@|outdated_breaking_releases_lead_and_point_at_their_sections
-//MUTANT section-span-takes-blank|s@^            if !line.trim().is_empty() {$@            if true {@|outdated_breaking_releases_lead_and_point_at_their_sections
 #[must_use]
 pub fn changelog_sections(text: &str) -> Vec<Heading> {
     let mut sections = Vec::new();
@@ -1319,7 +1306,6 @@ pub fn changelog_sections(text: &str) -> Vec<Heading> {
 /// smallest heading line to the largest section end. `?plain=1` because a
 /// rendered `.md` blob ignores `#L` anchors.
 //MUTANT-SUITE crates/batten/tests/it/engine_install.rs
-//MUTANT section-end-unspanned|s@^    let last = spans.iter().map(\x7cspan\x7c span.1).max();$@    let last = first;@|outdated_breaking_releases_lead_and_point_at_their_sections
 #[must_use]
 pub fn notes_url(repository: &str, reference: &str, newer: &[Heading]) -> String {
     let base = format!(

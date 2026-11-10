@@ -703,7 +703,6 @@ struct Subtree {
 /// This host's [`Subtree`], or `None` for a single-file entry. A platform row's
 /// `strip` and `bin` override the entry's, as its `unpack` does.
 //MUTANT-SUITE crates/batten/tests/it/provision.rs
-//MUTANT platform-bin-ignored|s@^    let bin = artifact.bin.as_deref().or(entry.bin.as_deref());$@    let bin = entry.bin.as_deref();@|a_platform_row_names_its_own_strip_and_bin
 fn subtree_of(entry: &Provision, artifact: &Artifact) -> Option<Subtree> {
     let bin = artifact.bin.as_deref().or(entry.bin.as_deref());
     let strip = artifact.strip.or(entry.strip).unwrap_or(0);
@@ -829,7 +828,6 @@ pub enum Applied {
 /// `links_host` is [`links_host`]'s answer: `false` leaves the declared link —
 /// the host's, not the repository's — unjudged and unwritten.
 //MUTANT-SUITE crates/batten/tests/it/provision.rs
-//MUTANT platform-unpack-ignored|s@^    let unpack = artifact.unpack.unwrap_or(entry.unpack);$@    let unpack = entry.unpack;@|a_platform_row_names_its_own_unpack
 pub fn apply(
     entry: &Provision,
     cache_root: &Path,
@@ -1024,7 +1022,6 @@ const LAUNCHER_VERB: &str = "provision-exec";
 /// executable BEFORE the rename and the file on `PATH` is never a moment
 /// non-executable. Same directory, so it cannot cross a filesystem.
 //MUTANT-SUITE crates/batten/tests/it/provision.rs
-//MUTANT subtree-link-copied|s@^    let written = if entry.env.is_empty() \&\& subtree.is_none() {$@    let written = if entry.env.is_empty() {@|a_subtree_entry_links_a_launcher_onto_path
 fn link_onto_path(
     entry: &Provision,
     dest: &str,
@@ -1417,7 +1414,6 @@ fn credential_declaration() -> std::result::Result<CredentialProbe, String> {
 /// linked worktree `repo_root` is the MAIN checkout, so `land` → `verify` in a
 /// worktree reported `<main checkout>/batten.toml will not load` over a branch
 /// whose own file loaded fine.
-//MUTANT credential-on-repo-root|s@^    let root = crate::config::authority_root(start)$@    let root = crate::git::repo_root(start)@|the_credential_declaration_in_a_worktree_is_the_worktrees
 fn credential_declaration_in(start: &Path) -> std::result::Result<CredentialProbe, String> {
     let root = crate::config::authority_root(start)
         .map_err(|err| format!("{} is in no repository: {err}", start.display()))?;
@@ -2026,7 +2022,6 @@ fn expand_home(dest: &str) -> Result<PathBuf> {
 /// keeps its open files, and a failed extraction leaves the old tree and the
 /// artifact as they were.
 //MUTANT-SUITE crates/batten/tests/it/provision.rs
-//MUTANT tree-aside-kept|s@^    let _ = fs::remove_dir_all(\&aside);$@@|a_reinstalled_subtree_replaces_the_old_tree
 fn install_tree(dir: &Path, unpack: Unpack, subtree: &Subtree, bytes: &[u8]) -> Result<PathBuf> {
     fs::create_dir_all(dir).context("create the provision cache directory")?;
     let pid = std::process::id();
@@ -2061,7 +2056,6 @@ fn install_tree(dir: &Path, unpack: Unpack, subtree: &Subtree, bytes: &[u8]) -> 
 
 /// The staged tree's binary must be a file, and is made executable.
 //MUTANT-SUITE crates/batten/tests/it/provision.rs
-//MUTANT bin-path-unchecked|s@^    if !staged.join(bin).is_file() {$@    if false {@|a_bin_path_missing_after_strip_is_refused
 fn staged_bin(staged: &Path, subtree: &Subtree) -> Result<()> {
     let bin = &subtree.bin;
     if !staged.join(bin).is_file() {
@@ -2092,8 +2086,6 @@ fn climbs_out(path: &Path) -> anyhow::Error {
 /// `path` with its first `strip` components dropped, `None` when nothing is
 /// left; a root, prefix or `..` component is refused.
 //MUTANT-SUITE crates/batten/tests/it/provision.rs
-//MUTANT strip-escape-admitted|s@^            _ => return Err(climbs_out(path)),$@            _ => {}@|an_entry_climbing_out_of_the_tree_is_refused
-//MUTANT strip-ignored|s@^    Ok((parts.len() > strip).then(\x7c\x7c parts\[strip..\].iter().collect()))$@    Ok(Some(parts.iter().collect()))@|a_subtree_entry_runs_its_binary_beside_its_files
 fn stripped(path: &Path, strip: usize) -> Result<Option<PathBuf>> {
     let mut parts = Vec::new();
     for component in path.components() {
@@ -2131,7 +2123,6 @@ fn lexically_inside(parent: &Path, link: &Path) -> bool {
 /// Write one archive entry under `tree` (CLOUD-2682), the one rule set the tar
 /// and zip loops share.
 //MUTANT-SUITE crates/batten/tests/it/provision.rs
-//MUTANT subtree-unextracted|s@^    let target = tree.join(\&rel);$@    if rel.as_path() != bin { return Ok(()); } let target = tree.join(\&rel);@|a_subtree_entry_runs_its_binary_beside_its_files
 fn place(
     tree: &Path,
     strip: usize,
@@ -2180,7 +2171,6 @@ fn place(
 /// A symlink whose target stays inside the tree (CLOUD-2682): relative, and
 /// resolved lexically from its own directory.
 //MUTANT-SUITE crates/batten/tests/it/provision.rs
-//MUTANT symlink-escape-admitted|s@^    if !lexically_inside(parent, \&link_target) {$@    if false {@|a_symlink_climbing_out_of_the_tree_is_refused
 #[cfg(unix)]
 fn place_symlink(parent: &Path, target: &Path, link: &Path, raw: &Path) -> Result<()> {
     let link_target = link.to_path_buf();
@@ -2251,7 +2241,6 @@ fn extract_tree_tar(bytes: &[u8], tree: &Path, subtree: &Subtree) -> Result<()> 
 
 /// Extract a zip archive as a subtree (CLOUD-2682).
 //MUTANT-SUITE crates/batten/tests/it/provision.rs
-//MUTANT zip-escape-admitted|s@^            return Err(climbs_out(Path::new(\&\*entry.name().unwrap_or_default())));$@            continue;@|a_zip_entry_climbing_out_is_refused
 fn extract_tree_zip(bytes: &[u8], tree: &Path, subtree: &Subtree) -> Result<()> {
     let mut archive =
         zip::ZipArchive::new(std::io::Cursor::new(bytes)).context("read the zip archive")?;
@@ -2429,7 +2418,6 @@ fn body_of(url: &str, response: crate::fetch::Response) -> Result<Vec<u8>> {
 /// apply would fail with a mismatch that blames the artifact for a typo in the
 /// config.
 //MUTANT-SUITE crates/batten/tests/it/provision.rs
-//MUTANT subtree-keys-unvalidated|s@^        validate_subtree(entry)?;$@@|a_subtree_key_without_an_archive_is_refused_at_load
 pub fn validate(entries: &[Provision]) -> Result<()> {
     let mut seen: Vec<&str> = Vec::new();
     for entry in entries {

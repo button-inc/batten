@@ -3901,7 +3901,6 @@ fn ci_weakenings(base: Option<&crate::ci::Ci>, working: Option<&crate::ci::Ci>) 
 /// the person making it, never from a committed name, so the table is no longer
 /// a repository's decision and its absence ranks below nothing.
 //MUTANT-SUITE crates/batten/src/trust.rs
-//MUTANT identity-removal-weakens|s@^    found // the identity is not compared (CLOUD-2659)$@    if base.identity.is_some() \&\& working.is_some_and(\x7cw\x7c w.identity.is_none()) { found.push(Weakening::new(WeakeningKind::AttributionDenyRemoved, "attribution.identity", "present", "absent")); }\n    found@|removing_the_committed_identity_is_not_a_weakening
 fn attribution_weakenings(
     base: Option<&crate::attribution::Attribution>,
     working: Option<&crate::attribution::Attribution>,

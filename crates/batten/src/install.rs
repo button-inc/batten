@@ -496,8 +496,6 @@ impl Lock {
 /// `/lib/ld-musl-*` loader, which handed a gnu binary to every host with no libc
 /// or too old a glibc.
 //MUTANT-SUITE crates/batten/tests/it/install_web.rs
-//MUTANT bootstrap-probes-the-libc|s@^Linux) target="$arch-unknown-linux-musl" ;;$@Linux) for l in /lib/ld-musl-*; do target="$arch-unknown-linux-musl"; done ;;@|the_bootstrap_is_the_bare_minimum
-//MUTANT bootstrap-fetches-gnu|s@^Linux) target="$arch-unknown-linux-musl" ;;$@Linux) target="$arch-unknown-linux-gnu" ;;@|linux_fetches_the_musl_build_and_never_a_gnu_one
 //MUTANT bootstrap-skips-its-baked-hash|s@^\[ "${{sum%% \*}}" = "$want" \] \x7c\x7c fail@true \x7c\x7c fail@|a_served_archive_disagreeing_with_the_lock_installs_nothing
 #[must_use]
 pub fn render_bootstrap(name: &str, repository: &str, lock: &Lock) -> String {

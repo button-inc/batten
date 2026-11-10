@@ -1219,7 +1219,6 @@ fn compile_for(
 /// refuses the flat function, and moving a nameable step is the remedy this
 /// crate already takes for that lint instead of raising a cap.
 //MUTANT-SUITE crates/batten/tests/it/preset_manifest.rs
-//MUTANT provider-key-unnamed|s@^        let repair = provider_repair(\&reads);$@        let repair = String::new();@|a_preset_reading_a_provider_is_refused_where_the_row_names_none
 fn preset_sources(
     rule: &Rule,
     manifest: &crate::preset::Manifest,

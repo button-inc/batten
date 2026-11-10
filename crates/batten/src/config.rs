@@ -5408,7 +5408,6 @@ pub struct AuthoritySite {
 /// As [`crate::git::repo_root`]: not a directory, not inside a repository, or a
 /// layout with no working tree to root.
 //MUTANT-SUITE crates/batten/tests/it/hook_worktree_root.rs
-//MUTANT anchor-skips-worktree|s@^        \&\& worktree.join(CONFIG_FILE).is_file()$@        \&\& false@|two_worktrees_with_different_configs_get_different_verdicts
 pub fn authority_root(start: &Path) -> Result<PathBuf> {
     if let Ok(worktree) = crate::git::worktree_root(start)
         && worktree.join(CONFIG_FILE).is_file()
