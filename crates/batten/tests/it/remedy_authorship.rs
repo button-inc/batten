@@ -247,9 +247,11 @@ fn a_caller_naming_a_bypass_it_does_not_implement_is_a_finding() {
 #[test]
 fn the_task_whose_program_reads_the_bypass_may_name_it() {
     let root = scratch("owner");
+    // THE TASK NAMES THE BYPASS, which is what puts it in front of the
+    // implementer check at all: a body naming none is judged by nothing.
     manifest(
         &root,
-        "[tasks.prose-only-check]\nrun = \"mise-tasks/prose-only-check.sh\"\n",
+        "[tasks.prose-only-check]\nrun = \"BATTEN_PROSE_ONLY_OVERRIDE=${BATTEN_PROSE_ONLY_OVERRIDE:-} mise-tasks/prose-only-check.sh\"\n",
     );
     fs::write(
         root.join("mise-tasks").join("prose-only-check.sh"),

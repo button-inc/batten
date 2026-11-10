@@ -112,6 +112,36 @@ fn the_boundary_acquires_a_plan_the_module_can_read() {
             .any(|step| step.name == "batten-check" && step.status == "included"),
         "this repository's gate still runs the step the row requires"
     );
+    // AND THE MODULE READS WHAT THE BOUNDARY COULD NOT ACQUIRE (CLOUD-845's gap,
+    // a suite that never installs the module): the tree's own
+    // `hk-plan-required` over a checkout with no `hk.pkl`, where no plan can be
+    // taken, says so rather than passing over the declared plan.
+    let module = std::fs::read_to_string(root.join("policy/hk-plan-required.rego"))
+        .expect("the module reads");
+    let dir = common::scratch("hk-plan-unacquired");
+    common::write(
+        &dir,
+        "batten.toml",
+        "version = 1\n\n[[rule]]\nid = \"plan require missing\"\nkind = \"policy\"\n\
+         scope = \"tree\"\nmodule = \"policy/hk-plan-required.rego\"\nseverity = \"deny\"\n\n\
+         [[rule.plan]]\nid = \"gate\"\nhook = \"check\"\nrequired = [\"batten-check\"]\n",
+    );
+    common::write(&dir, "policy/hk-plan-required.rego", &module);
+    common::init_repo(&dir);
+    let answer = common::batten()
+        .args(["check", "--rule", "plan require missing"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&answer.stdout),
+        String::from_utf8_lossy(&answer.stderr)
+    );
+    assert!(
+        said.contains("plan read missing"),
+        "a declared plan the runner could not produce is reported\n{said}"
+    );
 }
 
 /// A step the plan carries a reason for keeps the KIND and nothing else.
