@@ -111,8 +111,7 @@ run in the web sandbox — read `mem:github-access` before doubting.)
    `land` won't ready what your own gates refuse. Push early, fix after.
 2. **`mise run land`, backgrounded — the one step after pushing.** Each lap runs
    `verify` (mirrors CI, runs `linear-check`, refuses a branch stale on
-   `origin/main`), so neither is a prior step; a standalone `verify` iterates a
-   draft (CLOUD-2240). `land` readies after its push — a ready by hand buys only
+   `origin/main`), so neither is a prior step (CLOUD-2240). `land` readies after its push — a ready by hand buys only
    draft-era skips (CLOUD-247). No wall clock, only counts, never the PR webhook;
    it stops on a conflict, a failed `verify`, red CI or a spent lap budget. **When
    a stop says run it again, run it again.**
