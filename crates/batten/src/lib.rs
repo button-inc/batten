@@ -891,11 +891,7 @@ fn run_forge_poll(
             &round.to_string(),
             epoch_now(),
         );
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "a poll interval in seconds is far below f64's exact-integer range"
-        )]
-        pr_watch::pause_until(seconds as f64, &stop);
+        pr_watch::pause_until(std::time::Duration::from_secs(seconds).as_secs_f64(), &stop);
     }
 }
 
@@ -20304,8 +20300,7 @@ fn dispatch_envelope(
         &envelope,
         raw,
         &decision,
-        &mut advice,
-        ceiling,
+        (&mut advice, ceiling),
         out,
         err,
     )? {
@@ -22960,11 +22955,6 @@ fn emit_channel(
 /// stream; remove answers nothing on stdout and exits 0. A branch the declared
 /// trunk does not carry survives a remove, as does every branch when no trunk
 /// resolves: fail closed on a delete.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the hook boundary's own state, threaded once into the one branch that \
-              must answer before either writer of `out`"
-)]
 //MUTANT-SUITE crates/batten/tests/it/worktree_hooks.rs
 //MUTANT worktree-deny-still-creates|s@^    if matches!(decision, hook::Decision::Deny(_) \x7c hook::Decision::Ask(_)) {$@    if false {@|a_handler_deny_creates_no_worktree
 //MUTANT worktree-create-prints-nothing|s@^            writeln!(out, "{}", dir.display())?;$@@|a_created_worktree_answers_with_its_path_alone
@@ -22973,8 +22963,7 @@ fn worktree_answer(
     envelope: &hook::Envelope,
     raw: &str,
     decision: &hook::Decision,
-    advice: &mut Vec<advisory::Advice>,
-    ceiling: Option<&advisory::Channel>,
+    (advice, ceiling): (&mut Vec<advisory::Advice>, Option<&advisory::Channel>),
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<Option<ExitCode>> {

@@ -2144,14 +2144,12 @@ fn place(
         return Ok(());
     };
     let target = tree.join(&rel);
-    let root = tree.canonicalize().context("resolve the staged tree")?;
+    let root = crate::git::canonical(tree);
     let Some(parent) = target.parent() else {
         return Err(climbs_out(raw));
     };
     fs::create_dir_all(parent).context("create an archive entry's directory")?;
-    let parent = parent
-        .canonicalize()
-        .context("resolve an archive entry's directory")?;
+    let parent = crate::git::canonical(parent);
     if !parent.starts_with(&root) {
         return Err(climbs_out(raw));
     }
@@ -2166,7 +2164,8 @@ fn place(
     match kind {
         Kind::Dir => fs::create_dir_all(&target).context("create an archive directory")?,
         Kind::File { executable } => {
-            let mut out = fs::File::create(&target).context("write an archive file")?;
+            // stream: an archive entry, committed by the staged tree's rename
+            let mut out = fs::File::create(&target).context("write an archive file")?; // stream: tree rename
             std::io::copy(reader, &mut out).context("write an archive file")?;
             set_mode(&target, executable || rel.as_path() == bin)?;
         }
