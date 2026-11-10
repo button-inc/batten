@@ -11497,6 +11497,23 @@ fn capture_only_reports_handles_instead_of_the_childs_bytes() {
         !report.contains("bravo warning here"),
         "the handle report echoed the payload: {report}"
     );
+    // THE ONE POINTER EVERY STORED OUTPUT TAKES (CLOUD-2284): a view read in
+    // one hop, never a handle that needs a second call to reach the words.
+    let pointer = report
+        .lines()
+        .find(|line| line.contains("output point now at /"))
+        .unwrap_or_else(|| panic!("the capture is pointed at: {report}"));
+    assert!(pointer.contains("T)"), "{pointer}");
+    let view = pointer
+        .rsplit_once("; read ")
+        .map(|(_, path)| path.trim())
+        .unwrap_or_else(|| panic!("the pointer names its view: {pointer}"));
+    assert!(
+        std::fs::read_to_string(view)
+            .unwrap_or_default()
+            .contains("bravo warning here"),
+        "the view holds the stream: {view}"
+    );
 }
 
 #[cfg(unix)]

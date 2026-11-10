@@ -1866,7 +1866,7 @@ pub fn run_in_with_env(
 ) -> Result<ExitCode> {
     let bundle = split_bundle(command)?;
     let outcomes = dispatch(repo_root, &bundle, settings, published, next_run())?;
-    report_bundle(&bundle, &outcomes, patterns, settings, report)
+    report_bundle(repo_root, &bundle, &outcomes, patterns, settings, report)
 }
 
 // -- The named lock a child may be held under (CLOUD-1710) -------------------
@@ -2906,6 +2906,7 @@ fn run_one(
 
 /// Render everything the bundle has to say, and decide its exit code.
 fn report_bundle(
+    repo_root: &Path,
     bundle: &[&[String]],
     outcomes: &[Outcome],
     patterns: &[OutputPattern],
@@ -2959,6 +2960,17 @@ fn report_bundle(
                 .collect(),
         }
         .emit(settings.format, report)?;
+        // CAPTURED, NOT SHOWN, SO POINTED AT (CLOUD-2284): with no tee the
+        // child's words reached nobody, and a handle alone is one more call
+        // away. Each command's streams get the one pointer every stored output
+        // takes, a view read in one hop.
+        if !settings.tee && settings.format == OutputFormat::Human {
+            for outcome in outcomes {
+                if let Some(line) = capture::streams_pointer(repo_root, &outcome.captures) {
+                    writeln!(report, "{line}")?;
+                }
+            }
+        }
     }
 
     // BATTEN DIES OF THE SIGNAL BATTEN WAS SENT (CLOUD-746 S2), and this is the

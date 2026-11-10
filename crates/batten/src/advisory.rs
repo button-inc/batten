@@ -173,8 +173,9 @@ impl Sighter for Unsighted {
 /// line every stored output takes (CLOUD-2284), over a long view path.
 fn widest_pointer() -> String {
     format!(
-        "batten note output point now at /advisory:999999-999999(999999999B 999999999T); \
-         read /{}.md",
+        "batten note output point now at /advisory:999999-999999(999999999B 999999999T) \
+         advisory:{}; read /{}.md",
+        "0".repeat(64),
         "x".repeat(255)
     )
 }

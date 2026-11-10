@@ -5107,7 +5107,7 @@ fn file_and_report(
     if reduced.is_some()
         && let Ok(Some((path, index))) = capture::view(repo, &stored, &whole)
     {
-        writeln!(err, "{}", view_pointer(&path, &index))?;
+        writeln!(err, "{}", capture::pointer_line(&path, &index, &[&stored]))?;
     }
     writeln!(out, "{rendered}")?;
     // THE EXIT CODE IS THE ANSWER, AND UNTIL CLOUD-1645 IT WAS NOT ONE. This
@@ -5294,61 +5294,6 @@ struct ShowRequest<'a> {
     byte_range: Option<&'a str>,
     /// Emit a byte-stable document.
     json: bool,
-}
-
-/// The `output point now` finding for a stored response's view (CLOUD-2207):
-/// one subject per indexed field, naming its view lines and size, and the view
-/// itself as a document route — a pointer, never a byte of content (rule 4).
-//MUTANT-SUITE crates/batten/src/lib.rs
-fn view_pointer(path: &Path, index: &[capture::ViewField]) -> String {
-    view_refusal(path, index).render_finding(refusal::Arm::Pointer)
-}
-
-/// Stored text captures, named by `<stream>:<digest>` handles, as the one
-/// `output point now` pointer every stored output takes (CLOUD-2284): a view
-/// with one section per stream, each with its lines, bytes and tokens. `None`
-/// when a handle will not parse or read, or every stream was empty.
-//MUTANT-SUITE crates/batten/tests/it/land_verify_advice.rs
-fn stored_streams_pointer(root: &Path, handles: &[String]) -> Option<String> {
-    let mut held = Vec::new();
-    for text in handles {
-        let handle = capture::Handle::parse(text).ok()?;
-        let stored = capture::Capture {
-            stream: handle.stream.as_str(),
-            bytes: 0,
-            digest: handle.digest,
-        };
-        let bytes = capture::read(root, &stored).ok()?;
-        held.push((stored, bytes));
-    }
-    let (key, _) = held.first()?;
-    let streams: Vec<(&str, &[u8])> = held
-        .iter()
-        .map(|(stored, bytes)| (stored.stream, bytes.as_slice()))
-        .collect();
-    let (path, index) = capture::streams_view(root, key, &streams).ok()?;
-    (!index.is_empty()).then(|| view_pointer(&path, &index))
-}
-
-/// The `output point now` finding [`view_pointer`] renders, for a channel that
-/// carries findings rather than lines.
-fn view_refusal(path: &Path, index: &[capture::ViewField]) -> refusal::Refusal {
-    let subjects: Vec<verdict::Subject> = index
-        .iter()
-        .map(|field| {
-            verdict::artifact(&format!(
-                "{}:{}-{}({}B {}T)",
-                field.pointer, field.from, field.to, field.bytes, field.tokens
-            ))
-        })
-        .collect();
-    refusal::Refusal::engine(
-        verdict::Native::OutputPointNow,
-        &subjects,
-        refusal::Fix::None,
-    )
-    .with_only_document_route(&path.display().to_string())
-    .with_severity(refusal::Severity::Note)
 }
 
 /// The text of one field of a stored JSON document, named by an RFC 6901 JSON
@@ -15083,7 +15028,15 @@ fn run_land_verify_seen(
     // THE GATE'S LOG AS A POINTER (CLOUD-2223): its bytes are stored, never
     // streamed, and this is the one line that names where.
     let log = land::verify_log(root, branch, verified.sha());
-    if let Some(pointer) = stored_streams_pointer(root, &log) {
+    let gate_streams: Option<Vec<capture::Capture>> = log
+        .iter()
+        .map(|text| {
+            capture::Handle::parse(text)
+                .ok()
+                .map(capture::Capture::from)
+        })
+        .collect();
+    if let Some(pointer) = gate_streams.and_then(|held| capture::streams_pointer(root, &held)) {
         writeln!(out, "land: gate log {pointer}")?;
     }
     match verified {
@@ -21635,7 +21588,7 @@ fn closed_emission(emission: advisory::Emission, ceiling: Option<&advisory::Chan
             emission.overflow.as_bytes(),
         )
         .ok()?;
-        stored_streams_pointer(&root, &[stored.handle()])
+        capture::streams_pointer(&root, &[stored])
     });
     format!(
         "{}\n\n{}",
@@ -22234,28 +22187,8 @@ fn point_at_spills(
         .collect();
     let (_, first) = stored.first()?;
     let (path, index) = capture::result_view_spilled(&root, first, result, &markers).ok()?;
-    let mut subjects: Vec<verdict::Subject> = index
-        .iter()
-        .map(|field| {
-            verdict::artifact(&format!(
-                "{}:{}-{}({}B {}T)",
-                field.pointer, field.from, field.to, field.bytes, field.tokens
-            ))
-        })
-        .collect();
-    subjects.extend(
-        stored
-            .iter()
-            .map(|(_, capture)| verdict::artifact(&capture.handle())),
-    );
-    let pointer = refusal::Refusal::engine(
-        verdict::Native::OutputPointNow,
-        &subjects,
-        refusal::Fix::None,
-    )
-    // THE VIEW IS THE ONLY ROUTE (CLOUD-2284), as for every bounded result.
-    .with_only_document_route(&path.display().to_string())
-    .with_severity(refusal::Severity::Note);
+    let leaves: Vec<&capture::Capture> = stored.iter().map(|(_, leaf)| leaf).collect();
+    let pointer = capture::pointer(&path, &index, &leaves);
     let line = pointer.render_finding(refusal::Arm::Pointer);
     let mut bounded = result.clone();
     for (spill, _) in &stored {
@@ -22447,7 +22380,7 @@ fn bound_result(
     let stored = capture::store(&root, capture::Stream::Response, &bytes).ok()?;
     record_stored(&root, envelope, harness, capture::POST_TOOL_MEMBER, &stored);
     let (path, index) = capture::result_view(&root, &stored, result).ok()?;
-    let pointer = view_refusal(&path, &index);
+    let pointer = capture::pointer(&path, &index, &[&stored]);
     let line = pointer.render_finding(refusal::Arm::Pointer);
     let mut bounded = result.clone();
     replace_bulk(&mut bounded, &line);
@@ -31512,10 +31445,16 @@ mod tests {
         // THE VIEW IS THE ROUTE FOR EVERY BOUNDED RESULT (CLOUD-2284), as it is
         // for a spill: `--field` alone prints only a size header, so the hint
         // as printed reached no content.
-        let line = view_pointer(Path::new("/s/views/d.md"), &index);
+        let stored = capture::Capture {
+            stream: "response",
+            bytes: 45,
+            digest: "ab12".to_owned(),
+        };
+        let line = capture::pointer_line(Path::new("/s/views/d.md"), &index, &[&stored]);
         assert!(
             line.starts_with(
-                "batten note output point now at /id:2-2(5B 2T) /description:4-7(40B 10T);"
+                "batten note output point now at /id:2-2(5B 2T) /description:4-7(40B 10T) \
+                 response:ab12;"
             ),
             "{line}"
         );
