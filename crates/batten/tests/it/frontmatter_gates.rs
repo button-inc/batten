@@ -160,6 +160,19 @@ fn a_rules_stub_without_a_paths_trigger_is_refused() {
         vec![".claude/rules/policy-modules.md".to_owned()],
         "a stub asserting a trigger it does not carry is refused"
     );
+    // AND A FENCE THAT NAMES NO PATHS: a document is read, so the no-document
+    // arm abstains, and only the trigger arm can refuse it.
+    let root = scratch_for("stub-fence-no-paths", "policy/rules-paths-trigger.rego");
+    common::write(
+        &root,
+        ".claude/rules/policy-modules.md",
+        "---\ndescription: a stub\n---\n# Moved to `rules/policy-modules.md`\n",
+    );
+    assert_eq!(
+        findings(&root, stub_row()),
+        vec![".claude/rules/policy-modules.md".to_owned()],
+        "a fence with no `paths:` triggers on nothing and is refused"
+    );
 }
 
 #[test]
