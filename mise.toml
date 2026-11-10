@@ -1817,9 +1817,21 @@ description = "Gate: every mutant cargo-mutants makes of this branch's Rust chan
 #
 # `origin/main` IS A TIP DIFF, for `git::base_delta`'s stated reason: `verify`
 # asserts the branch is rebased on it, and CI's `ci` job fetches it first.
-env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNERS = "cargo-mutants=crates/*/src/**/*.rs,crates/*/build.rs,crates/*/tests/**/*.rs", NEXTEST_PROFILE = "mutants" }
+# BOTH RUNNERS RUN, WHATEVER THE FIRST ONE SAYS: a Rego survivor must not hide
+# the Rust verdicts, or a lap returns one runner's survivors and the next lap the
+# other's. `--continue-on-error` runs each and fails if either did, one at a
+# time so they do not compete for the box.
+run = "mise run --continue-on-error --jobs 1 mutant:declared ::: mutant:rust"
+
+[tasks."mutant:declared"]
+description = "Gate: every declared Rego, Pkl or manifest gate this branch touched has a mutation its suite catches"
+env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNERS = "cargo-mutants=crates/*/src/**/*.rs,crates/*/build.rs,crates/*/tests/**/*.rs" }
+run = "cargo run --quiet -p batten -- mutate sweep"
+
+[tasks."mutant:rust"]
+description = "Gate: every mutant cargo-mutants makes of this branch's Rust change since origin/main is caught"
+env = { NEXTEST_PROFILE = "mutants" }
 run = [
-  "cargo run --quiet -p batten -- mutate sweep",
   "cargo run --quiet -p batten -- provision apply",
   "mkdir -p target/mutants",
   "git diff --no-color --no-ext-diff origin/main...HEAD > target/mutants/change.diff",
