@@ -19570,6 +19570,7 @@ struct CallFacts {
     pinned: facts::Look<std::collections::BTreeSet<String>>,
     red_head: facts::Look<serde_json::Value>,
     commit_subject: facts::Look<String>,
+    pathspec_status: facts::Look<serde_json::Value>,
 }
 
 fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
@@ -19582,7 +19583,78 @@ fn call_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> CallFacts {
         pinned: pinned_for(policy, envelope),
         red_head: red_head_for(policy, envelope),
         commit_subject: commit_subject_for(policy, envelope),
+        pathspec_status: pathspec_status_for(policy, envelope),
     }
+}
+
+/// The status of every pathspec a checkout or restore names (CLOUD-2684),
+/// behind [`pinned_for`]'s narrowing and only for such a call: one index read
+/// and one status read, in process, never an argv carrying a caller's path.
+//MUTANT-SUITE crates/batten/tests/it/git_preset.rs
+//MUTANT payload-cwd-ignored|s@^    let base = envelope.cwd.clone().or_else(current_process_dir);$@    let base = current_process_dir();@|a_pathspec_is_placed_against_the_payload_cwd
+//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
+fn pathspec_status_for(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+) -> facts::Look<serde_json::Value> {
+    if envelope.event != hook::Event::PreTool || !policy.reads_pinned(envelope) {
+        return facts::Look::CouldNotLook;
+    }
+    let base = envelope.cwd.clone().or_else(current_process_dir);
+    let Some(base) = base else {
+        return facts::Look::CouldNotLook;
+    };
+    let hook::Pathspecs::Placed(calls) = hook::pathspec_calls(envelope, &base) else {
+        return facts::Look::CouldNotLook;
+    };
+    let mut entries = Vec::new();
+    for call in &calls {
+        let Some(placed) = placed_pathspecs(call) else {
+            return facts::Look::CouldNotLook;
+        };
+        entries.extend(placed);
+    }
+    facts::Look::Is(serde_json::json!({ "pathspecs": entries }))
+}
+
+fn current_process_dir() -> Option<PathBuf> {
+    std::env::current_dir().ok()
+}
+
+/// One call's pathspecs, repo-relative with their status, or `None` where one
+/// leaves the repository or the repository cannot be read.
+fn placed_pathspecs(call: &hook::PathspecCall) -> Option<Vec<serde_json::Value>> {
+    let dir = git::canonical(&call.dir);
+    let root = git::worktree_root(&dir).ok()?;
+    let tracked = git::tracked_paths(&root).ok()?;
+    let changed = git::changed_paths(&root).ok()?;
+    let inside = dir.strip_prefix(&root).ok()?.to_string_lossy().into_owned();
+    let mut entries = Vec::new();
+    for spec in &call.pathspecs {
+        if spec.split('/').any(|part| part == "..") {
+            return None;
+        }
+        let path = match (inside.as_str(), spec.trim_end_matches('/')) {
+            ("", "." | "") => ".".to_owned(),
+            ("", spec) => spec.to_owned(),
+            (inside, "." | "") => inside.to_owned(),
+            (inside, spec) => format!("{inside}/{spec}"),
+        };
+        let under = |listed: &String| {
+            path == "." || *listed == path || listed.starts_with(&format!("{path}/"))
+        };
+        let literal = path != "."
+            && !spec.starts_with(':')
+            && !spec.contains(['*', '?', '['])
+            && !root.join(&path).is_dir();
+        entries.push(serde_json::json!({
+            "path": path,
+            "literal": literal,
+            "tracked": tracked.iter().any(under),
+            "clean": !changed.iter().any(under),
+        }));
+    }
+    Some(entries)
 }
 
 //MUTANT-SUITE crates/batten/tests/it/commit.rs
@@ -20079,6 +20151,7 @@ fn dispatch_envelope(
         extracted: &extracted,
         dispatch: &call.dispatch,
         red_head: &call.red_head,
+        pathspec_status: &call.pathspec_status,
     };
     // THE DOOR (CLOUD-898). Declared handlers run here, under the contract in
     // `crate::handler`: bounded by the parent, fail-open on anything they break,
