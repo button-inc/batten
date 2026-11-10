@@ -3000,6 +3000,7 @@ test_a_rewrite_naming_an_unrenamed_token_is_refused if {
 		"\trun awk '/^id = \"unrelated-token\"/'",
 		"\trun awk '/^id = \"also-unrelated\"/'",
 	)
+
 	# AND A REWRITE AWAY FROM AN ID THE AUTHORITY STILL DECLARES is no rename,
 	# the one shape that reaches the old-token check: the new id is declared, so
 	# everything before it holds.
