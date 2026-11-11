@@ -475,7 +475,7 @@ mod tests {
                 RuleSeverity::Deny,
                 Some(crate::findings::Disposition::Acted),
             ),
-            stored("open-warning", RuleSeverity::Warn, None),
+            stored("open-warning", RuleSeverity::Advise, None),
         ] {
             findings::save_one(&dir, &record).unwrap();
         }

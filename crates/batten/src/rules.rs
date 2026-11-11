@@ -10479,7 +10479,7 @@ fn ejected_behind(
             )],
             owner: Some(rule.id.clone()),
             rule: MODULE_PIN_STALE.to_owned(),
-            severity: RuleSeverity::Warn,
+            severity: RuleSeverity::Advise,
             path,
             line: Some(1),
             identity: identity_of(rule, identity::FindingKind::Code, default),
@@ -13072,10 +13072,7 @@ fn run_once(
 pub fn any_blocking(findings: &[Finding], fail_on_warning: bool, rules: &[Rule]) -> bool {
     findings.iter().any(|finding| {
         decidability_of(finding, rules).may_block()
-            && severity::promote(
-                severity::row_for_rule(finding.severity).report,
-                fail_on_warning,
-            ) == ReportLevel::Fail
+            && severity::report_for(finding.severity, fail_on_warning) == ReportLevel::Fail
     })
 }
 
@@ -18159,10 +18156,10 @@ mod tests {
         let dir = temp_dir("rules-warn-reports");
         write(&dir, "a.rs", "TODO\n");
         let mut rule = forbid("no-todo", "**/*.rs", "TODO");
-        rule.severity = Some(RuleSeverity::Warn);
+        rule.severity = Some(RuleSeverity::Advise);
         let findings = run_static(std::slice::from_ref(&rule), &dir).unwrap();
         assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].severity, RuleSeverity::Warn);
+        assert_eq!(findings[0].severity, RuleSeverity::Advise);
         // THE TABLE IS PASSED, not `&[]`. `any_blocking` resolves each finding's
         // owning row to classify it (CLOUD-331), so a fixture that supplied no
         // table would be asserting over a classification path this test does not

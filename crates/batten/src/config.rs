@@ -7652,7 +7652,7 @@ mod tests {
         assert_eq!(config.rules.len(), 1);
         assert_eq!(
             config.rules[0].severity(),
-            crate::severity::RuleSeverity::Warn
+            crate::severity::RuleSeverity::Advise
         );
         assert_eq!(config.rules[0].scope, crate::rules::RuleScope::Tree);
     }

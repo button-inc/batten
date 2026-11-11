@@ -4,7 +4,7 @@
 .SH NAME
 batten\-adjudicate \- Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)
 .SH SYNOPSIS
-\fBbatten adjudicate\fR [\fB\-\-instant\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-harness\fR> 
+\fBbatten adjudicate\fR [\fB\-\-instant\fR] [\fB\-\-show\-input\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-harness\fR> 
 .SH DESCRIPTION
 Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)
 .SH OPTIONS
@@ -32,6 +32,9 @@ codex\-cli: Codex CLI, whose wire format is a near\-verbatim clone of Claude Cod
 .IP \(bu 2
 exit\-code: The neutral core contract: envelope in, decision as exit code out — `0` allow, `2` deny (reason on stderr), for any host whose only decision channel is an exit status. Both codes are the §7 table\*(Aqs, unmodified
 .RE
+.TP
+\fB\-\-show\-input\fR
+Store the exact policy input this call produced and print its pointer on stderr
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
