@@ -11118,6 +11118,38 @@ pub fn ratchets_at_call(
     projected: &str,
     cache: Option<&Path>,
 ) -> anyhow::Result<Vec<CallRatchet>> {
+    let moving = moving_rows(rules, target, current, projected)?;
+    if moving.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut counters = counter_states(&moving, root, cache)?;
+    let sets = changed_sets(&moving, root, target, cache)?;
+    let stamps = working_stamps(&sets, root, target);
+    count_base(&sets, &mut counters, root)?;
+    count_working(&stamps, &mut counters, root);
+    let found = moving
+        .into_iter()
+        .filter_map(|row| judge(row, &sets, &counters, &stamps, target))
+        .collect();
+    for state in counters.values() {
+        state.blobs.save();
+        state.files.save();
+    }
+    Ok(found)
+}
+
+/// A row this write moves in its banned direction: the row, its direction, base
+/// and glob, and the target's count before and after the write.
+type Moving<'a> = (&'a Rule, Direction, &'a str, &'a str, usize, usize);
+
+/// The rows the write's own move breaches, with no IO: everything later reads
+/// only for these.
+fn moving_rows<'a>(
+    rules: &[&'a Rule],
+    target: &str,
+    current: Option<&str>,
+    projected: &str,
+) -> anyhow::Result<Vec<Moving<'a>>> {
     let mut moving = Vec::new();
     for rule in rules {
         let (Some(direction), Some(base), Some(glob)) =
@@ -11142,14 +11174,18 @@ pub fn ratchets_at_call(
         }
         moving.push((*rule, direction, base, glob, was, now));
     }
-    if moving.is_empty() {
-        return Ok(Vec::new());
-    }
+    Ok(moving)
+}
 
-    // ONE COUNTER PER DISTINCT DEFINITION, each with its own persisted tables,
-    // so every blob and file below is read once and counted for all of them.
-    let mut counters: BTreeMap<Vec<u8>, CounterState<'_>> = BTreeMap::new();
-    for (rule, ..) in &moving {
+/// ONE COUNTER PER DISTINCT DEFINITION, each with its own persisted tables, so
+/// every blob and file is read once and counted for all of them.
+fn counter_states<'a>(
+    moving: &[Moving<'a>],
+    root: &Path,
+    cache: Option<&Path>,
+) -> anyhow::Result<BTreeMap<Vec<u8>, CounterState<'a>>> {
+    let mut counters: BTreeMap<Vec<u8>, CounterState<'a>> = BTreeMap::new();
+    for (rule, ..) in moving {
         if let std::collections::btree_map::Entry::Vacant(slot) = counters.entry(counter_key(rule))
         {
             let key = slot.key().clone();
@@ -11160,9 +11196,18 @@ pub fn ratchets_at_call(
             });
         }
     }
+    Ok(counters)
+}
 
-    // THE CHANGED SET, keyed by (HEAD, base, glob): two id lookups through one
-    // open, so a warm call walks no commit graph and diffs no tree.
+/// THE CHANGED SET per (base, glob), keyed by (HEAD, base, glob): two id
+/// lookups through one open, so a warm call walks no commit graph and diffs no
+/// tree.
+fn changed_sets<'a>(
+    moving: &[Moving<'a>],
+    root: &Path,
+    target: &str,
+    cache: Option<&Path>,
+) -> anyhow::Result<BTreeMap<(&'a str, &'a str), Changed>> {
     let refs: Vec<&str> = std::iter::once("HEAD")
         .chain(moving.iter().map(|(_, _, base, ..)| *base))
         .collect();
@@ -11174,17 +11219,22 @@ pub fn ratchets_at_call(
             continue;
         }
         let base_id = ids.get(index + 1).cloned().flatten().unwrap_or_default();
-        let set = changed_set(root, &head, base, &base_id, glob, target, cache)?;
-        sets.insert((*base, *glob), set);
+        let changed = changed_set(root, &head, base, &base_id, glob, target, cache)?;
+        sets.insert((*base, *glob), changed);
     }
+    Ok(sets)
+}
 
-    // EVERY READ IN FLIGHT BEFORE ANY IS MADE (operator ruling, 2026-11-11):
-    // stat each changed working file, then submit readahead for every file a
-    // counter does not hold at its stamp and, when a base count is missing,
-    // for the packs, and only then read.
+/// Each changed working file's stat, the target excepted (its count is the
+/// projected one).
+fn working_stamps<'s>(
+    sets: &'s BTreeMap<(&str, &str), Changed>,
+    root: &Path,
+    target: &str,
+) -> BTreeMap<&'s str, Option<Stamp>> {
     let mut stamps: BTreeMap<&str, Option<Stamp>> = BTreeMap::new();
-    for set in sets.values() {
-        for (path, _) in &set.paths {
+    for changed in sets.values() {
+        for (path, _) in &changed.paths {
             if path != target {
                 stamps
                     .entry(path.as_str())
@@ -11192,6 +11242,56 @@ pub fn ratchets_at_call(
             }
         }
     }
+    stamps
+}
+
+/// The base side: each blob no counter holds, inflated once and in parallel,
+/// counted for every counter inside its reader. EVERY READ IN FLIGHT BEFORE
+/// ANY IS MADE (operator ruling, 2026-11-11): the packs are prefetched first.
+fn count_base(
+    sets: &BTreeMap<(&str, &str), Changed>,
+    counters: &mut BTreeMap<Vec<u8>, CounterState<'_>>,
+    root: &Path,
+) -> anyhow::Result<()> {
+    let base_ids: BTreeSet<&str> = sets
+        .values()
+        .flat_map(|changed| changed.paths.iter().filter_map(|(_, id)| id.as_deref()))
+        .collect();
+    let base_ids: Vec<&str> = base_ids.into_iter().collect();
+    let unread: BTreeSet<&str> = counters
+        .values()
+        .flat_map(|state| state.blobs.missing(&base_ids))
+        .collect();
+    if unread.is_empty() {
+        return Ok(());
+    }
+    crate::git::prefetch_packs(root);
+    let tallies: Vec<&(dyn Fn(&str) -> usize + Sync)> =
+        counters.values().map(|state| &*state.tally).collect();
+    let unread: Vec<&str> = unread.into_iter().collect();
+    let counted = crate::git::map_blobs(root, &unread, &|text: &str| {
+        tallies
+            .iter()
+            .map(|tally| tally(text))
+            .collect::<Vec<usize>>()
+    })?;
+    for (index, state) in counters.values_mut().enumerate() {
+        for id in &unread {
+            let count = counted.get(*id).map_or(0, |counts| counts[index]);
+            state.blobs.counts.insert((*id).to_owned(), count);
+        }
+        state.blobs.added = true;
+    }
+    Ok(())
+}
+
+/// The working side: every file a counter does not hold at its stamp, read in
+/// one completion batch and counted once for every counter.
+fn count_working(
+    stamps: &BTreeMap<&str, Option<Stamp>>,
+    counters: &mut BTreeMap<Vec<u8>, CounterState<'_>>,
+    root: &Path,
+) {
     let stale: Vec<&str> = stamps
         .iter()
         .filter_map(|(path, stamped)| {
@@ -11202,41 +11302,6 @@ pub fn ratchets_at_call(
                 .then_some(*path)
         })
         .collect();
-    let base_ids: BTreeSet<&str> = sets
-        .values()
-        .flat_map(|set| set.paths.iter().filter_map(|(_, id)| id.as_deref()))
-        .collect();
-    let base_ids: Vec<&str> = base_ids.into_iter().collect();
-    let unread: BTreeSet<&str> = counters
-        .values()
-        .flat_map(|state| state.blobs.missing(&base_ids))
-        .collect();
-    if !unread.is_empty() {
-        crate::git::prefetch_packs(root);
-    }
-
-    // The base side: each unread blob inflated once, in parallel, counted for
-    // every counter inside its reader.
-    if !unread.is_empty() {
-        let tallies: Vec<&(dyn Fn(&str) -> usize + Sync)> =
-            counters.values().map(|state| &*state.tally).collect();
-        let unread: Vec<&str> = unread.into_iter().collect();
-        let counted = crate::git::map_blobs(root, &unread, &|text: &str| {
-            tallies
-                .iter()
-                .map(|tally| tally(text))
-                .collect::<Vec<usize>>()
-        })?;
-        for (index, state) in counters.values_mut().enumerate() {
-            for id in &unread {
-                let count = counted.get(*id).map_or(0, |counts| counts[index]);
-                state.blobs.counts.insert((*id).to_owned(), count);
-            }
-            state.blobs.added = true;
-        }
-    }
-    // The working side: every stale file read in one completion batch, each
-    // counted once for every counter.
     let sized: Vec<(std::path::PathBuf, u64)> = stale
         .iter()
         .map(|path| {
@@ -11261,51 +11326,51 @@ pub fn ratchets_at_call(
             state.files.put(path, *stamped, (state.tally)(&text));
         }
     }
+}
 
-    let mut found = Vec::new();
-    for (rule, direction, base, glob, was, now) in moving {
-        let set = &sets[&(base, glob)];
-        let Some(state) = counters.get(&counter_key(rule)) else {
-            continue;
-        };
-        let breached = if rule.per_file {
-            set.paths
-                .iter()
-                .find(|(path, _)| path == target)
-                .and_then(|(_, id)| id.as_deref())
-                .is_some_and(|id| direction.violated(state.blobs.get(Some(id)), now))
-        } else {
-            let mut movement = 0_i64;
-            for (path, id) in &set.paths {
-                let working = if path == target {
-                    now
-                } else {
-                    match stamps.get(path.as_str()).copied().flatten() {
-                        Some(stamped) => state.files.fresh(path, stamped).unwrap_or(0),
-                        None => 0,
-                    }
-                };
-                movement += signed(working) - signed(state.blobs.get(id.as_deref()));
-            }
-            match direction {
-                Direction::NonDecreasing => movement < 0,
-                Direction::NonIncreasing => movement > 0,
-            }
-        };
-        if breached {
-            found.push(CallRatchet {
-                rule: rule.id.clone(),
-                path: target.to_owned(),
-                was,
-                now,
-            });
+/// One moving row's verdict: a per-file row against the target's base blob, an
+/// aggregate as the summed movement over every changed path.
+fn judge(
+    (rule, direction, base, glob, was, now): Moving<'_>,
+    sets: &BTreeMap<(&str, &str), Changed>,
+    counters: &BTreeMap<Vec<u8>, CounterState<'_>>,
+    stamps: &BTreeMap<&str, Option<Stamp>>,
+    target: &str,
+) -> Option<CallRatchet> {
+    let changed = &sets[&(base, glob)];
+    let state = counters.get(&counter_key(rule))?;
+    let breached = if rule.per_file {
+        changed
+            .paths
+            .iter()
+            .find(|(path, _)| path == target)
+            .and_then(|(_, id)| id.as_deref())
+            .is_some_and(|id| direction.violated(state.blobs.get(Some(id)), now))
+    } else {
+        let mut movement = 0_i64;
+        for (path, id) in &changed.paths {
+            let working = if path == target {
+                now
+            } else {
+                stamps
+                    .get(path.as_str())
+                    .copied()
+                    .flatten()
+                    .map_or(0, |stamped| state.files.fresh(path, stamped).unwrap_or(0))
+            };
+            movement += signed(working) - signed(state.blobs.get(id.as_deref()));
         }
-    }
-    for state in counters.values() {
-        state.blobs.save();
-        state.files.save();
-    }
-    Ok(found)
+        match direction {
+            Direction::NonDecreasing => movement < 0,
+            Direction::NonIncreasing => movement > 0,
+        }
+    };
+    breached.then(|| CallRatchet {
+        rule: rule.id.clone(),
+        path: target.to_owned(),
+        was,
+        now,
+    })
 }
 
 /// One counter's tally and its two persisted tables, for one call.
@@ -11347,12 +11412,12 @@ fn changed_set(
         );
         (at, key)
     });
-    let held = entry
+    let cached = entry
         .as_ref()
         .and_then(|(at, key)| crate::cache::read(at, key))
         .and_then(|body| serde_json::from_slice::<(String, Changed)>(&body).ok());
-    let (merge_base, mut set) = if let Some(held) = held {
-        held
+    let (merge_base, mut set) = if let Some(cached) = cached {
+        cached
     } else {
         // As `ratchet_rule` reads it (CLOUD-405), falling back to the
         // declared ref exactly where it does.
