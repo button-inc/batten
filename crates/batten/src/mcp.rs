@@ -493,7 +493,7 @@ fn credential(source: &Source, entry: &Node, root: &Path) -> Result<Option<(Stri
     // POINTER-ONLY IN THE REFUSAL: the io error carries the path it tried, which
     // is an absolute path on somebody's machine, so it is dropped rather than
     // formatted. What a reader needs is which variable to fix.
-    let value = std::fs::read_to_string(std::path::PathBuf::from(at))
+    let value = crate::fsio::read_to_string(std::path::PathBuf::from(at))
         .map_err(|_| {
             anyhow::anyhow!("mcp: source {id}'s credential file, named by {name}, will not read")
         })?
@@ -1390,7 +1390,7 @@ pub(crate) fn server_map(
         };
         path
     };
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return Ok(None);
     };
     // A FILE THAT EXISTS AND WILL NOT PARSE STOPS THE SEARCH. Falling through
@@ -1695,7 +1695,7 @@ fn unenforceable_in(
         .collect();
     let mut rules = std::collections::BTreeSet::new();
     for path in settings {
-        let Ok(text) = std::fs::read_to_string(path) else {
+        let Ok(text) = crate::fsio::read_to_string(path) else {
             continue;
         };
         let Ok(document) = crate::rules::parse_node(Format::Json, &text) else {
@@ -1757,7 +1757,7 @@ fn granted_in(settings: &[std::path::PathBuf], server: &str, declared: &[String]
     let prefix = format!("mcp__{server}");
     let mut looked = false;
     for path in settings {
-        let Ok(text) = std::fs::read_to_string(path) else {
+        let Ok(text) = crate::fsio::read_to_string(path) else {
             continue;
         };
         let Ok(document) = crate::rules::parse_node(Format::Json, &text) else {
@@ -2284,7 +2284,7 @@ fn spawn_record(
     // reads. So this is a launch that records nothing and still launches.
     let git_dir = crate::git::git_dir(root).ok()?;
     let ledger = git_dir.join(SPAWN_LEDGER);
-    let load = std::fs::read_to_string("/proc/loadavg")
+    let load = crate::fsio::read_to_string("/proc/loadavg")
         .ok()
         .and_then(|text| text.split_whitespace().next().map(str::to_owned))
         .unwrap_or_else(|| String::from("?"));
@@ -2308,7 +2308,7 @@ fn spawn_record(
 /// backwards on resume, and a negative age counted as a sibling would inflate
 /// exactly the field the hypothesis reads.
 fn siblings_within(ledger: &Path, now: u64) -> usize {
-    let Ok(text) = std::fs::read_to_string(ledger) else {
+    let Ok(text) = crate::fsio::read_to_string(ledger) else {
         return 0;
     };
     text.lines()

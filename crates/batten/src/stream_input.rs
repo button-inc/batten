@@ -95,7 +95,7 @@ pub fn restore(value: &Value, spilled: &[Spilled]) -> Value {
         .iter()
         .filter(|spill| spill.bytes <= RESTORE_MAX_BYTES)
     {
-        if let Ok(text) = std::fs::read_to_string(&spill.path) {
+        if let Ok(text) = crate::fsio::read_to_string(&spill.path) {
             put(&mut restored, &marker(&spill.pointer), &text);
         }
     }
@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(read.spilled.len(), 1, "{:?}", read.spilled);
         assert_eq!(read.spilled[0].pointer, "/file/content");
         assert_eq!(
-            std::fs::read_to_string(&read.spilled[0].path).expect("leaf"),
+            crate::fsio::read_to_string(&read.spilled[0].path).expect("leaf"),
             big,
             "the leaf file holds the whole text"
         );
@@ -402,7 +402,7 @@ mod tests {
         let sent = format!("\u{feff}{}", payload("é and \\\"quoted\\\" text"));
         let read =
             super::read(sent.as_bytes(), &dir, 1000, |text| text.len() as u64).expect("reads");
-        let spooled = std::fs::read_to_string(&read.raw).expect("raw");
+        let spooled = crate::fsio::read_to_string(&read.raw).expect("raw");
         assert_eq!(
             spooled,
             sent.trim_start_matches('\u{feff}'),

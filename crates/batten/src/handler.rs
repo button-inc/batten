@@ -1023,7 +1023,7 @@ impl Payload {
         match self {
             Payload::Text(text) => std::borrow::Cow::Borrowed(text),
             Payload::Spooled(path) => {
-                std::borrow::Cow::Owned(std::fs::read_to_string(path).unwrap_or_default())
+                std::borrow::Cow::Owned(crate::fsio::read_to_string(path).unwrap_or_default())
             }
         }
     }

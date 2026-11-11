@@ -422,7 +422,7 @@ pub enum Signal {
 /// entry: the registry records what registered, and inventing a record here
 /// would let a half-wired task look fully wired.
 pub fn push(git_dir: &Path, pid: &str, signal: Signal, value: &str, now: u64) {
-    let Ok(body) = std::fs::read_to_string(entry_path(git_dir, pid)) else {
+    let Ok(body) = crate::fsio::read_to_string(entry_path(git_dir, pid)) else {
         return;
     };
     let mut entry = Entry::parse(&body);
@@ -446,7 +446,7 @@ pub fn push(git_dir: &Path, pid: &str, signal: Signal, value: &str, now: u64) {
 /// One field of one record, or `None` where nothing registered under that pid.
 #[must_use]
 pub fn read_field(git_dir: &Path, pid: &str, name: &str) -> Option<String> {
-    std::fs::read_to_string(entry_path(git_dir, pid))
+    crate::fsio::read_to_string(entry_path(git_dir, pid))
         .ok()
         .map(|body| Entry::field(&body, name))
 }
@@ -520,7 +520,7 @@ fn task_alive(pid: &str, recorded: &str) -> bool {
 fn cmdline_digest(pid: &str) -> Option<String> {
     use sha2::Digest as _;
     use std::fmt::Write as _;
-    let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let raw = crate::fsio::read(format!("/proc/{pid}/cmdline")).ok()?;
     if raw.is_empty() {
         return None;
     }
@@ -681,7 +681,7 @@ fn second(stamp: &str) -> Option<u64> {
 /// miss costs a wrong word here, never the evidence.
 #[must_use]
 pub fn alive(git_dir: &Path, options: Alive) -> Reading {
-    alive_reading(git_dir, options, |file| std::fs::read_to_string(file))
+    alive_reading(git_dir, options, |file| crate::fsio::read_to_string(file))
 }
 
 /// [`alive`] over an injected record reader: the step between listing an entry
@@ -808,7 +808,7 @@ fn records(git_dir: &Path) -> Vec<Entry> {
     files.sort();
     files
         .iter()
-        .filter_map(|file| std::fs::read_to_string(file).ok())
+        .filter_map(|file| crate::fsio::read_to_string(file).ok())
         .map(|body| Entry::parse(&body))
         .filter(Entry::is_complete)
         .collect()
@@ -1152,7 +1152,7 @@ fn take(lock: &Path, pid: &str) -> bool {
 
 /// Who the lock says holds it, or `None` where it says nothing readable.
 fn holder_of(lock: &Path) -> Option<String> {
-    let raw = std::fs::read_to_string(lock.join("pid")).ok()?;
+    let raw = crate::fsio::read_to_string(lock.join("pid")).ok()?;
     let holder = raw.trim().to_owned();
     (!holder.is_empty()).then_some(holder)
 }
@@ -1630,7 +1630,7 @@ mod tests {
         register(&dir, "kept", &std::process::id().to_string(), "stuck", 100);
         let options = Alive { now: 160 };
         let raced = alive_reading(&dir, options, |file| {
-            let body = std::fs::read_to_string(file)?;
+            let body = crate::fsio::read_to_string(file)?;
             if body.contains("gone") {
                 Err(std::io::Error::from(std::io::ErrorKind::NotFound))
             } else {

@@ -42,7 +42,6 @@
 //! It reaches one thing in the crate, `durable`, for the write. It is plumbing
 //! that a `fix` calls, so it is placed below every decider.
 
-use std::fs;
 use std::path::Path;
 
 use anyhow::{Context as _, Result, bail};
@@ -146,8 +145,8 @@ pub fn apply(format: Format, source: &str, edits: &[Edit]) -> Result<String> {
 /// When the file cannot be read or written, or for any reason [`apply`]
 /// refuses. A refused edit writes nothing.
 pub fn apply_file(format: Format, path: &Path, edits: &[Edit]) -> Result<bool> {
-    let source =
-        fs::read_to_string(path).with_context(|| format!("reading `{}`", path.display()))?;
+    let source = crate::fsio::read_to_string(path)
+        .with_context(|| format!("reading `{}`", path.display()))?;
     let edited = apply(format, &source, edits)?;
     if edited == source {
         return Ok(false);

@@ -404,7 +404,7 @@ tool/runner-action@aaa\tMIT\tCopyright (c) 2018 A Holder and contributors\n";
         let path = mint(&receipts, "a/b", 2, None, "2026-10-19T00:00:00Z").unwrap();
         assert_eq!(path, receipts.join("carry.a-b"));
         assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
+            crate::fsio::read_to_string(&path).unwrap(),
             format!("carry 2 row(s)\ntable {TABLE}\nderived-at 2026-10-19T00:00:00Z\nbase -\n")
         );
     }

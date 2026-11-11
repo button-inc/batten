@@ -1074,7 +1074,7 @@ fn freshness_of(entry: &Provision, cache_root: &Path, link: Option<&Link>) -> Re
             return Ok(Freshness::Missing);
         }
     }
-    let cached = match fs::read(dir.join(ARTIFACT)) {
+    let cached = match crate::fsio::read(dir.join(ARTIFACT)) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Freshness::Missing),
         Err(err) => return Err(err).context("read the cached artifact"),
@@ -1325,7 +1325,7 @@ fn cached_artifact_matching_pin(
     cache_root: &Path,
     pinned: &str,
 ) -> Option<Vec<u8>> {
-    let bytes = fs::read(entry_dir(cache_root, entry).join(ARTIFACT)).ok()?;
+    let bytes = crate::fsio::read(entry_dir(cache_root, entry).join(ARTIFACT)).ok()?;
     digest(&bytes).eq_ignore_ascii_case(pinned).then_some(bytes)
 }
 
@@ -1383,12 +1383,12 @@ fn link_into(
     let staged = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     // A SUBTREE IS LAUNCHED, NEVER COPIED (CLOUD-2682): its binary reads the
     // files beside its real path, and a copy on `PATH` has none beside it.
-    let written = if !launches(entry, subtree.is_some()) {
-        crate::durable::replace(&staged, binary).context("write the linked binary")
-    } else {
+    let written = if launches(entry, subtree.is_some()) {
         launcher(entry, cached).and_then(|bytes| {
             crate::durable::replace(&staged, bytes).context("write the linked launcher")
         })
+    } else {
+        crate::durable::replace(&staged, binary).context("write the linked binary")
     };
     if let Err(err) = written.and_then(|()| make_executable(&staged)) {
         let _ = fs::remove_file(&staged);
@@ -1501,7 +1501,7 @@ struct Launch {
 /// not apply, and answering `false` there would make every ordinary linked
 /// binary permanently stale.
 fn relaunches_a_present_interpreter(linked: &Path) -> bool {
-    let Ok(bytes) = fs::read(linked) else {
+    let Ok(bytes) = crate::fsio::read(linked) else {
         // Unreadable is not this predicate's finding: the `is_file` check above
         // already answered presence, and a read failure here is a permissions or
         // races question that re-linking would not fix.
@@ -1524,8 +1524,7 @@ const fn launches(entry: &Provision, subtree: bool) -> bool {
 fn links_a_launcher(entry: &Provision) -> bool {
     let subtree = entry
         .artifact()
-        .ok()
-        .is_some_and(|artifact| subtree_of(entry, &artifact).is_some());
+        .is_ok_and(|artifact| subtree_of(entry, &artifact).is_some());
     launches(entry, subtree)
 }
 
@@ -1533,7 +1532,7 @@ fn links_a_launcher(entry: &Provision) -> bool {
 /// [`LAUNCHER_VERB`]. Unreadable answers `false`; presence was answered by the
 /// caller, and re-linking does not fix a permissions failure.
 fn is_a_launcher(linked: &Path) -> bool {
-    let Ok(bytes) = fs::read(linked) else {
+    let Ok(bytes) = crate::fsio::read(linked) else {
         return false;
     };
     let first = bytes
@@ -1559,7 +1558,7 @@ fn is_a_launcher(linked: &Path) -> bool {
 /// that will not parse is `false`, because that is precisely the launcher
 /// [`exec_launcher`] refuses and tells the operator to rewrite.
 fn launcher_declares(linked: &Path, entry: &Provision, cached: &Path) -> bool {
-    let Ok(bytes) = fs::read(linked) else {
+    let Ok(bytes) = crate::fsio::read(linked) else {
         return true;
     };
     let Some(body) = bytes.split_once_newline() else {
@@ -1598,7 +1597,7 @@ pub fn exec_launcher(
     script: &Path,
     args: &[std::ffi::OsString],
 ) -> Result<std::convert::Infallible> {
-    let bytes = fs::read(script).with_context(|| {
+    let bytes = crate::fsio::read(script).with_context(|| {
         format!(
             "read the launcher at {} — `batten provision apply` rewrites it",
             script.display()
@@ -1677,7 +1676,7 @@ const SYSTEM_TRUST_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
 /// operator can see, and the cost of a wrong `true` is traffic silently leaving
 /// a path they chose.
 fn trust_names(org: &str) -> bool {
-    let Ok(text) = fs::read_to_string(trust_bundle()) else {
+    let Ok(text) = crate::fsio::read_to_string(trust_bundle()) else {
         return false;
     };
     bundle_names(&text, org)
@@ -1857,7 +1856,7 @@ fn credential_usable(value: &Secret, probe: &str) -> bool {
             .modified()
             .and_then(|at| at.elapsed().map_err(std::io::Error::other))
         && age.as_secs() < CREDENTIAL_MAX_AGE
-        && let Ok(body) = std::fs::read_to_string(&receipt)
+        && let Ok(body) = crate::fsio::read_to_string(&receipt)
     {
         return body.starts_with("live");
     }
@@ -2729,7 +2728,7 @@ fn make_executable(_path: &Path) -> Result<()> {
 /// pinned artifact over a channel that can be rewritten in flight.
 fn fetch(url: &str) -> Result<Vec<u8>> {
     if let Some(path) = url.strip_prefix("file://") {
-        return fs::read(path).with_context(|| format!("fetch {url}"));
+        return crate::fsio::read(path).with_context(|| format!("fetch {url}"));
     }
     if url.starts_with("https://") {
         return fetch_https(url);
@@ -4080,7 +4079,7 @@ mod tests {
             Applied::Installed
         );
         let binary = entry_dir(&cache, &entry).join(BIN_DIR).join("tool");
-        assert_eq!(fs::read(&binary).unwrap(), body);
+        assert_eq!(crate::fsio::read(&binary).unwrap(), body);
         if cfg!(unix) {
             let ran = crate::exec::piped_argv(
                 &dir,
@@ -4104,7 +4103,7 @@ mod tests {
             apply(&entry, &cache, false, false).unwrap(),
             Applied::Installed
         );
-        assert_eq!(fs::read(&binary).unwrap(), body);
+        assert_eq!(crate::fsio::read(&binary).unwrap(), body);
 
         // The binary present and the cached artifact gone is a cache miss.
         fs::remove_file(entry_dir(&cache, &entry).join(ARTIFACT)).unwrap();
@@ -4152,7 +4151,9 @@ mod tests {
         );
         let linked = bin.join("tool");
         assert!(
-            fs::read_to_string(&linked).unwrap().contains(LAUNCHER_VERB),
+            crate::fsio::read_to_string(&linked)
+                .unwrap()
+                .contains(LAUNCHER_VERB),
             "an entry with an environment links a launcher"
         );
         assert_eq!(freshness(&entry), Freshness::Fresh);
@@ -4161,7 +4162,7 @@ mod tests {
         other.env[0].prepend_list = vec!["/opt/elsewhere".to_owned()];
         assert_eq!(freshness(&other), Freshness::Missing, "other rules");
 
-        let launcher = fs::read_to_string(&linked).unwrap();
+        let launcher = crate::fsio::read_to_string(&linked).unwrap();
         let rest = launcher.split_once('\n').unwrap().1;
         fs::write(
             &linked,
@@ -4201,7 +4202,7 @@ mod tests {
             Applied::Installed
         );
         let linked = bin.join("tool");
-        assert_eq!(fs::read(&linked).unwrap(), body, "a plain copy");
+        assert_eq!(crate::fsio::read(&linked).unwrap(), body, "a plain copy");
         assert_eq!(freshness(&entry), Freshness::Fresh);
         assert_eq!(
             apply(&entry, &cache, false, true).unwrap(),
@@ -4325,7 +4326,7 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
             named.map_or_else(|| PathBuf::from(SYSTEM_TRUST_BUNDLE), PathBuf::from),
             "a variable that is set decides, else the system store"
         );
-        match fs::read_to_string(trust_bundle()) {
+        match crate::fsio::read_to_string(trust_bundle()) {
             Ok(text) => {
                 let carried = text
                     .split_inclusive(PEM_FOOTER)

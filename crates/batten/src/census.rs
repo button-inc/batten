@@ -554,7 +554,7 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
     let mut set_apart: BTreeMap<String, usize> = BTreeMap::new();
 
     for manifest in &declared.manifests {
-        let text = std::fs::read_to_string(root.join(&manifest.path)).map_err(|err| {
+        let text = crate::fsio::read_to_string(root.join(&manifest.path)).map_err(|err| {
             anyhow::anyhow!(
                 "census shell: the declared manifest {} cannot be read: {err}",
                 manifest.path
@@ -579,7 +579,7 @@ pub fn take(root: &Path, declared: &ShellCensus, tracked: &BTreeSet<String>) -> 
         let is_workflow = workflows.iter().any(|selector| selector.matches(path));
         // A path that is not a file — a submodule's gitlink, a file deleted from
         // the working tree — has no lines to count.
-        let Ok(bytes) = std::fs::read(root.join(path)) else {
+        let Ok(bytes) = crate::fsio::read(root.join(path)) else {
             continue;
         };
         // Decoding every tracked file to ask about its first two bytes would

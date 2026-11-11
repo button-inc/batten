@@ -658,7 +658,7 @@ pub fn read_range(dir: &Path, base: &str, head: &str) -> Result<Vec<Subject>> {
 ///
 /// Returns an error when the message file cannot be read — exit `1`, not a pass.
 pub fn read_message(message: &Path) -> Result<Subject> {
-    let body = std::fs::read_to_string(message).map_err(|error| {
+    let body = crate::fsio::read_to_string(message).map_err(|error| {
         UsageError::raise(format!(
             "commit: cannot read the commit message file `{}`: {error}",
             message.display()
