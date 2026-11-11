@@ -157,10 +157,7 @@ its exit, push. Declared work dies too: **"unsaved?" is `batten doctor session`*
    case escapes it, which `mutate` SHOWS and a surviving mutant refutes; an
    escape found later is owed to the gate, not to a note.
 3. **Gates decide, never estimate** — a command and an exit code over an object,
-   never the gated model's verdict (the harness's, or any whose context the
-   agent reaches). A Batten-managed model — pinned, deterministic, its text kept
-   in the engine — is a command, not that verdict. _(house-style, principle 3;
-   `mem:doctrine/model-verdict`.)_
+   never the gated model's verdict. _(house-style §5; `mem:doctrine/model-verdict`.)_
 4. **Output is a pointer, never the payload** — a count, `path:line`, or boolean,
    never the content. _(house-style §6.)_
 5. **Exit codes and output follow one contract** — byte-stable, `0/1/2/3`, no

@@ -20144,13 +20144,36 @@ fn dispatch_envelope(
     if !matches!(decision, hook::Decision::Deny(_) | hook::Decision::Ask(_)) {
         record_findings(&found, &envelope, err);
     }
+    answer_decision(
+        (harness, &envelope, raw),
+        decision,
+        (&policy, &facts),
+        advice,
+        mode,
+        out,
+        err,
+    )
+}
+
+/// The decided call, answered: the worktree's own answer where it has one,
+/// the advisory channel, then the rendering. Split from [`dispatch_envelope`]
+/// to keep that function inside the line budget; the order is its own.
+fn answer_decision(
+    (harness, envelope, raw): (hook::Harness, &hook::Envelope, &str),
+    decision: hook::Decision,
+    (policy, facts): (&hook::Policy, &hook::Facts<'_>),
+    mut advice: Vec<advisory::Advice>,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<HookDispatch> {
     let ceiling = policy.advisory.as_ref();
     // THE HOST'S WORKTREE REQUEST (CLOUD-2581): after the verdict, before either
     // writer of `out`, because WorktreeCreate's stdout is the new path and
     // nothing else.
     if let Some(code) = worktree_answer(
         harness,
-        &envelope,
+        envelope,
         raw,
         &decision,
         (&mut advice, ceiling),
@@ -20162,17 +20185,17 @@ fn dispatch_envelope(
     // A PRE-APPROVAL TAKES THE ADVICE INTO ITS OWN DOCUMENT (CLOUD-1949): two
     // documents on one stream is the collision above, with the grant as the
     // discarded one.
-    let context = preapproval_context(harness, &decision, &envelope, &mut advice, ceiling);
-    emit_channel(harness, &envelope, out, err, advice, ceiling, &decision)?;
+    let context = preapproval_context(harness, &decision, envelope, &mut advice, ceiling);
+    emit_channel(harness, envelope, out, err, advice, ceiling, &decision)?;
     let rendering = Rendering {
         context: context.as_deref(),
-        updated_input: grant_rewrite(&decision, &policy, &envelope, &facts),
+        updated_input: grant_rewrite(&decision, policy, envelope, facts),
     };
     let deny = match &decision {
         hook::Decision::Deny(refusal) => Some(refusal.rule().to_owned()),
         _ => None,
     };
-    let rendered = render(harness, &envelope, decision, &rendering, mode, out, err);
+    let rendered = render(harness, envelope, decision, &rendering, mode, out, err);
     Ok(HookDispatch { rendered, deny })
 }
 

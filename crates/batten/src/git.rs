@@ -4504,6 +4504,10 @@ pub fn paths_changed_between(dir: &Path, from: &str, to: &str) -> Result<BTreeSe
         .collect())
 }
 
+/// One changed path and its blob id at each revision, `None` where the path is
+/// absent there.
+pub type ChangedBlob = (String, Option<String>, Option<String>);
+
 /// [`paths_changed_between`] with each path's blob id at both revs (`None`
 /// where it is absent), restricted to `glob` (CLOUD-2692).
 ///
@@ -4519,7 +4523,7 @@ pub fn blobs_changed_between(
     from: &str,
     to: &str,
     glob: &str,
-) -> Result<Vec<(String, Option<String>, Option<String>)>> {
+) -> Result<Vec<ChangedBlob>> {
     let repository = open(dir)?;
     let mut before: BTreeMap<String, gix::ObjectId> = BTreeMap::new();
     walk_blob_ids(&repository, from, glob, |path, id| {

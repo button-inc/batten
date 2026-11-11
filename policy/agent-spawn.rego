@@ -130,6 +130,22 @@ test_a_shell_worktree_add_is_refused if {
 	some _ in violation with input as on("disposable", git(["worktree", "add", "../wt"]))
 }
 
+# A COMPOUND LINE (CLOUD-857): the add behind another command is judged as the
+# add alone, because the module reads every program the call runs.
+test_a_worktree_add_behind_another_command_is_refused if {
+	some _ in violation with input as on("disposable", {
+		"operation": "execute",
+		"tool": "Bash",
+		"command": "cd /tmp && git worktree add ../wt",
+		"arguments": {},
+		"segments": [],
+		"programs": [
+			{"name": "cd", "arguments": ["/tmp"]},
+			{"name": "git", "subcommand": "worktree", "arguments": ["worktree", "add", "../wt"]},
+		],
+	})
+}
+
 test_listing_worktrees_is_allowed if {
 	count(violation) == 0 with input as on("disposable", git(["worktree", "list"]))
 }

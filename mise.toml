@@ -4712,12 +4712,13 @@ description = "The full local gate each `land` lap runs — iterate a draft with
 # this task at all (`LAND_VERIFY_RECEIPT`, `land::verified_by_receipt`), which is
 # the path the measurement was about. A hand-run `mise run verify` re-proves; the
 # early exit could not be spelled as a step of a sequence that runs every step.
+# CHEAPEST FIRST: a dirty tree is one `git status` read and was refused only at
+# `receipt record`, after two compiles (#1276). The INSTALLED release asks it —
+# every session has one, the hooks run it on every call — so the answer costs
+# no build. The receipt steps stay on this tree's build, so the writer and the
+# reader of a receipt are one version. (Above the array, not in it: the shell
+# census reads every array line, comments included.)
 run = [
-  # CHEAPEST FIRST: a dirty tree is one `git status` read and was refused only
-  # at `receipt record`, after two compiles (#1276). The INSTALLED release asks
-  # it — every session has one, the hooks run it on every call — so the answer
-  # costs no build. The receipt steps below stay on this tree's build, so the
-  # writer and the reader of a receipt are one version.
   "batten receipt clean",
   "mise run toolchain-check",
   "cargo run --quiet -p batten -- land placed",
@@ -4868,15 +4869,16 @@ depends = ["tree-clean"]
 # pass, and the `run` array stops at the first failing tier, so nothing slower
 # starts over a head something cheaper refused.
 #   1. seconds: the lap's commits and config, the diff and pin questions, the
-#      workflow audit, the cfg-gated-test ratchet, cargo-deny.
-#   2. minutes: semver, the test replay, the two cross builds.
+#      workflow audit, the cfg-gated-test ratchet, cargo-deny, the instruction
+#      budget and the policy modules' own tests.
+#   2. minutes: semver, the test replay, the two cross builds, clippy.
 #   3. the suite: `ci` (hk's whole suite, mutants included).
 run = [
   "mise run tree-clean",
   "mise run record-verdicts",
   "mise run evaluator-io-record",
-  "mise run --continue-on-error verify:commit-lint ::: verify:config-lint ::: prose-only-check ::: engine-pin-check ::: zizmor ::: batten check --rule 'test cover never' ::: deny",
-  "mise run --continue-on-error semver ::: verify:test-replay ::: cross-check ::: darwin-link",
+  "mise run --continue-on-error verify:commit-lint ::: verify:config-lint ::: prose-only-check ::: engine-pin-check ::: zizmor ::: batten check --rule 'test cover never' ::: deny ::: policy-budget ::: policy-test",
+  "mise run --continue-on-error semver ::: verify:test-replay ::: cross-check ::: darwin-link ::: lint:clippy",
   "mise run ci",
   "mise run batten -- ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main",
   "mise run perf-gate",

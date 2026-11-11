@@ -3800,7 +3800,49 @@ mod tests {
         // from its docs so a truncated table cannot follow its own test, in the
         // entry shape the host reads (CLOUD-2694). Findings only, never `ok`, so
         // a merged `$HOME` surface on the machine cannot move the answer.
-        let hosts: [(hook::Harness, &[&str]); 4] = [
+        let hosts = documented_events();
+        for (harness, spellings) in hosts {
+            let command = hook::wiring_command(harness);
+            let entry = match harness.entry_shape() {
+                hook::EntryShape::Flat { write, .. } => {
+                    serde_json::json!([{ "type": "command", (write): command }])
+                }
+                hook::EntryShape::Nested => {
+                    serde_json::json!([{ "hooks": [{ "type": "command", "command": command }] }])
+                }
+            };
+            let mut events = serde_json::Map::new();
+            for spelling in spellings {
+                events.insert((*spelling).to_owned(), entry.clone());
+            }
+            let body = serde_json::json!({ "version": 1, "hooks": events });
+            let dir = write_surface(
+                &format!("hooks-every-derived-{}", harness.as_str()),
+                harness,
+                &serde_json::to_string_pretty(&body).unwrap(),
+            );
+            let row = diagnose_hooks(&dir)
+                .harnesses
+                .into_iter()
+                .find(|row| row.harness == harness.as_str())
+                .expect("the host is diagnosed");
+            let wrong: Vec<&WiringFinding> = row
+                .findings
+                .iter()
+                .filter(|finding| {
+                    finding.reason == EVENT_UNDERIVED || finding.reason == EVENT_UNREGISTERED
+                })
+                .filter(|finding| !finding.file.starts_with("~/"))
+                .collect();
+            assert!(wrong.is_empty(), "{}: {wrong:?}", harness.as_str());
+            assert_eq!(row.registrations, spellings.len(), "{}", harness.as_str());
+        }
+    }
+
+    /// Each non-Claude host's documented events, typed literally from its docs so
+    /// a truncated table cannot follow its own test (CLOUD-2695, CLOUD-2700).
+    fn documented_events() -> [(hook::Harness, &'static [&'static str]); 4] {
+        [
             (
                 hook::Harness::CodexCli,
                 &[
@@ -3880,43 +3922,7 @@ mod tests {
                     "afterTabFileEdit",
                 ],
             ),
-        ];
-        for (harness, spellings) in hosts {
-            let command = hook::wiring_command(harness);
-            let entry = match harness.entry_shape() {
-                hook::EntryShape::Flat { write, .. } => {
-                    serde_json::json!([{ "type": "command", (write): command }])
-                }
-                hook::EntryShape::Nested => {
-                    serde_json::json!([{ "hooks": [{ "type": "command", "command": command }] }])
-                }
-            };
-            let mut events = serde_json::Map::new();
-            for spelling in spellings {
-                events.insert((*spelling).to_owned(), entry.clone());
-            }
-            let body = serde_json::json!({ "version": 1, "hooks": events });
-            let dir = write_surface(
-                &format!("hooks-every-derived-{}", harness.as_str()),
-                harness,
-                &serde_json::to_string_pretty(&body).unwrap(),
-            );
-            let row = diagnose_hooks(&dir)
-                .harnesses
-                .into_iter()
-                .find(|row| row.harness == harness.as_str())
-                .expect("the host is diagnosed");
-            let wrong: Vec<&WiringFinding> = row
-                .findings
-                .iter()
-                .filter(|finding| {
-                    finding.reason == EVENT_UNDERIVED || finding.reason == EVENT_UNREGISTERED
-                })
-                .filter(|finding| !finding.file.starts_with("~/"))
-                .collect();
-            assert!(wrong.is_empty(), "{}: {wrong:?}", harness.as_str());
-            assert_eq!(row.registrations, spellings.len(), "{}", harness.as_str());
-        }
+        ]
     }
 
     #[test]
