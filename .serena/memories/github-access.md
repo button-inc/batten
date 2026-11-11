@@ -1,65 +1,44 @@
-# GitHub access — go around the proxy, never through it
+# GitHub access — the proxy is the route; there is no PAT
 
 Read when: any GitHub operation, OR before claiming the toolchain/tests/CI can't
 run because "the proxy/network blocks GitHub" (that claim is almost always
 false here — prove it locally first). AGENTS.md carries the one-line directive;
 this is the full mechanics and fallback order.
 
-## The core fact
+## The core fact (measured 2026-11-11)
 
-Routing a GitHub call _through_ the security proxy fails: it answers with a
-scoped app credential and 403s almost everything (`not accessible by
-integration`; GraphQL pinned to a tiny allowlist). GitHub itself is reachable —
-a direct PAT-authenticated request to `api.github.com` returns 200 with the full
-5000/hr limit. Go _around_ the proxy.
+**This environment carries NO personal access token.** `GH_TOKEN` and
+`GITHUB_TOKEN` hold only the proxy's `proxy-` placeholders, which the agent proxy
+replaces with its own credential — the GitHub App installation on this org — on
+every request it carries. `BATTEN_GITHUB_TOKEN` and
+`GITHUB_PERSONAL_ACCESS_TOKEN` are unset. Check with
+`${BATTEN_GITHUB_TOKEN:+SET}` before reasoning about a token.
 
-**THROUGH THE PROXY, YOUR TOKEN IS NOT USED AT ALL — the proxy answers with its
-own credential, whatever you send.** Measured 2026-09-06, `api.github.com/user`
-and `/rate_limit`, four requests through the proxy:
+So **through the proxy is the route** for everything about this repository:
+`gh`, the REST API, git push/fetch, and the `mcp__github__*` tools. What the proxy
+refuses is API access to a repository NOT attached to the session — it answers
+403 `GitHub access to this repository is not enabled for this session` — and no
+token you could send changes that, because the proxy discards whatever you send.
+Going around it (`--noproxy '*'`) leaves you unauthenticated: 60/hr, and 403 for
+anything private.
 
-| credential sent          | identity returned | core limit | third-party repo |
-| ------------------------ | ----------------- | ---------- | ---------------- |
-| our batten PAT           | `wenzowski`       | 15000      | 403              |
-| the ambient GITHUB_TOKEN | `wenzowski`       | 15000      | 403              |
-| a made-up `ghp_…` string | `wenzowski`       | 15000      | 403              |
-| no Authorization header  | `wenzowski`       | 15000      | 403              |
-
-A bogus token and NO token return the same identity and the same limit as a real
-PAT, so nothing you inject reaches GitHub on that path. The same four requests
-with the proxy actually bypassed (`curl --noproxy '*'`, proxy vars unset):
-
-| credential sent | identity    | core limit | third-party repo |
-| --------------- | ----------- | ---------- | ---------------- |
-| our batten PAT  | `wenzowski` | **5000**   | **200**          |
-| none            | —           | 60         | 403              |
-
-`5000` versus `15000` is the discriminator worth remembering: 15000 means the
-proxy answered and your PAT was discarded, 5000 means your PAT got through.
-
-**So a 403 on a third-party repo is NOT evidence the repo is out of scope.** It
-is the ordinary reading when the request went through the proxy, and it says
-nothing about the allowlist. Re-run it bypassed before concluding anything —
-diagnosing this as a scope problem, a bad token, or an expired token costs an
-hour and reaches for `add_repo`, which is blocked (below) and is not the fix.
+**Third-party release ASSETS are served; their API is not.** That is why the
+toolchain installs LOCKED (`session:install`, `setup.sh` step 2): a locked
+`mise install` downloads from the URL and checksum `mise.lock` pins and never
+resolves through `api.github.com` — measured, all 38 tools into an empty data
+directory, through the proxy, lock unchanged. An UNLOCKED resolve
+(`mise ls-remote`, `mise use` of an unpinned tool) is refused 403 here, and the
+remedy is a lock entry, never a token. The fence-and-PAT design this memory
+used to describe is retired (CLOUD-2688).
 
 ## Fixed preference order (fall through only on an observed failure)
 
-1. **`gh` through mise — default for everything.** `mise exec -- gh <…>`.
-   `mise.toml [env]` sets `GH_TOKEN` to our PAT, so `gh` authenticates as us.
-   (`NO_PROXY` is also set there and IS mise's lever as well as `gh`'s and
-   `curl`'s — see the toolchain section. An earlier revision of this line said it
-   "does nothing for mise itself"; that was measured backwards.) PR create/ready/view,
-   comments, landing (`gh pr comment <n> --body /fast-forward`), issues, `gh api`.
-2. **GitHub API direct with our PAT**, routed around the proxy — `gh api …`, or
-   `curl --noproxy '*' -H "Authorization: Bearer $BATTEN_GITHUB_TOKEN" …`.
-   `rate_limit`, repo, `pulls/<n>`, `commits/<sha>/status` all return 200.
-   **`BATTEN_GITHUB_TOKEN` is the name this container injects** —
-   `GITHUB_PERSONAL_ACCESS_TOKEN` is UNSET here, so the older spelling of this
-   line sent an empty header and read as a token failure. Prefer
-   `--noproxy '*'` over `env -u HTTPS_PROXY`: it steers this one call instead of
-   handing an unproxied environment to whatever the command spawns.
-3. **`mcp__github__*` tools — LAST RESORT**, only after (1) and (2) both actually
-   failed for that operation.
+1. **`gh` through mise — default for everything.** `mise exec -- gh <…>`. PR
+   create/ready/view, comments, landing (`gh pr comment <n> --body
+/fast-forward`), issues, `gh api` — all over the proxy's credential.
+2. **`mcp__github__*` tools** — when `gh` is not installed or the operation is
+   one the connector exposes better.
+3. **A repository you need and the session lacks:** `add_repo`, never a token.
 
 ## A degraded session start repairs itself, and says batten is broken
 
@@ -107,178 +86,25 @@ A repair the host refuses is the ONE ask to put to a human (CLOUD-680's shape).
 Name the refusal you actually got; never assert which settings key would have
 granted it unless you measured that key doing something.
 
-## The fence covers `mise` and NOT batten itself — measured 2026-09-10
+## Third-party repositories: git yes, the API no (measured 2026-11-11)
 
-`/root/.local/bin/mise` is a `provision-exec` wrapper whose declared env fences
-`github.com` and four sibling hosts out of `NO_PROXY`, sources the token from a
-first-set chain including `BATTEN_GITHUB_TOKEN`, carries
-`reject_prefix = "proxy-"` to refuse the injected placeholder, and unsets
-`HTTPS_PROXY` where the trust store names Anthropic. It is correct and complete.
-
-**It covers exactly one binary.** `/root/.local/bin/batten` is a bare stripped
-ELF, not a wrapper — so the engine, the session shell and `git` all run
-un-fenced. Confirmed in-container: `NO_PROXY` carries no `github.com`, while the
-PAT reaches GitHub off-proxy (`rate_limit` core **5000**, not 15000).
-
-`fetch.rs` honouring `*_PROXY` is **deliberate and correct**, not a defect —
-CLOUD-1399 argues it explicitly: _"that behaviour is correct and is what lets
-batten work on a host where a proxy is mandatory. The defect is a container's
-values."_ Only `get_direct` (the credential probe) refuses a proxy, because a
-question about a credential has no answer on a route that substitutes its own.
-
-**But the repair never landed.** CLOUD-1399 is Done and claims commit `46530200`
-shipped an `egress-is-unproxied` `[[startup]]` row.
-`git log -S'egress-is-unproxied' --all -- batten.toml` is EMPTY and `46530200` is
-not a valid object here. `batten doctor egress` correctly answers
-`egress failed egress-unfenced` and **nothing repairs it** — non-negotiable rule
-2's own words: _a gate that detects what it is wired to fix and waits to be asked
-is sensor only._ `BATTEN_ENVIRONMENT=disposable` IS set, so the trigger is not
-the problem; the row does not exist.
-
-CLOUD-1400 is the row for batten owning its own proxy (a decision spike, not
-work). CLOUD-1475 replaces the PAT-in-environment entirely with
-`repository_dispatch` as an authenticated bus and a webhook listener holding the
-secrets — zero bearer in the VM. Until then the standing constraints are: a live
-PAT in the environment, rotated frequently; **no access to any other system**;
-MCP is credentialless.
-
-## Why the toolchain runs here (a per-host fence, NOT unsetting the proxy)
-
-**`mise` NEEDS BOTH HALVES, AND THE FIRST ONE IS `NO_PROXY`.** Re-measured
-2026-09-06 over `mise ls-remote aqua:EmbarkStudios/cargo-deny`, second container,
-**`mise cache clear` before EACH arm**:
-
-| arm                                                       | result               |
-| --------------------------------------------------------- | -------------------- |
-| `NO_PROXY` prepended, no explicit token                   | **401**              |
-| proxy on, `NO_PROXY` untouched, no token                  | 403                  |
-| proxy on, `NO_PROXY` untouched, `MISE_GITHUB_TOKEN=<pat>` | 403                  |
-| `NO_PROXY` prepended **+** `MISE_GITHUB_TOKEN=<pat>`      | **OK, 100 versions** |
-| `HTTPS_PROXY` unset **+** `MISE_GITHUB_TOKEN=<pat>`       | OK, 100 versions     |
-| `HTTPS_PROXY` unset, no token                             | 401                  |
-
-Rows 3 and 4 differ **only** in `NO_PROXY`, so **mise does honour it**. Row 4
-succeeds with `HTTPS_PROXY` still set, so unsetting the proxy buys nothing over
-the per-host fence — it is the same fence applied to every host, and via `exec`
-it strips the proxy from every child (cargo, rustup, uv, npm, task bodies).
-
-**THE PREVIOUS VERSION OF THIS SECTION SAID THE OPPOSITE AND WAS AN ARTEFACT OF
-A WARM CACHE.** `ls-remote` is cached, so the first arm that succeeds makes every
-later arm pass, and arms run before it keep their stale failure. Any re-measure
-here MUST `mise cache clear` between arms; without it this table is unreadable.
-
-**The 401 and the 403 are ONE bug seen from either side of the proxy.** The
-container injects a placeholder `GITHUB_TOKEN` whose value literally begins
-`proxy-`. Proxied, it never reaches GitHub (the proxy substitutes its own
-credential) → 403. Fenced out via `NO_PROXY`, mise sends that placeholder direct
-and GitHub rejects it → 401. Neither is a repository-scope verdict. `GH_TOKEN` is
-not a name mise reads: setting only that still 401s.
-
-**`github.com` MUST BE FENCED TOO, AND "IT STAYS PROXIED SO `git` KEEPS ITS PROXY
-AUTH" IS THE WORST SENTENCE THIS FILE HAS EVER CARRIED.** It shipped 2026-08-06
-in `01ecabdd`, was still here on 2026-09-06, and it is why the fleet's landing
-lock is wedged.
-
-Proxied, `git` authenticates with **the injected token, not yours** — the same
-substitution §"The core fact" measures for the API, one protocol over. That token
-is scoped, so it 403s writes it does not cover. Measured 2026-09-06, the same
-`git push --delete` twice:
-
-| route                                       | result                         |
-| ------------------------------------------- | ------------------------------ |
-| through the proxy                           | `RPC failed; HTTP 403 curl 22` |
-| `github.com` fenced + PAT credential helper | **exit 0, ref deleted**        |
-
-**FENCING WEAKENS NOTHING, AND THAT IS THE WHOLE POINT.** Egress TLS is
-intercepted at the network layer either way (see the interception section below),
-so the Anthropic cert chain is presented on both routes and must be trusted on
-both. The ONLY thing the fence changes is **whose credential is respected —
-theirs or the PAT you were given.** Reading it as a security trade is the error;
-there is no trade.
-
-`git` needs a credential once the proxy stops supplying one, which is the half
-the old sentence mistook for a reason to stay proxied. Hand it the PAT:
-
-```
-git -c credential.helper='!f() { echo username=x-access-token; echo password=$BATTEN_GITHUB_TOKEN; }; f' push …
-```
-
-A helper rather than a token in the URL: the URL form puts the credential in
-`argv`, where `ps` and any command log will carry it.
-
-**What it cost, so the next reader does not re-derive it.** `land-lock`'s CAS is
-a `git push` to a ref another VM minted. The injected token is not scoped for it,
-so the push 403s; `swap` discards stderr (`land-lock.sh:442`), so `acquire`
-renders the refusal as `still held by <the last holder>` and names a session that
-released hours earlier. Measured: 34 identical refusals, 120s apart, zero
-successes, against a lease `status` reads as `released`. No session can take over
-a lease minted by a different VM while `github.com` is proxied — CLOUD-1569.
-
-**THE WIRING IS ON THREE SURFACES, AND NAMING ONLY TWO IS HOW #889 "FIXED" THIS
-AND CHANGED NOTHING:**
-
-| surface                           | reaches                                                                  | note                                                      |
-| --------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------- |
-| `batten.toml` `[[provision.env]]` | the provisioned wrapper at `~/.local/bin/mise`                           | **the one that actually runs in a provisioned container** |
-| `setup.sh` heredoc wrapper        | the same path, when setup.sh writes it                                   | what #889 edited                                          |
-| `mise.toml` `[env]`               | task bodies and what mise SPAWNS, never mise's own resolver (CLOUD-1455) | carries `GH_TOKEN`                                        |
-
-The real defect (CLOUD-1474) was ONE missing name in the token chain: all three
-read `GITHUB_PERSONAL_ACCESS_TOKEN`/`MISE_GITHUB_TOKEN`, the container injects
-`BATTEN_GITHUB_TOKEN`, so no token was set and the placeholder fell through. The
-`NO_PROXY` half was correct all along. `BATTEN_GITHUB_TOKEN` is now in all three
-chains, and an explicit `MISE_GITHUB_TOKEN` (CI's) is still left alone.
-
-**NO PAT IS A SUPPORTED STATE, AND THE PROXY IS ITS ROUTE (CLOUD-2122).**
-Measured 2026-10-07 with neither `BATTEN_GITHUB_TOKEN` nor any PAT injected:
-from the unfenced shell, `batten doctor forge` passed every probe as
-`wenzowski` — the proxy's own credential — and `record forge` exited 0; inside
-the provisioned wrapper the same calls 403'd and mise 401'd. The fence
-(`NO_PROXY` rows) was applied unconditionally while `mise.toml [env]`'s copy
-already fenced only when a real credential existed. The fix makes a
-`when_trust_names` list row a REMOVAL that owes a live credential, like
-`unset`. So: PAT present → fence + PAT; none → stay proxied, keep the marker.
-Before diagnosing anything: `${BATTEN_GITHUB_TOKEN:+SET}`, then
-`batten doctor forge` from the plain shell.
-
-**NOTHING VERSION-SHAPED NEEDS A TOKEN OR THE REST API.** Latest release /
-outdated-dep questions answer over routes with no auth and no API limit:
-`git ls-remote --tags https://github.com/<o>/<r>` (every tag),
-`https://github.com/<o>/<r>/releases/latest` (302 to the newest tag), and
-`releases/download/<tag>/<asset>` for the binary. The defect is the wrapper forwarding a `proxy-`
-placeholder instead of dropping it.
-
-**A `[[provision.env]]` EDIT IS INERT ON A WARM CONTAINER** (CLOUD-1502).
-`batten provision status` compares the exec path and the pinned version, not the
-`env` rows, so it reports no drift over a wrapper whose chain disagrees with the
-manifest. Measured 2026-09-06. `batten provision apply` is the only route, and
-nothing tells you that — so after changing a `[[provision.env]]` row, read
-`~/.local/bin/mise` and confirm the chain before believing the fix reached you.
-
-**Do not unset `HTTPS_PROXY`.** `/root/.ccr/README.md` refuses it, it is unneeded
-(row 4), and it removes the policy boundary for every child process.
-
-Do not report this as "policy blocks GitHub" or as a repo-scope problem. If a 403
-persists after BOTH halves are applied, that is a real env-wiring bug — diagnose
-(`env -u HTTPS_PROXY curl -H "Authorization: Bearer $BATTEN_GITHUB_TOKEN"
-https://api.github.com/rate_limit` should report limit 5000, not 15000), don't
-surrender.
-
-## Third-party clones at scale, and a shallow clone's false "forced update"
-
-**The fenced clone needs no per-clone approval, and it scales.** Measured
-2026-09-27: about 45 third-party repos were shallow-cloned for a research corpus
-this way:
-
-```
-NO_PROXY="github.com,$NO_PROXY" git -c credential.helper='!f() { echo username=x-access-token; echo password=$BATTEN_GITHUB_TOKEN; }; f' clone --depth 1 …
-```
-
-Metadata came from `mise exec -- gh api …`. Neither `add_repo` nor the GitHub MCP
-tools are needed for a public repo.
+- **git over HTTPS reaches any public repository through the proxy.**
+  `git ls-remote https://github.com/EmbarkStudios/cargo-deny HEAD` answered, and
+  `git clone --depth 1 <url>` takes the same route. No fence, no credential
+  helper, no approval: the clone needs nothing the environment does not already
+  give.
+- **The REST API refuses a repository not attached to the session**: `gh api
+repos/EmbarkStudios/cargo-deny` and a bare `curl` both answer 403, with or
+  without the placeholder. That is the proxy's scope, not a token's, so no token
+  changes it. **Attach the repository with `add_repo`** when its API is needed —
+  issues, comments, metadata — and read code with a clone.
+- **`gh` needs a non-empty `GH_TOKEN` to send anything.** `mise.toml` keeps the
+  `proxy-` placeholder when no PAT exists (CLOUD-2688); before that it blanked
+  it, and `mise exec -- gh` refused even this repository with "populate the
+  GH_TOKEN environment variable".
 
 **A shallow checkout can report a normal `main` advance as a force-push.** Measured
-the same day:
+2026-09-27:
 
 - `git fetch` printed `+ 4979166...4595ce3 main -> origin/main (forced update)`.
 - `merge-base --is-ancestor 4979166 4595ce3` failed.
@@ -297,69 +123,28 @@ reported "gh isn't installed" and fell back to MCP, while `mise exec -- gh` work
 in the parent (CLOUD-1930). Treat a forked skill's claim that `gh` is absent as a
 probe error, not a fact.
 
-## CI-checks scope gap (don't misdiagnose as a proxy problem)
+## Permission gaps are the App's, never a token to widen
 
-Reading CI checks needs **Checks: read**. Whether the current token carries it
-is a live fact, so ask the probe rather than this file: session start's
-`batten doctor forge` reports `checks=read` as `ok` or not. If `check-runs`
-403s with `x-accepted-github-permissions: checks=read`, that is a token
-capability, not a network block. The routes then are a classic PAT scoped
-`repo` (it bundles checks-read) or the MCP `get_check_runs` tool, which carries
-the permission via App auth.
+What the proxy's credential may do is a live fact: session start's `batten doctor
+forge` reports each permission as `ok` or not. A 403 carrying
+`x-accepted-github-permissions` names a permission the App installation lacks,
+not a network block — and there is no token here to widen, so the route is the
+`mcp__github__*` tool that carries it (`get_check_runs`, `update_pull_request`)
+or a change to the App installation, which only an org owner makes.
 
-**"Everything else works" is not quite true, and the second gap is `gh pr edit`.**
-Measured 2026-08-19 with a classic PAT scoped `repo,workflow`: `gh pr edit <n>
---body-file …` fails outright with `GraphQL: Your token has not been granted the
-required scopes … The 'login' field requires one of the following scopes:
-['read:org']`. The edit itself needs nothing but `repo`; `gh` incidentally
-queries `login`/`name`/`slug` on assignees and teams while building the mutation,
-and those fields are what demand `read:org`. So the failure names a scope the
-operation does not need, which is exactly the shape that sends a reader off to
-widen a token unnecessarily.
+`gh pr edit --body-file` once failed on a missing `read:org` it does not need
+(`gh` queries assignee/team fields while building the mutation; measured
+2026-08-19 under the retired PAT). If it fails the same way, use the MCP
+`update_pull_request` tool; `gh pr create` and `gh pr ready` never query those
+fields.
 
-Do not widen the PAT for this. Use the MCP `update_pull_request` tool, which
-carries the permission via App auth and edits the body directly — the same
-resolution as `get_check_runs` above, for the same reason. `gh pr create` and
-`gh pr ready` are unaffected; only the edit path queries those fields.
+## A refusal on one surface bounds that surface
 
-## `add_repo` is blocked, so the repo scope cannot be widened at all
-
-`add_repo` is served by the Claude Code Remote toolbox server, whose every tool
-the claude.ai account sets to `always_ask`. Measured 2026-08-21, it returned
-`MCP tool call requires approval` with nobody to approve. Its siblings
-`list_sessions`, `create_session` and `get_session` answered on 2026-09-27 once
-the owner approved each call (CLOUD-1946), and `add_repo` has the same posture.
-So:
-
-- **Call `add_repo` when the task needs a repository outside the session's
-  scope.** The owner approves or declines the prompt, and that is their decision
-  to make, not one to pre-empt by skipping the call.
-- **No setting is known that makes the prompt go away.** Claude Code Remote is
-  not listed at claude.ai/customize/connectors, and no `.claude/settings.json`
-  entry moves it (`mem:connector-allowlist-recovery`'s STOP section).
-
-### `gh` is the route, and nothing upstream is unreachable
-
-**It works on any public repo — including ones outside this session's scope.**
-`.claude/settings.json` allows `Bash(gh:*)` and `gh` is
-on PATH via mise, so `mise exec -- gh issue comment <n> --repo <owner>/<repo>
---body-file <f>` posts fine. Verified 2026-08-21 against
-`anthropics/claude-code#87548` and `#61097`, neither of which is in the session's
-repo scope. `gh-guard` denies only `gh pr merge`, `gh pr checks` and
-`gh run watch`; issue and PR comments are untouched.
-
-**So do not tell the user something upstream is unreachable, and do not hand them
-text to paste.** That claim was made in this memory for about ten minutes and it
-was false: `add_repo` being blocked bounds the **MCP** surface only. It stops you
-cloning or using the GitHub MCP tools against another repo; it does not stop you
-reading or commenting through `gh`. `#87548` — our own reproduction — sat
-un-updated from 2026-08-18 to 2026-08-21 because three sessions concluded "no
-route" without testing `gh`, not because there wasn't one.
-
-**The general form, which is the part worth carrying:** a refusal on one surface
-bounds that surface. Before reporting a capability as absent, try the other
-routes the environment already grants — here `gh`, `curl` through the proxy, and
-the repo's own tasks.
+Before reporting a capability as absent, try the other routes the environment
+already grants — `gh`, git, `curl` through the proxy, `add_repo`, the repo's own
+tasks. `anthropics/claude-code#87548`, our own reproduction, sat un-updated for
+three days because three sessions concluded "no route" without testing one. **Do
+not tell the user something is unreachable, and do not hand them text to paste.**
 
 ## Provider outages — status page first, then check on demand
 
@@ -384,12 +169,11 @@ original events were dropped) and run `mise run land` again.
 
 ## Hygiene
 
-- **`git` over `github.com` must be FENCED and given the PAT — do NOT "leave it
-  alone".** That instruction stood here from `01ecabdd` until 2026-09-06 and is
-  the direct cause of CLOUD-1569: proxied, `git` authenticates with the injected
-  token, which 403s any write it is not scoped for, including the landing lease's
-  CAS. See §"Why the toolchain runs here" for the measurement and the credential
-  helper. Interception applies on both routes, so fencing trades away nothing.
+- **`git` over `github.com` goes through the proxy, unfenced.** The proxy's App
+  credential carries this repository's pushes, the landing lease's CAS included
+  (measured 2026-11-11: `git push` of this branch through the proxy). The fenced,
+  PAT-carrying route this bullet once required is retired with the PAT
+  (CLOUD-2688).
 - Confirming CI is **`mise run land`'s job** (AGENTS.md, "Workflow contract").
   On demand, `SHA=<pushed head> mise run checks-green`, backgrounded, judges
   that head over the required roster (`CI_REQUIRED_CHECKS`), so one green job
@@ -409,11 +193,6 @@ original events were dropped) and run `mise run land` again.
   substitutes only when the variable is UNSET or empty, so when it is set the
   second half expands the credential. The concatenated "report either way" form
   is the trap; `${VAR:+SET}` alone is the whole check.
-- **Rotate a leaked PAT AFTER the session, never during.** A refreshed PAT can
-  only reach a session through its context, so rotating mid-session strands the
-  container with a dead credential and no route to the new one. Note also that a
-  GitHub credential disclosed _to GitHub_ is the least-bad case: GitHub scans its
-  own token formats and auto-revokes its own disclosed credentials.
 
 ## Transparent TLS interception — tools that carry their own CA roots
 
@@ -423,14 +202,10 @@ Egress Gateway ... CA`, and unsetting `HTTPS_PROXY` or adding a host to `NO_PROX
 changes nothing **for the certificate** — those only steer tools that _read_ the
 vars, and the interception is below that layer.
 
-**THAT IS ABOUT THE CERTIFICATE ONLY, AND READING IT WIDER IS HOW A SESSION
-CONCLUDES THE PAT IS USELESS.** Measured 2026-09-06: this paragraph was read as
-"nothing can get around the proxy, so your token is always discarded", which is
-false and contradicts §"The core fact" above. TLS is intercepted either way, and
-the CA is the same either way — but **who answers is not the same**. Bypassed,
-your PAT reaches GitHub and returns limit 5000 and 200 on a third-party repo;
-proxied, the proxy answers with its own credential and 403s it. Interception is
-not authorization. Verify in one line:
+**THAT IS ABOUT THE CERTIFICATE ONLY.** TLS is intercepted on every route and the
+CA is the same on every route, but who answers is not: proxied, the proxy
+answers GitHub with its own credential and its own scope (§"The core fact").
+Interception is not authorization. Verify the issuer in one line:
 
 ```
 openssl s_client -connect github.com:443 -servername github.com </dev/null 2>/dev/null | grep ' i:'
