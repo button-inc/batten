@@ -106,32 +106,25 @@ impl Host {
 /// explicit declaration, because the expensive direction is the one that must be
 /// said; a policy that only refuses a practice can follow detection.
 #[must_use]
-pub fn host(harness: Option<crate::hook::Harness>) -> Host {
+pub fn host(signal: Option<HostSignal>) -> Host {
     let read = |key: &str| std::env::var(key).ok();
-    host_of(harness, &read)
+    host_of(signal, &read)
 }
+
+/// A harness's own statement that it runs hosted: the variable it exports and
+/// the value that means a hosted session (CLOUD-2709). Named per harness by
+/// `Harness::host_signal` in the hook adapter, so this module reads a signal and
+/// never a harness — it stays plumbing.
+pub type HostSignal = (&'static str, &'static str);
 
 /// [`host`]'s decision over an environment reader, split for the unit cases
 /// (`set_var` is `unsafe`, and `unsafe` is forbidden here).
-fn host_of(harness: Option<crate::hook::Harness>, read: &dyn Fn(&str) -> Option<String>) -> Host {
-    if licenses(read(KEY).as_deref()) || harness.is_some_and(|harness| hosted(harness, read)) {
+fn host_of(signal: Option<HostSignal>, read: &dyn Fn(&str) -> Option<String>) -> Host {
+    let stated = signal.is_some_and(|(key, value)| read(key).as_deref() == Some(value));
+    if licenses(read(KEY).as_deref()) || stated {
         Host::Disposable
     } else {
         Host::Machine
-    }
-}
-
-/// Whether `harness` states that it runs hosted, by its own documented signal.
-///
-/// Claude Code's cloud sessions export `CLAUDE_CODE_REMOTE=true` (measured in
-/// this repository's own sessions, 2026-11-10). The other harnesses document no
-/// such signal today, so they answer no and the declaration decides; a harness
-/// gains a row here when its hosted form is measured stating one.
-fn hosted(harness: crate::hook::Harness, read: &dyn Fn(&str) -> Option<String>) -> bool {
-    use crate::hook::Harness;
-    match harness {
-        Harness::ClaudeCode => read("CLAUDE_CODE_REMOTE").as_deref() == Some("true"),
-        _ => false,
     }
 }
 
@@ -143,7 +136,7 @@ mod tests {
     /// exported the declaration, or a local session read as disposable.
     #[test]
     fn the_harness_states_its_host_and_the_declaration_is_the_fallback() {
-        use crate::hook::Harness;
+        let claude: Option<HostSignal> = Some(("CLAUDE_CODE_REMOTE", "true"));
         let env = |pairs: &'static [(&'static str, &'static str)]| {
             move |key: &str| {
                 pairs
@@ -155,12 +148,11 @@ mod tests {
         let cloud = env(&[("CLAUDE_CODE_REMOTE", "true")]);
         let local = env(&[]);
         let declared = env(&[("BATTEN_ENVIRONMENT", "disposable")]);
-        assert_eq!(host_of(Some(Harness::ClaudeCode), &cloud), Host::Disposable);
-        assert_eq!(host_of(Some(Harness::ClaudeCode), &local), Host::Machine);
-        // Another harness's signal is not this one's.
-        assert_eq!(host_of(Some(Harness::Cursor), &cloud), Host::Machine);
+        assert_eq!(host_of(claude, &cloud), Host::Disposable);
+        assert_eq!(host_of(claude, &local), Host::Machine);
+        // A harness with no signal of its own is not read through another one's.
+        assert_eq!(host_of(None, &cloud), Host::Machine);
         // The declaration decides wherever detection says nothing.
-        assert_eq!(host_of(Some(Harness::Cursor), &declared), Host::Disposable);
         assert_eq!(host_of(None, &declared), Host::Disposable);
         assert_eq!(host_of(None, &local), Host::Machine);
     }

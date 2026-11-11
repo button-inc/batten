@@ -3038,7 +3038,7 @@ fn shape_scope_parses_independently_of_severity() {
     // Acceptance (d). The two keys are separate axes, and a shape row proves it
     // over the binary: `mediated_call` × each severity all load, and neither
     // key's vocabulary is accepted in the other's slot.
-    for severity in ["deny", "warn", "allow"] {
+    for severity in ["deny", "advise", "record", "allow"] {
         let dir = repo_with_config(
             &format!("shape-severity-{severity}"),
             &format!(
@@ -3870,7 +3870,7 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
     let promoted_rows: std::collections::BTreeSet<&str> = parsed
         .rules
         .iter()
-        .filter(|rule| rule.severity() == batten::severity::RuleSeverity::Warn)
+        .filter(|rule| rule.severity() == batten::severity::RuleSeverity::Advise)
         .map(|rule| rule.id.as_str())
         .collect();
     for case in SHAPE_CENSUS {
@@ -7700,7 +7700,7 @@ fn severity_and_scope_serialize_byte_stably_over_the_binary() {
     // per-field-pinned default resolves explicitly rather than vanishing.
     let dir = repo_with_config(
         "severity-byte-stable",
-        &severity_fixture("severity = \"warn\"\n"),
+        &severity_fixture("severity = \"advise\"\n"),
     );
     let run = || {
         batten()
@@ -7714,7 +7714,7 @@ fn severity_and_scope_serialize_byte_stably_over_the_binary() {
     assert_eq!(first.status.code(), Some(0));
     let value: serde_json::Value =
         serde_json::from_slice(&first.stdout).expect("config show stdout is JSON");
-    assert_eq!(value["rule"]["value"][0]["severity"], "warn");
+    assert_eq!(value["rule"]["value"][0]["severity"], "advise");
     assert_eq!(value["rule"]["value"][0]["scope"], "tree");
     assert_eq!(
         first.stdout,
@@ -7774,7 +7774,7 @@ fn committed_rules_pin_severity_and_scope_explicitly() {
         for rule in value["rule"]["value"].as_array().expect("rules in output") {
             let severity = rule["severity"].as_str().expect("severity token");
             assert!(
-                ["allow", "warn", "deny"].contains(&severity),
+                ["allow", "record", "advise", "ask", "deny"].contains(&severity),
                 "{label}: severity {severity:?} outside the vocabulary"
             );
             // Derived from the vocabulary rather than pinned to `tree`: the

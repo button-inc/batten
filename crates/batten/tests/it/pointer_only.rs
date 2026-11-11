@@ -1240,6 +1240,14 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `land placed` (CLOUD-2707) prints at most one line naming a short sha and
+    // the next step, on stderr. No field it renders can carry a payload.
+    Verb {
+        path: "land placed",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // `landed check` (CLOUD-186, CLOUD-1127) reads a tracker payload, which is
     // the widest body on any read surface: a row carries a description an agent
     // wrote and a consumer's own facts sit in it. What it renders is a key, two
