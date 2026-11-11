@@ -770,7 +770,19 @@ fn freshness_of(entry: &Provision, cache_root: &Path, links_host: bool) -> Resul
         // the manifest USED to declare. That is the same second-run shape the
         // link check above records: the change never appears on the run that
         // makes it.
-        if !launcher_declares(&linked, entry, &binary) {
+        //
+        // ONLY OF A LAUNCHER (CLOUD-2210): `link_onto_path` writes a PLAIN COPY
+        // when the entry declares no env and no subtree, and a copy carries no
+        // launcher body, so asking it for one read every such entry `Missing`
+        // forever and `apply` never converged. The writer's predicate is asked
+        // here too, through `links_a_launcher`, so the two cannot disagree; and a
+        // copy entry still holding a LAUNCHER is stale, since that launcher
+        // injects an environment the manifest no longer declares.
+        if links_a_launcher(entry) {
+            if !launcher_declares(&linked, entry, &binary) {
+                return Ok(Freshness::Missing);
+            }
+        } else if is_a_launcher(&linked) {
             return Ok(Freshness::Missing);
         }
     }
@@ -1034,7 +1046,7 @@ fn link_onto_path(
     let staged = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     // A SUBTREE IS LAUNCHED, NEVER COPIED (CLOUD-2682): its binary reads the
     // files beside its real path, and a copy on `PATH` has none beside it.
-    let written = if entry.env.is_empty() && subtree.is_none() {
+    let written = if !launches(entry, subtree.is_some()) {
         crate::durable::replace(&staged, binary).context("write the linked binary")
     } else {
         launcher(entry, cached).and_then(|bytes| {
@@ -1154,6 +1166,43 @@ fn relaunches_a_present_interpreter(linked: &Path) -> bool {
         Some((interpreter, verb)) if verb == LAUNCHER_VERB => Path::new(interpreter).is_file(),
         _ => true,
     }
+}
+
+/// Whether `entry`'s link is a launcher rather than a plain copy (CLOUD-2210):
+/// it declares environment rows, or it links a subtree (CLOUD-2682). The ONE
+/// predicate both the writer (`link_onto_path`) and the reader (`freshness_of`)
+/// ask, the reader through [`links_a_launcher`].
+const fn launches(entry: &Provision, subtree: bool) -> bool {
+    !entry.env.is_empty() || subtree
+}
+
+/// [`launches`] for an entry whose subtree is read off this host's artifact.
+/// An entry with no artifact for this host links nothing here, so the answer
+/// only matters where one exists.
+fn links_a_launcher(entry: &Provision) -> bool {
+    let subtree = entry
+        .artifact()
+        .ok()
+        .is_some_and(|artifact| subtree_of(entry, &artifact).is_some());
+    launches(entry, subtree)
+}
+
+/// Whether the file at `linked` is a launcher: its `#!` line ends in
+/// [`LAUNCHER_VERB`]. Unreadable answers `false`; presence was answered by the
+/// caller, and re-linking does not fix a permissions failure.
+fn is_a_launcher(linked: &Path) -> bool {
+    let Ok(bytes) = fs::read(linked) else {
+        return false;
+    };
+    let first = bytes
+        .split(|byte| *byte == b'\n')
+        .next()
+        .unwrap_or_default();
+    std::str::from_utf8(first)
+        .ok()
+        .and_then(|line| line.strip_prefix("#!"))
+        .and_then(|shebang| shebang.rsplit_once(' '))
+        .is_some_and(|(_, verb)| verb == LAUNCHER_VERB)
 }
 
 /// Does the launcher at `linked` carry the environment rules `entry` declares?
@@ -3572,6 +3621,53 @@ mod tests {
 
         fs::remove_file(&linked).unwrap();
         assert_eq!(freshness(&entry), Freshness::Missing, "no link");
+    }
+
+    /// CLOUD-2210 / CLOUD-2476: an entry with a `link` and NO env rows links a
+    /// plain copy, which carries no launcher body. It reads `Fresh` after one
+    /// `apply`, and the second `apply` converges to `AlreadyFresh`; a stale
+    /// launcher left on that path (env rows since removed) is not fresh.
+    ///
+    /// Fails by: the launcher check asked of a copy again (never fresh, never
+    /// converges), or a leftover launcher read as a fresh copy.
+    #[test]
+    fn a_linked_copy_with_no_env_is_fresh_and_converges() {
+        let dir = scratch("linked-copy");
+        let artifact = dir.join("tool.sh");
+        let body = b"#!/bin/sh\nexit 0\n".to_vec();
+        fs::write(&artifact, &body).unwrap();
+        let mut entry = entry("tool", &digest(&body));
+        entry.url = Some(format!("file://{}", artifact.display()));
+        let bin = dir.join("bin");
+        entry.link = Some(bin.to_string_lossy().into_owned());
+        let cache = dir.join("cache");
+        let freshness = |entry: &Provision| {
+            status(std::slice::from_ref(entry), &cache).unwrap().entries[0].freshness
+        };
+
+        assert_eq!(
+            apply(&entry, &cache, false, true).unwrap(),
+            Applied::Installed
+        );
+        let linked = bin.join("tool");
+        assert_eq!(fs::read(&linked).unwrap(), body, "a plain copy");
+        assert_eq!(freshness(&entry), Freshness::Fresh);
+        assert_eq!(
+            apply(&entry, &cache, false, true).unwrap(),
+            Applied::AlreadyFresh,
+            "the second apply converges"
+        );
+
+        fs::write(
+            &linked,
+            format!("#!/usr/bin/batten {LAUNCHER_VERB}\n{{}}\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            freshness(&entry),
+            Freshness::Missing,
+            "a leftover launcher on a copy entry's path is stale"
+        );
     }
 
     #[test]
