@@ -181,6 +181,18 @@ impl Harness {
         }
     }
 
+    /// Whether this host's payload at `spelling` omits `hook_event_name`, so
+    /// the registration must name the event on argv (CLOUD-2700).
+    ///
+    /// Copilot's camelCase keys select its camelCase dialect, whose payload
+    /// carries no event name (M1); two events are documented only that way.
+    /// Without the name, the decoder would assume pre-tool, which is the wrong
+    /// moment entirely.
+    #[must_use]
+    pub fn names_event_on_argv(self, spelling: &str) -> bool {
+        self == Harness::CopilotCli && spelling.starts_with(|c: char| c.is_ascii_lowercase())
+    }
+
     fn wiring_row(self) -> Option<Wiring> {
         match self {
             // The host merges hooks across its settings files and defines no
@@ -215,7 +227,7 @@ impl Harness {
             // name at all.
             Harness::CopilotCli => Some(Wiring {
                 file: WiringFile::Whole(".github/hooks/batten.json"),
-                spellings: CLAUDE_SPELLINGS,
+                spellings: COPILOT_SPELLINGS,
                 project_dir_var: None,
             }),
             // The one host whose names are a structural gap in an otherwise
@@ -1442,6 +1454,25 @@ const CLAUDE_SPELLINGS: &[(Event, &str)] = &[
     (Event::ErrorOccurred, "ErrorOccurred"),
 ];
 
+/// Copilot CLI's names: its `PascalCase` dialect, which is Claude's spellings,
+/// plus the two events it documents only in camelCase (CLOUD-2700), which
+/// [`Harness::names_event_on_argv`] registers with the event on argv.
+const COPILOT_SPELLINGS: &[(Event, &str)] = &[
+    (Event::PreTool, "PreToolUse"),
+    (Event::PostTool, "PostToolUse"),
+    (Event::PostToolFailure, "PostToolUseFailure"),
+    (Event::Stop, "Stop"),
+    (Event::SessionStart, "SessionStart"),
+    (Event::SessionEnd, "SessionEnd"),
+    (Event::SubagentStart, "subagentStart"),
+    (Event::SubagentStop, "SubagentStop"),
+    (Event::PreCompact, "PreCompact"),
+    (Event::Notification, "Notification"),
+    (Event::PermissionRequest, "PermissionRequest"),
+    (Event::UserPromptExpansion, "userPromptTransformed"),
+    (Event::ErrorOccurred, "ErrorOccurred"),
+];
+
 /// How one registration entry is shaped on a host's committed surface
 /// (CLOUD-2694).
 ///
@@ -1547,7 +1578,9 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
     // The values go through `serde_json` rather than being interpolated raw:
     // they are ASCII identifiers today, and a row that ever carries a quote or a
     // backslash would otherwise emit JSON that does not parse.
-    let command = json_string(&wiring_command(harness));
+    // Per spelling, because a registration whose payload names no event carries
+    // it on argv (CLOUD-2700).
+    let command_for = |spelling: &str| json_string(&registration_command(harness, spelling));
     let registrations = wiring.registrations(harness);
     let shape = harness.entry_shape();
 
@@ -1557,8 +1590,8 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
     // and a key's value, which differ only by one level.
     // ONE ENTRY IN THE SHAPE THE HOST READS (CLOUD-2694): flat on Cursor and
     // Copilot, nested everywhere else.
-    let entry = |spelling: &str, indent: &str| match shape {
-        EntryShape::Flat { write, .. } => [
+    let entry = |spelling: &str, indent: &str| match (shape, command_for(spelling)) {
+        (EntryShape::Flat { write, .. }, command) => [
             format!("{indent}{}: [", json_string(spelling)),
             format!("{indent}  {{"),
             format!("{indent}    \"type\": \"command\","),
@@ -1567,7 +1600,7 @@ pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
             format!("{indent}]"),
         ]
         .join("\n"),
-        EntryShape::Nested => [
+        (EntryShape::Nested, command) => [
             format!("{indent}{}: [", json_string(spelling)),
             format!("{indent}  {{"),
             format!("{indent}    \"hooks\": ["),
@@ -1648,11 +1681,13 @@ const CODEX_EVENTS: &[Event] = &[
     Event::UserPromptSubmit,
 ];
 
-/// Copilot CLI: 11 of 14, in its `PascalCase` dialect. The three left are
-/// `UserPromptSubmit` (no documented blocking output, CLOUD-1941) and the two
-/// documented only in camelCase.
+/// Copilot CLI: 13 of 14. The one left is `UserPromptSubmit` (no documented
+/// blocking output, CLOUD-1941). The two camelCase-only events are registered
+/// with their name on argv (CLOUD-2700).
 const COPILOT_EVENTS: &[Event] = &[
     Event::ErrorOccurred,
+    Event::SubagentStart,
+    Event::UserPromptExpansion,
     Event::PreTool,
     Event::PostTool,
     Event::PostToolFailure,
@@ -2968,6 +3003,23 @@ impl Event {
 /// pre-tool can only ever over-adjudicate, which is the safe direction.
 const ASSUMED_EVENT: &str = "PreToolUse";
 
+/// The event a registration named on argv (`adjudicate --event`, CLOUD-2700),
+/// read only when the payload names none. Set once per process, at dispatch.
+pub static NAMED_EVENT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// The command one registration runs: the harness's mediation command, plus
+/// `--event <spelling>` where the host's payload at that spelling names no
+/// event (CLOUD-2700).
+#[must_use]
+pub fn registration_command(harness: Harness, spelling: &str) -> String {
+    let command = wiring_command(harness);
+    if harness.names_event_on_argv(spelling) {
+        format!("{command} --event {spelling}")
+    } else {
+        command
+    }
+}
+
 /// The prefix every MCP-provided tool carries in the converged wire format.
 ///
 /// A host fact rather than an invention: this repository's own
@@ -3860,9 +3912,13 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
 /// (CLOUD-2224), which never holds the payload as one string.
 #[must_use]
 pub fn decode_value(harness: Harness, value: &Value) -> Option<Envelope> {
+    // The payload's own name first; then the one the registration put on argv
+    // (`--event`, CLOUD-2700), for a dialect whose payload names none; then the
+    // conservative assumption.
     let raw_event = value
         .get("hook_event_name")
         .and_then(Value::as_str)
+        .or_else(|| NAMED_EVENT.get().map(String::as_str))
         .unwrap_or(ASSUMED_EVENT)
         .to_owned();
     let event = normalize_event(harness, &raw_event);
@@ -4074,7 +4130,14 @@ pub fn normalize_event(harness: Harness, raw: &str) -> Event {
             "preCompact" => Some(Event::PreCompact),
             _ => None,
         },
-        Harness::ClaudeCode | Harness::CopilotCli | Harness::CodexCli | Harness::ExitCode => None,
+        // Copilot's two camelCase-only events (CLOUD-2700). Their payload names
+        // no event, so the name arrives through `--event`.
+        Harness::CopilotCli => match raw {
+            "subagentStart" => Some(Event::SubagentStart),
+            "userPromptTransformed" => Some(Event::UserPromptExpansion),
+            _ => None,
+        },
+        Harness::ClaudeCode | Harness::CodexCli | Harness::ExitCode => None,
     };
     renamed.unwrap_or_else(|| Event::normalize(raw))
 }
@@ -20306,9 +20369,19 @@ deny contains "refused by themodule" if {
                     EntryShape::Flat { write, .. } => &hooks[spelling][0][write],
                     EntryShape::Nested => &hooks[spelling][0]["hooks"][0]["command"],
                 };
+                // The registration's own command: `--event` where the host's
+                // payload names none (CLOUD-2700).
                 assert_eq!(
                     *command,
-                    Value::String(wiring_command(*harness)),
+                    Value::String(registration_command(*harness, spelling)),
+                    "{}: {spelling}",
+                    harness.as_str()
+                );
+                assert_eq!(
+                    command
+                        .as_str()
+                        .is_some_and(|text| text.ends_with(&format!("--event {spelling}"))),
+                    harness.names_event_on_argv(spelling),
                     "{}: {spelling}",
                     harness.as_str()
                 );
