@@ -31,136 +31,38 @@ command -v mise >/dev/null 2>&1 || {
 }
 
 # ---------------------------------------------------------------------------
-# 2. GitHub reachability behind the agent proxy — a PATH WRAPPER, not an env file.
+# 2. NO WRAPPER (CLOUD-2688). This step used to shadow mise with a wrapper that
+#    fenced the GitHub hosts out of the agent proxy and fed mise a session PAT,
+#    because an UNLOCKED install resolves every tool through api.github.com and
+#    the proxy refuses that for third-party repos. There is no PAT — the
+#    container carries only the proxy's `proxy-` placeholders — and the API is
+#    not needed: every install below is LOCKED, from the URL and checksum
+#    `mise.lock` pins, which the proxy serves. Measured 2026-11-11: the whole
+#    manifest installed that way into an empty data directory, lock unchanged.
 #
-#    mise resolves every tool release through api.github.com. The proxy injects a
-#    token scoped to THIS repo only, so that host answers 403 for third-party tool
-#    repos (uv, cargo-deny, release-plz). The fix is to send the API + asset hosts
-#    around the proxy via NO_PROXY and let mise authenticate with the session PAT.
-#
-#    WHY A WRAPPER AND NOT BASH_ENV / .bashrc / .env:
-#      * The platform injects its OWN NO_PROXY (without api.github.com) as a real
-#        process env var, so a static NO_PROXY in the env config is overwritten —
-#        it MUST be mutated at runtime.
-#      * An agent's shell tool typically runs each command in a fresh
-#        non-interactive, non-login bash that sources NEITHER BASH_ENV NOR
-#        ~/.bashrc. So an env file, however early it is written, never reaches the
-#        agent's own `mise` calls — only child processes it spawns.
-#      * PATH starts with ~/.local/bin (writable, and where the real mise lives),
-#        so a wrapper there is the one hook that intercepts EVERY mise invocation:
-#        the agent shell, git hooks, cargo subprocesses, and `mise activate` alike.
-#
-#    The wrapper relocates the real binary to ~/.local/libexec/mise and shadows it
-#    at ~/.local/bin/mise. It prepends the GitHub hosts to NO_PROXY (github.com
-#    itself stays proxied, so git keeps its proxy auth to this repo) and sets
-#    MISE_GITHUB_TOKEN from the session PAT (mise-only; the proxy's own
-#    GITHUB_TOKEN for git is left untouched). Both are idempotent guards.
+#    A container an earlier run set up still has the wrapper; put the real
+#    binary back so nothing fences.
 # ---------------------------------------------------------------------------
 MISE_BIN="$HOME/.local/bin/mise"
-MISE_LIBEXEC="$HOME/.local/libexec"
-MISE_REAL="$MISE_LIBEXEC/mise"
-mkdir -p "$MISE_LIBEXEC"
-
-# If ~/.local/bin/mise is the real ELF binary (freshly installed, or replaced by a
-# mise self-update / re-run of mise.run), move it under libexec. head -c4 on an ELF
-# begins with 0x7F,'E','L','F'; -a lets grep read the binary as text.
-#
-# READ THEN MATCH, never piped. `head … | grep -q` under `pipefail` reports the
-# PIPELINE's failure when grep exits early on a match and head takes SIGPIPE — so
-# a MATCH reads as false and the relocation silently never happens, which is the
-# one branch this block exists for. `pipefail-grep-check` names the class.
-mise_magic="$(head -c4 "$MISE_BIN" 2>/dev/null || true)"
-if [[ -f "$MISE_BIN" ]] && grep -qa ELF <<<"$mise_magic"; then
-	mv -f "$MISE_BIN" "$MISE_REAL"
+MISE_REAL="$HOME/.local/libexec/mise"
+if [[ -x "$MISE_REAL" ]] && ! grep -qa ELF <<<"$(head -c4 "$MISE_BIN" 2>/dev/null || true)"; then
+	mv -f "$MISE_REAL" "$MISE_BIN"
 fi
+export MISE_LOCKFILE=true MISE_LOCKED=true
 
-# (Re)write the wrapper every run so fixes to it always take effect.
-cat >"$MISE_BIN" <<'WRAP'
-#!/usr/bin/env bash
-# mise wrapper: guarantee GitHub reachability behind the agent proxy for EVERY
-# mise call, independent of shell init. See setup.sh for the full rationale.
-# BOTH HALVES ARE REQUIRED, AND THE FIRST ONE IS `NO_PROXY` (CLOUD-1474).
-# Measured 2026-09-06 over `mise ls-remote aqua:EmbarkStudios/cargo-deny`, with
-# `mise cache clear` BEFORE EACH ARM — without that the first arm to succeed
-# makes every later arm pass from cache, which is how the previous revision of
-# this comment came to assert the opposite of the table below:
-#
-#   NO_PROXY prepended, no explicit token                401
-#   proxy on, NO_PROXY untouched, no token               403
-#   proxy on, NO_PROXY untouched, + MISE_GITHUB_TOKEN    403
-#   NO_PROXY prepended + MISE_GITHUB_TOKEN=<pat>         OK, 100 versions
-#
-# Rows 3 and 4 differ only in NO_PROXY, so `mise` DOES honour it — the claim that
-# it does not was the error, and `unset HTTPS_PROXY` was the remedy built on it.
-# Row 4 succeeds with HTTPS_PROXY still set, so the unset buys nothing: it is the
-# same fence applied to every host instead of the four that need it, and it
-# strips the proxy from every process `exec` hands it to — cargo, rustup, uv,
-# npm and every task body — which is what /root/.ccr/README.md and house policy
-# both refuse.
-#
-# WHY ROW 1 IS A 401 AND NOT AN AUTH-FREE SUCCESS — this is the whole bug. The
-# container injects a PLACEHOLDER `GITHUB_TOKEN` (its value literally begins
-# `proxy-`). Proxied, that never reaches GitHub, because the proxy substitutes
-# its own credential; fenced out via NO_PROXY, mise sends the placeholder direct
-# and GitHub rejects it. So the fence turned a 403 into the reported 401 and the
-# two failures are the same missing token seen from either side of the proxy.
-# `mise.toml`'s `[env]` block has recorded this in as many words all along.
-#
-# The proxy DOES substitute: through it, our PAT, the ambient GITHUB_TOKEN, a
-# made-up string and NO Authorization header all return the same identity and the
-# same 15000/hr limit. Direct, no header returns 60 and our PAT returns 5000.
-# The no-header arm is the discriminator — unauthenticated GitHub is 60/hr, so
-# 15000 with no credential sent can only be the proxy answering.
-#
-# `github.com` is deliberately NOT fenced, so git keeps its proxy-provided auth
-# to this repo; only the API and asset hosts go direct.
-for _v in NO_PROXY no_proxy; do
-  _cur="${!_v-}"
-  case ",$_cur," in
-    *,api.github.com,*) ;;
-    *) export "$_v=api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com${_cur:+,$_cur}" ;;
-  esac
-done
-
-# THE TOKEN'S NAME IS THE OTHER HALF. This read only
-# GITHUB_PERSONAL_ACCESS_TOKEN; the container injects BATTEN_GITHUB_TOKEN, and
-# neither that name nor MISE_GITHUB_TOKEN was set — so mise fell through to the
-# placeholder above. First-set wins, so an explicit MISE_GITHUB_TOKEN — what
-# mise-action sets in CI — is never overwritten. `GH_TOKEN` is NOT a name mise
-# reads: setting only that still 401s (measured), so it must be this variable.
-if [[ -z "${MISE_GITHUB_TOKEN:-}" ]]; then
-  for _t in GITHUB_PERSONAL_ACCESS_TOKEN BATTEN_GITHUB_TOKEN; do
-    if [[ -n "${!_t-}" ]]; then
-      export MISE_GITHUB_TOKEN="${!_t}"
-      break
-    fi
-  done
-fi
-exec "$HOME/.local/libexec/mise" "$@"
-WRAP
-chmod +x "$MISE_BIN"
-
-# If the real binary somehow is not in place (fresh box where mise.run wrote the
-# wrapper's path, or a wiped libexec), reinstall it and relocate once more.
-if [[ ! -x "$MISE_REAL" ]]; then
-	curl -fsSL https://mise.run | MISE_INSTALL_PATH="$MISE_REAL" sh ||
-		echo "setup: could not provision the real mise binary" >&2
-fi
-
-# 3. Interactive shells still get full activation ([env] blocks, task env). The
-#    wrapper already covers the proxy/PAT, so .bashrc need only add PATH + activate.
+# 3. Interactive shells still get full activation ([env] blocks, task env), so
+#    .bashrc need only add PATH + activate.
 if ! grep -q 'mise activate bash' "$HOME/.bashrc" 2>/dev/null; then
 	cat >>"$HOME/.bashrc" <<'EOF'
 
 # mise — shims first so non-interactive shells and git hooks resolve pinned tools.
-# GitHub-proxy reachability + PAT are handled by the ~/.local/bin/mise wrapper.
 export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$PATH"
 command -v mise >/dev/null 2>&1 && eval "$(mise activate bash)"
 EOF
 fi
 
 # 4. Provision every committed mise config, root first, then any nested ones.
-#    Every `mise` below is the wrapper, so provisioning works with no manual env.
+#    Locked (step 2), so provisioning needs no GitHub API and no credential.
 #
 #    `CLAUDE_PROJECT_DIR` is read as a HINT and never required: it is one
 #    harness's spelling, and this script must work under any of them. `$PWD` is
