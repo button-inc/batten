@@ -1,11 +1,21 @@
 {
   "hooks": {
-    "BeforeTool": [
+    "AfterAgent": [
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "batten adjudicate --harness gemini-cli"
+            "command": "batten adjudicate --harness gemini-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "AfterModel": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness gemini-cli",
+            "type": "command"
           }
         ]
       }
@@ -14,28 +24,8 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "batten adjudicate --harness gemini-cli"
-          }
-        ]
-      }
-    ],
-    "AfterAgent": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness gemini-cli"
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness gemini-cli"
+            "command": "batten adjudicate --harness gemini-cli",
+            "type": "command"
           }
         ]
       }
@@ -44,8 +34,38 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "batten adjudicate --harness gemini-cli"
+            "command": "batten adjudicate --harness gemini-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "BeforeModel": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness gemini-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "BeforeTool": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness gemini-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "BeforeToolSelection": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness gemini-cli",
+            "type": "command"
           }
         ]
       }
@@ -54,18 +74,8 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "batten adjudicate --harness gemini-cli"
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "batten adjudicate --harness gemini-cli"
+            "command": "batten adjudicate --harness gemini-cli",
+            "type": "command"
           }
         ]
       }
@@ -74,8 +84,28 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "batten adjudicate --harness gemini-cli"
+            "command": "batten adjudicate --harness gemini-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness gemini-cli",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "batten adjudicate --harness gemini-cli",
+            "type": "command"
           }
         ]
       }
