@@ -272,43 +272,70 @@ fn verify_declares_no_depends() {
     );
 }
 
-/// THE GATES `verify` GAVE UP STILL RUN, now in the fan, cheapest first
-/// (operator ruling, 2026-11-11). `ci`, `cross-check`, `darwin-link`, `zizmor`
-/// and `semver` were `depends`, which mise runs before the body, so the cheap
-/// gates reported only after the suite. In the fan they run behind the cheap
-/// gates, every one runs even when another fails, and `ci` is the last.
-#[test]
-fn verify_gated_carries_the_depends_verify_gave_up() {
-    let gated = steps("verify:gated");
-    let fan = &gated[step_at(&gated, "--continue-on-error")];
-    let tasks: Vec<&str> = fan
-        .trim_start_matches("mise run --continue-on-error ")
+/// The tasks one `mise run` step reaches: each `:::` member's first word.
+fn members(step: &str) -> Vec<String> {
+    step.trim_start_matches("mise run ")
+        .trim_start_matches("--continue-on-error ")
         .split(" ::: ")
-        .map(|task| task.split_whitespace().next().unwrap_or_default())
-        .collect();
-    for needed in [
-        "ci",
-        "cross-check",
-        "darwin-link",
-        "zizmor",
-        "semver",
-        "deny",
-    ] {
-        assert!(tasks.contains(&needed), "the fan runs {needed}: {tasks:?}");
-    }
-    let at = |name: &str| tasks.iter().position(|task| *task == name).unwrap();
-    for cheap in [
+        .filter_map(|task| task.split_whitespace().next())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// THE GATES RUN IN TIERS, CHEAPEST FIRST, AND A TIER GATES THE NEXT (owner
+/// rulings, 2026-11-11). `ci`, `cross-check`, `darwin-link`, `zizmor` and
+/// `semver` were `depends`, which ran before the body; one fan then started them
+/// all at once, so seconds-long gates refused a head while the suite and its
+/// mutants ran on for 41 minutes. Each tier is its own `--continue-on-error`
+/// fan, so it reports every failure it holds, and the `run` array stops at the
+/// first failing tier. Fails by: a build or the suite moved into a cheaper tier,
+/// or the tiers collapsed back into one step.
+#[test]
+fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
+    let gated = steps("verify:gated");
+    let position = |task: &str| {
+        gated
+            .iter()
+            .position(|step| {
+                step.starts_with("mise run ") && members(step).iter().any(|m| m == task)
+            })
+            .unwrap_or_else(|| panic!("verify:gated runs {task}: {gated:?}"))
+    };
+    let seconds = [
         "verify:commit-lint",
         "verify:config-lint",
         "prose-only-check",
+        "engine-pin-check",
         "zizmor",
-    ] {
-        assert!(
-            at(cheap) < at("cross-check"),
-            "{cheap} before the builds: {tasks:?}"
+        "deny",
+    ];
+    let minutes = ["semver", "verify:test-replay", "cross-check", "darwin-link"];
+    let tier_one = position(seconds[0]);
+    let tier_two = position(minutes[0]);
+    let suite = position("ci");
+    for task in seconds {
+        assert_eq!(
+            position(task),
+            tier_one,
+            "{task} is in the seconds tier: {gated:?}"
         );
     }
-    assert_eq!(tasks.last(), Some(&"ci"), "the suite is last: {tasks:?}");
+    for task in minutes {
+        assert_eq!(
+            position(task),
+            tier_two,
+            "{task} is in the minutes tier: {gated:?}"
+        );
+    }
+    assert!(
+        tier_one < tier_two && tier_two < suite,
+        "seconds, then minutes, then the suite: {gated:?}"
+    );
+    assert_eq!(
+        members(&gated[suite]),
+        ["ci"],
+        "the suite is its own tier: {gated:?}"
+    );
     assert_eq!(depends_of("verify:gated"), ["tree-clean"]);
 }
 
