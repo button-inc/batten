@@ -250,6 +250,54 @@ fn following_the_pointer_returns_text_not_another_pointer() {
 }
 
 #[test]
+fn a_shell_read_of_the_view_returns_text_not_another_pointer() {
+    // The same route through Bash: a `sed -n` over the view was bounded again
+    // into a second pointer (measured 2026-11-11). One route, one answer,
+    // whichever tool follows it. A shell call naming no view is still bounded.
+    let dir = repo("result-bound-follow-shell");
+    let first = post_tool(&dir, &read_result(&payload(2000)));
+    let view = view_named(&first.stdout);
+    let text = std::fs::read_to_string(&view).expect("the view exists");
+    let shell = |command: String| {
+        serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "bound",
+            "tool_name": "Bash",
+            "tool_input": { "command": command },
+            "tool_response": { "stdout": text, "stderr": "", "interrupted": false },
+        })
+    };
+    let followed = common::run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &shell(format!("sed -n 1,400p '{view}'")).to_string(),
+    );
+    assert_eq!(
+        followed.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(&followed)
+    );
+    let again = String::from_utf8_lossy(&followed.stdout);
+    assert!(
+        !again.contains("output point now"),
+        "the view is read: {again}"
+    );
+
+    let other = common::run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &shell("sed -n 1,400p notes.md".to_owned()).to_string(),
+    );
+    assert_eq!(other.status.code(), Some(0), "{}", common::stderr(&other));
+    let bounded = String::from_utf8_lossy(&other.stdout);
+    assert!(
+        bounded.contains("output point now"),
+        "a non-view read is bounded: {bounded}"
+    );
+}
+
+#[test]
 fn a_built_in_result_is_evicted_before_a_tracker_read() {
     // Storing every result must not displace what gates resolve: a store bounded
     // to two records keeps the tracker read through three built-in results.
