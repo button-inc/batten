@@ -2363,14 +2363,18 @@ pub fn is_git_hook(name: &str) -> bool {
 
 /// githooks(5) for git 2.43, one row per name, alphabetical.
 ///
-/// **A SNAPSHOT**: a hook a later git adds is not caught automatically. The two
+/// **A SNAPSHOT**: a hook a later git adds is not caught automatically. The
 /// registered rows must equal `doctor::COMMIT_HOOKS`, which stays the runtime
 /// authority for which git hooks batten links.
 ///
+/// `pre-push` IS REGISTERED, no longer `adjudicated-elsewhere`: the push was
+/// left to the mediated call and `land`, and a commit `git revert` made through
+/// the sequencer (no `commit-msg`) reached `verify` with a non-conventional
+/// subject. The push is the last local point every commit passes.
+///
 /// Every reason is a stable id: `after-the-fact` refuses nothing that has not
 /// already happened (the [`Event::PostTool`] argument), `server-side` runs on a
-/// remote, `adjudicated-elsewhere` is the push — decided at the mediated call and
-/// by `land` — and `no-predicate` is a hook nothing here has a rule for yet.
+/// remote, and `no-predicate` is a hook nothing here has a rule for yet.
 /// `pre-merge-commit` stays `no-predicate`: fast-forward landing makes no merge
 /// commits. Registering a further hook is per-source work, not this table's.
 pub const GIT_HOOKS: &[(&str, HookDisposition)] = &[
@@ -2393,7 +2397,7 @@ pub const GIT_HOOKS: &[(&str, HookDisposition)] = &[
     ("pre-auto-gc", unsupported("no-predicate")),
     ("pre-commit", BY_GATE),
     ("pre-merge-commit", unsupported("no-predicate")),
-    ("pre-push", unsupported("adjudicated-elsewhere")),
+    ("pre-push", BY_GATE),
     ("pre-rebase", unsupported("no-predicate")),
     ("pre-receive", unsupported("server-side")),
     ("prepare-commit-msg", unsupported("no-predicate")),
