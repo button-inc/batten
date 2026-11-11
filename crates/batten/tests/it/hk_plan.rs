@@ -124,17 +124,19 @@ fn the_boundary_acquires_a_plan_the_module_can_read() {
     // reading the output for the token passed over any module at all, the
     // predicate mutated away included. Measured on #1276's sweep:
     // `plan-unacquired-silenced` survived exactly that way.
-    let declared: String = ["step run missing", "plan run refused", "plan read missing"]
-        .iter()
-        .map(|id| {
-            format!(
+    let mut declared = String::new();
+    for id in ["step run missing", "plan run refused", "plan read missing"] {
+        std::fmt::Write::write_fmt(
+            &mut declared,
+            format_args!(
                 "\n[[verdict]]\nid = \"{id}\"\ngloss = \"the fixture class {id}\"\n\
                  class = \"A fixture class raised by the shipping module.\"\n\n\
                  [[verdict.route]]\nid = \"read the module\"\nkind = \"document\"\n\
                  target = \"policy/hk-plan-required.rego\"\n"
-            )
-        })
-        .collect();
+            ),
+        )
+        .expect("write to a string");
+    }
     common::write(
         &dir,
         "batten.toml",
