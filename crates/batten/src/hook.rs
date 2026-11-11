@@ -11990,6 +11990,79 @@ pub(crate) fn is_lookthrough_wrapper(token: &str) -> bool {
     LOOKTHROUGH_WRAPPERS.contains(&token)
 }
 
+/// Each look-through wrapper's options whose VALUE is the next word, as each
+/// tool's own manual spells them (CLOUD-2687). An attached value (`-ux`,
+/// `--user=x`) is one word and needs no entry; only the separated form does.
+const WRAPPER_VALUE_OPTIONS: [(&str, &[&str]); 7] = [
+    (
+        "sudo",
+        &[
+            "-u",
+            "--user",
+            "-g",
+            "--group",
+            "-C",
+            "--close-from",
+            "-h",
+            "--host",
+            "-p",
+            "--prompt",
+            "-U",
+            "--other-user",
+            "-r",
+            "--role",
+            "-t",
+            "--type",
+            "-D",
+            "--chdir",
+            "-R",
+            "--chroot",
+            "-T",
+            "--command-timeout",
+        ],
+    ),
+    ("doas", &["-u", "-C"]),
+    ("timeout", &["-s", "--signal", "-k", "--kill-after"]),
+    ("nice", &["-n", "--adjustment"]),
+    (
+        "env",
+        &["-u", "--unset", "-C", "--chdir", "-S", "--split-string"],
+    ),
+    (
+        "stdbuf",
+        &["-i", "--input", "-o", "--output", "-e", "--error"],
+    ),
+    (
+        "xargs",
+        &[
+            "-I",
+            "--replace",
+            "-n",
+            "--max-args",
+            "-P",
+            "--max-procs",
+            "-L",
+            "--max-lines",
+            "-s",
+            "--max-chars",
+            "-d",
+            "--delimiter",
+            "-E",
+            "--eof",
+            "-a",
+            "--arg-file",
+        ],
+    ),
+];
+
+/// Does `flag`, written as its own word, take the next word as its value?
+fn wrapper_option_takes_value(wrapper: &str, flag: &str) -> bool {
+    WRAPPER_VALUE_OPTIONS
+        .iter()
+        .find(|(name, _)| *name == wrapper)
+        .is_some_and(|(_, options)| options.contains(&flag))
+}
+
 /// Programs the boundary knows to leave their operands alone (CLOUD-1804).
 ///
 /// # The premise this repairs, which is CLOUD-1141's
@@ -12469,6 +12542,12 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
                         || is_env_assignment(program_token(tokens[i]))
                         || program_token(tokens[i]).starts_with(|c: char| c.is_ascii_digit()))
                 {
+                    // A FLAG WHOSE VALUE IS THE NEXT WORD takes that word with it
+                    // (CLOUD-2687): `sudo -u x git` resolved to `x`, so every
+                    // module finding git through `programs` allowed it.
+                    if wrapper_option_takes_value(wrapper, program_token(tokens[i])) {
+                        i += 1;
+                    }
                     i += 1;
                 }
             }
@@ -14121,6 +14200,34 @@ mod tests {
         assert!(is_deny("env GH_PAGER= gh pr merge"));
         assert!(is_deny("timeout 30 gh pr checks"));
         assert!(is_deny("FOO=bar gh pr merge"));
+    }
+
+    /// CLOUD-2687: a wrapper option whose value is the next word takes that word
+    /// with it. Fails by: the value read as the program, which hid `git` from
+    /// every module that finds it through `programs`.
+    #[test]
+    fn a_wrapper_options_separate_value_is_not_the_program() {
+        for command in [
+            "sudo -u x git commit -n",
+            "sudo -u x -g y git commit -n",
+            "timeout -s KILL 5 git commit -n",
+            "timeout -k 2 5 git commit -n",
+            "nice -n 5 git commit -n",
+            "env -u HOME git commit -n",
+            "stdbuf -o L git commit -n",
+            "xargs -I {} git commit -n",
+            "doas -u x git commit -n",
+        ] {
+            let tokens: Vec<&str> = command.split_whitespace().collect();
+            let found = effective_program(&tokens).map(|index| tokens[index]);
+            assert_eq!(found, Some("git"), "{command}");
+        }
+        // An attached value is one word and still resolves.
+        let tokens = ["sudo", "-ux", "git", "commit"];
+        assert_eq!(effective_program(&tokens), Some(2));
+        // And a value-less flag takes nothing with it.
+        let tokens = ["sudo", "-E", "git", "commit"];
+        assert_eq!(effective_program(&tokens), Some(2));
     }
 
     /// One program-only `shape` row and nothing else (CLOUD-401).
