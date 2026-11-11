@@ -1599,6 +1599,22 @@ const CHECK_STAGED: FlagDecl = FlagDecl {
 /// The caller reads the clock, which is prior art and stays outside: `date -u
 /// +%s` in whatever wrapper the consumer invokes this through is exactly where
 /// that read belongs.
+/// `adjudicate --event`: the host's event name, for a registration whose
+/// payload names none (CLOUD-2700). The payload's own name wins when present.
+const HOOK_EVENT: FlagDecl = FlagDecl {
+    id: "event",
+    long: Some("event"),
+    short: None,
+    help: "The host's event name, used only when the payload names none",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const HOOK_INSTANT: FlagDecl = FlagDecl {
     id: "instant",
     long: Some("instant"),
@@ -6487,6 +6503,7 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Unclassified,
         flags: &[
             HOOK_INSTANT,
+            HOOK_EVENT,
             FlagDecl::required_enum(
                 "harness",
                 "harness",
