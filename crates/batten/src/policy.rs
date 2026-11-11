@@ -1469,11 +1469,19 @@ pub fn compile(
         let package = engine
             .add_policy(path.clone(), source.clone())
             .map_err(|err| UsageError::raise(format!("`{path}` does not compile: {err}")))?;
-        // A package outside `data.batten` is unreachable by the one query this
-        // gate runs, so it has no address to record.
-        if let Some(relative) = relative_package(&package) {
-            packages.insert(relative);
-        }
+        // A PACKAGE OUTSIDE `data.batten` IS REFUSED, NOT SKIPPED (CLOUD-2696).
+        // The one query this gate runs never reaches it, so live it decided
+        // nothing and the call was allowed, while `policy test` evaluated its
+        // cases directly and passed them: a module green under its own tests and
+        // inert at the gate, with nothing to tell the two apart.
+        let Some(relative) = relative_package(&package) else {
+            return Err(UsageError::raise(format!(
+                "`{path}` declares `{package}`, outside `data.batten`, so the gate's query \
+                 never reaches it and it would decide nothing live; name it \
+                 `package batten.<name>`"
+            )));
+        };
+        packages.insert(relative);
         modules.push(Module { path: path.clone() });
     }
 
@@ -2024,6 +2032,52 @@ pub(crate) struct Compiled {
     entries: BTreeSet<(Vec<String>, String)>,
     /// The session-start facts the bundle reads, from [`Bundle::session_start_facts`].
     facts: Vec<String>,
+    /// What a bytecode refusal is confirmed against, when the bundle's sources
+    /// are at hand (CLOUD-2696).
+    confirm: Option<Confirm>,
+}
+
+/// The interpreter a bytecode refusal is re-decided by (CLOUD-2696).
+///
+/// **THE TWO EVALUATORS DISAGREE, MEASURED.** regorus's VM (0.11 and 0.15 alike)
+/// reads a helper function that is UNDEFINED for a call as satisfied when its
+/// result is bound with `:=` and negated over, so a module refused live what its
+/// own `with input as` cases — run by the interpreter under `policy test` —
+/// passed as clean (`an_undefined_helper_decides_alike_in_both_evaluators`).
+/// A gate whose live answer differs from its tested one is not the gate that was
+/// tested.
+///
+/// So a refusal is the interpreter's answer, always: the bytecode stays the fast
+/// path for the common allow, and a call it would refuse is decided again by the
+/// evaluator the module's cases ran under. Built once per process, on the first
+/// refusal, so an allow pays nothing.
+struct Confirm {
+    id: String,
+    sources: Vec<(String, String)>,
+    data: serde_json::Value,
+    engine: std::sync::OnceLock<Option<Box<regorus::Engine>>>,
+}
+
+impl Confirm {
+    fn new(id: &str, sources: &[(String, String)], data: serde_json::Value) -> Self {
+        Self {
+            id: id.to_owned(),
+            sources: sources.to_vec(),
+            data,
+            engine: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The interpreter over the same sources and data, compiled on first use.
+    fn engine(&self) -> Option<&regorus::Engine> {
+        self.engine
+            .get_or_init(|| {
+                compile(&self.id, &self.sources, &self.data)
+                    .ok()
+                    .and_then(|bundle| bundle.evaluator.engine().cloned().map(Box::new))
+            })
+            .as_deref()
+    }
 }
 
 /// [`compile`] on the hot path, through the bytecode cache (CLOUD-2236).
@@ -2056,6 +2110,7 @@ fn compile_cached(
     let Some(compiled) = Compiled::from_bundle(&bundle, data) else {
         return Ok(bundle);
     };
+    let compiled = compiled.confirmed_by(id, sources, data);
     if let Some(path) = path {
         write_cached(&path, &key, &bundle, &compiled);
         // THE RETIRED LOCATION GOES ON A MISS (CLOUD-2315): format 1 wrote
@@ -2184,6 +2239,11 @@ fn read_cached(
         data: data_value(data)?,
         entries: header.entries,
         facts: header.facts,
+        confirm: Some(Confirm::new(
+            id,
+            sources,
+            serde_json::from_str(data).unwrap_or_else(|_| serde_json::json!({})),
+        )),
     };
     Some(Bundle {
         id: id.to_owned(),
@@ -2278,7 +2338,21 @@ impl Compiled {
                 .into_iter()
                 .map(str::to_owned)
                 .collect(),
+            confirm: None,
         })
+    }
+
+    /// This bytecode, with what its refusals are confirmed against.
+    fn confirmed_by(
+        self,
+        id: &str,
+        sources: &[(String, String)],
+        data: &serde_json::Value,
+    ) -> Self {
+        Self {
+            confirm: Some(Confirm::new(id, sources, data.clone())),
+            ..self
+        }
     }
 
     /// `bundle` evaluating through this bytecode rather than its interpreter.
@@ -2411,7 +2485,28 @@ pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
     // ONE EVALUATION for both shapes, because the engine is the unit now: the
     // answer comes back once and is walked twice, rather than paying an
     // evaluation per rule name.
-    let Some(answered) = answer(bundle, input, &[DENY_RULE, VIOLATION_RULE]) else {
+    let decided = denials(bundle, answer(bundle, input, &[DENY_RULE, VIOLATION_RULE]));
+    // A BYTECODE REFUSAL IS THE INTERPRETER'S, OR IT IS NONE ([`Confirm`]).
+    if let Look::Is(found) = &decided
+        && !found.is_empty()
+        && let Evaluator::Compiled(compiled) = &bundle.evaluator
+        && let Some(engine) = compiled.confirm.as_ref().and_then(Confirm::engine)
+    {
+        let mut engine = engine.clone();
+        let interpreted = engine
+            .set_input_json(input)
+            .ok()
+            .and_then(|()| engine.eval_query(PACKAGE_QUERY.to_owned(), false).ok())
+            .map(|results| Answer::of(&results));
+        return denials(bundle, interpreted);
+    }
+    decided
+}
+
+/// The violations an answer carries, or could-not-look where it carries none
+/// readable or names an id the bundle never declared.
+fn denials(bundle: &Bundle, answered: Option<Answer>) -> Look<Vec<Violation>> {
+    let Some(answered) = answered else {
         return Look::CouldNotLook;
     };
 
@@ -4013,6 +4108,12 @@ fn extend_call_schema(document: &mut serde_json::Value) {
         .and_then(serde_json::Value::as_object_mut)
     {
         call.insert("forge".to_owned(), forge);
+        // CLOUD-2709: the kind of machine, as the environment declared it —
+        // `disposable` where `BATTEN_ENVIRONMENT` says so, `machine` otherwise.
+        call.insert(
+            "host".to_owned(),
+            serde_json::json!({"type": "string", "enum": ["disposable", "machine"]}),
+        );
         // CLOUD-2672: where the call stands, what it reaches, and its home.
         call.insert(
             "cwd".to_owned(),
@@ -4949,6 +5050,58 @@ rules contains not_quoted\n";
         Compiled::from_bundle(&bundle, &serde_json::json!({}))
             .expect("the fixture compiles to bytecode")
             .into_bundle(bundle)
+    }
+
+    /// CLOUD-2696's shape: a helper function undefined for the call, bound with
+    /// `:=` and then negated over. Both evaluators must read the undefined
+    /// helper as no violation. Fails by: the bytecode deciding a violation the
+    /// interpreter — and so `policy test` — does not.
+    const UNDEFINED_HELPER: &str = r#"package batten.helper
+
+import rego.v1
+
+rules contains "commit name refused"
+
+subject(args) := message if {
+	some i, word in args
+	word == "-m"
+	message := args[i + 1]
+}
+
+violation contains {"rule": "commit name refused", "verdict": "commit name refused", "subjects": []} if {
+	some program in input.call.programs
+	message := subject(program.arguments)
+	not regex.match(`^feat`, message)
+}
+"#;
+
+    #[test]
+    fn an_undefined_helper_decides_alike_in_both_evaluators() {
+        let none = r#"{"call":{"programs":[{"arguments":["commit","--amend"]}]}}"#;
+        let wrong = r#"{"call":{"programs":[{"arguments":["commit","-m","fix: x"]}]}}"#;
+        let right = r#"{"call":{"programs":[{"arguments":["commit","-m","feat: x"]}]}}"#;
+        let interpreted = bundle_of("row", &[("policy/h.rego", UNDEFINED_HELPER)]);
+        // As `compile_cached` builds it: bytecode that confirms a refusal.
+        let sources = sources_of(&[("policy/h.rego", UNDEFINED_HELPER)]);
+        let data = serde_json::json!({});
+        let compiled = {
+            let bundle = compile("row", &sources, &data).expect("the fixture compiles");
+            Compiled::from_bundle(&bundle, &data)
+                .expect("the fixture compiles to bytecode")
+                .confirmed_by("row", &sources, &data)
+                .into_bundle(bundle)
+        };
+        assert!(compiled.is_bytecode());
+        let refused = Some(vec!["commit name refused".to_owned()]);
+        for (evaluator, bundle) in [("interpreted", &interpreted), ("bytecode", &compiled)] {
+            assert_eq!(
+                verdicts(bundle, none),
+                Some(Vec::new()),
+                "{evaluator}: no -m, no subject"
+            );
+            assert_eq!(verdicts(bundle, wrong), refused, "{evaluator}");
+            assert_eq!(verdicts(bundle, right), Some(Vec::new()), "{evaluator}");
+        }
     }
 
     #[test]
