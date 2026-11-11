@@ -1630,7 +1630,10 @@ mod tests {
         let dir = scratch("link-gate");
         crate::gitwrite::init_on_main(&dir).unwrap();
         std::fs::write(dir.join("gate.sh"), "#!/bin/sh\n").unwrap();
-        assert_eq!(link_commit_gate(&dir, "gate.sh").unwrap(), 2);
+        assert_eq!(
+            link_commit_gate(&dir, "gate.sh").unwrap(),
+            crate::doctor::COMMIT_HOOKS.len()
+        );
         let hooks = crate::doctor::hooks_dir(&dir).unwrap();
         for name in crate::doctor::COMMIT_HOOKS {
             assert_eq!(

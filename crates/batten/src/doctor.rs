@@ -1374,13 +1374,16 @@ pub(crate) fn on_path(program: &str) -> bool {
     crate::rules::on_path_verbatim(program).is_some()
 }
 
-/// The two hooks a commit in this clone must run for the gate to be on its path.
+/// The hooks a commit in this clone must run for the gate to be on its path.
 ///
 /// `pre-commit` runs the gate; `commit-msg` carries the Conventional Commits
 /// check release-plz's semver bump depends on, so leaving it out would assert the
-/// expensive half and not the deciding one. Both are git's own names, which is
-/// what keeps this list generic: every consumer's commit path runs these two.
-pub(crate) const COMMIT_HOOKS: [&str; 2] = ["pre-commit", "commit-msg"];
+/// expensive half and not the deciding one. `pre-push` is the one point every
+/// commit passes WHATEVER made it: `git revert` and `git cherry-pick` commit
+/// through the sequencer, which runs no `commit-msg`, and a `Revert "…"` subject
+/// reached `verify` unjudged that way. All three are git's own names, which is
+/// what keeps this list generic: every consumer's commit path runs them.
+pub(crate) const COMMIT_HOOKS: [&str; 3] = ["pre-commit", "commit-msg", "pre-push"];
 
 /// The stable reason id for a commit path that does not run the gate.
 const COMMIT_HOOK_MISSING: &str = "commit-hook-missing";

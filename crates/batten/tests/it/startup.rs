@@ -153,7 +153,7 @@ fn a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them() {
     // the hook.
     let hooks = dir.join("committed-hooks");
     std::fs::create_dir_all(&hooks).unwrap();
-    for name in ["pre-commit", "commit-msg"] {
+    for name in ["pre-commit", "commit-msg", "pre-push"] {
         let at = hooks.join(name);
         std::fs::write(&at, "#!/bin/sh\nexit 0\n").unwrap();
         #[cfg(unix)]
@@ -226,13 +226,13 @@ fn the_commit_gate_sub_verb_answers_only_its_own_question() {
     assert_eq!(out_code(&bare), 1, "doctor never renders a policy verdict");
     assert_eq!(
         stdout(&bare),
-        "commit-gate failed commit-hook-missing commit-msg pre-commit\n",
+        "commit-gate failed commit-hook-missing commit-msg pre-commit pre-push\n",
         "the hook NAMES are the actionable subjects; the directory is a path and never emitted"
     );
 
     let hooks = dir.join(".git").join("hooks");
     std::fs::create_dir_all(&hooks).unwrap();
-    for name in ["pre-commit", "commit-msg"] {
+    for name in ["pre-commit", "commit-msg", "pre-push"] {
         let at = hooks.join(name);
         std::fs::write(&at, "#!/bin/sh\nexit 0\n").unwrap();
         #[cfg(unix)]
@@ -279,15 +279,14 @@ fn a_present_but_unrunnable_hook_reads_as_missing() {
     common::init_repo(&dir);
     let hooks = dir.join(".git").join("hooks");
     std::fs::create_dir_all(&hooks).unwrap();
-    std::fs::write(hooks.join("commit-msg"), "#!/bin/sh\nexit 0\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(
-            hooks.join("commit-msg"),
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
+    for runnable in ["commit-msg", "pre-push"] {
+        std::fs::write(hooks.join(runnable), "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(hooks.join(runnable), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
     }
     // Present, and mode 0644: git skips it silently.
     std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\nexit 0\n").unwrap();
@@ -665,7 +664,7 @@ fn wiring_gate_links_both_commit_hooks_to_the_checked_in_body() {
     }
 
     #[cfg(unix)]
-    for name in ["pre-commit", "commit-msg"] {
+    for name in ["pre-commit", "commit-msg", "pre-push"] {
         let target = std::fs::read_link(dir.join(".git").join("hooks").join(name))
             .expect("a symlink, never a copy");
         assert_eq!(
@@ -696,7 +695,7 @@ fn wiring_gate_refuses_a_body_the_repository_does_not_carry() {
         "{}",
         String::from_utf8_lossy(&refused.stderr)
     );
-    for name in ["pre-commit", "commit-msg"] {
+    for name in ["pre-commit", "commit-msg", "pre-push"] {
         assert!(
             std::fs::symlink_metadata(dir.join(".git").join("hooks").join(name)).is_err(),
             "`{name}` was not written"
