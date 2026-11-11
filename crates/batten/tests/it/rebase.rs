@@ -1415,7 +1415,10 @@ fn assert_flat(dir: &Path, trunk: gix::ObjectId, head: &str) {
     let repo = gix::open(dir).expect("reopen");
     let head: gix::ObjectId = head.parse().expect("head is a sha");
     assert_eq!(
-        repo.merge_base(trunk, head).expect("merge base").detach(),
+        repo.merge_base(trunk, head)
+            .expect("merge base")
+            .expect("a shared history")
+            .detach(),
         trunk,
         "the head descends from the trunk"
     );

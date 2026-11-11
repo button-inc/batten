@@ -505,11 +505,21 @@ pub fn placement(target: &Path, file: &str) -> Placement {
                 Placement::Root(canonical(&root))
             })
         }
-        Err(
-            gix::discover::upwards::Error::NoGitRepository { .. }
-            | gix::discover::upwards::Error::NoGitRepositoryWithinCeiling { .. }
-            | gix::discover::upwards::Error::NoGitRepositoryWithinFs { .. },
-        ) => Placement::Outside,
+        // gix 0.90 erases the operation's error into `gix::Error`; the variants
+        // are recovered by downcast, never by the broad `NotFound` class, which
+        // would also read an untrusted repository as no repository.
+        Err(err)
+            if matches!(
+                err.downcast_any_ref::<gix::discover::upwards::Error>(),
+                Some(
+                    gix::discover::upwards::Error::NoGitRepository { .. }
+                        | gix::discover::upwards::Error::NoGitRepositoryWithinCeiling { .. }
+                        | gix::discover::upwards::Error::NoGitRepositoryWithinFs { .. }
+                )
+            ) =>
+        {
+            Placement::Outside
+        }
         Err(_) => Placement::Unplaceable,
     }
 }
@@ -1787,7 +1797,9 @@ pub fn is_shallow(dir: &Path) -> Result<bool> {
     let Ok(repo) = open(dir) else {
         return Ok(true);
     };
-    Ok(repo.is_shallow())
+    // gix 0.90 answers a `Result`: an unreadable shallow file is the same
+    // conservative `true` as an unopenable repository.
+    Ok(repo.is_shallow().unwrap_or(true))
 }
 
 /// The commit messages on `base..HEAD`, as one blob (CLOUD-446).
@@ -4374,6 +4386,7 @@ pub fn merge_base(dir: &Path, base_ref: &str) -> Result<Option<String>> {
     Ok(repo
         .merge_base(base_id, head_id)
         .ok()
+        .flatten()
         .map(|found| found.detach().to_string()))
 }
 
@@ -4392,6 +4405,7 @@ pub fn merge_base_of(dir: &Path, one: &str, other: &str) -> Result<Option<String
     Ok(repo
         .merge_base(one.detach(), other.detach())
         .ok()
+        .flatten()
         .map(|found| found.detach().to_string()))
 }
 
@@ -4417,7 +4431,7 @@ pub fn is_ancestor(dir: &Path, ancestor: &str, descendant: &str) -> Result<Optio
     let ancestor = ancestor.detach();
     Ok(Some(
         repo.merge_base(ancestor, descendant.detach())
-            .is_ok_and(|found| found.detach() == ancestor),
+            .is_ok_and(|found| found.is_some_and(|found| found.detach() == ancestor)),
     ))
 }
 
@@ -4508,7 +4522,9 @@ fn cumulative_patch_id(dir: &Path, target: &str, head: &str) -> Result<Option<Pa
     let head_id = gix::ObjectId::from_hex(head.as_bytes()).map_err(|_| refused())?;
     let base = repo
         .merge_base(target_id, head_id)
-        .map_err(|_| UsageError::raise(format!("{target:?} and {head:?} share no history")))?;
+        .ok()
+        .flatten()
+        .ok_or_else(|| UsageError::raise(format!("{target:?} and {head:?} share no history")))?;
     let old_tree = repo
         .find_object(base.detach())
         .map_err(|_| refused())?
@@ -4989,7 +5005,7 @@ pub fn worktree_fact(dir: &Path) -> Result<WorktreeFact> {
     let repo = open(dir)?;
     let mut linked: Vec<WorktreeRegistration> = Vec::new();
     for proxy in repo.worktrees()? {
-        let id = proxy.id().to_string();
+        let id = proxy.id()?.to_string();
         // Read, decide, drop — the base never leaves this scope, which is what
         // `WorktreeRegistration`'s missing path field is enforcing.
         let Ok(base) = proxy.base() else { continue };
@@ -5201,7 +5217,7 @@ pub fn history_facts(
     // SHALLOW IS COULD-NOT-LOOK, decided once for the family rather than per
     // query: a shallow clone's missing history is missing for every pattern, and
     // answering some of them would be a partial result nothing marks as partial.
-    if repo.is_shallow() {
+    if repo.is_shallow().unwrap_or(true) {
         return Err(UsageError::raise(
             "the repository is shallow, so its history cannot be resolved".to_owned(),
         ));
@@ -5430,7 +5446,7 @@ fn path_transitions(
 /// Raises when `dir` is not a repository.
 pub fn path_was_deleted(dir: &Path, path: &str) -> Result<Option<bool>> {
     let repo = open(dir)?;
-    if repo.is_shallow() {
+    if repo.is_shallow().unwrap_or(true) {
         return Ok(None);
     }
     Ok(Some(
@@ -5452,7 +5468,7 @@ pub fn path_was_deleted(dir: &Path, path: &str) -> Result<Option<bool>> {
 /// could-not-look, never a short history.
 pub fn path_changes(dir: &Path, path: &str) -> Result<Vec<(String, String)>> {
     let repo = open(dir)?;
-    if repo.is_shallow() {
+    if repo.is_shallow().unwrap_or(true) {
         return Err(UsageError::raise(
             "the repository is shallow, so a path's history cannot be walked".to_owned(),
         ));
