@@ -221,6 +221,15 @@ pub struct Request {
     /// "I refined this story in my own session, on purpose" — the one way a
     /// human clears the sequence rules, and it says so in the receipt.
     pub bypass_sequence: bool,
+    /// The number of THIS branch's open pull request, as the forge answered it.
+    ///
+    /// A bundle's draft PR names every row it closes, and the forge's own
+    /// automation then moves each to In Progress, assigned, with that PR attached
+    /// — before the bundle has pulled any but the first (CLOUD-2697, measured on
+    /// #1276). Those rows are this branch's claim, not a competitor's, so a row
+    /// whose live PR is this one is judged past the competitor rules. `None` when
+    /// the forge was not asked or did not answer, which changes nothing.
+    pub own_pr: Option<String>,
 }
 
 /// What the gate decided.
@@ -285,33 +294,40 @@ pub fn judge(
     let mut verdict = Verdict::default();
     for issue in issues {
         let before = verdict.refusals.len();
+        // THIS BRANCH'S OWN CLAIM: its only live PR is this branch's open one.
+        // The column, the assignee and the PR are the forge recording that claim,
+        // so none of them is a competitor; the readiness and sequence rules below
+        // still decide.
+        let own = issue.live_pr.is_some() && issue.live_pr == request.own_pr;
 
-        if issue.status != ready_column {
-            verdict.refusals.push(Refusal {
-                id: issue.id.clone(),
-                // The token carries the consumer's word for the queue, so a
-                // reader is told which column their row failed to be in.
-                rule: format!("not-{} (in {})", ready_column.to_lowercase(), issue.status),
-                kind: Kind::Competitor,
-            });
-            continue;
-        }
-        if issue.assigned {
-            verdict.refusals.push(Refusal {
-                id: issue.id.clone(),
-                rule: "assigned".to_owned(),
-                kind: Kind::Competitor,
-            });
-        }
-        if let Some(number) = &issue.live_pr {
-            verdict.refusals.push(Refusal {
-                id: issue.id.clone(),
-                rule: format!(
-                    "has-pr ({number}) — if it is merged or closed, say so on the attachment \
-                     (\"state\": \"merged\") and re-run"
-                ),
-                kind: Kind::Competitor,
-            });
+        if !own {
+            if issue.status != ready_column {
+                verdict.refusals.push(Refusal {
+                    id: issue.id.clone(),
+                    // The token carries the consumer's word for the queue, so a
+                    // reader is told which column their row failed to be in.
+                    rule: format!("not-{} (in {})", ready_column.to_lowercase(), issue.status),
+                    kind: Kind::Competitor,
+                });
+                continue;
+            }
+            if issue.assigned {
+                verdict.refusals.push(Refusal {
+                    id: issue.id.clone(),
+                    rule: "assigned".to_owned(),
+                    kind: Kind::Competitor,
+                });
+            }
+            if let Some(number) = &issue.live_pr {
+                verdict.refusals.push(Refusal {
+                    id: issue.id.clone(),
+                    rule: format!(
+                        "has-pr ({number}) — if it is merged or closed, say so on the attachment \
+                         (\"state\": \"merged\") and re-run"
+                    ),
+                    kind: Kind::Competitor,
+                });
+            }
         }
 
         // Skipped wholesale under the bypass: both rules below are about the
@@ -1125,6 +1141,7 @@ mod tests {
         let takeover = Request {
             takeover: true,
             bypass_sequence: false,
+            own_pr: None,
         };
         assert!(
             !verdict.pullable(&takeover),
@@ -1161,6 +1178,49 @@ mod tests {
         };
         assert_eq!(verdict.refusals.len(), 1);
         assert!(verdict.refusals[0].rule.starts_with("not-todo"));
+    }
+
+    /// CLOUD-2697: a bundle's draft PR moves every row it closes to In Progress,
+    /// assigned, with that PR attached. Fails by: that row refused as held by
+    /// another when the PR is this branch's own, or a DIFFERENT PR let through.
+    #[test]
+    fn a_row_held_only_by_this_branchs_own_pr_is_its_claim() {
+        let held = Issue {
+            assigned: true,
+            live_pr: Some(String::from("1276")),
+            ..issue("CLOUD-1", "In Progress")
+        };
+        let grammar = crate::ready::Grammar::committed();
+        let judged = |own: Option<&str>| {
+            let request = Request {
+                own_pr: own.map(str::to_owned),
+                ..Request::default()
+            };
+            judge(
+                &grammar,
+                &test_columns(),
+                std::slice::from_ref(&held),
+                &request,
+                Path::new("."),
+                None,
+            )
+        };
+        // Its own: past every competitor rule, so the body is what decides — and
+        // this one carries none, which is the readiness rule asking for it.
+        assert!(
+            judged(Some("1276")).is_err(),
+            "this branch's own row reaches the readiness rule"
+        );
+        // Another PR is still a competitor, column first.
+        let Ok(other) = judged(Some("1300")) else {
+            panic!("a competitor needs no body")
+        };
+        assert!(other.refusals[0].rule.starts_with("not-todo"));
+        // And no answer from the forge changes nothing.
+        let Ok(unknown) = judged(None) else {
+            panic!("a competitor needs no body")
+        };
+        assert!(unknown.refusals[0].rule.starts_with("not-todo"));
     }
 
     #[test]

@@ -8235,6 +8235,7 @@ fn run_claim(
             let request = claim::Request {
                 takeover,
                 bypass_sequence,
+                own_pr: None,
             };
             run_claim_check(
                 &board_root(),
@@ -8596,6 +8597,19 @@ fn run_claim_check(
     }
 
     let issues = claim_payloads(repo, issue)?;
+    // THIS BRANCH'S PR, ASKED ONLY WHEN A ROW CARRIES ONE (CLOUD-2697): a row the
+    // bundle's own draft PR already moved is this branch's claim. No row with a
+    // live PR, no forge call; no answer, the competitor rules decide as before.
+    let mut request = request.clone();
+    if request.own_pr.is_none()
+        && issues.iter().any(|issue| issue.live_pr.is_some())
+        && let Ok(Some(branch)) = git::current_branch(repo)
+        && let fast_forward::Lookup::Found(number) =
+            fast_forward::look_up_pull_request(&repo_or_placeholder(repo), &branch)
+    {
+        request.own_pr = Some(number);
+    }
+    let request = &request;
     let verdict = claim::judge(
         grammar,
         columns,
