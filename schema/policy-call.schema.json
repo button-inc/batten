@@ -82,6 +82,13 @@
             "null"
           ]
         },
+        "host": {
+          "enum": [
+            "disposable",
+            "machine"
+          ],
+          "type": "string"
+        },
         "operation": {
           "type": "string"
         },

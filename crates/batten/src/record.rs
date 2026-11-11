@@ -1818,8 +1818,10 @@ fn macos_link_reading(
     // THE WALK STARTS AT THE WORKSPACE MEMBERS, because the question is
     // about everything this tree builds — unlike `evaluator-closure`,
     // whose question is about one package's sub-closure. That is the
-    // only difference between the two callers of this graph.
-    let built = graph.reachable(graph.member_roots());
+    // only difference between the two callers of this graph. LINKED, not merely
+    // reachable: a proc-macro or build-only subgraph runs on the host and links
+    // nothing into the macOS artifact.
+    let built = graph.linked(graph.member_roots());
     let mut lines = format!("scanned {}\n", built.len());
     for (name, id) in graph.named_in_order(&built) {
         match graph.links_of(id) {

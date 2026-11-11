@@ -142,16 +142,24 @@ use serde::{Deserialize, Serialize};
 /// CLOUD-61).
 ///
 /// Declared weakest-first: derived [`Ord`] is the severity rank.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuleSeverity {
     /// The rule is configured off: a match is not a finding at all.
     Allow,
-    /// A match is reported but does not by itself fail the run (it can be
-    /// promoted by `--fail-on-warning`, CLOUD-49).
-    Warn,
+    /// A TRIAL (CLOUD-2707): a match is RECORDED in the findings store and
+    /// never spoken, and never fails a run, `--fail-on-warning` included. The
+    /// row's record is how an operator decides whether to promote it.
+    ///
+    /// **A DISPOSITION AT `Advise`'S RANK, NOT A NEW RANK**, as `Ask` is at
+    /// `Deny`'s: how bad a finding is does not change with who hears it, so it
+    /// maps to `advise`'s row in [`TABLE`].
+    Record,
+    /// A match is SPOKEN as advice and does not by itself fail the run (it can
+    /// be promoted by `--fail-on-warning`, CLOUD-49). Spelled `warn` until
+    /// CLOUD-2707, which still parses as this.
+    #[serde(alias = "warn")]
+    Advise,
     /// A match blocks the call and hands the decision to a human (CLOUD-340).
     ///
     /// **A DISPOSITION AT `Deny`'S RANK, NOT A FOURTH RANK.** It blocks exactly
@@ -168,6 +176,30 @@ pub enum RuleSeverity {
     Deny,
 }
 
+/// A string enumerating every token the loader accepts (CLOUD-2707): each
+/// [`RuleSeverity::ALL`] spelling, plus `warn`, the pre-split spelling of
+/// `advise` that `#[serde(alias)]` still reads. Hand-written because a derived
+/// schema does not render an alias, and a schema rejecting `warn` would refuse
+/// every config written for an engine older than the split.
+impl JsonSchema for RuleSeverity {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("RuleSeverity")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut tokens: Vec<&'static str> = RuleSeverity::ALL
+            .iter()
+            .map(|severity| severity.as_str())
+            .collect();
+        tokens.push("warn");
+        schemars::json_schema!({
+            "description": "Config-time rule severity: `allow` (off), `record` (a trial, recorded and never spoken), `advise` (spoken, never refusing; `warn` is its pre-CLOUD-2707 spelling), `ask` (escalates to a human), `deny` (refuses).",
+            "type": "string",
+            "enum": tokens,
+        })
+    }
+}
+
 impl RuleSeverity {
     /// The word a finding of this severity is printed under (CLOUD-2145): a
     /// match that blocks is `deny`, one reported is `warn`, an allowed one a
@@ -176,7 +208,7 @@ impl RuleSeverity {
     pub const fn finding_severity(self) -> crate::refusal::Severity {
         match self {
             RuleSeverity::Deny | RuleSeverity::Ask => crate::refusal::Severity::Deny,
-            RuleSeverity::Warn => crate::refusal::Severity::Warn,
+            RuleSeverity::Advise | RuleSeverity::Record => crate::refusal::Severity::Warn,
             RuleSeverity::Allow => crate::refusal::Severity::Note,
         }
     }
@@ -187,7 +219,8 @@ impl RuleSeverity {
     /// [`tests::table_covers_every_variant_exactly_once`] fails.
     pub const ALL: &'static [RuleSeverity] = &[
         RuleSeverity::Allow,
-        RuleSeverity::Warn,
+        RuleSeverity::Record,
+        RuleSeverity::Advise,
         RuleSeverity::Ask,
         RuleSeverity::Deny,
     ];
@@ -207,15 +240,19 @@ impl RuleSeverity {
     /// ORDERED axis: what the table maps, and what a bijection may be asserted
     /// over. Reaching for `ALL` where a rank is meant is what the three tests
     /// below caught when `Ask` landed (CLOUD-340).
-    pub const RANKS: &'static [RuleSeverity] =
-        &[RuleSeverity::Allow, RuleSeverity::Warn, RuleSeverity::Deny];
+    pub const RANKS: &'static [RuleSeverity] = &[
+        RuleSeverity::Allow,
+        RuleSeverity::Advise,
+        RuleSeverity::Deny,
+    ];
 
     /// The stable lowercase token used in config and machine output.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             RuleSeverity::Allow => "allow",
-            RuleSeverity::Warn => "warn",
+            RuleSeverity::Record => "record",
+            RuleSeverity::Advise => "advise",
             RuleSeverity::Ask => "ask",
             RuleSeverity::Deny => "deny",
         }
@@ -321,7 +358,7 @@ pub const TABLE: [Mapping; 3] = [
         report: ReportLevel::Message,
     },
     Mapping {
-        rule: RuleSeverity::Warn,
+        rule: RuleSeverity::Advise,
         tier: AdvisoryTier::Caution,
         report: ReportLevel::Warn,
     },
@@ -342,7 +379,9 @@ pub const TABLE: [Mapping; 3] = [
 pub const fn row_for_rule(rule: RuleSeverity) -> Mapping {
     match rule {
         RuleSeverity::Allow => TABLE[0],
-        RuleSeverity::Warn => TABLE[1],
+        // `Record` SHARES `Advise`'S ROW for `Ask`'s reason one rank down: a
+        // trial's finding is as bad as advice; only who hears it differs.
+        RuleSeverity::Record | RuleSeverity::Advise => TABLE[1],
         // `Ask` SHARES `Deny`'S ROW, which is what makes the map total without
         // making it injective. An escalation blocks, so its latency tier and its
         // report level are a refusal's; only the channel differs, and a channel
@@ -397,10 +436,37 @@ pub const fn promote(report: ReportLevel, fail_on_warning: bool) -> ReportLevel 
     }
 }
 
+/// A rule grade as a report level, `--fail-on-warning` applied: the one place a
+/// grade becomes "does this fail" (CLOUD-2707).
+#[must_use]
+pub const fn report_for(rule: RuleSeverity, fail_on_warning: bool) -> ReportLevel {
+    // THE ONE PLACE A RULE GRADE BECOMES A REPORT LEVEL (CLOUD-2707). `record` is
+    // a trial: it reports at its rank and is never promoted, so no flag turns a
+    // row still being measured into a failure.
+    match rule {
+        RuleSeverity::Record => row_for_rule(rule).report,
+        RuleSeverity::Allow | RuleSeverity::Advise | RuleSeverity::Ask | RuleSeverity::Deny => {
+            promote(row_for_rule(rule).report, fail_on_warning)
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// CLOUD-2707: a `record` trial reports at `advise`'s rank and is never
+    /// promoted, while `advise` is; so no flag fails a run on a row still being
+    /// measured. Fails by: `report_for` promoting `record`, or not `advise`.
+    #[test]
+    fn a_trial_is_never_promoted_and_advice_is() {
+        assert_eq!(report_for(RuleSeverity::Record, true), ReportLevel::Warn);
+        assert_eq!(report_for(RuleSeverity::Record, false), ReportLevel::Warn);
+        assert_eq!(report_for(RuleSeverity::Advise, true), ReportLevel::Fail);
+        assert_eq!(report_for(RuleSeverity::Advise, false), ReportLevel::Warn);
+        assert_eq!(report_for(RuleSeverity::Deny, false), ReportLevel::Fail);
+    }
 
     #[test]
     fn table_covers_every_variant_exactly_once() {
@@ -495,12 +561,17 @@ mod tests {
         // without a decision fails here as well as at the closed enum.
         for &severity in RuleSeverity::ALL {
             assert!(
-                RuleSeverity::RANKS.contains(&severity) || severity == RuleSeverity::Ask,
-                "{} is neither a rank nor the escalation",
+                RuleSeverity::RANKS.contains(&severity)
+                    || matches!(severity, RuleSeverity::Ask | RuleSeverity::Record),
+                "{} is neither a rank, the escalation, nor the trial",
                 severity.as_str()
             );
         }
-        assert_eq!(RuleSeverity::ALL.len(), RuleSeverity::RANKS.len() + 1);
+        assert_eq!(RuleSeverity::ALL.len(), RuleSeverity::RANKS.len() + 2);
+        assert_eq!(
+            row_for_rule(RuleSeverity::Record).rule,
+            RuleSeverity::Advise
+        );
 
         // It shares `Deny`'s row ENTIRELY — the same latency tier and the same
         // report level, not merely the same blocking answer. A row of its own
@@ -535,7 +606,7 @@ mod tests {
         // compatibility surface, not an implementation detail (§6).
         assert_eq!(
             TABLE.map(|row| row.rule.as_str()),
-            ["allow", "warn", "deny"]
+            ["allow", "advise", "deny"]
         );
         assert_eq!(
             TABLE.map(|row| row.tier.as_str()),
@@ -576,17 +647,32 @@ mod tests {
 
     #[test]
     fn severity_round_trips_through_toml() {
-        let text = "rule = \"warn\"\ntier = \"caution\"\nreport = \"warn\"\n";
+        let text = "rule = \"advise\"\ntier = \"caution\"\nreport = \"warn\"\n";
         let doc: Doc = toml::from_str(text).unwrap();
         assert_eq!(
             doc,
             Doc {
-                rule: RuleSeverity::Warn,
+                rule: RuleSeverity::Advise,
                 tier: AdvisoryTier::Caution,
                 report: ReportLevel::Warn,
             }
         );
         assert_eq!(toml::to_string(&doc).unwrap(), text);
+    }
+
+    /// CLOUD-2707: `warn`, the spelling before the split, still parses as
+    /// `advise`, so a config written for an older engine keeps its meaning.
+    #[test]
+    fn the_old_warn_spelling_parses_as_advise() {
+        let doc: Doc =
+            toml::from_str("rule = \"warn\"\ntier = \"caution\"\nreport = \"warn\"\n").unwrap();
+        assert_eq!(doc.rule, RuleSeverity::Advise);
+        assert_eq!(
+            toml::from_str::<Doc>("rule = \"record\"\ntier = \"caution\"\nreport = \"warn\"\n")
+                .unwrap()
+                .rule,
+            RuleSeverity::Record
+        );
     }
 
     #[test]
@@ -595,7 +681,10 @@ mod tests {
         // and near-share `warning`, and those are different ranks: mapping by
         // name silently mis-rates a finding by one whole rank in both
         // directions. Rank-match, never name-match.
-        assert_eq!(row_for_rule(RuleSeverity::Warn).tier, AdvisoryTier::Caution);
+        assert_eq!(
+            row_for_rule(RuleSeverity::Advise).tier,
+            AdvisoryTier::Caution
+        );
         assert_eq!(row_for_tier(AdvisoryTier::Warning).rule, RuleSeverity::Deny);
 
         // The same trap on the reporting axis: report `warn` is the middle
@@ -647,7 +736,7 @@ mod tests {
         // rank a committed `deny` rule already produces, which is what makes the
         // exit code the same verdict rather than a parallel one (§7).
         assert_eq!(
-            promote(row_for_rule(RuleSeverity::Warn).report, true),
+            promote(row_for_rule(RuleSeverity::Advise).report, true),
             row_for_rule(RuleSeverity::Deny).report
         );
         // …and the low rank is untouched by the setting, so an `allow` rule's
@@ -675,7 +764,7 @@ mod tests {
         // rank, which is why it is not a collision.
         assert_eq!(
             serde_json::from_str::<RuleSeverity>("\"warn\"").unwrap(),
-            RuleSeverity::Warn
+            RuleSeverity::Advise
         );
         assert_eq!(
             serde_json::from_str::<ReportLevel>("\"warn\"").unwrap(),

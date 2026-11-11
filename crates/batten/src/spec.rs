@@ -590,6 +590,10 @@ mod tests {
                 // The adopted runner's drift gate (CLOUD-947): a `read`, where its
                 // generator sibling writes the artifact and so is not here.
                 "hk drift".to_owned(),
+                // `land placed` (CLOUD-2707) compares the tree with HEAD and HEAD with
+                // the remote-tracking refs, writes nothing and always exits 0: it is
+                // advice on stderr. Sorted before `landed`, since a space precedes `e`.
+                "land placed".to_owned(),
                 // The board sweep (CLOUD-186, CLOUD-1127). It reads a payload on
                 // stdin and three caller-supplied evidence files and starts no
                 // program — the `claimed-keys` spawn its shell predecessor made
@@ -1042,6 +1046,7 @@ mod tests {
             // fetch the lap already makes. `write` for that fetch, and so absent
             // from the read-only allowlist.
             "land linear".to_owned(),
+            "land placed".to_owned(),
             "land push".to_owned(),
             "land replay".to_owned(),
             "land verify".to_owned(),

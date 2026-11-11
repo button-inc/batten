@@ -8577,6 +8577,23 @@ fn print_claim_refusals(
     Ok(())
 }
 
+/// The request with this branch's own pull request filled in (CLOUD-2697): a
+/// row the bundle's own draft PR already moved is this branch's claim. Asked
+/// only when a row carries a live PR, so no such row costs no forge call; no
+/// answer leaves the competitor rules to decide as before.
+fn with_own_pr(repo: &Path, request: &claim::Request, issues: &[claim::Issue]) -> claim::Request {
+    let mut request = request.clone();
+    if request.own_pr.is_none()
+        && issues.iter().any(|issue| issue.live_pr.is_some())
+        && let Ok(Some(branch)) = git::current_branch(repo)
+        && let fast_forward::Lookup::Found(number) =
+            fast_forward::look_up_pull_request(&repo_or_placeholder(repo), &branch)
+    {
+        request.own_pr = Some(number);
+    }
+    request
+}
+
 fn run_claim_check(
     repo: &Path,
     grammar: &ready::Grammar,
@@ -8604,19 +8621,7 @@ fn run_claim_check(
     }
 
     let issues = claim_payloads(repo, issue)?;
-    // THIS BRANCH'S PR, ASKED ONLY WHEN A ROW CARRIES ONE (CLOUD-2697): a row the
-    // bundle's own draft PR already moved is this branch's claim. No row with a
-    // live PR, no forge call; no answer, the competitor rules decide as before.
-    let mut request = request.clone();
-    if request.own_pr.is_none()
-        && issues.iter().any(|issue| issue.live_pr.is_some())
-        && let Ok(Some(branch)) = git::current_branch(repo)
-        && let fast_forward::Lookup::Found(number) =
-            fast_forward::look_up_pull_request(&repo_or_placeholder(repo), &branch)
-    {
-        request.own_pr = Some(number);
-    }
-    let request = &request;
+    let request = &with_own_pr(repo, request, &issues);
     let verdict = claim::judge(
         grammar,
         columns,
@@ -11821,6 +11826,7 @@ fn run_land(
             run_land_verify(root, &standing, &branch, None, out, err)
         }
         cli::LandCommand::FastForward => run_land_fast_forward(root, &branch, out, err),
+        cli::LandCommand::Placed => run_land_placed(root, err),
         cli::LandCommand::Replay {
             reference,
             resolve,
@@ -14732,6 +14738,26 @@ fn run_land_verify(
     run_land_verify_seen(root, bet, branch, reference, None, out, err).map(|(code, _)| code)
 }
 
+/// `land placed` (CLOUD-2707): ADVICE, never a refusal. Verifying without
+/// landing is legitimate, so the gate always runs; on a committed, pushed head
+/// outside the lap it says the one thing the run does not show — that the lap
+/// answers this head from the receipt this run writes (CLOUD-1891), so `land`
+/// is the next step and costs no second gate unless the trunk moves.
+fn run_land_placed(root: &Path, err: &mut dyn Write) -> Result<ExitCode> {
+    let under_lap = std::env::var_os(land::LAP_GATE).is_some();
+    let uncommitted = git::uncommitted(root).unwrap_or(1);
+    let placed = land::placement(under_lap, uncommitted, git::head_on_a_remote(root));
+    if placed == land::Placement::BeforeLand {
+        let head = git::head_commit(root).unwrap_or_default();
+        let short = head.get(..10).unwrap_or(&head);
+        writeln!(
+            err,
+            "land placed: {short} is committed and pushed; `mise run land` (backgrounded) reuses this run's receipt and runs no second gate unless the trunk moves"
+        )?;
+    }
+    Ok(ExitCode::Success)
+}
+
 /// The self-stall terms for this verify (CLOUD-2369), or `None` where the bound
 /// is switched off or there is no task to watch.
 ///
@@ -14824,6 +14850,9 @@ fn run_land_verify_seen(
         .published()
         .map(|base| vec![(speculation::PUBLISHED_AS.to_owned(), base.to_owned())])
         .unwrap_or_default();
+    // THE LAP'S OWN GATE IS NEVER ITS OWN DUPLICATE (CLOUD-2707): `land placed`,
+    // the gate's first step, reads this and lets the run through.
+    published.push((land::LAP_GATE.to_owned(), "1".to_owned()));
     // THE GATE'S STEPS ANNOUNCE UNDER THIS TASK (CLOUD-2369): `step::announce`
     // reads `$BATTEN_TASK_PID`, which nothing set, so a verify's steps never
     // moved the registry the stall arm reads.
@@ -20013,7 +20042,16 @@ fn dispatch_envelope(
     // being read. A turn already handed a handler's advice has been told
     // something more specific, so the module's line is appended only to a silent
     // buffer.
-    let block = fill_turn_advice(&policy, &envelope, &facts, overrides, raw, &mut advice);
+    let mut found = Vec::new();
+    let block = fill_turn_advice(
+        &policy,
+        &envelope,
+        &facts,
+        overrides,
+        raw,
+        &mut advice,
+        &mut found,
+    );
     // The one Stop that can block (CLOUD-2441): see `unlanded_stop_block`.
     if refused_stop(harness, block, &mut advice, err)? {
         return Ok(HookDispatch::undenied(ExitCode::Violation));
@@ -20076,6 +20114,12 @@ fn dispatch_envelope(
     // longer happened.
     let decision = settle_repair(&policy, &envelope, decision)
         .map_refusal(|refusal| refusal.read_through(&policy.redirects));
+    // THE NONBLOCKING FINDINGS ARE RECORDED ONLY FOR A CALL THAT RUNS (CLOUD-2707):
+    // a refused or escalated call happens to nothing, so a finding about it would
+    // record a call that never ran — the same reason a refusal outranks advice.
+    if !matches!(decision, hook::Decision::Deny(_) | hook::Decision::Ask(_)) {
+        record_findings(&found, &envelope, err);
+    }
     let ceiling = policy.advisory.as_ref();
     // THE HOST'S WORKTREE REQUEST (CLOUD-2581): after the verdict, before either
     // writer of `out`, because WorktreeCreate's stdout is the new path and
@@ -21345,6 +21389,7 @@ fn fill_turn_advice(
     overrides: &Overrides,
     raw: &str,
     advice: &mut Vec<advisory::Advice>,
+    found: &mut Vec<hook::Graded>,
 ) -> Option<refusal::Refusal> {
     let mut block = None;
     // EVERY APPLICABLE STOP RUNG SPEAKS, IN RANK ORDER (CLOUD-2078). "At most
@@ -21361,26 +21406,99 @@ fn fill_turn_advice(
     for nudge in stop_nudges(overrides, envelope, raw, &mut block) {
         push_finding(advice, severity::AdvisoryTier::Caution, nudge);
     }
-    // THE WRITE-TIME SIGNAL (CLOUD-1131), and it is the delivery half of the
-    // demotion `hook::policy_rules` performs. A `mediated_call` module enabled at
-    // `severity = "warn"` no longer denies; without this line its violation would
-    // reach nobody at all, which is a worse answer than the deny it replaced —
-    // an advisory nothing surfaces is a sensor with no reader.
-    //
-    // NOT FOLDED INTO THE STOP LADDER ABOVE. That one is the end-of-turn
-    // channel; this one rides a single tool call the agent is making right now,
-    // about the call in hand rather than about the turn. `policy_advice` is empty at `Stop` (the
-    // block above owns that moment), and returns every non-blocking module's
-    // line on a call (CLOUD-1470); the key test drops a finding two bundles
-    // raised identically (CLOUD-2075).
-    for refusal in hook::policy_advice(policy, envelope, facts) {
-        push_finding(
-            advice,
-            severity::AdvisoryTier::Warning,
-            refusal.read_through(&policy.redirects),
-        );
+    // EVERY NONBLOCKING FINDING IS RECORDED, AND `advise` IS ALSO SPOKEN
+    // (CLOUD-2707). The findings store is where `check` and `doctor` read what a
+    // row has been doing, so no grade bypasses it. `advise` is the write-time
+    // signal CLOUD-1131 built, spoken on the call the agent is making and never
+    // refusing it; `record` is a TRIAL, never spoken, so a row still being
+    // measured cannot teach the model that Batten's words are optional. A finding
+    // that cannot be written is said on the operator's stream — never swallowed.
+    *found = hook::nonblocking_findings(policy, envelope, facts);
+    // At Stop the ladder above already spoke (`stop_advice`), so these are only
+    // recorded there.
+    let speaks = envelope.event != hook::Event::Stop;
+    for (severity, refusal) in found.iter() {
+        if speaks && *severity == severity::RuleSeverity::Advise {
+            push_finding(
+                advice,
+                severity::AdvisoryTier::Warning,
+                refusal.clone().read_through(&policy.redirects),
+            );
+        }
     }
     block
+}
+
+/// Write every nonblocking finding of this call to the findings store, each at
+/// its grade (CLOUD-2707).
+///
+/// Never fails the call and never speaks to the model. A finding that cannot be
+/// written is NOT swallowed: one line on the operator's stream names the rule
+/// whose finding lost its record and why. Keyed by rule and pointer, so a row
+/// firing again on the same call shape counts an occurrence rather than minting
+/// a second finding.
+fn record_findings(found: &[hook::Graded], envelope: &hook::Envelope, err: &mut dyn Write) {
+    if found.is_empty() {
+        return;
+    }
+    let lost = |err: &mut dyn Write, rule: &str, why: &str| {
+        let _ = writeln!(
+            err,
+            "batten: `{rule}` fired and its finding could not be recorded: {why}"
+        );
+    };
+    let root = hook_authority_root();
+    let Some((dir, head)) = store::resolve(root)
+        .ok()
+        .and_then(|opened| store::bound_dir(&opened))
+        .zip(git::head_commit(root).ok())
+    else {
+        for (_, refusal) in found {
+            lost(
+                err,
+                refusal.rule(),
+                "the findings store or HEAD could not be resolved",
+            );
+        }
+        return;
+    };
+    for (grade, refusal) in found {
+        let pointer = refusal.render_finding(refusal::Arm::Pointer);
+        let context = findings::Context::new(format!("{}/{}", grade.as_str(), envelope.raw_tool));
+        let next = match grade {
+            severity::RuleSeverity::Record => {
+                "a `record` row is on trial: promote it to `advise` or `deny` once its record shows it decides correctly, or retire it"
+            }
+            severity::RuleSeverity::Allow
+            | severity::RuleSeverity::Advise
+            | severity::RuleSeverity::Ask
+            | severity::RuleSeverity::Deny => {
+                "advice spoken on the call; its record shows how often the row fires and whether it is heeded"
+            }
+        };
+        let advisory = findings::Advisory {
+            rule: refusal.rule().to_owned(),
+            identity: identity::StoredIdentity::new(
+                identity::FindingKind::Sequence,
+                identity::sequence_fingerprint(refusal.rule(), &pointer, None),
+            ),
+            tier: severity::row_for_rule(*grade).tier,
+            path: envelope.raw_tool.clone(),
+            line: None,
+            check: findings::Check::Reevaluate,
+            remediation: findings::Remediation::NoFix(next.to_owned()),
+        };
+        if let Err(error) = findings::record_advisory(
+            &dir,
+            &context,
+            &head,
+            None,
+            &advisory,
+            findings::FINDINGS_SCHEMA,
+        ) {
+            lost(err, refusal.rule(), &error.to_string());
+        }
+    }
 }
 
 /// Push a finding unless one with the same POINTER is already in the emission
@@ -29427,10 +29545,7 @@ fn run_rules(
                     path: &finding.path,
                     line: finding.line,
                     severity: finding.severity,
-                    report: severity::promote(
-                        severity::row_for_rule(finding.severity).report,
-                        config.fail_on_warning,
-                    ),
+                    report: severity::report_for(finding.severity, config.fail_on_warning),
                     identity: &finding.identity,
                 })
                 .collect(),

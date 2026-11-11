@@ -473,7 +473,9 @@ fn an_implementer_subagent_is_not_preapproved_in_plan_mode() {
     assert_plan_refused(&implementer);
 }
 
-/// A worktree spawn stays refused in auto mode: the deny is composed first.
+/// A worktree spawn stays refused in auto mode on a disposable host: the deny
+/// is composed first. The host is declared, since CLOUD-2709 refuses a worktree
+/// only where the harness says the machine is disposable.
 #[test]
 fn a_worktree_spawn_is_refused_in_auto() {
     let worktree = envelope(
@@ -481,7 +483,18 @@ fn a_worktree_spawn_is_refused_in_auto() {
         "Agent",
         &serde_json::json!({ "subagent_type": "general-purpose", "isolation": "worktree", "prompt": "x" }),
     );
-    let (decision, reason) = verdict(&worktree).unwrap_or_default();
+    let mut disposable = common::batten();
+    disposable.env("CLAUDE_CODE_REMOTE", "true");
+    let (decision, reason) = documents_from(&mut disposable, &worktree)
+        .iter()
+        .find_map(|document| {
+            let inner = document.get("hookSpecificOutput")?;
+            Some((
+                inner.get("permissionDecision")?.as_str()?.to_owned(),
+                inner.get("permissionDecisionReason")?.as_str()?.to_owned(),
+            ))
+        })
+        .unwrap_or_default();
     assert_eq!(decision, "deny", "{reason}");
     assert!(reason.contains("spawn place wrong"), "{reason}");
 }

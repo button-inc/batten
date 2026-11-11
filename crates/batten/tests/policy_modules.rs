@@ -946,7 +946,7 @@ fn a_predicate_severity_naming_an_unpublished_id_is_refused_at_load() {
     let path = module_file(&root, "two.rego", TWO_PREDICATES);
     let mut rule = row("policy-two", &path);
     rule.predicate_severity = Some(
-        [("no-such-predicate".to_owned(), RuleSeverity::Warn)]
+        [("no-such-predicate".to_owned(), RuleSeverity::Advise)]
             .into_iter()
             .collect(),
     );
@@ -976,7 +976,7 @@ fn severity_resolves_per_predicate_and_falls_back_to_the_row() {
     let path = module_file(&root, "two.rego", TWO_PREDICATES);
     let mut rule = row("policy-two", &path);
     rule.predicate_severity = Some(
-        [("no-stray-artifact".to_owned(), RuleSeverity::Warn)]
+        [("no-stray-artifact".to_owned(), RuleSeverity::Advise)]
             .into_iter()
             .collect(),
     );
@@ -991,7 +991,7 @@ fn severity_resolves_per_predicate_and_falls_back_to_the_row() {
 
     assert_eq!(
         rule.severity_for(Some("no-stray-artifact")),
-        RuleSeverity::Warn,
+        RuleSeverity::Advise,
         "the predicate the table names carries its own severity"
     );
     assert_eq!(

@@ -834,6 +834,11 @@ pub enum LandCommand {
     /// A flag would put a second spelling of one name on the surface, and the
     /// two would drift.
     Verify,
+    /// Advise a gate run outside the lap on a committed, pushed head that `land`
+    /// is the next step and reuses this run's receipt (CLOUD-2707). Never
+    /// refuses: verifying without landing is legitimate. A consumer's gate names
+    /// this as an early step.
+    Placed,
     /// Ask the fast-forward bot to land this head, and read the answer keyed to
     /// that request.
     ///
@@ -3045,6 +3050,7 @@ fn land_of(matches: &ArgMatches) -> Option<LandCommand> {
         }),
         ("push", _) => Some(LandCommand::Push),
         ("verify", _) => Some(LandCommand::Verify),
+        ("placed", _) => Some(LandCommand::Placed),
         ("fast-forward", _) => Some(LandCommand::FastForward),
         ("lap", matches) => Some(LandCommand::Lap {
             reference: reference_of(matches),

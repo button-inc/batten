@@ -4647,7 +4647,7 @@ depends = ["hooks", "deny"]
 [tasks.verify]
 #MUTANT-SUITE crates/batten/tests/it/verify_unprovisioned.rs
 #MUTANT hook-repair-dropped|s@^  "cargo run --quiet -p batten -- wiring reclaim -y",$@@|the_hook_surface_is_reclaimed_before_the_gate_set_judges_it
-description = "Full local pre-flight — run this before marking any draft PR ready"
+description = "The full local gate each `land` lap runs — iterate a draft with it; on a pushed head run `mise run land`"
 # A SEQUENCE OF ARGV STEPS, AND NO LONGER A MAPPER (CLOUD-843, CLOUD-1990). mise
 # runs a `run` array in order, stops at the first step that fails, and exits with
 # THAT step's code — measured, the same verbatim propagation CLOUD-407 recorded
@@ -4674,6 +4674,12 @@ description = "Full local pre-flight — run this before marking any draft PR re
 # 2. THE TOOLCHAIN (CLOUD-1683), after the reclaim and before anything that runs
 #    `cargo run`, so an unprovisioned tree is refused as that and not as a missing
 #    claim receipt.
+# 2a. THE PLACEMENT (CLOUD-2707), right after the toolchain because it is the
+#    first `cargo run`. ADVICE, NEVER A REFUSAL: verifying without landing is
+#    legitimate. On a committed, pushed head outside the lap it says on stderr
+#    that `land` is the next step and answers this head from the receipt this
+#    run writes, so no second gate runs unless the trunk moves. The lap's own
+#    gate (`BATTEN_LAND_GATE`) and a dirty or unpushed draft hear nothing.
 # 3. THE CLAIM RECEIPT (CLOUD-431, CLOUD-693, CLOUD-1295). The hook row is the
 #    fast half and can be unloaded; this is the half every landing path runs. ANY
 #    ONE of the three kinds satisfies it — `claim.<branch>` from a refined issue,
@@ -4708,6 +4714,7 @@ description = "Full local pre-flight — run this before marking any draft PR re
 # early exit could not be spelled as a step of a sequence that runs every step.
 run = [
   "mise run toolchain-check",
+  "cargo run --quiet -p batten -- land placed",
   "cargo run --quiet -p batten -- receipt status claim --or bot --or carry --key branch",
   "mise run linear-check",
   "cargo run --quiet -p batten -- wiring reclaim -y",

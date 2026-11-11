@@ -7652,6 +7652,19 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[],
     },
+    // `read`: it compares the working tree with HEAD and HEAD with the
+    // remote-tracking refs, writes nothing, and always exits `0` — it is advice
+    // on stderr, never a refusal, because verifying without landing is
+    // legitimate (CLOUD-2707).
+    CommandDecl {
+        path: "land placed",
+        id: "land.placed",
+        about: "Advise a gate run on a committed, pushed head that land is next and reuses its receipt",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Read,
+        flags: &[],
+    },
     // `write`, and the write is REMOTE — a comment on somebody else's pull
     // request — which puts it beside `land push` rather than beside the record
     // writers above. It is not `destructive`: a comment adds, and the merge it

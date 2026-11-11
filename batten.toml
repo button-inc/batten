@@ -875,7 +875,26 @@ severity = "deny"
 pattern = "gh pr ready"
 checks = ["verify", "linear-check"]
 key = "head"
-reason = "Run `mise run verify` (backgrounded), then `mise run linear-check`, then retry, or just `mise run land`, which drives the whole loop. Readying is what starts CI, so prove it green first."
+reason = "Run `mise run land` (backgrounded): each lap runs `verify` and `linear-check`, reusing a `verify` receipt already on this head, and readies the head itself. Readying is what starts CI, so it waits for a green head."
+
+# CLOUD-2707, half one: A PUSHED HEAD NO `verify` EVER SAW. Measured on PR #1276:
+# 42 row commits pushed over hours, each checked with clippy and its own tests
+# only, so the first full gate was `land`'s first lap and its sixteen findings,
+# a failing test and a Windows break all landed on the bundle's last hour instead
+# of on the row that caused each. AGENTS.md says push the imperfect draft, so
+# this is a WARN, never a deny: the push proceeds and each unverified push is
+# RECORDED in the findings store (never spoken: the model hears Batten only on
+# a refusal), so `check` and `doctor` show how often a branch was pushed past
+# the gate, and the row can be promoted once its record says it decides well.
+[[rule]]
+id = "branch run missing"
+kind = "receipt"
+scope = "mediated_call"
+severity = "warn"
+pattern = "git push"
+checks = ["verify"]
+key = "head"
+reason = "This head has no `verify` receipt. Run `mise run land` (backgrounded) after the push: each lap runs `verify`, so a finding is named at this row and not at the bundle's end."
 
 # CLOUD-859. The read-the-review gate, and this repository's FIRST `[[fact]]`
 # row — the agent-sourced channel has had no consumer since CLOUD-776 landed it.
@@ -4195,6 +4214,20 @@ exclude = "^(regex|exclude) = "
 severity = "deny"
 scope = "tree"
 no_fix_reason = "class 3 (prose): say which model — `gated-model` for the harness's own judgement, or name the Batten-managed model (mem:doctrine/model-verdict)"
+
+# CLOUD-2711: THE MUTATION RUNNER NAMES NO CONSUMER PATH (non-negotiable rule 1).
+# `mutate.rs` once hardcoded this repository's preset directory, so a consumer
+# whose presets lived elsewhere was never censused or swept and nothing said so.
+# The directory is `$MUTANT_PRESETS` now; this row holds the file at zero
+# spellings of the crate's own path, prose and test fixtures included.
+[[rule]]
+id = "path name loose"
+kind = "forbid"
+glob = "crates/batten/src/mutate.rs"
+regex = "crates/batten"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "class 3 (prose): name the path through its declaration (`MUTANT_PRESETS`, `MUTANT_TASKS`) or a neutral fixture such as `crates/app/`, never this repository's layout"
 
 # Non-negotiable rule 1 as a standing gate, not prose (CLOUD-7). "The core stays
 # repo-agnostic … a grep for a specific consumer's names must return zero hits"

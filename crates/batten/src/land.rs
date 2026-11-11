@@ -1637,6 +1637,42 @@ pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
     Ok(pushed)
 }
 
+/// The variable the lap's own gate runs under (CLOUD-2707): set by
+/// `run_land_verify_seen` on the gate it spawns, and read by `land placed`, so
+/// the lap's own gate is never advised to run the lap.
+pub const LAP_GATE: &str = "BATTEN_LAND_GATE";
+
+/// Where a gate run stands relative to `land` (CLOUD-2707).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    /// The lap itself is running the gate.
+    Lap,
+    /// The head is still being iterated: uncommitted work, or commits on no
+    /// remote, or a clone whose remotes could not be read.
+    Iterating,
+    /// A committed, pushed head outside the lap: the run is legitimate, and
+    /// `land` is the step after it, answering this head from the run's receipt.
+    BeforeLand,
+}
+
+/// Decide where a gate run stands (CLOUD-2707). It only chooses whether to
+/// advise; nothing here refuses, and could-not-look is iterating, so an
+/// unreadable remote says nothing rather than something false.
+#[must_use]
+pub const fn placement(
+    under_lap: bool,
+    uncommitted: usize,
+    on_a_remote: Option<bool>,
+) -> Placement {
+    if under_lap {
+        Placement::Lap
+    } else if uncommitted > 0 || !matches!(on_a_remote, Some(true)) {
+        Placement::Iterating
+    } else {
+        Placement::BeforeLand
+    }
+}
+
 /// What the lap's verification said about this head.
 ///
 /// # The engine does not know what "verify" means here
@@ -4502,6 +4538,31 @@ mod forge_tests {
 mod lap_tests {
     use super::{Basis, Progress, Step, lap_progress, progress, progress_of, stalled, still};
     use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
+
+    /// CLOUD-2707: only a committed, pushed head outside the lap is advised
+    /// toward `land`; the lap, a dirty tree, an unpushed head and an unreadable remote
+    /// each run the gate.
+    #[test]
+    fn only_a_clean_pushed_head_outside_the_lap_is_before_land() {
+        use super::{Placement, placement};
+        assert_eq!(placement(false, 0, Some(true)), Placement::BeforeLand);
+        assert_eq!(placement(true, 0, Some(true)), Placement::Lap, "the lap");
+        assert_eq!(
+            placement(false, 1, Some(true)),
+            Placement::Iterating,
+            "dirty"
+        );
+        assert_eq!(
+            placement(false, 0, Some(false)),
+            Placement::Iterating,
+            "unpushed"
+        );
+        assert_eq!(
+            placement(false, 0, None),
+            Placement::Iterating,
+            "unreadable"
+        );
+    }
 
     /// CLOUD-2371: only this branch's own superseded ready head is cancelled
     /// and re-drafted; every other state is left as it was.

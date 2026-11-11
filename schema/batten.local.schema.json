@@ -2039,28 +2039,15 @@
       ]
     },
     "RuleSeverity": {
-      "description": "Config-time rule severity — *what fails a check* (cargo-deny's model,\nCLOUD-61).\n\nDeclared weakest-first: derived [`Ord`] is the severity rank.",
-      "oneOf": [
-        {
-          "description": "The rule is configured off: a match is not a finding at all.",
-          "type": "string",
-          "const": "allow"
-        },
-        {
-          "description": "A match is reported but does not by itself fail the run (it can be\npromoted by `--fail-on-warning`, CLOUD-49).",
-          "type": "string",
-          "const": "warn"
-        },
-        {
-          "description": "A match blocks the call and hands the decision to a human (CLOUD-340).\n\n**A DISPOSITION AT `Deny`'S RANK, NOT A FOURTH RANK.** It blocks exactly\nas `deny` does; what differs is who decides, which is orthogonal to how\nbad the finding is. That is why it maps to `deny`'s row rather than\ngetting one of its own — see the module header, where the bijection this\nbreaks is corrected rather than quietly widened.\n\nMediated-call rules only. A tree-scoped rule has no caller to ask, so\n`ask` there is a config error rather than a silent downgrade, refused by\n`rules::validate`.",
-          "type": "string",
-          "const": "ask"
-        },
-        {
-          "description": "A match fails the run.",
-          "type": "string",
-          "const": "deny"
-        }
+      "description": "Config-time rule severity: `allow` (off), `record` (a trial, recorded and never spoken), `advise` (spoken, never refusing; `warn` is its pre-CLOUD-2707 spelling), `ask` (escalates to a human), `deny` (refuses).",
+      "type": "string",
+      "enum": [
+        "allow",
+        "record",
+        "advise",
+        "ask",
+        "deny",
+        "warn"
       ]
     },
     "Sink": {

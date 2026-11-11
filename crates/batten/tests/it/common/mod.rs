@@ -528,6 +528,10 @@ pub(crate) fn batten() -> Batten {
         // that means a host sets it.
         "CLAUDE_CODE_REMOTE",
         "BATTEN_ENVIRONMENT",
+        // THE LAP'S GATE MARKER (CLOUD-2707): a lap exports it to the whole gate,
+        // the suite included, so a placement case would read every head as the
+        // lap's own and its refusal arm could never fail.
+        "BATTEN_LAND_GATE",
         // NOT the overlay variable itself: it is how a mutated preset reaches the
         // `batten` a suite spawns, and scrubbing it judged every preset row
         // against the embedded, unmutated text (85 false survivors).

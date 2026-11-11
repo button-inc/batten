@@ -973,6 +973,9 @@ _batten() {
             batten__subcmd__help__subcmd__land,linear)
                 cmd="batten__subcmd__help__subcmd__land__subcmd__linear"
                 ;;
+            batten__subcmd__help__subcmd__land,placed)
+                cmd="batten__subcmd__help__subcmd__land__subcmd__placed"
+                ;;
             batten__subcmd__help__subcmd__land,push)
                 cmd="batten__subcmd__help__subcmd__land__subcmd__push"
                 ;;
@@ -1366,6 +1369,9 @@ _batten() {
             batten__subcmd__land,linear)
                 cmd="batten__subcmd__land__subcmd__linear"
                 ;;
+            batten__subcmd__land,placed)
+                cmd="batten__subcmd__land__subcmd__placed"
+                ;;
             batten__subcmd__land,push)
                 cmd="batten__subcmd__land__subcmd__push"
                 ;;
@@ -1389,6 +1395,9 @@ _batten() {
                 ;;
             batten__subcmd__land__subcmd__help,linear)
                 cmd="batten__subcmd__land__subcmd__help__subcmd__linear"
+                ;;
+            batten__subcmd__land__subcmd__help,placed)
+                cmd="batten__subcmd__land__subcmd__help__subcmd__placed"
                 ;;
             batten__subcmd__land__subcmd__help,push)
                 cmd="batten__subcmd__land__subcmd__help__subcmd__push"
@@ -2303,7 +2312,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__adjudicate)
-            opts="-q -v -y -h --instant --harness --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --instant --harness --show-input --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -7347,7 +7356,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__land)
-            opts="replay wait push verify fast-forward lap linear"
+            opts="replay wait push verify placed fast-forward lap linear"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -7389,6 +7398,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__land__subcmd__linear)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__land__subcmd__placed)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -9713,7 +9736,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__land)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help replay wait push verify fast-forward lap linear help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help replay wait push verify placed fast-forward lap linear help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -9773,7 +9796,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__land__subcmd__help)
-            opts="replay wait push verify fast-forward lap linear help"
+            opts="replay wait push verify placed fast-forward lap linear help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -9829,6 +9852,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__land__subcmd__help__subcmd__linear)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__land__subcmd__help__subcmd__placed)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -9929,6 +9966,36 @@ _batten() {
             return 0
             ;;
         batten__subcmd__land__subcmd__linear)
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__land__subcmd__placed)
             opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )

@@ -118,10 +118,17 @@ fn assert_denied(dir: &Path, path: &str) {
 }
 
 fn assert_allowed(dir: &Path, path: &str) {
+    let run = run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &write_payload(path),
+    );
+    // The refusal is named on failure, so a wrong deny says which rule fired.
     assert_eq!(
-        verdict(dir, path),
+        run.status.code(),
         Some(0),
-        "must allow the write to {path}"
+        "must allow the write to {path}: {}",
+        stderr(&run)
     );
 }
 
@@ -255,8 +262,18 @@ fn a_git_ignored_path_is_never_judged() {
 
 #[test]
 fn a_path_outside_the_repository_is_never_judged() {
-    // Not this repository's policy to enforce.
-    let dir = repo("claim-outside");
+    // Not this repository's policy to enforce. The fixture lives OUTSIDE every
+    // repository: under `target/` its `../sibling.md` landed inside this
+    // checkout, where per-call reach (CLOUD-2672) judged it under this
+    // checkout's live config, so the case read the running session's state.
+    let dir = Fixture::at(common::scratch_outside_tree("claim-outside", "repo"))
+        .config(POLICY)
+        .file(".gitignore", "scratch/\n")
+        .file("src/tracked.rs", "// committed\n")
+        .git()
+        .base_commit()
+        .build();
+    git_in(&dir, &["checkout", "-q", "-b", "user/cloud-444-slug"]);
     assert_allowed(&dir, "/tmp/elsewhere.md");
     assert_allowed(&dir, "../sibling.md");
 }

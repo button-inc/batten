@@ -1019,11 +1019,20 @@ fn scope_open() -> bool {
 /// file would have a remembered handle served stale, so any of them moving fails
 /// `the_memos_read_list_was_audited_against_this_gix` until the list is
 /// re-audited against the new open and this moves with it.
+///
+/// Re-audited for gix 0.90.0 / gix-config 0.62.2 / gix-discover 0.57.1
+/// (2026-11-11): `Permissions::isolated()` still disables system, installation,
+/// global, user, environment and include config, and the new
+/// `system_config_path` / `git_installation_config_path` options load only under
+/// those permissions. `gix-discover` now resolves `commondir` itself, which is
+/// already on the list. The one addition, an ownership check lowering trust on
+/// the resolved git, common and worktree directories, reads metadata rather
+/// than file content, so the list is unchanged.
 #[cfg(test)]
 const AUDITED_GIX: &[(&str, &str)] = &[
-    ("gix", "0.87.1"),
-    ("gix-config", "0.60.0"),
-    ("gix-discover", "0.55.0"),
+    ("gix", "0.90.0"),
+    ("gix-config", "0.62.2"),
+    ("gix-discover", "0.57.1"),
 ];
 
 /// The bytes of every file an isolated open of `git_dir` reads — no includes,
