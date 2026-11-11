@@ -288,6 +288,7 @@ mod tests {
     /// Fails by: the watcher's pass taking the tree with `try_lock` and
     /// skipping it when held, which leaves the stale fixture on disk.
     #[test]
+    #[allow(clippy::expect_used)]
     fn a_held_tree_is_waited_for_not_skipped() {
         use std::sync::atomic::AtomicUsize;
         let repo = crate::scratch::scratch("disk-watch-held-tree");
