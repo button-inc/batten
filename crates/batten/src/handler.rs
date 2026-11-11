@@ -1286,7 +1286,28 @@ fn interpret(code: Option<i32>, stdout: &str, stderr: &str) -> Outcome {
 /// because a handler that put its reason on the wrong stream has still said
 /// something true, and discarding it would leave a refusal with no reason at all
 /// — which §5 forbids more strongly than it requires a particular stream.
+///
+/// **A BATTEN CHILD'S OWN REFUSAL IS THE REASON, AND ONLY IT.** A handler that
+/// runs `batten check` through a task runner writes its finding to stdout, its
+/// remedy line to stderr, and the runner adds its own `ERROR task failed` line
+/// there too. Taking stderr whole handed the session three statements for one
+/// refusal, and the one carrying the pointer (`… at CLOUD-N`) was the one
+/// dropped. So the `batten deny` lines on either stream are the reason, and
+/// nothing else: one refusal, its pointers kept.
 fn reason(stderr: &str, stdout: &str) -> String {
+    let head = format!(
+        "{} {} ",
+        crate::refusal::PROVENANCE,
+        crate::refusal::Severity::Deny.word()
+    );
+    let denials: Vec<&str> = stderr
+        .lines()
+        .chain(stdout.lines())
+        .filter(|line| line.starts_with(&head) && crate::refusal::parse_finding(line).is_some())
+        .collect();
+    if !denials.is_empty() {
+        return denials.join("\n");
+    }
     if stderr.is_empty() {
         stdout.to_owned()
     } else {
@@ -1298,6 +1319,36 @@ fn reason(stderr: &str, stdout: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A Batten child's refusal reaches the session as its deny lines alone:
+    /// the remedy line and the task runner's error line are dropped, and the
+    /// deny on stdout (the one carrying the pointer) is kept.
+    #[test]
+    fn a_batten_child_refusal_is_its_deny_lines_alone() {
+        let stdout = "batten deny issue file held at CLOUD-1\n";
+        let stderr = "batten remedy issue file other — class 3 (a board action)\n\
+                      [filed-here:guard] ERROR task failed\n";
+        assert_eq!(
+            reason(stderr, stdout),
+            "batten deny issue file held at CLOUD-1"
+        );
+
+        // Two denials are two pointers, both kept, stderr's first.
+        let stdout = "batten deny issue file held at CLOUD-2\n";
+        let stderr = "batten deny issue file unclear at CLOUD-3\n[x] ERROR task failed\n";
+        assert_eq!(
+            reason(stderr, stdout),
+            "batten deny issue file unclear at CLOUD-3\nbatten deny issue file held at CLOUD-2"
+        );
+
+        // A line merely mentioning a deny mid-sentence is not a finding.
+        let stderr = "note: batten deny is printed below\n";
+        assert_eq!(reason(stderr, ""), stderr);
+
+        // A handler that is not Batten keeps the old reading: stderr, else stdout.
+        assert_eq!(reason("", "plain reason\n"), "plain reason\n");
+        assert_eq!(reason("stderr reason\n", "stdout\n"), "stderr reason\n");
+    }
 
     /// The command selector's four readings, decided directly (CLOUD-1650).
     ///
