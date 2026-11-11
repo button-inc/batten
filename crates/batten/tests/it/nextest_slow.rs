@@ -171,9 +171,8 @@ fn an_absent_runner_config_is_refused() {
 fn a_declaration_without_terminate_after_is_refused() {
     let root = repo("nextest-slow-report-only", Some(REPORT_ONLY));
     assert_eq!(rules_fired(&root), vec![UNBOUNDED.to_owned()]);
-    // A PERIOD WITH NO MULTIPLIER is just as unbounded, and it is the shape that
-    // reaches the `terminate-after` test at all: the string form above fails on
-    // its missing `period` first.
+    // A PERIOD WITH NO MULTIPLIER is just as unbounded: `kill_seconds` reads the
+    // multiplier by splitting on `terminate-after`, so this line yields no kill.
     let root = repo(
         "nextest-slow-period-only",
         Some("[profile.default]\nslow-timeout = { period = \"10s\" }\n"),
@@ -266,6 +265,24 @@ fn an_override_citing_no_row_is_refused() {
     let root = repo(
         "nextest-slow-unfiled",
         Some(&format!("{ARMED}{UNFILED_THREADS}")),
+    );
+    assert_eq!(rules_fired(&root), vec![UNFILED.to_owned()]);
+}
+
+/// AN OVERRIDE THAT LIFTS THE KILL, citing nothing. A `slow-timeout` with a
+/// period and no `terminate-after` kills nothing, so for the tests it selects it
+/// is the ban switched off — the least bounded exception there is. Read through a
+/// `terminate-after` conjunct it was no override at all and owed no reason
+/// (#1276's sweep, where `terminator-unread` survived because no other case could
+/// observe that conjunct).
+#[test]
+fn an_unterminated_override_citing_no_row_is_refused() {
+    let root = repo(
+        "nextest-slow-unterminated-override",
+        Some(&format!(
+            "{ARMED}\n[[profile.default.overrides]]\nfilter = 'test(heavy)'\n\
+             slow-timeout = {{ period = \"60s\" }}\n"
+        )),
     );
     assert_eq!(rules_fired(&root), vec![UNFILED.to_owned()]);
 }
