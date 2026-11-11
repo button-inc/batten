@@ -22282,18 +22282,33 @@ fn spills_within_bound(result: &serde_json::Value, spilled: &[stream_input::Spil
 
 /// Whether this call reads a capture view, the route the bound's own pointer
 /// prints (CLOUD-2228): such a read is never bounded again.
+///
+/// **THE SAME ANSWER FOR A SHELL READ OF THE VIEW.** A `cat`, `sed -n` or
+/// `grep` naming the view is the same route followed through another tool, and
+/// bounding it handed back a pointer to a pointer: measured 2026-11-11, a `sed`
+/// over a view spilled into a second view. One route, one answer, whichever
+/// tool takes it. A shell call is a view read when one of its words is a view.
 fn reads_a_view(envelope: &hook::Envelope) -> bool {
-    let Some(path) = envelope
+    let named = envelope
         .input
         .get("file_path")
-        .and_then(serde_json::Value::as_str)
-    else {
+        .and_then(serde_json::Value::as_str);
+    if named.is_none() && envelope.command.is_empty() {
         return false;
-    };
+    }
     let Ok(root) = git::repo_root(hook_session_home()) else {
         return false;
     };
-    capture::is_view(&root, Path::new(path))
+    named.map_or_else(
+        || {
+            envelope
+                .command
+                .split_whitespace()
+                .map(|word| word.trim_matches(|c| c == '\'' || c == '"'))
+                .any(|word| capture::is_view(&root, Path::new(word)))
+        },
+        |path| capture::is_view(&root, Path::new(path)),
+    )
 }
 
 /// Mark every finding a tool's output carries as seen in this context, and cut
