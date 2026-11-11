@@ -55,7 +55,6 @@
 //! when asked is a gate nobody runs.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
@@ -492,7 +491,7 @@ fn find_line_anchored(haystack: &str, needle: &str) -> Option<usize> {
 /// one, which is the same false green a dead glob produced (CLOUD-298).
 fn embedded_value(root: &Path, name: &str, decl: &EmbeddedDecl) -> Result<Option<String>> {
     let full = root.join(&decl.path);
-    let text = match fs::read_to_string(&full) {
+    let text = match crate::fsio::read_to_string(&full) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(UsageError::raise(format!(
@@ -631,7 +630,7 @@ pub fn measure(root: &Path, name: &str, budget: &BudgetSet) -> Result<Report> {
     let mut lines = 0;
     // `BTreeSet` iterates in sorted order, which is the fixed reporting order.
     for path in selected {
-        let text = fs::read_to_string(root.join(&path))?;
+        let text = crate::fsio::read_to_string(root.join(&path))?;
         let loaded = loaded(&text);
         let file = FileCount {
             path,
@@ -730,6 +729,7 @@ pub fn validate(budget: Option<&Budget>) -> Result<()> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn frontmatter_is_stripped_only_as_a_leading_fence() {

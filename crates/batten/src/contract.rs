@@ -172,7 +172,7 @@ pub fn surface(root: &Path, tracked: &[String]) -> Result<Look<Manifest>> {
             if manifest.contains_key(path) {
                 continue;
             }
-            let contents = std::fs::read(root.join(path))?;
+            let contents = crate::fsio::read(root.join(path))?;
             // The whole-set fingerprint over ONE entry: the path is hashed
             // alongside the bytes, and the same normalization every other
             // identity in the engine uses, so a CRLF checkout does not report
@@ -249,7 +249,7 @@ fn snapshot_path(git_dir: &Path, session: Option<&str>) -> PathBuf {
 /// has already read the new files and must not be nudged about them.
 #[must_use]
 pub fn previous(git_dir: &Path, session: Option<&str>) -> Look<Manifest> {
-    let Ok(text) = std::fs::read_to_string(snapshot_path(git_dir, session)) else {
+    let Ok(text) = crate::fsio::read_to_string(snapshot_path(git_dir, session)) else {
         return Look::CouldNotLook;
     };
     let mut manifest = Manifest::new();

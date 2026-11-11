@@ -513,7 +513,7 @@ mod tests {
         std::fs::write(&path, "h 1400 1500\nx 1600 1500 land-st").expect("plant a torn tail");
         append_whole_lines(&path, "h 2100 2000").expect("append");
         assert_eq!(
-            std::fs::read_to_string(&path).expect("read"),
+            crate::fsio::read_to_string(&path).expect("read"),
             "h 1400 1500\nh 2100 2000\n",
             "the fragment is gone and the new record stands alone"
         );
@@ -522,7 +522,10 @@ mod tests {
         std::fs::write(&path, "x 16").expect("plant a lone fragment");
         append_whole_lines(&path, "h 1").expect("append");
         append_whole_lines(&path, "h 2").expect("append");
-        assert_eq!(std::fs::read_to_string(&path).expect("read"), "h 1\nh 2\n");
+        assert_eq!(
+            crate::fsio::read_to_string(&path).expect("read"),
+            "h 1\nh 2\n"
+        );
     }
 
     /// Fails by: a first append to an empty store probing a tail it does not
@@ -533,10 +536,10 @@ mod tests {
         let lines = dir.join("lines");
         std::fs::write(&lines, "").expect("an empty store");
         append_whole_lines(&lines, "h 1").expect("append");
-        assert_eq!(std::fs::read_to_string(&lines).expect("read"), "h 1\n");
+        assert_eq!(crate::fsio::read_to_string(&lines).expect("read"), "h 1\n");
         let ledger = dir.join("ledger");
         append_with_mode(&ledger, "one", 0o600).expect("append");
-        assert_eq!(std::fs::read_to_string(&ledger).expect("read"), "one\n");
+        assert_eq!(crate::fsio::read_to_string(&ledger).expect("read"), "one\n");
     }
 
     /// Fails by: a creation that failed for any reason but the name being
@@ -601,7 +604,7 @@ mod tests {
         });
         assert_eq!(winners, 1, "one creator, however many raced");
         assert!(
-            std::fs::read_to_string(&path)
+            crate::fsio::read_to_string(&path)
                 .expect("read")
                 .starts_with("writer "),
             "the winner's contents, whole"
@@ -641,7 +644,7 @@ mod tests {
         });
         assert_eq!(winners, 1, "one creator, however many raced");
         assert!(
-            std::fs::read_to_string(&path)
+            crate::fsio::read_to_string(&path)
                 .expect("read")
                 .starts_with("writer "),
             "the winner's contents, whole"
@@ -655,7 +658,7 @@ mod tests {
         append_with_mode_as(&log, "one", 0o600, Persist::Atomic).expect("append");
         append_with_mode_as(&log, "two\n", 0o600, Persist::Atomic).expect("append");
         assert_eq!(
-            std::fs::read_to_string(&log).expect("read"),
+            crate::fsio::read_to_string(&log).expect("read"),
             "one\ntwo\n",
             "each append is one terminated line"
         );
@@ -689,7 +692,7 @@ mod tests {
         let path = dir.join("state");
         replace(&path, "old\n").expect("first");
         replace(&path, "new\n").expect("second");
-        assert_eq!(std::fs::read_to_string(&path).expect("read"), "new\n");
+        assert_eq!(crate::fsio::read_to_string(&path).expect("read"), "new\n");
         let leftovers = std::fs::read_dir(&dir).expect("list").count();
         assert_eq!(leftovers, 1, "no temp file survives a successful replace");
     }
@@ -704,7 +707,7 @@ mod tests {
         #[cfg(not(unix))]
         {
             replace(&path, "b").expect("replace");
-            assert_eq!(std::fs::read_to_string(&path).expect("read"), "b");
+            assert_eq!(crate::fsio::read_to_string(&path).expect("read"), "b");
         }
         #[cfg(unix)]
         {
@@ -724,7 +727,7 @@ mod tests {
         let real = dir.join("real");
         replace(&real, "a").expect("create");
         #[cfg(not(unix))]
-        assert_eq!(std::fs::read_to_string(&real).expect("read"), "a");
+        assert_eq!(crate::fsio::read_to_string(&real).expect("read"), "a");
         #[cfg(unix)]
         {
             let link = dir.join("link");
@@ -736,7 +739,7 @@ mod tests {
                     .file_type()
                     .is_symlink()
             );
-            assert_eq!(std::fs::read_to_string(&real).expect("read"), "b");
+            assert_eq!(crate::fsio::read_to_string(&real).expect("read"), "b");
         }
     }
 
@@ -765,7 +768,7 @@ mod tests {
         for handle in handles {
             handle.join().expect("writer");
         }
-        let body = std::fs::read_to_string(&path).expect("read");
+        let body = crate::fsio::read_to_string(&path).expect("read");
         let lines: Vec<&str> = body.lines().collect();
         assert_eq!(lines.len(), 400);
         for record in lines {

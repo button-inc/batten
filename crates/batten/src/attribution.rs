@@ -457,7 +457,7 @@ pub fn read_range(dir: &Path, base: &str, head: &str) -> Result<Vec<CommitMeta>>
 /// Returns an error when the message file cannot be read or git cannot resolve an
 /// identity — exit `1`, not a pass.
 pub fn read_message(dir: &Path, message: &Path) -> Result<CommitMeta> {
-    let body = std::fs::read_to_string(message).map_err(|error| {
+    let body = crate::fsio::read_to_string(message).map_err(|error| {
         UsageError::raise(format!(
             "attribution: cannot read the commit message file `{}`: {error}",
             message.display()

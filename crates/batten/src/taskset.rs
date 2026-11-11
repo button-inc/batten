@@ -140,7 +140,7 @@ pub fn cached(root: &Path) -> TaskFacts {
     if meta.len() > RECORD_MAX {
         return Look::CouldNotLook;
     }
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    let Ok(text) = crate::fsio::read_to_string(&path) else {
         return Look::CouldNotLook;
     };
     let Ok(record) = serde_json::from_str::<Record>(&text) else {
@@ -182,7 +182,7 @@ pub fn refresh(root: &Path, declared: &[TaskQuery]) -> TaskFacts {
         let Some(format) = crate::facts::Format::for_path(&row.manifest) else {
             continue;
         };
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(text) = crate::fsio::read_to_string(&path) else {
             continue;
         };
         // THROUGH `rules::parse_node`, the one `Format::read` call in the crate

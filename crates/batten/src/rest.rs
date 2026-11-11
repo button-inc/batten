@@ -977,7 +977,7 @@ pub(crate) fn routed(case: &str, routes: &[(&str, u16, &str)]) -> std::path::Pat
 /// What [`routed`]'s fixture was asked, one `<METHOD> <url>` per line.
 #[cfg(test)]
 pub(crate) fn asked(dir: &std::path::Path) -> String {
-    std::fs::read_to_string(dir.join("args")).unwrap_or_default()
+    crate::fsio::read_to_string(dir.join("args")).unwrap_or_default()
 }
 
 /// One request as the fixture seam sees it.
@@ -1007,7 +1007,7 @@ fn from_fixture(
     now: u64,
 ) -> Option<Answer> {
     let url = request.url;
-    if let Ok(routes) = std::fs::read_to_string(dir.join("routes")) {
+    if let Ok(routes) = crate::fsio::read_to_string(dir.join("routes")) {
         let line = format!("{} {url}", request.method);
         let routed = routes.lines().find_map(|route| {
             let (needle, file) = route.split_once('\t')?;
@@ -1018,12 +1018,12 @@ fn from_fixture(
             if let Some(body) = request.body {
                 let _ = crate::durable::replace(dir.join(format!("{file}.request")), body);
             }
-            let raw = std::fs::read_to_string(dir.join(&file)).ok()?;
+            let raw = crate::fsio::read_to_string(dir.join(&file)).ok()?;
             return Some(canned(&raw, now));
         }
     }
     let calls = dir.join("calls");
-    let n = std::fs::read_to_string(&calls)
+    let n = crate::fsio::read_to_string(&calls)
         .ok()
         .and_then(|raw| raw.trim().parse::<u32>().ok())
         .unwrap_or(0)
@@ -1048,8 +1048,8 @@ fn from_fixture(
             }
         }
     }
-    let raw = std::fs::read_to_string(dir.join(format!("resp.{n}")))
-        .or_else(|_| std::fs::read_to_string(dir.join("resp.last")))
+    let raw = crate::fsio::read_to_string(dir.join(format!("resp.{n}")))
+        .or_else(|_| crate::fsio::read_to_string(dir.join("resp.last")))
         .ok()?;
     Some(canned(&raw, now))
 }

@@ -285,7 +285,7 @@ pub fn added_since(root: &Path, base: &str) -> Result<Ledger> {
             text.clone_into(&mut base_text);
         }
     })?;
-    let head_text = std::fs::read_to_string(root.join(LEDGER)).unwrap_or_default();
+    let head_text = crate::fsio::read_to_string(root.join(LEDGER)).unwrap_or_default();
     Ok(compare(&base_text, &head_text))
 }
 
@@ -417,7 +417,7 @@ mod tests {
         let root = crate::scratch::scratch("asked-record");
         assert_eq!(record(&root, &result("Admit it"), 7).unwrap(), 1);
         assert_eq!(record(&root, &result("Refuse"), 8).unwrap(), 1);
-        let text = std::fs::read_to_string(root.join(LEDGER)).unwrap();
+        let text = crate::fsio::read_to_string(root.join(LEDGER)).unwrap();
         assert_eq!(text.lines().count(), 2);
         let mut unanswered = result("Admit it");
         unanswered["answers"] = serde_json::json!({});

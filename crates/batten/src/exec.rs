@@ -643,7 +643,7 @@ pub(crate) fn cancel_owned_group(repo_root: &Path) -> bool {
     // ABSENT IS THE COMMON CASE AND IT IS NOT A FAILURE: a gate run without the
     // grouping opt-in records no note, so there is no group to cancel and the
     // watcher simply loses whatever it was racing.
-    let Ok(body) = std::fs::read_to_string(&path) else {
+    let Ok(body) = crate::fsio::read_to_string(&path) else {
         return false;
     };
     let pgid = body.trim();
