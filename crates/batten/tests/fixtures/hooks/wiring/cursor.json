@@ -7,7 +7,43 @@
         "command": "batten adjudicate --harness cursor"
       }
     ],
+    "beforeShellExecution": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
     "afterFileEdit": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "afterMCPExecution": [
       {
         "type": "command",
         "command": "batten adjudicate --harness cursor"
@@ -50,6 +86,36 @@
       }
     ],
     "preCompact": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "afterAgentResponse": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "afterAgentThought": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "workspaceOpen": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "beforeTabFileRead": [
+      {
+        "type": "command",
+        "command": "batten adjudicate --harness cursor"
+      }
+    ],
+    "afterTabFileEdit": [
       {
         "type": "command",
         "command": "batten adjudicate --harness cursor"

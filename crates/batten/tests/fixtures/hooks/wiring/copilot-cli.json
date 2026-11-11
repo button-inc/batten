@@ -60,6 +60,12 @@
         "type": "command",
         "bash": "batten adjudicate --harness copilot-cli"
       }
+    ],
+    "ErrorOccurred": [
+      {
+        "type": "command",
+        "bash": "batten adjudicate --harness copilot-cli"
+      }
     ]
   }
 }

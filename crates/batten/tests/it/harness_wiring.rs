@@ -926,9 +926,18 @@ fn cursor_row(name: &str, body: &serde_json::Value) -> serde_json::Value {
 
 /// The nine spellings Cursor registers (CLOUD-2695: every documented event
 /// Batten has a variant for, and Batten is on all of them).
-const CURSOR_EVENTS: [&str; 9] = [
+/// Every name Cursor documents that Batten registers on (CLOUD-2700): 20 of
+/// its 21, the specialized pre- and post-tool names included. Only
+/// `beforeSubmitPrompt` is left off, because a deny there is ignored.
+const CURSOR_EVENTS: [&str; 20] = [
     "preToolUse",
+    "beforeShellExecution",
+    "beforeMCPExecution",
+    "beforeReadFile",
     "afterFileEdit",
+    "postToolUse",
+    "afterShellExecution",
+    "afterMCPExecution",
     "postToolUseFailure",
     "stop",
     "sessionStart",
@@ -936,6 +945,11 @@ const CURSOR_EVENTS: [&str; 9] = [
     "subagentStart",
     "subagentStop",
     "preCompact",
+    "afterAgentResponse",
+    "afterAgentThought",
+    "workspaceOpen",
+    "beforeTabFileRead",
+    "afterTabFileEdit",
 ];
 
 fn unregistered(row: &serde_json::Value) -> Vec<serde_json::Value> {

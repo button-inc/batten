@@ -78,5 +78,35 @@
         }
       ]
     }
+  ],
+  "BeforeModel": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten adjudicate --harness gemini-cli"
+        }
+      ]
+    }
+  ],
+  "AfterModel": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten adjudicate --harness gemini-cli"
+        }
+      ]
+    }
+  ],
+  "BeforeToolSelection": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten adjudicate --harness gemini-cli"
+        }
+      ]
+    }
   ]
 }

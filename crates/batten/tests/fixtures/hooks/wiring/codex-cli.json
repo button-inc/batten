@@ -109,6 +109,36 @@
           }
         ]
       }
+    ],
+    "PreModelRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "batten adjudicate --harness codex-cli"
+          }
+        ]
+      }
+    ],
+    "PostModelRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "batten adjudicate --harness codex-cli"
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "batten adjudicate --harness codex-cli"
+          }
+        ]
+      }
     ]
   }
 }

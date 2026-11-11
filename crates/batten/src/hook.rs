@@ -240,6 +240,10 @@ impl Harness {
                     (Event::SessionEnd, "SessionEnd"),
                     (Event::Notification, "Notification"),
                     (Event::PreCompact, "PreCompress"),
+                    // CLOUD-2700.
+                    (Event::ModelRequest, "BeforeModel"),
+                    (Event::ModelResponse, "AfterModel"),
+                    (Event::ToolSelection, "BeforeToolSelection"),
                 ],
                 project_dir_var: None,
             }),
@@ -249,8 +253,24 @@ impl Harness {
             Harness::Cursor => Some(Wiring {
                 file: WiringFile::Whole(".cursor/hooks.json"),
                 spellings: &[
+                    // ONE MOMENT, SEVERAL HOST NAMES (CLOUD-2700): Cursor splits
+                    // pre-tool and post-tool across a generic event and
+                    // specialized ones, and a consumer's handler can be keyed on
+                    // any of them, so Batten registers on every one. The first
+                    // spelling per event is the primary one a reader takes.
                     (Event::PreTool, "preToolUse"),
+                    (Event::PreTool, "beforeShellExecution"),
+                    (Event::PreTool, "beforeMCPExecution"),
+                    (Event::PreTool, "beforeReadFile"),
                     (Event::PostTool, "afterFileEdit"),
+                    (Event::PostTool, "postToolUse"),
+                    (Event::PostTool, "afterShellExecution"),
+                    (Event::PostTool, "afterMCPExecution"),
+                    (Event::AgentResponse, "afterAgentResponse"),
+                    (Event::AgentThought, "afterAgentThought"),
+                    (Event::WorkspaceOpen, "workspaceOpen"),
+                    (Event::TabFileRead, "beforeTabFileRead"),
+                    (Event::TabFileEdit, "afterTabFileEdit"),
                     (Event::Stop, "stop"),
                     (Event::SessionStart, "sessionStart"),
                     // CLOUD-2695.
@@ -1357,11 +1377,13 @@ impl Wiring {
         Event::ALL
             .iter()
             .filter(|event| capabilities.emits(**event))
-            .filter_map(|event| {
+            // EVERY spelling of the event, not the first (CLOUD-2700): a host
+            // that names one moment several ways is registered under each.
+            .flat_map(|event| {
                 self.spellings
                     .iter()
-                    .find(|(named, _)| named == event)
-                    .map(|(_, spelling)| (*event, *spelling))
+                    .filter(move |(named, _)| named == event)
+                    .map(move |(_, spelling)| (*event, *spelling))
             })
             .collect()
     }
@@ -1412,6 +1434,12 @@ const CLAUDE_SPELLINGS: &[(Event, &str)] = &[
     (Event::FileChanged, "FileChanged"),
     (Event::DirectoryAdded, "DirectoryAdded"),
     (Event::MessageDisplay, "MessageDisplay"),
+    // CLOUD-2700: names Claude Code never sends, safe here for the reason
+    // `PostToolBatch`'s comment gives. Codex and Copilot emit them.
+    (Event::ModelRequest, "PreModelRequest"),
+    (Event::ModelResponse, "PostModelRequest"),
+    (Event::Interrupt, "Interrupt"),
+    (Event::ErrorOccurred, "ErrorOccurred"),
 ];
 
 /// How one registration entry is shaped on a host's committed surface
@@ -1602,8 +1630,11 @@ fn json_string(raw: &str) -> String {
 // Copilot documents no blocking output for it, so both would fail open.
 // What stays off each surface is CLOUD-2700's.
 
-/// Codex CLI: 11 of its 14 documented events.
+/// Codex CLI: all 14 of its documented events (CLOUD-2700 added the last three).
 const CODEX_EVENTS: &[Event] = &[
+    Event::ModelRequest,
+    Event::ModelResponse,
+    Event::Interrupt,
     Event::PreTool,
     Event::PostTool,
     Event::Stop,
@@ -1617,8 +1648,11 @@ const CODEX_EVENTS: &[Event] = &[
     Event::UserPromptSubmit,
 ];
 
-/// Copilot CLI: 10 of 14, in its `PascalCase` dialect.
+/// Copilot CLI: 11 of 14, in its `PascalCase` dialect. The three left are
+/// `UserPromptSubmit` (no documented blocking output, CLOUD-1941) and the two
+/// documented only in camelCase.
 const COPILOT_EVENTS: &[Event] = &[
+    Event::ErrorOccurred,
     Event::PreTool,
     Event::PostTool,
     Event::PostToolFailure,
@@ -1631,8 +1665,11 @@ const COPILOT_EVENTS: &[Event] = &[
     Event::PermissionRequest,
 ];
 
-/// Gemini CLI: 8 of 11.
+/// Gemini CLI: all 11 (CLOUD-2700 added the model and tool-selection three).
 const GEMINI_EVENTS: &[Event] = &[
+    Event::ModelRequest,
+    Event::ModelResponse,
+    Event::ToolSelection,
     Event::PreTool,
     Event::PostTool,
     Event::Stop,
@@ -1643,8 +1680,15 @@ const GEMINI_EVENTS: &[Event] = &[
     Event::PreCompact,
 ];
 
-/// Cursor: 9 of 21.
+/// Cursor: 14 moments under 20 of its 21 names. The four colliding names are
+/// extra spellings of pre-tool and post-tool (CLOUD-2700); `beforeSubmitPrompt`
+/// is left off because a deny there is ignored (CLOUD-1941).
 const CURSOR_EVENTS: &[Event] = &[
+    Event::AgentResponse,
+    Event::AgentThought,
+    Event::WorkspaceOpen,
+    Event::TabFileRead,
+    Event::TabFileEdit,
     Event::PreTool,
     Event::PostTool,
     Event::PostToolFailure,
@@ -2597,6 +2641,31 @@ pub enum Event {
     DirectoryAdded,
     /// The host displayed a message. Claude Code (CLOUD-2581).
     MessageDisplay,
+    /// The host is about to send a model request. Codex `PreModelRequest`,
+    /// Gemini `BeforeModel` (CLOUD-2700).
+    ModelRequest,
+    /// A model response arrived. Codex `PostModelRequest`, Gemini `AfterModel`
+    /// (CLOUD-2700).
+    ModelResponse,
+    /// The host is about to choose which tools the model is offered. Gemini
+    /// `BeforeToolSelection` (CLOUD-2700).
+    ToolSelection,
+    /// The agent finished a response. Cursor `afterAgentResponse` (CLOUD-2700).
+    AgentResponse,
+    /// The agent finished a thinking block. Cursor `afterAgentThought`
+    /// (CLOUD-2700).
+    AgentThought,
+    /// The user interrupted the agent. Codex `Interrupt` (CLOUD-2700).
+    Interrupt,
+    /// The host reported an error. Copilot `ErrorOccurred` (CLOUD-2700).
+    ErrorOccurred,
+    /// A workspace was opened. Cursor `workspaceOpen` (CLOUD-2700).
+    WorkspaceOpen,
+    /// Tab completion is about to read a file. Cursor `beforeTabFileRead`
+    /// (CLOUD-2700). Not a tool call: the payload carries no tool.
+    TabFileRead,
+    /// Tab completion edited a file. Cursor `afterTabFileEdit` (CLOUD-2700).
+    TabFileEdit,
     /// A forge event: one of GitHub's webhook events, normalized by
     /// [`crate::forge_event`] (CLOUD-2689). No host emits it, so no wiring
     /// registers it; `forge intake` is its door. Its verdict is a finding about
@@ -2646,6 +2715,17 @@ impl Event {
         Event::FileChanged,
         Event::DirectoryAdded,
         Event::MessageDisplay,
+        // CLOUD-2700: the moments only non-Claude hosts emit.
+        Event::ModelRequest,
+        Event::ModelResponse,
+        Event::ToolSelection,
+        Event::AgentResponse,
+        Event::AgentThought,
+        Event::Interrupt,
+        Event::ErrorOccurred,
+        Event::WorkspaceOpen,
+        Event::TabFileRead,
+        Event::TabFileEdit,
         Event::Forge,
         Event::Unrecognized,
     ];
@@ -2725,6 +2805,17 @@ impl Event {
                 | Event::FileChanged
                 | Event::DirectoryAdded
                 | Event::MessageDisplay
+                // CLOUD-2700's, for the same reason: no rule selects for them.
+                | Event::ModelRequest
+                | Event::ModelResponse
+                | Event::ToolSelection
+                | Event::AgentResponse
+                | Event::AgentThought
+                | Event::Interrupt
+                | Event::ErrorOccurred
+                | Event::WorkspaceOpen
+                | Event::TabFileRead
+                | Event::TabFileEdit
         )
     }
 
@@ -2800,6 +2891,16 @@ impl Event {
             Event::FileChanged => "file-changed",
             Event::DirectoryAdded => "directory-added",
             Event::MessageDisplay => "message-display",
+            Event::ModelRequest => "model-request",
+            Event::ModelResponse => "model-response",
+            Event::ToolSelection => "tool-selection",
+            Event::AgentResponse => "agent-response",
+            Event::AgentThought => "agent-thought",
+            Event::Interrupt => "interrupt",
+            Event::ErrorOccurred => "error-occurred",
+            Event::WorkspaceOpen => "workspace-open",
+            Event::TabFileRead => "tab-file-read",
+            Event::TabFileEdit => "tab-file-edit",
             Event::Forge => "forge",
             Event::Unrecognized => "unrecognized",
         }
@@ -2848,6 +2949,12 @@ impl Event {
             "FileChanged" => Event::FileChanged,
             "DirectoryAdded" => Event::DirectoryAdded,
             "MessageDisplay" => Event::MessageDisplay,
+            // CLOUD-2700: Codex's and Copilot's own PascalCase names, read here
+            // because both hosts ship the converged spellings.
+            "PreModelRequest" => Event::ModelRequest,
+            "PostModelRequest" => Event::ModelResponse,
+            "Interrupt" => Event::Interrupt,
+            "ErrorOccurred" => Event::ErrorOccurred,
             _ => Event::Unrecognized,
         }
     }
@@ -3918,7 +4025,8 @@ pub(crate) fn present_str(value: &Value, key: &str) -> Option<String> {
 /// Codex CLI and Copilot's `PascalCase` dialect ship verbatim. Only the two hosts
 /// that genuinely diverge get a table here, which is what keeps host vocabulary
 /// out of the harness-blind core.
-fn normalize_event(harness: Harness, raw: &str) -> Event {
+#[must_use]
+pub fn normalize_event(harness: Harness, raw: &str) -> Event {
     let renamed = match harness {
         // Gemini's names are the only structural gap in an otherwise
         // Claude-identical payload.
@@ -3931,6 +4039,10 @@ fn normalize_event(harness: Harness, raw: &str) -> Event {
             // Its prompt-submit moment and its pre-compaction (CLOUD-2695).
             "BeforeAgent" => Some(Event::UserPromptSubmit),
             "PreCompress" => Some(Event::PreCompact),
+            // CLOUD-2700.
+            "BeforeModel" => Some(Event::ModelRequest),
+            "AfterModel" => Some(Event::ModelResponse),
+            "BeforeToolSelection" => Some(Event::ToolSelection),
             _ => None,
         },
         // Cursor splits pre-tool across a generic event and three specialized
@@ -3940,7 +4052,16 @@ fn normalize_event(harness: Harness, raw: &str) -> Event {
             "preToolUse" | "beforeShellExecution" | "beforeMCPExecution" | "beforeReadFile" => {
                 Some(Event::PreTool)
             }
-            "afterFileEdit" => Some(Event::PostTool),
+            // Post-tool is split the same way (CLOUD-2700): the generic
+            // `postToolUse` and three specialized after-events.
+            "postToolUse" | "afterFileEdit" | "afterShellExecution" | "afterMCPExecution" => {
+                Some(Event::PostTool)
+            }
+            "afterAgentResponse" => Some(Event::AgentResponse),
+            "afterAgentThought" => Some(Event::AgentThought),
+            "workspaceOpen" => Some(Event::WorkspaceOpen),
+            "beforeTabFileRead" => Some(Event::TabFileRead),
+            "afterTabFileEdit" => Some(Event::TabFileEdit),
             // `subagentStop` is its own moment now (CLOUD-2695): the Stop-family
             // mapping predates the variant, and a subagent ending does not run
             // the end-of-turn gate on Claude Code either.
@@ -5227,6 +5348,17 @@ fn event_decides(event: Event) -> Option<Decision> {
         | Event::FileChanged
         | Event::DirectoryAdded
         | Event::MessageDisplay
+        // CLOUD-2700's: no rule kind selects for any of them yet.
+        | Event::ModelRequest
+        | Event::ModelResponse
+        | Event::ToolSelection
+        | Event::AgentResponse
+        | Event::AgentThought
+        | Event::Interrupt
+        | Event::ErrorOccurred
+        | Event::WorkspaceOpen
+        | Event::TabFileRead
+        | Event::TabFileEdit
         // `Forge` (CLOUD-2690): the native gate chain is `pre-tool`'s alone.
         // A forge event is judged by the policy modules, in their own arm of
         // `adjudicated_gates`, before this table is read.
