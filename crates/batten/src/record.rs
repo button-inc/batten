@@ -607,6 +607,20 @@ fn run_forge_fetch(reference: &str, fetch: &Fetch, err: &mut dyn Write) -> Resul
         return Ok(ExitCode::Internal);
     }
     let runs = crate::pr_watch::runs_from_body(&answer.body);
+    // A MANUFACTURED FAN-IN RED IS NO ANSWER (CLOUD-2317 against CLOUD-1831): a
+    // draft's `final` fails because every job it needs skipped, and recording it
+    // as a verdict made `forge check red` refuse every head pushed as a draft,
+    // the push the workflow asks for early and often. Nothing recorded is
+    // could-not-look, which is what a draft's run is about the code.
+    if let Some(fanin) = fetch.fanin.as_deref()
+        && crate::checks_green::fanin_failure_manufactured(&runs, &fetch.answered, fanin)
+    {
+        writeln!(
+            err,
+            "record forge: the fan-in failed only because its siblings did not answer (a draft or cancelled run); nothing recorded"
+        )?;
+        return Ok(ExitCode::Success);
+    }
     let answered: Vec<&str> = fetch.answered.iter().map(String::as_str).collect();
     let conclusions = graded(&runs, &answered);
     let Some((body, dropped)) = forge_body(&conclusions, fetch.fanin.as_deref()) else {

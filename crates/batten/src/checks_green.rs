@@ -163,6 +163,55 @@ impl Run {
     }
 }
 
+/// Whether the fan-in's failure in `runs` was MANUFACTURED by its siblings not
+/// answering, and so is no verdict on the commit (CLOUD-363, CLOUD-900).
+///
+/// [`decide`] already reads it this way for a cancelled matrix; the recorder
+/// did not, so a draft run — every sibling `skipped`, the fan-in red by design
+/// since CLOUD-2317 — was written as a verdict, and `forge check red` refused
+/// every head pushed as a draft, wedging the landing it is upstream of (#1276).
+/// One predicate for the recorder, so it reads a run as `decide` does.
+///
+/// Manufactured means: the fan-in's newest run concluded in an answered failure,
+/// no sibling concluded in an answered failure (a real one judges the tree, and
+/// CLOUD-900 keeps it the verdict), every sibling has concluded, and at least
+/// one sibling's conclusion is a non-answer.
+#[must_use]
+pub fn fanin_failure_manufactured(runs: &[Run], answered: &[String], fanin: &str) -> bool {
+    let mut grouped: BTreeMap<&str, Vec<&Run>> = BTreeMap::new();
+    for run in runs {
+        grouped.entry(run.name.as_str()).or_default().push(run);
+    }
+    let latest: BTreeMap<&str, &Run> = grouped
+        .into_iter()
+        .filter_map(|(name, group)| winner(&group, answered).map(|run| (name, run)))
+        .collect();
+    let is_answer = |run: &Run| answered.iter().any(|word| word == &run.conclusion);
+    let Some(fan) = latest.get(fanin) else {
+        return false;
+    };
+    if !fan.completed() || fan.passes_gate() || !is_answer(fan) {
+        return false;
+    }
+    let mut unanswered = false;
+    for (name, run) in &latest {
+        if *name == fanin {
+            continue;
+        }
+        if !run.completed() {
+            return false;
+        }
+        if is_answer(run) {
+            if !run.passes_gate() {
+                return false;
+            }
+        } else {
+            unanswered = true;
+        }
+    }
+    unanswered
+}
+
 /// The roster and its two qualifiers, all of them the consumer's.
 ///
 /// None of these is a literal in this crate: a tracker's or a forge's vocabulary
@@ -908,6 +957,46 @@ mod tests {
         let Ok(Verdict::DeadEnd(_)) = decide(&reading, &roster()) else {
             panic!("a manufactured fan-in failure is not a verdict");
         };
+    }
+
+    /// Fails by: a draft run's red fan-in read as a verdict, which wedged every
+    /// head pushed as a draft (#1276); or a real sibling failure, a green
+    /// fan-in, or a sibling still running read as manufactured.
+    #[test]
+    fn a_draft_runs_red_fanin_is_manufactured_and_a_real_failure_is_not() {
+        let answered: Vec<String> = roster().answered;
+        let draft = vec![
+            run("completed", "skipped", "ci", "", 0),
+            run("completed", "skipped", "perf", "", 0),
+            run("completed", "failure", "final", "", 0),
+        ];
+        assert!(fanin_failure_manufactured(&draft, &answered, "final"));
+        let real = vec![
+            run("completed", "failure", "ci", "", 0),
+            run("completed", "skipped", "perf", "", 0),
+            run("completed", "failure", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(&real, &answered, "final"));
+        let green = vec![
+            run("completed", "success", "ci", "", 0),
+            run("completed", "success", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(&green, &answered, "final"));
+        let running = vec![
+            run("in_progress", "", "ci", "", 0),
+            run("completed", "skipped", "perf", "", 0),
+            run("completed", "failure", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(&running, &answered, "final"));
+        let all_answered = vec![
+            run("completed", "success", "ci", "", 0),
+            run("completed", "failure", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(
+            &all_answered,
+            &answered,
+            "final"
+        ));
     }
 
     #[test]
