@@ -45,7 +45,7 @@
 //! beside the `#MUTANT` rows, and nothing else (CLOUD-2160). A source declaring
 //! none, or naming a path no runner here recognizes, reports `no-suite` and runs
 //! nothing — a guessed suite is a guessed verdict. A
-//! `.rego` module can therefore name `crates/batten/tests/<x>.rs` — the tier
+//! `.rego` module can therefore name a crate's `tests/<x>.rs` — the tier
 //! that actually drives the engine — as the suite a mutation must redden. The
 //! declaration is read PER SOURCE: a preset gate is a directory of modules, and
 //! each module's rows run under its own module's suite (see `Gate::suite_for`).
@@ -106,7 +106,7 @@ use anyhow::{Context as _, Result, bail};
 /// IMPLEMENTATION LANGUAGE** (CLOUD-1369). These read `#MUTANT `, matched with
 /// `strip_prefix` and no trim, so a declaration could only live in a `#`-comment
 /// file — bash or Rego. `#MUTANT` is not valid Rust, so no predicate in
-/// `crates/batten/src/**` could carry one, while `obligations-bound` demands the
+/// a crate's `src/**` could carry one, while `obligations-bound` demands the
 /// declared obligation file carry exactly that row. The pair was unsatisfiable
 /// for every Rust change, and a shell suite was no escape because
 /// `V-SHELL-RULE-ADDED` refuses adding one.
@@ -2368,7 +2368,7 @@ const SUITE_TARGET: &str = "target/mutate-cargo";
 /// `cargo nextest run` reads, and cargo then handed those artifacts back as
 /// fresh: measured here, a `mise run test:filter` in the real tree printed
 /// `Compiling batten`, linked a library whose debug info named
-/// `target/mutate/crates/batten/src/policy.rs`, and evaluated an engine that
+/// the mutated copy's `policy.rs` under `target/mutate/`, and evaluated an engine that
 /// projected `input.tree.missing` as an array while the source on disk projected
 /// a map. Two hours went into a projection defect that did not exist.
 ///
@@ -5274,7 +5274,7 @@ mod tests {
         let registry = Registry::parse("cargo-mutants=crates/**/*.rs").expect("parses");
         assert_eq!(
             registry
-                .owner("crates/batten/src/drain.rs")
+                .owner("crates/app/src/drain.rs")
                 .expect("one owner"),
             RunnerKind::CargoMutants
         );
@@ -5282,9 +5282,9 @@ mod tests {
             registry.owner("policy/filed-here.rego").expect("one owner"),
             RunnerKind::Declared
         );
-        assert!(!registry.declares(&row_from("crates/batten/src/drain.rs")));
+        assert!(!registry.declares(&row_from("crates/app/src/drain.rs")));
         assert!(registry.declares(&row_from("policy/filed-here.rego")));
-        assert!(Registry::default().declares(&row_from("crates/batten/src/drain.rs")));
+        assert!(Registry::default().declares(&row_from("crates/app/src/drain.rs")));
     }
 
     /// The committed globs own what ships and the cases that test it: a crate's
@@ -5297,10 +5297,10 @@ mod tests {
         )
         .expect("parses");
         for owned in [
-            "crates/batten/src/lib.rs",
-            "crates/batten/src/policy/presets/x.rs",
-            "crates/batten/build.rs",
-            "crates/batten/tests/it/mutate.rs",
+            "crates/app/src/lib.rs",
+            "crates/app/src/policy/presets/x.rs",
+            "crates/app/build.rs",
+            "crates/app/tests/it/mutate.rs",
         ] {
             assert_eq!(
                 registry.owner(owned).expect("one owner"),
@@ -5310,7 +5310,7 @@ mod tests {
         }
         assert_eq!(
             registry
-                .owner("crates/batten/examples/hook-read-bench.rs")
+                .owner("crates/app/examples/hook-read-bench.rs")
                 .expect("one owner"),
             RunnerKind::Declared
         );
@@ -5461,7 +5461,7 @@ mod tests {
         // `#MUTANT-SUITE` can never be read as declarations of a mutation.
         let lines = vec![
             String::from("#MUTANT-EXEMPT CLOUD-1|why"),
-            String::from("#MUTANT-SUITE crates/batten/tests/x.rs"),
+            String::from("#MUTANT-SUITE crates/app/tests/x.rs"),
         ];
         assert!(rows_in(&lines, "policy/x.rego").is_empty());
     }
@@ -5472,11 +5472,11 @@ mod tests {
         // census both open it — and a target name is deliberately not derived
         // from it. A grouped suite lives at `tests/it/<x>.rs` and is a MODULE,
         // not a target called `<x>`, so a stem here would name nothing.
-        let suite = Suite::declared("crates/batten/tests/it/shell_retirement.rs");
+        let suite = Suite::declared("crates/app/tests/it/shell_retirement.rs");
         assert_eq!(
             suite,
             Some(Suite::Cargo {
-                path: String::from("crates/batten/tests/it/shell_retirement.rs"),
+                path: String::from("crates/app/tests/it/shell_retirement.rs"),
             })
         );
     }

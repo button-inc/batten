@@ -490,6 +490,7 @@ mod verdict;
 mod verdict_registry;
 mod verdict_vocabulary;
 mod verify_chain;
+mod verify_placement;
 mod verify_unprovisioned;
 mod waivers;
 mod walker;

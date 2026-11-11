@@ -138,6 +138,14 @@ expression: stdout_of(&output)
           "takes_value": true,
           "positional": false,
           "help": "The epoch second to judge time-dependent records against, supplied as data"
+        },
+        {
+          "name": "show_input",
+          "short": null,
+          "long": "show-input",
+          "takes_value": false,
+          "positional": false,
+          "help": "Store the exact policy input this call produced and print its pointer on stderr"
         }
       ],
       "subcommands": []
@@ -2049,6 +2057,15 @@ expression: stdout_of(&output)
               "help": "The remote reference to land onto (default: the trunk — `must_land_on`, else the remote's default branch)"
             }
           ],
+          "subcommands": []
+        },
+        {
+          "path": "land placed",
+          "id": "land.placed",
+          "about": "Advise a gate run on a committed, pushed head that land is next and reuses its receipt",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [],
           "subcommands": []
         },
         {
@@ -5525,6 +5542,10 @@ expression: stdout_of(&output)
     {
       "id": "hk.drift",
       "path": "hk drift"
+    },
+    {
+      "id": "land.placed",
+      "path": "land placed"
     },
     {
       "id": "landed.abandoned",

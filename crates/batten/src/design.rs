@@ -285,10 +285,10 @@ pub const GATES: &[(&str, RuleSeverity)] = &[
     (DIGEST_MISMATCH, RuleSeverity::Deny),
     (VERIFIER_ABSENT, RuleSeverity::Deny),
     (BYTE_COUNT_MISMATCH, RuleSeverity::Deny),
-    (CLAIMANT_ABSENT, RuleSeverity::Warn),
-    (SELF_ATTESTED, RuleSeverity::Warn),
-    (DIGEST_NOT_COMPUTABLE, RuleSeverity::Warn),
-    (CAPTURE_OVER_BUDGET, RuleSeverity::Warn),
+    (CLAIMANT_ABSENT, RuleSeverity::Advise),
+    (SELF_ATTESTED, RuleSeverity::Advise),
+    (DIGEST_NOT_COMPUTABLE, RuleSeverity::Advise),
+    (CAPTURE_OVER_BUDGET, RuleSeverity::Advise),
 ];
 
 /// The severity a gate id carries.
@@ -558,10 +558,8 @@ pub fn blocks(findings: &[Finding], strictness: Strictness, fail_on_warning: boo
 /// path never carries one.
 fn promotes_to_fail(findings: &[Finding], fail_on_warning: bool) -> bool {
     findings.iter().any(|finding| {
-        crate::severity::promote(
-            crate::severity::row_for_rule(finding.severity).report,
-            fail_on_warning,
-        ) == crate::severity::ReportLevel::Fail
+        crate::severity::report_for(finding.severity, fail_on_warning)
+            == crate::severity::ReportLevel::Fail
     })
 }
 
@@ -725,7 +723,7 @@ mod tests {
             .iter()
             .find(|problem| problem.id == CLAIMANT_ABSENT)
             .unwrap();
-        assert_eq!(claimant.severity(), RuleSeverity::Warn);
+        assert_eq!(claimant.severity(), RuleSeverity::Advise);
     }
 
     #[test]
@@ -734,7 +732,7 @@ mod tests {
         claim.verifier = claim.claimant.clone();
         let problems = audit(&[claim], DEFAULT_MAX_CAPTURE_BYTES);
         assert_eq!(ids(&problems), [SELF_ATTESTED]);
-        assert_eq!(problems[0].severity(), RuleSeverity::Warn);
+        assert_eq!(problems[0].severity(), RuleSeverity::Advise);
     }
 
     #[test]

@@ -4635,14 +4635,14 @@ mod tests {
     #[test]
     fn lowering_a_rules_severity_is_a_weakening() {
         let base = parse(&format!("version = 1\n{}", rule("r", "deny")));
-        let working = parse(&format!("version = 1\n{}", rule("r", "warn")));
+        let working = parse(&format!("version = 1\n{}", rule("r", "advise")));
         assert_eq!(
             weakenings(&base, &working),
             vec![Weakening::new(
                 WeakeningKind::SeverityLowered,
                 "rule[r].severity",
                 "deny",
-                "warn"
+                "advise"
             )]
         );
     }

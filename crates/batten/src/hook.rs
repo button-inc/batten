@@ -285,6 +285,25 @@ impl Harness {
         self.capabilities().reason_travels_in_band
     }
 
+    /// How this harness states that it runs hosted: the variable it exports and
+    /// the value meaning a hosted, disposable session (CLOUD-2709), or `None`
+    /// where its hosted form states nothing and the declaration decides.
+    ///
+    /// Claude Code's cloud sessions export `CLAUDE_CODE_REMOTE=true` (measured
+    /// in this repository's own sessions, 2026-11-10). A harness gains a signal
+    /// here when its hosted form is measured stating one.
+    #[must_use]
+    pub const fn host_signal(self) -> Option<crate::environment::HostSignal> {
+        match self {
+            Harness::ClaudeCode => Some(("CLAUDE_CODE_REMOTE", "true")),
+            Harness::CodexCli
+            | Harness::CopilotCli
+            | Harness::GeminiCli
+            | Harness::Cursor
+            | Harness::ExitCode => None,
+        }
+    }
+
     /// The tools on this host whose call **writes the path it names**.
     ///
     /// A host fact, so it lives in the adapter rather than in `[[rule]]`: the
@@ -5251,23 +5270,31 @@ fn native_denial(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Opt
 }
 
 /// The refusals of every compiled gate that fired at a reporting, non-blocking
-/// grade, delivered as advisories while the call is allowed (CLOUD-2291).
-fn native_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Refusal> {
+/// grade, each at that grade: spoken if `advise`, recorded if `record`
+/// (CLOUD-2291, CLOUD-2707).
+fn native_nonblocking(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Graded> {
     native_fired(policy, envelope, facts)
         .into_iter()
-        .filter(|(gate, _)| {
-            let severity = native_grade(policy, *gate, facts);
-            severity != RuleSeverity::Allow && !blocks(severity, policy.fail_on_warning)
-        })
-        .map(|(_, refusal)| refusal)
+        .map(|(gate, refusal)| (native_grade(policy, gate, facts), refusal))
+        .filter(|(severity, _)| nonblocking(*severity, policy.fail_on_warning))
         .collect()
+}
+
+/// A finding with the severity its row was graded at, so the boundary can tell
+/// what it SPEAKS (`advise`) from what it RECORDS (`record`) (CLOUD-2707).
+pub type Graded = (RuleSeverity, Refusal);
+
+/// Whether a grade reports without refusing: `advise` or `record`, never
+/// `allow` (off) and never a blocking grade, which is the caller's `Decision`.
+fn nonblocking(severity: RuleSeverity, fail_on_warning: bool) -> bool {
+    !matches!(severity, RuleSeverity::Allow) && !blocks(severity, fail_on_warning)
 }
 
 /// Every compiled gate that FIRED on this call, with its refusal, in the order
 /// the mediated chain has always run them (CLOUD-2291).
 ///
 /// The one place each gate's predicate is written: [`native_denial`] and
-/// [`native_advice`] differ only in which grades they take, so the deny and the
+/// [`native_nonblocking`] differ only in which grades they take, so the deny and the
 /// advisory cannot disagree about when a gate fires. Facts first, grades after
 /// — the facts are already resolved and nearly always empty.
 fn native_fired(
@@ -6448,7 +6475,7 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
         for rule in &policy.shapes {
             if rule.kind != RuleKind::Receipt
                 || rule.receipt_trigger() != ReceiptTrigger::Write
-                || !blocks(rule.severity(), policy.fail_on_warning)
+                || rule.severity() == RuleSeverity::Allow
                 || !modifier_admits(rule, envelope)
             {
                 continue;
@@ -6468,7 +6495,7 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
     if !envelope.raw_tool.is_empty() {
         for rule in &policy.shapes {
             if rule.kind != RuleKind::Receipt
-                || !blocks(rule.severity(), policy.fail_on_warning)
+                || rule.severity() == RuleSeverity::Allow
                 || !rule.selects_tool(&envelope.raw_tool)
                 || !modifier_admits(rule, envelope)
             {
@@ -6485,7 +6512,7 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
         for rule in &policy.shapes {
             if rule.kind != RuleKind::Receipt
                 || rule.on != receipt_event
-                || !blocks(rule.severity(), policy.fail_on_warning)
+                || rule.severity() == RuleSeverity::Allow
                 || !modifier_admits(rule, envelope)
             {
                 continue;
@@ -6523,7 +6550,7 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
         for rule in &policy.shapes {
             if rule.kind != RuleKind::Receipt
                 || rule.receipt_trigger() != ReceiptTrigger::Command
-                || !blocks(rule.severity(), policy.fail_on_warning)
+                || rule.severity() == RuleSeverity::Allow
                 || !modifier_admits(rule, envelope)
             {
                 continue;
@@ -6630,6 +6657,12 @@ fn receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> 
         crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => return Decision::Allow,
     };
     for rule in matching_receipt_rows(policy, envelope) {
+        // The selection carries `advise` and `record` rows too (CLOUD-2707), so
+        // their receipts are resolved; only a blocking row decides here, and
+        // `receipt_nonblocking` reports the rest at their own grades.
+        if !blocks(rule.severity(), policy.fail_on_warning) {
+            continue;
+        }
         // Every named receipt must be valid. An unresolved name is Missing,
         // never absent-and-therefore-fine: a boundary that answered for
         // fewer checks than the row requires has not proved the precondition.
@@ -6638,6 +6671,93 @@ fn receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> 
         }
     }
     Decision::Allow
+}
+
+/// The `advise` and `record` receipt rows' findings (CLOUD-2707): a
+/// precondition the call still lacks, at the row's own grade. Before this a
+/// nonblocking receipt row was skipped at selection, so it decided nothing on
+/// any path.
+fn receipt_nonblocking(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> Vec<Graded> {
+    let crate::facts::Look::Is(resolved) = facts else {
+        return Vec::new();
+    };
+    matching_receipt_rows(policy, envelope)
+        .into_iter()
+        .filter(|rule| nonblocking(rule.severity(), policy.fail_on_warning))
+        .filter_map(|rule| {
+            receipt_verdict(policy, rule, resolved).map(|refusal| (rule.severity(), refusal))
+        })
+        .collect()
+}
+
+/// Every other call gate's `advise` and `record` findings (CLOUD-2707).
+///
+/// The content, tool, ceiling, pipeline and command-shape gates each select
+/// only BLOCKING rows, so a nonblocking row of those kinds loaded and then
+/// decided nothing on any path — the silence `land_hand_stepping.rs` records.
+/// Rather than a second predicate per gate, which could drift from the deny
+/// side, the SAME gates run over those rows promoted to `deny`, and whatever
+/// they refuse is the finding, carried back at the row's own grade. Receipt
+/// rows have [`receipt_nonblocking`] (their facts are resolved per row) and
+/// native rows [`native_nonblocking`].
+fn gate_nonblocking(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Graded> {
+    let graded: Vec<&Rule> = policy
+        .shapes
+        .iter()
+        .filter(|rule| {
+            !matches!(rule.kind, RuleKind::Receipt | RuleKind::Native)
+                && nonblocking(rule.severity(), policy.fail_on_warning)
+        })
+        .collect();
+    if graded.is_empty() {
+        return Vec::new();
+    }
+    let promoted = Policy {
+        shapes: graded
+            .iter()
+            .map(|rule| Rule {
+                severity: Some(RuleSeverity::Deny),
+                ..(*rule).clone()
+            })
+            .collect(),
+        bundles: Vec::new(),
+        ..policy.clone()
+    };
+    let mut measured = 0;
+    let shape_gated = !envelope.command.is_empty() || call_event(envelope).is_some();
+    let mut decided = vec![
+        content_rules(&promoted, envelope, facts.prospective),
+        tool_rules(&promoted, envelope),
+        ceiling_rules(&promoted, envelope, &mut measured),
+        pipeline_rules(&promoted, envelope),
+    ];
+    if shape_gated {
+        decided.push(shape_rules(
+            &promoted,
+            envelope,
+            &envelope.command,
+            facts.keys,
+        ));
+    }
+    decided
+        .into_iter()
+        .filter_map(|decision| match decision {
+            Decision::Deny(refusal) | Decision::Ask(refusal) => {
+                // Back at the grade the row declared, found by the id the
+                // refusal carries; a refusal no graded row owns is dropped
+                // rather than guessed at.
+                let severity = graded
+                    .iter()
+                    .find(|rule| rule.id == refusal.rule())
+                    .map(|rule| rule.severity())?;
+                Some((severity, refusal))
+            }
+            Decision::Allow
+            | Decision::Waived(_)
+            | Decision::Preapproved(_)
+            | Decision::Repaired(_) => None,
+        })
+        .collect()
 }
 
 /// Adjudicate one receipt row against the resolved facts (CLOUD-1297).
@@ -8538,8 +8658,13 @@ pub fn stop_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> O
     // that would be a lie: that projection opens `Refused by`, and nothing here
     // refuses. The id, the cause and the remedy all travel, so the fix clause is
     // present exactly as that contract insists.
-    let (_, refusal) = policy_refusal(policy, envelope, facts)?;
-    Some(refusal)
+    //
+    // EVERY GRADE BUT A TRIAL SPEAKS HERE (CLOUD-2707). Stop cannot refuse, so a
+    // `deny` or `advise` module's nudge is its whole voice; a `record` module's
+    // violation is written to the store through [`nonblocking_findings`] and
+    // never spoken.
+    let (severity, refusal) = policy_refusal(policy, envelope, facts)?;
+    (severity != RuleSeverity::Record).then_some(refusal)
 }
 
 /// The policy gate: hand every registered module the call's facts and read back
@@ -8569,10 +8694,9 @@ fn policy_rules(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Deci
     // said otherwise. `blocks` is the same predicate every typed rule kind here
     // consults, so the two now answer one question.
     //
-    // A NON-BLOCKING VIOLATION IS NOT DISCARDED, it is demoted — `policy_advice`
-    // renders the same refusal as text, and `run_hook` puts it on the advisory
-    // channel. A sensor with no reader is the defect this row exists inside, so
-    // the demotion and the delivery land together or neither does.
+    // A NON-BLOCKING VIOLATION IS NOT DISCARDED (CLOUD-1131, CLOUD-2707):
+    // `nonblocking_findings` returns it at its grade, and `run_hook` SPEAKS an
+    // `advise` one on the call and RECORDS a `record` one in the findings store.
     match policy_refusal(policy, envelope, facts) {
         Some((severity, refusal)) if blocks(severity, policy.fail_on_warning) => {
             Decision::Deny(refusal)
@@ -8581,35 +8705,49 @@ fn policy_rules(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Deci
     }
 }
 
-/// The advisory half of [`policy_rules`]: every NON-blocking, non-`allow` module
-/// violation, one per bundle (CLOUD-1131, CLOUD-1470).
+/// Every nonblocking finding this call raised, each at its row's grade
+/// (CLOUD-1131, CLOUD-1470, CLOUD-2707): module violations one per bundle,
+/// native gates, receipt rows and every other call gate's rows graded
+/// `advise` or `record`. The boundary SPEAKS an `advise` finding on the call
+/// and RECORDS a `record` one in the findings store; neither is dropped.
 ///
-/// Empty for silence, for a blocking violation — that one is the caller's
-/// `Decision` and saying it twice would put one finding on two channels — and at
-/// `Stop`, where [`stop_advice`] stays the sole module producer (CLOUD-888's
-/// one-nudge bound). Every advisory is returned rather than the strongest,
-/// because two pointers on one call are two things a reader needs, and keeping
-/// only the first-declared shed the second silently.
-///
-/// Returned as [`Refusal`]s so the renderer is the caller's choice.
+/// Empty for silence and for a blocking violation, which is the caller's
+/// `Decision`. At `Stop` it holds only a `record` module's end-of-turn
+/// violation: [`stop_advice`] speaks every other grade there. Every finding is
+/// returned rather than the strongest, because two pointers on one call are two
+/// things a reader needs.
 #[must_use]
-pub fn policy_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Refusal> {
+pub fn nonblocking_findings(
+    policy: &Policy,
+    envelope: &Envelope,
+    facts: &Facts<'_>,
+) -> Vec<Graded> {
     let turn_end = envelope.event == Event::Stop;
     if turn_end {
-        return Vec::new();
+        // A nonblocking module's end-of-turn violation, for the RECORD:
+        // [`stop_advice`] is what speaks at Stop (an `advise` one, never a
+        // `record` one), so the boundary speaks none of these here.
+        return policy_refusal(policy, envelope, facts)
+            .filter(|(severity, _)| nonblocking(*severity, policy.fail_on_warning))
+            .into_iter()
+            .collect();
     }
-    // A compiled gate graded `warn` speaks here, beside the modules (CLOUD-2291).
-    // Under the chain's own conditions, so the warn side runs exactly where the
-    // deny side does.
-    let mut advice = if event_decides(envelope.event).is_none()
+    // A compiled gate graded `advise` or `record` reports here, beside the
+    // modules (CLOUD-2291). Under the chain's own conditions, so the nonblocking
+    // side runs exactly where the deny side does.
+    let mut found = if event_decides(envelope.event).is_none()
         && (!policy.is_empty() || reach_refusal(facts.reach).is_some())
     {
-        native_advice(policy, envelope, facts)
+        native_nonblocking(policy, envelope, facts)
     } else {
         Vec::new()
     };
-    advice.extend(policy_advisories(policy, envelope, facts));
-    advice
+    found.extend(policy_advisories(policy, envelope, facts));
+    if event_decides(envelope.event).is_none() {
+        found.extend(receipt_nonblocking(policy, envelope, facts.receipts));
+        found.extend(gate_nonblocking(policy, envelope, facts));
+    }
+    found
 }
 
 /// The harness this process adjudicates for, bound once by the hook entry
@@ -8736,7 +8874,7 @@ fn policy_refusal(
 ///
 /// A blocking violation empties the result: it is the call's decision, and
 /// saying it twice would put one finding on two channels.
-fn policy_advisories(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Refusal> {
+fn policy_advisories(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Vec<Graded> {
     if policy.bundles.is_empty() {
         return Vec::new();
     }
@@ -8758,12 +8896,15 @@ fn policy_advisories(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
         if severity == RuleSeverity::Allow {
             continue;
         }
-        advised.push(Refusal::from_class(
-            bundle.attribute(violation),
-            &policy.verdicts,
-            &violation.verdict,
-            &violation.subjects,
-            Fix::None,
+        advised.push((
+            severity,
+            Refusal::from_class(
+                bundle.attribute(violation),
+                &policy.verdicts,
+                &violation.verdict,
+                &violation.subjects,
+                Fix::None,
+            ),
         ));
     }
     advised
@@ -9451,7 +9592,10 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
         // a committed preset can only apply the same answer to both.
         call.insert(
             "host".to_owned(),
-            serde_json::json!(crate::environment::host(HARNESS.get().copied()).as_str()),
+            serde_json::json!(
+                crate::environment::host(HARNESS.get().and_then(|harness| harness.host_signal()))
+                    .as_str()
+            ),
         );
     }
     serde_json::to_string(&document)
@@ -10877,7 +11021,9 @@ fn protected_refusal(redirects: &[Redirect], target: &Target<'_>) -> Refusal {
 /// `deny` mean the same thing at the mediation channel as in the checks
 /// pipeline. One interpretation, two surfaces.
 fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
-    severity::promote(severity::row_for_rule(severity).report, fail_on_warning) == ReportLevel::Fail
+    // Through `report_for`, which owns the trial carve-out (CLOUD-2707): a
+    // `record` row never blocks, `--fail-on-warning` included.
+    severity::report_for(severity, fail_on_warning) == ReportLevel::Fail
 }
 
 /// Compose a shape row's refusal: the rule that refused, why, and what to run.
@@ -11144,6 +11290,26 @@ impl Separator {
     }
 }
 
+/// What bash runs of a call it cannot parse whole: the longest prefix of whole
+/// lines that parses, as [`segments`] reads it (CLOUD-2707's suite, measured on
+/// `rable` 0.2.2).
+///
+/// `bash -c` executes each complete command before the line it cannot parse,
+/// so that prefix is what reaches the system, and judging it is strictly
+/// tighter than abstaining on the whole call. Only a call whose first line
+/// already fails abstains. Bounded: each step is one line shorter, and the
+/// recursion into [`segments`] is only ever over a prefix that parsed.
+fn runnable_prefix(command: &str) -> crate::facts::Look<Vec<Segment>> {
+    let lines: Vec<&str> = command.split_inclusive('\n').collect();
+    for end in (1..lines.len()).rev() {
+        let prefix = lines[..end].concat();
+        if rable::parse(&prefix, false).is_ok() {
+            return segments(&prefix);
+        }
+    }
+    crate::facts::Look::CouldNotLook
+}
+
 /// Split a command into shell-separated segments, over a real bash PARSE.
 ///
 /// **This was a character walk until CLOUD-1381, and the replacement is the
@@ -11198,8 +11364,15 @@ fn segments(command: &str) -> crate::facts::Look<Vec<Segment>> {
         // THE ARM THE CHARACTER WALK COULD NOT HAVE. A refusal here would block
         // a call on a parse failure, which the exit table forbids (`3` never
         // blocks); a clean `Vec` would be the silent under-denial the row is
-        // about. Abstention is the third answer, and it is recorded.
-        return crate::facts::Look::CouldNotLook;
+        // about.
+        //
+        // BUT BASH DOES NOT ABSTAIN (measured, `rable` 0.2.2): `bash -c` runs
+        // every complete command BEFORE the line it cannot parse, then exits
+        // 2. `echo ran\n| tail -1` prints `ran`. So a whole-call abstention let
+        // `rm <protected>` followed by any unparseable line run unjudged. What
+        // bash runs is the longest prefix of whole lines that parses, and that
+        // prefix is judged; only a call with no such prefix abstains.
+        return runnable_prefix(command);
     };
     // AND A PARSE THAT SUCCEEDED IS NOT YET A PARSE THAT READ EVERYTHING.
     //
@@ -14983,7 +15156,7 @@ mod tests {
     #[test]
     fn a_warn_shape_rule_blocks_only_once_promotion_is_on() {
         let mut rule = shape("gh-pr-merge", "gh pr merge", None);
-        rule.severity = Some(RuleSeverity::Warn);
+        rule.severity = Some(RuleSeverity::Advise);
         let call = envelope("gh pr merge 42");
 
         let advisory = Policy {
@@ -18878,7 +19051,7 @@ deny contains "refused by themodule" if {
 
         // A row the severity policy cannot reach buys nothing either: the gate
         // skips it, so counting it here is a file read for an unreachable verdict.
-        policy.shapes.last_mut().unwrap().severity = Some(RuleSeverity::Warn);
+        policy.shapes.last_mut().unwrap().severity = Some(RuleSeverity::Advise);
         assert!(
             !policy.reads_prospective(&write),
             "a row `blocks` says nothing about must not buy a read"
@@ -20656,14 +20829,14 @@ deny contains "refused by themodule" if {
                 let call = envelope("");
                 (
                     native_denial(&policy, &call, f),
-                    native_advice(&policy, &call, f).len(),
+                    native_nonblocking(&policy, &call, f).len(),
                 )
             })
         };
         let (denial, advice) = at(Vec::new());
         assert!(matches!(denial, Some(Decision::Deny(_))), "{denial:?}");
         assert_eq!(advice, 0);
-        let (denial, advice) = at(vec![history_graded(RuleSeverity::Warn)]);
+        let (denial, advice) = at(vec![history_graded(RuleSeverity::Advise)]);
         assert_eq!(denial, None);
         assert_eq!(advice, 1);
         let (denial, advice) = at(vec![history_graded(RuleSeverity::Allow)]);
@@ -20803,11 +20976,21 @@ deny contains "refused by themodule" if {
             matched_ids(&ceiling_policy(vec![tool_receipt_row()]), &call),
             ["issue-receipt"]
         );
-        let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+        // A nonblocking row is SELECTED too (CLOUD-2707), so its receipt is
+        // resolved for the record; an `allow` row, configured off, is not.
+        let advised = Rule {
+            severity: Some(RuleSeverity::Advise),
             ..tool_receipt_row()
         };
-        assert!(matched_ids(&ceiling_policy(vec![warned]), &call).is_empty());
+        assert_eq!(
+            matched_ids(&ceiling_policy(vec![advised]), &call),
+            ["issue-receipt"]
+        );
+        let off = Rule {
+            severity: Some(RuleSeverity::Allow),
+            ..tool_receipt_row()
+        };
+        assert!(matched_ids(&ceiling_policy(vec![off]), &call).is_empty());
         let conditioned = Rule {
             when_absent: Some(Field::SessionId),
             ..tool_receipt_row()
@@ -20817,19 +21000,29 @@ deny contains "refused by themodule" if {
         assert!(matched_ids(&ceiling_policy(vec![conditioned]), &in_session).is_empty());
     }
 
-    /// On the command walk, a receipt row that does not block, or that is
+    /// On the command walk, a receipt row configured off, or one that is
     /// triggered by a write, is not matched by its command; and the program's
     /// own name is never one of its operands.
     ///
     /// Fails by: the trigger or blocking test conjoined with the next one,
     /// or the operand words starting at the program.
     #[test]
-    fn the_command_walk_matches_only_a_blocking_command_triggered_row() {
-        let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+    fn the_command_walk_matches_only_a_live_command_triggered_row() {
+        // Nonblocking rows are selected for the record (CLOUD-2707); only a
+        // row configured off is not.
+        let off = Rule {
+            severity: Some(RuleSeverity::Allow),
             ..ready_receipt_row()
         };
-        assert!(matched_ids(&ceiling_policy(vec![warned]), &envelope("gh pr ready")).is_empty());
+        assert!(matched_ids(&ceiling_policy(vec![off]), &envelope("gh pr ready")).is_empty());
+        let advised = Rule {
+            severity: Some(RuleSeverity::Advise),
+            ..ready_receipt_row()
+        };
+        assert_eq!(
+            matched_ids(&ceiling_policy(vec![advised]), &envelope("gh pr ready")),
+            ["ready-receipt"]
+        );
         let write_triggered = Rule {
             trigger: Some(ReceiptTrigger::Write),
             ..ready_receipt_row()
@@ -20887,6 +21080,67 @@ deny contains "refused by themodule" if {
         crate::facts::Look::Is(resolved(entries))
     }
 
+    /// CLOUD-2707: a `warn` receipt row with its receipt missing is recorded at the
+    /// call and never denies; a `deny` row denies and is never also recorded.
+    ///
+    /// Fails by: the selection dropping `warn` rows again (no record), the deny
+    /// loop losing its blocking test (a `warn` row denies), or the record
+    /// losing its own (a `deny` row also recorded).
+    #[test]
+    fn a_warn_receipt_row_is_recorded_and_a_deny_row_denies() {
+        let call = envelope("gh pr ready");
+        let missing = receipts(&[]);
+        let warned = ceiling_policy(vec![Rule {
+            severity: Some(RuleSeverity::Advise),
+            ..ready_receipt_row()
+        }]);
+        assert_eq!(receipt_rules(&warned, &call, &missing), Decision::Allow);
+        assert_eq!(receipt_nonblocking(&warned, &call, &missing).len(), 1);
+        let (stop, waived) = (
+            crate::stop::StopFacts::default(),
+            crate::waiver::Live::new(),
+        );
+        let facts = Facts {
+            receipts: &missing,
+            ..Facts::none(&stop, &waived)
+        };
+        assert_eq!(nonblocking_findings(&warned, &call, &facts).len(), 1);
+        let denied = ceiling_policy(vec![ready_receipt_row()]);
+        assert!(matches!(
+            receipt_rules(&denied, &call, &missing),
+            Decision::Deny(_)
+        ));
+        assert!(receipt_nonblocking(&denied, &call, &missing).is_empty());
+    }
+
+    /// CLOUD-2707: a `warn` shape row is recorded at the call and allows it; the
+    /// same row at `deny` denies and is not also recorded.
+    ///
+    /// Fails by: the record pass not promoting `warn` rows (lost again), or
+    /// taking blocking rows too (a deny also recorded).
+    #[test]
+    fn a_warn_shape_row_is_recorded_and_a_deny_row_denies() {
+        let call = envelope("git push origin main");
+        let warned = ceiling_policy(vec![Rule {
+            severity: Some(RuleSeverity::Advise),
+            ..shape("push-warned", "git push", None)
+        }]);
+        assert_eq!(
+            no_facts(|f| super::adjudicate(&warned, &call, f)),
+            Decision::Allow
+        );
+        assert_eq!(
+            no_facts(|f| nonblocking_findings(&warned, &call, f)).len(),
+            1
+        );
+        let denied = ceiling_policy(vec![shape("push-denied", "git push", None)]);
+        assert!(matches!(
+            no_facts(|f| super::adjudicate(&denied, &call, f)),
+            Decision::Deny(_)
+        ));
+        assert!(no_facts(|f| gate_nonblocking(&denied, &call, f)).is_empty());
+    }
+
     /// The tool receipt gate denies a selecting receipt row whose receipt is
     /// missing, and nothing else.
     ///
@@ -20906,7 +21160,7 @@ deny contains "refused by themodule" if {
         };
         assert_eq!(gate(shaped, &call), Decision::Allow);
         let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+            severity: Some(RuleSeverity::Advise),
             ..tool_receipt_row()
         };
         assert_eq!(gate(warned, &call), Decision::Allow);
@@ -21090,7 +21344,7 @@ deny contains "refused by themodule" if {
         };
         assert_eq!(gate(receipt, &call), Decision::Allow);
         let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+            severity: Some(RuleSeverity::Advise),
             ..task_tool_row()
         };
         assert_eq!(gate(warned, &call), Decision::Allow);
@@ -21152,7 +21406,7 @@ deny contains "refused by themodule" if {
         };
         assert_eq!(gate(receipt, &call), Decision::Allow);
         let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+            severity: Some(RuleSeverity::Advise),
             ..row.clone()
         };
         assert_eq!(gate(warned, &call), Decision::Allow);
@@ -21237,7 +21491,7 @@ deny contains "refused by themodule" if {
         let mixed = graded_modules(
             "mixed",
             &[
-                ("refused by alpha", RuleSeverity::Warn),
+                ("refused by alpha", RuleSeverity::Advise),
                 ("refused by beta", RuleSeverity::Deny),
             ],
             "",
@@ -21250,8 +21504,8 @@ deny contains "refused by themodule" if {
         let ties = graded_modules(
             "ties",
             &[
-                ("refused by alpha", RuleSeverity::Warn),
-                ("refused by beta", RuleSeverity::Warn),
+                ("refused by alpha", RuleSeverity::Advise),
+                ("refused by beta", RuleSeverity::Advise),
             ],
             "",
         );
@@ -21260,33 +21514,57 @@ deny contains "refused by themodule" if {
         assert_eq!(strongest.verdict(), Some("refused by alpha"));
     }
 
-    /// A `warn` module allows the call and speaks as advice, except at
-    /// `Stop`, where it nudges once and only while no nudge is active.
+    /// CLOUD-2707: an `advise` module allows the call and is reported at its
+    /// grade, and nudges at `Stop`; a `record` module is reported at a call and
+    /// at `Stop` and never nudges; a `deny` module nudges at `Stop`. Each nudge
+    /// fires once, only while no nudge is active.
     ///
-    /// Fails by: denying at `warn`, losing the advice, advising at `Stop`, or
-    /// either stop guard inverted.
+    /// Fails by: denying at `advise`, losing a finding, speaking a `record`
+    /// module at `Stop` or silencing an `advise` one, or either stop guard
+    /// inverted.
     #[test]
-    fn a_warn_module_advises_and_nudges_at_stop() {
-        let warned = graded_modules("warned", &[("refused by alpha", RuleSeverity::Warn)], "");
+    fn an_advise_module_speaks_and_a_record_module_is_only_recorded() {
+        let module = |severity| graded_modules("graded", &[("refused by alpha", severity)], "");
         let call = envelope("forbidden");
+        let stop = envelope_at(Event::Stop, "forbidden");
+        let advised = module(RuleSeverity::Advise);
         assert_eq!(
-            no_facts(|f| policy_rules(&warned, &call, f)),
+            no_facts(|f| policy_rules(&advised, &call, f)),
             Decision::Allow
         );
-        assert_eq!(no_facts(|f| policy_advice(&warned, &call, f)).len(), 1);
-        let stop = envelope_at(Event::Stop, "forbidden");
-        assert!(no_facts(|f| policy_advice(&warned, &stop, f)).is_empty());
-        assert!(no_facts(|f| stop_advice(&warned, &stop, f)).is_some());
+        let found = no_facts(|f| nonblocking_findings(&advised, &call, f));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, RuleSeverity::Advise);
+        assert!(no_facts(|f| stop_advice(&advised, &stop, f)).is_some());
+        assert_eq!(
+            no_facts(|f| nonblocking_findings(&advised, &stop, f)).len(),
+            1
+        );
+        let recorded = module(RuleSeverity::Record);
+        assert_eq!(
+            no_facts(|f| policy_rules(&recorded, &call, f)),
+            Decision::Allow
+        );
+        assert_eq!(
+            no_facts(|f| nonblocking_findings(&recorded, &call, f))[0].0,
+            RuleSeverity::Record
+        );
+        assert!(no_facts(|f| stop_advice(&recorded, &stop, f)).is_none());
+        assert_eq!(
+            no_facts(|f| nonblocking_findings(&recorded, &stop, f)).len(),
+            1
+        );
+        let denied = module(RuleSeverity::Deny);
+        assert!(no_facts(|f| stop_advice(&denied, &stop, f)).is_some());
         let active = Envelope {
             stop_active: Some(true),
             ..envelope_at(Event::Stop, "forbidden")
         };
-        assert!(no_facts(|f| stop_advice(&warned, &active, f)).is_none());
-        assert!(no_facts(|f| stop_advice(&warned, &call, f)).is_none());
-        let off = graded_modules("off", &[("refused by alpha", RuleSeverity::Allow)], "");
-        assert!(no_facts(|f| policy_advice(&off, &call, f)).is_empty());
+        assert!(no_facts(|f| stop_advice(&denied, &active, f)).is_none());
+        assert!(no_facts(|f| stop_advice(&denied, &call, f)).is_none());
+        let off = module(RuleSeverity::Allow);
+        assert!(no_facts(|f| nonblocking_findings(&off, &call, f)).is_empty());
     }
-
     /// A native gate graded `warn` advises on a moment the chain decides, and
     /// not on one it does not.
     ///
@@ -21295,12 +21573,12 @@ deny contains "refused by themodule" if {
     #[test]
     fn a_warned_native_gate_advises_where_the_chain_decides() {
         use crate::facts::Look;
-        let policy = ceiling_policy(vec![history_graded(RuleSeverity::Warn)]);
+        let policy = ceiling_policy(vec![history_graded(RuleSeverity::Advise)]);
         let advice = |event| {
             with_native_facts(
                 &Look::CouldNotLook,
                 &Look::Is(vec![String::from("row")]),
-                |f| policy_advice(&policy, &envelope_at(event, "ls"), f).len(),
+                |f| nonblocking_findings(&policy, &envelope_at(event, "ls"), f).len(),
             )
         };
         assert_eq!(advice(Event::PreTool), 1);
@@ -21698,7 +21976,7 @@ deny contains "refused by themodule" if {
             Decision::Deny(_)
         ));
         let warned = Rule {
-            severity: Some(RuleSeverity::Warn),
+            severity: Some(RuleSeverity::Advise),
             ..head()
         };
         assert_eq!(piped(warned, "mise run ci | head"), Decision::Allow);
