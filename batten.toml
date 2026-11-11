@@ -10119,18 +10119,6 @@ path = ".github/workflows/release-plz.yml"
 reason = "ripsecrets reads the Actions secret expression inside the `GIT_CONFIG_KEY_0` insteadOf URL as an embedded credential; it is expanded by the runner from `secrets.*`, so nothing is committed. Re-check against the pinned scanner's next version."
 expires = "2026-11-14"
 
-# THE `test cover partial` LEGITIMATE CASE, by the route its verdict's own note
-# names: three CLOUD-2711 cases in `tests/it/mutate.rs` carry `#[cfg(unix)]`
-# because their subject is `toy_repo`, whose gate is a bash program the tier
-# executes — it does not exist off unix, so a `cfg!` arm would assert nothing,
-# and the file's other 87 gated cases are the same class. Expected to lapse
-# unused: `base = "origin/main"`, so the floor rises when this lands.
-[[waiver]]
-rule = "test cover unseen"
-path = "crates/batten/tests/it/mutate.rs"
-reason = "CLOUD-2711's three new cases drive `toy_repo`, a bash gate the tier executes; the subject does not exist off unix, which is the case the verdict exempts in prose and routes to a waiver"
-expires = "2026-11-25"
-
 # CLOUD-1387's shadow, waived for as long as its fix takes to land and no longer.
 #
 # `claim-before-code` reads `node = "project"` off the capture keyed to one row,
@@ -17679,7 +17667,7 @@ target = "policy/ci-cache-declared.rego"
 id = "test cover partial"
 gloss = "this branch put a #[cfg] platform attribute on a #[test], so one arm is never compiled where it is authored"
 class = """
-The remedy is `cfg!` inside the case, not an attribute over it. An attribute makes the whole case vanish on the other target, so `cross-check` type-checks only the arm the local host admits and the next edit to the other one is discovered by CI; a `cfg!` keeps both arms compiled everywhere and states the off-platform contract where a reader can see it. Measured on CLOUD-1148: `scratch.rs`'s reaper case asserted collection unconditionally, the `windows` job reddened alone, and the first fix put `#[cfg(unix)]` over it -- which is this verdict. A case whose SUBJECT genuinely does not exist off the platform is a different thing and is not what this refuses: the rule is a ratchet over the diff, so the ~40 pairs already in the tree stay. The could-not-look side is `diff read absent`, which this module raises rather than restating.
+The remedy is `cfg!` inside the case, not an attribute over it. An attribute makes the whole case vanish on the other target, so `cross-check` type-checks only the arm the local host admits and the next edit to the other one is discovered by CI; a `cfg!` keeps both arms compiled everywhere and states the off-platform contract where a reader can see it. Measured on CLOUD-1148: `scratch.rs`'s reaper case asserted collection unconditionally, the `windows` job reddened alone, and the first fix put `#[cfg(unix)]` over it -- which is this verdict. "Its subject does not exist off the platform" is NOT an exemption: it is a claim the gate cannot check, and the measured instance was false — three CLOUD-2711 cases called their fixture "a bash program the tier executes" while the sweep applies a row in-process, and the fixture became portable by reading the gate rather than spawning it. The one exemption is the compiler's verdict, not the author's: a `cfg!` arm that does not TYPE-CHECK off the platform (`cross-check` refuses it), which is a fact a reviewer can reproduce. The rule is a ratchet over the diff, so the pairs already in the tree stay. The could-not-look side is `diff read absent`, which this module raises rather than restating.
 """
 
 [[verdict.route]]
