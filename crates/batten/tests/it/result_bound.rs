@@ -634,6 +634,35 @@ fn an_mcp_spill_is_read_under_its_own_pointer() {
     assert!(note_of(&posted.stdout).contains("/0/text:"));
 }
 
+/// A TARGETLESS RESULT IS BOUND BY ITS SESSION'S HOME, NOT THE DIRECTORY IT
+/// CROSSED (CLOUD-2705, by CLOUD-2672's design). An MCP answer names no path, so
+/// it is judged where its session started; a visit to a repository declaring a
+/// tighter bound does not move that. Fails by: the second repository's bound
+/// applying to a session homed in the first.
+#[test]
+fn a_targetless_result_is_bound_by_its_sessions_home() {
+    let home = repo("result-bound-home-default");
+    // The session homes in a repository with the default bound.
+    let first = mcp_post_in(&home, &payload(2000), "homed");
+    assert!(note_of(&first.stdout).contains("/0/text:"));
+    let visited = common::Fixture::at(common::scratch("result-bound-home-visited").join("repo"))
+        .config("version = 1\n\n[capture]\nresult_max_tokens = 500\n")
+        .git()
+        .base_commit()
+        .build();
+    // Under the visited repository's own bound this would be rewritten, and its
+    // own session proves it; under the home's default it is not.
+    let own = mcp_post_in(&visited, &payload(150), "visited-own");
+    assert!(note_of(&own.stdout).contains("/0/text:"));
+    let homed = mcp_post_in(&visited, &payload(150), "homed");
+    assert_eq!(homed.status.code(), Some(0), "{}", common::stderr(&homed));
+    assert!(
+        homed.stdout.is_empty(),
+        "the visited repository's bound governed a session homed elsewhere: {}",
+        String::from_utf8_lossy(&homed.stdout)
+    );
+}
+
 /// EVERY SPILL POINTER NAMES ITS LINES, BYTES AND TOKENS (CLOUD-2284), and each
 /// holds: the view exists, its lines are the section, the section is the leaf.
 #[test]
