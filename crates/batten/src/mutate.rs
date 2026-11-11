@@ -3942,7 +3942,7 @@ fn record_document(
     )
     .ok()?;
     let document = ran.stdout.lines().find(|line| line.starts_with('{'))?;
-    (ran.passed() && fs::write(into, document).is_ok()).then_some(())
+    (ran.passed() && crate::durable::replace(into, document).is_ok()).then_some(())
 }
 
 /// BUILD ONCE, BEFORE ANY ROW IS TIMED (CLOUD-1910), and record the build so no

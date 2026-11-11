@@ -10119,6 +10119,18 @@ path = ".github/workflows/release-plz.yml"
 reason = "ripsecrets reads the Actions secret expression inside the `GIT_CONFIG_KEY_0` insteadOf URL as an embedded credential; it is expanded by the runner from `secrets.*`, so nothing is committed. Re-check against the pinned scanner's next version."
 expires = "2026-11-14"
 
+# THE `test cover partial` LEGITIMATE CASE, by the route its verdict's own note
+# names: three CLOUD-2711 cases in `tests/it/mutate.rs` carry `#[cfg(unix)]`
+# because their subject is `toy_repo`, whose gate is a bash program the tier
+# executes — it does not exist off unix, so a `cfg!` arm would assert nothing,
+# and the file's other 87 gated cases are the same class. Expected to lapse
+# unused: `base = "origin/main"`, so the floor rises when this lands.
+[[waiver]]
+rule = "test cover unseen"
+path = "crates/batten/tests/it/mutate.rs"
+reason = "CLOUD-2711's three new cases drive `toy_repo`, a bash gate the tier executes; the subject does not exist off unix, which is the case the verdict exempts in prose and routes to a waiver"
+expires = "2026-11-25"
+
 # CLOUD-1387's shadow, waived for as long as its fix takes to land and no longer.
 #
 # `claim-before-code` reads `node = "project"` off the capture keyed to one row,
