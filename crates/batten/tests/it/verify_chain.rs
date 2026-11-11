@@ -272,15 +272,44 @@ fn verify_declares_no_depends() {
     );
 }
 
+/// THE GATES `verify` GAVE UP STILL RUN, now in the fan, cheapest first
+/// (operator ruling, 2026-11-11). `ci`, `cross-check`, `darwin-link`, `zizmor`
+/// and `semver` were `depends`, which mise runs before the body, so the cheap
+/// gates reported only after the suite. In the fan they run behind the cheap
+/// gates, every one runs even when another fails, and `ci` is the last.
 #[test]
 fn verify_gated_carries_the_depends_verify_gave_up() {
-    let depends = depends_of("verify:gated");
-    for needed in ["tree-clean", "ci", "cross-check"] {
+    let gated = steps("verify:gated");
+    let fan = &gated[step_at(&gated, "--continue-on-error")];
+    let tasks: Vec<&str> = fan
+        .trim_start_matches("mise run --continue-on-error ")
+        .split(" ::: ")
+        .map(|task| task.split_whitespace().next().unwrap_or_default())
+        .collect();
+    for needed in [
+        "ci",
+        "cross-check",
+        "darwin-link",
+        "zizmor",
+        "semver",
+        "deny",
+    ] {
+        assert!(tasks.contains(&needed), "the fan runs {needed}: {tasks:?}");
+    }
+    let at = |name: &str| tasks.iter().position(|task| *task == name).unwrap();
+    for cheap in [
+        "verify:commit-lint",
+        "verify:config-lint",
+        "prose-only-check",
+        "zizmor",
+    ] {
         assert!(
-            depends.iter().any(|entry| entry == needed),
-            "verify:gated depends on {needed}: {depends:?}"
+            at(cheap) < at("cross-check"),
+            "{cheap} before the builds: {tasks:?}"
         );
     }
+    assert_eq!(tasks.last(), Some(&"ci"), "the suite is last: {tasks:?}");
+    assert_eq!(depends_of("verify:gated"), ["tree-clean"]);
 }
 
 /// THE RETIRED BODY'S ORDER, which the old suite pinned by behaviour and by text:
