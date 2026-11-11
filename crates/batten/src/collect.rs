@@ -611,6 +611,52 @@ pub fn earliest_build_start(processes: &[Process], trees: &[PathBuf]) -> Option<
         .min()
 }
 
+/// The earliest start among running TEST BINARIES under `trees`: what a
+/// scratch fixture's liveness is rooted in (#1276).
+///
+/// MEASURED ON #1276: a `land` lap's passes each logged `disk-live` and freed
+/// nothing while 6.8GB of fixtures that a FINISHED suite wrote sat in
+/// `target/tmp`, until the mutation stage filled the volume. Every one of them
+/// was written after the lap's own `cargo run` started, and that process lives
+/// as long as the lap. A fixture is written by a suite, so a suite still running
+/// is what keeps it — never a cargo, and never the engine's own build, which
+/// runs from the same tree for the whole lap ([`is_kept`] over `kept`).
+#[must_use]
+pub fn fixtures_since(trees: &[PathBuf], kept: &[Kept]) -> Option<SystemTime> {
+    match processes() {
+        Some(table) => earliest_fixture_writer(&table, trees, kept),
+        None => Some(SystemTime::UNIX_EPOCH),
+    }
+}
+
+/// The earliest start among `processes` whose executable is under one of
+/// `trees` and is not a kept file.
+#[must_use]
+pub fn earliest_fixture_writer(
+    processes: &[Process],
+    trees: &[PathBuf],
+    kept: &[Kept],
+) -> Option<SystemTime> {
+    let trees: Vec<PathBuf> = trees
+        .iter()
+        .map(|tree| crate::git::canonical(tree))
+        .collect();
+    // A TABLE THAT NAMES NO EXECUTABLE (macOS's) CANNOT TELL A SUITE FROM A
+    // BUILD, so it falls back to the build window: wider, never narrower.
+    if processes.iter().all(|process| process.exe.is_none()) {
+        return earliest_build_start(processes, &trees);
+    }
+    processes
+        .iter()
+        .filter(|process| {
+            process.exe.as_ref().is_some_and(|exe| {
+                trees.iter().any(|tree| exe.starts_with(tree)) && !is_kept(exe, kept)
+            })
+        })
+        .map(|process| process.started)
+        .min()
+}
+
 /// A build: a [`BUILD_PROGRAMS`] name (each under `p_comm`'s 16 bytes, so macOS
 /// names them whole), or an executable under one of `trees`.
 fn is_build(process: &Process, trees: &[PathBuf]) -> bool {
@@ -673,6 +719,9 @@ struct Unit {
     /// A scratch entry or the staged copy, taken whole: a live run reads it
     /// with no build lock held.
     whole: bool,
+    /// A test suite's scratch fixture, whose writer is a test binary rather
+    /// than a build: judged live by [`Request::fixtures_since`].
+    fixture: bool,
 }
 
 /// Every unit under `tree`, at any depth: every `.fingerprint` directory, nested
@@ -714,6 +763,7 @@ fn units_in(tree: &Path, fingerprints: Vec<PathBuf>, wholes: &[PathBuf]) -> Vec<
                 profile: profile.clone(),
                 fingerprint,
                 whole: false,
+                fixture: false,
             });
         }
     }
@@ -744,6 +794,7 @@ fn caches_in(tree: &Path, profile: &Path) -> Vec<Unit> {
             fingerprint: entry.path(),
             artifacts: Vec::new(),
             whole: false,
+            fixture: false,
         })
         .collect()
 }
@@ -822,6 +873,7 @@ fn whole_units(tree: &Path, wholes: &[PathBuf]) -> Vec<Unit> {
                 fingerprint: whole.clone(),
                 artifacts: Vec::new(),
                 whole: true,
+                fixture: false,
             });
             continue;
         }
@@ -841,6 +893,7 @@ fn whole_units(tree: &Path, wholes: &[PathBuf]) -> Vec<Unit> {
                     fingerprint: entry.path(),
                     artifacts: Vec::new(),
                     whole: true,
+                    fixture: true,
                 }),
         );
     }
@@ -885,6 +938,7 @@ fn mutant_copies(dir: &Path) -> Vec<Unit> {
             fingerprint: entry.path(),
             artifacts: Vec::new(),
             whole: true,
+            fixture: false,
         })
         .collect()
 }
@@ -1136,6 +1190,23 @@ pub struct Request<'a> {
     /// reads no such directory, which every bounded pass and every case asks for:
     /// a case run INSIDE a sweep would otherwise collect that sweep's own copy.
     pub copies: Option<&'a Path>,
+    /// Every scratch FIXTURE written at or after this instant is live: the
+    /// earliest test binary still running ([`fixtures_since`]). A fixture's
+    /// writer is a suite, never cargo, so [`Request::live_since`] — rooted by
+    /// any live cargo, the `cargo run` that hosts a whole lap included — kept
+    /// every fixture a lap's finished suites wrote until the lap ended.
+    pub fixtures_since: Option<SystemTime>,
+}
+
+impl Request<'_> {
+    /// The window that judges `unit` live: a fixture's writers, or a build's.
+    fn live_window(&self, unit: &Unit) -> Option<SystemTime> {
+        if unit.fixture {
+            self.fixtures_since
+        } else {
+            self.live_since
+        }
+    }
 }
 
 /// The live units and scratch, in the order a pass takes them.
@@ -1247,7 +1318,7 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
             Err(lock) => {
                 why.held += 1;
                 why.live |= request
-                    .live_since
+                    .live_window(&unit)
                     .is_some_and(|since| unit.last_use >= since);
                 if !held.locks.contains(&lock) {
                     held.locks.push(lock);
@@ -1256,7 +1327,7 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
             }
         };
         if request
-            .live_since
+            .live_window(&unit)
             .is_some_and(|since| unit.last_use >= since)
             && read_by_a_run(&unit)
         {
@@ -1398,6 +1469,7 @@ pub fn collect_toward_max(
         deadline,
         wait,
         live_since: live_since(&trees),
+        fixtures_since: fixtures_since(&trees, &kept),
     });
     Some(Collected {
         freed_bytes: pass.freed_bytes,
@@ -1668,6 +1740,59 @@ mod tests {
         );
     }
 
+    /// A FIXTURE'S WRITER IS A SUITE (#1276): a test binary under a tree roots
+    /// the fixture window; a cargo — the `cargo run` hosting a whole lap — and
+    /// the engine's own build, running from the same tree all lap, do not. A
+    /// table that names no executable falls back to the build window.
+    ///
+    /// Fails by: a cargo or the kept engine rooting fixtures, which keeps every
+    /// fixture a lap's finished suites wrote; no fallback where no executable is
+    /// named, which leaves a running suite's fixtures unprotected.
+    #[test]
+    fn a_fixture_is_rooted_by_a_running_suite_alone() {
+        let tree = scratch("fixture-writers").join("target");
+        let engine = tree.join("debug").join("batten");
+        let suite = tree.join("debug").join("deps").join("it-0123");
+        std::fs::create_dir_all(suite.parent().expect("deps")).expect("mkdir");
+        std::fs::write(&engine, b"engine").expect("write the engine");
+        std::fs::write(&suite, b"suite").expect("write the suite");
+        let kept = super::kept(std::slice::from_ref(&engine));
+        let tree = crate::git::canonical(&tree);
+        let process = |exe: &Path, secs| Process {
+            exe: Some(exe.to_path_buf()),
+            name: super::program_name(&exe.to_string_lossy()),
+            started: at(secs),
+        };
+        let cargo = Path::new("/home/u/.rustup/toolchains/x/bin/cargo");
+        let lap = [process(cargo, 50), process(&tree.join("debug/batten"), 60)];
+        assert_eq!(
+            super::earliest_fixture_writer(&lap, std::slice::from_ref(&tree), &kept),
+            None,
+            "a lap with no suite running roots no fixture"
+        );
+        let running = [
+            process(cargo, 50),
+            process(&tree.join("debug/batten"), 60),
+            process(&tree.join("debug/deps/it-0123"), 300),
+        ];
+        assert_eq!(
+            super::earliest_fixture_writer(&running, std::slice::from_ref(&tree), &kept),
+            Some(at(300)),
+            "a running suite roots what it writes from its start"
+        );
+        let named = |name: &str, secs| Process {
+            exe: None,
+            name: name.to_owned(),
+            started: at(secs),
+        };
+        let macos = [named("cargo", 70), named("batten", 50)];
+        assert_eq!(
+            super::earliest_fixture_writer(&macos, &[tree], &kept),
+            Some(at(70)),
+            "with no executable named, the build window stands"
+        );
+    }
+
     /// A PROGRAM KNOWN ONLY BY NAME KEEPS EVERY FILE ITS NAME BEGINS (macOS's
     /// `p_comm`, cut to 16 bytes), and nothing else.
     #[test]
@@ -1768,6 +1893,7 @@ mod tests {
             wait: false,
             live_since: None,
             copies: None,
+            fixtures_since: None,
         }
     }
 

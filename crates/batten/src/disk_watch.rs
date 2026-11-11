@@ -317,13 +317,22 @@ mod tests {
             min_free_mb: Some(10),
             max_free_mb: Some(11),
         };
-        let samples = Arc::new(AtomicUsize::new(0));
-        let (counted, releaser) = (Arc::clone(&samples), Arc::clone(&held));
+        // THE THIRD READING IS THE EVENT THE CASE WAITS ON, never a clock. The
+        // first starts the collection; the second, a tick later, releases the
+        // other collector's lock; the third comes after the pass that the release
+        // let through — the collection's own closing read when the watcher waited,
+        // or the next tick when it skipped and left the fixture standing.
+        let (reached, settled) = std::sync::mpsc::channel();
+        let samples = AtomicUsize::new(0);
+        let releaser = Arc::clone(&held);
         let watch = DiskWatch {
             repo: repo.clone(),
             config: &config,
             free_mb: Box::new(move || {
-                let taken = counted.fetch_add(1, Ordering::SeqCst);
+                let taken = samples.fetch_add(1, Ordering::SeqCst);
+                if taken == 2 {
+                    let _ = reached.send(());
+                }
                 if taken >= 1 {
                     if let Ok(mut lock) = releaser.lock() {
                         drop(lock.take());
@@ -334,18 +343,9 @@ mod tests {
             }),
             kept: Vec::new(),
         };
-        let gone = stale.clone();
         let ((), lines) = around(Some(watch), || {
-            for _ in 0..400 {
-                if !gone.exists() || samples.load(Ordering::SeqCst) >= 4 {
-                    return;
-                }
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "bounded by a count: at most 400 polls of 50 ms, four of the watcher's ticks"
-                )]
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
+            // Bounded by the event: three of the watcher's ticks at the outside.
+            let _ = settled.recv_timeout(std::time::Duration::from_secs(60));
         });
         assert!(!stale.exists(), "the held tree was skipped: {lines:?}");
     }

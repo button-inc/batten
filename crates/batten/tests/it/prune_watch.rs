@@ -111,6 +111,7 @@ fn request<'a>(
         wait: false,
         live_since: None,
         copies: None,
+        fixtures_since: None,
     }
 }
 
@@ -119,6 +120,7 @@ fn request<'a>(
 fn request_under_a_live_build(trees: &[PathBuf], need: u64) -> batten::collect::Request<'_> {
     let mut ask = request(trees, &[], need);
     ask.live_since = Some(SystemTime::now() - Duration::from_secs(60));
+    ask.fixtures_since = ask.live_since;
     ask
 }
 
@@ -184,6 +186,28 @@ fn a_stale_test_scratch_entry_is_collected() {
     assert_eq!(units, 1, "only the stale fixture is outside the live build");
     assert!(!tree.join("tmp/old-fixture").exists());
     assert!(tree.join("tmp/live-fixture").exists());
+}
+
+/// A FIXTURE A FINISHED SUITE WROTE GOES, EVEN INSIDE A LIVE BUILD'S WINDOW
+/// (#1276): the `cargo run` hosting a lap lives as long as the lap, and every
+/// fixture its suites wrote read as live until the mutation stage filled the
+/// volume. With no suite running, nothing roots a fixture.
+///
+/// Fails by: fixtures judged by the build window rather than their own.
+#[test]
+fn a_fixture_no_running_suite_wrote_is_collected_inside_a_builds_window() {
+    let root = common::scratch("collect-finished-suite");
+    let tree = root.join("target");
+    aged_dir(&tree.join("tmp/finished-suite-fixture"), 1);
+    let trees = [tree.clone()];
+    let mut ask = request_under_a_live_build(&trees, u64::MAX);
+    ask.fixtures_since = None;
+    let units = batten::collect::collect(&ask).removed;
+    assert_eq!(
+        units, 1,
+        "the finished suite's fixture is outside every window"
+    );
+    assert!(!tree.join("tmp/finished-suite-fixture").exists());
 }
 
 /// A COPY A KILLED SWEEP LEFT IN THE TEMP DIRECTORY IS COLLECTED, AND A LIVE
