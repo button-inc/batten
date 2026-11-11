@@ -354,6 +354,28 @@ pub(crate) fn task_depends(name: &str) -> Vec<String> {
     }
 }
 
+/// Every task a task reaches directly: its `depends`, each `mise run X` step, and
+/// each `::: X` member of a `mise run --continue-on-error` fan (the verify fan of
+/// 2026-11-11). A gate moved from `depends` into the fan is still reached, so a
+/// test asking "does verify run X" must not care which of the two spells it.
+pub(crate) fn task_reaches(name: &str) -> Vec<String> {
+    let mut reached = task_depends(name);
+    for line in task_body(name).lines() {
+        let Some(rest) = line.trim().strip_prefix("mise run ") else {
+            continue;
+        };
+        for member in rest.split(":::") {
+            if let Some(task) = member
+                .split_whitespace()
+                .find(|word| !word.starts_with('-'))
+            {
+                reached.push(task.to_owned());
+            }
+        }
+    }
+    reached
+}
+
 /// Every `BATTEN_` variable the command surface declares, derived from the
 /// surface itself so the set cannot drift behind a new flag.
 fn declared_env_vars() -> Vec<&'static str> {
