@@ -148,8 +148,10 @@ webpki-roots = "1"
 # seccomp `EPERM` and `io_uring_disabled` included (read in compio-driver
 # 0.10.0's `DriverType::suggest` and `fusion::Driver::new`); Windows gets IOCP,
 # macOS a pool. Tokio stays the network runtime.
-compio = { version = "0.17", default-features = false, features = [
+compio = { version = "0.19", default-features = false, features = [
   "runtime",
+  "fs",
+  "io",
   "io-uring",
   "polling",
 ] }
