@@ -1592,14 +1592,14 @@ mod tests {
         let dir = store("re-rated");
         let context = Context::new("refs/heads/a");
         let commit = "0".repeat(40);
-        let fingerprint = finding_for(RuleSeverity::Warn).identity.fingerprint;
+        let fingerprint = finding_for(RuleSeverity::Advise).identity.fingerprint;
 
         record(
             &dir,
             &context,
             &commit,
             None,
-            &[finding_for(RuleSeverity::Warn)],
+            &[finding_for(RuleSeverity::Advise)],
             FINDINGS_SCHEMA,
             &all_evaluated(),
         )
@@ -1625,7 +1625,7 @@ mod tests {
         );
         assert_eq!(
             after.severity,
-            RuleSeverity::Warn,
+            RuleSeverity::Advise,
             "the recorded severity is the one the finding was minted under"
         );
 
