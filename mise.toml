@@ -711,7 +711,7 @@ MUTANT_TASKS = "mise.toml"
 # `mise install` fails ("GitHub access to this repository is not enabled"). The
 # fix is not to give up — GitHub is reachable — it is to send just the API/asset
 # hosts straight to GitHub, over the direct route (our tools are public repos, so
-# unauthenticated resolution works there; GH_TOKEN below still carries our PAT):
+# unauthenticated resolution works there; GH_TOKEN below carries a PAT where one is set):
 #   * NO_PROXY gains api.github.com (+ the redirect/asset hosts) so those calls
 #     bypass the proxy. github.com itself is deliberately left proxied, so git
 #     keeps its proxy-provided auth to button-inc/batten. The guard appends once
@@ -724,7 +724,7 @@ MUTANT_TASKS = "mise.toml"
 #     1200 s in `verify`); the proxy stays the route, and the tokens stay empty as below.
 # See AGENTS.md, "GitHub is reachable — never report the toolchain as unrunnable".
 # `gh` and zizmor read GH_TOKEN. In the sandbox the ambient GH_TOKEN is a proxy
-# placeholder that 401s when sent direct (NO_PROXY, above), so set it to our PAT;
+# placeholder that 401s when sent direct (NO_PROXY, above), so a PAT, where one is set, takes its place;
 # in CI there is no PAT, so fall back to MISE_GITHUB_TOKEN, which mise-action sets
 # to the job token. Both are valid, non-empty tokens (never the proxy
 # placeholder), so a tool that rejects an *empty* GH_TOKEN — like zizmor — works
@@ -737,7 +737,16 @@ MUTANT_TASKS = "mise.toml"
 # reported 401, and not a repository-scope verdict. Measure with `mise cache
 # clear` before EACH arm: without it the first arm that succeeds makes every
 # later arm pass from cache, which is how this was misread three times.
-GH_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=''))) }}"
+#
+# WITH NO PAT THE PLACEHOLDER IS KEPT, never blanked (CLOUD-2688). An empty
+# GH_TOKEN makes `gh` refuse before it sends anything ("populate the GH_TOKEN
+# environment variable"), while the placeholder reaches the proxy — `NO_PROXY`
+# above only sends GitHub direct when a real token exists — and the proxy swaps
+# in its own credential. Measured 2026-11-11, no PAT in the container: `gh api
+# repos/button-inc/batten` answers through the placeholder and fails under the
+# blanked value; the API answers 403 for a third-party repository with or
+# without the placeholder, so keeping it costs nothing anywhere.
+GH_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=get_env(name='GH_TOKEN', default='')))) }}"
 # THE OTHER HALF OF THE SAME REPAIR, and its absence is why the paragraph above
 # describes a 401 the paragraph above did not fix. `GH_TOKEN` is what `gh` and
 # zizmor read; `GITHUB_TOKEN` is what MISE'S OWN backends read — aqua, the
@@ -3300,7 +3309,16 @@ silent = "stdout"
 # `MISE_ENV = "agent"` provisions `mise.agent.toml` on top of the manifest, and
 # holds `toolchain-check` to it: Serena lives there now, out of every build's
 # reach (CLOUD-2553), and a session is the one place that launches it.
-env = { MISE_LOCKFILE = "false", MISE_ENV = "agent" }
+#
+# LOCKED, AND STILL PURE (CLOUD-2688). Locked mode installs every tool from the
+# URL and checksum `mise.lock` pins and never writes the lock, so the residue
+# `MISE_LOCKFILE=false` existed to stop cannot arise; it needs the lockfile ON to
+# read it, the opt-in every CI workflow already makes. It also needs no GitHub
+# API: measured 2026-11-11 in a cloud session with no PAT, a locked install of
+# the whole manifest into an empty data directory went through the agent proxy,
+# installed all 38 tools and left `mise.lock` byte-identical, where an unlocked
+# resolve is refused 403 for every third-party repository.
+env = { MISE_LOCKFILE = "true", MISE_LOCKED = "true", MISE_ENV = "agent" }
 run = ["mise install", "mise run toolchain-check"]
 
 [tasks."toolchain-check"]

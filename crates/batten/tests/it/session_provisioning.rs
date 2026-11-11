@@ -919,7 +919,7 @@ fn every_provisioning_step_declares_its_own_bound() {
 }
 
 #[test]
-fn the_install_step_is_declared_lockfile_free() {
+fn the_install_step_is_declared_locked() {
     // CARRIES `"the install is lockfile-free — provisioning must not dirty the
     // tracked lock"` (CLOUD-223), and `"mise install runs — the step whose
     // absence was the defect"` with it: both were greps over the retired
@@ -942,13 +942,28 @@ fn the_install_step_is_declared_lockfile_free() {
         .and_then(|tasks| tasks.values().next())
         .expect("the block carries its task");
 
-    assert_eq!(
+    // LOCKED, NOT LOCKFILE-FREE, since CLOUD-2688. The invariant is unchanged —
+    // provisioning must not dirty the tracked lock — and the mechanism moved: a
+    // LOCKED install reads `mise.lock` (its URLs and checksums, so no
+    // `api.github.com` resolve the proxy refuses) and refuses, rather than
+    // appends, anything the lock lacks. Measured: all 38 tools into an empty data
+    // directory, lock byte-identical after.
+    let env = |key: &str| {
         task.get("env")
-            .and_then(|env| env.get("MISE_LOCKFILE"))
-            .and_then(toml::Value::as_str),
-        Some("false"),
-        "provisioning installs purely, so it cannot append a platform key `mise lock` \
-         cannot produce and `lock cover partial` rejects"
+            .and_then(|env| env.get(key))
+            .and_then(toml::Value::as_str)
+            .map(ToOwned::to_owned)
+    };
+    assert_eq!(
+        env("MISE_LOCKED").as_deref(),
+        Some("true"),
+        "provisioning installs from the lock and never writes it, so it cannot append a \
+         platform key `mise lock` cannot produce and `lock cover partial` rejects"
+    );
+    assert_eq!(
+        env("MISE_LOCKFILE").as_deref(),
+        Some("true"),
+        "locked mode reads the lockfile, so the lockfile must be on"
     );
     assert!(
         task_value(&block, "run").contains("mise install"),
