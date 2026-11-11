@@ -4713,6 +4713,12 @@ description = "The full local gate each `land` lap runs — iterate a draft with
 # the path the measurement was about. A hand-run `mise run verify` re-proves; the
 # early exit could not be spelled as a step of a sequence that runs every step.
 run = [
+  # CHEAPEST FIRST: a dirty tree is one `git status` read and was refused only
+  # at `receipt record`, after two compiles (#1276). The INSTALLED release asks
+  # it — every session has one, the hooks run it on every call — so the answer
+  # costs no build. The receipt steps below stay on this tree's build, so the
+  # writer and the reader of a receipt are one version.
+  "batten receipt clean",
   "mise run toolchain-check",
   "cargo run --quiet -p batten -- land placed",
   "cargo run --quiet -p batten -- receipt status claim --or bot --or carry --key branch",
