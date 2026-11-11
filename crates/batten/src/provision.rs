@@ -1332,11 +1332,9 @@ pub fn organisation_of(pem: &str) -> Option<String> {
 
     x509_cert::Certificate::from_pem(pem)
         .ok()?
-        .tbs_certificate
-        .subject
-        .0
+        .tbs_certificate()
+        .subject()
         .iter()
-        .flat_map(|name| name.0.iter())
         .find(|attribute| attribute.oid == ORGANISATION_NAME)
         .and_then(|attribute| attribute_text(&attribute.value))
 }

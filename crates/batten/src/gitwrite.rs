@@ -248,7 +248,7 @@ pub fn carries(dir: &Path, candidate: &str, tip: &str) -> bool {
         return false;
     };
     repo.merge_base(base, head)
-        .is_ok_and(|found| found.detach() == base)
+        .is_ok_and(|found| found.is_some_and(|found| found.detach() == base))
 }
 
 /// The merge commits in `base..tip`, oldest last, or `None` where either rev
@@ -499,7 +499,7 @@ fn replay_range(
     let descends = bound == base
         && repo
             .merge_base(base, tip)
-            .is_ok_and(|found| found.detach() == base);
+            .is_ok_and(|found| found.is_some_and(|found| found.detach() == base));
 
     let walk = repo
         .rev_walk([tip])
