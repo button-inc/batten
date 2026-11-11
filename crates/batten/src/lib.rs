@@ -12554,6 +12554,22 @@ fn run_land_lap(
     //
     // BEFORE the lease and the singleton, which is where the predecessor put it
     // and for its reason: a refusal here has spent nothing at all.
+    //
+    // A DIRTY TREE FIRST, AND HERE (owner ruling, 2026-11-11). `verify` refuses
+    // one only at `receipt record`, after the toolchain check, two compiles and
+    // the linearity fetch: measured on #1276, a lap stopped there on one
+    // uncommitted ledger line it could have named before spending anything. The
+    // question is one `git status` read, the cheapest a lap can ask, so it is
+    // asked before every other.
+    if let Some(dirty) = git::uncommitted(root).ok().filter(|dirty| *dirty > 0) {
+        writeln!(
+            err,
+            "::error:: land: the working tree differs from HEAD in {dirty} path(s), so no lap \
+             can verify what it would push. Commit the work (you are pre-authorised to) or set \
+             it aside, then run the lap again."
+        )?;
+        return Ok(ExitCode::Violation);
+    }
     if let Some(code) = run_land_entry_gates(root, branch, out, err)? {
         return Ok(code);
     }
