@@ -119,12 +119,31 @@ fn the_boundary_acquires_a_plan_the_module_can_read() {
     let module = std::fs::read_to_string(root.join("policy/hk-plan-required.rego"))
         .expect("the module reads");
     let dir = common::scratch("hk-plan-unacquired");
+    // EVERY VERDICT THE MODULE RAISES IS DECLARED, or the engine refuses the
+    // row at load — and that refusal NAMES `plan read missing`, so a case
+    // reading the output for the token passed over any module at all, the
+    // predicate mutated away included. Measured on #1276's sweep:
+    // `plan-unacquired-silenced` survived exactly that way.
+    let declared: String = ["step run missing", "plan run refused", "plan read missing"]
+        .iter()
+        .map(|id| {
+            format!(
+                "\n[[verdict]]\nid = \"{id}\"\ngloss = \"the fixture class {id}\"\n\
+                 class = \"A fixture class raised by the shipping module.\"\n\n\
+                 [[verdict.route]]\nid = \"read the module\"\nkind = \"document\"\n\
+                 target = \"policy/hk-plan-required.rego\"\n"
+            )
+        })
+        .collect();
     common::write(
         &dir,
         "batten.toml",
-        "version = 1\n\n[[rule]]\nid = \"plan require missing\"\nkind = \"policy\"\n\
-         scope = \"tree\"\nmodule = \"policy/hk-plan-required.rego\"\nseverity = \"deny\"\n\n\
-         [[rule.plan]]\nid = \"gate\"\nhook = \"check\"\nrequired = [\"batten-check\"]\n",
+        &format!(
+            "version = 1\n\n[[rule]]\nid = \"plan require missing\"\nkind = \"policy\"\n\
+             scope = \"tree\"\nmodule = \"policy/hk-plan-required.rego\"\nseverity = \"deny\"\n\n\
+             [[rule.plan]]\nid = \"gate\"\nhook = \"check\"\nrequired = [\"batten-check\"]\n\
+             {declared}"
+        ),
     );
     common::write(&dir, "policy/hk-plan-required.rego", &module);
     common::init_repo(&dir);
@@ -138,9 +157,15 @@ fn the_boundary_acquires_a_plan_the_module_can_read() {
         String::from_utf8_lossy(&answer.stdout),
         String::from_utf8_lossy(&answer.stderr)
     );
+    // THE VERDICT, NOT THE TOKEN: exit `2` and the deny line naming the plan.
+    assert_eq!(
+        answer.status.code(),
+        Some(2),
+        "a declared plan the runner could not produce is refused\n{said}"
+    );
     assert!(
-        said.contains("plan read missing"),
-        "a declared plan the runner could not produce is reported\n{said}"
+        said.contains("deny plan read missing at gate"),
+        "the refusal names the plan nobody could acquire\n{said}"
     );
 }
 
