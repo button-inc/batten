@@ -87,7 +87,7 @@ fn verify_depends_on_the_offline_one_and_never_on_the_scheduled_one() {
     // adding the online audit to `verify` would drag it back onto the landing
     // path through CI. `verify:gated` is the link that carries the gate set since
     // CLOUD-407 made `verify` a dependency-free sequence.
-    let depends = common::task_depends("verify:gated");
+    let depends = common::task_reaches("verify:gated");
     assert!(
         depends.iter().any(|task| task == "zizmor"),
         "verify:gated no longer depends on the offline audit: {depends:?}"

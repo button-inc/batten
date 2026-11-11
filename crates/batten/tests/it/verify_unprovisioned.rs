@@ -353,7 +353,7 @@ fn the_extracted_verify_body_is_the_task_and_not_the_whole_file() {
 /// borrowed tips were measured in on 2026-09-25/26.
 #[test]
 fn both_base_armed_gates_read_the_base_the_lap_actually_borrowed() {
-    let gated = task_body("verify:gated");
+    let gated = common::task_reaches("verify:gated");
     for (wrapper, armed, gate) in [
         (
             "verify:config-lint",
@@ -363,8 +363,8 @@ fn both_base_armed_gates_read_the_base_the_lap_actually_borrowed() {
         ("verify:commit-lint", "BASE_SHA", "mise run commit-lint"),
     ] {
         assert!(
-            gated.contains(&format!("mise run {wrapper}")),
-            "the gate set reaches {gate} through {wrapper}: {gated}"
+            gated.iter().any(|task| task == wrapper),
+            "the gate set reaches {gate} through {wrapper}: {gated:?}"
         );
         let body = task_body(wrapper);
         assert!(body.contains(gate), "{wrapper} runs {gate}: {body}");
