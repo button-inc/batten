@@ -1098,13 +1098,41 @@ hooks {
       }
     }
   }
+  // THE COMMIT, NOT `verify`, IS WHERE A WEAKENING IS JUDGED. Measured on #1276:
+  // a waiver written into `batten.toml`, three `#[cfg(unix)]` cases and a
+  // `Revert "…"` subject each reached `verify` before anything refused them,
+  // because the two gates that judge them (`config lint`, `test cover missing`)
+  // sat in the `slow` profile for one reason — `cargo run` would make every
+  // commit pay a compile (CLOUD-1397). The PINNED engine pays none: these steps
+  // call it directly, as `filed-here:guard` does before every write, so the
+  // refusal lands on the commit that introduced the weakening.
   ["pre-commit"] {
     // Check only what is staged, and never let a fixer clobber unstaged work:
     // hk stashes the working tree, runs the steps, then restores it via
     // three-way merge. patch-file is faster than `git stash` and sidesteps
     // index-lock races. See https://hk.jdx.dev/environment_variables.
     stash = "patch-file"
-    steps = gate
+    steps = (gate) {
+      ["config-lint-pinned"] {
+        glob = List("batten.toml", ".batten/asked.jsonl")
+        check = "batten config lint"
+      }
+      ["cfg-gated-test-pinned"] {
+        glob = List("**/*.rs")
+        check = "batten check --rule 'test cover missing'"
+      }
+    }
+  }
+  // `git revert` and `git cherry-pick` commit through the sequencer, which runs
+  // no `commit-msg` hook, so a `Revert "…"` subject reached `verify` unjudged
+  // (b67a1ae6). The push is the last local point every commit passes, whatever
+  // made it, so the subjects of the whole branch are judged there.
+  ["pre-push"] {
+    steps {
+      ["commit-subjects"] {
+        check = "batten commit check origin/main..HEAD"
+      }
+    }
   }
   // Read-only variant driven by `hk check --all` (via `mise run hooks`) in CI.
   //
