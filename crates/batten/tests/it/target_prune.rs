@@ -541,7 +541,10 @@ fn superseded_example_generations_are_reclaimed_like_deps() {
     unit(&examples, "bench", "cccccccccccc", 60, 101, 5);
     let orphan = examples.join("bench-dddddddddddd.bench.1a2b3c4d-cgu.0.rcgu.dwo");
     std::fs::write(&orphan, b"debuginfo").unwrap();
-    let foreign = repo.join("target/tmp/fixture/examples");
+    // OUTSIDE `tmp/`: a decoy under the test scratch is a fixture the disk
+    // collector judges by its own window (#1276), and no suite runs from this
+    // tree, so it went for that reason rather than this case's.
+    let foreign = repo.join("target/fixture/examples");
     artifact(&foreign, "bench", "aaaaaaaaaaaa", 3600);
     artifact(&foreign, "bench", "bbbbbbbbbbbb", 1800);
     artifact(&foreign, "bench", "cccccccccccc", 60);
