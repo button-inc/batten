@@ -73,9 +73,97 @@ fn licenses(value: Option<&str>) -> bool {
     value == Some(DISPOSABLE)
 }
 
+/// What kind of machine a mediated call runs on, as a policy reads it
+/// (`input.call.host`, CLOUD-2709).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Host {
+    /// A hosted, disposable session: a harness's cloud container.
+    Disposable,
+    /// Anything else, a developer's own machine included.
+    Machine,
+}
+
+impl Host {
+    /// The token a policy module compares.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disposable => "disposable",
+            Self::Machine => "machine",
+        }
+    }
+}
+
+/// The host a call runs on: DETECTED from the harness first, declared second.
+///
+/// **THE HARNESS SAYS WHERE IT RUNS, AND BATTEN IS THE LAYER THAT READS EACH
+/// HARNESS** (CLOUD-2709). A hand-set variable is a second authority over a fact
+/// the host already states, and one forgotten export reads a cloud session as a
+/// laptop. So each harness's own signal decides, and [`disposable`]'s explicit
+/// declaration is the fallback for a harness whose hosted form states nothing.
+///
+/// Distinct from [`disposable`] on purpose: a destructive repair still needs the
+/// explicit declaration, because the expensive direction is the one that must be
+/// said; a policy that only refuses a practice can follow detection.
+#[must_use]
+pub fn host(harness: Option<crate::hook::Harness>) -> Host {
+    let read = |key: &str| std::env::var(key).ok();
+    host_of(harness, &read)
+}
+
+/// [`host`]'s decision over an environment reader, split for the unit cases
+/// (`set_var` is `unsafe`, and `unsafe` is forbidden here).
+fn host_of(harness: Option<crate::hook::Harness>, read: &dyn Fn(&str) -> Option<String>) -> Host {
+    if licenses(read(KEY).as_deref()) || harness.is_some_and(|harness| hosted(harness, read)) {
+        Host::Disposable
+    } else {
+        Host::Machine
+    }
+}
+
+/// Whether `harness` states that it runs hosted, by its own documented signal.
+///
+/// Claude Code's cloud sessions export `CLAUDE_CODE_REMOTE=true` (measured in
+/// this repository's own sessions, 2026-11-10). The other harnesses document no
+/// such signal today, so they answer no and the declaration decides; a harness
+/// gains a row here when its hosted form is measured stating one.
+fn hosted(harness: crate::hook::Harness, read: &dyn Fn(&str) -> Option<String>) -> bool {
+    use crate::hook::Harness;
+    match harness {
+        Harness::ClaudeCode => read("CLAUDE_CODE_REMOTE").as_deref() == Some("true"),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CLOUD-2709. Fails by: a cloud session read as a machine because nobody
+    /// exported the declaration, or a local session read as disposable.
+    #[test]
+    fn the_harness_states_its_host_and_the_declaration_is_the_fallback() {
+        use crate::hook::Harness;
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |key: &str| {
+                pairs
+                    .iter()
+                    .find(|(name, _)| *name == key)
+                    .map(|(_, value)| (*value).to_owned())
+            }
+        };
+        let cloud = env(&[("CLAUDE_CODE_REMOTE", "true")]);
+        let local = env(&[]);
+        let declared = env(&[("BATTEN_ENVIRONMENT", "disposable")]);
+        assert_eq!(host_of(Some(Harness::ClaudeCode), &cloud), Host::Disposable);
+        assert_eq!(host_of(Some(Harness::ClaudeCode), &local), Host::Machine);
+        // Another harness's signal is not this one's.
+        assert_eq!(host_of(Some(Harness::Cursor), &cloud), Host::Machine);
+        // The declaration decides wherever detection says nothing.
+        assert_eq!(host_of(Some(Harness::Cursor), &declared), Host::Disposable);
+        assert_eq!(host_of(None, &declared), Host::Disposable);
+        assert_eq!(host_of(None, &local), Host::Machine);
+    }
 
     #[test]
     fn only_the_exact_value_licenses_a_destructive_repair() {

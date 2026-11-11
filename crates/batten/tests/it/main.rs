@@ -330,6 +330,7 @@ mod policy_cache;
 mod policy_engine_count;
 mod policy_input_narrowing;
 mod policy_input_schema;
+mod policy_parity;
 mod policy_presets;
 mod policy_severity;
 mod policy_test_suite;
