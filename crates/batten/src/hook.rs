@@ -6542,11 +6542,8 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
         };
         // Normalised with the program, for the reason `matching_shape_rows`
         // states: a grouped command's closing paren rides the last operand.
-        let words: Vec<&str> = tokens[program_index + 1..]
-            .iter()
-            .map(|token| program_token(token))
-            .filter(|token| !token.starts_with('-'))
-            .collect();
+        // Anchored at the subcommand, for the shape walk's reason (CLOUD-2666).
+        let words = verdict_words(&tokens, program_index).unwrap_or_default();
         for rule in &policy.shapes {
             if rule.kind != RuleKind::Receipt
                 || rule.receipt_trigger() != ReceiptTrigger::Command
@@ -9941,11 +9938,12 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
         // LAST token — which is a matched operand whenever the command takes no
         // trailing argument, so `(gh pr merge)` would not match where
         // `(gh pr merge 42)` did.
-        let words: Vec<&str> = tokens[program_index + 1..]
-            .iter()
-            .map(|token| program_token(token))
-            .filter(|token| !token.starts_with('-'))
-            .collect();
+        //
+        // ANCHORED AT THE SUBCOMMAND (CLOUD-2666): `verdict_words` steps past
+        // the program's global value options to the subcommand, so `git -C d
+        // push` is `push`, and `git stash push` is `stash push`, which a row
+        // keyed on `git push` must not match.
+        let words = verdict_words(&tokens, program_index).unwrap_or_default();
         for rule in &policy.shapes {
             // Kind-filtered, not scope-filtered: `receipt` rows are
             // `mediated_call`-scoped too and carry a `pattern`, so without this
@@ -12147,8 +12145,14 @@ pub(crate) fn unquote(word: &str) -> String {
 /// nine days after the first was measured — a shared authority is what stops
 /// the twin recurring. The cases stay per-matcher (`rules::validate` and the
 /// tests below), because sharing the decision must not also share the evidence.
+///
+/// **A PREFIX OF THE SUBCOMMAND WORDS, NEVER A WINDOW ANYWHERE (CLOUD-2666).**
+/// The words start at the subcommand ([`verdict_words`]), so `git push` matches
+/// `git -C d push` and not `git stash push`, `git log push` or `git checkout
+/// push`. Matching anywhere was the workaround for not knowing which options
+/// take values, and it over-matched every subcommand that takes an operand.
 fn operands_match(words: &[&str], wanted: &[&str]) -> bool {
-    wanted.is_empty() || words.windows(wanted.len()).any(|window| window == wanted)
+    words.starts_with(wanted)
 }
 
 /// Did the call reach its program through the mediator a row requires?
@@ -14321,6 +14325,55 @@ mod tests {
                 "adjudicate must read no clock, and it named {clock}"
             );
         }
+    }
+
+    /// CLOUD-2666's over-match. A row keyed on a subcommand matches from the
+    /// subcommand, past the program's global value options, and nowhere else:
+    /// `git stash push` is not `git push`, and `gh pr view merge` is not
+    /// `gh pr merge`.
+    #[test]
+    fn a_shape_row_matches_its_subcommand_and_never_an_operand() {
+        let push = ceiling_policy(vec![shape("no-push", "git push", None)]);
+        let decide = |policy: &Policy, command: &str| {
+            adjudicate(
+                policy,
+                &envelope(command),
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
+                &crate::stop::StopFacts::default(),
+            )
+        };
+        for refused in [
+            "git push",
+            "git push origin main",
+            "git -C d push",
+            "git -c a=b push",
+        ] {
+            assert!(
+                matches!(decide(&push, refused), Decision::Deny(_)),
+                "{refused} is a push"
+            );
+        }
+        for admitted in ["git stash push -m x", "git log push", "git checkout push"] {
+            assert!(
+                matches!(decide(&push, admitted), Decision::Allow),
+                "{admitted} is not a push"
+            );
+        }
+        for refused in [
+            "gh pr merge 1",
+            "gh -R o/r pr merge 1",
+            "gh pr -R o/r merge 1",
+        ] {
+            assert!(
+                matches!(adjudicate_command(refused), Decision::Deny(_)),
+                "{refused} is a merge"
+            );
+        }
+        assert!(matches!(
+            adjudicate_command("gh pr view merge"),
+            Decision::Allow
+        ));
     }
 
     fn adjudicate_command(command: &str) -> Decision {
