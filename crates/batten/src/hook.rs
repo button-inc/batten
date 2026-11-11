@@ -10215,7 +10215,7 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
         //
         // ANCHORED AT THE SUBCOMMAND (CLOUD-2666): `verdict_words` steps past
         // the program's global value options to the subcommand, so `git -C d
-        // push` is `push`, and `git notes push` is `notes push`, which a row
+        // push` is `push`, and `git stash push` is `stash push`, which a row
         // keyed on `git push` must not match.
         let words = verdict_words(&tokens, program_index).unwrap_or_default();
         for rule in &policy.shapes {
@@ -12422,7 +12422,7 @@ pub(crate) fn unquote(word: &str) -> String {
 ///
 /// **A PREFIX OF THE SUBCOMMAND WORDS, NEVER A WINDOW ANYWHERE (CLOUD-2666).**
 /// The words start at the subcommand ([`verdict_words`]), so `git push` matches
-/// `git -C d push` and not `git notes push`, `git log push` or `git checkout
+/// `git -C d push` and not `git stash push`, `git log push` or `git checkout
 /// push`. Matching anywhere was the workaround for not knowing which options
 /// take values, and it over-matched every subcommand that takes an operand.
 fn operands_match(words: &[&str], wanted: &[&str]) -> bool {
@@ -14607,7 +14607,7 @@ mod tests {
 
     /// CLOUD-2666's over-match. A row keyed on a subcommand matches from the
     /// subcommand, past the program's global value options, and nowhere else:
-    /// `git notes push` is not `git push`, and `gh pr view merge` is not
+    /// `git stash push` is not `git push`, and `gh pr view merge` is not
     /// `gh pr merge`.
     #[test]
     fn a_shape_row_matches_its_subcommand_and_never_an_operand() {
@@ -14632,7 +14632,7 @@ mod tests {
                 "{refused} is a push"
             );
         }
-        for admitted in ["git notes push -m x", "git log push", "git checkout push"] {
+        for admitted in ["git stash push -m x", "git log push", "git checkout push"] {
             assert!(
                 matches!(decide(&push, admitted), Decision::Allow),
                 "{admitted} is not a push"

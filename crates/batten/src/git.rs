@@ -8664,6 +8664,72 @@ mod tests {
         }
     }
 
+    /// The tokens a build of `source` compiles into production, space-joined:
+    /// every non-trivia token outside an item carrying `#[cfg(test)]`. Comments
+    /// and whitespace are trivia, so prose never reaches the scan.
+    fn production_code(source: &str) -> String {
+        use ra_ap_syntax::{AstNode as _, NodeOrToken, SourceFile, ast, ast::HasAttrs as _};
+        let root = SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024).syntax_node();
+        let test_only: Vec<ra_ap_syntax::TextRange> = root
+            .descendants()
+            .filter_map(ast::Item::cast)
+            .filter(|item| {
+                item.attrs().any(|attr| {
+                    attr.syntax()
+                        .text()
+                        .to_string()
+                        .split_whitespace()
+                        .collect::<String>()
+                        == "#[cfg(test)]"
+                })
+            })
+            .map(|item| item.syntax().text_range())
+            .collect();
+        root.descendants_with_tokens()
+            .filter_map(NodeOrToken::into_token)
+            // Comments by their LEXEME as well as by trivia: a doc comment does
+            // not reach this walk as trivia in this parser (it documents the
+            // item), and it is still prose. Only a comment's text starts `//` or
+            // `/*`; a string literal's starts with its quote.
+            .filter(|token| {
+                let text = token.text();
+                !token.kind().is_trivia() && !text.starts_with("//") && !text.starts_with("/*")
+            })
+            .filter(|token| {
+                !test_only
+                    .iter()
+                    .any(|range| range.contains_range(token.text_range()))
+            })
+            .map(|token| token.text().to_owned())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Fails by: the scan reading prose or a test fixture again, so a comment
+    /// naming `git stash push` refuses the crate; or skipping production code,
+    /// so a reinstated primitive passes.
+    #[test]
+    fn the_primitive_scan_reads_production_code_only() {
+        let word = ["sta", "sh"].concat();
+        let prose = format!(
+            "// `git {word} push` is not a push\n/// and `git {word} push` in a doc\nfn f() {{}}\n#[cfg(test)]\nmod tests {{ const C: &str = \"git {word} push\"; }}\n"
+        );
+        assert!(
+            !production_code(&prose).contains(&word),
+            "prose and tests are skipped"
+        );
+        let spawn = format!("fn f() {{ run(&[\"{word}\", \"push\"]); }}\n");
+        assert!(
+            production_code(&spawn).contains(&word),
+            "a spawn argument is code"
+        );
+        let primitive = format!("pub fn {word}_save() {{}}\n");
+        assert!(
+            production_code(&primitive).contains(&word),
+            "an identifier is code"
+        );
+    }
+
     #[test]
     fn no_gix_gap_primitive_survives() {
         // CLOUD-780's rule, shipped with its mechanism. Two primitives used to
@@ -8680,19 +8746,32 @@ mod tests {
         // concatenation so this test's own source is not a match — which is
         // also why the doc above points at the issue for what was dropped
         // instead of re-typing the vocabulary it forbids.
+        //
+        // CODE, NOT PROSE OR FIXTURES. The scan matched the token anywhere in a
+        // file, so it fired on a comment and a test naming `git stash push` as
+        // the operand a command row must NOT read as `git push` (CLOUD-2666) —
+        // and the "fix" was renaming the command until the scanner stopped
+        // noticing, `no_ancestry_decides_merged_ness`'s failure over again. A
+        // primitive is a production identifier or a spawn's string argument, so
+        // that is all this reads: comments and `#[cfg(test)]` items are skipped
+        // on the syntax tree, never by rewording.
         let forbidden = [
             ["sta", "sh"].concat(),
             ["prun", "able"].concat(),
             ["worktree", "_remove"].concat(),
         ];
         for (path, source) in crate_sources(false) {
+            let code = production_code(&source);
             for token in &forbidden {
+                let at = code.find(token.as_str());
                 assert!(
-                    !source.contains(token.as_str()),
-                    "{}: names {token:?}; that vocabulary retired with the primitives \
-                     built on it, and re-deriving either would put a spawn back that \
-                     exists only because gix has no equivalent (CLOUD-780)",
-                    path.display()
+                    at.is_none(),
+                    "{}: names {token:?} in `{}`; that vocabulary retired with the \
+                     primitives built on it, and re-deriving either would put a spawn \
+                     back that exists only because gix has no equivalent (CLOUD-780)",
+                    path.display(),
+                    at.map_or("", |at| &code
+                        [at.saturating_sub(60)..(at + 40).min(code.len())])
                 );
             }
         }
