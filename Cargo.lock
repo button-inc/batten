@@ -205,7 +205,6 @@ dependencies = [
  "sysctl",
  "tar",
  "tiktoken-rs",
- "tinyvec",
  "tokio",
  "toml",
  "toml_edit",
