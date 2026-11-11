@@ -2017,4 +2017,39 @@ fn a_bats_case_spending_a_surviving_binding_is_refused() {
         vec![String::from("shell retire other")],
         "`HOOK`'s binding survives, so the case spending it is not going away"
     );
+    // AND THE SAME, WITH THE CASE KEPT: only the spend line goes, beside the
+    // other binding. The two removals above also drop the `@test` block, and
+    // its header is refused by `case_earns_removal` whatever this arm decides —
+    // so neither could observe the binding's name, and #1276's sweep measured
+    // `bats-binding-survives` surviving both. Here the spend line is the only
+    // removal no other arm judges.
+    let spend_moved = two.replacen("\trun grep -q \"$HOOK\" wiring\n", "", 1);
+    let spend_moved = spend_moved.replacen(
+        "\tOTHER=\"$BATS_TEST_DIRNAME/../mise-tasks/old-gate.sh\"\n",
+        "",
+        1,
+    );
+    let root = repo(
+        "bats-bind-spend-moved",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            ("mise-tasks/other.sh", GATE),
+            ("tests/binding.bats", &two),
+        ],
+        &Head {
+            written: &[
+                ("tests/binding.bats", &spend_moved),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger("mise-tasks/old-gate.sh"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert_eq!(
+        findings(&root),
+        vec![String::from("shell retire other")],
+        "`OTHER`'s binding dying buys nothing for a line spending `HOOK`"
+    );
 }
