@@ -589,7 +589,7 @@ impl SourcedStore {
     /// CLOUD-859's fix, since the existing three-valued contract already carries
     /// it and no new verdict was needed.
     pub(crate) fn record(&self, check: &str) -> Option<crate::facts::Sourced> {
-        crate::facts::Sourced::parse(&std::fs::read_to_string(self.path(check)?).ok()?)
+        crate::facts::Sourced::parse(&crate::fsio::read_to_string(self.path(check)?).ok()?)
     }
 
     /// Whether `check`'s record is older than the declaring row's bound
@@ -1119,7 +1119,7 @@ fn named_validity(git_dir: &str, check: &str, subject: &str) -> Validity {
     let path = Path::new(git_dir)
         .join("batten-receipts")
         .join(format!("{check}.{subject}"));
-    if std::fs::read_to_string(&path).is_ok() {
+    if crate::fsio::read_to_string(&path).is_ok() {
         Validity::Valid
     } else {
         Validity::Missing
@@ -1217,7 +1217,7 @@ fn branch_validity_with(
     let path = Path::new(git_dir)
         .join("batten-receipts")
         .join(branch_receipt_name(check, branch));
-    let Ok(body) = std::fs::read_to_string(&path) else {
+    let Ok(body) = crate::fsio::read_to_string(&path) else {
         return Validity::Missing;
     };
     let recorded = recorded_base(&body);
@@ -1409,7 +1409,7 @@ pub fn head_receipt_valid(check: &str) -> bool {
 }
 
 fn load_statement(path: &Path) -> Option<Statement> {
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::fsio::read(path).ok()?;
     let statement: Statement = serde_json::from_slice(&bytes).ok()?;
     (statement.statement_type == STATEMENT_TYPE && statement.predicate_type == PREDICATE_TYPE)
         .then_some(statement)
@@ -2272,7 +2272,7 @@ pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
 /// answer; a `mode = "replace"` receipt has exactly one line, which is the family
 /// this column is for.
 fn field_refutes(path: &Path, bound: &crate::rules::FieldBound) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return false;
     };
     let Some(line) = text.lines().next() else {
@@ -3196,7 +3196,7 @@ mod tests {
             "2026-01-01T00:00:00Z",
         )
         .expect("mint a receipt");
-        let text = std::fs::read_to_string(&minted).expect("read the minted receipt");
+        let text = crate::fsio::read_to_string(&minted).expect("read the minted receipt");
         assert_eq!(
             recorded_base(&text),
             Some("deadbeef".to_owned()),

@@ -104,7 +104,7 @@ pub fn boot_time() -> std::result::Result<String, BootUnreadable> {
         let value = value.to_str().and_then(parse_override);
         return value.ok_or(BootUnreadable::Malformed);
     }
-    std::fs::read_to_string("/proc/stat")
+    crate::fsio::read_to_string("/proc/stat")
         .ok()
         .as_deref()
         .and_then(parse_btime)
@@ -409,7 +409,7 @@ pub fn run_report(once: bool, out: &mut dyn Write, err: &mut dyn Write) -> Resul
 /// Whether the once-per-boot mark says `boot`'s verdict was already read. An
 /// absent or unreadable mark says nothing, so the report speaks.
 fn marked_for(mark: &Path, boot: &str) -> bool {
-    let seen = std::fs::read_to_string(mark).unwrap_or_default();
+    let seen = crate::fsio::read_to_string(mark).unwrap_or_default();
     seen.trim_end() == boot
 }
 

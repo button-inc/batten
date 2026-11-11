@@ -18197,3 +18197,37 @@ tools = [
   ["rustc", "--version"],
   ["mise", "tasks", "info", "hk-drift", "--json"],
 ]
+
+# EVERY FILESYSTEM READ GOES THROUGH `crate::fsio` (CLOUD-2692, CLOUD-2384). The
+# fsio codemod moved 374 direct `std::fs` reads in `crates/batten/src` onto the
+# `batten-fsio` crate, so a read can batch on a completion queue where the
+# platform has one, and nothing before that run held the shape. These two rows
+# are the regrowth gate the migration owes: the count can only fall, and since
+# both are judged at the call, the write that would add a direct read is refused
+# before it lands, not at `verify`.
+#
+# Two LITERAL substrings rather than `fs::read`, because `ratchet` counts with
+# `str::matches`: the bare prefix would also count `fs::read_dir(` and
+# `fs::read_link(`, which `fsio` does not cover. The three survivors today are
+# prose naming the retired form, a doc comment and two codemod comments.
+[[rule]]
+id = "path read loose"
+kind = "ratchet"
+glob = "crates/batten/src/**/*.rs"
+pattern = 'fs::read('
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "class 2 (the fsio codemod, `skills/codemod`): call `crate::fsio::read`, which batches on the completion queue; a direct `std::fs::read` is the shape the migration retired"
+
+[[rule]]
+id = "source read loose"
+kind = "ratchet"
+glob = "crates/batten/src/**/*.rs"
+pattern = 'fs::read_to_string('
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "class 2 (the fsio codemod, `skills/codemod`): call `crate::fsio::read_to_string`, which batches on the completion queue; a direct `std::fs::read_to_string` is the shape the migration retired"

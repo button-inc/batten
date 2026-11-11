@@ -959,7 +959,7 @@ mod tests {
         .unwrap();
         assert_eq!(path, receipts.join("bot.renovate-x"));
         assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
+            crate::fsio::read_to_string(&path).unwrap(),
             "CLOUD-700\nbot renovate[bot]\npr 7\nderived-at 2026-01-01T00:00:00Z\nbase -\n"
         );
         let _ = std::fs::remove_dir_all(&receipts);

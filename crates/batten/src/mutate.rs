@@ -712,7 +712,7 @@ fn has_extension(path: &str, extension: &str) -> bool {
 
 /// Every line of `path` under `root`, or `None` where it will not read.
 fn lines_of(root: &Path, path: &str) -> Option<Vec<String>> {
-    let text = std::fs::read_to_string(root.join(path)).ok()?;
+    let text = crate::fsio::read_to_string(root.join(path)).ok()?;
     Some(text.lines().map(str::to_owned).collect())
 }
 
@@ -1654,8 +1654,8 @@ impl Staged {
             // every sweep, which is what makes a Rust-tier gate affordable at
             // all. The staged bytes are still exactly the tracked bytes; the
             // only thing preserved is the timestamp of a file nothing changed.
-            if std::fs::read(&to)
-                .is_ok_and(|there| std::fs::read(&from).is_ok_and(|here| here == there))
+            if crate::fsio::read(&to)
+                .is_ok_and(|there| crate::fsio::read(&from).is_ok_and(|here| here == there))
             {
                 continue;
             }
@@ -1748,8 +1748,8 @@ impl Staged {
 /// and restoring it made cargo see a changed source on every row and rebuild
 /// inside the timed run. Leaving identical bytes untouched keeps the tree warm.
 fn copy_if_changed(from: &Path, to: &Path) -> std::io::Result<()> {
-    let wanted = std::fs::read(from)?;
-    if std::fs::read(to).is_ok_and(|have| have == wanted) {
+    let wanted = crate::fsio::read(from)?;
+    if crate::fsio::read(to).is_ok_and(|have| have == wanted) {
         return Ok(());
     }
     std::fs::copy(from, to).map(|_| ())
@@ -1774,7 +1774,7 @@ const MANIFEST: &str = ".mutate-staged";
 /// a build nothing asked it to judge. The manifest touches exactly the paths a
 /// run put there and never looks at anything else.
 fn reconcile(dir: &Path, tracked: &std::collections::BTreeSet<String>) -> Result<()> {
-    let previous = std::fs::read_to_string(dir.join(MANIFEST)).unwrap_or_default();
+    let previous = crate::fsio::read_to_string(dir.join(MANIFEST)).unwrap_or_default();
     for path in previous.lines() {
         if path.is_empty() || tracked.contains(path) {
             continue;
@@ -1857,7 +1857,7 @@ pub fn in_diff_patch(root: &Path, base: &str, sources: &[String]) -> Result<Stri
             crate::git::BaseBlob::Found { text, .. } => text,
             _ => String::new(),
         };
-        let after = fs::read_to_string(root.join(source)).unwrap_or_default();
+        let after = crate::fsio::read_to_string(root.join(source)).unwrap_or_default();
         if before == after {
             continue;
         }
@@ -2231,9 +2231,9 @@ fn finish(
     err_path: &Path,
     capture: &Path,
 ) -> Ran {
-    let stdout = fs::read_to_string(out_path).unwrap_or_default();
+    let stdout = crate::fsio::read_to_string(out_path).unwrap_or_default();
     let mut output = stdout.clone();
-    output.push_str(&fs::read_to_string(err_path).unwrap_or_default());
+    output.push_str(&crate::fsio::read_to_string(err_path).unwrap_or_default());
     // Best effort: a capture left behind is a few bytes under the system temp
     // directory, and failing a sweep over housekeeping would trade a real
     // verdict for tidiness.
@@ -2508,7 +2508,7 @@ fn nextest_env(root: &Path, staged: &Path) -> Vec<(String, String)> {
 /// 035fd4ea variant got wrong: the staged tree is the one nextest runs in.
 fn declared_profile(staged: &Path, profile: Option<String>) -> Option<String> {
     let profile = profile.filter(|name| !name.trim().is_empty())?;
-    let text = fs::read_to_string(staged.join(".config/nextest.toml")).ok()?;
+    let text = crate::fsio::read_to_string(staged.join(".config/nextest.toml")).ok()?;
     let config: toml::Table = text.parse().ok()?;
     config
         .get("profile")
@@ -2697,7 +2697,9 @@ fn run_suite(
         Suite::Conftest { path } => {
             conftest_verdict(&ran.output, want, &lines_of(dir, path).unwrap_or_default())
         }
-        Suite::Pytest { .. } => pytest_verdict(&fs::read_to_string(&junit).unwrap_or_default()),
+        Suite::Pytest { .. } => {
+            pytest_verdict(&crate::fsio::read_to_string(&junit).unwrap_or_default())
+        }
     };
     let _ = fs::remove_file(&junit);
     if ran.outcome == Outcome::TimedOut {
@@ -3194,7 +3196,7 @@ fn total_cases(root: &Path, suite: &Suite) -> usize {
 /// read, or a script outside the one-substitution subset.
 fn apply(staged: &Staged, overlay: Option<&Overlay>, row: &Row) -> Result<Option<Verdict>> {
     let path = staged.dir().join(&row.source);
-    let Ok(before) = std::fs::read_to_string(&path) else {
+    let Ok(before) = crate::fsio::read_to_string(&path) else {
         return Ok(Some(Verdict::UnappliableMutation));
     };
     let Some(after) = substitute(&before, &row.script) else {
@@ -3365,11 +3367,11 @@ fn diff_shape(
     overlay: Option<&Overlay>,
     source: &str,
 ) -> (bool, usize) {
-    let before = std::fs::read_to_string(root.join(source)).unwrap_or_default();
+    let before = crate::fsio::read_to_string(root.join(source)).unwrap_or_default();
     let mutated = overlay
         .and_then(|overlay| overlay.path_of(source))
         .unwrap_or_else(|| staged.dir().join(source));
-    let after = std::fs::read_to_string(mutated).unwrap_or_default();
+    let after = crate::fsio::read_to_string(mutated).unwrap_or_default();
     if before == after {
         return (false, 0);
     }
@@ -3599,11 +3601,11 @@ const CAUGHT_RECORD: &str = "caught.tsv";
 fn row_key(root: &Path, gate: &Gate, row: &Row) -> String {
     let mut material = row.script.clone().into_bytes();
     material.push(0);
-    material.extend(std::fs::read(root.join(&row.source)).unwrap_or_default());
+    material.extend(crate::fsio::read(root.join(&row.source)).unwrap_or_default());
     material.push(0);
     if let Some(suite) = gate.suite_for(row) {
         let path = suite.path();
-        let text = std::fs::read_to_string(root.join(path)).unwrap_or_default();
+        let text = crate::fsio::read_to_string(root.join(path)).unwrap_or_default();
         material.extend(crate::git::without_comments(path, &text).into_bytes());
     }
     crate::provision::digest(&material)
@@ -3611,7 +3613,7 @@ fn row_key(root: &Path, gate: &Gate, row: &Row) -> String {
 
 /// The keys recorded caught; an unreadable record is an empty one.
 fn recorded_caught(record: &Path) -> std::collections::HashSet<String> {
-    std::fs::read_to_string(record)
+    crate::fsio::read_to_string(record)
         .map(|text| text.lines().map(str::to_owned).collect())
         .unwrap_or_default()
 }
@@ -3785,7 +3787,7 @@ impl ChangeInputs {
             // Any other patch that cannot be written (a base that will not
             // open) is `None`: no record, a full run. A binary base side
             // reads as empty, so its text successor keys as a whole-file add.
-            let read = fs::read(root.join(path));
+            let read = crate::fsio::read(root.join(path));
             let absent = read
                 .as_ref()
                 .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
@@ -3903,7 +3905,7 @@ fn embedded_paths(target: &Path, staged: &Path) -> Vec<String> {
         if path.extension().is_none_or(|ext| ext != "d") {
             continue;
         }
-        let text = fs::read_to_string(&path).unwrap_or_default();
+        let text = crate::fsio::read_to_string(&path).unwrap_or_default();
         for line in text.lines() {
             if let Some(input) = line.strip_suffix(':') {
                 found.extend(relative(&input.replace("\\ ", " ")));
@@ -3912,7 +3914,7 @@ fn embedded_paths(target: &Path, staged: &Path) -> Vec<String> {
     }
     let build = target.join("debug").join("build");
     for entry in fs::read_dir(&build).into_iter().flatten().flatten() {
-        let text = fs::read_to_string(entry.path().join("output")).unwrap_or_default();
+        let text = crate::fsio::read_to_string(entry.path().join("output")).unwrap_or_default();
         for line in text.lines() {
             let watched = line
                 .strip_prefix("cargo:rerun-if-changed=")
@@ -4541,7 +4543,7 @@ fn inert_rows(root: &Path, subjects: &BTreeMap<String, String>) -> Vec<(String, 
     let mut found = Vec::new();
     for name in subjects.keys() {
         for source in sources_for(root, name) {
-            let Ok(text) = std::fs::read_to_string(root.join(&source)) else {
+            let Ok(text) = crate::fsio::read_to_string(root.join(&source)) else {
                 continue;
             };
             // ONE READ PER SOURCE: the declaring lines are sliced from the
@@ -4645,7 +4647,7 @@ impl Machine {
     pub fn probe(floor_mb: u64) -> Result<Self> {
         let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
         let free_mb = crate::prune::sampler(std::env::temp_dir())?()?;
-        let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
+        let meminfo = crate::fsio::read_to_string("/proc/meminfo").unwrap_or_default();
         let available = mem_available_mb(&meminfo);
         let cgroup = cgroup_remaining_mb(Path::new("/sys/fs/cgroup"));
         let memory_mb = match (available, cgroup) {
@@ -4677,7 +4679,7 @@ fn mem_available_mb(meminfo: &str) -> Option<u64> {
 /// neither is readable or the limit is unbounded.
 fn cgroup_remaining_mb(root: &Path) -> Option<u64> {
     let read = |name: &str| -> Option<String> {
-        std::fs::read_to_string(root.join(name))
+        crate::fsio::read_to_string(root.join(name))
             .ok()
             .map(|text| text.trim().to_owned())
     };
@@ -5590,7 +5592,7 @@ mod tests {
             .join("tests/fixtures/mutate")
             .join(arm)
             .join(state);
-        let text = std::fs::read_to_string(&path)
+        let text = crate::fsio::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         text.split_once('\n')
             .map(|(_, rest)| rest.to_owned())
@@ -6313,7 +6315,7 @@ mod tests {
         // A thread, because opening a fifo's read end blocks until a writer
         // opens it — which is the suite, below.
         std::thread::spawn(move || {
-            let read = std::fs::read_to_string(&fifo);
+            let read = crate::fsio::read_to_string(&fifo);
             let _ = send.send(read);
         });
         // The suite names its own pid and its job's, so a job that outlives the
@@ -6388,7 +6390,7 @@ mod tests {
         let (named, said) = std::sync::mpsc::channel();
         let ready = dir.join("ready");
         std::thread::spawn(move || {
-            let _ = named.send(std::fs::read_to_string(ready));
+            let _ = named.send(crate::fsio::read_to_string(ready));
         });
         let leader: u32 = said
             .recv_timeout(std::time::Duration::from_secs(20))
@@ -6414,7 +6416,7 @@ mod tests {
     /// would run, so a cleanup could only trade a bounded leak for a stranger.
     fn survivors(dir: &std::path::Path) -> String {
         let read = |name: &str| {
-            std::fs::read_to_string(dir.join(name))
+            crate::fsio::read_to_string(dir.join(name))
                 .unwrap_or_default()
                 .trim()
                 .to_owned()

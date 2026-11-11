@@ -49,6 +49,7 @@ pub mod ci_step;
 pub mod claim;
 pub mod cli;
 pub mod codemod;
+pub use batten_fsio as fsio;
 pub mod collect;
 pub mod commit;
 pub mod completion;
@@ -1315,7 +1316,7 @@ fn say_follow_once(
 fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let root = git::worktree_root(Path::new("."))?;
     let path = root.join(config::CONFIG_FILE);
-    let text = std::fs::read_to_string(&path).map_err(|why| {
+    let text = crate::fsio::read_to_string(&path).map_err(|why| {
         UsageError::raise(format!(
             "engine update: cannot read {} ({why}), so there is no pin to move",
             path.display()
@@ -1361,7 +1362,7 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
     let mut published = std::collections::BTreeSet::new();
     let mut stale = Vec::new();
     for workflow in workflow_files(&root)? {
-        let body = std::fs::read_to_string(root.join(&workflow))?;
+        let body = crate::fsio::read_to_string(root.join(&workflow))?;
         if !body.contains("BATTEN_") {
             continue;
         }
@@ -1595,7 +1596,7 @@ fn notice_enabled(root: &Path, text: &str) -> bool {
         return false;
     }
     let key = |text: &str| engine::top_level(text, "update_notice")?.as_bool();
-    let local = std::fs::read_to_string(root.join(resolve::LOCAL_CONFIG_FILE)).ok();
+    let local = crate::fsio::read_to_string(root.join(resolve::LOCAL_CONFIG_FILE)).ok();
     local
         .as_deref()
         .and_then(key)
@@ -1612,7 +1613,7 @@ fn notice_enabled(root: &Path, text: &str) -> bool {
 /// [`NOTICE_RETRY`] after a failed lookup, so an offline session pays at most
 /// once an hour, and [`NOTICE_TTL`] after one that answered.
 fn notice_due(stamp: &Path, now: u64, tag: &str) -> bool {
-    let text = std::fs::read_to_string(stamp).unwrap_or_default();
+    let text = crate::fsio::read_to_string(stamp).unwrap_or_default();
     let mut fields = text.split('\t').map(str::trim);
     let last = fields
         .next()
@@ -1680,7 +1681,7 @@ fn clear_outdated(ask: &Outdated) -> Result<()> {
 /// of `engine outdated`; it only reads.
 fn declared_release() -> Result<(std::path::PathBuf, String, Option<engine::Pin>)> {
     let root = git::worktree_root(Path::new("."))?;
-    let text = std::fs::read_to_string(root.join(config::CONFIG_FILE)).unwrap_or_default();
+    let text = crate::fsio::read_to_string(root.join(config::CONFIG_FILE)).unwrap_or_default();
     let pin = engine::declared(&text);
     Ok((root, text, pin))
 }
@@ -1973,7 +1974,7 @@ enum Want {
 
 /// The `engine` pin of the worktree at `root`, when there is one.
 fn worktree_pin(root: Option<&Path>) -> Option<engine::Pin> {
-    let text = std::fs::read_to_string(root?.join(config::CONFIG_FILE)).ok()?;
+    let text = crate::fsio::read_to_string(root?.join(config::CONFIG_FILE)).ok()?;
     engine::declared(&text)
 }
 
@@ -2039,7 +2040,7 @@ fn pinned_by(pin: Option<engine::Pin>) -> Result<Option<Want>> {
 /// answered with whatever binary is running.
 fn release_bytes(tag: &str, exe: &Path, repository: &str) -> Result<Vec<u8>> {
     if tag == engine::release() {
-        return Ok(std::fs::read(exe)?);
+        return Ok(crate::fsio::read(exe)?);
     }
     match engine::fetch_published(repository, tag)? {
         engine::Release::Published(bytes) => Ok(bytes),
@@ -2143,7 +2144,7 @@ fn install_wanted(
             let bytes = release_bytes(&tag, &exe, repository)?;
             let fence = root.unwrap_or_else(|| exe.with_file_name(""));
             for target in engine::install_targets(&exe, path.as_deref(), &fence) {
-                if std::fs::read(&target).ok().as_deref() == Some(bytes.as_slice()) {
+                if crate::fsio::read(&target).ok().as_deref() == Some(bytes.as_slice()) {
                     continue;
                 }
                 durable::replace(&target, &bytes)?;
@@ -2187,7 +2188,7 @@ fn place_download(
         writable_dir,
     );
     let (tag, bytes) = match want {
-        Want::Running | Want::Source(_) => (engine::release(), std::fs::read(exe)?),
+        Want::Running | Want::Source(_) => (engine::release(), crate::fsio::read(exe)?),
         Want::Release(tag) => {
             let bytes = release_bytes(&tag, exe, repository)?;
             (tag, bytes)
@@ -2276,7 +2277,7 @@ fn install_source(root: &Path, want: &str, out: &mut dyn Write) -> Result<ExitCo
     // A CURRENT RUNNING BINARY IS COPIED, NOT REBUILT: it is the pinned engine
     // already, by its stamp, and a build would be the same bytes slower.
     let (bytes, digest) = if engine::running_stamp().as_deref() == Some(want) {
-        (std::fs::read(&binary)?, want.to_owned())
+        (crate::fsio::read(&binary)?, want.to_owned())
     } else {
         let build: Vec<String> = ["cargo", "build", "--release", "-p", "batten"]
             .iter()
@@ -2301,7 +2302,7 @@ fn install_source(root: &Path, want: &str, out: &mut dyn Write) -> Result<ExitCo
         // cargo was told to put it and the follow looked under `target/`.
         // `checkout_build` is deliberately NOT the other end — it reads no
         // environment, because its callers ask about somebody else's tree.
-        (std::fs::read(engine::release_build(root))?, digest)
+        (crate::fsio::read(engine::release_build(root))?, digest)
     };
     for target in behind {
         durable::replace(&target, &bytes)?;
@@ -2423,7 +2424,7 @@ fn engine_pin(
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
     let path = root.join(config::CONFIG_FILE);
-    let text = std::fs::read_to_string(&path)?;
+    let text = crate::fsio::read_to_string(&path)?;
     let source = || -> Result<engine::Pin> {
         Ok(engine::Pin {
             release: None,
@@ -2489,7 +2490,7 @@ fn engine_pin(
 /// Every finding is a pointer: the file, the token, the pin.
 fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<ExitCode> {
     let config_path = root.join(config::CONFIG_FILE);
-    let text = std::fs::read_to_string(&config_path)?;
+    let text = crate::fsio::read_to_string(&config_path)?;
     // ONE DECLARATION (CLOUD-2595). The batten row IS the pin, so the only copy
     // left to disagree is the `engine` key's release alias; a floor no longer
     // exists to sit above it.
@@ -2578,7 +2579,7 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
         findings += 1;
     }
     for lane in lanes {
-        let workflow = std::fs::read_to_string(root.join(lane))?;
+        let workflow = crate::fsio::read_to_string(root.join(lane))?;
         for verb in engine::invoked_verbs(&workflow) {
             let mut args: Vec<&str> = verb.split(' ').collect();
             args.push("--help");
@@ -2766,7 +2767,7 @@ fn bench_drift(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let existing = std::fs::read_to_string(committed).unwrap_or_default();
+    let existing = crate::fsio::read_to_string(committed).unwrap_or_default();
 
     // THE HONESTY HALF RUNS FIRST, and over the COMMITTED bytes rather than
     // the fresh render. A generator bug that dropped a method line would
@@ -3004,7 +3005,7 @@ fn run_release(
     let root = Path::new(&root);
 
     let read = |path: &str| -> Result<String> {
-        std::fs::read_to_string(root.join(path)).map_err(|_| {
+        crate::fsio::read_to_string(root.join(path)).map_err(|_| {
             UsageError::raise(format!(
                 "release install: cannot read {path}, so the install contract is unknown. That is \
                  a checkout problem, not a failing contract."
@@ -3509,7 +3510,7 @@ fn run_hk(
         // Answered above, before the probe it must not pay for.
         HkCommand::Observe { .. } => Ok(ExitCode::Success),
         HkCommand::Drift => {
-            let Ok(text) = std::fs::read_to_string(&artifact) else {
+            let Ok(text) = crate::fsio::read_to_string(&artifact) else {
                 writeln!(
                     err,
                     "::error:: hk: no committed contract at {path}, so there is nothing to compare — run `batten hk contract`",
@@ -3771,7 +3772,7 @@ fn declared_ledger(overrides: &Overrides) -> Result<(defects::Defects, PathBuf)>
 /// Read and parse the declared ledger. An absent file is an empty ledger — the
 /// ordinary state before the first record.
 fn read_ledger(path: &Path) -> Result<Vec<defects::Record>> {
-    defects::parse(&std::fs::read_to_string(path).unwrap_or_default())
+    defects::parse(&crate::fsio::read_to_string(path).unwrap_or_default())
 }
 
 /// List recorded defects, as pointers (CLOUD-52).
@@ -5717,7 +5718,7 @@ fn board_root() -> PathBuf {
 /// this cannot open has not supplied empty evidence, they have supplied evidence
 /// nobody read.
 fn evidence_file(path: &str, what: &str) -> Result<Vec<(String, Option<String>)>> {
-    let raw = std::fs::read_to_string(path).map_err(|_| {
+    let raw = crate::fsio::read_to_string(path).map_err(|_| {
         UsageError::raise(format!(
             "landed: {what} names a file that cannot be read: {path}. That is a caller problem, not a clean board."
         ))
@@ -7068,12 +7069,13 @@ fn derive_row(lane: &bot::BotLane, number: &str) -> Result<(bot::Pull, String, S
         )]));
     };
     let repo_root = git::repo_root(Path::new("."))?;
-    let template = std::fs::read_to_string(repo_root.join(&lane.body_template)).map_err(|err| {
-        UsageError::raise(format!(
-            "bot lane: cannot read body_template {}: {err}",
-            lane.body_template
-        ))
-    })?;
+    let template =
+        crate::fsio::read_to_string(repo_root.join(&lane.body_template)).map_err(|err| {
+            UsageError::raise(format!(
+                "bot lane: cannot read body_template {}: {err}",
+                lane.body_template
+            ))
+        })?;
     let manifests = owned
         .iter()
         .map(|path| format!("- `{path}`"))
@@ -8781,7 +8783,7 @@ fn run_claim_carry(
         git::BaseBlob::Found { text, .. } => text,
         git::BaseBlob::AbsentAtRef { .. } | git::BaseBlob::RefUnreachable { .. } => String::new(),
     };
-    let after = std::fs::read_to_string(repo.join(carry::TABLE)).unwrap_or_default();
+    let after = crate::fsio::read_to_string(repo.join(carry::TABLE)).unwrap_or_default();
 
     // Every OTHER path this branch moved. `writes_in_range` answers per commit
     // over declared globs, so `**` is the whole tree and the table is filtered out
@@ -10282,7 +10284,7 @@ fn run_preset_eject(target: &str, out: &mut dyn Write) -> Result<ExitCode> {
 fn owning_row<'a>(config: &'a resolve::Resolved, id: &str) -> Option<&'a rules::Rule> {
     config.rules.iter().find(|rule| {
         rule.module.as_deref().is_some_and(|module| {
-            std::fs::read_to_string(module)
+            crate::fsio::read_to_string(module)
                 .is_ok_and(|text| policy::finding_ids(&text).contains(id))
         })
     })
@@ -10313,7 +10315,7 @@ fn run_policy_hooks(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
         ))
     })?;
     let label = path.display().to_string();
-    let body = std::fs::read_to_string(&path)
+    let body = crate::fsio::read_to_string(&path)
         .map_err(|_| UsageError::raise(format!("{}: {label}", transcript::UNREADABLE_NOTICE)))?;
     // A REFUSAL RATHER THAN A COULD-NOT-LOOK, and the difference is this verb's
     // subject (CLOUD-1624). `check` reads the transcript incidentally and must
@@ -18496,7 +18498,7 @@ fn commit_admissions(
             ))
         }
         (None, Some(message)) => {
-            let body = std::fs::read_to_string(message).map_err(|error| {
+            let body = crate::fsio::read_to_string(message).map_err(|error| {
                 UsageError::raise(format!(
                     "commit check: cannot read the commit message file `{message}`: {error}"
                 ))
@@ -19576,7 +19578,7 @@ fn unread_history(envelope: &hook::Envelope) -> facts::Look<Vec<String>> {
     };
     let (Ok(head), Ok(current)) = (
         git::show(root, "HEAD", config::CONFIG_FILE),
-        std::fs::read_to_string(root.join(config::CONFIG_FILE)),
+        crate::fsio::read_to_string(root.join(config::CONFIG_FILE)),
     ) else {
         return facts::Look::CouldNotLook;
     };
@@ -19990,6 +19992,7 @@ fn dispatch_envelope(
     let stop = stop::StopFacts::default();
     let prospective = prospective_for(&policy, &envelope);
     let budgeted = budgeted_for(&policy, &envelope);
+    let ratcheted = ratcheted_for(&policy, &envelope);
     // The reading manifest (CLOUD-925), resolved here because the tracked set is
     // a property of a checkout and `adjudicate` is contractually pure.
     //
@@ -20013,6 +20016,7 @@ fn dispatch_envelope(
         sourced: &agent_sourced,
         prospective: &prospective,
         budgeted: &budgeted,
+        ratcheted: &ratcheted,
         manifest,
         pinned: &call.pinned,
         tasks: &tasks,
@@ -20380,7 +20384,7 @@ fn decode_payload(
     // A spilled payload is by definition one memory must not hold, so there the
     // handlers read the parsed value, each spilled leaf holding its marker.
     let raw = if streamed.spilled.is_empty() {
-        std::fs::read_to_string(&streamed.raw).unwrap_or_default()
+        crate::fsio::read_to_string(&streamed.raw).unwrap_or_default()
     } else {
         serde_json::to_string(&streamed.value).unwrap_or_default()
     };
@@ -20750,7 +20754,7 @@ fn follow_to_pinned<'a>(
     // will not read hands the child nothing, so it falls through instead —
     // a child answering `0` over an empty document is not an answer about this
     // call, and NOTHING RAN, so the hand-off below is still owed its turn.
-    let Ok(raw) = std::fs::read_to_string(&payload.streamed.raw) else {
+    let Ok(raw) = crate::fsio::read_to_string(&payload.streamed.raw) else {
         return Ok(Follow::NOTHING);
     };
     let followed = hand_off(&target.root, &target.argv, &raw, out)?;
@@ -20899,7 +20903,7 @@ fn hand_to_checkout_build(handoff: Handoff<'_>, out: &mut dyn Write) -> Result<O
         return Ok(None);
     }
     let root = hook_authority_root();
-    let Ok(text) = std::fs::read_to_string(root.join(config::CONFIG_FILE)) else {
+    let Ok(text) = crate::fsio::read_to_string(root.join(config::CONFIG_FILE)) else {
         return Ok(None);
     };
     if engine::declared(&text).and_then(|pin| pin.source).is_none() {
@@ -21922,7 +21926,7 @@ fn adopt_engine_row(root: &Path, overrides: &Overrides) -> Result<Option<String>
     // the hook and `init` hand in `.`.
     let root = &git::canonical(root);
     let path = root.join(config::CONFIG_FILE);
-    let text = std::fs::read_to_string(&path)?;
+    let text = crate::fsio::read_to_string(&path)?;
     if engine::declared(&text).is_some() {
         return Ok(None);
     }
@@ -23199,6 +23203,69 @@ fn manifest_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::Manif
 /// (CLOUD-2661). Nothing is read for a write no set selects. Every read is
 /// bounded: the target, then the set's literal members, each capped, and a
 /// member that cannot be read leaves the totals unjudged, never refused.
+/// The target's text now (`None` for a file that does not exist) and its text
+/// once the write lands: a `Write`'s content, or an `Edit`'s spans applied to
+/// the current text. `None` is could-not-look. The one reading the budget and
+/// the ratchet gates share, so they cannot disagree about what a write lands.
+fn projected_write(
+    root: &Path,
+    target: &str,
+    envelope: &hook::Envelope,
+) -> Option<(Option<String>, String)> {
+    let current = match read_capped(&root.join(target)) {
+        Ok(text) => Some(text),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return None,
+    };
+    let written = ["/content", "/new_source"].iter().find_map(|key| {
+        envelope
+            .input
+            .pointer(key)
+            .and_then(serde_json::Value::as_str)
+    });
+    let projected = match written {
+        Some(text) => text.to_owned(),
+        None => match hook::landed_from(current.as_deref().unwrap_or(""), &envelope.input) {
+            facts::Look::Is(text) => text,
+            facts::Look::IsNot | facts::Look::CouldNotLook => return None,
+        },
+    };
+    Some((current, projected))
+}
+
+/// Each ratchet row this write would move the banned way past its base
+/// (CLOUD-2692). A write no row's glob covers reads nothing; any git failure is
+/// could-not-look, which admits, because `check` judges the tree regardless.
+fn ratcheted_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::RatchetFacts {
+    let rows = policy.ratchets_for(envelope);
+    let Some(target) = envelope.writes.as_deref() else {
+        return facts::Look::CouldNotLook;
+    };
+    if rows.is_empty() {
+        return facts::Look::CouldNotLook;
+    }
+    let root = hook_authority_root();
+    let Some((current, projected)) = projected_write(root, target, envelope) else {
+        return facts::Look::CouldNotLook;
+    };
+    let cache = state::state_root()
+        .ok()
+        .and_then(|state| cache::root_under(&state));
+    // Every selected row in one pass, so they share the merge base, HEAD and
+    // every git read.
+    match rules::ratchets_at_call(
+        &rows,
+        root,
+        target,
+        current.as_deref(),
+        &projected,
+        cache.as_deref(),
+    ) {
+        Ok(moved) => facts::Look::Is(moved),
+        Err(_) => facts::Look::CouldNotLook,
+    }
+}
+
 fn budgeted_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::BudgetFacts {
     let names = policy.budget_sets_for(envelope);
     let (Some(budget), Some(target)) = (&policy.budget, envelope.writes.as_deref()) else {
@@ -23208,26 +23275,8 @@ fn budgeted_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::Budge
         return facts::Look::CouldNotLook;
     }
     let root = hook_authority_root();
-    let current = match read_capped(&root.join(target)) {
-        Ok(text) => Some(text),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(_) => return facts::Look::CouldNotLook,
-    };
-    let projected = ["/content", "/new_source"]
-        .iter()
-        .find_map(|key| {
-            envelope
-                .input
-                .pointer(key)
-                .and_then(serde_json::Value::as_str)
-        })
-        .map(ToOwned::to_owned);
-    let projected = match projected {
-        Some(text) => text,
-        None => match hook::landed_from(current.as_deref().unwrap_or(""), &envelope.input) {
-            facts::Look::Is(text) => text,
-            facts::Look::IsNot | facts::Look::CouldNotLook => return facts::Look::CouldNotLook,
-        },
+    let Some((current, projected)) = projected_write(root, target, envelope) else {
+        return facts::Look::CouldNotLook;
     };
     let mut measures = Vec::new();
     for name in names {
@@ -23273,7 +23322,7 @@ fn read_capped(path: &Path) -> std::io::Result<String> {
     if std::fs::metadata(path).is_ok_and(|meta| meta.len() > 1 << 20) {
         return Err(std::io::Error::other("over the read cap"));
     }
-    std::fs::read_to_string(path)
+    crate::fsio::read_to_string(path)
 }
 
 fn prospective_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::ProspectiveFacts {
@@ -24804,7 +24853,7 @@ fn spoken_key(entry: &task::Entry) -> String {
 /// Whether the claim `key` is already recorded in the marker at `seen`.
 fn already_marked(seen: Option<&Path>, key: &str) -> bool {
     seen.is_some_and(|path| {
-        std::fs::read_to_string(path).is_ok_and(|text| text.lines().any(|line| line == key))
+        crate::fsio::read_to_string(path).is_ok_and(|text| text.lines().any(|line| line == key))
     })
 }
 
@@ -24917,7 +24966,7 @@ fn filed_here_rows(overrides: &Overrides, root: &Path) -> Option<(Vec<String>, V
     let claim = claim::claimed_token(&git_dir.join("batten-receipts"), &branch);
     let record = recorder::record_path(&git_dir, BOARD_RECORD, &branch, claim.as_deref());
     let mut seen = std::collections::BTreeSet::new();
-    let filed: Vec<String> = std::fs::read_to_string(record)
+    let filed: Vec<String> = crate::fsio::read_to_string(record)
         .map(|text| {
             text.lines()
                 .filter_map(|line| {
@@ -25227,7 +25276,7 @@ fn defer_backgrounded(
 fn recover_spilled(result: &serde_json::Value) -> Option<serde_json::Value> {
     let text = result.as_str()?;
     let path = facts::spilled_path(text)?;
-    let bytes = std::fs::read_to_string(path).ok()?;
+    let bytes = crate::fsio::read_to_string(path).ok()?;
     facts::payload_in(&serde_json::from_str(&bytes).ok()?)
 }
 
@@ -25973,7 +26022,7 @@ fn collect_before_admitting(
 /// capture must not fail because config did not parse, so an unreadable
 /// authority means the engine defaults rather than an error.
 fn capture_budget() -> Option<capture::CaptureConfig> {
-    let text = std::fs::read_to_string(hook_session_home().join(config::CONFIG_FILE)).ok()?;
+    let text = crate::fsio::read_to_string(hook_session_home().join(config::CONFIG_FILE)).ok()?;
     let parsed: config::Config = toml::from_str(&text).ok()?;
     parsed.capture
 }
@@ -27079,7 +27128,7 @@ fn run_judges(
                 path: Some((*path).clone()),
                 line: None,
                 class: judge::PayloadClass::FileText,
-                bytes: std::fs::read(root.join(path)).unwrap_or_default(),
+                bytes: crate::fsio::read(root.join(path)).unwrap_or_default(),
             });
         }
         let rule_text = judge::RuleText {
@@ -27886,7 +27935,7 @@ fn push_state(repo: &Path, landed_by: config::LandedBy) -> completion::PushState
 /// This branch's recorded step and its claim fingerprint, if any.
 fn unlanded_step(git_dir: &Path, branch: &str) -> Option<(String, Step)> {
     let path = recorder::record_path(git_dir, UNLANDED_STEP, branch, None);
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = crate::fsio::read_to_string(path).ok()?;
     let (key, step) = text.trim().split_once(' ')?;
     Some((key.to_owned(), Step::parse(step)?))
 }
@@ -29887,7 +29936,7 @@ fn run_lint_brief(path: Option<&str>, json: bool, out: &mut dyn Write) -> Result
                 UsageError::raise("the brief on stdin is not valid UTF-8".to_owned())
             })?
         }
-        Some(source) => std::fs::read_to_string(source).map_err(|err| {
+        Some(source) => crate::fsio::read_to_string(source).map_err(|err| {
             UsageError::raise(format!("cannot read the brief at {source}: {err}"))
         })?,
     };
@@ -30535,7 +30584,7 @@ fn run_ci_suites(
     let mut subjects: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
         std::collections::BTreeMap::new();
     for suite in &suites {
-        let Ok(text) = std::fs::read_to_string(root.join(suite)) else {
+        let Ok(text) = crate::fsio::read_to_string(root.join(suite)) else {
             return widest(&format!("{suite} could not be read"), out, err);
         };
         subjects.insert(suite.clone(), rules::declared_subject(&text, "# subject:"));
@@ -31350,7 +31399,7 @@ mod tests {
                 .iter()
                 .map(|bin| Path::new(bin).join(name))
                 .find(|path| path.is_file())
-                .and_then(|path| std::fs::read(path).ok())
+                .and_then(|path| crate::fsio::read(path).ok())
         };
         let answers = program("true").expect("every unix host carries `true`");
         let refuses = program("false").expect("every unix host carries `false`");
@@ -31768,7 +31817,7 @@ mod tests {
             "the declared beat ran on the applied renewal"
         );
         let receipt = lease_receipt_path(&root, "claude/x").unwrap();
-        assert_eq!(std::fs::read_to_string(receipt).unwrap(), "42\n");
+        assert_eq!(crate::fsio::read_to_string(receipt).unwrap(), "42\n");
         // And a consumer that declares no beat gets nothing spawned.
         let _ = std::fs::remove_file(&beat);
         lease_renewed(&root, "claude/x", 43, "");

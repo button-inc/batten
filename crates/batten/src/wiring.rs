@@ -255,7 +255,7 @@ fn record_path(git_dir: &Path) -> PathBuf {
 /// no store to have looked in.
 pub fn read_at_load(dir: &Path) -> Result<Option<AtLoad>> {
     let path = record_path(&git::git_dir(dir)?);
-    let Ok(raw) = std::fs::read_to_string(path) else {
+    let Ok(raw) = crate::fsio::read_to_string(path) else {
         return Ok(None);
     };
     Ok(serde_json::from_str(&raw).ok())
@@ -378,7 +378,7 @@ pub fn reclaim(dir: &Path, home: &Path, dry_run: bool) -> Result<Reclaimed> {
             if same_file(&path, &dir.join(surface)) {
                 continue;
             }
-            let Ok(raw) = std::fs::read_to_string(&path) else {
+            let Ok(raw) = crate::fsio::read_to_string(&path) else {
                 continue;
             };
             let Ok(mut document) = serde_json::from_str::<serde_json::Value>(&raw) else {
@@ -601,7 +601,7 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
         hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
     };
     let path = root.join(surface);
-    let mut document = match std::fs::read_to_string(&path) {
+    let mut document = match crate::fsio::read_to_string(&path) {
         Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
             Ok(document) if document.is_object() => document,
             _ => return Ok(out),
@@ -674,7 +674,7 @@ pub fn register_committed(repo: &Path, check: bool) -> Result<Vec<(hook::Harness
             hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
         };
         let path = repo.join(surface);
-        let mut document = match std::fs::read_to_string(&path) {
+        let mut document = match crate::fsio::read_to_string(&path) {
             Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
                 Ok(document) if document.is_object() => document,
                 _ => continue,
@@ -1013,7 +1013,7 @@ pub fn disarm(home: &Path, declared: &[Disarm], dry_run: bool) -> Result<Disarme
             || row.path.clone(),
             |name| name.to_string_lossy().into_owned(),
         );
-        let state = match std::fs::read_to_string(&path) {
+        let state = match crate::fsio::read_to_string(&path) {
             // Absent, or unreadable. Distinguished by `try_exists` rather than
             // collapsed: a file that is there and unreadable is a repair this
             // verb owes and could not perform, and reporting it as `absent`
@@ -1244,7 +1244,7 @@ fn link_hook(source: &Path, link: &Path) -> std::io::Result<()> {
     }
     #[cfg(not(unix))]
     {
-        crate::durable::replace(link, std::fs::read(source)?)
+        crate::durable::replace(link, crate::fsio::read(source)?)
     }
 }
 
@@ -1634,7 +1634,7 @@ mod tests {
         let hooks = crate::doctor::hooks_dir(&dir).unwrap();
         for name in crate::doctor::COMMIT_HOOKS {
             assert_eq!(
-                std::fs::read_to_string(hooks.join(name)).unwrap(),
+                crate::fsio::read_to_string(hooks.join(name)).unwrap(),
                 "#!/bin/sh\n"
             );
         }

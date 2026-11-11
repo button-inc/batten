@@ -858,7 +858,7 @@ impl Index {
     /// repository that has recorded nothing yet has an empty index, and calling
     /// that unreadable would make every first comparison `Unavailable`.
     fn lines(&self) -> Option<Vec<String>> {
-        match std::fs::read_to_string(&self.at) {
+        match crate::fsio::read_to_string(&self.at) {
             Ok(text) => Some(text.lines().map(str::to_owned).collect()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
             Err(_) => None,
@@ -1323,7 +1323,7 @@ pub fn read_live_in(
                 .with_context(|| format!("take the spool lock {}", lock_path.display()));
         }
     }
-    let committed = std::fs::read_to_string(&watermark_path)
+    let committed = crate::fsio::read_to_string(&watermark_path)
         .ok()
         .and_then(|text| text.trim().parse::<u64>().ok())
         .unwrap_or(0);
@@ -1360,7 +1360,7 @@ pub fn live_watermark(repo_root: &Path, stream: LiveStream, key: &str) -> Result
 #[must_use]
 pub fn live_watermark_in(dir: &Path, stream: LiveStream, key: &str) -> Option<u64> {
     let path = dir.join(format!("{}.watermark", live_handle(stream, key)));
-    std::fs::read_to_string(&path)
+    crate::fsio::read_to_string(&path)
         .ok()
         .and_then(|text| text.trim().parse::<u64>().ok())
 }
@@ -1377,7 +1377,7 @@ pub fn live_watermark_in(dir: &Path, stream: LiveStream, key: &str) -> Option<u6
 /// be read.
 pub fn read(repo_root: &Path, capture: &Capture) -> Result<Vec<u8>> {
     let path = captures_dir(repo_root)?.join(format!("{}-{}", capture.stream, capture.digest));
-    std::fs::read(&path).with_context(|| format!("read the capture {}", path.display()))
+    crate::fsio::read(&path).with_context(|| format!("read the capture {}", path.display()))
 }
 
 /// One top-level field of a stored JSON document, located in its view.
@@ -1783,7 +1783,7 @@ fn pretty_json(source: &Path) -> Result<Option<String>> {
     if bytes > crate::stream_input::RESTORE_MAX_BYTES {
         return Ok(None);
     }
-    let raw = std::fs::read(source)
+    let raw = crate::fsio::read(source)
         .with_context(|| format!("read the spilled leaf {}", source.display()))?;
     let Ok(text) = std::str::from_utf8(&raw) else {
         return Ok(None);
@@ -2885,7 +2885,7 @@ fn trim_calls(dir: &Path, ordered: &[CallRow], max_records: u64) -> Result<()> {
 /// A session with no rows yet walks the log once and answers zero; the bound on
 /// THAT is the log trimming in [`evict_to_budget_in`].
 fn next_order(path: &Path, session: &str) -> u64 {
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return 0;
     };
     for line in text.lines().rev() {
@@ -2904,7 +2904,7 @@ fn next_order(path: &Path, session: &str) -> u64 {
 /// reason: a row nothing wrote is not evidence about a call, and inventing one
 /// from it would be a fabricated provenance record.
 fn read_calls(path: &Path) -> Vec<CallRow> {
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return Vec::new();
     };
     text.lines()
@@ -3069,7 +3069,7 @@ fn find_in_filtered(dir: &Path, selector: &Selector<'_>, by_tool: bool) -> Optio
         // log outlives an evicted capture by design, so a missing file is an
         // ordinary state of the store and not a failure to look.
         let path = dir.join(format!("{}-{digest}", Stream::Response.as_str()));
-        let Ok(bytes) = std::fs::read(&path) else {
+        let Ok(bytes) = crate::fsio::read(&path) else {
             continue;
         };
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
@@ -4204,7 +4204,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            std::fs::read_to_string(path).unwrap(),
+            crate::fsio::read_to_string(path).unwrap(),
             "## /a/b\none\ntwo\n## /a/e\n{}\n## /a/k\n[]\n## /s\nx\ny\nz\n## /t\nplain\n"
         );
     }

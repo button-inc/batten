@@ -106,7 +106,7 @@ impl PresetModule {
         #[cfg(feature = "preset-overlay")]
         if let Some(dir) = std::env::var_os("BATTEN_PRESET_OVERLAY")
             && let Some(relative) = self.pointer.strip_prefix("<preset:")
-            && let Ok(text) = std::fs::read_to_string(
+            && let Ok(text) = crate::fsio::read_to_string(
                 std::path::Path::new(&dir).join(relative.replacen('>', "", 1)),
             )
         {
@@ -2682,7 +2682,7 @@ mod tests {
 
         let refused = |rules: &[Rule]| {
             assert!(eject(&root, &config, rules, target).is_err());
-            assert_eq!(std::fs::read_to_string(&config).unwrap(), text);
+            assert_eq!(crate::fsio::read_to_string(&config).unwrap(), text);
         };
         refused(&[rule(GIT_ROW), rule(&GIT_ROW.replace("git calls", "again"))]);
         refused(&[
@@ -2718,9 +2718,9 @@ mod tests {
             (done.row.as_str(), done.copies.as_str(), done.added),
             ("git calls", "git ejected", true)
         );
-        let copy = std::fs::read_to_string(root.join(&done.written[0])).unwrap();
+        let copy = crate::fsio::read_to_string(root.join(&done.written[0])).unwrap();
         assert!(copy.starts_with("# batten-ejected: git/git-call-is-preapproved version "));
-        let edited = std::fs::read_to_string(&config).unwrap();
+        let edited = crate::fsio::read_to_string(&config).unwrap();
         assert!(
             edited.contains("except = [\"git-call-is-preapproved\"]"),
             "{edited}"

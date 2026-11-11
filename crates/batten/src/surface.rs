@@ -9019,7 +9019,7 @@ mod tests {
         let paths = std::iter::once("").chain(SURFACE.iter().map(|decl| decl.path));
         for path in paths {
             let name = crate::render::page_name("batten", path);
-            let committed = std::fs::read_to_string(dir.join(format!("{name}.1")))
+            let committed = crate::fsio::read_to_string(dir.join(format!("{name}.1")))
                 .unwrap_or_else(|_| panic!("man/{name}.1 is committed"));
             let rendered = crate::render::man(&root, Some(path)).expect("the page renders");
             assert!(rendered == committed, "man/{name}.1 is stale");
