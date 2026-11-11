@@ -280,7 +280,7 @@ pub fn record_read(
 /// Whether `context` holds a read of `id`'s history at `digest`.
 #[must_use]
 pub fn admits(git_dir: &Path, context: &str, id: &str, digest: &str) -> bool {
-    std::fs::read_to_string(receipt_path(git_dir, id, context))
+    crate::fsio::read_to_string(receipt_path(git_dir, id, context))
         .ok()
         .and_then(|body| body.split('\x1f').nth(1).map(str::to_owned))
         .is_some_and(|held| held == digest)

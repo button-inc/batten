@@ -2525,7 +2525,7 @@ impl Local {
     /// the two-holders bug arriving through the identity rather than the CAS.
     pub fn holder(&self) -> Result<String> {
         let path = self.dir.join("holder");
-        if let Ok(existing) = std::fs::read_to_string(&path) {
+        if let Ok(existing) = crate::fsio::read_to_string(&path) {
             let existing = existing.trim();
             if !existing.is_empty() {
                 return Ok(existing.to_owned());
@@ -2590,7 +2590,7 @@ impl Local {
     /// would resurrect the assumption the tab exists to remove.
     #[must_use]
     pub fn poisoned(&self) -> Option<(String, String)> {
-        let record = std::fs::read_to_string(self.dir.join("poisoned")).ok()?;
+        let record = crate::fsio::read_to_string(self.dir.join("poisoned")).ok()?;
         // Neither half can be empty: the record is trimmed first, so a tab it
         // still carries has a non-blank byte on each side of it.
         let (tracking, at) = record.trim().split_once('\t')?;
@@ -2620,7 +2620,7 @@ impl Local {
     #[must_use]
     pub fn held_for(&self, name: &str, token: &str, now: i64) -> i64 {
         let path = self.dir.join(name);
-        let seen = std::fs::read_to_string(&path).unwrap_or_default();
+        let seen = crate::fsio::read_to_string(&path).unwrap_or_default();
         let mut fields = seen.split_whitespace();
         let previous = fields.next().unwrap_or_default();
         let since: Option<i64> = fields.next().and_then(|at| at.parse().ok());
@@ -2864,7 +2864,8 @@ impl Progress {
 /// be inventing the finding.
 #[must_use]
 pub fn progress_of(git_dir: &std::path::Path, pid: u32) -> Option<Progress> {
-    let text = std::fs::read_to_string(git_dir.join("batten-tasks").join(pid.to_string())).ok()?;
+    let text =
+        crate::fsio::read_to_string(git_dir.join("batten-tasks").join(pid.to_string())).ok()?;
     let field = |name: &str| -> i64 {
         text.lines()
             .find_map(|line| line.strip_prefix(&format!("{name}: ")))
@@ -2976,7 +2977,7 @@ pub fn bail(
 #[must_use]
 #[cfg(target_os = "linux")]
 pub fn holder_alive(pid: u32, marker: &str) -> bool {
-    let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+    let Ok(raw) = crate::fsio::read(format!("/proc/{pid}/cmdline")) else {
         return false;
     };
     let command = String::from_utf8_lossy(&raw).replace('\0', " ");
@@ -3989,7 +3990,7 @@ mod tests {
         let dir = crate::scratch::scratch(&format!("lease-{name}"));
         crate::gitwrite::commit_paths(&dir, &[], "base").expect("a repository with a commit");
         let config = dir.join(".git").join("config");
-        let text = std::fs::read_to_string(&config).expect("config");
+        let text = crate::fsio::read_to_string(&config).expect("config");
         std::fs::write(
             &config,
             format!("{text}[remote \"origin\"]\n\turl = {REMOTE}\n"),
@@ -4958,7 +4959,7 @@ mod tests {
         // being reported as a failure nobody could act on.
         let mine = std::process::id();
         let raw =
-            std::fs::read(format!("/proc/{mine}/cmdline")).expect("this process has a cmdline");
+            crate::fsio::read(format!("/proc/{mine}/cmdline")).expect("this process has a cmdline");
         let command = String::from_utf8_lossy(&raw).replace('\0', " ");
         let word = command.split_whitespace().next().expect("argv0").to_owned();
         assert!(holder_alive(mine, &word));

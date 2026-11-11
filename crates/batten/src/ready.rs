@@ -528,8 +528,9 @@ pub(crate) fn committed_patterns() -> Vec<crate::pattern::NamedPattern> {
 
 #[cfg(test)]
 fn read_committed_patterns() -> Vec<crate::pattern::NamedPattern> {
-    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../batten.toml"))
-        .unwrap_or_default();
+    let text =
+        crate::fsio::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../batten.toml"))
+            .unwrap_or_default();
     match crate::facts::Format::Toml.read(&text) {
         crate::facts::Look::Is(crate::facts::Node::Map(map)) => match map.get("pattern") {
             Some(crate::facts::Node::List(items)) => items
@@ -863,7 +864,7 @@ fn first_line(pattern: &Regex, lines: &[&str]) -> Option<usize> {
 /// regime must not guess, because guessing either way manufactures a violation
 /// or launders one.
 pub fn workspace_version(root: &Path) -> Result<String> {
-    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).map_err(|_| {
+    let manifest = crate::fsio::read_to_string(root.join("Cargo.toml")).map_err(|_| {
         UsageError::raise(format!(
             "ready: cannot read the workspace version from {}/Cargo.toml — §6 needs it to know \
              which SemVer arrows fire",

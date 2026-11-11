@@ -559,7 +559,7 @@ pub fn remember(ring_file: &std::path::Path, key: &str) -> std::io::Result<()> {
 }
 
 fn read_ring(ring_file: &std::path::Path) -> std::io::Result<Vec<String>> {
-    match std::fs::read_to_string(ring_file) {
+    match crate::fsio::read_to_string(ring_file) {
         Ok(text) => Ok(text.lines().map(str::to_owned).collect()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(error) => Err(error),
@@ -678,7 +678,7 @@ pub fn cursor_path(common_dir: &std::path::Path, source: &str) -> std::path::Pat
 }
 
 fn read_cursor(path: &std::path::Path) -> std::io::Result<Option<Cursor>> {
-    match std::fs::read_to_string(path) {
+    match crate::fsio::read_to_string(path) {
         Ok(text) => Ok(serde_json::from_str(&text).ok()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
