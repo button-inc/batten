@@ -8612,6 +8612,24 @@ pub fn policy_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) ->
     advice
 }
 
+/// The harness this process adjudicates for, bound once by the hook entry
+/// (CLOUD-2709): the envelope is the normalized shape every harness decodes to,
+/// so the one fact that differs per harness — where it runs — is read here.
+static HARNESS: std::sync::OnceLock<Harness> = std::sync::OnceLock::new();
+
+/// Bind the harness this process answers for. The first binding stands.
+pub fn bind_harness(harness: Harness) {
+    let _ = HARNESS.set(harness);
+}
+
+/// The exact `input` document every policy row receives for this call
+/// (CLOUD-2696): [`call_document`] itself, never a reconstruction, so what
+/// `adjudicate --show-input` shows is what the bundles were handed.
+#[must_use]
+pub fn policy_input(envelope: &Envelope, facts: &Facts<'_>) -> Option<serde_json::Value> {
+    serde_json::from_str(&call_document(envelope, facts).ok()?).ok()
+}
+
 /// The STRONGEST violation any enabled bundle raises, with the severity its
 /// enabling row declared.
 ///
@@ -9427,6 +9445,14 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
         call.insert("cwd".to_owned(), serde_json::json!(facts.reach.cwd));
         call.insert("roots".to_owned(), serde_json::json!(facts.reach.roots));
         call.insert("home".to_owned(), serde_json::json!(facts.reach.home));
+        // THE KIND OF MACHINE (CLOUD-2709), the one fact only the environment
+        // can state (`environment`, CLOUD-1383): a practice that differs between
+        // a disposable container and a developer's machine branches on it, where
+        // a committed preset can only apply the same answer to both.
+        call.insert(
+            "host".to_owned(),
+            serde_json::json!(crate::environment::host(HARNESS.get().copied()).as_str()),
+        );
     }
     serde_json::to_string(&document)
 }

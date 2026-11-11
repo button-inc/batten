@@ -6493,6 +6493,14 @@ pub const SURFACE: &[CommandDecl] = &[
                 "The harness whose payload to decode and whose decision channel to answer in",
                 harness_parser,
             ),
+            // CLOUD-2696: the policy input is otherwise invisible, so a module
+            // that passes its own cases and decides differently live leaves its
+            // author nothing to compare.
+            FlagDecl::switch(
+                "show_input",
+                "show-input",
+                "Store the exact policy input this call produced and print its pointer on stderr",
+            ),
         ],
     },
     // The payload noun exists so the extractor is NOT `hook field` (CLOUD-479).

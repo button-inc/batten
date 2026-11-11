@@ -523,6 +523,11 @@ pub(crate) fn batten() -> Batten {
         "MUTANT_PRESETS",
         "MUTANT_OVERLAY_ENV",
         "MUTANT_OVERLAY_FEATURES",
+        // THE HOST SIGNALS (CLOUD-2709): a suite run inside a cloud session
+        // inherited them and decided `host` one way, and CI the other. A case
+        // that means a host sets it.
+        "CLAUDE_CODE_REMOTE",
+        "BATTEN_ENVIRONMENT",
         // NOT the overlay variable itself: it is how a mutated preset reaches the
         // `batten` a suite spawns, and scrubbing it judged every preset row
         // against the embedded, unmutated text (85 false survivors).

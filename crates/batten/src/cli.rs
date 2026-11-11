@@ -172,6 +172,9 @@ pub enum Command {
         /// `None` means the boundary reads its own clock, which is what it has
         /// always done, so no committed row changes meaning by this arriving.
         instant: Option<String>,
+        /// `--show-input`: store the exact policy input this call produced and
+        /// print its pointer (CLOUD-2696).
+        show_input: bool,
     },
     /// Print one allowlisted field of a hook payload read from stdin.
     HookField {
@@ -4001,6 +4004,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             .map(|harness| Command::Hook {
                 harness: *harness,
                 instant: matches.get_one::<String>("instant").cloned(),
+                show_input: flag(matches, "show_input"),
             }),
         "payload" => match matches.subcommand()? {
             ("field", inner) => Some(Command::HookField {

@@ -233,14 +233,80 @@ fn only_a_spawn_is_judged() {
 /// checkout has one implementer, so a worktree spawn, the host's worktree tool
 /// and an implementing agent type are refused, and a read-only search is not.
 fn spawn(repo: &Path, tool: &str, input: &serde_json::Value) -> (Option<i32>, String) {
+    spawn_on(repo, tool, input, true)
+}
+
+/// [`spawn`] on a stated host (CLOUD-2709): a Claude Code cloud session when
+/// `cloud`, a developer's machine otherwise, each by the harness's own signal.
+fn spawn_on(
+    repo: &Path,
+    tool: &str,
+    input: &serde_json::Value,
+    cloud: bool,
+) -> (Option<i32>, String) {
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
         "tool_name": tool,
         "tool_input": input,
     })
     .to_string();
-    let output = run_with_stdin(repo, &["adjudicate", "--harness", "exit-code"], &payload);
-    (output.status.code(), stderr(&output))
+    let mut invocation = common::batten();
+    if cloud {
+        invocation.env("CLAUDE_CODE_REMOTE", "true");
+    }
+    let output = common::stdin_run(
+        &mut invocation,
+        repo,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        stderr(&output)
+    );
+    let refused = said.contains("\"permissionDecision\":\"deny\"");
+    (Some(if refused { 2 } else { 0 }), said)
+}
+
+/// A worktree on a developer's machine is the practice, by every route.
+#[test]
+fn a_worktree_on_a_machine_is_allowed() {
+    let repo = repo("spawn-place-machine");
+    for (tool, input) in [
+        (
+            "Agent",
+            serde_json::json!({"subagent_type": "Explore", "isolation": "worktree", "prompt": "x"}),
+        ),
+        ("EnterWorktree", serde_json::json!({})),
+        (
+            "Bash",
+            serde_json::json!({"command": "git worktree add ../wt"}),
+        ),
+    ] {
+        let (code, text) = spawn_on(&repo, tool, &input, false);
+        assert_eq!(code, Some(0), "{tool}: {text}");
+    }
+}
+
+/// CLOUD-2709: `git worktree add` through the shell is the route the first two
+/// arms left open, measured on PR #1276.
+#[test]
+fn a_shell_worktree_add_is_refused() {
+    let repo = repo("spawn-place-shell-add");
+    let (code, text) = spawn(
+        &repo,
+        "Bash",
+        &serde_json::json!({"command": "git -C . worktree add ../wt"}),
+    );
+    assert_eq!(code, Some(2), "{text}");
+    assert!(text.contains("spawn place wrong"), "{text}");
+    let (listed, text) = spawn(
+        &repo,
+        "Bash",
+        &serde_json::json!({"command": "git worktree list"}),
+    );
+    assert_eq!(listed, Some(0), "{text}");
 }
 
 #[test]

@@ -404,15 +404,22 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // behaviour.
         Some(Command::Mcp { command }) => run_mcp(&command, &overrides, out, err),
         Some(Command::Target { command }) => run_target(&command, &overrides, mode, err),
-        Some(Command::Hook { harness, instant }) => run_hook(
+        Some(Command::Hook {
             harness,
-            supplied_instant(instant.as_deref())?,
-            mode,
-            &overrides,
-            pinned.as_ref(),
-            out,
-            err,
-        ),
+            instant,
+            show_input,
+        }) => {
+            let _ = SHOW_INPUT.set(show_input);
+            run_hook(
+                harness,
+                supplied_instant(instant.as_deref())?,
+                mode,
+                &overrides,
+                pinned.as_ref(),
+                out,
+                err,
+            )
+        }
         // CLOUD-479. Touches NO config — this is the per-turn hot path, and the
         // whole point is that it costs less than the `jq` process it replaces.
         // `run_hook` loads policy only past its cheap refusals for the same
@@ -19615,6 +19622,8 @@ fn run_hook(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let _memos = hook_call_memos();
+    // THE HARNESS, BOUND FOR THE FACTS THAT DIFFER PER HOST (CLOUD-2709).
+    hook::bind_harness(harness);
     let Some(payload) = read_payload(mode, err)? else {
         return Ok(ExitCode::Success);
     };
@@ -21508,6 +21517,7 @@ fn compose(
     envelope: &hook::Envelope,
     facts: &hook::Facts<'_>,
 ) -> hook::Decision {
+    show_policy_input(envelope, facts);
     match handled {
         Some(hook::Decision::Preapproved(reason)) => {
             match hook::adjudicate(policy, envelope, facts) {
@@ -21529,6 +21539,41 @@ fn compose(
             decided => decided,
         },
     }
+}
+
+/// `adjudicate --show-input`, set once at dispatch (CLOUD-2696).
+static SHOW_INPUT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Store the policy input this call produced and print its pointer, when asked.
+///
+/// STORED AND POINTED AT, NEVER PRINTED (rule 4): the input carries the call's
+/// whole argv and every projected fact, so it goes where every other stored
+/// output goes and the reader follows the pointer. Silent on every failure: a
+/// diagnostic that cannot be stored must not change the decision it describes.
+fn show_policy_input(envelope: &hook::Envelope, facts: &hook::Facts<'_>) {
+    if !SHOW_INPUT.get().copied().unwrap_or(false) {
+        return;
+    }
+    let Some(input) = hook::policy_input(envelope, facts) else {
+        return;
+    };
+    let Ok(root) = git::repo_root(hook_session_home()) else {
+        return;
+    };
+    let Ok(bytes) = serde_json::to_vec(&input) else {
+        return;
+    };
+    let Ok(stored) = capture::store(&root, capture::Stream::Response, &bytes) else {
+        return;
+    };
+    let Ok((path, index)) = capture::result_view(&root, &stored, &input) else {
+        return;
+    };
+    let _ = writeln!(
+        std::io::stderr(),
+        "{}",
+        capture::pointer_line(&path, &index, &[&stored])
+    );
 }
 
 /// Fill the advisory buffer from the two producers that ride a batch boundary.
