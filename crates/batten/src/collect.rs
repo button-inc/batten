@@ -559,8 +559,12 @@ mod windows_table {
 }
 
 /// The programs whose process is a build: cargo and what it runs.
-const BUILD_PROGRAMS: [&str; 6] = [
+const BUILD_PROGRAMS: [&str; 7] = [
     "cargo",
+    // A SWEEP IS A BUILD for as long as it runs: it stages a copy (see
+    // [`mutant_copies`]) and builds and tests in it, and its copy is live from
+    // the moment it is made.
+    "cargo-mutants",
     "cargo-nextest",
     "cargo-clippy",
     "clippy-driver",
@@ -843,6 +847,48 @@ fn whole_units(tree: &Path, wholes: &[PathBuf]) -> Vec<Unit> {
     units
 }
 
+/// How cargo-mutants names the copy it stages a sweep in, inside the temp
+/// directory: `cargo-mutants-<crate>-<random>.tmp`. The engine's own runner's
+/// spelling, never a consumer's (rule 1).
+const MUTANT_COPY: (&str, &str) = ("cargo-mutants-", ".tmp");
+
+/// Each copy cargo-mutants staged in `dir`, as one unit taken whole.
+///
+/// MEASURED ON #1276: a sweep that is killed leaves its copy behind — the copy
+/// is a temporary directory cargo-mutants removes only on a clean exit — and the
+/// next lap began 4.5GB down, beside its own live 12GB copy, on a volume the
+/// collector measured and could not reach: every tree it ranked was under the
+/// checkout. A copy is dated by its newest write at ANY depth, the staged copy's
+/// rule: a live sweep writes deep, and so does nothing else.
+///
+/// A LIVE SWEEP'S COPY IS ITS ROOT: cargo-mutants is a [`BUILD_PROGRAMS`] entry,
+/// so a running sweep's start is at or before [`live_since`] and every write to
+/// its copy is after it.
+fn mutant_copies(dir: &Path) -> Vec<Unit> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let (prefix, suffix) = MUTANT_COPY;
+    entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(prefix) && name.ends_with(suffix))
+        })
+        .map(|entry| Unit {
+            tree: dir.to_path_buf(),
+            profile: entry.path(),
+            last_use: newest_write_within(&entry.path()),
+            fingerprint: entry.path(),
+            artifacts: Vec::new(),
+            whole: true,
+        })
+        .collect()
+}
+
 /// The newest mtime anywhere under `path`, never following a link.
 fn newest_write_within(path: &Path) -> SystemTime {
     let mut newest = std::fs::symlink_metadata(path)
@@ -1085,6 +1131,11 @@ pub struct Request<'a> {
     pub wait: bool,
     /// Every unit used at or after this instant is live: [`live_since`].
     pub live_since: Option<SystemTime>,
+    /// The directory cargo-mutants stages its copies in — the temp directory, its
+    /// own default — whose copies a pass takes whole: [`mutant_copies`]. `None`
+    /// reads no such directory, which every bounded pass and every case asks for:
+    /// a case run INSIDE a sweep would otherwise collect that sweep's own copy.
+    pub copies: Option<&'a Path>,
 }
 
 /// The live units and scratch, in the order a pass takes them.
@@ -1162,6 +1213,9 @@ fn pass_of(request: &Request<'_>) -> (Pass, String) {
         let wholes = wholes_in(tree, &fingerprints);
         scratch.extend(whole_units(tree, &wholes));
         units.extend(units_in(tree, fingerprints, &wholes));
+    }
+    if let Some(dir) = request.copies {
+        scratch.extend(mutant_copies(dir));
     }
     let live = ranked(units, scratch);
     // WHY A PASS REMOVED WHAT IT DID, counted (CLOUD-2197's trace): measured on
@@ -1331,7 +1385,12 @@ pub fn collect_toward_max(
     let mut kept = kept.to_vec();
     kept.extend(crate::engine::checkout_build(repo).and_then(|build| identity(&build)));
     kept.extend(crate::engine::own_build(repo).and_then(|build| identity(&build)));
+    // THE COPIES ARE READ BY AN UNBOUNDED PASS ONLY: dating a copy walks it
+    // whole, and a hook or a compile is bounded by a deadline that walk would
+    // spend before a single unit went.
+    let temp = std::env::temp_dir();
     let pass = collect(&Request {
+        copies: deadline.is_none().then_some(temp.as_path()),
         trees: &trees,
         keep_generations: prune.keep,
         kept: &kept,
@@ -1708,6 +1767,7 @@ mod tests {
             deadline: None,
             wait: false,
             live_since: None,
+            copies: None,
         }
     }
 
