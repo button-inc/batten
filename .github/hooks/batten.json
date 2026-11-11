@@ -65,6 +65,18 @@
         "bash": "batten adjudicate --harness copilot-cli",
         "type": "command"
       }
+    ],
+    "subagentStart": [
+      {
+        "bash": "batten adjudicate --harness copilot-cli --event subagentStart",
+        "type": "command"
+      }
+    ],
+    "userPromptTransformed": [
+      {
+        "bash": "batten adjudicate --harness copilot-cli --event userPromptTransformed",
+        "type": "command"
+      }
     ]
   },
   "version": 1

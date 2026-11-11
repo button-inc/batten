@@ -408,8 +408,12 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             harness,
             instant,
             show_input,
+            event,
         }) => {
             let _ = SHOW_INPUT.set(show_input);
+            if let Some(event) = event {
+                let _ = hook::NAMED_EVENT.set(event);
+            }
             run_hook(
                 harness,
                 supplied_instant(instant.as_deref())?,

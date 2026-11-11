@@ -175,6 +175,9 @@ pub enum Command {
         /// `--show-input`: store the exact policy input this call produced and
         /// print its pointer (CLOUD-2696).
         show_input: bool,
+        /// `--event <name>`: the host's event name, for a payload that names
+        /// none (CLOUD-2700).
+        event: Option<String>,
     },
     /// Print one allowlisted field of a hook payload read from stdin.
     HookField {
@@ -4011,6 +4014,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
                 harness: *harness,
                 instant: matches.get_one::<String>("instant").cloned(),
                 show_input: flag(matches, "show_input"),
+                event: matches.get_one::<String>("event").cloned(),
             }),
         "payload" => match matches.subcommand()? {
             ("field", inner) => Some(Command::HookField {

@@ -621,7 +621,7 @@ pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
         wiring.file,
         &spellings,
         &hook::wiring_command(harness),
-        harness.entry_shape(),
+        harness,
     );
     if out.events.is_empty() || check || !out.authoritative {
         return Ok(out);
@@ -694,7 +694,7 @@ pub fn register_committed(repo: &Path, check: bool) -> Result<Vec<(hook::Harness
             wiring.file,
             &spellings,
             &hook::wiring_command(*harness),
-            harness.entry_shape(),
+            *harness,
         );
         if events.is_empty() {
             continue;
@@ -725,8 +725,9 @@ fn add_missing(
     file: hook::WiringFile,
     spellings: &[&str],
     command: &str,
-    shape: hook::EntryShape,
+    harness: hook::Harness,
 ) -> Vec<String> {
+    let shape = harness.entry_shape();
     let Some(root) = document.as_object_mut() else {
         return Vec::new();
     };
@@ -764,7 +765,14 @@ fn add_missing(
         if present {
             continue;
         }
-        let entry = new_entry(shape, command);
+        // The registration's own command: the event on argv where the host's
+        // payload names none (CLOUD-2700).
+        let named = if harness.names_event_on_argv(spelling) {
+            format!("{command} --event {spelling}")
+        } else {
+            command.to_owned()
+        };
+        let entry = new_entry(shape, &named);
         match events
             .get_mut(*spelling)
             .and_then(serde_json::Value::as_array_mut)
@@ -1405,7 +1413,7 @@ mod tests {
             claude(),
             &["SessionStart", "PreToolUse"],
             "batten adjudicate --harness claude-code",
-            hook::Harness::ClaudeCode.entry_shape(),
+            hook::Harness::ClaudeCode,
         );
         assert_eq!(added, vec!["PreToolUse".to_owned()]);
         assert_eq!(
@@ -1436,7 +1444,7 @@ mod tests {
                 claude(),
                 &spellings,
                 command,
-                hook::Harness::ClaudeCode.entry_shape()
+                hook::Harness::ClaudeCode
             )
             .len(),
             2
@@ -1447,7 +1455,7 @@ mod tests {
                 claude(),
                 &spellings,
                 command,
-                hook::Harness::ClaudeCode.entry_shape()
+                hook::Harness::ClaudeCode
             )
             .is_empty()
         );
@@ -1463,7 +1471,7 @@ mod tests {
             claude(),
             &["SessionStart"],
             "batten adjudicate --harness claude-code",
-            hook::Harness::ClaudeCode.entry_shape(),
+            hook::Harness::ClaudeCode,
         );
         assert_eq!(added, vec!["SessionStart".to_owned()]);
         assert_eq!(

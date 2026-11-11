@@ -3832,6 +3832,8 @@ mod tests {
                     "Notification",
                     "PermissionRequest",
                     "ErrorOccurred",
+                    "subagentStart",
+                    "userPromptTransformed",
                 ],
             ),
             (
