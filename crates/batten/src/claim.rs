@@ -484,7 +484,7 @@ fn sequence_refusal(issue: &Issue, description: &str, receipts: &Path) -> Result
 ///
 /// [`UsageError`] when the receipt or the store exists and will not read.
 fn read_baseline(receipt: &Path, store: &Path) -> Result<Option<String>> {
-    match std::fs::read_to_string(receipt) {
+    match crate::fsio::read_to_string(receipt) {
         Ok(text) => Ok(text
             .lines()
             .next()
@@ -636,7 +636,7 @@ fn carried_ids(receipt: &Path, base: Option<&str>) -> Vec<String> {
 /// and two unresolvable bases are not evidence of the same branch.
 fn receipt_on_the_same_base(receipt: &Path, base: Option<&str>) -> Option<String> {
     let base = base?;
-    let existing = std::fs::read_to_string(receipt).ok()?;
+    let existing = crate::fsio::read_to_string(receipt).ok()?;
     existing
         .lines()
         .filter_map(|line| line.strip_prefix("base "))
@@ -667,7 +667,7 @@ fn receipt_on_the_same_base(receipt: &Path, base: Option<&str>) -> Option<String
 /// partition, so a branch with no claim behaves exactly as it did before.
 #[must_use]
 pub fn claimed_token(receipts: &Path, branch: &str) -> Option<String> {
-    let body = std::fs::read_to_string(receipts.join(receipt_name(branch))).ok()?;
+    let body = crate::fsio::read_to_string(receipts.join(receipt_name(branch))).ok()?;
     // LINE 1 IS THE ID LIST and `mint` says so in as many words, so this reads the
     // documented position rather than scanning for a shape.
     let ids = body.lines().next()?.trim();
@@ -852,7 +852,7 @@ pub fn adopt(
         if !name.starts_with("claim.") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(text) = crate::fsio::read_to_string(&path) else {
             continue;
         };
         // Read by KEY, never by line number: line 1 is the id list every existing
@@ -901,7 +901,7 @@ pub fn adopt(
     // bypass wearing a better name — the same reason the takeover names the
     // refusals it overrode. `branch` is rewritten so the receipt keeps describing
     // where it lives, and `adopted-from` keeps where it came from.
-    let Ok(text) = std::fs::read_to_string(&orphan.path) else {
+    let Ok(text) = crate::fsio::read_to_string(&orphan.path) else {
         return Err(UsageError::raise(
             "claim: the orphaned receipt could not be re-read to adopt it".to_owned(),
         ));
@@ -1023,7 +1023,7 @@ mod tests {
             "2026-09-01T00:00:00Z",
         )
         .unwrap();
-        std::fs::read_to_string(dest).unwrap()
+        crate::fsio::read_to_string(dest).unwrap()
     }
 
     /// ONE BRANCH, MANY ISSUES (CLOUD-472). The receipt's first line has always
@@ -1358,7 +1358,7 @@ mod tests {
             "2026-09-01T00:00:00Z",
         )
         .unwrap();
-        let body = std::fs::read_to_string(dest).unwrap();
+        let body = crate::fsio::read_to_string(dest).unwrap();
         assert!(
             body.contains("takeover 1 refusal(s) overridden: CLOUD-1 assigned\n"),
             "{body}"
@@ -1384,7 +1384,7 @@ mod tests {
         let orphan = adopt(&receipts, "new", Some("old"), &|_| false).unwrap();
         assert_eq!(orphan.recorded, "old");
         assert_eq!(
-            std::fs::read_to_string(receipts.join(receipt_name("new"))).unwrap(),
+            crate::fsio::read_to_string(receipts.join(receipt_name("new"))).unwrap(),
             "CLOUD-1\nbranch new\nadopted-from old\n"
         );
         assert!(!receipts.join(receipt_name("old")).exists());

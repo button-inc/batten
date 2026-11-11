@@ -921,7 +921,7 @@ pub fn fingerprint(root: &Path) -> Look<String> {
     for path in &changed {
         material.push_str(path);
         material.push(' ');
-        match std::fs::read(root.join(path)) {
+        match crate::fsio::read(root.join(path)) {
             Ok(bytes) => material.push_str(&crate::tools::digest(&bytes)),
             Err(_) => material.push('-'),
         }
@@ -990,7 +990,7 @@ pub fn acquire(root: &Path, query: &PlanQuery) -> Look<Planned> {
         // ABSENT rather than could-not-look: a repository that has not committed
         // a contract can still ask what its gate would run, and refusing the whole
         // fact would make this row depend on the other one being adopted first.
-        contract_digest: std::fs::read(root.join(ARTIFACT))
+        contract_digest: crate::fsio::read(root.join(ARTIFACT))
             .ok()
             .map(|bytes| crate::tools::digest(&bytes)),
         input_fingerprint: fingerprint,
@@ -1116,7 +1116,7 @@ pub fn observation_path(git_dir: &Path, session: &str, contract_digest: &str) ->
 #[must_use]
 pub fn observed(git_dir: &Path, session: &str, contract_digest: &str) -> Look<Observation> {
     let path = observation_path(git_dir, session, contract_digest);
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return Look::CouldNotLook;
     };
     match serde_json::from_str::<Observation>(&text) {
@@ -1193,7 +1193,7 @@ pub fn observe(
     // The digest is the cache key, so it is read BEFORE anything is probed. An
     // absent contract still has a key -- a stable literal -- because a session
     // that observed "there is no contract" has observed something.
-    let contract_digest = std::fs::read(root.join(ARTIFACT)).map_or_else(
+    let contract_digest = crate::fsio::read(root.join(ARTIFACT)).map_or_else(
         |_| "no-contract".to_owned(),
         |bytes| crate::tools::digest(&bytes),
     );
@@ -1201,7 +1201,7 @@ pub fn observe(
         return Ok(Look::Is(already));
     }
 
-    let committed = std::fs::read_to_string(root.join(ARTIFACT))
+    let committed = crate::fsio::read_to_string(root.join(ARTIFACT))
         .ok()
         .and_then(|text| Contract::parse(&text).ok());
     let current = match resolve(root) {

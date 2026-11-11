@@ -436,7 +436,7 @@ fn changed_fields(recorded: &KeyMaterial, observed: &KeyMaterial) -> Vec<String>
 /// `None` routes it through the same path as "no store here", which ends in a
 /// loud fresh-mint or a stranger report rather than a silent half-read.
 fn read_record(dir: &Path) -> Option<StoreRecord> {
-    let text = std::fs::read_to_string(dir.join(STORE_FILE)).ok()?;
+    let text = crate::fsio::read_to_string(dir.join(STORE_FILE)).ok()?;
     let record: StoreRecord = serde_json::from_str(&text).ok()?;
     (record.schema == STORE_SCHEMA).then_some(record)
 }
@@ -468,7 +468,7 @@ fn write_marker(common_dir: &str, id: &StoreId) -> Result<()> {
 
 /// The store id this repository's marker names, if any.
 fn read_marker(common_dir: &str) -> Option<StoreId> {
-    let text = std::fs::read_to_string(Path::new(common_dir).join(MARKER_FILE)).ok()?;
+    let text = crate::fsio::read_to_string(Path::new(common_dir).join(MARKER_FILE)).ok()?;
     let trimmed = text.trim();
     (!trimmed.is_empty()).then(|| StoreId(trimmed.to_owned()))
 }
@@ -888,7 +888,7 @@ pub fn resolve_address(
         // symlink at an address is a store that has been damaged in a way reading
         // cannot repair, and it is not the same as a wrong digest.
         Ok(meta) if !meta.is_file() => Resolution::Corrupt,
-        Ok(_) => match std::fs::read(&at) {
+        Ok(_) => match crate::fsio::read(&at) {
             Err(_) => Resolution::Unavailable,
             Ok(bytes) => verified(domain, address, bytes),
         },
@@ -1628,7 +1628,7 @@ mod tests {
 
         // A remote added is a migration, recorded and described by field name.
         let config = repo.join(".git/config");
-        let mut text = std::fs::read_to_string(&config).unwrap();
+        let mut text = crate::fsio::read_to_string(&config).unwrap();
         text.push_str("[remote \"origin\"]\n\turl = https://h/o/r\n");
         std::fs::write(&config, text).unwrap();
         let opened = resolve(&repo).unwrap();

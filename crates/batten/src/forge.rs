@@ -111,7 +111,7 @@ pub fn record_path(git_dir: &Path, sha: &str) -> PathBuf {
 pub fn verdicts(git_dir: &Path, declared: &[String]) -> BTreeMap<String, BTreeMap<String, String>> {
     let mut found = BTreeMap::new();
     for sha in declared {
-        let Ok(text) = std::fs::read_to_string(record_path(git_dir, sha)) else {
+        let Ok(text) = crate::fsio::read_to_string(record_path(git_dir, sha)) else {
             // ABSENT, not empty. This is the arm the whole family turns on.
             continue;
         };
@@ -610,11 +610,11 @@ fn validator_path(git_dir: &Path, url: &str) -> PathBuf {
 /// returned failure here for the same reason.
 fn conditional_get(git_dir: &Path, path: &str, fetch: Transport<'_>) -> Option<(u16, String)> {
     let stored = validator_path(git_dir, path);
-    let etag = std::fs::read_to_string(stored.join("etag")).ok();
+    let etag = crate::fsio::read_to_string(stored.join("etag")).ok();
     let answer = fetch(path, etag.as_deref().map(str::trim))?;
 
     if answer.status == 304 {
-        let cached = std::fs::read_to_string(stored.join("body")).ok()?;
+        let cached = crate::fsio::read_to_string(stored.join("body")).ok()?;
         return Some((200, cached));
     }
     if !answer.is_reading() {

@@ -213,7 +213,7 @@ pub fn stale(rows: &[Row], tracked: &BTreeSet<String>) -> Vec<String> {
 /// are could-not-look, and none of them is an empty corpus.
 pub fn derive(root: &Path, tracked: &BTreeSet<String>) -> Result<(Vec<Row>, String)> {
     let path = root.join(REPORT);
-    let Ok(report) = std::fs::read_to_string(&path) else {
+    let Ok(report) = crate::fsio::read_to_string(&path) else {
         return Err(UsageError::raise(format!(
             "record suites: no report at {REPORT} — the suite runner has not written one in this \
              tree, or a receipt let it skip. Run the suite first; this reads a report and measures \
@@ -457,7 +457,7 @@ pub fn nextest_rows(report: &str) -> Vec<Row> {
 /// could-not-look, never an empty suite.
 pub fn derive_nextest(root: &Path, profile: &str) -> Result<(Vec<Row>, String)> {
     let relative = format!("{NEXTEST_REPORT_DIR}/{profile}/{NEXTEST_REPORT_FILE}");
-    let Ok(report) = std::fs::read_to_string(root.join(&relative)) else {
+    let Ok(report) = crate::fsio::read_to_string(root.join(&relative)) else {
         return Err(UsageError::raise(format!(
             "record suites: no report at {relative} — nextest has not written one for profile \
              `{profile}` in this tree. Run the suite first; this reads a report and measures \

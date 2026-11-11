@@ -46,7 +46,6 @@
 //! with no `batten.toml` is could-not-look, for exactly `--config-from`'s reason.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -3307,7 +3306,7 @@ fn binary_is_behind_the_config(source: &str, text: &str) -> bool {
     // READ, THEN DERIVE (CLOUD-1876). A tuple evaluates both arms, so this paid
     // a whole-schema derivation to answer `false` for every source with no
     // sibling artifact — which is every consumer tree, every time.
-    let Ok(committed) = fs::read_to_string(&at) else {
+    let Ok(committed) = crate::fsio::read_to_string(&at) else {
         return false;
     };
     let Ok(derived) = schema() else {
@@ -4648,7 +4647,7 @@ static LAST_TEXT: std::sync::Mutex<HeldText> = std::sync::Mutex::new(None);
 /// text out of the `String` the read produced, the first moves it.
 pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<String>> {
     let Some(stamp) = crate::cache::stamp(path) else {
-        return fs::read_to_string(path).map(std::sync::Arc::from);
+        return crate::fsio::read_to_string(path).map(std::sync::Arc::from);
     };
     if let Ok(last) = LAST_TEXT.lock()
         && let Some((held, at, text)) = last.as_ref()
@@ -4657,7 +4656,7 @@ pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<String>> {
         return Ok(std::sync::Arc::clone(text));
     }
     let at = crate::cache::now();
-    let text = std::sync::Arc::new(fs::read_to_string(path)?);
+    let text = std::sync::Arc::new(crate::fsio::read_to_string(path)?);
     // THE DIGEST THE PARSE KEY TAKES, ONLY WHILE THE PARSE CACHE IS ON (CLOUD-2608):
     // the hook re-hashed this 956 KB text on every call to key its parse entry.
     // Off the cache, nothing here touches a cache directory.
@@ -5446,7 +5445,7 @@ pub fn load_override(path: &Path) -> Result<OverrideConfig> {
 /// Read a config file, mapping a missing file to a [`UsageError`] and any other
 /// I/O failure to an internal error (→ exit `3`).
 fn read(path: &Path) -> Result<String> {
-    match fs::read_to_string(path) {
+    match crate::fsio::read_to_string(path) {
         Ok(text) => Ok(text),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Err(UsageError::raise(format!(
             "no config found at {}",
@@ -5462,6 +5461,7 @@ mod tests {
 
     use super::*;
     use crate::error::UsageError;
+    use std::fs;
 
     // --- `[perf]` and the version floor --------------------------------------
 
@@ -7429,7 +7429,7 @@ mod tests {
     #[test]
     fn one_config_survives_the_parse_cache_unchanged() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
-        let text = fs::read_to_string(&path).unwrap();
+        let text = crate::fsio::read_to_string(&path).unwrap();
         let parsed = parse_ungated(&text, "batten.toml").unwrap();
         let dir = crate::scratch::scratch("config-parse-cache-roundtrip");
         let entry = dir.join("entry.cfg");

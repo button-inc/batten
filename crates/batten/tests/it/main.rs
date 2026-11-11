@@ -310,6 +310,7 @@ mod ntia;
 mod obligations_bound;
 mod one_pr;
 mod outcome_advice;
+mod ratchet_at_call;
 // The decoy is a `#!/bin/sh` script whose permission bits are the mechanism, so
 // the subject does not exist off Unix and `PermissionsExt` does not compile
 // there — `rules/rust.md`'s stated exception to the `cfg!`-inside-a-case rule,

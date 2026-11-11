@@ -119,6 +119,115 @@ pub fn rename_method_calls(
     Ok(edited)
 }
 
+/// Redirect every call whose callee is one of `from`'s paths to `to`, and
+/// nothing else (CLOUD-2692): `fs::read_to_string(x)` becomes
+/// `crate::io::read_to_string(x)`, arguments untouched.
+///
+/// Only a call expression's own callee path is matched, compared as written
+/// with whitespace removed. A path in a `use`, a comment, a string literal, a
+/// longer path (`fs::read_to_string_lossy`) or a method call of the same name
+/// is left alone.
+///
+/// # Errors
+///
+/// [`CouldNotLook`] when the parser reports any error over `source` under
+/// `edition`. The source is then not rewritten at all.
+pub fn redirect_calls(
+    source: &str,
+    edition: Edition,
+    from: &[&str],
+    to: &str,
+) -> Result<String, CouldNotLook> {
+    let parse = SourceFile::parse(source, edition.parser());
+    let errors = parse.errors();
+    if !errors.is_empty() {
+        return Err(CouldNotLook {
+            errors: errors.len(),
+        });
+    }
+    let root = parse.syntax_node();
+    let targets: Vec<ast::Path> = root
+        .descendants()
+        .filter_map(ast::CallExpr::cast)
+        .filter_map(|call| match call.expr()? {
+            ast::Expr::PathExpr(callee) => callee.path(),
+            _ => None,
+        })
+        .filter(|path| {
+            let written: String = path
+                .syntax()
+                .text()
+                .to_string()
+                .split_whitespace()
+                .collect();
+            from.contains(&written.as_str())
+        })
+        .collect();
+    // INSIDE A MACRO'S ARGUMENTS TOO. A macro call's arguments are a token tree,
+    // not expressions, so the call-expression match above cannot see
+    // `assert_eq!(fs::read_to_string(p)…)`. There the match is the token run
+    // that spells a `from` path, followed by `(`, and the edit is that run's
+    // byte range, so every other byte of the macro is kept.
+    let mut ranges: Vec<std::ops::Range<usize>> = targets
+        .iter()
+        .map(|path| {
+            let range = path.syntax().text_range();
+            usize::from(range.start())..usize::from(range.end())
+        })
+        .collect();
+    for tree in root.descendants().filter_map(ast::TokenTree::cast) {
+        // Direct children only: a nested tree is visited on its own, and here
+        // it stands as its opening delimiter, which is how a call's `(p)`
+        // follows its path inside a macro.
+        let tokens: Vec<(String, ra_ap_syntax::TextRange)> = tree
+            .syntax()
+            .children_with_tokens()
+            .filter_map(|child| match child {
+                ra_ap_syntax::NodeOrToken::Token(token) => (!token.kind().is_trivia())
+                    .then(|| (token.text().to_owned(), token.text_range())),
+                ra_ap_syntax::NodeOrToken::Node(node) => node
+                    .first_token()
+                    .map(|open| (open.text().to_owned(), node.text_range())),
+            })
+            .collect();
+        for path in from {
+            for start in 0..tokens.len() {
+                // The run is the tokens whose texts concatenate to the path,
+                // however the lexer split its `::`.
+                let mut spelled = String::new();
+                let mut end = start;
+                while end < tokens.len() && spelled.len() < path.len() {
+                    spelled.push_str(&tokens[end].0);
+                    end += 1;
+                }
+                if spelled != *path || end >= tokens.len() || tokens[end].0 != "(" {
+                    continue;
+                }
+                // Not the tail of a longer path (`x::fs::read`) or a method.
+                let preceded = start
+                    .checked_sub(1)
+                    .is_some_and(|before| matches!(tokens[before].0.as_str(), ":" | "::" | "."));
+                if !preceded {
+                    let first = tokens[start].1.start();
+                    let last = tokens[end - 1].1.end();
+                    ranges.push(usize::from(first)..usize::from(last));
+                }
+            }
+        }
+    }
+    if ranges.is_empty() {
+        return Ok(source.to_owned());
+    }
+    // Spliced from the end, so each range's offsets still hold when it is cut.
+    ranges.sort_by_key(|range| std::cmp::Reverse(range.start));
+    ranges.dedup();
+    let mut edited = source.to_owned();
+    for range in ranges {
+        edited.replace_range(range, to);
+    }
+    Ok(edited)
+}
+
 /// Replace each target's name token on the tree itself.
 fn edit(root: ra_ap_syntax::SyntaxNode, targets: &[ast::NameRef], to: &str) -> SyntaxEdit {
     let (editor, _) = SyntaxEditor::new(root);

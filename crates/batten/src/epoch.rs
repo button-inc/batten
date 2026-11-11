@@ -292,7 +292,7 @@ fn authority(dir: &Path, base_ref: Option<&str>) -> Result<Config> {
 fn read_tracked(dir: &Path, path: &str, base_ref: Option<&str>) -> Result<Vec<u8>> {
     match base_ref {
         Some(reference) => git::show(dir, reference, path).map(String::into_bytes),
-        None => std::fs::read(dir.join(path)).map_err(|err| {
+        None => crate::fsio::read(dir.join(path)).map_err(|err| {
             UsageError::raise(format!(
                 "cannot read tracked config-surface path {path}: {err}"
             ))

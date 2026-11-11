@@ -308,7 +308,7 @@ pub fn custody(repo_root: &Path, today: Date) -> Result<Custody> {
 /// Errors are pointer-only: a malformed file is named by path and by which line
 /// failed, never by its contents, because its contents are key material.
 fn read(path: &Path) -> Result<Option<Custody>> {
-    let text = match fs::read_to_string(path) {
+    let text = match crate::fsio::read_to_string(path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
@@ -697,7 +697,7 @@ pub fn events(repo_root: &Path) -> Result<Vec<Event>> {
 ///
 /// As [`events`].
 pub fn events_at(path: &Path) -> Result<Vec<Event>> {
-    let text = match fs::read_to_string(path) {
+    let text = match crate::fsio::read_to_string(path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => {
@@ -984,7 +984,7 @@ fn lost_from(events: &[Event], held_witnesses: &[String]) -> Vec<String> {
 /// and no new capability: the bytes move from disk to disk through one `String`
 /// that is never rendered.
 fn generation_lines(path: &Path) -> Result<(String, String)> {
-    let text = fs::read_to_string(path)
+    let text = crate::fsio::read_to_string(path)
         .with_context(|| format!("read the secret-identity key {}", path.display()))?;
     let mut lines = text.lines();
     let id = lines.next().unwrap_or_default().trim().to_owned();
@@ -1376,7 +1376,7 @@ mod tests {
     fn a_malformed_key_is_refused_rather_than_re_minted() {
         let path = scratch("malformed");
         load_or_mint_at(&path, date()).unwrap();
-        let before = fs::read_to_string(&path).unwrap();
+        let before = crate::fsio::read_to_string(&path).unwrap();
 
         fs::write(&path, "2026-08-13\nnot-hex\n").unwrap();
         let err = load_or_mint_at(&path, date()).unwrap_err().to_string();
@@ -1403,13 +1403,13 @@ mod tests {
         // the branch under test. Pre-creating the file *is* the other process.
         let path = scratch("race");
         let winner = load_or_mint_at(&path, date()).unwrap();
-        let winner_bytes = fs::read_to_string(&path).unwrap();
+        let winner_bytes = crate::fsio::read_to_string(&path).unwrap();
 
         let loser = mint(&path, date()).unwrap();
 
         assert_eq!(loser.id(), winner.id());
         assert_eq!(
-            fs::read_to_string(&path).unwrap(),
+            crate::fsio::read_to_string(&path).unwrap(),
             winner_bytes,
             "the loser wrote nothing; a truncating write here would re-identify \
              every finding already emitted under the winner's key"
@@ -1436,10 +1436,13 @@ mod tests {
     fn a_retired_key_with_an_empty_id_is_refused() {
         let path = scratch("retired-empty-id");
         load_or_mint_at(&path, date()).unwrap();
-        let text = fs::read_to_string(&path).unwrap();
+        let text = crate::fsio::read_to_string(&path).unwrap();
         let hex = text.lines().nth(1).unwrap().to_owned();
         fs::write(&path, format!("{text}\n{hex}\n")).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap().lines().nth(2), Some(""));
+        assert_eq!(
+            crate::fsio::read_to_string(&path).unwrap().lines().nth(2),
+            Some("")
+        );
         assert!(custody_at(&path, date()).is_err());
     }
 
@@ -1496,7 +1499,7 @@ mod tests {
     fn the_key_bytes_reach_no_rendering() {
         let path = scratch("redaction");
         let key = load_or_mint_at(&path, date()).unwrap();
-        let hex = fs::read_to_string(&path).unwrap();
+        let hex = crate::fsio::read_to_string(&path).unwrap();
         let hex = hex.lines().nth(1).unwrap().to_owned();
 
         let rendered = format!("{key:?}");
@@ -1942,7 +1945,7 @@ sha256 = "00"
         .unwrap();
         record_orphan(&path, "2026-08-13", 2).unwrap();
 
-        let text = fs::read_to_string(ledger_beside(&path)).unwrap();
+        let text = crate::fsio::read_to_string(ledger_beside(&path)).unwrap();
         assert!(!text.contains(&hex), "the ledger carries no key material");
         assert!(text.contains(key.id()), "it does carry the coordinate");
         // And the redacting `Debug` holds for the custody wrapper too, which is a

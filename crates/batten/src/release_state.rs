@@ -1549,7 +1549,7 @@ pub fn run_pin(
     let text = match at {
         Some(rev) => crate::git::show(std::path::Path::new("."), rev, "batten.toml")
             .map_err(|why| why.to_string()),
-        None => std::fs::read_to_string("batten.toml").map_err(|why| why.to_string()),
+        None => crate::fsio::read_to_string("batten.toml").map_err(|why| why.to_string()),
     };
     let text = match text {
         Ok(text) => text,
@@ -1924,7 +1924,7 @@ mod tests {
         let (code, out, fixture) = cut("cut-dispatched", 204);
         assert_eq!(code, crate::ExitCode::Success, "{out}");
         assert!(out.contains("v1.0.0 drafted at"), "{out}");
-        let drafted = std::fs::read_to_string(fixture.join("route.3.request")).unwrap();
+        let drafted = crate::fsio::read_to_string(fixture.join("route.3.request")).unwrap();
         assert!(
             drafted.contains("notes") && !drafted.contains("old"),
             "{drafted}"
@@ -2028,7 +2028,7 @@ mod tests {
             "install.lock\ninstall.sh\n"
         );
         assert!(
-            std::fs::read_to_string(dir.join(crate::install::LOCK_FILE))
+            crate::fsio::read_to_string(dir.join(crate::install::LOCK_FILE))
                 .unwrap()
                 .contains("\ntag v1.0.0\n")
         );

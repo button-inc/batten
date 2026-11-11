@@ -247,7 +247,7 @@ pub(crate) fn store_tool(id: &str, text: &str, overrides: &Overrides) -> Result<
     // over bytes this producer never read would be a verdict about a file nobody
     // can identify, which is the one thing the digest in the key exists to make
     // impossible.
-    let Ok(bytes) = std::fs::read(&subject) else {
+    let Ok(bytes) = crate::fsio::read(&subject) else {
         return Err(UsageError::raise(format!(
             "cannot read `{}`, the input row `{id}` names, so no verdict can be keyed to it",
             row.input
@@ -298,7 +298,7 @@ pub fn run_validate(id: &str, overrides: &Overrides, err: &mut dyn Write) -> Res
         )));
     }
     let root = git::repo_root(Path::new("."))?;
-    let Ok(bytes) = std::fs::read(root.join(&row.input)) else {
+    let Ok(bytes) = crate::fsio::read(root.join(&row.input)) else {
         return Err(UsageError::raise(format!(
             "cannot read `{}`, the input row `{id}` names, so no verdict can be keyed to it",
             row.input
@@ -370,8 +370,8 @@ const RECEIPTS: &str = "batten-tools-asked";
 // re-runs a validator whose inputs did not move, and an unkeyed argv replays an
 // answer to a question nobody is asking.
 fn already_clean(record: &Path, receipt: &Path, asked: &str) -> bool {
-    let answered_zero = std::fs::read_to_string(record).is_ok_and(|body| body == "exit 0\n");
-    let same_argv = std::fs::read_to_string(receipt).is_ok_and(|held| held == asked);
+    let answered_zero = crate::fsio::read_to_string(record).is_ok_and(|body| body == "exit 0\n");
+    let same_argv = crate::fsio::read_to_string(receipt).is_ok_and(|held| held == asked);
     answered_zero && same_argv
 }
 
@@ -1570,7 +1570,7 @@ fn turn_reading(
     let Some(path) = crate::turn::transcript_of(&stdin) else {
         return Ok(None);
     };
-    let Ok(body) = std::fs::read_to_string(&path) else {
+    let Ok(body) = crate::fsio::read_to_string(&path) else {
         return Ok(None);
     };
     let vocabulary = crate::turn::Vocabulary {
@@ -1991,7 +1991,7 @@ pub(crate) fn store_named(verb: &str, family: &str, body: &str) -> Result<()> {
 /// read — which is not the same answer as one that is absent.
 pub(crate) fn load_named(verb: &str, family: &str) -> Result<Option<String>> {
     let path = named_path(verb, family)?;
-    match std::fs::read_to_string(&path) {
+    match crate::fsio::read_to_string(&path) {
         Ok(body) => Ok(Some(body)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("read the record {}", path.display())),
@@ -2039,7 +2039,7 @@ pub(crate) fn clear_kind<'a>(
         // A FAMILY READ OFF THE RAW CONFIG is held to the grammar validation
         // holds it to, so it can never name a path outside the store.
         let path = named_path(verb, &safe_component("record family", family)?)?;
-        if std::fs::read_to_string(&path).is_ok_and(|body| body.starts_with(&line)) {
+        if crate::fsio::read_to_string(&path).is_ok_and(|body| body.starts_with(&line)) {
             remove_stale(&path)?;
         }
     }
@@ -2132,7 +2132,7 @@ fn keyed_path(git_dir: &Path, family: &str, key: &str) -> PathBuf {
 /// path a second time beside [`keyed_path`] would be a second spelling of the key
 /// the two verbs share. `family` must already be a single path component.
 pub(crate) fn keyed_read(git_dir: &Path, family: &str, key: &str) -> Option<String> {
-    std::fs::read_to_string(keyed_path(git_dir, family, key)).ok()
+    crate::fsio::read_to_string(keyed_path(git_dir, family, key)).ok()
 }
 
 /// Write one keyed record's value whole, through the same store as
@@ -2212,7 +2212,7 @@ pub fn run_journal(family: &str) -> Result<ExitCode> {
 pub fn run_keyed_show(family: &str, key: &str, out: &mut dyn std::io::Write) -> Result<ExitCode> {
     let family = safe_component("family", family)?;
     let git_dir = git::git_dir(Path::new("."))?;
-    match std::fs::read_to_string(keyed_path(&git_dir, &family, key)) {
+    match crate::fsio::read_to_string(keyed_path(&git_dir, &family, key)) {
         Ok(value) => {
             writeln!(out, "hit")?;
             write!(out, "{value}")?;

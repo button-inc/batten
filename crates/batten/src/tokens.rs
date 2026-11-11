@@ -162,7 +162,7 @@ pub struct Workloads {
 /// behind it.
 pub fn method(root: &Path) -> Result<Method> {
     let path = root.join(METHOD);
-    let text = std::fs::read_to_string(&path).with_context(|| {
+    let text = crate::fsio::read_to_string(&path).with_context(|| {
         format!("token-bench: {METHOD} is missing — the method is an input, not a default")
     })?;
     toml::from_str(&text).with_context(|| format!("token-bench: {METHOD} did not parse"))
@@ -175,7 +175,7 @@ pub fn method(root: &Path) -> Result<Method> {
 /// A file that is missing or will not parse.
 pub fn workloads(root: &Path) -> Result<Workloads> {
     let path = root.join(WORKLOADS);
-    let text = std::fs::read_to_string(&path).with_context(|| {
+    let text = crate::fsio::read_to_string(&path).with_context(|| {
         format!("token-bench: {WORKLOADS} is missing — the workloads are an input, not a default")
     })?;
     toml::from_str(&text).with_context(|| format!("token-bench: {WORKLOADS} did not parse"))
@@ -1138,11 +1138,11 @@ mod tests {
         let staged = materialize(&root, "f", &into).unwrap();
         assert_eq!(staged, into.join("f"));
         assert_eq!(
-            std::fs::read_to_string(staged.join("a.txt")).unwrap(),
+            crate::fsio::read_to_string(staged.join("a.txt")).unwrap(),
             "top"
         );
         assert_eq!(
-            std::fs::read_to_string(staged.join("sub/b.txt")).unwrap(),
+            crate::fsio::read_to_string(staged.join("sub/b.txt")).unwrap(),
             "nested"
         );
         assert!(!staged.join("a.txt.in").exists());

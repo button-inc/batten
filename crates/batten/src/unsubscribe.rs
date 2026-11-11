@@ -309,7 +309,7 @@ pub fn drop_subscription(
     let Some(token_file) = host.token_env.as_deref().and_then(std::env::var_os) else {
         return give_up(out, pr, "no credential file declared");
     };
-    let Ok(token) = std::fs::read_to_string(&token_file) else {
+    let Ok(token) = crate::fsio::read_to_string(&token_file) else {
         return give_up(out, pr, "the credential file will not read");
     };
     let token = token.trim_end();
@@ -527,7 +527,8 @@ mod tests {
         let digest = mint(&dir, &host, "cse_a", 489, b"secret answer", "agent").unwrap();
         assert_eq!(digest.len(), 12);
         let stored =
-            std::fs::read_to_string(dir.join("batten-receipts/pr-unsubscribed.cse_a.489")).unwrap();
+            crate::fsio::read_to_string(dir.join("batten-receipts/pr-unsubscribed.cse_a.489"))
+                .unwrap();
         assert!(stored.starts_with("pr 489\nsession cse_a\nvia agent\n"));
         assert!(!stored.contains("secret"), "never the answer");
         assert!(receipt_path(&dir, &host, "cse_a", 489).is_file());

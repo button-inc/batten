@@ -299,7 +299,7 @@ pub(crate) fn key(configs: &[PathBuf]) -> Option<String> {
     let mut any = false;
     for path in keyed_paths(configs) {
         let path_bytes = path.to_string_lossy().into_owned().into_bytes();
-        match std::fs::read(&path) {
+        match crate::fsio::read(&path) {
             Ok(bytes) => {
                 any = true;
                 owned.push((path_bytes, Some(bytes)));
@@ -346,7 +346,7 @@ pub fn cached(root: &Path) -> PinnedFacts {
     let Some(path) = record_path(root) else {
         return Look::CouldNotLook;
     };
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return Look::CouldNotLook;
     };
     let Ok(record) = serde_json::from_str::<Record>(&text) else {

@@ -1091,7 +1091,7 @@ fn settle(
             let source = resolutions
                 .get(path)
                 .map_or_else(|| std::path::PathBuf::from(path), Clone::clone);
-            let bytes = std::fs::read(dir.join(&source)).map_err(|err| {
+            let bytes = crate::fsio::read(dir.join(&source)).map_err(|err| {
                 anyhow::anyhow!(
                     "gitwrite: {path} carries no resolution to read at {}: {err}",
                     source.display()
@@ -1121,7 +1121,7 @@ fn settle(
 /// matched, so a union is never taken for a path the file did not name.
 fn union_paths(dir: &Path) -> std::collections::BTreeSet<String> {
     // stream: the repository's own attributes file, a handful of lines.
-    let Ok(text) = std::fs::read_to_string(dir.join(".gitattributes")) else {
+    let Ok(text) = crate::fsio::read_to_string(dir.join(".gitattributes")) else {
         return std::collections::BTreeSet::new();
     };
     text.lines()
@@ -1399,7 +1399,7 @@ pub fn link_worktree(common: &Path, top: &Path, name: &str) -> Result<std::path:
 /// A worktree with no readable `.git` file or admin directory, or a removal the
 /// filesystem refuses.
 pub fn unlink_worktree(worktree: &Path) -> Result<(std::path::PathBuf, Option<String>)> {
-    let pointer = std::fs::read_to_string(worktree.join(".git")).map_err(|err| {
+    let pointer = crate::fsio::read_to_string(worktree.join(".git")).map_err(|err| {
         anyhow::anyhow!("worktree: {} has no .git file: {err}", worktree.display())
     })?;
     let admin = std::path::PathBuf::from(
@@ -1409,10 +1409,10 @@ pub fn unlink_worktree(worktree: &Path) -> Result<(std::path::PathBuf, Option<St
             .ok_or_else(|| anyhow::anyhow!("worktree: .git is not a gitdir pointer"))?
             .trim(),
     );
-    let commondir = std::fs::read_to_string(admin.join("commondir"))
+    let commondir = crate::fsio::read_to_string(admin.join("commondir"))
         .map_err(|err| anyhow::anyhow!("worktree: no commondir: {err}"))?;
     let common = crate::git::canonical(&admin.join(commondir.trim()));
-    let branch = std::fs::read_to_string(admin.join("HEAD"))
+    let branch = crate::fsio::read_to_string(admin.join("HEAD"))
         .ok()
         .and_then(|head| {
             head.trim()
@@ -1700,7 +1700,7 @@ pub fn commit_paths(dir: &Path, paths: &[String], message: &str) -> Result<()> {
         if !meta.is_file() {
             continue;
         }
-        let body = std::fs::read(&full)
+        let body = crate::fsio::read(&full)
             .map_err(|err| anyhow::anyhow!("gitwrite: cannot read {}: {err}", full.display()))?;
         let id = repo
             .write_blob(&body)
@@ -1863,7 +1863,7 @@ fn tree_from_dir(repo: &gix::Repository, dir: &Path) -> Result<gix::ObjectId> {
                 tree_from_dir(repo, &path)?,
             )
         } else {
-            let body = std::fs::read(&path).map_err(|err| {
+            let body = crate::fsio::read(&path).map_err(|err| {
                 anyhow::anyhow!("gitwrite: cannot read {}: {err}", path.display())
             })?;
             let id = repo
@@ -2090,7 +2090,7 @@ mod tests {
         let dir = crate::scratch::scratch("gitwrite-refs");
         init_on_main(&dir).unwrap_or_else(|err| panic!("init: {err}"));
         assert_eq!(
-            std::fs::read_to_string(dir.join(".git/HEAD")).unwrap_or_default(),
+            crate::fsio::read_to_string(dir.join(".git/HEAD")).unwrap_or_default(),
             "ref: refs/heads/main\n"
         );
         let head = || {
@@ -2439,7 +2439,7 @@ mod tests {
         let dir = crate::scratch::scratch("gitwrite-bare-main");
         init_bare_on_main(&dir).unwrap_or_else(|err| panic!("{err}"));
         assert_eq!(
-            std::fs::read_to_string(dir.join("HEAD")).unwrap_or_else(|err| panic!("{err}")),
+            crate::fsio::read_to_string(dir.join("HEAD")).unwrap_or_else(|err| panic!("{err}")),
             "ref: refs/heads/main\n"
         );
     }

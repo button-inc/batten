@@ -314,7 +314,7 @@ pub fn load(root: &Path) -> Result<Option<Baseline>> {
     if !file.exists() {
         return Ok(None);
     }
-    let bytes = std::fs::read(&file).with_context(|| format!("read {}", file.display()))?;
+    let bytes = crate::fsio::read(&file).with_context(|| format!("read {}", file.display()))?;
     let baseline: Baseline = serde_json::from_slice(&bytes)
         .with_context(|| format!("parse the baseline at {}", file.display()))?;
     if baseline.schema != BASELINE_SCHEMA {

@@ -296,7 +296,7 @@ pub fn column(git_dir: Option<&Path>, receipt: &str, field: usize, key: &str) ->
     let path = git_dir
         .join("batten-receipts")
         .join(format!("{receipt}.{key}"));
-    std::fs::read_to_string(path)
+    crate::fsio::read_to_string(path)
         .ok()
         .and_then(|text| nth_field(&text, field))
         .unwrap_or_else(|| "-".to_owned())

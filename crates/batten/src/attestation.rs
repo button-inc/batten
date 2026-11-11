@@ -418,7 +418,7 @@ mod tests {
         let into = dir.join("x");
         std::fs::create_dir_all(&into).unwrap();
         let found = untar(&archive, &into, "tool").unwrap().expect("the binary");
-        assert_eq!(std::fs::read(found).unwrap(), b"ELF");
+        assert_eq!(crate::fsio::read(found).unwrap(), b"ELF");
     }
 
     /// An archive that unpacks and carries no binary is a RELEASE verdict, and

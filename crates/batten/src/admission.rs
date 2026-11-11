@@ -694,7 +694,7 @@ fn lock(dir: &Path) -> Result<std::fs::File> {
 #[must_use]
 pub fn load(repo_root: &Path, admission: &str) -> Option<Record> {
     let path = record_path(repo_root, admission).ok()?;
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::fsio::read(path).ok()?;
     let record: Record = serde_json::from_slice(&bytes).ok()?;
     (record.predicate_type == PREDICATE_TYPE).then_some(record)
 }
@@ -872,7 +872,7 @@ pub fn chain_head(repo_root: &Path, rule: &str, subject: &str) -> Result<Option<
         if path.extension().is_none_or(|ext| ext != "json") {
             continue;
         }
-        let Ok(bytes) = std::fs::read(&path) else {
+        let Ok(bytes) = crate::fsio::read(&path) else {
             continue;
         };
         let Ok(record) = serde_json::from_slice::<Record>(&bytes) else {
@@ -946,7 +946,7 @@ pub fn admitted(
         if path.extension().is_none_or(|ext| ext != "json") {
             continue;
         }
-        let Ok(bytes) = std::fs::read(&path) else {
+        let Ok(bytes) = crate::fsio::read(&path) else {
             continue;
         };
         let Ok(record) = serde_json::from_slice::<Record>(&bytes) else {

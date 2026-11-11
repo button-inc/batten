@@ -240,7 +240,7 @@ pub fn run(request: &StepRequest, out: &mut dyn Write, err: &mut dyn Write) -> R
         return Err(UsageError::raise("ci step: no command after `--`"));
     };
     let stdin = match request.stdin {
-        Some(ref path) => std::fs::read_to_string(path)
+        Some(ref path) => crate::fsio::read_to_string(path)
             .map_err(|e| UsageError::raise(format!("ci step: --stdin {path}: {e}")))?,
         None => String::new(),
     };
@@ -313,7 +313,7 @@ mod tests {
         let file = dir.join("output");
         append_to(Some(file.clone().into_os_string()), OUTPUT_VAR, "k=v\n").unwrap();
         append_to(Some(file.clone().into_os_string()), OUTPUT_VAR, "").unwrap();
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "k=v\n");
+        assert_eq!(crate::fsio::read_to_string(&file).unwrap(), "k=v\n");
         append_to(Some(std::ffi::OsString::new()), OUTPUT_VAR, "k=v\n").unwrap();
         append_to(None, OUTPUT_VAR, "k=v\n").unwrap();
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);

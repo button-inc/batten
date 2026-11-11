@@ -308,7 +308,7 @@ pub fn committed_binaries(root: &Path, tracked: &BTreeSet<String>) -> Vec<String
     tracked
         .iter()
         .filter(|path| {
-            let Ok(bytes) = std::fs::read(root.join(path)) else {
+            let Ok(bytes) = crate::fsio::read(root.join(path)) else {
                 return false;
             };
             is_executable(&bytes)

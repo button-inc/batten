@@ -688,7 +688,7 @@ fn branch_lap_lines(root: &Path, branch: &str) -> Vec<String> {
     files.sort();
     files
         .iter()
-        .filter_map(|(_, path)| std::fs::read_to_string(path).ok())
+        .filter_map(|(_, path)| crate::fsio::read_to_string(path).ok())
         .flat_map(|text| text.lines().map(str::to_owned).collect::<Vec<_>>())
         .collect()
 }
@@ -1485,7 +1485,7 @@ fn read_red_head(root: &Path, branch: &str) -> crate::facts::Look<RedHead> {
     let Some(path) = red_head_path(root, branch) else {
         return crate::facts::Look::CouldNotLook;
     };
-    let text = match std::fs::read_to_string(&path) {
+    let text = match crate::fsio::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return crate::facts::Look::IsNot;

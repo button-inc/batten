@@ -341,7 +341,7 @@ impl Pin {
         let Some(path) = Self::path(dir) else {
             return Ok(None);
         };
-        let text = match std::fs::read_to_string(&path) {
+        let text = match crate::fsio::read_to_string(&path) {
             Ok(text) => text,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(_) => {

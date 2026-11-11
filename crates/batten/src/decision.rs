@@ -594,7 +594,7 @@ pub fn load_all(repo_root: &Path) -> Result<Vec<DecisionRecord>> {
 
     let mut all = Vec::new();
     for path in paths {
-        let text = std::fs::read_to_string(&path)
+        let text = crate::fsio::read_to_string(&path)
             .with_context(|| format!("read the decision shard {}", path.display()))?;
         all.extend(
             text.lines()

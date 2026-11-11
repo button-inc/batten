@@ -4192,6 +4192,10 @@ pub struct Policy {
     /// The resolved `[budget]` sets, judged at a write that would change one
     /// (CLOUD-2661). `None` arms nothing.
     pub budget: Option<crate::budget::Budget>,
+    /// The ratchet rows a write can be judged against (CLOUD-2692), held apart
+    /// from `shapes` because they are tree-scoped rows every `shapes` consumer
+    /// would otherwise have to filter out.
+    pub ratchets: Vec<Rule>,
     /// The host this policy is being applied on, and through it the
     /// [`Capabilities`] row a rule may branch on (CLOUD-779).
     ///
@@ -4330,6 +4334,7 @@ impl Policy {
         Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness,
             shapes: Vec::new(),
             fail_on_warning: false,
@@ -4485,6 +4490,12 @@ impl Policy {
             facts: resolved.facts.clone(),
             commit: resolved.commit.clone(),
             budget: resolved.budget.clone(),
+            ratchets: resolved
+                .rules
+                .iter()
+                .filter(|rule| crate::rules::judged_at_call(rule))
+                .cloned()
+                .collect(),
             mints: resolved.mints.clone(),
             recorders: resolved.recorders.clone(),
             patterns: resolved.patterns.clone(),
@@ -4911,6 +4922,30 @@ impl Policy {
             })
     }
 
+    /// The ratchet rows a write selects (CLOUD-2692): a `PreTool` write whose
+    /// target a blocking row's glob matches. Empty means the boundary reads
+    /// nothing for the ratchets, so a write no glob covers pays one glob match
+    /// per row and no git read.
+    #[must_use]
+    pub fn ratchets_for(&self, envelope: &Envelope) -> Vec<&Rule> {
+        let Some(target) = envelope.writes.as_deref() else {
+            return Vec::new();
+        };
+        if envelope.event != Event::PreTool || envelope.operation != Operation::Write {
+            return Vec::new();
+        }
+        self.ratchets
+            .iter()
+            .filter(|rule| {
+                blocks(rule.severity(), self.fail_on_warning)
+                    && rule
+                        .glob
+                        .as_deref()
+                        .is_some_and(|glob| crate::rules::glob_match(glob, target))
+            })
+            .collect()
+    }
+
     /// The `[budget.*]` sets a write selects (CLOUD-2661): a `PreTool` write
     /// whose target a set's `files` entry matches. Empty means the boundary
     /// reads nothing for the budget.
@@ -5133,6 +5168,8 @@ impl Policy {
             && self.commit.is_none()
             // And a `[budget]` set arms the budget gate (CLOUD-2661).
             && self.budget.as_ref().is_none_or(crate::budget::Budget::is_empty)
+            // And a ratchet row arms the ratchet gate (CLOUD-2692).
+            && self.ratchets.is_empty()
     }
 
     /// This policy with every row whose declared hatch is in `set` removed
@@ -5154,6 +5191,7 @@ impl Policy {
         Policy {
             commit: self.commit.clone(),
             budget: self.budget.clone(),
+            ratchets: self.ratchets.clone(),
             shapes: self
                 .shapes
                 .iter()
@@ -5917,6 +5955,12 @@ fn adjudicated_call_gates(policy: &Policy, envelope: &Envelope, facts: &Facts<'_
     if let Some(refusal) = budget_rules(facts) {
         return Decision::Deny(refusal);
     }
+    // THE RATCHET GATE (CLOUD-2692), at the write that would move a ratchet
+    // row the banned way past its base. Only a write that itself moves the
+    // banned way is judged, so a repair of a standing breach goes through.
+    if let Some(refusal) = ratchet_rules(facts) {
+        return Decision::Deny(refusal);
+    }
     // The tool-keyed gate (CLOUD-924), and its placement is the whole reason it
     // works: ABOVE the `command.is_empty()` early return, which every structured
     // call trips. An MCP call, a `Read` and a `Task` spawn carry no command line,
@@ -6221,6 +6265,10 @@ pub type ProspectiveFacts = crate::facts::Look<String>;
 /// What a call's budgeted sets measure before and after it (CLOUD-2661).
 pub type BudgetFacts = crate::facts::Look<Vec<crate::budget::CallMeasure>>;
 
+/// The ratchet rows a write would move the banned way (CLOUD-2692), read at
+/// the boundary because the base counts are git reads.
+pub type RatchetFacts = crate::facts::Look<Vec<crate::rules::CallRatchet>>;
+
 /// The text an edit-shaped payload lands over `current`: its spans applied in
 /// order, the first occurrence each unless `replace_all` (CLOUD-2661). One edit
 /// model, shared by [`prospective_facts`] and the budget's boundary read.
@@ -6273,7 +6321,7 @@ pub fn prospective_facts(root: &std::path::Path, envelope: &Envelope) -> Prospec
     if std::fs::metadata(&target).is_ok_and(|meta| meta.len() > MAX_PROSPECTIVE_BYTES) {
         return crate::facts::Look::CouldNotLook;
     }
-    let Ok(current) = std::fs::read_to_string(&target) else {
+    let Ok(current) = crate::fsio::read_to_string(&target) else {
         return crate::facts::Look::CouldNotLook;
     };
     landed_from(&current, &envelope.input)
@@ -6403,6 +6451,9 @@ pub struct Facts<'a> {
     /// Each `[budget.*]` set this write would change, measured before and
     /// after (CLOUD-2661), read at the boundary.
     pub budgeted: &'a BudgetFacts,
+    /// Each ratchet row this write would move the banned way past its base
+    /// (CLOUD-2692), read at the boundary.
+    pub ratcheted: &'a RatchetFacts,
     /// What the agent reported for each agent-sourced check.
     pub sourced: &'a AgentFacts,
     /// What this call's write would land, before it happens (CLOUD-758).
@@ -6491,6 +6542,7 @@ impl<'a> Facts<'a> {
             commit_subject: &crate::facts::Look::CouldNotLook,
             reach: &NO_REACH,
             budgeted: &crate::facts::Look::CouldNotLook,
+            ratcheted: &crate::facts::Look::CouldNotLook,
             // Could-not-look, never "an empty write". A `Facts::none` caller has
             // resolved nothing, which is a different claim from having looked
             // and found no content.
@@ -8723,6 +8775,33 @@ fn budget_rules(facts: &Facts<'_>) -> Option<Refusal> {
 /// the first subject.
 pub const BUDGET_CALL: &str = "budget-call";
 
+/// The first ratchet row this write would breach (CLOUD-2692), refused under
+/// the row's own id so a waiver keyed on it answers the call as it answers
+/// `check`. Could-not-look admits: the write is judged by `check` regardless.
+fn ratchet_rules(facts: &Facts<'_>) -> Option<Refusal> {
+    let crate::facts::Look::Is(moved) = facts.ratcheted else {
+        return None;
+    };
+    moved.first().map(|found| {
+        Refusal::declared(
+            found.rule.clone(),
+            crate::verdict::Native::CeilingExceeded,
+            &[
+                crate::verdict::Subject::Path {
+                    path: found.path.clone(),
+                },
+                crate::verdict::Subject::Count {
+                    count: found.was as u64,
+                },
+                crate::verdict::Subject::Count {
+                    count: found.now as u64,
+                },
+            ],
+            Fix::declared(None),
+        )
+    })
+}
+
 /// A budget refusal: the set and both counts, pointer-only.
 fn budget_refusal(name: &str, count: usize, max: usize) -> Refusal {
     Refusal::declared(
@@ -10136,7 +10215,7 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
         //
         // ANCHORED AT THE SUBCOMMAND (CLOUD-2666): `verdict_words` steps past
         // the program's global value options to the subcommand, so `git -C d
-        // push` is `push`, and `git stash push` is `stash push`, which a row
+        // push` is `push`, and `git notes push` is `notes push`, which a row
         // keyed on `git push` must not match.
         let words = verdict_words(&tokens, program_index).unwrap_or_default();
         for rule in &policy.shapes {
@@ -12343,7 +12422,7 @@ pub(crate) fn unquote(word: &str) -> String {
 ///
 /// **A PREFIX OF THE SUBCOMMAND WORDS, NEVER A WINDOW ANYWHERE (CLOUD-2666).**
 /// The words start at the subcommand ([`verdict_words`]), so `git push` matches
-/// `git -C d push` and not `git stash push`, `git log push` or `git checkout
+/// `git -C d push` and not `git notes push`, `git log push` or `git checkout
 /// push`. Matching anywhere was the workaround for not knowing which options
 /// take values, and it over-matched every subcommand that takes an operand.
 fn operands_match(words: &[&str], wanted: &[&str]) -> bool {
@@ -13751,6 +13830,7 @@ mod tests {
                 commit_subject: &crate::facts::Look::CouldNotLook,
                 reach: &NO_REACH,
                 budgeted: &crate::facts::Look::CouldNotLook,
+                ratcheted: &crate::facts::Look::CouldNotLook,
                 // Could-not-look: these unit cases resolve no repository, so
                 // they make no claim about what a reset would discard. The
                 // compiled tier `history_drop.rs` is where that fact is real.
@@ -13938,6 +14018,7 @@ mod tests {
         Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -14003,6 +14084,7 @@ mod tests {
         Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -14076,6 +14158,7 @@ mod tests {
         Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -14524,7 +14607,7 @@ mod tests {
 
     /// CLOUD-2666's over-match. A row keyed on a subcommand matches from the
     /// subcommand, past the program's global value options, and nowhere else:
-    /// `git stash push` is not `git push`, and `gh pr view merge` is not
+    /// `git notes push` is not `git push`, and `gh pr view merge` is not
     /// `gh pr merge`.
     #[test]
     fn a_shape_row_matches_its_subcommand_and_never_an_operand() {
@@ -14549,7 +14632,7 @@ mod tests {
                 "{refused} is a push"
             );
         }
-        for admitted in ["git stash push -m x", "git log push", "git checkout push"] {
+        for admitted in ["git notes push -m x", "git log push", "git checkout push"] {
             assert!(
                 matches!(decide(&push, admitted), Decision::Allow),
                 "{admitted} is not a push"
@@ -14687,6 +14770,7 @@ mod tests {
         Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -14856,6 +14940,7 @@ mod tests {
         Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -15371,6 +15456,7 @@ mod tests {
         let policy = Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -15410,6 +15496,7 @@ mod tests {
         let advisory = Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -15443,6 +15530,7 @@ mod tests {
         let promoted = Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -15484,6 +15572,7 @@ mod tests {
         let policy = Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -15537,6 +15626,7 @@ mod tests {
         let policy = Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -15604,6 +15694,7 @@ mod tests {
         Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -15683,6 +15774,7 @@ mod tests {
         Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             // A module fixture, so it protects nothing and has no membership
             // question for a root to change the answer to.
@@ -16281,6 +16373,7 @@ deny contains "refused by themodule" if {
         Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -16578,6 +16671,7 @@ deny contains "refused by themodule" if {
         Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -18124,6 +18218,7 @@ deny contains "refused by themodule" if {
         let no_paths = Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -18199,6 +18294,7 @@ deny contains "refused by themodule" if {
         let guarding = Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
@@ -18221,6 +18317,7 @@ deny contains "refused by themodule" if {
         let elsewhere = Policy {
             commit: None,
             budget: None,
+            ratchets: Vec::new(),
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),

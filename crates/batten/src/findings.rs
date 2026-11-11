@@ -572,7 +572,7 @@ fn record_path(store_dir: &Path, fingerprint: Fingerprint) -> PathBuf {
 /// from the *future* is still absent — that half stays fail-closed, because a
 /// field this binary cannot see is a field it would silently drop on write.
 fn read_record(path: &Path) -> Option<FindingRecord> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = crate::fsio::read_to_string(path).ok()?;
     let record: FindingRecord = serde_json::from_str(&text).ok()?;
     (FINDINGS_SCHEMA_MIN..=FINDINGS_SCHEMA)
         .contains(&record.schema)
@@ -1206,7 +1206,7 @@ mod tests {
     /// observations. A `PartialEq` over a deserialized enum cannot see a write
     /// path that re-serialized the field differently.
     fn stored_tier_bytes(dir: &Path, fingerprint: Fingerprint) -> String {
-        let text = std::fs::read_to_string(record_path(dir, fingerprint)).unwrap();
+        let text = crate::fsio::read_to_string(record_path(dir, fingerprint)).unwrap();
         text.lines()
             .find(|line| line.trim_start().starts_with("\"tier\""))
             .expect("the record persists a tier")

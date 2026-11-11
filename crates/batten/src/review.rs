@@ -224,7 +224,7 @@ pub fn prompt(id: &str) -> Option<(&'static str, String)> {
 /// at nothing.
 #[must_use]
 pub fn read(path: &Path) -> Look<Vec<Finding>> {
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return Look::IsNot;
     };
     let mut findings = Vec::new();
@@ -283,7 +283,7 @@ pub fn resolve(
         let Some(subject_path) = row.path.as_deref() else {
             continue;
         };
-        let Ok(bytes) = std::fs::read(root.join(subject_path)) else {
+        let Ok(bytes) = crate::fsio::read(root.join(subject_path)) else {
             // COULD NOT READ THE SUBJECT is could-not-look, and it must not
             // dispatch: a review keyed to bytes nobody could read would be a
             // record about a subject that does not exist.

@@ -140,6 +140,19 @@ rustls-graviola = "0.4"
 # the fetch reproducible across hosts, which suits a checksum-pinned provisioner
 # better than the platform store does.
 webpki-roots = "1"
+# FILE IO IS COMPLETION-BASED (CLOUD-2692, operator ruling 2026-11-11: a heavy
+# read/write tool uses asynchronous disk IO to its fullest). Tokio's file IO is a
+# blocking pool on every platform, so file reads go through compio instead: on
+# Linux its fusion driver uses io_uring and falls back to polling (a pool for
+# regular files) when the ring cannot be set up or lacks an opcode it needs,
+# seccomp `EPERM` and `io_uring_disabled` included (read in compio-driver
+# 0.10.0's `DriverType::suggest` and `fusion::Driver::new`); Windows gets IOCP,
+# macOS a pool. Tokio stays the network runtime.
+compio = { version = "0.17", default-features = false, features = [
+  "runtime",
+  "io-uring",
+  "polling",
+] }
 # CURRENT-THREAD ONLY, and `clippy.toml` already refuses the multi-thread builder
 # (CLOUD-747): measured out of tree, current-thread costs +0.14ms over
 # constructing none where multi-thread costs +1.68ms and grows a worker per core,

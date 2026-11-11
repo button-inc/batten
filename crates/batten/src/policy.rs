@@ -1344,7 +1344,7 @@ fn read_sources(
                     "rule `{rule_id}` registers `{path}`, which is absent at {reference}"
                 ))
             })?,
-            None => std::fs::read_to_string(root.join(path)).map_err(|_| {
+            None => crate::fsio::read_to_string(root.join(path)).map_err(|_| {
                 UsageError::raise(format!(
                     "rule `{rule_id}` registers `{path}`, which cannot be read"
                 ))

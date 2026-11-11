@@ -183,6 +183,15 @@ declared_modules := {
 	# a pure, lossless rewrite that a `fix` calls. It reaches nothing in this
 	# crate, only `ra_ap_syntax`, so it is a LEAF.
 	"codemod",
+	# `fsio` arrived with CLOUD-2692: every filesystem read the crate makes, so a
+	# read can be batched, streamed or queued in one place. It reaches nothing in
+	# this crate, only `std` and `compio`, so it is a LEAF.
+	"fsio",
+	# `mutation_markers` arrived with CLOUD-2253: the Rust tier's build-time
+	# refusal of hand-written mutation markers and a second cargo-mutants argv.
+	# `build.rs` includes it by `#[path]`, so it is compiled outside this crate
+	# and must reach nothing in it: a LEAF by construction, not by choice.
+	"mutation_markers",
 	# `remedy` arrived with CLOUD-1576: two pure string predicates over a row's
 	# remedy columns, which `rules` and `lint` call. It reaches nothing in this
 	# crate, so it is a LEAF.

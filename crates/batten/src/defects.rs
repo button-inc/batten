@@ -285,7 +285,7 @@ fn bases(repo: &Path) -> Result<Vec<String>> {
 /// finding here, not a usage error: `check` must be able to report it beside
 /// everything else it found rather than aborting the whole run on one bad row.
 pub fn gate(repo: &Path, declared: &Defects) -> Result<Vec<Finding>> {
-    let working = std::fs::read_to_string(repo.join(&declared.path)).unwrap_or_default();
+    let working = crate::fsio::read_to_string(repo.join(&declared.path)).unwrap_or_default();
 
     let mut problems = match parse_lines(&working) {
         Ok(records) => validate_records(&records, &declared.classes),

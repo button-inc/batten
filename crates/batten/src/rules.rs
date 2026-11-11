@@ -7999,7 +7999,7 @@ fn dedup_scoped(findings: &mut Vec<Finding>) {
 fn recorder_blocked(git_dir: &std::path::Path, branch: &str) -> BTreeMap<String, String> {
     let claim = crate::claim::claimed_token(&git_dir.join("batten-receipts"), branch);
     let path = crate::recorder::blocked_path(git_dir, branch, claim.as_deref());
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return BTreeMap::new();
     };
     text.lines()
@@ -8080,7 +8080,7 @@ fn recorder_records(
         // surface rests on: an unreadable store leaves the key out of the map so
         // a module sees *does not hold*, where an empty file is a key whose value
         // is the empty list — "nothing was recorded" rather than "nothing looked".
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(text) = crate::fsio::read_to_string(&path) else {
             continue;
         };
         found.insert(name.to_owned(), text.lines().map(str::to_owned).collect());
@@ -8611,7 +8611,7 @@ pub(crate) fn acquire(root: &Path, rel_path: &str, want: Option<Want>) -> Acquir
     // work is actually spent, and the `UnknownFormat` arm above deliberately
     // costs nothing and is deliberately not counted.
     DOCUMENTS_ACQUIRED.fetch_add(1, Ordering::Relaxed);
-    let bytes = match fs::read(root.join(rel_path)) {
+    let bytes = match crate::fsio::read(root.join(rel_path)) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return Acquired::No(NotAcquired::Absent);
@@ -10453,7 +10453,7 @@ fn ejected_behind(
         (None, None) => return,
     };
     for path in paths {
-        let Ok(source) = std::fs::read_to_string(root.join(&path)) else {
+        let Ok(source) = crate::fsio::read_to_string(root.join(&path)) else {
             continue;
         };
         let Some((preset, module, recorded)) = crate::preset::ejected_from(&source) else {
@@ -10849,7 +10849,7 @@ fn fingerprint_of(violation: &crate::policy::Violation) -> String {
 ///
 /// Returns an error when `regex` does not compile; `validate` has refused that
 /// at load, so this is the belt to its suspenders.
-fn ratchet_tally(rule: &Rule) -> anyhow::Result<impl Fn(&str) -> usize + '_> {
+fn ratchet_tally(rule: &Rule) -> anyhow::Result<impl Fn(&str) -> usize + Sync + '_> {
     // THE COUNTED TOKEN: a literal, or an expression for one a literal cannot spell
     // (CLOUD-2059). `validate` admits exactly one and has compiled the expression,
     // so the `None` arm is unreachable and counts nothing.
@@ -10866,6 +10866,519 @@ fn ratchet_tally(rule: &Rule) -> anyhow::Result<impl Fn(&str) -> usize + '_> {
             (None, None) => 0,
         },
     )
+}
+
+/// One ratchet row a mediated write would move the banned way (CLOUD-2692).
+///
+/// `was` and `now` are the written file's own count before and after the write:
+/// the pointer a reader needs to find what moved. The row is the subject, so a
+/// waiver keyed on its id answers it at the call as it does in `check`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct CallRatchet {
+    /// The row's id.
+    pub rule: String,
+    /// The written path.
+    pub path: String,
+    /// The path's count before the write.
+    pub was: usize,
+    /// The path's count after it.
+    pub now: usize,
+}
+
+/// Whether `rule` is a ratchet a mediated write can be judged against
+/// (CLOUD-2692).
+///
+/// Every ratchet but the two whose admission reads subject facts: `retires_with`
+/// asks whether a declared subject died, and `conserves` maps case names across
+/// the whole set, and neither is a single-file question. Those stay `check`'s.
+#[must_use]
+pub fn judged_at_call(rule: &Rule) -> bool {
+    rule.kind == RuleKind::Ratchet
+        && rule.severity() != RuleSeverity::Allow
+        && rule.direction.is_some()
+        && rule.base.is_some()
+        && rule.glob.is_some()
+        && rule.retires_with.is_none()
+        && rule.conserves.is_none()
+}
+
+/// The cache format; bump when [`BlobCounts`], [`FileCounts`] or a key's
+/// inputs change.
+const CALL_RATCHET_FORMAT: &str = "batten-call-ratchet-4";
+
+/// What a row counts, as cache-key bytes: two rows with the same counter share
+/// their counts, and a row whose counter changed reads none of its old ones.
+fn counter_key(rule: &Rule) -> Vec<u8> {
+    format!(
+        "{}\0{}\0{:?}",
+        rule.pattern.as_deref().unwrap_or_default(),
+        rule.regex.as_deref().unwrap_or_default(),
+        rule.counts
+    )
+    .into_bytes()
+}
+
+/// One persisted count table under the cache's `ratchet-counts` directory,
+/// keyed by `name` within this repository and counter.
+fn count_entry(
+    cache: Option<&Path>,
+    root: &Path,
+    counter: &[u8],
+    name: &str,
+) -> Option<(std::path::PathBuf, String)> {
+    cache.map(|dir| {
+        let at = dir.join("ratchet-counts").join(
+            blake3::hash(
+                &[
+                    root.display().to_string().as_bytes(),
+                    b"\0",
+                    name.as_bytes(),
+                    b"\0",
+                    counter,
+                ]
+                .concat(),
+            )
+            .to_hex()
+            .as_str(),
+        );
+        (
+            at,
+            crate::cache::key(CALL_RATCHET_FORMAT, &[name.as_bytes(), counter]),
+        )
+    })
+}
+
+/// Each committed blob's count under one counter, by blob id, persisted
+/// (CLOUD-2692).
+///
+/// **A count is a pure function of a blob's content and the counter**, so it is
+/// cached by content: a blob is read and counted once, ever. The blobs asked
+/// for are the merge base's, which every branch and session shares, so after
+/// the first call on a base they are all held.
+struct BlobCounts {
+    entry: Option<(std::path::PathBuf, String)>,
+    counts: BTreeMap<String, usize>,
+    added: bool,
+}
+
+impl BlobCounts {
+    fn load(counter: &[u8], root: &Path, cache: Option<&Path>) -> Self {
+        let entry = count_entry(cache, root, counter, "blobs");
+        let counts = entry
+            .as_ref()
+            .and_then(|(at, key)| crate::cache::read(at, key))
+            .and_then(|body| serde_json::from_slice(&body).ok())
+            .unwrap_or_default();
+        Self {
+            entry,
+            counts,
+            added: false,
+        }
+    }
+
+    fn missing<'a>(&self, ids: &[&'a str]) -> Vec<&'a str> {
+        ids.iter()
+            .copied()
+            .filter(|id| !self.counts.contains_key(*id))
+            .collect()
+    }
+
+    fn get(&self, id: Option<&str>) -> usize {
+        id.and_then(|id| self.counts.get(id)).copied().unwrap_or(0)
+    }
+
+    fn save(&self) {
+        if let (true, Some((at, key))) = (self.added, &self.entry)
+            && let Ok(body) = serde_json::to_vec(&self.counts)
+        {
+            crate::cache::write(at, key, &body);
+        }
+    }
+}
+
+/// What a working file's count is keyed by: the file's identity and the stat
+/// fields any write moves, git's index heuristic. A file whose key is unchanged
+/// is not read again.
+type Stamp = (u64, u64, u64, i128);
+
+/// Each working file's count under one counter, by path, keyed by its
+/// [`Stamp`], persisted (CLOUD-2692).
+///
+/// **The working side is read from the files, never from HEAD's blobs**: the
+/// sum the row asks about is the tree as it stands, which a file read answers
+/// directly, uncompressed, and an uncommitted edit to a changed path is counted
+/// where a HEAD read would have missed it. A file is re-read only when its
+/// stamp moved.
+struct FileCounts {
+    entry: Option<(std::path::PathBuf, String)>,
+    counts: BTreeMap<String, (Stamp, usize)>,
+    added: bool,
+}
+
+impl FileCounts {
+    fn load(counter: &[u8], root: &Path, cache: Option<&Path>) -> Self {
+        let entry = count_entry(cache, root, counter, "files");
+        let counts = entry
+            .as_ref()
+            .and_then(|(at, key)| crate::cache::read(at, key))
+            .and_then(|body| serde_json::from_slice(&body).ok())
+            .unwrap_or_default();
+        Self {
+            entry,
+            counts,
+            added: false,
+        }
+    }
+
+    /// The held count of `path`, when it was taken at `stamp`.
+    fn fresh(&self, path: &str, stamp: Stamp) -> Option<usize> {
+        self.counts
+            .get(path)
+            .filter(|(held, _)| *held == stamp)
+            .map(|(_, count)| *count)
+    }
+
+    fn put(&mut self, path: &str, stamp: Stamp, count: usize) {
+        self.counts.insert(path.to_owned(), (stamp, count));
+        self.added = true;
+    }
+
+    fn save(&self) {
+        if let (true, Some((at, key))) = (self.added, &self.entry)
+            && let Ok(body) = serde_json::to_vec(&self.counts)
+        {
+            crate::cache::write(at, key, &body);
+        }
+    }
+}
+
+/// A file's [`Stamp`]: device, inode, size and modification time in
+/// nanoseconds. Off unix the identity half is zero and size and time decide.
+fn stamp(meta: &fs::Metadata) -> Stamp {
+    #[cfg(unix)]
+    let (dev, ino) = {
+        use std::os::unix::fs::MetadataExt as _;
+        (meta.dev(), meta.ino())
+    };
+    #[cfg(not(unix))]
+    let (dev, ino) = (0, 0);
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |since| {
+            i128::try_from(since.as_nanos()).unwrap_or(i128::MAX)
+        });
+    (dev, ino, meta.len(), modified)
+}
+
+/// A count as a signed quantity, for the movement arithmetic.
+fn signed(count: usize) -> i64 {
+    i64::try_from(count).unwrap_or(i64::MAX)
+}
+
+/// Judge the ratchet rows a mediated write to `target` selects (CLOUD-2692):
+/// each row the write moves the banned way past its base.
+///
+/// `current` is the target's text now (`None` for a new file) and `projected`
+/// its text after the write. Cheapest first:
+///
+/// * **The write's own move**, with no read at all: a write that holds or
+///   moves the file's count the allowed way is never refused, so a repair of a
+///   standing breach goes through, and a rise the row's `admits_with` token
+///   declares in the written text is admitted, as `check` admits it.
+/// * **`per_file`**: the projected file against its own count at the merge
+///   base. A path absent at the base has no ceiling and is not judged.
+/// * **Aggregate**: the sum's movement from the merge base, over the paths the
+///   branch changed, plus the target: each path's count in the WORKING TREE
+///   (the target's projected) less its count at the base. A path the tree diff
+///   does not name holds the same count on both sides, so it cannot move the
+///   sum, and is never read.
+///
+/// **Every read is put in flight before any is made**: readahead is submitted
+/// for every changed working file, and for the packs when a base count is not
+/// yet held, so a cold page cache returns all the bytes at the device's queue
+/// depth rather than one fault at a time. Working counts are keyed by each
+/// file's stat and base counts by blob id, so a warm call reads nothing but the
+/// target.
+///
+/// **Uncommitted edits to files no commit changed are not read**: the one
+/// primitive that sees them, the worktree status, measured 91 ms here. `check`
+/// still judges the whole tree.
+///
+/// # Errors
+///
+/// When a row's counter does not compile, or git cannot read the repository.
+pub fn ratchets_at_call(
+    rules: &[&Rule],
+    root: &Path,
+    target: &str,
+    current: Option<&str>,
+    projected: &str,
+    cache: Option<&Path>,
+) -> anyhow::Result<Vec<CallRatchet>> {
+    let mut moving = Vec::new();
+    for rule in rules {
+        let (Some(direction), Some(base), Some(glob)) =
+            (rule.direction, rule.base.as_deref(), rule.glob.as_deref())
+        else {
+            continue;
+        };
+        if !judged_at_call(rule) || !glob_match(glob, target) {
+            continue;
+        }
+        let tally = ratchet_tally(rule)?;
+        let was = current.map_or(0, &tally);
+        let now = tally(projected);
+        if !direction.violated(was, now) {
+            continue;
+        }
+        if now > was
+            && let Some(token) = rule.admits_with.as_deref()
+            && !declared_subject(projected, token).is_empty()
+        {
+            continue;
+        }
+        moving.push((*rule, direction, base, glob, was, now));
+    }
+    if moving.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // ONE COUNTER PER DISTINCT DEFINITION, each with its own persisted tables,
+    // so every blob and file below is read once and counted for all of them.
+    let mut counters: BTreeMap<Vec<u8>, CounterState<'_>> = BTreeMap::new();
+    for (rule, ..) in &moving {
+        if let std::collections::btree_map::Entry::Vacant(slot) = counters.entry(counter_key(rule))
+        {
+            let key = slot.key().clone();
+            slot.insert(CounterState {
+                tally: Box::new(ratchet_tally(rule)?),
+                blobs: BlobCounts::load(&key, root, cache),
+                files: FileCounts::load(&key, root, cache),
+            });
+        }
+    }
+
+    // THE CHANGED SET, keyed by (HEAD, base, glob): two id lookups through one
+    // open, so a warm call walks no commit graph and diffs no tree.
+    let refs: Vec<&str> = std::iter::once("HEAD")
+        .chain(moving.iter().map(|(_, _, base, ..)| *base))
+        .collect();
+    let ids = crate::git::rev_ids(root, &refs)?;
+    let head = ids.first().cloned().flatten().unwrap_or_default();
+    let mut sets: BTreeMap<(&str, &str), Changed> = BTreeMap::new();
+    for (index, (_, _, base, glob, ..)) in moving.iter().enumerate() {
+        if sets.contains_key(&(*base, *glob)) {
+            continue;
+        }
+        let base_id = ids.get(index + 1).cloned().flatten().unwrap_or_default();
+        let set = changed_set(root, &head, base, &base_id, glob, target, cache)?;
+        sets.insert((*base, *glob), set);
+    }
+
+    // EVERY READ IN FLIGHT BEFORE ANY IS MADE (operator ruling, 2026-11-11):
+    // stat each changed working file, then submit readahead for every file a
+    // counter does not hold at its stamp and, when a base count is missing,
+    // for the packs, and only then read.
+    let mut stamps: BTreeMap<&str, Option<Stamp>> = BTreeMap::new();
+    for set in sets.values() {
+        for (path, _) in &set.paths {
+            if path != target {
+                stamps
+                    .entry(path.as_str())
+                    .or_insert_with(|| fs::metadata(root.join(path)).ok().map(|meta| stamp(&meta)));
+            }
+        }
+    }
+    let stale: Vec<&str> = stamps
+        .iter()
+        .filter_map(|(path, stamped)| {
+            let stamped = (*stamped)?;
+            counters
+                .values()
+                .any(|state| state.files.fresh(path, stamped).is_none())
+                .then_some(*path)
+        })
+        .collect();
+    let base_ids: BTreeSet<&str> = sets
+        .values()
+        .flat_map(|set| set.paths.iter().filter_map(|(_, id)| id.as_deref()))
+        .collect();
+    let base_ids: Vec<&str> = base_ids.into_iter().collect();
+    let unread: BTreeSet<&str> = counters
+        .values()
+        .flat_map(|state| state.blobs.missing(&base_ids))
+        .collect();
+    if !unread.is_empty() {
+        crate::git::prefetch_packs(root);
+    }
+
+    // The base side: each unread blob inflated once, in parallel, counted for
+    // every counter inside its reader.
+    if !unread.is_empty() {
+        let tallies: Vec<&(dyn Fn(&str) -> usize + Sync)> =
+            counters.values().map(|state| &*state.tally).collect();
+        let unread: Vec<&str> = unread.into_iter().collect();
+        let counted = crate::git::map_blobs(root, &unread, &|text: &str| {
+            tallies
+                .iter()
+                .map(|tally| tally(text))
+                .collect::<Vec<usize>>()
+        })?;
+        for (index, state) in counters.values_mut().enumerate() {
+            for id in &unread {
+                let count = counted.get(*id).map_or(0, |counts| counts[index]);
+                state.blobs.counts.insert((*id).to_owned(), count);
+            }
+            state.blobs.added = true;
+        }
+    }
+    // The working side: every stale file read in one completion batch, each
+    // counted once for every counter.
+    let sized: Vec<(std::path::PathBuf, u64)> = stale
+        .iter()
+        .map(|path| {
+            let size = stamps
+                .get(path)
+                .copied()
+                .flatten()
+                .map_or(0, |(_, _, size, _)| size);
+            (root.join(path), size)
+        })
+        .collect();
+    let texts: Vec<Option<String>> = crate::fsio::read_many(&sized)
+        .into_iter()
+        .map(|bytes| bytes.and_then(|bytes| String::from_utf8(bytes).ok()))
+        .collect();
+    for (path, text) in stale.iter().zip(texts) {
+        let Some(Some(stamped)) = stamps.get(path) else {
+            continue;
+        };
+        let text = text.unwrap_or_default();
+        for state in counters.values_mut() {
+            state.files.put(path, *stamped, (state.tally)(&text));
+        }
+    }
+
+    let mut found = Vec::new();
+    for (rule, direction, base, glob, was, now) in moving {
+        let set = &sets[&(base, glob)];
+        let Some(state) = counters.get(&counter_key(rule)) else {
+            continue;
+        };
+        let breached = if rule.per_file {
+            set.paths
+                .iter()
+                .find(|(path, _)| path == target)
+                .and_then(|(_, id)| id.as_deref())
+                .is_some_and(|id| direction.violated(state.blobs.get(Some(id)), now))
+        } else {
+            let mut movement = 0_i64;
+            for (path, id) in &set.paths {
+                let working = if path == target {
+                    now
+                } else {
+                    match stamps.get(path.as_str()).copied().flatten() {
+                        Some(stamped) => state.files.fresh(path, stamped).unwrap_or(0),
+                        None => 0,
+                    }
+                };
+                movement += signed(working) - signed(state.blobs.get(id.as_deref()));
+            }
+            match direction {
+                Direction::NonDecreasing => movement < 0,
+                Direction::NonIncreasing => movement > 0,
+            }
+        };
+        if breached {
+            found.push(CallRatchet {
+                rule: rule.id.clone(),
+                path: target.to_owned(),
+                was,
+                now,
+            });
+        }
+    }
+    for state in counters.values() {
+        state.blobs.save();
+        state.files.save();
+    }
+    Ok(found)
+}
+
+/// One counter's tally and its two persisted tables, for one call.
+struct CounterState<'a> {
+    tally: Box<dyn Fn(&str) -> usize + Sync + 'a>,
+    blobs: BlobCounts,
+    files: FileCounts,
+}
+
+/// The paths a branch changed under one glob since its merge base, each with
+/// its blob id at the base (`None` where it is absent there), the target always
+/// among them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct Changed {
+    paths: Vec<(String, Option<String>)>,
+}
+
+/// [`Changed`] for (`head`, `base_id`, `glob`), from the cache when this HEAD
+/// was diffed against this base before: the merge base and the tree diff are
+/// taken only when HEAD or the base ref moved.
+fn changed_set(
+    root: &Path,
+    head: &str,
+    base: &str,
+    base_id: &str,
+    glob: &str,
+    target: &str,
+    cache: Option<&Path>,
+) -> anyhow::Result<Changed> {
+    let entry = cache.map(|dir| {
+        let at = dir.join("ratchet-changed").join(
+            blake3::hash(format!("{}\0{base}\0{glob}", root.display()).as_bytes())
+                .to_hex()
+                .as_str(),
+        );
+        let key = crate::cache::key(
+            CALL_RATCHET_FORMAT,
+            &[head.as_bytes(), base_id.as_bytes(), glob.as_bytes()],
+        );
+        (at, key)
+    });
+    let held = entry
+        .as_ref()
+        .and_then(|(at, key)| crate::cache::read(at, key))
+        .and_then(|body| serde_json::from_slice::<(String, Changed)>(&body).ok());
+    let (merge_base, mut set) = if let Some(held) = held {
+        held
+    } else {
+        // As `ratchet_rule` reads it (CLOUD-405), falling back to the
+        // declared ref exactly where it does.
+        let merge_base = crate::git::merge_base(root, base)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| base.to_owned());
+        let set = Changed {
+            paths: crate::git::blobs_changed_between(root, &merge_base, head, glob)?
+                .into_iter()
+                .map(|(path, at_base, _)| (path, at_base))
+                .collect(),
+        };
+        if let Some((at, key)) = &entry
+            && let Ok(body) = serde_json::to_vec(&(&merge_base, &set))
+        {
+            crate::cache::write(at, key, &body);
+        }
+        (merge_base, set)
+    };
+    // The target is always judged, committed or not.
+    if !set.paths.iter().any(|(path, _)| path == target) {
+        let at_base = crate::git::blob_ids_at(root, &merge_base, &[target])?.remove(target);
+        set.paths.push((target.to_owned(), at_base));
+    }
+    Ok(set)
 }
 
 /// Evaluate a [`RuleKind::Ratchet`]: count at the base rev, count in the working
@@ -10971,7 +11484,7 @@ fn ratchet_rule(
     let admits_with = rule.admits_with.as_deref();
     let mut working_declared: BTreeSet<&str> = BTreeSet::new();
     for path in matched {
-        let text = fs::read_to_string(root.join(path)).unwrap_or_default();
+        let text = crate::fsio::read_to_string(root.join(path)).unwrap_or_default();
         count_read(text.len());
         let count = tally(&text);
         working_count += count;
@@ -11589,7 +12102,7 @@ fn claimed_cases(root: &Path, conserves: &Conserves, files: &[String]) -> Claime
     }
     let mut claimed = ClaimedCases::default();
     for path in files.iter().filter(|path| selector.matches(path)) {
-        let Ok(text) = fs::read_to_string(root.join(path)) else {
+        let Ok(text) = crate::fsio::read_to_string(root.join(path)) else {
             continue;
         };
         count_read(text.len());
@@ -11996,7 +12509,7 @@ fn conserve_case_names(
         // The head copy, if the file survived. A PARTIAL deletion owes a mapping
         // for the cases it dropped and nothing for the ones still standing, so
         // the surviving names have to be read rather than assumed absent.
-        let survivors = fs::read_to_string(root.join(path)).unwrap_or_default();
+        let survivors = crate::fsio::read_to_string(root.join(path)).unwrap_or_default();
         count_read(survivors.len());
         let mapping = Mapping {
             conserves,
@@ -13196,7 +13709,7 @@ fn forbid_in_files(
     let mode = span_mode(rule);
     for rel_path in paths {
         let rel_path = rel_path.as_str();
-        let contents = match fs::read(root.join(rel_path)) {
+        let contents = match crate::fsio::read(root.join(rel_path)) {
             Ok(bytes) => bytes,
             // A path the walk listed and the read cannot find is a tree that
             // moved under us, not a finding — the same silence as before, per
@@ -14559,7 +15072,7 @@ mod tests {
                 if path.extension() != Some(std::ffi::OsStr::new("rs")) {
                     continue;
                 }
-                let source = std::fs::read_to_string(&path).unwrap();
+                let source = crate::fsio::read_to_string(&path).unwrap();
                 sources.push((path, source));
             }
         }
@@ -15043,7 +15556,7 @@ mod tests {
         let root = std::env::temp_dir();
         let emitted = emitted_tree_keys(&root);
 
-        let source = std::fs::read_to_string(
+        let source = crate::fsio::read_to_string(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("src")
                 .join("policy.rs"),
@@ -18534,7 +19047,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             if !resolved.is_file() {
                 return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
             }
-            if !std::fs::read(&resolved)
+            if !crate::fsio::read(&resolved)
                 .unwrap_or_default()
                 .starts_with(b"MZ")
             {

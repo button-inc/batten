@@ -1106,7 +1106,7 @@ fn wake_path(store_dir: &Path, session: &str) -> PathBuf {
 /// file the reason findings stop being surfaced.
 #[must_use]
 pub fn load_wake(store_dir: &Path, session: &str) -> WakeState {
-    let Ok(text) = std::fs::read_to_string(wake_path(store_dir, session)) else {
+    let Ok(text) = crate::fsio::read_to_string(wake_path(store_dir, session)) else {
         return WakeState::default();
     };
     serde_json::from_str::<WakeState>(&text)
@@ -2425,7 +2425,7 @@ mod tests {
         // A future schema reads as fresh rather than as an error.
         let path = wake_path(&dir, "session-1");
         let mut future: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            serde_json::from_str(&crate::fsio::read_to_string(&path).unwrap()).unwrap();
         future["schema"] = serde_json::json!(WAKE_SCHEMA + 1);
         std::fs::write(&path, future.to_string()).unwrap();
         assert_eq!(load_wake(&dir, "session-1"), WakeState::default());

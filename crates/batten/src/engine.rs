@@ -129,7 +129,7 @@ pub fn digest(root: &Path) -> Result<String> {
         .iter()
         .filter(|path| is_input(path))
     {
-        let bytes = std::fs::read(root.join(path))?;
+        let bytes = crate::fsio::read(root.join(path))?;
         hasher.update(path.as_bytes());
         hasher.update([0]);
         hasher.update(&bytes);
@@ -921,7 +921,7 @@ pub fn running_stamp() -> Option<String> {
 /// `binary`'s stamp, or `None` when it carries none.
 #[must_use]
 pub fn stamp_of(binary: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(stamp_path(binary)).ok()?;
+    let text = crate::fsio::read_to_string(stamp_path(binary)).ok()?;
     let digest = text.trim();
     (!digest.is_empty()).then(|| digest.to_owned())
 }
@@ -1595,7 +1595,7 @@ pub fn asset_of(url: &str) -> &str {
 /// As [`release_sums`], and an internal error when the cache cannot be written.
 pub fn pinned_sums(state_dir: &Path, repository: &str, tag: &str) -> Result<String> {
     let path = release_dir(state_dir, tag).join("SHA256SUMS");
-    if let Ok(body) = std::fs::read_to_string(&path) {
+    if let Ok(body) = crate::fsio::read_to_string(&path) {
         return Ok(body);
     }
     let body = release_sums(repository, tag)?;

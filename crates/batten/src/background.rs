@@ -193,7 +193,7 @@ pub fn resolve(git_dir: &Path, transcript: Option<&Path>, now: u64) -> Vec<(Pend
         else {
             continue;
         };
-        let Some(pending) = std::fs::read(&path)
+        let Some(pending) = crate::fsio::read(&path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Pending>(&bytes).ok())
         else {
@@ -207,7 +207,7 @@ pub fn resolve(git_dir: &Path, transcript: Option<&Path>, now: u64) -> Vec<(Pend
     }
     let wanted: HashSet<String> = waiting.keys().cloned().collect();
     let answered = transcript
-        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|path| crate::fsio::read_to_string(path).ok())
         .map(|text| exits(&text, &wanted))
         .unwrap_or_default();
     let mut resolved = Vec::new();
@@ -216,7 +216,7 @@ pub fn resolve(git_dir: &Path, transcript: Option<&Path>, now: u64) -> Vec<(Pend
             Some(exit) => {
                 let _ = std::fs::remove_file(&path);
                 if exit.completed
-                    && let Ok(text) = std::fs::read_to_string(&exit.output)
+                    && let Ok(text) = crate::fsio::read_to_string(&exit.output)
                 {
                     resolved.push((pending, text));
                 }

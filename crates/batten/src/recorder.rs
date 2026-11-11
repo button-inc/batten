@@ -1150,7 +1150,7 @@ pub fn append_all(
         if !snapshots.contains_key(&recorder.record) {
             snapshots.insert(
                 recorder.record.clone(),
-                std::fs::read_to_string(&path).unwrap_or_default(),
+                crate::fsio::read_to_string(&path).unwrap_or_default(),
             );
         }
         if let Some(recorded) = &recorder.requires_recorded
@@ -1766,7 +1766,7 @@ mod outcome_tests {
             append_all(&rows, &git_dir, "main", &context, selects, "Bash"),
             1
         );
-        assert_eq!(std::fs::read_to_string(&path).expect("record"), "one\n");
+        assert_eq!(crate::fsio::read_to_string(&path).expect("record"), "one\n");
 
         // Now the snapshot carries `one`, so both earn a line.
         assert_eq!(
@@ -1774,7 +1774,7 @@ mod outcome_tests {
             2
         );
         assert_eq!(
-            std::fs::read_to_string(&path).expect("record"),
+            crate::fsio::read_to_string(&path).expect("record"),
             "one\none\ntwo\n"
         );
     }

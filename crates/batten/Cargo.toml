@@ -110,6 +110,8 @@ rustls.workspace = true
 rustls-graviola.workspace = true
 rustls-pki-types.workspace = true
 tokio.workspace = true
+compio.workspace = true
+batten-fsio = { path = "../batten-fsio", version = "=0.0.220" }
 tower-service.workspace = true
 webpki-roots.workspace = true
 clap.workspace = true

@@ -227,7 +227,7 @@ pub fn key(format: &str, inputs: &[&[u8]]) -> String {
 /// decide whether the bytes are the ones written.
 #[must_use]
 pub fn read(path: &Path, key: &str) -> Option<Vec<u8>> {
-    let mut bytes = std::fs::read(path).ok()?;
+    let mut bytes = crate::fsio::read(path).ok()?;
     let (head, rest) = split_line(&bytes)?;
     if head != key.as_bytes() {
         return None;
@@ -615,12 +615,12 @@ mod tests {
         let dir = scratch("torn");
         let path = dir.join("entry");
         write(&path, "key", b"the whole body");
-        let mut bytes = std::fs::read(&path).expect("read");
+        let mut bytes = crate::fsio::read(&path).expect("read");
         bytes.truncate(bytes.len() - 3);
         std::fs::write(&path, &bytes).expect("tear");
         assert!(read(&path, "key").is_none(), "a truncated body is a miss");
         write(&path, "key", b"the whole body");
-        let mut bytes = std::fs::read(&path).expect("read");
+        let mut bytes = crate::fsio::read(&path).expect("read");
         let last = bytes.len() - 1;
         bytes[last] = 0;
         std::fs::write(&path, &bytes).expect("zero");
@@ -934,7 +934,7 @@ mod tests {
         let root = own
             .parent()
             .expect("the partition sits in the tagged directory");
-        let tag = std::fs::read_to_string(root.join("CACHEDIR.TAG")).expect("tag");
+        let tag = crate::fsio::read_to_string(root.join("CACHEDIR.TAG")).expect("tag");
         assert!(tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55"));
     }
 

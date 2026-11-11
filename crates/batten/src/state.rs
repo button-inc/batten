@@ -193,7 +193,7 @@ fn session_authority_file(state: &Path, session: &str) -> PathBuf {
 pub fn record_session_authority(session: &str, root: &Path) -> Result<()> {
     let path = session_authority_file(&state_root()?, session);
     let text = root.to_string_lossy();
-    if std::fs::read_to_string(&path).is_ok_and(|held| held == text) {
+    if crate::fsio::read_to_string(&path).is_ok_and(|held| held == text) {
         return Ok(());
     }
     if let Some(parent) = path.parent() {
@@ -219,7 +219,8 @@ pub fn recorded_session_authority(session: &str, file: &str) -> Option<PathBuf> 
 /// directory that no longer governs anything.
 #[must_use]
 pub fn recorded_session_authority_in(state: &Path, session: &str, file: &str) -> Option<PathBuf> {
-    let root = PathBuf::from(std::fs::read_to_string(session_authority_file(state, session)).ok()?);
+    let root =
+        PathBuf::from(crate::fsio::read_to_string(session_authority_file(state, session)).ok()?);
     (root.is_absolute() && root.join(file).is_file()).then_some(root)
 }
 

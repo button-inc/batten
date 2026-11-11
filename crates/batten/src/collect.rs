@@ -237,7 +237,7 @@ fn processes() -> Option<Vec<Process>> {
         let table = pids
             .filter_map(|dir| {
                 let exe = std::fs::read_link(dir.join("exe")).ok()?;
-                let stat = std::fs::read_to_string(dir.join("stat")).ok()?;
+                let stat = crate::fsio::read_to_string(dir.join("stat")).ok()?;
                 let since_boot = proc_stat::start_ticks(&stat)?;
                 Some(Process {
                     name: program_name(&exe.to_string_lossy()),
@@ -294,7 +294,7 @@ fn processes() -> Option<Vec<Process>> {
 /// either could not be read.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn proc_table() -> Option<(u64, u64, impl Iterator<Item = PathBuf>)> {
-    let boot = proc_stat::boot_seconds(&std::fs::read_to_string("/proc/stat").ok()?)?;
+    let boot = proc_stat::boot_seconds(&crate::fsio::read_to_string("/proc/stat").ok()?)?;
     let ticks = rustix::param::clock_ticks_per_second().max(1);
     let pids = std::fs::read_dir("/proc")
         .ok()?
@@ -420,7 +420,7 @@ pub(crate) fn group_orphaned(pgid: &str, registrant: &str, alive_at: u64) -> boo
         let Some((boot, ticks, pids)) = proc_table() else {
             return false;
         };
-        let stats = pids.filter_map(|dir| std::fs::read_to_string(dir.join("stat")).ok());
+        let stats = pids.filter_map(|dir| crate::fsio::read_to_string(dir.join("stat")).ok());
         orphaned_in(stats, pgid, registrant, boot, ticks, alive_at)
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]

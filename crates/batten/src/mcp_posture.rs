@@ -56,7 +56,7 @@ pub fn run(inputs: &Inputs<'_>, session: &Session, err: &mut dyn Write) -> Resul
         writeln!(err, "mcp posture: no {settings} — nothing to check")?;
         return Ok(ExitCode::Success);
     }
-    let text = std::fs::read_to_string(inputs.settings)?;
+    let text = crate::fsio::read_to_string(inputs.settings)?;
     let Ok(document) = crate::rules::parse_node(Format::Json, &text) else {
         anyhow::bail!(
             "mcp posture: {settings} is not readable JSON, so nothing about it was judged"
@@ -191,7 +191,7 @@ fn newest_log(dir: &Path) -> Option<(String, String)> {
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl"))
         })
         .max()?;
-    let text = std::fs::read_to_string(dir.join(&newest)).ok()?;
+    let text = crate::fsio::read_to_string(dir.join(&newest)).ok()?;
     Some((newest, text))
 }
 
@@ -241,7 +241,7 @@ const AFTER_ATTEMPT: i64 = 35;
 /// an absent ledger, or one that never saw this server, is `unrecorded` and
 /// never `never-spawned` — a verdict from nothing.
 fn spawn_verdict(server: &str, log_name: &str, spawns: Option<&Path>) -> String {
-    let Some(text) = spawns.and_then(|path| std::fs::read_to_string(path).ok()) else {
+    let Some(text) = spawns.and_then(|path| crate::fsio::read_to_string(path).ok()) else {
         return String::from(
             "unrecorded (no spawn ledger; launch the server through `batten mcp spawn` to tell a \
              launch that never happened from one that hung)",

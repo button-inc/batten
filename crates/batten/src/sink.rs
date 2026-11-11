@@ -199,8 +199,12 @@ pub fn store(
 ) -> std::io::Result<BTreeMap<String, String>> {
     let mut records = BTreeMap::new();
     for entry in declared.iter().filter(|entry| entry.kind.reads_back()) {
-        match std::fs::read_to_string(path(git_dir, entry.kind, &entry.rule, &entry.discriminator))
-        {
+        match crate::fsio::read_to_string(path(
+            git_dir,
+            entry.kind,
+            &entry.rule,
+            &entry.discriminator,
+        )) {
             Ok(text) => {
                 records.insert(entry.rule.clone(), text);
             }

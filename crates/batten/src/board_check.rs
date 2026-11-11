@@ -1143,7 +1143,7 @@ impl Cites {
         }
         let contents: Vec<String> = paths
             .iter()
-            .filter_map(|path| std::fs::read(declared.root.join(path)).ok())
+            .filter_map(|path| crate::fsio::read(declared.root.join(path)).ok())
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
             .collect();
         let history = !crate::git::is_shallow(declared.root).unwrap_or(true);
@@ -1397,7 +1397,7 @@ impl Refs {
             .map_err(|_| "the whole-tree glob does not compile".to_owned())?];
         let mut hits = BTreeSet::new();
         for path in corpus_paths(root, &everything, &self.exclude)? {
-            let Ok(bytes) = std::fs::read(root.join(&path)) else {
+            let Ok(bytes) = crate::fsio::read(root.join(&path)) else {
                 continue;
             };
             if bytes.contains(&0) {

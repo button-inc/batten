@@ -661,7 +661,7 @@ fn residue(rustlib: &Path, target: &str) -> bool {
         return true;
     }
     let component = format!("rust-std-{target}");
-    std::fs::read_to_string(rustlib.join("components"))
+    crate::fsio::read_to_string(rustlib.join("components"))
         .is_ok_and(|text| text.lines().any(|line| line == component))
 }
 
@@ -746,7 +746,7 @@ fn purge(rustlib: &Path, target: &str) {
         rustlib.join(format!("manifest-rust-std-{target}")),
     ));
     let components = rustlib.join("components");
-    if let Ok(text) = std::fs::read_to_string(&components) {
+    if let Ok(text) = crate::fsio::read_to_string(&components) {
         let component = format!("rust-std-{target}");
         let kept: Vec<&str> = text.lines().filter(|line| *line != component).collect();
         // REWRITTEN ONLY WHEN A LINE WENT. A rewrite that changed nothing would
@@ -1213,7 +1213,7 @@ pub fn unprovisioned(declared: &[String], installed: &[String]) -> Vec<String> {
 /// `no_artifact_name_reaches_the_core` as the gate that enforces it.
 #[must_use]
 pub fn diagnose_toolchain(manifest: &Path, probe: &str) -> Toolchain {
-    let Ok(text) = std::fs::read_to_string(manifest) else {
+    let Ok(text) = crate::fsio::read_to_string(manifest) else {
         return Toolchain::Unreadable;
     };
     let declared = declared_tools(&text);
@@ -1270,7 +1270,7 @@ pub fn diagnose_mediator(dir: &Path) -> Mediator {
     // documented worktree setup the verb then answered `Unbuilt` over a built
     // tree and `BuildBehindSource` could never fire at all.
     let built = crate::engine::release_build(dir);
-    let (Ok(left), Ok(right)) = (std::fs::read(&resolved), std::fs::read(&built)) else {
+    let (Ok(left), Ok(right)) = (crate::fsio::read(&resolved), crate::fsio::read(&built)) else {
         return Mediator::Unbuilt;
     };
     if left.len() != right.len() {
@@ -2308,7 +2308,7 @@ fn diagnose_harness(
     // has no file on it is unwired, which is the state this check exists to
     // report — reading "nothing to compare" as "nothing wrong" is the shape the
     // gate keeps re-meeting.
-    let Ok(raw) = std::fs::read_to_string(dir.join(path)) else {
+    let Ok(raw) = crate::fsio::read_to_string(dir.join(path)) else {
         return Some(row(
             vec![WiringFinding {
                 event: String::new(),
@@ -2655,7 +2655,7 @@ fn merged_under(
             tally.deduplicated += 1;
             continue;
         }
-        let Ok(raw) = std::fs::read_to_string(&path) else {
+        let Ok(raw) = crate::fsio::read_to_string(&path) else {
             // ABSENT AND UNREADABLE ARE DIFFERENT REMEDIES, so they are
             // different counters, exactly as `FILE_MISSING` and
             // `FILE_UNREADABLE` are different reason ids on the committed side.
@@ -2738,7 +2738,7 @@ fn diagnose_session_root(
         fix: String::new(),
     };
     let surface = root.join(session_root_surface());
-    let Ok(raw) = std::fs::read_to_string(&surface) else {
+    let Ok(raw) = crate::fsio::read_to_string(&surface) else {
         return (vec![finding("", FILE_MISSING)], 0);
     };
     let Ok(document) = serde_json::from_str::<serde_json::Value>(&raw) else {
@@ -3081,7 +3081,7 @@ fn transcript_evidence(
     // BYTES FIRST, THEN TEXT: a write paused inside a multibyte character leaves
     // a tail that is not UTF-8, and decoding the whole file first would read
     // that torn tail as an unreadable transcript rather than as `Torn`.
-    let Ok(bytes) = std::fs::read(dir.join(path)) else {
+    let Ok(bytes) = crate::fsio::read(dir.join(path)) else {
         return TaskEvidence::Unknown;
     };
     // The last newline opens the tail rather than closing the body: the trim
@@ -3235,7 +3235,7 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
         if path.extension().is_none_or(|ext| ext != "json") {
             continue;
         }
-        let Ok(bytes) = std::fs::read_to_string(&path) else {
+        let Ok(bytes) = crate::fsio::read_to_string(&path) else {
             // ONE unreadable member poisons the whole reading. A partial count
             // is a number that looks measured and is not, and this verb's only
             // failure mode that matters is under-reporting.
@@ -4724,7 +4724,7 @@ mod probe_tests {
         assert!(!rustlib.join(target).exists());
         assert!(!rustlib.join(format!("manifest-rust-std-{target}")).exists());
         assert_eq!(
-            std::fs::read_to_string(rustlib.join("components")).expect("components"),
+            crate::fsio::read_to_string(rustlib.join("components")).expect("components"),
             "rustc\ncargo\n"
         );
     }

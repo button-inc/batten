@@ -190,7 +190,7 @@ fn format_path(store_dir: &Path) -> PathBuf {
 /// Returns an error when the journal directory cannot be created or written.
 pub fn open(store_dir: &Path) -> Result<Access> {
     let path = format_path(store_dir);
-    let format = match std::fs::read_to_string(&path) {
+    let format = match crate::fsio::read_to_string(&path) {
         Ok(text) => serde_json::from_str::<Format>(&text)
             .with_context(|| format!("read the store format {}", path.display()))?,
         Err(_) if legacy_records_exist(store_dir) => Format {
@@ -534,7 +534,7 @@ pub fn fold_lines(store_dir: &Path) -> Fold {
 
     let mut all = Vec::new();
     for path in paths {
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(text) = crate::fsio::read_to_string(&path) else {
             return Fold::Unreadable(path);
         };
         // Only terminated lines. `split('\n')` then dropping the tail is what
@@ -599,7 +599,7 @@ fn read_shards(store_dir: &Path) -> Result<Vec<Entry>> {
 
     let mut all = Vec::new();
     for path in paths {
-        let text = std::fs::read_to_string(&path)
+        let text = crate::fsio::read_to_string(&path)
             .with_context(|| format!("read the shard {}", path.display()))?;
         // A torn trailing line is dropped rather than failing the merge: the
         // writer will re-append it, and refusing to merge every other shard over
@@ -804,7 +804,7 @@ impl Drain {
 /// first-drain case), and an unparseable line is skipped the same way a torn
 /// shard line is. There is no failure a caller could act on differently.
 fn read_merged(store_dir: &Path) -> Vec<Entry> {
-    let Ok(text) = std::fs::read_to_string(merged_path(store_dir)) else {
+    let Ok(text) = crate::fsio::read_to_string(merged_path(store_dir)) else {
         return Vec::new();
     };
     text.lines()
@@ -1143,11 +1143,11 @@ mod tests {
             .map(|entry| entry.path())
             .find(|path| path.extension().is_some_and(|ext| ext == "json"))
             .expect("the record file");
-        let marked = format!("{}\n", std::fs::read_to_string(&path).unwrap());
+        let marked = format!("{}\n", crate::fsio::read_to_string(&path).unwrap());
         std::fs::write(&path, &marked).unwrap();
         merge(&dir).unwrap();
         assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
+            crate::fsio::read_to_string(&path).unwrap(),
             marked,
             "a merge whose fold changed nothing must not rewrite the record"
         );

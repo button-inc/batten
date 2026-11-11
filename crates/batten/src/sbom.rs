@@ -498,7 +498,7 @@ fn first_quoted(text: &str, prefix: &str) -> Option<String> {
 
 /// The manifest's version: the first `version = "…"` line.
 fn manifest_version(root: &Path) -> Result<String> {
-    let text = std::fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
+    let text = crate::fsio::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
     match first_quoted(&text, "version = \"") {
         Some(version) if !version.is_empty() => Ok(version),
         _ => unseen("could not read a version from Cargo.toml"),
@@ -522,7 +522,7 @@ fn manifest_version_for_binary(root: &Path, binary: &str) -> Result<String> {
 
 /// `Organization: <first author>` of the manifest, or NOASSERTION.
 fn workspace_supplier(root: &Path) -> String {
-    let text = std::fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
+    let text = crate::fsio::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
     match first_quoted(&text, "authors = [") {
         Some(author) if !author.is_empty() => organization(&author),
         _ => NOASSERTION.to_owned(),
@@ -559,7 +559,7 @@ fn holder_lines(text: &str) -> Vec<String> {
 
 /// A file's text, or nothing for one a line scan would call binary.
 fn scannable(path: &Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::fsio::read(path).ok()?;
     if bytes.contains(&0) {
         return None;
     }
@@ -1102,7 +1102,7 @@ fn spawn(program: &str, args: &[&str], root: &Path, capture: bool) -> Option<(bo
 
 /// Read and parse one JSON document.
 fn read_json(path: &Path) -> Option<Value> {
-    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    serde_json::from_str(&crate::fsio::read_to_string(path).ok()?).ok()
 }
 
 /// Write one JSON document in place through a temporary, so a failed write never
@@ -1212,7 +1212,7 @@ fn derive_tree_inner(declared: &Declared, root: &Path, spdx: &Path, cdx: &Path) 
     let own_copyright = workspace_copyright(root);
     let actions = match &declared.actions {
         None => None,
-        Some(table) => match std::fs::read_to_string(root.join(table)) {
+        Some(table) => match crate::fsio::read_to_string(root.join(table)) {
             Ok(text) => Some(actions_table(&text)),
             Err(_) => {
                 return unseen(format!(

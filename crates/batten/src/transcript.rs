@@ -1220,7 +1220,7 @@ pub fn resolve(root: &Path, configured: Option<&str>, harness: Option<Harness>) 
         TranscriptShape::Unsurveyed(owes) => return Capability::Unsurveyed(owes),
     };
     let path = root.join(relative);
-    let Ok(body) = std::fs::read_to_string(&path) else {
+    let Ok(body) = crate::fsio::read_to_string(&path) else {
         // Unopenable and absent are one answer on purpose: both mean the file
         // yielded nothing, and distinguishing a missing file from a permission
         // failure would report an access problem as a parse failure. A file that
@@ -1744,7 +1744,7 @@ pub fn census(root: &std::path::Path, exclude: Option<&str>) -> usize {
             if path.extension().is_none_or(|ext| ext != "jsonl") {
                 continue;
             }
-            let Ok(body) = std::fs::read_to_string(&path) else {
+            let Ok(body) = crate::fsio::read_to_string(&path) else {
                 continue;
             };
             // THE FIRST AUTHORED ID IN THE FILE IDENTIFIES IT; a file with none

@@ -648,7 +648,7 @@ fn head_could_inherit(base_built_now: bool, head_cleaned: bool) -> bool {
 
 /// Whether two files hold the same bytes; an unreadable side is never "same".
 fn same_bytes(left: &Path, right: &Path) -> bool {
-    match (std::fs::read(left), std::fs::read(right)) {
+    match (crate::fsio::read(left), crate::fsio::read(right)) {
         (Ok(left), Ok(right)) => left == right,
         _ => false,
     }
@@ -803,7 +803,7 @@ pub fn keep_as_base(perf_dir: &Path, key: &str, head_bin: &Path, keep: &str) -> 
 
 /// Whether the `built-for` marker names `key`.
 fn marked_for(perf_dir: &Path, key: &str) -> bool {
-    std::fs::read_to_string(built_for(perf_dir, key)).is_ok_and(|text| text == key)
+    crate::fsio::read_to_string(built_for(perf_dir, key)).is_ok_and(|text| text == key)
 }
 
 /// The marker a base build writes beside its binary, naming the key it was
@@ -962,7 +962,7 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Re
     let marker = target_dir.map(|dir| dir.join(LAST_ARM));
     let mut cleaned = false;
     if let Some(marker) = &marker {
-        let last = std::fs::read_to_string(marker).ok();
+        let last = crate::fsio::read_to_string(marker).ok();
         if switches_arm(last.as_deref(), what) {
             let clean: Vec<String> = ["clean", "-p", "batten", "--profile", profile]
                 .iter()
@@ -1091,7 +1091,7 @@ fn wired_command(tree: &Path, bin: &Path) -> Result<Vec<String>> {
         WiringFile::Whole(path) => (path, None),
     };
     let settings = tree.join(path);
-    let text = std::fs::read_to_string(&settings).with_context(|| {
+    let text = crate::fsio::read_to_string(&settings).with_context(|| {
         format!(
             "perf-pair: {} wires no settings the wired pair can read. No measurement.",
             settings.display()
@@ -1778,7 +1778,7 @@ fn bench(
         bail!("perf-pair: measuring the {id} pair failed. No measurement.");
     }
 
-    let text = std::fs::read_to_string(&json)
+    let text = crate::fsio::read_to_string(&json)
         .with_context(|| format!("perf-pair: could not read the {id} pair. No measurement."))?;
     let parsed: serde_json::Value = serde_json::from_str(&text)
         .with_context(|| format!("perf-pair: the {id} pair did not parse. No measurement."))?;
@@ -2566,7 +2566,7 @@ pub fn config_load(path: &Path) -> Result<Sweep> {
     // Read once, up front, for two reasons: it is the `parse` arm's input, and a
     // missing or unparseable file is a could-not-look that must be reported
     // BEFORE any timing rather than as a zero.
-    let text = std::fs::read_to_string(path)
+    let text = crate::fsio::read_to_string(path)
         .with_context(|| format!("perf-config-load: could not read {source}"))?;
     crate::config::parse(&text, &source)
         .with_context(|| format!("perf-config-load: {source} does not parse"))?;
@@ -3482,8 +3482,8 @@ mod tests {
             "the kept head answers as the next pair's base"
         );
         assert_eq!(
-            std::fs::read(base_binary(&perf, "headkey"))?,
-            std::fs::read(&head)?
+            crate::fsio::read(base_binary(&perf, "headkey"))?,
+            crate::fsio::read(&head)?
         );
         assert!(!stale.exists(), "a base neither live nor kept is removed");
         Ok(())
@@ -3606,8 +3606,8 @@ mod tests {
         std::fs::write(&built, b"head")?;
         let head = perf.join("pair").join("batten-head");
         take_arm(&shared, &head, "head")?;
-        assert_eq!(std::fs::read(&base)?, b"base");
-        assert_eq!(std::fs::read(&head)?, b"head");
+        assert_eq!(crate::fsio::read(&base)?, b"base");
+        assert_eq!(crate::fsio::read(&head)?, b"head");
         assert!(take_arm(&perf.join("empty"), &head, "head").is_err());
         let _ = std::fs::remove_dir_all(&scratch);
         Ok(())
@@ -3833,7 +3833,7 @@ mod tests {
         sibling(&perf, "b", 60);
         seed_base_target_dir(&perf, "c").expect("seed");
         let seeded = base_target_dir(&perf, "c").join("marker");
-        assert_eq!(std::fs::read_to_string(seeded).expect("seeded"), "b");
+        assert_eq!(crate::fsio::read_to_string(seeded).expect("seeded"), "b");
         assert!(
             !base_target_dir(&perf, "b").exists(),
             "a rename, not a copy"
@@ -3869,7 +3869,7 @@ mod tests {
         sibling(&perf, "d", 60);
         seed_base_target_dir(&perf, "c").expect("seed");
         let kept = base_target_dir(&perf, "c").join("marker");
-        assert_eq!(std::fs::read_to_string(kept).expect("kept"), "c");
+        assert_eq!(crate::fsio::read_to_string(kept).expect("kept"), "c");
         assert!(base_target_dir(&perf, "d").exists());
     }
 
@@ -4176,7 +4176,7 @@ mod tests {
         assert!(head.is_file(), "a directory that is no base build stays");
         assert!(base_target_dir(&perf, "livebase").is_dir());
         assert!(!base_target_dir(&perf, "stale").exists());
-        assert_eq!(std::fs::read(base_binary(&perf, "headkey"))?, b"head");
+        assert_eq!(crate::fsio::read(base_binary(&perf, "headkey"))?, b"head");
         Ok(())
     }
 
@@ -4315,10 +4315,10 @@ mod tests {
         assert_eq!(check, out.join("check-repo"));
         assert_eq!(hooks, repo.join("crates/batten/tests/fixtures/hooks"));
         assert_eq!(
-            std::fs::read_to_string(check.join("batten.toml"))?,
+            crate::fsio::read_to_string(check.join("batten.toml"))?,
             "authority"
         );
-        assert_eq!(std::fs::read_to_string(check.join("lib.rs"))?, "source");
+        assert_eq!(crate::fsio::read_to_string(check.join("lib.rs"))?, "source");
         Ok(())
     }
 
@@ -4575,17 +4575,17 @@ mod tests {
         let (floor, two) = (root.join("floor"), root.join("two"));
         sweep_fixture(&floor, 0)?;
         assert_eq!(
-            std::fs::read_to_string(floor.join("batten.toml"))?,
+            crate::fsio::read_to_string(floor.join("batten.toml"))?,
             "version = 1\n"
         );
         sweep_fixture(&two, 2)?;
-        let authority = std::fs::read_to_string(two.join("batten.toml"))?;
+        let authority = crate::fsio::read_to_string(two.join("batten.toml"))?;
         assert!(
             authority.contains("documents = [\"config0.toml\", \"config1.toml\"]"),
             "{authority}"
         );
         assert_eq!(
-            std::fs::read_to_string(two.join("config1.toml"))?,
+            crate::fsio::read_to_string(two.join("config1.toml"))?,
             "quiet = true\n"
         );
         assert!(two.join(".git").is_dir());

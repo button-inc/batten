@@ -256,7 +256,7 @@ impl SessionRecord {
 /// is its own root, with no cursor", which re-syncs — the safe direction, since a
 /// half-read cursor would skip findings.
 fn read_record(path: &Path) -> Option<SessionRecord> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = crate::fsio::read_to_string(path).ok()?;
     let record: SessionRecord = serde_json::from_str(&text).ok()?;
     (record.schema == SESSION_SCHEMA).then_some(record)
 }

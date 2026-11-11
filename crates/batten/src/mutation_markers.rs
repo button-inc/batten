@@ -76,6 +76,8 @@ mod tests {
     #[test]
     fn the_one_site_builds_the_argv_once() {
         let site = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(CARGO_MUTANTS_SITE);
+        // `std`, not `crate::fsio`: `build.rs` includes this file as its own
+        // module, so it reaches nothing in the crate (CLOUD-2692).
         let text = std::fs::read_to_string(&site).unwrap_or_default();
         assert_eq!(
             text.matches(CARGO_MUTANTS_ARGV).count(),
