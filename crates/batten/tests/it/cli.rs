@@ -2689,6 +2689,32 @@ const EVENTS: &[EventRow] = &[
         adjudicated: false,
         state_decided: false,
     },
+    // CLOUD-2700: Codex's and Copilot's PascalCase names, which the converged
+    // decoder reads.
+    EventRow {
+        event: batten::hook::Event::ModelRequest,
+        spelling: "PreModelRequest",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::ModelResponse,
+        spelling: "PostModelRequest",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::Interrupt,
+        spelling: "Interrupt",
+        adjudicated: false,
+        state_decided: false,
+    },
+    EventRow {
+        event: batten::hook::Event::ErrorOccurred,
+        spelling: "ErrorOccurred",
+        adjudicated: false,
+        state_decided: false,
+    },
     EventRow {
         event: batten::hook::Event::Unrecognized,
         spelling: "SomethingThisBuildDoesNotKnow",
@@ -2772,11 +2798,81 @@ fn every_normalized_event_resolves_to_its_golden_decision() {
     }
 }
 
+/// The events only one host spells (CLOUD-2700): no converged name exists, so
+/// each is fed through its own host's decoder rather than `Event::normalize`,
+/// which keeps host vocabulary out of the harness-blind core.
+const HOST_EVENTS: &[(batten::hook::Harness, batten::hook::Event, &str)] = &[
+    (
+        batten::hook::Harness::GeminiCli,
+        batten::hook::Event::ToolSelection,
+        "BeforeToolSelection",
+    ),
+    (
+        batten::hook::Harness::Cursor,
+        batten::hook::Event::AgentResponse,
+        "afterAgentResponse",
+    ),
+    (
+        batten::hook::Harness::Cursor,
+        batten::hook::Event::AgentThought,
+        "afterAgentThought",
+    ),
+    (
+        batten::hook::Harness::Cursor,
+        batten::hook::Event::WorkspaceOpen,
+        "workspaceOpen",
+    ),
+    (
+        batten::hook::Harness::Cursor,
+        batten::hook::Event::TabFileRead,
+        "beforeTabFileRead",
+    ),
+    (
+        batten::hook::Harness::Cursor,
+        batten::hook::Event::TabFileEdit,
+        "afterTabFileEdit",
+    ),
+];
+
+#[test]
+fn a_host_only_event_passes_through_undecided() {
+    // Each row normalizes on its own host, and a banned command in its payload
+    // is neither denied nor answered with a decision document: no rule selects
+    // for these moments yet.
+    let dir = repo_with_gh_policy("host-event-census");
+    for (harness, event, spelling) in HOST_EVENTS {
+        assert_eq!(
+            batten::hook::normalize_event(*harness, spelling),
+            *event,
+            "{spelling} normalizes on {}",
+            harness.as_str()
+        );
+        let output = run_hook_in(
+            &dir,
+            harness.as_str(),
+            &payload_at(spelling, "gh pr merge 42"),
+        );
+        let at = format!("{}/{spelling}", harness.as_str());
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{at}: {}",
+            common::stderr(&output)
+        );
+        let raw = String::from_utf8_lossy(&output.stdout);
+        assert!(!raw.contains("\"deny\""), "{at}: {raw}");
+    }
+}
+
 #[test]
 fn the_census_covers_every_normalized_event() {
     // Total, or the golden set is coverage rather than a contract: a variant
     // added to `Event::ALL` with no row would ship with its decision unpinned.
-    let mut covered: Vec<&str> = EVENTS.iter().map(|row| row.event.as_str()).collect();
+    let mut covered: Vec<&str> = EVENTS
+        .iter()
+        .map(|row| row.event.as_str())
+        .chain(HOST_EVENTS.iter().map(|(_, event, _)| event.as_str()))
+        .collect();
     covered.sort_unstable();
     covered.dedup();
     // A row is fed to a host as `hook_event_name`, and no host spells a forge
