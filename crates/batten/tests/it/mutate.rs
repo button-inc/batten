@@ -128,8 +128,6 @@ use common::{stderr, stdout};
 /// (CLOUD-2160). The harness is suite-agnostic above `run_suite`: every verdict
 /// this file's decision table asserts is decided by `judge_row` over a
 /// `Selection`, which every arm produces.
-// Unix only, with `toy_repo`: the gate is a bash program the tier executes, and
-// off unix nothing reaches it (`-D warnings` refuses a const nothing reads).
 /// Where the toy repositories keep presets, as this repository's `[env]`
 /// declares its own: the crate names no preset directory (CLOUD-2711).
 const PRESETS: &str = "crates/batten/src/policy/presets";
@@ -148,8 +146,16 @@ exit 0
 ///
 /// `CARGO_MANIFEST_DIR` is the STAGED tree, because the sweep runs `cargo` there
 /// — so the tier executes the mutated gate, never the source tree's.
+///
+/// THROUGH `bash`, NOT THE FILE'S EXEC BIT, so the tier runs on every platform.
+/// The gate is a bash program, so bash is the subject's own dependency; what was
+/// unix-only was executing the file directly, which needs a mode bit and a
+/// shebang Windows has neither of. Every CI leg carries `bash` (Git for Windows
+/// on the `windows` runner), and the sweep applies a row in-process
+/// (`mutate::substitute`), so nothing else here needs a unix host.
 const GATE_HELPER: &str = r#"fn gate(input: &str) -> Option<i32> {
-    std::process::Command::new(concat!(env!("CARGO_MANIFEST_DIR"), "/mise-tasks/@GATE@"))
+    std::process::Command::new("bash")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/mise-tasks/@GATE@"))
         .arg(input)
         .status()
         .expect("run the toy gate")
@@ -158,8 +164,6 @@ const GATE_HELPER: &str = r#"fn gate(input: &str) -> Option<i32> {
 "#;
 
 /// The mutation the toy suite catches: the gate stops refusing anything.
-// Unix only, with `toy_repo`: these describe the toy fixture, and off unix
-// nothing reaches it (`-D warnings` refuses a const nothing reads).
 const CAUGHT: &str = "#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|over_the_limit";
 
 /// The package every toy carries, so `cargo test` has something to build.
@@ -236,7 +240,7 @@ fn toy_suite(gate: &str, prefix: &str) -> String {
 
 /// A toy repository carrying one gate, one suite and the declared rows.
 ///
-/// Unix only: the gate is a bash program the tier executes.
+/// Portable: the tier runs the gate through `bash`, not its exec bit (`GATE_HELPER`).
 fn toy_repo(name: &str, rows: &[&str]) -> PathBuf {
     let root = toy(name);
     let mut gate = String::from(TOY_GATE);
@@ -1156,7 +1160,6 @@ fn a_mutation_its_suite_catches_is_a_pass() {
 
 /// A build script cargo reruns on EVERY build — it watches a path that does not
 /// exist — and that counts its runs into `$TOY_BUILD_COUNTER`.
-#[cfg(unix)]
 const ALWAYS_STALE_BUILD: &str = r#"fn main() {
     println!("cargo:rerun-if-changed=no-such-path");
     if let Some(path) = std::env::var_os("TOY_BUILD_COUNTER") {
@@ -1177,7 +1180,6 @@ const ALWAYS_STALE_BUILD: &str = r#"fn main() {
 /// script runs exactly once. Fails by: any row asking cargo to build, which reran
 /// this script per row — and the library with it, 75s a row in this repository's
 /// own sweep when a missing `rerun-if-changed` path did the same.
-#[cfg(unix)]
 #[test]
 fn a_row_runs_the_one_build_and_never_compiles() {
     let root = toy_repo(
@@ -1205,7 +1207,6 @@ fn a_row_runs_the_one_build_and_never_compiles() {
 /// through `include_str!`, so the recorded binaries carry the unmutated text and
 /// only a rebuild sees the row's mutation. Fails by: reusing the binaries for a
 /// subject cargo's dep-info names, which reads the mutant as surviving.
-#[cfg(unix)]
 #[test]
 fn a_row_whose_subject_the_build_embeds_is_rebuilt() {
     let root = toy_repo(
@@ -1563,7 +1564,6 @@ fn other_suite(tail: &str) -> String {
 }
 
 /// Sweep `gates` narrowed to what changed since `base`.
-#[cfg(unix)]
 fn sweep_since(root: &Path, gates: &str, base: &str) -> (i32, String, String) {
     // THE INHERITED ENVIRONMENT, as before CLOUD-2588: these cases run under a
     // CI leg's own `$CI`, which is where #1209's class showed. Only the
@@ -1644,7 +1644,6 @@ fn a_change_to_a_suite_sweeps_its_gate() {
 /// gate. Fails by: the suite arm reading raw bytes, which re-swept every gate
 /// naming a suite whose comments moved (134 rows on #1276, from deleting
 /// markers).
-#[cfg(unix)]
 #[test]
 fn a_comment_edit_to_a_suite_sweeps_nothing() {
     let root = two_gate_repo("since-suite-comment");
@@ -3045,7 +3044,6 @@ fn a_policy_module_is_censused_unconditionally_so_a_migration_cannot_shrink_the_
 /// `MUTANT_PRESETS` declares is no subject at all. Fails by: the crate naming its
 /// own preset directory again, which censused this repository's layout in
 /// every consumer.
-#[cfg(unix)]
 #[test]
 fn a_preset_outside_the_declared_directory_is_no_subject() {
     let root = toy("census-preset-elsewhere");
