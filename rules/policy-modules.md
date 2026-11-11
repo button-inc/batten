@@ -374,7 +374,8 @@ CLOUD-1949), `input.call.cwd` (the call's canonical start directory),
 `input.call.roots` (the sorted canonical roots of every directory the call acts
 on, `[]` when none is in a repository and `null` when one cannot be placed) and
 `input.call.home` (the session's canonical home, `null` where it has none) —
-CLOUD-2672, plus the `facts` object.
+CLOUD-2672, `input.call.host` (`disposable` where `BATTEN_ENVIRONMENT` declares
+the container so, `machine` otherwise — CLOUD-2709), plus the `facts` object.
 
 **A segment's `construct` is the one field that is about the command's SHAPE
 rather than its text** (CLOUD-1381), and it is worth its own sentence because it
