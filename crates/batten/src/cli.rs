@@ -4008,21 +4008,8 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         }),
         "show" => show_of(matches),
         "target" => target_of(matches).map(|command| Command::Target { command }),
-        "adjudicate" => matches
-            .get_one::<Harness>("harness")
-            .map(|harness| Command::Hook {
-                harness: *harness,
-                instant: matches.get_one::<String>("instant").cloned(),
-                show_input: flag(matches, "show_input"),
-                event: matches.get_one::<String>("event").cloned(),
-            }),
-        "payload" => match matches.subcommand()? {
-            ("field", inner) => Some(Command::HookField {
-                harness: *inner.get_one::<Harness>("harness")?,
-                field: *inner.get_one::<HookFieldName>("name")?,
-            }),
-            _ => None,
-        },
+        "adjudicate" => adjudicate_of(matches),
+        "payload" => payload_of(matches),
         "receipt" => receipt_of(matches).map(|command| Command::Receipt { command }),
         "state" => state_of(matches).map(|command| Command::State { command }),
         "record" => record_of(matches).map(|command| Command::Record { command }),
@@ -4038,6 +4025,27 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "engine" => engine_of(matches).map(|command| Command::Engine { command }),
         "test" => test_of(matches).map(|command| Command::Test { command }),
         "forge" => forge_of(matches).map(|command| Command::Forge { command }),
+        _ => None,
+    }
+}
+
+fn adjudicate_of(matches: &ArgMatches) -> Option<Command> {
+    matches
+        .get_one::<Harness>("harness")
+        .map(|harness| Command::Hook {
+            harness: *harness,
+            instant: matches.get_one::<String>("instant").cloned(),
+            show_input: flag(matches, "show_input"),
+            event: matches.get_one::<String>("event").cloned(),
+        })
+}
+
+fn payload_of(matches: &ArgMatches) -> Option<Command> {
+    match matches.subcommand()? {
+        ("field", inner) => Some(Command::HookField {
+            harness: *inner.get_one::<Harness>("harness")?,
+            field: *inner.get_one::<HookFieldName>("name")?,
+        }),
         _ => None,
     }
 }
