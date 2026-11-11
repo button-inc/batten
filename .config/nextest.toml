@@ -145,6 +145,17 @@ fail-fast = false
 [profile.default.junit]
 path = "junit.xml"
 
+# CHEAP CASES FIRST. A unit case decides in milliseconds; an `it` case spawns
+# the binary and builds a fixture repository. Scheduling the unit cases first
+# means the first failure, and the mutant it catches under `mutants`'
+# fail-fast, arrives at unit speed whenever a unit case can see it (operator
+# ruling, 2026-11-10: order the tests from cheap to expensive). Priority orders
+# scheduling only; every case still runs under `default`'s no-fail-fast.
+# Overrides on `default` apply to every profile, `mutants` and `narrow` included.
+[[profile.default.overrides]]
+filter = 'kind(lib)'
+priority = 100
+
 # NO `ci` PROFILE (CLOUD-2588). It set nothing of its own and inherited every
 # key from `default`, so selecting it under `$CI` moved only the report
 # directory, while making CI's environment one `verify` never ran under. CI runs
