@@ -3812,6 +3812,10 @@ mod tests {
                     "PreCompact",
                     "PostCompact",
                     "UserPromptSubmit",
+                    // CLOUD-2700.
+                    "PreModelRequest",
+                    "PostModelRequest",
+                    "Interrupt",
                 ],
             ),
             (
@@ -3827,6 +3831,7 @@ mod tests {
                     "PreCompact",
                     "Notification",
                     "PermissionRequest",
+                    "ErrorOccurred",
                 ],
             ),
             (
@@ -3840,13 +3845,22 @@ mod tests {
                     "SessionEnd",
                     "Notification",
                     "PreCompress",
+                    "BeforeModel",
+                    "AfterModel",
+                    "BeforeToolSelection",
                 ],
             ),
             (
                 hook::Harness::Cursor,
                 &[
                     "preToolUse",
+                    "beforeShellExecution",
+                    "beforeMCPExecution",
+                    "beforeReadFile",
                     "afterFileEdit",
+                    "postToolUse",
+                    "afterShellExecution",
+                    "afterMCPExecution",
                     "postToolUseFailure",
                     "stop",
                     "sessionStart",
@@ -3854,6 +3868,11 @@ mod tests {
                     "subagentStart",
                     "subagentStop",
                     "preCompact",
+                    "afterAgentResponse",
+                    "afterAgentThought",
+                    "workspaceOpen",
+                    "beforeTabFileRead",
+                    "afterTabFileEdit",
                 ],
             ),
         ];
