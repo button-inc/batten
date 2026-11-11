@@ -110,6 +110,7 @@ fn request<'a>(
         deadline: None,
         wait: false,
         live_since: None,
+        copies: None,
     }
 }
 
@@ -183,6 +184,44 @@ fn a_stale_test_scratch_entry_is_collected() {
     assert_eq!(units, 1, "only the stale fixture is outside the live build");
     assert!(!tree.join("tmp/old-fixture").exists());
     assert!(tree.join("tmp/live-fixture").exists());
+}
+
+/// A COPY A KILLED SWEEP LEFT IN THE TEMP DIRECTORY IS COLLECTED, AND A LIVE
+/// SWEEP'S IS NOT (#1276). cargo-mutants removes its copy only on a clean exit,
+/// and a lap began 4.5GB down beside its own live 12GB copy on a volume whose
+/// every ranked tree was under the checkout.
+///
+/// THE LIVE COPY IS WRITTEN TWO LEVELS DOWN AND NOWHERE ELSE, because that is how
+/// a sweep writes: a shallow date reads it as idle since it was staged.
+///
+/// Fails by: no copies read; any directory in the temp directory taken; a copy
+/// dated shallow, which collects the live one.
+#[test]
+fn a_stale_mutant_copy_is_collected_and_a_live_one_kept() {
+    let root = common::scratch("collect-mutant-copies");
+    let temp = root.join("temp");
+    let stale = temp.join("cargo-mutants-batten-AAAAAA.tmp");
+    aged_dir(&stale.join("target/debug"), 7200);
+    aged_dir(&stale.join("target"), 7200);
+    aged_dir(&stale, 7200);
+    let live = temp.join("cargo-mutants-batten-BBBBBB.tmp");
+    aged_dir(&live.join("src/deep"), 1);
+    aged_dir(&live.join("src"), 7200);
+    aged_dir(&live, 7200);
+    let other = temp.join("somebody-elses.tmp");
+    aged_dir(&other, 7200);
+    let tree = root.join("target");
+    std::fs::create_dir_all(&tree).unwrap();
+    let trees = [tree];
+    let mut ask = request_under_a_live_build(&trees, u64::MAX);
+    ask.copies = Some(&temp);
+    let _ = batten::collect::collect(&ask);
+    assert!(!stale.exists(), "a copy no live sweep writes goes");
+    assert!(
+        live.exists(),
+        "a copy written since the live build began stays"
+    );
+    assert!(other.exists(), "only cargo-mutants' own copies are taken");
 }
 
 /// A BUILD INSIDE FRESH SCRATCH IS THE SCRATCH ENTRY'S, NOT A UNIT OF ITS OWN:
