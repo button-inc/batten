@@ -65,7 +65,7 @@
 # unterminated and the unreadable are ONE class — every one of them means no ban
 # is in force that this gate can vouch for.
 #MUTANT-SUITE crates/batten/tests/it/nextest_slow.rs
-#MUTANT terminator-unread|s@^\tcontains(line, "terminate-after")$@\ttrue@|a_declaration_without_terminate_after_is_refused
+#MUTANT unterminated-override-admitted|s@^\tsome i in slow_timeout_at$@\tsome i in slow_timeout_at; contains(lines[i], "terminate-after")@|an_unterminated_override_citing_no_row_is_refused
 #MUTANT ceiling-may-rise|s@^\tkill > ceiling_seconds$@\tfalse@|a_period_above_the_ceiling_is_refused
 #MUTANT declaration-unread|s@^lines := input.tree.lines\[config\]$@lines := []@|the_committed_config_declares_a_terminating_slow_timeout
 #MUTANT override-reason-unread|s@^\tnot filed(i)$@\ttrue@|an_override_that_cites_a_row_is_clean
@@ -138,15 +138,22 @@ section(i) := header if {
 	header := trim_space(lines[max(before)])
 }
 
-# A non-comment line declaring BOTH halves of the ban. `period` alone only
-# reports; it is `terminate-after` that kills, so a declaration carrying one and
-# not the other is not a ban and must not read as one.
-terminating_at contains i if {
+# A non-comment `slow-timeout` line, whatever it declares.
+slow_timeout_at contains i if {
 	some i, line in lines
 	not startswith(trim_space(line), "#")
 	contains(line, "slow-timeout")
-	contains(line, "period")
-	contains(line, "terminate-after")
+}
+
+# A `slow-timeout` line carrying a period. Whether it also KILLS is
+# `kill_seconds`'s question, not this one's: `period` alone only reports and it
+# is `terminate-after` that kills, and `kill_seconds` reads the multiplier by
+# splitting on that word, so a line without it yields no kill and refuses as
+# unbounded. A `terminate-after` conjunct here was redundant for the default
+# bound — no case could observe it — and for an override it was a HOLE, below.
+terminating_at contains i if {
+	some i in slow_timeout_at
+	contains(lines[i], "period")
 }
 
 # THE DEFAULT BOUND: what every case is held to, and the only thing the ceiling
@@ -160,8 +167,14 @@ terminating contains lines[i] if {
 # — bounding them by the default's number would make the exception mechanism
 # unusable, and a gate that forbids the sanctioned escape is the shape that gets
 # switched off. What they owe instead is a filed reason, below.
+#
+# EVERY `slow-timeout` OVERRIDE, TERMINATING OR NOT. Read through a
+# `terminate-after` conjunct, an override declaring only a period was no override
+# at all: it lifted the kill for its tests — nextest kills nothing without a
+# multiplier — and owed no reason, so the least bounded exception was the one this
+# gate never asked about.
 override_at contains i if {
-	some i in terminating_at
+	some i in slow_timeout_at
 	startswith(section(i), "[[profile.default.overrides]]")
 }
 
@@ -411,7 +424,20 @@ filed_override := [
 test_an_override_citing_no_row_is_refused if {
 	count(violation) == 1 with input as tree({".config/nextest.toml": unfiled_override})
 	count(violation) == 1 with input as tree({".config/nextest.toml": unfiled_scheduling})
+	count(violation) == 1 with input as tree({".config/nextest.toml": unfiled_unterminated})
 }
+
+# AN OVERRIDE THAT LIFTS THE KILL, citing nothing: a period and no
+# `terminate-after` kills nothing for the tests it selects, so it owes a reason
+# exactly as a terminating override does.
+unfiled_unterminated := [
+	"[profile.default]",
+	"slow-timeout = { period = \"10s\", terminate-after = 30 }",
+	"",
+	"[[profile.default.overrides]]",
+	"filter = 'test(something_heavy)'",
+	"slow-timeout = { period = \"60s\" }",
+]
 
 # A SCHEDULING override (`threads-required`, `test-group`) citing no row is the
 # same refusal, and the only shape that reaches the scheduling-key arm: the
