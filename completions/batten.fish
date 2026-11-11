@@ -3500,6 +3500,7 @@ complete -c batten -n "__fish_batten_using_subcommand startup" -l no-input -d 'N
 complete -c batten -n "__fish_batten_using_subcommand startup" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand startup" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand adjudicate" -l instant -d 'The epoch second to judge time-dependent records against, supplied as data' -r
+complete -c batten -n "__fish_batten_using_subcommand adjudicate" -l event -d 'The host\'s event name, used only when the payload names none' -r
 complete -c batten -n "__fish_batten_using_subcommand adjudicate" -l harness -d 'The harness whose payload to decode and whose decision channel to answer in' -r -f -a "claude-code\t'Claude Code\'s `PreToolUse` payload; a deny is returned as the `hookSpecificOutput.permissionDecision` JSON object on stdout with exit `0` — the channel the production shell guards already use'
 cursor\t'Cursor. Two payload families under one host: a generic `preToolUse` that looks like Claude\'s, and specialized events (`beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution`) that carry the operand at top level and **no** `tool_name` at all. Session is `conversation_id`'
 copilot-cli\t'GitHub Copilot CLI, registered in its **`PascalCase`** dialect — which yields `hook_event_name` natively. The camelCase dialect omits the event name entirely, so Batten does not speak it'

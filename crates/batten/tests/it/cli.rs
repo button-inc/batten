@@ -2865,6 +2865,50 @@ fn a_host_only_event_passes_through_undecided() {
 }
 
 #[test]
+fn a_named_event_decodes_a_payload_that_names_none() {
+    // Copilot's camelCase dialect sends no `hook_event_name` (CLOUD-2700). With
+    // no name the decoder assumes pre-tool, so a banned command is refused at a
+    // moment that is not a tool call. The registration's `--event` names the
+    // moment instead, and the payload's own name still wins when present.
+    let dir = repo_with_gh_policy("named-event");
+    let nameless = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": { "command": "gh pr merge 42" },
+    })
+    .to_string();
+    let run = |args: &[&str], payload: &str| common::run_with_stdin(&dir, args, payload);
+    let assumed = run(&["adjudicate", "--harness", "copilot-cli"], &nameless);
+    assert_eq!(
+        assumed.status.code(),
+        Some(2),
+        "no name is assumed pre-tool"
+    );
+    for event in ["subagentStart", "userPromptTransformed"] {
+        let named = run(
+            &["adjudicate", "--harness", "copilot-cli", "--event", event],
+            &nameless,
+        );
+        assert_eq!(
+            named.status.code(),
+            Some(0),
+            "{event}: {}",
+            common::stderr(&named)
+        );
+    }
+    let own = run(
+        &[
+            "adjudicate",
+            "--harness",
+            "copilot-cli",
+            "--event",
+            "subagentStart",
+        ],
+        &payload_at("PreToolUse", "gh pr merge 42"),
+    );
+    assert_eq!(own.status.code(), Some(2), "the payload's own name wins");
+}
+
+#[test]
 fn the_census_covers_every_normalized_event() {
     // Total, or the golden set is coverage rather than a contract: a variant
     // added to `Event::ALL` with no row would ship with its decision unpinned.
