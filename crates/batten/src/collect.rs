@@ -924,6 +924,23 @@ fn whole_units(tree: &Path, wholes: &[PathBuf]) -> Vec<Unit> {
 /// spelling, never a consumer's (rule 1).
 const MUTANT_COPY: (&str, &str) = ("cargo-mutants-", ".tmp");
 
+/// Whether `repo` is a cargo-mutants copy, or inside one: a component named
+/// as [`MUTANT_COPY`] names.
+///
+/// A COPY IS COLLECTED WHOLE OR NOT AT ALL. It carries `.git`, so a hook or a
+/// compile inside it resolved the copy as a repository and collected its
+/// `target/` unit by unit between two mutants, when no cargo lock is held.
+/// MEASURED ON #1276: 28 of 83 mutants rebuilt every dependency (341-370
+/// crates, ~5 min each) where the other 55 rebuilt one crate in ~18 s.
+fn within_mutant_copy(repo: &Path) -> bool {
+    let (prefix, suffix) = MUTANT_COPY;
+    repo.components().any(|part| {
+        part.as_os_str()
+            .to_str()
+            .is_some_and(|name| name.starts_with(prefix) && name.ends_with(suffix))
+    })
+}
+
 /// Each copy cargo-mutants staged in `dir`, as one unit taken whole.
 ///
 /// MEASURED ON #1276: a sweep that is killed leaves its copy behind — the copy
@@ -1456,6 +1473,9 @@ pub fn collect_toward_max(
     deadline: Option<Instant>,
     wait: bool,
 ) -> Option<Collected> {
+    if within_mutant_copy(repo) {
+        return None;
+    }
     let (_, max) = prune.free_band()?;
     let started = Instant::now();
     let trees = trees(repo, prune);
@@ -1761,6 +1781,24 @@ mod tests {
             Some(at(400)),
             "a process the table names only by name is a build by that name"
         );
+    }
+
+    /// A COPY IS NEVER COLLECTED FROM INSIDE (#1276): a repository at or under
+    /// a cargo-mutants copy is one; a sibling whose name only begins like one,
+    /// or the temp directory itself, is not.
+    ///
+    /// Fails by: a pass inside a copy evicting the dependencies the next
+    /// mutant rebuilds from scratch; a lookalike name refused.
+    #[test]
+    fn a_pass_rooted_in_a_mutant_copy_collects_nothing() {
+        let copy = Path::new("/tmp/cargo-mutants-batten-cwEUjS.tmp");
+        assert!(super::within_mutant_copy(copy));
+        assert!(super::within_mutant_copy(&copy.join("crates/app")));
+        assert!(!super::within_mutant_copy(Path::new("/tmp")));
+        assert!(!super::within_mutant_copy(Path::new(
+            "/tmp/cargo-mutants-notes"
+        )));
+        assert!(!super::within_mutant_copy(Path::new("/home/u/repo.tmp")));
     }
 
     /// A WINDOW NEVER OPENS AFTER THE SCAN (#1276): with no writer alive it is
