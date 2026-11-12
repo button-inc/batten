@@ -17996,11 +17996,9 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
             outcome
         }
     };
-    let rejudge = !narrowed.is_empty()
-        && matches!(
-            mutate::cargo_exit(outcome),
-            ExitCode::Violation | ExitCode::Internal
-        );
+    // MISSED OR TIMED OUT ONLY: a failed baseline (4) is not a mutant the
+    // covering cases missed, and re-running it judged the same red tree twice.
+    let rejudge = !narrowed.is_empty() && matches!(outcome, mutate::Outcome::Failed(Some(2 | 3)));
     if !rejudge {
         return Ok(mutate::cargo_exit(outcome));
     }

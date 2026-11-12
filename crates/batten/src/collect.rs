@@ -924,21 +924,24 @@ fn whole_units(tree: &Path, wholes: &[PathBuf]) -> Vec<Unit> {
 /// spelling, never a consumer's (rule 1).
 const MUTANT_COPY: (&str, &str) = ("cargo-mutants-", ".tmp");
 
-/// Whether `repo` is a cargo-mutants copy, or inside one: a component named
-/// as [`MUTANT_COPY`] names.
+/// Whether `repo` IS a cargo-mutants copy: its own directory named as
+/// [`MUTANT_COPY`] names.
 ///
 /// A COPY IS COLLECTED WHOLE OR NOT AT ALL. It carries `.git`, so a hook or a
 /// compile inside it resolved the copy as a repository and collected its
 /// `target/` unit by unit between two mutants, when no cargo lock is held.
 /// MEASURED ON #1276: 28 of 83 mutants rebuilt every dependency (341-370
 /// crates, ~5 min each) where the other 55 rebuilt one crate in ~18 s.
+///
+/// THE ROOT ALONE, NEVER AN ANCESTOR: a suite run inside the copy makes its
+/// fixture repositories under the copy's `target/tmp`, and reading any
+/// ancestor refused their passes too, so a case asserting a pass ran failed
+/// the copy's baseline and no mutant was tested.
 fn within_mutant_copy(repo: &Path) -> bool {
     let (prefix, suffix) = MUTANT_COPY;
-    repo.components().any(|part| {
-        part.as_os_str()
-            .to_str()
-            .is_some_and(|name| name.starts_with(prefix) && name.ends_with(suffix))
-    })
+    repo.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(prefix) && name.ends_with(suffix))
 }
 
 /// Each copy cargo-mutants staged in `dir`, as one unit taken whole.
@@ -1783,9 +1786,9 @@ mod tests {
         );
     }
 
-    /// A COPY IS NEVER COLLECTED FROM INSIDE (#1276): a repository at or under
-    /// a cargo-mutants copy is one; a sibling whose name only begins like one,
-    /// or the temp directory itself, is not.
+    /// A COPY IS NEVER COLLECTED FROM INSIDE (#1276): the copy's own root is
+    /// one; a fixture repository under it, a sibling whose name only begins like
+    /// one, or the temp directory itself, is not.
     ///
     /// Fails by: a pass inside a copy evicting the dependencies the next
     /// mutant rebuilds from scratch; a lookalike name refused.
@@ -1793,7 +1796,8 @@ mod tests {
     fn a_pass_rooted_in_a_mutant_copy_collects_nothing() {
         let copy = Path::new("/tmp/cargo-mutants-batten-cwEUjS.tmp");
         assert!(super::within_mutant_copy(copy));
-        assert!(super::within_mutant_copy(&copy.join("crates/app")));
+        // A fixture repository the copy's own suite made is its own tree.
+        assert!(!super::within_mutant_copy(&copy.join("target/tmp/fixture")));
         assert!(!super::within_mutant_copy(Path::new("/tmp")));
         assert!(!super::within_mutant_copy(Path::new(
             "/tmp/cargo-mutants-notes"
