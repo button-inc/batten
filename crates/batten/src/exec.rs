@@ -2452,6 +2452,56 @@ pub fn become_argv<S: AsRef<std::ffi::OsStr>>(argv: &[S]) -> Result<std::convert
     )))
 }
 
+/// [`become_argv`], with each of `remove` taken out of the environment the
+/// program inherits: a stand-in that must not be inherited by what it becomes
+/// (the cargo-mutants `$CARGO` stand-in, `mutate::cover`).
+///
+/// # Errors
+///
+/// As [`become_argv`].
+#[cfg(unix)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: becoming the named program IS the verb, as for `become_argv` (CLOUD-320); this only narrows what it inherits"
+)]
+pub fn become_argv_without<S: AsRef<std::ffi::OsStr>>(
+    argv: &[S],
+    remove: &[&str],
+) -> Result<std::convert::Infallible> {
+    use std::os::unix::process::CommandExt as _;
+    let Some((program, rest)) = argv.split_first() else {
+        return Err(UsageError::raise(
+            "no launch line to become, so nothing was started".to_owned(),
+        ));
+    };
+    let program = program.as_ref();
+    let mut command = Command::new(program);
+    command.args(rest);
+    for key in remove {
+        command.env_remove(key);
+    }
+    let failed = command.exec();
+    Err(UsageError::raise(format!(
+        "could not become `{}`: {failed}",
+        Path::new(program).display()
+    )))
+}
+
+/// [`become_argv_without`] where a process cannot be replaced: refused, as
+/// [`become_argv`] is.
+///
+/// # Errors
+///
+/// Always.
+#[cfg(not(unix))]
+pub fn become_argv_without<S: AsRef<std::ffi::OsStr>>(
+    argv: &[S],
+    remove: &[&str],
+) -> Result<std::convert::Infallible> {
+    let _ = remove;
+    become_argv(argv)
+}
+
 /// The same, where a process cannot be replaced.
 ///
 /// **A refusal rather than a spawn**, and the difference from
