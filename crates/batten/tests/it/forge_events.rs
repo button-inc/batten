@@ -153,6 +153,12 @@ fn a_wake_refusal_exits_zero_and_lands_in_the_findings_store() {
         .collect();
     assert_eq!(forge.len(), 1, "{records:?}");
     assert_eq!(forge[0].instances[0].path, "forge:pull_request.opened");
+    // A refusal that WAS recorded never says it was not.
+    assert!(
+        !common::stderr(&out).contains("persisted:false"),
+        "{}",
+        common::stderr(&out)
+    );
 }
 
 const FORGE_RULE: &str = r#"
