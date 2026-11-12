@@ -863,10 +863,13 @@ fn run_forge_poll(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let _memos = hook_call_memos();
-    let every = match every.map(str::parse::<u64>) {
+    // ZERO IS REFUSED BY THE TYPE, NOT BY A GUARD: a `seconds > 0` guard's
+    // mutants admitted `--every 0`, whose loop then spun forever and timed
+    // the whole mutation sweep out three times over (1253s each).
+    let every = match every.map(str::parse::<std::num::NonZeroU64>) {
         None => None,
-        Some(Ok(seconds)) if seconds > 0 => Some(seconds),
-        Some(_) => {
+        Some(Ok(seconds)) => Some(seconds.get()),
+        Some(Err(_)) => {
             return Err(UsageError::raise(
                 "forge poll: --every takes a whole number of seconds above 0".to_owned(),
             ));
