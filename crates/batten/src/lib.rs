@@ -17996,11 +17996,8 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
             outcome
         }
     };
-    // MISSED OR TIMED OUT ONLY: a failed baseline (4) is not a mutant the
-    // covering cases missed, and re-running it judged the same red tree twice.
-    let rejudge = !narrowed.is_empty() && matches!(outcome, mutate::Outcome::Failed(Some(2 | 3)));
-    if !rejudge {
-        return Ok(mutate::cargo_exit(outcome));
+    if let AfterCovering::Final(code) = after_covering(!narrowed.is_empty(), outcome) {
+        return Ok(code);
     }
     writeln!(
         out,
@@ -18009,6 +18006,26 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
     match mutate::cargo_mutants(root, &runner, &registry, &base, jobs, shard, &diff, &[])? {
         mutate::CargoRun::NothingOwned => Ok(ExitCode::Success),
         mutate::CargoRun::Ran { outcome, .. } => Ok(mutate::cargo_exit(outcome)),
+    }
+}
+
+/// What follows cargo-mutants' first pass.
+#[derive(Debug, PartialEq, Eq)]
+enum AfterCovering {
+    /// The pass's verdict is final.
+    Final(ExitCode),
+    /// The whole suite re-judges what the covering cases missed.
+    Rejudge,
+}
+
+/// Whether a first pass `narrowed` to covering cases is re-judged: only when
+/// it MISSED (2) or TIMED OUT (3). A failed baseline (4) is not a mutant the
+/// covering cases missed, and re-running it judged the same red tree twice.
+/// An unnarrowed pass was already the whole suite's verdict.
+const fn after_covering(narrowed: bool, outcome: mutate::Outcome) -> AfterCovering {
+    match outcome {
+        mutate::Outcome::Failed(Some(2 | 3)) if narrowed => AfterCovering::Rejudge,
+        _ => AfterCovering::Final(mutate::cargo_exit(outcome)),
     }
 }
 
@@ -31482,6 +31499,73 @@ mod mutation_markers;
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Only a narrowed pass that missed or timed out is re-judged by the whole
+    /// suite; every other pass's verdict is final, and maps as cargo-mutants'.
+    ///
+    /// Fails by: the narrowed guard dropped, a code added to or dropped from
+    /// `2 | 3`, or the final arm answering anything but `cargo_exit`.
+    #[test]
+    fn only_a_narrowed_miss_or_timeout_is_rejudged() {
+        use mutate::Outcome;
+        for code in [2, 3] {
+            assert_eq!(
+                after_covering(true, Outcome::Failed(Some(code))),
+                AfterCovering::Rejudge,
+                "a narrowed exit {code} is re-judged"
+            );
+            assert_eq!(
+                after_covering(false, Outcome::Failed(Some(code))),
+                AfterCovering::Final(mutate::cargo_exit(Outcome::Failed(Some(code)))),
+                "an unnarrowed exit {code} is already the suite's"
+            );
+        }
+        for outcome in [
+            Outcome::Passed,
+            Outcome::Failed(Some(1)),
+            Outcome::Failed(Some(4)),
+            Outcome::Failed(None),
+            Outcome::TimedOut,
+        ] {
+            assert_eq!(
+                after_covering(true, outcome),
+                AfterCovering::Final(mutate::cargo_exit(outcome)),
+                "{outcome:?} is final"
+            );
+        }
+    }
+
+    /// The stand-in's environment: this binary as `$CARGO`, the real cargo
+    /// behind it, and the map, mutants list and root it narrows by.
+    ///
+    /// Fails by: any pair dropped, renamed or emptied.
+    #[test]
+    fn the_cover_environment_makes_this_binary_cargo() {
+        let root = Path::new("/r");
+        let map = Path::new("/r/target/mutants/cover.map");
+        let env: std::collections::BTreeMap<String, String> =
+            cover_env(root, map).unwrap().into_iter().collect();
+        let me = std::env::current_exe().unwrap();
+        let real = std::env::var("CARGO").unwrap_or_else(|_| String::from("cargo"));
+        let want: std::collections::BTreeMap<String, String> = [
+            ("CARGO", me.to_string_lossy().into_owned()),
+            (mutate::cover::SHIM, real),
+            (mutate::cover::MAP, map.to_string_lossy().into_owned()),
+            (
+                mutate::cover::MUTANTS,
+                ["target", "mutants", "mutants.out", "mutants.json"]
+                    .iter()
+                    .fold(root.to_path_buf(), |path, part| path.join(part))
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            (mutate::cover::ROOT, root.to_string_lossy().into_owned()),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect();
+        assert_eq!(env, want);
+    }
 
     /// The wake form answers 0 whatever rendered; the `--event` form keeps a
     /// non-zero exit that carried no deny. #1276's sweep found `Ok(_) if wake`
