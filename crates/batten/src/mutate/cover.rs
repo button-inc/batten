@@ -620,9 +620,44 @@ fn wrapped_config(root: &Path, recorder: &Path) -> Result<String> {
         config,
         "\n[scripts.wrapper.batten-cover]\ncommand = [{recorder}, \"{RECORD_ARG}\"]\n\n\
          [profile.batten-cover]\nfail-fast = false\nretries = 0\n\n\
+         [profile.batten-cover.junit]\npath = \"{JUNIT}\"\n\n\
          [[profile.batten-cover.scripts]]\nfilter = \"all()\"\nrun-wrapper = \"batten-cover\"\n"
     );
     Ok(config)
+}
+
+/// The report the cover profile writes, under `<target>/nextest/batten-cover/`.
+/// nextest writes it only when the run finishes.
+const JUNIT: &str = "cover.xml";
+
+/// How many cases a nextest `JUnit` report says ran: its root's `tests`.
+#[must_use]
+pub fn junit_count(report: &str) -> Option<usize> {
+    let root = report.find("<testsuites")?;
+    let rest = &report[root..];
+    let rest = &rest[..rest.find('>')?];
+    let at = rest.find(" tests=\"")? + " tests=\"".len();
+    let digits = &rest[at..];
+    digits[..digits.find('"')?].parse().ok()
+}
+
+/// A map is complete when every case the run reports recorded what it ran.
+/// A run cut short, or a recorder that failed, would leave whole modules out,
+/// and every mutant only they reach would go to the whole-suite pass: measured
+/// on #1276, a map missing the suite's alphabetical tail (527 of 9,855 cases).
+///
+/// # Errors
+///
+/// No report (the run did not finish), or fewer records than cases.
+pub fn complete(report: Option<&str>, recorded: usize) -> Result<()> {
+    let ran = report
+        .and_then(junit_count)
+        .context("the cover run wrote no report, so it did not finish")?;
+    anyhow::ensure!(
+        recorded >= ran,
+        "only {recorded} of {ran} case(s) recorded what they executed"
+    );
+    Ok(())
 }
 
 /// Where the instrumented build goes: OUTSIDE `target/`, which the disk
@@ -691,7 +726,18 @@ fn build(out: &mut dyn std::io::Write) -> Result<()> {
         super::Said::Streamed,
     )?;
     let map = collect(&work)?;
-    anyhow::ensure!(!map.tests.is_empty(), "no case recorded what it executed");
+    let report = build_dir(&root)
+        .join("nextest")
+        .join("batten-cover")
+        .join(JUNIT);
+    let whole = complete(
+        crate::fsio::read_to_string(&report).ok().as_deref(),
+        map.tests.len(),
+    );
+    if whole.is_err() {
+        let _ = std::fs::remove_dir_all(build_dir(&root));
+    }
+    whole?;
     let target = map_path(&root);
     crate::durable::replace(&target, map.render())?;
     let _ = std::fs::remove_dir_all(&work);
@@ -862,5 +908,26 @@ mod tests {
             .map(|s| (*s).to_owned())
             .collect();
         assert_eq!(test_name(&args), Some("engine_pin::init"));
+    }
+
+    #[test]
+    fn the_report_names_how_many_cases_ran() {
+        let report = "<?xml version=\"1.0\"?>\n<testsuites name=\"nextest-run\" tests=\"9855\" \
+                      failures=\"0\"><testsuite name=\"a\" tests=\"3\"></testsuite></testsuites>";
+        assert_eq!(junit_count(report), Some(9855));
+        assert_eq!(junit_count("<testsuites name=\"x\">"), None);
+        assert_eq!(junit_count(""), None);
+    }
+
+    /// A short or missing record set refuses the map; a whole one passes.
+    ///
+    /// Fails by: the report's absence read as complete, or `>=` loosened.
+    #[test]
+    fn a_map_missing_cases_is_refused() {
+        let report = "<testsuites tests=\"3\">";
+        assert!(complete(Some(report), 3).is_ok());
+        assert!(complete(Some(report), 4).is_ok());
+        assert!(complete(Some(report), 2).is_err());
+        assert!(complete(None, 3).is_err());
     }
 }
