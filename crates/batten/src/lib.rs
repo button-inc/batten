@@ -884,7 +884,7 @@ fn run_forge_poll(
     };
     let git_dir = git::git_dir(&root)?;
     let pid = std::process::id().to_string();
-    let now = epoch_now();
+    let now = boundary_epoch();
     task::register(&git_dir, "forge-poll", &pid, "polling", now);
     let (unregister_dir, unregister_pid) = (git_dir.clone(), pid.clone());
     exec::on_terminate(move || task::unregister(&unregister_dir, &unregister_pid));
@@ -900,17 +900,10 @@ fn run_forge_poll(
             &pid,
             task::Signal::Tick,
             &round.to_string(),
-            epoch_now(),
+            boundary_epoch(),
         );
         pr_watch::pause_until(std::time::Duration::from_secs(seconds).as_secs_f64(), &stop);
     }
-}
-
-/// Seconds since the epoch, for the task registry's stamps.
-fn epoch_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs())
 }
 
 /// One poll round: read, dispatch each event, save the cursor.
