@@ -17961,22 +17961,85 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
         )?;
         return Ok(ExitCode::Internal);
     };
-    match mutate::cargo_mutants(root, &runner, &registry, &base, jobs, shard, &diff)? {
+    // COVERING TESTS FIRST, THE WHOLE SUITE FOR WHAT THEY MISS (CLOUD-2253): with
+    // a map, cargo-mutants' `$CARGO` is this binary, which narrows each test step
+    // to the cases covering the mutant (`mutate::cover`). Only a CAUGHT verdict is
+    // taken from that pass; every mutant it missed is re-judged by the whole
+    // suite, `--iterate` skipping the caught ones, so the verdict is the suite's.
+    let map = mutate::cover::map_path(root);
+    let narrowed = if map.is_file() {
+        cover_env(root, &map)?
+    } else {
+        Vec::new()
+    };
+    let first = mutate::cargo_mutants(
+        root, &runner, &registry, &base, jobs, shard, &diff, &narrowed,
+    )?;
+    let outcome = match first {
         mutate::CargoRun::NothingOwned => {
             writeln!(
                 out,
                 "mutate cargo: no source cargo-mutants owns changed since {base}"
             )?;
-            Ok(ExitCode::Success)
+            return Ok(ExitCode::Success);
         }
         mutate::CargoRun::Ran { sources, outcome } => {
             writeln!(
                 out,
-                "mutate cargo: {sources} changed source(s) judged by cargo-mutants on {jobs} job(s)"
+                "mutate cargo: {sources} changed source(s) judged by cargo-mutants on {jobs} job(s){}",
+                if narrowed.is_empty() {
+                    ""
+                } else {
+                    ", covering cases first"
+                }
             )?;
-            Ok(mutate::cargo_exit(outcome))
+            outcome
         }
+    };
+    let rejudge = !narrowed.is_empty()
+        && matches!(
+            mutate::cargo_exit(outcome),
+            ExitCode::Violation | ExitCode::Internal
+        );
+    if !rejudge {
+        return Ok(mutate::cargo_exit(outcome));
     }
+    writeln!(
+        out,
+        "mutate cargo: re-judging what the covering cases missed against the whole suite"
+    )?;
+    match mutate::cargo_mutants(root, &runner, &registry, &base, jobs, shard, &diff, &[])? {
+        mutate::CargoRun::NothingOwned => Ok(ExitCode::Success),
+        mutate::CargoRun::Ran { outcome, .. } => Ok(mutate::cargo_exit(outcome)),
+    }
+}
+
+/// The environment that makes this binary cargo-mutants' `$CARGO`, narrowing
+/// each mutant's test step to the cases `map` says cover it.
+fn cover_env(root: &Path, map: &Path) -> Result<Vec<(String, String)>> {
+    let me = std::env::current_exe()?;
+    let real = std::env::var("CARGO").unwrap_or_else(|_| String::from("cargo"));
+    let mutants = root
+        .join("target")
+        .join("mutants")
+        .join("mutants.out")
+        .join("mutants.json");
+    Ok(vec![
+        (String::from("CARGO"), me.to_string_lossy().into_owned()),
+        (String::from(mutate::cover::SHIM), real),
+        (
+            String::from(mutate::cover::MAP),
+            map.to_string_lossy().into_owned(),
+        ),
+        (
+            String::from(mutate::cover::MUTANTS),
+            mutants.to_string_lossy().into_owned(),
+        ),
+        (
+            String::from(mutate::cover::ROOT),
+            root.to_string_lossy().into_owned(),
+        ),
+    ])
 }
 
 /// `batten mutate sweep`: the declared runner over the narrowed set, or the one
