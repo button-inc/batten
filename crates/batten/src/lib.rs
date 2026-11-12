@@ -781,8 +781,13 @@ fn run_forge_intake(
         }
         Intake::Dispatched(rendered) => rendered,
     };
-    // THE WAKE FORM NEVER REFUSES THE OPERATOR'S PROMPT: its refusal is the
-    // record and a stderr line, and its exit is 0.
+    wake_exit(rendered, wake, err)
+}
+
+/// THE WAKE FORM NEVER REFUSES THE OPERATOR'S PROMPT: its refusal is the record
+/// and a stderr line, and its exit is 0. The `--event` form keeps every
+/// rendering — a deny's error and a non-zero exit alike.
+fn wake_exit(rendered: Result<ExitCode>, wake: bool, err: &mut dyn Write) -> Result<ExitCode> {
     match rendered {
         Ok(_) if wake => Ok(ExitCode::Success),
         Err(denied) if wake => {
@@ -31420,6 +31425,28 @@ mod mutation_markers;
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// The wake form answers 0 whatever rendered; the `--event` form keeps a
+    /// non-zero exit that carried no deny. #1276's sweep found `Ok(_) if wake`
+    /// unguarded: every forge case reaches the wake arm through a deny, never
+    /// through a rendering that is `Ok` and not `Success`.
+    ///
+    /// Fails by: the wake guard dropped from either arm.
+    #[test]
+    fn only_the_wake_form_turns_a_rendering_into_success() {
+        let mut err = Vec::new();
+        let kept = wake_exit(Ok(ExitCode::Violation), false, &mut err).unwrap();
+        assert_eq!(kept, ExitCode::Violation, "the event form keeps its exit");
+        let woken = wake_exit(Ok(ExitCode::Violation), true, &mut err).unwrap();
+        assert_eq!(woken, ExitCode::Success, "the wake form answers 0");
+        assert!(
+            wake_exit(Err(anyhow::anyhow!("denied")), false, &mut err).is_err(),
+            "the event form keeps a deny"
+        );
+        let woken = wake_exit(Err(anyhow::anyhow!("denied")), true, &mut err).unwrap();
+        assert_eq!(woken, ExitCode::Success, "a woken deny is a stderr line");
+        assert_eq!(String::from_utf8_lossy(&err), "denied\n");
+    }
 
     /// `engine install`'s gnu probe (CLOUD-2595) keeps only bytes that ANSWER
     /// here, judged by running them with no shell, and leaves no probe behind.
