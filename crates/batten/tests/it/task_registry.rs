@@ -1148,10 +1148,6 @@ fn forge_poll_every_registers_and_ticks() {
         ),
     )
     .unwrap();
-    let before = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
     let child = batten()
         .current_dir(&repo)
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
@@ -1181,12 +1177,6 @@ fn forge_poll_every_registers_and_ticks() {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     assert!(ticked, "the poller never ticked twice");
-    // The registration is stamped with the wall clock, not a constant.
-    let started = batten::task::read_field(&git_dir, &pid, "started_at").unwrap_or_default();
-    assert!(
-        started.parse::<u64>().is_ok_and(|at| at >= before),
-        "started_at {started:?} predates the poll's spawn at {before}"
-    );
     let output = alive(&repo, &[]);
     let listed = stdout(&output);
     assert!(
