@@ -106,6 +106,71 @@ fn the_collector_ran_for_this_run() {
     }
 }
 
+/// CLOUD-2716. A case's `std::env::temp_dir()` is under a root the collector
+/// covers, so unit-case scratch is collected with the rest. Before, it was the
+/// system temp dir, which nothing collected: 29,597 entries filled the disk.
+///
+/// Fails by: the collector no longer publishing `TMPDIR`, or publishing one
+/// outside its roots.
+///
+/// Off unix the case abstains: Windows' `GetTempPath` reads `TMP`/`TEMP`,
+/// never `TMPDIR`, and Git Bash spells the roots `/d/a/...`.
+#[test]
+fn a_case_temp_dir_is_under_a_collected_root() {
+    if !cfg!(unix) {
+        return;
+    }
+    let roots = std::env::var(ROOTS).unwrap_or_default();
+    let temp = std::env::temp_dir()
+        .canonicalize()
+        .expect("the temp dir resolves");
+    assert!(
+        std::env::split_paths(&roots).any(|root| temp.starts_with(root)),
+        "{} is not under a root the collector covers ({roots:?})",
+        temp.display()
+    );
+    let tree = crate::common::at_root(".")
+        .canonicalize()
+        .expect("the checkout resolves");
+    assert!(
+        !temp.starts_with(&tree),
+        "{} is inside the checkout, where a not-a-repository fixture is one",
+        temp.display()
+    );
+}
+
+/// The collector's `TMPDIR` is `batten-suite` under the temp dir it was given,
+/// published as its last covered root and created; a lone run takes the last
+/// run's entries there, and a run beside another leaves them. The existence
+/// half is unix only: Git Bash's `/d/a/...` spelling is not a path this
+/// process can open.
+///
+/// Fails by: `TMPDIR` unpublished, published under `target/`, left out of the
+/// roots, or collected under a live run.
+#[test]
+fn the_collector_publishes_a_temp_dir_it_owns() {
+    for (others, kept) in [("", false), ("4242", true)] {
+        let (survived, published) = collect_seeded(
+            &format!("temp-dir-{}", others.len()),
+            others,
+            &["tmp", "../tmpdir/batten-suite"],
+        );
+        assert_eq!(survived[1], kept, "others={others:?}: {published}");
+        let line = line_of(&published, "TMPDIR");
+        let temp = line.trim_start_matches("TMPDIR=");
+        assert!(
+            line.starts_with("TMPDIR=") && temp.ends_with("/tmpdir/batten-suite"),
+            "{published}"
+        );
+        let roots = line_of(&published, ROOTS);
+        assert_eq!(roots.rsplit(':').next(), Some(temp), "{published}");
+        assert!(
+            !cfg!(unix) || PathBuf::from(temp).is_dir(),
+            "the published TMPDIR exists: {published}"
+        );
+    }
+}
+
 /// The committed `clear-scratch` command, exactly as nextest runs it.
 fn collector_command() -> String {
     let text = std::fs::read_to_string(crate::common::at_root(".config/nextest.toml"))
@@ -175,6 +240,9 @@ fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, Strin
         .arg("-c")
         .arg(collector_command())
         .env("CARGO_TARGET_DIR", root.join("target"))
+        // ITS OWN TEMP DIR: a lone-run collector inheriting this suite's
+        // `TMPDIR` would take the running suite's temp root.
+        .env("TMPDIR", root.join("tmpdir"))
         .env("NEXTEST_ENV", &published)
         .env("PATH", path)
         .status()
