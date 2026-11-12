@@ -593,6 +593,11 @@ fn workspace_crates(root: &Path) -> Result<BTreeSet<String>> {
 
 /// The repository's nextest config with the recording wrapper and its profile
 /// added, so every case keeps the setup scripts and settings it runs under.
+///
+/// APPENDED AS TEXT, the experimental list alone edited in place: an edited
+/// `profile.batten-cover` came out as an INLINE table, which cannot hold the
+/// `[[...scripts]]` array, so the wrapper was dropped without an error and the
+/// suite ran unrecorded.
 fn wrapped_config(root: &Path, recorder: &Path) -> Result<String> {
     let path = root.join(".config").join("nextest.toml");
     let text = crate::fsio::read_to_string(&path).unwrap_or_default();
@@ -609,19 +614,24 @@ fn wrapped_config(root: &Path, recorder: &Path) -> Result<String> {
         experimental.push("wrapper-scripts");
     }
     doc["experimental"] = toml_edit::value(experimental);
-    let mut command = toml_edit::Array::new();
-    command.push(recorder.to_string_lossy().into_owned());
-    command.push(RECORD_ARG);
-    doc["scripts"]["wrapper"]["batten-cover"]["command"] = toml_edit::value(command);
-    doc["profile"]["batten-cover"]["fail-fast"] = toml_edit::value(false);
-    doc["profile"]["batten-cover"]["retries"] = toml_edit::value(0);
-    let mut script = toml_edit::Table::new();
-    script.insert("filter", toml_edit::value("all()"));
-    script.insert("run-wrapper", toml_edit::value("batten-cover"));
-    let mut scripts = toml_edit::ArrayOfTables::new();
-    scripts.push(script);
-    doc["profile"]["batten-cover"]["scripts"] = toml_edit::Item::ArrayOfTables(scripts);
-    Ok(doc.to_string())
+    let recorder = toml_edit::Value::from(recorder.to_string_lossy().into_owned());
+    let mut config = doc.to_string();
+    let _ = write!(
+        config,
+        "\n[scripts.wrapper.batten-cover]\ncommand = [{recorder}, \"{RECORD_ARG}\"]\n\n\
+         [profile.batten-cover]\nfail-fast = false\nretries = 0\n\n\
+         [[profile.batten-cover.scripts]]\nfilter = \"all()\"\nrun-wrapper = \"batten-cover\"\n"
+    );
+    Ok(config)
+}
+
+/// Where the instrumented build goes: OUTSIDE `target/`, which the disk
+/// collector ranks, because it reclaimed the instrumented test binaries in the
+/// middle of the run executing them (6.6 GB, on #1276). Keyed by the checkout,
+/// and removed once the map is written.
+fn build_dir(root: &Path) -> PathBuf {
+    let key = blake3::hash(root.to_string_lossy().as_bytes()).to_hex();
+    std::env::temp_dir().join(format!("batten-cover-{}", &key[..12]))
 }
 
 fn build(out: &mut dyn std::io::Write) -> Result<()> {
@@ -636,12 +646,17 @@ fn build(out: &mut dyn std::io::Write) -> Result<()> {
     crate::durable::replace(&config, wrapped_config(&root, &recorder)?)?;
     let crates_list = crates.iter().cloned().collect::<Vec<_>>().join(",");
     let env = [
-        (
-            String::from("CARGO_TARGET_DIR"),
-            root.join("target").join("mutate-cover"),
-        ),
+        (String::from("CARGO_TARGET_DIR"), build_dir(&root)),
         (String::from(DIR), work.clone()),
         (String::from(PROFDATA), tool),
+        // THE BUILD'S OWN PROFILES go here, not into the tree: an instrumented
+        // build script or proc macro runs while compiling, from the crate's
+        // directory, and wrote hundreds of `default_*.profraw` beside the
+        // sources. The wrapper overrides this for each case it records.
+        (
+            String::from("LLVM_PROFILE_FILE"),
+            work.join("build").join("%p-%m.profraw"),
+        ),
     ]
     .map(|(key, value)| (key, value.to_string_lossy().into_owned()));
     let mut env = env.to_vec();
@@ -680,6 +695,7 @@ fn build(out: &mut dyn std::io::Write) -> Result<()> {
     let target = map_path(&root);
     crate::durable::replace(&target, map.render())?;
     let _ = std::fs::remove_dir_all(&work);
+    let _ = std::fs::remove_dir_all(build_dir(&root));
     writeln!(
         out,
         "mutate cover: {} case(s), {} function(s) at {}",
