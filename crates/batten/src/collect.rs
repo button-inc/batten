@@ -636,7 +636,7 @@ pub fn no_later_than(window: Option<SystemTime>, scanned: SystemTime) -> SystemT
     window.map_or(scanned, |since| since.min(scanned))
 }
 
-/// The earliest start among `processes` whose executable is under one of
+/// The earliest start among `processes` whose executable is a test harness under one of
 /// `trees` and is not a kept file.
 #[must_use]
 pub fn earliest_fixture_writer(
@@ -657,11 +657,23 @@ pub fn earliest_fixture_writer(
         .iter()
         .filter(|process| {
             process.exe.as_ref().is_some_and(|exe| {
-                trees.iter().any(|tree| exe.starts_with(tree)) && !is_kept(exe, kept)
+                is_test_harness(exe)
+                    && trees.iter().any(|tree| exe.starts_with(tree))
+                    && !is_kept(exe, kept)
             })
         })
         .map(|process| process.started)
         .min()
+}
+
+/// A test harness: cargo links every one into its profile's `deps/`, where a
+/// `cargo run` binary sits at the profile's top. MEASURED ON #1276: the lap's
+/// own `target/debug/batten land lap`, unkept and alive for hours, rooted 6.8GB
+/// of finished suites' fixtures until the volume filled.
+fn is_test_harness(exe: &Path) -> bool {
+    exe.parent()
+        .and_then(Path::file_name)
+        .is_some_and(|dir| dir == "deps")
 }
 
 /// A build: a [`BUILD_PROGRAMS`] name (each under `p_comm`'s 16 bytes, so macOS
@@ -1791,7 +1803,13 @@ mod tests {
             started: at(secs),
         };
         let cargo = Path::new("/home/u/.rustup/toolchains/x/bin/cargo");
-        let lap = [process(cargo, 50), process(&tree.join("debug/batten"), 60)];
+        // The lap's host: under the tree, unkept, and not a test harness.
+        let host = process(&tree.join("release/host"), 40);
+        let lap = [
+            process(cargo, 50),
+            process(&tree.join("debug/batten"), 60),
+            host.clone(),
+        ];
         assert_eq!(
             super::earliest_fixture_writer(&lap, std::slice::from_ref(&tree), &kept),
             None,
@@ -1801,6 +1819,7 @@ mod tests {
             process(cargo, 50),
             process(&tree.join("debug/batten"), 60),
             process(&tree.join("debug/deps/it-0123"), 300),
+            host,
         ];
         assert_eq!(
             super::earliest_fixture_writer(&running, std::slice::from_ref(&tree), &kept),
