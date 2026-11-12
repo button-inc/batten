@@ -97,6 +97,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 
+pub mod cover;
+
 /// The declaration markers, bare — the comment opener is [`OPENERS`]'s business.
 ///
 /// Beside the code rather than in a manifest: a declaration in a second file is
@@ -1884,13 +1886,26 @@ enum Program<'a> {
     /// The consumer's own mutation tool, `[mutate] command`'s first element
     /// (CLOUD-2211): committed in the reviewed authority, like a suite runner.
     Command(&'a str),
+    /// One test binary nextest handed the coverage recorder ([`cover`]): the
+    /// case under measurement, which no in-process route can run.
+    Test(&'a str),
+    /// LLVM's `llvm-profdata`, reducing a test's profiles to what executed
+    /// ([`cover`]): the profile format is LLVM's, read by LLVM's own tool.
+    Profdata(&'a str),
+    /// `rustc --print sysroot`, where the toolchain keeps the `llvm-profdata`
+    /// matching its LLVM ([`cover`]): the toolchain's own answer.
+    Rustc,
 }
 
 impl Program<'_> {
     const fn name(&self) -> &str {
         match self {
             Program::Cargo => "cargo",
-            Program::Suite(program) | Program::Command(program) => program,
+            Program::Rustc => "rustc",
+            Program::Suite(program)
+            | Program::Command(program)
+            | Program::Test(program)
+            | Program::Profdata(program) => program,
         }
     }
 }
@@ -4722,6 +4737,10 @@ pub enum CargoRun {
 ///
 /// No `base` to compare against, a patch that cannot be written to `diff`, or
 /// a `runner` that cannot be spawned.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is one cargo-mutants input the caller decides: the tree, the runner, what it owns, the base, the jobs, the shard, where the diff goes and the environment that may narrow its tests (CLOUD-2253)"
+)]
 pub fn cargo_mutants(
     root: &Path,
     runner: &Path,
@@ -4730,6 +4749,7 @@ pub fn cargo_mutants(
     jobs: usize,
     shard: Option<(usize, usize)>,
     diff: &Path,
+    env: &[(String, String)],
 ) -> Result<CargoRun> {
     let Some(delta) = crate::git::base_delta(root, base, &[String::from("**")], false)? else {
         bail!("mutate cargo: no {base} to compare against");
@@ -4763,7 +4783,7 @@ pub fn cargo_mutants(
         root,
         Program::Command(&runner),
         &args,
-        &[],
+        env,
         runner_bound(),
         Said::Streamed,
     )?;
@@ -4906,7 +4926,8 @@ mod tests {
                 "HEAD",
                 1,
                 None,
-                &diff
+                &diff,
+                &[]
             )
             .expect("judged"),
             CargoRun::NothingOwned
