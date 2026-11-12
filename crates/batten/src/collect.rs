@@ -629,6 +629,13 @@ pub fn fixtures_since(trees: &[PathBuf], kept: &[Kept]) -> Option<SystemTime> {
     }
 }
 
+/// A liveness window that never opens after `scanned`: whatever a pass finds
+/// written since it began is in use, with or without a live writer named.
+#[must_use]
+pub fn no_later_than(window: Option<SystemTime>, scanned: SystemTime) -> SystemTime {
+    window.map_or(scanned, |since| since.min(scanned))
+}
+
 /// The earliest start among `processes` whose executable is under one of
 /// `trees` and is not a kept file.
 #[must_use]
@@ -1460,6 +1467,10 @@ pub fn collect_toward_max(
     // whole, and a hook or a compile is bounded by a deadline that walk would
     // spend before a single unit went.
     let temp = std::env::temp_dir();
+    // ANYTHING WRITTEN SINCE THIS PASS BEGAN IS IN USE, whatever the process
+    // table said: a window of `None` (no writer alive at the scan) let a pass
+    // remove a fixture a suite created after it looked.
+    let scanned = std::time::SystemTime::now();
     let pass = collect(&Request {
         copies: deadline.is_none().then_some(temp.as_path()),
         trees: &trees,
@@ -1468,8 +1479,8 @@ pub fn collect_toward_max(
         need_bytes,
         deadline,
         wait,
-        live_since: live_since(&trees),
-        fixtures_since: fixtures_since(&trees, &kept),
+        live_since: Some(no_later_than(live_since(&trees), scanned)),
+        fixtures_since: Some(no_later_than(fixtures_since(&trees, &kept), scanned)),
     });
     Some(Collected {
         freed_bytes: pass.freed_bytes,
@@ -1738,6 +1749,22 @@ mod tests {
             Some(at(400)),
             "a process the table names only by name is a build by that name"
         );
+    }
+
+    /// A WINDOW NEVER OPENS AFTER THE SCAN (#1276): with no writer alive it is
+    /// the scan itself, and an earlier writer's start stays earlier.
+    ///
+    /// Fails by: `None` reading as "nothing is live", which removed a state
+    /// root a suite created after the pass looked; a later writer pushing the
+    /// window past the scan.
+    #[test]
+    fn a_window_never_opens_after_the_scan() {
+        let scanned = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(100);
+        let earlier = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(40);
+        let later = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(160);
+        assert_eq!(super::no_later_than(None, scanned), scanned);
+        assert_eq!(super::no_later_than(Some(earlier), scanned), earlier);
+        assert_eq!(super::no_later_than(Some(later), scanned), scanned);
     }
 
     /// A FIXTURE'S WRITER IS A SUITE (#1276): a test binary under a tree roots

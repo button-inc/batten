@@ -1443,6 +1443,12 @@ pub(crate) fn scratch_state_root() -> &'static Path {
     static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     ROOT.get_or_init(|| {
         let dir = target_tmp().join(format!("state-{}", std::process::id()));
+        // WIPED FIRST, LIKE EVERY SCRATCH PATH: pid_max is 32768 here and a run
+        // spawns more processes than that, so this name is a dead process's.
+        // Inherited, it kept that process's store AND its old mtime, so the disk
+        // collector dated a live root stale and removed it between a spend and
+        // the hook that read it (bypass_scrub, a mutation baseline).
+        let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create the scratch state root");
         // THIS process's own library calls resolve the same root its children
         // are pinned to, so a case that spawns and calls in-process reads one
