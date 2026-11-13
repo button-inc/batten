@@ -171,6 +171,45 @@ fn the_collector_publishes_a_temp_dir_it_owns() {
     }
 }
 
+/// A nextest running in ANOTHER checkout defers only the shared temp root:
+/// this checkout's `target/tmp` is still collected. Two cargo-mutants jobs
+/// each deferred the other's collection, and a copy grew 3 GB of fixtures
+/// until the disk filled under a build (CLOUD-2716).
+///
+/// Linux only, inside the case: the other run's directory is read from
+/// `/proc`, and where it cannot be read the run counts as this checkout's.
+///
+/// Fails by: `target/tmp` guarded by every run again, or the shared root
+/// guarded by this checkout's runs alone.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the other run is a real process whose directory `/proc` reports"
+)]
+fn a_run_in_another_checkout_defers_only_the_shared_root() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let elsewhere = crate::common::scratch("clear-scratch-elsewhere");
+    let mut other = std::process::Command::new("sleep")
+        .arg("60")
+        .current_dir(&elsewhere)
+        .spawn()
+        .expect("start the other run");
+    let (survived, published) = collect_seeded(
+        "clear-scratch-other-checkout",
+        &other.id().to_string(),
+        &["tmp", "../tmpdir/batten-suite"],
+    );
+    let _ = other.kill();
+    let _ = other.wait();
+    assert_eq!(
+        survived,
+        vec![false, true],
+        "this checkout's scratch is taken, the shared root is left: {published}"
+    );
+}
+
 /// The committed `clear-scratch` command, exactly as nextest runs it.
 fn collector_command() -> String {
     let text = std::fs::read_to_string(crate::common::at_root(".config/nextest.toml"))
