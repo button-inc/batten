@@ -115,6 +115,9 @@ pub struct Function {
     pub function_name: String,
     /// Its return type as written, `-> T`, or empty.
     pub return_type: String,
+    /// Where the whole function is.
+    #[serde(default)]
+    pub span: Option<Span>,
 }
 
 /// The byte offset of `position` in `text`, or `None` past its end.
@@ -700,6 +703,7 @@ pub fn build(
     work: &std::path::Path,
     target: &std::path::Path,
     mutants: &[Listed],
+    known_unviable: BTreeSet<u32>,
     out: &mut dyn std::io::Write,
 ) -> anyhow::Result<(BTreeSet<u32>, Schema)> {
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
@@ -720,8 +724,7 @@ pub fn build(
         String::from("CARGO_TARGET_DIR"),
         target.to_string_lossy().into_owned(),
     )];
-    let mut skip = BTreeSet::new();
-    let mut unowned_rounds = 0;
+    let mut skip = known_unviable;
     for round in 1..=12 {
         let schema = write_schema(root, work, mutants, &skip)?;
         let ran = super::spawn(
@@ -749,18 +752,14 @@ pub fn build(
         for message in &stray {
             writeln!(out, "mutate schema:   unowned: {message}")?;
         }
-        if owned.is_empty() {
-            // ONE RETRY FOR AN ERROR NO SOURCE OWNS: measured on #1276, a
-            // round run beside another build failed on two span-less errors and
-            // the same tree then built clean, so the first such round is read
-            // as the machine's, and only a second as the schema's.
-            unowned_rounds += 1;
-            anyhow::ensure!(
-                unowned_rounds < 2,
-                "the schema build failed twice on error(s) no mutant owns: {}",
-                stray.join("; ")
-            );
-        }
+        // AN ERROR NO MUTANT OWNS IS THE SCHEMA'S OWN FAULT, never retried:
+        // on #1276 two of them were sources edited mid-sweep, which the
+        // pristine snapshot now rules out, and anything else is a rendering bug.
+        anyhow::ensure!(
+            !owned.is_empty(),
+            "the schema build failed on error(s) no mutant owns: {}",
+            stray.join("; ")
+        );
         skip.extend(owned);
     }
     anyhow::bail!("the schema build was not clean within 12 rounds")
@@ -1020,6 +1019,139 @@ pub fn record_reach(
     collect_reach(&base)
 }
 
+// ---------------------------------------------------------------------------
+// Regression reuse: a verdict stands while nothing it was decided over moved.
+// ---------------------------------------------------------------------------
+
+/// The source files a case's verdict depends on, besides the mutated site:
+/// an integration case's own `tests/<binary>/<module>.rs` and the shared
+/// `common/` beside it, or a unit case's module file. `package_dirs` maps a
+/// package name to its directory.
+#[must_use]
+pub fn case_sources(
+    package_dirs: &std::collections::BTreeMap<String, String>,
+    name: &str,
+    binary: &str,
+) -> Vec<String> {
+    let (package, target) = binary.split_once("::").unwrap_or((binary, ""));
+    let Some(dir) = package_dirs.get(package) else {
+        return Vec::new();
+    };
+    let prefix = if dir.is_empty() {
+        String::new()
+    } else {
+        format!("{dir}/")
+    };
+    let module: Vec<&str> = name
+        .split("::")
+        .take_while(|segment| *segment != "tests")
+        .collect();
+    let module = &module[..module
+        .len()
+        .saturating_sub(usize::from(!name.contains("::tests::")))];
+    if target.is_empty() {
+        if module.is_empty() {
+            return vec![format!("{prefix}src/lib.rs")];
+        }
+        let path = module.join("/");
+        return vec![
+            format!("{prefix}src/{path}.rs"),
+            format!("{prefix}src/{path}/mod.rs"),
+        ];
+    }
+    if target.contains('/') {
+        return vec![format!("{prefix}src/main.rs")];
+    }
+    let head = module.first().copied().unwrap_or_default();
+    vec![
+        format!("{prefix}tests/{target}/{head}.rs"),
+        format!("{prefix}tests/{target}/common/mod.rs"),
+        format!("{prefix}tests/{target}/main.rs"),
+        format!("{prefix}tests/{target}.rs"),
+    ]
+}
+
+/// The key an unviable verdict is reused under: the mutated function's text
+/// and the mutation without its position. Whether a mutant compiles depends
+/// on nothing else. `None` when the function cannot be read.
+#[must_use]
+pub fn site_key(root: &std::path::Path, mutant: &Listed) -> Option<String> {
+    Some(site_hasher(root, mutant)?.finalize().to_hex().to_string())
+}
+
+/// The key a run's verdict is reused under: [`site_key`]'s inputs and every
+/// reaching case with the text of the files it is defined in.
+#[must_use]
+pub fn verdict_key(
+    root: &std::path::Path,
+    mutant: &Listed,
+    cases: &BTreeSet<(String, String)>,
+    package_dirs: &std::collections::BTreeMap<String, String>,
+) -> Option<String> {
+    let mut hasher = site_hasher(root, mutant)?;
+    let mut files = BTreeSet::new();
+    for (name, binary) in cases {
+        hasher.update(format!("\x1e{name}\x1f{binary}").as_bytes());
+        files.extend(case_sources(package_dirs, name, binary));
+    }
+    for file in files {
+        hasher.update(format!("\x1d{file}\x1f").as_bytes());
+        hasher.update(&crate::fsio::read(root.join(&file)).unwrap_or_default());
+    }
+    Some(hasher.finalize().to_hex().to_string())
+}
+
+fn site_hasher(root: &std::path::Path, mutant: &Listed) -> Option<blake3::Hasher> {
+    let source = crate::fsio::read_to_string(root.join(&mutant.file)).ok()?;
+    let function = mutant.function.as_ref()?;
+    let span = function.span?;
+    let text = source.get(offset(&source, span.start)?..offset(&source, span.end)?)?;
+    let mut hasher = blake3::Hasher::new();
+    for part in [
+        mutant.file.as_str(),
+        text,
+        mutant.genre.as_str(),
+        mutant.replacement.as_str(),
+        function.function_name.as_str(),
+    ] {
+        hasher.update(part.as_bytes());
+        hasher.update(b"\x1f");
+    }
+    // THE SITE WITHIN THE FUNCTION, as an offset from the function's start, so
+    // a function moved whole keeps its key and a second site does not share it.
+    let site = offset(&source, mutant.span.start)?.checked_sub(offset(&source, span.start)?)?;
+    hasher.update(site.to_string().as_bytes());
+    Some(hasher)
+}
+
+/// Package name to directory, from where the listing's mutants live.
+#[must_use]
+pub fn package_dirs(mutants: &[Listed]) -> std::collections::BTreeMap<String, String> {
+    mutants
+        .iter()
+        .filter_map(|m| {
+            let at = m.file.find("/src/")?;
+            Some((m.package.clone(), m.file[..at].to_owned()))
+        })
+        .collect()
+}
+
+/// Reusable verdicts, by key: `key\tverdict` lines.
+#[must_use]
+pub fn load_verdicts(text: &str) -> std::collections::BTreeMap<String, String> {
+    text.lines()
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(key, verdict)| (key.to_owned(), verdict.to_owned()))
+        .collect()
+}
+
+/// Whether a stored verdict may stand in for a run: only a kill or a build
+/// failure, never a survivor, which a case added since may now kill.
+#[must_use]
+pub fn reusable(verdict: &str) -> bool {
+    matches!(verdict, "caught" | "timeout" | "unviable")
+}
+
 /// The first argument that runs a schema sweep over a listing file.
 pub const RUN_ARG: &str = "__mutate-schema";
 
@@ -1048,6 +1180,83 @@ pub fn ran(args: impl Iterator<Item = std::ffi::OsString>) -> Option<std::proces
     Some(std::process::ExitCode::from(code))
 }
 
+/// What judging a mutant reads, shared by every worker.
+struct Judging<'a> {
+    work: &'a std::path::Path,
+    target: &'a std::path::Path,
+    root: &'a std::path::Path,
+    mutants: &'a [Listed],
+    reach: &'a std::collections::BTreeMap<u32, BTreeSet<(String, String)>>,
+    cache: &'a std::collections::BTreeMap<String, String>,
+    dirs: &'a std::collections::BTreeMap<String, String>,
+}
+
+/// Judge every mutant in `todo` on `jobs` workers, reusing a stored kill whose
+/// key still holds.
+fn judge_all(judging: &Judging<'_>, todo: &[u32], jobs: usize) -> Vec<(u32, Verdict)> {
+    let nobody = BTreeSet::new();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let verdicts = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for _ in 0..jobs.max(1) {
+            scope.spawn(|| {
+                loop {
+                    let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(&id) = todo.get(at) else { break };
+                    let Some(mutant) = judging.mutants.get(id as usize) else {
+                        break;
+                    };
+                    let cases = judging.reach.get(&id).unwrap_or(&nobody);
+                    let key = verdict_key(judging.root, mutant, cases, judging.dirs);
+                    let reused = key
+                        .as_ref()
+                        .and_then(|key| judging.cache.get(key))
+                        .filter(|v| reusable(v));
+                    let verdict = match reused.map(String::as_str) {
+                        Some("caught") => Verdict::Caught,
+                        Some("timeout") => Verdict::Timeout,
+                        _ => judge(judging.work, judging.target, id, mutant, cases)
+                            .unwrap_or(Verdict::Error),
+                    };
+                    if let Ok(mut held) = verdicts.lock() {
+                        held.push((id, verdict));
+                    }
+                }
+            });
+        }
+    });
+    verdicts.into_inner().unwrap_or_default()
+}
+
+/// Write the reusable verdicts back, one `key\tverdict` line each.
+fn store_verdicts(
+    path: &std::path::Path,
+    cache: &std::collections::BTreeMap<String, String>,
+) -> anyhow::Result<()> {
+    let mut stored = String::new();
+    for (key, verdict) in cache {
+        let _ = writeln!(stored, "{key}\t{verdict}");
+    }
+    std::fs::write(path, stored)?;
+    Ok(())
+}
+
+/// The mutants a stored verdict already found do not compile, by site key.
+fn cached_unviable(
+    site_keys: &[Option<String>],
+    cache: &std::collections::BTreeMap<String, String>,
+) -> BTreeSet<u32> {
+    site_keys
+        .iter()
+        .enumerate()
+        .filter(|(_, key)| {
+            key.as_ref()
+                .is_some_and(|key| cache.get(key).is_some_and(|v| v == "unviable"))
+        })
+        .filter_map(|(id, _)| u32::try_from(id).ok())
+        .collect()
+}
+
 fn sweep(
     listing_path: &str,
     jobs: Option<&String>,
@@ -1063,7 +1272,28 @@ fn sweep(
     let jobs: usize = jobs.and_then(|j| j.parse().ok()).unwrap_or(3);
     let started = std::time::Instant::now();
     sync(&root, &work)?;
-    let (unviable, schema) = build(&root, &work, &target, &mutants, out)?;
+    // THE SOURCES AS THE SWEEP FOUND THEM: every rendering, key and case file
+    // is read from this snapshot, never the live checkout, which an edit during
+    // an hour-long sweep would move under the listing's spans.
+    let snapshot = state.join("pristine");
+    super::cover::pristine(&root, &snapshot)?;
+    let root = snapshot;
+    let cache_path = state.join("verdicts");
+    let mut cache = load_verdicts(&crate::fsio::read_to_string(&cache_path).unwrap_or_default());
+    let dirs = package_dirs(&mutants);
+    let site_keys: Vec<Option<String>> = mutants.iter().map(|m| site_key(&root, m)).collect();
+    let known_unviable = cached_unviable(&site_keys, &cache);
+    writeln!(
+        out,
+        "mutate schema: {} unviable known from earlier runs",
+        known_unviable.len()
+    )?;
+    let (unviable, schema) = build(&root, &work, &target, &mutants, known_unviable, out)?;
+    for id in &unviable {
+        if let Some(key) = &site_keys[*id as usize] {
+            cache.insert(key.clone(), String::from("unviable"));
+        }
+    }
     let classic: BTreeSet<u32> = schema
         .files
         .values()
@@ -1089,28 +1319,30 @@ fn sweep(
     let todo: Vec<u32> = (0..u32::try_from(mutants.len())?)
         .filter(|id| !unviable.contains(id) && !classic.contains(id))
         .collect();
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let verdicts = std::sync::Mutex::new(Vec::new());
-    std::thread::scope(|scope| {
-        for _ in 0..jobs.max(1) {
-            scope.spawn(|| {
-                loop {
-                    let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let Some(&id) = todo.get(at) else { break };
-                    let Some(mutant) = mutants.get(id as usize) else {
-                        break;
-                    };
-                    let cases = reach.get(&id).unwrap_or(&nobody);
-                    let verdict =
-                        judge(&work, &target, id, mutant, cases).unwrap_or(Verdict::Error);
-                    if let Ok(mut held) = verdicts.lock() {
-                        held.push((id, verdict));
-                    }
-                }
-            });
+    let verdicts = judge_all(
+        &Judging {
+            work: &work,
+            target: &target,
+            root: &root,
+            mutants: &mutants,
+            reach: &reach,
+            cache: &cache,
+            dirs: &dirs,
+        },
+        &todo,
+        jobs,
+    );
+    // EVERY KILL IS KEPT FOR THE NEXT LAP, keyed by what decided it; a
+    // survivor is not, since a case added since may kill it.
+    for (id, verdict) in &verdicts {
+        if matches!(verdict, Verdict::Caught | Verdict::Timeout)
+            && let Some(mutant) = mutants.get(*id as usize)
+            && let Some(key) = verdict_key(&root, mutant, reach.get(id).unwrap_or(&nobody), &dirs)
+        {
+            cache.insert(key, verdict.name().to_owned());
         }
-    });
-    let verdicts = verdicts.into_inner().unwrap_or_default();
+    }
+    store_verdicts(&cache_path, &cache)?;
     let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for (id, verdict) in &verdicts {
         *counts.entry(verdict.name()).or_default() += 1;
@@ -1158,6 +1390,7 @@ mod tests {
             function: Some(Function {
                 function_name: String::from("f"),
                 return_type: String::from("-> bool"),
+                span: None,
             }),
         }
     }
