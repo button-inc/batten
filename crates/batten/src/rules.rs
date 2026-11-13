@@ -10857,13 +10857,14 @@ fn ratchet_tally(rule: &Rule) -> anyhow::Result<impl Fn(&str) -> usize + Sync + 
     // Or the token measure `policy budget` takes per file (CLOUD-2663): the same
     // function over the same loaded text, so the ratchet and the budget cannot
     // disagree about one file.
-    let tokens = rule.counts == Some(CeilingUnit::Tokens);
+    // NEITHER A LITERAL NOR AN EXPRESSION IS THE TOKEN MEASURE: `validate`
+    // admits exactly one of the three, and refuses any ratchet `counts` but
+    // `tokens` (`validate_ratchet_measure`).
     Ok(
         move |text: &str| match (&expression, rule.pattern.as_deref()) {
             (Some(expression), _) => expression.find_iter(text).count(),
             (None, Some(pattern)) => text.matches(pattern).count(),
-            (None, None) if tokens => crate::budget::estimate_tokens(&crate::budget::loaded(text)),
-            (None, None) => 0,
+            (None, None) => crate::budget::estimate_tokens(&crate::budget::loaded(text)),
         },
     )
 }
@@ -11166,7 +11167,9 @@ fn moving_rows<'a>(
         if !direction.violated(was, now) {
             continue;
         }
-        if now > was
+        // A RISE, said by the direction: a violated row moved, so a
+        // non-increasing one rose and a non-decreasing one fell.
+        if direction == Direction::NonIncreasing
             && let Some(token) = rule.admits_with.as_deref()
             && !declared_subject(projected, token).is_empty()
         {
@@ -11265,7 +11268,7 @@ fn count_base(
     if unread.is_empty() {
         return Ok(());
     }
-    crate::git::prefetch_packs(root);
+    let _ = crate::git::prefetch_packs(root);
     let tallies: Vec<&(dyn Fn(&str) -> usize + Sync)> =
         counters.values().map(|state| &*state.tally).collect();
     let unread: Vec<&str> = unread.into_iter().collect();
@@ -11953,7 +11956,8 @@ fn per_file_findings(
             continue;
         }
         let mut blockers = BTreeSet::new();
-        if rule.admits_with.is_some() && now > was {
+        // A RISE, said by the direction: the row was violated, so it moved.
+        if rule.admits_with.is_some() && direction == Direction::NonIncreasing {
             if working_declared.contains(path) {
                 continue;
             }

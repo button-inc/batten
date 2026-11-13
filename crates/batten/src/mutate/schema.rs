@@ -154,6 +154,10 @@ enum Wrap {
     /// A match arm switched off, per mutant: the site is its guard's condition,
     /// or the point after its pattern where it has none.
     ArmOff(Vec<u32>),
+    /// A `const fn`'s `const` dropped, so a switch can run in its body. Renders
+    /// as nothing and owns nothing: a const caller it breaks is answered by
+    /// [`unviable`] through [`Rendered::deconst`].
+    Erase,
 }
 
 /// One switched site and everything that switches it.
@@ -174,6 +178,9 @@ pub struct Rendered {
     pub regions: Vec<(Range<usize>, Vec<u32>)>,
     /// Mutants handed back to cargo-mutants.
     pub classic: Vec<u32>,
+    /// Each `const fn` whose `const` the rendering dropped: its name as
+    /// cargo-mutants lists it, and the mutants placed in its body.
+    pub deconst: Vec<(String, Vec<u32>)>,
 }
 
 impl Rendered {
@@ -188,14 +195,42 @@ impl Rendered {
     }
 }
 
-fn in_const_context(node: &SyntaxNode) -> bool {
-    node.ancestors().any(|ancestor| match ancestor.kind() {
-        SyntaxKind::CONST | SyntaxKind::STATIC | SyntaxKind::CONST_ARG | SyntaxKind::ARRAY_TYPE => {
-            true
+/// Where a node is evaluated.
+#[derive(Debug, PartialEq, Eq)]
+enum Context {
+    /// At run time only.
+    Runtime,
+    /// Inside a const item, static, const argument or array length, where no
+    /// switch can run: handed back.
+    ConstItem,
+    /// Inside a `const fn`: switched, with the `const` (and the space after
+    /// it) at this range dropped. A `const fn` also runs at run time, and
+    /// only a caller in a const context needs it const.
+    ConstFn(Range<usize>),
+}
+
+fn const_context(node: &SyntaxNode) -> Context {
+    let mut context = Context::Runtime;
+    for ancestor in node.ancestors() {
+        match ancestor.kind() {
+            SyntaxKind::CONST
+            | SyntaxKind::STATIC
+            | SyntaxKind::CONST_ARG
+            | SyntaxKind::ARRAY_TYPE => return Context::ConstItem,
+            SyntaxKind::FN if context == Context::Runtime => {
+                if let Some(token) = ast::Fn::cast(ancestor).and_then(|f| f.const_token()) {
+                    let end = token
+                        .next_token()
+                        .filter(|next| next.kind() == SyntaxKind::WHITESPACE)
+                        .map_or(token.text_range().end(), |next| next.text_range().end());
+                    context =
+                        Context::ConstFn(usize::from(token.text_range().start())..usize::from(end));
+                }
+            }
+            _ => {}
         }
-        SyntaxKind::FN => ast::Fn::cast(ancestor).is_some_and(|f| f.const_token().is_some()),
-        _ => false,
-    })
+    }
+    context
 }
 
 fn node_at(root: &SyntaxNode, range: Range<usize>) -> Option<SyntaxNode> {
@@ -217,14 +252,31 @@ fn guard_condition(arm: &ast::MatchArm) -> Option<ast::Expr> {
     arm.guard()?.syntax().children().find_map(ast::Expr::cast)
 }
 
+/// A placed mutant: its site, its wrap, and the `const` its function must
+/// drop for the switch to run, if any.
+type Placed = (Range<usize>, Wrap, Option<Range<usize>>);
+
 /// The site and wrap for one mutant, or `None` to hand it back.
-fn place(root: &SyntaxNode, text: &str, id: u32, mutant: &Listed) -> Option<(Range<usize>, Wrap)> {
+fn place(root: &SyntaxNode, text: &str, id: u32, mutant: &Listed) -> Option<Placed> {
     let start = offset(text, mutant.span.start)?;
     let end = offset(text, mutant.span.end)?;
     let node = node_at(root, start..end)?;
-    if in_const_context(&node) {
-        return None;
-    }
+    let erase = match const_context(&node) {
+        Context::ConstItem => return None,
+        Context::ConstFn(range) => Some(range),
+        Context::Runtime => None,
+    };
+    let (site, wrap) = switched(&node, start..end, id, mutant)?;
+    Some((site, wrap, erase))
+}
+
+/// The site and wrap that switch `mutant` at `node`, spanning `start..end`.
+fn switched(
+    node: &SyntaxNode,
+    Range { start, end }: Range<usize>,
+    id: u32,
+    mutant: &Listed,
+) -> Option<(Range<usize>, Wrap)> {
     match mutant.genre.as_str() {
         "FnValue" => {
             let returns = mutant
@@ -327,6 +379,7 @@ fn merge(wraps: &mut Vec<Wrap>, wrap: Wrap) {
         Wrap::Body(_) => 1,
         Wrap::Guard(_) => 2,
         Wrap::ArmOff(_) => 3,
+        Wrap::Erase => 4,
     });
 }
 
@@ -410,7 +463,11 @@ impl Writer<'_> {
         let start = self.out.len();
         self.layer(site, site.wraps.len());
         let ids: Vec<u32> = site.wraps.iter().flat_map(ids_of).collect();
-        self.regions.push((start..self.out.len(), ids));
+        // A SITE OWNING NO MUTANT CLAIMS NO ERROR: an erased `const` renders
+        // as nothing, and a region of it would swallow an error placed there.
+        if !ids.is_empty() {
+            self.regions.push((start..self.out.len(), ids));
+        }
     }
 
     /// The site with its first `depth` wraps applied, innermost first.
@@ -450,6 +507,7 @@ impl Writer<'_> {
                     self.out.push(')');
                 }
             }
+            Wrap::Erase => {}
             Wrap::ArmOff(ids) => {
                 if site.range.is_empty() {
                     let start = self.out.len();
@@ -473,6 +531,7 @@ fn ids_of(wrap: &Wrap) -> Vec<u32> {
             alts.iter().map(|(id, _)| *id).collect()
         }
         Wrap::ArmOff(ids) => ids.clone(),
+        Wrap::Erase => Vec::new(),
     }
 }
 
@@ -484,14 +543,29 @@ pub fn render(source: &str, mutants: &[(u32, &Listed)], skip: &BTreeSet<u32>) ->
     let root = parse.tree().syntax().clone();
     let mut classic = Vec::new();
     let mut sites: Vec<Site> = Vec::new();
+    let mut erased: std::collections::BTreeMap<(usize, usize), (String, Vec<u32>)> =
+        std::collections::BTreeMap::new();
     for (id, mutant) in mutants {
         if skip.contains(id) {
             continue;
         }
-        let Some((range, wrap)) = place(&root, source, *id, mutant) else {
+        let Some((range, wrap, erase)) = place(&root, source, *id, mutant) else {
             classic.push(*id);
             continue;
         };
+        if let Some(erase) = erase {
+            // A MUTANT WITH NO FUNCTION NAME could not be answered for if its
+            // dropped `const` broke a caller, so it is handed back instead.
+            let Some(function) = mutant.function.as_ref() else {
+                classic.push(*id);
+                continue;
+            };
+            erased
+                .entry((erase.start, erase.end))
+                .or_insert_with(|| (function.function_name.clone(), Vec::new()))
+                .1
+                .push(*id);
+        }
         match sites.iter_mut().find(|site| site.range == range) {
             Some(site) => merge(&mut site.wraps, wrap),
             None => sites.push(Site {
@@ -500,6 +574,13 @@ pub fn render(source: &str, mutants: &[(u32, &Listed)], skip: &BTreeSet<u32>) ->
                 children: Vec::new(),
             }),
         }
+    }
+    for &(start, end) in erased.keys() {
+        sites.push(Site {
+            range: start..end,
+            wraps: vec![Wrap::Erase],
+            children: Vec::new(),
+        });
     }
     let roots = nest(sites);
     let mut writer = Writer {
@@ -512,6 +593,7 @@ pub fn render(source: &str, mutants: &[(u32, &Listed)], skip: &BTreeSet<u32>) ->
         text: writer.out,
         regions: writer.regions,
         classic,
+        deconst: erased.into_values().collect(),
     }
 }
 
@@ -654,18 +736,51 @@ pub fn write_schema(
     Ok(schema)
 }
 
+/// What a refused build's errors say about the mutants.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Refused {
+    /// The mutants an error belongs to: they do not compile.
+    pub owned: BTreeSet<u32>,
+    /// The mutants of each `const fn` whose dropped `const` a const caller
+    /// needed: they compile, but not switched, so they are handed back.
+    pub reconst: BTreeSet<u32>,
+    /// Each error no mutant owns.
+    pub stray: Vec<String>,
+}
+
+/// Whether rustc's `message` is a const context refusing a call to the
+/// function cargo-mutants lists as `name` (E0015), however it qualifies it.
+fn refuses_const_call(message: &str, name: &str) -> bool {
+    message.contains("non-const")
+        && (message.contains(&format!("`{name}`")) || message.contains(&format!("::{name}`")))
+}
+
 /// The mutants the compiler's errors in `messages` (cargo's JSON lines)
-/// belong to, and the count of errors no mutant owns.
+/// belong to, those handed back because a const caller needs their function
+/// const, and the errors no mutant owns.
 #[must_use]
-pub fn unviable(schema: &Schema, messages: &str) -> (BTreeSet<u32>, Vec<String>) {
-    let mut owned = BTreeSet::new();
-    let mut stray = Vec::new();
+pub fn unviable(schema: &Schema, messages: &str) -> Refused {
+    let mut refused = Refused::default();
     for line in messages.lines() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
         let message = &value["message"];
         if value["reason"] != "compiler-message" || message["level"] != "error" {
+            continue;
+        }
+        let text = message["message"].as_str().unwrap_or_default();
+        // A CONST CALLER FIRST, wherever it sits: its error is the dropped
+        // `const`'s, even inside another mutant's branch.
+        let reconst: Vec<u32> = schema
+            .files
+            .values()
+            .flat_map(|rendered| &rendered.deconst)
+            .filter(|(name, _)| refuses_const_call(text, name))
+            .flat_map(|(_, ids)| ids.iter().copied())
+            .collect();
+        if !reconst.is_empty() {
+            refused.reconst.extend(reconst);
             continue;
         }
         let primary = message["spans"]
@@ -679,11 +794,11 @@ pub fn unviable(schema: &Schema, messages: &str) -> (BTreeSet<u32>, Vec<String>)
             schema.files.get(file)?.owners(at)
         });
         match ids {
-            Some(ids) => owned.extend(ids.iter().copied()),
-            None => stray.push(message["message"].as_str().unwrap_or_default().to_owned()),
+            Some(ids) => refused.owned.extend(ids.iter().copied()),
+            None => refused.stray.push(text.to_owned()),
         }
     }
-    (owned, stray)
+    refused
 }
 
 /// Build the schema in `work` into `target` until it compiles, switching off
@@ -700,7 +815,7 @@ pub fn build(
     mutants: &[Listed],
     known_unviable: BTreeSet<u32>,
     out: &mut dyn std::io::Write,
-) -> anyhow::Result<(BTreeSet<u32>, Schema)> {
+) -> anyhow::Result<Built> {
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
     let mut args: Vec<String> = [
         "test",
@@ -720,6 +835,7 @@ pub fn build(
         target.to_string_lossy().into_owned(),
     )];
     let mut skip = known_unviable;
+    let mut handed = BTreeSet::new();
     for round in 1..=12 {
         let schema = write_schema(root, work, mutants, &skip)?;
         let ran = super::spawn(
@@ -733,31 +849,52 @@ pub fn build(
             writeln!(
                 out,
                 "mutate schema: build {round} clean, {} unviable",
-                skip.len()
+                skip.len() - handed.len()
             )?;
-            return Ok((skip, schema));
+            return Ok(Built {
+                unviable: skip.difference(&handed).copied().collect(),
+                handed,
+                schema,
+            });
         }
-        let (owned, stray) = unviable(&schema, &ran.stdout);
+        let refused = unviable(&schema, &ran.stdout);
         writeln!(
             out,
-            "mutate schema: build {round} refused {} mutant(s), {} error(s) unowned",
-            owned.len(),
-            stray.len()
+            "mutate schema: build {round} refused {} mutant(s), handed back {} for a const caller, {} error(s) unowned",
+            refused.owned.len(),
+            refused.reconst.len(),
+            refused.stray.len()
         )?;
-        for message in &stray {
+        for message in &refused.stray {
             writeln!(out, "mutate schema:   unowned: {message}")?;
         }
         // AN ERROR NO MUTANT OWNS IS THE SCHEMA'S OWN FAULT, never retried:
         // on #1276 two of them were sources edited mid-sweep, which the
         // pristine snapshot now rules out, and anything else is a rendering bug.
         anyhow::ensure!(
-            !owned.is_empty(),
+            !refused.owned.is_empty() || !refused.reconst.is_empty(),
             "the schema build failed on error(s) no mutant owns: {}",
-            stray.join("; ")
+            refused.stray.join("; ")
         );
-        skip.extend(owned);
+        skip.extend(refused.owned);
+        // HANDED BACK, NOT UNVIABLE: the mutants compile, only not switched,
+        // and with every one of them skipped the function keeps its `const`.
+        skip.extend(refused.reconst.iter().copied());
+        handed.extend(refused.reconst);
     }
     anyhow::bail!("the schema build was not clean within 12 rounds")
+}
+
+/// A schema that built: the mutants that do not compile, those handed back
+/// because a const caller needs their function const, and the renderings.
+#[derive(Debug)]
+pub struct Built {
+    /// Mutants an error belonged to.
+    pub unviable: BTreeSet<u32>,
+    /// Mutants whose `const fn` a const caller needs const.
+    pub handed: BTreeSet<u32>,
+    /// The renderings that built.
+    pub schema: Schema,
 }
 
 /// What one mutant's covering cases said.
@@ -1020,10 +1157,7 @@ fn judge(
         .and_then(|key| hints.lock().ok()?.get(key).cloned())
         .unwrap_or_default();
     let (first, second) = phases(cases, &hinted, judging.seconds);
-    for phase in [&first, &second] {
-        if phase.is_empty() {
-            continue;
-        }
+    for phase in batches(&first).iter().chain(&batches(&second)) {
         match run_cases(judging, id, mutant, phase) {
             Ok((Verdict::Missed, _)) => {}
             Ok((verdict, killed_by)) => {
@@ -1043,6 +1177,34 @@ fn judge(
         }
     }
     Verdict::Missed
+}
+
+/// The longest filterset one run is handed, in bytes. The kernel caps ONE
+/// argument at 128 KiB (`MAX_ARG_STRLEN`), and on #1276 the sites reached by
+/// nearly every case failed to start with `E2BIG`.
+const FILTER_BYTES: usize = 96 * 1024;
+
+/// `phase` cut into runs whose filtersets each fit [`FILTER_BYTES`], in case
+/// order, so the runs stop at the first kill as one would. Empty for an empty
+/// phase.
+fn batches(phase: &BTreeSet<Case>) -> Vec<BTreeSet<Case>> {
+    let mut runs: Vec<BTreeSet<Case>> = Vec::new();
+    let mut bytes = 0;
+    for case in phase {
+        // `test(=<name>) | ` per case (`cover::filterset`).
+        let cost = case.0.len() + 10;
+        match runs.last_mut() {
+            Some(run) if bytes + cost <= FILTER_BYTES => {
+                bytes += cost;
+                run.insert(case.clone());
+            }
+            _ => {
+                bytes = cost;
+                runs.push([case.clone()].into());
+            }
+        }
+    }
+    runs
 }
 
 /// As nextest's `run-wrapper` while reach is recorded: run the case with its
@@ -1161,7 +1323,14 @@ pub fn record_reach(
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base)?;
     let config = state.join("nextest.toml");
-    let recorder = std::env::current_exe()?;
+    // A PRIVATE COPY of this binary is the recorder: the suite runs for minutes,
+    // and the checkout's own `target/debug/batten` is relinked by any build in
+    // between, so a case could run a half-linked one. Renamed into place, so a
+    // running copy is never written.
+    let recorder = state.join("recorder");
+    let staged = state.join(format!("recorder.{}", std::process::id()));
+    std::fs::copy(std::env::current_exe()?, &staged)?;
+    std::fs::rename(&staged, &recorder)?;
     std::fs::write(
         &config,
         super::cover::wrapped_config(work, &recorder, RECORD_ARG, &state.join("nextest"))?,
@@ -1368,11 +1537,17 @@ pub fn load_verdicts(text: &str) -> std::collections::BTreeMap<String, String> {
         .collect()
 }
 
-/// Whether a stored verdict may stand in for a run: only a kill or a build
-/// failure, never a survivor, which a case added since may now kill.
+/// Whether a stored verdict may stand in for a run: every decided verdict,
+/// never a run that erred. A SURVIVOR TOO: its key holds the cases that reach
+/// its site and their files, so a case added that reaches it, or an edit to
+/// one that does, moves the key and it is judged again. Re-judging survivors
+/// whose key held cost most of a lap's judging on #1276.
 #[must_use]
 pub fn reusable(verdict: &str) -> bool {
-    matches!(verdict, "caught" | "timeout" | "unviable")
+    matches!(
+        verdict,
+        "caught" | "timeout" | "unviable" | "missed" | "uncovered"
+    )
 }
 
 /// The first argument that runs a schema sweep over a listing file.
@@ -1389,9 +1564,15 @@ pub fn ran(args: impl Iterator<Item = std::ffi::OsString>) -> Option<std::proces
     if args.first().map(String::as_str) != Some(RUN_ARG) {
         return None;
     }
+    let path = args.get(1)?;
+    let jobs = args.get(2).and_then(|j| j.parse().ok()).unwrap_or(3);
     let mut out = std::io::stdout();
-    let code = match sweep(args.get(1)?, args.get(2), &mut out) {
-        Ok(code) => code,
+    let swept = crate::git::repo_root(std::path::Path::new(".")).and_then(|root| {
+        let mutants = listing(&crate::fsio::read_to_string(path)?)?;
+        sweep(&root, &mutants, jobs, &mut out)
+    });
+    let code = match swept {
+        Ok(swept) => swept.code,
         Err(why) => {
             let _ = std::io::Write::write_fmt(
                 &mut std::io::stderr(),
@@ -1468,6 +1649,8 @@ fn judge_all(
                     let verdict = match reused.map(String::as_str) {
                         Some("caught") => Verdict::Caught,
                         Some("timeout") => Verdict::Timeout,
+                        Some("missed") => Verdict::Missed,
+                        Some("uncovered") => Verdict::Uncovered,
                         _ => judge(judging, id, mutant, cases, hints),
                     };
                     // EVERY VERDICT, SURVIVORS TOO, the moment it is decided:
@@ -1603,13 +1786,82 @@ fn report(
     Ok(if failed { 2 } else { 0 })
 }
 
-fn sweep(
-    listing_path: &str,
-    jobs: Option<&String>,
+/// This shard's mutants of `listed`: each `k`th of every `n` by listing order,
+/// so the shards of one listing partition it. All of them with no shard.
+#[must_use]
+pub fn shard_of(listed: Vec<Listed>, shard: Option<(usize, usize)>) -> Vec<Listed> {
+    let Some((k, n)) = shard else {
+        return listed;
+    };
+    listed
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| index % n == k)
+        .map(|(_, mutant)| mutant)
+        .collect()
+}
+
+/// A sweep's exit on the house contract (§6): 0 every switched mutant caught,
+/// 2 one survived, and anything else could not look.
+#[must_use]
+pub const fn exit_of(code: u8) -> crate::exit::ExitCode {
+    match code {
+        0 => crate::exit::ExitCode::Success,
+        2 => crate::exit::ExitCode::Violation,
+        _ => crate::exit::ExitCode::Internal,
+    }
+}
+
+/// The graver of two exits, for a verdict two runners share: could-not-look
+/// over a violation over usage over success.
+#[must_use]
+pub const fn worse(a: crate::exit::ExitCode, b: crate::exit::ExitCode) -> crate::exit::ExitCode {
+    if b.code() > a.code() { b } else { a }
+}
+
+/// Print and answer each handed-back mutant's name. The schema decided
+/// nothing about one, so whatever judges it next needs the list, not the
+/// count.
+fn handed_back(
     out: &mut dyn std::io::Write,
-) -> anyhow::Result<u8> {
-    let root = crate::git::repo_root(std::path::Path::new("."))?;
-    let state = crate::state::repo_state_dir(&root)?
+    mutants: &[Listed],
+    classic: &BTreeSet<u32>,
+) -> anyhow::Result<Vec<String>> {
+    let mut names = Vec::new();
+    for id in classic {
+        if let Some(mutant) = mutants.get(*id as usize) {
+            writeln!(out, "classic\t{}", mutant.name)?;
+            names.push(mutant.name.clone());
+        }
+    }
+    Ok(names)
+}
+
+/// What a sweep decided: its exit (0 every switched mutant caught, 2 one
+/// survived, 3 a run erred) and the mutants it handed back, by name, for
+/// cargo-mutants to judge.
+#[derive(Debug)]
+pub struct Swept {
+    /// The exit, as [`report`] answers it.
+    pub code: u8,
+    /// The handed-back mutants' names.
+    pub classic: Vec<String>,
+}
+
+/// Every one of `mutants` judged in one schema build of the checkout at
+/// `root`, on `jobs` workers.
+///
+/// # Errors
+///
+/// The tree cannot be staged, the schema does not build, or the unmutated
+/// suite fails.
+pub fn sweep(
+    root: &std::path::Path,
+    mutants: &[Listed],
+    jobs: usize,
+    out: &mut dyn std::io::Write,
+) -> anyhow::Result<Swept> {
+    let state = crate::state::repo_state_dir(root)?
         .join("mutate")
         .join("schema");
     let work = state.join("tree");
@@ -1618,22 +1870,20 @@ fn sweep(
     // of its own passed only inside a checkout, so a target beside the tree
     // failed the unmutated baseline.
     let target = work.join("target");
-    let mutants = listing(&crate::fsio::read_to_string(listing_path)?)?;
-    let jobs: usize = jobs.and_then(|j| j.parse().ok()).unwrap_or(3);
     let started = std::time::Instant::now();
-    sync(&root, &work)?;
+    sync(root, &work)?;
     // THE SOURCES AS THE SWEEP FOUND THEM: every rendering, key and case file
     // is read from this snapshot, never the live checkout, which an edit during
     // an hour-long sweep would move under the listing's spans.
     let snapshot = state.join("pristine");
-    super::cover::pristine(&root, &snapshot)?;
+    super::cover::pristine(root, &snapshot)?;
     let root = snapshot;
     // AN ERROR LOG IS THIS SWEEP'S OR NOTHING: one left by a killed sweep
     // would read as a run of this one erring.
     let _ = std::fs::remove_dir_all(state.join("errors"));
     let cache_path = state.join("verdicts");
     let mut cache = load_verdicts(&crate::fsio::read_to_string(&cache_path).unwrap_or_default());
-    let dirs = package_dirs(&mutants);
+    let dirs = package_dirs(mutants);
     let site_keys: Vec<Option<String>> = mutants.iter().map(|m| site_key(&root, m)).collect();
     let known_unviable = cached_unviable(&site_keys, &cache);
     writeln!(
@@ -1641,16 +1891,21 @@ fn sweep(
         "mutate schema: {} unviable known from earlier runs",
         known_unviable.len()
     )?;
-    let (unviable, schema) = build(&root, &work, &target, &mutants, known_unviable, out)?;
+    let Built {
+        unviable,
+        handed,
+        schema,
+    } = build(&root, &work, &target, mutants, known_unviable, out)?;
     // KEPT BEFORE ANY TEST RUNS: a restart skips the unviable loop's builds.
     journal(
         &cache_path,
-        &newly_unviable(&unviable, &site_keys, &mutants, &mut cache),
+        &newly_unviable(&unviable, &site_keys, mutants, &mut cache),
     )?;
     let classic: BTreeSet<u32> = schema
         .files
         .values()
         .flat_map(|r| r.classic.iter().copied())
+        .chain(handed)
         .collect();
     writeln!(
         out,
@@ -1688,7 +1943,7 @@ fn sweep(
             target: &target,
             scratch: &scratch,
             root: &root,
-            mutants: &mutants,
+            mutants,
             reach: &reach,
             seconds: &seconds,
             cache: &cache,
@@ -1699,21 +1954,19 @@ fn sweep(
         jobs,
         out,
     );
-    // EACH HANDED-BACK MUTANT BY NAME: the schema decided nothing about it, so
-    // whatever judges it next needs the list, not the count.
-    for id in &classic {
-        if let Some(mutant) = mutants.get(*id as usize) {
-            writeln!(out, "classic\t{}", mutant.name)?;
-        }
-    }
-    report(
+    let names = handed_back(out, mutants, &classic)?;
+    let code = report(
         out,
-        &mutants,
+        mutants,
         &verdicts,
         (unviable.len(), classic.len()),
         &state,
         started,
-    )
+    )?;
+    Ok(Swept {
+        code,
+        classic: names,
+    })
 }
 
 #[cfg(test)]
@@ -1724,15 +1977,18 @@ mod tests {
     #[test]
     fn a_journaled_verdict_outranks_the_line_before_it_and_a_torn_line_is_dropped() {
         let loaded = load_verdicts(
-            "k\tunviable\tm1\nj\tcaught\tm2\nk\tcaught\tm1\ns\tmissed\tm3\n-\tcaught\tm4\nt\tcau",
+            "k\tunviable\tm1\nj\tcaught\tm2\nk\tcaught\tm1\ns\tmissed\tm3\n-\tcaught\tm4\n\
+             e\terror\tm5\nu\tuncovered\tm6\nt\tcau",
         );
         assert_eq!(loaded.get("k").map(String::as_str), Some("caught"));
         assert!(!loaded.contains_key("t"), "a torn line is dropped");
         assert!(
-            !loaded.contains_key("s"),
-            "a survivor is kept, never reused"
+            !loaded.contains_key("e"),
+            "a run that erred decided nothing"
         );
-        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded.get("s").map(String::as_str), Some("missed"));
+        assert_eq!(loaded.get("u").map(String::as_str), Some("uncovered"));
+        assert_eq!(loaded.len(), 4);
         assert_eq!(journal_line(None, "missed", "m"), "-\tmissed\tm\n");
     }
 
@@ -2023,6 +2279,7 @@ mod tests {
             text: String::new(),
             regions: vec![(0..10, vec![1]), (2..4, vec![2]), (6..6, vec![3])],
             classic: Vec::new(),
+            deconst: Vec::new(),
         };
         assert_eq!(rendered.owners(3), Some(&[2][..]));
         assert_eq!(rendered.owners(4), Some(&[1][..]), "an end is exclusive");
@@ -2037,10 +2294,26 @@ mod tests {
     /// A `const fn` body is a const context, so its mutants are handed back,
     /// and a match-arm span that is not the arm is handed back too.
     #[test]
-    fn a_const_fn_and_a_stray_arm_span_are_handed_back() {
-        let source = "const fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n";
+    fn a_const_fn_drops_its_const_and_a_stray_arm_span_is_handed_back() {
+        let source = "pub const fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n";
         let rendered = render_all(source, &[listed("BinaryOperator", "!=", (2, 7), (2, 9))]);
-        assert_eq!(rendered.classic, vec![0]);
+        assert!(rendered.classic.is_empty());
+        assert_eq!(
+            rendered.text,
+            "pub fn f(a: u8, b: u8) -> bool {\n    (if crate::__batten_mutant(0) { a != b } else { a == b })\n}\n"
+        );
+        assert_eq!(rendered.deconst, vec![(String::from("f"), vec![0])]);
+        assert_eq!(
+            rendered.owners(rendered.text.find("fn").unwrap()),
+            None,
+            "the erased const owns no error"
+        );
+        let mut nameless = listed("BinaryOperator", "!=", (2, 7), (2, 9));
+        nameless.function = None;
+        assert_eq!(render_all(source, &[nameless]).classic, vec![0]);
+        let item = "const fn f() -> u8 {\n    const N: u8 = 1 + 2;\n    N\n}\n";
+        let inner = render_all(item, &[listed("BinaryOperator", "-", (2, 21), (2, 22))]);
+        assert_eq!(inner.classic, vec![0], "a const item inside a const fn");
         let source =
             "fn f(x: u8) -> u8 {\n    match x {\n        3 => 4,\n        _ => 0,\n    }\n}\n";
         let stray = render_all(source, &[listed("MatchArm", "", (3, 9), (3, 10))]);
@@ -2235,6 +2508,7 @@ mod tests {
             text: String::new(),
             regions: vec![(10..20, vec![4]), (30..40, vec![5])],
             classic: Vec::new(),
+            deconst: Vec::new(),
         };
         let schema = Schema {
             files: [(String::from("src/m.rs"), rendered)].into(),
@@ -2260,9 +2534,111 @@ mod tests {
             String::from("not json"),
         ]
         .join("\n");
-        let (owned, stray) = unviable(&schema, &messages);
-        assert_eq!(owned, [4].into());
-        assert_eq!(stray, vec![String::from("stray")]);
+        let refused = unviable(&schema, &messages);
+        assert_eq!(refused.owned, [4].into());
+        let deconsted = Rendered {
+            deconst: vec![(String::from("Prior::as_str"), vec![7, 8])],
+            ..Rendered::default()
+        };
+        let schema = Schema {
+            files: [
+                (
+                    String::from("src/m.rs"),
+                    schema.files.into_values().next().unwrap(),
+                ),
+                (String::from("src/p.rs"), deconsted),
+            ]
+            .into(),
+        };
+        let caller = line(
+            "compiler-message",
+            "error",
+            "cannot call non-const method `attribution::Prior::as_str` in constants",
+            &span(true, 15),
+        );
+        let refused = unviable(&schema, &caller);
+        assert_eq!(
+            refused.reconst,
+            [7, 8].into(),
+            "inside mutant 4's region too"
+        );
+        assert!(refused.owned.is_empty());
+        assert!(refuses_const_call(
+            "cannot call non-const fn `as_str` in constant functions",
+            "as_str"
+        ));
+        assert!(!refuses_const_call(
+            "cannot call non-const fn `to_str` in constants",
+            "as_str"
+        ));
+        assert!(!refuses_const_call(
+            "mismatched types: `Prior::as_str`",
+            "Prior::as_str"
+        ));
+        let refused = unviable(&schema, &messages);
+        assert_eq!(refused.owned, [4].into());
+        assert!(refused.reconst.is_empty());
+        assert_eq!(refused.stray, vec![String::from("stray")]);
+    }
+
+    /// A phase too long for one argument is cut into runs that each fit, and
+    /// together hold every case once.
+    ///
+    /// Fails by: a run past the cap, a case dropped or repeated, or an empty
+    /// phase spending a run.
+    #[test]
+    fn a_phase_is_cut_into_runs_whose_filters_fit_one_argument() {
+        // 1,024 bytes a case, so exactly 96 fill a run to the cap.
+        let long = "x".repeat(1_011);
+        let phase: BTreeSet<Case> = (0..193).map(|n| case(&format!("{long}{n:03}"))).collect();
+        let runs = batches(&phase);
+        assert_eq!(
+            runs.iter().map(BTreeSet::len).collect::<Vec<_>>(),
+            [96, 96, 1],
+            "a run is filled to the cap and no further"
+        );
+        assert_eq!(
+            runs.into_iter().flatten().collect::<BTreeSet<Case>>(),
+            phase
+        );
+        assert!(batches(&BTreeSet::new()).is_empty());
+        assert_eq!(batches(&[case("one")].into()).len(), 1);
+    }
+
+    /// Fails by: a mutant in two shards or none, or the order not kept.
+    #[test]
+    fn the_shards_of_a_listing_partition_it() {
+        let named = |names: &[&str]| -> Vec<Listed> {
+            names
+                .iter()
+                .map(|name| Listed {
+                    name: (*name).to_owned(),
+                    ..listed("FnValue", "true", (1, 1), (1, 2))
+                })
+                .collect()
+        };
+        let picked = |shard: Vec<Listed>| shard.into_iter().map(|m| m.name).collect::<Vec<_>>();
+        let all = named(&["a", "b", "c", "d", "e"]);
+        assert_eq!(picked(shard_of(all.clone(), Some((0, 2)))), ["a", "c", "e"]);
+        assert_eq!(picked(shard_of(all.clone(), Some((1, 2)))), ["b", "d"]);
+        assert_eq!(picked(shard_of(all, None)).len(), 5);
+    }
+
+    #[test]
+    fn a_sweep_exit_maps_onto_the_contract_and_the_graver_one_wins() {
+        use crate::exit::ExitCode;
+        assert_eq!(exit_of(0), ExitCode::Success);
+        assert_eq!(exit_of(2), ExitCode::Violation);
+        assert_eq!(exit_of(3), ExitCode::Internal);
+        assert_eq!(exit_of(1), ExitCode::Internal);
+        for (a, b, graver) in [
+            (ExitCode::Success, ExitCode::Violation, ExitCode::Violation),
+            (ExitCode::Violation, ExitCode::Success, ExitCode::Violation),
+            (ExitCode::Violation, ExitCode::Internal, ExitCode::Internal),
+            (ExitCode::Usage, ExitCode::Usage, ExitCode::Usage),
+        ] {
+            assert_eq!(worse(a, b), graver, "{a:?} {b:?}");
+        }
     }
 
     #[test]
@@ -2418,7 +2794,7 @@ mod tests {
         assert_eq!(code, 0);
     }
 
-    /// A stored kill or timeout is reused without a run and without a second
+    /// A stored verdict, a kept survivor's too, is reused without a run and without a second
     /// journal line, a mutant nothing reaches is uncovered and journaled, and
     /// progress is printed every hundred verdicts and at the end.
     ///
@@ -2442,12 +2818,16 @@ mod tests {
         let mut mutants: Vec<Listed> = (0..101).map(|_| with("!=", "kill")).collect();
         mutants.push(with("<", "hang"));
         mutants.push(with("<=", "none"));
+        mutants.push(with(">", "kept-survivor"));
+        mutants.push(with(">=", "kept-unreached"));
         let dirs = std::collections::BTreeMap::new();
         let nobody = BTreeSet::new();
         let key = |m: &Listed| verdict_key(&base, m, &nobody, &dirs).unwrap();
         let cache = [
             (key(&mutants[0]), String::from("caught")),
             (key(&mutants[101]), String::from("timeout")),
+            (key(&mutants[103]), String::from("missed")),
+            (key(&mutants[104]), String::from("uncovered")),
         ]
         .into();
         let store = base.join("verdicts");
@@ -2465,13 +2845,19 @@ mod tests {
             dirs: &dirs,
             store: &store,
         };
-        let todo: Vec<u32> = (0..103).collect();
+        let todo: Vec<u32> = (0..105).collect();
         let mut out = Vec::new();
         let mut verdicts = judge_all(&judging, &todo, 2, &mut out);
         verdicts.sort_by_key(|(id, _)| *id);
         assert!(verdicts[..101].iter().all(|(_, v)| *v == Verdict::Caught));
         assert_eq!(verdicts[101].1, Verdict::Timeout);
         assert_eq!(verdicts[102].1, Verdict::Uncovered);
+        assert_eq!(
+            verdicts[103].1,
+            Verdict::Missed,
+            "a kept survivor, not re-judged"
+        );
+        assert_eq!(verdicts[104].1, Verdict::Uncovered);
         let said = String::from_utf8(out).unwrap();
         let progress: Vec<&str> = said
             .lines()
@@ -2480,8 +2866,8 @@ mod tests {
         assert_eq!(
             progress,
             [
-                "mutate schema: judged 100/103",
-                "mutate schema: judged 103/103"
+                "mutate schema: judged 100/105",
+                "mutate schema: judged 105/105"
             ]
         );
         let journaled = std::fs::read_to_string(&store).unwrap();
