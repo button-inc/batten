@@ -98,6 +98,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 
 pub mod cover;
+pub mod schema;
 
 /// The declaration markers, bare — the comment opener is [`OPENERS`]'s business.
 ///

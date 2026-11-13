@@ -99,6 +99,7 @@ row here, so a new module lands with its line.
 - `mint.rs` — receipts minted from the tool result that earned them (CLOUD-1024): the `[[mint]]` table, the closed six-form body template, and the dotted path selector.
 - `mutate.rs` — mutation coverage over the declared gate set (CLOUD-418), retired out of `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh` under CLOUD-1267.
 - `cover.rs` (under `mutate/`) — per-case coverage for cargo-mutants (CLOUD-2253): `__cover-build` records which workspace functions each case executes (a nextest run-wrapper per case), and as cargo-mutants' `$CARGO` it narrows each mutant's test step to the covering cases; `mutate cargo` re-judges what they miss against the whole suite.
+- `schema.rs` (under `mutate/`) — mutant schemata (CLOUD-2253): renders every listed cargo-mutants mutant into one build, each behind `crate::__batten_mutant(N)` (`BATTEN_MUTANT`), so a mutant costs its covering cases and no build of its own; sites it cannot switch go back to cargo-mutants.
 - `mutation_markers.rs` — the scanner `build.rs` includes to refuse a hand-rolled Rust mutation marker, or a cargo-mutants argv built outside its one site; compiled into the library only for its own tests.
 - `token_enum.rs` — `token_enum!`, one declaration per tokened enum: the variants, `ALL` and the token from one `Variant => "token"` list, with duplicate tokens refused at compile time (CLOUD-2442).
 - `verbs.rs` — the mutating-verb table (CLOUD-36): which programs change the world, config-driven (rule 1) and typed by `effect.rs`'s one §5 vocabulary.

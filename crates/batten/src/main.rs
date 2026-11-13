@@ -46,6 +46,9 @@ fn main() -> ExitCode {
     if let Some(code) = batten::mutate::cover::built(std::env::args_os()) {
         return code;
     }
+    if let Some(code) = batten::mutate::schema::ran(std::env::args_os()) {
+        return code;
+    }
     // AS A GIT HOOK (CLOUD-2339): every git hook links to this binary, and
     // everything after a hook name in argv[0] is git's.
     if let Some(code) = batten::githook::dispatched(std::env::args_os()) {
