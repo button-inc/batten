@@ -1454,10 +1454,12 @@ pub fn case_sources(
         return vec![format!("{prefix}src/main.rs")];
     }
     let head = module.first().copied().unwrap_or_default();
+    // NOT THE TARGET'S `main.rs`: it declares the modules and nothing a case
+    // asserts, so one `mod` line added on #1276 moved the key of every mutant
+    // an integration case reaches and the next lap re-judged them all.
     vec![
         format!("{prefix}tests/{target}/{head}.rs"),
         format!("{prefix}tests/{target}/common/mod.rs"),
-        format!("{prefix}tests/{target}/main.rs"),
         format!("{prefix}tests/{target}.rs"),
     ]
 }
@@ -1471,25 +1473,106 @@ pub fn site_key(root: &std::path::Path, mutant: &Listed) -> Option<String> {
 }
 
 /// The key a run's verdict is reused under: [`site_key`]'s inputs and every
-/// reaching case with the text of the files it is defined in.
+/// reaching case with its [`case_digests`] digest.
 #[must_use]
 pub fn verdict_key(
     root: &std::path::Path,
     mutant: &Listed,
     cases: &BTreeSet<(String, String)>,
-    package_dirs: &std::collections::BTreeMap<String, String>,
+    digests: &std::collections::BTreeMap<Case, String>,
 ) -> Option<String> {
     let mut hasher = site_hasher(root, mutant)?;
-    let mut files = BTreeSet::new();
-    for (name, binary) in cases {
-        hasher.update(format!("\x1e{name}\x1f{binary}").as_bytes());
-        files.extend(case_sources(package_dirs, name, binary));
-    }
-    for file in files {
-        hasher.update(format!("\x1d{file}\x1f").as_bytes());
-        hasher.update(&crate::fsio::read(root.join(&file)).unwrap_or_default());
+    for case in cases {
+        let digest = digests.get(case).map_or("", String::as_str);
+        hasher.update(format!("\x1e{}\x1f{}\x1f{digest}", case.0, case.1).as_bytes());
     }
     Some(hasher.finalize().to_hex().to_string())
+}
+
+/// Each case's own text, digested once per sweep (read once per file): in
+/// each of its own module files, the test function it names and the helper
+/// functions beside it; the whole file where no such test is found; and the
+/// shared fixtures (`common/mod.rs`) whole. KEYED BY THE CASE, NOT ITS FILE:
+/// on #1276 a file-wide key moved every mutant a `lib.rs` case reaches on any
+/// edit to `lib.rs`, so a lap re-judged nearly all of them.
+#[must_use]
+pub fn case_digests<'c>(
+    root: &std::path::Path,
+    cases: impl IntoIterator<Item = &'c Case>,
+    package_dirs: &std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<Case, String> {
+    type Parsed = Option<(Vec<u8>, std::collections::BTreeMap<String, Vec<String>>)>;
+    let mut parsed: std::collections::BTreeMap<String, Parsed> = std::collections::BTreeMap::new();
+    let mut digests = std::collections::BTreeMap::new();
+    for case in cases {
+        let (name, binary) = case;
+        let test = name.rsplit("::").next().unwrap_or(name);
+        let mut hasher = blake3::Hasher::new();
+        for file in case_sources(package_dirs, name, binary) {
+            let held = parsed.entry(file.clone()).or_insert_with(|| {
+                let bytes = crate::fsio::read(root.join(&file)).ok()?;
+                let tests = test_texts(&String::from_utf8_lossy(&bytes));
+                Some((bytes, tests))
+            });
+            hasher.update(format!("\x1d{file}\x1f").as_bytes());
+            let Some((bytes, tests)) = held else {
+                continue;
+            };
+            match tests.get(test).filter(|_| !file.ends_with("common/mod.rs")) {
+                Some(texts) => {
+                    for text in texts {
+                        hasher.update(text.as_bytes());
+                        hasher.update(b"\x1e");
+                    }
+                }
+                None => {
+                    hasher.update(bytes);
+                }
+            }
+        }
+        digests.insert(case.clone(), hasher.finalize().to_hex().to_string());
+    }
+    digests
+}
+
+/// Every `#[test]` function in `source` by name: its own text, then the
+/// non-test functions of the module it sits in, which are its helpers.
+fn test_texts(source: &str) -> std::collections::BTreeMap<String, Vec<String>> {
+    use ast::{HasAttrs as _, HasName as _};
+    let is_test = |function: &ast::Fn| {
+        function
+            .attrs()
+            .any(|attr| attr.syntax().text().to_string().contains("test"))
+    };
+    let parse = SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024);
+    let mut texts: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for function in parse
+        .tree()
+        .syntax()
+        .descendants()
+        .filter_map(ast::Fn::cast)
+    {
+        let Some(name) = function.name() else {
+            continue;
+        };
+        if !is_test(&function) {
+            continue;
+        }
+        let helpers: String = function
+            .syntax()
+            .parent()
+            .into_iter()
+            .flat_map(|module| module.children().filter_map(ast::Fn::cast))
+            .filter(|sibling| !is_test(sibling))
+            .map(|sibling| sibling.syntax().to_string())
+            .collect();
+        texts
+            .entry(name.text().to_string())
+            .or_default()
+            .push(format!("{}\x1f{helpers}", function.syntax()));
+    }
+    texts
 }
 
 fn site_hasher(root: &std::path::Path, mutant: &Listed) -> Option<blake3::Hasher> {
@@ -1599,7 +1682,8 @@ struct Judging<'a> {
     /// Each case's measured seconds, from the reach run.
     seconds: &'a std::collections::BTreeMap<Case, f64>,
     cache: &'a std::collections::BTreeMap<String, String>,
-    dirs: &'a std::collections::BTreeMap<String, String>,
+    /// Each reaching case's own digest ([`case_digests`]).
+    digests: &'a std::collections::BTreeMap<Case, String>,
     /// The verdict journal, appended as each verdict is decided: CRASH-ONLY
     /// (Candea & Fox 2003), so a killed sweep keeps every kill it finished and
     /// a restart resumes from them (a restart lost a whole judging pass).
@@ -1644,7 +1728,7 @@ fn judge_all(
                         break;
                     };
                     let cases = judging.reach.get(&id).unwrap_or(nobody);
-                    let key = verdict_key(judging.root, mutant, cases, judging.dirs);
+                    let key = verdict_key(judging.root, mutant, cases, judging.digests);
                     let reused = key
                         .as_ref()
                         .and_then(|key| judging.cache.get(key))
@@ -1918,6 +2002,7 @@ pub fn sweep(
     )?;
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
     let reach = record_reach(&work, &target, &state, &packages)?;
+    let digests = case_digests(&root, reach.values().flatten(), &dirs);
     writeln!(
         out,
         "mutate schema: reach recorded for {} site(s) in {}s",
@@ -1948,7 +2033,7 @@ pub fn sweep(
             reach: &reach,
             seconds: &seconds,
             cache: &cache,
-            dirs: &dirs,
+            digests: &digests,
             store: &cache_path,
         },
         &todo,
@@ -2678,7 +2763,6 @@ mod tests {
             vec![
                 "crates/batten/tests/it/cli.rs",
                 "crates/batten/tests/it/common/mod.rs",
-                "crates/batten/tests/it/main.rs",
                 "crates/batten/tests/it.rs"
             ]
         );
@@ -2733,7 +2817,8 @@ mod tests {
         );
         let dirs = [(String::from("p"), String::new())].into();
         let cases = [(String::from("x"), String::from("p"))].into();
-        let verdict = verdict_key(&root, &ne, &cases, &dirs).unwrap();
+        let digests = case_digests(&root, &cases, &dirs);
+        let verdict = verdict_key(&root, &ne, &cases, &digests).unwrap();
         assert_eq!(verdict.len(), 64);
         assert_ne!(verdict, key);
         std::fs::write(root.join("src/lib.rs"), format!("\n{source}")).unwrap();
@@ -2743,7 +2828,53 @@ mod tests {
             (4, 2),
         );
         assert_eq!(site_key(&root, &moved), Some(key));
-        assert_ne!(verdict_key(&root, &moved, &cases, &dirs), Some(verdict));
+        let digests = case_digests(&root, &cases, &dirs);
+        assert_ne!(verdict_key(&root, &moved, &cases, &digests), Some(verdict));
+    }
+
+    /// A case's digest moves with its own test and the helpers beside it,
+    /// and with nothing else in its file: an edit to another test or to the
+    /// code under test leaves it.
+    ///
+    /// Fails by: the file read whole (any edit moves every case), a helper
+    /// left out (its edit moves nothing), or two tests sharing one digest.
+    #[test]
+    fn a_case_is_keyed_by_its_own_test_and_helpers() {
+        let root = crate::scratch::scratch("schema-case-digests");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let write = |code: &str, helper: &str, b: &str| {
+            std::fs::write(
+                root.join("src/lib.rs"),
+                format!(
+                    "pub fn code() -> u8 {{ {code} }}\n\
+                     #[cfg(test)]\nmod tests {{\n\
+                     fn helper() -> u8 {{ {helper} }}\n\
+                     #[test]\nfn a() {{ assert_eq!(helper(), 1); }}\n\
+                     #[test]\nfn b() {{ assert_eq!(super::code(), {b}); }}\n}}\n"
+                ),
+            )
+            .unwrap();
+        };
+        let dirs = [(String::from("p"), String::new())].into();
+        let cases: BTreeSet<Case> = ["tests::a", "tests::b"]
+            .map(|name| (name.to_owned(), String::from("p")))
+            .into();
+        let digest = |name: &str| {
+            case_digests(&root, &cases, &dirs)[&(name.to_owned(), String::from("p"))].clone()
+        };
+        write("1", "1", "1");
+        let (a, b) = (digest("tests::a"), digest("tests::b"));
+        assert_ne!(a, b);
+        write("2", "1", "1");
+        assert_eq!(
+            (digest("tests::a"), digest("tests::b")),
+            (a.clone(), b.clone())
+        );
+        write("2", "1", "2");
+        assert_eq!(digest("tests::a"), a, "another test's edit");
+        assert_ne!(digest("tests::b"), b);
+        write("2", "3", "2");
+        assert_ne!(digest("tests::a"), a, "a helper's edit");
     }
 
     #[test]
@@ -2820,9 +2951,9 @@ mod tests {
         mutants.push(with("<=", "none"));
         mutants.push(with(">", "kept-survivor"));
         mutants.push(with(">=", "kept-unreached"));
-        let dirs = std::collections::BTreeMap::new();
+        let digests = std::collections::BTreeMap::new();
         let nobody = BTreeSet::new();
-        let key = |m: &Listed| verdict_key(&base, m, &nobody, &dirs).unwrap();
+        let key = |m: &Listed| verdict_key(&base, m, &nobody, &digests).unwrap();
         let cache = [
             (key(&mutants[0]), String::from("caught")),
             (key(&mutants[101]), String::from("timeout")),
@@ -2842,7 +2973,7 @@ mod tests {
             reach: &reach,
             seconds: &seconds,
             cache: &cache,
-            dirs: &dirs,
+            digests: &digests,
             store: &store,
         };
         let todo: Vec<u32> = (0..105).collect();
