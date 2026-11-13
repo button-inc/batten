@@ -1370,6 +1370,9 @@ pub fn record_reach(
         ran.passed(),
         "the unmutated suite failed on the schema build, so no verdict would mean anything"
     );
+    // THE FINISHED SUITE'S FIXTURES GO: nothing reads them once it has exited,
+    // and on #1276 they held 3.7 GB of the tree's target while the judging ran.
+    let _ = std::fs::remove_dir_all(target.join("tmp"));
     let reach = collect_reach(&base)?;
     std::fs::write(&seal, inputs)?;
     Ok(reach)
@@ -1752,7 +1755,7 @@ fn report(
     verdicts: &[(u32, Verdict)],
     (unviable, classic): (usize, usize),
     state: &std::path::Path,
-    started: std::time::Instant,
+    seconds: u64,
 ) -> anyhow::Result<u8> {
     let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for (id, verdict) in verdicts {
@@ -1766,9 +1769,7 @@ fn report(
     writeln!(
         out,
         "mutate schema: {counts:?}, {} unviable, {} classic, in {}s",
-        unviable,
-        classic,
-        started.elapsed().as_secs()
+        unviable, classic, seconds
     )?;
     // A RUN THAT ERRED DECIDED NOTHING: could-not-look (3), above any verdict,
     // so a sweep whose runs failed never reads as a set of survivors.
@@ -1961,7 +1962,7 @@ pub fn sweep(
         &verdicts,
         (unviable.len(), classic.len()),
         &state,
-        started,
+        started.elapsed().as_secs(),
     )?;
     Ok(Swept {
         code,
@@ -2774,8 +2775,7 @@ mod tests {
             (1, Verdict::Missed),
             (2, Verdict::Uncovered),
         ];
-        let started = std::time::Instant::now();
-        let code = report(&mut out, &mutants, &verdicts, (4, 5), &state, started).unwrap();
+        let code = report(&mut out, &mutants, &verdicts, (4, 5), &state, 7).unwrap();
         let said = String::from_utf8(out).unwrap();
         assert_eq!(code, 2);
         assert!(
@@ -2785,12 +2785,12 @@ mod tests {
         assert!(!said.contains("\tm0"), "{said}");
         assert!(
             said.contains(
-                "{\"caught\": 1, \"missed\": 1, \"uncovered\": 1}, 4 unviable, 5 classic"
+                "{\"caught\": 1, \"missed\": 1, \"uncovered\": 1}, 4 unviable, 5 classic, in 7s"
             ),
             "{said}"
         );
         let mut out = Vec::new();
-        let code = report(&mut out, &mutants, &verdicts[..1], (0, 0), &state, started).unwrap();
+        let code = report(&mut out, &mutants, &verdicts[..1], (0, 0), &state, 7).unwrap();
         assert_eq!(code, 0);
     }
 
