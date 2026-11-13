@@ -832,14 +832,21 @@ pub fn judge(
     .to_vec();
     // THE CASES' PACKAGES, NOT THE MUTANT'S: a `batten-fsio` site reached only
     // by `batten`'s cases is judged by those.
-    for package in binaries
+    let packages: BTreeSet<&str> = binaries
         .iter()
         .map(|binary| package_of(binary))
-        .collect::<BTreeSet<_>>()
-    {
-        args.extend([String::from("-p"), package.to_owned()]);
+        .filter(|package| !package.is_empty())
+        .collect();
+    if packages.is_empty() || binaries.contains("") {
+        // A CASE WHOSE BINARY WENT UNRECORDED narrows nothing: its own package
+        // and every target, rather than a `-p ""` cargo refuses.
+        args.extend([String::from("-p"), mutant.package.clone()]);
+    } else {
+        for package in packages {
+            args.extend([String::from("-p"), package.to_owned()]);
+        }
+        args.extend(super::cover::target_args(&binaries, &mutant.file));
     }
-    args.extend(super::cover::target_args(&binaries, &mutant.file));
     args.extend([
         String::from("-E"),
         super::cover::filterset(&tests),
@@ -864,7 +871,17 @@ pub fn judge(
         super::Outcome::TimedOut => Verdict::Timeout,
         super::Outcome::Failed(_) if ran.output.contains("TIMEOUT") => Verdict::Timeout,
         super::Outcome::Failed(Some(100)) => Verdict::Caught,
-        super::Outcome::Failed(_) => Verdict::Error,
+        super::Outcome::Failed(_) => {
+            // THE RUN'S OWN WORDS, KEPT: on #1276 2,213 runs failed before a
+            // case started and said nothing anywhere, so an error now leaves
+            // its output beside the tree, where the summary points.
+            if let Some(state) = work.parent() {
+                let errors = state.join("errors");
+                let _ = std::fs::create_dir_all(&errors);
+                let _ = std::fs::write(errors.join(format!("{id}.log")), &ran.output);
+            }
+            Verdict::Error
+        }
     })
 }
 
@@ -900,7 +917,7 @@ fn record(test: &[String]) -> anyhow::Result<u8> {
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("no case to run"))?;
     let name = super::cover::test_name(test).unwrap_or(program);
-    let binary = std::env::var("NEXTEST_BINARY_ID").unwrap_or_default();
+    let binary = super::cover::binary_id(program, &std::env::current_dir()?);
     let key = blake3::hash(test.join("\u{1f}").as_bytes()).to_hex()[..16].to_owned();
     let dir = base.join(key);
     let _ = std::fs::remove_dir_all(&dir);
@@ -1257,6 +1274,48 @@ fn cached_unviable(
         .collect()
 }
 
+/// Print every verdict that is not a kill, and the counts, and answer the
+/// sweep's exit: 3 when a run erred, 2 when a mutant survived, else 0.
+fn report(
+    out: &mut dyn std::io::Write,
+    mutants: &[Listed],
+    verdicts: &[(u32, Verdict)],
+    (unviable, classic): (usize, usize),
+    state: &std::path::Path,
+    started: std::time::Instant,
+) -> anyhow::Result<u8> {
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for (id, verdict) in verdicts {
+        *counts.entry(verdict.name()).or_default() += 1;
+        if !matches!(verdict, Verdict::Caught)
+            && let Some(mutant) = mutants.get(*id as usize)
+        {
+            writeln!(out, "{}\t{}", verdict.name(), mutant.name)?;
+        }
+    }
+    writeln!(
+        out,
+        "mutate schema: {counts:?}, {} unviable, {} classic, in {}s",
+        unviable,
+        classic,
+        started.elapsed().as_secs()
+    )?;
+    // A RUN THAT ERRED DECIDED NOTHING: could-not-look (3), above any verdict,
+    // so a sweep whose runs failed never reads as a set of survivors.
+    if verdicts.iter().any(|(_, v)| matches!(v, Verdict::Error)) {
+        writeln!(
+            out,
+            "mutate schema: run errors kept under {}",
+            state.join("errors").display()
+        )?;
+        return Ok(3);
+    }
+    let failed = verdicts
+        .iter()
+        .any(|(_, v)| matches!(v, Verdict::Missed | Verdict::Uncovered));
+    Ok(if failed { 2 } else { 0 })
+}
+
 fn sweep(
     listing_path: &str,
     jobs: Option<&String>,
@@ -1347,26 +1406,14 @@ fn sweep(
         }
     }
     store_verdicts(&cache_path, &cache)?;
-    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-    for (id, verdict) in &verdicts {
-        *counts.entry(verdict.name()).or_default() += 1;
-        if !matches!(verdict, Verdict::Caught)
-            && let Some(mutant) = mutants.get(*id as usize)
-        {
-            writeln!(out, "{}\t{}", verdict.name(), mutant.name)?;
-        }
-    }
-    writeln!(
+    report(
         out,
-        "mutate schema: {counts:?}, {} unviable, {} classic, in {}s",
-        unviable.len(),
-        classic.len(),
-        started.elapsed().as_secs()
-    )?;
-    let failed = verdicts
-        .iter()
-        .any(|(_, v)| matches!(v, Verdict::Missed | Verdict::Uncovered));
-    Ok(if failed { 2 } else { 0 })
+        &mutants,
+        &verdicts,
+        (unviable.len(), classic.len()),
+        &state,
+        started,
+    )
 }
 
 #[cfg(test)]
