@@ -1267,7 +1267,11 @@ fn sweep(
         .join("mutate")
         .join("schema");
     let work = state.join("tree");
-    let target = state.join("target");
+    // INSIDE THE TREE, where cargo-mutants' copies keep theirs: a case's
+    // fixtures land under the target's `tmp/`, and on #1276 one with no `.git`
+    // of its own passed only inside a checkout, so a target beside the tree
+    // failed the unmutated baseline.
+    let target = work.join("target");
     let mutants = listing(&crate::fsio::read_to_string(listing_path)?)?;
     let jobs: usize = jobs.and_then(|j| j.parse().ok()).unwrap_or(3);
     let started = std::time::Instant::now();
