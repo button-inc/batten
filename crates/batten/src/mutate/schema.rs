@@ -42,25 +42,47 @@ use ra_ap_syntax::{AstNode as _, SourceFile, SyntaxKind, SyntaxNode, TextRange, 
 /// The environment variable that selects the active mutant.
 pub const ACTIVE: &str = "BATTEN_MUTANT";
 
-/// The switch every mutated crate root gains.
+/// The switch every mutated crate root gains, for a schema of `probes`
+/// function probes.
 ///
-/// RECORDING TOO: under `BATTEN_MUTANT_RECORD` each process appends every site
-/// it reaches, once, to a file named by its pid in that directory, written
-/// unbuffered so a process killed mid-case still leaves its record.
-pub const SWITCH: &str = "\n#[doc(hidden)]\n#[allow(dead_code, unreachable_pub, clippy::all)]\n\
-pub(crate) fn __batten_mutant(id: u32) -> bool {\n    \
-static ACTIVE: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();\n    \
-static REACHED: std::sync::OnceLock<Option<std::sync::Mutex<(std::collections::HashSet<u32>, std::fs::File)>>> = std::sync::OnceLock::new();\n    \
-if let Some(held) = REACHED.get_or_init(|| {\n        \
+/// RECORDING TOO: under `BATTEN_MUTANT_RECORD` each process appends every
+/// mutant site it reaches (`<id>`) and every function it executes (`f<id>`),
+/// once each, to a file named by its pid in that directory, written
+/// unbuffered so a process killed mid-case still leaves its record. A
+/// function's probe costs one relaxed load once it has fired.
+#[must_use]
+pub fn prelude(probes: usize) -> String {
+    format!(
+        "\n#[doc(hidden)]\n#[allow(dead_code, unreachable_pub, clippy::all)]\n\
+pub(crate) fn __batten_record(line: std::fmt::Arguments<'_>) {{\n    \
+static REACHED: std::sync::OnceLock<Option<std::sync::Mutex<std::fs::File>>> = std::sync::OnceLock::new();\n    \
+if let Some(file) = REACHED.get_or_init(|| {{\n        \
 let dir = std::env::var_os(\"BATTEN_MUTANT_RECORD\")?;\n        \
 let file = std::fs::OpenOptions::new().create(true).append(true)\
 .open(std::path::Path::new(&dir).join(std::process::id().to_string())).ok()?;\n        \
-Some(std::sync::Mutex::new((std::collections::HashSet::new(), file)))\n    \
-}) && let Ok(mut held) = held.lock() && held.0.insert(id) {\n        \
-let _ = std::io::Write::write_all(&mut held.1, format!(\"{id}\\n\").as_bytes());\n    \
-}\n    \
+Some(std::sync::Mutex::new(file))\n    \
+}}) && let Ok(mut file) = file.lock() {{\n        \
+let _ = std::io::Write::write_fmt(&mut *file, format_args!(\"{{line}}\\n\"));\n    \
+}}\n}}\n\
+#[doc(hidden)]\n#[allow(dead_code, unreachable_pub, clippy::all)]\n\
+pub(crate) fn __batten_mutant(id: u32) -> bool {{\n    \
+static ACTIVE: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();\n    \
+static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<u32>>> = std::sync::OnceLock::new();\n    \
+if let Ok(mut seen) = SEEN.get_or_init(Default::default).lock() && seen.insert(id) {{\n        \
+__batten_record(format_args!(\"{{id}}\"));\n    \
+}}\n    \
 *ACTIVE.get_or_init(|| std::env::var(\"BATTEN_MUTANT\").ok().and_then(|v| v.parse().ok())) \
-== Some(id)\n}\n";
+== Some(id)\n}}\n\
+#[doc(hidden)]\n#[allow(dead_code, unreachable_pub, clippy::all)]\n\
+pub(crate) fn __batten_fn(id: usize) {{\n    \
+static SEEN: [std::sync::atomic::AtomicBool; {probes}] = \
+[const {{ std::sync::atomic::AtomicBool::new(false) }}; {probes}];\n    \
+if let Some(seen) = SEEN.get(id) && !seen.load(std::sync::atomic::Ordering::Relaxed) \
+&& !seen.swap(true, std::sync::atomic::Ordering::Relaxed) {{\n        \
+__batten_record(format_args!(\"f{{id}}\"));\n    \
+}}\n}}\n"
+    )
+}
 
 /// The directory a recording case's processes write their reached sites to.
 pub const RECORD: &str = "BATTEN_MUTANT_RECORD";
@@ -158,6 +180,9 @@ enum Wrap {
     /// as nothing and owns nothing: a const caller it breaks is answered by
     /// [`unviable`] through [`Rendered::deconst`].
     Erase,
+    /// A function probe, inserted at the start of a body: the statement that
+    /// records the function as executed. Owns no mutant.
+    Probe(String),
 }
 
 /// One switched site and everything that switches it.
@@ -181,6 +206,16 @@ pub struct Rendered {
     /// Each `const fn` whose `const` the rendering dropped: its name as
     /// cargo-mutants lists it, and the mutants placed in its body.
     pub deconst: Vec<(String, Vec<u32>)>,
+    /// Each probed function's source digest, in probe-id order from the id
+    /// the rendering was given.
+    pub probes: Vec<String>,
+    /// The output ranges the probes were written at, so a compile error at
+    /// one unprobes the file rather than reading as a mutant's.
+    pub probe_regions: Vec<Range<usize>>,
+    /// The digest of the source with every probed body cut out: types,
+    /// consts, `const fn`s, macros and signatures, which no probe records
+    /// but every run depends on. The whole source where nothing is probed.
+    pub skeleton: String,
 }
 
 impl Rendered {
@@ -380,6 +415,7 @@ fn merge(wraps: &mut Vec<Wrap>, wrap: Wrap) {
         Wrap::Guard(_) => 2,
         Wrap::ArmOff(_) => 3,
         Wrap::Erase => 4,
+        Wrap::Probe(_) => 5,
     });
 }
 
@@ -414,6 +450,7 @@ struct Writer<'a> {
     source: &'a str,
     out: String,
     regions: Vec<(Range<usize>, Vec<u32>)>,
+    probe_regions: Vec<Range<usize>>,
 }
 
 fn switch(ids: &[u32]) -> String {
@@ -508,6 +545,11 @@ impl Writer<'_> {
                 }
             }
             Wrap::Erase => {}
+            Wrap::Probe(statement) => {
+                let start = self.out.len();
+                self.out.push_str(statement);
+                self.probe_regions.push(start..self.out.len());
+            }
             Wrap::ArmOff(ids) => {
                 if site.range.is_empty() {
                     let start = self.out.len();
@@ -531,14 +573,20 @@ fn ids_of(wrap: &Wrap) -> Vec<u32> {
             alts.iter().map(|(id, _)| *id).collect()
         }
         Wrap::ArmOff(ids) => ids.clone(),
-        Wrap::Erase => Vec::new(),
+        Wrap::Erase | Wrap::Probe(_) => Vec::new(),
     }
 }
 
 /// Render `source` with every mutant of `mutants` switched, except those in
-/// `skip`. A mutant the rewrite cannot place is returned in `classic`.
+/// `skip`, and, from `probe_from`, a probe in every runtime function body. A
+/// mutant the rewrite cannot place is returned in `classic`.
 #[must_use]
-pub fn render(source: &str, mutants: &[(u32, &Listed)], skip: &BTreeSet<u32>) -> Rendered {
+pub fn render(
+    source: &str,
+    mutants: &[(u32, &Listed)],
+    skip: &BTreeSet<u32>,
+    probe_from: Option<usize>,
+) -> Rendered {
     let parse = SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024);
     let root = parse.tree().syntax().clone();
     let mut classic = Vec::new();
@@ -575,6 +623,7 @@ pub fn render(source: &str, mutants: &[(u32, &Listed)], skip: &BTreeSet<u32>) ->
             }),
         }
     }
+    let (probes, skeleton) = probe_sites(&root, source, probe_from, &mut sites);
     for &(start, end) in erased.keys() {
         sites.push(Site {
             range: start..end,
@@ -587,6 +636,7 @@ pub fn render(source: &str, mutants: &[(u32, &Listed)], skip: &BTreeSet<u32>) ->
         source,
         out: String::with_capacity(source.len() * 2),
         regions: Vec::new(),
+        probe_regions: Vec::new(),
     };
     writer.inner(0..source.len(), &roots, None);
     Rendered {
@@ -594,7 +644,71 @@ pub fn render(source: &str, mutants: &[(u32, &Listed)], skip: &BTreeSet<u32>) ->
         regions: writer.regions,
         classic,
         deconst: erased.into_values().collect(),
+        probes,
+        probe_regions: writer.probe_regions,
+        skeleton,
     }
+}
+
+/// A probe site in every function body that runs at run time, ids counted
+/// from `probe_from` (none when it is `None`), each with its function's
+/// source digest; and the skeleton digest (see [`Rendered::skeleton`]).
+///
+/// THE FUNCTION IS THE UNIT (RTS++, Fu et al. 2019; RustyRTS, Hundsdorfer et
+/// al., ICST 2025): a test's verdict depends on the functions it executes, so
+/// those are recorded per case, while what is decided at compile time (const
+/// items and `const fn`s, types, macros, signatures) is in the skeleton every
+/// key carries. Source text, never the binary: one line shifts every address.
+fn probe_sites(
+    root: &SyntaxNode,
+    source: &str,
+    probe_from: Option<usize>,
+    sites: &mut Vec<Site>,
+) -> (Vec<String>, String) {
+    let mut probes = Vec::new();
+    let mut cuts: Vec<Range<usize>> = Vec::new();
+    if let Some(mut next) = probe_from {
+        for function in root.descendants().filter_map(ast::Fn::cast) {
+            if function.const_token().is_some()
+                || const_context(function.syntax()) != Context::Runtime
+            {
+                continue;
+            }
+            let Some(list) = function.body().and_then(|body| body.stmt_list()) else {
+                continue;
+            };
+            let (Some(open), Some(close)) = (list.l_curly_token(), list.r_curly_token()) else {
+                continue;
+            };
+            let at = usize::from(open.text_range().end());
+            sites.push(Site {
+                range: at..at,
+                wraps: vec![Wrap::Probe(format!("crate::__batten_fn({next});"))],
+                children: Vec::new(),
+            });
+            probes.push(
+                blake3::hash(function.syntax().to_string().as_bytes())
+                    .to_hex()
+                    .to_string(),
+            );
+            cuts.push(at..usize::from(close.text_range().start()));
+            next += 1;
+        }
+    }
+    cuts.sort_by_key(|cut| cut.start);
+    let mut skeleton = blake3::Hasher::new();
+    let mut at = 0;
+    for cut in cuts {
+        // A body inside a cut body went with it.
+        if cut.start < at {
+            continue;
+        }
+        skeleton.update(source[at..cut.start].as_bytes());
+        skeleton.update(b"\x1f");
+        at = cut.end;
+    }
+    skeleton.update(source[at..].as_bytes());
+    (probes, skeleton.finalize().to_hex().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -687,15 +801,62 @@ fn crate_roots(work: &std::path::Path, mutants: &[Listed]) -> BTreeSet<String> {
     roots
 }
 
-/// The schema as rendered into `work`: per file, its rendering.
+/// The schema as rendered into `work`: per file, its rendering, and what the
+/// verdict keys read from it.
 #[derive(Debug, Default)]
 pub struct Schema {
-    /// Each mutated file's rendering, by path.
+    /// Each rendered file's rendering, by path.
     pub files: std::collections::BTreeMap<String, Rendered>,
+    /// Every probed function's source digest, by probe id.
+    pub probes: Vec<String>,
+    /// The digest of every rendered file's skeleton ([`Rendered::skeleton`]).
+    pub skeleton: String,
 }
 
-/// Render every mutant but `skip` from `root`'s sources into `work`, with the
-/// switch in every crate root. Returns the renderings, for error attribution.
+/// Every Rust source under the `src/` of each package `mutants` live in: the
+/// files a probe goes into, mutated or not.
+fn package_sources(root: &std::path::Path, mutants: &[Listed]) -> BTreeSet<String> {
+    let mut sources: BTreeSet<String> = mutants.iter().map(|m| m.file.clone()).collect();
+    for dir in package_dirs(mutants).values() {
+        let src = root.join(dir).join("src");
+        for entry in ignore::WalkBuilder::new(&src)
+            .hidden(false)
+            .build()
+            .flatten()
+        {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "rs")
+                && let Ok(relative) = path.strip_prefix(root)
+            {
+                sources.insert(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    sources
+}
+
+/// The sources a package's `build.rs` includes by `#[path]`: compiled into
+/// the build script too, which has no probe to call.
+fn build_script_includes(root: &std::path::Path, mutants: &[Listed]) -> BTreeSet<String> {
+    let mut included = BTreeSet::new();
+    for dir in package_dirs(mutants).values() {
+        let Ok(script) = crate::fsio::read_to_string(root.join(dir).join("build.rs")) else {
+            continue;
+        };
+        for line in script.lines() {
+            if let Some(rest) = line.trim().strip_prefix("#[path = \"")
+                && let Some((path, _)) = rest.split_once('"')
+            {
+                included.insert(format!("{dir}/{path}"));
+            }
+        }
+    }
+    included
+}
+
+/// Render every mutant but `skip` from `root`'s sources into `work`, a probe
+/// in every package source but `unprobed`, and the switch in every crate
+/// root. Returns the renderings, for error attribution and the keys.
 ///
 /// # Errors
 ///
@@ -705,6 +866,7 @@ pub fn write_schema(
     work: &std::path::Path,
     mutants: &[Listed],
     skip: &BTreeSet<u32>,
+    unprobed: &BTreeSet<String>,
 ) -> anyhow::Result<Schema> {
     let mut by_file: std::collections::BTreeMap<&str, Vec<(u32, &Listed)>> =
         std::collections::BTreeMap::new();
@@ -716,21 +878,31 @@ pub fn write_schema(
             .push((id, mutant));
     }
     let roots = crate_roots(work, mutants);
+    let included = build_script_includes(root, mutants);
     let mut schema = Schema::default();
-    let mut touched: BTreeSet<String> = BTreeSet::new();
-    for (file, listed) in &by_file {
-        let source = crate::fsio::read_to_string(root.join(file))?;
-        let mut rendered = render(&source, listed, skip);
-        if roots.contains(*file) {
-            rendered.text.push_str(SWITCH);
-        }
-        write_if_changed(&work.join(file), &rendered.text)?;
-        touched.insert((*file).to_owned());
-        schema.files.insert((*file).to_owned(), rendered);
+    let mut skeleton = blake3::Hasher::new();
+    for file in package_sources(root, mutants) {
+        let source = crate::fsio::read_to_string(root.join(&file))?;
+        let listed = by_file.get(file.as_str()).map_or(&[][..], Vec::as_slice);
+        let probe_from =
+            (!unprobed.contains(&file) && !included.contains(&file)).then_some(schema.probes.len());
+        let rendered = render(&source, listed, skip, probe_from);
+        schema.probes.extend(rendered.probes.iter().cloned());
+        skeleton.update(format!("\x1d{file}\x1f{}", rendered.skeleton).as_bytes());
+        schema.files.insert(file, rendered);
     }
-    for crate_root in roots.difference(&touched) {
+    schema.skeleton = skeleton.finalize().to_hex().to_string();
+    let prelude = prelude(schema.probes.len());
+    for (file, rendered) in &schema.files {
+        let mut text = rendered.text.clone();
+        if roots.contains(file) {
+            text.push_str(&prelude);
+        }
+        write_if_changed(&work.join(file), &text)?;
+    }
+    for crate_root in roots.iter().filter(|r| !schema.files.contains_key(*r)) {
         let mut source = crate::fsio::read_to_string(root.join(crate_root))?;
-        source.push_str(SWITCH);
+        source.push_str(&prelude);
         write_if_changed(&work.join(crate_root), &source)?;
     }
     Ok(schema)
@@ -744,6 +916,9 @@ pub struct Refused {
     /// The mutants of each `const fn` whose dropped `const` a const caller
     /// needed: they compile, but not switched, so they are handed back.
     pub reconst: BTreeSet<u32>,
+    /// The files whose probes an error landed on: rebuilt without probes,
+    /// their whole text then in the skeleton.
+    pub unprobe: BTreeSet<String>,
     /// Each error no mutant owns.
     pub stray: Vec<String>,
 }
@@ -788,11 +963,26 @@ pub fn unviable(schema: &Schema, messages: &str) -> Refused {
             .into_iter()
             .flatten()
             .find(|span| span["is_primary"] == true);
-        let ids = primary.and_then(|span| {
+        let at = primary.and_then(|span| {
             let file = span["file_name"].as_str()?;
             let at = usize::try_from(span["byte_start"].as_u64()?).ok()?;
-            schema.files.get(file)?.owners(at)
+            Some((file, at))
         });
+        // AN ERROR ON A PROBE IS THE PROBE'S: the file is compiled somewhere
+        // the switch is not (a build script's `#[path]`), whatever mutant's
+        // branch the probe sits in.
+        if let Some((file, at)) = at
+            && schema.files.get(file).is_some_and(|rendered| {
+                rendered
+                    .probe_regions
+                    .iter()
+                    .any(|region| region.start <= at && at < region.end)
+            })
+        {
+            refused.unprobe.insert(file.to_owned());
+            continue;
+        }
+        let ids = at.and_then(|(file, at)| schema.files.get(file)?.owners(at));
         match ids {
             Some(ids) => refused.owned.extend(ids.iter().copied()),
             None => refused.stray.push(text.to_owned()),
@@ -836,8 +1026,9 @@ pub fn build(
     )];
     let mut skip = known_unviable;
     let mut handed = BTreeSet::new();
+    let mut unprobed = BTreeSet::new();
     for round in 1..=12 {
-        let schema = write_schema(root, work, mutants, &skip)?;
+        let schema = write_schema(root, work, mutants, &skip, &unprobed)?;
         let ran = super::spawn(
             work,
             super::Program::Cargo,
@@ -860,9 +1051,10 @@ pub fn build(
         let refused = unviable(&schema, &ran.stdout);
         writeln!(
             out,
-            "mutate schema: build {round} refused {} mutant(s), handed back {} for a const caller, {} error(s) unowned",
+            "mutate schema: build {round} refused {} mutant(s), handed back {} for a const caller, unprobed {} file(s), {} error(s) unowned",
             refused.owned.len(),
             refused.reconst.len(),
+            refused.unprobe.len(),
             refused.stray.len()
         )?;
         for message in &refused.stray {
@@ -872,10 +1064,11 @@ pub fn build(
         // on #1276 two of them were sources edited mid-sweep, which the
         // pristine snapshot now rules out, and anything else is a rendering bug.
         anyhow::ensure!(
-            !refused.owned.is_empty() || !refused.reconst.is_empty(),
+            !refused.owned.is_empty() || !refused.reconst.is_empty() || !refused.unprobe.is_empty(),
             "the schema build failed on error(s) no mutant owns: {}",
             refused.stray.join("; ")
         );
+        unprobed.extend(refused.unprobe);
         skip.extend(refused.owned);
         // HANDED BACK, NOT UNVIABLE: the mutants compile, only not switched,
         // and with every one of them skipped the function keeps its `const`.
@@ -1261,37 +1454,49 @@ fn record(test: &[String]) -> anyhow::Result<u8> {
     })
 }
 
-/// Every mutant site each case reached: per mutant, its cases' names and
-/// binaries.
+/// What the reach run recorded: per mutant site, the cases that reached it;
+/// per case, the probed functions it executed.
+#[derive(Debug, Default)]
+pub struct Reach {
+    /// Each site's reaching cases, by mutant id.
+    pub sites: std::collections::BTreeMap<u32, BTreeSet<Case>>,
+    /// Each case's executed functions, by probe id.
+    pub executed: std::collections::BTreeMap<Case, BTreeSet<usize>>,
+}
+
+/// Every mutant site each case reached and every function it executed, from
+/// every process of each case.
 ///
 /// # Errors
 ///
 /// The reach directory cannot be read.
-pub fn collect_reach(
-    base: &std::path::Path,
-) -> anyhow::Result<std::collections::BTreeMap<u32, BTreeSet<(String, String)>>> {
-    let mut reach: std::collections::BTreeMap<u32, BTreeSet<(String, String)>> =
-        std::collections::BTreeMap::new();
+pub fn collect_reach(base: &std::path::Path) -> anyhow::Result<Reach> {
+    let mut reach = Reach::default();
     for case in std::fs::read_dir(base)? {
         let dir = case?.path();
         let Ok(head) = crate::fsio::read_to_string(dir.join("case")) else {
             continue;
         };
         let (name, binary) = head.split_once('\t').unwrap_or((head.as_str(), ""));
+        let case: Case = (name.to_owned(), binary.to_owned());
         for file in std::fs::read_dir(&dir)? {
             let path = file?.path();
             if path.file_name().is_some_and(|f| f == "case") {
                 continue;
             }
             let text = crate::fsio::read_to_string(&path).unwrap_or_default();
-            for id in text
-                .lines()
-                .filter_map(|line| line.trim().parse::<u32>().ok())
-            {
-                reach
-                    .entry(id)
-                    .or_default()
-                    .insert((name.to_owned(), binary.to_owned()));
+            for line in text.lines().map(str::trim) {
+                if let Some(probe) = line.strip_prefix('f') {
+                    if let Ok(probe) = probe.parse::<usize>() {
+                        reach
+                            .executed
+                            .entry(case.clone())
+                            .or_default()
+                            .insert(probe);
+                    }
+                } else if let Ok(site) = line.parse::<u32>() {
+                    reach.sites.entry(site).or_default().insert(case.clone());
+                }
             }
         }
     }
@@ -1310,7 +1515,7 @@ pub fn record_reach(
     target: &std::path::Path,
     state: &std::path::Path,
     packages: &BTreeSet<&str>,
-) -> anyhow::Result<std::collections::BTreeMap<u32, BTreeSet<(String, String)>>> {
+) -> anyhow::Result<Reach> {
     let base = state.join("reach");
     // REACH IS A FUNCTION OF THE SCHEMA TREE, so a restart over the same tree
     // resumes from the record a finished run sealed instead of re-running the
@@ -1381,6 +1586,26 @@ pub fn record_reach(
 /// The file `record_reach` writes once a record is whole, holding the digest
 /// of the tree it was recorded over.
 const SEALED: &str = "sealed";
+
+/// The digest of every non-Rust file the checkout at `live` tracks or has
+/// changed: fixtures, presets, configs and the lockfile a run may read, which
+/// no probe records. Untracked ignored files (a session transcript) are not.
+///
+/// # Errors
+///
+/// The checkout's index or status cannot be read.
+pub fn resource_digest(live: &std::path::Path) -> anyhow::Result<String> {
+    let mut paths = crate::git::tracked_paths(live)?;
+    paths.extend(crate::git::changed_paths(live)?);
+    let mut hasher = blake3::Hasher::new();
+    for path in paths.iter().filter(|path| !path.ends_with(".rs")) {
+        hasher.update(path.as_bytes());
+        hasher.update(&[0]);
+        hasher.update(&crate::fsio::read(live.join(path)).unwrap_or_default());
+        hasher.update(&[0]);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
 
 /// A digest of every source and manifest in the schema tree: what the test
 /// binaries a reach record ran were built from. The build output is not.
@@ -1495,11 +1720,19 @@ pub fn verdict_key(
 /// shared fixtures (`common/mod.rs`) whole. KEYED BY THE CASE, NOT ITS FILE:
 /// on #1276 a file-wide key moved every mutant a `lib.rs` case reaches on any
 /// edit to `lib.rs`, so a lap re-judged nearly all of them.
+///
+/// THE FUNCTIONS IT EXECUTED, BY THEIR SOURCE (Ekstazi, Gligoric et al., ISSTA
+/// 2015; RTS++): each probed function the reach run saw the case run, by its
+/// digest, so an edit anywhere on its path moves its key; and `global`, the
+/// skeleton and every resource it may read, which no probe sees.
 #[must_use]
 pub fn case_digests<'c>(
     root: &std::path::Path,
     cases: impl IntoIterator<Item = &'c Case>,
     package_dirs: &std::collections::BTreeMap<String, String>,
+    executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+    probes: &[String],
+    global: &str,
 ) -> std::collections::BTreeMap<Case, String> {
     type Parsed = Option<(Vec<u8>, std::collections::BTreeMap<String, Vec<String>>)>;
     let mut parsed: std::collections::BTreeMap<String, Parsed> = std::collections::BTreeMap::new();
@@ -1508,6 +1741,11 @@ pub fn case_digests<'c>(
         let (name, binary) = case;
         let test = name.rsplit("::").next().unwrap_or(name);
         let mut hasher = blake3::Hasher::new();
+        hasher.update(global.as_bytes());
+        for probe in executed.get(case).into_iter().flatten() {
+            hasher.update(b"\x1c");
+            hasher.update(probes.get(*probe).map_or("", String::as_str).as_bytes());
+        }
         for file in case_sources(package_dirs, name, binary) {
             let held = parsed.entry(file.clone()).or_insert_with(|| {
                 let bytes = crate::fsio::read(root.join(&file)).ok()?;
@@ -1714,12 +1952,14 @@ fn judge_all(
             .ok(),
     );
     let next = std::sync::atomic::AtomicUsize::new(0);
+    let reused_count = std::sync::atomic::AtomicUsize::new(0);
     let (sent, decided) = std::sync::mpsc::channel::<(u32, Verdict)>();
     let mut verdicts = Vec::with_capacity(todo.len());
     std::thread::scope(|scope| {
         for _ in 0..jobs.max(1) {
             let sent = sent.clone();
-            let (next, hints, journal, nobody) = (&next, &hints, &journal, &nobody);
+            let (next, hints, journal, nobody, reused_count) =
+                (&next, &hints, &journal, &nobody, &reused_count);
             scope.spawn(move || {
                 loop {
                     let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1733,6 +1973,9 @@ fn judge_all(
                         .as_ref()
                         .and_then(|key| judging.cache.get(key))
                         .filter(|v| reusable(v));
+                    if reused.is_some() {
+                        reused_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
                     let verdict = match reused.map(String::as_str) {
                         Some("caught") => Verdict::Caught,
                         Some("timeout") => Verdict::Timeout,
@@ -1771,6 +2014,12 @@ fn judge_all(
             }
         }
     });
+    let _ = writeln!(
+        out,
+        "mutate schema: reused {} of {} verdict(s)",
+        reused_count.into_inner(),
+        todo.len()
+    );
     verdicts
 }
 
@@ -1962,6 +2211,7 @@ pub fn sweep(
     // an hour-long sweep would move under the listing's spans.
     let snapshot = state.join("pristine");
     super::cover::pristine(root, &snapshot)?;
+    let resources = resource_digest(root)?;
     let root = snapshot;
     // AN ERROR LOG IS THIS SWEEP'S OR NOTHING: one left by a killed sweep
     // would read as a run of this one erring.
@@ -2002,11 +2252,22 @@ pub fn sweep(
     )?;
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
     let reach = record_reach(&work, &target, &state, &packages)?;
-    let digests = case_digests(&root, reach.values().flatten(), &dirs);
+    let global = blake3::hash(format!("{}\x1f{resources}", schema.skeleton).as_bytes())
+        .to_hex()
+        .to_string();
+    let digests = case_digests(
+        &root,
+        reach.sites.values().flatten(),
+        &dirs,
+        &reach.executed,
+        &schema.probes,
+        &global,
+    );
     writeln!(
         out,
-        "mutate schema: reach recorded for {} site(s) in {}s",
-        reach.len(),
+        "mutate schema: reach recorded for {} site(s), {} function(s) probed, in {}s",
+        reach.sites.len(),
+        schema.probes.len(),
         started.elapsed().as_secs()
     )?;
     let seconds = durations(
@@ -2030,7 +2291,7 @@ pub fn sweep(
             scratch: &scratch,
             root: &root,
             mutants,
-            reach: &reach,
+            reach: &reach.sites,
             seconds: &seconds,
             cache: &cache,
             digests: &digests,
@@ -2124,7 +2385,7 @@ mod tests {
             .enumerate()
             .map(|(id, m)| (u32::try_from(id).unwrap(), m))
             .collect();
-        render(source, &numbered, &BTreeSet::new())
+        render(source, &numbered, &BTreeSet::new(), None)
     }
 
     /// A case's reach is every site any of its processes recorded, and each
@@ -2144,7 +2405,16 @@ mod tests {
         std::fs::create_dir_all(&two).unwrap();
         std::fs::write(two.join("case"), "m::tests::second\tbatten").unwrap();
         std::fs::write(two.join("200"), "9\n").unwrap();
-        let reach = collect_reach(&base).unwrap();
+        std::fs::write(one.join("102"), "f4\nf2\n").unwrap();
+        let recorded = collect_reach(&base).unwrap();
+        assert_eq!(
+            recorded
+                .executed
+                .get(&(String::from("m::first"), String::from("batten::it"))),
+            Some(&[2, 4].into()),
+            "a case's executed functions, from every process"
+        );
+        let reach = recorded.sites;
         let first = (String::from("m::first"), String::from("batten::it"));
         let second = (String::from("m::tests::second"), String::from("batten"));
         assert_eq!(reach.get(&3), Some(&[first.clone()].into_iter().collect()));
@@ -2266,6 +2536,7 @@ mod tests {
             source,
             &[(7, &listed("BinaryOperator", "!=", (3, 7), (3, 9)))],
             &[7].into_iter().collect(),
+            None,
         );
         assert_eq!(skipped.text, source);
     }
@@ -2365,7 +2636,7 @@ mod tests {
             text: String::new(),
             regions: vec![(0..10, vec![1]), (2..4, vec![2]), (6..6, vec![3])],
             classic: Vec::new(),
-            deconst: Vec::new(),
+            ..Rendered::default()
         };
         assert_eq!(rendered.owners(3), Some(&[2][..]));
         assert_eq!(rendered.owners(4), Some(&[1][..]), "an end is exclusive");
@@ -2578,12 +2849,14 @@ mod tests {
                 .map(String::from)
                 .into()
         );
-        let schema = write_schema(&root, &work, &[inner], &BTreeSet::new()).unwrap();
+        let schema =
+            write_schema(&root, &work, &[inner], &BTreeSet::new(), &BTreeSet::new()).unwrap();
         assert!(schema.files.contains_key("crates/x/src/m.rs"));
         let m = std::fs::read_to_string(work.join("crates/x/src/m.rs")).unwrap();
         assert!(m.contains("crate::__batten_mutant(0) { a != b }"), "{m}");
         let lib = std::fs::read_to_string(work.join("crates/x/src/lib.rs")).unwrap();
-        assert_eq!(lib, format!("pub mod m;\n{SWITCH}"));
+        assert_eq!(lib, format!("pub mod m;\n{}", prelude(schema.probes.len())));
+        assert_eq!(schema.probes.len(), 1, "m.rs's one function");
     }
 
     /// An error is owned by the mutant whose region holds its primary span;
@@ -2594,10 +2867,11 @@ mod tests {
             text: String::new(),
             regions: vec![(10..20, vec![4]), (30..40, vec![5])],
             classic: Vec::new(),
-            deconst: Vec::new(),
+            ..Rendered::default()
         };
         let schema = Schema {
             files: [(String::from("src/m.rs"), rendered)].into(),
+            ..Schema::default()
         };
         let span = |primary: bool, at: u32| {
             format!("{{\"is_primary\":{primary},\"file_name\":\"src/m.rs\",\"byte_start\":{at}}}")
@@ -2635,6 +2909,7 @@ mod tests {
                 (String::from("src/p.rs"), deconsted),
             ]
             .into(),
+            ..Schema::default()
         };
         let caller = line(
             "compiler-message",
@@ -2817,7 +3092,8 @@ mod tests {
         );
         let dirs = [(String::from("p"), String::new())].into();
         let cases = [(String::from("x"), String::from("p"))].into();
-        let digests = case_digests(&root, &cases, &dirs);
+        let none = std::collections::BTreeMap::new();
+        let digests = case_digests(&root, &cases, &dirs, &none, &[], "");
         let verdict = verdict_key(&root, &ne, &cases, &digests).unwrap();
         assert_eq!(verdict.len(), 64);
         assert_ne!(verdict, key);
@@ -2828,7 +3104,7 @@ mod tests {
             (4, 2),
         );
         assert_eq!(site_key(&root, &moved), Some(key));
-        let digests = case_digests(&root, &cases, &dirs);
+        let digests = case_digests(&root, &cases, &dirs, &none, &[], "");
         assert_ne!(verdict_key(&root, &moved, &cases, &digests), Some(verdict));
     }
 
@@ -2860,7 +3136,15 @@ mod tests {
             .map(|name| (name.to_owned(), String::from("p")))
             .into();
         let digest = |name: &str| {
-            case_digests(&root, &cases, &dirs)[&(name.to_owned(), String::from("p"))].clone()
+            case_digests(
+                &root,
+                &cases,
+                &dirs,
+                &std::collections::BTreeMap::new(),
+                &[],
+                "",
+            )[&(name.to_owned(), String::from("p"))]
+                .clone()
         };
         write("1", "1", "1");
         let (a, b) = (digest("tests::a"), digest("tests::b"));
@@ -2875,6 +3159,122 @@ mod tests {
         assert_ne!(digest("tests::b"), b);
         write("2", "3", "2");
         assert_ne!(digest("tests::a"), a, "a helper's edit");
+    }
+
+    /// Every function body that runs at run time gains a probe, numbered from
+    /// the id given, and a `const fn`, a body-less declaration or a function
+    /// in a const item does not; with no id, nothing is probed.
+    #[test]
+    fn every_runtime_function_body_gains_a_probe() {
+        let source = "fn f(a: u8) -> u8 {\n    a\n}\nconst fn g() -> u8 {\n    1\n}\n\
+                      trait T {\n    fn h(&self);\n    fn d(&self) {}\n}\n\
+                      const C: u8 = { fn inner() -> u8 { 2 } inner() };\n";
+        let rendered = render(source, &[], &BTreeSet::new(), Some(5));
+        assert!(
+            rendered
+                .text
+                .contains("fn f(a: u8) -> u8 {crate::__batten_fn(5);"),
+            "{}",
+            rendered.text
+        );
+        assert!(
+            rendered
+                .text
+                .contains("fn d(&self) {crate::__batten_fn(6);}"),
+            "{}",
+            rendered.text
+        );
+        assert_eq!(rendered.probes.len(), 2, "{}", rendered.text);
+        assert_eq!(rendered.probe_regions.len(), 2);
+        let first = &rendered.probe_regions[0];
+        assert_eq!(&rendered.text[first.clone()], "crate::__batten_fn(5);");
+        let bare = render(source, &[], &BTreeSet::new(), None);
+        assert_eq!(bare.text, source);
+        assert!(bare.probes.is_empty());
+    }
+
+    /// The skeleton holds what no probe records: it moves with a type, a
+    /// signature or a `const fn` body, and not with a probed body.
+    #[test]
+    fn the_skeleton_moves_with_what_no_probe_records() {
+        let skeleton = |source: &str| render(source, &[], &BTreeSet::new(), Some(0)).skeleton;
+        let base = "struct S(u8);\nfn f() -> u8 {\n    1\n}\nconst fn g() -> u8 {\n    1\n}\n";
+        let held = skeleton(base);
+        assert_eq!(
+            skeleton(&base.replace("    1\n}\nconst", "    2\n}\nconst")),
+            held
+        );
+        assert_ne!(
+            skeleton(&base.replace("struct S(u8)", "struct S(u16)")),
+            held
+        );
+        assert_ne!(
+            skeleton(&base.replace("fn f() -> u8", "fn f() -> u16")),
+            held
+        );
+        assert_ne!(
+            skeleton(&format!("{}2\n}}\n", &base[..base.len() - 4])),
+            held
+        );
+        let unprobed = render(base, &[], &BTreeSet::new(), None).skeleton;
+        assert_ne!(
+            render(
+                &base.replace("    1\n}\nconst", "    2\n}\nconst"),
+                &[],
+                &BTreeSet::new(),
+                None
+            )
+            .skeleton,
+            unprobed,
+            "an unprobed file is whole"
+        );
+    }
+
+    /// A case's digest moves with a function it executed and with nothing it
+    /// did not, and every case's moves with the global digest.
+    ///
+    /// Fails by: the executed functions left out (a callee's edit reuses a
+    /// stale kill), or another case's functions read into this one.
+    #[test]
+    fn a_case_moves_with_the_functions_it_executed() {
+        let root = crate::scratch::scratch("schema-executed-digests");
+        let dirs = std::collections::BTreeMap::new();
+        let (one, two) = (case("one"), case("two"));
+        let cases: BTreeSet<Case> = [one.clone(), two.clone()].into();
+        let executed = [(one.clone(), [0].into()), (two.clone(), [1].into())].into();
+        let digests = |probes: &[String], global: &str| {
+            case_digests(&root, &cases, &dirs, &executed, probes, global)
+        };
+        let held = digests(&[String::from("a"), String::from("b")], "g");
+        let moved = digests(&[String::from("a2"), String::from("b")], "g");
+        assert_ne!(moved[&one], held[&one], "its callee changed");
+        assert_eq!(moved[&two], held[&two], "not a function it ran");
+        let global = digests(&[String::from("a"), String::from("b")], "h");
+        assert!(cases.iter().all(|case| global[case] != held[case]));
+    }
+
+    /// An error on a probe unprobes its file, even inside a mutant's branch.
+    #[test]
+    fn an_error_on_a_probe_unprobes_its_file() {
+        let source = "fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n";
+        let rendered = render(
+            source,
+            &[(0, &listed("BinaryOperator", "!=", (2, 7), (2, 9)))],
+            &BTreeSet::new(),
+            Some(0),
+        );
+        let at = rendered.probe_regions[0].start + 2;
+        let schema = Schema {
+            files: [(String::from("src/m.rs"), rendered)].into(),
+            ..Schema::default()
+        };
+        let message = format!(
+            "{{\"reason\":\"compiler-message\",\"message\":{{\"level\":\"error\",\"message\":\"e\",\
+             \"spans\":[{{\"is_primary\":true,\"file_name\":\"src/m.rs\",\"byte_start\":{at}}}]}}}}"
+        );
+        let refused = unviable(&schema, &message);
+        assert_eq!(refused.unprobe, [String::from("src/m.rs")].into());
+        assert!(refused.owned.is_empty() && refused.stray.is_empty());
     }
 
     #[test]
@@ -2992,8 +3392,13 @@ mod tests {
         let said = String::from_utf8(out).unwrap();
         let progress: Vec<&str> = said
             .lines()
+            .filter(|line| line.starts_with("mutate schema: judged"))
             .map(|line| line.split(" in ").next().unwrap_or_default())
             .collect();
+        assert!(
+            said.contains("mutate schema: reused 104 of 105 verdict(s)"),
+            "{said}"
+        );
         assert_eq!(
             progress,
             [
