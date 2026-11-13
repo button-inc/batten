@@ -1646,6 +1646,44 @@ mod repair {
         assert_eq!(stamp.trim(), digest, "and carries the pin's stamp");
     }
 
+    /// A RELEASE PIN REWRITES ONLY WHAT DIFFERS (CLOUD-2287). The running engine is
+    /// the pinned release, so it is left alone and not listed; the stale copy on
+    /// `PATH` becomes it and is listed.
+    ///
+    /// Fails by: a target holding the release's bytes rewritten, or a stale
+    /// one skipped, which the sweep on #1276 found unguarded.
+    #[test]
+    fn a_release_pin_rewrites_only_the_copy_that_differs() {
+        let dir = repo("engine-update-release-differs");
+        stub_cargo(&dir);
+        let binary = private_binary(&dir);
+        common::write(
+            &dir,
+            "batten.toml",
+            &format!(
+                "version = 1\nengine = {{ release = \"v{}\" }}\n",
+                env!("CARGO_PKG_VERSION")
+            ),
+        );
+        let on_path = hook_bin(&dir).join("batten");
+        std::fs::create_dir_all(hook_bin(&dir)).unwrap();
+        common::write(&hook_bin(&dir), "batten", "an older engine\n");
+        let before = std::fs::read(&binary).unwrap();
+        let output = run(&binary, &dir, &["engine", "install"], "");
+        assert!(output.status.success(), "{}", text(&output));
+        assert_eq!(
+            std::fs::read(&on_path).unwrap(),
+            before,
+            "the stale copy became the release"
+        );
+        let listed = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            listed.contains("hook-bin"),
+            "the rewritten copy is listed: {listed}"
+        );
+        assert_eq!(listed.lines().count(), 1, "and only it: {listed}");
+    }
+
     /// The case's stand-in for `~/.local/bin`: a sibling of the repository, on `PATH`
     /// after the stub `bin`.
     fn hook_bin(dir: &Path) -> PathBuf {

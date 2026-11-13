@@ -2375,6 +2375,25 @@ fn policy_explain_answers_a_rule_a_class_and_a_native() {
     );
 }
 
+/// A module's finding id explains as the `[[rule]]` row binding that module
+/// (CLOUD-1638): `test cover unseen` is `policy/cfg-gated-test.rego`'s
+/// finding, and the committed row binding the module is `test cover missing`.
+/// No row is named `test cover unseen`, so only the module hop reaches it.
+///
+/// Fails by: the hop from finding id to owning row answering nothing, which
+/// the sweep on #1276 found unguarded.
+#[test]
+fn a_modules_finding_id_explains_as_the_row_that_binds_it() {
+    let root = common::at_root(".");
+    let explained = batten_with(&root, &["policy", "explain", "test cover unseen"], &[]);
+    let out = String::from_utf8_lossy(&explained.stdout);
+    assert_eq!(explained.status.code(), Some(0), "{out}");
+    assert!(
+        out.contains("test cover missing"),
+        "the owning row is the answer: {out}"
+    );
+}
+
 #[test]
 fn a_deny_names_the_path_classs_own_mutation_over_the_verbs() {
     // The three tiers over the compiled binary, because a refusal is a contract
