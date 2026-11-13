@@ -819,6 +819,10 @@ fn a_lap_over_a_clone_with_no_remote_stops_rather_than_lapping_toward_nothing() 
 #[test]
 fn a_lap_over_a_dirty_tree_stops_before_anything_else() {
     let repo = repo("land-lap-dirty");
+    // A REMOTE TO RESOLVE, since the lap names its base before it opens; the
+    // dirty-tree question is then the first one the lap itself asks.
+    let url = repo.display().to_string();
+    common::git_in(&repo, &["remote", "add", "origin", &url]);
     std::fs::write(repo.join("lib.rs"), "edited\n").unwrap();
     let (code, out, err) = land_lap(&repo, "3", "true");
     assert_eq!(
