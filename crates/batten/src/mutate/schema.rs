@@ -659,9 +659,9 @@ pub fn write_schema(
 /// The mutants the compiler's errors in `messages` (cargo's JSON lines)
 /// belong to, and the count of errors no mutant owns.
 #[must_use]
-pub fn unviable(schema: &Schema, messages: &str) -> (BTreeSet<u32>, usize) {
+pub fn unviable(schema: &Schema, messages: &str) -> (BTreeSet<u32>, Vec<String>) {
     let mut owned = BTreeSet::new();
-    let mut stray = 0;
+    let mut stray = Vec::new();
     for line in messages.lines() {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
@@ -682,7 +682,7 @@ pub fn unviable(schema: &Schema, messages: &str) -> (BTreeSet<u32>, usize) {
         });
         match ids {
             Some(ids) => owned.extend(ids.iter().copied()),
-            None => stray += 1,
+            None => stray.push(message["message"].as_str().unwrap_or_default().to_owned()),
         }
     }
     (owned, stray)
@@ -721,6 +721,7 @@ pub fn build(
         target.to_string_lossy().into_owned(),
     )];
     let mut skip = BTreeSet::new();
+    let mut unowned_rounds = 0;
     for round in 1..=12 {
         let schema = write_schema(root, work, mutants, &skip)?;
         let ran = super::spawn(
@@ -741,13 +742,25 @@ pub fn build(
         let (owned, stray) = unviable(&schema, &ran.stdout);
         writeln!(
             out,
-            "mutate schema: build {round} refused {} mutant(s), {stray} error(s) unowned",
-            owned.len()
+            "mutate schema: build {round} refused {} mutant(s), {} error(s) unowned",
+            owned.len(),
+            stray.len()
         )?;
-        anyhow::ensure!(
-            !owned.is_empty(),
-            "the schema build failed on {stray} error(s) no mutant owns"
-        );
+        for message in &stray {
+            writeln!(out, "mutate schema:   unowned: {message}")?;
+        }
+        if owned.is_empty() {
+            // ONE RETRY FOR AN ERROR NO SOURCE OWNS: measured on #1276, a
+            // round run beside another build failed on two span-less errors and
+            // the same tree then built clean, so the first such round is read
+            // as the machine's, and only a second as the schema's.
+            unowned_rounds += 1;
+            anyhow::ensure!(
+                unowned_rounds < 2,
+                "the schema build failed twice on error(s) no mutant owns: {}",
+                stray.join("; ")
+            );
+        }
         skip.extend(owned);
     }
     anyhow::bail!("the schema build was not clean within 12 rounds")
