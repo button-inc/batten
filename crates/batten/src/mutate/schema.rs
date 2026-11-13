@@ -1400,6 +1400,9 @@ struct Judging<'a> {
     seconds: &'a std::collections::BTreeMap<Case, f64>,
     cache: &'a std::collections::BTreeMap<String, String>,
     dirs: &'a std::collections::BTreeMap<String, String>,
+    /// The verdict cache, appended at each barrier so a killed sweep keeps
+    /// every kill it finished (a container restart lost a whole judging pass).
+    store: &'a std::path::Path,
 }
 
 /// Judgements between two scratch collections. A run leaves its fixtures for
@@ -1416,6 +1419,7 @@ fn judge_all(judging: &Judging<'_>, todo: &[u32], jobs: usize) -> Vec<(u32, Verd
     let verdicts = std::sync::Mutex::new(Vec::new());
     let hints = std::sync::Mutex::new(std::collections::BTreeMap::new());
     let exclusive = Exclusive::default();
+    let fresh = std::sync::Mutex::new(String::new());
     for chunk in todo.chunks(BARRIER) {
         let next = std::sync::atomic::AtomicUsize::new(0);
         std::thread::scope(|scope| {
@@ -1438,6 +1442,13 @@ fn judge_all(judging: &Judging<'_>, todo: &[u32], jobs: usize) -> Vec<(u32, Verd
                             Some("timeout") => Verdict::Timeout,
                             _ => judge(judging, id, mutant, cases, &hints, &exclusive),
                         };
+                        if reused.is_none()
+                            && matches!(verdict, Verdict::Caught | Verdict::Timeout)
+                            && let Some(key) = key
+                            && let Ok(mut held) = fresh.lock()
+                        {
+                            let _ = writeln!(held, "{key}\t{}", verdict.name());
+                        }
                         if let Ok(mut held) = verdicts.lock() {
                             held.push((id, verdict));
                         }
@@ -1445,6 +1456,20 @@ fn judge_all(judging: &Judging<'_>, todo: &[u32], jobs: usize) -> Vec<(u32, Verd
                 });
             }
         });
+        // KEPT BEFORE THE NEXT CHUNK: a later line wins on load, so appending
+        // is safe, and the sweep's final write compacts the file.
+        if let Ok(mut held) = fresh.lock()
+            && !held.is_empty()
+        {
+            let appended = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(judging.store)
+                .and_then(|mut file| std::io::Write::write_all(&mut file, held.as_bytes()));
+            if appended.is_ok() {
+                held.clear();
+            }
+        }
         // NO RUN IS IN FLIGHT, so every fixture left is a finished run's.
         let _ = std::fs::remove_dir_all(judging.target.join("tmp"));
         let _ = std::fs::remove_dir_all(judging.scratch);
@@ -1549,6 +1574,9 @@ fn sweep(
     let snapshot = state.join("pristine");
     super::cover::pristine(&root, &snapshot)?;
     let root = snapshot;
+    // AN ERROR LOG IS THIS SWEEP'S OR NOTHING: one left by a killed sweep
+    // would read as a run of this one erring.
+    let _ = std::fs::remove_dir_all(state.join("errors"));
     let cache_path = state.join("verdicts");
     let mut cache = load_verdicts(&crate::fsio::read_to_string(&cache_path).unwrap_or_default());
     let dirs = package_dirs(&mutants);
@@ -1612,6 +1640,7 @@ fn sweep(
             seconds: &seconds,
             cache: &cache,
             dirs: &dirs,
+            store: &cache_path,
         },
         &todo,
         jobs,
@@ -1641,6 +1670,13 @@ fn sweep(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_verdict_appended_at_a_barrier_outranks_the_line_before_it() {
+        let loaded = load_verdicts("k\tunviable\nj\tcaught\nk\tcaught\n");
+        assert_eq!(loaded.get("k").map(String::as_str), Some("caught"));
+        assert_eq!(loaded.len(), 2);
+    }
 
     fn listed(genre: &str, replacement: &str, from: (usize, usize), to: (usize, usize)) -> Listed {
         Listed {
