@@ -1862,11 +1862,13 @@ run = "cargo run --quiet -p batten -- mutate sweep"
 description = "Gate: every mutant cargo-mutants makes of this branch's Rust change since origin/main is caught"
 # THE PER-JOB COST IS THE TREE'S, THE MACHINE IS MEASURED: `batten mutate cargo`
 # divides cores, temp-volume headroom above the collector's floor, and memory by
-# one copy's cold mutants-profile build, measured on CLOUD-1414: 3,872 MB of
-# target beside a ~370 MB copy, and a 3.5 GB peak rustc. It writes the change as
-# `--in-diff`, adds `--shard` from `MUTANT_SHARD`, and runs cargo-mutants itself;
-# every shard keeps its baseline, which is what derives the timeout.
-env = { NEXTEST_PROFILE = "mutants", MUTANT_JOB_DISK_MB = "4300", MUTANT_JOB_MEMORY_MB = "4000" }
+# one copy's cold mutants-profile build: 5.5 GB of target beside a ~340 MB copy
+# on #1276, 2026-11-13 (3,872 MB on CLOUD-1414; the tree grew), and a 3.5 GB peak
+# rustc. Sized under, two jobs filled the disk mid-build and a mutant whose build
+# hit ENOSPC was recorded unviable. It writes the change as `--in-diff`, adds
+# `--shard` from `MUTANT_SHARD`, and runs cargo-mutants itself; every shard keeps
+# its baseline, which is what derives the timeout.
+env = { NEXTEST_PROFILE = "mutants", MUTANT_JOB_DISK_MB = "6200", MUTANT_JOB_MEMORY_MB = "4000" }
 # The verb applies the pin and runs the cached binary, so nothing is linked onto
 # PATH and no task step precedes it.
 run = "cargo run --quiet -p batten -- mutate cargo"
