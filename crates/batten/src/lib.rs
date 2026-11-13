@@ -17968,7 +17968,10 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // suite, `--iterate` skipping the caught ones, so the verdict is the suite's.
     let map = mutate::cover::map_path(root);
     let narrowed = if map.is_file() {
-        cover_env(root, &map, &state::repo_state_dir(root)?.join("mutate"))?
+        let state = state::repo_state_dir(root)?.join("mutate");
+        let pristine = state.join("pristine");
+        mutate::cover::pristine(root, &pristine)?;
+        cover_env(root, &map, &state, &pristine)?
     } else {
         Vec::new()
     };
@@ -18037,7 +18040,12 @@ const fn after_covering(narrowed: bool, outcome: mutate::Outcome) -> AfterCoveri
 /// checkout's own `target/debug/batten` is rebuilt by any build in between, so a
 /// step could run a different engine, or a half-linked one, and read as a mutant
 /// that failed to build. Renamed into place, so a running copy is never written.
-fn cover_env(root: &Path, map: &Path, shim_dir: &Path) -> Result<Vec<(String, String)>> {
+fn cover_env(
+    root: &Path,
+    map: &Path,
+    shim_dir: &Path,
+    pristine: &Path,
+) -> Result<Vec<(String, String)>> {
     let me = std::env::current_exe()?;
     std::fs::create_dir_all(shim_dir)?;
     let shim = shim_dir.join("cargo-shim");
@@ -18064,7 +18072,7 @@ fn cover_env(root: &Path, map: &Path, shim_dir: &Path) -> Result<Vec<(String, St
         ),
         (
             String::from(mutate::cover::ROOT),
-            root.to_string_lossy().into_owned(),
+            pristine.to_string_lossy().into_owned(),
         ),
     ])
 }
@@ -31559,7 +31567,10 @@ mod tests {
         let map = Path::new("/r/target/mutants/cover.map");
         let dir = crate::scratch::scratch("cover-env-shim");
         let env: std::collections::BTreeMap<String, String> =
-            cover_env(root, map, &dir).unwrap().into_iter().collect();
+            cover_env(root, map, &dir, &dir.join("pristine"))
+                .unwrap()
+                .into_iter()
+                .collect();
         let shim = dir.join("cargo-shim");
         let me = std::env::current_exe().unwrap();
         assert_eq!(
@@ -31580,7 +31591,10 @@ mod tests {
                     .to_string_lossy()
                     .into_owned(),
             ),
-            (mutate::cover::ROOT, root.to_string_lossy().into_owned()),
+            (
+                mutate::cover::ROOT,
+                dir.join("pristine").to_string_lossy().into_owned(),
+            ),
         ]
         .into_iter()
         .map(|(key, value)| (key.to_owned(), value))
