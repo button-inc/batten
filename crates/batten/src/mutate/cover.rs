@@ -807,7 +807,7 @@ pub fn wrapped_config(root: &Path, recorder: &Path, arg: &str, store: &Path) -> 
 
 /// The report the cover profile writes, under `<target>/nextest/batten-cover/`.
 /// nextest writes it only when the run finishes.
-const JUNIT: &str = "cover.xml";
+pub(crate) const JUNIT: &str = "cover.xml";
 
 /// How many cases a nextest `JUnit` report says ran: the `tests` of every
 /// suite but a setup script's (`@setup-script:…`), which nextest reports as a

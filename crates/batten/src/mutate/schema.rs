@@ -801,23 +801,105 @@ fn package_of(binary: &str) -> &str {
         .map_or(binary, |(package, _)| package)
 }
 
-/// Judge mutant `id` by the cases that reach its site, with it switched on.
-/// `cases` holds each reaching case's name and binary; none reach it is a
-/// survivor no run could kill.
+/// A case: its name and the binary that holds it.
+type Case = (String, String);
+
+/// Seconds of measured case time the first phase may spend before the rest
+/// wait on it. The sites' median reach costs 3.3 s in all (#1276), so most
+/// mutants are judged in one run; a hub's hundreds of cases are not paid for
+/// unless the cheap ones all survive.
+const FIRST_PHASE_SECONDS: f64 = 4.0;
+
+/// What a case the reach run did not time is taken to cost.
+const UNMEASURED_SECONDS: f64 = 1.0;
+
+/// Each case's measured seconds, from a nextest `JUnit` report: the `name`,
+/// `classname` (the binary) and `time` of every `<testcase>`.
+fn durations(junit: &str) -> std::collections::BTreeMap<Case, f64> {
+    let mut timed = std::collections::BTreeMap::new();
+    for element in junit.split("<testcase ").skip(1) {
+        let head = format!(" {}", element.split('>').next().unwrap_or_default());
+        let (Some(name), Some(binary), Some(time)) = (
+            attribute(&head, "name"),
+            attribute(&head, "classname"),
+            attribute(&head, "time"),
+        ) else {
+            continue;
+        };
+        if let Ok(time) = time.parse::<f64>() {
+            timed.insert((name, binary), time);
+        }
+    }
+    timed
+}
+
+/// One XML attribute's unescaped value from an element's head.
+fn attribute(head: &str, key: &str) -> Option<String> {
+    let needle = format!(" {key}=\"");
+    let at = head.find(&needle)? + needle.len();
+    let value = &head[at..];
+    let value = &value[..value.find('"')?];
+    Some(
+        value
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .replace("&amp;", "&"),
+    )
+}
+
+/// The two runs a mutant is judged by. The first holds the cases that killed a
+/// sibling in the same function, then the cheapest of the rest until
+/// [`FIRST_PHASE_SECONDS`] are spent; the second holds everything else and runs
+/// only when the first kills nothing — prioritised cases, stopped at the first
+/// kill (Zhang, Marinov & Khurshid, ISSTA 2013), with no case ever skipped for
+/// a survivor.
+fn phases(
+    cases: &BTreeSet<Case>,
+    hints: &BTreeSet<Case>,
+    seconds: &std::collections::BTreeMap<Case, f64>,
+) -> (BTreeSet<Case>, BTreeSet<Case>) {
+    let cost = |case: &Case| seconds.get(case).copied().unwrap_or(UNMEASURED_SECONDS);
+    let mut first: BTreeSet<Case> = cases.intersection(hints).cloned().collect();
+    let mut spent: f64 = first.iter().map(cost).sum();
+    let mut rest: Vec<&Case> = cases.iter().filter(|case| !first.contains(*case)).collect();
+    rest.sort_by(|a, b| cost(a).total_cmp(&cost(b)).then_with(|| a.cmp(b)));
+    let mut second = BTreeSet::new();
+    for case in rest {
+        if first.is_empty() || spent < FIRST_PHASE_SECONDS {
+            spent += cost(case);
+            first.insert(case.clone());
+        } else {
+            second.insert(case.clone());
+        }
+    }
+    (first, second)
+}
+
+/// The case a failed run names first, from nextest's `FAIL [ time] binary
+/// name` line (`--color never`).
+fn killer(output: &str) -> Option<Case> {
+    output.lines().find_map(|line| {
+        let rest = line.trim_start().strip_prefix("FAIL [")?;
+        let (_, rest) = rest.split_once("] ")?;
+        let (binary, name) = rest.trim().split_once(' ')?;
+        Some((name.trim().to_owned(), binary.to_owned()))
+    })
+}
+
+/// Run `cases` once with mutant `id` switched on, and answer its verdict and
+/// the case that killed it. `cases` must not be empty.
 ///
 /// # Errors
 ///
 /// The run could not be started.
-pub fn judge(
-    work: &std::path::Path,
-    target: &std::path::Path,
+fn run_cases(
+    judging: &Judging<'_>,
     id: u32,
     mutant: &Listed,
-    cases: &BTreeSet<(String, String)>,
-) -> anyhow::Result<Verdict> {
-    if cases.is_empty() {
-        return Ok(Verdict::Uncovered);
-    }
+    cases: &BTreeSet<Case>,
+) -> anyhow::Result<(Verdict, Option<Case>)> {
     let tests: BTreeSet<&str> = cases.iter().map(|(name, _)| name.as_str()).collect();
     let binaries: BTreeSet<&str> = cases.iter().map(|(_, binary)| binary.as_str()).collect();
     let mut args: Vec<String> = [
@@ -827,6 +909,8 @@ pub fn judge(
         "mutants",
         "--profile",
         "mutants",
+        "--color",
+        "never",
     ]
     .map(String::from)
     .to_vec();
@@ -855,34 +939,140 @@ pub fn judge(
     let env = [
         (
             String::from("CARGO_TARGET_DIR"),
-            target.to_string_lossy().into_owned(),
+            judging.target.to_string_lossy().into_owned(),
+        ),
+        // THE SWEEP'S OWN TEMP ROOT, so the fixtures a run leaves there are
+        // the sweep's to collect at its barrier, never another checkout's.
+        (
+            String::from("TMPDIR"),
+            judging.scratch.to_string_lossy().into_owned(),
         ),
         (String::from(ACTIVE), id.to_string()),
     ];
     let ran = super::spawn(
-        work,
+        judging.work,
         super::Program::Cargo,
         &args,
         &env,
         super::runner_bound(),
     )?;
     Ok(match ran.outcome {
-        super::Outcome::Passed => Verdict::Missed,
-        super::Outcome::TimedOut => Verdict::Timeout,
-        super::Outcome::Failed(_) if ran.output.contains("TIMEOUT") => Verdict::Timeout,
-        super::Outcome::Failed(Some(100)) => Verdict::Caught,
+        super::Outcome::Passed => (Verdict::Missed, None),
+        super::Outcome::TimedOut => (Verdict::Timeout, None),
+        super::Outcome::Failed(_) if ran.output.contains("TIMEOUT") => (Verdict::Timeout, None),
+        super::Outcome::Failed(Some(100)) => (Verdict::Caught, killer(&ran.output)),
         super::Outcome::Failed(_) => {
             // THE RUN'S OWN WORDS, KEPT: on #1276 2,213 runs failed before a
             // case started and said nothing anywhere, so an error now leaves
             // its output beside the tree, where the summary points.
-            if let Some(state) = work.parent() {
+            if let Some(state) = judging.work.parent() {
                 let errors = state.join("errors");
                 let _ = std::fs::create_dir_all(&errors);
                 let _ = std::fs::write(errors.join(format!("{id}.log")), &ran.output);
             }
-            Verdict::Error
+            (Verdict::Error, None)
         }
     })
+}
+
+/// The cases in flight, which no other run may start: many fixtures sit at a
+/// fixed path under the target's `tmp/`, so one case run twice at once by two
+/// workers would corrupt its own fixture and fake a kill.
+#[derive(Default)]
+struct Exclusive {
+    held: std::sync::Mutex<BTreeSet<Case>>,
+    freed: std::sync::Condvar,
+}
+
+/// A hold on cases, released when dropped.
+struct Held<'a> {
+    by: &'a Exclusive,
+    cases: &'a BTreeSet<Case>,
+}
+
+impl Exclusive {
+    /// Wait until none of `cases` is in flight, then hold them.
+    fn hold<'a>(&'a self, cases: &'a BTreeSet<Case>) -> Held<'a> {
+        let mut held = self
+            .held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while !held.is_disjoint(cases) {
+            held = self
+                .freed
+                .wait(held)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        held.extend(cases.iter().cloned());
+        Held { by: self, cases }
+    }
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        let mut held = self
+            .by
+            .held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for case in self.cases {
+            held.remove(case);
+        }
+        self.by.freed.notify_all();
+    }
+}
+
+/// The function a mutant sits in, which its siblings share.
+type Sibling = (String, String, Option<usize>);
+
+/// Judge mutant `id` by the cases that reach its site, in two phases (see
+/// [`phases`]); none reach it is a survivor no run could kill. A kill teaches
+/// its siblings which case to try first.
+fn judge(
+    judging: &Judging<'_>,
+    id: u32,
+    mutant: &Listed,
+    cases: &BTreeSet<Case>,
+    hints: &std::sync::Mutex<std::collections::BTreeMap<Sibling, BTreeSet<Case>>>,
+    exclusive: &Exclusive,
+) -> Verdict {
+    if cases.is_empty() {
+        return Verdict::Uncovered;
+    }
+    let sibling: Option<Sibling> = mutant.function.as_ref().map(|function| {
+        (
+            mutant.file.clone(),
+            function.function_name.clone(),
+            function.span.as_ref().map(|span| span.start.line),
+        )
+    });
+    let hinted = sibling
+        .as_ref()
+        .and_then(|key| hints.lock().ok()?.get(key).cloned())
+        .unwrap_or_default();
+    let (first, second) = phases(cases, &hinted, judging.seconds);
+    for phase in [&first, &second] {
+        if phase.is_empty() {
+            continue;
+        }
+        let ran = {
+            let _held = exclusive.hold(phase);
+            run_cases(judging, id, mutant, phase)
+        };
+        match ran {
+            Ok((Verdict::Missed, _)) => {}
+            Ok((verdict, killed_by)) => {
+                if let (Some(key), Some(case)) = (sibling, killed_by)
+                    && let Ok(mut hints) = hints.lock()
+                {
+                    hints.entry(key).or_default().insert(case);
+                }
+                return verdict;
+            }
+            Err(_) => return Verdict::Error,
+        }
+    }
+    Verdict::Missed
 }
 
 /// As nextest's `run-wrapper` while reach is recorded: run the case with its
@@ -1201,47 +1391,65 @@ pub fn ran(args: impl Iterator<Item = std::ffi::OsString>) -> Option<std::proces
 struct Judging<'a> {
     work: &'a std::path::Path,
     target: &'a std::path::Path,
+    /// The sweep's own temp root, collected at each barrier.
+    scratch: &'a std::path::Path,
     root: &'a std::path::Path,
     mutants: &'a [Listed],
-    reach: &'a std::collections::BTreeMap<u32, BTreeSet<(String, String)>>,
+    reach: &'a std::collections::BTreeMap<u32, BTreeSet<Case>>,
+    /// Each case's measured seconds, from the reach run.
+    seconds: &'a std::collections::BTreeMap<Case, f64>,
     cache: &'a std::collections::BTreeMap<String, String>,
     dirs: &'a std::collections::BTreeMap<String, String>,
 }
 
+/// Judgements between two scratch collections. A run leaves its fixtures for
+/// the next to collect, which no run may do while another is in flight; on
+/// #1276 three workers never let one, and 1,540 runs left 13 GB and filled the
+/// disk. Measured at about 8.5 MB a run, so a barrier holds ~3.4 GB at most.
+const BARRIER: usize = 400;
+
 /// Judge every mutant in `todo` on `jobs` workers, reusing a stored kill whose
-/// key still holds.
+/// key still holds. Workers stop at every [`BARRIER`]th mutant while the
+/// scratch every finished run left is collected.
 fn judge_all(judging: &Judging<'_>, todo: &[u32], jobs: usize) -> Vec<(u32, Verdict)> {
     let nobody = BTreeSet::new();
-    let next = std::sync::atomic::AtomicUsize::new(0);
     let verdicts = std::sync::Mutex::new(Vec::new());
-    std::thread::scope(|scope| {
-        for _ in 0..jobs.max(1) {
-            scope.spawn(|| {
-                loop {
-                    let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let Some(&id) = todo.get(at) else { break };
-                    let Some(mutant) = judging.mutants.get(id as usize) else {
-                        break;
-                    };
-                    let cases = judging.reach.get(&id).unwrap_or(&nobody);
-                    let key = verdict_key(judging.root, mutant, cases, judging.dirs);
-                    let reused = key
-                        .as_ref()
-                        .and_then(|key| judging.cache.get(key))
-                        .filter(|v| reusable(v));
-                    let verdict = match reused.map(String::as_str) {
-                        Some("caught") => Verdict::Caught,
-                        Some("timeout") => Verdict::Timeout,
-                        _ => judge(judging.work, judging.target, id, mutant, cases)
-                            .unwrap_or(Verdict::Error),
-                    };
-                    if let Ok(mut held) = verdicts.lock() {
-                        held.push((id, verdict));
+    let hints = std::sync::Mutex::new(std::collections::BTreeMap::new());
+    let exclusive = Exclusive::default();
+    for chunk in todo.chunks(BARRIER) {
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..jobs.max(1) {
+                scope.spawn(|| {
+                    loop {
+                        let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(&id) = chunk.get(at) else { break };
+                        let Some(mutant) = judging.mutants.get(id as usize) else {
+                            break;
+                        };
+                        let cases = judging.reach.get(&id).unwrap_or(&nobody);
+                        let key = verdict_key(judging.root, mutant, cases, judging.dirs);
+                        let reused = key
+                            .as_ref()
+                            .and_then(|key| judging.cache.get(key))
+                            .filter(|v| reusable(v));
+                        let verdict = match reused.map(String::as_str) {
+                            Some("caught") => Verdict::Caught,
+                            Some("timeout") => Verdict::Timeout,
+                            _ => judge(judging, id, mutant, cases, &hints, &exclusive),
+                        };
+                        if let Ok(mut held) = verdicts.lock() {
+                            held.push((id, verdict));
+                        }
                     }
-                }
-            });
-        }
-    });
+                });
+            }
+        });
+        // NO RUN IS IN FLIGHT, so every fixture left is a finished run's.
+        let _ = std::fs::remove_dir_all(judging.target.join("tmp"));
+        let _ = std::fs::remove_dir_all(judging.scratch);
+        let _ = std::fs::create_dir_all(judging.scratch);
+    }
     verdicts.into_inner().unwrap_or_default()
 }
 
@@ -1379,6 +1587,17 @@ fn sweep(
         started.elapsed().as_secs()
     )?;
     let nobody = BTreeSet::new();
+    let seconds = durations(
+        &crate::fsio::read_to_string(
+            state
+                .join("nextest")
+                .join("batten-cover")
+                .join(super::cover::JUNIT),
+        )
+        .unwrap_or_default(),
+    );
+    let scratch = state.join("scratch");
+    std::fs::create_dir_all(&scratch)?;
     let todo: Vec<u32> = (0..u32::try_from(mutants.len())?)
         .filter(|id| !unviable.contains(id) && !classic.contains(id))
         .collect();
@@ -1386,9 +1605,11 @@ fn sweep(
         &Judging {
             work: &work,
             target: &target,
+            scratch: &scratch,
             root: &root,
             mutants: &mutants,
             reach: &reach,
+            seconds: &seconds,
             cache: &cache,
             dirs: &dirs,
         },
@@ -1615,5 +1836,91 @@ mod tests {
         let at_ne = rendered.text.find("!=").unwrap();
         assert_eq!(rendered.owners(at_ne), Some(&[1][..]));
         assert_eq!(rendered.owners(0), None, "outside every switch");
+    }
+
+    fn case(name: &str) -> Case {
+        (name.to_owned(), String::from("batten::it"))
+    }
+
+    #[test]
+    fn a_junit_report_times_each_case_by_name_and_binary() {
+        let report = "<testsuite name=\"batten::it\"><testcase name=\"a::b&lt;1&gt;\" \
+                      classname=\"batten::it\" timestamp=\"x\" time=\"0.250\">\
+                      </testcase><testcase name=\"c\" classname=\"batten\" time=\"2\"/>";
+        let timed = durations(report);
+        assert_eq!(timed.get(&case("a::b<1>")), Some(&0.25));
+        assert_eq!(
+            timed.get(&(String::from("c"), String::from("batten"))),
+            Some(&2.0)
+        );
+        assert_eq!(timed.len(), 2);
+    }
+
+    #[test]
+    fn the_first_phase_tries_a_siblings_killer_then_the_cheapest_cases() {
+        let cases: BTreeSet<Case> = ["slow", "cheap", "killer", "mid"].map(case).into();
+        let seconds = [
+            ("slow", 30.0),
+            ("cheap", 0.5),
+            ("killer", 9.0),
+            ("mid", 3.0),
+        ]
+        .map(|(name, time)| (case(name), time))
+        .into();
+        let hints: BTreeSet<Case> = [case("killer"), case("elsewhere")].into();
+        let (first, second) = phases(&cases, &hints, &seconds);
+        assert_eq!(
+            first,
+            [case("killer")].into(),
+            "a hint alone spends the budget"
+        );
+        assert_eq!(second, ["cheap", "mid", "slow"].map(case).into());
+        let (first, second) = phases(&cases, &BTreeSet::new(), &seconds);
+        assert_eq!(first, ["cheap", "mid", "killer"].map(case).into());
+        assert_eq!(
+            second,
+            [case("slow")].into(),
+            "every case runs in one phase or the other"
+        );
+    }
+
+    #[test]
+    fn a_first_phase_is_never_empty_while_a_case_reaches() {
+        let cases: BTreeSet<Case> = [case("only")].into();
+        let seconds = [(case("only"), 500.0)].into();
+        let (first, second) = phases(&cases, &BTreeSet::new(), &seconds);
+        assert_eq!(first, cases);
+        assert!(second.is_empty());
+    }
+
+    #[test]
+    fn the_killer_is_the_first_failed_case_a_run_names() {
+        let output = "   SETUP FAIL [ 0.1s] clear-scratch: sh\n\
+                      \x20       FAIL [   4.551s] batten::it mutate::a_change\n\
+                      \x20       FAIL [   1.000s] batten unit::other\n";
+        assert_eq!(killer(output), Some(case("mutate::a_change")));
+        assert_eq!(killer("PASS [ 1s] batten::it x"), None);
+    }
+
+    #[test]
+    fn a_case_in_flight_is_held_until_its_run_ends() {
+        let exclusive = Exclusive::default();
+        let one: BTreeSet<Case> = [case("a"), case("b")].into();
+        let other: BTreeSet<Case> = [case("c")].into();
+        let held = exclusive.hold(&one);
+        let _alongside = exclusive.hold(&other);
+        let overlapping: BTreeSet<Case> = [case("b")].into();
+        let waited = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let _second = exclusive.hold(&overlapping);
+                assert!(
+                    waited.load(std::sync::atomic::Ordering::SeqCst),
+                    "held before release"
+                );
+            });
+            waited.store(true, std::sync::atomic::Ordering::SeqCst);
+            drop(held);
+        });
     }
 }
