@@ -11,7 +11,8 @@
 //! predicate `build.rs` applies.
 
 /// The argument that makes a cargo invocation cargo-mutants'. Built in exactly
-/// one place, `mutate::cargo_mutants`, which runs cargo-mutants as itself.
+/// one place, `mutate::cargo_mutants_argv`, which both the listing and the run
+/// of cargo-mutants itself take their argv from.
 pub(crate) const CARGO_MUTANTS_ARGV: &str = "String::from(\"mutants\")";
 
 /// The one source allowed to carry [`CARGO_MUTANTS_ARGV`], relative to the crate.

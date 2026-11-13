@@ -1278,51 +1278,6 @@ pub fn read_at(dir: &Path, reference: &str, path: &str) -> Result<BaseBlob> {
     Ok(BaseBlob::Found { text, commit })
 }
 
-/// The text of each of `paths` at `reference`, through ONE repository open
-/// (CLOUD-2692).
-///
-/// [`read_at`] opens the repository per call, which is most of its ~2 ms; a
-/// ratchet judged at the call reads every path a branch changed, at two revs,
-/// and that cost per path would not fit the per-call budget. A path absent at
-/// the ref, or whose object is not a UTF-8 file, is left out of the map, which
-/// a count reads as zero, the same reading `for_each_blob_at_rev` gives a path
-/// it never yields.
-///
-/// # Errors
-///
-/// When the repository cannot be opened or `reference` does not resolve to a
-/// tree.
-pub fn read_many_at(
-    dir: &Path,
-    reference: &str,
-    paths: &[&str],
-) -> Result<BTreeMap<String, String>> {
-    let repository = open(dir)?;
-    let tree = repository
-        .rev_parse_single(reference)
-        .map_err(|_| UsageError::raise(format!("{reference} does not resolve")))?
-        .object()
-        .map_err(|_| UsageError::raise(format!("cannot read the object {reference} names")))?
-        .peel_to_tree()
-        .map_err(|_| UsageError::raise(format!("cannot resolve {reference} to a tree")))?;
-    let mut texts = BTreeMap::new();
-    for path in paths {
-        let Ok(Some(entry)) = tree.lookup_entry_by_path(path) else {
-            continue;
-        };
-        if !entry.mode().is_blob() {
-            continue;
-        }
-        let Ok(object) = entry.object() else {
-            continue;
-        };
-        if let Ok(text) = String::from_utf8(object.data.clone()) {
-            texts.insert((*path).to_owned(), text);
-        }
-    }
-    Ok(texts)
-}
-
 /// The unified hunks of `after` against `before`, 3 lines of context, as `git
 /// diff` writes them below its file headers.
 ///
@@ -4621,14 +4576,16 @@ pub fn will_need(path: &Path) {
 ///
 /// `POSIX_FADV_WILLNEED` submits readahead and returns at once, so every pack
 /// is queued in one pass before any object is read. A hint only: a failure is
-/// ignored, and off Linux it is a no-op.
-pub fn prefetch_packs(dir: &Path) {
+/// ignored, and off Linux it is a no-op. Answers how many pack and index files
+/// it hinted, the one thing a hint can be checked by.
+pub fn prefetch_packs(dir: &Path) -> usize {
     let Ok(repository) = open(dir) else {
-        return;
+        return 0;
     };
     let Ok(entries) = std::fs::read_dir(repository.objects.store_ref().path().join("pack")) else {
-        return;
+        return 0;
     };
+    let mut hinted = 0;
     for entry in entries.flatten() {
         let path = entry.path();
         if path
@@ -4636,8 +4593,10 @@ pub fn prefetch_packs(dir: &Path) {
             .is_some_and(|ext| ext == "pack" || ext == "idx")
         {
             will_need(&path);
+            hinted += 1;
         }
     }
+    hinted
 }
 
 /// `each` over the UTF-8 text of every blob in `ids`, in parallel, keyed by id
@@ -4703,29 +4662,6 @@ pub fn map_blobs<R: Send>(
         all.extend(result?);
     }
     Ok(all)
-}
-
-/// The UTF-8 text of each blob in `ids`, through one repository open; an id
-/// that does not resolve to UTF-8 text is left out.
-///
-/// # Errors
-///
-/// When the repository cannot be opened.
-pub fn read_blobs(dir: &Path, ids: &[&str]) -> Result<BTreeMap<String, String>> {
-    let repository = open(dir)?;
-    let mut texts = BTreeMap::new();
-    for id in ids {
-        let Ok(oid) = gix::ObjectId::from_hex(id.as_bytes()) else {
-            continue;
-        };
-        let Ok(object) = repository.find_object(oid) else {
-            continue;
-        };
-        if let Ok(text) = String::from_utf8(object.data.clone()) {
-            texts.insert((*id).to_owned(), text);
-        }
-    }
-    Ok(texts)
 }
 
 /// The patch identity of the branch's whole change against a declared base REF
@@ -6648,6 +6584,21 @@ mod tests {
             tracked_paths(&dir).expect("an empty answer, as ls-files gives"),
             BTreeSet::new()
         );
+    }
+
+    /// Every pack and index file is hinted, and nothing else in the pack
+    /// directory.
+    #[test]
+    fn every_pack_and_index_is_prefetched() {
+        let repo = crate::scratch::scratch("git-prefetch-packs");
+        crate::gitwrite::init_on_main(&repo).expect("init");
+        let packs = repo.join(".git/objects/pack");
+        std::fs::create_dir_all(&packs).unwrap();
+        for name in ["p.pack", "p.idx", "p.keep", "p.rev"] {
+            std::fs::write(packs.join(name), "x").unwrap();
+        }
+        assert_eq!(prefetch_packs(&repo), 2);
+        assert_eq!(prefetch_packs(&repo.join("nowhere")), 0);
     }
 
     /// A ceiling that contains nothing here fences nothing, which is how git reads

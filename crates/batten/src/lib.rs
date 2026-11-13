@@ -8584,14 +8584,20 @@ fn print_claim_refusals(
     Ok(())
 }
 
+/// Whether [`with_own_pr`] asks the forge: only when the request names no
+/// pull request yet and some row carries a live one, so a claim no PR touches
+/// costs no forge call.
+fn asks_forge(request: &claim::Request, issues: &[claim::Issue]) -> bool {
+    request.own_pr.is_none() && issues.iter().any(|issue| issue.live_pr.is_some())
+}
+
 /// The request with this branch's own pull request filled in (CLOUD-2697): a
 /// row the bundle's own draft PR already moved is this branch's claim. Asked
 /// only when a row carries a live PR, so no such row costs no forge call; no
 /// answer leaves the competitor rules to decide as before.
 fn with_own_pr(repo: &Path, request: &claim::Request, issues: &[claim::Issue]) -> claim::Request {
     let mut request = request.clone();
-    if request.own_pr.is_none()
-        && issues.iter().any(|issue| issue.live_pr.is_some())
+    if asks_forge(&request, issues)
         && let Ok(Some(branch)) = git::current_branch(repo)
         && let fast_forward::Lookup::Found(number) =
             fast_forward::look_up_pull_request(&repo_or_placeholder(repo), &branch)
@@ -17905,10 +17911,12 @@ fn run_mutate(
     }
 }
 
-/// `batten mutate cargo`: cargo-mutants over the change since
-/// `$MUTANT_CHANGED_SINCE`, on as many jobs as the machine holds at the tree's
-/// declared per-job cost, its exit read onto the house contract: missed mutants
-/// are a violation, a timeout or a failed baseline could not look.
+/// `batten mutate cargo`: every mutant cargo-mutants makes of the change since
+/// `$MUTANT_CHANGED_SINCE`, judged in one schema build (`mutate::schema`), and
+/// only the ones the schema hands back by cargo-mutants itself, on as many jobs
+/// as the machine holds at the tree's declared per-job cost. Missed mutants are
+/// a violation; a run that erred, a timeout or a failed baseline could not
+/// look.
 ///
 /// The disk floor is the collector's own, so the jobs never spend the room it
 /// exists to keep.
@@ -17948,10 +17956,18 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
         .and_then(|declared| declared.free_band())
         .unwrap_or(prune::DEFAULT_FREE_BAND)
         .0;
-    let jobs = mutate::job_count(mutate::Machine::probe(floor)?, cost);
+    let machine = mutate::Machine::probe(floor)?;
+    let jobs = mutate::job_count(machine, cost);
     let diff = state::repo_state_dir(root)?
         .join("mutate")
         .join("change.diff");
+    let Some(sources) = mutate::write_change(root, &registry, &base, &diff)? else {
+        writeln!(
+            out,
+            "mutate cargo: no source cargo-mutants owns changed since {base}"
+        )?;
+        return Ok(ExitCode::Success);
+    };
     // FROM THE PROVISION CACHE, NEVER `PATH`: the engine runs the pinned bytes
     // itself, so the row needs no `link` (only the task runner's carries one).
     let Some(runner) = provisioned_binary("cargo-mutants", &Overrides::default()) else {
@@ -17961,120 +17977,35 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
         )?;
         return Ok(ExitCode::Internal);
     };
-    // COVERING TESTS FIRST, THE WHOLE SUITE FOR WHAT THEY MISS (CLOUD-2253): with
-    // a map, cargo-mutants' `$CARGO` is this binary, which narrows each test step
-    // to the cases covering the mutant (`mutate::cover`). Only a CAUGHT verdict is
-    // taken from that pass; every mutant it missed is re-judged by the whole
-    // suite, `--iterate` skipping the caught ones, so the verdict is the suite's.
-    let map = mutate::cover::map_path(root);
-    let narrowed = if map.is_file() {
-        let state = state::repo_state_dir(root)?.join("mutate");
-        let pristine = state.join("pristine");
-        mutate::cover::pristine(root, &pristine)?;
-        cover_env(root, &map, &state, &pristine)?
-    } else {
-        Vec::new()
-    };
-    let first = mutate::cargo_mutants(
-        root, &runner, &registry, &base, jobs, shard, &diff, &narrowed,
+    // CARGO-MUTANTS' OWN GENERATOR, THE SCHEMA'S BUILD (CLOUD-2253): one build
+    // with every mutant switched in, one reach run, each mutant judged by the
+    // cases that reach it. Measured on #1276: 3,132 mutants, the classic tool
+    // building each one, against one 195 s build.
+    let mine = mutate::schema::shard_of(mutate::list_mutants(root, &runner, &diff)?, shard);
+    let workers = mutate::judging_jobs(machine);
+    writeln!(
+        out,
+        "mutate cargo: {} mutant(s) of {sources} changed source(s), switched in one schema build, judged on {workers} worker(s)",
+        mine.len()
     )?;
-    let outcome = match first {
-        mutate::CargoRun::NothingOwned => {
-            writeln!(
-                out,
-                "mutate cargo: no source cargo-mutants owns changed since {base}"
-            )?;
-            return Ok(ExitCode::Success);
-        }
-        mutate::CargoRun::Ran { sources, outcome } => {
-            writeln!(
-                out,
-                "mutate cargo: {sources} changed source(s) judged by cargo-mutants on {jobs} job(s){}",
-                if narrowed.is_empty() {
-                    ""
-                } else {
-                    ", covering cases first"
-                }
-            )?;
-            outcome
-        }
-    };
-    if let AfterCovering::Final(code) = after_covering(!narrowed.is_empty(), outcome) {
-        return Ok(code);
+    let swept = mutate::schema::sweep(root, &mine, workers, out)?;
+    let schema = mutate::schema::exit_of(swept.code);
+    if swept.classic.is_empty() {
+        return Ok(schema);
     }
     writeln!(
         out,
-        "mutate cargo: re-judging what the covering cases missed against the whole suite"
+        "mutate cargo: {} handed-back mutant(s) judged by cargo-mutants",
+        swept.classic.len()
     )?;
-    match mutate::cargo_mutants(root, &runner, &registry, &base, jobs, shard, &diff, &[])? {
-        mutate::CargoRun::NothingOwned => Ok(ExitCode::Success),
-        mutate::CargoRun::Ran { outcome, .. } => Ok(mutate::cargo_exit(outcome)),
-    }
-}
-
-/// What follows cargo-mutants' first pass.
-#[derive(Debug, PartialEq, Eq)]
-enum AfterCovering {
-    /// The pass's verdict is final.
-    Final(ExitCode),
-    /// The whole suite re-judges what the covering cases missed.
-    Rejudge,
-}
-
-/// Whether a first pass `narrowed` to covering cases is re-judged: only when
-/// it MISSED (2) or TIMED OUT (3). A failed baseline (4) is not a mutant the
-/// covering cases missed, and re-running it judged the same red tree twice.
-/// An unnarrowed pass was already the whole suite's verdict.
-const fn after_covering(narrowed: bool, outcome: mutate::Outcome) -> AfterCovering {
-    match outcome {
-        mutate::Outcome::Failed(Some(2 | 3)) if narrowed => AfterCovering::Rejudge,
-        _ => AfterCovering::Final(mutate::cargo_exit(outcome)),
-    }
-}
-
-/// The environment that makes this binary cargo-mutants' `$CARGO`, narrowing
-/// each mutant's test step to the cases `map` says cover it.
-///
-/// A PRIVATE COPY of this binary is the stand-in, in `shim_dir`: cargo-mutants
-/// calls `$CARGO` for every step of a sweep that runs for hours, and the
-/// checkout's own `target/debug/batten` is rebuilt by any build in between, so a
-/// step could run a different engine, or a half-linked one, and read as a mutant
-/// that failed to build. Renamed into place, so a running copy is never written.
-fn cover_env(
-    root: &Path,
-    map: &Path,
-    shim_dir: &Path,
-    pristine: &Path,
-) -> Result<Vec<(String, String)>> {
-    let me = std::env::current_exe()?;
-    std::fs::create_dir_all(shim_dir)?;
-    let shim = shim_dir.join("cargo-shim");
-    let staged = shim_dir.join(format!("cargo-shim.{}", std::process::id()));
-    std::fs::copy(&me, &staged)?;
-    std::fs::rename(&staged, &shim)?;
-    let me = shim;
-    let real = std::env::var("CARGO").unwrap_or_else(|_| String::from("cargo"));
-    let mutants = root
-        .join("target")
-        .join("mutants")
-        .join("mutants.out")
-        .join("mutants.json");
-    Ok(vec![
-        (String::from("CARGO"), me.to_string_lossy().into_owned()),
-        (String::from(mutate::cover::SHIM), real),
-        (
-            String::from(mutate::cover::MAP),
-            map.to_string_lossy().into_owned(),
-        ),
-        (
-            String::from(mutate::cover::MUTANTS),
-            mutants.to_string_lossy().into_owned(),
-        ),
-        (
-            String::from(mutate::cover::ROOT),
-            pristine.to_string_lossy().into_owned(),
-        ),
-    ])
+    let classic = mutate::cargo_exit(mutate::cargo_mutants(
+        root,
+        &runner,
+        &diff,
+        jobs,
+        &swept.classic,
+    )?);
+    Ok(mutate::schema::worse(schema, classic))
 }
 
 /// `batten mutate sweep`: the declared runner over the narrowed set, or the one
@@ -31520,88 +31451,6 @@ mod mutation_markers;
 mod tests {
     use super::*;
 
-    /// Only a narrowed pass that missed or timed out is re-judged by the whole
-    /// suite; every other pass's verdict is final, and maps as cargo-mutants'.
-    ///
-    /// Fails by: the narrowed guard dropped, a code added to or dropped from
-    /// `2 | 3`, or the final arm answering anything but `cargo_exit`.
-    #[test]
-    fn only_a_narrowed_miss_or_timeout_is_rejudged() {
-        use mutate::Outcome;
-        for code in [2, 3] {
-            assert_eq!(
-                after_covering(true, Outcome::Failed(Some(code))),
-                AfterCovering::Rejudge,
-                "a narrowed exit {code} is re-judged"
-            );
-            assert_eq!(
-                after_covering(false, Outcome::Failed(Some(code))),
-                AfterCovering::Final(mutate::cargo_exit(Outcome::Failed(Some(code)))),
-                "an unnarrowed exit {code} is already the suite's"
-            );
-        }
-        for outcome in [
-            Outcome::Passed,
-            Outcome::Failed(Some(1)),
-            Outcome::Failed(Some(4)),
-            Outcome::Failed(None),
-            Outcome::TimedOut,
-        ] {
-            assert_eq!(
-                after_covering(true, outcome),
-                AfterCovering::Final(mutate::cargo_exit(outcome)),
-                "{outcome:?} is final"
-            );
-        }
-    }
-
-    /// The stand-in's environment: a private copy of this binary as `$CARGO`,
-    /// the real cargo behind it, and the map, mutants list and root it
-    /// narrows by.
-    ///
-    /// Fails by: any pair dropped, renamed or emptied, or `$CARGO` left
-    /// pointing at a binary a later build overwrites.
-    #[test]
-    fn the_cover_environment_makes_a_private_copy_cargo() {
-        let root = Path::new("/r");
-        let map = Path::new("/r/target/mutants/cover.map");
-        let dir = crate::scratch::scratch("cover-env-shim");
-        let env: std::collections::BTreeMap<String, String> =
-            cover_env(root, map, &dir, &dir.join("pristine"))
-                .unwrap()
-                .into_iter()
-                .collect();
-        let shim = dir.join("cargo-shim");
-        let me = std::env::current_exe().unwrap();
-        assert_eq!(
-            std::fs::metadata(&shim).unwrap().len(),
-            std::fs::metadata(&me).unwrap().len(),
-            "the stand-in is a whole copy of this binary"
-        );
-        let real = std::env::var("CARGO").unwrap_or_else(|_| String::from("cargo"));
-        let want: std::collections::BTreeMap<String, String> = [
-            ("CARGO", shim.to_string_lossy().into_owned()),
-            (mutate::cover::SHIM, real),
-            (mutate::cover::MAP, map.to_string_lossy().into_owned()),
-            (
-                mutate::cover::MUTANTS,
-                ["target", "mutants", "mutants.out", "mutants.json"]
-                    .iter()
-                    .fold(root.to_path_buf(), |path, part| path.join(part))
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
-            (
-                mutate::cover::ROOT,
-                dir.join("pristine").to_string_lossy().into_owned(),
-            ),
-        ]
-        .into_iter()
-        .map(|(key, value)| (key.to_owned(), value))
-        .collect();
-        assert_eq!(env, want);
-    }
-
     /// The wake form answers 0 whatever rendered; the `--event` form keeps a
     /// non-zero exit that carried no deny. #1276's sweep found `Ok(_) if wake`
     /// unguarded: every forge case reaches the wake arm through a deny, never
@@ -32154,5 +32003,178 @@ mod tests {
         lease_hold_bail(&root, &terms, "someone", 42, HoldEnd::Stalled, &note);
         assert!(marker.exists(), "stopping a stalled lander is");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Each step speaks under its class, and the two push steps each name the
+    /// fact they mean.
+    ///
+    /// Fails by: an arm dropped, which reads its step as `Land`'s.
+    #[test]
+    fn each_unlanded_step_speaks_under_its_own_class() {
+        let class = |step| step_refusal(step, 1).verdict().map(str::to_owned);
+        assert_eq!(class(Step::NoUpstream), class(Step::Push));
+        assert_ne!(
+            step_refusal(Step::NoUpstream, 1),
+            step_refusal(Step::Push, 1),
+            "no-upstream is its own fact"
+        );
+        assert_eq!(class(Step::PushUnknown), class(Step::Shallow));
+        for step in [
+            Step::NoUpstream,
+            Step::PushUnknown,
+            Step::Shallow,
+            Step::MergeHeld,
+        ] {
+            assert_ne!(class(step), class(Step::Land), "{step:?}");
+        }
+    }
+
+    /// A message file's subject is its first line, read within 64 KiB: a file
+    /// under the cap needs no line end, one at it does.
+    #[test]
+    fn a_message_files_subject_is_read_within_its_first_64_kib() {
+        let dir = crate::scratch::scratch("first-line");
+        let write = |name: &str, body: &[u8]| {
+            let path = dir.join(name);
+            std::fs::write(&path, body).unwrap();
+            path
+        };
+        let is = |text: &str| facts::Look::Is(text.to_owned());
+        assert_eq!(first_line(&write("short", b"subject\nbody")), is("subject"));
+        assert_eq!(first_line(&write("unended", b"subject")), is("subject"));
+        assert_eq!(
+            first_line(&write("mid", &[b'a'; 2_000])),
+            is(&"a".repeat(2_000)),
+            "under the cap, no line end is needed"
+        );
+        let mut early = b"s\n".to_vec();
+        early.extend([b'a'; 70_000]);
+        assert_eq!(first_line(&write("early", &early)), is("s"));
+        assert_eq!(
+            first_line(&write("long", &[b'a'; 70_000])),
+            facts::Look::CouldNotLook,
+            "no line end within the cap"
+        );
+        assert_eq!(first_line(&dir.join("missing")), facts::Look::CouldNotLook);
+    }
+
+    #[test]
+    fn a_read_is_refused_only_past_one_mib() {
+        let dir = crate::scratch::scratch("read-capped");
+        std::fs::write(dir.join("at"), vec![b'a'; 1 << 20]).unwrap();
+        std::fs::write(dir.join("over"), vec![b'a'; (1 << 20) + 1]).unwrap();
+        assert_eq!(read_capped(&dir.join("at")).unwrap().len(), 1 << 20);
+        assert!(read_capped(&dir.join("over")).is_err());
+    }
+
+    /// A set is judged at the call only with every entry literal, none
+    /// embedded, every other member readable, and an absent target named.
+    #[test]
+    fn a_set_is_judged_at_the_call_only_when_literal_and_readable() {
+        let root = crate::scratch::scratch("set-members");
+        std::fs::write(root.join("a.md"), "a").unwrap();
+        std::fs::write(root.join("b.md"), "b").unwrap();
+        let set = |files: &[&str], embedded: bool| budget::BudgetSet {
+            files: files.iter().map(|file| (*file).to_owned()).collect(),
+            max_tokens: 1,
+            max_lines: None,
+            max_bytes_per_file: None,
+            embedded: if embedded {
+                vec![budget::EmbeddedDecl {
+                    path: String::from("c.toml"),
+                    key: String::from("k"),
+                }]
+            } else {
+                Vec::new()
+            },
+        };
+        let b = Some([(String::from("b.md"), String::from("b"))].into());
+        assert_eq!(
+            set_members(&root, &set(&["a.md", "b.md"], false), "a.md", true),
+            b
+        );
+        assert_eq!(
+            set_members(&root, &set(&["a.md", "b.md"], true), "a.md", true),
+            None
+        );
+        assert_eq!(
+            set_members(&root, &set(&["*.md"], false), "a.md", true),
+            None
+        );
+        assert_eq!(
+            set_members(&root, &set(&["a.md", "b.md"], false), "c.md", false),
+            None,
+            "an absent target no entry names"
+        );
+        let both = Some(
+            [
+                (String::from("a.md"), String::from("a")),
+                (String::from("b.md"), String::from("b")),
+            ]
+            .into(),
+        );
+        assert_eq!(
+            set_members(&root, &set(&["a.md", "b.md", "c.md"], false), "c.md", false),
+            both,
+            "an absent target named exactly"
+        );
+        assert_eq!(
+            set_members(&root, &set(&["a.md", "gone.md"], false), "a.md", true),
+            None,
+            "an unreadable member"
+        );
+    }
+
+    #[test]
+    fn two_paths_in_one_checkout_are_one_repository() {
+        let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert!(same_repository(Some(here), &here.join("src")));
+        assert!(!same_repository(None, here));
+    }
+
+    /// Fails by: the forge asked when the request already names its PR, or
+    /// when no row carries one.
+    #[test]
+    fn the_forge_is_asked_only_for_a_live_pr_the_request_does_not_name() {
+        let issue = |live_pr: Option<&str>| claim::Issue {
+            id: String::from("CLOUD-1"),
+            status: String::from("Todo"),
+            assigned: false,
+            live_pr: live_pr.map(String::from),
+            description: None,
+            created_at: None,
+        };
+        let unnamed = claim::Request::default();
+        let named = claim::Request {
+            own_pr: Some(String::from("7")),
+            ..claim::Request::default()
+        };
+        assert!(asks_forge(&unnamed, &[issue(None), issue(Some("7"))]));
+        assert!(!asks_forge(&unnamed, &[issue(None)]));
+        assert!(!asks_forge(&named, &[issue(Some("7"))]));
+    }
+
+    /// A pathspec is literal only when it is not `.`, magic, a glob or a
+    /// directory: each of those may name more than one path.
+    #[test]
+    fn a_pathspec_is_literal_only_when_it_names_one_path() {
+        let repo = crate::scratch::scratch("placed-pathspecs");
+        crate::gitwrite::init_on_main(&repo).unwrap();
+        std::fs::create_dir_all(repo.join("d")).unwrap();
+        std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+        std::fs::write(repo.join("d/x"), "x\n").unwrap();
+        crate::gitwrite::commit_paths(&repo, &[String::from("a.txt"), String::from("d/x")], "seed")
+            .unwrap();
+        let specs = ["a.txt", ":(top)a.txt", "*.txt", "d", "."];
+        let placed = placed_pathspecs(&hook::PathspecCall {
+            dir: repo.clone(),
+            pathspecs: specs.iter().map(|spec| (*spec).to_owned()).collect(),
+        })
+        .unwrap();
+        let literal: Vec<bool> = placed
+            .iter()
+            .map(|entry| entry["literal"].as_bool().unwrap())
+            .collect();
+        assert_eq!(literal, [true, false, false, false, false], "{placed:?}");
     }
 }

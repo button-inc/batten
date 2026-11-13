@@ -10,3 +10,20 @@ copy_vcs = true
 gitignore = true
 # Where `mutant:rust` keeps its verdict files, which `--iterate` reads back.
 output = "target/mutants"
+
+# EQUIVALENT MUTANTS, each with the reason no test can tell it from the
+# original (mutants.rs, "Skipping functions"; Madeyski et al., TSE 2014, on why
+# equivalence is decided by argument and not by a test). A pattern names the
+# function and the mutation, never a line, so it follows the code it was
+# argued for and lapses when that code goes.
+exclude_re = [
+  # A readahead hint to the kernel: what it changes is page-cache timing, which
+  # no assertion can observe. `prefetch_packs` counts what it hinted instead.
+  'replace will_need with \(\)',
+  # The single-thread path and the threaded path read the same blobs into the
+  # same map; `workers == 1` only decides whether a thread is worth spawning.
+  'replace == with != in map_blobs',
+  # Where a ratchet's count table persists between calls. Without one every
+  # count is taken fresh, so the verdict is the same; only the call is slower.
+  'replace count_entry -> ',
+]

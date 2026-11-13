@@ -1887,26 +1887,17 @@ enum Program<'a> {
     /// The consumer's own mutation tool, `[mutate] command`'s first element
     /// (CLOUD-2211): committed in the reviewed authority, like a suite runner.
     Command(&'a str),
-    /// One test binary nextest handed the coverage recorder ([`cover`]): the
-    /// case under measurement, which no in-process route can run.
+    /// One test binary nextest handed the schema's reach recorder
+    /// ([`schema`]): the case under measurement, which no in-process route
+    /// can run.
     Test(&'a str),
-    /// LLVM's `llvm-profdata`, reducing a test's profiles to what executed
-    /// ([`cover`]): the profile format is LLVM's, read by LLVM's own tool.
-    Profdata(&'a str),
-    /// `rustc --print sysroot`, where the toolchain keeps the `llvm-profdata`
-    /// matching its LLVM ([`cover`]): the toolchain's own answer.
-    Rustc,
 }
 
 impl Program<'_> {
     const fn name(&self) -> &str {
         match self {
             Program::Cargo => "cargo",
-            Program::Rustc => "rustc",
-            Program::Suite(program)
-            | Program::Command(program)
-            | Program::Test(program)
-            | Program::Profdata(program) => program,
+            Program::Suite(program) | Program::Command(program) | Program::Test(program) => program,
         }
     }
 }
@@ -4709,24 +4700,89 @@ fn cgroup_remaining_mb(root: &Path) -> Option<u64> {
     (limit < 1 << 50).then(|| limit.saturating_sub(usage) / (1024 * 1024))
 }
 
-/// What `batten mutate cargo` did with a change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum CargoRun {
-    /// No source the registry gives cargo-mutants changed: nothing was run.
-    NothingOwned,
-    /// cargo-mutants ran over this many changed sources and exited so.
-    Ran {
-        /// The changed sources cargo-mutants owns.
-        sources: usize,
-        /// How its run ended.
-        outcome: Outcome,
-    },
+/// Write the change since `base` that cargo-mutants owns to `diff`, as the
+/// patch `--in-diff` reads, and answer how many sources it holds. `None`, and
+/// nothing written, when no source the registry gives cargo-mutants changed.
+///
+/// # Errors
+///
+/// No `base` to compare against, or a patch that cannot be written.
+pub fn write_change(
+    root: &Path,
+    registry: &Registry,
+    base: &str,
+    diff: &Path,
+) -> Result<Option<usize>> {
+    let Some(delta) = crate::git::base_delta(root, base, &[String::from("**")], false)? else {
+        bail!("mutate cargo: no {base} to compare against");
+    };
+    let changed: std::collections::BTreeSet<String> =
+        delta.added.into_iter().chain(delta.edited).collect();
+    let sources = owned_changes(root, &changed, registry, RunnerKind::CargoMutants);
+    if sources.is_empty() {
+        return Ok(None);
+    }
+    let patch = in_diff_patch(root, base, &sources)?;
+    if let Some(dir) = diff.parent() {
+        fs::create_dir_all(dir)
+            .with_context(|| format!("mutate cargo: create {}", dir.display()))?;
+    }
+    crate::durable::replace(diff, patch)
+        .with_context(|| format!("mutate cargo: write {}", diff.display()))?;
+    Ok(Some(sources.len()))
 }
 
-/// Run cargo-mutants itself over the change since `base`: `--in-diff` of the
-/// sources `registry` gives it, `--jobs` as sized, `--iterate`, and `--shard`
-/// where one is asked for, its output streamed as it judges.
+/// Every mutant cargo-mutants makes of `diff`, as `--list --json` names them:
+/// its own generator, so the schema judges exactly the set it would.
+///
+/// # Errors
+///
+/// `runner` cannot be spawned, refuses, or prints no listing.
+pub fn list_mutants(root: &Path, runner: &Path, diff: &Path) -> Result<Vec<schema::Listed>> {
+    let args = cargo_mutants_argv(diff, ["--list", "--json"].map(String::from));
+    let runner = runner.to_string_lossy();
+    let ran = spawn(root, Program::Command(&runner), &args, &[], runner_bound())?;
+    if !ran.passed() {
+        bail!(
+            "mutate cargo: cargo-mutants could not list the change: {}",
+            ran.output
+        );
+    }
+    schema::listing(&ran.stdout)
+}
+
+/// cargo-mutants' argv over the change in `diff`, then `rest`: BUILT HERE AND
+/// NOWHERE ELSE (`mutation_markers`), so the listing the schema judges and the
+/// run that judges what it hands back read one change the one way.
+fn cargo_mutants_argv(diff: &Path, rest: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut args = vec![
+        String::from("mutants"),
+        String::from("--in-diff"),
+        diff.to_string_lossy().into_owned(),
+    ];
+    args.extend(rest);
+    args
+}
+
+/// The regex cargo-mutants' `--re` matches exactly `name` with: anchored, and
+/// every character the `regex` crate gives a meaning escaped (its own
+/// `regex::escape` set).
+#[must_use]
+pub fn exactly(name: &str) -> String {
+    let mut pattern = String::from("^");
+    for c in name.chars() {
+        if "\\.+*?()|[]{}^$#&-~".contains(c) {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern.push('$');
+    pattern
+}
+
+/// Run cargo-mutants itself over the mutants of `diff` named `names`, the
+/// ones the schema handed back: `--in-diff`, `--re` per name, `--jobs` as
+/// sized and `--iterate`, its output streamed as it judges.
 ///
 /// AN ARGV, NEVER A HARNESS. Copy mode, timeouts, the baseline and the verdict
 /// files are cargo-mutants' own (`.cargo/mutants.toml` carries the rest); this
@@ -4736,62 +4792,33 @@ pub enum CargoRun {
 ///
 /// # Errors
 ///
-/// No `base` to compare against, a patch that cannot be written to `diff`, or
-/// a `runner` that cannot be spawned.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each is one cargo-mutants input the caller decides: the tree, the runner, what it owns, the base, the jobs, the shard, where the diff goes and the environment that may narrow its tests (CLOUD-2253)"
-)]
+/// A `runner` that cannot be spawned.
 pub fn cargo_mutants(
     root: &Path,
     runner: &Path,
-    registry: &Registry,
-    base: &str,
-    jobs: usize,
-    shard: Option<(usize, usize)>,
     diff: &Path,
-    env: &[(String, String)],
-) -> Result<CargoRun> {
-    let Some(delta) = crate::git::base_delta(root, base, &[String::from("**")], false)? else {
-        bail!("mutate cargo: no {base} to compare against");
-    };
-    let changed: std::collections::BTreeSet<String> =
-        delta.added.into_iter().chain(delta.edited).collect();
-    let sources = owned_changes(root, &changed, registry, RunnerKind::CargoMutants);
-    if sources.is_empty() {
-        return Ok(CargoRun::NothingOwned);
-    }
-    let patch = in_diff_patch(root, base, &sources)?;
-    if let Some(dir) = diff.parent() {
-        fs::create_dir_all(dir)
-            .with_context(|| format!("mutate cargo: create {}", dir.display()))?;
-    }
-    crate::durable::replace(diff, patch)
-        .with_context(|| format!("mutate cargo: write {}", diff.display()))?;
-    let mut args = vec![
-        String::from("mutants"),
-        String::from("--in-diff"),
-        diff.to_string_lossy().into_owned(),
+    jobs: usize,
+    names: &[String],
+) -> Result<Outcome> {
+    let mut rest = vec![
         String::from("--jobs"),
         jobs.to_string(),
         String::from("--iterate"),
     ];
-    if let Some((k, n)) = shard {
-        args.extend([String::from("--shard"), format!("{k}/{n}")]);
+    for name in names {
+        rest.extend([String::from("--re"), exactly(name)]);
     }
+    let args = cargo_mutants_argv(diff, rest);
     let runner = runner.to_string_lossy();
     let ran = spawn_as(
         root,
         Program::Command(&runner),
         &args,
-        env,
+        &[],
         runner_bound(),
         Said::Streamed,
     )?;
-    Ok(CargoRun::Ran {
-        sources: sources.len(),
-        outcome: ran.outcome,
-    })
+    Ok(ran.outcome)
 }
 
 /// cargo-mutants' exit read onto the house contract (§6): 0 every mutant
@@ -4805,6 +4832,20 @@ pub const fn cargo_exit(outcome: Outcome) -> crate::exit::ExitCode {
         Outcome::Failed(Some(1)) => ExitCode::Usage,
         Outcome::Failed(Some(2)) => ExitCode::Violation,
         Outcome::Failed(_) | Outcome::TimedOut => ExitCode::Internal,
+    }
+}
+
+/// How many workers a schema sweep judges on: a core each but one. A worker
+/// builds nothing (the schema is one build) and runs its cases under nextest,
+/// which spends cores of its own, so the copy-sized [`job_count`] does not
+/// apply. Measured on #1276: three workers on four cores judged 2,402 mutants
+/// at about three minutes a hundred. Never below one.
+#[must_use]
+pub const fn judging_jobs(machine: Machine) -> usize {
+    if machine.cores > 1 {
+        machine.cores - 1
+    } else {
+        1
     }
 }
 
@@ -4902,10 +4943,10 @@ mod tests {
         }
     }
 
-    /// Fails by: cargo-mutants spawned, or its diff written, for a change it
-    /// owns no source of.
+    /// Fails by: a diff written, or a count answered, for a change
+    /// cargo-mutants owns no source of; or an owned change left unwritten.
     #[test]
-    fn a_change_cargo_mutants_owns_nothing_of_runs_nothing() {
+    fn only_a_change_cargo_mutants_owns_is_written() {
         let root = fixture("cargo-run-unowned");
         crate::gitwrite::init_on_main(&root).expect("a repository");
         put(&root, "src/a.rs", "fn a() {}\n");
@@ -4920,20 +4961,43 @@ mod tests {
         let registry = Registry::parse("cargo-mutants=src/*.rs").expect("parses");
         let diff = root.join("state").join("change.diff");
         assert_eq!(
-            cargo_mutants(
-                &root,
-                Path::new("cargo-mutants"),
-                &registry,
-                "HEAD",
-                1,
-                None,
-                &diff,
-                &[]
-            )
-            .expect("judged"),
-            CargoRun::NothingOwned
+            write_change(&root, &registry, "HEAD", &diff).expect("judged"),
+            None
         );
         assert!(!diff.exists(), "no diff is written for nothing to run");
+        put(&root, "src/a.rs", "fn a() { b() }\n");
+        assert_eq!(
+            write_change(&root, &registry, "HEAD", &diff).expect("judged"),
+            Some(1)
+        );
+        let written = crate::fsio::read_to_string(&diff).expect("written");
+        assert!(
+            written.contains("src/a.rs") && written.contains("+fn a() { b() }"),
+            "{written}"
+        );
+    }
+
+    #[test]
+    fn a_sweep_judges_on_every_core_but_one() {
+        let on = |cores| Machine {
+            cores,
+            disk_headroom_mb: 0,
+            memory_mb: 0,
+        };
+        assert_eq!(judging_jobs(on(4)), 3);
+        assert_eq!(judging_jobs(on(2)), 1);
+        assert_eq!(judging_jobs(on(1)), 1);
+        assert_eq!(judging_jobs(on(0)), 1);
+    }
+
+    /// A handed-back mutant is selected by its whole name and nothing else.
+    #[test]
+    fn a_name_is_matched_whole_and_literally() {
+        assert_eq!(
+            exactly("src/a.rs:3:5: replace a -> u8 with 0"),
+            "^src/a\\.rs:3:5: replace a \\-> u8 with 0$"
+        );
+        assert_eq!(exactly("a|b(c)"), "^a\\|b\\(c\\)$");
     }
 
     /// Fails by: the first field read, kilobytes reported as megabytes.
