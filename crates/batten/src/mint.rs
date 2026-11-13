@@ -925,8 +925,9 @@ fn validate_across(mints: &[Declared]) -> anyhow::Result<()> {
                         && mint.selects.is_some()
                         && other.selects != mint.selects)
                     // Two `require` rows read the record and leave it, so
-                    // neither can starve the other (CLOUD-2680).
-                    && (other.spends() || mint.spends())
+                    // neither can starve the other (CLOUD-2680). A spend row
+                    // beside a require row is refused below, for its mode.
+                    && mint.spends()
             })
             .count()
             > 1

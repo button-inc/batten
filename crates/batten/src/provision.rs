@@ -2138,7 +2138,7 @@ fn stripped(path: &Path, strip: usize) -> Result<Option<PathBuf>> {
 
 /// Whether `link`, read from the directory `parent` (both relative to the tree
 /// root), stays inside the tree.
-#[cfg(unix)]
+#[cfg_attr(not(unix), allow(dead_code))]
 fn lexically_inside(parent: &Path, link: &Path) -> bool {
     let mut depth = parent
         .components()
@@ -3889,6 +3889,179 @@ tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
             Some(false)
         );
         assert_eq!(route_honours_credentials(probe, &real, unreachable), None);
+    }
+
+    /// A component a strip may drop is a normal one or `.`; nothing is left
+    /// when the strip takes every one.
+    #[test]
+    fn a_strip_drops_leading_components_and_refuses_a_climb() {
+        assert_eq!(
+            stripped(Path::new("./tool/bin/x"), 1).unwrap(),
+            Some(PathBuf::from("bin/x"))
+        );
+        assert_eq!(stripped(Path::new("tool"), 1).unwrap(), None);
+        assert!(stripped(Path::new("../x"), 0).is_err());
+    }
+
+    /// A link stays inside while its `..` never climbs above the tree root.
+    #[test]
+    fn a_link_is_inside_while_it_never_climbs_past_the_root() {
+        if !cfg!(unix) {
+            return;
+        }
+        assert!(lexically_inside(Path::new("a"), Path::new("../b")));
+        assert!(!lexically_inside(Path::new("a"), Path::new("../../b")));
+        assert!(lexically_inside(Path::new(""), Path::new("./x")));
+        assert!(lexically_inside(Path::new("a"), Path::new("x/../../y")));
+        assert!(!lexically_inside(Path::new("a/b"), Path::new("/etc")));
+    }
+
+    /// An entry is written with the mode its archive gave it, the declared
+    /// binary always executable; a later entry replaces a link rather than
+    /// writing through it; an in-tree link is made.
+    #[test]
+    fn an_entry_is_placed_with_its_mode_and_never_through_a_link() {
+        if !cfg!(unix) {
+            return;
+        }
+        let tree = crate::scratch::scratch("provision-place");
+        let bin = Path::new("bin/tool");
+        let mode = |path: &str| mode_of(&tree.join(path));
+        let put = |raw: &str, kind: Kind, body: &[u8]| {
+            place(&tree, 0, bin, Path::new(raw), kind, &mut &body[..]).unwrap();
+        };
+        put("bin/tool", Kind::File { executable: false }, b"t");
+        put("lib/data", Kind::File { executable: false }, b"d");
+        put("lib/run", Kind::File { executable: true }, b"r");
+        assert_eq!(mode("bin/tool"), 0o755, "the declared binary");
+        assert_eq!(mode("lib/data"), 0o644);
+        assert_eq!(mode("lib/run"), 0o755);
+        put("lib/link", Kind::Symlink(PathBuf::from("data")), b"");
+        assert_eq!(
+            fs::read_link(tree.join("lib/link")).unwrap(),
+            Path::new("data")
+        );
+        put("lib/link", Kind::File { executable: false }, b"new");
+        assert!(
+            !fs::symlink_metadata(tree.join("lib/link"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read(tree.join("lib/data")).unwrap(),
+            b"d",
+            "not written through"
+        );
+    }
+
+    /// A file's permission bits; `0` off unix, whose cases return before
+    /// they read one.
+    fn mode_of(path: &Path) -> u32 {
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::metadata(path).unwrap().permissions().mode() & 0o777
+        };
+        #[cfg(not(unix))]
+        let mode = {
+            let _ = path;
+            0
+        };
+        mode
+    }
+
+    fn tarball(entries: &[(&str, tar::EntryType, u32, &[u8])]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        for (path, kind, mode, bytes) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(*kind);
+            header.set_size(bytes.len() as u64);
+            header.set_mode(*mode);
+            header.set_cksum();
+            builder.append_data(&mut header, path, *bytes).unwrap();
+        }
+        let tar = builder.into_inner().unwrap();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut gz, &tar).unwrap();
+        gz.finish().unwrap()
+    }
+
+    /// A tar entry is executable only where its mode says so, and an entry
+    /// that is neither a file, a directory nor a link is refused.
+    #[test]
+    fn a_tar_tree_keeps_each_mode_and_refuses_a_device() {
+        if !cfg!(unix) {
+            return;
+        }
+        let tree = crate::scratch::scratch("provision-tar-tree");
+        let subtree = Subtree {
+            strip: 0,
+            bin: PathBuf::from("bin/tool"),
+        };
+        let bytes = tarball(&[
+            ("bin/tool", tar::EntryType::Regular, 0o644, b"t"),
+            ("lib/run", tar::EntryType::Regular, 0o755, b"r"),
+            ("lib/data", tar::EntryType::Regular, 0o644, b"d"),
+        ]);
+        extract_tree_tar(&bytes, &tree, &subtree).unwrap();
+        let mode = |path: &str| mode_of(&tree.join(path));
+        assert_eq!((mode("lib/run"), mode("lib/data")), (0o755, 0o644));
+        let fifo = tarball(&[("lib/pipe", tar::EntryType::Fifo, 0o644, b"")]);
+        assert!(extract_tree_tar(&fifo, &tree, &subtree).is_err());
+    }
+
+    #[test]
+    fn a_zip_tree_keeps_each_mode() {
+        if !cfg!(unix) {
+            return;
+        }
+        let tree = crate::scratch::scratch("provision-zip-tree");
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (path, mode) in [("lib/run", 0o755), ("lib/data", 0o644)] {
+            let options = zip::write::SimpleFileOptions::default().unix_permissions(mode);
+            writer.start_file(path, options).unwrap();
+            std::io::Write::write_all(&mut writer, b"x").unwrap();
+        }
+        let bytes = writer.finish().unwrap().into_inner();
+        let subtree = Subtree {
+            strip: 0,
+            bin: PathBuf::from("bin/tool"),
+        };
+        extract_tree_zip(&bytes, &tree, &subtree).unwrap();
+        let mode = |path: &str| mode_of(&tree.join(path));
+        assert_eq!((mode("lib/run"), mode("lib/data")), (0o755, 0o644));
+    }
+
+    /// A launcher is a file whose `#!` line ends in the launcher verb.
+    #[test]
+    fn a_launcher_is_known_by_the_verb_its_shebang_ends_in() {
+        let dir = crate::scratch::scratch("provision-is-launcher");
+        let file = |name: &str, body: &str| {
+            let path = dir.join(name);
+            fs::write(&path, body).unwrap();
+            path
+        };
+        let verb = format!("#!/opt/batten {LAUNCHER_VERB}\nexec tool\n");
+        assert!(is_a_launcher(&file("launcher", &verb)));
+        assert!(!is_a_launcher(&file("other", "#!/opt/batten other\n")));
+        assert!(!is_a_launcher(&file("shell", "#!/bin/sh\n")));
+        assert!(!is_a_launcher(&dir.join("missing")));
+    }
+
+    /// A `bin` is a relative path with no `..`: blank, absolute or climbing
+    /// is refused, each on its own.
+    #[test]
+    fn a_subtree_bin_is_a_relative_path_inside_the_archive() {
+        let with_bin = |bin: &str| Provision {
+            unpack: Unpack::TarGz,
+            bin: Some(bin.to_owned()),
+            ..entry("tool", "0")
+        };
+        assert!(validate_subtree(&with_bin("bin/tool")).is_ok());
+        for bin in [" ", "/opt/tool", "bin/../../tool"] {
+            assert!(validate_subtree(&with_bin(bin)).is_err(), "{bin:?}");
+        }
     }
 }
 
