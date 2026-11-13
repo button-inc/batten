@@ -1180,6 +1180,14 @@ pub fn record_reach(
     packages: &BTreeSet<&str>,
 ) -> anyhow::Result<std::collections::BTreeMap<u32, BTreeSet<(String, String)>>> {
     let base = state.join("reach");
+    // REACH IS A FUNCTION OF THE SCHEMA TREE, so a restart over the same tree
+    // resumes from the record a finished run sealed instead of re-running the
+    // suite (640 s on #1276).
+    let inputs = tree_digest(work);
+    let seal = base.join(SEALED);
+    if crate::fsio::read_to_string(&seal).is_ok_and(|held| held == inputs) {
+        return collect_reach(&base);
+    }
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base)?;
     let config = state.join("nextest.toml");
@@ -1223,7 +1231,41 @@ pub fn record_reach(
         ran.passed(),
         "the unmutated suite failed on the schema build, so no verdict would mean anything"
     );
-    collect_reach(&base)
+    let reach = collect_reach(&base)?;
+    std::fs::write(&seal, inputs)?;
+    Ok(reach)
+}
+
+/// The file `record_reach` writes once a record is whole, holding the digest
+/// of the tree it was recorded over.
+const SEALED: &str = "sealed";
+
+/// A digest of every source and manifest in the schema tree: what the test
+/// binaries a reach record ran were built from. The build output is not.
+#[must_use]
+pub fn tree_digest(work: &std::path::Path) -> String {
+    let mut files: Vec<std::path::PathBuf> = ignore::WalkBuilder::new(work)
+        .standard_filters(false)
+        .filter_entry(|entry| !matches!(entry.file_name().to_str(), Some("target" | ".git")))
+        .build()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+        .map(ignore::DirEntry::into_path)
+        .collect();
+    files.sort();
+    let mut hasher = blake3::Hasher::new();
+    for file in files {
+        hasher.update(
+            file.strip_prefix(work)
+                .unwrap_or(&file)
+                .as_os_str()
+                .as_encoded_bytes(),
+        );
+        hasher.update(&[0]);
+        hasher.update(&std::fs::read(&file).unwrap_or_default());
+        hasher.update(&[0]);
+    }
+    hasher.finalize().to_hex().to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -1348,6 +1390,7 @@ pub fn package_dirs(mutants: &[Listed]) -> std::collections::BTreeMap<String, St
 pub fn load_verdicts(text: &str) -> std::collections::BTreeMap<String, String> {
     text.lines()
         .filter_map(|line| line.split_once('\t'))
+        .filter(|(_, verdict)| reusable(verdict))
         .map(|(key, verdict)| (key.to_owned(), verdict.to_owned()))
         .collect()
 }
@@ -1400,8 +1443,9 @@ struct Judging<'a> {
     seconds: &'a std::collections::BTreeMap<Case, f64>,
     cache: &'a std::collections::BTreeMap<String, String>,
     dirs: &'a std::collections::BTreeMap<String, String>,
-    /// The verdict cache, appended at each barrier so a killed sweep keeps
-    /// every kill it finished (a container restart lost a whole judging pass).
+    /// The verdict journal, appended as each verdict is decided: CRASH-ONLY
+    /// (Candea & Fox 2003), so a killed sweep keeps every kill it finished and
+    /// a restart resumes from them (a restart lost a whole judging pass).
     store: &'a std::path::Path,
 }
 
@@ -1419,7 +1463,13 @@ fn judge_all(judging: &Judging<'_>, todo: &[u32], jobs: usize) -> Vec<(u32, Verd
     let verdicts = std::sync::Mutex::new(Vec::new());
     let hints = std::sync::Mutex::new(std::collections::BTreeMap::new());
     let exclusive = Exclusive::default();
-    let fresh = std::sync::Mutex::new(String::new());
+    let journal = std::sync::Mutex::new(
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(judging.store)
+            .ok(),
+    );
     for chunk in todo.chunks(BARRIER) {
         let next = std::sync::atomic::AtomicUsize::new(0);
         std::thread::scope(|scope| {
@@ -1445,9 +1495,13 @@ fn judge_all(judging: &Judging<'_>, todo: &[u32], jobs: usize) -> Vec<(u32, Verd
                         if reused.is_none()
                             && matches!(verdict, Verdict::Caught | Verdict::Timeout)
                             && let Some(key) = key
-                            && let Ok(mut held) = fresh.lock()
+                            && let Ok(mut held) = journal.lock()
+                            && let Some(file) = held.as_mut()
                         {
-                            let _ = writeln!(held, "{key}\t{}", verdict.name());
+                            // ONE WRITE PER LINE, so a crash tears at most the
+                            // last, which `load_verdicts` skips.
+                            let line = format!("{key}\t{}\n", verdict.name());
+                            let _ = std::io::Write::write_all(file, line.as_bytes());
                         }
                         if let Ok(mut held) = verdicts.lock() {
                             held.push((id, verdict));
@@ -1456,20 +1510,6 @@ fn judge_all(judging: &Judging<'_>, todo: &[u32], jobs: usize) -> Vec<(u32, Verd
                 });
             }
         });
-        // KEPT BEFORE THE NEXT CHUNK: a later line wins on load, so appending
-        // is safe, and the sweep's final write compacts the file.
-        if let Ok(mut held) = fresh.lock()
-            && !held.is_empty()
-        {
-            let appended = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(judging.store)
-                .and_then(|mut file| std::io::Write::write_all(&mut file, held.as_bytes()));
-            if appended.is_ok() {
-                held.clear();
-            }
-        }
         // NO RUN IS IN FLIGHT, so every fixture left is a finished run's.
         let _ = std::fs::remove_dir_all(judging.target.join("tmp"));
         let _ = std::fs::remove_dir_all(judging.scratch);
@@ -1487,7 +1527,10 @@ fn store_verdicts(
     for (key, verdict) in cache {
         let _ = writeln!(stored, "{key}\t{verdict}");
     }
-    std::fs::write(path, stored)?;
+    // REPLACED WHOLE OR NOT AT ALL: a crash mid-write leaves the journal.
+    let staged = path.with_extension("compacting");
+    std::fs::write(&staged, stored)?;
+    std::fs::rename(&staged, path)?;
     Ok(())
 }
 
@@ -1593,6 +1636,8 @@ fn sweep(
             cache.insert(key.clone(), String::from("unviable"));
         }
     }
+    // KEPT BEFORE ANY TEST RUNS: a restart skips the unviable loop's builds.
+    store_verdicts(&cache_path, &cache)?;
     let classic: BTreeSet<u32> = schema
         .files
         .values()
@@ -1672,10 +1717,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_verdict_appended_at_a_barrier_outranks_the_line_before_it() {
-        let loaded = load_verdicts("k\tunviable\nj\tcaught\nk\tcaught\n");
+    fn a_journaled_verdict_outranks_the_line_before_it_and_a_torn_line_is_dropped() {
+        let loaded = load_verdicts("k\tunviable\nj\tcaught\nk\tcaught\nt\tcau");
         assert_eq!(loaded.get("k").map(String::as_str), Some("caught"));
+        assert!(!loaded.contains_key("t"));
         assert_eq!(loaded.len(), 2);
+    }
+
+    #[test]
+    fn the_reach_seal_moves_with_a_source_and_not_with_build_output() {
+        let work = std::env::temp_dir().join(format!("batten-schema-seal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&work);
+        std::fs::create_dir_all(work.join("src")).unwrap();
+        std::fs::create_dir_all(work.join("target")).unwrap();
+        std::fs::write(work.join("src/lib.rs"), "fn a() {}").unwrap();
+        let before = tree_digest(&work);
+        std::fs::write(work.join("target/out"), "built").unwrap();
+        assert_eq!(tree_digest(&work), before);
+        std::fs::write(work.join("src/lib.rs"), "fn b() {}").unwrap();
+        assert_ne!(tree_digest(&work), before);
+        let _ = std::fs::remove_dir_all(&work);
     }
 
     fn listed(genre: &str, replacement: &str, from: (usize, usize), to: (usize, usize)) -> Listed {
