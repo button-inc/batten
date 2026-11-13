@@ -47,8 +47,18 @@ no_fix_reason = "class 3 (test): fixture"
 
 /// `files` committed on `main`, then `branch` committed on a feature branch.
 fn fixture(name: &str, files: &[(&str, &str)], branch: &[(&str, &str)]) -> PathBuf {
+    fixture_with(name, CONFIG, files, branch)
+}
+
+/// [`fixture`] under `config`.
+fn fixture_with(
+    name: &str,
+    config: &str,
+    files: &[(&str, &str)],
+    branch: &[(&str, &str)],
+) -> PathBuf {
     let dir = scratch(name);
-    std::fs::write(dir.join("batten.toml"), CONFIG).unwrap();
+    std::fs::write(dir.join("batten.toml"), config).unwrap();
     let write = |files: &[(&str, &str)]| {
         for (path, text) in files {
             let path = dir.join(path);
@@ -205,4 +215,116 @@ fn a_per_file_row_judges_the_file_against_its_own_base() {
         denied(&write(&dir, "tests/new.txt", "nothing here\n")),
         None
     );
+}
+
+/// A changed file's uncommitted edit is part of the sum, and is counted again
+/// once it changes: its count is kept against its stat, never its path.
+///
+/// Fails by: the working side left out, a count kept but never read, or a
+/// stale count served after the file changed.
+#[test]
+fn an_uncommitted_edit_to_a_changed_file_is_counted_and_recounted() {
+    let dir = fixture(
+        "ratchet-call-working",
+        &[
+            ("docs/a.md", "TODO one\n"),
+            ("docs/b.md", "TODO x\nTODO y\n"),
+        ],
+        &[("docs/b.md", "TODO x\n")],
+    );
+    // b.md's commit paid for one: admitted.
+    assert_eq!(
+        denied(&edit(&dir, "docs/a.md", "TODO one", "TODO one\nTODO two")),
+        None
+    );
+    // b.md, edited on disk and not committed, takes it back and one more.
+    std::fs::write(dir.join("docs/b.md"), "TODO x\nTODO y\nTODO z\n").unwrap();
+    let output = edit(&dir, "docs/a.md", "TODO one", "TODO one\nTODO two");
+    assert!(denied(&output).is_some(), "{}", common::stdout(&output));
+}
+
+/// Two rows over one glob, counting different tokens, each keep their own
+/// counts: one moved past its base is refused, the other is not.
+#[test]
+fn rows_counting_different_tokens_keep_their_own_counts() {
+    let config = r#"version = 1
+
+[[rule]]
+id = "xx count ahead"
+kind = "ratchet"
+glob = "docs/*.md"
+pattern = "XX"
+direction = "non_increasing"
+base = "main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "class 3 (test): fixture"
+
+[[rule]]
+id = "yy count ahead"
+kind = "ratchet"
+glob = "docs/*.md"
+pattern = "YY"
+direction = "non_increasing"
+base = "main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "class 3 (test): fixture"
+"#;
+    let dir = fixture_with(
+        "ratchet-call-two-counters",
+        config,
+        &[("docs/a.md", "none\n"), ("docs/b.md", "YY YY\n")],
+        &[("docs/b.md", "XX XX XX\n")],
+    );
+    let output = edit(&dir, "docs/a.md", "none", "XX YY");
+    let reason = denied(&output).unwrap_or_else(|| panic!("{}", common::stdout(&output)));
+    assert!(reason.contains("xx count ahead"), "{reason}");
+    assert!(
+        !reason.contains("yy count ahead"),
+        "YY fell on the branch: {reason}"
+    );
+}
+
+/// A non-decreasing sum holds at zero movement and is refused below it.
+#[test]
+fn a_non_decreasing_sum_is_refused_only_below_its_base() {
+    let config = r#"version = 1
+
+[[rule]]
+id = "case floor"
+kind = "ratchet"
+glob = "notes/*.txt"
+pattern = "case"
+direction = "non_decreasing"
+base = "main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "class 3 (test): fixture"
+"#;
+    let dir = fixture_with(
+        "ratchet-call-floor",
+        config,
+        &[("notes/a.txt", "case case\n"), ("notes/b.txt", "none\n")],
+        &[("notes/b.txt", "case\n")],
+    );
+    assert_eq!(
+        denied(&edit(&dir, "notes/a.txt", "case case", "case")),
+        None,
+        "b.txt's commit pays for it"
+    );
+    let output = edit(&dir, "notes/a.txt", "case case", "none");
+    assert!(denied(&output).is_some(), "{}", common::stdout(&output));
+}
+
+/// A write outside every row's glob is judged by none of them, even on a
+/// branch whose committed change already moved a row past its base.
+#[test]
+fn a_write_outside_the_glob_is_not_judged_by_the_row() {
+    let dir = fixture(
+        "ratchet-call-outside",
+        &[("docs/b.md", "none\n")],
+        &[("docs/b.md", "TODO\n")],
+    );
+    assert_eq!(denied(&write(&dir, "notes/x.md", "TODO\n")), None);
 }
