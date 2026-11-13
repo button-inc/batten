@@ -299,6 +299,7 @@ mod msrv_pin_agreement;
 mod mutant_rows;
 mod mutants_cache;
 mod mutate;
+mod mutate_schema;
 mod mutation_declared_case;
 mod named_paths;
 mod narrow_adoption;
