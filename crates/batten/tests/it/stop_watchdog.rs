@@ -96,7 +96,7 @@ fn isolated(repo: &Path, home: &Path) -> common::Batten {
     common::state_home(&mut command, home);
     command
         .current_dir(repo)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"));
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp());
     command
 }
 

@@ -84,7 +84,7 @@ fn run(repo: &Path, home: &Path, args: &[&str]) -> (i32, String, String) {
         .state_home(home)
         .args(args)
         .current_dir(repo)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_LOG_LEVEL")
         .output()

@@ -115,7 +115,7 @@ fn judge_cmd(repo: &Path, home: &Path, args: &[&str], with_stub: bool) -> Output
         .args(args)
         .current_dir(repo)
         .env("PATH", path)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .output()
         .expect("run batten")
 }
