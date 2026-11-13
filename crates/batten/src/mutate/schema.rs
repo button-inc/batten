@@ -964,7 +964,10 @@ fn run_cases(
         &args,
         &env,
         super::runner_bound(),
-    )?;
+    );
+    // THE RUN'S OWN SCRATCH GOES WITH IT: nothing else ever reads it.
+    let _ = std::fs::remove_dir_all(&own);
+    let ran = ran?;
     Ok(match ran.outcome {
         super::Outcome::Passed => (Verdict::Missed, None),
         super::Outcome::TimedOut => (Verdict::Timeout, None),
@@ -1413,15 +1416,13 @@ struct Judging<'a> {
     store: &'a std::path::Path,
 }
 
-/// Judgements between two scratch collections. A run leaves its fixtures for
-/// the next to collect, which no run may do while another is in flight; on
-/// #1276 three workers never let one, and 1,540 runs left 13 GB and filled the
-/// disk. Measured at about 8.5 MB a run, so a barrier holds ~3.4 GB at most.
-const BARRIER: usize = 400;
+/// How many verdicts pass between two progress lines.
+const PROGRESS_EVERY: usize = 100;
 
 /// Judge every mutant in `todo` on `jobs` workers, reusing a stored kill whose
-/// key still holds. Workers stop at every [`BARRIER`]th mutant while the
-/// scratch every finished run left is collected.
+/// key still holds. NO BARRIER: each run owns its scratch (`run_cases`) and
+/// removes it when it ends, so no worker ever waits for another's slow run.
+/// Progress is printed from this thread as verdicts arrive.
 fn judge_all(
     judging: &Judging<'_>,
     todo: &[u32],
@@ -1430,7 +1431,6 @@ fn judge_all(
 ) -> Vec<(u32, Verdict)> {
     let started = std::time::Instant::now();
     let nobody = BTreeSet::new();
-    let verdicts = std::sync::Mutex::new(Vec::new());
     let hints = std::sync::Mutex::new(std::collections::BTreeMap::new());
     let journal = std::sync::Mutex::new(
         std::fs::OpenOptions::new()
@@ -1439,60 +1439,63 @@ fn judge_all(
             .open(judging.store)
             .ok(),
     );
-    for chunk in todo.chunks(BARRIER) {
-        let next = std::sync::atomic::AtomicUsize::new(0);
-        std::thread::scope(|scope| {
-            for _ in 0..jobs.max(1) {
-                scope.spawn(|| {
-                    loop {
-                        let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some(&id) = chunk.get(at) else { break };
-                        let Some(mutant) = judging.mutants.get(id as usize) else {
-                            break;
-                        };
-                        let cases = judging.reach.get(&id).unwrap_or(&nobody);
-                        let key = verdict_key(judging.root, mutant, cases, judging.dirs);
-                        let reused = key
-                            .as_ref()
-                            .and_then(|key| judging.cache.get(key))
-                            .filter(|v| reusable(v));
-                        let verdict = match reused.map(String::as_str) {
-                            Some("caught") => Verdict::Caught,
-                            Some("timeout") => Verdict::Timeout,
-                            _ => judge(judging, id, mutant, cases, &hints),
-                        };
-                        // EVERY VERDICT, SURVIVORS TOO, the moment it is
-                        // decided: one write per line, so a crash tears at
-                        // most the last. Only a kill is reused (`reusable`);
-                        // a survivor's line is the record a killed sweep keeps.
-                        if reused.is_none()
-                            && let Ok(mut held) = journal.lock()
-                            && let Some(file) = held.as_mut()
-                        {
-                            let line = journal_line(key.as_deref(), verdict.name(), &mutant.name);
-                            let _ = std::io::Write::write_all(file, line.as_bytes());
-                        }
-                        if let Ok(mut held) = verdicts.lock() {
-                            held.push((id, verdict));
-                        }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let (sent, decided) = std::sync::mpsc::channel::<(u32, Verdict)>();
+    let mut verdicts = Vec::with_capacity(todo.len());
+    std::thread::scope(|scope| {
+        for _ in 0..jobs.max(1) {
+            let sent = sent.clone();
+            let (next, hints, journal, nobody) = (&next, &hints, &journal, &nobody);
+            scope.spawn(move || {
+                loop {
+                    let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(&id) = todo.get(at) else { break };
+                    let Some(mutant) = judging.mutants.get(id as usize) else {
+                        break;
+                    };
+                    let cases = judging.reach.get(&id).unwrap_or(nobody);
+                    let key = verdict_key(judging.root, mutant, cases, judging.dirs);
+                    let reused = key
+                        .as_ref()
+                        .and_then(|key| judging.cache.get(key))
+                        .filter(|v| reusable(v));
+                    let verdict = match reused.map(String::as_str) {
+                        Some("caught") => Verdict::Caught,
+                        Some("timeout") => Verdict::Timeout,
+                        _ => judge(judging, id, mutant, cases, hints),
+                    };
+                    // EVERY VERDICT, SURVIVORS TOO, the moment it is decided:
+                    // one write per line, so a crash tears at most the last.
+                    // Only a kill is reused (`reusable`); a survivor's line is
+                    // the record a stopped sweep keeps.
+                    if reused.is_none()
+                        && let Ok(mut held) = journal.lock()
+                        && let Some(file) = held.as_mut()
+                    {
+                        let line = journal_line(key.as_deref(), verdict.name(), &mutant.name);
+                        let _ = std::io::Write::write_all(file, line.as_bytes());
                     }
-                });
+                    if sent.send((id, verdict)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(sent);
+        for verdict in decided {
+            verdicts.push(verdict);
+            if verdicts.len() % PROGRESS_EVERY == 0 || verdicts.len() == todo.len() {
+                let _ = writeln!(
+                    out,
+                    "mutate schema: judged {}/{} in {}s",
+                    verdicts.len(),
+                    todo.len(),
+                    started.elapsed().as_secs()
+                );
             }
-        });
-        // PROGRESS AT EVERY BARRIER, so a long sweep answers "how far" itself.
-        let judged = verdicts.lock().map_or(0, |held| held.len());
-        let _ = writeln!(
-            out,
-            "mutate schema: judged {judged}/{} in {}s",
-            todo.len(),
-            started.elapsed().as_secs()
-        );
-        // NO RUN IS IN FLIGHT, so every fixture left is a finished run's.
-        let _ = std::fs::remove_dir_all(judging.target.join("tmp"));
-        let _ = std::fs::remove_dir_all(judging.scratch);
-        let _ = std::fs::create_dir_all(judging.scratch);
-    }
-    verdicts.into_inner().unwrap_or_default()
+        }
+    });
+    verdicts
 }
 
 /// Append `lines` to the verdict journal in one write. APPEND-ONLY, never
