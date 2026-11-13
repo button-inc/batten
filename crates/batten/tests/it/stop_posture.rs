@@ -558,7 +558,7 @@ fn hook_in(dir: &Path, home: &Path, payload: &str) -> Output {
     command
         .current_dir(dir)
         .args(["adjudicate", "--harness", "claude-code"])
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1511,7 +1511,7 @@ fn verb_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
     command
         .current_dir(dir)
         .args(args)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command.output().expect("run batten verb")
