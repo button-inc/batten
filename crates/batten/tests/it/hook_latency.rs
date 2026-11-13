@@ -124,7 +124,7 @@ fn shimmed(repo: &Path, shims: &Path, home: &Path, args: &[&str]) -> common::Bat
         .current_dir(repo)
         .args(args)
         .env("PATH", std::env::join_paths(dirs).expect("a joinable PATH"))
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     command

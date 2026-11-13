@@ -137,7 +137,7 @@ fn every_spawn_of_the_binary_pins_the_home() {
 /// `session:*` task, until CLOUD-2173.
 #[test]
 fn every_spawn_stops_mises_walk_at_the_fixture_root() {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let root = &common::target_tmp();
     let command = common::batten();
     let ceiling = command
         .get_envs()
