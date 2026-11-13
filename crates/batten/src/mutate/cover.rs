@@ -182,6 +182,9 @@ fn key_matches(key: &[&str], module: &[String], function: &str) -> bool {
 pub struct Map {
     /// Test names, indexed by id.
     pub tests: Vec<String>,
+    /// Each test's nextest binary id (`batten`, `batten::it`), by the same id;
+    /// empty where the record did not say.
+    pub binaries: Vec<String>,
     /// Covered function key → the ids of the tests that executed it.
     pub keys: BTreeMap<String, BTreeSet<usize>>,
 }
@@ -189,11 +192,33 @@ pub struct Map {
 impl Map {
     /// Add one test's record: its name and the keys it covered.
     pub fn add(&mut self, test: &str, keys: impl IntoIterator<Item = String>) {
+        self.add_in("", test, keys);
+    }
+
+    /// Add one test's record with the binary it lives in.
+    pub fn add_in(&mut self, binary: &str, test: &str, keys: impl IntoIterator<Item = String>) {
         let id = self.tests.len();
         self.tests.push(test.to_owned());
+        self.binaries.push(binary.to_owned());
         for key in keys {
             self.keys.entry(key).or_default().insert(id);
         }
+    }
+
+    /// The binaries `tests` live in, or `None` if any of them is unknown, so
+    /// a build is narrowed only when every covering case's binary is known.
+    #[must_use]
+    pub fn binaries_of(&self, tests: &BTreeSet<&str>) -> Option<BTreeSet<&str>> {
+        let mut found = BTreeSet::new();
+        for (test, binary) in self.tests.iter().zip(&self.binaries) {
+            if tests.contains(test.as_str()) {
+                if binary.is_empty() {
+                    return None;
+                }
+                found.insert(binary.as_str());
+            }
+        }
+        Some(found)
     }
 
     /// The tests that cover the function cargo-mutants named, in `file`.
@@ -220,8 +245,12 @@ impl Map {
     #[must_use]
     pub fn render(&self) -> String {
         let mut text = format!("{HEADER}\n");
-        for (id, test) in self.tests.iter().enumerate() {
-            let _ = writeln!(text, "T {id} {test}");
+        for (id, (test, binary)) in self.tests.iter().zip(&self.binaries).enumerate() {
+            if binary.is_empty() {
+                let _ = writeln!(text, "T {id} {test}");
+            } else {
+                let _ = writeln!(text, "T {id} {test} {binary}");
+            }
         }
         for (key, ids) in &self.keys {
             let ids: Vec<String> = ids.iter().map(usize::to_string).collect();
@@ -246,7 +275,10 @@ impl Map {
                     if first.parse::<usize>().ok()? != map.tests.len() {
                         return None;
                     }
-                    map.tests.push(second.to_owned());
+                    // `name` or `name binary`: neither holds a space.
+                    let (case, binary) = second.split_once(' ').unwrap_or((second, ""));
+                    map.tests.push(case.to_owned());
+                    map.binaries.push(binary.to_owned());
                 }
                 "K" => {
                     let ids = second
@@ -354,6 +386,44 @@ pub fn mutated_line(copy: &Path, root: &Path) -> Result<Option<(String, usize)>>
     Ok(None)
 }
 
+/// The cargo target flags that build exactly `binaries` (nextest binary ids:
+/// `pkg` is a library's unit tests, `pkg::bin/name`, `pkg::example/name`,
+/// `pkg::bench/name`, and `pkg::name` an integration test).
+///
+/// No covering binary still builds `--lib`, the cheapest build that decides
+/// whether the mutant compiles. A mutant in a binary's own source adds
+/// `--bins`, since no library target compiles that file.
+#[must_use]
+pub fn target_args(binaries: &BTreeSet<&str>, mutated_file: &str) -> Vec<String> {
+    let mut targets: BTreeSet<Vec<String>> = BTreeSet::new();
+    for binary in binaries {
+        let target = match binary.split_once("::") {
+            None => vec![String::from("--lib")],
+            Some((_, rest)) => match rest.split_once('/') {
+                Some(("bin", name)) => vec![String::from("--bin"), name.to_owned()],
+                Some(("example", name)) => vec![String::from("--example"), name.to_owned()],
+                Some(("bench", name)) => vec![String::from("--bench"), name.to_owned()],
+                _ => vec![String::from("--test"), rest.to_owned()],
+            },
+        };
+        targets.insert(target);
+    }
+    if targets.is_empty() {
+        targets.insert(vec![String::from("--lib")]);
+    }
+    if mutated_file.ends_with("src/main.rs") || mutated_file.contains("src/bin/") {
+        targets.insert(vec![String::from("--bins")]);
+    }
+    targets.into_iter().flatten().collect()
+}
+
+/// Whether `args` (cargo's, after the program) is a nextest run, the build
+/// step (`--no-run`) or the test step alike.
+#[must_use]
+pub fn is_nextest_run(args: &[std::ffi::OsString]) -> bool {
+    args.first().is_some_and(|arg| arg == "nextest") && args.get(1).is_some_and(|arg| arg == "run")
+}
+
 /// Whether `args` (cargo's, after the program) is a nextest test run, as
 /// opposed to the build step cargo-mutants runs first with `--no-run`.
 #[must_use]
@@ -363,21 +433,29 @@ pub fn is_test_step(args: &[std::ffi::OsString]) -> bool {
         && !args.iter().any(|arg| arg == "--no-run")
 }
 
-/// The filterset the stand-in adds for the mutant in the working directory,
-/// or `None` to run cargo's command unchanged (the baseline, or anything the
-/// map cannot place).
-fn selection() -> Option<String> {
+/// What the stand-in adds for the mutant in the working directory: the
+/// filterset naming its covering cases, and the target flags building only
+/// their binaries (empty when a covering case's binary is unknown). `None` to
+/// run cargo's command unchanged: the baseline, or anything the map cannot
+/// place.
+fn selection() -> Option<(String, Vec<String>)> {
     let map = Map::parse(&crate::fsio::read_to_string(std::env::var_os(MAP)?).ok()?)?;
     let mutants = crate::fsio::read_to_string(std::env::var_os(MUTANTS)?).ok()?;
     let root = PathBuf::from(std::env::var_os(ROOT)?);
     let copy = std::env::current_dir().ok()?;
     let (file, line) = mutated_line(&copy, &root).ok()??;
     let function = function_at(&mutants, &file, line)?;
-    Some(filterset(&map.select(&file, &function)))
+    let tests = map.select(&file, &function);
+    let targets = map
+        .binaries_of(&tests)
+        .map(|binaries| target_args(&binaries, &file))
+        .unwrap_or_default();
+    Some((filterset(&tests), targets))
 }
 
 /// As cargo-mutants' `$CARGO`: when [`SHIM`] names the real cargo, become it,
-/// narrowing a test step to the covering tests. `None` when this process is not
+/// narrowing the build and test steps alike to the covering tests' binaries,
+/// and the test step to the covering tests. `None` when this process is not
 /// the stand-in.
 pub fn cargo_shimmed(
     args: impl Iterator<Item = std::ffi::OsString>,
@@ -385,14 +463,20 @@ pub fn cargo_shimmed(
     let cargo = std::env::var_os(SHIM)?;
     let mut launch: Vec<std::ffi::OsString> = vec![cargo];
     let rest: Vec<std::ffi::OsString> = args.skip(1).collect();
-    let narrowed = if is_test_step(&rest) {
+    let narrowed = if is_nextest_run(&rest) {
         selection()
     } else {
         None
     };
+    let test_step = is_test_step(&rest);
     launch.extend(rest);
-    if let Some(filter) = narrowed {
-        launch.extend(["-E".into(), filter.into(), "--no-tests=pass".into()]);
+    if let Some((filter, targets)) = narrowed {
+        // THE SAME TARGETS FOR BOTH STEPS: a test step naming other targets
+        // than its build would compile the rest there instead.
+        launch.extend(targets.into_iter().map(std::ffi::OsString::from));
+        if test_step {
+            launch.extend(["-E".into(), filter.into(), "--no-tests=pass".into()]);
+        }
     }
     match crate::exec::become_argv_without(&launch, &[SHIM]) {
         Ok(never) => match never {},
@@ -506,7 +590,10 @@ fn record(test: &[String]) -> Result<u8> {
         }
     }
     let _ = std::fs::remove_dir_all(&work);
-    let mut body = format!("{name}\n");
+    // THE BINARY IT LIVES IN, as nextest names it to the process it runs, so
+    // the stand-in can build only that binary for a mutant it covers.
+    let binary = std::env::var("NEXTEST_BINARY_ID").unwrap_or_default();
+    let mut body = format!("{name}\t{binary}\n");
     for key in keys {
         let _ = writeln!(body, "{key}");
     }
@@ -789,8 +876,9 @@ pub fn collect(dir: &Path) -> Result<Map> {
     for file in records {
         let body = crate::fsio::read_to_string(&file).unwrap_or_default();
         let mut lines = body.lines();
-        let Some(test) = lines.next() else { continue };
-        map.add(test, lines.map(str::to_owned));
+        let Some(head) = lines.next() else { continue };
+        let (test, binary) = head.split_once('\t').unwrap_or((head, ""));
+        map.add_in(binary, test, lines.map(str::to_owned));
     }
     Ok(map)
 }
@@ -920,6 +1008,10 @@ mod tests {
         assert!(is_test_step(&args(&["nextest", "run", "--package=batten"])));
         assert!(!is_test_step(&args(&["nextest", "run", "--no-run"])));
         assert!(!is_test_step(&args(&["build", "--tests"])));
+        assert!(is_nextest_run(&args(&["nextest", "run", "--no-run"])));
+        assert!(is_nextest_run(&args(&["nextest", "run"])));
+        assert!(!is_nextest_run(&args(&["nextest", "list"])));
+        assert!(!is_nextest_run(&args(&["build", "run"])));
     }
 
     #[test]
@@ -929,6 +1021,62 @@ mod tests {
             .map(|s| (*s).to_owned())
             .collect();
         assert_eq!(test_name(&args), Some("engine_pin::init"));
+    }
+
+    /// Each binary id names its own target; nothing covering still builds the
+    /// library; a binary's own source adds `--bins`.
+    ///
+    /// Fails by: an id read as the wrong target kind, the empty case building
+    /// nothing, or a binary source left unbuilt.
+    #[test]
+    fn each_binary_names_the_target_that_builds_it() {
+        let set = |ids: &[&'static str]| ids.iter().copied().collect::<BTreeSet<&str>>();
+        let lib = "crates/batten/src/lib.rs";
+        assert_eq!(target_args(&set(&["batten"]), lib), ["--lib"]);
+        assert_eq!(target_args(&set(&["batten::it"]), lib), ["--test", "it"]);
+        assert_eq!(
+            target_args(&set(&["batten::bin/batten"]), lib),
+            ["--bin", "batten"]
+        );
+        assert_eq!(
+            target_args(&set(&["batten::example/window-census"]), lib),
+            ["--example", "window-census"]
+        );
+        assert_eq!(
+            target_args(&set(&["batten::bench/b"]), lib),
+            ["--bench", "b"]
+        );
+        assert_eq!(
+            target_args(&set(&["batten", "batten::it", "batten-fsio"]), lib),
+            ["--lib", "--test", "it"],
+            "two libraries are one `--lib`"
+        );
+        assert_eq!(target_args(&set(&[]), lib), ["--lib"]);
+        assert_eq!(
+            target_args(&set(&["batten::it"]), "crates/batten/src/main.rs"),
+            ["--bins", "--test", "it"]
+        );
+    }
+
+    /// A map narrows only when it knows every covering case's binary, and
+    /// keeps the binaries through its own file.
+    ///
+    /// Fails by: an unknown binary read as known, or the binary dropped by
+    /// `render` or `parse`.
+    #[test]
+    fn binaries_narrow_only_when_every_case_has_one() {
+        let mut map = Map::default();
+        map.add_in("batten", "a", [String::from("f")]);
+        map.add_in("batten::it", "b", [String::from("f")]);
+        map.add("c", [String::from("g")]);
+        let ab: BTreeSet<&str> = ["a", "b"].into_iter().collect();
+        assert_eq!(
+            map.binaries_of(&ab),
+            Some(["batten", "batten::it"].into_iter().collect())
+        );
+        let ac: BTreeSet<&str> = ["a", "c"].into_iter().collect();
+        assert_eq!(map.binaries_of(&ac), None, "c's binary is unknown");
+        assert_eq!(Map::parse(&map.render()), Some(map));
     }
 
     #[test]
