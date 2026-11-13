@@ -70,7 +70,7 @@ fn alive(dir: &Path, args: &[&str]) -> Output {
     command
         .args(args)
         .current_dir(dir)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .output()
         .expect("run batten task alive")
 }
@@ -82,7 +82,7 @@ fn task(dir: &Path, args: &[&str]) -> Output {
     command
         .args(args)
         .current_dir(dir)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .output()
         .expect("run batten task")
 }
@@ -1150,7 +1150,7 @@ fn forge_poll_every_registers_and_ticks() {
     .unwrap();
     let child = batten()
         .current_dir(&repo)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .args(["forge", "poll", "--every", "1"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

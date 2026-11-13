@@ -936,16 +936,25 @@ fn run_cases(
         super::cover::filterset(&tests),
         String::from("--no-tests=pass"),
     ]);
+    let own = judging.scratch.join(id.to_string());
+    let _ = std::fs::create_dir_all(own.join("tmp"));
+    let _ = std::fs::create_dir_all(own.join("fixtures"));
     let env = [
         (
             String::from("CARGO_TARGET_DIR"),
             judging.target.to_string_lossy().into_owned(),
         ),
-        // THE SWEEP'S OWN TEMP ROOT, so the fixtures a run leaves there are
-        // the sweep's to collect at its barrier, never another checkout's.
+        // EACH RUN ITS OWN TEMP AND FIXTURE ROOTS, under the sweep's scratch:
+        // a fixture at a fixed path is then never shared by two workers
+        // running one case, so no run waits on another's cases, and what a
+        // run leaves is the sweep's to collect at its barrier.
         (
             String::from("TMPDIR"),
-            judging.scratch.to_string_lossy().into_owned(),
+            own.join("tmp").to_string_lossy().into_owned(),
+        ),
+        (
+            String::from(TEST_TMPDIR),
+            own.join("fixtures").to_string_lossy().into_owned(),
         ),
         (String::from(ACTIVE), id.to_string()),
     ];
@@ -975,52 +984,9 @@ fn run_cases(
     })
 }
 
-/// The cases in flight, which no other run may start: many fixtures sit at a
-/// fixed path under the target's `tmp/`, so one case run twice at once by two
-/// workers would corrupt its own fixture and fake a kill.
-#[derive(Default)]
-struct Exclusive {
-    held: std::sync::Mutex<BTreeSet<Case>>,
-    freed: std::sync::Condvar,
-}
-
-/// A hold on cases, released when dropped.
-struct Held<'a> {
-    by: &'a Exclusive,
-    cases: &'a BTreeSet<Case>,
-}
-
-impl Exclusive {
-    /// Wait until none of `cases` is in flight, then hold them.
-    fn hold<'a>(&'a self, cases: &'a BTreeSet<Case>) -> Held<'a> {
-        let mut held = self
-            .held
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        while !held.is_disjoint(cases) {
-            held = self
-                .freed
-                .wait(held)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-        }
-        held.extend(cases.iter().cloned());
-        Held { by: self, cases }
-    }
-}
-
-impl Drop for Held<'_> {
-    fn drop(&mut self) {
-        let mut held = self
-            .by
-            .held
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for case in self.cases {
-            held.remove(case);
-        }
-        self.by.freed.notify_all();
-    }
-}
+/// The variable that moves an integration suite's fixture root off the path
+/// cargo compiled in (`tests/it/common`'s `target_tmp`).
+const TEST_TMPDIR: &str = "BATTEN_TEST_TMPDIR";
 
 /// The function a mutant sits in, which its siblings share.
 type Sibling = (String, String, Option<usize>);
@@ -1034,7 +1000,6 @@ fn judge(
     mutant: &Listed,
     cases: &BTreeSet<Case>,
     hints: &std::sync::Mutex<std::collections::BTreeMap<Sibling, BTreeSet<Case>>>,
-    exclusive: &Exclusive,
 ) -> Verdict {
     if cases.is_empty() {
         return Verdict::Uncovered;
@@ -1055,11 +1020,7 @@ fn judge(
         if phase.is_empty() {
             continue;
         }
-        let ran = {
-            let _held = exclusive.hold(phase);
-            run_cases(judging, id, mutant, phase)
-        };
-        match ran {
+        match run_cases(judging, id, mutant, phase) {
             Ok((Verdict::Missed, _)) => {}
             Ok((verdict, killed_by)) => {
                 if let (Some(key), Some(case)) = (sibling, killed_by)
@@ -1389,8 +1350,11 @@ pub fn package_dirs(mutants: &[Listed]) -> std::collections::BTreeMap<String, St
 #[must_use]
 pub fn load_verdicts(text: &str) -> std::collections::BTreeMap<String, String> {
     text.lines()
-        .filter_map(|line| line.split_once('\t'))
-        .filter(|(_, verdict)| reusable(verdict))
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            Some((fields.next()?, fields.next()?))
+        })
+        .filter(|(key, verdict)| *key != "-" && reusable(verdict))
         .map(|(key, verdict)| (key.to_owned(), verdict.to_owned()))
         .collect()
 }
@@ -1458,11 +1422,16 @@ const BARRIER: usize = 400;
 /// Judge every mutant in `todo` on `jobs` workers, reusing a stored kill whose
 /// key still holds. Workers stop at every [`BARRIER`]th mutant while the
 /// scratch every finished run left is collected.
-fn judge_all(judging: &Judging<'_>, todo: &[u32], jobs: usize) -> Vec<(u32, Verdict)> {
+fn judge_all(
+    judging: &Judging<'_>,
+    todo: &[u32],
+    jobs: usize,
+    out: &mut dyn std::io::Write,
+) -> Vec<(u32, Verdict)> {
+    let started = std::time::Instant::now();
     let nobody = BTreeSet::new();
     let verdicts = std::sync::Mutex::new(Vec::new());
     let hints = std::sync::Mutex::new(std::collections::BTreeMap::new());
-    let exclusive = Exclusive::default();
     let journal = std::sync::Mutex::new(
         std::fs::OpenOptions::new()
             .create(true)
@@ -1490,17 +1459,17 @@ fn judge_all(judging: &Judging<'_>, todo: &[u32], jobs: usize) -> Vec<(u32, Verd
                         let verdict = match reused.map(String::as_str) {
                             Some("caught") => Verdict::Caught,
                             Some("timeout") => Verdict::Timeout,
-                            _ => judge(judging, id, mutant, cases, &hints, &exclusive),
+                            _ => judge(judging, id, mutant, cases, &hints),
                         };
+                        // EVERY VERDICT, SURVIVORS TOO, the moment it is
+                        // decided: one write per line, so a crash tears at
+                        // most the last. Only a kill is reused (`reusable`);
+                        // a survivor's line is the record a killed sweep keeps.
                         if reused.is_none()
-                            && matches!(verdict, Verdict::Caught | Verdict::Timeout)
-                            && let Some(key) = key
                             && let Ok(mut held) = journal.lock()
                             && let Some(file) = held.as_mut()
                         {
-                            // ONE WRITE PER LINE, so a crash tears at most the
-                            // last, which `load_verdicts` skips.
-                            let line = format!("{key}\t{}\n", verdict.name());
+                            let line = journal_line(key.as_deref(), verdict.name(), &mutant.name);
                             let _ = std::io::Write::write_all(file, line.as_bytes());
                         }
                         if let Ok(mut held) = verdicts.lock() {
@@ -1510,6 +1479,14 @@ fn judge_all(judging: &Judging<'_>, todo: &[u32], jobs: usize) -> Vec<(u32, Verd
                 });
             }
         });
+        // PROGRESS AT EVERY BARRIER, so a long sweep answers "how far" itself.
+        let judged = verdicts.lock().map_or(0, |held| held.len());
+        let _ = writeln!(
+            out,
+            "mutate schema: judged {judged}/{} in {}s",
+            todo.len(),
+            started.elapsed().as_secs()
+        );
         // NO RUN IS IN FLIGHT, so every fixture left is a finished run's.
         let _ = std::fs::remove_dir_all(judging.target.join("tmp"));
         let _ = std::fs::remove_dir_all(judging.scratch);
@@ -1518,20 +1495,45 @@ fn judge_all(judging: &Judging<'_>, todo: &[u32], jobs: usize) -> Vec<(u32, Verd
     verdicts.into_inner().unwrap_or_default()
 }
 
-/// Write the reusable verdicts back, one `key\tverdict` line each.
-fn store_verdicts(
-    path: &std::path::Path,
-    cache: &std::collections::BTreeMap<String, String>,
-) -> anyhow::Result<()> {
-    let mut stored = String::new();
-    for (key, verdict) in cache {
-        let _ = writeln!(stored, "{key}\t{verdict}");
-    }
-    // REPLACED WHOLE OR NOT AT ALL: a crash mid-write leaves the journal.
-    let staged = path.with_extension("compacting");
-    std::fs::write(&staged, stored)?;
-    std::fs::rename(&staged, path)?;
+/// Append `lines` to the verdict journal in one write. APPEND-ONLY, never
+/// rewritten: a crash tears at most the last line, which `load_verdicts`
+/// skips, and a survivor's line outlives the sweep that decided it.
+fn journal(path: &std::path::Path, lines: &str) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?
+        .write_all(lines.as_bytes())?;
     Ok(())
+}
+
+/// One journal line: the verdict's key (`-` when the site has none), the
+/// verdict, and the mutant it was decided for.
+fn journal_line(key: Option<&str>, verdict: &str, name: &str) -> String {
+    format!("{}\t{verdict}\t{name}\n", key.unwrap_or("-"))
+}
+
+/// Record each unviable mutant in `cache`, answering the journal lines for
+/// those it did not already hold.
+fn newly_unviable(
+    unviable: &BTreeSet<u32>,
+    site_keys: &[Option<String>],
+    mutants: &[Listed],
+    cache: &mut std::collections::BTreeMap<String, String>,
+) -> String {
+    let mut found = String::new();
+    for id in unviable {
+        if let Some(Some(key)) = site_keys.get(*id as usize)
+            && let Some(mutant) = mutants.get(*id as usize)
+            && cache
+                .insert(key.clone(), String::from("unviable"))
+                .is_none()
+        {
+            found.push_str(&journal_line(Some(key), "unviable", &mutant.name));
+        }
+    }
+    found
 }
 
 /// The mutants a stored verdict already found do not compile, by site key.
@@ -1631,13 +1633,11 @@ fn sweep(
         known_unviable.len()
     )?;
     let (unviable, schema) = build(&root, &work, &target, &mutants, known_unviable, out)?;
-    for id in &unviable {
-        if let Some(key) = &site_keys[*id as usize] {
-            cache.insert(key.clone(), String::from("unviable"));
-        }
-    }
     // KEPT BEFORE ANY TEST RUNS: a restart skips the unviable loop's builds.
-    store_verdicts(&cache_path, &cache)?;
+    journal(
+        &cache_path,
+        &newly_unviable(&unviable, &site_keys, &mutants, &mut cache),
+    )?;
     let classic: BTreeSet<u32> = schema
         .files
         .values()
@@ -1659,7 +1659,6 @@ fn sweep(
         reach.len(),
         started.elapsed().as_secs()
     )?;
-    let nobody = BTreeSet::new();
     let seconds = durations(
         &crate::fsio::read_to_string(
             state
@@ -1689,18 +1688,8 @@ fn sweep(
         },
         &todo,
         jobs,
+        out,
     );
-    // EVERY KILL IS KEPT FOR THE NEXT LAP, keyed by what decided it; a
-    // survivor is not, since a case added since may kill it.
-    for (id, verdict) in &verdicts {
-        if matches!(verdict, Verdict::Caught | Verdict::Timeout)
-            && let Some(mutant) = mutants.get(*id as usize)
-            && let Some(key) = verdict_key(&root, mutant, reach.get(id).unwrap_or(&nobody), &dirs)
-        {
-            cache.insert(key, verdict.name().to_owned());
-        }
-    }
-    store_verdicts(&cache_path, &cache)?;
     report(
         out,
         &mutants,
@@ -1718,10 +1707,17 @@ mod tests {
 
     #[test]
     fn a_journaled_verdict_outranks_the_line_before_it_and_a_torn_line_is_dropped() {
-        let loaded = load_verdicts("k\tunviable\nj\tcaught\nk\tcaught\nt\tcau");
+        let loaded = load_verdicts(
+            "k\tunviable\tm1\nj\tcaught\tm2\nk\tcaught\tm1\ns\tmissed\tm3\n-\tcaught\tm4\nt\tcau",
+        );
         assert_eq!(loaded.get("k").map(String::as_str), Some("caught"));
-        assert!(!loaded.contains_key("t"));
+        assert!(!loaded.contains_key("t"), "a torn line is dropped");
+        assert!(
+            !loaded.contains_key("s"),
+            "a survivor is kept, never reused"
+        );
         assert_eq!(loaded.len(), 2);
+        assert_eq!(journal_line(None, "missed", "m"), "-\tmissed\tm\n");
     }
 
     #[test]
@@ -1997,27 +1993,5 @@ mod tests {
                       \x20       FAIL [   1.000s] batten unit::other\n";
         assert_eq!(killer(output), Some(case("mutate::a_change")));
         assert_eq!(killer("PASS [ 1s] batten::it x"), None);
-    }
-
-    #[test]
-    fn a_case_in_flight_is_held_until_its_run_ends() {
-        let exclusive = Exclusive::default();
-        let one: BTreeSet<Case> = [case("a"), case("b")].into();
-        let other: BTreeSet<Case> = [case("c")].into();
-        let held = exclusive.hold(&one);
-        let _alongside = exclusive.hold(&other);
-        let overlapping: BTreeSet<Case> = [case("b")].into();
-        let waited = std::sync::atomic::AtomicBool::new(false);
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                let _second = exclusive.hold(&overlapping);
-                assert!(
-                    waited.load(std::sync::atomic::Ordering::SeqCst),
-                    "held before release"
-                );
-            });
-            waited.store(true, std::sync::atomic::Ordering::SeqCst);
-            drop(held);
-        });
     }
 }

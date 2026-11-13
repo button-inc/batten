@@ -73,8 +73,15 @@ pub(crate) fn set_times(path: &Path, times: fs::FileTimes) {
 /// repositories live.
 #[must_use]
 pub(crate) fn target_tmp() -> PathBuf {
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+    // A RUNTIME OVERRIDE FIRST: cargo bakes `CARGO_TARGET_TMPDIR` into the
+    // binary, so a mutation sweep running one case on several workers at once
+    // gives each its own root here, or two runs would share a fixture path.
+    std::env::var_os(TEST_TMPDIR)
+        .map_or_else(|| PathBuf::from(env!("CARGO_TARGET_TMPDIR")), PathBuf::from)
 }
+
+/// The variable a mutation sweep sets to move [`target_tmp`] per worker.
+pub(crate) const TEST_TMPDIR: &str = "BATTEN_TEST_TMPDIR";
 
 /// A committed file at the repository root, located from this crate's manifest
 /// directory.
@@ -1029,7 +1036,7 @@ fn pin_mise(command: &mut Command) {
     // `session:*` task against the host, 200 processes and 78s. A case run over
     // the real repository has its manifest in its own cwd, below no ceiling.
     // The declared mutation, in a plain comment for the reason above:
-    command.env("MISE_CEILING_PATHS", env!("CARGO_TARGET_TMPDIR"));
+    command.env("MISE_CEILING_PATHS", target_tmp());
 }
 
 /// The mise data dir [`batten`] pins, for the case asserting a state redirect
@@ -2048,7 +2055,7 @@ pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", target_tmp())
         // A hook a fixture installs runs under git's PATH, so git gets the
         // CLOUD-1951 mask too: no installed `batten` answers a hook by name.
         .env("PATH", ambient_path())

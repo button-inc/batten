@@ -6605,7 +6605,7 @@ fn receipt_cmd(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> 
         .args(args)
         .current_dir(dir)
         .state_home(home)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .output()
         .expect("run batten receipt")
 }
@@ -7380,9 +7380,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
 
     // A stale fixture from a prior run would add findings and break the byte
     // equality below — `repo_with_config` does not clear the directory itself.
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-agnostic-dirty"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("config-agnostic-dirty"));
     let dirty = repo_with_config("config-agnostic-dirty", &contents);
 
     // Both a Rust file and a non-Rust one, because that is what discriminates
@@ -7448,9 +7446,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     // The other half of the discriminator: the same rules must stay silent on a
     // tree that carries none of the shapes. A rule that fired on everything
     // would pass the case above and still be useless.
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-agnostic-clean"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("config-agnostic-clean"));
     let clean = repo_with_config("config-agnostic-clean", &contents);
     committed_budget_surfaces(&clean);
     let home = committed_config_fixture_git(&clean);
@@ -7502,9 +7498,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
     let contents = fs::read_to_string(&committed).expect("read batten.toml");
 
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-portability-dirty"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("config-portability-dirty"));
     let dirty = repo_with_config("config-portability-dirty", &contents);
     committed_budget_surfaces(&dirty);
     let home = committed_config_fixture_git(&dirty);
@@ -7591,9 +7585,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     // one in-place form BSD accepts, a `read` loop replaces `mapfile`, bare
     // `xargs` replaces the short flag, and a plain `branch main` off an explicitly
     // named branch replaces the force.
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-portability-clean"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("config-portability-clean"));
     let clean = repo_with_config("config-portability-clean", &contents);
     committed_budget_surfaces(&clean);
     let home = committed_config_fixture_git(&clean);
@@ -8851,7 +8843,7 @@ fn store_cmd(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> Ou
         .args(args)
         .current_dir(dir)
         .state_home(home)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .output()
         .expect("run batten state")
 }
@@ -9537,7 +9529,7 @@ fn session_cmd(
         .args(args)
         .current_dir(dir)
         .state_home(home)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .env("BATTEN_SESSION", session);
     match parent {
         Some(parent) => command.env("BATTEN_SESSION_PARENT", parent),
@@ -12980,9 +12972,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
 
     // The prescription, spelled the way the hook spells it. Line 2, so the
     // pointer proves the finding is anchored rather than reported file-wide.
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("denied-identity-dirty"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("denied-identity-dirty"));
     let dirty = repo_with_config("denied-identity-dirty", &contents);
     committed_budget_surfaces(&dirty);
     let home = committed_config_fixture_git(&dirty);
@@ -13033,9 +13023,7 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
     // The discriminator. Stating the precedence rather than the command is what
     // the rule leaves room for — otherwise the row would forbid the very prose
     // AGENTS.md rule 8 and `rules/commits.md` are made of.
-    let _ = fs::remove_dir_all(
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("denied-identity-clean"),
-    );
+    let _ = fs::remove_dir_all(common::target_tmp().join("denied-identity-clean"));
     let clean = repo_with_config("denied-identity-clean", &contents);
     committed_budget_surfaces(&clean);
     let home = committed_config_fixture_git(&clean);
@@ -13868,7 +13856,7 @@ fn ready_hook(repo: &Path, home: &Path, command: &str) -> Output {
         .args(["adjudicate", "--harness", "exit-code"])
         .current_dir(repo)
         .state_home(home)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
