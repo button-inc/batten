@@ -810,6 +810,27 @@ fn a_lap_over_a_clone_with_no_remote_stops_rather_than_lapping_toward_nothing() 
     );
 }
 
+/// A lap over a dirty tree stops first, naming the count, before it spends a
+/// fetch or a compile on work it could not push: measured on #1276, a lap that
+/// asked this last stopped on one uncommitted line after two compiles.
+///
+/// Fails by: the dirty-tree question answered "clean" for a dirty tree, which
+/// the sweep on #1276 found unguarded.
+#[test]
+fn a_lap_over_a_dirty_tree_stops_before_anything_else() {
+    let repo = repo("land-lap-dirty");
+    std::fs::write(repo.join("lib.rs"), "edited\n").unwrap();
+    let (code, out, err) = land_lap(&repo, "3", "true");
+    assert_eq!(
+        code, 2,
+        "a dirty tree is the lap's own refusal: {out} {err}"
+    );
+    assert!(
+        err.contains("differs from HEAD in 1 path(s)"),
+        "the refusal names the count: {err}"
+    );
+}
+
 /// `batten land fast-forward`, with the workflow named in the environment.
 fn land_fast_forward(repo: &Path, workflow: &str) -> (i32, String, String) {
     let output = batten()
