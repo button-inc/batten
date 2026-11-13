@@ -240,11 +240,12 @@ fn place(root: &SyntaxNode, text: &str, id: u32, mutant: &Listed) -> Option<(Ran
             ))
         }
         "BinaryOperator" | "UnaryOperator" => {
-            let expr = node.ancestors().find(|n| {
-                matches!(n.kind(), SyntaxKind::BIN_EXPR | SyntaxKind::PREFIX_EXPR)
-                    && span_of(n).start <= start
-                    && end <= span_of(n).end
-            })?;
+            // The innermost operator expression holding the span: every
+            // ancestor of the covering node holds it, so the kind decides, and
+            // the token check below hands back a span that is not its operator.
+            let expr = node
+                .ancestors()
+                .find(|n| matches!(n.kind(), SyntaxKind::BIN_EXPR | SyntaxKind::PREFIX_EXPR))?;
             let op = match expr.kind() {
                 SyntaxKind::BIN_EXPR => ast::BinExpr::cast(expr.clone())?.op_token()?,
                 _ => ast::PrefixExpr::cast(expr.clone())?.op_token()?,
@@ -302,18 +303,12 @@ fn place(root: &SyntaxNode, text: &str, id: u32, mutant: &Listed) -> Option<(Ran
 /// Fold `wrap` into the wraps already at a site: same kind merges.
 fn merge(wraps: &mut Vec<Wrap>, wrap: Wrap) {
     for held in wraps.iter_mut() {
+        // ONE SITE, ONE OPERATOR: a site is its expression's span, which holds
+        // exactly one operator token, so two `Op`s at one site swap the same one.
         match (held, &wrap) {
-            (
-                Wrap::Op { op, alts },
-                Wrap::Op {
-                    op: other,
-                    alts: more,
-                },
-            ) if op == other => {
-                alts.extend(more.iter().cloned());
-                return;
-            }
-            (Wrap::Body(alts), Wrap::Body(more)) | (Wrap::Guard(alts), Wrap::Guard(more)) => {
+            (Wrap::Op { alts, .. }, Wrap::Op { alts: more, .. })
+            | (Wrap::Body(alts), Wrap::Body(more))
+            | (Wrap::Guard(alts), Wrap::Guard(more)) => {
                 alts.extend(more.iter().cloned());
                 return;
             }
@@ -977,14 +972,20 @@ fn run_cases(
             // THE RUN'S OWN WORDS, KEPT: on #1276 2,213 runs failed before a
             // case started and said nothing anywhere, so an error now leaves
             // its output beside the tree, where the summary points.
-            if let Some(state) = judging.work.parent() {
-                let errors = state.join("errors");
-                let _ = std::fs::create_dir_all(&errors);
-                let _ = std::fs::write(errors.join(format!("{id}.log")), &ran.output);
-            }
+            keep_error(judging, id, &ran.output);
             (Verdict::Error, None)
         }
     })
+}
+
+/// Keep what an erring run of mutant `id` said under the sweep's `errors/`,
+/// where the summary points.
+fn keep_error(judging: &Judging<'_>, id: u32, said: &str) {
+    if let Some(state) = judging.work.parent() {
+        let errors = state.join("errors");
+        let _ = std::fs::create_dir_all(&errors);
+        let _ = std::fs::write(errors.join(format!("{id}.log")), said);
+    }
 }
 
 /// The variable that moves an integration suite's fixture root off the path
@@ -1033,7 +1034,12 @@ fn judge(
                 }
                 return verdict;
             }
-            Err(_) => return Verdict::Error,
+            Err(why) => {
+                // A RUN THAT COULD NOT START SAYS WHY, beside the runs that
+                // failed: on #1276 six such errors left no log at all.
+                keep_error(judging, id, &format!("{why:#}\n"));
+                return Verdict::Error;
+            }
         }
     }
     Verdict::Missed
@@ -1693,6 +1699,13 @@ fn sweep(
         jobs,
         out,
     );
+    // EACH HANDED-BACK MUTANT BY NAME: the schema decided nothing about it, so
+    // whatever judges it next needs the list, not the count.
+    for id in &classic {
+        if let Some(mutant) = mutants.get(*id as usize) {
+            writeln!(out, "classic\t{}", mutant.name)?;
+        }
+    }
     report(
         out,
         &mutants,
@@ -1996,5 +2009,485 @@ mod tests {
                       \x20       FAIL [   1.000s] batten unit::other\n";
         assert_eq!(killer(output), Some(case("mutate::a_change")));
         assert_eq!(killer("PASS [ 1s] batten::it x"), None);
+    }
+
+    /// A region holds its start and not its end, an empty one holds its start,
+    /// and the smallest holding region decides.
+    ///
+    /// Fails by: an error at a region's end attributed to it, an error on an
+    /// arm's zero-width switch attributed to its enclosing site, or the
+    /// widest region winning.
+    #[test]
+    fn a_region_holds_its_start_and_not_its_end() {
+        let rendered = Rendered {
+            text: String::new(),
+            regions: vec![(0..10, vec![1]), (2..4, vec![2]), (6..6, vec![3])],
+            classic: Vec::new(),
+        };
+        assert_eq!(rendered.owners(3), Some(&[2][..]));
+        assert_eq!(rendered.owners(4), Some(&[1][..]), "an end is exclusive");
+        assert_eq!(
+            rendered.owners(6),
+            Some(&[3][..]),
+            "an empty region holds its start"
+        );
+        assert_eq!(rendered.owners(10), None);
+    }
+
+    /// A `const fn` body is a const context, so its mutants are handed back,
+    /// and a match-arm span that is not the arm is handed back too.
+    #[test]
+    fn a_const_fn_and_a_stray_arm_span_are_handed_back() {
+        let source = "const fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n";
+        let rendered = render_all(source, &[listed("BinaryOperator", "!=", (2, 7), (2, 9))]);
+        assert_eq!(rendered.classic, vec![0]);
+        let source =
+            "fn f(x: u8) -> u8 {\n    match x {\n        3 => 4,\n        _ => 0,\n    }\n}\n";
+        let stray = render_all(source, &[listed("MatchArm", "", (3, 9), (3, 10))]);
+        assert_eq!(stray.classic, vec![0], "the pattern alone is not the arm");
+    }
+
+    /// Two mutants of one operator, or two deletions of one arm, share a
+    /// switch; an error between their branches belongs to both.
+    ///
+    /// Fails by: a second operator mutant wrapped around the first instead of
+    /// joining it, or a second arm deletion dropped.
+    #[test]
+    fn mutants_of_one_operator_or_arm_share_its_switch() {
+        let source = "fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n";
+        let ops = render_all(
+            source,
+            &[
+                listed("BinaryOperator", "!=", (2, 7), (2, 9)),
+                listed("BinaryOperator", "<", (2, 7), (2, 9)),
+            ],
+        );
+        assert_eq!(
+            ops.text,
+            "fn f(a: u8, b: u8) -> bool {\n    (if crate::__batten_mutant(0) { a != b } else if \
+             crate::__batten_mutant(1) { a < b } else { a == b })\n}\n"
+        );
+        let between = ops.text.find(" else if").unwrap();
+        assert_eq!(ops.owners(between), Some(&[0, 1][..]));
+        let source =
+            "fn f(x: u8) -> u8 {\n    match x {\n        3 => 4,\n        _ => 0,\n    }\n}\n";
+        let arms = render_all(
+            source,
+            &[
+                listed("MatchArm", "", (3, 9), (3, 15)),
+                listed("MatchArm", "", (3, 9), (3, 15)),
+            ],
+        );
+        assert!(
+            arms.text
+                .contains("3 if !(crate::__batten_mutant(0) || crate::__batten_mutant(1)) => 4,"),
+            "{}",
+            arms.text
+        );
+    }
+
+    /// A site inside a wider one renders inside it, and an operator swapped in
+    /// a site holding a child is swapped in the gap that holds it only.
+    ///
+    /// Fails by: a site starting where its parent starts left beside it, or
+    /// an operator swap applied to a gap that does not hold the operator.
+    #[test]
+    fn a_site_inside_another_renders_inside_it() {
+        let source = "fn f(a: u8, b: u8, c: bool) -> bool {\n    a == b && c\n}\n";
+        let nested = render_all(
+            source,
+            &[
+                listed("FnValue", "true", (2, 5), (2, 16)),
+                listed("BinaryOperator", "!=", (2, 7), (2, 9)),
+            ],
+        );
+        assert_eq!(
+            nested.text,
+            "fn f(a: u8, b: u8, c: bool) -> bool {\n    if crate::__batten_mutant(0) { true } else { \
+             (if crate::__batten_mutant(1) { a != b } else { a == b }) && c }\n}\n"
+        );
+        let source = "fn f(a: u8, b: u8, c: u8) -> u8 {\n    (a + b) * c\n}\n";
+        let swapped = render_all(
+            source,
+            &[
+                listed("BinaryOperator", "-", (2, 8), (2, 9)),
+                listed("BinaryOperator", "+", (2, 13), (2, 14)),
+            ],
+        );
+        let inner = "(if crate::__batten_mutant(0) { a - b } else { a + b })";
+        assert_eq!(
+            swapped.text,
+            format!(
+                "fn f(a: u8, b: u8, c: u8) -> u8 {{\n    (if crate::__batten_mutant(1) {{ ({inner}) + c }} \
+                 else {{ ({inner}) * c }})\n}}\n"
+            )
+        );
+    }
+
+    #[test]
+    fn a_listing_is_read_past_the_text_around_it() {
+        let text = "  Compiling\n[{\"name\":\"m\",\"file\":\"src/lib.rs\",\"package\":\"p\",\
+                    \"genre\":\"FnValue\",\"replacement\":\"true\",\"span\":{\"start\":\
+                    {\"line\":1,\"column\":2},\"end\":{\"line\":3,\"column\":4}},\
+                    \"function\":null}]\n[exited with code 0]\n";
+        let got = listing(text).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].name.as_str(), got[0].span.end.column), ("m", 4));
+        assert!(listing("nothing listed").is_err());
+    }
+
+    /// The tree mirrors the checkout: files, nested directories and links,
+    /// a changed file or link rewritten, and only the top `target/` left out.
+    #[test]
+    fn a_sync_mirrors_the_checkout_but_its_top_target() {
+        let base = crate::scratch::scratch("schema-sync");
+        let (root, work) = (base.join("root"), base.join("work"));
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        std::fs::create_dir_all(root.join("sub/target")).unwrap();
+        std::fs::write(root.join("a.txt"), "one").unwrap();
+        std::fs::write(root.join("target/x"), "built").unwrap();
+        std::fs::write(root.join("sub/target/y"), "kept").unwrap();
+        std::fs::write(root.join("sub/b.txt"), "two").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("a.txt", root.join("link")).unwrap();
+        sync(&root, &work).unwrap();
+        assert_eq!(std::fs::read_to_string(work.join("a.txt")).unwrap(), "one");
+        assert_eq!(
+            std::fs::read_to_string(work.join("sub/b.txt")).unwrap(),
+            "two"
+        );
+        assert!(
+            !work.join("target").exists(),
+            "the top target is the build's"
+        );
+        assert!(
+            work.join("sub/target/y").is_file(),
+            "a nested target is source"
+        );
+        std::fs::write(root.join("a.txt"), "uno").unwrap();
+        sync(&root, &work).unwrap();
+        assert_eq!(std::fs::read_to_string(work.join("a.txt")).unwrap(), "uno");
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                std::fs::read_link(work.join("link")).unwrap(),
+                std::path::Path::new("a.txt")
+            );
+            std::fs::remove_file(root.join("link")).unwrap();
+            std::os::unix::fs::symlink("sub/b.txt", root.join("link")).unwrap();
+            sync(&root, &work).unwrap();
+            assert_eq!(
+                std::fs::read_link(work.join("link")).unwrap(),
+                std::path::Path::new("sub/b.txt")
+            );
+        }
+        let file = base.join("w");
+        write_if_changed(&file, "a").unwrap();
+        write_if_changed(&file, "b").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "b");
+        journal(&base.join("j"), "x\n").unwrap();
+        journal(&base.join("j"), "y\n").unwrap();
+        assert_eq!(std::fs::read_to_string(base.join("j")).unwrap(), "x\ny\n");
+    }
+
+    /// The switch goes into every crate root a mutant's package has, and each
+    /// mutated file is rendered into the tree.
+    #[test]
+    fn the_schema_is_written_with_the_switch_in_each_crate_root() {
+        let base = crate::scratch::scratch("schema-write");
+        let (root, work) = (base.join("root"), base.join("work"));
+        for dir in [&root, &work] {
+            std::fs::create_dir_all(dir.join("crates/x/src")).unwrap();
+            std::fs::create_dir_all(dir.join("src")).unwrap();
+            std::fs::write(dir.join("crates/x/src/lib.rs"), "pub mod m;\n").unwrap();
+            std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+            std::fs::write(
+                dir.join("crates/x/src/m.rs"),
+                "fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n",
+            )
+            .unwrap();
+        }
+        let mut inner = listed("BinaryOperator", "!=", (2, 7), (2, 9));
+        inner.file = String::from("crates/x/src/m.rs");
+        let mut top = listed("FnValue", "()", (1, 11), (1, 13));
+        top.file = String::from("src/b.rs");
+        let mut loose = top.clone();
+        loose.file = String::from("build.rs");
+        assert_eq!(
+            crate_roots(&work, &[inner.clone(), top, loose]),
+            ["crates/x/src/lib.rs", "src/main.rs"]
+                .map(String::from)
+                .into()
+        );
+        let schema = write_schema(&root, &work, &[inner], &BTreeSet::new()).unwrap();
+        assert!(schema.files.contains_key("crates/x/src/m.rs"));
+        let m = std::fs::read_to_string(work.join("crates/x/src/m.rs")).unwrap();
+        assert!(m.contains("crate::__batten_mutant(0) { a != b }"), "{m}");
+        let lib = std::fs::read_to_string(work.join("crates/x/src/lib.rs")).unwrap();
+        assert_eq!(lib, format!("pub mod m;\n{SWITCH}"));
+    }
+
+    /// An error is owned by the mutant whose region holds its primary span;
+    /// a warning, a non-compiler line, or an error outside every region is not.
+    #[test]
+    fn an_error_is_owned_by_its_primary_span() {
+        let rendered = Rendered {
+            text: String::new(),
+            regions: vec![(10..20, vec![4]), (30..40, vec![5])],
+            classic: Vec::new(),
+        };
+        let schema = Schema {
+            files: [(String::from("src/m.rs"), rendered)].into(),
+        };
+        let span = |primary: bool, at: u32| {
+            format!("{{\"is_primary\":{primary},\"file_name\":\"src/m.rs\",\"byte_start\":{at}}}")
+        };
+        let line = |reason: &str, level: &str, message: &str, spans: &str| {
+            format!(
+                "{{\"reason\":\"{reason}\",\"message\":{{\"level\":\"{level}\",\"message\":\"{message}\",\"spans\":[{spans}]}}}}"
+            )
+        };
+        let messages = [
+            line(
+                "compiler-message",
+                "error",
+                "e",
+                &format!("{},{}", span(false, 35), span(true, 15)),
+            ),
+            line("compiler-message", "warning", "w", &span(true, 35)),
+            line("build-finished", "error", "b", &span(true, 35)),
+            line("compiler-message", "error", "stray", &span(true, 25)),
+            String::from("not json"),
+        ]
+        .join("\n");
+        let (owned, stray) = unviable(&schema, &messages);
+        assert_eq!(owned, [4].into());
+        assert_eq!(stray, vec![String::from("stray")]);
+    }
+
+    #[test]
+    fn a_first_phase_stops_once_its_budget_is_spent_exactly() {
+        let cases: BTreeSet<Case> = ["a", "b", "c"].map(case).into();
+        let seconds = [("a", 1.0), ("b", 3.0), ("c", 5.0)]
+            .map(|(name, time)| (case(name), time))
+            .into();
+        let (first, second) = phases(&cases, &BTreeSet::new(), &seconds);
+        assert_eq!(first, ["a", "b"].map(case).into());
+        assert_eq!(second, [case("c")].into());
+    }
+
+    #[test]
+    fn a_cases_sources_are_its_module_or_its_test_target() {
+        let dirs: std::collections::BTreeMap<String, String> = [
+            (String::from("batten"), String::from("crates/batten")),
+            (String::from("root"), String::new()),
+        ]
+        .into();
+        let sources = |name: &str, binary: &str| case_sources(&dirs, name, binary);
+        assert_eq!(sources("top", "root"), vec!["src/lib.rs"]);
+        assert_eq!(
+            sources("hook::tests::x", "batten"),
+            vec!["crates/batten/src/hook.rs", "crates/batten/src/hook/mod.rs"]
+        );
+        assert_eq!(
+            sources("mutate::schema::x", "batten"),
+            vec![
+                "crates/batten/src/mutate/schema.rs",
+                "crates/batten/src/mutate/schema/mod.rs"
+            ]
+        );
+        assert_eq!(
+            sources("cli::a_case", "batten::it"),
+            vec![
+                "crates/batten/tests/it/cli.rs",
+                "crates/batten/tests/it/common/mod.rs",
+                "crates/batten/tests/it/main.rs",
+                "crates/batten/tests/it.rs"
+            ]
+        );
+        assert_eq!(
+            sources("x", "batten::bin/batten"),
+            vec!["crates/batten/src/main.rs"]
+        );
+        assert!(sources("x", "nobody").is_empty());
+    }
+
+    fn in_function(mut mutant: Listed, from: (usize, usize), to: (usize, usize)) -> Listed {
+        if let Some(function) = mutant.function.as_mut() {
+            function.span = Some(Span {
+                start: Position {
+                    line: from.0,
+                    column: from.1,
+                },
+                end: Position {
+                    line: to.0,
+                    column: to.1,
+                },
+            });
+        }
+        mutant
+    }
+
+    /// A site's key is its function's text and the mutation: two mutations
+    /// of one site differ, a function moved whole keeps its key, and a
+    /// verdict's key also moves with the reaching cases' files.
+    #[test]
+    fn a_key_follows_the_function_and_not_its_position() {
+        let root = crate::scratch::scratch("schema-keys");
+        let source = "fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n";
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), source).unwrap();
+        let ne = in_function(
+            listed("BinaryOperator", "!=", (2, 7), (2, 9)),
+            (1, 1),
+            (3, 2),
+        );
+        let lt = in_function(
+            listed("BinaryOperator", "<", (2, 7), (2, 9)),
+            (1, 1),
+            (3, 2),
+        );
+        let key = site_key(&root, &ne).unwrap();
+        assert_eq!(key.len(), 64);
+        assert_ne!(Some(key.clone()), site_key(&root, &lt));
+        assert_eq!(
+            site_key(&root, &listed("BinaryOperator", "!=", (2, 7), (2, 9))),
+            None
+        );
+        let dirs = [(String::from("p"), String::new())].into();
+        let cases = [(String::from("x"), String::from("p"))].into();
+        let verdict = verdict_key(&root, &ne, &cases, &dirs).unwrap();
+        assert_eq!(verdict.len(), 64);
+        assert_ne!(verdict, key);
+        std::fs::write(root.join("src/lib.rs"), format!("\n{source}")).unwrap();
+        let moved = in_function(
+            listed("BinaryOperator", "!=", (3, 7), (3, 9)),
+            (2, 1),
+            (4, 2),
+        );
+        assert_eq!(site_key(&root, &moved), Some(key));
+        assert_ne!(verdict_key(&root, &moved, &cases, &dirs), Some(verdict));
+    }
+
+    #[test]
+    fn only_a_stored_unviable_verdict_skips_a_build() {
+        let keys = [Some("k1"), None, Some("k2"), Some("k3")].map(|k| k.map(String::from));
+        let cache = [
+            (String::from("k1"), String::from("unviable")),
+            (String::from("k2"), String::from("caught")),
+        ]
+        .into();
+        assert_eq!(cached_unviable(&keys, &cache), [0].into());
+    }
+
+    /// The report names every verdict but a kill, counts each, and exits 2 on
+    /// a survivor and 0 when every mutant was caught.
+    #[test]
+    fn a_report_names_each_survivor_and_counts_every_verdict() {
+        let state = crate::scratch::scratch("schema-report");
+        let mutants: Vec<Listed> = ["m0", "m1", "m2"]
+            .map(|name| {
+                let mut mutant = listed("FnValue", "true", (1, 1), (1, 2));
+                mutant.name = String::from(name);
+                mutant
+            })
+            .into();
+        let mut out = Vec::new();
+        let verdicts = [
+            (0, Verdict::Caught),
+            (1, Verdict::Missed),
+            (2, Verdict::Uncovered),
+        ];
+        let started = std::time::Instant::now();
+        let code = report(&mut out, &mutants, &verdicts, (4, 5), &state, started).unwrap();
+        let said = String::from_utf8(out).unwrap();
+        assert_eq!(code, 2);
+        assert!(
+            said.contains("missed\tm1\n") && said.contains("uncovered\tm2\n"),
+            "{said}"
+        );
+        assert!(!said.contains("\tm0"), "{said}");
+        assert!(
+            said.contains(
+                "{\"caught\": 1, \"missed\": 1, \"uncovered\": 1}, 4 unviable, 5 classic"
+            ),
+            "{said}"
+        );
+        let mut out = Vec::new();
+        let code = report(&mut out, &mutants, &verdicts[..1], (0, 0), &state, started).unwrap();
+        assert_eq!(code, 0);
+    }
+
+    /// A stored kill or timeout is reused without a run and without a second
+    /// journal line, a mutant nothing reaches is uncovered and journaled, and
+    /// progress is printed every hundred verdicts and at the end.
+    ///
+    /// Fails by: a reused verdict re-judged (no case reaches it, so it would
+    /// read uncovered), or progress printed on the wrong count.
+    #[test]
+    fn stored_kills_are_reused_and_progress_is_counted_by_hundreds() {
+        let base = crate::scratch::scratch("schema-judge-all");
+        let source = "fn f(a: u8, b: u8) -> bool {\n    a == b\n}\n";
+        std::fs::create_dir_all(base.join("src")).unwrap();
+        std::fs::write(base.join("src/lib.rs"), source).unwrap();
+        let with = |replacement: &str, name: &str| {
+            let mut mutant = in_function(
+                listed("BinaryOperator", replacement, (2, 7), (2, 9)),
+                (1, 1),
+                (3, 2),
+            );
+            mutant.name = String::from(name);
+            mutant
+        };
+        let mut mutants: Vec<Listed> = (0..101).map(|_| with("!=", "kill")).collect();
+        mutants.push(with("<", "hang"));
+        mutants.push(with("<=", "none"));
+        let dirs = std::collections::BTreeMap::new();
+        let nobody = BTreeSet::new();
+        let key = |m: &Listed| verdict_key(&base, m, &nobody, &dirs).unwrap();
+        let cache = [
+            (key(&mutants[0]), String::from("caught")),
+            (key(&mutants[101]), String::from("timeout")),
+        ]
+        .into();
+        let store = base.join("verdicts");
+        let reach = std::collections::BTreeMap::new();
+        let seconds = std::collections::BTreeMap::new();
+        let judging = Judging {
+            work: &base,
+            target: &base,
+            scratch: &base,
+            root: &base,
+            mutants: &mutants,
+            reach: &reach,
+            seconds: &seconds,
+            cache: &cache,
+            dirs: &dirs,
+            store: &store,
+        };
+        let todo: Vec<u32> = (0..103).collect();
+        let mut out = Vec::new();
+        let mut verdicts = judge_all(&judging, &todo, 2, &mut out);
+        verdicts.sort_by_key(|(id, _)| *id);
+        assert!(verdicts[..101].iter().all(|(_, v)| *v == Verdict::Caught));
+        assert_eq!(verdicts[101].1, Verdict::Timeout);
+        assert_eq!(verdicts[102].1, Verdict::Uncovered);
+        let said = String::from_utf8(out).unwrap();
+        let progress: Vec<&str> = said
+            .lines()
+            .map(|line| line.split(" in ").next().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            progress,
+            [
+                "mutate schema: judged 100/103",
+                "mutate schema: judged 103/103"
+            ]
+        );
+        let journaled = std::fs::read_to_string(&store).unwrap();
+        assert_eq!(
+            journaled,
+            journal_line(Some(&key(&mutants[102])), "uncovered", "none")
+        );
     }
 }

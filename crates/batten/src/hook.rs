@@ -5751,7 +5751,7 @@ fn segment_commit_message(segment: &Segment, cwd: Option<&Path>) -> Option<Commi
         path.push(operand);
         Some(CommitMessage::File(path))
     };
-    let rest = &arguments[verb + 1..];
+    let (_, rest) = arguments[verb..].split_first()?;
     for (index, word) in rest.iter().enumerate() {
         let next = || rest.get(index + 1).copied();
         if *word == "-m" || *word == "--message" {
@@ -7946,10 +7946,9 @@ pub fn call_targets(envelope: &Envelope, start: &Path) -> Option<Vec<std::path::
         if is_cd_segment(handed) {
             let dir = placed_cd(segment, handed, &current)?;
             operands.push(dir.clone());
-            if !segment.grouped
-                && !segment.nested
-                && matches!(segment.terminator, Some(Separator::And | Separator::Semi))
-            {
+            // FOLLOWED ONLY ACROSS `&&` OR `;`: `placed_cd` has already refused
+            // a grouped or substituted `cd`, so the separator alone decides.
+            if matches!(segment.terminator, Some(Separator::And | Separator::Semi)) {
                 current = dir;
             }
             continue;
@@ -8001,11 +8000,10 @@ pub fn pathspec_calls(envelope: &Envelope, base: &Path) -> Pathspecs {
         let handed = &tokens[..tokens.len().saturating_sub(line.redirects.len())];
         if is_cd_segment(handed) {
             match placed_cd(segment, handed, &current) {
+                // As in `call_targets`: `placed_cd` refused a grouped or
+                // substituted `cd`, so the separator alone decides.
                 Some(dir) => {
-                    if !segment.grouped
-                        && !segment.nested
-                        && matches!(segment.terminator, Some(Separator::And | Separator::Semi))
-                    {
+                    if matches!(segment.terminator, Some(Separator::And | Separator::Semi)) {
                         current = dir;
                     }
                 }
@@ -10206,7 +10204,11 @@ fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a R
         // `get` answers `None` for a reversed range, so a program inside its own
         // redirections (`> f`) reads as an empty argv rather than a panic.
         let spoken = tokens.len().saturating_sub(line.redirects.len());
-        let argv: &[&str] = tokens.get(program_index + 1..spoken).unwrap_or_default();
+        let argv: &[&str] = tokens
+            .get(..spoken)
+            .and_then(|handed| handed.get(program_index..))
+            .and_then(<[&str]>::split_first)
+            .map_or(&[][..], |(_, argv)| argv);
         // Subcommand words with flags dropped. A value-taking flag leaves its
         // value behind, but the blocked words are adjacent, so that never hides
         // a real match (`gh -R o/r pr merge` still matches; `gh pr view
@@ -20705,6 +20707,159 @@ deny contains "refused by themodule" if {
         ] {
             assert_eq!(normalize_event(Harness::Cursor, raw), event, "{raw}");
         }
+    }
+
+    /// Gemini's model events and Copilot's two camelCase-only events normalize
+    /// to their concepts (CLOUD-2700).
+    ///
+    /// Fails by: dropping any arm, which reads the spelling as unrecognized.
+    #[test]
+    fn gemini_and_copilot_renamed_events_normalize() {
+        for (harness, raw, event) in [
+            (Harness::GeminiCli, "BeforeModel", Event::ModelRequest),
+            (Harness::GeminiCli, "AfterModel", Event::ModelResponse),
+            (Harness::CopilotCli, "subagentStart", Event::SubagentStart),
+            (
+                Harness::CopilotCli,
+                "userPromptTransformed",
+                Event::UserPromptExpansion,
+            ),
+        ] {
+            assert_eq!(normalize_event(harness, raw), event, "{raw}");
+        }
+    }
+
+    fn parsed(command: &str) -> Vec<Segment> {
+        let crate::facts::Look::Is(parsed) = segments(command) else {
+            panic!("`{command}` parses");
+        };
+        parsed
+    }
+
+    /// A glued `-m` message is read, and a backgrounded `wait` waits on
+    /// nothing after it, so it is itself detached.
+    #[test]
+    fn a_glued_message_is_read_and_a_backgrounded_wait_waits_on_nothing() {
+        assert_eq!(
+            segment_commit_message(&parsed("git commit -mfix")[0], None),
+            Some(CommitMessage::Text(String::from("fix")))
+        );
+        assert!(!waited_on(&parsed("wait &"), 0, 1));
+    }
+
+    /// Fails by: a `_`-led or `_`-holding variable refused, a name with a
+    /// non-identifier character accepted, or `%` and a non-number accepted.
+    #[test]
+    fn an_own_job_reference_names_only_the_calls_job() {
+        for (word, own) in [
+            ("%1", true),
+            ("%", true),
+            ("%x", false),
+            ("$_x", true),
+            ("${a_1}", true),
+            ("$x-y", false),
+            ("${1x}", false),
+            ("12", false),
+        ] {
+            assert_eq!(own_job_ref(word), own, "{word}");
+        }
+    }
+
+    /// A `cd` is placed only bare, literal and alone; `pushd` too.
+    #[test]
+    fn a_cd_is_placed_only_bare_and_literal() {
+        let base = Path::new("/r");
+        let placed = |command: &str| {
+            let segments = parsed(command);
+            let segment = segments
+                .iter()
+                .find(|segment| segment.words.iter().any(|w| w == "cd" || w == "pushd"))
+                .unwrap_or_else(|| panic!("`{command}` has a cd"));
+            let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+            placed_cd(segment, &tokens, base)
+        };
+        assert_eq!(placed("cd sub"), Some(PathBuf::from("/r/sub")));
+        assert_eq!(placed("pushd sub"), Some(PathBuf::from("/r/sub")));
+        for refused in [
+            "(cd sub)",
+            "echo $(cd sub)",
+            "command cd",
+            "cd -",
+            "cd s*",
+            "cd $D",
+        ] {
+            assert_eq!(placed(refused), None, "{refused}");
+        }
+    }
+
+    /// A `cd` moves the directory later programs run in only across `&&` or
+    /// `;`, and a git program's `-C` with no subcommand still names its dir.
+    #[test]
+    fn a_cd_is_followed_only_across_and_or_semicolon() {
+        let targets = |command: &str| {
+            call_targets(&envelope_at(Event::PreTool, command), Path::new("/r")).unwrap()
+        };
+        let at = |dirs: &[&str]| dirs.iter().map(PathBuf::from).collect::<Vec<_>>();
+        assert_eq!(targets("cd sub"), at(&["/r", "/r/sub"]));
+        assert_eq!(targets("cd sub && true"), at(&["/r/sub", "/r/sub"]));
+        assert_eq!(targets("git -C sub"), at(&["/r", "/r/sub"]));
+    }
+
+    /// Fails by: a piped `cd` followed, `-C` misread, a `--work-tree` placed,
+    /// a `--` checkout of `.` refused, or `-s <tree>` read as a pathspec.
+    #[test]
+    fn a_pathspec_is_placed_through_each_option_and_separator() {
+        let calls =
+            |command: &str| pathspec_calls(&envelope_at(Event::PreTool, command), Path::new("/r"));
+        let placed = |dir: &str, specs: &[&str]| {
+            Pathspecs::Placed(vec![PathspecCall {
+                dir: PathBuf::from(dir),
+                pathspecs: specs.iter().map(|spec| (*spec).to_owned()).collect(),
+            }])
+        };
+        assert_eq!(calls("cd sub | true; git restore f"), placed("/r", &["f"]));
+        assert_eq!(calls("cd sub; git restore f"), placed("/r/sub", &["f"]));
+        assert_eq!(calls("git -C sub restore f"), placed("/r/sub", &["f"]));
+        assert_eq!(calls("git --work-tree=w restore f"), Pathspecs::Unplaceable);
+        assert_eq!(calls("git checkout -- ."), placed("/r", &["."]));
+        assert_eq!(calls("git checkout main"), placed("/r", &[]));
+        assert_eq!(calls("git restore -s HEAD f"), placed("/r", &["f"]));
+    }
+
+    /// Only a word that is wholly a `cat` heredoc substitution, bare or
+    /// quoted, is read as its body.
+    #[test]
+    fn only_a_whole_word_cat_heredoc_is_read_as_its_body() {
+        let bodies = |command: &str| {
+            parsed(command)
+                .into_iter()
+                .flat_map(|segment| segment.cat_bodies)
+                .map(|(_, body)| body.trim_end().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            bodies("git commit -m $(cat <<'EOF'\nbare\nEOF\n)"),
+            vec!["bare"]
+        );
+        assert_eq!(
+            bodies("git commit -m \"$(cat <<'EOF'\nquoted\nEOF\n)\""),
+            vec!["quoted"]
+        );
+        for refused in [
+            "git commit -m x$(cat <<'EOF'\nglued\nEOF\n)y",
+            "git commit -m \"$(tac <<'EOF'\nother\nEOF\n)\"",
+            "git commit -m \"$(X=1 cat <<'EOF'\nassigned\nEOF\n)\"",
+        ] {
+            assert!(bodies(refused).is_empty(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn mise_reads_its_value_options_ahead_of_the_subcommand() {
+        assert_eq!(
+            subcommand_index(&["-C", "d", "run", "x"], global_value_options("mise")),
+            Some(2)
+        );
     }
 
     #[test]
