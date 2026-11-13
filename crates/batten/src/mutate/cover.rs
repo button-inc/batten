@@ -730,7 +730,11 @@ fn workspace_crates(root: &Path) -> Result<BTreeSet<String>> {
 /// `profile.batten-cover` came out as an INLINE table, which cannot hold the
 /// `[[...scripts]]` array, so the wrapper was dropped without an error and the
 /// suite ran unrecorded.
-fn wrapped_config(root: &Path, recorder: &Path, store: &Path) -> Result<String> {
+///
+/// # Errors
+///
+/// The repository's nextest config does not parse.
+pub fn wrapped_config(root: &Path, recorder: &Path, arg: &str, store: &Path) -> Result<String> {
     let path = root.join(".config").join("nextest.toml");
     let text = crate::fsio::read_to_string(&path).unwrap_or_default();
     let mut doc: toml_edit::DocumentMut = text.parse().context("parse nextest.toml")?;
@@ -753,7 +757,7 @@ fn wrapped_config(root: &Path, recorder: &Path, store: &Path) -> Result<String> 
     let mut config = doc.to_string();
     let _ = write!(
         config,
-        "\n[store]\ndir = {store}\n\n[scripts.wrapper.batten-cover]\ncommand = [{recorder}, \"{RECORD_ARG}\"]\n\n\
+        "\n[store]\ndir = {store}\n\n[scripts.wrapper.batten-cover]\ncommand = [{recorder}, \"{arg}\"]\n\n\
          [profile.batten-cover]\nfail-fast = false\nretries = 0\n\n\
          [profile.batten-cover.junit]\npath = \"{JUNIT}\"\n\n\
          [[profile.batten-cover.scripts]]\nfilter = \"all()\"\nrun-wrapper = \"batten-cover\"\n"
@@ -824,7 +828,10 @@ fn build(out: &mut dyn std::io::Write) -> Result<()> {
     let recorder = std::env::current_exe()?;
     let config = work.join("nextest.toml");
     let store = work.join("nextest");
-    crate::durable::replace(&config, wrapped_config(&root, &recorder, &store)?)?;
+    crate::durable::replace(
+        &config,
+        wrapped_config(&root, &recorder, RECORD_ARG, &store)?,
+    )?;
     let crates_list = crates.iter().cloned().collect::<Vec<_>>().join(",");
     let env = [
         (String::from("CARGO_TARGET_DIR"), build_dir(&root)),
