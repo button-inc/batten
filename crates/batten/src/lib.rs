@@ -17968,7 +17968,7 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
     // suite, `--iterate` skipping the caught ones, so the verdict is the suite's.
     let map = mutate::cover::map_path(root);
     let narrowed = if map.is_file() {
-        cover_env(root, &map)?
+        cover_env(root, &map, &state::repo_state_dir(root)?.join("mutate"))?
     } else {
         Vec::new()
     };
@@ -18031,8 +18031,20 @@ const fn after_covering(narrowed: bool, outcome: mutate::Outcome) -> AfterCoveri
 
 /// The environment that makes this binary cargo-mutants' `$CARGO`, narrowing
 /// each mutant's test step to the cases `map` says cover it.
-fn cover_env(root: &Path, map: &Path) -> Result<Vec<(String, String)>> {
+///
+/// A PRIVATE COPY of this binary is the stand-in, in `shim_dir`: cargo-mutants
+/// calls `$CARGO` for every step of a sweep that runs for hours, and the
+/// checkout's own `target/debug/batten` is rebuilt by any build in between, so a
+/// step could run a different engine, or a half-linked one, and read as a mutant
+/// that failed to build. Renamed into place, so a running copy is never written.
+fn cover_env(root: &Path, map: &Path, shim_dir: &Path) -> Result<Vec<(String, String)>> {
     let me = std::env::current_exe()?;
+    std::fs::create_dir_all(shim_dir)?;
+    let shim = shim_dir.join("cargo-shim");
+    let staged = shim_dir.join(format!("cargo-shim.{}", std::process::id()));
+    std::fs::copy(&me, &staged)?;
+    std::fs::rename(&staged, &shim)?;
+    let me = shim;
     let real = std::env::var("CARGO").unwrap_or_else(|_| String::from("cargo"));
     let mutants = root
         .join("target")
@@ -31535,20 +31547,29 @@ mod tests {
         }
     }
 
-    /// The stand-in's environment: this binary as `$CARGO`, the real cargo
-    /// behind it, and the map, mutants list and root it narrows by.
+    /// The stand-in's environment: a private copy of this binary as `$CARGO`,
+    /// the real cargo behind it, and the map, mutants list and root it
+    /// narrows by.
     ///
-    /// Fails by: any pair dropped, renamed or emptied.
+    /// Fails by: any pair dropped, renamed or emptied, or `$CARGO` left
+    /// pointing at a binary a later build overwrites.
     #[test]
-    fn the_cover_environment_makes_this_binary_cargo() {
+    fn the_cover_environment_makes_a_private_copy_cargo() {
         let root = Path::new("/r");
         let map = Path::new("/r/target/mutants/cover.map");
+        let dir = crate::scratch::scratch("cover-env-shim");
         let env: std::collections::BTreeMap<String, String> =
-            cover_env(root, map).unwrap().into_iter().collect();
+            cover_env(root, map, &dir).unwrap().into_iter().collect();
+        let shim = dir.join("cargo-shim");
         let me = std::env::current_exe().unwrap();
+        assert_eq!(
+            std::fs::metadata(&shim).unwrap().len(),
+            std::fs::metadata(&me).unwrap().len(),
+            "the stand-in is a whole copy of this binary"
+        );
         let real = std::env::var("CARGO").unwrap_or_else(|_| String::from("cargo"));
         let want: std::collections::BTreeMap<String, String> = [
-            ("CARGO", me.to_string_lossy().into_owned()),
+            ("CARGO", shim.to_string_lossy().into_owned()),
             (mutate::cover::SHIM, real),
             (mutate::cover::MAP, map.to_string_lossy().into_owned()),
             (
