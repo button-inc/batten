@@ -43,11 +43,33 @@ use ra_ap_syntax::{AstNode as _, SourceFile, SyntaxKind, SyntaxNode, TextRange, 
 pub const ACTIVE: &str = "BATTEN_MUTANT";
 
 /// The switch every mutated crate root gains.
-pub const SWITCH: &str = "\n#[doc(hidden)]\n#[allow(dead_code, unreachable_pub)]\n\
+///
+/// RECORDING TOO: under `BATTEN_MUTANT_RECORD` each process appends every site
+/// it reaches, once, to a file named by its pid in that directory, written
+/// unbuffered so a process killed mid-case still leaves its record.
+pub const SWITCH: &str = "\n#[doc(hidden)]\n#[allow(dead_code, unreachable_pub, clippy::all)]\n\
 pub(crate) fn __batten_mutant(id: u32) -> bool {\n    \
 static ACTIVE: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();\n    \
+static REACHED: std::sync::OnceLock<Option<std::sync::Mutex<(std::collections::HashSet<u32>, std::fs::File)>>> = std::sync::OnceLock::new();\n    \
+if let Some(held) = REACHED.get_or_init(|| {\n        \
+let dir = std::env::var_os(\"BATTEN_MUTANT_RECORD\")?;\n        \
+let file = std::fs::OpenOptions::new().create(true).append(true)\
+.open(std::path::Path::new(&dir).join(std::process::id().to_string())).ok()?;\n        \
+Some(std::sync::Mutex::new((std::collections::HashSet::new(), file)))\n    \
+}) && let Ok(mut held) = held.lock() && held.0.insert(id) {\n        \
+let _ = std::io::Write::write_all(&mut held.1, format!(\"{id}\\n\").as_bytes());\n    \
+}\n    \
 *ACTIVE.get_or_init(|| std::env::var(\"BATTEN_MUTANT\").ok().and_then(|v| v.parse().ok())) \
 == Some(id)\n}\n";
+
+/// The directory a recording case's processes write their reached sites to.
+pub const RECORD: &str = "BATTEN_MUTANT_RECORD";
+
+/// The directory every case's reach is recorded under.
+pub const REACH: &str = "BATTEN_SCHEMA_REACH";
+
+/// The first argument that makes this binary nextest's recording wrapper.
+pub const RECORD_ARG: &str = "__schema-record";
 
 /// One mutant as `cargo mutants --list --json` names it.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -760,7 +782,16 @@ impl Verdict {
     }
 }
 
-/// Judge mutant `id` by its covering cases, with it switched on.
+/// The package a nextest binary id names: `batten::it` is `batten`'s.
+fn package_of(binary: &str) -> &str {
+    binary
+        .split_once("::")
+        .map_or(binary, |(package, _)| package)
+}
+
+/// Judge mutant `id` by the cases that reach its site, with it switched on.
+/// `cases` holds each reaching case's name and binary; none reach it is a
+/// survivor no run could kill.
 ///
 /// # Errors
 ///
@@ -770,16 +801,13 @@ pub fn judge(
     target: &std::path::Path,
     id: u32,
     mutant: &Listed,
-    map: &super::cover::Map,
+    cases: &BTreeSet<(String, String)>,
 ) -> anyhow::Result<Verdict> {
-    let function = mutant
-        .function
-        .as_ref()
-        .map_or("", |f| f.function_name.as_str());
-    let tests = map.select(&mutant.file, function);
-    if tests.is_empty() {
+    if cases.is_empty() {
         return Ok(Verdict::Uncovered);
     }
+    let tests: BTreeSet<&str> = cases.iter().map(|(name, _)| name.as_str()).collect();
+    let binaries: BTreeSet<&str> = cases.iter().map(|(_, binary)| binary.as_str()).collect();
     let mut args: Vec<String> = [
         "nextest",
         "run",
@@ -787,14 +815,19 @@ pub fn judge(
         "mutants",
         "--profile",
         "mutants",
-        "-p",
     ]
     .map(String::from)
     .to_vec();
-    args.push(mutant.package.clone());
-    if let Some(binaries) = map.binaries_of(&tests) {
-        args.extend(super::cover::target_args(&binaries, &mutant.file));
+    // THE CASES' PACKAGES, NOT THE MUTANT'S: a `batten-fsio` site reached only
+    // by `batten`'s cases is judged by those.
+    for package in binaries
+        .iter()
+        .map(|binary| package_of(binary))
+        .collect::<BTreeSet<_>>()
+    {
+        args.extend([String::from("-p"), package.to_owned()]);
     }
+    args.extend(super::cover::target_args(&binaries, &mutant.file));
     args.extend([
         String::from("-E"),
         super::cover::filterset(&tests),
@@ -821,6 +854,157 @@ pub fn judge(
         super::Outcome::Failed(Some(100)) => Verdict::Caught,
         super::Outcome::Failed(_) => Verdict::Error,
     })
+}
+
+/// As nextest's `run-wrapper` while reach is recorded: run the case with its
+/// own record directory, which every process it spawns inherits, and exit as
+/// it did. `None` when this process is not the wrapper.
+pub fn recorded(args: impl Iterator<Item = std::ffi::OsString>) -> Option<std::process::ExitCode> {
+    let args: Vec<String> = args
+        .skip(1)
+        .filter_map(|arg| arg.into_string().ok())
+        .collect();
+    if args.first().map(String::as_str) != Some(RECORD_ARG) {
+        return None;
+    }
+    let code = match record(args.get(1..).unwrap_or_default()) {
+        Ok(code) => code,
+        Err(why) => {
+            let _ = std::io::Write::write_fmt(
+                &mut std::io::stderr(),
+                format_args!("batten: schema record: {why:#}\n"),
+            );
+            101
+        }
+    };
+    Some(std::process::ExitCode::from(code))
+}
+
+fn record(test: &[String]) -> anyhow::Result<u8> {
+    let base = std::path::PathBuf::from(
+        std::env::var_os(REACH).ok_or_else(|| anyhow::anyhow!("no reach directory"))?,
+    );
+    let (program, rest) = test
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("no case to run"))?;
+    let name = super::cover::test_name(test).unwrap_or(program);
+    let binary = std::env::var("NEXTEST_BINARY_ID").unwrap_or_default();
+    let key = blake3::hash(test.join("\u{1f}").as_bytes()).to_hex()[..16].to_owned();
+    let dir = base.join(key);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("case"), format!("{name}\t{binary}"))?;
+    let cwd = std::env::current_dir()?;
+    let ran = super::spawn_as(
+        &cwd,
+        super::Program::Test(program),
+        rest,
+        &[(String::from(RECORD), dir.to_string_lossy().into_owned())],
+        super::runner_bound(),
+        super::Said::Streamed,
+    )?;
+    Ok(match ran.outcome {
+        super::Outcome::Passed => 0,
+        super::Outcome::Failed(Some(code)) => u8::try_from(code).unwrap_or(101),
+        super::Outcome::Failed(None) | super::Outcome::TimedOut => 101,
+    })
+}
+
+/// Every mutant site each case reached: per mutant, its cases' names and
+/// binaries.
+///
+/// # Errors
+///
+/// The reach directory cannot be read.
+pub fn collect_reach(
+    base: &std::path::Path,
+) -> anyhow::Result<std::collections::BTreeMap<u32, BTreeSet<(String, String)>>> {
+    let mut reach: std::collections::BTreeMap<u32, BTreeSet<(String, String)>> =
+        std::collections::BTreeMap::new();
+    for case in std::fs::read_dir(base)? {
+        let dir = case?.path();
+        let Ok(head) = crate::fsio::read_to_string(dir.join("case")) else {
+            continue;
+        };
+        let (name, binary) = head.split_once('\t').unwrap_or((head.as_str(), ""));
+        for file in std::fs::read_dir(&dir)? {
+            let path = file?.path();
+            if path.file_name().is_some_and(|f| f == "case") {
+                continue;
+            }
+            let text = crate::fsio::read_to_string(&path).unwrap_or_default();
+            for id in text
+                .lines()
+                .filter_map(|line| line.trim().parse::<u32>().ok())
+            {
+                reach
+                    .entry(id)
+                    .or_default()
+                    .insert((name.to_owned(), binary.to_owned()));
+            }
+        }
+    }
+    Ok(reach)
+}
+
+/// Run the whole suite once on the schema build with no mutant active,
+/// recording which sites each case reaches. It is also the baseline: a case
+/// that fails unmutated makes every verdict meaningless, so it refuses.
+///
+/// # Errors
+///
+/// A case failed unmutated, or the run could not be made.
+pub fn record_reach(
+    work: &std::path::Path,
+    target: &std::path::Path,
+    state: &std::path::Path,
+    packages: &BTreeSet<&str>,
+) -> anyhow::Result<std::collections::BTreeMap<u32, BTreeSet<(String, String)>>> {
+    let base = state.join("reach");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base)?;
+    let config = state.join("nextest.toml");
+    let recorder = std::env::current_exe()?;
+    std::fs::write(
+        &config,
+        super::cover::wrapped_config(work, &recorder, RECORD_ARG, &state.join("nextest"))?,
+    )?;
+    let mut args: Vec<String> = [
+        "nextest",
+        "run",
+        "--cargo-profile",
+        "mutants",
+        "--profile",
+        "batten-cover",
+        "--no-fail-fast",
+        "--config-file",
+    ]
+    .map(String::from)
+    .to_vec();
+    args.push(config.to_string_lossy().into_owned());
+    for package in packages {
+        args.extend([String::from("-p"), (*package).to_owned()]);
+    }
+    let env = [
+        (
+            String::from("CARGO_TARGET_DIR"),
+            target.to_string_lossy().into_owned(),
+        ),
+        (String::from(REACH), base.to_string_lossy().into_owned()),
+    ];
+    let ran = super::spawn_as(
+        work,
+        super::Program::Cargo,
+        &args,
+        &env,
+        super::runner_bound(),
+        super::Said::Streamed,
+    )?;
+    anyhow::ensure!(
+        ran.passed(),
+        "the unmutated suite failed on the schema build, so no verdict would mean anything"
+    );
+    collect_reach(&base)
 }
 
 /// The first argument that runs a schema sweep over a listing file.
@@ -863,9 +1047,6 @@ fn sweep(
     let work = state.join("tree");
     let target = state.join("target");
     let mutants = listing(&crate::fsio::read_to_string(listing_path)?)?;
-    let map =
-        super::cover::Map::parse(&crate::fsio::read_to_string(super::cover::map_path(&root))?)
-            .ok_or_else(|| anyhow::anyhow!("no coverage map; run `batten __cover-build`"))?;
     let jobs: usize = jobs.and_then(|j| j.parse().ok()).unwrap_or(3);
     let started = std::time::Instant::now();
     sync(&root, &work)?;
@@ -883,6 +1064,15 @@ fn sweep(
         classic.len(),
         started.elapsed().as_secs()
     )?;
+    let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
+    let reach = record_reach(&work, &target, &state, &packages)?;
+    writeln!(
+        out,
+        "mutate schema: reach recorded for {} site(s) in {}s",
+        reach.len(),
+        started.elapsed().as_secs()
+    )?;
+    let nobody = BTreeSet::new();
     let todo: Vec<u32> = (0..u32::try_from(mutants.len())?)
         .filter(|id| !unviable.contains(id) && !classic.contains(id))
         .collect();
@@ -897,7 +1087,9 @@ fn sweep(
                     let Some(mutant) = mutants.get(id as usize) else {
                         break;
                     };
-                    let verdict = judge(&work, &target, id, mutant, &map).unwrap_or(Verdict::Error);
+                    let cases = reach.get(&id).unwrap_or(&nobody);
+                    let verdict =
+                        judge(&work, &target, id, mutant, cases).unwrap_or(Verdict::Error);
                     if let Ok(mut held) = verdicts.lock() {
                         held.push((id, verdict));
                     }
@@ -964,6 +1156,39 @@ mod tests {
             .map(|(id, m)| (u32::try_from(id).unwrap(), m))
             .collect();
         render(source, &numbered, &BTreeSet::new())
+    }
+
+    /// A case's reach is every site any of its processes recorded, and each
+    /// site lists the cases that reached it with their binaries.
+    ///
+    /// Fails by: a spawned process's record dropped, a case attributed to the
+    /// wrong binary, or a non-number read as a site.
+    #[test]
+    fn reach_is_every_site_any_process_of_a_case_recorded() {
+        let base = crate::scratch::scratch("schema-reach");
+        let one = base.join("aa");
+        std::fs::create_dir_all(&one).unwrap();
+        std::fs::write(one.join("case"), "m::first\tbatten::it").unwrap();
+        std::fs::write(one.join("100"), "3\n7\n").unwrap();
+        std::fs::write(one.join("101"), "7\n9\nnoise\n").unwrap();
+        let two = base.join("bb");
+        std::fs::create_dir_all(&two).unwrap();
+        std::fs::write(two.join("case"), "m::tests::second\tbatten").unwrap();
+        std::fs::write(two.join("200"), "9\n").unwrap();
+        let reach = collect_reach(&base).unwrap();
+        let first = (String::from("m::first"), String::from("batten::it"));
+        let second = (String::from("m::tests::second"), String::from("batten"));
+        assert_eq!(reach.get(&3), Some(&[first.clone()].into_iter().collect()));
+        assert_eq!(reach.get(&7), Some(&[first.clone()].into_iter().collect()));
+        assert_eq!(reach.get(&9), Some(&[first, second].into_iter().collect()));
+        assert_eq!(reach.len(), 3);
+    }
+
+    #[test]
+    fn a_binary_names_its_package() {
+        assert_eq!(package_of("batten::it"), "batten");
+        assert_eq!(package_of("batten-fsio"), "batten-fsio");
+        assert_eq!(package_of("batten::bin/batten"), "batten");
     }
 
     #[test]
