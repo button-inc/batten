@@ -155,7 +155,7 @@ fn refuse_hand_rolled_mutation(manifest: &Path) -> Built {
             .collect();
         return Err(format!(
             "a cargo-mutants argv is built at [{}], not once in {}: cargo-mutants runs as \
-             itself through `mutate::cargo_mutants`, never a second harness (CLOUD-2253)",
+             itself through `mutate::cargo_mutants_argv`, never a second harness (CLOUD-2253)",
             sites.join(", "),
             mutation_markers::CARGO_MUTANTS_SITE
         )

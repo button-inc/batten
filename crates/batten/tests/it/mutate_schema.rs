@@ -8,8 +8,12 @@ use crate::common;
 const LIB: &str = "pub fn add(a: u8, b: u8) -> u8 {\n    a + b\n}\n\
 pub fn same(a: u8, b: u8) -> bool {\n    a == b\n}\n\
 pub fn untested() -> bool {\n    true\n}\n\
+pub const fn two() -> u8 {\n    2\n}\n\
+pub const TWO: u8 = two();\n\
+pub const fn three() -> u8 {\n    3\n}\n\
 #[cfg(test)]\nmod tests {\n    #[test]\n    fn adds() {\n        assert_eq!(super::add(2, 3), 5);\n    }\n\
-    #[test]\n    fn compares() {\n        assert!(super::same(1, 1));\n    }\n}\n";
+    #[test]\n    fn compares() {\n        assert!(super::same(1, 1));\n    }\n\
+    #[test]\n    fn triples() {\n        assert_eq!(super::three(), 3);\n    }\n}\n";
 
 /// One mutant as `cargo mutants --list --json` prints it.
 fn mutant(
@@ -88,6 +92,20 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
         mutant("ill-typed", "FnValue", "\"x\"", [2, 5, 2, 10], add),
         mutant("hang", "FnValue", "loop {}", [2, 5, 2, 10], add),
         mutant(
+            "const-caller",
+            "FnValue",
+            "0",
+            [11, 5, 11, 6],
+            ("two", "-> u8", [10, 1, 12, 2]),
+        ),
+        mutant(
+            "const-kill",
+            "FnValue",
+            "0",
+            [15, 5, 15, 6],
+            ("three", "-> u8", [14, 1, 16, 2]),
+        ),
+        mutant(
             "field",
             "StructField",
             "",
@@ -107,14 +125,18 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     assert_eq!(code, Some(2), "a survivor exits 2\n{said}\n{err}");
     assert!(
         said.contains(
-            "{\"caught\": 1, \"missed\": 1, \"timeout\": 1, \"uncovered\": 1}, 1 unviable, 1 classic"
+            "{\"caught\": 2, \"missed\": 1, \"timeout\": 1, \"uncovered\": 1}, 1 unviable, 2 classic"
         ),
         "{said}\n{err}"
     );
     assert!(said.contains("missed\tsurvive\n"), "{said}");
     assert!(said.contains("uncovered\tunreached\n"), "{said}");
     assert!(said.contains("timeout\thang\n"), "{said}");
-    assert!(said.contains("build 1 refused 1 mutant(s)"), "{said}");
+    assert!(
+        said.contains("build 1 refused 1 mutant(s), handed back 1 for a const caller"),
+        "{said}"
+    );
+    assert!(said.contains("classic\tconst-caller\n"), "{said}");
     assert!(
         said.contains("classic\tfield\n"),
         "a handed-back mutant is named: {said}"
@@ -125,10 +147,10 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
         again.contains("1 unviable known from earlier runs"),
         "{again}"
     );
-    assert!(again.contains("build 1 clean, 1 unviable"), "{again}");
+    assert!(again.contains("build 2 clean, 1 unviable"), "{again}");
     assert!(
         again.contains(
-            "{\"caught\": 1, \"missed\": 1, \"timeout\": 1, \"uncovered\": 1}, 1 unviable, 1 classic"
+            "{\"caught\": 2, \"missed\": 1, \"timeout\": 1, \"uncovered\": 1}, 1 unviable, 2 classic"
         ),
         "{again}\n{err}"
     );

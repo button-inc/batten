@@ -1816,18 +1816,22 @@ description = "Gate: every mutant cargo-mutants makes of this branch's Rust chan
 #
 # TWO RUNNERS, EACH OVER WHAT IT OWNS:
 #
-# * RUST IS CARGO-MUTANTS', RUN AS ITS BOOK SAYS AND WRAPPED BY NOTHING
-#   (https://mutants.rs/, CLOUD-2253). `--in-diff` over the branch's diff;
-#   `--iterate` skips what an earlier run caught, so a lap re-tests only what
-#   moved; `--jobs 2`, the book's starting count, each in its own copy of the
-#   tree; `--shard` in CI, where the `ci` job has already run the suite, so a
-#   shard skips the baseline and states its timeout as the book requires: 900s,
-#   because a surviving mutant runs the whole suite (669s measured) and a
-#   shorter bound would report it as a timeout. Locally the baseline sets the
-#   timeout at five times its own run. Its settings are `.cargo/mutants.toml`'s: the
+# * RUST IS CARGO-MUTANTS' MUTANTS, JUDGED IN ONE SCHEMA BUILD (CLOUD-2253):
+#   cargo-mutants lists the branch's diff (`--list --json --in-diff`), and
+#   `batten mutate cargo` switches every one of them into a single build
+#   (mutant schemata: Untch, Offutt & Harrold, ISSTA 1993), records which cases
+#   reach each site in one run of the suite, and judges each mutant by those
+#   cases alone, cheapest first, stopping at the first kill (Zhang, Marinov &
+#   Khurshid, ISSTA 2013). A verdict is journaled the moment it is decided and
+#   reused while its function and its cases' files are unchanged, so a lap
+#   re-judges only what moved. Measured on #1276: one 195 s build against the
+#   classic tool's build per mutant. What the schema cannot switch (a struct
+#   field, an `impl Trait` body, a const item) it hands back by name to
+#   cargo-mutants itself, run as its book says: `--re` per name, `--iterate`,
+#   `--jobs` sized below. `.cargo/mutants.toml` carries its settings: the
 #   `[profile.mutants]` build, nextest, and `.git` in each copy. The nextest
 #   profile `mutants` stops at a mutant's first failing case and never retries.
-#   `provision apply` puts the pinned binary on PATH first (`batten.toml`).
+#   `--shard` in CI slices the listing by index, so the shards partition it.
 # * EVERYTHING ELSE IS `batten mutate sweep`'s: the hand-written `#MUTANT` rows of
 #   Rego, Pkl and manifests, which no tool mutates (CLOUD-2070), narrowed to the
 #   gates the diff touched.
@@ -1860,14 +1864,14 @@ run = "cargo run --quiet -p batten -- mutate sweep"
 
 [tasks."mutant:rust"]
 description = "Gate: every mutant cargo-mutants makes of this branch's Rust change since origin/main is caught"
-# THE PER-JOB COST IS THE TREE'S, THE MACHINE IS MEASURED: `batten mutate cargo`
-# divides cores, temp-volume headroom above the collector's floor, and memory by
-# one copy's cold mutants-profile build: 5.5 GB of target beside a ~340 MB copy
-# on #1276, 2026-11-13 (3,872 MB on CLOUD-1414; the tree grew), and a 3.5 GB peak
-# rustc. Sized under, two jobs filled the disk mid-build and a mutant whose build
-# hit ENOSPC was recorded unviable. It writes the change as `--in-diff`, adds
-# `--shard` from `MUTANT_SHARD`, and runs cargo-mutants itself; every shard keeps
-# its baseline, which is what derives the timeout.
+# THE PER-JOB COST IS THE TREE'S, THE MACHINE IS MEASURED: for the mutants the
+# schema hands back, `batten mutate cargo` divides cores, temp-volume headroom
+# above the collector's floor, and memory by one copy's cold mutants-profile
+# build: 5.5 GB of target beside a ~340 MB copy on #1276, 2026-11-13 (3,872 MB on
+# CLOUD-1414; the tree grew), and a 3.5 GB peak rustc. Sized under, two jobs
+# filled the disk mid-build and a mutant whose build hit ENOSPC was recorded
+# unviable. The schema itself judges on every core but one, since its workers
+# share its one build.
 env = { NEXTEST_PROFILE = "mutants", MUTANT_JOB_DISK_MB = "6200", MUTANT_JOB_MEMORY_MB = "4000" }
 # The verb applies the pin and runs the cached binary, so nothing is linked onto
 # PATH and no task step precedes it.
