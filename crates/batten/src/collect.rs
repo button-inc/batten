@@ -2420,4 +2420,22 @@ mod tests {
         assert!(!older.exists());
         assert!(!newer.exists());
     }
+
+    /// This very test binary is a running harness under its own profile
+    /// directory, so the fixtures it writes are live: a window is answered,
+    /// never `None`, which would let a collector take them.
+    #[test]
+    fn a_running_suite_holds_its_fixtures_live() {
+        // A process table names executables on Linux; elsewhere the window is
+        // the build's, which this case does not assert.
+        if !cfg!(any(target_os = "linux", target_os = "android")) {
+            return;
+        }
+        let exe = std::env::current_exe().unwrap();
+        let profile = exe.parent().and_then(Path::parent).unwrap().to_path_buf();
+        assert!(
+            super::fixtures_since(&[profile], &[]).is_some(),
+            "this suite is running"
+        );
+    }
 }

@@ -1206,6 +1206,26 @@ pub fn report_claim(
 mod tests {
     use super::*;
 
+    /// A process's digest is the SHA-256 of its `/proc` command line, in
+    /// lowercase hex; a pid with none has no digest.
+    #[test]
+    fn a_cmdline_digest_is_the_sha256_of_the_command_line() {
+        use sha2::Digest as _;
+        // Only Linux has `/proc`; elsewhere every pid reads as no digest.
+        if !cfg!(target_os = "linux") {
+            assert_eq!(cmdline_digest(&std::process::id().to_string()), None);
+            return;
+        }
+        let pid = std::process::id().to_string();
+        let raw = std::fs::read("/proc/self/cmdline").unwrap();
+        let want: String = sha2::Sha256::digest(&raw)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(cmdline_digest(&pid), Some(want));
+        assert_eq!(cmdline_digest("0"), None);
+    }
+
     /// A temp a kill stranded between its sync and its rename parses as a whole
     /// record, so the readers must not take it for one (CLOUD-2372).
     #[test]

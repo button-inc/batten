@@ -1092,6 +1092,38 @@ fn register_supersedes_its_tasks_dead_records() {
     }
 }
 
+/// Only this task's dead records go: another task's dead record, and this
+/// task's own record whose registrant still lives, both stay.
+#[test]
+fn register_supersedes_only_its_own_tasks_dead_records() {
+    let repo = registry_repo("task-register-supersedes-only-its-own");
+    let dead = unassignable_pid();
+    seed(&repo, "other-task", &dead, "polling", 1000);
+    let me = std::process::id().to_string();
+    let first = task(&repo, &["register", "forge-events", &me, "polling"]);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    #[cfg(unix)]
+    let parent = std::os::unix::process::parent_id().to_string();
+    #[cfg(not(unix))]
+    let parent = String::from("1");
+    let second = task(&repo, &["register", "forge-events", &parent, "polling"]);
+    assert_eq!(second.status.code(), Some(0), "{}", stderr(&second));
+    let report = alive(&repo, &["--instant", "4000000000"]);
+    assert_eq!(
+        lines_for(&report, "other-task").len(),
+        1,
+        "{}",
+        stdout(&report)
+    );
+    assert!(
+        lines_for(&report, "forge-events")
+            .iter()
+            .any(|line| line.contains(&format!(" {me} "))),
+        "the live registrant's record stays: {}",
+        stdout(&report)
+    );
+}
+
 /// THE GUARD, green at HEAD by design: a dead registrant whose GROUP still runs
 /// keeps its record, because forgetting it would hide that group from `land`'s
 /// reap (CLOUD-1148).

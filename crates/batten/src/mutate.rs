@@ -2455,18 +2455,28 @@ impl Overlay {
     /// where any of the three variables is unset or blank.
     #[must_use]
     pub fn declared(root: &Path) -> Option<Self> {
+        Self::declared_by(root, |name| std::env::var(name).ok())
+    }
+
+    /// [`Overlay::declared`] over the variables `var` answers: each trimmed of
+    /// space and a trailing `/`, and a blank one unset.
+    fn declared_by(root: &Path, var: impl Fn(&str) -> Option<String>) -> Option<Self> {
         let read = |name: &str| {
-            std::env::var(name)
-                .ok()
+            var(name)
                 .map(|value| value.trim().trim_end_matches('/').to_owned())
                 .filter(|value| !value.is_empty())
         };
         Some(Self {
-            root: presets_dir()?,
+            root: read("MUTANT_PRESETS")?,
             env: read("MUTANT_OVERLAY_ENV")?,
             features: read("MUTANT_OVERLAY_FEATURES")?,
             dir: target_dir(root).join("mutate-overlay"),
         })
+    }
+
+    /// The `--features` a cargo invocation carries for this overlay.
+    fn feature_args(&self) -> Vec<String> {
+        vec![String::from("--features"), self.features.clone()]
     }
 
     /// Where the mutated copy of `source` is written, or `None` for a source
@@ -2484,9 +2494,9 @@ impl Overlay {
 /// The `--features` every cargo invocation of a sweep carries, so the build it
 /// pays once is the one every row runs.
 fn overlay_features(root: &Path) -> Vec<String> {
-    Overlay::declared(root).map_or_else(Vec::new, |overlay| {
-        vec![String::from("--features"), overlay.features]
-    })
+    Overlay::declared(root)
+        .as_ref()
+        .map_or_else(Vec::new, Overlay::feature_args)
 }
 
 /// The environment a nextest run in `staged` carries: [`suite_env`], with the
@@ -5040,6 +5050,9 @@ mod tests {
 
         std::fs::write(v2.join("memory.max"), "max\n").unwrap();
         assert_eq!(cgroup_remaining_mb(&v2), None);
+        // A petabyte exactly is already "unbounded".
+        std::fs::write(v2.join("memory.max"), (1_u64 << 50).to_string()).unwrap();
+        assert_eq!(cgroup_remaining_mb(&v2), None);
     }
 
     /// Fails by: the first status line reported instead of the last, or a
@@ -5119,6 +5132,37 @@ mod tests {
             .expect("parses");
         assert!(absent_runners(&command, |_| true).is_empty());
         assert_eq!(absent_runners(&command, |_| false), ["command"]);
+        let missing = Registry::parse("command=**/*.rs")
+            .and_then(|registry| {
+                registry.with_command(&[String::from("no-such-mutation-runner-anywhere")])
+            })
+            .expect("parses");
+        assert_eq!(unresolvable(Path::new("/"), &missing).len(), 1);
+    }
+
+    /// An overlay needs all three variables, each trimmed, and names its
+    /// features to cargo.
+    #[test]
+    fn an_overlay_is_declared_only_by_all_three_variables() {
+        let vars = |presets: &str| {
+            let presets = presets.to_owned();
+            move |name: &str| match name {
+                "MUTANT_PRESETS" => Some(presets.clone()),
+                "MUTANT_OVERLAY_ENV" => Some(String::from(" BATTEN_PRESET_OVERLAY ")),
+                "MUTANT_OVERLAY_FEATURES" => Some(String::from("preset-overlay")),
+                _ => None,
+            }
+        };
+        let root = Path::new("/r");
+        let overlay = Overlay::declared_by(root, vars("crates/x/presets/")).expect("declared");
+        assert_eq!(overlay.root, "crates/x/presets");
+        assert_eq!(overlay.env, "BATTEN_PRESET_OVERLAY");
+        assert_eq!(overlay.feature_args(), ["--features", "preset-overlay"]);
+        assert!(
+            Overlay::declared_by(root, vars("  ")).is_none(),
+            "a blank one is unset"
+        );
+        assert!(Overlay::declared_by(root, |_| None).is_none());
     }
 
     /// Fails by: an inherited profile kept that the staged tree does not

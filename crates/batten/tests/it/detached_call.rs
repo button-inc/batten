@@ -114,6 +114,20 @@ fn a_native_detach_row_grades_the_gate() {
     assert!(out.contains("turn watch dropped"), "and advises\n{out}");
 }
 
+/// `advise` speaks on the call and never refuses it; `record` is a trial,
+/// recorded and never spoken (CLOUD-2707).
+#[test]
+fn an_advise_row_speaks_and_a_record_row_stays_silent() {
+    let advised = repo("detach-advise", &common::native_row("detach", "advise"));
+    let out = judged(&advised, "claude-code", "true &");
+    assert!(!out.contains("\"deny\""), "{out}");
+    assert!(out.contains("turn watch dropped"), "spoken\n{out}");
+    let recorded = repo("detach-record", &common::native_row("detach", "record"));
+    let out = judged(&recorded, "claude-code", "true &");
+    assert!(!out.contains("\"deny\""), "{out}");
+    assert!(!out.contains("turn watch dropped"), "never spoken\n{out}");
+}
+
 /// A harness with no supported background option has no better shape to name.
 #[test]
 fn a_harness_without_a_background_option_is_not_refused() {

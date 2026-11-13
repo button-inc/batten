@@ -997,6 +997,18 @@ mod tests {
             &answered,
             "final"
         ));
+        // The fan-in's own state decides first: one not completed, whatever its
+        // conclusion field says, and one that passed, are no manufactured red.
+        let unfinished = vec![
+            run("completed", "skipped", "ci", "", 0),
+            run("in_progress", "failure", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(&unfinished, &answered, "final"));
+        let passed = vec![
+            run("completed", "skipped", "ci", "", 0),
+            run("completed", "success", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(&passed, &answered, "final"));
     }
 
     #[test]

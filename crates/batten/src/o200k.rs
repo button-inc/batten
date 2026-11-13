@@ -290,4 +290,43 @@ mod tests {
             );
         }
     }
+
+    /// A stream is counted in 64 KiB windows that end on a whole character,
+    /// whatever sizes its reads come in; a window holding an invalid byte is
+    /// counted whole.
+    ///
+    /// Fails by: a window never counted until the end, a cut inside a
+    /// character, a window cut at an invalid byte, or the counts not summed.
+    #[test]
+    fn a_stream_counts_in_windows_ending_on_a_character() {
+        use super::{Chunked, WINDOW, chunked_tokens, tokens};
+        // 9 bytes a repeat, so a window's end falls inside the 3-byte `€`.
+        let text = "words€ ".repeat(30_000);
+        let mut expected = 0;
+        let mut at = 0;
+        while at < text.len() {
+            let mut end = (at + WINDOW).min(text.len());
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            expected += tokens(&text[at..end]);
+            at = end;
+        }
+        assert_ne!(expected, tokens(&text), "the windows are the measure");
+        for piece in [text.len(), 7, WINDOW + 1] {
+            let mut chunked = Chunked::default();
+            for part in text.as_bytes().chunks(piece) {
+                chunked.feed(part);
+            }
+            assert_eq!(chunked.counted(), expected, "fed {piece} bytes at a time");
+        }
+        let mut bytes = b"a ".repeat(500);
+        bytes.push(0xFF);
+        bytes.extend(b"b ".repeat(40_000));
+        let lossy: u64 = bytes
+            .chunks(WINDOW)
+            .map(|window| tokens(&String::from_utf8_lossy(window)))
+            .sum();
+        assert_eq!(chunked_tokens(&bytes), lossy);
+    }
 }

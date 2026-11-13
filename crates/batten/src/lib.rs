@@ -27958,19 +27958,9 @@ fn record_unlanded_step(
         return;
     };
     let path = recorder::record_path(&git_dir, UNLANDED_STEP, &branch, None);
-    let step = match outcome {
-        // Who lands decides the step (CLOUD-2656); push state is read only in
-        // person mode, so the agent default costs nothing new.
-        completion::Outcome::Raised { .. } => {
-            let push = push_state(repo, config.landed_by);
-            Some(completion::next_step(config.landed_by, push))
-        }
-        completion::Outcome::NotComputable { reason } if *reason == worktree::SHALLOW => {
-            Some(Step::Shallow)
-        }
-        _ => None,
-    };
-    let Some(step) = step else {
+    let Some(step) = owed_step(outcome, config.landed_by, || {
+        push_state(repo, config.landed_by)
+    }) else {
         let _ = std::fs::remove_file(path);
         return;
     };
@@ -27979,6 +27969,25 @@ fn record_unlanded_step(
     }
     let fingerprint = completion::identity(session).fingerprint.to_hex();
     let _ = crate::durable::replace(&path, format!("{fingerprint} {}\n", step.as_str()));
+}
+
+/// The step `outcome` owes, if any: a raised claim's next step, by who lands
+/// it (CLOUD-2656), with `push` read only where that needs it; a shallow
+/// clone's could-not-look; nothing else.
+fn owed_step(
+    outcome: &completion::Outcome,
+    landed_by: config::LandedBy,
+    push: impl FnOnce() -> completion::PushState,
+) -> Option<Step> {
+    match outcome {
+        // Push state is read only in person mode, so the agent default costs
+        // nothing new.
+        completion::Outcome::Raised { .. } => Some(completion::next_step(landed_by, push())),
+        completion::Outcome::NotComputable { reason } if *reason == worktree::SHALLOW => {
+            Some(Step::Shallow)
+        }
+        _ => None,
+    }
 }
 
 /// Where the claim's commits are relative to its upstream (CLOUD-2656). Read
@@ -32176,5 +32185,20 @@ mod tests {
             .map(|entry| entry["literal"].as_bool().unwrap())
             .collect();
         assert_eq!(literal, [true, false, false, false, false], "{placed:?}");
+    }
+
+    /// Only a shallow clone's could-not-look owes a step; any other one owes
+    /// nothing, so no receipt says `shallow` about a clone that is not.
+    #[test]
+    fn only_a_shallow_could_not_look_owes_a_step() {
+        let owed = |reason| {
+            owed_step(
+                &completion::Outcome::NotComputable { reason },
+                config::LandedBy::Agent,
+                || completion::PushState::NotComputable,
+            )
+        };
+        assert_eq!(owed(worktree::SHALLOW), Some(Step::Shallow));
+        assert_eq!(owed("the trunk is unreadable"), None);
     }
 }

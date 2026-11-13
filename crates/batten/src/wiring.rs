@@ -675,9 +675,11 @@ pub fn register_committed(repo: &Path, check: bool) -> Result<Vec<(hook::Harness
         };
         let path = repo.join(surface);
         let mut document = match crate::fsio::read_to_string(&path) {
+            // A document that is not an object gains nothing: `add_missing`
+            // answers no event for it, and the file is left as it is.
             Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
-                Ok(document) if document.is_object() => document,
-                _ => continue,
+                Ok(document) => document,
+                Err(_) => continue,
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 serde_json::Value::Object(serde_json::Map::new())
@@ -1198,15 +1200,9 @@ pub fn link_git_hooks(dir: &Path, check: bool) -> Result<GateReport> {
         if check {
             continue;
         }
-        match std::fs::remove_file(&link) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(anyhow::anyhow!(
-                    "wiring gate: the `{name}` hook will not be replaced: {error}"
-                ));
-            }
-        }
+        // NOTHING THERE, OR A STALE LINK, goes; a remove that fails leaves the
+        // path in place, and the link below then refuses it by name.
+        let _ = std::fs::remove_file(&link);
         link_hook(&exe, &link).map_err(|error| {
             anyhow::anyhow!("wiring gate: the `{name}` hook will not link: {error}")
         })?;
@@ -1700,5 +1696,135 @@ mod tests {
             document["hooks"]["stop"],
             serde_json::json!([{"command": "batten adjudicate --harness cursor"}])
         );
+    }
+
+    /// An event batten alone registers loses nothing and is not reported.
+    #[test]
+    fn an_event_with_only_batten_reports_no_removal() {
+        let command = hook::wiring_command(hook::Harness::Cursor);
+        let mut document = serde_json::json!({"version": 1, "hooks": {
+            "stop": [{"command": "other-tool"}, {"command": command}],
+            "start": [{"command": command}]
+        }});
+        let removed = prune_siblings(
+            &mut document,
+            hook::WiringFile::Whole(".cursor/hooks.json"),
+            &command,
+            hook::Harness::Cursor.entry_shape(),
+        );
+        assert_eq!(removed, vec![("stop".to_owned(), 1)]);
+    }
+
+    /// A hook is foreign unless it is a link to this binary, or to a file
+    /// named batten's; nothing at all is not foreign.
+    #[test]
+    fn a_hook_is_foreign_unless_it_links_to_batten() {
+        if !cfg!(unix) {
+            return;
+        }
+        let dir = scratch("is-foreign");
+        let exe = dir.join("engine");
+        let link = |name: &str, target: &str| {
+            let at = dir.join(name);
+            symlink(target, &at);
+            at
+        };
+        assert!(!is_foreign(&link("own", exe.to_str().unwrap()), &exe));
+        assert!(!is_foreign(&link("named", "/opt/bin/batten"), &exe));
+        assert!(!is_foreign(&link("named-exe", "/opt/bin/batten.exe"), &exe));
+        assert!(is_foreign(&link("other", "/opt/bin/hk"), &exe));
+        std::fs::write(dir.join("file"), "#!/bin/sh\n").unwrap();
+        assert!(is_foreign(&dir.join("file"), &exe));
+        assert!(!is_foreign(&dir.join("nothing"), &exe));
+    }
+
+    /// Only a flat host's file gains `"version": 1`, and never over one the
+    /// user set.
+    #[test]
+    fn only_a_flat_file_gains_a_version_and_never_over_its_own() {
+        let mut nested = serde_json::json!({});
+        let _ = add_missing(
+            &mut nested,
+            claude(),
+            &["Stop"],
+            &hook::wiring_command(hook::Harness::ClaudeCode),
+            hook::Harness::ClaudeCode,
+        );
+        assert!(nested.get("version").is_none(), "{nested}");
+        let cursor = hook::WiringFile::Whole(".cursor/hooks.json");
+        let command = hook::wiring_command(hook::Harness::Cursor);
+        let mut flat = serde_json::json!({});
+        let _ = add_missing(
+            &mut flat,
+            cursor,
+            &["stop"],
+            &command,
+            hook::Harness::Cursor,
+        );
+        assert_eq!(flat["version"], 1);
+        let mut own = serde_json::json!({"version": 2});
+        let _ = add_missing(&mut own, cursor, &["stop"], &command, hook::Harness::Cursor);
+        assert_eq!(own["version"], 2);
+    }
+
+    /// A declared hook a foreign file holds is replaced wherever this checkout
+    /// owns its hooks directory, `core.hooksPath` inside the work tree too; a
+    /// declared runner that resolves is not owed, one that does not is.
+    #[test]
+    fn a_declared_hook_in_an_owned_hooks_path_is_replaced() {
+        let dir = scratch("link-gate-hooks-path");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        let config = dir.join(".git").join("config");
+        let mut text = std::fs::read_to_string(&config).unwrap();
+        text.push_str("[core]\n\thooksPath = githooks\n");
+        std::fs::write(&config, text).unwrap();
+        std::fs::write(
+            dir.join("batten.toml"),
+            "version = 1\n\n[hook.git]\npre-commit = [\"sh\", \"-c\", \"true\"]\n\
+             pre-push = [\"no-such-runner-anywhere\"]\n",
+        )
+        .unwrap();
+        let hooks = dir.join("githooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\n").unwrap();
+        let report = link_git_hooks(&dir, false).unwrap();
+        assert!(report.foreign.is_empty(), "{report:?}");
+        assert_eq!(report.runner_unresolved, vec!["pre-push".to_owned()]);
+        assert_eq!(
+            std::fs::read_link(hooks.join("pre-commit")).unwrap(),
+            std::env::current_exe().unwrap()
+        );
+    }
+
+    /// A surface that cannot be read is skipped, never taken for an empty one
+    /// to write over; one that is absent is owed; one that is not an object
+    /// gains nothing.
+    #[test]
+    fn an_unreadable_surface_is_skipped_and_an_absent_one_is_owed() {
+        let repo = scratch("register-committed-unreadable");
+        let surface = |file: hook::WiringFile| match file {
+            hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
+        };
+        let owes_claude = |repo: &Path| {
+            register_committed(repo, true)
+                .unwrap()
+                .iter()
+                .any(|(harness, _)| *harness == hook::Harness::ClaudeCode)
+        };
+        assert!(owes_claude(&repo), "an absent surface is owed");
+        std::fs::create_dir_all(repo.join(surface(claude()))).unwrap();
+        assert!(!owes_claude(&repo), "a directory is not read as empty");
+        std::fs::remove_dir_all(repo.join(surface(claude()))).unwrap();
+        std::fs::write(repo.join(surface(claude())), "[]").unwrap();
+        assert!(!owes_claude(&repo), "an array gains nothing");
+    }
+
+    /// A symlink at `at` naming `target`; a no-op off unix, whose cases return
+    /// before they reach one.
+    fn symlink(target: &str, at: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, at).unwrap();
+        #[cfg(not(unix))]
+        let _ = (target, at);
     }
 }
