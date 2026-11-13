@@ -11,7 +11,8 @@ pub fn untested() -> bool {\n    true\n}\n\
 pub const fn two() -> u8 {\n    2\n}\n\
 pub const TWO: u8 = two();\n\
 pub const fn three() -> u8 {\n    3\n}\n\
-#[cfg(test)]\nmod tests {\n    #[test]\n    fn adds() {\n        assert_eq!(super::add(2, 3), 5);\n    }\n\
+pub fn five() -> u8 {\n    5\n}\n\
+#[cfg(test)]\nmod tests {\n    #[test]\n    fn adds() {\n        assert_eq!(super::add(2, 3), super::five());\n    }\n\
     #[test]\n    fn compares() {\n        assert!(super::same(1, 1));\n    }\n\
     #[test]\n    fn triples() {\n        assert_eq!(super::three(), 3);\n    }\n}\n";
 
@@ -148,10 +149,29 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
         "{again}"
     );
     assert!(again.contains("build 2 clean, 1 unviable"), "{again}");
+    assert!(again.contains("reused 5 of 5 verdict(s)"), "{again}");
     assert!(
         again.contains(
             "{\"caught\": 2, \"missed\": 1, \"timeout\": 1, \"uncovered\": 1}, 1 unviable, 2 classic"
         ),
         "{again}\n{err}"
+    );
+    // THE SOUNDNESS CASE (Ekstazi; RTS++): an edit to a function a case
+    // executes, though it is neither the mutated function nor the test, moves
+    // that case's key. `adds` calls `five`, so the two mutants it reaches are
+    // judged again; the three no case running `five` reaches are reused.
+    common::write(
+        &repo,
+        "src/lib.rs",
+        &LIB.replace("    5\n}", "    4 + 1\n}"),
+    );
+    let (code, third, err) = sweep();
+    assert_eq!(code, Some(2), "{third}\n{err}");
+    assert!(third.contains("reused 3 of 5 verdict(s)"), "{third}\n{err}");
+    assert!(
+        third.contains(
+            "{\"caught\": 2, \"missed\": 1, \"timeout\": 1, \"uncovered\": 1}, 1 unviable, 2 classic"
+        ),
+        "{third}"
     );
 }
