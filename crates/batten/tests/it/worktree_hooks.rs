@@ -76,6 +76,11 @@ fn a_created_worktree_answers_with_its_path_alone() {
         format!("{}\n", expected.display()),
         "stdout is the path and nothing else"
     );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "",
+        "no advice was owed, so no verdict line is written"
+    );
     let listed = git_in(&dir, &["worktree", "list", "--porcelain"]);
     assert!(
         listed.contains(&format!("worktree {}", expected.display())),

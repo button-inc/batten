@@ -22314,6 +22314,17 @@ fn point_at_spills(
 /// bytes alone prove it over (an `o200k` token is at most 128 bytes) is never
 /// read. At or under the default, nothing spilled can be within it.
 fn spills_within_bound(result: &serde_json::Value, spilled: &[stream_input::Spilled]) -> bool {
+    let configured = capture::result_max_tokens(capture_budget().as_ref());
+    configured > capture::DEFAULT_RESULT_MAX_TOKENS && spills_within(result, spilled, configured)
+}
+
+/// Whether `result`'s inline text and its `spilled` files hold at most
+/// `configured` tokens, counted in chunks and stopping once past it.
+fn spills_within(
+    result: &serde_json::Value,
+    spilled: &[stream_input::Spilled],
+    configured: u64,
+) -> bool {
     fn inline(value: &serde_json::Value, into: &mut u64) {
         match value {
             serde_json::Value::String(text) => *into += o200k::tokens(text),
@@ -22323,10 +22334,6 @@ fn spills_within_bound(result: &serde_json::Value, spilled: &[stream_input::Spil
             }
             _ => {}
         }
-    }
-    let configured = capture::result_max_tokens(capture_budget().as_ref());
-    if configured <= capture::DEFAULT_RESULT_MAX_TOKENS {
-        return false;
     }
     let mut counted = 0;
     inline(result, &mut counted);
@@ -25730,10 +25737,7 @@ fn mint_with_policy(
 /// Keep a backgrounded call for [`replay_mints`] when some declared mint
 /// selects it; nothing is minted at launch either way (CLOUD-2677).
 fn defer_mints(policy: &hook::Policy, raw_tool: &str, input: &serde_json::Value, task: &str) {
-    let selected = policy.declared_mints().iter().any(|mint| {
-        rules::selects_tool_name(&mint.tool, raw_tool) && crate::mint::selects(mint, input)
-    });
-    if !selected {
+    if !mint_owed(policy.declared_mints(), raw_tool, input) {
         return;
     }
     let root = hook_authority_root();
@@ -25741,6 +25745,19 @@ fn defer_mints(policy: &hook::Policy, raw_tool: &str, input: &serde_json::Value,
         return;
     };
     let _ = background::defer(&git_dir, task, &pending_for(root, raw_tool, input));
+}
+
+/// Whether one declared mint selects this call by BOTH its tool and its input
+/// selector: a row naming the tool whose selector refuses the input owes nothing,
+/// and neither does a matching selector under another tool.
+fn mint_owed(
+    declared: &[crate::mint::Declared],
+    raw_tool: &str,
+    input: &serde_json::Value,
+) -> bool {
+    declared.iter().any(|mint| {
+        rules::selects_tool_name(&mint.tool, raw_tool) && crate::mint::selects(mint, input)
+    })
 }
 
 /// The one constructor of a deferred call, so a recorder's deferral and a
@@ -31460,6 +31477,67 @@ mod mutation_markers;
 mod tests {
     use super::*;
 
+    /// A write's projection reads the file it replaces: a missing file is a
+    /// creation (no current text), while any OTHER read failure is
+    /// could-not-look, never a creation, so a ratchet is not judged against an
+    /// empty base it never read. #1276's sweep found the `NotFound` guard
+    /// unpinned.
+    ///
+    /// Fails by: the `NotFound` guard forced either way.
+    #[test]
+    fn a_projection_treats_only_a_missing_file_as_a_creation() {
+        let root = std::env::temp_dir().join(format!("batten-projected-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("dir")).unwrap();
+        let raw = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": { "file_path": "new.txt", "content": "written\n" },
+        });
+        let envelope = hook::decode(hook::Harness::ClaudeCode, &raw.to_string()).unwrap();
+        assert_eq!(
+            projected_write(&root, "new.txt", &envelope),
+            Some((None, "written\n".to_owned())),
+            "a missing file is created from nothing"
+        );
+        assert_eq!(
+            projected_write(&root, "dir", &envelope),
+            None,
+            "a target that cannot be read is not a creation"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A deferred call owes a mint only when one row selects it by tool AND by
+    /// input. #1276's sweep found the conjunction unpinned: every case reaching
+    /// it either matched both halves or neither.
+    ///
+    /// Fails by: `&&` read as `||`, or either half dropped.
+    #[test]
+    fn a_mint_is_owed_only_when_its_tool_and_selector_both_select() {
+        let mint: crate::mint::Declared = serde_json::from_value(serde_json::json!({
+            "name": "issue-read",
+            "tool": "get_issue",
+            "key": "named",
+            "key_from": "id",
+            "requires": ["id"],
+            "mode": "replace",
+            "body": "{id}",
+            "selects_at": "state",
+            "selects": "open",
+        }))
+        .expect("a declared mint");
+        let rows = std::slice::from_ref(&mint);
+        let open = serde_json::json!({ "state": "open" });
+        let closed = serde_json::json!({ "state": "closed" });
+        assert!(mint_owed(rows, "get_issue", &open), "both halves select");
+        assert!(
+            !mint_owed(rows, "get_issue", &closed),
+            "the selector refuses"
+        );
+        assert!(!mint_owed(rows, "save_issue", &open), "the tool refuses");
+    }
+
     /// The wake form answers 0 whatever rendered; the `--event` form keeps a
     /// non-zero exit that carried no deny. #1276's sweep found `Ok(_) if wake`
     /// unguarded: every forge case reaches the wake arm through a deny, never
@@ -32200,5 +32278,32 @@ mod tests {
         };
         assert_eq!(owed(worktree::SHALLOW), Some(Step::Shallow));
         assert_eq!(owed("the trunk is unreadable"), None);
+    }
+
+    /// A spilled result is within the bound exactly at it and not one token
+    /// past; a file whose bytes alone prove it over is never read.
+    #[test]
+    fn a_spill_is_within_its_bound_exactly_at_it() {
+        let dir = crate::scratch::scratch("spills-within");
+        let text = "word ".repeat(400);
+        let path = dir.join("leaf");
+        std::fs::write(&path, &text).unwrap();
+        let spilled = [stream_input::Spilled {
+            pointer: String::from("/a"),
+            path,
+            bytes: text.len() as u64,
+        }];
+        let inline = serde_json::json!({"b": "one two"});
+        let total = o200k::chunked_tokens(text.as_bytes()) + o200k::tokens("one two");
+        assert!(spills_within(&inline, &spilled, total));
+        assert!(!spills_within(&inline, &spilled, total - 1));
+        let huge = [stream_input::Spilled {
+            bytes: 128 * (total + 1),
+            ..spilled[0].clone()
+        }];
+        assert!(
+            !spills_within(&inline, &huge, total),
+            "over by its bytes alone"
+        );
     }
 }

@@ -505,22 +505,28 @@ pub fn placement(target: &Path, file: &str) -> Placement {
                 Placement::Root(canonical(&root))
             })
         }
-        // gix 0.90 erases the operation's error into `gix::Error`; the variants
-        // are recovered by downcast, never by the broad `NotFound` class, which
-        // would also read an untrusted repository as no repository.
-        Err(err)
-            if matches!(
-                err.downcast_any_ref::<gix::discover::upwards::Error>(),
-                Some(
-                    gix::discover::upwards::Error::NoGitRepository { .. }
-                        | gix::discover::upwards::Error::NoGitRepositoryWithinCeiling { .. }
-                        | gix::discover::upwards::Error::NoGitRepositoryWithinFs { .. }
-                )
-            ) =>
-        {
-            Placement::Outside
-        }
-        Err(_) => Placement::Unplaceable,
+        Err(err) => undiscovered(&err),
+    }
+}
+
+/// Where a failed discovery places a target: no repository above it is
+/// `Outside`, while any other failure — an untrusted repository, a ceiling
+/// that cannot be matched — is `Unplaceable`, never read as no repository.
+/// gix 0.90 erases the operation's error into `gix::Error`; the variants are
+/// recovered by downcast, never by the broad `NotFound` class, which would
+/// also read an untrusted repository as no repository.
+fn undiscovered(err: &gix::Error) -> Placement {
+    if matches!(
+        err.downcast_any_ref::<gix::discover::upwards::Error>(),
+        Some(
+            gix::discover::upwards::Error::NoGitRepository { .. }
+                | gix::discover::upwards::Error::NoGitRepositoryWithinCeiling { .. }
+                | gix::discover::upwards::Error::NoGitRepositoryWithinFs { .. }
+        )
+    ) {
+        Placement::Outside
+    } else {
+        Placement::Unplaceable
     }
 }
 
@@ -9071,6 +9077,38 @@ mod tests {
         assert_eq!(iso_utc(0), "1970-01-01T00:00:00Z");
         assert_eq!(iso_utc(1_577_934_245), "2020-01-02T03:04:05Z");
         assert_eq!(iso_utc(1_622_548_800), "2021-06-01T12:00:00Z");
+    }
+
+    /// No repository above a target places it outside; a discovery that failed
+    /// for any other reason is unplaceable, never outside. #1276's sweep found
+    /// the guard forced to `true` unpinned: no case reached a non-absent error.
+    ///
+    /// Fails by: the no-repository guard forced either way.
+    #[test]
+    fn only_an_absent_repository_places_a_target_outside() {
+        let absent = gix::discover::upwards::Error::NoGitRepository {
+            path: PathBuf::from("/nowhere"),
+        };
+        assert_eq!(
+            undiscovered(&gix::Error::from_error(absent)),
+            Placement::Outside
+        );
+        let untrusted = gix::discover::upwards::Error::NoTrustedGitRepository {
+            path: PathBuf::from("/here"),
+            candidate: PathBuf::from("/here/.git"),
+            required: gix::sec::Trust::Full,
+            trust: gix::sec::Trust::Reduced,
+        };
+        assert_eq!(
+            undiscovered(&gix::Error::from_error(untrusted)),
+            Placement::Unplaceable,
+            "an untrusted repository is not an absent one"
+        );
+        let foreign = std::io::Error::other("unreadable");
+        assert_eq!(
+            undiscovered(&gix::Error::from_error(foreign)),
+            Placement::Unplaceable
+        );
     }
 
     /// Fails by: an existing target walked past its own directory, a missing
