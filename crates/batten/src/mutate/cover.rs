@@ -448,9 +448,19 @@ fn record(test: &[String]) -> Result<u8> {
     let (program, rest) = test.split_first().context("no test to run")?;
     let name = test_name(test).unwrap_or(program).to_owned();
     let id = blake3::hash(test.join("\u{1f}").as_bytes()).to_hex()[..16].to_owned();
+    // RESUMED, NOT REPEATED: a build cut short (a container restart, on
+    // #1276, 8,754 cases in) keeps its records, and a case already recorded
+    // passes without running again.
+    if dir.join("tests").join(&id).is_file() {
+        return Ok(0);
+    }
     let work = dir.join("work").join(&id);
     std::fs::create_dir_all(&work).with_context(|| format!("create {}", work.display()))?;
-    let pattern = work.join("%p-%m.profraw").to_string_lossy().into_owned();
+    // `%m` WITHOUT `%p`: LLVM merges every process of one binary into one
+    // file online. Per-process files (`%p-%m`) are ~12 MB each, and a case
+    // that spawns the engine hundreds of times filled the disk mid-map on
+    // #1276, so the cover run stopped reporting 513 cases short.
+    let pattern = work.join("%m.profraw").to_string_lossy().into_owned();
     let cwd = std::env::current_dir()?;
     let ran = super::spawn_as(
         &cwd,
@@ -598,7 +608,7 @@ fn workspace_crates(root: &Path) -> Result<BTreeSet<String>> {
 /// `profile.batten-cover` came out as an INLINE table, which cannot hold the
 /// `[[...scripts]]` array, so the wrapper was dropped without an error and the
 /// suite ran unrecorded.
-fn wrapped_config(root: &Path, recorder: &Path) -> Result<String> {
+fn wrapped_config(root: &Path, recorder: &Path, store: &Path) -> Result<String> {
     let path = root.join(".config").join("nextest.toml");
     let text = crate::fsio::read_to_string(&path).unwrap_or_default();
     let mut doc: toml_edit::DocumentMut = text.parse().context("parse nextest.toml")?;
@@ -615,10 +625,13 @@ fn wrapped_config(root: &Path, recorder: &Path) -> Result<String> {
     }
     doc["experimental"] = toml_edit::value(experimental);
     let recorder = toml_edit::Value::from(recorder.to_string_lossy().into_owned());
+    // THE STORE IS NAMED, so the report is where the build reads it: left to
+    // nextest, it went under the checkout's `target/`, not the build's.
+    let store = toml_edit::Value::from(store.to_string_lossy().into_owned());
     let mut config = doc.to_string();
     let _ = write!(
         config,
-        "\n[scripts.wrapper.batten-cover]\ncommand = [{recorder}, \"{RECORD_ARG}\"]\n\n\
+        "\n[store]\ndir = {store}\n\n[scripts.wrapper.batten-cover]\ncommand = [{recorder}, \"{RECORD_ARG}\"]\n\n\
          [profile.batten-cover]\nfail-fast = false\nretries = 0\n\n\
          [profile.batten-cover.junit]\npath = \"{JUNIT}\"\n\n\
          [[profile.batten-cover.scripts]]\nfilter = \"all()\"\nrun-wrapper = \"batten-cover\"\n"
@@ -630,15 +643,23 @@ fn wrapped_config(root: &Path, recorder: &Path) -> Result<String> {
 /// nextest writes it only when the run finishes.
 const JUNIT: &str = "cover.xml";
 
-/// How many cases a nextest `JUnit` report says ran: its root's `tests`.
+/// How many cases a nextest `JUnit` report says ran: the `tests` of every
+/// suite but a setup script's (`@setup-script:…`), which nextest reports as a
+/// suite of one and is no case. `None` for a report with no case suite.
 #[must_use]
 pub fn junit_count(report: &str) -> Option<usize> {
-    let root = report.find("<testsuites")?;
-    let rest = &report[root..];
-    let rest = &rest[..rest.find('>')?];
-    let at = rest.find(" tests=\"")? + " tests=\"".len();
-    let digits = &rest[at..];
-    digits[..digits.find('"')?].parse().ok()
+    let mut total = None;
+    for suite in report.split("<testsuite ").skip(1) {
+        let head = &suite[..suite.find('>')?];
+        if head.contains("name=\"@") {
+            continue;
+        }
+        let at = head.find(" tests=\"")? + " tests=\"".len();
+        let digits = &head[at..];
+        let count: usize = digits[..digits.find('"')?].parse().ok()?;
+        total = Some(total.unwrap_or(0) + count);
+    }
+    total
 }
 
 /// A map is complete when every case the run reports recorded what it ran.
@@ -674,11 +695,14 @@ fn build(out: &mut dyn std::io::Write) -> Result<()> {
     let tool = profdata(&root)?;
     let crates = workspace_crates(&root)?;
     let work = root.join("target").join("mutants").join("cover-work");
-    let _ = std::fs::remove_dir_all(&work);
+    // Only the in-flight profiles go: the records of a build cut short are
+    // kept, and `record` skips every case they already hold.
+    let _ = std::fs::remove_dir_all(work.join("work"));
     std::fs::create_dir_all(&work)?;
     let recorder = std::env::current_exe()?;
     let config = work.join("nextest.toml");
-    crate::durable::replace(&config, wrapped_config(&root, &recorder)?)?;
+    let store = work.join("nextest");
+    crate::durable::replace(&config, wrapped_config(&root, &recorder, &store)?)?;
     let crates_list = crates.iter().cloned().collect::<Vec<_>>().join(",");
     let env = [
         (String::from("CARGO_TARGET_DIR"), build_dir(&root)),
@@ -690,7 +714,7 @@ fn build(out: &mut dyn std::io::Write) -> Result<()> {
         // sources. The wrapper overrides this for each case it records.
         (
             String::from("LLVM_PROFILE_FILE"),
-            work.join("build").join("%p-%m.profraw"),
+            work.join("build").join("%m.profraw"),
         ),
     ]
     .map(|(key, value)| (key, value.to_string_lossy().into_owned()));
@@ -726,10 +750,7 @@ fn build(out: &mut dyn std::io::Write) -> Result<()> {
         super::Said::Streamed,
     )?;
     let map = collect(&work)?;
-    let report = build_dir(&root)
-        .join("nextest")
-        .join("batten-cover")
-        .join(JUNIT);
+    let report = store.join("batten-cover").join(JUNIT);
     let whole = complete(
         crate::fsio::read_to_string(&report).ok().as_deref(),
         map.tests.len(),
@@ -912,10 +933,16 @@ mod tests {
 
     #[test]
     fn the_report_names_how_many_cases_ran() {
-        let report = "<?xml version=\"1.0\"?>\n<testsuites name=\"nextest-run\" tests=\"9855\" \
-                      failures=\"0\"><testsuite name=\"a\" tests=\"3\"></testsuite></testsuites>";
-        assert_eq!(junit_count(report), Some(9855));
-        assert_eq!(junit_count("<testsuites name=\"x\">"), None);
+        let report = "<testsuites name=\"nextest-run\" tests=\"9856\">\
+                      <testsuite name=\"@setup-script:clear-scratch\" tests=\"1\" disabled=\"0\">\
+                      </testsuite><testsuite name=\"batten\" tests=\"3923\" disabled=\"0\">\
+                      </testsuite><testsuite name=\"batten::it\" tests=\"5912\" disabled=\"0\">\
+                      </testsuite></testsuites>";
+        assert_eq!(junit_count(report), Some(9835), "a setup script is no case");
+        assert_eq!(
+            junit_count("<testsuites tests=\"1\"><testsuite name=\"@setup-script:x\" tests=\"1\">"),
+            None
+        );
         assert_eq!(junit_count(""), None);
     }
 
@@ -924,7 +951,7 @@ mod tests {
     /// Fails by: the report's absence read as complete, or `>=` loosened.
     #[test]
     fn a_map_missing_cases_is_refused() {
-        let report = "<testsuites tests=\"3\">";
+        let report = "<testsuites tests=\"3\"><testsuite name=\"b\" tests=\"3\">";
         assert!(complete(Some(report), 3).is_ok());
         assert!(complete(Some(report), 4).is_ok());
         assert!(complete(Some(report), 2).is_err());
