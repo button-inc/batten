@@ -523,6 +523,46 @@ pub fn cargo_shimmed(
     }
 }
 
+/// The nextest binary id of the case a wrapper runs, from the test program's
+/// path and the directory nextest starts it in, which is its package's.
+///
+/// NOT `NEXTEST_BINARY_ID`: nextest 0.9.104 does not hand it to a wrapper
+/// script, and on #1276 every case recorded an empty binary, so every build
+/// went unnarrowed and every schema judgement named the package `""`.
+///
+/// `deps/<target>-<hash>` is the library's unit cases where `<target>` is the
+/// package's crate name, and the package's integration test otherwise.
+#[must_use]
+pub fn binary_id(program: &str, package_dir: &Path) -> String {
+    let file = Path::new(program)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let target = file
+        .rsplit_once('-')
+        .map_or(file.as_str(), |(stem, _)| stem);
+    let manifest = crate::fsio::read_to_string(package_dir.join("Cargo.toml")).unwrap_or_default();
+    let package = manifest
+        .parse::<toml::Table>()
+        .ok()
+        .and_then(|table| {
+            table
+                .get("package")?
+                .get("name")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .unwrap_or_default();
+    if package.is_empty() || target.is_empty() {
+        return String::new();
+    }
+    if target == package.replace('-', "_") {
+        package
+    } else {
+        format!("{package}::{target}")
+    }
+}
+
 /// The test name in the argv nextest hands a wrapper: `<binary> --exact <name>`.
 #[must_use]
 pub fn test_name(args: &[String]) -> Option<&str> {
@@ -627,7 +667,7 @@ fn record(test: &[String]) -> Result<u8> {
     let _ = std::fs::remove_dir_all(&work);
     // THE BINARY IT LIVES IN, as nextest names it to the process it runs, so
     // the stand-in can build only that binary for a mutant it covers.
-    let binary = std::env::var("NEXTEST_BINARY_ID").unwrap_or_default();
+    let binary = binary_id(program, &std::env::current_dir().unwrap_or_default());
     let mut body = format!("{name}\t{binary}\n");
     for key in keys {
         let _ = writeln!(body, "{key}");
@@ -1054,6 +1094,28 @@ mod tests {
         assert!(is_nextest_run(&args(&["nextest", "run"])));
         assert!(!is_nextest_run(&args(&["nextest", "list"])));
         assert!(!is_nextest_run(&args(&["build", "run"])));
+    }
+
+    #[test]
+    fn a_test_program_names_its_binary_from_its_package() {
+        let dir = crate::scratch::scratch("cover-binary-id");
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"batten-fsio\"\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            binary_id("/t/mutants/deps/batten_fsio-0425a3337a593f5d", &dir),
+            "batten-fsio",
+            "the package's own crate is its library's unit cases"
+        );
+        assert_eq!(
+            binary_id("/t/mutants/deps/it-0425a3337a593f5d", &dir),
+            "batten-fsio::it",
+            "any other target is the package's integration test"
+        );
+        let bare = crate::scratch::scratch("cover-binary-id-none");
+        assert_eq!(binary_id("/t/deps/it-0425", &bare), "", "no package, no id");
     }
 
     #[test]
