@@ -433,6 +433,41 @@ pub fn is_test_step(args: &[std::ffi::OsString]) -> bool {
         && !args.iter().any(|arg| arg == "--no-run")
 }
 
+/// The checkout's Rust sources as they stand, copied under `dest`: what each
+/// cargo-mutants copy is compared against to find its mutated line.
+///
+/// NOT THE LIVE CHECKOUT, which a sweep running for hours does not freeze:
+/// measured on #1276, one edit to `lib.rs` mid-sweep made its line the "first
+/// difference" of every later mutant below it, so each was handed another
+/// function's cases, survived them, and fell to the whole-suite pass.
+///
+/// # Errors
+///
+/// The checkout cannot be listed, or a source cannot be copied.
+pub fn pristine(root: &Path, dest: &Path) -> Result<()> {
+    let _ = std::fs::remove_dir_all(dest);
+    let mut paths = crate::git::tracked_paths(root)?;
+    paths.extend(crate::git::changed_paths(root)?);
+    for path in &paths {
+        if Path::new(path)
+            .extension()
+            .is_none_or(|ext| !ext.eq_ignore_ascii_case("rs"))
+        {
+            continue;
+        }
+        let from = root.join(path);
+        if !from.is_file() {
+            continue;
+        }
+        let to = dest.join(path);
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(&from, &to).with_context(|| format!("copy {path}"))?;
+    }
+    Ok(())
+}
+
 /// What the stand-in adds for the mutant in the working directory: the
 /// filterset naming its covering cases, and the target flags building only
 /// their binaries (empty when a covering case's binary is unknown). `None` to
@@ -1077,6 +1112,46 @@ mod tests {
         let ac: BTreeSet<&str> = ["a", "c"].into_iter().collect();
         assert_eq!(map.binaries_of(&ac), None, "c's binary is unknown");
         assert_eq!(Map::parse(&map.render()), Some(map));
+    }
+
+    /// The snapshot holds the tree's Rust sources, tracked or not, and no
+    /// other file; a later edit to the checkout leaves it alone, so the
+    /// mutated line is found against what the sweep started from.
+    ///
+    /// Fails by: an untracked source left out, a non-source copied, or the
+    /// comparison reading the live checkout.
+    #[test]
+    fn a_snapshot_is_the_sources_as_the_sweep_found_them() {
+        let dir = crate::scratch::scratch("cover-pristine");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("src/a.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(repo.join("notes.txt"), "n\n").unwrap();
+        crate::gitwrite::commit_paths(
+            &repo,
+            &[String::from("src/a.rs"), String::from("notes.txt")],
+            "fixture",
+        )
+        .unwrap();
+        std::fs::write(repo.join("src/new.rs"), "fn n() {}\n").unwrap();
+        let dest = dir.join("pristine");
+        pristine(&repo, &dest).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dest.join("src/a.rs")).unwrap(),
+            "fn a() {}\n"
+        );
+        assert!(dest.join("src/new.rs").is_file(), "an untracked source");
+        assert!(!dest.join("notes.txt").exists(), "a non-source");
+        std::fs::write(repo.join("src/a.rs"), "fn a() {}\nfn b() {}\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dest.join("src/a.rs")).unwrap(),
+            "fn a() {}\n",
+            "the snapshot does not follow the checkout"
+        );
+        assert_eq!(
+            mutated_line(&repo, &dest).unwrap(),
+            Some((String::from("src/a.rs"), 2))
+        );
     }
 
     #[test]
