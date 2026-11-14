@@ -127,6 +127,10 @@ budgets := {
 	"merge-conflict-markers": 100,
 	"conventional-commit": 100,
 	"commit-attribution": 100,
+	# CLOUD-2736: the pre-tool and post-tool calls with the off-box daemon watch
+	# on, which an agent with the state repository set pays on every tool call.
+	"hook-offbox": 100,
+	"posttool-offbox": 100,
 }
 
 # The commit-time steps among `budgets`, whose README row must publish a measured
@@ -154,6 +158,8 @@ targets := {
 	# first response waits on `SessionStart` (CLOUD-2840).
 	"session-start": 10,
 	"wired": 10,
+	"hook-offbox": 10,
+	"posttool-offbox": 10,
 }
 
 # Where the record carries an arm's p50: `record-perf` writes it beside the p95,
@@ -423,6 +429,8 @@ agreeing_readme := [
 	"| `merge-conflict-markers` | a commit-time hook step | 50.0 ms | 60.0 ms | — | ≤ 100 ms |",
 	"| `conventional-commit` | a commit-time hook step | 50.0 ms | 60.0 ms | — | ≤ 100 ms |",
 	"| `commit-attribution` | a commit-time hook step | 29.3 ms | 42.9 ms | — | ≤ 100 ms |",
+	"| `hook-offbox` | adjudication, daemon watch on | — | — | ≤ 10 ms | ≤ 100 ms |",
+	"| `posttool-offbox` | a PostToolUse call, daemon watch on | — | — | ≤ 10 ms | ≤ 100 ms |",
 ]
 
 # The commit-time steps' rows, for a case whose own README has a different
@@ -456,6 +464,10 @@ clean_record := {
 	"stop/p50": "2.4",
 	"session-start/p50": "3.9",
 	"wired/p50": "8.0",
+	"hook-offbox": "3.2",
+	"hook-offbox/p50": "3.0",
+	"posttool-offbox": "2.6",
+	"posttool-offbox/p50": "2.4",
 }
 
 # THE TWO FINDINGS ARE TOLD APART BY TOKEN (CLOUD-2730): a p50 over its target
@@ -628,6 +640,8 @@ test_a_reordered_budget_column_is_still_found if {
 				"| `stop` | ≤ 100 ms | ≤ 10 ms | — | — |",
 				"| `session-start` | ≤ 100 ms | ≤ 10 ms | — | — |",
 				"| `wired` | ≤ 100 ms | ≤ 10 ms | 8.0 ms | 8.4 ms |",
+				"| `hook-offbox` | ≤ 100 ms | ≤ 10 ms | — | — |",
+				"| `posttool-offbox` | ≤ 100 ms | ≤ 10 ms | — | — |",
 			],
 			commit_rows,
 		)},

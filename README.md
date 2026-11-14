@@ -219,6 +219,8 @@ the launcher's own share is attributable.
 | `stop`                   | an end of turn — decode, state record, drain detached     | —      | —      | ≤ 10 ms | ≤ 100 ms |
 | `session-start`          | a session start — payload write, setup task spawned       | —      | —      | ≤ 10 ms | ≤ 100 ms |
 | `wired`                  | the hook as `.claude/settings.json` invokes it            | 8.0 ms | 8.4 ms | ≤ 10 ms | ≤ 100 ms |
+| `hook-offbox`            | `hook` with the off-box daemon watch on                   | —      | —      | ≤ 10 ms | ≤ 100 ms |
+| `posttool-offbox`        | `posttool` with the off-box daemon watch on               | —      | —      | ≤ 10 ms | ≤ 100 ms |
 | `cargo-fmt`              | pre-commit: `rustfmt --check` over the staged `.rs` files | 21 ms  | 29 ms  | —       | ≤ 100 ms |
 | `taplo`                  | pre-commit: `taplo lint` over the staged unbound TOML     | 14 ms  | 21 ms  | —       | ≤ 100 ms |
 | `taplo-format`           | pre-commit: `taplo format --check` over the staged TOML   | 17 ms  | 23 ms  | —       | ≤ 100 ms |
@@ -247,6 +249,11 @@ Their cells do NOT come from the machine the series above comes from, for
 `posttool`'s reason below: they are `mise run perf` at f8fc77c6 (release, 300
 runs) on a 4-core cloud container whose own `noop` read 3.4 ms / 4.2 ms and `hook`
 17.2 ms / 28.1 ms, so read them against those figures, not the rows above.
+
+The two `-offbox` rows are `hook` and `posttool` again with the state repository
+variable set and a daemon's lock held: what the daemon watch adds to every tool
+call for a session that has off-box state switched on. Their measured cells are
+`—` for `passthrough`'s reason below.
 
 `posttool` is the same envelope decode plus the response capture, and its cells
 are `—` for `passthrough`'s reason: the series above comes from a quieter

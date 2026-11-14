@@ -501,6 +501,14 @@ pub enum Native by id {
     /// A call reached a repository other than its session's home, where the
     /// home arms the reach gate (CLOUD-2672). Appended last, as above.
     CallReachLoose => "call reach loose",
+    /// This session's off-box daemon is not running, is stuck, or serves
+    /// another session (CLOUD-2736).
+    ///
+    /// **APPENDED LAST**, with the one below, for [`Native::ProseColumnRefused`]'s
+    /// reason.
+    OffboxDaemonDown => "spawn run missing",
+    /// The command that starts the off-box daemon was not run in the background.
+    OffboxDaemonForeground => "spawn run blocked",
 }
 }
 

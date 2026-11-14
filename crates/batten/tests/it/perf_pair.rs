@@ -691,6 +691,8 @@ fn a_measurement_times_every_path_off_its_release_build() {
         "merge-conflict-markers",
         "conventional-commit",
         "commit-attribution",
+        "hook-offbox",
+        "posttool-offbox",
     ] {
         assert!(
             records.contains(&format!("path={id} ")),
@@ -703,7 +705,7 @@ fn a_measurement_times_every_path_off_its_release_build() {
         .lines()
         .filter(|line| line.starts_with("hyperfine "))
         .collect();
-    assert_eq!(timed.len(), 15, "{argv}");
+    assert_eq!(timed.len(), 17, "{argv}");
     // A multi-word argument reaches hyperfine quoted, or it splits the rule
     // name into three words and the arm measures a usage error.
     assert!(

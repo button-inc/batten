@@ -92,6 +92,7 @@ row here, so a new module lands with its line.
 - `sessions.rs` — the session-source contract (CLOUD-1010): `SessionSource` lists an agent's stored sessions and reads each one's native records from a cursor, verbatim and bounded; `read_jsonl` is the shared file source and `JsonlFile` the neutral one.
 - `offbox.rs` — off-box session state: reads `BATTEN_STATE_REPO`, derives the state repository's remote from the project origin, and says whether it can be written (CLOUD-2718).
 - `forge.rs` (crate `batten-base`) — the forge's verdict for a commit, read back from a record something else wrote (CLOUD-1154).
+- `offbox_watch.rs` — whether the off-box daemon is alive, from its lock, status file and inbox (CLOUD-2736): the probe the hook and `doctor session` share, the hook's own `misses`/`noted` file, the session leaf, and the two remedy commands. File operations only; reaches no transport.
 - `tools.rs` (crate `batten-base`) — a third-party tool's verdict, read back from a record keyed to (tool, pinned version, input digest) (CLOUD-1171).
 - `captured.rs` — declared REDUCTIONS over responses the agent already captured (CLOUD-1188).
 - `task.rs` (crate `batten-base`) — CLOUD-425's READER: which long-running tasks are running right now, and what phase each is in, ported off `mise-tasks/alive.sh` (CLOUD-843).
