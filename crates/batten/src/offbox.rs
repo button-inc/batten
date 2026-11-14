@@ -175,7 +175,7 @@ pub fn attach_note(value: &str) -> String {
 
 /// The directory, under the per-checkout off-box directory, that holds one
 /// directory per session.
-const SESSIONS: &str = "sessions";
+const SESSIONS: &str = crate::offbox_watch::SESSIONS;
 
 /// A session's local snapshot repository, inside its session directory.
 const REPO: &str = "repo.git";
@@ -211,6 +211,23 @@ const READ: u64 = 8 * MIB;
 /// everything else there is rebuilt (`provision/`, `cache/`) or is this
 /// feature's own working state.
 const STATE_STORES: [&str; 1] = ["captures"];
+
+/// State entries taken in part: only the files DIRECTLY under each prefix
+/// (CLOUD-2723). The mutation sweep's verdict journal and reach seal live
+/// there, beside a staged checkout, a source snapshot and a build directory
+/// that are rebuilt and must not be shipped.
+const STATE_FILES_UNDER: [&str; 1] = ["mutate/schema/"];
+
+/// Whether a state-relative path is a file directly under a listed prefix.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT mutate-tree-dir-included|s@^            .is_some_and(\x7crest\x7c !rest.is_empty() \&\& !rest.contains('/'))$@            .is_some_and(\x7crest\x7c !rest.is_empty())@|the_mutation_stores_are_carried_and_their_work_directories_are_not
+fn listed_file(relative: &str) -> bool {
+    STATE_FILES_UNDER.iter().any(|prefix| {
+        relative
+            .strip_prefix(prefix)
+            .is_some_and(|rest| !rest.is_empty() && !rest.contains('/'))
+    })
+}
 
 /// The prefix every store in the project's git directory carries.
 const GIT_STORE_PREFIX: &str = "batten-";
@@ -549,7 +566,7 @@ fn git_excluded(entry: &str) -> bool {
 /// `state/<entry>/…` from the state directory, by allow-list; `git/<entry>/…`
 /// from the project's per-worktree git directory, by exclude-list.
 //MUTANT-SUITE crates/batten/tests/it/offbox_snapshot.rs
-//MUTANT provision-dir-included|s@^            if !STATE_STORES.contains(\&entry.as_str()) {$@            if false {@|the_tree_holds_the_stores_and_the_transcript_in_segments
+//MUTANT provision-dir-included|s@^            if !STATE_STORES.contains(\&entry.as_str()) \&\& !listed_file(\&relative) {$@            if false {@|the_tree_holds_the_stores_and_the_transcript_in_segments
 //MUTANT lock-entry-included|s@^            if excluded \x7c\x7c relative.ends_with(".lock") {$@            if excluded {@|the_tree_holds_the_stores_and_the_transcript_in_segments
 #[expect(
     clippy::case_sensitive_file_extension_comparisons,
@@ -560,7 +577,7 @@ fn store_files(project_root: &Path) -> Vec<(String, PathBuf)> {
     if let Ok(state) = crate::state::repo_state_dir(project_root) {
         for (relative, path) in files_under(&state) {
             let entry = relative.split('/').next().unwrap_or_default().to_owned();
-            if !STATE_STORES.contains(&entry.as_str()) {
+            if !STATE_STORES.contains(&entry.as_str()) && !listed_file(&relative) {
                 continue;
             }
             // A lock is never content, wherever it sits.
@@ -1236,7 +1253,12 @@ fn held(destination: &Path) -> Vec<(String, PathBuf)> {
 fn destination(project_root: &Path, store: &str) -> Option<PathBuf> {
     let (root, entry) = store.split_once('/')?;
     match root {
-        "state" if STATE_STORES.contains(&entry) => {
+        "state"
+            if STATE_STORES.contains(&entry)
+                || STATE_FILES_UNDER
+                    .iter()
+                    .any(|prefix| prefix.split('/').next() == Some(entry)) =>
+        {
             Some(crate::state::repo_state_dir(project_root).ok()?.join(entry))
         }
         "git" if entry.starts_with(GIT_STORE_PREFIX) && !git_excluded(entry) => {
@@ -1459,6 +1481,221 @@ fn foreign(dir: &Path, last: Option<&str>, path: &str) -> bool {
         return aside.join("transcript").exists();
     }
     keyed(path, "history/").is_some_and(|(entry, _)| aside.join("history").join(entry).exists())
+}
+
+// --- the restore (CLOUD-2723) --------------------------------------------------
+
+/// A session's restore record, in its own directory: the commit id restored,
+/// or [`NOTHING_RESTORED`].
+pub const RESTORED: &str = crate::offbox_watch::RESTORED;
+
+/// What the restore record holds when there was nothing to restore from.
+pub const NOTHING_RESTORED: &str = "none";
+
+/// The ref the rotation job keeps every rotated session reachable from.
+pub const ARCHIVE: &str = "refs/heads/archive";
+
+/// The key of a session ref in the archive: the first sixteen hex digits of
+/// the BLAKE3 of its full name. Of the whole name, so it includes the project.
+#[must_use]
+pub fn archive_key(reference: &str) -> String {
+    blake3::hash(reference.as_bytes()).to_hex()[..16].to_owned()
+}
+
+/// Where the archive's tree keeps `root` — `index` or `observed` — for a
+/// session ref: `<root>/<aa>/<bb>/<key>`. Fixed at two levels, never split or
+/// moved, so a reader can compute it.
+#[must_use]
+pub fn archive_path(root: &str, reference: &str) -> String {
+    let key = archive_key(reference);
+    format!("{root}/{}/{}/{key}", &key[..2], &key[2..4])
+}
+
+/// What one restore came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Restored {
+    /// A snapshot was put back; its commit id.
+    Snapshot(String),
+    /// There was nothing to restore from.
+    Nothing,
+    /// The forge said to slow down; no answer was reached and none is recorded.
+    Throttled(lease::Throttled),
+    /// Discovery answered that this machine may not read the repository.
+    Unattached,
+}
+
+impl Restored {
+    /// The one stdout token.
+    #[must_use]
+    pub const fn token(&self) -> &'static str {
+        match self {
+            Restored::Snapshot(_) => "restored",
+            Restored::Nothing => NOTHING_RESTORED,
+            Restored::Throttled(_) => "throttled",
+            Restored::Unattached => Status::Unattached.token(),
+        }
+    }
+
+    /// The exit that goes with it.
+    #[must_use]
+    pub const fn code(&self) -> ExitCode {
+        match self {
+            Restored::Snapshot(_) | Restored::Nothing => ExitCode::Success,
+            Restored::Throttled(_) => ExitCode::Violation,
+            Restored::Unattached => ExitCode::Usage,
+        }
+    }
+}
+
+/// Make the session's local repository, where a restore is the first thing to
+/// need it.
+fn prepare(repo: &Path) -> Result<()> {
+    std::fs::create_dir_all(repo)
+        .map_err(|err| anyhow::anyhow!("offbox: the session repository will not create: {err}"))?;
+    gitwrite::init_bare(repo)
+}
+
+/// Where a snapshot to restore was found.
+struct Found {
+    commit: String,
+    /// Read from the session's own live ref, so the next push may replace it.
+    live: bool,
+}
+
+/// The newest snapshot of the session whose ref is `name`: its live ref, else
+/// the last line of its archive index file.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT archived-session-not-found|s@^    let Some((_, blob)) = index.iter().find(\x7c(path, _)\x7c path == \&wanted) else {$@    let Some((_, blob)) = index.iter().find(\x7c(path, _)\x7c path == "nowhere") else {@|a_rotated_session_is_restored_from_the_archive_index
+//MUTANT older-archived-snapshot-restored|s@^        .last()$@        .next()@|the_last_line_of_an_index_file_is_the_one_restored
+fn newest(
+    remote: &str,
+    repo: &Path,
+    refs: &lease::Advertisement,
+    name: &str,
+) -> Result<Option<Found>> {
+    let live = refs.head_of(name);
+    if live != lease::ZERO {
+        return Ok(Some(Found {
+            commit: live.to_owned(),
+            live: true,
+        }));
+    }
+    let archive = refs.head_of(ARCHIVE);
+    if archive == lease::ZERO {
+        return Ok(None);
+    }
+    prepare(repo)?;
+    lease::fetch_shallow(remote, repo, archive)?;
+    let index = gitwrite::tree_index(repo, archive)?;
+    let wanted = archive_path("index", name);
+    let Some((_, blob)) = index.iter().find(|(path, _)| path == &wanted) else {
+        return Ok(None);
+    };
+    let text = String::from_utf8_lossy(&gitwrite::read_blob(repo, blob)?).into_owned();
+    // The first line is the ref's name; each later one is a snapshot's commit
+    // id, oldest first.
+    let commit = text
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .last()
+        .map(str::to_owned);
+    Ok(commit.map(|commit| Found {
+        commit,
+        live: false,
+    }))
+}
+
+/// Put the session's pushed snapshot back where the snapshot read it, in a
+/// container that does not have it (CLOUD-2723).
+///
+/// Looked for in order: the session's own live ref; the archive, where the
+/// rotation job keeps a session it rotated away; then the same two for
+/// `predecessor`, the session this one continues. [`absorb`] does all the
+/// copying — `own` for the session's own snapshots, so its record stream is
+/// continued, and not for a predecessor's, whose transcript is kept aside.
+///
+/// `refs/offbox/last` is set only for a snapshot read from the session's own
+/// live ref: that is the one value the next push replaces. After an archive or
+/// predecessor restore the live ref is absent, and a push is admitted over
+/// nothing.
+///
+/// **The restore record is written whenever an answer was reached** — the
+/// commit id, or `none` — and never otherwise: a throttle or an unreadable
+/// repository is not "nothing to restore", and recording it as that would stop
+/// the daemon ever trying again.
+///
+/// # Errors
+///
+/// A transport failure, or a local file that will not read or write.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT archive-restore-sets-last|s@^        if found.live \&\& own {$@        if true {@|a_rotated_session_is_restored_from_the_archive_index
+//MUTANT predecessor-transcript-adopted-as-own|s@^        absorb(session.project_root, \&session.meta, \&found.commit, own)?;$@        absorb(session.project_root, \&session.meta, \&found.commit, true)?;@|a_predecessors_snapshot_is_absorbed_and_its_transcript_kept_aside
+//MUTANT nothing-found-leaves-restored-unwritten|s@^    record_restored(\&dir, NOTHING_RESTORED)?;$@@|nothing_to_restore_from_is_recorded_as_none
+//MUTANT throttled-restore-recorded-as-none|s@^        Some(throttle) => Ok(Restored::Throttled(\*throttle)),$@        Some(_) => Ok(Restored::Nothing),@|a_throttled_restore_records_nothing
+pub fn restore_once(session: &Session<'_>, predecessor: Option<&str>) -> Result<Restored> {
+    match restore(session, predecessor) {
+        Ok(restored) => Ok(restored),
+        Err(err) => restore_throttled(err),
+    }
+}
+
+/// `Ok(throttled)` where `err` is the forge saying slow down, `err` back
+/// otherwise.
+fn restore_throttled(err: anyhow::Error) -> Result<Restored> {
+    match err.downcast_ref::<lease::Throttled>() {
+        Some(throttle) => Ok(Restored::Throttled(*throttle)),
+        None => Err(err),
+    }
+}
+
+fn record_restored(dir: &Path, value: &str) -> Result<()> {
+    let refused =
+        |err: std::io::Error| anyhow::anyhow!("offbox: the restore record will not write: {err}");
+    std::fs::create_dir_all(dir).map_err(refused)?;
+    crate::durable::replace(dir.join(RESTORED), format!("{value}\n")).map_err(refused)
+}
+
+/// [`restore_once`]'s body; a throttle met anywhere in it is an error here
+/// and an outcome there.
+fn restore(session: &Session<'_>, predecessor: Option<&str>) -> Result<Restored> {
+    match lease::probe(&session.remote, Service::UploadPack)? {
+        200 => {}
+        401 | 403 | 404 => return Ok(Restored::Unattached),
+        other => {
+            return Err(anyhow::anyhow!(
+                "offbox: the state repository answered {other} to discovery"
+            ));
+        }
+    }
+    let refs = lease::advertise(&session.remote, Service::UploadPack)?;
+    let dir = session_dir(session.project_root, &session.meta)?;
+    let repo = local_repo(&dir);
+
+    // This session's own snapshots first; then the predecessor's, by the same
+    // two steps, under its own ref name.
+    let mut candidates = vec![(reference(&session.meta), true)];
+    if let Some(predecessor) = predecessor.filter(|id| !id.is_empty()) {
+        let mut meta = session.meta.clone();
+        predecessor.clone_into(&mut meta.session);
+        candidates.push((reference(&meta), false));
+    }
+    for (name, own) in candidates {
+        let Some(found) = newest(&session.remote, &repo, &refs, &name)? else {
+            continue;
+        };
+        prepare(&repo)?;
+        lease::fetch_shallow(&session.remote, &repo, &found.commit)?;
+        absorb(session.project_root, &session.meta, &found.commit, own)?;
+        if found.live && own {
+            gitwrite::set_ref(&repo, LAST, &found.commit)?;
+        }
+        record_restored(&dir, &found.commit)?;
+        return Ok(Restored::Snapshot(found.commit));
+    }
+    record_restored(&dir, NOTHING_RESTORED)?;
+    Ok(Restored::Nothing)
 }
 
 // --- the daemon (CLOUD-2721) ---------------------------------------------------
@@ -1711,6 +1948,9 @@ pub struct Launching<'a> {
     pub value: &'a str,
     /// The project's origin URL, where it has one.
     pub origin: Option<&'a str>,
+    /// The session this one continues, where the environment names one: what
+    /// a restore falls back to when the session has no snapshot of its own.
+    pub predecessor: Option<&'a str>,
     /// How many wakes to run before returning; `None` runs until killed.
     pub wakes: Option<u64>,
 }
@@ -1854,6 +2094,11 @@ impl Daemon<'_> {
             .map_err(|err| anyhow::anyhow!("offbox: the attach note will not write: {err}"))
     }
 
+    /// Whether the restore has yet to reach an answer.
+    fn unrestored(&self) -> bool {
+        matches!(self.status.restored.as_str(), "pending" | "unavailable")
+    }
+
     /// One push attempt.
     fn push(&mut self, world: &mut dyn World) -> Result<()> {
         let (Some(meta), Some(remote)) = (self.meta.clone(), self.remote.clone()) else {
@@ -1898,6 +2143,49 @@ impl Daemon<'_> {
         Ok(())
     }
 
+    /// Restore, once, before the first push (CLOUD-2723).
+    ///
+    /// An answer — a snapshot, or nothing to restore from — is recorded by
+    /// [`restore_once`] and never asked for again. No answer is `unavailable`:
+    /// the daemon waits as the backoff says and tries again, and by then the
+    /// session has been stamped, so what it restores lands under `absorbed/`.
+    fn restore(&mut self, world: &mut dyn World) -> Result<()> {
+        let (Some(meta), Some(remote)) = (self.meta.clone(), self.remote.clone()) else {
+            return Ok(());
+        };
+        let session = Session {
+            project_root: self.launching.project_root,
+            provisions: self.launching.provisions,
+            meta,
+            remote,
+            transcript: self.launching.transcript.map(Path::to_path_buf),
+            time: world.now(),
+        };
+        let result = match restore_once(&session, self.launching.predecessor) {
+            Ok(Restored::Snapshot(_)) => {
+                "yes".clone_into(&mut self.status.restored);
+                Attempt::Done
+            }
+            Ok(Restored::Nothing) => {
+                NOTHING_RESTORED.clone_into(&mut self.status.restored);
+                Attempt::Done
+            }
+            Ok(Restored::Throttled(throttle)) => Attempt::Throttled(throttle),
+            Ok(Restored::Unattached) => {
+                self.unattached()?;
+                Attempt::Failed
+            }
+            Err(_) => Attempt::Failed,
+        };
+        if result != Attempt::Done {
+            "unavailable".clone_into(&mut self.status.restored);
+        }
+        let owed = self.owed;
+        self.settle(result, world);
+        self.owed = owed;
+        Ok(())
+    }
+
     /// One wake of the loop.
     fn wake(&mut self, world: &mut dyn World) -> Result<()> {
         self.status.inbox_read =
@@ -1908,6 +2196,12 @@ impl Daemon<'_> {
             // Not known to be writable yet: ask, once any wait has run out.
             if wait_left == 0 {
                 self.probe(world)?;
+            }
+        } else if self.remote.is_some() && self.unrestored() {
+            // BEFORE ANY PUSH: a push first would be rejected over a snapshot
+            // this container has not seen, and absorb it as a rival's.
+            if wait_left == 0 {
+                self.restore(world)?;
             }
         } else if self.remote.is_some() && now >= self.not_before {
             let grew = self.status.inbox_read > self.inbox_at_attempt || self.owed;
@@ -1944,6 +2238,7 @@ impl Daemon<'_> {
 /// an error: it is counted, waited out, and tried again.
 //MUTANT-SUITE crates/batten/src/offbox.rs
 //MUTANT restart-forgets-the-wait|s@^        status.wait_until = previous.wait_until;$@@|a_restart_inside_a_wait_still_honours_it
+//MUTANT relaunch-restores-again|s@^        Some(_) => String::from("yes"),$@        Some(_) => String::from("pending"),@|a_daemon_that_finds_the_restore_record_does_not_restore_again
 //MUTANT new-session-inherits-the-old-status|s@^        if previous.session == status.session {$@        if true {@|a_restart_inside_a_wait_still_honours_it
 pub fn run(launching: &Launching<'_>, world: &mut dyn World) -> Result<Launch> {
     let dir = daemon_dir(launching.project_root)?;
@@ -1982,6 +2277,19 @@ pub fn run(launching: &Launching<'_>, world: &mut dyn World) -> Result<Launch> {
     if !surveyed {
         "not-surveyed".clone_into(&mut status.source);
     }
+    // A START THAT FINDS THE RESTORE RECORD DOES NOT RESTORE AGAIN (CLOUD-2723):
+    // (mutant row `relaunch-restores-again` is beside `run`'s other rows.)
+    // every relaunch would otherwise absorb the session's own last push and
+    // send any store changed since to `absorbed/`.
+    status.restored = match meta.as_ref().and_then(|meta| {
+        let dir = session_dir(launching.project_root, meta).ok()?;
+        std::fs::read_to_string(dir.join(RESTORED)).ok()
+    }) {
+        Some(record) if record.trim() == NOTHING_RESTORED => String::from(NOTHING_RESTORED),
+        Some(_) => String::from("yes"),
+        None if meta.is_some() => String::from("pending"),
+        None => String::from(NOTHING_RESTORED),
+    };
     if let Some(previous) = previous {
         status.throttles = previous.throttles;
         status.failures = previous.failures;
@@ -2741,6 +3049,7 @@ mod push_tests {
                     transcript: Some(&self.transcript),
                     value: "acme/state",
                     origin: Some(REMOTE),
+                    predecessor: None,
                     wakes: Some(wakes),
                 },
                 &mut sim,
@@ -2917,5 +3226,314 @@ mod push_tests {
         let note = std::fs::read_to_string(daemon_dir(&writer.root).unwrap().join(NOTE)).unwrap();
         assert_eq!(note, format!("{}\n", attach_note("acme/state")));
         assert_eq!(receives(&stand), 0);
+    }
+
+    // --- the restore (CLOUD-2723) ---------------------------------------------
+
+    impl Writer {
+        fn state_file(&self, path: &str, body: &str) {
+            put(
+                &crate::state::repo_state_dir(&self.root).unwrap().join(path),
+                body,
+            );
+        }
+
+        fn restore(&self, predecessor: Option<&str>) -> Restored {
+            restore_once(
+                &Session {
+                    project_root: &self.root,
+                    provisions: &self.provisions,
+                    meta: self.meta.clone(),
+                    remote: REMOTE.to_owned(),
+                    transcript: Some(self.transcript.clone()),
+                    time: TIME,
+                },
+                predecessor,
+            )
+            .expect("the restore runs")
+        }
+
+        fn restored(&self) -> Option<String> {
+            std::fs::read_to_string(self.dir().join(RESTORED)).ok()
+        }
+    }
+
+    const FIRST: &str = "{\"n\":1}\n{\"n\":2}\n";
+
+    /// A writer that has pushed two stores and a transcript, and its commit.
+    fn pushed_once(base: &Path, stand: &Shared, session: &str) -> (Writer, String) {
+        let one = Writer::new(base, &format!("first-{session}"), session);
+        one.git_file("batten-receipts/r.json", "receipt\n");
+        one.state_file("captures/a/one.txt", "captured\n");
+        put(&one.transcript, FIRST);
+        assert_eq!(one.push().outcome, Pushed::Applied);
+        let commit = head(stand, &one.meta);
+        (one, commit)
+    }
+
+    /// Rotate `meta`'s session away, as the cleanup job does: its ref gone,
+    /// and an archive whose index file lists `commits`, oldest first.
+    fn rotate_away(base: &Path, stand: &Shared, meta: &Meta, commits: &[&str]) {
+        let name = reference(meta);
+        let scratch = base.join(format!("archive-{}.git", commits.len()));
+        gitwrite::init_bare(&scratch).unwrap();
+        let mut index = format!("{name}\n");
+        for commit in commits {
+            index.push_str(commit);
+            index.push('\n');
+        }
+        let entries = vec![(
+            archive_path("index", &name),
+            Content::Bytes(index.into_bytes()),
+        )];
+        let (tip, _) = gitwrite::commit_tree(&scratch, &entries, &[], TIME, "archive").unwrap();
+        let mut stand = stand.borrow_mut();
+        stand.objects.extend(objects_of(&scratch, &tip));
+        stand.refs.retain(|(held, _)| held != &name);
+        stand.refs.push((ARCHIVE.to_owned(), tip));
+    }
+
+    fn assert_stores_back(fresh: &Writer) {
+        assert_eq!(
+            fresh.read_git("batten-receipts/r.json").as_deref(),
+            Some("receipt\n")
+        );
+        let captured = crate::state::repo_state_dir(&fresh.root)
+            .unwrap()
+            .join("captures/a/one.txt");
+        assert_eq!(std::fs::read_to_string(captured).unwrap(), "captured\n");
+    }
+
+    /// Fails by: a store not put back, the record stream not continued, or the
+    /// push after a restore being rejected.
+    #[test]
+    fn an_own_live_ref_is_restored_in_place_and_the_next_push_applies() {
+        let base = base("offbox-restore-own");
+        let stand = standing(&[], Vec::new());
+        let (one, commit) = pushed_once(&base, &stand, "s");
+        let theirs = one.tree(&commit);
+        let fresh = Writer::new(&base, "fresh", "s");
+
+        assert_eq!(fresh.restore(None), Restored::Snapshot(commit.clone()));
+
+        assert_stores_back(&fresh);
+        assert_eq!(
+            fresh.local("transcript")["main/0/000000.jsonl"],
+            FIRST.as_bytes()
+        );
+        let given: Cursors = serde_json::from_slice(&theirs["cursor.json"]).unwrap();
+        assert_eq!(
+            load_cursors(&fresh.dir())["transcript/main"],
+            given["transcript/main"]
+        );
+        assert_eq!(
+            fresh.restored().as_deref(),
+            Some(format!("{commit}\n").as_str())
+        );
+        assert_eq!(fresh.last().as_deref(), Some(commit.as_str()));
+
+        // The same stream, one line on, in this container's own file.
+        put(&fresh.transcript, &format!("{FIRST}{{\"n\":3}}\n"));
+        let before = receives(&stand);
+        assert_eq!(fresh.push().outcome, Pushed::Applied);
+        assert_eq!(receives(&stand), before + 1, "applied on its first attempt");
+        let tree = fresh.tree(&head(&stand, &fresh.meta));
+        assert_eq!(
+            tree["transcript/main/0/000000.jsonl"],
+            format!("{FIRST}{{\"n\":3}}\n").as_bytes()
+        );
+    }
+
+    /// Fails by: a session the cleanup job rotated away not being found, or an
+    /// archived snapshot being taken for the live ref's value.
+    #[test]
+    fn a_rotated_session_is_restored_from_the_archive_index() {
+        let base = base("offbox-restore-archive");
+        let stand = standing(&[], Vec::new());
+        let (one, commit) = pushed_once(&base, &stand, "s");
+        rotate_away(&base, &stand, &one.meta, &[&commit]);
+        let fresh = Writer::new(&base, "fresh", "s");
+
+        assert_eq!(fresh.restore(None), Restored::Snapshot(commit.clone()));
+
+        assert_stores_back(&fresh);
+        assert_eq!(
+            fresh.restored().as_deref(),
+            Some(format!("{commit}\n").as_str())
+        );
+        assert_eq!(
+            fresh.last(),
+            None,
+            "the live ref is absent, so nothing is `last`"
+        );
+
+        let before = receives(&stand);
+        assert_eq!(fresh.push().outcome, Pushed::Applied);
+        assert_eq!(receives(&stand), before + 1);
+        assert_ne!(
+            head(&stand, &fresh.meta),
+            lease::ZERO,
+            "the live ref is back"
+        );
+    }
+
+    /// Fails by: an older snapshot of a session rotated twice being restored.
+    #[test]
+    fn the_last_line_of_an_index_file_is_the_one_restored() {
+        let base = base("offbox-restore-index");
+        let stand = standing(&[], Vec::new());
+        let (one, older) = pushed_once(&base, &stand, "s");
+        add(&one.transcript, "{\"n\":3}\n");
+        assert_eq!(one.push().outcome, Pushed::Applied);
+        let newer = head(&stand, &one.meta);
+        rotate_away(&base, &stand, &one.meta, &[&older, &newer]);
+        let fresh = Writer::new(&base, "fresh", "s");
+
+        assert_eq!(fresh.restore(None), Restored::Snapshot(newer));
+        assert_eq!(
+            fresh.local("transcript")["main/0/000000.jsonl"],
+            format!("{FIRST}{{\"n\":3}}\n").as_bytes()
+        );
+    }
+
+    /// Fails by: a predecessor's records being continued as this session's own.
+    #[test]
+    fn a_predecessors_snapshot_is_absorbed_and_its_transcript_kept_aside() {
+        let base = base("offbox-restore-predecessor");
+        let stand = standing(&[], Vec::new());
+        let (_, commit) = pushed_once(&base, &stand, "before");
+        let fresh = Writer::new(&base, "fresh", "after");
+
+        assert_eq!(
+            fresh.restore(Some("before")),
+            Restored::Snapshot(commit.clone())
+        );
+
+        assert_stores_back(&fresh);
+        assert!(
+            fresh.local("transcript").is_empty(),
+            "not this session's stream"
+        );
+        assert_eq!(
+            fresh.local(&format!("absorbed/{commit}"))["transcript/main/0/000000.jsonl"],
+            FIRST.as_bytes()
+        );
+        assert_eq!(fresh.last(), None);
+        assert_eq!(
+            fresh.restored().as_deref(),
+            Some(format!("{commit}\n").as_str())
+        );
+    }
+
+    /// Fails by: an answer of "nothing" going unrecorded, so it is asked again
+    /// on every start.
+    #[test]
+    fn nothing_to_restore_from_is_recorded_as_none() {
+        let base = base("offbox-restore-nothing");
+        let _stand = standing(&[], Vec::new());
+        let fresh = Writer::new(&base, "fresh", "s");
+
+        let restored = fresh.restore(Some("nobody"));
+
+        assert_eq!(restored, Restored::Nothing);
+        assert_eq!(restored.token(), "none");
+        assert_eq!(restored.code(), ExitCode::Success);
+        assert_eq!(fresh.restored().as_deref(), Some("none\n"));
+        let left: Vec<String> = files_under(&fresh.dir())
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        assert_eq!(left, [RESTORED], "nothing else was written");
+    }
+
+    /// Fails by: a throttle being recorded as nothing to restore.
+    #[test]
+    fn a_throttled_restore_records_nothing() {
+        let base = base("offbox-restore-throttled");
+        let stand = standing(&[], Vec::new());
+        let (_, _) = pushed_once(&base, &stand, "s");
+        let fresh = Writer::new(&base, "fresh", "s");
+        stand.borrow_mut().canned.push(Canned {
+            kind: Kind::Discovery,
+            left: 1,
+            status: 429,
+            headers: vec![(String::from("retry-after"), String::from("30"))],
+        });
+
+        let restored = fresh.restore(None);
+
+        assert!(matches!(restored, Restored::Throttled(_)), "{restored:?}");
+        assert_eq!(restored.code(), ExitCode::Violation);
+        assert_eq!(fresh.restored(), None);
+
+        // The upload itself throttled, after discovery answered: the same.
+        stand.borrow_mut().canned.push(Canned {
+            kind: Kind::Upload,
+            left: 1,
+            status: 429,
+            headers: Vec::new(),
+        });
+        assert!(matches!(fresh.restore(None), Restored::Throttled(_)));
+        assert_eq!(fresh.restored(), None);
+    }
+
+    /// Fails by: every relaunch absorbing the session's own last push again.
+    #[test]
+    fn a_daemon_that_finds_the_restore_record_does_not_restore_again() {
+        let base = base("offbox-restore-relaunch");
+        let stand = standing(&[], Vec::new());
+        let (_, commit) = pushed_once(&base, &stand, "s");
+        let fresh = Writer::new(&base, "fresh", "s");
+        put(&fresh.transcript, FIRST);
+        assert_eq!(fresh.restore(None), Restored::Snapshot(commit));
+        let uploads = stand.borrow().uploads;
+
+        fresh.daemon(1000, 4, |_| {});
+
+        assert_eq!(stand.borrow().uploads, uploads, "no fetch");
+        assert_eq!(fresh.status().restored, "yes");
+        assert!(fresh.local("absorbed").is_empty());
+
+        // And a daemon with no record restores once, then says so.
+        let other = Writer::new(&base, "other", "s");
+        other.daemon(1000, 4, |_| {});
+        assert_eq!(other.status().restored, "yes");
+        assert!(other.restored().is_some());
+    }
+
+    /// Fails by: the sweep's rebuilt directories shipped with its journal.
+    #[test]
+    fn the_mutation_stores_are_carried_and_their_work_directories_are_not() {
+        let base = base("offbox-restore-mutate");
+        let stand = standing(&[], Vec::new());
+        let one = Writer::new(&base, "one", "s");
+        one.state_file("mutate/schema/journal.jsonl", "{}\n");
+        one.state_file("mutate/schema/reach.seal", "seal\n");
+        one.state_file("mutate/schema/tree/src/lib.rs", "staged\n");
+        one.state_file("mutate/schema/pristine/src/lib.rs", "source\n");
+        one.state_file("mutate/schema/target/debug/x", "built\n");
+        one.state_file("mutate/other/y", "not listed\n");
+        assert_eq!(one.push().outcome, Pushed::Applied);
+
+        let tree = one.tree(&head(&stand, &one.meta));
+        let carried: Vec<&String> = tree
+            .keys()
+            .filter(|path| path.starts_with("state/mutate/"))
+            .collect();
+        assert_eq!(
+            carried,
+            [
+                "state/mutate/schema/journal.jsonl",
+                "state/mutate/schema/reach.seal"
+            ]
+        );
+
+        // And a container without them gets them back in place.
+        let fresh = Writer::new(&base, "fresh", "s");
+        assert!(matches!(fresh.restore(None), Restored::Snapshot(_)));
+        let back = crate::state::repo_state_dir(&fresh.root)
+            .unwrap()
+            .join("mutate/schema/journal.jsonl");
+        assert_eq!(std::fs::read_to_string(back).unwrap(), "{}\n");
     }
 }

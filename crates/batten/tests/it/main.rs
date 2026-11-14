@@ -320,6 +320,8 @@ mod offbox_daemon;
 mod offbox_hook;
 mod offbox_push;
 #[cfg(unix)]
+mod offbox_restore;
+#[cfg(unix)]
 mod offbox_snapshot;
 mod offbox_status;
 mod one_pr;
