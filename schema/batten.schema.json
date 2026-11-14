@@ -1269,14 +1269,6 @@
             "type": "string",
             "maxLength": 1536
           }
-        },
-        "suite_shared": {
-          "description": "Paths a bats suite can be moved by without naming them (CLOUD-1716).\n\n**CONSUMER DATA for `slow_inert`'s reason, and it arrived here as a\nconstant** (review of #928). `suites::select` carried a literal list —\nthis repository's task runner, gate config, lockfile and harness settings\n— inside `crates/batten`, which non-negotiable rule 1 refuses: the core\nknows the RELATIONSHIP (a path every suite depends on widens the run) and\nthe consumer knows which of its paths those are.\n\nSame spelling as `slow_inert`: an entry ending `/` covers a directory,\nanything else is an exact path.\n\n**Empty WIDENS, where `slow_inert` empty narrows**, and the asymmetry is\nthe one `suites::select` is built around: a selection that is too wide\ncosts money and shows up in the bill, while one that is too narrow has no\nsymptom at all — the suites simply do not run and a regression lands\ngreen. So an undeclared list is read as \"this tree has not said what its\nshared inputs are\", and the answer is every suite.",
-          "type": "array",
-          "items": {
-            "type": "string",
-            "maxLength": 1536
-          }
         }
       },
       "additionalProperties": false,

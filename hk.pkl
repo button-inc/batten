@@ -833,10 +833,10 @@ local gate = new Mapping<String, Step> {
         // inputs stops running for exactly the commits it is meant to judge, so
         // `glob-containment` refused the rows until this followed them.
         ".github/workflows/**",
-        // Recursive since CLOUD-328: the ratchet row over bats suites was
-        // narrowed to one segment only to dodge a submodule the walker used to
-        // count and the base rev did not. Both halves stop at a nested
-        // repository now, so the row spans depth again and this must follow it.
+        // KEPT AFTER THE LAST SUITE RETIRED (CLOUD-2634). No row reads bats
+        // suites any more, but `shell write other` refuses an ADDED one as
+        // `shell place refused`, and a commit adding only a suite must still
+        // run this step for that refusal to fire before the push.
         "tests/**/*.bats",
         // CLOUD-383's portability row scopes a `forbid` to `mise-tasks/**`, so
         // those files are an input to `batten check` now — and a step whose glob

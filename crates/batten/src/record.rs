@@ -646,19 +646,6 @@ fn dropped_note(dropped: usize) -> Option<String> {
     })
 }
 
-/// Whether a tracked path is a bats suite the corpus carries: under `tests/`,
-/// with the `bats` extension in any case.
-///
-/// `extension`, not `ends_with(".bats")`: the string comparison is
-/// case-sensitive where a file name is not everywhere, and a `FOO.BATS` the
-/// runner would run is one this corpus would then never carry.
-fn is_bats_suite(path: &str) -> bool {
-    path.starts_with("tests/")
-        && Path::new(path)
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("bats"))
-}
-
 /// The nextest profile a run used, from `NEXTEST_PROFILE`'s value: an unset or
 /// empty one is the `default` profile.
 fn profile_or_default(named: Option<String>) -> String {
@@ -667,68 +654,27 @@ fn profile_or_default(named: Option<String>) -> String {
         .unwrap_or_else(|| "default".to_owned())
 }
 
-/// Derive the per-suite cost corpus and print it, or write it (CLOUD-352).
+/// Derive the per-module cost table from nextest's report and print it
+/// (CLOUD-352, CLOUD-2059).
 ///
-/// The one `record` leaf whose store is a COMMITTED file rather than the
-/// out-of-tree record tree, and the reason is the reader: the others are read by
-/// a gate, this one by a person deciding whether the suite they are about to add
-/// a case to is expensive. A record nobody opens answers nothing.
+/// Read by a person deciding whether the module they are about to add a case to
+/// is expensive, so it is printed for the row it is posted to and never written
+/// to the tree. The bats lane, which read a bats report and could write a
+/// committed corpus with `--write`, is gone with the last bats suite
+/// (CLOUD-2634).
 ///
 /// # Errors
 ///
-/// A [`UsageError`] when the report is absent, unreadable, carries no suite, or
-/// names a suite this tree does not track — see [`crate::suites::derive`], where
-/// all four are could-not-look and none is an empty corpus. An internal error
-/// when the corpus cannot be written.
-//MUTANT retired-bats-report-shadows-nextest|s@^    if tracked.is_empty() {$@    if !root.join(crate::suites::REPORT).is_file() {@|a_retired_bats_report_does_not_shadow_the_nextest_one
-pub fn run_suites(write: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+/// A [`UsageError`] when the report is absent or carries no case — see
+/// [`crate::suites::derive_nextest`], where both are could-not-look and neither
+/// is an empty suite.
+//MUTANT nextest-lane-dropped-with-bats|s@^    write!(out, "{text}")?;$@    let _ = text;@|record_suites_reads_a_nextest_report_per_module
+pub fn run_suites(out: &mut dyn Write) -> Result<ExitCode> {
     let root = git::repo_root(Path::new("."))?;
     let root = Path::new(&root);
-    // THE TRACKED SET FROM GIT, never a directory walk: an untracked scratch file
-    // beside the suites is not something the corpus should have to carry, and a
-    // walk would put it there.
-    let tracked: std::collections::BTreeSet<String> = crate::git::tracked_paths(root)?
-        .into_iter()
-        .filter(|path| is_bats_suite(path))
-        .collect();
-    // TWO RUNNERS, ONE VERB (CLOUD-2059). The bats report is read where the tree
-    // still TRACKS a bats suite — a consumer with a bats lane keeps exactly what
-    // it had — and nextest's own JUnit report otherwise, for the profile the run
-    // used. Keyed on the lane, never on a report file existing: a retired lane
-    // leaves its last report in `target/` indefinitely, and measured here it
-    // shadowed every nextest reading behind a "stale report" refusal. The
-    // per-module table is printed, never written: it is a measurement an author
-    // reads on the row it is posted to, and `--write`'s committed corpus is the
-    // bats lane's contract alone.
-    if tracked.is_empty() {
-        let profile = profile_or_default(std::env::var("NEXTEST_PROFILE").ok());
-        let (rows, text) = crate::suites::derive_nextest(root, &profile)?;
-        write!(out, "{text}")?;
-        if write {
-            writeln!(
-                err,
-                "record suites: {} module(s) printed; a nextest table is not written to the tree",
-                rows.len()
-            )?;
-        }
-        return Ok(ExitCode::Success);
-    }
-    let (rows, text) = crate::suites::derive(root, &tracked)?;
-    if !write {
-        write!(out, "{text}")?;
-        return Ok(ExitCode::Success);
-    }
-    // `store` rather than a second write path, and it is the same helper the
-    // other three leaves use: one place that creates the directory and reports
-    // which write failed. The corpus lives in the tree rather than under
-    // `$GIT_DIR`, and that is the only thing this leaf does differently.
-    store(&crate::suites::corpus_path(root), &text)?;
-    writeln!(
-        err,
-        "record suites: {} suite(s), written to {}",
-        rows.len(),
-        crate::suites::CORPUS
-    )?;
+    let profile = profile_or_default(std::env::var("NEXTEST_PROFILE").ok());
+    let (_, text) = crate::suites::derive_nextest(root, &profile)?;
+    write!(out, "{text}")?;
     Ok(ExitCode::Success)
 }
 
@@ -746,7 +692,7 @@ pub fn run(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     match command {
-        crate::cli::RecordCommand::Suites { write } => run_suites(write, out, err),
+        crate::cli::RecordCommand::Suites => run_suites(out),
         crate::cli::RecordCommand::Tool { id } => run_tool(&id, overrides),
         crate::cli::RecordCommand::ToolPicked { id, pick } => {
             run_tool_picked(&id, &pick, overrides)
@@ -2334,14 +2280,9 @@ mod tests {
         assert!(dropped_note(1).is_some_and(|note| note.contains(" 1 check-run")));
     }
 
-    /// Fails by: a path outside `tests/` or of another extension counted as a
-    /// bats suite, or an empty profile named.
+    /// Fails by: an empty profile named.
     #[test]
-    fn a_bats_suite_and_a_profile_are_read_exactly() {
-        assert!(is_bats_suite("tests/a.bats"));
-        assert!(is_bats_suite("tests/A.BATS"));
-        assert!(!is_bats_suite("other/a.bats"));
-        assert!(!is_bats_suite("tests/a.sh"));
+    fn a_profile_is_read_exactly() {
         assert_eq!(profile_or_default(None), "default");
         assert_eq!(profile_or_default(Some(String::new())), "default");
         assert_eq!(profile_or_default(Some("ci".to_owned())), "ci");
@@ -2609,33 +2550,5 @@ mod tests {
             refusal(turn_reading("turn", &asked("key", "0"), &none))
                 .is_some_and(|error| error.contains("1-indexed"))
         );
-    }
-
-    /// Fails by: the bats lane writing the corpus when asked only to print it,
-    /// or printing when asked to write.
-    #[test]
-    fn the_bats_corpus_is_printed_or_written_as_asked() {
-        let repo = enter_repo(
-            "record-suites",
-            &[("tests/a.bats", "@test \"a\" { true; }\n")],
-        );
-        let report = repo.join(crate::suites::REPORT);
-        std::fs::create_dir_all(report.parent().unwrap()).unwrap();
-        std::fs::write(
-            &report,
-            "<testsuites>\n<testsuite name=\"a.bats\" tests=\"1\" time=\"1.5\">\n</testsuite>\n</testsuites>\n",
-        )
-        .unwrap();
-        let corpus = crate::suites::corpus_path(&repo);
-
-        let (mut out, mut err) = (Vec::new(), Vec::new());
-        run_suites(false, &mut out, &mut err).unwrap();
-        assert!(!out.is_empty());
-        assert!(!corpus.exists());
-
-        let (mut out, mut err) = (Vec::new(), Vec::new());
-        run_suites(true, &mut out, &mut err).unwrap();
-        assert!(out.is_empty());
-        assert!(corpus.is_file());
     }
 }

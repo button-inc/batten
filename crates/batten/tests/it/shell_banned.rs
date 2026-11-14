@@ -337,6 +337,23 @@ fn an_added_shell_script_is_refused() {
     assert!(grew(&found, "scripts/deploy.sh"), "{found:?}");
 }
 
+/// A BATS SUITE IS SHELL TO THE BAN (CLOUD-2634). Once the last suite retired,
+/// no row read `tests/**/*.bats` any more, so this is the only gate standing
+/// between the tree and a suite coming back. Its `#!/usr/bin/env bats` names no
+/// shell, so the extension alone must decide it.
+#[test]
+fn an_added_bats_suite_is_refused() {
+    let dir = repo("shell-ban-bats", &[("README.md", "x\n")]);
+    change(
+        &dir,
+        "tests/deploy.bats",
+        "#!/usr/bin/env bats\n@test \"deploys\" { run true; }\n",
+    );
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, "tests/deploy.bats"), "{found:?}");
+}
+
 #[test]
 fn an_added_shebang_program_under_a_declared_directory_is_refused() {
     let dir = repo("shell-ban-shebang", &[("README.md", "x\n")]);

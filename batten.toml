@@ -5030,27 +5030,6 @@ regex = '\$\(wc -l [^|)]*\)'
 severity = "deny"
 scope = "tree"
 
-# git refuses `branch -f` on the branch that is currently checked out. Three
-# fixture setups did it anyway, and passed only because the runner's git still
-# defaults to `master`, which made `main` a different branch — an accident of the
-# runner's configuration, not a property of the test. It is a `setup()` failure,
-# so every case in the suite errors, not one.
-#
-# The replacement is `git init -b <name>` plus a plain `git branch main`, NOT
-# `branch -M main`: `-M` renames the current branch, and these fixtures want a
-# SECOND branch marking the trunk while HEAD stays on the feature branch. That
-# distinction is measured, not assumed — rewriting them to `-M` first made
-# `tests/verified.bats`'s moved-main case fail, because it checks that other
-# branch out.
-[[rule]]
-id = "branch edit unsafe"
-no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
-kind = "forbid"
-glob = "tests/**/*.bats"
-pattern = "branch -f main"
-severity = "deny"
-scope = "tree"
-
 # No tracked instruction prescribes the commit identity `identity_deny` refuses
 # (CLOUD-605).
 #
@@ -5911,118 +5890,13 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "class 3 (a person's choice between restore and waive): restore the tests, or waive the reduction deliberately; which of the two is the whole question"
 
-# `tests/**/*.bats`, recursive — and the recursion is safe now rather than by
-# this glob's care. `tests/bats` is a vendored submodule carrying 227 of its own
-# `.bats` files, and the two sides of a ratchet used to disagree about
-# submodules: `git ls-tree -r` at the base saw one gitlink while the
-# working-tree walk saw every file inside it. Measured with this glob before the
-# fix: base 637, working 1404 — a permanent +767 skew that no realistic deletion
-# could pull back under, i.e. a gate that could not fail. The row was narrowed to
-# `tests/*.bats` as a workaround; CLOUD-328 fixed the engine instead, so both
-# halves now stop at a nested repository and select the same files. Widened back
-# because the narrow glob was only correct while every bats suite sat directly in
-# `tests/` — this one covers a nested one the day it is written.
-# RENAMED FROM `bats count dropped` under CLOUD-843, and only the name moved: the
-# shell suite retired, the `bats` subject word lost the last class that spent it,
-# and a rule id is drawn from the vocabulary like a verdict name. The glob, the
-# token and the `[rule.conserves]` ledger below are byte-identical.
-[[rule]]
-id = "suite count dropped"
-kind = "ratchet"
-glob = "tests/**/*.bats"
-pattern = "@test \""
-direction = "non_decreasing"
-base = "origin/main"
-# CLOUD-807. Retirement is the steady-state behaviour of a repo folding its bash
-# into its own engine (CLOUD-312), not an exception — so it belongs in the rule,
-# not in a `[[waiver]]` that expires. The waiver this replaces was BLANKET: it
-# carried only `rule` and `reason`, so every deletion of every `@test` under
-# this glob passed, and a suite quietly gutted was indistinguishable from a
-# retirement. Net effect of the swap is a STRONGER ratchet, not a weaker one.
-#
-# The subject is DECLARED, never inferred from the filename. Measured: 19 of the
-# 142 suites had no same-named `mise-tasks/` program and every one was
-# legitimate — `verify.bats` and `cross-check.bats` covered `mise.toml` tasks,
-# `git-hook.bats` covered a hook body, and the rest were aspect suites over a
-# subject the filename only hints at. A filename heuristic would block those
-# retirements and admit real deletions elsewhere: `gh-guard.bats` drove
-# `gh-guard-check` too, and retiring only half of that pair must not buy the
-# suite's deletion.
-retires_with = "# subject:"
-severity = "deny"
-scope = "tree"
-no_fix_reason = "class 3 (a person's choice between restore and waive): restore the tests, or waive the reduction deliberately; which of the two is the whole question"
-
-# CLOUD-908. The column above conserves FILES: it asks whether the subject died
-# and never whether the cases moved, so a migration can delete a 259-line suite
-# and land green with nothing asserting what replaced it. Measured on the one
-# retirement the campaign has completed — 22 named cases deleted, six of them
-# with no successor anything in the tree could name, and one whose behaviour was
-# deliberately inverted with nothing marking it.
-#
-# So every case inside a decrease owes exactly one arm, and the arms live in
-# `crates/batten/tests/*.rs` — one block per retired suite, on its primary
-# successor, which is what lets another session (or another account) read
-# migration progress off the tree instead of off a chat transcript. A suite with
-# no block is untouched; a block with unmapped cases is half-done.
-#
-# `declared_in` is this repo's Rust test tree because that is where the ledger
-# for a retired bash suite belongs today: a migrated gate's evidence is a Rust
-# test or a `policy test` case, and both are reachable from there. A wave that
-# needs a ledger somewhere else widens this glob deliberately rather than
-# scattering arms — the walk is bounded by declaration on purpose.
-#
-# CLOUD-1080 adds the fourth arm, and the reason is a measured dead end rather
-# than a wish. The three above all name a SUCCESSOR, because they were written for
-# a suite migrating into the engine. A WITHDRAWAL has none: `.claude/container-
-# setup.sh` was added and removed inside one session, and six of its eight cases
-# described the wrapper's own existence — which script to prefer, what to fetch,
-# what to verify about the fetched bytes — so nothing replaced them because
-# nothing should have a subject to replace. The two that did have successors are
-# `subsumed` and `changed` in that ledger.
-#
-# With three arms the only routes past that were a false `subsumed` — a ledger
-# entry that lies in order to pass — or a `[[waiver]]`, which `config-lint`
-# refuses as `waiver-added` unless the weakening was groomed onto the issue before
-# the work started. Neither is honest, so the gate had no honest path, which makes
-# it a defect rather than a verdict.
-#
-# It is admissible ONLY where the dying file's declared subject is absent at head,
-# which is what keeps it strictly NARROWER than the waiver it replaces: a waiver
-# admits every deletion under its path, and this admits one case at a time and
-# only once the subject went with it. It owes a reason and names no target.
-#
-# CLOUD-1268 ADDS THE FIFTH, AND IT IS THE FOURTH'S EXACT MIRROR. `withdrawn` is
-# admissible only where the declared subject DIED; `ported` only where it LIVES.
-# Between them, both answers to "what happened to the subject" have a spelling,
-# and neither can be written over the other's condition.
-#
-# The class was measured and had no honest route. 16 of this repository's suites
-# declare a `# subject:` that CLOUD-843 never retires — `mise.toml`, `hk.pkl`,
-# `batten.toml`, `clippy.toml`, `install.sh`, a `.claude/hooks/` program,
-# `tests/helpers.bash`, Rust source. `SubjectFacts::died` is `.all()`, so it can
-# never hold for them, so those suites were undeletable BY CONSTRUCTION: 217.9s of
-# a 1097.1s corpus, in a lane whose makespan cannot fall below its longest suite.
-# Both other routes EDIT a governed `.bats`, which `shell edit refused` refuses
-# with no override — so the spelling had to live here, in the ledger.
-#
-# IT OBLIGES MORE THAN `carried`, NEVER LESS, which is what makes it additive
-# rather than a loosening of CLOUD-1130's arm: a target the tree carries, exactly
-# as the first three demand, PLUS a `subject:` field naming a path the dying file
-# itself declared at base and the head tree still carries. That field is what
-# clears the aggregate subject-alive term — by naming the survivor, rather than by
-# a `carried` row falsely claiming a case moved into it — and the subject is read
-# from the base header rather than taken from the author, so a row cannot name a
-# convenient survivor it invented.
-[rule.conserves]
-case = "@test \""
-close = "\""
-carried = "// carried:"
-subsumed = "// subsumed:"
-changed = "// changed:"
-withdrawn = "// withdrawn:"
-ported = "// ported:"
-declared_in = "crates/batten/tests/**/*.rs"
+# NO `suite count dropped` (CLOUD-2634). It refused a fall in `@test "` lines
+# under `tests/**/*.bats`, with a `[rule.conserves]` ledger owing every retired
+# case an arm in `crates/batten/tests/**/*.rs`. The last suite retired, so the
+# count on the base is 0 and the row could never fire; a re-added suite is
+# refused as `shell place refused` before any count of it exists. The `//
+# carried:` arms in the Rust suites stay as the record of where each case went.
+# `test count dropped` above is the ratchet that holds the Rust tests.
 
 # The mirror direction: a disabled test is a deleted test that still counts, so
 # the guard is on the token RISING.
@@ -7491,7 +7365,10 @@ delta_sources = ["**"]
 # and the route would still not clear the verdict it is offered for. The module
 # would report clean while deciding nothing, which is the dead-gate class
 # arriving inside the fix for a dead route.
-line_sources = ["mise-tasks/*.sh", "crates/batten/tests/**/*.rs", "tests/**/*.bats"]
+#
+# The bats glob left this list with the last suite (CLOUD-2634): it selected no
+# file, and a re-added suite is `shell place refused` before this row reads it.
+line_sources = ["mise-tasks/*.sh", "crates/batten/tests/**/*.rs"]
 module = "policy/shell-retirement.rego"
 severity = "deny"
 
@@ -7679,7 +7556,6 @@ line_sources = [
   "crates/batten/tests/**/*.rs",
   "crates/batten/src/policy/presets/**/*.rego",
   "policy/*.rego",
-  "tests/**/*.bats",
   "mise-tasks/**",
   "mise.toml",
   "crates/batten/src/**/*.rs",
@@ -7709,7 +7585,6 @@ line_sources = [
   "crates/batten/tests/**/*.rs",
   "crates/batten/src/policy/presets/**/*.rego",
   "policy/*.rego",
-  "tests/**/*.bats",
   "mise-tasks/**",
   # The declaring side for an inline task (CLOUD-1909); its suites are already
   # in the set above.
@@ -9735,22 +9610,6 @@ module = "policy/release-provision-parity.rego"
 severity = "deny"
 no_fix_reason = "class 3 (an upstream artifact): a platform a provisioned tool cannot reach is not fixable in this tree: either the upstream artifact exists and the row should pin it, or it does not and the gap is declared with its consequence — and which of the two is a supply-chain decision, not a rewrite"
 
-# ---------------------------------------------------------------------------
-# CLOUD-1156. A suite whose `# subject:` names something no shell retirement
-# deletes is unreachable by the whole campaign, and nothing reported it.
-#
-# `line_sources` RATHER THAN `sources`, and the reason is the header itself: a
-# `# subject:` line is a COMMENT, which no parser this engine carries would
-# hand back.
-#
-# THE GLOB IS THE JUDGED SET, so it must reach every path `is_bats` would call
-# governed — `startswith("tests/")` and `endswith(".bats")`, nested included.
-# Both spellings are declared because `Selector` sets `literal_separator(true)`,
-# so `tests/*.bats` does not cross a `/` and would silently drop a nested suite
-# into the gap between what the campaign governs and what this rule can see.
-# There are no nested suites today; the row is written for the day there is one,
-# because that is the day nobody would notice.
-# ---------------------------------------------------------------------------
 # CLOUD-183's memory-graph edges, retired out of `mise-tasks/memories-check.sh`
 # by CLOUD-1163. The predecessor's own header called itself "a pure function of
 # the tracked tree", and that is exactly what made it portable with no new fact:
@@ -9759,8 +9618,7 @@ no_fix_reason = "class 3 (an upstream artifact): a platform a provisioned tool c
 #
 # TWO SOURCE COLUMNS' WORTH OF WORK IN ONE, because a `mem:` reference is prose.
 # No parser this engine carries hands back the inside of a Markdown paragraph, so
-# the referrer scan is a LINE reading -- the same reason `suite-subject-retirable`
-# above reads its subjects unparsed.
+# the referrer scan is a LINE reading.
 #
 # THE GLOB IS THE JUDGED SET and it must reach every tracked Markdown file, not
 # only the memories: AGENTS.md and the rule files reference memories too, and an
@@ -9793,14 +9651,6 @@ line_sources = [
   "tests/**/*.md",
 ]
 module = "policy/memories.rego"
-severity = "deny"
-[[rule]]
-id = "suite retire unclear"
-no_fix_reason = "class 3 (a port onto a batten verb): authored shell is retired rather than edited, and porting a program is a design no codemod writes"
-kind = "policy"
-scope = "tree"
-line_sources = ["tests/*.bats", "tests/**/*.bats"]
-module = "policy/suite-subject-retirable.rego"
 severity = "deny"
 
 # CLOUD-681. `mise run fmt` is `hk fix --all`, and hk does not no-op a step that
@@ -10371,9 +10221,8 @@ slow_inert = [".serena/memories/", ".coderabbit.yaml"]
 
 # NO `suite_shared` (CLOUD-843). It named the paths every bats suite depended on
 # without naming, for `batten ci suites`, whose one caller was `test:bats`. That
-# task retired with the last suite, so the key had no reader and listed a deleted
-# file (`tests/helpers.bash`). A consumer that selects shell suites declares its
-# own; an undeclared set widens, which is the safe direction.
+# task retired with the last suite, and the key, the verb and the engine's whole
+# bats lane were deleted with it (CLOUD-2634).
 
 # The workflow whose matrix names the targets a release builds (CLOUD-65),
 # ported out of `mise-tasks/install-check.sh`. `release install` compares three
@@ -15519,75 +15368,6 @@ grows one, this arm is how that is discovered.
 id = "task read first"
 kind = "document"
 target = "mise.toml"
-
-[[verdict]]
-id = "suite retire never"
-gloss = "a bats suite declares a subject no shell retirement can delete, and no exemption declares why"
-class = """
-`SubjectFacts::died` is `all`, so a suite is deletable only once EVERY declared \
-subject is gone from head. A subject that is configuration, a workflow, a \
-launcher hook or a source file is not what the campaign retires, so such a suite \
-is undeletable by construction — and, until this class existed, in silence. The \
-refusal is not that the suite is wrong; it is that its unreachability was never \
-written down.
-"""
-
-# The exemption is a DECLARATION, not a waiver, which is why the route names the
-# table rather than a bypass. Re-subjecting the suite is the other answer and is
-# refused by `shell edit refused` with no override, so it is not offered here.
-[[verdict.route]]
-id = "module read first"
-kind = "document"
-target = "policy/suite-subject-retirable.rego"
-
-[[verdict]]
-id = "suite declare missing"
-gloss = "a bats suite declares no `# subject:` at all, so nothing can decide whether it is retirable"
-class = """
-The anti-vacuity half of the class above. Every other arm quantifies over a \
-suite's DECLARED subjects, so a suite with no header satisfies all of them \
-trivially — deleting the header would be the way out of the gate. A suite with \
-no subject is also not retirable, because `SubjectFacts::died` has nothing to \
-decide over.
-"""
-
-[[verdict.route]]
-id = "rule read first"
-kind = "document"
-target = "rules/toolchain.md"
-
-[[verdict]]
-id = "suite admit stale"
-gloss = "an exemption names a suite that is gone, or one whose subjects are now all retirable"
-class = """
-The table held in the direction that keeps it honest. An exemption nothing needs \
-reads as a live claim about a reachability problem that no longer exists, and a \
-table that only ever grows is the stale census CLOUD-929 deleted four of. \
-`module-layering`'s posture: absence is an error, and so is a row answering \
-nothing.
-"""
-
-[[verdict.route]]
-id = "module read first"
-kind = "document"
-target = "policy/suite-subject-retirable.rego"
-
-[[verdict]]
-id = "suite parse unread"
-gloss = "a declared suite could not be read, so nothing about its subject was judged"
-class = """
-Could-not-look, and it must not be spelled like either answer. A suite ABSENT \
-from the corpus is not this rule's business; a suite the boundary tried to \
-acquire and could not means every predicate above is undefined rather than \
-satisfied. Reading the second as clean is the vacuous pass this engine exists to \
-keep inexpressible, and it is the exact shape a module iterating only `lines` \
-produces over a file it never opened.
-"""
-
-[[verdict.route]]
-id = "task run first"
-kind = "command"
-target = "mise run lint:shell"
 
 # --- the formatters-only subset (CLOUD-681) ----------------------------------
 

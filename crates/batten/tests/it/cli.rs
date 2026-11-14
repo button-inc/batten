@@ -6998,12 +6998,11 @@ const AGNOSTICISM_RULES: [&str; 5] = [
 ];
 
 /// See [`AGNOSTICISM_RULES`].
-const PORTABILITY_RULES: [&str; 6] = [
+const PORTABILITY_RULES: [&str; 5] = [
     "shell parse unsafe",
     "shell edit unsafe",
     "shell read unsafe",
     "shell list unsafe",
-    "branch edit unsafe",
     "shell guard unsafe",
 ];
 
@@ -7197,34 +7196,20 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
          flock /tmp/lock true\n",
     )
     .expect("write fixture task");
-    fs::create_dir_all(dirty.join("tests")).expect("create fixture test dir");
-    // The `# subject:` header every suite owes since CLOUD-807: the committed
-    // `bats count dropped` row carries `retires_with`, so a suite declaring
-    // no subject is itself a finding. Declared here — pointing at the task seed
-    // this fixture already writes — so this test keeps asserting the PORTABILITY
-    // rules and nothing else, rather than growing a second rule's pointer. It
-    // takes line 1, which is where a real suite puts it, so the banned line
-    // below is line 2.
-    fs::write(
-        dirty.join("tests/seed.bats"),
-        "# subject: mise-tasks/seed.sh\n\tgit branch -f main\n",
-    )
-    .expect("write fixture suite");
 
-    // THE SEEDS ARE COMMITTED INTO THE BASE, for the reason the `# subject:`
-    // header above already records one rule earlier (CLOUD-1059). The committed
+    // THE SEED IS COMMITTED INTO THE BASE (CLOUD-1059). The committed
     // `shell retire partial` row decides over the delta against `origin/main`, and
     // `committed_config_fixture_git` pins that ref at an EMPTY commit — so a seed
     // written afterwards is an authored shell rule this fixture ADDS, which that
     // row refuses, and the refusal would grow a second rule's pointer into an
-    // assertion about portability. Committing them and re-pointing the ref makes
-    // the two files unchanged rather than added, so the delta is empty and this
-    // test keeps asserting the PORTABILITY rules and nothing else.
-    // The two seeds by name rather than `-A`: this fixture also carries an
-    // untracked `batten.toml` and a provision cache, and sweeping those into the
-    // index would move `Fact::Tracked` under every other committed rule — a
-    // wider blast radius than the one path this needs to change.
-    git_in(&dirty, &["add", "mise-tasks/seed.sh", "tests/seed.bats"]);
+    // assertion about portability. Committing it and re-pointing the ref makes
+    // the file unchanged rather than added, so the delta is empty and this test
+    // keeps asserting the PORTABILITY rules and nothing else.
+    // The seed by name rather than `-A`: this fixture also carries an untracked
+    // `batten.toml` and a provision cache, and sweeping those into the index
+    // would move `Fact::Tracked` under every other committed rule — a wider
+    // blast radius than the one path this needs to change.
+    git_in(&dirty, &["add", "mise-tasks/seed.sh"]);
     git_in(&dirty, &["commit", "-q", "-m", "seed"]);
     git_in(&dirty, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
 
@@ -7254,16 +7239,14 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
          batten deny shell edit unsafe at mise-tasks/seed.sh:2\n\
          batten deny shell read unsafe at mise-tasks/seed.sh:3\n\
          batten deny shell list unsafe at mise-tasks/seed.sh:4\n\
-         batten deny shell guard unsafe at mise-tasks/seed.sh:5\n\
-         batten deny branch edit unsafe at tests/seed.bats:2\n",
+         batten deny shell guard unsafe at mise-tasks/seed.sh:5\n",
         "one sorted pointer per banned construct, and nothing else"
     );
 
     // The discriminator: the portable spellings this change adopted must be
     // SILENT, or the rows would forbid their own replacements. `-i.bak` is the
-    // one in-place form BSD accepts, a `read` loop replaces `mapfile`, bare
-    // `xargs` replaces the short flag, and a plain `branch main` off an explicitly
-    // named branch replaces the force.
+    // one in-place form BSD accepts, a `read` loop replaces `mapfile`, and bare
+    // `xargs` replaces the short flag.
     let _ = fs::remove_dir_all(
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-portability-clean"),
     );
@@ -7279,19 +7262,13 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
          git ls-files | xargs grep x\n",
     )
     .expect("write clean task");
-    fs::create_dir_all(clean.join("tests")).expect("create clean test dir");
-    fs::write(
-        clean.join("tests/seed.bats"),
-        "# subject: mise-tasks/seed.sh\n\tgit branch main\n",
-    )
-    .expect("write clean suite");
 
     // Committed into the base for the reason the dirty fixture above records
-    // (CLOUD-1059): otherwise these two seeds are files this fixture ADDS, and
+    // (CLOUD-1059): otherwise this seed is a file this fixture ADDS, and
     // `shell retire partial` refuses an added authored shell rule — which would make
     // a tree that is portable by construction exit 2 for a reason that has
     // nothing to do with portability.
-    git_in(&clean, &["add", "mise-tasks/seed.sh", "tests/seed.bats"]);
+    git_in(&clean, &["add", "mise-tasks/seed.sh"]);
     git_in(&clean, &["commit", "-q", "-m", "seed"]);
     git_in(&clean, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
 

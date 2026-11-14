@@ -17304,7 +17304,7 @@ struct Narrowed {
 /// (CLOUD-2072), with the change itself so a registered runner can judge its
 /// own half (CLOUD-1746).
 ///
-/// Could-not-look WIDENS, as `ci suites` does: a base that cannot be diffed
+/// Could-not-look WIDENS: a base that cannot be diffed
 /// sweeps the whole set, because a sweep that is too wide shows up in the bill
 /// and one that is too narrow has no symptom at all.
 ///
@@ -29219,7 +29219,6 @@ fn run_ci(
 ) -> Result<ExitCode> {
     match *command {
         cli::CiCommand::SlowNeeded { ref base } => run_ci_slow_needed(base, overrides, out, err),
-        cli::CiCommand::Suites { ref base } => run_ci_suites(base, overrides, out, err),
         cli::CiCommand::SlowNeededAt { ref base, ref head } => {
             run_ci_slow_needed_at(base, head, overrides, out, err)
         }
@@ -29266,101 +29265,6 @@ fn run_ci_slow_needed_at(
         return Ok(ExitCode::Usage);
     }
     run_ci_slow_needed(base, overrides, out, err)
-}
-
-/// Which bats suites a diff can move (CLOUD-886), ported off
-/// `mise-tasks/suite-select.sh` under CLOUD-1716.
-///
-/// # COULD-NOT-LOOK WIDENS, it never narrows
-///
-/// Every failure here -- an unresolvable base, an unreadable suite, a header
-/// that has rotted -- falls back to every suite rather than refusing. The
-/// asymmetry is the whole design: a run that is too wide shows up in the bill,
-/// and one that is too narrow has no symptom at all.
-///
-/// # Errors
-///
-/// Propagates a write failure on either channel. Nothing about the tree is an
-/// error; the widest answer is always available.
-fn run_ci_suites(
-    base: &str,
-    overrides: &Overrides,
-    out: &mut dyn Write,
-    err: &mut dyn Write,
-) -> Result<ExitCode> {
-    let root = git::repo_root(Path::new("."))?;
-    let root = Path::new(&root);
-    let suites = bats_suites(root);
-    // The consumer's own shared inputs (rule 1). An unresolvable config is
-    // could-not-look like every other failure in this verb, and could-not-look
-    // widens.
-    let shared = resolve::resolve(Path::new("."), overrides)
-        .ok()
-        .and_then(|resolved| resolved.ci.map(|ci| ci.suite_shared))
-        .unwrap_or_default();
-
-    let widest = |why: &str, out: &mut dyn Write, err: &mut dyn Write| -> Result<ExitCode> {
-        writeln!(err, "ci suites: running every suite — {why}")?;
-        for suite in &suites {
-            writeln!(out, "{suite}")?;
-        }
-        Ok(ExitCode::Success)
-    };
-
-    let Ok(Some(delta)) = git::base_delta(root, base, &[String::from("**")], false) else {
-        return widest(
-            &format!("no {base} to compare against, so the changed set is unknowable"),
-            out,
-            err,
-        );
-    };
-    let changed: std::collections::BTreeSet<String> = delta
-        .added
-        .iter()
-        .chain(delta.edited.iter())
-        .chain(delta.deleted.iter())
-        .cloned()
-        .collect();
-
-    let mut subjects: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
-        std::collections::BTreeMap::new();
-    for suite in &suites {
-        let Ok(text) = std::fs::read_to_string(root.join(suite)) else {
-            return widest(&format!("{suite} could not be read"), out, err);
-        };
-        subjects.insert(suite.clone(), rules::declared_subject(&text, "# subject:"));
-    }
-
-    let selection = suites::select(&changed, &suites, &subjects, &shared);
-    if let Some(ref why) = selection.widened {
-        return widest(why, out, err);
-    }
-    for suite in &selection.suites {
-        writeln!(out, "{suite}")?;
-    }
-    Ok(ExitCode::Success)
-}
-
-/// Every bats suite PRESENT in the working tree.
-///
-/// Present rather than merely tracked, and for `select`'s reason: every path
-/// this emits is one the consumer hands to bats, and a file bats cannot open is
-/// not a suite to run -- which is exactly the state a retirement passes through.
-fn bats_suites(root: &Path) -> std::collections::BTreeSet<String> {
-    let mut found = std::collections::BTreeSet::new();
-    if let Ok(entries) = std::fs::read_dir(root.join("tests")) {
-        for entry in entries.filter_map(std::result::Result::ok) {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if Path::new(&name)
-                .extension()
-                .is_some_and(|ext| ext == "bats")
-                && root.join("tests").join(&name).is_file()
-            {
-                found.insert(format!("tests/{name}"));
-            }
-        }
-    }
-    found
 }
 
 /// Whether a diff can move the hk slow tier (CLOUD-398).

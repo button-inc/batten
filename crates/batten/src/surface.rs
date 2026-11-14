@@ -2661,27 +2661,6 @@ const ISSUE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
-/// Write the derived corpus to its committed path instead of to stdout.
-///
-/// **Off by default, which is the safer direction for a verb whose product is a
-/// tracked file.** A caller who wants to SEE what would be recorded — a reviewer
-/// diffing a proposed corpus against the committed one — must not have to dirty
-/// the tree to do it, and `receipt clean` is one of the things that would then
-/// refuse.
-const SUITES_WRITE: FlagDecl = FlagDecl {
-    id: "write",
-    long: Some("write"),
-    short: None,
-    help: "Write the corpus to its committed path instead of printing it",
-    env: EnvDecl::None,
-    global: false,
-    positional: false,
-    required: false,
-    hidden: false,
-    rung: Rung::None,
-    value: ValueDecl::Bool,
-};
-
 /// The roster `checks green` decides against (CLOUD-1143).
 ///
 /// **Flags rather than environment variables, and that is rule 1 rather than
@@ -4353,37 +4332,6 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[SLOW_BASE, SLOW_HEAD],
     },
-    // WHICH suites a diff can move (CLOUD-886), ported out of
-    // `mise-tasks/suite-select.sh` under CLOUD-1716.
-    //
-    // `Read` and `EXITS_STANDARD` rather than `ci slow-needed`'s verdict table,
-    // because this ANSWERS rather than decides: the suite list is the payload, a
-    // caller runs what it names, and there is no yes-or-no for an exit code to
-    // carry. Could-not-look widens to every suite instead of refusing -- a
-    // selector that cannot answer must never narrow, which is the asymmetry
-    // `suites::select` is built around.
-    CommandDecl {
-        path: "ci suites",
-        id: "ci.suites",
-        about: "Name the bats suites a diff can move, or every suite where it cannot prove one inert",
-        // **NO DATA CHANNEL, and the declaration was the defect rather than the
-        // implementation.** This row said `true` while the verb offers no `-J`
-        // and emits no document: it writes one suite PATH per line, which the
-        // caller hands straight to bats. `cli::every_data_channel_verb_emits_one_pure_json_document`
-        // and `cli::no_progress_reaches_stderr_when_it_is_not_a_terminal` both
-        // caught it — the first because an empty answer printed nothing where a
-        // document was promised, the second because `-J` is not a flag here at
-        // all.
-        //
-        // Inventing a JSON shape to satisfy the declaration would be the wrong
-        // repair: nothing consumes one, and `generate schema` carries this same
-        // `false` for the same reason — its only output IS the artifact, with no
-        // human rendering to switch away from.
-        data_channel: false,
-        exits: EXITS_STANDARD,
-        effect: Effect::Read,
-        flags: &[SLOW_BASE],
-    },
     // The runner-file glue a workflow step used a shell for (CLOUD-843, Phase
     // 4): step outputs, the run summary, a verdict mapped to an output, a
     // capture. `step run`'s reading: it runs the command the caller names, so
@@ -5171,8 +5119,7 @@ pub const SURFACE: &[CommandDecl] = &[
         path: "perf measure",
         id: "perf.measure",
         about: "Measure this binary's invocation cost on every path and print one record per path",
-        // **NO DATA CHANNEL**, for `ci suites`' reason and stated in this row's
-        // own `about`: it prints ONE RECORD PER PATH — `path=… p50=… p95=…
+        // **NO DATA CHANNEL**, stated in this row's own `about`: it prints ONE RECORD PER PATH — `path=… p50=… p95=…
         // mean=… runs=…` — which `batten record tool perf-p95 --pick path=p95` reduces. That line
         // format IS the contract with the frozen caller, so a JSON rendering
         // would be a second output nothing reads, and declaring a channel the
@@ -6936,32 +6883,30 @@ pub const SURFACE: &[CommandDecl] = &[
     // could supply the wrong one", and this composes the same key with the same two
     // functions. The negative half falls out for free: a record for a tool nobody
     // declared is unspellable.
-    // The per-suite cost corpus (CLOUD-352), ported off `mise-tasks/suite-bench.sh`
-    // under CLOUD-1753.
+    // The per-module cost table (CLOUD-352, CLOUD-2059).
     //
     // A LEAF UNDER `record` RATHER THAN A NOUN OF ITS OWN, and the noun already
     // means what this does: write down what happened. The two neighbours key
-    // their records by tool and by forge; this one keys by suite, and the store
-    // is a committed file because the READER is a person deciding whether the
-    // file they are about to edit is expensive.
+    // their records by tool and by forge; this one keys by test module, and the
+    // READER is a person deciding whether the module they are about to edit is
+    // expensive.
     //
-    // IT RUNS NOTHING. The corpus is derived from the report `test:bats` leaves
-    // behind — re-executing the suite to measure it would cost more than the
-    // waste it reports and would be a second authority over a run that already
-    // happened. So this reads one file and writes one file, and reaches
+    // IT RUNS NOTHING. The table is derived from the report nextest leaves behind
+    // — re-executing the suite to measure it would cost more than the waste it
+    // reports and would be a second authority over a run that already happened.
+    // So this reads one file and prints it, and reaches
     // `policy/spawn-adapters.rego` not at all.
     //
-    // `--write` rather than always writing: without it the corpus goes to stdout,
-    // which is what lets a caller diff a proposed corpus against the committed
-    // one without touching the tree.
+    // `Read`, and no `--write` (CLOUD-2634): the committed corpus `--write`
+    // produced was the bats lane's, and it went with the last bats suite.
     CommandDecl {
         path: "record suites",
         id: "record.suites",
-        about: "Derive what each bats suite costs from the report the runner wrote, and record it where an author reads it",
+        about: "Derive what each nextest module costs from the report the runner wrote, and print it",
         data_channel: false,
         exits: EXITS_STANDARD,
-        effect: Effect::Write,
-        flags: &[SUITES_WRITE],
+        effect: Effect::Read,
+        flags: &[],
     },
     CommandDecl {
         path: "record tool",
