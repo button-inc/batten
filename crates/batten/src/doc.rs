@@ -1470,6 +1470,28 @@ pub const VENDORED_DOCS: &[VendoredDoc] = &[
         dont: &["move the same code inline or into another untracked file"],
     },
     VendoredDoc {
+        id: "spawn run missing",
+        why: Some(
+            "While the daemon is down nothing this session writes leaves the machine, and a reclaimed container takes it all",
+        ),
+        act: &[
+            "run the command the line names; start `batten offbox run` in the background",
+            "for a stuck daemon, or one serving another session, kill the pid the line names first",
+        ],
+        dont: &[
+            "unset the state repository variable to make the notice stop",
+            "start the daemon under another session's id",
+        ],
+    },
+    VendoredDoc {
+        id: "spawn run blocked",
+        why: Some(
+            "In the foreground the daemon holds the turn until the host kills it, and dies with that call",
+        ),
+        act: &["run the same command with the host's background mark"],
+        dont: &["detach it with `nohup` or `&`, which hides it from the agent that must manage it"],
+    },
+    VendoredDoc {
         id: "output point now",
         why: Some(
             "A pointer the reader cannot slice sends them around it, paying the window twice",

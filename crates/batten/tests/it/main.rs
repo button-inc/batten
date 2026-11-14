@@ -305,6 +305,8 @@ mod ntia;
 mod obligations_bound;
 #[cfg(unix)]
 mod offbox_daemon;
+#[cfg(unix)]
+mod offbox_hook;
 mod offbox_push;
 #[cfg(unix)]
 mod offbox_snapshot;

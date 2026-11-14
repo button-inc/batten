@@ -53,7 +53,7 @@ use crate::sessions::{Cursor, Fidelity, REPLACED, SessionRef, SessionSource};
 ///
 /// Named here so the one writer and every reader spell it once. [`status`] never
 /// creates it: the feature being off must leave no trace.
-pub const DIR: &str = "offbox";
+pub const DIR: &str = crate::offbox_watch::DIR;
 
 /// What `batten offbox status` found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -289,8 +289,7 @@ pub enum Snapshot {
 /// valid in a ref name; a digest always is.
 #[must_use]
 pub fn leaf(harness: &str, session: &str) -> String {
-    let digest = blake3::hash(session.as_bytes()).to_hex();
-    format!("{harness}-{}", &digest[..16])
+    crate::offbox_watch::leaf(harness, session)
 }
 
 /// Where a session's local snapshot files live:
@@ -423,12 +422,13 @@ fn recover(dir: &Path, prefix: &str, position: &Position) -> Result<()> {
         match current {
             Some(current) if index < current => {}
             Some(current) if index == current => {
-                let file = std::fs::OpenOptions::new()
-                    .write(true)
-                    .open(&path)
-                    .map_err(refused)?;
-                if file.metadata().map_err(refused)?.len() > position.length {
-                    file.set_len(position.length).map_err(refused)?;
+                if std::fs::metadata(&path).map_err(refused)?.len() > position.length {
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&path)
+                        .map_err(refused)?
+                        .set_len(position.length)
+                        .map_err(refused)?;
                 }
             }
             _ => std::fs::remove_file(&path).map_err(refused)?,
@@ -991,7 +991,7 @@ impl Push {
 /// `Ok(throttle)` where `err` is the forge saying slow down, `err` back
 /// otherwise: a throttle is an outcome here, never a failure.
 //MUTANT-SUITE crates/batten/src/offbox.rs
-//MUTANT throttled-probe-reads-as-failure|s@^        Some(throttled) => Ok(Push::only(Pushed::Throttled(*throttled))),$@        Some(_) => Err(err),@|a_throttled_probe_is_throttled_and_sends_nothing
+//MUTANT throttled-probe-reads-as-failure|s@^        Some(throttled) => Ok(Push::only(Pushed::Throttled(\*throttled))),$@        Some(_) => Err(err),@|a_throttled_probe_is_throttled_and_sends_nothing
 fn throttled(err: anyhow::Error) -> Result<Push> {
     match err.downcast_ref::<lease::Throttled>() {
         Some(throttled) => Ok(Push::only(Pushed::Throttled(*throttled))),
@@ -1464,16 +1464,16 @@ fn foreign(dir: &Path, last: Option<&str>, path: &str) -> bool {
 // --- the daemon (CLOUD-2721) ---------------------------------------------------
 
 /// The lock one daemon per checkout holds for its life, under [`DIR`].
-pub const LOCK: &str = "lock";
+pub const LOCK: &str = crate::offbox_watch::LOCK;
 
 /// The daemon's status file, under [`DIR`]: one `key value` per line.
-pub const STATUS: &str = "status";
+pub const STATUS: &str = crate::offbox_watch::STATUS;
 
 /// The file the hook appends one line to per tool call. Only its length is read.
-pub const INBOX: &str = "inbox";
+pub const INBOX: &str = crate::offbox_watch::INBOX;
 
 /// The one line telling an agent how to attach the state repository.
-pub const NOTE: &str = "note";
+pub const NOTE: &str = crate::offbox_watch::NOTE;
 
 /// How often the loop wakes, in seconds.
 const WAKE: u64 = 5;
@@ -2191,7 +2191,7 @@ mod push_tests {
             let root = base.join(name);
             std::fs::create_dir_all(&root).unwrap();
             gitwrite::init_on_main(&root).unwrap();
-            let root = root.canonicalize().unwrap();
+            let root = crate::git::canonical(&root);
             let rows: Rows = toml::from_str(
                 "[[provision]]\nname = \"ripsecrets\"\nversion = \"0.0.0-stub\"\n\
                  url = 'file:///nonexistent/ripsecrets'\n\

@@ -120,6 +120,7 @@ pub mod minted;
 pub mod mutate;
 pub mod o200k;
 pub mod offbox;
+pub mod offbox_watch;
 pub mod outcome;
 pub mod output;
 pub mod outputs;
@@ -19433,6 +19434,7 @@ fn run_hook(
     // become the reason work stops; the retry will simply deny again with the
     // same `Fix::Run`, which is the safe direction and a visible one.
     if envelope.event == hook::Event::PostTool {
+        offbox_post(harness, &envelope);
         post_tool(harness, &envelope, &spilled, overrides, out, &mut advice)?;
     }
     // THE SAME CORRECTION AGAIN, ONE SELECTOR LATER (CLOUD-924). The paragraph
@@ -19679,6 +19681,7 @@ fn run_hook(
     // the advice went to the operator's stream. The other three delivering
     // events carry no verdict, so none of them can collide.
     let decision = admitted(handled, &policy, &envelope, &facts, out, err)?;
+    let decision = offbox_gate(harness, &envelope, decision);
     // A REFUSAL OUTRANKS ADVICE ABOUT THE SAME CALL, which is this function's own
     // rule rather than a new one: the nudge block above keeps a module's line out
     // of a buffer a handler already filled because that turn "has been told
@@ -20857,6 +20860,205 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
 /// Composes the handler's answer with the engine's first, so the call site in
 /// `run_hook` stays one line under `rustfmt`: measured, the four-argument form
 /// wrapped to six lines and put `run_hook` back over `too_many_lines`.
+/// This checkout's off-box directory, or `None` with the state repository
+/// variable unset — in which case no file under it is opened (CLOUD-2736).
+//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
+//MUTANT unset-still-writes-the-inbox|s@^    if !std::env::var(session::STATE_REPO_ENV).is_ok_and(\x7cvalue\x7c !value.trim().is_empty()) {$@    if false {@|unset_opens_no_file_and_denies_nothing
+fn offbox_watch_dir() -> Option<PathBuf> {
+    if !std::env::var(session::STATE_REPO_ENV).is_ok_and(|value| !value.trim().is_empty()) {
+        return None;
+    }
+    // THE DAEMON'S OWN ROOT: `offbox run` resolves the repository from its
+    // working directory, so the hook resolves the same one, never a config
+    // anchor that could sit beneath it.
+    let root = git::repo_root(hook_authority_root()).ok()?;
+    Some(state::repo_state_dir(&root).ok()?.join(offbox_watch::DIR))
+}
+
+/// The post-tool half of the daemon watch (CLOUD-2736): tell the daemon a tool
+/// call happened, and count whether it was there to hear.
+///
+/// One appended line, one shared try-lock, two small reads, one small write
+/// where the count moved. **It starts nothing and reaches no network.** Silent
+/// on failure, like every recorder at this boundary.
+//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
+//MUTANT hook-spawns-the-daemon|s@^    let heard = offbox_watch::probe(\&dir, leaf.as_deref());$@    let _ = std::process::Command::new("batten").args(["offbox", "status"]).spawn(); let heard = offbox_watch::probe(\&dir, leaf.as_deref());@|the_hook_starts_no_process
+fn offbox_post(harness: hook::Harness, envelope: &hook::Envelope) {
+    let Some(dir) = offbox_watch_dir() else {
+        return;
+    };
+    let session = envelope.session.as_deref();
+    let _ = offbox_watch::message(&dir, session.unwrap_or("-"));
+    let leaf = session.map(|session| offbox_watch::leaf(harness.as_str(), session));
+    let heard = offbox_watch::probe(&dir, leaf.as_deref());
+    let before = offbox_watch::Seen::read(&dir);
+    let mut seen = before;
+    if heard == offbox_watch::Liveness::Alive {
+        seen.misses = 0;
+        seen.owed = false;
+    } else {
+        seen.misses = seen.misses.saturating_add(1);
+        seen.owed = true;
+    }
+    if seen != before {
+        let _ = seen.write(&dir);
+    }
+}
+
+/// The finding that says the daemon is down and what fixes it.
+fn offbox_down(says: &str, remedy: &str) -> refusal::Refusal {
+    refusal::Refusal::engine(
+        verdict::Native::OffboxDaemonDown,
+        &[verdict::Subject::Artifact {
+            artifact: says.to_owned(),
+        }],
+        refusal::Fix::Run(remedy.to_owned()),
+    )
+    .with_command_route(remedy)
+}
+
+/// The advising half of the daemon watch (CLOUD-2736), on every event but the
+/// post-tool one — which on most hosts carries no advice, so its word waits in
+/// the hook's own file for the next event that does.
+///
+/// At session start the daemon is looked for outright and no miss is counted,
+/// so the agent can launch it before its first tool call. The daemon's attach
+/// note is relayed once: nothing is denied for an unreachable state repository.
+//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
+//MUTANT attach-note-repeated-every-call|s@^            seen.noted = true;$@@|the_attach_note_is_relayed_once_and_denies_nothing
+fn offbox_advise(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    advice: &mut Vec<advisory::Advice>,
+) {
+    if envelope.event == hook::Event::PostTool {
+        return;
+    }
+    let Some(dir) = offbox_watch_dir() else {
+        return;
+    };
+    let before = offbox_watch::Seen::read(&dir);
+    let mut seen = before;
+    let starting = envelope.event == hook::Event::SessionStart;
+    if let Some(session) = envelope
+        .session
+        .as_deref()
+        .filter(|_| starting || seen.owed)
+    {
+        let name = harness.as_str();
+        let found = offbox_watch::probe(&dir, Some(&offbox_watch::leaf(name, session)));
+        let remedy =
+            offbox_watch::remedy(&dir, found, session, name, envelope.transcript.as_deref());
+        if let (Some(says), Some(remedy)) = (found.says(), remedy) {
+            push_finding(
+                advice,
+                severity::AdvisoryTier::Caution,
+                offbox_down(says, &remedy),
+            );
+        }
+        seen.owed = false;
+    }
+    let status = std::fs::read_to_string(dir.join(offbox_watch::STATUS)).unwrap_or_default();
+    match offbox_watch::field(&status, "attached") {
+        Some("no") if !seen.noted => {
+            let note = std::fs::read_to_string(dir.join(offbox_watch::NOTE)).unwrap_or_default();
+            if let Some(line) = note.lines().next().filter(|line| !line.is_empty()) {
+                // The daemon's own sentence is the subject: it names the
+                // repository and both remedies, and the hook only relays it.
+                push_finding(
+                    advice,
+                    severity::AdvisoryTier::Caution,
+                    refusal::Refusal::engine(
+                        verdict::Native::WorkspaceStateBroken,
+                        &[verdict::Subject::Artifact {
+                            artifact: line.to_owned(),
+                        }],
+                        refusal::Fix::None,
+                    ),
+                );
+            }
+            seen.noted = true;
+        }
+        Some("yes") => seen.noted = false,
+        _ => {}
+    }
+    if seen != before {
+        let _ = seen.write(&dir);
+    }
+}
+
+/// The daemon gate (CLOUD-2736): after the grace, a pre-tool call is refused
+/// until the agent has run the command that brings the daemon back.
+///
+/// It only ever turns an allow into a deny, and only on a host KNOWN to let an
+/// agent keep a process running. In order: the relaunch command with the
+/// background mark is this gate's to allow, and without the mark it is refused
+/// with the instruction to background it; the `kill` remedy is allowed in the
+/// state it remedies; then five or more misses and a daemon that is still not
+/// alive ON THIS CALL refuse. The probe is taken now, so a daemon relaunched a
+/// moment ago is seen at once and a stale count denies nothing.
+//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
+//MUTANT gate-applies-without-a-background-facility|s@^    if harness.background_facility() != hook::BackgroundFacility::Surveyed(true) {$@    if false {@|a_host_with_no_known_background_facility_is_advised_and_never_denied
+//MUTANT foreground-relaunch-admitted|s@^        if backgrounded {$@        if true {@|the_relaunch_command_is_admitted_only_in_the_background
+//MUTANT background-relaunch-denied|s@^        if backgrounded {$@        if false {@|the_relaunch_command_is_admitted_only_in_the_background
+//MUTANT dead-daemon-never-denied|s@^    if offbox_watch::Seen::read(\&dir).misses < offbox_watch::GRACE {$@    if true {@|a_dead_daemon_is_denied_after_the_grace_with_the_relaunch_command
+//MUTANT denied-before-the-grace|s@^    if offbox_watch::Seen::read(\&dir).misses < offbox_watch::GRACE {$@    if false {@|a_dead_daemon_is_allowed_inside_the_grace
+//MUTANT stale-miss-count-denies-a-live-daemon|s@^    let now = offbox_watch::probe(\&dir, Some(\&offbox_watch::leaf(name, session)));$@    let now = offbox_watch::Liveness::Dead;@|a_relaunched_daemon_is_seen_at_once_whatever_the_count
+fn offbox_gate(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    decision: hook::Decision,
+) -> hook::Decision {
+    // EVERY DECISION THAT LETS THE CALL RUN, not the plain allow alone: a
+    // pre-approved call and a waived one proceed just the same, and a
+    // repository that grants its ordinary commands would otherwise never meet
+    // this gate at all. A refusal or an escalation already speaks, and stands.
+    let speaks = matches!(decision, hook::Decision::Deny(_) | hook::Decision::Ask(_));
+    if envelope.event != hook::Event::PreTool || speaks {
+        return decision;
+    }
+    if harness.background_facility() != hook::BackgroundFacility::Surveyed(true) {
+        return decision;
+    }
+    let (Some(dir), Some(session)) = (offbox_watch_dir(), envelope.session.as_deref()) else {
+        return decision;
+    };
+    let name = harness.as_str();
+    let transcript = envelope.transcript.as_deref();
+    let relaunch = offbox_watch::relaunch(session, name, transcript);
+    let command = envelope.command.trim();
+    if command == relaunch {
+        let backgrounded = hook::Field::RunInBackground.read(envelope).as_deref() == Some("true");
+        if backgrounded {
+            return decision;
+        }
+        return hook::Decision::Deny(
+            refusal::Refusal::engine(
+                verdict::Native::OffboxDaemonForeground,
+                &[verdict::Subject::Artifact {
+                    artifact: String::from("run it in the background"),
+                }],
+                refusal::Fix::Run(relaunch.clone()),
+            )
+            .with_command_route(&relaunch),
+        );
+    }
+    if offbox_watch::Seen::read(&dir).misses < offbox_watch::GRACE {
+        return decision;
+    }
+    let now = offbox_watch::probe(&dir, Some(&offbox_watch::leaf(name, session)));
+    let (Some(says), Some(remedy)) = (
+        now.says(),
+        offbox_watch::remedy(&dir, now, session, name, transcript),
+    ) else {
+        return decision;
+    };
+    if command == remedy {
+        return decision;
+    }
+    hook::Decision::Deny(offbox_down(says, &remedy))
+}
+
 fn admitted(
     handled: Option<hook::Decision>,
     policy: &hook::Policy,
@@ -21218,6 +21420,7 @@ fn collect_batch_advice(
     expire_history_reads(envelope);
     repair_startup_rows(envelope, overrides);
     report_container_health(envelope, overrides, advice);
+    offbox_advise(harness, envelope, advice);
     Ok(())
 }
 

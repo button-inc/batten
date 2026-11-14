@@ -111,6 +111,10 @@ budgets := {
 	"hook": 100,
 	"wired": 100,
 	"check": 100,
+	# CLOUD-2736: the pre-tool and post-tool calls with the off-box daemon watch
+	# on, which an agent with the state repository set pays on every tool call.
+	"hook-offbox": 100,
+	"posttool-offbox": 100,
 }
 
 # The targets, in milliseconds, for the arms an agent waits on at every tool
@@ -128,6 +132,8 @@ targets := {
 	"posttool": 10,
 	"stop": 10,
 	"wired": 10,
+	"hook-offbox": 10,
+	"posttool-offbox": 10,
 }
 
 # Where the record carries an arm's p50: `record-perf` writes it beside the p95,
@@ -350,6 +356,8 @@ agreeing_readme := [
 	"| `posttool` | a PostToolUse call | — | — | ≤ 10 ms | ≤ 100 ms |",
 	"| `stop` | an end of turn | — | — | ≤ 10 ms | ≤ 100 ms |",
 	"| `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 10 ms | ≤ 100 ms |",
+	"| `hook-offbox` | adjudication, daemon watch on | — | — | ≤ 10 ms | ≤ 100 ms |",
+	"| `posttool-offbox` | a PostToolUse call, daemon watch on | — | — | ≤ 10 ms | ≤ 100 ms |",
 ]
 
 # Every budgeted path measured, comfortably inside.
@@ -366,6 +374,10 @@ clean_record := {
 	"posttool/p50": "2.1",
 	"stop/p50": "2.4",
 	"wired/p50": "8.0",
+	"hook-offbox": "3.2",
+	"hook-offbox/p50": "3.0",
+	"posttool-offbox": "2.6",
+	"posttool-offbox/p50": "2.4",
 }
 
 # THE TWO FINDINGS ARE TOLD APART BY TOKEN (CLOUD-2730): a p50 over its target
@@ -409,7 +421,7 @@ test_a_readme_publishing_a_different_target_is_refused if {
 			array.slice(agreeing_readme, 0, 4),
 			array.concat(
 				["| `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 20 ms | ≤ 100 ms |"],
-				array.slice(agreeing_readme, 5, 9),
+				array.slice(agreeing_readme, 5, 11),
 			),
 		)},
 		"tool-verdict": {"perf-p95": clean_record},
@@ -423,7 +435,7 @@ test_a_readme_publishing_no_target_for_a_targeted_path_is_refused if {
 			array.slice(agreeing_readme, 0, 4),
 			array.concat(
 				["| `hook` | adjudication | 2.8 ms | 3.0 ms | — | ≤ 100 ms |"],
-				array.slice(agreeing_readme, 5, 9),
+				array.slice(agreeing_readme, 5, 11),
 			),
 		)},
 		"tool-verdict": {"perf-p95": clean_record},
@@ -496,7 +508,7 @@ test_a_readme_publishing_a_different_budget_is_refused if {
 			array.slice(agreeing_readme, 0, 2),
 			array.concat(
 				["| `noop` | process start | 2.1 ms | 2.4 ms | — | ≤ 50 ms |"],
-				array.slice(agreeing_readme, 3, 9),
+				array.slice(agreeing_readme, 3, 11),
 			),
 		)},
 		"tool-verdict": {"perf-p95": clean_record},
@@ -520,7 +532,7 @@ test_a_readme_publishing_no_budget_for_a_gated_path_is_refused if {
 			array.slice(agreeing_readme, 0, 2),
 			array.concat(
 				["| `noop` | process start | 2.1 ms | 2.4 ms | — | — |"],
-				array.slice(agreeing_readme, 3, 9),
+				array.slice(agreeing_readme, 3, 11),
 			),
 		)},
 		"tool-verdict": {"perf-p95": clean_record},
@@ -541,6 +553,8 @@ test_a_reordered_budget_column_is_still_found if {
 			"| `posttool` | ≤ 100 ms | ≤ 10 ms | — | — |",
 			"| `stop` | ≤ 100 ms | ≤ 10 ms | — | — |",
 			"| `wired` | ≤ 100 ms | ≤ 10 ms | 8.0 ms | 8.4 ms |",
+			"| `hook-offbox` | ≤ 100 ms | ≤ 10 ms | — | — |",
+			"| `posttool-offbox` | ≤ 100 ms | ≤ 10 ms | — | — |",
 		]},
 		"tool-verdict": {"perf-p95": clean_record},
 	}}

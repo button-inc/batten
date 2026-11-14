@@ -407,6 +407,12 @@ declared_modules := {
 	# module the chain adds is reached through this one, and a mediated call
 	# that could reach it would wait on a remote inside CLOUD-689's ceiling.
 	"offbox",
+	# `offbox_watch` arrived with CLOUD-2736: whether the off-box daemon is
+	# alive, read from its lock, status file and inbox. A leaf the hook path and
+	# `doctor session` both call, so the two cannot disagree about "alive";
+	# `offbox` reads its file names and the session leaf from it, never the
+	# other way. Its own forbidden edges are below.
+	"offbox_watch",
 	# `sessions` arrived with CLOUD-1010: the session-source contract, the
 	# reading half of an agent's session store. It reaches `hook` for the
 	# harness table and `error`, and nothing else in the crate.
@@ -1057,6 +1063,12 @@ forbidden[from] contains to if {
 		# adjudicates a mediated call. `mcp -> rules` is deliberately NOT here --
 		# what it reaches there is `parse_node`, a parser rather than a verdict.
 		"mcp": {"hook"},
+		# THE HOOK CALLS `offbox_watch` ON EVERY TOOL CALL (CLOUD-2736), so what
+		# it may reach is what the hook may reach: four small files, and never
+		# the transport or the module that pushes. An edge here would hand the
+		# mediated path a way to open a connection or start a push through a
+		# module whose whole reason is that it cannot.
+		"offbox_watch": {"offbox", "lease", "fetch", "gitwrite", "rest", "sessions"},
 		"surface": {"cli", "lib"},
 		"cli": {"lib", "journal"},
 		# `config -> step` joins the chain for `step_table`'s reason (CLOUD-843):
@@ -1500,6 +1512,32 @@ test_the_mediated_path_must_not_reach_offbox if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/offbox.rs",
 		[internal("gitwrite", 20), internal("secrets", 21), internal("sessions", 22), internal("durable", 23)],
+	)
+}
+
+# CLOUD-2736's daemon watch. The hook may reach it; it may reach nothing that
+# pushes or connects; and `offbox` reading its names from it is allowed.
+test_the_daemon_watch_reaches_no_transport if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("offbox_watch", 31)],
+	)
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/offbox.rs",
+		[internal("offbox_watch", 12)],
+	)
+
+	every reached in ["offbox", "lease", "fetch", "gitwrite"] {
+		count(violation) == 1 with input as judging(
+			"crates/batten/src/offbox_watch.rs",
+			[internal(reached, 20)],
+		)
+	}
+
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/offbox_watch.rs",
+		[internal("durable", 20)],
 	)
 }
 
