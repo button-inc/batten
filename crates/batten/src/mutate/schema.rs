@@ -687,7 +687,7 @@ fn probe_sites(
             let Some(list) = function.body().and_then(|body| body.stmt_list()) else {
                 continue;
             };
-            let (Some(open), Some(close)) = (list.l_curly_token(), list.r_curly_token()) else {
+            let (Some(open), Some(_)) = (list.l_curly_token(), list.r_curly_token()) else {
                 continue;
             };
             let at = usize::from(open.text_range().end());
@@ -1448,6 +1448,19 @@ fn record(test: &[String]) -> anyhow::Result<u8> {
     let base = std::path::PathBuf::from(
         std::env::var_os(REACH).ok_or_else(|| anyhow::anyhow!("no reach directory"))?,
     );
+    record_into(&base, test)
+}
+
+/// Record one case's reach under `base`, or nothing when a run over the same
+/// tree already recorded it passing.
+///
+/// RESUMABLE, CASE BY CASE: a case's record is whole only once its process has
+/// exited and [`DONE`] holds the exit code, so a run killed mid-suite (twice in
+/// one #1276 session, each costing the whole 724 s suite) keeps every case that
+/// finished and runs only the rest. A case that failed, or never finished, runs
+/// again. The skip is here rather than in a filter, so the resumed run is the
+/// same single invocation and no list of names meets the argument limit.
+fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
     let (program, rest) = test
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("no case to run"))?;
@@ -1455,6 +1468,9 @@ fn record(test: &[String]) -> anyhow::Result<u8> {
     let binary = super::cover::binary_id(program, &std::env::current_dir()?);
     let key = blake3::hash(test.join("\u{1f}").as_bytes()).to_hex()[..16].to_owned();
     let dir = base.join(key);
+    if finished_passing(&dir) {
+        return Ok(0);
+    }
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join("case"), format!("{name}\t{binary}"))?;
@@ -1467,11 +1483,44 @@ fn record(test: &[String]) -> anyhow::Result<u8> {
         super::runner_bound(),
         super::Said::Streamed,
     )?;
-    Ok(match ran.outcome {
+    let code = match ran.outcome {
         super::Outcome::Passed => 0,
         super::Outcome::Failed(Some(code)) => u8::try_from(code).unwrap_or(101),
         super::Outcome::Failed(None) | super::Outcome::TimedOut => 101,
-    })
+    };
+    crate::durable::replace(dir.join(DONE), code.to_string())?;
+    Ok(code)
+}
+
+/// The file a case's record holds once its process exited, with its exit code.
+const DONE: &str = "done";
+
+/// Whether the case recorded at `dir` finished and passed: the one record a
+/// resumed run keeps.
+fn finished_passing(dir: &std::path::Path) -> bool {
+    crate::fsio::read_to_string(dir.join(DONE)).is_ok_and(|code| code == "0")
+}
+
+/// The file naming the schema tree a reach directory is being recorded over.
+const TREE: &str = "tree";
+
+/// Keep `base` when it is being recorded over the tree `inputs` names, else
+/// clear it for that tree; how many cases it already holds recorded.
+///
+/// # Errors
+///
+/// The directory cannot be cleared or written.
+fn resume_reach(base: &std::path::Path, inputs: &str) -> anyhow::Result<usize> {
+    if crate::fsio::read_to_string(base.join(TREE)).is_ok_and(|held| held == inputs) {
+        return Ok(std::fs::read_dir(base)?
+            .filter_map(Result::ok)
+            .filter(|entry| finished_passing(&entry.path()))
+            .count());
+    }
+    let _ = std::fs::remove_dir_all(base);
+    std::fs::create_dir_all(base)?;
+    crate::durable::replace(base.join(TREE), inputs)?;
+    Ok(0)
 }
 
 /// What the reach run recorded: per mutant site, the cases that reached it;
@@ -1501,7 +1550,7 @@ pub fn collect_reach(base: &std::path::Path) -> anyhow::Result<Reach> {
         let case: Case = (name.to_owned(), binary.to_owned());
         for file in std::fs::read_dir(&dir)? {
             let path = file?.path();
-            if path.file_name().is_some_and(|f| f == "case") {
+            if path.file_name().is_some_and(|f| f == "case" || f == DONE) {
                 continue;
             }
             let text = crate::fsio::read_to_string(&path).unwrap_or_default();
@@ -1535,6 +1584,7 @@ pub fn record_reach(
     target: &std::path::Path,
     state: &std::path::Path,
     packages: &BTreeSet<&str>,
+    out: &mut dyn std::io::Write,
 ) -> anyhow::Result<Reach> {
     let base = state.join("reach");
     // REACH IS A FUNCTION OF THE SCHEMA TREE, so a restart over the same tree
@@ -1545,8 +1595,13 @@ pub fn record_reach(
     if crate::fsio::read_to_string(&seal).is_ok_and(|held| held == inputs) {
         return collect_reach(&base);
     }
-    let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(&base)?;
+    let resumed = resume_reach(&base, &inputs)?;
+    if resumed > 0 {
+        writeln!(
+            out,
+            "mutate schema: reach resumed with {resumed} case(s) already recorded"
+        )?;
+    }
     let config = state.join("nextest.toml");
     // A PRIVATE COPY of this binary is the recorder: the suite runs for minutes,
     // and the checkout's own `target/debug/batten` is relinked by any build in
@@ -2271,7 +2326,7 @@ pub fn sweep(
         started.elapsed().as_secs()
     )?;
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
-    let reach = record_reach(&work, &target, &state, &packages)?;
+    let reach = record_reach(&work, &target, &state, &packages, out)?;
     let global = blake3::hash(format!("{}\x1f{resources}", schema.skeleton).as_bytes())
         .to_hex()
         .to_string();
@@ -2357,6 +2412,67 @@ mod tests {
         assert_eq!(loaded.get("u").map(String::as_str), Some("uncovered"));
         assert_eq!(loaded.len(), 4);
         assert_eq!(journal_line(None, "missed", "m"), "-\tmissed\tm\n");
+    }
+
+    /// A reach record over the same tree resumes: a case that finished
+    /// passing is kept and counted, one that failed or never finished is not;
+    /// a record over another tree is cleared for this one.
+    ///
+    /// Fails by: a record over another tree kept (reach from other code), a
+    /// failed or torn case counted, or a finished one not.
+    #[test]
+    fn a_reach_record_resumes_only_over_its_own_tree() {
+        let base = crate::scratch::scratch("schema-reach-resume");
+        for (case, done) in [("a", Some("0")), ("b", Some("101")), ("c", None)] {
+            std::fs::create_dir_all(base.join(case)).unwrap();
+            if let Some(code) = done {
+                std::fs::write(base.join(case).join(DONE), code).unwrap();
+            }
+        }
+        std::fs::write(base.join(TREE), "tree-1").unwrap();
+        assert_eq!(resume_reach(&base, "tree-1").unwrap(), 1);
+        assert!(base.join("b").exists(), "kept, to be run again");
+        assert_eq!(resume_reach(&base, "tree-2").unwrap(), 0);
+        assert!(!base.join("a").exists(), "another tree's record is cleared");
+        assert_eq!(std::fs::read_to_string(base.join(TREE)).unwrap(), "tree-2");
+    }
+
+    /// A case recorded passing is not run again; one recorded failing is.
+    /// The program does not exist, so running it is an error and skipping it
+    /// is not: the outcome says which happened.
+    ///
+    /// Fails by: a finished case run again (the whole suite re-run on every
+    /// restart), or a failed one skipped (a baseline failure hidden).
+    #[test]
+    fn a_finished_case_is_skipped_and_a_failed_one_runs_again() {
+        let base = crate::scratch::scratch("schema-reach-skip");
+        let test = [
+            String::from("/nonexistent/batten-reach-case"),
+            String::from("--exact"),
+            String::from("case"),
+        ];
+        let key = blake3::hash(test.join("\u{1f}").as_bytes()).to_hex()[..16].to_owned();
+        std::fs::create_dir_all(base.join(&key)).unwrap();
+        std::fs::write(base.join(&key).join(DONE), "0").unwrap();
+        assert_eq!(record_into(&base, &test).unwrap(), 0, "skipped");
+        std::fs::write(base.join(&key).join(DONE), "101").unwrap();
+        assert!(record_into(&base, &test).is_err(), "run again");
+    }
+
+    /// The exit-code file is the record's own, never a site: `0` would read as
+    /// site 0 reached by every case.
+    ///
+    /// Fails by: the done file read as a record line.
+    #[test]
+    fn a_finished_cases_exit_code_is_not_a_site() {
+        let base = crate::scratch::scratch("schema-reach-done");
+        let case = base.join("k");
+        std::fs::create_dir_all(&case).unwrap();
+        std::fs::write(case.join("case"), "name\tbinary").unwrap();
+        std::fs::write(case.join(DONE), "0").unwrap();
+        std::fs::write(case.join("1234"), "7\nf3\n").unwrap();
+        let reach = collect_reach(&base).unwrap();
+        assert_eq!(reach.sites.keys().copied().collect::<Vec<_>>(), [7]);
     }
 
     #[test]
