@@ -15775,7 +15775,7 @@ fn say_what_the_wait_saw(
                 &format!("::error:: land: {}", red.render_finding(refusal::Arm::Full)),
             )?;
             // THE RE-RUN ECONOMY, and it is what `failed_runs`/`rerun_failed`
-            // were built for and never reached. `tests/land.bats` split it in
+            // were built for and never reached. `tests/land.bats` splits it in
             // two: *"a run that died before any mise step is re-run, not
             // reported red"* against *"a job that reached a verdict is red, and
             // is never re-run"*. This engine cannot yet tell those apart — that
