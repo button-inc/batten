@@ -551,6 +551,16 @@ pub enum Command {
 pub enum OffboxCommand {
     /// Whether the state repository can be written from here (CLOUD-2718).
     Status,
+    /// Snapshot one session and replace its ref on the state repository
+    /// (CLOUD-2720).
+    Push {
+        /// The harness's own identifier for the session.
+        session: String,
+        /// The harness's name, which selects the session source.
+        harness: String,
+        /// The transcript path the harness named, where it named one.
+        transcript: Option<String>,
+    },
 }
 
 /// The `modules` sub-verbs (CLOUD-2789).
@@ -4233,6 +4243,11 @@ fn forge_of(matches: &ArgMatches) -> Option<ForgeCommand> {
 fn offbox_of(matches: &ArgMatches) -> Option<OffboxCommand> {
     match matches.subcommand()? {
         ("status", _) => Some(OffboxCommand::Status),
+        ("push", matches) => Some(OffboxCommand::Push {
+            session: matches.get_one::<String>("session").cloned()?,
+            harness: matches.get_one::<String>("harness").cloned()?,
+            transcript: matches.get_one::<String>("transcript").cloned(),
+        }),
         _ => None,
     }
 }

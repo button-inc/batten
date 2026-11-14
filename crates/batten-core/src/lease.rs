@@ -4662,6 +4662,9 @@ pub(crate) mod testing {
         pub(crate) left: usize,
         pub(crate) name: String,
         pub(crate) id: String,
+        /// The ids the moves after the first set, in order; when it runs out
+        /// the last one is used again.
+        pub(crate) then: Vec<String>,
     }
 
     /// The remote: its refs, its objects, the status it answers with, every
@@ -4749,6 +4752,9 @@ pub(crate) mod testing {
             if let Some(moved) = self.moved.as_mut().filter(|moved| moved.left > 0) {
                 moved.left -= 1;
                 let (name, id) = (moved.name.clone(), moved.id.clone());
+                if !moved.then.is_empty() {
+                    moved.id = moved.then.remove(0);
+                }
                 self.set(&name, &id);
             }
             if pack.len() >= 12 {
@@ -7864,6 +7870,7 @@ mod transport_tests {
             left: 1,
             name: BRANCH.to_owned(),
             id: other.clone(),
+            then: Vec::new(),
         });
 
         let outcome = push(REMOTE, &repo, BRANCH, &head, &|_| true).unwrap();
@@ -7877,6 +7884,7 @@ mod transport_tests {
             left: 1,
             name: BRANCH.to_owned(),
             id: head.clone(),
+            then: Vec::new(),
         });
         assert_eq!(
             push(REMOTE, &repo, BRANCH, &head, &|_| true).unwrap(),

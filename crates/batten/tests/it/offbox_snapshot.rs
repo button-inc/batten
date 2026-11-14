@@ -260,6 +260,7 @@ fn the_tree_holds_the_stores_and_the_transcript_in_segments() {
     let meta = Rig::meta("layout");
     rig.state_file("captures/a/one.txt", "one\n");
     rig.state_file("cache/rebuilt.bin", "rebuilt\n");
+    rig.state_file("captures/calls.lock", "1\n");
     rig.git_file("batten-ledger/x.json", "{}\n");
     rig.git_file("batten-ledger/held.lock", "1\n");
     rig.git_file("batten-receipt", "r\n");
