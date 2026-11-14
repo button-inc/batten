@@ -17738,6 +17738,11 @@ fn run_lease_acquire(
                     writeln!(out, "lease: lost the race for it")?;
                     Ok(ExitCode::Violation)
                 }
+                // A throttle is the error a non-200 answer always was here (CLOUD-2729).
+                Ok(lease::Outcome::Throttled { .. }) => {
+                    writeln!(err, "::error:: lease: the forge throttled the request")?;
+                    Ok(ExitCode::Internal)
+                }
                 Err(reason) => {
                     writeln!(err, "::error:: lease: {reason}")?;
                     Ok(ExitCode::Internal)
@@ -17791,6 +17796,11 @@ fn ask_the_holder_to_stand_down(
             lease::writer_version()
         )?,
         Ok(lease::Outcome::Rejected { .. }) => {}
+        // A throttle is the error a non-200 answer always was here (CLOUD-2729).
+        Ok(lease::Outcome::Throttled { .. }) => writeln!(
+            err,
+            "::error:: lease: the stand-down request: the forge throttled it"
+        )?,
         Err(reason) => writeln!(err, "::error:: lease: the stand-down request: {reason}")?,
     }
     Ok(())
@@ -17857,6 +17867,11 @@ fn run_lease_renew(
             Ok(ExitCode::Success)
         }
         Ok(lease::Outcome::Rejected { .. }) => Ok(ExitCode::Violation),
+        // A throttle is the error a non-200 answer always was here (CLOUD-2729).
+        Ok(lease::Outcome::Throttled { .. }) => {
+            writeln!(err, "::error:: lease: the forge throttled the request")?;
+            Ok(ExitCode::Internal)
+        }
         Err(reason) => {
             writeln!(err, "::error:: lease: {reason}")?;
             Ok(ExitCode::Internal)
@@ -18213,6 +18228,11 @@ fn run_lease_release(
             )?;
             Ok(ExitCode::Success)
         }
+        // A throttle is the error a non-200 answer always was here (CLOUD-2729).
+        Ok(lease::Outcome::Throttled { .. }) => {
+            writeln!(err, "::error:: lease: the forge throttled the request")?;
+            Ok(ExitCode::Internal)
+        }
         Err(reason) => {
             writeln!(err, "::error:: lease: {reason}")?;
             Ok(ExitCode::Internal)
@@ -18277,6 +18297,11 @@ fn run_lease_reserve(
         Ok(lease::Outcome::Rejected { .. }) => {
             writeln!(out, "lease: could not reserve; the lease moved")?;
             Ok(ExitCode::Violation)
+        }
+        // A throttle is the error a non-200 answer always was here (CLOUD-2729).
+        Ok(lease::Outcome::Throttled { .. }) => {
+            writeln!(err, "::error:: lease: the forge throttled the request")?;
+            Ok(ExitCode::Internal)
         }
         Err(reason) => {
             writeln!(err, "::error:: lease: {reason}")?;
