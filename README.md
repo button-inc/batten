@@ -199,9 +199,9 @@ per-clone setup and the task tour.
 ## Performance
 
 Batten runs as a `PreToolUse` hook, so its cost is paid on **every** mediated
-tool call rather than once per commit. These are measured numbers, not targets —
-`mise run perf` reproduces them, and `mise run perf-assert` fails when a
-measured p95 leaves its budget.
+tool call rather than once per commit. The p50 and p95 columns are measured
+numbers — `mise run perf` reproduces them — and `mise run perf-assert` fails
+when a measured p95 leaves its budget or a hook arm's p50 leaves its target.
 
 `wired` is the number an agent actually waits on: the entry point
 `.claude/settings.json` invokes, launcher included, **derived from that file at
@@ -209,22 +209,29 @@ measure time** rather than hardcoded — so the published figure describes what 
 installed rather than a binary nothing calls. `hook` stays measured beside it so
 the launcher's own share is attributable.
 
-| path                     | what it does                                              | p50    | p95    | budget   |
-| ------------------------ | --------------------------------------------------------- | ------ | ------ | -------- |
-| `noop`                   | process start, command tree, render                       | 2.1 ms | 2.4 ms | ≤ 100 ms |
-| `check`                  | + config load, trust resolution, one-rule tree            | 2.3 ms | 2.7 ms | ≤ 100 ms |
-| `hook`                   | + envelope decode, adjudication, decision write           | 2.8 ms | 3.0 ms | ≤ 100 ms |
-| `passthrough`            | a call no rule selects — decode, allow, no config load    | —      | —      | ≤ 100 ms |
-| `posttool`               | a PostToolUse call — decode, capture the response         | —      | —      | ≤ 100 ms |
-| `stop`                   | an end of turn — decode, state record, drain detached     | —      | —      | ≤ 100 ms |
-| `session-start`          | a session start — payload write, setup task spawned       | —      | —      | ≤ 100 ms |
-| `wired`                  | the hook as `.claude/settings.json` invokes it            | 8.0 ms | 8.4 ms | ≤ 100 ms |
-| `cargo-fmt`              | pre-commit: `rustfmt --check` over the staged `.rs` files | 21 ms  | 29 ms  | ≤ 100 ms |
-| `taplo`                  | pre-commit: `taplo lint` over the staged unbound TOML     | 14 ms  | 21 ms  | ≤ 100 ms |
-| `taplo-format`           | pre-commit: `taplo format --check` over the staged TOML   | 17 ms  | 23 ms  | ≤ 100 ms |
-| `merge-conflict-markers` | pre-commit: `batten enforce --rule 'source carry broken'` | 74 ms  | 84 ms  | ≤ 100 ms |
-| `conventional-commit`    | commit-msg: `batten commit check --message`               | 35 ms  | 46 ms  | ≤ 100 ms |
-| `commit-attribution`     | commit-msg: `batten attribution check --message`          | 21 ms  | 26 ms  | ≤ 100 ms |
+| path                     | what it does                                              | p50    | p95    | target  | budget   |
+| ------------------------ | --------------------------------------------------------- | ------ | ------ | ------- | -------- |
+| `noop`                   | process start, command tree, render                       | 2.1 ms | 2.4 ms | —       | ≤ 100 ms |
+| `check`                  | + config load, trust resolution, one-rule tree            | 2.3 ms | 2.7 ms | —       | ≤ 100 ms |
+| `hook`                   | + envelope decode, adjudication, decision write           | 2.8 ms | 3.0 ms | ≤ 10 ms | ≤ 100 ms |
+| `passthrough`            | a call no rule selects — decode, allow, no config load    | —      | —      | ≤ 10 ms | ≤ 100 ms |
+| `posttool`               | a PostToolUse call — decode, capture the response         | —      | —      | ≤ 10 ms | ≤ 100 ms |
+| `stop`                   | an end of turn — decode, state record, drain detached     | —      | —      | ≤ 10 ms | ≤ 100 ms |
+| `session-start`          | a session start — payload write, setup task spawned       | —      | —      | ≤ 10 ms | ≤ 100 ms |
+| `wired`                  | the hook as `.claude/settings.json` invokes it            | 8.0 ms | 8.4 ms | ≤ 10 ms | ≤ 100 ms |
+| `cargo-fmt`              | pre-commit: `rustfmt --check` over the staged `.rs` files | 21 ms  | 29 ms  | —       | ≤ 100 ms |
+| `taplo`                  | pre-commit: `taplo lint` over the staged unbound TOML     | 14 ms  | 21 ms  | —       | ≤ 100 ms |
+| `taplo-format`           | pre-commit: `taplo format --check` over the staged TOML   | 17 ms  | 23 ms  | —       | ≤ 100 ms |
+| `merge-conflict-markers` | pre-commit: `batten enforce --rule 'source carry broken'` | 74 ms  | 84 ms  | —       | ≤ 100 ms |
+| `conventional-commit`    | commit-msg: `batten commit check --message`               | 35 ms  | 46 ms  | —       | ≤ 100 ms |
+| `commit-attribution`     | commit-msg: `batten attribution check --message`          | 21 ms  | 26 ms  | —       | ≤ 100 ms |
+
+**Two numbers, two questions.** The `target` is held against the **p50**: what
+a mediated call normally costs. The `budget` is held against the **p95**: what
+it must never exceed. `perf-assert` reports each under its own class, so a
+finding says which one was missed. Every hook arm an agent waits on carries the
+target; `noop` and `check` are on no mediated call's path, and the commit-time
+steps answer to the ceiling alone.
 
 A commit hook is a batten hook and answers to the same ceiling: the last six
 rows are every default `pre-commit` and `commit-msg` step a commit touching a
