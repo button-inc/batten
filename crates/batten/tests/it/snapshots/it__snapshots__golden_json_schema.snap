@@ -2653,6 +2653,40 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "offbox restore",
+          "id": "offbox.restore",
+          "about": "Put a session's pushed snapshot back where it was read from, in a container that does not have it",
+          "effect": "write",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "from",
+              "short": null,
+              "long": "from",
+              "takes_value": true,
+              "positional": false,
+              "help": "The session this one continues; its snapshot is restored when this session has none"
+            },
+            {
+              "name": "harness",
+              "short": null,
+              "long": "harness",
+              "takes_value": true,
+              "positional": false,
+              "help": "The harness the session belongs to; it selects where the session's records are read from"
+            },
+            {
+              "name": "session",
+              "short": null,
+              "long": "session",
+              "takes_value": true,
+              "positional": false,
+              "help": "The harness's own identifier for the session whose state is pushed"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "offbox run",
           "id": "offbox.run",
           "about": "Run this session's off-box daemon until it is killed: push when there is something new, wait when the forge says to",

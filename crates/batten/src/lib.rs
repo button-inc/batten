@@ -686,6 +686,11 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 harness,
                 transcript,
             } => run_offbox_daemon(out, &session, &harness, transcript.as_deref()),
+            cli::OffboxCommand::Restore {
+                session,
+                harness,
+                from,
+            } => run_offbox_restore(out, &session, &harness, from.as_deref()),
         },
     }
 }
@@ -741,6 +746,7 @@ fn run_offbox_daemon(
         .map(|config| config.provisions)
         .unwrap_or_default();
     let transcript = transcript.map(PathBuf::from);
+    let predecessor = std::env::var(session::PARENT_ENV).ok();
     let launch = offbox::run(
         &offbox::Launching {
             project_root: &root,
@@ -750,12 +756,69 @@ fn run_offbox_daemon(
             transcript: transcript.as_deref(),
             value: &value,
             origin: origin.as_deref(),
+            predecessor: predecessor.as_deref(),
             wakes: None,
         },
         &mut DaemonWorld,
     )?;
     writeln!(out, "{}", launch.token())?;
     Ok(ExitCode::Success)
+}
+
+/// `batten offbox restore` (CLOUD-2723): one restore, one token.
+///
+/// The predecessor is `--from`, else the environment's: the session this one
+/// continues, restored from when this session has no snapshot of its own.
+fn run_offbox_restore(
+    out: &mut dyn Write,
+    session: &str,
+    harness: &str,
+    from: Option<&str>,
+) -> Result<ExitCode> {
+    let value = std::env::var(session::STATE_REPO_ENV).unwrap_or_default();
+    let value = value.trim();
+    if value.is_empty() {
+        writeln!(out, "{}", offbox::Status::Off.token())?;
+        return Ok(ExitCode::Success);
+    }
+    let origin = git::remotes(Path::new("."))
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|(name, url)| (name == "origin").then_some(url));
+    let named = origin.as_deref().and_then(|origin| {
+        Some((
+            offbox::remote_for(origin, value)?,
+            offbox::origin_path(origin)?,
+        ))
+    });
+    let Some((remote, origin)) = named else {
+        let refused = offbox::Status::NoHttpOrigin;
+        writeln!(out, "{}", refused.token())?;
+        return Ok(refused.code());
+    };
+    let root = git::repo_root(Path::new("."))?;
+    // Loaded for the forge's credential names, as `offbox push` loads it.
+    let provisions = config::load(&root.join(config::CONFIG_FILE))
+        .map(|config| config.provisions)
+        .unwrap_or_default();
+    let ambient = std::env::var(session::PARENT_ENV).ok();
+    let restored = offbox::restore_once(
+        &offbox::Session {
+            project_root: &root,
+            provisions: &provisions,
+            meta: offbox::Meta {
+                harness: harness.to_owned(),
+                session: session.to_owned(),
+                origin,
+            },
+            remote,
+            transcript: None,
+            time: i64::try_from(now_unix()).unwrap_or(i64::MAX),
+        },
+        from.or(ambient.as_deref()),
+    )?;
+    writeln!(out, "{}", restored.token())?;
+    Ok(restored.code())
 }
 
 /// `batten offbox push` (CLOUD-2720): one snapshot, one swap, one token.
@@ -21402,7 +21465,7 @@ fn collect_batch_advice(
 ) -> Result<()> {
     // FIRST, AND THE ORDER IS THE PREDICATE (CLOUD-1991): the stamp dates the
     // session, so it is written before any declared handler provisions anything.
-    stamp_session(envelope);
+    stamp_session(harness, envelope);
     if Some(envelope.event) == harness.capabilities().degrade(hook::Event::PostToolBatch) {
         drain_advisories(envelope, overrides, mode, err, advice)?;
     }
@@ -21436,16 +21499,86 @@ fn collect_batch_advice(
 /// Fails open and silently, like every other side effect at this boundary: a
 /// session start is not a call being adjudicated, and a clone with no readable
 /// git directory is one where `claim check` reports the missing stamp itself.
-fn stamp_session(envelope: &hook::Envelope) {
-    if envelope.event != hook::Event::SessionStart {
+///
+/// # Held back for a restore (CLOUD-2723)
+///
+/// The stamp makes the receipts store non-empty, and a restore would then put
+/// the restored receipts aside instead of back in place. So where the state
+/// repository variable is set, the host is known to let an agent run the
+/// daemon, and this session has no restore record yet, a session start writes
+/// `stamp-owed` instead and the stamp is paid on a later event: once the
+/// restore record exists, or the daemon reports the restore `unavailable`.
+/// It is paid DATED AT THE SESSION'S START, which is what the gate reads.
+///
+/// **There is no fallback that pays it anyway.** A daemon that is never
+/// started is the daemon gate's to refuse; an unstamped session cannot claim.
+//MUTANT-SUITE crates/batten/tests/it/offbox_restore.rs
+//MUTANT stamp-written-before-restore|s@^        if defer_stamp(harness, envelope) {$@        if false {@|a_session_start_with_no_restore_record_owes_its_stamp
+//MUTANT stamp-written-while-restore-is-pending|s@^    if restored \x7c\x7c unavailable {$@    if true {@|an_owed_stamp_is_not_paid_while_the_restore_is_pending
+//MUTANT owed-stamp-never-paid|s@^    if restored \x7c\x7c unavailable {$@    if false {@|an_owed_stamp_is_paid_once_the_restore_is_recorded
+//MUTANT paid-stamp-dated-at-payment|s@^        if claim::stamp_session_at(\&receipts, began).is_ok() {$@        if claim::stamp_session(\&receipts).is_ok() {@|an_owed_stamp_is_paid_once_the_restore_is_recorded
+//MUTANT stamp-deferred-without-a-background-facility|s@^    if harness.background_facility() != hook::BackgroundFacility::Surveyed(true) \x7c\x7c !owes {$@    if !owes {@|a_host_with_no_background_facility_is_stamped_at_once
+fn stamp_session(harness: hook::Harness, envelope: &hook::Envelope) {
+    if envelope.event == hook::Event::SessionStart {
+        if defer_stamp(harness, envelope) {
+            return;
+        }
+        let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+            return;
+        };
+        // `RECEIPT_DIR` under the PER-WORKTREE directory, which is where
+        // `run_claim_check` reads it: a linked worktree dates its own session.
+        let _stamped = claim::stamp_session(&git_dir.join(RECEIPT_DIR));
         return;
     }
-    let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+    pay_owed_stamp(harness, envelope);
+}
+
+/// Whether this session's restore record exists under the off-box directory.
+fn restore_recorded(dir: &Path, harness: hook::Harness, envelope: &hook::Envelope) -> bool {
+    envelope.session.as_deref().is_some_and(|session| {
+        offbox_watch::restored_path(dir, &offbox_watch::leaf(harness.as_str(), session)).exists()
+    })
+}
+
+/// At a session start: whether the stamp is held back, having written the
+/// file that says so.
+fn defer_stamp(harness: hook::Harness, envelope: &hook::Envelope) -> bool {
+    let Some(dir) = offbox_watch_dir() else {
+        return false;
+    };
+    let owes = envelope.session.is_some() && !restore_recorded(&dir, harness, envelope);
+    if harness.background_facility() != hook::BackgroundFacility::Surveyed(true) || !owes {
+        return false;
+    }
+    // Not written is not owed: a stamp that could never be paid would leave
+    // the session unable to claim for good.
+    std::fs::create_dir_all(&dir).is_ok()
+        && durable::replace(dir.join(offbox_watch::STAMP_OWED), b"").is_ok()
+}
+
+/// On any event after the start: pay a stamp that is owed, once the restore
+/// has reached an answer or the daemon has said it cannot.
+fn pay_owed_stamp(harness: hook::Harness, envelope: &hook::Envelope) {
+    let Some(dir) = offbox_watch_dir() else {
         return;
     };
-    // `RECEIPT_DIR` under the PER-WORKTREE directory, which is where
-    // `run_claim_check` reads it: a linked worktree dates its own session.
-    let _stamped = claim::stamp_session(&git_dir.join(RECEIPT_DIR));
+    let owed = dir.join(offbox_watch::STAMP_OWED);
+    let Ok(began) = std::fs::metadata(&owed).and_then(|meta| meta.modified()) else {
+        return;
+    };
+    let restored = restore_recorded(&dir, harness, envelope);
+    let status = std::fs::read_to_string(dir.join(offbox_watch::STATUS)).unwrap_or_default();
+    let unavailable = offbox_watch::field(&status, "restored") == Some("unavailable");
+    if restored || unavailable {
+        let Ok(git_dir) = git::git_dir(hook_authority_root()) else {
+            return;
+        };
+        let receipts = git_dir.join(RECEIPT_DIR);
+        if claim::stamp_session_at(&receipts, began).is_ok() {
+            let _ = std::fs::remove_file(&owed);
+        }
+    }
 }
 
 /// Record what the pin provides, once per session (CLOUD-1028).
@@ -30051,7 +30184,7 @@ fn run_doctor_session(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
     // LAST, and only with the state repository variable set (CLOUD-2722):
     // whether this checkout's state is leaving the machine. It changes no exit.
     if let Some(offbox) = &report.offbox {
-        writeln!(out, "{}", offbox.line())?;
+        output::line(out, offbox)?;
     }
     Ok(session_code(&report))
 }

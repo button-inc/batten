@@ -216,11 +216,8 @@ fn a_session_start_with_no_daemon_is_advised_and_counts_nothing() {
     let said = rig.start();
     assert!(said.text.contains(DOWN), "{}", said.text);
     assert!(said.text.contains(&rig.relaunch(true)), "{}", said.text);
-    assert_eq!(
-        rig.dir().map(|dir| Seen::read(&dir).misses),
-        None,
-        "nothing written"
-    );
+    // The start may leave the owed-stamp file (CLOUD-2723); it counts no miss.
+    assert_eq!(rig.dir().map_or(0, |dir| Seen::read(&dir).misses), 0);
 }
 
 /// Fails by: a refusal before the agent has had its five calls.

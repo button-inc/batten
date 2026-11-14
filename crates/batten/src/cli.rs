@@ -521,6 +521,15 @@ pub enum OffboxCommand {
         /// The transcript path the harness named, where it named one.
         transcript: Option<String>,
     },
+    /// Put a pushed snapshot back in a container that lacks it (CLOUD-2723).
+    Restore {
+        /// The harness's own identifier for the session.
+        session: String,
+        /// The harness's name.
+        harness: String,
+        /// The session this one continues, where it is named.
+        from: Option<String>,
+    },
     /// Run the session's off-box daemon until it is killed (CLOUD-2721).
     Run {
         /// The harness's own identifier for the session.
@@ -4061,6 +4070,11 @@ fn offbox_of(matches: &ArgMatches) -> Option<OffboxCommand> {
             session: matches.get_one::<String>("session").cloned()?,
             harness: matches.get_one::<String>("harness").cloned()?,
             transcript: matches.get_one::<String>("transcript").cloned(),
+        }),
+        ("restore", matches) => Some(OffboxCommand::Restore {
+            session: matches.get_one::<String>("session").cloned()?,
+            harness: matches.get_one::<String>("harness").cloned()?,
+            from: matches.get_one::<String>("from").cloned(),
         }),
         ("run", matches) => Some(OffboxCommand::Run {
             session: matches.get_one::<String>("session").cloned()?,

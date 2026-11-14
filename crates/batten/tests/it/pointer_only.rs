@@ -1673,6 +1673,13 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `off` (CLOUD-2723): with the variable removed nothing is looked for.
+    Verb {
+        path: "offbox restore",
+        args: &["--session", "s", "--harness", "exit-code"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // `off`, and it returns: with the variable removed the daemon never starts
     // (CLOUD-2721).
     Verb {

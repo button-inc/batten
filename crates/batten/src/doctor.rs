@@ -2732,10 +2732,9 @@ pub struct OffboxReport {
     pub restored: Option<String>,
 }
 
-impl OffboxReport {
-    /// The one text line `doctor session` adds.
-    #[must_use]
-    pub fn line(&self) -> String {
+/// The one text line `doctor session` adds.
+impl crate::output::Line for OffboxReport {
+    fn line(&self) -> String {
         let count =
             |value: Option<u32>| value.map_or_else(|| String::from("unknown"), |n| n.to_string());
         format!(

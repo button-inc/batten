@@ -3039,6 +3039,22 @@ const OFFBOX_TRANSCRIPT: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--from <predecessor id>` on `offbox restore`: the session this one
+/// continues, restored from when the session has no snapshot of its own.
+const OFFBOX_FROM: FlagDecl = FlagDecl {
+    id: "from",
+    long: Some("from"),
+    short: None,
+    help: "The session this one continues; its snapshot is restored when this session has none",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const ADOPT_FROM: FlagDecl = FlagDecl {
     id: "adopt_from",
     long: Some("adopt-from"),
@@ -8228,6 +8244,21 @@ pub const SURFACE: &[CommandDecl] = &[
     // unreached: "offbox run" CLOUD-2736 the agent launches it through its
     // harness's background facility, never anything in this tree; the hook row
     // is what tells the agent to.
+    // `write`: it writes the restored stores and the restore record
+    // (CLOUD-2723). `EXITS_VERDICT` for `offbox push`'s reason: exit 2 is the
+    // forge saying slow down, with no answer reached.
+    // unreached: "offbox restore" CLOUD-2723 the daemon runs the same function
+    // on start; the verb is for a person, and for an acceptance step that
+    // restores into a container whose state was deleted.
+    CommandDecl {
+        path: "offbox restore",
+        id: "offbox.restore",
+        about: "Put a session's pushed snapshot back where it was read from, in a container that does not have it",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[OFFBOX_SESSION, OFFBOX_HARNESS, OFFBOX_FROM],
+    },
     CommandDecl {
         path: "offbox run",
         id: "offbox.run",
