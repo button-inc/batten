@@ -3050,7 +3050,8 @@ run = [
 # WHAT SUPPLIES IT CHANGED, AND THIS COMMENT NAMED THE DEAD ONE (CLOUD-1455). It
 # used to read "the setup script shadows `mise` with a wrapper", which was true of
 # the ~120-line provisioning script and false the moment that became a one-line
-# `curl … install.sh | sh && batten startup --repair`. Nothing replaced the
+# `curl … install.sh | sh && batten startup --repair` (the exact line is in
+# `README.md`, "Cloud environment Setup field"). Nothing replaced the
 # wrapper, so every third-party pinned tool 403'd in a fresh container while this
 # comment still explained why they would not. The `[[provision.env]]` rows on
 # `batten.toml`'s mise entry are what supplies it now, through a launcher

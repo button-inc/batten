@@ -262,7 +262,9 @@ you see that.
 The declared repairs also run on their own at session start — writing a `repair`
 in the committed authority is the authorisation to run it — so `--repair` is for
 provisioning a container out of band: the environment's Setup field runs
-`batten startup --repair` after `install.sh`. A row with no `repair` is reported and never acted on.
+`batten startup --repair` after `install.sh`, and the exact line is in
+`README.md` under "Cloud environment Setup field". A row with no `repair` is
+reported and never acted on.
 
 What a row means is its `gloss` in `batten.toml`: the report is pointer-only, so
 the id is all it carries.

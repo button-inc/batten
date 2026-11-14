@@ -18079,8 +18079,9 @@ repair = ["batten", "wiring", "reclaim", "-y"]
 # order a cold container needs them. Everything above this comment is a
 # precondition about batten itself; these are about the toolchain every gate in
 # this repository runs through, and without them
-# `curl … install.sh | sh && batten startup --repair` installs an engine that
-# cannot run a single `mise run`.
+# `curl … install.sh | sh && batten startup --repair` (the exact line is in
+# `README.md`, "Cloud environment Setup field") installs an engine that cannot
+# run a single `mise run`.
 #
 # ORDER IS RUNNING ORDER, as it is for the `session-*` handlers, and here it is
 # load-bearing rather than tidy: rows two and three invoke `mise`, which row one
