@@ -20,8 +20,10 @@
 //!
 //! # What this does not decide
 //!
-//! Which interpreters take a script (`perl -e`, `sh -c`), and which carriers run
-//! a text through a shell, are later rows'. The mediation walk in `hook.rs`
+//! Which carriers run a text through a shell is a later row's. Which
+//! interpreters take a script (`perl -e`, `sh -c`) is rule 10's, read from the
+//! cited [`INTERPRETERS`] table through the mediation walk's own per-family
+//! option grammar (CLOUD-2626). The mediation walk in `hook.rs`
 //! parses with the same crate and is unchanged: this module calls the parser
 //! itself and reads two of the walk's helpers, [`crate::hook::covered`] and
 //! [`crate::hook::unquote`], rather than growing second copies.
@@ -34,7 +36,8 @@ pub enum Verdict {
     /// Empty for a text holding no command at all.
     Argv(Vec<String>),
     /// Shell logic, with the reason: a `rable` node kind's name, or one of
-    /// `unparseable`, `multi-command`, `assignment`, `glob`, `tilde`.
+    /// `unparseable`, `multi-command`, `assignment`, `glob`, `tilde`,
+    /// `interpreter-script`.
     Shell(&'static str),
 }
 
@@ -76,7 +79,338 @@ pub fn logic(text: &str) -> Verdict {
     let Some(node) = nodes.first() else {
         return Verdict::Argv(Vec::new());
     };
-    command(node)
+    let verdict = command(node);
+    // 10. One plain command whose program takes a script, and whose argv
+    //     carries one (CLOUD-2626).
+    if let Verdict::Argv(words) = &verdict
+        && runs_script(&words.iter().map(String::as_str).collect::<Vec<_>>())
+    {
+        return Verdict::Shell(INTERPRETER_SCRIPT);
+    }
+    verdict
+}
+
+/// The reason rule 10 carries.
+const INTERPRETER_SCRIPT: &str = "interpreter-script";
+
+/// How a program in [`INTERPRETERS`] takes its script.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Takes {
+    /// Through an inline option only (`sh -c`, `perl -e`): a first operand is
+    /// a script FILE, and whether that file is shell is not this table's
+    /// question (CLOUD-2628's).
+    Inline,
+    /// Through an inline option, or as its first operand when no program-file
+    /// option (`-f`) names it: the awk family and sed.
+    Operand,
+    /// A multi-call binary: its first operand names the applet, and the
+    /// applet is the program, looked up in this table again.
+    Applet,
+}
+
+/// One program that takes a script. Its option grammar (which flag is inline,
+/// which takes a value) is `crate::hook`'s per-family `grammar`, the one the
+/// mediation walk reads; this row names the program and how it takes a script,
+/// and its doc comment carries the citation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Interpreter {
+    /// The program's name with any version suffix removed (`python3` is
+    /// `python`).
+    program: &'static str,
+    /// How it takes its script.
+    takes: Takes,
+}
+
+/// POSIX `sh`: `-c` reads commands from the command_string operand; otherwise
+/// the first operand is a file of commands.
+/// <https://pubs.opengroup.org/onlinepubs/9799919799/utilities/sh.html>
+const SH: Interpreter = Interpreter {
+    program: "sh",
+    takes: Takes::Inline,
+};
+
+/// `dash`: as POSIX `sh`.
+/// <https://manpages.debian.org/bookworm/dash/dash.1.en.html>
+const DASH: Interpreter = Interpreter {
+    program: "dash",
+    takes: Takes::Inline,
+};
+
+/// `ksh` (OpenBSD): `-c string`; otherwise the first operand is a file.
+/// <https://man.openbsd.org/ksh.1>
+const KSH: Interpreter = Interpreter {
+    program: "ksh",
+    takes: Takes::Inline,
+};
+
+/// `mksh`: `-c cmd`; otherwise the first operand is a file, `-` or none stdin.
+/// <https://manpages.debian.org/bookworm/mksh/mksh.1.en.html>
+const MKSH: Interpreter = Interpreter {
+    program: "mksh",
+    takes: Takes::Inline,
+};
+
+/// `ash`, the Almquist shell as `BusyBox` ships it: `-c` as POSIX `sh`.
+/// <https://busybox.net/downloads/BusyBox.html>
+const ASH: Interpreter = Interpreter {
+    program: "ash",
+    takes: Takes::Inline,
+};
+
+/// `yash`: with `-c` "the shell interprets and executes the first operand as a
+/// command string"; without it, the first operand is a file.
+/// <https://magicant.github.io/yash/doc/invoke.html>
+const YASH: Interpreter = Interpreter {
+    program: "yash",
+    takes: Takes::Inline,
+};
+
+/// `bash`: `-c command_string`; otherwise the first argument is a file of
+/// commands. <https://manpages.debian.org/bookworm/bash/bash.1.en.html>
+const BASH: Interpreter = Interpreter {
+    program: "bash",
+    takes: Takes::Inline,
+};
+
+/// `zsh`: `-c` takes the first argument as a command; otherwise it is a
+/// script file. <https://manpages.debian.org/bookworm/zsh-common/zsh.1.en.html>
+const ZSH: Interpreter = Interpreter {
+    program: "zsh",
+    takes: Takes::Inline,
+};
+
+/// `fish`: `-c`/`--command` and `-C`/`--init-command` carry commands;
+/// `fish FILE` runs a file.
+/// <https://fishshell.com/docs/current/cmds/fish.html>
+const FISH: Interpreter = Interpreter {
+    program: "fish",
+    takes: Takes::Inline,
+};
+
+/// `csh`: "commands are read from the (single) following argument" of `-c`;
+/// otherwise the first argument is a script file.
+/// <https://manpages.debian.org/bookworm/csh/csh.1.en.html>
+const CSH: Interpreter = Interpreter {
+    program: "csh",
+    takes: Takes::Inline,
+};
+
+/// `tcsh`: `-c` as `csh`; otherwise "the first argument is taken as the name
+/// of a file of commands".
+/// <https://manpages.debian.org/bookworm/tcsh/tcsh.1.en.html>
+const TCSH: Interpreter = Interpreter {
+    program: "tcsh",
+    takes: Takes::Inline,
+};
+
+/// `busybox`: invoked as `busybox <applet> [arguments...]`, it behaves as the
+/// applet, so `busybox sh -c …` is `sh -c …`.
+/// <https://busybox.net/downloads/BusyBox.html>
+const BUSYBOX: Interpreter = Interpreter {
+    program: "busybox",
+    takes: Takes::Applet,
+};
+
+/// `perl`: `-e`/`-E` (repeatable); otherwise the first argument is a file.
+/// <https://perldoc.perl.org/perlrun>
+const PERL: Interpreter = Interpreter {
+    program: "perl",
+    takes: Takes::Inline,
+};
+
+/// `python`: `-c`; otherwise a script, directory or zip, or `-`. `-m` runs a
+/// module and carries no text. <https://docs.python.org/3/using/cmdline.html>
+const PYTHON: Interpreter = Interpreter {
+    program: "python",
+    takes: Takes::Inline,
+};
+
+/// `node`: `-e`/`--eval` and `-p`/`--print`; otherwise an entry file.
+/// <https://nodejs.org/api/cli.html>
+const NODE: Interpreter = Interpreter {
+    program: "node",
+    takes: Takes::Inline,
+};
+
+/// `ruby`: `-e` "specifies script from command-line"; otherwise a
+/// `program_file` operand. <https://manpages.debian.org/bookworm/ruby/ruby.1.en.html>
+const RUBY: Interpreter = Interpreter {
+    program: "ruby",
+    takes: Takes::Inline,
+};
+
+/// POSIX `awk`: the first operand is the program unless `-f progfile` is
+/// given. <https://pubs.opengroup.org/onlinepubs/9799919799/utilities/awk.html>
+const AWK: Interpreter = Interpreter {
+    program: "awk",
+    takes: Takes::Operand,
+};
+
+/// `gawk`: as `awk`, adding `-e`/`--source` program text and `-E`/`--exec` as
+/// a program file. <https://man7.org/linux/man-pages/man1/gawk.1.html>
+const GAWK: Interpreter = Interpreter {
+    program: "gawk",
+    takes: Takes::Operand,
+};
+
+/// `mawk`: the first operand is the program text unless `-f program-file` is
+/// given; it has no `-e`.
+/// <https://manpages.debian.org/bookworm/mawk/mawk.1.en.html>
+const MAWK: Interpreter = Interpreter {
+    program: "mawk",
+    takes: Takes::Operand,
+};
+
+/// `sed`: the first operand is the script unless `-e script` or `-f file` is
+/// given. <https://pubs.opengroup.org/onlinepubs/9799919799/utilities/sed.html>
+/// GNU `-i[SUFFIX]` edits in place and is an effect, not a script carrier:
+/// <https://man7.org/linux/man-pages/man1/sed.1.html>
+const SED: Interpreter = Interpreter {
+    program: "sed",
+    takes: Takes::Operand,
+};
+
+/// Every program that takes a script, researched and cited row by row
+/// (CLOUD-2626). Every shell [`ShellKind`] names is here.
+const INTERPRETERS: [Interpreter; 20] = [
+    SH, DASH, KSH, MKSH, ASH, YASH, BASH, ZSH, FISH, CSH, TCSH, BUSYBOX, PERL, PYTHON, NODE, RUBY,
+    AWK, GAWK, MAWK, SED,
+];
+
+/// Whether one argv runs a script: its program is in [`INTERPRETERS`] and the
+/// argv carries one, or it is a wrapper whose utility does.
+///
+/// The detector's interpreter mutation rows, each killed by the unit case it
+/// names, run from this file.
+//MUTANT-SUITE crates/batten/src/shell.rs
+//MUTANT wrapper-operand-unread|s@^    if wrapped.iter().any(\x7cutility\x7c runs_script(utility)) {$@    if false {@|a_wrapped_shell_is_a_script
+fn runs_script(argv: &[&str]) -> bool {
+    let Some((first, arguments)) = argv.split_first() else {
+        return false;
+    };
+    let program = file_name(first);
+    let wrapped = utilities(program, arguments);
+    if wrapped.iter().any(|utility| runs_script(utility)) {
+        return true;
+    }
+    interpreter(program, arguments)
+}
+
+/// Whether `program`, a table row, carries a script in `arguments`.
+//MUTANT interpreter-inline-flag-unread|s@^        crate::hook::Carried::Inline => true,$@        crate::hook::Carried::Inline => false,@|an_interpreter_inline_flag_is_a_script
+//MUTANT program-operand-unread|s@^        crate::hook::Carried::Operand => row.takes == Takes::Operand,$@        crate::hook::Carried::Operand => false,@|a_program_operand_is_a_script
+fn interpreter(program: &str, arguments: &[&str]) -> bool {
+    let family = crate::hook::family(program);
+    let Some(row) = INTERPRETERS.iter().find(|row| row.program == family) else {
+        return false;
+    };
+    if row.takes == Takes::Applet {
+        return arguments
+            .split_first()
+            .is_some_and(|(applet, rest)| interpreter(file_name(applet), rest));
+    }
+    match crate::hook::carried(program, arguments) {
+        crate::hook::Carried::Inline => true,
+        crate::hook::Carried::Operand => row.takes == Takes::Operand,
+        crate::hook::Carried::File | crate::hook::Carried::Elsewhere => false,
+    }
+}
+
+/// The utilities a wrapper runs, each judged by the same rule; none for a
+/// program that wraps nothing. The wrapper itself is argv: `env -S`, `xargs`
+/// and `find -exec` take an argv, not shell, so what they run is the question.
+fn utilities<'a>(program: &str, arguments: &[&'a str]) -> Vec<Vec<&'a str>> {
+    match program {
+        "find" => find_utilities(arguments),
+        "env" => env_utility(arguments).into_iter().collect(),
+        "xargs" => vec![after_options(arguments, XARGS_VALUED)],
+        // The other wrappers the mediation walk looks through (`nohup`,
+        // `timeout`, …): the utility follows their flags, assignments and
+        // numeric arguments, as `hook::effective_program` steps over them.
+        wrapper if crate::hook::is_lookthrough_wrapper(wrapper) => vec![
+            arguments
+                .iter()
+                .copied()
+                .skip_while(|word| {
+                    word.starts_with('-')
+                        || word.contains('=')
+                        || word.starts_with(|c: char| c.is_ascii_digit())
+                })
+                .collect(),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+/// `find`'s utilities: the words after each `-exec`, `-execdir`, `-ok` or
+/// `-okdir`, up to its `;` or `+`.
+/// <https://pubs.opengroup.org/onlinepubs/9799919799/utilities/find.html>
+fn find_utilities<'a>(arguments: &[&'a str]) -> Vec<Vec<&'a str>> {
+    let mut found = Vec::new();
+    let mut words = arguments.iter().copied();
+    while let Some(word) = words.next() {
+        if matches!(word, "-exec" | "-execdir" | "-ok" | "-okdir") {
+            found.push(
+                words
+                    .by_ref()
+                    .take_while(|word| !matches!(*word, ";" | "+"))
+                    .collect(),
+            );
+        }
+    }
+    found
+}
+
+/// `xargs`' options that take a value: POSIX `-E eofstr`, `-I replstr`,
+/// `-L number`, `-n number`, `-s size`, and GNU's `-a file`, `-d delim`,
+/// `-P max-procs`. The utility is the first operand after them.
+/// <https://pubs.opengroup.org/onlinepubs/9799919799/utilities/xargs.html>
+const XARGS_VALUED: &[&str] = &["-E", "-I", "-L", "-n", "-s", "-a", "-d", "-P"];
+
+/// `env`'s utility: the first word after its options and assignments, or the
+/// `-S` string split into words, followed by whatever comes after it.
+/// <https://man7.org/linux/man-pages/man1/env.1.html>
+fn env_utility<'a>(arguments: &[&'a str]) -> Option<Vec<&'a str>> {
+    let mut at = 0;
+    while let Some(word) = arguments.get(at) {
+        let split = match *word {
+            "-S" | "--split-string" => arguments.get(at + 1).copied().map(|text| (text, at + 2)),
+            _ => word
+                .strip_prefix("--split-string=")
+                .or_else(|| word.strip_prefix("-S").filter(|text| !text.is_empty()))
+                .map(|text| (text, at + 1)),
+        };
+        if let Some((text, rest)) = split {
+            let mut utility: Vec<&str> = text.split_whitespace().collect();
+            utility.extend(arguments.get(rest..).unwrap_or_default());
+            return Some(utility);
+        }
+        if matches!(*word, "-u" | "-C" | "--unset" | "--chdir") {
+            at += 2;
+        } else if word.starts_with('-') || word.contains('=') {
+            at += 1;
+        } else {
+            return Some(arguments.get(at..).unwrap_or_default().to_vec());
+        }
+    }
+    None
+}
+
+/// The words from the first operand on, past options and the values of those
+/// in `valued` given as a separate word.
+fn after_options<'a>(arguments: &[&'a str], valued: &[&str]) -> Vec<&'a str> {
+    let mut at = 0;
+    while let Some(word) = arguments.get(at) {
+        if *word == "--" {
+            at += 1;
+            break;
+        }
+        if !word.starts_with('-') {
+            break;
+        }
+        at += if valued.contains(word) { 2 } else { 1 };
+    }
+    arguments.get(at..).unwrap_or_default().to_vec()
 }
 
 /// Rules 5 to 9, over the one top-level node.
@@ -432,6 +766,131 @@ mod tests {
         assert_eq!(argv("set -e"), ["set", "-e"]);
         assert_eq!(argv("cargo nextest run"), ["cargo", "nextest", "run"]);
         assert_eq!(argv("echo '$x'"), ["echo", "$x"]);
+    }
+
+    #[test]
+    fn an_interpreter_inline_flag_is_a_script() {
+        // Rule 10, one assertion per table row with an inline flag.
+        for text in [
+            "sh -c 'x'",
+            "bash -c 'x'",
+            "zsh -c 'x'",
+            "dash -c 'x'",
+            "ksh -c 'x'",
+            "fish -c 'x'",
+            "perl -e 'x'",
+            "python -c 'x'",
+            "node -e 'x'",
+            "ruby -e 'x'",
+            "gawk -e 'x'",
+            // A bundle, a long form, a versioned name and a path.
+            "bash -ec 'x'",
+            "fish --command 'x'",
+            "python3 -c 'x'",
+            "/usr/bin/perl -E 'x'",
+            "node --eval 'x'",
+            "sed -n -e 's/a/b/p' f",
+        ] {
+            assert_eq!(shell(text), "interpreter-script", "{text}");
+        }
+        // A script file is argv here; whether it is shell is CLOUD-2628's.
+        assert_eq!(argv("python script.py"), ["python", "script.py"]);
+        assert_eq!(
+            argv("python -m pytest -c x"),
+            ["python", "-m", "pytest", "-c", "x"]
+        );
+        assert_eq!(argv("perl script.pl -e x").len(), 4);
+        assert_eq!(argv("bash -e run").len(), 3);
+    }
+
+    #[test]
+    fn every_shell_kind_runs_an_inline_script_and_a_file_is_argv() {
+        // The owner's widening: every shell `ShellKind` names is a table row.
+        for shell_name in [
+            "sh",
+            "bash",
+            "zsh",
+            "dash",
+            "ksh",
+            "fish",
+            "csh",
+            "tcsh",
+            "mksh",
+            "ash",
+            "yash",
+            "busybox sh",
+            "busybox ash",
+        ] {
+            assert_eq!(
+                shell(&format!("{shell_name} -c 'echo x'")),
+                "interpreter-script",
+                "{shell_name}"
+            );
+            let file = format!("{shell_name} script-file");
+            assert_eq!(argv(&file).last().map(String::as_str), Some("script-file"));
+        }
+        assert_eq!(argv("busybox wget -c u").len(), 4);
+    }
+
+    #[test]
+    fn a_program_operand_is_a_script() {
+        for text in ["awk '{print}' f", "mawk '{print}' f", "sed 's/a/b/' f"] {
+            assert_eq!(shell(text), "interpreter-script", "{text}");
+        }
+        assert_eq!(shell("awk -F, -v n=1 '{print}' f"), "interpreter-script");
+        assert_eq!(argv("awk -f p.awk f"), ["awk", "-f", "p.awk", "f"]);
+        assert_eq!(argv("sed -f p.sed f"), ["sed", "-f", "p.sed", "f"]);
+        assert_eq!(argv("gawk --file=p.awk f").len(), 3);
+        // A program-file option does not hide an inline one.
+        assert_eq!(shell("gawk -f lib.awk -e 'x'"), "interpreter-script");
+        // An inline-only interpreter's first operand is a file.
+        assert_eq!(argv("ruby x.rb").len(), 2);
+    }
+
+    #[test]
+    fn a_wrapped_shell_is_a_script() {
+        for text in [
+            "find . -exec sh -c 'x' \\;",
+            "find . -name a -execdir bash -c 'x' {} +",
+            "xargs sh -c 'x'",
+            "xargs -I {} -n 1 sh -c 'x'",
+            "env -S 'sh -c x'",
+            "env FOO=1 perl -e 'x'",
+            "nohup sh -c 'x'",
+            "timeout 5 python3 -c 'x'",
+        ] {
+            assert_eq!(shell(text), "interpreter-script", "{text}");
+        }
+        assert_eq!(argv("find . -exec rm {} \\;").len(), 6);
+        assert_eq!(argv("xargs rm"), ["xargs", "rm"]);
+        assert_eq!(argv("env -S 'cargo test'").len(), 3);
+        assert_eq!(argv("find . -name sh").len(), 4);
+    }
+
+    #[test]
+    fn every_interpreter_row_carries_a_citation() {
+        // Each `const … : Interpreter` row's doc comment names an https URL,
+        // and the table holds exactly the rows declared.
+        let source = include_str!("shell.rs");
+        let lines: Vec<&str> = source.lines().collect();
+        let mut rows = 0;
+        for (at, line) in lines.iter().enumerate() {
+            if !(line.starts_with("const ") && line.ends_with(": Interpreter = Interpreter {")) {
+                continue;
+            }
+            rows += 1;
+            let cited = lines[..at]
+                .iter()
+                .rev()
+                .take_while(|above| above.starts_with("///"))
+                .any(|above| above.contains("<https://"));
+            assert!(cited, "{line} has no citation doc comment");
+        }
+        assert_eq!(rows, INTERPRETERS.len());
+        let mut names = std::collections::BTreeSet::new();
+        for row in INTERPRETERS {
+            assert!(names.insert(row.program), "{} listed twice", row.program);
+        }
     }
 
     #[test]
