@@ -31,7 +31,6 @@
 
 use crate::common;
 
-use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -72,6 +71,7 @@ impl Env {
             .state_home(&self.home)
             .args(args)
             .current_dir(&self.repo)
+            .env("BATTEN_STUB_PLAN", self.plan())
             .output()
             .expect("run batten")
     }
@@ -88,13 +88,21 @@ impl Env {
         fs::write(full, contents).unwrap();
     }
 
-    /// Write a stub scanner, provision it, and write the config that uses it.
+    /// Where the scanner's plan is: beside the artifact, never in the cache the
+    /// provisioned copy runs from, so [`Env::run`] names it.
+    fn plan(&self) -> PathBuf {
+        self.artifacts.join("ripsecrets.plan.json")
+    }
+
+    /// Write a stub scanner (a copy of the stand-in under `plan`), provision it,
+    /// and write the config that uses it.
     ///
     /// Returns after `provision apply` has installed it, so a case that wants a
     /// COLD cache simply does not call this.
-    fn install_scanner(&self, script: &str) {
+    fn install_scanner(&self, plan: &serde_json::Value) {
         let path = self.artifacts.join("ripsecrets");
-        fs::write(&path, script).unwrap();
+        fs::copy(common::stub(), &path).unwrap();
+        fs::write(self.plan(), plan.to_string()).unwrap();
         let bytes = fs::read(&path).unwrap();
         self.config(&format!("file://{}", path.display()), &digest(&bytes));
         let applied = self.run(&["provision", "apply"]);
@@ -182,54 +190,51 @@ fn other_token() -> String {
     OTHER_PARTS.concat()
 }
 
-/// The shell that reconstructs a token inside the stub, without the contiguous
-/// string ever appearing in the script.
+/// The steps that print a token one fragment at a time, so the contiguous
+/// string never appears in the plan.
 ///
 /// **This is not decoration, and the first version of this suite failed without
 /// it.** `provision` caches the exact artifact bytes by contract, so a stub
-/// carrying the token as a literal puts it under the state root — and the
+/// carrying the token as a literal put it under the state root — and the
 /// assertions below search the state root precisely because that is where a leak
-/// would land. A test whose own fixture trips its assertion teaches nothing, and
-/// weakening the assertion to exclude the cache would have hidden a real leak in
-/// the one place Batten writes files nobody reads.
-fn shell_token(parts: [&str; 5]) -> String {
-    let mut out = String::new();
-    for part in parts {
-        out.push('"');
-        out.push_str(part);
-        out.push('"');
-    }
-    out
+/// would land. The artifact is the stand-in's binary now and its plan sits beside
+/// the artifact rather than in the cache, but a plan holding the token whole
+/// would still be one copy away from that leak.
+fn token_steps(parts: [&str; 5]) -> Vec<serde_json::Value> {
+    parts
+        .iter()
+        .map(|part| serde_json::json!({"stdout": part}))
+        .collect()
 }
 
-/// A stub emitting ripsecrets' measured output shape for the given matches.
+/// The stand-in's plan emitting ripsecrets' measured output shape for the given
+/// matches.
 ///
 /// A match is `(path, line, which token)`; `None` means a span the parser should
 /// refuse. The stub ignores its arguments beyond echoing what it was told to,
 /// which is what makes the disagreement cases below expressible at all — a real
 /// scanner cannot be asked to contradict itself.
-fn stub(matches: &[(&str, usize, Option<[&str; 5]>)], exit: i32) -> String {
-    let mut script = String::from("#!/bin/sh\n");
-    // `writeln!` into a String is infallible; the results are discarded rather
-    // than propagated, as `render.rs` does for the same reason.
-    for (index, (path, line, parts)) in matches.iter().enumerate() {
+fn stub(matches: &[(&str, usize, Option<[&str; 5]>)], exit: i32) -> serde_json::Value {
+    let mut steps = Vec::new();
+    for (path, line, parts) in matches {
         if let Some(parts) = parts {
-            let _ = writeln!(script, "T{index}={}", shell_token(*parts));
-            let _ = writeln!(script, "printf '%s\\n' \"{path}:{line}:$T{index}\"");
+            steps.push(serde_json::json!({"stdout": format!("{path}:{line}:")}));
+            steps.extend(token_steps(*parts));
         } else {
             // A shape this build cannot parse, still carrying a token: the
             // hazard is that an unparseable line is one the scanner emitted
             // BECAUSE it found a secret in it.
-            let _ = writeln!(script, "T{index}={}", shell_token(TOKEN_PARTS));
-            let _ = writeln!(script, "printf '%s\\n' \"!! unexpected $T{index}\"");
+            steps.push(serde_json::json!({"stdout": "!! unexpected "}));
+            steps.extend(token_steps(TOKEN_PARTS));
         }
+        steps.push(serde_json::json!({"stdout": "\n"}));
     }
-    let _ = writeln!(script, "exit {exit}");
-    script
+    steps.push(serde_json::json!({"exit": exit}));
+    serde_json::json!([{"steps": steps}])
 }
 
 /// The stub that reports nothing and exits clean.
-fn clean_stub() -> String {
+fn clean_stub() -> serde_json::Value {
     stub(&[], 0)
 }
 
@@ -503,7 +508,7 @@ fn a_glob_matching_nothing_never_spawns_the_scanner() {
     // run if executed proves the spawn never happened.
     let env = Env::new("secrets-no-match");
     env.file("app.txt", "not matched by the rule's glob\n");
-    env.install_scanner("#!/bin/sh\nexit 3\n");
+    env.install_scanner(&stub(&[], 3));
 
     let out = env.run(&["enforce"]);
     assert_eq!(

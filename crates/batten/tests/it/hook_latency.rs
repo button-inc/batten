@@ -82,7 +82,7 @@ target = "policy/docs-tree-absent.rego"
 ///
 /// The fixture declares no toolchain pin, so the analyser is the bare `cargo`
 /// on `PATH` (`rules::symbols_launcher`) — which is the shim. Unix only: the
-/// shim is a shell script.
+/// shim is the stand-in linked as a bare `cargo`.
 fn fixture(name: &str) -> (PathBuf, PathBuf, PathBuf) {
     let root = common::scratch(name);
     let repo = root.join("repo");
@@ -94,19 +94,14 @@ fn fixture(name: &str) -> (PathBuf, PathBuf, PathBuf) {
     common::git_in(&repo, &["add", "-A"]);
     common::git_in(&repo, &["commit", "-q", "-m", "chore: base"]);
     let shims = root.join("shims");
-    fs::create_dir_all(&shims).expect("shim dir");
     let log = root.join("spawns.log");
-    let cargo = shims.join("cargo");
-    fs::write(
-        &cargo,
-        format!("#!/bin/sh\necho \"$PPID\" >> '{}'\nexit 1\n", log.display()),
-    )
-    .expect("write shim");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).expect("shim mode");
-    }
+    common::stub_at(
+        &shims.join("cargo"),
+        &serde_json::json!([{"steps": [
+            {"append": [log.display().to_string(), "{ppid}\n"]},
+            {"exit": 1},
+        ]}]),
+    );
     let home = root.join("home");
     fs::create_dir_all(&home).expect("home dir");
     (repo, shims, home)

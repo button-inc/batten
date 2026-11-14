@@ -36,9 +36,12 @@
 //! (a path: stdin byte for byte), `trap` (`TERM`, `INT` or `HUP` no longer ends
 //! the program; unix only), `await-signal` (block until a trapped signal
 //! arrives), `await-file` (`[path, text]`: block until the file contains the
-//! text, exiting 124 after a minute), `exit`.
+//! text, exiting 124 after a minute), `exec` (an argv, exiting with its code),
+//! `exit-with` (a text that expands to a code, e.g. `{env:CODE}`), `exit`.
 //!
-//! Text and paths expand `{argv}`, `{argv:N}` (1-based), `{argv-after:FLAG}`,
+//! Text and paths expand `{argv}`, `{argv:N}` (1-based), `{argv-from:N}` (the
+//! words from N on; as a whole argv element it splices them in separately),
+//! `{argv-after:FLAG}`,
 //! `{argv-strip:PREFIX}`, `{pid}`, `{ppid}` and `{env:NAME}`.
 
 use std::io::{Read as _, Write as _};
@@ -94,6 +97,11 @@ enum Step {
     /// Block until the file at a path contains a text, for at most a minute;
     /// past that the program exits 124.
     AwaitFile(String, String),
+    /// Run an argv and exit with its exit code, as a shell's `exec` did.
+    Exec(Vec<String>),
+    /// Exit with the code a text expands to (`{env:CODE}`); a text that is not a
+    /// number exits 2.
+    ExitWith(String),
     Exit(i32),
 }
 
@@ -182,6 +190,12 @@ impl Call {
         out
     }
 
+    /// The argv from its `from`th word (1-based) on, which a shell spelled
+    /// `shift N; "$@"`.
+    fn argv_from(&self, from: usize) -> &[String] {
+        self.args.get(from.saturating_sub(1)..).unwrap_or_default()
+    }
+
     /// One placeholder's value, or `None` when `key` names none.
     fn placeholder(&self, key: &str) -> Option<String> {
         if key == "argv" {
@@ -202,6 +216,9 @@ impl Call {
                     .cloned()
                     .unwrap_or_default(),
             );
+        }
+        if let Some(from) = key.strip_prefix("argv-from:") {
+            return Some(self.argv_from(from.parse().ok()?).join(" "));
         }
         if let Some(flag) = key.strip_prefix("argv-after:") {
             let at = self.args.iter().position(|arg| arg == flag)?;
@@ -318,6 +335,12 @@ fn step(call: &Call, step: &Step) -> anyhow::Result<Option<i32>> {
             .is_ok_and(|status| status.success());
             std::fs::write(call.expand(to), if alive { "alive" } else { "dead" })?;
         }
+        Step::Exec(argv) => {
+            std::io::stdout().flush()?;
+            let status = command(call, argv)?.status()?;
+            return Ok(Some(status.code().unwrap_or(128)));
+        }
+        Step::ExitWith(text) => return Ok(Some(call.expand(text).trim().parse().unwrap_or(2))),
         Step::Exit(code) => return Ok(Some(*code)),
     }
     Ok(None)
@@ -385,7 +408,21 @@ fn await_signal(name: &str) -> anyhow::Result<()> {
     reason = "a test stand-in's `run` and `spawn` steps start the program its plan names; it is never shipped (CLOUD-2336)"
 )]
 fn command(call: &Call, argv: &[String]) -> anyhow::Result<std::process::Command> {
-    let mut words = argv.iter().map(|word| call.expand(word));
+    // An element that is exactly `{argv-from:N}` splices those words in one by
+    // one, as `"$@"` did; anywhere else it expands to one joined word.
+    let mut words = argv
+        .iter()
+        .flat_map(|word| {
+            word.strip_prefix("{argv-from:")
+                .and_then(|rest| rest.strip_suffix('}'))
+                .and_then(|from| from.parse::<usize>().ok())
+                .map_or_else(
+                    || vec![call.expand(word)],
+                    |from| call.argv_from(from).to_vec(),
+                )
+        })
+        .collect::<Vec<_>>()
+        .into_iter();
     let program = words
         .next()
         .ok_or_else(|| anyhow::anyhow!("stub: a step names an empty argv"))?;
