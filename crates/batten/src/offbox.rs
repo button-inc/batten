@@ -1326,7 +1326,9 @@ fn push_capped(session: &Session<'_>, extra: &[Feed<'_>], byte_cap: u64) -> Resu
         // knows it for its own, where it would otherwise absorb its own
         // session as another writer's.
         gitwrite::set_ref(&repo, SENT, &commit)?;
+        crate::testing::step()?; // the request is a step: a kill before it sends nothing
         let outcome = lease::push(&session.remote, &repo, &name, &commit, &admit)?;
+        crate::testing::step()?; // and so is its answer: a kill here is a reply never read
         match outcome {
             lease::Outcome::Applied => {
                 gitwrite::set_ref(&repo, LAST, &commit)?;
@@ -2242,6 +2244,7 @@ fn newest(
 //MUTANT archive-restore-sets-last|s@^        if found.live \&\& own {$@        if true {@|a_rotated_session_is_restored_from_the_archive_index
 //MUTANT predecessor-transcript-adopted-as-own|s@^        absorb(session.project_root, \&session.meta, \&found.commit, own)?;$@        absorb(session.project_root, \&session.meta, \&found.commit, true)?;@|a_predecessors_snapshot_is_absorbed_and_its_transcript_kept_aside
 //MUTANT nothing-found-leaves-restored-unwritten|s@^    record_restored(\&dir, NOTHING_RESTORED)?;$@@|nothing_to_restore_from_is_recorded_as_none
+//MUTANT snapshot-already-here-restored-again|s@^        if here {$@        if false {@|a_daemon_that_finds_the_restore_record_does_not_restore_again
 //MUTANT restore-ignores-the-push-lock|s@^    if restoring.is_none() {$@    if false {@|a_restore_waits_for_the_push_lock
 //MUTANT throttled-restore-recorded-as-none|s@^        Some(throttle) => Ok(Restored::Throttled(\*throttle)),$@        Some(_) => Ok(Restored::Nothing),@|a_throttled_restore_records_nothing
 pub fn restore_once(session: &Session<'_>, predecessor: Option<&str>) -> Result<Restored> {
@@ -2288,6 +2291,24 @@ fn restore(session: &Session<'_>, predecessor: Option<&str>) -> Result<Restored>
         return Ok(Restored::Contended);
     }
     let refs = lease::advertise(&session.remote, Service::UploadPack)?;
+    // A PUSH THE REMOTE APPLIED AND THIS MACHINE NEVER RECORDED is recorded
+    // first, so the question below — is the remote's snapshot already here —
+    // is asked of the truth.
+    own_push_recorded(&dir, &repo, refs.head_of(&reference(&session.meta)))?;
+    // WHAT IS ALREADY HERE IS DECIDED FROM WHAT IS HERE, on every start: the
+    // commit the local repository last pushed or absorbed, and the one commit
+    // this directory last restored from. A restore therefore runs at every
+    // start and a second one changes nothing — where it once ran only while a
+    // record of the first was absent, and, run again, kept the session's own
+    // last push aside as another writer's.
+    let last = if repo.exists() {
+        crate::git::resolve_ref(&repo, LAST)?
+    } else {
+        None
+    };
+    let taken = std::fs::read_to_string(dir.join(RESTORED))
+        .ok()
+        .map(|record| record.trim().to_owned());
 
     // This session's own snapshots first; then the predecessor's, by the same
     // two steps, under its own ref name.
@@ -2301,6 +2322,12 @@ fn restore(session: &Session<'_>, predecessor: Option<&str>) -> Result<Restored>
         let Some(found) = newest(&session.remote, &repo, &refs, &name)? else {
             continue;
         };
+        let here = last.as_deref() == Some(found.commit.as_str())
+            || taken.as_deref() == Some(found.commit.as_str());
+        if here {
+            record_restored(&dir, &found.commit)?;
+            return Ok(Restored::Snapshot(found.commit));
+        }
         prepare(&repo)?;
         lease::fetch_shallow(&session.remote, &repo, &found.commit)?;
         absorb(session.project_root, &session.meta, &found.commit, own)?;
@@ -3206,7 +3233,7 @@ impl<'a> Daemon<'a> {
 /// an error: it is counted, waited out, and tried again.
 //MUTANT-SUITE crates/batten/src/offbox.rs
 //MUTANT restart-forgets-the-wait|s@^        status.wait_until = previous.wait_until;$@@|a_restart_inside_a_wait_still_honours_it
-//MUTANT relaunch-restores-again|s@^        Some(_) => String::from("yes"),$@        Some(_) => String::from("pending"),@|a_daemon_that_finds_the_restore_record_does_not_restore_again
+//MUTANT start-skips-the-restore|s@^        String::from("pending")$@        String::from("yes")@|a_start_restores_whatever_the_last_run_recorded
 //MUTANT new-session-inherits-the-old-status|s@^        if previous.session == status.session {$@        if true {@|a_restart_inside_a_wait_still_honours_it
 pub fn run(launching: &Launching<'_>, world: &mut dyn World) -> Result<Launch> {
     let dir = daemon_dir(launching.project_root)?;
@@ -3245,18 +3272,15 @@ pub fn run(launching: &Launching<'_>, world: &mut dyn World) -> Result<Launch> {
     if !surveyed {
         "not-surveyed".clone_into(&mut status.source);
     }
-    // A START THAT FINDS THE RESTORE RECORD DOES NOT RESTORE AGAIN (CLOUD-2723):
-    // (mutant row `relaunch-restores-again` is beside `run`'s other rows.)
-    // every relaunch would otherwise absorb the session's own last push and
-    // send any store changed since to `absorbed/`.
-    status.restored = match meta.as_ref().and_then(|meta| {
-        let dir = session_dir(launching.project_root, meta).ok()?;
-        std::fs::read_to_string(dir.join(RESTORED)).ok()
-    }) {
-        Some(record) if record.trim() == NOTHING_RESTORED => String::from(NOTHING_RESTORED),
-        Some(_) => String::from("yes"),
-        None if meta.is_some() => String::from("pending"),
-        None => String::from(NOTHING_RESTORED),
+    // EVERY START BEGINS WITH THE RESTORE, whatever the last run recorded and
+    // however it ended. The start is the recovery: what is already here is
+    // decided by `restore` from the local repository and the remote's refs,
+    // so a start after a clean run, a kill or a reclaimed container takes the
+    // one path, and a restore with nothing to do fetches nothing.
+    status.restored = if meta.is_some() {
+        String::from("pending")
+    } else {
+        String::from(NOTHING_RESTORED)
     };
     if let Some(previous) = previous {
         status.throttles = previous.throttles;
@@ -3945,6 +3969,86 @@ mod push_tests {
         );
     }
 
+    /// Fails by: ANY durable step of a start — the restore, then the push — at
+    /// which a kill leaves the next start short of the one end state: the
+    /// remote holding the source whole and once, every store as it is on the
+    /// disk, nothing of the session's own kept aside as another writer's, and
+    /// a push that has nothing left to say.
+    ///
+    /// The kill is moved one step later each round until a start finishes
+    /// unkilled, so no step is left to the author's imagination. The transcript
+    /// crosses a segment boundary between the two pushes, and a store changes.
+    #[test]
+    fn a_kill_before_any_durable_step_is_recovered_by_the_next_start() {
+        let mut steps = None;
+        for kill_at in 0..600_u64 {
+            let base = base(&format!("offbox-kill-{kill_at}"));
+            let stand = standing(&[], Vec::new());
+            let one = Writer::new(&base, "one", "s");
+            one.git_file("batten-receipts/r.json", "receipt\n");
+            one.state_file("journal/merged.jsonl", "{}\n");
+            put(&one.transcript, &records(0..700, 1000));
+            assert_eq!(one.push().outcome, Pushed::Applied);
+            add(&one.transcript, &records(700..1900, 1000));
+            one.git_file("batten-receipts/r.json", "receipt, changed\n");
+
+            // THE START THAT IS KILLED.
+            crate::testing::kill_after(Some(kill_at));
+            let _ = restore_once(&one.session(), None);
+            let _ = push_once(&one.session(), &[]);
+            let killed = crate::testing::killed();
+            crate::testing::kill_after(None);
+
+            // THE SESSION GOES ON WHILE ITS DAEMON IS DOWN, as a live one does:
+            // a recovery that only holds for a session that stood still is one
+            // that keeps the session's own push aside the moment it has not.
+            add(&one.transcript, &records(1900..1910, 1000));
+            one.git_file("batten-receipts/r.json", "receipt, changed again\n");
+
+            // THE NEXT START, which is all the recovery there is.
+            one.restore(None);
+            let recovered = one.push().outcome;
+            assert!(
+                matches!(recovered, Pushed::Applied | Pushed::Unchanged),
+                "kill at {kill_at}: the next start {recovered:?}"
+            );
+            assert_eq!(
+                one.push().outcome,
+                Pushed::Unchanged,
+                "kill at {kill_at}: the two sides agree"
+            );
+            let tree = one.tree(&head(&stand, &one.meta));
+            let stored: Vec<u8> = tree
+                .iter()
+                .filter(|(path, _)| path.starts_with("transcript/main/0/"))
+                .flat_map(|(_, bytes)| bytes.clone())
+                .collect();
+            assert!(
+                stored == std::fs::read(&one.transcript).unwrap(),
+                "kill at {kill_at}: the remote's transcript is not the source"
+            );
+            assert_eq!(
+                tree["git/batten-receipts/r.json"], b"receipt, changed again\n",
+                "kill at {kill_at}"
+            );
+            assert_eq!(
+                tree["state/journal/merged.jsonl"], b"{}\n",
+                "kill at {kill_at}"
+            );
+            let aside: Vec<&String> = tree
+                .keys()
+                .filter(|path| path.starts_with("absorbed/"))
+                .collect();
+            assert!(aside.is_empty(), "kill at {kill_at}: kept aside: {aside:?}");
+            if !killed {
+                steps = Some(kill_at);
+                break;
+            }
+        }
+        let steps = steps.expect("a start finishes unkilled inside the bound");
+        assert!(steps > 8, "the premise: a start takes many steps: {steps}");
+    }
+
     /// Fails by: a throttle at discovery reading as a failure, or anything
     /// being sent after it.
     #[test]
@@ -4555,6 +4659,26 @@ mod push_tests {
         other.daemon(1000, 4, |_| {});
         assert_eq!(other.status().restored, "yes");
         assert!(other.restored().is_some());
+    }
+
+    /// Fails by: a start trusting the record an earlier run left — `none`,
+    /// written while the remote was empty — over what the remote holds now.
+    #[test]
+    fn a_start_restores_whatever_the_last_run_recorded() {
+        let base = base("offbox-restore-every-start");
+        let stand = standing(&[], Vec::new());
+        let fresh = Writer::new(&base, "fresh", "s");
+        assert_eq!(fresh.restore(None), Restored::Nothing);
+        assert_eq!(fresh.restored().as_deref().map(str::trim), Some("none"));
+        let (_, commit) = pushed_once(&base, &stand, "s");
+
+        fresh.daemon(1000, 4, |_| {});
+
+        assert_eq!(
+            fresh.restored().as_deref().map(str::trim),
+            Some(commit.as_str())
+        );
+        assert_eq!(fresh.status().restored, "yes");
     }
 
     /// Fails by: the sweep's rebuilt directories shipped with its journal.
