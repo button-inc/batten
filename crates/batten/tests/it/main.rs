@@ -433,6 +433,7 @@ mod sleep_ban;
 mod snapshots;
 #[cfg(unix)]
 mod sonar_gate;
+mod source_claude_code;
 mod spawn_ceilings;
 mod spawn_census;
 mod spawn_census_clippy;
