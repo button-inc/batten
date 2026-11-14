@@ -4031,36 +4031,19 @@ mod tests {
     /// (#1276). Failing here kills the mutant and reaps the group.
     #[cfg(unix)]
     fn reap(group: &mut Group) {
-        let pid = group
-            .pid
-            .parse::<i32>()
-            .ok()
-            .and_then(rustix::process::Pid::from_raw)
-            .expect("a numeric pid");
-        let deadline = std::time::Instant::now() + REAP_GRACE;
-        loop {
-            match rustix::process::waitid(
-                rustix::process::WaitId::Pid(pid),
-                rustix::process::WaitIdOptions::EXITED | rustix::process::WaitIdOptions::NOHANG,
-            ) {
-                Ok(Some(_)) | Err(rustix::io::Errno::CHILD) => break,
-                Ok(None) | Err(rustix::io::Errno::INTR) => {}
-                Err(other) => panic!("waiting on the group failed: {other}"),
-            }
-            if std::time::Instant::now() >= deadline {
-                let _ = escalate_group(&group.pid);
-                await_reaped(group.pid.parse().expect("a numeric pid"));
-                group.reaped = true;
-                panic!("the group outlived its cancel by {REAP_GRACE:?}, so it was killed");
-            }
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "the interval of the poll this loop is: it exits the moment the group \
-                          is reaped, and its outer bound is `REAP_GRACE`, past which the group \
-                          is killed and the case fails"
-            )]
-            std::thread::sleep(Duration::from_millis(5));
+        let pid: u32 = group.pid.parse().expect("a numeric pid");
+        let (reaped, exited) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            await_reaped(pid);
+            let _ = reaped.send(());
+        });
+        if exited.recv_timeout(REAP_GRACE).is_err() {
+            let _ = escalate_group(&group.pid);
+            let _ = waiter.join();
+            group.reaped = true;
+            panic!("the group outlived its cancel by {REAP_GRACE:?}, so it was killed");
         }
+        let _ = waiter.join();
         group.reaped = true;
     }
 

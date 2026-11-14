@@ -246,21 +246,43 @@ fn trace_whole(trace: &str) -> bool {
 const TRACE_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The trace at `path` once whole, or whatever it holds at [`TRACE_GRACE`].
+///
+/// WOKEN BY THE TRACER'S CLOSE, NEVER BY A POLL: the watch is placed before the
+/// first read, so a close after that read is an event and one before it left a
+/// whole trace to read. A wait that could not be set up reads once — a partial
+/// trace keys the case on every file, slower and never unsound.
+#[cfg(target_os = "linux")]
 fn await_trace(path: &std::path::Path) -> Option<String> {
+    use rustix::fs::inotify;
+    let read = || crate::fsio::read_to_string(path).ok();
+    let Ok(watch) = inotify::init(inotify::CreateFlags::CLOEXEC) else {
+        return read();
+    };
+    if inotify::add_watch(&watch, path, inotify::WatchFlags::CLOSE_WRITE).is_err() {
+        return read();
+    }
+    let (closed, woken) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut events = [0_u8; 1024];
+        while rustix::io::read(&watch, &mut events).is_ok() && closed.send(()).is_ok() {}
+    });
     let deadline = std::time::Instant::now() + TRACE_GRACE;
     loop {
-        let text = crate::fsio::read_to_string(path).ok();
-        if text.as_deref().is_some_and(trace_whole) || std::time::Instant::now() >= deadline {
+        let text = read();
+        if text.as_deref().is_some_and(trace_whole) {
             return text;
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of the poll this loop is: it exits the moment the detached \
-                      tracer writes the case's exit, and its outer bound is `TRACE_GRACE`, past \
-                      which the case keys on every file rather than waits longer"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() || woken.recv_timeout(left).is_err() {
+            return read();
+        }
     }
+}
+
+/// No tracer off Linux, so nothing to wait for.
+#[cfg(not(target_os = "linux"))]
+fn await_trace(path: &std::path::Path) -> Option<String> {
+    crate::fsio::read_to_string(path).ok()
 }
 
 /// A strace string argument up to its closing quote, or `None` for an escape
