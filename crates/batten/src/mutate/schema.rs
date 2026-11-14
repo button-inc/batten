@@ -58,8 +58,7 @@ pub(crate) fn __batten_record(line: std::fmt::Arguments<'_>) {{\n    \
 static REACHED: std::sync::OnceLock<Option<std::sync::Mutex<std::fs::File>>> = std::sync::OnceLock::new();\n    \
 if let Some(file) = REACHED.get_or_init(|| {{\n        \
 let dir = std::env::var_os(\"BATTEN_MUTANT_RECORD\")?;\n        \
-let file = std::fs::OpenOptions::new().create(true).append(true)\
-.open(std::path::Path::new(&dir).join(std::process::id().to_string())).ok()?;\n        \
+let file = std::fs::OpenOptions::new().create(true).append(true).open(std::path::Path::new(&dir).join(std::process::id().to_string())).ok()?; // stream: probe lines, committed by the case record's done file\n        \
 Some(std::sync::Mutex::new(file))\n    \
 }}) && let Ok(mut file) = file.lock() {{\n        \
 let _ = std::io::Write::write_fmt(&mut *file, format_args!(\"{{line}}\\n\"));\n    \
@@ -789,7 +788,7 @@ fn sync_dir(from: &std::path::Path, to: &std::path::Path, top: bool) -> anyhow::
 /// Write `text` to `path` only if it differs, keeping an unchanged file's time.
 fn write_if_changed(path: &std::path::Path, text: &str) -> anyhow::Result<()> {
     if crate::fsio::read_to_string(path).ok().as_deref() != Some(text) {
-        std::fs::write(path, text)?;
+        crate::durable::replace(path, text)?;
     }
     Ok(())
 }
@@ -1384,7 +1383,7 @@ fn keep_error(judging: &Judging<'_>, id: u32, said: &str) {
     if let Some(state) = judging.work.parent() {
         let errors = state.join("errors");
         let _ = std::fs::create_dir_all(&errors);
-        let _ = std::fs::write(errors.join(format!("{id}.log")), said);
+        let _ = crate::durable::replace(errors.join(format!("{id}.log")), said);
     }
 }
 
@@ -1404,7 +1403,7 @@ fn judge(
     mutant: &Listed,
     cases: &BTreeSet<Case>,
     hints: &std::sync::Mutex<std::collections::BTreeMap<Sibling, BTreeSet<Case>>>,
-    journal: &std::sync::Mutex<Option<std::fs::File>>,
+    journal: &std::sync::Mutex<Option<std::path::PathBuf>>,
 ) -> (Verdict, usize) {
     if cases.is_empty() {
         return (Verdict::Uncovered, 0);
@@ -1583,7 +1582,7 @@ fn record_into(base: &std::path::Path, test: &[String]) -> anyhow::Result<u8> {
     }
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
-    std::fs::write(dir.join("case"), format!("{name}\t{binary}"))?;
+    crate::durable::replace(dir.join("case"), format!("{name}\t{binary}"))?;
     let cwd = std::env::current_dir()?;
     let ran = super::spawn_as(
         &cwd,
@@ -1716,7 +1715,7 @@ pub fn record_reach(
     let staged = state.join(format!("recorder.{}", std::process::id()));
     std::fs::copy(std::env::current_exe()?, &staged)?;
     std::fs::rename(&staged, &recorder)?;
-    std::fs::write(
+    crate::durable::replace(
         &config,
         super::cover::wrapped_config(work, &recorder, RECORD_ARG, &state.join("nextest"))?,
     )?;
@@ -1759,7 +1758,7 @@ pub fn record_reach(
     // and on #1276 they held 3.7 GB of the tree's target while the judging ran.
     let _ = std::fs::remove_dir_all(target.join("tmp"));
     let reach = collect_reach(&base)?;
-    std::fs::write(base.join(SEALED), inputs)?;
+    crate::durable::replace(base.join(SEALED), inputs)?;
     Ok(reach)
 }
 
@@ -1922,11 +1921,11 @@ pub fn pair_key(
 const PASSED: &str = "passed";
 
 /// Append `line` to the journal, one write so a crash tears at most it.
-fn append(journal: &std::sync::Mutex<Option<std::fs::File>>, line: &str) {
-    if let Ok(mut held) = journal.lock()
-        && let Some(file) = held.as_mut()
+fn append(journal: &std::sync::Mutex<Option<std::path::PathBuf>>, line: &str) {
+    if let Ok(held) = journal.lock()
+        && let Some(path) = held.as_ref()
     {
-        let _ = std::io::Write::write_all(file, line.as_bytes());
+        let _ = crate::durable::append(path, line);
     }
 }
 
@@ -2161,13 +2160,7 @@ fn judge_all(
     let started = std::time::Instant::now();
     let nobody = BTreeSet::new();
     let hints = std::sync::Mutex::new(std::collections::BTreeMap::new());
-    let journal = std::sync::Mutex::new(
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(judging.store)
-            .ok(),
-    );
+    let journal = std::sync::Mutex::new(Some(judging.store.to_path_buf()));
     let next = std::sync::atomic::AtomicUsize::new(0);
     let reused_count = std::sync::atomic::AtomicUsize::new(0);
     let skipped_runs = std::sync::atomic::AtomicUsize::new(0);
@@ -2258,12 +2251,9 @@ fn judge_all(
 /// rewritten: a crash tears at most the last line, which `load_verdicts`
 /// skips, and a survivor's line outlives the sweep that decided it.
 fn journal(path: &std::path::Path, lines: &str) -> anyhow::Result<()> {
-    use std::io::Write as _;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?
-        .write_all(lines.as_bytes())?;
+    if !lines.is_empty() {
+        crate::durable::append(path, lines)?;
+    }
     Ok(())
 }
 
