@@ -260,7 +260,7 @@ fn the_excluded_referrers_are_not_judged() {
 }
 
 #[test]
-fn a_shadowed_name_is_reported() {
+fn a_shadowed_name_is_reported_as_a_duplicate() {
     let dir = fixture(
         "memories-shadowed",
         &[
@@ -277,6 +277,15 @@ fn a_shadowed_name_is_reported() {
     assert!(
         said.contains("notes.md.md"),
         "the finding names the shadowed file\n{said}"
+    );
+    // TWO FINDINGS, AND THE COUNT IS THE ASSERTION. The name also fails the
+    // charset, so the exit and the path alone hold with the duplicate arm gone;
+    // the report prints the rule and never the verdict, so only the second
+    // finding tells the two arms apart.
+    assert_eq!(
+        said.matches("notes.md.md").count(),
+        2,
+        "a shadowed name is a duplicate and unspellable, one finding each\n{said}"
     );
 }
 
