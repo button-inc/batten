@@ -747,6 +747,7 @@ fn run_offbox_daemon(
         .unwrap_or_default();
     let transcript = transcript.map(PathBuf::from);
     let predecessor = std::env::var(session::PARENT_ENV).ok();
+    let history = crate::sessions::machine_sources(harness, transcript.as_deref());
     let launch = offbox::run(
         &offbox::Launching {
             project_root: &root,
@@ -758,6 +759,8 @@ fn run_offbox_daemon(
             origin: origin.as_deref(),
             predecessor: predecessor.as_deref(),
             wakes: None,
+            history: &history,
+            byte_cap: offbox::BYTE_CAP,
         },
         &mut DaemonWorld,
     )?;
