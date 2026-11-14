@@ -17913,21 +17913,13 @@ fn run_mutate(
 
 /// `batten mutate cargo`: every mutant cargo-mutants makes of the change since
 /// `$MUTANT_CHANGED_SINCE`, judged in one schema build (`mutate::schema`), and
-/// only the ones the schema hands back by cargo-mutants itself, on as many jobs
-/// as the machine holds at the tree's declared per-job cost. Missed mutants are
-/// a violation; a run that erred, a timeout or a failed baseline could not
-/// look.
+/// the ones the schema hands back judged inside the sweep by cargo-mutants in
+/// place, on the cases that can observe each. Missed mutants are a violation;
+/// a run that erred or a timeout could not look.
 ///
 /// The disk floor is the collector's own, so the jobs never spend the room it
 /// exists to keep.
 fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
-    let cost = match mutate::JobCost::declared() {
-        Ok(cost) => cost,
-        Err(reason) => {
-            writeln!(err, "::error:: mutate cargo: {reason:#}")?;
-            return Ok(ExitCode::Usage);
-        }
-    };
     let Some(base) = mutate::changed_since() else {
         writeln!(
             err,
@@ -17957,7 +17949,6 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
         .unwrap_or(prune::DEFAULT_FREE_BAND)
         .0;
     let machine = mutate::Machine::probe(floor)?;
-    let jobs = mutate::job_count(machine, cost);
     let diff = state::repo_state_dir(root)?
         .join("mutate")
         .join("change.diff");
@@ -17991,33 +17982,16 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
         "mutate cargo: {} mutant(s) of {sources} changed source(s), switched in one schema build, judged on {workers} worker(s)",
         mine.len()
     )?;
-    let swept = mutate::schema::sweep(root, &mine, &listed_over, workers, out)?;
-    let schema = mutate::schema::exit_of(swept.code);
-    if swept.classic.is_empty() {
-        return Ok(schema);
-    }
-    writeln!(
-        out,
-        "mutate cargo: {} handed-back mutant(s) judged by cargo-mutants",
-        swept.classic.len()
-    )?;
-    // CARGO-MUTANTS COPIES THE LIVE CHECKOUT, an hour after the listing: an
-    // edit since would judge these names against other text, so it refuses
-    // rather than report verdicts about code the listing never saw.
-    anyhow::ensure!(
-        mutate::cover::source_digest(root)? == listed_over,
-        "the checkout's Rust sources changed during the sweep, so cargo-mutants would judge \
-         the handed-back mutants against text they were not listed from; the schema's verdicts \
-         are journaled, so run the sweep again once the tree is still"
-    );
-    let classic = mutate::cargo_exit(mutate::cargo_mutants(
-        root,
-        &runner,
-        &diff,
-        jobs,
-        &swept.classic,
-    )?);
-    Ok(mutate::schema::worse(schema, classic))
+    // THE HANDED-BACK MUTANTS ARE JUDGED INSIDE THE SWEEP, in place, on the
+    // cases that can observe each, under the same journal: the classic stage
+    // this replaces paid a copy, a full build, a baseline run and the whole
+    // suite per mutant on every lap.
+    let handback = mutate::schema::Handback {
+        runner: &runner,
+        diff: &diff,
+    };
+    let swept = mutate::schema::sweep(root, &mine, &listed_over, workers, Some(&handback), out)?;
+    Ok(mutate::schema::exit_of(swept.code))
 }
 
 /// `batten mutate sweep`: the declared runner over the narrowed set, or the one

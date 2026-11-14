@@ -168,6 +168,10 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     let (code, third, err) = sweep();
     assert_eq!(code, Some(2), "{third}\n{err}");
     assert!(third.contains("reused 3 of 5 verdict(s)"), "{third}\n{err}");
+    assert!(
+        third.contains("reach carried 2 case(s) across the change"),
+        "only adds, which runs five, is recorded again: {third}"
+    );
     assert!(third.contains(COUNTS), "{third}");
     // THE REUSE CASE: a new function no case runs, with a doc comment, and a
     // new const no case names move no key: a function is its own probe's, and
@@ -180,6 +184,10 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     let (code, fourth, err) = sweep();
     assert_eq!(code, Some(2), "{fourth}\n{err}");
     assert!(
+        fourth.contains("reach carried 3 case(s) across the change"),
+        "an added item re-records no case: {fourth}"
+    );
+    assert!(
         fourth.contains("reused 5 of 5 verdict(s)"),
         "{fourth}\n{err}"
     );
@@ -190,6 +198,10 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     let (code, fifth, err) = sweep();
     assert_eq!(code, Some(2), "{fifth}\n{err}");
     assert!(fifth.contains("reused 3 of 5 verdict(s)"), "{fifth}\n{err}");
+    assert!(
+        fifth.contains("reach carried 2 case(s) across the change"),
+        "{fifth}"
+    );
     // THE CASE #1276 PAID SIX HOURS FOR: a non-Rust file no case reads. A
     // traced case keys on the files it touched, so every verdict is reused;
     // untraced, every case keys on every non-Rust file and is judged again.
@@ -202,4 +214,10 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
         "traced: {}\n{sixth}\n{err}",
         traced()
     );
+    let carried = if traced() {
+        "reach carried 3 case(s)"
+    } else {
+        "reach carried 0 case(s)"
+    };
+    assert!(sixth.contains(carried), "{carried:?} in {sixth}");
 }
