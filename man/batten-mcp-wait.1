@@ -1,0 +1,40 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-mcp-wait 1  batten 
+.SH NAME
+batten\-mcp\-wait \- Poll one declared method until its declared reduction changes, or until an eviction limit less a buffer passes
+.SH SYNOPSIS
+\fBbatten mcp wait\fR [\fB\-\-interval\fR] [\fB\-\-evict\-after\fR] [\fB\-\-buffer\fR] [\fB\-\-singleton\fR] [\fB\-\-each\-receipt\fR] [\fB\-\-arg\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIserver\fR> <\fImethod\fR> [\fIparams\fR] 
+.SH DESCRIPTION
+Poll one declared method until its declared reduction changes, or until an eviction limit less a buffer passes
+.SH OPTIONS
+.TP
+\fB\-\-interval\fR \fI<interval>\fR
+Seconds between polls (default 30)
+.TP
+\fB\-\-evict\-after\fR \fI<evict\-after>\fR
+The host\*(Aqs cache\-eviction limit in seconds; absent, the wait ends only on a change
+.TP
+\fB\-\-buffer\fR \fI<buffer>\fR
+Seconds subtracted from the eviction limit (default 60)
+.TP
+\fB\-\-singleton\fR \fI<singleton>\fR
+Hold the clone\*(Aqs singleton lock of this name while waiting
+.TP
+\fB\-\-each\-receipt\fR \fI<each\-receipt>\fR
+Read one subject per receipt minted under this name, listed again on every poll
+.TP
+\fB\-\-arg\fR \fI<arg>\fR
+The argument key each receipt\*(Aqs suffix is passed as, with \-\-each\-receipt
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIserver\fR>
+The server to dispatch to, as a `[[mcp.source]]` names it
+.TP
+<\fImethod\fR>
+The method to poll; it must have a `[[mcp.result]]` row
+.TP
+[\fIparams\fR]
+One JSON argument object per subject; the wait ends when any one\*(Aqs reduction changes

@@ -56,7 +56,12 @@ fn usage(input: u64, cache_read: u64, cache_write: u64, output: u64) -> serde_js
 }
 
 fn jsonl(records: &[serde_json::Value]) -> String {
-    records.iter().map(|record| format!("{record}\n")).collect()
+    let mut text = String::new();
+    for record in records {
+        text.push_str(&record.to_string());
+        text.push('\n');
+    }
+    text
 }
 
 /// Three messages, one record each. Context is the LAST message's

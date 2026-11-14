@@ -520,7 +520,8 @@ pub struct ResultRow {
     pub reduce: Reduce,
     /// The fields kept, in the order they are written.
     ///
-    /// Top-level keys of the payload the row's `node` reaches. A declared field
+    /// Paths into the payload the row's `node` reaches, in [`Node::at`]'s
+    /// dotted spelling, so `outer.inner` names a nested key. A declared field
     /// the payload does not carry is ABSENT from the reduction rather than
     /// present and null: "the row does not have this" and "the reduction dropped
     /// it" are different answers.
@@ -540,6 +541,15 @@ pub struct ResultRow {
     /// wrongly gets could-not-look rather than a reduction over the wrong tree.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub embedded: bool,
+    /// Whether the answer's single text block carries its document INSIDE an
+    /// envelope of prose, rather than being the document (CLOUD-2759).
+    ///
+    /// A new key and not a new meaning for `embedded`, which re-parses a node's
+    /// whole text and has rows written against it. Set, the payload is the first
+    /// complete JSON object inside the text block; [`payload_for`] reads it, so
+    /// `mcp call` and `mcp wait` reduce such an answer alike.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub enveloped: bool,
 }
 
 /// How a [`ResultRow`] turns a response into something rule 4 permits.
@@ -1979,6 +1989,53 @@ pub fn payload(result: &serde_json::Value) -> Payload {
     }
 }
 
+/// [`payload`], with the declared row's `enveloped` key applied (CLOUD-2759).
+///
+/// Only where [`payload`] did not unframe the answer and the row says the single
+/// text block carries its document inside prose: then the first complete JSON
+/// object in that text is the payload. A row without the key, or an answer
+/// [`payload`] already unframed, is [`payload`]'s answer unchanged.
+//MUTANT-SUITE crates/batten/src/mcp.rs
+//MUTANT enveloped-unread|s@^        \&\& row.is_some_and(\x7crow\x7c row.enveloped)$@        \&\& false@|an_embedded_object_is_found_inside_an_envelope
+#[must_use]
+pub fn payload_for(result: &serde_json::Value, row: Option<&ResultRow>) -> Payload {
+    let plain = payload(result);
+    if !plain.unwrapped
+        && row.is_some_and(|row| row.enveloped)
+        && let Some(value) = single_text(result).and_then(first_object)
+    {
+        return Payload {
+            value,
+            unwrapped: true,
+        };
+    }
+    plain
+}
+
+/// The text of a result's single content block, or `None`.
+fn single_text(result: &serde_json::Value) -> Option<&str> {
+    result
+        .get("content")
+        .and_then(serde_json::Value::as_array)
+        .filter(|blocks| blocks.len() == 1)
+        .and_then(|blocks| blocks.first())
+        .and_then(|block| block.get("text"))
+        .and_then(serde_json::Value::as_str)
+}
+
+/// The first complete JSON object in `text`: tried at each `{` in order, the
+/// first one a streaming parse reads whole as an object.
+fn first_object(text: &str) -> Option<serde_json::Value> {
+    text.match_indices('{').find_map(|(at, _)| {
+        let mut stream =
+            serde_json::Deserializer::from_str(text.get(at..)?).into_iter::<serde_json::Value>();
+        match stream.next() {
+            Some(Ok(value)) if value.is_object() => Some(value),
+            _ => None,
+        }
+    })
+}
+
 /// Apply a row's reduction to a payload [`payload`] has already unframed.
 ///
 /// **A row that cannot find its payload yields `None`**, which the caller reports
@@ -2717,6 +2774,388 @@ fn frame(text: &str) -> String {
     text.to_owned()
 }
 
+// ---------------------------------------------------------------------------
+// `mcp wait` (CLOUD-2759)
+// ---------------------------------------------------------------------------
+//
+// THE SECOND SANCTIONED WAITER. `pr watch` is a task that polls outside the model
+// and exits when the forge reaches a verdict; this is the same shape over the MCP
+// client: poll a declared method, reduce each answer by its declared row, and
+// exit when a reduction changes. The caller backgrounds it and acts on its exit,
+// which is the rule every timer refusal already states. Nothing here names a
+// session, a status or a vendor: what is compared is whatever the consumer's
+// `[[mcp.result]]` row declares.
+
+/// What one subject read as on one poll.
+#[derive(Debug, Clone, PartialEq)]
+enum Reading {
+    /// The declared reduction of the answer: the only thing compared or printed.
+    Reduced(serde_json::Map<String, serde_json::Value>),
+    /// The read failed or could not be reduced.
+    Unreadable,
+}
+
+/// Why a read was not reduced, which decides the first poll's exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unread {
+    /// No answer: the transport failed.
+    Transport,
+    /// The server answered with a tool-level error.
+    ToolError,
+    /// An answer arrived and the row could not reduce it.
+    Unreduced,
+}
+
+/// Where a wait's subjects come from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Subjects {
+    /// Argument objects as written, each named by its 1-based position.
+    Fixed(Vec<serde_json::Value>),
+    /// One subject per `<mint>.<suffix>` file in `store`, listed again on every
+    /// poll and read with the argument `{<arg>: <suffix>}`, each named by its
+    /// suffix.
+    Receipts {
+        /// The receipt store: `batten-receipts` under the git directory.
+        store: std::path::PathBuf,
+        /// The mint name receipts are filed under.
+        mint: String,
+        /// The argument key the suffix is passed as.
+        arg: String,
+    },
+}
+
+impl Subjects {
+    /// Every subject right now, as `(name, arguments)`, in a stable order.
+    fn list(&self) -> Vec<(String, serde_json::Value)> {
+        match self {
+            Subjects::Fixed(params) => params
+                .iter()
+                .enumerate()
+                .map(|(at, params)| ((at + 1).to_string(), params.clone()))
+                .collect(),
+            Subjects::Receipts { store, mint, arg } => {
+                let prefix = format!("{mint}.");
+                let mut suffixes: Vec<String> = std::fs::read_dir(store)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .filter_map(|entry| entry.file_name().into_string().ok())
+                    .filter_map(|name| name.strip_prefix(&prefix).map(str::to_owned))
+                    .filter(|suffix| !suffix.is_empty())
+                    .collect();
+                suffixes.sort();
+                suffixes
+                    .into_iter()
+                    .map(|suffix| (suffix.clone(), receipt_params(arg, &suffix)))
+                    .collect()
+            }
+        }
+    }
+}
+
+/// The argument object for one receipt: `{<arg>: <suffix>}`.
+fn receipt_params(arg: &str, suffix: &str) -> serde_json::Value {
+    let mut params = serde_json::Map::new();
+    params.insert(arg.to_owned(), serde_json::Value::String(suffix.to_owned()));
+    serde_json::Value::Object(params)
+}
+
+/// How often a wait reads, and how many pauses it may take.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pacing {
+    /// Seconds between polls.
+    pub interval: f64,
+    /// How many pauses fit before the limit, or `None` for no time limit.
+    pub pauses: Option<u128>,
+}
+
+impl Pacing {
+    /// Pacing for `interval`, bounded by `evict_after` less `buffer` where an
+    /// eviction limit is given (CLOUD-2759).
+    ///
+    /// **The bound is a number of pauses**: the difference divided by the
+    /// interval and rounded down, so the elapsed time runs over by however long
+    /// the reads take, which the buffer absorbs. **No limit is no default**: with
+    /// no `evict_after` the wait ends only on a change, because a default would be
+    /// one host's figure under one billing state, and this crate carries none.
+    /// `None` for a zero interval, which is no pacing at all.
+    //MUTANT-SUITE crates/batten/src/mcp.rs
+    //MUTANT no-limit-gets-a-default|s@^        let Some(evict) = evict_after else {$@        let Some(evict) = evict_after.or(Some(std::time::Duration::from_secs(3000))) else {@|the_limit_is_the_eviction_limit_less_the_buffer
+    //MUTANT evict-limit-miscounted|s@^        let pauses = evict.saturating_sub(buffer).as_millis() / step;$@        let pauses = evict.saturating_sub(buffer).as_millis() / step + 1;@|the_limit_is_the_eviction_limit_less_the_buffer
+    #[must_use]
+    pub fn new(
+        interval: std::time::Duration,
+        evict_after: Option<std::time::Duration>,
+        buffer: std::time::Duration,
+    ) -> Option<Pacing> {
+        let step = interval.as_millis();
+        if step == 0 {
+            return None;
+        }
+        let seconds = interval.as_secs_f64();
+        let Some(evict) = evict_after else {
+            return Some(Pacing {
+                interval: seconds,
+                pauses: None,
+            });
+        };
+        let pauses = evict.saturating_sub(buffer).as_millis() / step;
+        Some(Pacing {
+            interval: seconds,
+            pauses: Some(pauses),
+        })
+    }
+}
+
+/// How a wait ended: the code and the one line it prints.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Waited {
+    /// The verb's exit code, on `mcp call`'s table.
+    pub exit: crate::exit::ExitCode,
+    /// The one pointer-only line: never the answer, only the reduced values that
+    /// changed (rule 4).
+    pub line: String,
+}
+
+impl Waited {
+    fn at(exit: crate::exit::ExitCode, line: String) -> Waited {
+        Waited { exit, line }
+    }
+}
+
+/// The singleton lock a wait holds for its lifetime, released when it returns.
+struct HeldLock {
+    git_dir: std::path::PathBuf,
+    name: String,
+}
+
+impl Drop for HeldLock {
+    fn drop(&mut self) {
+        crate::task::singleton_release(&self.git_dir, &self.name);
+    }
+}
+
+/// Take the clone's singleton lock `name`, as `land` takes its own: this
+/// process's pid and the shared recheck. A held lock is exit 2 naming the
+/// holder, and a lock that could not be looked at is exit 3, never "free".
+//MUTANT-SUITE crates/batten/src/mcp.rs
+//MUTANT lock-not-exclusive|s@^        crate::task::Claim::Held { holder, .. } => Err(held_by(name, \&holder)),$@        crate::task::Claim::Held { .. } => Ok(None),@|a_second_waiter_under_the_same_name_exits_two
+//MUTANT could-not-look-reads-as-free|s@^        crate::task::Claim::CouldNotLook(_) => Err(unlookable(name)),$@        crate::task::Claim::CouldNotLook(_) => Ok(None),@|a_lock_that_cannot_be_looked_at_is_three
+fn acquire(lock: Option<(&Path, &str)>) -> std::result::Result<Option<HeldLock>, Waited> {
+    let Some((git_dir, name)) = lock else {
+        return Ok(None);
+    };
+    let pid = std::process::id().to_string();
+    match crate::task::singleton_acquire(git_dir, name, &pid, crate::SINGLETON_RECHECK) {
+        crate::task::Claim::Taken | crate::task::Claim::Reclaimed(_) => Ok(Some(HeldLock {
+            git_dir: git_dir.to_path_buf(),
+            name: name.to_owned(),
+        })),
+        crate::task::Claim::Held { holder, .. } => Err(held_by(name, &holder)),
+        crate::task::Claim::CouldNotLook(_) => Err(unlookable(name)),
+    }
+}
+
+fn held_by(name: &str, holder: &str) -> Waited {
+    Waited::at(
+        crate::exit::ExitCode::Violation,
+        format!("mcp wait: {name} is already held by pid {holder}; one waiter at a time"),
+    )
+}
+
+fn unlookable(name: &str) -> Waited {
+    Waited::at(
+        crate::exit::ExitCode::Internal,
+        format!("mcp wait: the {name} lock could not be looked at, which is not the same as free"),
+    )
+}
+
+/// Read and reduce one subject.
+//MUTANT-SUITE crates/batten/src/mcp.rs
+//MUTANT unreduced-compared-whole|s@^    if !payload.unwrapped {$@    if false {@|an_unreduced_poll_is_three
+//MUTANT whole-answer-compared|s@^    let reduced = reduce(row, \&payload.value);$@    let reduced = payload.value.as_object().cloned();@|an_undeclared_field_changing_is_not_a_change
+fn read_one(
+    row: &ResultRow,
+    params: &serde_json::Value,
+    read: &mut dyn FnMut(&serde_json::Value) -> Result<serde_json::Value>,
+) -> (Reading, Option<Unread>) {
+    let Ok(result) = read(params) else {
+        return (Reading::Unreadable, Some(Unread::Transport));
+    };
+    if failed(&result) {
+        return (Reading::Unreadable, Some(Unread::ToolError));
+    }
+    let payload = payload_for(&result, Some(row));
+    if !payload.unwrapped {
+        return (Reading::Unreadable, Some(Unread::Unreduced));
+    }
+    let reduced = reduce(row, &payload.value);
+    match reduced {
+        Some(kept) => (Reading::Reduced(kept), None),
+        None => (Reading::Unreadable, Some(Unread::Unreduced)),
+    }
+}
+
+/// Read every subject once, in list order.
+//MUTANT-SUITE crates/batten/src/mcp.rs
+//MUTANT only-first-read-polled|s@^    for (name, params) in subjects {$@    for (name, params) in subjects.iter().take(1) {@|any_one_of_several_reads_changing_ends_the_wait
+fn poll(
+    row: &ResultRow,
+    subjects: &[(String, serde_json::Value)],
+    read: &mut dyn FnMut(&serde_json::Value) -> Result<serde_json::Value>,
+) -> Vec<(String, Reading, Option<Unread>)> {
+    let mut readings = Vec::with_capacity(subjects.len());
+    for (name, params) in subjects {
+        let (reading, why) = read_one(row, params, read);
+        readings.push((name.clone(), reading, why));
+    }
+    readings
+}
+
+/// Whether a subject's reading moved. Staying unreadable is not a change.
+//MUTANT-SUITE crates/batten/src/mcp.rs
+//MUTANT change-unseen|s@^    before != after$@    false@|a_changed_reduction_ends_the_wait
+//MUTANT unreadable-subject-ends-every-wait|s@^    before != after$@    before != after \x7c\x7c *after == Reading::Unreadable@|one_unreadable_subject_does_not_end_the_wait
+fn changed(before: &Reading, after: &Reading) -> bool {
+    before != after
+}
+
+/// The one line naming what changed: the subject, and each reduced value that
+/// moved, old then new. Values are the REDUCTION's, never the answer's.
+fn change_line(name: &str, before: &Reading, after: &Reading) -> String {
+    match (before, after) {
+        (Reading::Reduced(old), Reading::Reduced(new)) => {
+            let keys: std::collections::BTreeSet<&String> = old.keys().chain(new.keys()).collect();
+            let shown = |value: Option<&serde_json::Value>| {
+                value.map_or_else(|| "-".to_owned(), serde_json::Value::to_string)
+            };
+            let moved: Vec<String> = keys
+                .into_iter()
+                .filter(|key| old.get(*key) != new.get(*key))
+                .map(|key| format!("{key} {} -> {}", shown(old.get(key)), shown(new.get(key))))
+                .collect();
+            format!("mcp wait: subject {name} changed: {}", moved.join("; "))
+        }
+        (_, Reading::Unreadable) => format!("mcp wait: subject {name} became unreadable"),
+        (Reading::Unreadable, Reading::Reduced(_)) => {
+            format!("mcp wait: subject {name} became readable")
+        }
+    }
+}
+
+/// `mcp wait` over an injected read and pause (CLOUD-2759).
+///
+/// The read is one dispatch of `method` with one subject's arguments; the pause
+/// is the one sleep in the crate. Both are injected so the cases count reads and
+/// pauses rather than time them, the way `pr_watch::watch_with` takes its pacing.
+///
+/// Compares each poll's reduction against the subject's FIRST reading, so a
+/// subject already in the state the caller fears is not a change: the caller
+/// reads once before waiting.
+//MUTANT-SUITE crates/batten/src/mcp.rs
+//MUTANT undeclared-method-polled|s@^    let Some(row) = declared else {$@    let Some(row) = declared.or(config.results.first()) else {@|a_method_with_no_result_row_is_refused_before_the_first_poll
+//MUTANT lock-not-taken|s@^    let held = acquire(lock);$@    let held = acquire(None);@|a_singleton_wait_holds_the_lock_while_it_runs
+//MUTANT empty-set-waits|s@^    if known.is_empty() {$@    if false {@|no_receipts_is_nothing_to_wait_for
+//MUTANT unreadable-reads-as-unchanged|s@^        .all(\x7c(_, reading, _)\x7c \*reading == Reading::Unreadable)$@        .all(\x7c_\x7c false)@|a_first_poll_that_cannot_be_made_is_three
+//MUTANT limit-waits-forever|s@^        if pacing.pauses.is_some_and(\x7climit\x7c done >= limit) {$@        if false {@|no_change_exits_zero_at_the_limit
+//MUTANT receipts-read-once|s@^        let fresh = subjects.list();$@        let fresh = known.clone();@|a_receipt_minted_mid_wait_is_watched_from_the_next_poll
+//MUTANT removed-receipt-still-read|s@^        known.retain(\x7c(name, _)\x7c fresh.iter().any(\x7c(listed, _)\x7c listed == name));$@        known.retain(\x7c_\x7c true);@|a_receipt_removed_mid_wait_is_dropped
+//MUTANT receipt-named-by-position|s@^                    .map(\x7csuffix\x7c (suffix.clone(), receipt_params(arg, \&suffix)))$@                    .enumerate().map(\x7c(at, suffix)\x7c ((at + 1).to_string(), receipt_params(arg, \&suffix)))@|a_receipt_minted_mid_wait_is_watched_from_the_next_poll
+pub(crate) fn wait_with(
+    config: &McpConfig,
+    method: &str,
+    subjects: &Subjects,
+    pacing: Pacing,
+    lock: Option<(&Path, &str)>,
+    read: &mut dyn FnMut(&serde_json::Value) -> Result<serde_json::Value>,
+    pause: &mut dyn FnMut(f64),
+) -> Waited {
+    use crate::exit::ExitCode;
+    let declared = row_for(config, method);
+    let Some(row) = declared else {
+        return Waited::at(
+            ExitCode::Usage,
+            format!(
+                "mcp wait: {method} declares no [[mcp.result]] row, so nothing bounded can be \
+                 compared — declare one and wait again"
+            ),
+        );
+    };
+    let held = acquire(lock);
+    let _held = match held {
+        Ok(held) => held,
+        Err(refused) => return refused,
+    };
+    let mut known = subjects.list();
+    if known.is_empty() {
+        return Waited::at(
+            ExitCode::Success,
+            "mcp wait: nothing to wait for".to_owned(),
+        );
+    }
+    let first = poll(row, &known, read);
+    if first
+        .iter()
+        .all(|(_, reading, _)| *reading == Reading::Unreadable)
+    {
+        // A tool-level error from the ONLY subject is the caller's arguments,
+        // exit 1 as `mcp call` answers it; anything else is could-not-look.
+        if let [(_, _, Some(Unread::ToolError))] = first.as_slice() {
+            return Waited::at(
+                ExitCode::Usage,
+                format!("mcp wait: {method} reported a tool-level error for its only subject"),
+            );
+        }
+        return Waited::at(
+            ExitCode::Internal,
+            format!(
+                "mcp wait: no subject's first read of {method} could be made or reduced — \
+                 could-not-look, never unchanged"
+            ),
+        );
+    }
+    let mut baseline: Vec<(String, Reading)> = first
+        .into_iter()
+        .map(|(name, reading, _)| (name, reading))
+        .collect();
+    let mut done: u128 = 0;
+    loop {
+        if pacing.pauses.is_some_and(|limit| done >= limit) {
+            break;
+        }
+        pause(pacing.interval);
+        done += 1;
+        let fresh = subjects.list();
+        known.retain(|(name, _)| fresh.iter().any(|(listed, _)| listed == name));
+        for subject in fresh {
+            if !known.iter().any(|(name, _)| *name == subject.0) {
+                known.push(subject);
+            }
+        }
+        if known.is_empty() {
+            return Waited::at(
+                ExitCode::Success,
+                "mcp wait: nothing to wait for".to_owned(),
+            );
+        }
+        for (name, after, _) in poll(row, &known, read) {
+            match baseline.iter().find(|(seen, _)| *seen == name) {
+                Some((_, before)) if changed(before, &after) => {
+                    return Waited::at(ExitCode::Success, change_line(&name, before, &after));
+                }
+                Some(_) => {}
+                // A subject first seen on this poll: this reading is its baseline.
+                None => baseline.push((name, after)),
+            }
+        }
+        baseline.retain(|(name, _)| known.iter().any(|(listed, _)| listed == name));
+    }
+    Waited::at(
+        ExitCode::Success,
+        format!("mcp wait: no change in {} polls", done + 1),
+    )
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -2888,6 +3327,7 @@ mod tests {
             fields: fields.iter().map(|f| (*f).to_owned()).collect(),
             node: String::new(),
             embedded: false,
+            enveloped: false,
         }
     }
 
@@ -3472,6 +3912,7 @@ mod tests {
             fields: Vec::new(),
             node: String::new(),
             embedded: false,
+            enveloped: false,
         });
         assert!(validate(&config).is_err());
     }
@@ -4123,5 +4564,542 @@ mod tests {
             Some("NEGOTIATE-X".to_owned())
         );
         assert_eq!(challenge(&response(r#"realm="x""#)), None);
+    }
+
+    // --- `mcp wait` (CLOUD-2759) --------------------------------------------
+
+    use std::cell::{Cell, RefCell};
+    use std::time::Duration;
+
+    fn wait_row(method: &str, fields: &[&str], enveloped: bool) -> ResultRow {
+        ResultRow {
+            method: method.to_owned(),
+            reduce: Reduce::Project,
+            fields: fields.iter().map(|field| (*field).to_owned()).collect(),
+            node: String::new(),
+            embedded: false,
+            enveloped,
+        }
+    }
+
+    fn wait_config(row: ResultRow) -> McpConfig {
+        McpConfig {
+            results: vec![row],
+            ..McpConfig::default()
+        }
+    }
+
+    /// A `tools/call` result whose one text block is `text`.
+    fn answer_text(text: &str) -> serde_json::Value {
+        serde_json::json!({"content": [{"type": "text", "text": text}]})
+    }
+
+    /// A pure-JSON answer carrying `status` and a field no row declares.
+    fn status(value: &str, noise: u64) -> serde_json::Value {
+        answer_text(&serde_json::json!({"status": value, "noise": noise}).to_string())
+    }
+
+    fn pacing(evict: Option<u64>) -> Pacing {
+        Pacing::new(
+            Duration::from_secs(30),
+            evict.map(Duration::from_secs),
+            Duration::from_secs(60),
+        )
+        .expect("a positive interval")
+    }
+
+    fn one_subject() -> Subjects {
+        Subjects::Fixed(vec![serde_json::json!({})])
+    }
+
+    #[test]
+    fn a_changed_reduction_ends_the_wait() {
+        let config = wait_config(wait_row("get", &["status"], false));
+        let script = [status("A", 1), status("A", 2), status("B", 3)];
+        let reads = Cell::new(0);
+        let waited = wait_with(
+            &config,
+            "get",
+            &one_subject(),
+            pacing(None),
+            None,
+            &mut |_| {
+                let at = reads.get();
+                reads.set(at + 1);
+                Ok(script[at.min(2)].clone())
+            },
+            &mut |_| {},
+        );
+        assert_eq!(reads.get(), 3, "returns after the third read");
+        assert_eq!(waited.exit, crate::exit::ExitCode::Success);
+        assert_eq!(
+            waited.line, r#"mcp wait: subject 1 changed: status "A" -> "B""#,
+            "the changed field, old and new, and nothing else from the answer"
+        );
+    }
+
+    #[test]
+    fn an_undeclared_field_changing_is_not_a_change() {
+        let config = wait_config(wait_row("get", &["status"], false));
+        let reads = Cell::new(0u64);
+        let waited = wait_with(
+            &config,
+            "get",
+            &one_subject(),
+            pacing(Some(150)),
+            None,
+            &mut |_| {
+                reads.set(reads.get() + 1);
+                Ok(status("A", reads.get()))
+            },
+            &mut |_| {},
+        );
+        assert_eq!(waited.line, "mcp wait: no change in 4 polls");
+        assert_eq!(reads.get(), 4, "the wait ran to its limit");
+    }
+
+    #[test]
+    fn no_change_exits_zero_at_the_limit() {
+        let config = wait_config(wait_row("get", &["status"], false));
+        let pauses = Cell::new(0);
+        let waited = wait_with(
+            &config,
+            "get",
+            &one_subject(),
+            pacing(Some(150)),
+            None,
+            &mut |_| Ok(status("A", 0)),
+            &mut |seconds| {
+                assert!((seconds - 30.0).abs() < f64::EPSILON, "the interval");
+                pauses.set(pauses.get() + 1);
+            },
+        );
+        assert_eq!(pauses.get(), 3, "a first read, then exactly three pauses");
+        assert_eq!(waited.exit, crate::exit::ExitCode::Success);
+        assert_eq!(waited.line, "mcp wait: no change in 4 polls");
+    }
+
+    #[test]
+    fn a_first_poll_that_cannot_be_made_is_three() {
+        let config = wait_config(wait_row("get", &["status"], false));
+        let waited = wait_with(
+            &config,
+            "get",
+            &one_subject(),
+            pacing(Some(150)),
+            None,
+            &mut |_| Err(anyhow::anyhow!("the transport failed")),
+            &mut |_| {},
+        );
+        assert_eq!(
+            waited.exit,
+            crate::exit::ExitCode::Internal,
+            "{}",
+            waited.line
+        );
+    }
+
+    #[test]
+    fn a_method_with_no_result_row_is_refused_before_the_first_poll() {
+        // A row for ANOTHER method is declared, so a waiter that borrowed it
+        // would poll; refusing is the only way to read nothing.
+        let config = wait_config(wait_row("other", &["status"], false));
+        let reads = Cell::new(0);
+        let waited = wait_with(
+            &config,
+            "get",
+            &one_subject(),
+            pacing(Some(150)),
+            None,
+            &mut |_| {
+                reads.set(reads.get() + 1);
+                Ok(status("A", 0))
+            },
+            &mut |_| {},
+        );
+        assert_eq!(waited.exit, crate::exit::ExitCode::Usage, "{}", waited.line);
+        assert_eq!(reads.get(), 0, "zero reads");
+    }
+
+    /// One prose line, then one JSON object: the shape the session read answers
+    /// in.
+    fn enveloped(bucket: &str) -> serde_json::Value {
+        answer_text(&format!(
+            "Session record follows.\n{}",
+            serde_json::json!({"ccr": {"status_bucket": bucket}, "title": "t"})
+        ))
+    }
+
+    #[test]
+    fn an_embedded_object_is_found_inside_an_envelope() {
+        let row = wait_row("get", &["ccr.status_bucket"], true);
+        let reduced = reduce(&row, &payload_for(&enveloped("working"), Some(&row)).value);
+        assert_eq!(
+            reduced.and_then(|kept| kept.get("ccr.status_bucket").cloned()),
+            Some(serde_json::json!("working")),
+            "the reduction is the value at the dotted path"
+        );
+        let config = wait_config(row);
+        let script = [enveloped("working"), enveloped("blocked")];
+        let reads = Cell::new(0);
+        let waited = wait_with(
+            &config,
+            "get",
+            &one_subject(),
+            pacing(None),
+            None,
+            &mut |_| {
+                let at = reads.get();
+                reads.set(at + 1);
+                Ok(script[at.min(1)].clone())
+            },
+            &mut |_| {},
+        );
+        assert_eq!(
+            waited.line,
+            r#"mcp wait: subject 1 changed: ccr.status_bucket "working" -> "blocked""#
+        );
+    }
+
+    #[test]
+    fn an_unreduced_poll_is_three() {
+        let config = wait_config(wait_row("get", &["ccr.status_bucket"], false));
+        let reads = Cell::new(0);
+        let waited = wait_with(
+            &config,
+            "get",
+            &one_subject(),
+            pacing(Some(150)),
+            None,
+            &mut |_| {
+                reads.set(reads.get() + 1);
+                Ok(enveloped("working"))
+            },
+            &mut |_| {},
+        );
+        assert_eq!(
+            waited.exit,
+            crate::exit::ExitCode::Internal,
+            "{}",
+            waited.line
+        );
+        assert_eq!(reads.get(), 1, "exit 3 after one read");
+    }
+
+    #[test]
+    fn the_limit_is_the_eviction_limit_less_the_buffer() {
+        let config = wait_config(wait_row("get", &["status"], false));
+        for (evict, expected) in [(300, 8), (3600, 118)] {
+            let pauses = Cell::new(0u64);
+            let reads = Cell::new(0u64);
+            wait_with(
+                &config,
+                "get",
+                &one_subject(),
+                pacing(Some(evict)),
+                None,
+                &mut |_| {
+                    reads.set(reads.get() + 1);
+                    Ok(status("A", 0))
+                },
+                &mut |_| pauses.set(pauses.get() + 1),
+            );
+            assert_eq!(pauses.get(), expected, "--evict-after {evict}s");
+            assert_eq!(reads.get(), expected + 1, "each pause followed by a read");
+        }
+        // NO LIMIT IS NO DEFAULT: still polling after more pauses than any
+        // default of a plausible length would allow.
+        let pauses = Cell::new(0u64);
+        let waited = wait_with(
+            &config,
+            "get",
+            &one_subject(),
+            pacing(None),
+            None,
+            &mut |_| Ok(status(if pauses.get() >= 10_000 { "B" } else { "A" }, 0)),
+            &mut |_| pauses.set(pauses.get() + 1),
+        );
+        assert_eq!(pauses.get(), 10_000, "{}", waited.line);
+    }
+
+    #[test]
+    fn any_one_of_several_reads_changing_ends_the_wait() {
+        let config = wait_config(wait_row("get", &["status"], false));
+        let subjects = Subjects::Fixed(vec![
+            serde_json::json!({"n": 1}),
+            serde_json::json!({"n": 2}),
+            serde_json::json!({"n": 3}),
+        ]);
+        let reads = Cell::new(0);
+        let waited = wait_with(
+            &config,
+            "get",
+            &subjects,
+            pacing(Some(300)),
+            None,
+            &mut |params| {
+                reads.set(reads.get() + 1);
+                let moved = params["n"] == 2 && reads.get() > 3;
+                Ok(status(if moved { "B" } else { "A" }, 0))
+            },
+            &mut |_| {},
+        );
+        assert_eq!(
+            waited.line,
+            r#"mcp wait: subject 2 changed: status "A" -> "B""#
+        );
+    }
+
+    #[test]
+    fn a_singleton_wait_holds_the_lock_while_it_runs() {
+        let dir = crate::scratch::scratch("mcp-wait-lock");
+        let own = std::process::id().to_string();
+        let config = wait_config(wait_row("get", &["status"], false));
+        let seen = RefCell::new(Vec::new());
+        wait_with(
+            &config,
+            "get",
+            &one_subject(),
+            pacing(Some(90)),
+            Some((dir.as_path(), "w")),
+            &mut |_| Ok(status("A", 0)),
+            &mut |_| {
+                seen.borrow_mut()
+                    .push(crate::task::singleton_holder(&dir, "w"))
+            },
+        );
+        assert_eq!(*seen.borrow(), vec![Some(own)], "held during the pause");
+        assert_eq!(
+            crate::task::singleton_holder(&dir, "w"),
+            None,
+            "released on return"
+        );
+    }
+
+    #[test]
+    fn a_second_waiter_under_the_same_name_exits_two() {
+        let dir = crate::scratch::scratch("mcp-wait-second");
+        let own = std::process::id().to_string();
+        assert!(matches!(
+            crate::task::singleton_acquire(&dir, "w", &own, Duration::ZERO),
+            crate::task::Claim::Taken
+        ));
+        let config = wait_config(wait_row("get", &["status"], false));
+        let reads = Cell::new(0);
+        let waited = wait_with(
+            &config,
+            "get",
+            &one_subject(),
+            pacing(Some(90)),
+            Some((dir.as_path(), "w")),
+            &mut |_| {
+                reads.set(reads.get() + 1);
+                Ok(status("A", 0))
+            },
+            &mut |_| {},
+        );
+        crate::task::singleton_release(&dir, "w");
+        assert_eq!(
+            waited.exit,
+            crate::exit::ExitCode::Violation,
+            "{}",
+            waited.line
+        );
+        assert!(
+            waited.line.contains(&own),
+            "names the holder: {}",
+            waited.line
+        );
+        assert_eq!(reads.get(), 0);
+    }
+
+    #[test]
+    fn a_lock_that_cannot_be_looked_at_is_three() {
+        let dir = crate::scratch::scratch("mcp-wait-unlookable");
+        let file = dir.join("not-a-directory");
+        std::fs::write(&file, b"x").expect("a plain file where the git dir belongs");
+        let config = wait_config(wait_row("get", &["status"], false));
+        let waited = wait_with(
+            &config,
+            "get",
+            &one_subject(),
+            pacing(Some(90)),
+            Some((file.as_path(), "w")),
+            &mut |_| Ok(status("A", 0)),
+            &mut |_| {},
+        );
+        assert_eq!(
+            waited.exit,
+            crate::exit::ExitCode::Internal,
+            "{}",
+            waited.line
+        );
+    }
+
+    fn receipts(name: &str, suffixes: &[&str]) -> (std::path::PathBuf, Subjects) {
+        let store = crate::scratch::scratch(name);
+        for suffix in suffixes {
+            std::fs::write(store.join(format!("mint.{suffix}")), b"").expect("a receipt");
+        }
+        let subjects = Subjects::Receipts {
+            store: store.clone(),
+            mint: "mint".to_owned(),
+            arg: "key".to_owned(),
+        };
+        (store, subjects)
+    }
+
+    #[test]
+    fn a_receipt_minted_mid_wait_is_watched_from_the_next_poll() {
+        let (store, subjects) = receipts("mcp-wait-minted", &["A"]);
+        let config = wait_config(wait_row("get", &["status"], false));
+        let reads_of_b = Cell::new(0);
+        let waited = wait_with(
+            &config,
+            "get",
+            &subjects,
+            pacing(Some(600)),
+            None,
+            &mut |params| {
+                if params["key"] == "B" {
+                    reads_of_b.set(reads_of_b.get() + 1);
+                    return Ok(status(if reads_of_b.get() >= 2 { "y" } else { "x" }, 0));
+                }
+                Ok(status("A", 0))
+            },
+            &mut |_| {
+                std::fs::write(store.join("mint.B"), b"").expect("a receipt mid-wait");
+            },
+        );
+        assert_eq!(
+            waited.line,
+            r#"mcp wait: subject B changed: status "x" -> "y""#
+        );
+    }
+
+    #[test]
+    fn no_receipts_is_nothing_to_wait_for() {
+        let (_, subjects) = receipts("mcp-wait-none", &[]);
+        let config = wait_config(wait_row("get", &["status"], false));
+        let reads = Cell::new(0);
+        let waited = wait_with(
+            &config,
+            "get",
+            &subjects,
+            pacing(None),
+            None,
+            &mut |_| {
+                reads.set(reads.get() + 1);
+                Ok(status("A", 0))
+            },
+            &mut |_| {},
+        );
+        assert_eq!(waited.exit, crate::exit::ExitCode::Success);
+        assert_eq!(waited.line, "mcp wait: nothing to wait for");
+        assert_eq!(reads.get(), 0);
+    }
+
+    #[test]
+    fn a_receipt_removed_mid_wait_is_dropped() {
+        let (store, subjects) = receipts("mcp-wait-removed", &["A", "B"]);
+        let config = wait_config(wait_row("get", &["status"], false));
+        let reads_of_b = Cell::new(0);
+        wait_with(
+            &config,
+            "get",
+            &subjects,
+            pacing(Some(120)),
+            None,
+            &mut |params| {
+                if params["key"] == "B" {
+                    reads_of_b.set(reads_of_b.get() + 1);
+                }
+                Ok(status("A", 0))
+            },
+            &mut |_| {
+                let _ = std::fs::remove_file(store.join("mint.B"));
+            },
+        );
+        assert_eq!(reads_of_b.get(), 1, "the removed subject is not read again");
+    }
+
+    #[test]
+    fn one_unreadable_subject_does_not_end_the_wait() {
+        let config = wait_config(wait_row("get", &["status"], false));
+        let subjects = Subjects::Fixed(vec![
+            serde_json::json!({"n": 1}),
+            serde_json::json!({"n": 2}),
+        ]);
+        let waited = wait_with(
+            &config,
+            "get",
+            &subjects,
+            pacing(Some(150)),
+            None,
+            &mut |params| {
+                if params["n"] == 2 {
+                    return Err(anyhow::anyhow!("gone"));
+                }
+                Ok(status("A", 0))
+            },
+            &mut |_| {},
+        );
+        assert_eq!(
+            waited.line, "mcp wait: no change in 4 polls",
+            "ran to its limit"
+        );
+        // ONE THAT FAILS FROM POLL TWO ends it, naming that subject.
+        let (_, subjects) = receipts("mcp-wait-unreadable", &["A", "B"]);
+        let reads_of_b = Cell::new(0);
+        let waited = wait_with(
+            &config,
+            "get",
+            &subjects,
+            pacing(Some(150)),
+            None,
+            &mut |params| {
+                if params["key"] == "B" {
+                    reads_of_b.set(reads_of_b.get() + 1);
+                    if reads_of_b.get() >= 2 {
+                        return Err(anyhow::anyhow!("gone"));
+                    }
+                }
+                Ok(status("A", 0))
+            },
+            &mut |_| {},
+        );
+        assert_eq!(waited.line, "mcp wait: subject B became unreadable");
+    }
+
+    #[test]
+    fn mcp_call_reduces_an_enveloped_answer() {
+        let dir = crate::scratch::scratch("mcp-call-enveloped");
+        crate::testing::contain_state(&dir.join("state"));
+        let row = wait_row("get", &["ccr.status_bucket"], true);
+        let config = wait_config(row.clone());
+        let result = enveloped("working");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        crate::file_and_report(
+            &dir,
+            &crate::McpAnswer {
+                config: &config,
+                method: "get",
+                source: "fixture",
+                result: &result,
+                mints: &[],
+                patterns: &[],
+            },
+            &mut out,
+            &mut err,
+        )
+        .expect("reports");
+        let printed: serde_json::Value = serde_json::from_slice(&out).expect("one JSON answer");
+        let compared = reduce(&row, &payload_for(&result, Some(&row)).value).expect("reduces");
+        assert_eq!(
+            printed,
+            serde_json::Value::Object(compared),
+            "`mcp call` prints the value `mcp wait` compares"
+        );
     }
 }

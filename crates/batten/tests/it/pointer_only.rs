@@ -1399,6 +1399,20 @@ const CENSUS: &[Verb] = &[
              stdout is bounded by the `[[mcp.result]]` row rather than by this field",
         ),
     },
+    // `mcp wait` (CLOUD-2759) prints one line: the subject and the declared
+    // reduced values that moved, old then new, or a count of polls. Like `call`,
+    // what can reach it is bounded by the `[[mcp.result]]` row; the sweep's
+    // fixture declares none, so this answers exit 1 before any read.
+    Verb {
+        path: "mcp wait",
+        args: &["a-server", "a-method", "{}"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Passthrough(
+            "its product is the declared reduction's changed values, which a consumer chose by \
+             writing the `[[mcp.result]]` row; the sweep fixture declares none, so it refuses \
+             before any read",
+        ),
+    },
     // THE TWO BOARD VERBS ARE POINTER-ONLY BY CONSTRUCTION, and it is the property
     // that lets them run in CI at all: an issue body can carry consumer detail, so
     // a gate that echoed the prose it matched would leak it through the log. Every

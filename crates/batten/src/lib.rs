@@ -4185,6 +4185,9 @@ fn run_mcp(
             err,
         );
     }
+    if let cli::McpCommand::Wait { .. } = command {
+        return run_mcp_wait(command, overrides, out, err);
+    }
     let cli::McpCommand::Call {
         server,
         method,
@@ -4263,6 +4266,133 @@ fn run_mcp(
         out,
         err,
     )
+}
+
+/// Seconds as the caller wrote them — `30` or `30s` — or a usage error.
+fn wait_seconds(flag: &str, given: Option<&str>, default: u64) -> Result<std::time::Duration> {
+    let Some(raw) = given else {
+        return Ok(std::time::Duration::from_secs(default));
+    };
+    raw.strip_suffix('s')
+        .unwrap_or(raw)
+        .parse::<u64>()
+        .map(std::time::Duration::from_secs)
+        .map_err(|_| {
+            UsageError::raise(format!(
+                "mcp wait: --{flag} takes a whole number of seconds, such as 30 or 30s"
+            ))
+        })
+}
+
+/// `batten mcp wait` (CLOUD-2759): the client `mcp call` uses, polled by
+/// [`mcp::wait_with`] with the crate's one sleep.
+///
+/// # Errors
+///
+/// A usage error for malformed arguments or an undeclared server, before any
+/// poll; a failure to write the line.
+fn run_mcp_wait(
+    command: &cli::McpCommand,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let cli::McpCommand::Wait {
+        server,
+        method,
+        params,
+        interval,
+        evict_after,
+        buffer,
+        singleton,
+        each_receipt,
+        arg,
+    } = command
+    else {
+        return Err(UsageError::raise(
+            "mcp: no sub-verb resolved from this invocation".to_owned(),
+        ));
+    };
+    let repo = git::repo_root(Path::new("."))?;
+    let resolved = resolve::resolve(Path::new("."), overrides)?;
+    let config = resolved.mcp.clone().unwrap_or_default();
+    let interval = wait_seconds("interval", interval.as_deref(), 30)?;
+    let buffer = wait_seconds("buffer", buffer.as_deref(), 60)?;
+    let evict_after = match evict_after.as_deref() {
+        Some(raw) => Some(wait_seconds("evict-after", Some(raw), 0)?),
+        None => None,
+    };
+    let Some(pacing) = mcp::Pacing::new(interval, evict_after, buffer) else {
+        return Err(UsageError::raise(
+            "mcp wait: --interval must be at least one second".to_owned(),
+        ));
+    };
+    let git_dir = git::git_dir(&repo)?;
+    let subjects = match (each_receipt, arg) {
+        (Some(mint), Some(arg)) if params.is_empty() => mcp::Subjects::Receipts {
+            store: git_dir.join("batten-receipts"),
+            mint: mint.clone(),
+            arg: arg.clone(),
+        },
+        (None, None) if !params.is_empty() => mcp::Subjects::Fixed(
+            params
+                .iter()
+                .map(|raw| {
+                    serde_json::from_str(raw).map_err(|failure| {
+                        UsageError::raise(format!(
+                            "mcp wait: an argument object is not readable JSON: {failure}"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        ),
+        _ => {
+            return Err(UsageError::raise(
+                "mcp wait: give one or more argument objects, or --each-receipt with --arg, \
+                 and not both"
+                    .to_owned(),
+            ));
+        }
+    };
+    // REFUSED BEFORE THE SERVER IS RESOLVED, so a method with no row costs
+    // nothing: `wait_with` answers it before any read.
+    let wiring = match mcp::wiring(&config, &repo, server) {
+        Ok(wiring) => Some(wiring),
+        Err(_) if mcp::row_for(&config, method).is_none() => None,
+        Err(mcp::Unresolved::Undeclared) => {
+            return Err(UsageError::raise(format!(
+                "mcp wait: {server} cannot be dispatched — {}",
+                mcp::Unresolved::Undeclared.pointer()
+            )));
+        }
+        Err(unresolved) => {
+            return Err(anyhow::anyhow!(
+                "mcp wait: {server} cannot be dispatched — {}",
+                unresolved.pointer()
+            ));
+        }
+    };
+    let mut read = |params: &serde_json::Value| match &wiring {
+        Some(wiring) => mcp::dispatch(wiring, method, params),
+        None => Err(anyhow::anyhow!("mcp wait: {server} is not wired")),
+    };
+    let waited = mcp::wait_with(
+        &config,
+        method,
+        &subjects,
+        pacing,
+        singleton.as_deref().map(|name| (git_dir.as_path(), name)),
+        &mut read,
+        &mut pr_watch::pause,
+    );
+    // The change and the no-change line are the product, on stdout; a refusal
+    // is Batten's record about the call, on stderr.
+    if waited.exit == ExitCode::Success {
+        writeln!(out, "{}", waited.line)?;
+    } else {
+        writeln!(err, "batten: {}", waited.line)?;
+    }
+    Ok(waited.exit)
 }
 
 /// What `mcp grant` was asked, as the surface parsed it.
@@ -4418,6 +4548,8 @@ struct McpAnswer<'a> {
 /// Only for a failure to write the answer out. The store and the call log are
 /// **reported and never raised**: the exchange has already happened by the time
 /// this runs, and refusing here would turn a completed dispatch into an error.
+//MUTANT-SUITE crates/batten/src/mcp.rs
+//MUTANT enveloped-wait-only|s@^    let payload = mcp::payload_for(result, mcp::row_for(config, method));$@    let payload = mcp::payload(result);@|mcp_call_reduces_an_enveloped_answer
 fn file_and_report(
     repo: &Path,
     answer: &McpAnswer<'_>,
@@ -4441,7 +4573,9 @@ fn file_and_report(
     // top level. Filing the JSON-RPC envelope here instead would put `id` two
     // levels down, every one of those lookups would silently resolve nothing, and
     // the gates would report could-not-look over a store that was full.
-    let payload = mcp::payload(result);
+    // THE DECLARED ROW'S FRAMING TOO (CLOUD-2759): an `enveloped` row's answer
+    // is unframed here, so `mcp call` and `mcp wait` reduce it alike.
+    let payload = mcp::payload_for(result, mcp::row_for(config, method));
     let whole = serde_json::to_vec(&payload.value)?;
     let stored = capture::store(repo, capture::Stream::Response, &whole)?;
     // The call log, so a later reader can resolve this response by the key it
@@ -12182,9 +12316,9 @@ fn run_land_singleton(
 /// The pause between the two sightings a singleton reclaim requires.
 ///
 /// A constant here rather than in `task`, because it is this caller's tolerance
-/// for a holder that took the lock between two reads, and the only other caller
-/// is a test that needs a wider margin than production.
-const SINGLETON_RECHECK: std::time::Duration = std::time::Duration::from_millis(250);
+/// for a holder that took the lock between two reads. Crate-visible since
+/// `mcp wait` takes its lock the way `land` does (CLOUD-2759).
+pub(crate) const SINGLETON_RECHECK: std::time::Duration = std::time::Duration::from_millis(250);
 
 fn run_land_lap(
     root: &Path,

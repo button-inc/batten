@@ -4449,8 +4449,12 @@
           "description": "Whether the node's scalar text is itself a document to parse.\n\nA server that frames its payload as text carrying JSON is common and is\nnot something the engine may assume: a row says so, and a row that says so\nwrongly gets could-not-look rather than a reduction over the wrong tree.",
           "type": "boolean"
         },
+        "enveloped": {
+          "description": "Whether the answer's single text block carries its document INSIDE an\nenvelope of prose, rather than being the document (CLOUD-2759).\n\nA new key and not a new meaning for `embedded`, which re-parses a node's\nwhole text and has rows written against it. Set, the payload is the first\ncomplete JSON object inside the text block; [`payload_for`] reads it, so\n`mcp call` and `mcp wait` reduce such an answer alike.",
+          "type": "boolean"
+        },
         "fields": {
-          "description": "The fields kept, in the order they are written.\n\nTop-level keys of the payload the row's `node` reaches. A declared field\nthe payload does not carry is ABSENT from the reduction rather than\npresent and null: \"the row does not have this\" and \"the reduction dropped\nit\" are different answers.",
+          "description": "The fields kept, in the order they are written.\n\nPaths into the payload the row's `node` reaches, in [`Node::at`]'s\ndotted spelling, so `outer.inner` names a nested key. A declared field\nthe payload does not carry is ABSENT from the reduction rather than\npresent and null: \"the row does not have this\" and \"the reduction dropped\nit\" are different answers.",
           "type": "array",
           "items": {
             "type": "string",

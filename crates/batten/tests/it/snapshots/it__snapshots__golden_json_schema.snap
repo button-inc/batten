@@ -2579,6 +2579,88 @@ expression: stdout_of(&output)
             }
           ],
           "subcommands": []
+        },
+        {
+          "path": "mcp wait",
+          "id": "mcp.wait",
+          "about": "Poll one declared method until its declared reduction changes, or until an eviction limit less a buffer passes",
+          "effect": "unclassified",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "arg",
+              "short": null,
+              "long": "arg",
+              "takes_value": true,
+              "positional": false,
+              "help": "The argument key each receipt's suffix is passed as, with --each-receipt"
+            },
+            {
+              "name": "buffer",
+              "short": null,
+              "long": "buffer",
+              "takes_value": true,
+              "positional": false,
+              "help": "Seconds subtracted from the eviction limit (default 60)"
+            },
+            {
+              "name": "each-receipt",
+              "short": null,
+              "long": "each-receipt",
+              "takes_value": true,
+              "positional": false,
+              "help": "Read one subject per receipt minted under this name, listed again on every poll"
+            },
+            {
+              "name": "evict-after",
+              "short": null,
+              "long": "evict-after",
+              "takes_value": true,
+              "positional": false,
+              "help": "The host's cache-eviction limit in seconds; absent, the wait ends only on a change"
+            },
+            {
+              "name": "interval",
+              "short": null,
+              "long": "interval",
+              "takes_value": true,
+              "positional": false,
+              "help": "Seconds between polls (default 30)"
+            },
+            {
+              "name": "method",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The method to poll; it must have a `[[mcp.result]]` row"
+            },
+            {
+              "name": "params",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "One JSON argument object per subject; the wait ends when any one's reduction changes"
+            },
+            {
+              "name": "server",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The server to dispatch to, as a `[[mcp.source]]` names it"
+            },
+            {
+              "name": "singleton",
+              "short": null,
+              "long": "singleton",
+              "takes_value": true,
+              "positional": false,
+              "help": "Hold the clone's singleton lock of this name while waiting"
+            }
+          ],
+          "subcommands": []
         }
       ]
     },
