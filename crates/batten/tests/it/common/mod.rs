@@ -1257,6 +1257,59 @@ pub(crate) fn require_bin(tool: &str, bin: &str) -> PathBuf {
     path
 }
 
+/// The test-only stand-in program, `examples/stub.rs` (CLOUD-2336).
+///
+/// Cargo builds an `[[example]]` with the tests and puts it at
+/// `<target>/<profile>/examples/`, beside the `deps/` directory this test binary
+/// runs from. `CARGO_BIN_EXE_*` names no example, so the path is computed.
+///
+/// # Panics
+///
+/// When the helper was not built: a `--lib`-only run does not build examples.
+#[must_use]
+pub(crate) fn stub() -> PathBuf {
+    let exe = std::env::current_exe().expect("this test binary has a path");
+    let profile = exe
+        .parent()
+        .and_then(Path::parent)
+        .expect("a test binary sits in <target>/<profile>/deps");
+    let stub = profile.join(format!(
+        "examples/batten-stub{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    assert!(
+        stub.is_file(),
+        "{} is not built; run `cargo test -p batten`, which builds the example",
+        stub.display()
+    );
+    stub
+}
+
+/// Install the stand-in at `path` under the plan `rules`, a JSON list
+/// (`examples/stub.rs` documents it), written beside it as `<path>.plan.json`.
+///
+/// A symlink where the platform has one, so the invoked NAME is `path`'s file
+/// name and a rule can match on it; a copy otherwise.
+///
+/// # Panics
+///
+/// When the link or the plan cannot be written.
+pub(crate) fn stub_at(path: &Path, rules: &serde_json::Value) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create the stub's directory");
+    }
+    let _ = std::fs::remove_file(path);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(stub(), path).expect("link the stub");
+    #[cfg(not(unix))]
+    std::fs::copy(stub(), path).expect("copy the stub");
+    std::fs::write(
+        format!("{}.plan.json", path.display()),
+        serde_json::to_string(rules).expect("a plan serialises"),
+    )
+    .expect("write the stub's plan");
+}
+
 /// A path the committed protected set guards TODAY: the policy authority while the
 /// owner's set is declared, and otherwise the asked ledger the narrower set always
 /// guards (CLOUD-1078).

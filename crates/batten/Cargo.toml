@@ -53,6 +53,13 @@ path = "src/main.rs"
 name = "batten"
 path = "src/lib.rs"
 
+# The test-only stand-in for a program a test runs (CLOUD-2336). An example,
+# never a `[[bin]]`: `batten dist` refuses a package with two bin targets and
+# cargo-dist would ship the second. Built with the tests, never released.
+[[example]]
+name = "batten-stub"
+path = "examples/stub.rs"
+
 # The negative case for `no_evaluator_feature_admits_io`, and nothing else
 # (CLOUD-831 §7). A gate that is never shown to fail ships as coverage
 # (CLOUD-418): the IO-free test asserts a module cannot reach `http.send`, and

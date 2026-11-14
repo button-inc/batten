@@ -174,13 +174,40 @@ fn source_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/acceptance-corpus")
 }
 
-/// Materialize the fixture into a scratch tree, stripping the inertness suffix.
+/// Materialize the fixture into a scratch tree, stripping the inertness suffix,
+/// and install its two programs.
 ///
-/// The stub programs need their executable bit: the corpus is committed as
-/// inert data, and `.in` files carry no mode worth preserving.
+/// `bin/checker` and `bin/shape-lint` stand in for the predecessor repository's
+/// own checker binary and its repository-shape linter. Every rule invokes one of
+/// them with the source item's argv, verbatim minus the program, and its exit
+/// mirrors what that item expected: so a `warn` rule reports and a `deny` rule
+/// passes on a clean tree. A `seed-violation` file in the tree flips every call
+/// to exit 1.
+///
+/// They were `#!/bin/sh` scripts; they are the test stand-in under a plan now
+/// (CLOUD-2336), matching each argv EXACTLY as the scripts matched `"$*"`. A
+/// prefix match would fire `entity-grep` on a longer argv.
 fn materialize(name: &str) -> PathBuf {
     let dir = common::scratch_repo(&format!("acceptance-corpus/{name}"));
     copy_inert(&source_dir(), &dir);
+    let seeded = serde_json::json!({"file_exists": "seed-violation", "steps": [{"exit": 1}]});
+    common::stub_at(
+        &dir.join("bin/checker"),
+        &serde_json::json!([
+            seeded,
+            {"name": "checker", "argv": ["entity-grep"], "steps": [{"exit": 1}]},
+            {"name": "checker", "argv": ["token-budget", "--threshold", "1500"], "steps": [{"exit": 1}]},
+            {"name": "checker", "steps": [{"exit": 0}]},
+        ]),
+    );
+    common::stub_at(
+        &dir.join("bin/shape-lint"),
+        &serde_json::json!([
+            seeded,
+            {"name": "shape-lint", "argv": ["check", "--fail-on-warning", "--no-docs"], "steps": [{"exit": 1}]},
+            {"name": "shape-lint", "steps": [{"exit": 0}]},
+        ]),
+    );
     dir
 }
 
@@ -201,20 +228,8 @@ fn copy_inert(from: &Path, to: &Path) {
         let contents = fs::read_to_string(&path).expect("read a fixture file");
         let target = to.join(stripped);
         fs::write(&target, contents).expect("write a fixture file");
-        if to.file_name().and_then(|n| n.to_str()) == Some("bin") {
-            make_executable(&target);
-        }
     }
 }
-
-#[cfg(unix)]
-fn make_executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("mark the stub executable");
-}
-
-#[cfg(not(unix))]
-fn make_executable(_path: &Path) {}
 
 /// The materialized ruleset, parsed.
 fn materialized_config(dir: &Path) -> Config {
@@ -282,6 +297,14 @@ fn the_warn_items_report_without_failing_until_promoted() {
     assert!(
         !common::stdout(&default).is_empty(),
         "…and is still reported"
+    );
+    // The finding is the one the source item expected, not just any output: a
+    // stand-in that ran its first rule for every argv would fire the deny items
+    // too and never reach this id.
+    assert!(
+        common::stdout(&default).contains("shape-lint-warning-backlog"),
+        "{}",
+        common::stdout(&default)
     );
 
     let promoted = common::run(&dir, &["enforce", "--fail-on-warning"]);
