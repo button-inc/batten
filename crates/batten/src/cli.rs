@@ -529,6 +529,21 @@ pub enum Command {
         /// The sub-verb selected.
         command: ModulesCommand,
     },
+    /// Off-box session state (CLOUD-2717).
+    ///
+    /// APPENDED LAST, for the reason above.
+    Offbox {
+        /// The sub-verb selected.
+        command: OffboxCommand,
+    },
+}
+
+/// Subcommands of `offbox` (CLOUD-2717).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OffboxCommand {
+    /// Whether the state repository can be written from here (CLOUD-2718).
+    Status,
 }
 
 /// The `modules` sub-verbs (CLOUD-2789).
@@ -4107,6 +4122,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "test" => test_of(matches).map(|command| Command::Test { command }),
         "forge" => forge_of(matches).map(|command| Command::Forge { command }),
         "modules" => modules_of(matches).map(|command| Command::Modules { command }),
+        "offbox" => offbox_of(matches).map(|command| Command::Offbox { command }),
         _ => None,
     }
 }
@@ -4160,6 +4176,13 @@ fn forge_of(matches: &ArgMatches) -> Option<ForgeCommand> {
         ("poll", matches) => Some(ForgeCommand::Poll {
             every: matches.get_one::<String>("every").cloned(),
         }),
+        _ => None,
+    }
+}
+
+fn offbox_of(matches: &ArgMatches) -> Option<OffboxCommand> {
+    match matches.subcommand()? {
+        ("status", _) => Some(OffboxCommand::Status),
         _ => None,
     }
 }
