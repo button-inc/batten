@@ -623,7 +623,7 @@ pub fn render(
             }),
         }
     }
-    let (probes, skeleton) = probe_sites(&root, source, probe_from, &mut sites);
+    let (probes, skeleton) = probe_sites(&root, probe_from, &mut sites);
     for &(start, end) in erased.keys() {
         sites.push(Site {
             range: start..end,
@@ -657,11 +657,21 @@ pub fn render(
 /// THE FUNCTION IS THE UNIT (RTS++, Fu et al. 2019; RustyRTS, Hundsdorfer et
 /// al., ICST 2025): a test's verdict depends on the functions it executes, so
 /// those are recorded per case, while what is decided at compile time (const
-/// items and `const fn`s, types, macros, signatures) is in the skeleton every
-/// key carries. Source text, never the binary: one line shifts every address.
+/// items and `const fn`s, types, macros, impl headers, imports) is in the
+/// skeleton every key carries. Source text, never the binary: one line shifts
+/// every address.
+///
+/// A PROBED FUNCTION LEAVES THE SKELETON WHOLE, signature and attributes with
+/// its body: its probe digest is the whole item, and reach is recorded afresh
+/// on every run, so a function that is new, renamed or re-typed moves exactly
+/// the cases that now execute it. Kept in the skeleton, every added test or
+/// helper moved every key in the crate, and #1276's sweep reused nothing.
+///
+/// TOKENS, NOT TEXT (Ekstazi's smart checksum, Gligoric et al. ISSTA 2015):
+/// whitespace and comments, doc comments included, change no compiled
+/// behaviour, so the skeleton hashes the non-trivia tokens alone.
 fn probe_sites(
     root: &SyntaxNode,
-    source: &str,
     probe_from: Option<usize>,
     sites: &mut Vec<Site>,
 ) -> (Vec<String>, String) {
@@ -691,23 +701,33 @@ fn probe_sites(
                     .to_hex()
                     .to_string(),
             );
-            cuts.push(at..usize::from(close.text_range().start()));
+            let item = function.syntax().text_range();
+            cuts.push(usize::from(item.start())..usize::from(item.end()));
             next += 1;
         }
     }
     cuts.sort_by_key(|cut| cut.start);
     let mut skeleton = blake3::Hasher::new();
-    let mut at = 0;
-    for cut in cuts {
-        // A body inside a cut body went with it.
-        if cut.start < at {
+    let mut cut = cuts.iter().peekable();
+    for token in root
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+    {
+        if matches!(token.kind(), SyntaxKind::WHITESPACE | SyntaxKind::COMMENT) {
             continue;
         }
-        skeleton.update(source[at..cut.start].as_bytes());
+        let start = usize::from(token.text_range().start());
+        // A function inside a cut function went with it: cuts are walked in
+        // order, and one ending before this token is behind every later token.
+        while cut.peek().is_some_and(|c| c.end <= start) {
+            cut.next();
+        }
+        if cut.peek().is_some_and(|c| c.start <= start) {
+            continue;
+        }
+        skeleton.update(token.text().as_bytes());
         skeleton.update(b"\x1f");
-        at = cut.end;
     }
-    skeleton.update(source[at..].as_bytes());
     (probes, skeleton.finalize().to_hex().to_string())
 }
 
@@ -3193,11 +3213,17 @@ mod tests {
         assert!(bare.probes.is_empty());
     }
 
-    /// The skeleton holds what no probe records: it moves with a type, a
-    /// signature or a `const fn` body, and not with a probed body.
+    /// The skeleton holds what no probe records: it moves with a type or a
+    /// `const fn` body, and not with a probed function — body, signature, or
+    /// the function being new — nor with a comment or whitespace. A probed
+    /// function's own digest moves with its signature instead.
+    ///
+    /// Fails by: a probed signature left in the skeleton (every added helper
+    /// moves every key), trivia hashed, or a signature in neither digest.
     #[test]
     fn the_skeleton_moves_with_what_no_probe_records() {
         let skeleton = |source: &str| render(source, &[], &BTreeSet::new(), Some(0)).skeleton;
+        let probes = |source: &str| render(source, &[], &BTreeSet::new(), Some(0)).probes;
         let base = "struct S(u8);\nfn f() -> u8 {\n    1\n}\nconst fn g() -> u8 {\n    1\n}\n";
         let held = skeleton(base);
         assert_eq!(
@@ -3208,9 +3234,20 @@ mod tests {
             skeleton(&base.replace("struct S(u8)", "struct S(u16)")),
             held
         );
-        assert_ne!(
-            skeleton(&base.replace("fn f() -> u8", "fn f() -> u16")),
-            held
+        let retyped = base.replace("fn f() -> u8", "fn f() -> u16");
+        assert_eq!(skeleton(&retyped), held, "a probed signature is its own");
+        assert_ne!(probes(&retyped), probes(base), "and moves its probe");
+        assert_eq!(
+            skeleton(&format!(
+                "{base}/// helper\n#[inline]\nfn h(x: u8) -> u8 {{\n    x\n}}\n"
+            )),
+            held,
+            "a new probed function moves no other key"
+        );
+        assert_eq!(
+            skeleton(&base.replace("struct S(u8);", "// note\nstruct  S( u8 ) ;")),
+            held,
+            "trivia is not hashed"
         );
         assert_ne!(
             skeleton(&format!("{}2\n}}\n", &base[..base.len() - 4])),

@@ -52,8 +52,9 @@ fn mutant(
 ///
 /// Fails by: an unviable mutant judged (it would survive), a hang read as a
 /// kill, a site no case reaches judged by a run, a failed case read as a
-/// survivor, the exit not saying a mutant survived, or a second sweep that
-/// rebuilds what the first proved unviable.
+/// survivor, the exit not saying a mutant survived, a second sweep that
+/// rebuilds what the first proved unviable, a new helper moving every key, or
+/// an executed function's non-body change moving none.
 #[test]
 fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     let _ = common::require_bin("nextest", "cargo-nextest");
@@ -174,4 +175,28 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
         ),
         "{third}"
     );
+    // THE REUSE CASE: a new function no case runs, with a doc comment, moves
+    // no key. Its signature is its own probe's, never the skeleton every key
+    // carries, so adding a helper or a test keeps every verdict.
+    let grown = format!(
+        "{}/// A helper no case runs.\npub fn helper(x: u8) -> u8 {{\n    x\n}}\n",
+        LIB.replace("    5\n}", "    4 + 1\n}")
+    );
+    common::write(&repo, "src/lib.rs", &grown);
+    let (code, fourth, err) = sweep();
+    assert_eq!(code, Some(2), "{fourth}\n{err}");
+    assert!(
+        fourth.contains("reused 5 of 5 verdict(s)"),
+        "{fourth}\n{err}"
+    );
+    // AND ITS SOUNDNESS HALF: what leaves the skeleton is in the item's probe,
+    // so a change to `five` outside its body still moves the cases running it.
+    common::write(
+        &repo,
+        "src/lib.rs",
+        &grown.replace("pub fn five()", "#[inline(never)]\npub fn five()"),
+    );
+    let (code, fifth, err) = sweep();
+    assert_eq!(code, Some(2), "{fifth}\n{err}");
+    assert!(fifth.contains("reused 3 of 5 verdict(s)"), "{fifth}\n{err}");
 }
