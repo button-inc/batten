@@ -5464,6 +5464,78 @@ mod push_tests {
         assert!(marked("b") && marked("c"));
     }
 
+    /// Fails by: ANY durable step of a push that is importing the machine's
+    /// other sessions at which a kill leaves one of them, after the starts that
+    /// follow, short of a record, holding one twice, or marked as stored while
+    /// the remote does not hold all of it.
+    #[test]
+    fn a_kill_at_any_step_of_an_import_stores_every_session_whole_and_once() {
+        let mut steps = None;
+        for kill_at in 0..600_u64 {
+            let base = base(&format!("offbox-kill-import-{kill_at}"));
+            // The markers are the machine's, and the machine is this process.
+            let _ = std::fs::remove_dir_all(machine().join(IMPORTED));
+            let stand = standing(&[], Vec::new());
+            let mut one = Writer::new(&base, "one", "s");
+            put(&one.transcript, &records(0..2, 4));
+            let (a, b) = (base.join("a.jsonl"), base.join("b.jsonl"));
+            put(&a, &records(10..13, 4));
+            put(&b, &records(20..22, 4));
+            one.history = listing(&[
+                ("s", "", None, &one.transcript),
+                ("a", "", None, &a),
+                ("b", "", None, &b),
+            ]);
+
+            crate::testing::kill_after(Some(kill_at));
+            let _ = import_push(&one.session(), &one.history, &machine(), one.byte_cap);
+            let killed = crate::testing::killed();
+            crate::testing::kill_after(None);
+
+            // One of the sessions goes on while the daemon is down.
+            add(&a, &records(13..14, 4));
+            add(&one.transcript, &records(2..3, 4));
+            for _ in 0..4 {
+                let done = one.import();
+                assert!(
+                    matches!(outcome(&done), Pushed::Applied | Pushed::Unchanged),
+                    "kill at {kill_at}: {:?}",
+                    outcome(&done)
+                );
+            }
+            assert_eq!(
+                outcome(&one.import()),
+                &Pushed::Unchanged,
+                "kill at {kill_at}: the two sides agree"
+            );
+
+            let tree = one.remote(&stand);
+            for (id, file) in [("a", &a), ("b", &b)] {
+                assert_eq!(
+                    imported(&tree, id, "main"),
+                    text(file),
+                    "kill at {kill_at}: {id}"
+                );
+                assert!(marked(id), "kill at {kill_at}: {id} is marked");
+            }
+            let live: String = tree
+                .iter()
+                .filter(|(path, _)| path.starts_with("transcript/main/"))
+                .map(|(_, bytes)| String::from_utf8_lossy(bytes).into_owned())
+                .collect();
+            assert_eq!(live, text(&one.transcript), "kill at {kill_at}: live");
+            if !killed {
+                steps = Some(kill_at);
+                break;
+            }
+        }
+        let steps = steps.expect("an import finishes unkilled inside the bound");
+        assert!(
+            steps > 8,
+            "the premise: an import takes many steps: {steps}"
+        );
+    }
+
     /// Fails by: a session another agent is still writing marked as finished,
     /// or one of its records stored twice.
     #[test]
