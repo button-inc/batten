@@ -30,9 +30,13 @@
 //! (`[path, text]`).
 //!
 //! Steps: `stdout`, `stderr`, `write` (`[path, text]`), `append`, `mkdir`,
-//! `cat`, `sleep` (ms), `run` (an argv, waited for), `spawn` (`{argv, pid}`: not
-//! waited for, its pid written), `probe-pid` (`{pid, to}`: writes `alive` or
-//! `dead`), `exit`.
+//! `cat`, `sleep` (ms), `run` (an argv, waited for), `spawn` (`{argv, pid,
+//! quiet}`: not waited for, its pid written, its streams sent to null when
+//! `quiet`), `probe-pid` (`{pid, to}`: writes `alive` or `dead`), `save-stdin`
+//! (a path: stdin byte for byte), `trap` (`TERM`, `INT` or `HUP` no longer ends
+//! the program; unix only), `await-signal` (block until a trapped signal
+//! arrives), `await-file` (`[path, text]`: block until the file contains the
+//! text, exiting 124 after a minute), `exit`.
 //!
 //! Text and paths expand `{argv}`, `{argv:N}` (1-based), `{argv-after:FLAG}`,
 //! `{argv-strip:PREFIX}`, `{pid}`, `{ppid}` and `{env:NAME}`.
@@ -69,8 +73,27 @@ enum Step {
     Cat(String),
     Sleep(u64),
     Run(Vec<String>),
-    Spawn { argv: Vec<String>, pid: String },
-    ProbePid { pid: String, to: String },
+    Spawn {
+        argv: Vec<String>,
+        pid: String,
+        /// The child's three streams go to null, so it holds no pipe the
+        /// caller drains.
+        #[serde(default)]
+        quiet: bool,
+    },
+    ProbePid {
+        pid: String,
+        to: String,
+    },
+    /// Stdin, byte for byte, to a path.
+    SaveStdin(String),
+    /// A signal (`TERM`, `INT`, `HUP`) no longer ends this program.
+    Trap(String),
+    /// Block until a signal `trap` caught arrives, then go on to the next step.
+    AwaitSignal(String),
+    /// Block until the file at a path contains a text, for at most a minute;
+    /// past that the program exits 124.
+    AwaitFile(String, String),
     Exit(i32),
 }
 
@@ -234,8 +257,8 @@ fn plan_path(invoked: &str) -> PathBuf {
 /// Run one step, returning the exit code it sets, if it sets one.
 fn step(call: &Call, step: &Step) -> anyhow::Result<Option<i32>> {
     match step {
-        Step::Stdout(text) => print!("{}", call.expand(text)),
-        Step::Stderr(text) => eprint!("{}", call.expand(text)),
+        Step::Stdout(text) => std::io::stdout().write_all(call.expand(text).as_bytes())?,
+        Step::Stderr(text) => std::io::stderr().write_all(call.expand(text).as_bytes())?,
         Step::Write(path, text) => std::fs::write(call.expand(path), call.expand(text))?,
         Step::Append(path, text) => {
             let mut file = std::fs::OpenOptions::new()
@@ -245,7 +268,7 @@ fn step(call: &Call, step: &Step) -> anyhow::Result<Option<i32>> {
             file.write_all(call.expand(text).as_bytes())?;
         }
         Step::Mkdir(path) => std::fs::create_dir_all(call.expand(path))?,
-        Step::Cat(path) => print!("{}", std::fs::read_to_string(call.expand(path))?),
+        Step::Cat(path) => std::io::stdout().write_all(&std::fs::read(call.expand(path))?)?,
         Step::Sleep(ms) => {
             #[expect(
                 clippy::disallowed_methods,
@@ -256,9 +279,33 @@ fn step(call: &Call, step: &Step) -> anyhow::Result<Option<i32>> {
         Step::Run(argv) => {
             let _ = command(call, argv)?.status()?;
         }
-        Step::Spawn { argv, pid } => {
-            let child = command(call, argv)?.spawn()?;
+        Step::Spawn { argv, pid, quiet } => {
+            let mut child = command(call, argv)?;
+            if *quiet {
+                child
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+            }
+            let child = child.spawn()?;
             std::fs::write(call.expand(pid), child.id().to_string())?;
+        }
+        Step::SaveStdin(path) => std::fs::write(call.expand(path), &call.stdin)?,
+        Step::Trap(name) => trap(name)?,
+        Step::AwaitSignal(name) => await_signal(name)?,
+        Step::AwaitFile(path, text) => {
+            let (path, text) = (call.expand(path), call.expand(text));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            while !std::fs::read_to_string(&path).is_ok_and(|body| body.contains(&text)) {
+                if std::time::Instant::now() > deadline {
+                    return Ok(Some(124));
+                }
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "polls for the file the test writes, bounded by the one-minute deadline above"
+                )]
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
         }
         Step::ProbePid { pid, to } => {
             let pid = std::fs::read_to_string(call.expand(pid))?;
@@ -274,6 +321,62 @@ fn step(call: &Call, step: &Step) -> anyhow::Result<Option<i32>> {
         Step::Exit(code) => return Ok(Some(*code)),
     }
     Ok(None)
+}
+
+/// Make the named signal set a flag instead of ending the program, which is what
+/// a shell's `trap '' TERM` did for a test that needs a process that will not die
+/// of it.
+#[cfg(unix)]
+fn trap(name: &str) -> anyhow::Result<()> {
+    let (signal, flag) = caught(name)?;
+    signal_hook::flag::register(signal, std::sync::Arc::clone(flag))?;
+    Ok(())
+}
+
+/// Wait for a signal [`trap`] registered to arrive. The poll is bounded by the
+/// signal itself: a case that never sends it kills this program at teardown.
+#[cfg(unix)]
+fn await_signal(name: &str) -> anyhow::Result<()> {
+    let (_, flag) = caught(name)?;
+    while !flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "polls the flag the trapped signal sets, which is this step's terminal state; the test sending it is the bound"
+        )]
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    Ok(())
+}
+
+/// A signal's number and the flag its trap sets, one flag per signal.
+#[cfg(unix)]
+fn caught(
+    name: &str,
+) -> anyhow::Result<(i32, &'static std::sync::Arc<std::sync::atomic::AtomicBool>)> {
+    use std::sync::{Arc, OnceLock, atomic::AtomicBool};
+    static TERM: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+    static INT: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+    static HUP: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+    let (signal, cell) = match name {
+        "TERM" => (signal_hook::consts::SIGTERM, &TERM),
+        "INT" => (signal_hook::consts::SIGINT, &INT),
+        "HUP" => (signal_hook::consts::SIGHUP, &HUP),
+        other => anyhow::bail!("stub: no trap for signal `{other}`"),
+    };
+    Ok((
+        signal,
+        cell.get_or_init(|| Arc::new(AtomicBool::new(false))),
+    ))
+}
+
+#[cfg(not(unix))]
+fn trap(name: &str) -> anyhow::Result<()> {
+    anyhow::bail!("stub: signals are unix-only, no trap for `{name}`")
+}
+
+#[cfg(not(unix))]
+fn await_signal(name: &str) -> anyhow::Result<()> {
+    anyhow::bail!("stub: signals are unix-only, nothing to await for `{name}`")
 }
 
 /// The child a `run`, `spawn` or `probe-pid` step starts, its argv expanded.
@@ -311,11 +414,12 @@ fn main() -> anyhow::Result<std::process::ExitCode> {
         .map_err(|error| anyhow::anyhow!("stub: no plan for `{invoked}`: {error}"))?;
     let rules: Vec<Rule> = serde_json::from_str(&plan)?;
     let Some(rule) = rules.iter().find(|rule| rule.matches(&call)) else {
-        eprintln!(
+        writeln!(
+            std::io::stderr(),
             "stub: no rule matched `{} {}`",
             call.name,
             call.args.join(" ")
-        );
+        )?;
         return Ok(std::process::ExitCode::from(127));
     };
     for each in &rule.steps {

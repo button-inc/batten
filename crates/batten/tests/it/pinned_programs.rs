@@ -411,18 +411,13 @@ fn a_fixture_root_asks_the_pin_nothing_through_the_eager_door() {
     // constant: a test is not a reason to widen the API, and `mediated` is already
     // the one spelling of that argv.
     let (mediator, _) = pinned::mediated("anything");
-    let stub = bin.join(mediator);
-    std::fs::write(
-        &stub,
-        format!("#!/bin/sh\necho called >>'{}'\nexit 1\n", log.display()),
-    )
-    .expect("the stub is written");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
-            .expect("the stub is executable");
-    }
+    common::stub_at(
+        &bin.join(mediator),
+        &serde_json::json!([{ "steps": [
+            { "append": [log.display().to_string(), "called\n"] },
+            { "exit": 1 },
+        ] }]),
+    );
 
     assert!(
         pinned::repaired(&repo).could_not_look(),
@@ -445,9 +440,10 @@ fn a_fixture_root_asks_the_pin_nothing_through_the_eager_door() {
 /// so the record a later call reads is the proof both answers arrived.
 #[test]
 fn a_session_start_records_the_programs_the_pin_composes() {
-    // THE STUB IS A `#!/bin/sh` SCRIPT, which is a program only where a shebang
-    // is honoured. Off unix the mediator cannot be stood in for, so the case
-    // states that and asserts nothing — compiled on every target all the same.
+    // THE STUB IS THE STAND-IN, installed by link, and off unix it is a copy
+    // without the platform's executable suffix, so the mediator's NAME cannot
+    // be stood in for there: the case states that and asserts nothing —
+    // compiled on every target all the same.
     if !cfg!(unix) {
         return;
     }
@@ -460,31 +456,35 @@ fn a_session_start_records_the_programs_the_pin_composes() {
         "[tools]\njq = \"1.7\"\n",
         &[],
     );
-    let executable = |path: &Path, body: &str| {
-        std::fs::write(path, body).expect("the stub is written");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-                .expect("the stub is executable");
-        }
-    };
     let tools = dir.join("pin-tools");
     std::fs::create_dir_all(&tools).expect("the pin's tool directory is created");
-    executable(&tools.join("pinnedtool"), "#!/bin/sh\n");
+    // An executable the composed PATH adds; never run.
+    common::stub_at(&tools.join("pinnedtool"), &serde_json::json!([]));
     let bin = dir.join("stub-bin");
     std::fs::create_dir_all(&bin).expect("the stub directory is created");
     let (mediator, _) = pinned::mediated("anything");
-    executable(
+    // `env` answers the composed PATH (the pin's tools, then the ambient one),
+    // `config` the file configuring it. The `{"PATH":"` opener is its own step:
+    // the stand-in reads a `{` up to the next `}` as one placeholder.
+    common::stub_at(
         &bin.join(mediator),
-        &format!(
-            "#!/bin/sh\ncase \"$1\" in\n\
-             env) printf '{{\"PATH\":\"%s:%s\"}}\\n' '{}' \"$PATH\" ;;\n\
-             config) printf '[{{\"path\":\"%s\"}}]\\n' '{}' ;;\n\
-             esac\n",
-            tools.display(),
-            dir.join("mise.toml").display()
-        ),
+        &serde_json::json!([
+            {
+                "argv_prefix": ["env"],
+                "steps": [
+                    { "stdout": "{\"PATH\":\"" },
+                    { "stdout": format!("{}:{{env:PATH}}", tools.display()) },
+                    { "stdout": "\"}\n" },
+                ],
+            },
+            {
+                "argv_prefix": ["config"],
+                "steps": [{
+                    "stdout": format!("[{{\"path\":\"{}\"}}]\n", dir.join("mise.toml").display()),
+                }],
+            },
+            { "steps": [] },
+        ]),
     );
     // The masked ambient PATH (CLOUD-1951; `common::ambient_path`).
     let path = std::env::join_paths(

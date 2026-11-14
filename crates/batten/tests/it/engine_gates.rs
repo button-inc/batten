@@ -61,26 +61,20 @@ fn seed_release(dir: &Path, tag: &str, lint_exit: u8, verbs: &[&str]) {
         .join("engine")
         .join(tag);
     std::fs::create_dir_all(&cache).unwrap();
-    let mut script = format!(
-        "#!/bin/sh\nif [ \"$1 $2\" = \"config show\" ]; then exit 0; fi\nif [ \"$1 $2\" = \"config lint\" ]; then exit {lint_exit}; fi\n"
-    );
+    let mut rules = vec![
+        serde_json::json!({ "argv_prefix": ["config", "show"], "steps": [] }),
+        serde_json::json!({
+            "argv_prefix": ["config", "lint"],
+            "steps": [{ "exit": lint_exit }],
+        }),
+    ];
     for verb in verbs {
-        script.push_str("if [ \"$*\" = \"");
-        script.push_str(verb);
-        script.push_str(" --help\" ]; then exit 0; fi\n");
+        let mut argv: Vec<&str> = verb.split(' ').collect();
+        argv.push("--help");
+        rules.push(serde_json::json!({ "argv": argv, "steps": [] }));
     }
-    script.push_str("exit 2\n");
-    common::write(&cache, "batten", &script);
-    make_executable(&cache.join("batten"));
-}
-
-fn make_executable(path: &Path) {
-    use std::os::unix::fs::PermissionsExt as _;
-    let mut mode = std::fs::metadata(path)
-        .expect("stat the stub")
-        .permissions();
-    mode.set_mode(0o755);
-    std::fs::set_permissions(path, mode).expect("chmod the stub");
+    rules.push(serde_json::json!({ "steps": [{ "exit": 2 }] }));
+    common::stub_at(&cache.join("batten"), &serde_json::Value::Array(rules));
 }
 
 const LANE: &str = "\

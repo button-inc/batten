@@ -236,30 +236,39 @@ fn tarball(path: &Path, entries: &[(&str, &[u8])]) {
         .expect("finish the gzip stream");
 }
 
-/// The stub verifier: `release download` copies the case's assets into
+/// The stub verifier's plan: `release download` copies the case's assets into
 /// `--dir` — and fails, as a real download does, when there is nothing to copy —
 /// and `attestation verify` passes a binary whose bytes say so. Every call is
 /// logged, so a case can assert which were made.
 #[cfg(unix)]
-const STUB: &str = r#"#!/bin/sh
-echo "$*" >> "$STUB_LOG"
-case "$1 $2" in
-"release download")
-  dir=""
-  while [ $# -gt 0 ]; do
-    [ "$1" = "--dir" ] && dir="$2"
-    shift
-  done
-  mkdir -p "$dir" && cp "$STUB_ASSETS"/* "$dir"/
-  ;;
-"attestation verify")
-  grep -q ATTESTED "$3"
-  ;;
-*)
-  exit 64
-  ;;
-esac
-"#;
+fn stub_plan() -> serde_json::Value {
+    let logs = serde_json::json!({ "append": ["{env:STUB_LOG}", "{argv}\n"] });
+    serde_json::json!([
+        {
+            "argv_prefix": ["release", "download"],
+            "file_exists": "{env:STUB_ASSETS}/tool-x86_64.tar.gz",
+            "steps": [
+                logs,
+                { "mkdir": "{argv-after:--dir}" },
+                { "run": ["cp", "-R", "{env:STUB_ASSETS}/.", "{argv-after:--dir}"] },
+            ],
+        },
+        {
+            "argv_prefix": ["release", "download"],
+            "steps": [logs, { "exit": 1 }],
+        },
+        {
+            "argv_prefix": ["attestation", "verify"],
+            "file_contains": ["{argv:3}", "ATTESTED"],
+            "steps": [logs],
+        },
+        {
+            "argv_prefix": ["attestation", "verify"],
+            "steps": [logs, { "exit": 1 }],
+        },
+        { "steps": [logs, { "exit": 64 }] },
+    ])
+}
 
 /// One producer run's world: the consumer, the fixture forge, the stub's `bin`
 /// and the assets the stub will "download".
@@ -273,16 +282,11 @@ struct World {
 
 #[cfg(unix)]
 fn world(name: &str) -> World {
-    use std::os::unix::fs::PermissionsExt as _;
-
     let dir = repo(name);
     let forge = common::scratch(&format!("attestation-{name}-forge"));
     let bin = common::scratch(&format!("attestation-{name}-bin"));
     let assets = common::scratch(&format!("attestation-{name}-assets"));
-    let stub = bin.join("gh");
-    std::fs::write(&stub, STUB).expect("plant the stub verifier");
-    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
-        .expect("make the stub executable");
+    common::stub_at(&bin.join("gh"), &stub_plan());
     World {
         dir,
         forge,
