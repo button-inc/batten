@@ -135,6 +135,7 @@ pub mod preflight;
 pub mod preset;
 pub mod probe;
 pub mod probe_verdict;
+pub mod prompt_cache;
 pub mod propose;
 pub mod provision;
 pub mod prune;
@@ -4316,18 +4317,37 @@ fn run_mcp_wait(
     let repo = git::repo_root(Path::new("."))?;
     let resolved = resolve::resolve(Path::new("."), overrides)?;
     let config = resolved.mcp.clone().unwrap_or_default();
-    let interval = wait_seconds("interval", interval.as_deref(), 30)?;
-    let buffer = wait_seconds("buffer", buffer.as_deref(), 60)?;
-    let evict_after = match evict_after.as_deref() {
-        Some(raw) => Some(wait_seconds("evict-after", Some(raw), 0)?),
-        None => None,
+    let optional = |flag: &str, given: Option<&str>| -> Result<Option<u64>> {
+        given
+            .map(|raw| wait_seconds(flag, Some(raw), 0).map(|it| it.as_secs()))
+            .transpose()
     };
-    let Some(pacing) = mcp::Pacing::new(interval, evict_after, buffer) else {
+    let interval = wait_seconds("interval", interval.as_deref(), 30)?.as_secs();
+    let buffer = optional("buffer", buffer.as_deref())?;
+    let evict_after = optional("evict-after", evict_after.as_deref())?;
+    let git_dir = git::git_dir(&repo)?;
+    // THE LIMIT IN FORCE AND THE WARM COUNT (CLOUD-2763): the Stop path's
+    // receipt, and the limit exits already spent on this branch.
+    let store = git_dir.join(RECEIPT_DIR);
+    let in_force = prompt_cache::InForce::read(&store);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    let branch = git::current_branch(&repo)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let count = recorder::record_path(&git_dir, "cache-warm-wakes", &branch, None);
+    let wakes = in_force.map_or(0, |it| mcp::warm_wakes(&count, now, it.lifetime_secs));
+    let Some((pacing, said)) = mcp::pacing_for(interval, evict_after, buffer, in_force, wakes)
+    else {
         return Err(UsageError::raise(
             "mcp wait: --interval must be at least one second".to_owned(),
         ));
     };
-    let git_dir = git::git_dir(&repo)?;
+    if let Some(said) = said {
+        writeln!(err, "{said}")?;
+    }
     let subjects = match (each_receipt, arg) {
         (Some(mint), Some(arg)) if params.is_empty() => mcp::Subjects::Receipts {
             store: git_dir.join("batten-receipts"),
@@ -4385,6 +4405,10 @@ fn run_mcp_wait(
         &mut read,
         &mut pr_watch::pause,
     );
+    // Only a limit taken from the receipt spends a warm wake.
+    if evict_after.is_none() && in_force.is_some() {
+        mcp::settle_warm(&count, &waited, now);
+    }
     // The change and the no-change line are the product, on stdout; a refusal
     // is Batten's record about the call, on stderr.
     if waited.exit == ExitCode::Success {
@@ -19596,6 +19620,9 @@ fn run_hook(
     // being read. A turn already handed a handler's advice has been told
     // something more specific, so the module's line is appended only to a silent
     // buffer.
+    // THE LIMIT IN FORCE, written where a background task can read it
+    // (CLOUD-2763): at the end of a turn, which is when a wait begins.
+    note_cache_limit(harness, &envelope);
     let block = fill_turn_advice(&policy, &envelope, &facts, overrides, &raw, &mut advice);
     // The one Stop that can block (CLOUD-2441): see `unlanded_stop_block`.
     if refused_stop(harness, block, &mut advice, err)? {
@@ -23730,6 +23757,49 @@ fn note_land_dispatch(envelope: &hook::Envelope) {
             let _ = std::fs::create_dir_all(parent);
         }
         let _ = crate::durable::append(&path, LAND_TASK);
+    }
+}
+
+/// Write the session's prompt-cache limit in force to the authority's receipt
+/// store (CLOUD-2763). See [`record_cache_limit`].
+fn note_cache_limit(harness: hook::Harness, envelope: &hook::Envelope) {
+    if envelope.event != hook::Event::Stop {
+        return;
+    }
+    if let Ok(git_dir) = git::git_dir(hook_authority_root()) {
+        record_cache_limit(&git_dir.join(RECEIPT_DIR), harness, envelope);
+    }
+}
+
+/// The limit in force for a Stop, written to `store`'s
+/// [`prompt_cache::RECEIPT`], replacing the previous value (CLOUD-2763).
+///
+/// Read from the session's last cache write, which names its bucket, and never
+/// inferred from billing, which the engine does not see. A subagent's Stop
+/// writes nothing: its bucket is not the main conversation's. No usage, a host
+/// with no published table, or a model with no read price REMOVES a stale
+/// file. Two main sessions in one clone overwrite each other: last writer wins.
+//MUTANT-SUITE crates/batten/src/prompt_cache.rs
+//MUTANT limit-written-per-call|s@^    if envelope.event != hook::Event::Stop \x7c\x7c envelope.agent.is_some() {$@    if envelope.agent.is_some() {@|the_limit_in_force_follows_the_last_write
+//MUTANT subagent-overwrites-limit|s@^    if envelope.event != hook::Event::Stop \x7c\x7c envelope.agent.is_some() {$@    if envelope.event != hook::Event::Stop {@|the_limit_in_force_follows_the_last_write
+//MUTANT stale-limit-kept|s@^            let _ = std::fs::remove_file(\&receipt);$@@|the_limit_in_force_follows_the_last_write
+fn record_cache_limit(store: &Path, harness: hook::Harness, envelope: &hook::Envelope) {
+    if envelope.event != hook::Event::Stop || envelope.agent.is_some() {
+        return;
+    }
+    let receipt = store.join(prompt_cache::RECEIPT);
+    let in_force = harness.capabilities().cache_eviction.and_then(|eviction| {
+        let text = std::fs::read_to_string(envelope.transcript.as_deref()?).ok()?;
+        prompt_cache::in_force(eviction, &text)
+    });
+    match in_force {
+        Some(in_force) => {
+            let _ = std::fs::create_dir_all(store);
+            let _ = crate::durable::replace(&receipt, in_force.line());
+        }
+        None => {
+            let _ = std::fs::remove_file(&receipt);
+        }
     }
 }
 

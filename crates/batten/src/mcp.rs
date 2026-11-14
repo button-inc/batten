@@ -2915,11 +2915,97 @@ pub struct Waited {
     /// The one pointer-only line: never the answer, only the reduced values that
     /// changed (rule 4).
     pub line: String,
+    /// Whether the wait ended at its limit with no change: one warm wake spent.
+    pub at_limit: bool,
+    /// Whether the wait ended on a change: the warm count starts again.
+    pub changed: bool,
 }
 
 impl Waited {
     fn at(exit: crate::exit::ExitCode, line: String) -> Waited {
-        Waited { exit, line }
+        Waited {
+            exit,
+            line,
+            at_limit: false,
+            changed: false,
+        }
+    }
+}
+
+/// The pacing for one wait, and the break-even line when it applies
+/// (CLOUD-2763).
+///
+/// An explicit `--evict-after` wins. Without one the limit in force the Stop
+/// path recorded is used, less the buffer, `prompt_cache::BUFFER_SECS` unless
+/// `--buffer` says otherwise; with neither there is no limit. Once the warm
+/// wakes already spent reach the break-even count for the recorded prices, the
+/// limit is dropped and the wait runs to a change only.
+//MUTANT-SUITE crates/batten/src/mcp.rs
+//MUTANT receipt-unread|s@^    let recorded = in_force.filter(\x7c_\x7c evict_after.is_none());$@    let recorded = None::<crate::prompt_cache::InForce>.filter(\x7c_\x7c evict_after.is_none());@|a_wait_with_no_flag_uses_the_receipt
+//MUTANT buffer-default-zero|s@^    let buffer = buffer.unwrap_or(crate::prompt_cache::BUFFER_SECS);$@    let buffer = buffer.unwrap_or(0);@|a_wait_with_no_flag_uses_the_receipt
+//MUTANT break-even-never-reached|s@^        if wakes >= allowed {$@        if false {@|the_wait_stops_waking_at_break_even
+//MUTANT waiter-counts-one-request|s@^            crate::prompt_cache::REQUESTS_PER_WAKE,$@            1,@|the_wait_stops_waking_at_break_even
+#[must_use]
+pub fn pacing_for(
+    interval: u64,
+    evict_after: Option<u64>,
+    buffer: Option<u64>,
+    in_force: Option<crate::prompt_cache::InForce>,
+    wakes: u64,
+) -> Option<(Pacing, Option<String>)> {
+    let buffer = buffer.unwrap_or(crate::prompt_cache::BUFFER_SECS);
+    let recorded = in_force.filter(|_| evict_after.is_none());
+    let mut evict = evict_after.or(recorded.map(|it| it.lifetime_secs));
+    let mut said = None;
+    if let Some(it) = recorded {
+        let allowed = crate::prompt_cache::wakes_allowed(
+            it.write_milli,
+            it.read_milli,
+            crate::prompt_cache::REQUESTS_PER_WAKE,
+        );
+        if wakes >= allowed {
+            evict = None;
+            said = Some(format!(
+                "mcp wait: past break-even after {allowed} wakes, waiting for a change only"
+            ));
+        }
+    }
+    let pacing = Pacing::new(
+        std::time::Duration::from_secs(interval),
+        evict.map(std::time::Duration::from_secs),
+        std::time::Duration::from_secs(buffer),
+    )?;
+    Some((pacing, said))
+}
+
+/// The warm wakes already spent in this run of waits: the lines of `count`
+/// written within one `lifetime` of `now`. An older line means the cache
+/// expired anyway, so a new run of warm wakes has started.
+//MUTANT-SUITE crates/batten/src/mcp.rs
+//MUTANT stale-count-kept|s@^        .filter(\x7cat\x7c at.saturating_add(lifetime) >= now)$@        .filter(\x7c_\x7c true)@|a_count_older_than_the_limit_is_ignored
+#[must_use]
+pub fn warm_wakes(count: &Path, now: u64, lifetime: u64) -> u64 {
+    let text = std::fs::read_to_string(count).unwrap_or_default();
+    let fresh = text
+        .lines()
+        .filter_map(|line| line.trim().parse::<u64>().ok())
+        .filter(|at| at.saturating_add(lifetime) >= now)
+        .count();
+    u64::try_from(fresh).unwrap_or(u64::MAX)
+}
+
+/// Settle the warm count after a wait: a wake spent at the limit is appended
+/// with its time; a change clears the count.
+//MUTANT-SUITE crates/batten/src/mcp.rs
+//MUTANT warm-count-never-cleared|s@^        let _ = std::fs::remove_file(count);$@@|a_change_resets_the_count
+pub fn settle_warm(count: &Path, waited: &Waited, now: u64) {
+    if waited.changed {
+        let _ = std::fs::remove_file(count);
+    } else if waited.at_limit {
+        if let Some(parent) = count.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = crate::durable::append(count, &now.to_string());
     }
 }
 
@@ -3141,7 +3227,10 @@ pub(crate) fn wait_with(
         for (name, after, _) in poll(row, &known, read) {
             match baseline.iter().find(|(seen, _)| *seen == name) {
                 Some((_, before)) if changed(before, &after) => {
-                    return Waited::at(ExitCode::Success, change_line(&name, before, &after));
+                    return Waited {
+                        changed: true,
+                        ..Waited::at(ExitCode::Success, change_line(&name, before, &after))
+                    };
                 }
                 Some(_) => {}
                 // A subject first seen on this poll: this reading is its baseline.
@@ -3150,10 +3239,13 @@ pub(crate) fn wait_with(
         }
         baseline.retain(|(name, _)| known.iter().any(|(listed, _)| listed == name));
     }
-    Waited::at(
-        ExitCode::Success,
-        format!("mcp wait: no change in {} polls", done + 1),
-    )
+    Waited {
+        at_limit: true,
+        ..Waited::at(
+            ExitCode::Success,
+            format!("mcp wait: no change in {} polls", done + 1),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -5100,6 +5192,106 @@ mod tests {
             printed,
             serde_json::Value::Object(compared),
             "`mcp call` prints the value `mcp wait` compares"
+        );
+    }
+
+    // --- the limit in force and break-even (CLOUD-2763) ----------------------
+
+    fn in_force(
+        lifetime_secs: u64,
+        write_milli: u64,
+        read_milli: u64,
+    ) -> crate::prompt_cache::InForce {
+        crate::prompt_cache::InForce {
+            lifetime_secs,
+            write_milli,
+            read_milli,
+        }
+    }
+
+    fn pauses_under(pacing: Pacing, limit: u64) -> u64 {
+        let config = wait_config(wait_row("get", &["status"], false));
+        let pauses = Cell::new(0u64);
+        wait_with(
+            &config,
+            "get",
+            &one_subject(),
+            pacing,
+            None,
+            &mut |_| Ok(status(if pauses.get() >= limit { "B" } else { "A" }, 0)),
+            &mut |_| pauses.set(pauses.get() + 1),
+        );
+        pauses.get()
+    }
+
+    #[test]
+    fn a_wait_with_no_flag_uses_the_receipt() {
+        let (pacing, said) =
+            pacing_for(30, None, None, Some(in_force(300, 1250, 100)), 0).expect("paced");
+        assert_eq!(said, None);
+        assert_eq!(
+            pauses_under(pacing, u64::MAX),
+            8,
+            "300 less the 60-second default buffer"
+        );
+        let (unbounded, _) = pacing_for(30, None, None, None, 0).expect("paced");
+        assert_eq!(
+            pauses_under(unbounded, 200),
+            200,
+            "no receipt and no flag: still polling after 200"
+        );
+    }
+
+    #[test]
+    fn the_wait_stops_waking_at_break_even() {
+        let one_hour = Some(in_force(3600, 2000, 25));
+        let (pacing, said) = pacing_for(30, None, None, one_hour, 38).expect("paced");
+        assert_eq!(said, None);
+        assert_eq!(
+            pacing.pauses,
+            Some(118),
+            "38 spent: still exits at the limit"
+        );
+        let (pacing, said) = pacing_for(30, None, None, one_hour, 39).expect("paced");
+        assert_eq!(pacing.pauses, None, "39 spent: past break-even");
+        assert_eq!(
+            said.as_deref(),
+            Some("mcp wait: past break-even after 39 wakes, waiting for a change only")
+        );
+    }
+
+    #[test]
+    fn a_change_resets_the_count() {
+        let dir = crate::scratch::scratch("mcp-wait-warm-reset");
+        let count = dir.join("warm");
+        let limit = Waited {
+            at_limit: true,
+            ..Waited::at(crate::exit::ExitCode::Success, String::new())
+        };
+        settle_warm(&count, &limit, 1000);
+        settle_warm(&count, &limit, 1100);
+        assert_eq!(warm_wakes(&count, 1200, 3600), 2);
+        let change = Waited {
+            changed: true,
+            ..Waited::at(crate::exit::ExitCode::Success, String::new())
+        };
+        settle_warm(&count, &change, 1300);
+        assert_eq!(
+            warm_wakes(&count, 1400, 3600),
+            0,
+            "a change clears the count"
+        );
+    }
+
+    #[test]
+    fn a_count_older_than_the_limit_is_ignored() {
+        let dir = crate::scratch::scratch("mcp-wait-warm-stale");
+        let count = dir.join("warm");
+        std::fs::write(&count, "1000\n5000\n").expect("a count");
+        assert_eq!(
+            warm_wakes(&count, 5100, 3600),
+            1,
+            "the line from 1000 is past one limit"
         );
     }
 }
