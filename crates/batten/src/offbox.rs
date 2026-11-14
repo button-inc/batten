@@ -1461,6 +1461,564 @@ fn foreign(dir: &Path, last: Option<&str>, path: &str) -> bool {
     keyed(path, "history/").is_some_and(|(entry, _)| aside.join("history").join(entry).exists())
 }
 
+// --- the daemon (CLOUD-2721) ---------------------------------------------------
+
+/// The lock one daemon per checkout holds for its life, under [`DIR`].
+pub const LOCK: &str = "lock";
+
+/// The daemon's status file, under [`DIR`]: one `key value` per line.
+pub const STATUS: &str = "status";
+
+/// The file the hook appends one line to per tool call. Only its length is read.
+pub const INBOX: &str = "inbox";
+
+/// The one line telling an agent how to attach the state repository.
+pub const NOTE: &str = "note";
+
+/// How often the loop wakes, in seconds.
+const WAKE: u64 = 5;
+
+/// The least time between two push attempts, in seconds.
+const FLOOR: u64 = 60;
+
+/// How long with no word from the hook before a push is tried anyway.
+const TIMER: u64 = 600;
+
+/// The longest base wait, the cap the REST tier's own backoff uses.
+const MAX_WAIT: u64 = 3600;
+
+/// How long to wait after a snapshot the scanner refused.
+const REFUSED_WAIT: u64 = 600;
+
+/// The first attempt after start is delayed by up to this many seconds.
+const SPREAD: u64 = 60;
+
+/// How many times a starting daemon tries the lock, and how long between
+/// tries: one second in all. The hook holds the lock for an instant on every
+/// tool call, so one failed try is not another daemon.
+const LOCK_TRIES: u32 = 20;
+const LOCK_PAUSE_MS: u64 = 50;
+
+/// What one push attempt, or one probe, came to — as the backoff reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Attempt {
+    /// Applied, or nothing had changed.
+    Done,
+    /// The forge said to slow down.
+    Throttled(lease::Throttled),
+    /// A transport failure, or the remote would not be written.
+    Failed,
+    /// The swap was rejected on every attempt.
+    Contended,
+    /// No snapshot was built: the scanner is absent or failed.
+    Refused,
+}
+
+/// The seconds to wait after `result` before the next request (CLOUD-2721).
+///
+/// **GitHub decides the rate.** `Retry-After` is honoured; failing that, the
+/// reset instant; failing that, a minute and then exponentially longer — its
+/// published rule. `throttles` and `failures` count consecutive results of
+/// their kind, starting at 1, and are the caller's to keep.
+///
+/// The base is capped at [`MAX_WAIT`], and a uniformly random extra of up to
+/// half the base is added from `random`, so daemons throttled together do not
+/// come back together. This reads no clock: `now` is the caller's.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT retry-after-ignored|s@^            (Some(seconds), _) => seconds,$@            (Some(_), _) => 0,@|next_wait_follows_the_forge_then_doubles
+//MUTANT backoff-does-not-double|s@^    60_u64.saturating_mul(1_u64 << exponent)$@    60_u64@|next_wait_follows_the_forge_then_doubles
+//MUTANT backoff-exceeds-the-cap|s@^    let base = base.min(MAX_WAIT);$@@|next_wait_follows_the_forge_then_doubles
+#[must_use]
+pub fn next_wait(result: Attempt, throttles: u32, failures: u32, now: i64, random: u64) -> u64 {
+    let base = match result {
+        Attempt::Done | Attempt::Contended => 0,
+        Attempt::Refused => REFUSED_WAIT,
+        Attempt::Throttled(throttle) => match (throttle.retry_after, throttle.reset_at) {
+            (Some(seconds), _) => seconds,
+            (None, Some(reset)) => {
+                u64::try_from(i64::try_from(reset).unwrap_or(i64::MAX).saturating_sub(now))
+                    .unwrap_or(0)
+            }
+            (None, None) => doubling(throttles),
+        },
+        Attempt::Failed => doubling(failures),
+    };
+    let base = base.min(MAX_WAIT);
+    base + random % (base / 2 + 1)
+}
+
+/// A minute, doubled once for each consecutive result after the first.
+fn doubling(count: u32) -> u64 {
+    let exponent = count.saturating_sub(1).min(32);
+    60_u64.saturating_mul(1_u64 << exponent)
+}
+
+/// Whether to push now (CLOUD-2721): something may be new, the floor has
+/// passed, and no wait is in force.
+///
+/// `grew` is the hook's word that a tool call happened; the timer is the other
+/// trigger, so a hook that says nothing still gets a push every ten minutes.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT push-inside-the-floor|s@^    wait_left == 0 \&\& since_last >= FLOOR \&\& (grew \x7c\x7c since_last >= TIMER)$@    wait_left == 0 \&\& (grew \x7c\x7c since_last >= TIMER)@|the_decision_to_push_needs_a_trigger_the_floor_and_no_wait
+//MUTANT timer-never-triggers-a-push|s@^    wait_left == 0 \&\& since_last >= FLOOR \&\& (grew \x7c\x7c since_last >= TIMER)$@    wait_left == 0 \&\& since_last >= FLOOR \&\& grew@|the_decision_to_push_needs_a_trigger_the_floor_and_no_wait
+#[must_use]
+pub const fn should_push(grew: bool, since_last: u64, wait_left: u64) -> bool {
+    wait_left == 0 && since_last >= FLOOR && (grew || since_last >= TIMER)
+}
+
+/// How long the first attempt after start is held back, so sessions that start
+/// together do not push together.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT first-push-is-immediate|s@^    random % (SPREAD + 1)$@    0 * random@|the_first_attempt_is_spread_over_a_minute
+#[must_use]
+pub const fn first_delay(random: u64) -> u64 {
+    random % (SPREAD + 1)
+}
+
+/// The daemon's status file, as its keys.
+///
+/// A reader ignores a key it does not know, so a later slice can add one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusFile {
+    /// The daemon's process id.
+    pub pid: u32,
+    /// `<harness>-<hash>` of the session this daemon serves.
+    pub session: String,
+    /// The byte length of the inbox the daemon has seen.
+    pub inbox_read: u64,
+    /// The commit id last applied, or `-`.
+    pub pushed: String,
+    /// Consecutive throttled attempts.
+    pub throttles: u32,
+    /// Consecutive failed attempts.
+    pub failures: u32,
+    /// The epoch second before which the daemon makes no request; 0 for none.
+    pub wait_until: i64,
+    /// `yes`, `no`, `no-origin` or `unknown`.
+    pub attached: String,
+    /// `pending`, `yes`, `none` or `unavailable`.
+    pub restored: String,
+    /// `ok`, `not-surveyed` or `unavailable`.
+    pub source: String,
+}
+
+//MUTANT-SUITE crates/batten/tests/it/offbox_daemon.rs
+//MUTANT status-written-without-a-pid|s@^        let mut text = format!("pid {}\\n", self.pid);$@        let mut text = String::new();@|the_status_file_names_the_daemons_pid_and_session
+//MUTANT status-names-no-session|s@^        let _ = writeln!(text, "session {}", self.session);$@@|the_status_file_names_the_daemons_pid_and_session
+impl StatusFile {
+    /// The file's text. **`pid` first, then `session`**: the two lines a reader
+    /// needs before any other, written before anything else is known.
+    #[must_use]
+    pub fn render(&self) -> String {
+        use std::fmt::Write as _;
+        let mut text = format!("pid {}\n", self.pid);
+        let _ = writeln!(text, "session {}", self.session);
+        let _ = writeln!(text, "inbox_read {}", self.inbox_read);
+        let _ = writeln!(text, "pushed {}", self.pushed);
+        let _ = writeln!(text, "throttles {}", self.throttles);
+        let _ = writeln!(text, "failures {}", self.failures);
+        let _ = writeln!(text, "wait_until {}", self.wait_until);
+        let _ = writeln!(text, "attached {}", self.attached);
+        let _ = writeln!(text, "restored {}", self.restored);
+        let _ = writeln!(text, "source {}", self.source);
+        text
+    }
+
+    /// Read a status file's text. A key that is absent or will not parse takes
+    /// its empty value, and an unknown key is skipped.
+    #[must_use]
+    pub fn parse(text: &str) -> Self {
+        let mut read = StatusFile {
+            pid: 0,
+            session: String::new(),
+            inbox_read: 0,
+            pushed: String::from("-"),
+            throttles: 0,
+            failures: 0,
+            wait_until: 0,
+            attached: String::from("unknown"),
+            restored: String::from("none"),
+            source: String::from("ok"),
+        };
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once(' ') else {
+                continue;
+            };
+            match key {
+                "pid" => read.pid = value.parse().unwrap_or(0),
+                "session" => value.clone_into(&mut read.session),
+                "inbox_read" => read.inbox_read = value.parse().unwrap_or(0),
+                "pushed" => value.clone_into(&mut read.pushed),
+                "throttles" => read.throttles = value.parse().unwrap_or(0),
+                "failures" => read.failures = value.parse().unwrap_or(0),
+                "wait_until" => read.wait_until = value.parse().unwrap_or(0),
+                "attached" => value.clone_into(&mut read.attached),
+                "restored" => value.clone_into(&mut read.restored),
+                "source" => value.clone_into(&mut read.source),
+                _ => {}
+            }
+        }
+        read
+    }
+}
+
+/// What the daemon takes from outside itself: the clock, the pause between
+/// wakes, and randomness. The verb supplies the real ones; a test supplies a
+/// clock that a pause advances.
+pub trait World {
+    /// The current epoch second.
+    fn now(&mut self) -> i64;
+    /// Wait this many milliseconds.
+    fn pause(&mut self, millis: u64);
+    /// Sixty-four random bits.
+    fn random(&mut self) -> u64;
+}
+
+/// How a launch ended, for the two cases in which it ends at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Launch {
+    /// Another daemon holds this checkout's lock.
+    Running,
+    /// The loop ran the number of wakes it was asked for. Only a test asks.
+    Stopped,
+}
+
+impl Launch {
+    /// The one stdout token.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Launch::Running => "running",
+            Launch::Stopped => "stopped",
+        }
+    }
+}
+
+/// What a daemon is launched with.
+#[allow(missing_debug_implementations)]
+pub struct Launching<'a> {
+    /// The project's root directory.
+    pub project_root: &'a Path,
+    /// The scanner's provision rows.
+    pub provisions: &'a [crate::provision::Provision],
+    /// The harness's name and the session's own id.
+    pub harness: &'a str,
+    /// The session's own id, as the harness spells it.
+    pub session: &'a str,
+    /// The transcript path the harness named, where it named one.
+    pub transcript: Option<&'a Path>,
+    /// The state repository's value, as the environment spells it.
+    pub value: &'a str,
+    /// The project's origin URL, where it has one.
+    pub origin: Option<&'a str>,
+    /// How many wakes to run before returning; `None` runs until killed.
+    pub wakes: Option<u64>,
+}
+
+/// The per-checkout directory the daemon's own files live in.
+fn daemon_dir(project_root: &Path) -> Result<PathBuf> {
+    Ok(crate::state::repo_state_dir(project_root)?.join(DIR))
+}
+
+/// Take this checkout's daemon lock, or `None` where another daemon holds it.
+///
+/// The hook probes the lock for an instant on every tool call, so a failed try
+/// is retried every 50 ms for one second before it is read as another daemon.
+//MUTANT-SUITE crates/batten/tests/it/offbox_daemon.rs
+//MUTANT second-daemon-also-runs|s@^    let held_elsewhere = true;$@    let held_elsewhere = false;@|a_second_daemon_in_one_checkout_says_running_and_exits
+//MUTANT lock-probe-makes-the-daemon-exit|s@^    for attempt in 0..LOCK_TRIES {$@    for attempt in 0..1 {@|a_lock_probed_at_start_does_not_stop_the_daemon
+fn take_lock(dir: &Path, world: &mut dyn World) -> Result<Option<std::fs::File>> {
+    let refused =
+        |err: std::io::Error| anyhow::anyhow!("offbox: the daemon lock will not open: {err}");
+    std::fs::create_dir_all(dir).map_err(refused)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(LOCK))
+        .map_err(refused)?;
+    for attempt in 0..LOCK_TRIES {
+        if fs4::FileExt::try_lock(&file).is_ok() {
+            return Ok(Some(file));
+        }
+        if attempt + 1 < LOCK_TRIES {
+            world.pause(LOCK_PAUSE_MS);
+        }
+    }
+    let held_elsewhere = true;
+    Ok((!held_elsewhere).then_some(file))
+}
+
+/// The running daemon: what it was launched with, and what it remembers
+/// between wakes. Everything it must not lose is in the status file.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT applied-push-keeps-the-backoff|s@^                self.status.throttles = 0;$@@|a_throttled_daemon_waits_as_told_and_resets_on_an_applied_push
+struct Daemon<'a> {
+    launching: &'a Launching<'a>,
+    dir: PathBuf,
+    meta: Option<Meta>,
+    remote: Option<String>,
+    status: StatusFile,
+    /// The status text last written, so the file is rewritten only on change.
+    written: String,
+    /// When a push was last attempted, and the inbox length it saw.
+    last_attempt: Option<i64>,
+    inbox_at_attempt: u64,
+    /// Whether the last attempt left something unpushed.
+    owed: bool,
+    /// The first attempt is not made before this.
+    not_before: i64,
+}
+
+impl Daemon<'_> {
+    fn write_status(&mut self) -> Result<()> {
+        let text = self.status.render();
+        if text == self.written {
+            return Ok(());
+        }
+        crate::durable::replace(self.dir.join(STATUS), &text)
+            .map_err(|err| anyhow::anyhow!("offbox: the status file will not write: {err}"))?;
+        self.written = text;
+        Ok(())
+    }
+
+    /// Count `result`, and store how long the forge and the backoff say to wait.
+    fn settle(&mut self, result: Attempt, world: &mut dyn World) {
+        match result {
+            Attempt::Done => {
+                self.status.throttles = 0;
+                self.status.failures = 0;
+            }
+            Attempt::Throttled(_) => self.status.throttles += 1,
+            Attempt::Failed => self.status.failures += 1,
+            Attempt::Contended | Attempt::Refused => {}
+        }
+        let now = world.now();
+        let wait = next_wait(
+            result,
+            self.status.throttles,
+            self.status.failures,
+            now,
+            world.random(),
+        );
+        self.status.wait_until = if wait == 0 {
+            0
+        } else {
+            now.saturating_add(i64::try_from(wait).unwrap_or(i64::MAX))
+        };
+        self.owed = result != Attempt::Done;
+    }
+
+    /// Ask the remote whether this machine may write it, once.
+    fn probe(&mut self, world: &mut dyn World) -> Result<()> {
+        let Some(remote) = self.remote.clone() else {
+            return Ok(());
+        };
+        let result = match lease::probe(&remote, Service::ReceivePack) {
+            Ok(200) => {
+                "yes".clone_into(&mut self.status.attached);
+                Attempt::Done
+            }
+            Ok(401 | 403 | 404) => {
+                self.unattached()?;
+                Attempt::Failed
+            }
+            Ok(_) => {
+                "unknown".clone_into(&mut self.status.attached);
+                Attempt::Failed
+            }
+            Err(err) => {
+                if let Some(throttle) = err.downcast_ref::<lease::Throttled>() {
+                    Attempt::Throttled(*throttle)
+                } else {
+                    "unknown".clone_into(&mut self.status.attached);
+                    Attempt::Failed
+                }
+            }
+        };
+        // A probe that answered leaves nothing owed; only its counts and its
+        // wait are kept.
+        let owed = self.owed;
+        self.settle(result, world);
+        self.owed = owed;
+        Ok(())
+    }
+
+    /// The remote will not be written from here: say so, and how to fix it.
+    /// **Nothing is denied for it** — the daemon keeps running and asks again.
+    fn unattached(&mut self) -> Result<()> {
+        "no".clone_into(&mut self.status.attached);
+        let mut note = attach_note(self.launching.value.trim());
+        note.push('\n');
+        crate::durable::replace(self.dir.join(NOTE), note)
+            .map_err(|err| anyhow::anyhow!("offbox: the attach note will not write: {err}"))
+    }
+
+    /// One push attempt.
+    fn push(&mut self, world: &mut dyn World) -> Result<()> {
+        let (Some(meta), Some(remote)) = (self.meta.clone(), self.remote.clone()) else {
+            return Ok(());
+        };
+        let now = world.now();
+        self.last_attempt = Some(now);
+        self.inbox_at_attempt = self.status.inbox_read;
+        let session = Session {
+            project_root: self.launching.project_root,
+            provisions: self.launching.provisions,
+            meta,
+            remote,
+            transcript: self.launching.transcript.map(Path::to_path_buf),
+            time: now,
+        };
+        let result = match push_once(&session, &[]) {
+            Ok(push) => match push.outcome {
+                Pushed::Applied | Pushed::Unchanged => {
+                    let repo = local_repo(&session_dir(session.project_root, &session.meta)?);
+                    if let Some(commit) = crate::git::resolve_ref(&repo, LAST)? {
+                        self.status.pushed = commit;
+                    }
+                    "yes".clone_into(&mut self.status.attached);
+                    Attempt::Done
+                }
+                Pushed::Contended => Attempt::Contended,
+                Pushed::Throttled(throttle) => Attempt::Throttled(throttle),
+                Pushed::Unattached => {
+                    self.unattached()?;
+                    Attempt::Failed
+                }
+                Pushed::Refused(_) => {
+                    "unavailable".clone_into(&mut self.status.source);
+                    Attempt::Refused
+                }
+            },
+            // A transport failure is a result, never the daemon's end.
+            Err(_) => Attempt::Failed,
+        };
+        self.settle(result, world);
+        Ok(())
+    }
+
+    /// One wake of the loop.
+    fn wake(&mut self, world: &mut dyn World) -> Result<()> {
+        self.status.inbox_read =
+            std::fs::metadata(self.dir.join(INBOX)).map_or(0, |meta| meta.len());
+        let now = world.now();
+        let wait_left = u64::try_from(self.status.wait_until.saturating_sub(now)).unwrap_or(0);
+        if self.remote.is_some() && self.status.attached != "yes" {
+            // Not known to be writable yet: ask, once any wait has run out.
+            if wait_left == 0 {
+                self.probe(world)?;
+            }
+        } else if self.remote.is_some() && now >= self.not_before {
+            let grew = self.status.inbox_read > self.inbox_at_attempt || self.owed;
+            // Never attempted reads as the timer having run out.
+            let since_last = self.last_attempt.map_or(TIMER, |last| {
+                u64::try_from(now.saturating_sub(last)).unwrap_or(0)
+            });
+            if should_push(grew, since_last, wait_left) {
+                self.push(world)?;
+            }
+        }
+        self.write_status()
+    }
+}
+
+/// Run the off-box daemon for one session until it is killed (CLOUD-2721).
+///
+/// **Crash-only.** There is no shutdown path. Every piece of the daemon's state
+/// is a file under the checkout's off-box directory, replaced whole, so killing
+/// it at any instant loses nothing a restart does not recover.
+///
+/// **One per checkout**, by an exclusive lock held for the daemon's life; a
+/// second launch answers [`Launch::Running`].
+///
+/// On start it keeps the previous status file's `throttles`, `failures` and
+/// `wait_until` whatever session wrote them — a wait the forge asked for binds
+/// the machine, not the session — and its `pushed` only when the session is its
+/// own. Then it writes its `pid` and `session`, empties the inbox, and begins
+/// to wake every five seconds.
+///
+/// # Errors
+///
+/// A lock or a status file that will not open or write. A failed push is not
+/// an error: it is counted, waited out, and tried again.
+//MUTANT-SUITE crates/batten/src/offbox.rs
+//MUTANT restart-forgets-the-wait|s@^        status.wait_until = previous.wait_until;$@@|a_restart_inside_a_wait_still_honours_it
+//MUTANT new-session-inherits-the-old-status|s@^        if previous.session == status.session {$@        if true {@|a_restart_inside_a_wait_still_honours_it
+pub fn run(launching: &Launching<'_>, world: &mut dyn World) -> Result<Launch> {
+    let dir = daemon_dir(launching.project_root)?;
+    let Some(_lock) = take_lock(&dir, world)? else {
+        return Ok(Launch::Running);
+    };
+
+    let named = launching.origin.and_then(|origin| {
+        Some((
+            remote_for(origin, launching.value.trim())?,
+            origin_path(origin)?,
+        ))
+    });
+    let (remote, meta) = match named {
+        Some((remote, origin)) => (
+            Some(remote),
+            Some(Meta {
+                harness: launching.harness.to_owned(),
+                session: launching.session.to_owned(),
+                origin,
+            }),
+        ),
+        None => (None, None),
+    };
+    let surveyed = crate::sessions::source_named(launching.harness, launching.transcript).is_some();
+
+    let previous = std::fs::read_to_string(dir.join(STATUS))
+        .map(|text| StatusFile::parse(&text))
+        .ok();
+    let mut status = StatusFile::parse("");
+    status.pid = std::process::id();
+    status.session = leaf(launching.harness, launching.session);
+    if remote.is_none() {
+        "no-origin".clone_into(&mut status.attached);
+    }
+    if !surveyed {
+        "not-surveyed".clone_into(&mut status.source);
+    }
+    if let Some(previous) = previous {
+        status.throttles = previous.throttles;
+        status.failures = previous.failures;
+        status.wait_until = previous.wait_until;
+        if previous.session == status.session {
+            status.pushed = previous.pushed;
+        }
+    }
+
+    let now = world.now();
+    let mut daemon = Daemon {
+        launching,
+        dir: dir.clone(),
+        meta,
+        remote,
+        status,
+        written: String::new(),
+        last_attempt: None,
+        inbox_at_attempt: 0,
+        owed: false,
+        not_before: now.saturating_add(i64::try_from(first_delay(world.random())).unwrap_or(0)),
+    };
+    daemon.write_status()?;
+    crate::durable::replace(dir.join(INBOX), "")
+        .map_err(|err| anyhow::anyhow!("offbox: the inbox will not write: {err}"))?;
+
+    let mut wakes = 0_u64;
+    loop {
+        if launching.wakes.is_some_and(|limit| wakes >= limit) {
+            return Ok(Launch::Stopped);
+        }
+        daemon.wake(world)?;
+        wakes += 1;
+        world.pause(WAKE * 1000);
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -2136,5 +2694,228 @@ mod push_tests {
             Some("other 0\n")
         );
         assert!(one.dir().join(ABSORBED).join(&others[1]).is_dir());
+    }
+
+    // --- the daemon (CLOUD-2721) ----------------------------------------------
+
+    /// A clock a pause advances, a fixed source of randomness, and a look at the
+    /// world after each wake.
+    struct Sim<'a> {
+        now: i64,
+        random: u64,
+        after_wake: Box<dyn FnMut(i64) + 'a>,
+    }
+
+    impl World for Sim<'_> {
+        fn now(&mut self) -> i64 {
+            self.now
+        }
+
+        fn pause(&mut self, millis: u64) {
+            if millis >= 1000 {
+                (self.after_wake)(self.now);
+            }
+            self.now += i64::try_from(millis / 1000).unwrap();
+        }
+
+        fn random(&mut self) -> u64 {
+            self.random
+        }
+    }
+
+    impl Writer {
+        /// Run this writer's daemon for `wakes` wakes of a simulated clock
+        /// starting at `now`, and return the clock's reading when it stopped.
+        fn daemon(&self, now: i64, wakes: u64, after_wake: impl FnMut(i64)) -> i64 {
+            let mut sim = Sim {
+                now,
+                random: 0,
+                after_wake: Box::new(after_wake),
+            };
+            let launch = run(
+                &Launching {
+                    project_root: &self.root,
+                    provisions: &self.provisions,
+                    harness: &self.meta.harness,
+                    session: &self.meta.session,
+                    transcript: Some(&self.transcript),
+                    value: "acme/state",
+                    origin: Some(REMOTE),
+                    wakes: Some(wakes),
+                },
+                &mut sim,
+            )
+            .expect("the daemon runs");
+            assert_eq!(launch, Launch::Stopped);
+            sim.now
+        }
+
+        fn status_path(&self) -> PathBuf {
+            daemon_dir(&self.root).unwrap().join(STATUS)
+        }
+
+        fn status(&self) -> StatusFile {
+            StatusFile::parse(&std::fs::read_to_string(self.status_path()).unwrap())
+        }
+    }
+
+    /// Fails by: the forge's own wait being ignored, a backoff that does not
+    /// grow, or one that grows past the cap.
+    #[test]
+    fn next_wait_follows_the_forge_then_doubles() {
+        let throttled = |retry_after, reset_at| {
+            Attempt::Throttled(lease::Throttled {
+                retry_after,
+                reset_at,
+            })
+        };
+        let most = u64::MAX;
+        assert_eq!(next_wait(Attempt::Done, 3, 3, 0, most), 0);
+        assert_eq!(next_wait(Attempt::Contended, 0, 0, 0, most), 0);
+        assert_eq!(next_wait(Attempt::Refused, 0, 0, 0, 0), 600);
+        // `Retry-After` 120: that, plus at most half of it.
+        assert_eq!(next_wait(throttled(Some(120), None), 1, 0, 0, 0), 120);
+        assert_eq!(next_wait(throttled(Some(120), Some(9)), 1, 0, 0, 60), 180);
+        assert_eq!(next_wait(throttled(Some(120), None), 1, 0, 0, 61), 120);
+        // Only a reset instant, 300 seconds ahead.
+        assert_eq!(next_wait(throttled(None, Some(1300)), 1, 0, 1000, 0), 300);
+        assert_eq!(next_wait(throttled(None, Some(1300)), 1, 0, 1000, 150), 450);
+        // A reset that is not ahead of now is no wait at all.
+        assert_eq!(next_wait(throttled(None, Some(900)), 1, 0, 1000, most), 0);
+        // Neither: a minute, then doubling, then the cap.
+        for (count, base) in [(1, 60), (2, 120), (3, 240), (10, 3600), (40, 3600)] {
+            assert_eq!(next_wait(throttled(None, None), count, 0, 0, 0), base);
+            assert_eq!(
+                next_wait(throttled(None, None), count, 0, 0, base / 2),
+                base + base / 2
+            );
+            // A transport failure doubles the same way, on its own count.
+            assert_eq!(next_wait(Attempt::Failed, 0, count, 0, 0), base);
+        }
+        assert_eq!(next_wait(throttled(Some(9000), None), 1, 0, 0, 0), 3600);
+    }
+
+    /// Fails by: a push with no trigger, inside the floor, or inside a wait.
+    #[test]
+    fn the_decision_to_push_needs_a_trigger_the_floor_and_no_wait() {
+        assert!(!should_push(false, 599, 0));
+        assert!(should_push(false, 600, 0));
+        assert!(!should_push(true, 59, 0));
+        assert!(should_push(true, 60, 0));
+        assert!(!should_push(true, 60, 1));
+    }
+
+    /// Fails by: every session that starts together pushing together.
+    #[test]
+    fn the_first_attempt_is_spread_over_a_minute() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut delays = BTreeSet::new();
+        for _ in 0..100 {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let delay = first_delay(seed >> 11);
+            assert!(delay <= 60, "{delay}");
+            delays.insert(delay);
+        }
+        assert!(delays.len() > 1, "{delays:?}");
+    }
+
+    /// Fails by: a relaunch forgetting a wait the forge asked for, or a new
+    /// session taking the old one's last-pushed commit as its own.
+    #[test]
+    fn a_restart_inside_a_wait_still_honours_it() {
+        let base = base("offbox-daemon-restart");
+        let stand = standing(&[], Vec::new());
+        for (name, own) in [("own", true), ("other", false)] {
+            let writer = Writer::new(&base, name, "s");
+            let mut left = StatusFile::parse("");
+            left.session = if own {
+                leaf("exit-code", "s")
+            } else {
+                String::from("exit-code-0000000000000000")
+            };
+            left.pushed = String::from("0123456789abcdef0123456789abcdef01234567");
+            left.throttles = 2;
+            left.failures = 1;
+            left.wait_until = 1100;
+            put(&writer.status_path(), &left.render());
+            let before = stand.borrow().asked.len();
+
+            // 19 wakes from 1000 end at 1095: all inside the wait.
+            let stopped = writer.daemon(1000, 19, |_| {});
+
+            assert_eq!(stand.borrow().asked.len(), before, "{name}: no request");
+            let kept = writer.status();
+            assert_eq!((kept.throttles, kept.failures), (2, 1), "{name}");
+            assert_eq!(kept.wait_until, 1100, "{name}");
+            assert_eq!(kept.pushed == left.pushed, own, "{name}: {}", kept.pushed);
+            assert_eq!(kept.session, leaf("exit-code", "s"));
+            assert_eq!(kept.pid, std::process::id());
+
+            // And once it has passed, the daemon asks.
+            writer.daemon(stopped, 3, |_| {});
+            assert!(stand.borrow().asked.len() > before, "{name}: it asks after");
+        }
+    }
+
+    /// Fails by: a throttled daemon coming back before it was told to, or
+    /// keeping its backoff after a push that was applied.
+    #[test]
+    fn a_throttled_daemon_waits_as_told_and_resets_on_an_applied_push() {
+        let base = base("offbox-daemon-throttled");
+        let stand = standing(&[], Vec::new());
+        let writer = Writer::new(&base, "one", "s");
+        put(&writer.transcript, "{\"n\":1}\n");
+        stand.borrow_mut().canned.push(Canned {
+            kind: Kind::Receive,
+            left: 2,
+            status: 429,
+            headers: vec![(String::from("retry-after"), String::from("120"))],
+        });
+        let mut posts: Vec<i64> = Vec::new();
+        let mut throttles: Vec<u32> = Vec::new();
+        let status = writer.status_path();
+
+        writer.daemon(1000, 80, |now| {
+            if stand.borrow().receives > posts.len() {
+                posts.push(now);
+            }
+            let seen = StatusFile::parse(&std::fs::read_to_string(&status).unwrap()).throttles;
+            if throttles.last() != Some(&seen) {
+                throttles.push(seen);
+            }
+        });
+
+        assert_eq!(posts.len(), 3, "{posts:?}");
+        assert_eq!(receives(&stand), 3);
+        assert!(posts[1] - posts[0] >= 120, "{posts:?}");
+        assert!(posts[2] - posts[1] >= 120, "{posts:?}");
+        assert_eq!(throttles, [0, 1, 2, 0]);
+        let last = writer.status();
+        assert_eq!(Some(last.pushed), writer.last());
+        assert_eq!(last.wait_until, 0);
+        assert_eq!(last.attached, "yes");
+        assert_eq!(last.source, "ok");
+    }
+
+    /// Fails by: an unwritable remote being pushed to, or the agent not being
+    /// told how to attach it.
+    #[test]
+    fn an_unattached_remote_is_noted_and_never_pushed_to() {
+        let base = base("offbox-daemon-unattached");
+        let stand = standing(&[], Vec::new());
+        stand.borrow_mut().status = 403;
+        let writer = Writer::new(&base, "one", "s");
+
+        writer.daemon(1000, 3, |_| {});
+
+        let status = writer.status();
+        assert_eq!(status.attached, "no");
+        assert_eq!(status.failures, 1);
+        assert!(status.wait_until > 1000);
+        let note = std::fs::read_to_string(daemon_dir(&writer.root).unwrap().join(NOTE)).unwrap();
+        assert_eq!(note, format!("{}\n", attach_note("acme/state")));
+        assert_eq!(receives(&stand), 0);
     }
 }
