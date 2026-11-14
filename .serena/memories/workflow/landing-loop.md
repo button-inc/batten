@@ -1,7 +1,7 @@
 # The landing loop, and why its shape looks like breakage from an old clone
 
-Read this **before** changing anything under `mise-tasks/land.sh*`, `ci-wait`,
-`main-watch`, `checks-green`, or `tests/land*.bats`. Three things here read as
+Read this **before** changing anything under `crates/batten/src/land.rs`, `ci-wait`,
+`main-watch`, `checks-green`, or their `land*` tests. Three things here read as
 defects to an agent on a clone that predates them, and each is the change:
 
 - **a lease held by a live process**, not a file the tree owns;
@@ -96,10 +96,10 @@ cost of failing open is one matrix and the cost of failing closed is the fleet.
 
 ## Why there is no clock, anywhere
 
-`ci-wait` is unbounded by design and `tests/land.bats` asserts the task carries
+`ci-wait` is unbounded by design: the poll carries
 no wall-clock timeout. The tests are held to the same bar, and the shape to copy
 when a case genuinely needs a precondition the runner might not create is
-CLOUD-448's, in `tests/land-lock.bats`: **retry the SETUP, never the
+CLOUD-448's: **retry the SETUP, never the
 MEASUREMENT** (retrying the measurement is drive-to-green), and `skip` with a
 diagnostic naming the ticket when N attempts fail to establish it.
 
@@ -277,7 +277,7 @@ gate run and cannot borrow anything.
 ## Porting a lifecycle: four owner decisions, each a pointer
 
 Recovered from PR #848's session (2026-09-06), where a port carried every STEP
-of `land.sh` and dropped its LIFECYCLE with every gate green. Each rule lives
+of the land script and dropped its LIFECYCLE with every gate green. Each rule lives
 on its row; this section is the pointer, not the argument.
 
 - **Crash-only is the architecture** (CLOUD-1558). The lock and the reaper

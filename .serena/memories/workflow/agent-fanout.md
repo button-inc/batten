@@ -206,7 +206,7 @@ Measured 2026-09-01: reading "enforced at claim time", an agent reported the WIP
 cap as a bound on how many tickets it could take, twice.
 
 **AND THE MECHANISM COUNTS THE WRONG THING TOO**, so this is not merely a wording
-fix: `mise-tasks/graph-check.sh` emits
+fix: the graph-check script emitted
 `wip $(jq -r '[.[] | select(.status == "In Progress")] | length')` — one per
 ISSUE. The board-computable count of builds is the distinct PR attachments among
 In Progress rows plus the In Progress rows carrying none; that over-counts a
@@ -390,7 +390,7 @@ constraint on a frontier model, and treating it as one costs laps.
 
 The real bound on a bundle is the one already stated: **it must be one file
 domain**, read off open PRs' file lists rather than their titles. Two rows that
-sound unrelated and both edit `mise-tasks/land.sh` belong in the same bundle;
+sound unrelated and both edit the landing loop belong in the same bundle;
 two that sound related and touch disjoint trees do not.
 
 Order within a bundle by real dependency: the ticket whose gate the next one
@@ -471,7 +471,7 @@ invisible until they bite:
 
 The partition is by **file domain**, not by topic, and it is only real if it
 reads open PRs' file lists rather than their titles. Two issues that read as
-unrelated but both edit `mise-tasks/land.sh` are one issue for dispatch purposes.
+unrelated but both edit the landing loop are one issue for dispatch purposes.
 
 ## A fan-out that drafts rather than lands
 
