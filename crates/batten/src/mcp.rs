@@ -2546,6 +2546,7 @@ fn post_all(
             url: &wiring.endpoint,
             headers: &headers,
             body: Some(body),
+            file: None,
             direct: false,
             patch: false,
             delete: false,

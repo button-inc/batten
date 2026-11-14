@@ -1642,6 +1642,14 @@ pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
         // predicate: a free-form string in a fixed-column record is a channel
         // for prose to travel down, which rule 4 refuses.
         crate::lease::Outcome::Rejected { .. } => Pushed::Raced,
+        // The error a non-200 answer always was on this path (CLOUD-2729): a
+        // lap that could not push has not raced, and the loop's own stop is
+        // what handles a forge that will not take it.
+        crate::lease::Outcome::Throttled { .. } => {
+            return Err(anyhow::anyhow!(
+                "land: push {reference}: the forge throttled the request"
+            ));
+        }
     };
     append(root, branch, std::slice::from_ref(&pushed.line()))?;
     Ok(pushed)
