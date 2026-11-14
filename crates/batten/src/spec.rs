@@ -1123,6 +1123,7 @@ mod tests {
             // Off-box session state (CLOUD-2717). The noun is unclassified
             // because the verbs that follow `status` write a remote.
             "offbox".to_owned(),
+            "offbox push".to_owned(),
             "offbox status".to_owned(),
             // CLOUD-479. `payload field` is a decoder, not a mediator: it
             // reads stdin, projects one allowlisted field, and renders no

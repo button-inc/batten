@@ -388,6 +388,20 @@ pub fn source_for(harness: Harness, transcript: Option<&Path>) -> Sourced {
     }
 }
 
+/// The session source for the harness NAMED `harness`, or `None` where the name
+/// is no harness's or nobody has written its source.
+///
+/// For a caller that holds the name as text — a flag's value — and must not
+/// reach the harness table to turn it into one.
+#[must_use]
+pub fn source_named(harness: &str, transcript: Option<&Path>) -> Option<Box<dyn SessionSource>> {
+    let harness = Harness::ALL.iter().find(|each| each.as_str() == harness)?;
+    match source_for(*harness, transcript) {
+        Sourced::Surveyed(source) => Some(source),
+        Sourced::Unsurveyed(_) => None,
+    }
+}
+
 /// Claude Code's session source (CLOUD-1011): one append-only JSON-lines file
 /// per session under a projects directory, with subagent transcripts in a
 /// `subagents` directory beside the session they belong to.

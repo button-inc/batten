@@ -2986,6 +2986,59 @@ const SESSION: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--session <id>` on `offbox push`: whose snapshot it is.
+///
+/// Required, where [`SESSION`] is optional: a snapshot is keyed by its session,
+/// and one pushed under a shared key would have two sessions overwrite each
+/// other's ref.
+const OFFBOX_SESSION: FlagDecl = FlagDecl {
+    id: "session",
+    long: Some("session"),
+    short: None,
+    help: "The harness's own identifier for the session whose state is pushed",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--harness <name>` on `offbox push`: which session source reads the records.
+///
+/// A plain string, never the hook's `--harness` enum: a harness this build has
+/// no source for still has stores to push, and refusing its name would refuse
+/// those.
+const OFFBOX_HARNESS: FlagDecl = FlagDecl {
+    id: "harness",
+    long: Some("harness"),
+    short: None,
+    help: "The harness the session belongs to; it selects where the session's records are read from",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--transcript <path>` on `offbox push`: the path the harness named.
+const OFFBOX_TRANSCRIPT: FlagDecl = FlagDecl {
+    id: "transcript",
+    long: Some("transcript"),
+    short: None,
+    help: "The transcript path the harness named for this session, where it named one",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const ADOPT_FROM: FlagDecl = FlagDecl {
     id: "adopt_from",
     long: Some("adopt-from"),
@@ -8153,6 +8206,21 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[],
+    },
+    // `write`: it commits in the session's local repository and replaces a ref
+    // on the state repository (CLOUD-2720). `EXITS_VERDICT`, the one verb of the
+    // noun that has one: exit 2 says the state is not off this machine yet — a
+    // lost race on every attempt, or the forge saying slow down.
+    // unreached: "offbox push" CLOUD-2721 a person or an acceptance step runs
+    // one push by hand; the daemon row calls the same function on its own beat.
+    CommandDecl {
+        path: "offbox push",
+        id: "offbox.push",
+        about: "Snapshot one session and make it the value of its ref on the state repository",
+        data_channel: false,
+        exits: EXITS_VERDICT,
+        effect: Effect::Write,
+        flags: &[OFFBOX_SESSION, OFFBOX_HARNESS, OFFBOX_TRANSCRIPT],
     },
     CommandDecl {
         path: "artifacts",

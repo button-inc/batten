@@ -675,8 +675,76 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // ruling 2), so no key could layer over it.
         Some(Command::Offbox { command }) => match command {
             cli::OffboxCommand::Status => run_offbox_status(out),
+            cli::OffboxCommand::Push {
+                session,
+                harness,
+                transcript,
+            } => run_offbox_push(out, &session, &harness, transcript.as_deref()),
         },
     }
+}
+
+/// `batten offbox push` (CLOUD-2720): one snapshot, one swap, one token.
+///
+/// Everything the push takes from the world is read here, at the boundary: the
+/// switch from the environment, the origin from the clone, the scanner's rows
+/// and the forge's credential names from the config, and the clock.
+fn run_offbox_push(
+    out: &mut dyn Write,
+    session: &str,
+    harness: &str,
+    transcript: Option<&str>,
+) -> Result<ExitCode> {
+    let value = std::env::var(session::STATE_REPO_ENV).unwrap_or_default();
+    let value = value.trim();
+    if value.is_empty() {
+        writeln!(out, "{}", offbox::Status::Off.token())?;
+        return Ok(ExitCode::Success);
+    }
+    let origin = git::remotes(Path::new("."))
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|(name, url)| (name == "origin").then_some(url));
+    let named = origin.as_deref().and_then(|origin| {
+        Some((
+            offbox::remote_for(origin, value)?,
+            offbox::origin_path(origin)?,
+        ))
+    });
+    let Some((remote, origin)) = named else {
+        let refused = offbox::Status::NoHttpOrigin;
+        writeln!(out, "{}", refused.token())?;
+        return Ok(refused.code());
+    };
+    let root = git::repo_root(Path::new("."))?;
+    // The config is where the scanner's rows are, and loading it is what
+    // declares the forge's credential names, as `batten land` relies on. A
+    // project with no config has no scanner, and the push says so.
+    let provisions = config::load(&root.join(config::CONFIG_FILE))
+        .map(|config| config.provisions)
+        .unwrap_or_default();
+    let push = offbox::push_once(
+        &offbox::Session {
+            project_root: &root,
+            provisions: &provisions,
+            meta: offbox::Meta {
+                harness: harness.to_owned(),
+                session: session.to_owned(),
+                origin,
+            },
+            remote,
+            transcript: transcript.map(PathBuf::from),
+            time: i64::try_from(now_unix()).unwrap_or(i64::MAX),
+        },
+        &[],
+    )?;
+    if push.outcome == offbox::Pushed::Refused(offbox::Refusal::ScannerFailed) {
+        return Err(anyhow::anyhow!(
+            "offbox: the secret scanner ran and its answer could not be trusted, so nothing was pushed"
+        ));
+    }
+    writeln!(out, "{}", push.outcome.token())?;
+    Ok(push.outcome.code())
 }
 
 /// `batten offbox status` (CLOUD-2718): one token, and the exit that goes with it.
