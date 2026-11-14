@@ -969,3 +969,118 @@ fn the_skill_contract_is_wired_into_the_hk_gate() {
          crates/batten/tests/it/skill_contract.rs, and runs `{check}`"
     );
 }
+
+// --- seeded evals (CLOUD-2765) -----------------------------------------------
+//
+// #MUTANT evals-shape-unread: empty the body of `evals_case_findings`. INERT: a
+// row in a test file is not reached by the mutation sweep, so the case below
+// carries its own negative fixture, which is what kills it.
+
+/// What is wrong with one seeded case: a `seed` with `old`, `new` and `class`,
+/// and a non-empty `assertions` list.
+///
+/// A BATCH CASE is the one other shape: a `seed.batch` naming cases of the same
+/// file (or the unseeded `control`), each of which must exist. `groom`'s run over
+/// several rows at once is such a case, and its seeds are its members'.
+fn evals_case_findings(case: &serde_json::Value, names: &[&str]) -> Vec<String> {
+    let mut found = Vec::new();
+    if let Some(batch) = case["seed"]["batch"].as_array() {
+        for member in batch {
+            let member = member.as_str().unwrap_or_default();
+            if member != "control" && !names.contains(&member) {
+                found.push(format!("seed.batch names no case: {member}"));
+            }
+        }
+        if batch.is_empty() {
+            found.push("seed.batch empty".to_owned());
+        }
+    } else {
+        for key in ["old", "new", "class"] {
+            if case["seed"][key].as_str().is_none_or(str::is_empty) {
+                found.push(format!("seed.{key} missing"));
+            }
+        }
+    }
+    if case["assertions"]
+        .as_array()
+        .is_none_or(std::vec::Vec::is_empty)
+    {
+        found.push("assertions empty".to_owned());
+    }
+    found
+}
+
+/// Every finding over one skill's `evals/evals.json`.
+fn evals_findings(path: &Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return vec![format!("{}: unreadable", path.display())];
+    };
+    let Ok(document) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return vec![format!("{}: not JSON", path.display())];
+    };
+    let Some(cases) = document["evals"]
+        .as_array()
+        .filter(|cases| !cases.is_empty())
+    else {
+        return vec![format!("{}: no cases", path.display())];
+    };
+    let names: Vec<&str> = cases
+        .iter()
+        .filter_map(|case| case["name"].as_str())
+        .collect();
+    cases
+        .iter()
+        .flat_map(|case| evals_case_findings(case, &names))
+        .map(|finding| format!("{}: {finding}", path.display()))
+        .collect()
+}
+
+#[test]
+fn every_evals_file_is_well_formed() {
+    let root = at_root(".");
+    let mut seen = 0;
+    for skill in authored_skills(&root) {
+        // `skills/<name>/SKILL.md`: the evals sit beside it.
+        let Some(dir) = Path::new(&skill).parent() else {
+            continue;
+        };
+        let path = root.join(dir).join("evals/evals.json");
+        if !path.exists() {
+            continue;
+        }
+        seen += 1;
+        assert_eq!(evals_findings(&path), Vec::<String>::new(), "{skill}");
+    }
+    assert!(seen >= 2, "groom's and plan-check's evals are both read");
+
+    // `plan-check`: six cases of six classes, each seed found once in its base.
+    let dir = root.join(AUTHORED).join("plan-check/evals");
+    let document: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("evals.json")).expect("evals"))
+            .expect("JSON");
+    let base = fs::read_to_string(dir.join("base-plan.md")).expect("the base plan");
+    let cases = document["evals"].as_array().expect("cases");
+    assert!(cases.len() >= 6, "at least six seeded cases");
+    let classes: BTreeSet<&str> = cases
+        .iter()
+        .filter_map(|case| case["seed"]["class"].as_str())
+        .collect();
+    assert!(classes.len() >= 6, "six distinct classes: {classes:?}");
+    for case in cases {
+        let old = case["seed"]["old"].as_str().unwrap_or_default();
+        assert_eq!(base.matches(old).count(), 1, "seed occurs once: {old}");
+    }
+
+    // THE NEGATIVE FIXTURE, which is what kills `evals-shape-unread`.
+    let scratch_dir = scratch("skill-evals-negative");
+    let bad = scratch_dir.join("evals.json");
+    fs::write(
+        &bad,
+        r#"{"evals": [{"seed": {"old": "a", "new": "b", "class": "c"}, "assertions": []}]}"#,
+    )
+    .expect("a malformed evals file");
+    assert!(
+        !evals_findings(&bad).is_empty(),
+        "an empty assertions list is reported"
+    );
+}

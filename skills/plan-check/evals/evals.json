@@ -1,0 +1,115 @@
+{
+  "skill_name": "plan-check",
+  "evals": [
+    {
+      "id": 1,
+      "name": "seed-false-premise",
+      "prompt": "Check the plan in evals/base-plan.md for CLOUD-2765 (plan snapshot provided) and give its verdict.",
+      "seed": {
+        "base": "skills/plan-check/evals/base-plan.md",
+        "base_snapshot": "2026-11-14",
+        "old": "in the shape of `skills/groom/references/validator-brief.md`",
+        "new": "by reusing `skills/groom/references/plan-brief.md`, which already exists,",
+        "class": "false premise about the tree"
+      },
+      "expected_output": "needs-fixes; the seeded defect found with evidence",
+      "files": [],
+      "assertions": [
+        "flags that skills/groom/references/plan-brief.md does not exist",
+        "every finding carries path:line evidence",
+        "makes no tracker or file write"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "seed-step-without-an-item",
+      "prompt": "Check the plan in evals/base-plan.md for CLOUD-2765 (plan snapshot provided) and give its verdict.",
+      "seed": {
+        "base": "skills/plan-check/evals/base-plan.md",
+        "base_snapshot": "2026-11-14",
+        "old": "- S4 Write this plan",
+        "new": "- S6 Rewrite `skills/groom/SKILL.md` to share the ladder.\n- S4 Write this plan",
+        "class": "a step with no acceptance item"
+      },
+      "expected_output": "needs-fixes; the seeded defect found with evidence",
+      "files": [],
+      "assertions": [
+        "flags S6 as serving no acceptance item",
+        "notes that changing groom is out of scope",
+        "makes no tracker or file write"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "seed-item-without-a-step",
+      "prompt": "Check the plan in evals/base-plan.md for CLOUD-2765 (plan snapshot provided) and give its verdict.",
+      "seed": {
+        "base": "skills/plan-check/evals/base-plan.md",
+        "base_snapshot": "2026-11-14",
+        "old": "- A4 The validator brief",
+        "new": "- A5 The skill is listed in the README's skill table.\n- A4 The validator brief",
+        "class": "an acceptance item with no step"
+      },
+      "expected_output": "needs-fixes; the seeded defect found with evidence",
+      "files": [],
+      "assertions": [
+        "flags A5 as reached by no step",
+        "makes no tracker or file write"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "seed-test-that-passes-anyway",
+      "prompt": "Check the plan in evals/base-plan.md for CLOUD-2765 (plan snapshot provided) and give its verdict.",
+      "seed": {
+        "base": "skills/plan-check/evals/base-plan.md",
+        "base_snapshot": "2026-11-14",
+        "old": "today no `plan-check` evals file exists, so the six-case assertion fails.",
+        "new": "it asserts that `skills/groom/evals/evals.json` parses.",
+        "class": "a test that passes without the change"
+      },
+      "expected_output": "needs-fixes; the seeded defect found with evidence",
+      "files": [],
+      "assertions": [
+        "flags that the first failing test passes on the tree as it stands",
+        "makes no tracker or file write"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "seed-impossible-order",
+      "prompt": "Check the plan in evals/base-plan.md for CLOUD-2765 (plan snapshot provided) and give its verdict.",
+      "seed": {
+        "base": "skills/plan-check/evals/base-plan.md",
+        "base_snapshot": "2026-11-14",
+        "old": "- S1 Write `skills/plan-check/SKILL.md`: the P0 to P3 ladder and the closing line.",
+        "new": "- S1 Write `skills/plan-check/SKILL.md`, quoting the case count S4 produces, and commit it before S4 runs: the P0 to P3 ladder and the closing line.",
+        "class": "an impossible order"
+      },
+      "expected_output": "needs-fixes; the seeded defect found with evidence",
+      "files": [],
+      "assertions": [
+        "flags that S1 needs S4's output before S4 runs",
+        "makes no tracker or file write"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "seed-number-without-a-command",
+      "prompt": "Check the plan in evals/base-plan.md for CLOUD-2765 (plan snapshot provided) and give its verdict.",
+      "seed": {
+        "base": "skills/plan-check/evals/base-plan.md",
+        "base_snapshot": "2026-11-14",
+        "old": "inside the 300-line budget",
+        "new": "inside the 300-line budget, at 212 lines today",
+        "class": "a number with no command"
+      },
+      "expected_output": "needs-fixes; the seeded defect found with evidence",
+      "files": [],
+      "assertions": [
+        "flags the line count as stated with no command that reproduces it",
+        "makes no tracker or file write"
+      ]
+    }
+  ]
+}
