@@ -294,3 +294,230 @@ fn every_session_start_fact_has_a_reader() {
         );
     }
 }
+
+// --- the off-box report (CLOUD-2722) -------------------------------------------
+//
+// Every fixture here exits 0 with the variable unset — the fact is minted and
+// the one task is completed — so a change to the exit code would show. The
+// off-box files are written directly: the test plays the daemon.
+
+/// A clean session, its state home, and where its off-box directory is.
+struct Offbox {
+    repo: PathBuf,
+    home: PathBuf,
+    dir: PathBuf,
+}
+
+const PUSHED: &str = "0123456789abcdef0123456789abcdef01234567";
+const LEAF: &str = "claude-code-0a1b2c3d4e5f6071";
+
+impl Offbox {
+    fn new(name: &str) -> Self {
+        let repo = scratch(
+            name,
+            "fixture-fact-dep",
+            "policy/fixture-fact-dep.rego",
+            READS_A_FACT,
+        );
+        completed_task(&repo);
+        mint(&repo);
+        let home = common::scratch(&format!("doctor-session-{name}-home"));
+        let dir = batten::state::repo_state_dir_under(
+            &home.join("data"),
+            &repo.canonicalize().expect("the fixture resolves"),
+        )
+        .expect("the state directory is nameable")
+        .join(batten::offbox_watch::DIR);
+        Offbox { repo, home, dir }
+    }
+
+    fn run(&self, set: bool, args: &[&str]) -> Output {
+        use common::StateHome as _;
+        let mut command = batten();
+        command
+            .args(["doctor", "session"])
+            .args(args)
+            .current_dir(&self.repo)
+            .state_home(&self.home)
+            .env_remove("BATTEN_STRICTNESS")
+            .env_remove("BATTEN_FAIL_ON_WARNING")
+            .env_remove("BATTEN_CONFIG_FROM");
+        if set {
+            command.env(batten::session::STATE_REPO_ENV, "example/state");
+        }
+        command.output().expect("run batten doctor session")
+    }
+
+    /// The report's `offbox` member and the text rendering's `offbox:` line.
+    fn report(&self) -> (serde_json::Value, String) {
+        let json = self.run(true, &["-J"]);
+        assert_eq!(json.status.code(), Some(0), "{}", stdout(&json));
+        let document: serde_json::Value =
+            serde_json::from_str(&stdout(&json)).expect("the document parses");
+        let text = self.run(true, &[]);
+        assert_eq!(text.status.code(), Some(0), "{}", stdout(&text));
+        let line = stdout(&text).lines().last().unwrap_or_default().to_owned();
+        (document["offbox"].clone(), line)
+    }
+
+    fn status(&self, lines: &str) {
+        std::fs::create_dir_all(&self.dir).expect("the off-box directory");
+        std::fs::write(self.dir.join(batten::offbox_watch::STATUS), lines).expect("status");
+    }
+
+    fn inbox(&self, bytes: usize) {
+        std::fs::create_dir_all(&self.dir).expect("the off-box directory");
+        std::fs::write(
+            self.dir.join(batten::offbox_watch::INBOX),
+            "x".repeat(bytes),
+        )
+        .expect("inbox");
+    }
+
+    /// Hold the daemon's lock, as a running daemon does.
+    fn hold(&self) -> std::fs::File {
+        std::fs::create_dir_all(&self.dir).expect("the off-box directory");
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.dir.join(batten::offbox_watch::LOCK))
+            .expect("open the lock");
+        fs4::FileExt::try_lock(&lock).expect("take the lock");
+        lock
+    }
+
+    fn full_status(&self) {
+        self.status(&format!(
+            "pid 4242\nsession {LEAF}\npushed {PUSHED}\nwait_until 1700000120\nthrottles 1\n\
+             failures 0\nattached yes\nrestored yes\ninbox_read 100\n"
+        ));
+    }
+}
+
+/// Fails by: a session with the feature off being told about it.
+#[test]
+fn unset_reports_no_offbox_at_all() {
+    let offbox = Offbox::new("offbox-unset");
+    offbox.full_status();
+    let json = offbox.run(false, &["-J"]);
+    assert_eq!(json.status.code(), Some(0), "{}", stdout(&json));
+    let document: serde_json::Value = serde_json::from_str(&stdout(&json)).unwrap();
+    assert!(document.get("offbox").is_none(), "{document}");
+    let text = offbox.run(false, &[]);
+    assert!(!stdout(&text).contains("offbox:"), "{}", stdout(&text));
+}
+
+/// Fails by: an absent file read as anything but its stated empty value, or
+/// the verb leaving a directory behind.
+#[test]
+fn set_with_no_files_reports_a_dead_daemon_and_creates_nothing() {
+    let offbox = Offbox::new("offbox-empty");
+    let (report, line) = offbox.report();
+    assert_eq!(report["daemon"], "dead");
+    assert_eq!(report["unread_bytes"], 0);
+    for key in [
+        "session",
+        "pushed",
+        "wait_until",
+        "throttles",
+        "failures",
+        "attached",
+        "restored",
+    ] {
+        assert!(report[key].is_null(), "{key}: {report}");
+    }
+    assert_eq!(
+        line,
+        "offbox: daemon dead, pushed none, 0 bytes unread, wait until none, unknown throttled, unknown failed"
+    );
+    assert!(!offbox.dir.exists(), "the verb creates nothing");
+}
+
+/// Fails by: a field read from the wrong line, or the unread count ignoring
+/// how far the daemon has read.
+#[test]
+fn a_running_daemon_is_reported_from_its_own_files() {
+    let offbox = Offbox::new("offbox-running");
+    offbox.full_status();
+    offbox.inbox(160);
+    let _lock = offbox.hold();
+
+    let (report, line) = offbox.report();
+
+    assert_eq!(report["daemon"], "running");
+    assert_eq!(report["pushed"], PUSHED);
+    assert_eq!(report["session"], LEAF);
+    assert_eq!(report["unread_bytes"], 60);
+    assert_eq!(report["wait_until"], 1_700_000_120);
+    assert_eq!(report["throttles"], 1);
+    assert_eq!(report["failures"], 0);
+    assert_eq!(report["attached"], "yes");
+    assert_eq!(report["restored"], "yes");
+    assert_eq!(
+        line,
+        format!(
+            "offbox: daemon running, pushed {PUSHED}, 60 bytes unread, wait until 1700000120, 1 throttled, 0 failed"
+        )
+    );
+}
+
+/// Fails by: a daemon nobody is running reported as running.
+#[test]
+fn a_free_lock_is_a_dead_daemon() {
+    let offbox = Offbox::new("offbox-dead");
+    offbox.full_status();
+    offbox.inbox(160);
+    drop(offbox.hold());
+    let (report, _) = offbox.report();
+    assert_eq!(report["daemon"], "dead");
+    assert_eq!(report["pushed"], PUSHED, "the files are still read");
+}
+
+/// Fails by: the stuck threshold a byte off, in either direction.
+#[test]
+fn a_daemon_is_stuck_one_byte_past_sixteen_kibibytes() {
+    let offbox = Offbox::new("offbox-stuck");
+    offbox.full_status();
+    let _lock = offbox.hold();
+    let behind = usize::try_from(batten::offbox_watch::BEHIND).unwrap();
+
+    offbox.inbox(100 + behind);
+    assert_eq!(offbox.report().0["daemon"], "running", "exactly 16 KiB");
+
+    offbox.inbox(100 + behind + 1);
+    let (report, _) = offbox.report();
+    assert_eq!(report["daemon"], "stuck");
+    assert_eq!(report["unread_bytes"], behind + 1);
+}
+
+/// Fails by: a line that will not parse poisoning the others, or `-` printed
+/// as an id.
+#[test]
+fn an_unparsed_line_is_null_and_the_rest_is_read() {
+    let offbox = Offbox::new("offbox-partial");
+    offbox.status("pid 4242\npushed -\nthrottles many\nfailures 2\nfuture-key 9\nattached no\n");
+    let _lock = offbox.hold();
+
+    let (report, line) = offbox.report();
+
+    assert!(report["pushed"].is_null(), "{report}");
+    assert!(report["throttles"].is_null(), "{report}");
+    assert_eq!(report["failures"], 2);
+    assert_eq!(report["attached"], "no");
+    assert!(report.get("future-key").is_none());
+    assert!(
+        line.contains("pushed none") && line.contains("unknown throttled, 2 failed"),
+        "{line}"
+    );
+}
+
+/// Fails by: the exit code reading the new field.
+#[test]
+fn the_offbox_report_changes_no_exit_code() {
+    let offbox = Offbox::new("offbox-exit");
+    assert_eq!(offbox.run(false, &[]).status.code(), Some(0), "the premise");
+    // Dead, with nothing pushed: as bad as the field gets, and still 0.
+    assert_eq!(offbox.run(true, &[]).status.code(), Some(0));
+    assert_eq!(offbox.run(true, &["-J"]).status.code(), Some(0));
+}

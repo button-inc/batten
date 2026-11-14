@@ -109,6 +109,9 @@ pub fn field<'a>(status: &'a str, key: &str) -> Option<&'a str> {
 //MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
 //MUTANT held-lock-far-behind-reads-alive|s@^    if behind > BEHIND {$@    if false {@|a_daemon_far_behind_its_inbox_is_stuck_and_the_remedy_kills_it
 //MUTANT other-session-daemon-reads-alive|s@^        \&\& serving != session$@        \&\& false@|a_daemon_serving_another_session_is_reported_and_then_denied
+//MUTANT-SUITE crates/batten/tests/it/doctor_session.rs
+//MUTANT stuck-threshold-off-by-one|s@^    if behind > BEHIND {$@    if behind >= BEHIND {@|a_daemon_is_stuck_one_byte_past_sixteen_kibibytes
+//MUTANT-SUITE crates/batten/tests/it/offbox_hook.rs
 //MUTANT probe-takes-the-lock-exclusively|s@^    if fs4::FileExt::try_lock_shared(\&lock).is_ok() {$@    if fs4::FileExt::try_lock(\&lock).is_ok() {@|a_shared_hold_on_the_lock_is_not_a_daemon
 #[must_use]
 pub fn probe(dir: &Path, session: Option<&str>) -> Liveness {
