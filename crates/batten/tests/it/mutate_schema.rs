@@ -45,20 +45,10 @@ fn mutant(
     })
 }
 
-/// Every verdict a sweep can reach, each from its own mutant: a kill, a
-/// survivor a case reaches, a site no case reaches, a hang, and a mutant that
-/// does not compile; then a second sweep over the same tree keeps every one,
-/// knows the unviable mutant without building it, and reuses the reach record.
-///
-/// Fails by: an unviable mutant judged (it would survive), a hang read as a
-/// kill, a site no case reaches judged by a run, a failed case read as a
-/// survivor, the exit not saying a mutant survived, a second sweep that
-/// rebuilds what the first proved unviable, a new helper moving every key, or
-/// an executed function's non-body change moving none.
-#[test]
-fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
-    let _ = common::require_bin("nextest", "cargo-nextest");
-    let repo = common::scratch_repo("mutate-schema-sweep");
+/// A committed fixture crate whose library is [`LIB`], with a nextest profile
+/// that ends a hang in seconds.
+fn seeded(name: &str) -> std::path::PathBuf {
+    let repo = common::scratch_repo(name);
     common::write(
         &repo,
         "Cargo.toml",
@@ -74,7 +64,13 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     common::write(&repo, "src/lib.rs", LIB);
     common::git_in(&repo, &["add", "-A"]);
     common::git_in(&repo, &["commit", "-qm", "seed"]);
+    repo
+}
+
+/// The listing every verdict comes from, written where the sweep reads it.
+fn listing() -> String {
     let add = ("add", "-> u8", [1, 1, 3, 2]);
+    let untested = ("untested", "-> bool", [7, 1, 9, 2]);
     let listing = serde_json::json!([
         mutant("kill", "BinaryOperator", "*", [2, 7, 2, 8], add),
         mutant(
@@ -84,13 +80,7 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
             [5, 7, 5, 9],
             ("same", "-> bool", [4, 1, 6, 2]),
         ),
-        mutant(
-            "unreached",
-            "FnValue",
-            "false",
-            [8, 5, 8, 9],
-            ("untested", "-> bool", [7, 1, 9, 2]),
-        ),
+        mutant("unreached", "FnValue", "false", [8, 5, 8, 9], untested),
         mutant("ill-typed", "FnValue", "\"x\"", [2, 5, 2, 10], add),
         mutant("hang", "FnValue", "loop {}", [2, 5, 2, 10], add),
         mutant(
@@ -107,17 +97,40 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
             [15, 5, 15, 6],
             ("three", "-> u8", [14, 1, 16, 2]),
         ),
-        mutant(
-            "field",
-            "StructField",
-            "",
-            [8, 5, 8, 9],
-            ("untested", "-> bool", [7, 1, 9, 2]),
-        ),
+        mutant("field", "StructField", "", [8, 5, 8, 9], untested),
     ]);
     let file = common::scratch("mutate-schema-listing").join("listing.json");
     std::fs::write(&file, listing.to_string()).unwrap();
-    let file = file.to_string_lossy().into_owned();
+    file.to_string_lossy().into_owned()
+}
+
+/// Whether reach runs cases under a tracer on this host, as the schema asks.
+fn traced() -> bool {
+    cfg!(target_os = "linux")
+        && std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .any(|dir| dir.join("strace").is_file())
+}
+
+/// The verdict counts every sweep of the fixture reaches.
+const COUNTS: &str =
+    "{\"caught\": 2, \"missed\": 1, \"timeout\": 1, \"uncovered\": 1}, 1 unviable, 2 classic";
+
+/// Every verdict a sweep can reach, each from its own mutant: a kill, a
+/// survivor a case reaches, a site no case reaches, a hang, and a mutant that
+/// does not compile; then a second sweep over the same tree keeps every one,
+/// knows the unviable mutant without building it, and reuses the reach record.
+///
+/// Fails by: an unviable mutant judged (it would survive), a hang read as a
+/// kill, a site no case reaches judged by a run, a failed case read as a
+/// survivor, the exit not saying a mutant survived, a second sweep that
+/// rebuilds what the first proved unviable, a new helper or const moving every
+/// key, a traced case keyed on a non-Rust file it never read, or
+/// an executed function's non-body change moving none.
+#[test]
+fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let repo = seeded("mutate-schema-sweep");
+    let file = listing();
     let sweep = || {
         let output = common::run(&repo, &["__mutate-schema", &file, "2"]);
         let said = common::stdout(&output);
@@ -125,62 +138,43 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     };
     let (code, said, err) = sweep();
     assert_eq!(code, Some(2), "a survivor exits 2\n{said}\n{err}");
-    assert!(
-        said.contains(
-            "{\"caught\": 2, \"missed\": 1, \"timeout\": 1, \"uncovered\": 1}, 1 unviable, 2 classic"
-        ),
-        "{said}\n{err}"
-    );
-    assert!(said.contains("missed\tsurvive\n"), "{said}");
-    assert!(said.contains("uncovered\tunreached\n"), "{said}");
-    assert!(said.contains("timeout\thang\n"), "{said}");
-    assert!(
-        said.contains("build 1 refused 1 mutant(s), handed back 1 for a const caller"),
-        "{said}"
-    );
-    assert!(said.contains("classic\tconst-caller\n"), "{said}");
-    assert!(
-        said.contains("classic\tfield\n"),
-        "a handed-back mutant is named: {said}"
-    );
+    assert!(said.contains(COUNTS), "{said}\n{err}");
+    for line in [
+        "missed\tsurvive\n",
+        "uncovered\tunreached\n",
+        "timeout\thang\n",
+        "build 1 refused 1 mutant(s), handed back 1 for a const caller",
+        "classic\tconst-caller\n",
+        "classic\tfield\n",
+    ] {
+        assert!(said.contains(line), "{line:?} in {said}");
+    }
     let (code, again, err) = sweep();
     assert_eq!(code, Some(2), "{again}\n{err}");
-    assert!(
-        again.contains("1 unviable known from earlier runs"),
-        "{again}"
-    );
-    assert!(again.contains("build 2 clean, 1 unviable"), "{again}");
-    assert!(again.contains("reused 5 of 5 verdict(s)"), "{again}");
-    assert!(
-        again.contains(
-            "{\"caught\": 2, \"missed\": 1, \"timeout\": 1, \"uncovered\": 1}, 1 unviable, 2 classic"
-        ),
-        "{again}\n{err}"
-    );
+    for line in [
+        "1 unviable known from earlier runs",
+        "build 2 clean, 1 unviable",
+        "reused 5 of 5 verdict(s)",
+        COUNTS,
+    ] {
+        assert!(again.contains(line), "{line:?} in {again}\n{err}");
+    }
     // THE SOUNDNESS CASE (Ekstazi; RTS++): an edit to a function a case
     // executes, though it is neither the mutated function nor the test, moves
     // that case's key. `adds` calls `five`, so the two mutants it reaches are
     // judged again; the three no case running `five` reaches are reused.
-    common::write(
-        &repo,
-        "src/lib.rs",
-        &LIB.replace("    5\n}", "    4 + 1\n}"),
-    );
+    let edited = LIB.replace("    5\n}", "    4 + 1\n}");
+    common::write(&repo, "src/lib.rs", &edited);
     let (code, third, err) = sweep();
     assert_eq!(code, Some(2), "{third}\n{err}");
     assert!(third.contains("reused 3 of 5 verdict(s)"), "{third}\n{err}");
-    assert!(
-        third.contains(
-            "{\"caught\": 2, \"missed\": 1, \"timeout\": 1, \"uncovered\": 1}, 1 unviable, 2 classic"
-        ),
-        "{third}"
-    );
-    // THE REUSE CASE: a new function no case runs, with a doc comment, moves
-    // no key. Its signature is its own probe's, never the skeleton every key
-    // carries, so adding a helper or a test keeps every verdict.
+    assert!(third.contains(COUNTS), "{third}");
+    // THE REUSE CASE: a new function no case runs, with a doc comment, and a
+    // new const no case names move no key: a function is its own probe's, and
+    // a const keys only the cases whose functions name it.
     let grown = format!(
-        "{}/// A helper no case runs.\npub fn helper(x: u8) -> u8 {{\n    x\n}}\n",
-        LIB.replace("    5\n}", "    4 + 1\n}")
+        "{edited}/// A helper no case runs.\npub fn helper(x: u8) -> u8 {{\n    x\n}}\n\
+         pub const UNNAMED: u8 = 7;\n"
     );
     common::write(&repo, "src/lib.rs", &grown);
     let (code, fourth, err) = sweep();
@@ -191,12 +185,21 @@ fn a_sweep_judges_every_verdict_and_a_second_reuses_the_first() {
     );
     // AND ITS SOUNDNESS HALF: what leaves the skeleton is in the item's probe,
     // so a change to `five` outside its body still moves the cases running it.
-    common::write(
-        &repo,
-        "src/lib.rs",
-        &grown.replace("pub fn five()", "#[inline(never)]\npub fn five()"),
-    );
+    let inlined = grown.replace("pub fn five()", "#[inline(never)]\npub fn five()");
+    common::write(&repo, "src/lib.rs", &inlined);
     let (code, fifth, err) = sweep();
     assert_eq!(code, Some(2), "{fifth}\n{err}");
     assert!(fifth.contains("reused 3 of 5 verdict(s)"), "{fifth}\n{err}");
+    // THE CASE #1276 PAID SIX HOURS FOR: a non-Rust file no case reads. A
+    // traced case keys on the files it touched, so every verdict is reused;
+    // untraced, every case keys on every non-Rust file and is judged again.
+    common::write(&repo, "notes.txt", "a note no case reads\n");
+    let (code, sixth, err) = sweep();
+    assert_eq!(code, Some(2), "{sixth}\n{err}");
+    assert_eq!(
+        sixth.contains("reused 5 of 5 verdict(s)"),
+        traced(),
+        "traced: {}\n{sixth}\n{err}",
+        traced()
+    );
 }
