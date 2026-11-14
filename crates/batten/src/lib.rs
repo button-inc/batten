@@ -173,6 +173,7 @@ pub mod selfwrite;
 pub mod semver;
 pub mod session;
 pub mod severity;
+pub mod shell;
 pub mod signer_posture;
 pub mod sink;
 pub mod source;

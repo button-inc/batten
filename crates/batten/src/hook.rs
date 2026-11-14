@@ -7883,6 +7883,10 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // file of unbounded size is unbounded in the input exactly as
             // parsing one is, and the 100ms budget is per call (CLOUD-846).
             crate::facts::Fact::Lines => None,
+            // Derived from `Lines` and `Document` by parsing every declared
+            // body (CLOUD-2625), so unbounded in the input for both their
+            // reasons at once.
+            crate::facts::Fact::Shell => None,
             // Not resolvable on the mediated call, for `Document`'s reason plus
             // one this family adds (CLOUD-1167): it opens and parses a file of
             // unbounded size, AND the file lives outside the repository, so the
@@ -9969,7 +9973,10 @@ fn words_in(nodes: &[rable::Node]) -> usize {
 /// cost is stated rather than absorbed: an unbalanced quote in a command that
 /// ALSO opens a heredoc is not caught here. That is a miss, never a false
 /// refusal, and it is a strictly smaller hole than the one this closes.
-fn covered(nodes: &[rable::Node], command: &str) -> bool {
+///
+/// `pub(crate)` for [`crate::shell::logic`], which asks the same question of
+/// the same parser's output (CLOUD-2625) rather than growing a second guard.
+pub(crate) fn covered(nodes: &[rable::Node], command: &str) -> bool {
     let Some(end) = nodes.iter().map(|node| node.span.end).max() else {
         // No nodes at all: an empty or whitespace-only command reads clean, and
         // `segments("")` giving an empty list is relied on elsewhere.

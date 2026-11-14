@@ -234,7 +234,8 @@ A **tree**-scoped module (`scope = "tree"`, run by `batten check`) reads
 `input.tree.documents`, `input.tree.lines`, `input.tree.invocations`,
 `input.tree.uses`, `input.tree.tracked`, `input.tree.traversals`, `input.tree.missing`,
 `input.tree.produced`, `input.tree.records`, `input.tree["records-blocked"]`,
-`input.tree.landing`, and the git
+`input.tree.landing`, `input.tree.shell` (the shell detector's answer over the
+declared `[census.shell]` homes, both sides of the delta — CLOUD-2625), and the git
 family —
 `input.tree.git-head`, `input.tree.git-refs`, `input.tree.git-ranges`,
 `input.tree.git-remote`, `input.tree.git-status`, `input.tree.git-worktrees`,

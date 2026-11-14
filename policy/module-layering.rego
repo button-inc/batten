@@ -757,7 +757,17 @@ declared_modules := {
 	# nothing -- the shell ban is the gate and this is its measurement -- so it
 	# mints no `Finding` and reaches no decider, and it starts no program, which
 	# is what keeps the verb on the derived read-only allowlist.
+	# CLOUD-2625 adds `census -> shell`: whether a line is shell is the detector's
+	# answer, which the census counts with and projects as `input.tree.shell` for
+	# `rules`' tree document. It still decides nothing.
 	"census",
+	# `shell` arrived with CLOUD-2625: the one detector of "is this text shell
+	# logic", decided on the `rable` AST. A pure function over a string, so it
+	# reaches `hook` alone -- for `covered` and `unquote`, the mediation walk's
+	# own conservation guard and quote removal, read rather than copied -- and
+	# decides nothing, mints no `Finding` and starts no program. `census` reads
+	# it, and through `census` the tree document the shell ban reads.
+	"shell",
 	# `engine` arrived with CLOUD-2061 and is `census`' class: a report over the
 	# tracked tree (`git` for the tracked paths) that the `engine digest` verb
 	# renders, plus one write through `durable` for the stamp. `config::parse`
