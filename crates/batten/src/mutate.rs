@@ -4834,38 +4834,52 @@ pub fn exactly(name: &str) -> String {
     pattern
 }
 
-/// Run cargo-mutants itself over the mutants of `diff` named `names`, the
-/// ones the schema handed back: `--in-diff`, `--re` per name, `--jobs` as
-/// sized and `--iterate`, its output streamed as it judges.
-///
-/// AN ARGV, NEVER A HARNESS. Copy mode, timeouts, the baseline and the verdict
-/// files are cargo-mutants' own (`.cargo/mutants.toml` carries the rest); this
-/// assembles what a task body would otherwise spell in shell, and reads back
-/// only the exit. `runner` is the provisioned binary, run as cargo runs a
-/// subcommand: its own name's suffix, `mutants`, first.
+/// Run cargo-mutants IN PLACE in `tree` over the one mutant of `diff` named
+/// `name`: no copy and no baseline, since the schema's reach run proved the
+/// unmutated suite on this source; its tests narrowed to the nextest
+/// filterset `filter` when one is given; its outcome files under `output`.
+/// AN ARGV, NEVER A HARNESS, like [`cargo_mutants`]: the verdict is read back
+/// by the caller.
 ///
 /// # Errors
 ///
 /// A `runner` that cannot be spawned.
-pub fn cargo_mutants(
-    root: &Path,
-    runner: &Path,
-    diff: &Path,
-    jobs: usize,
-    names: &[String],
+pub fn cargo_mutant_in_place(
+    (tree, runner, diff): (&Path, &Path, &Path),
+    name: &str,
+    filter: Option<&str>,
+    timeout: std::time::Duration,
+    output: &Path,
 ) -> Result<Outcome> {
-    let mut rest = vec![
-        String::from("--jobs"),
-        jobs.to_string(),
-        String::from("--iterate"),
-    ];
-    for name in names {
-        rest.extend([String::from("--re"), exactly(name)]);
+    let mut rest: Vec<String> = [
+        "--in-place",
+        "--baseline",
+        "skip",
+        "--test-workspace",
+        "true",
+        "--timeout",
+    ]
+    .map(String::from)
+    .to_vec();
+    rest.push(timeout.as_secs().max(1).to_string());
+    rest.extend([
+        String::from("--output"),
+        output.to_string_lossy().into_owned(),
+        String::from("--re"),
+        exactly(name),
+    ]);
+    if let Some(filter) = filter {
+        rest.extend([
+            String::from("--"),
+            String::from("-E"),
+            filter.to_owned(),
+            String::from("--no-tests=pass"),
+        ]);
     }
     let args = cargo_mutants_argv(diff, rest);
     let runner = runner.to_string_lossy();
     let ran = spawn_as(
-        root,
+        tree,
         Program::Command(&runner),
         &args,
         &[],
