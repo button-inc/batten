@@ -471,7 +471,19 @@ pub fn run_step(
     // `ERROR task failed`, with no case named anywhere a person could read it.
     let mut settings = crate::exec::ExecConfig::DEFAULT;
     settings.tee = true;
-    let ran = crate::exec::run_with(command, &[], &settings, &mut std::io::sink());
+    // A MISS KEEPS WHAT IT FINISHES, CASE BY CASE, when the command is a
+    // nextest run (CLOUD-2772): a stopped run resumes rather than re-running
+    // every case it passed. Keyed by the command's own argv, never a config key,
+    // so the released engine reading the authority meets nothing new. The
+    // receipt's key stays the declared command's; a journal that cannot be set
+    // up runs the command as declared, because the journal is an economy and
+    // the step's verdict is the command's alone.
+    let journaled = Some(command)
+        .filter(|command| crate::mutate::resume::is_nextest_run(command))
+        .and_then(|_| crate::git::repo_root(Path::new(".")).ok())
+        .and_then(|root| crate::mutate::resume::journaled(&root, command).ok());
+    let running = journaled.as_deref().unwrap_or(command);
+    let ran = crate::exec::run_with(running, &[], &settings, &mut std::io::sink());
     let passed = matches!(ran, Ok(ExitCode::Success));
     if passed && matches!(answer, Answer::Miss(_)) {
         // A record that refuses or fails here — the inputs moved while the
