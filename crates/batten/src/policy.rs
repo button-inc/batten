@@ -53,10 +53,10 @@
 //!   rather than testing a string in a manifest, so it stays true when the
 //!   feature arrives by Cargo's cross-graph feature unification rather than by
 //!   an edit. Shown able to fail under `--features probe-evaluator-io`.
-//! * `mise-tasks/evaluator-closure-check.sh`, wired as `batten.toml`'s
-//!   `evaluator-closure-io-free` row, is the CLOSURE half: it walks the resolved
-//!   graph from the `regorus` node and refuses any of the nine IO-bearing crates
-//!   the manifest names becoming reachable.
+//! * `policy/evaluator-closure.rego`, wired as a `batten.toml` `policy` row,
+//!   is the CLOSURE half: over the resolved graph walked from the `regorus`
+//!   node, it refuses any of the nine IO-bearing crates the manifest names
+//!   becoming reachable.
 //!
 //! Neither subsumes the other. The first would still pass if an IO crate entered
 //! the closure behind a builtin nothing calls; the second would still pass if a
