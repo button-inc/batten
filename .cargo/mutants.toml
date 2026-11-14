@@ -26,4 +26,11 @@ exclude_re = [
   # Where a ratchet's count table persists between calls. Without one every
   # count is taken fresh, so the verdict is the same; only the call is slower.
   'replace count_entry -> ',
+  # `flush` runs only on a full 64 KiB window, and an incomplete trailing UTF-8
+  # sequence is at most three bytes, so the valid prefix is never empty there:
+  # `> 0` and `>= 0` differ only on a window no caller ever flushes.
+  'replace > with >= in Chunked::flush',
+  # `ExitCode` is a fieldless enum: two values with equal codes are the same
+  # value, so which of them `worse` answers on a tie cannot be told apart.
+  'replace > with >= in worse',
 ]
