@@ -109,6 +109,254 @@ fn cause(command: &str) -> String {
     ))
 }
 
+// --- a pre-approved verdict piped into a filter runs without it (CLOUD-1939) -
+
+/// A fixture whose pipeline row names `git fetch`/`git commit` and `mise run` as
+/// verdict-bearing, with the `git` preset PRE-APPROVING the git calls and nothing
+/// pre-approving `mise`.
+const CORRECTABLE: &str = r#"version = 1
+
+[[rule]]
+id = "verdict-piped"
+kind = "pipeline"
+scope = "mediated_call"
+severity = "deny"
+filters = ["tail", "grep"]
+reason = "Run the command alone in the call."
+
+[[rule.verdict]]
+program = "git"
+subcommands = ["fetch", "commit"]
+
+[[rule.verdict]]
+program = "mise"
+subcommands = ["run"]
+
+[[rule]]
+id = "git-preapproved"
+kind = "policy"
+scope = "mediated_call"
+preset = "git"
+severity = "deny"
+"#;
+
+fn correctable(name: &str, extra: &str) -> PathBuf {
+    common::Fixture::new(name)
+        .config(&format!("{CORRECTABLE}{extra}"))
+        .git()
+        .build()
+}
+
+/// Every document a Claude Code pre-tool answer put on stdout, and its exit.
+fn answered(
+    dir: &std::path::Path,
+    harness: &str,
+    command: &str,
+) -> (Vec<serde_json::Value>, std::process::Output) {
+    let outcome = run_with_stdin(
+        dir,
+        &["adjudicate", "--harness", harness],
+        &payload(command),
+    );
+    let documents = String::from_utf8_lossy(&outcome.stdout)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    (documents, outcome)
+}
+
+fn hook_output(documents: &[serde_json::Value]) -> Option<&serde_json::Value> {
+    documents
+        .iter()
+        .find_map(|document| document.get("hookSpecificOutput"))
+}
+
+fn corrected_command(documents: &[serde_json::Value]) -> Option<String> {
+    hook_output(documents)?
+        .get("updatedInput")?
+        .get("command")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+fn decision(documents: &[serde_json::Value]) -> Option<String> {
+    hook_output(documents)?
+        .get("permissionDecision")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+#[test]
+fn a_piped_preapproved_verdict_runs_without_the_filter() {
+    let dir = correctable("pipe-correct", "");
+    let (documents, _) = answered(&dir, "claude-code", "git fetch origin | tail -5");
+    assert_eq!(
+        decision(&documents).as_deref(),
+        Some("allow"),
+        "{documents:?}"
+    );
+    assert_eq!(
+        corrected_command(&documents).as_deref(),
+        Some("git fetch origin")
+    );
+}
+
+#[test]
+fn a_stderr_merge_stays_with_the_command() {
+    let dir = correctable("pipe-correct-merge", "");
+    let (documents, _) = answered(&dir, "claude-code", "git fetch origin 2>&1 | tail -5");
+    assert_eq!(
+        corrected_command(&documents).as_deref(),
+        Some("git fetch origin 2>&1")
+    );
+}
+
+#[test]
+fn a_piped_verdict_that_is_only_allowed_keeps_its_deny() {
+    let dir = correctable("pipe-correct-allowed", "");
+    let (documents, _) = answered(&dir, "claude-code", "mise run build | tail -5");
+    assert_eq!(
+        decision(&documents).as_deref(),
+        Some("deny"),
+        "{documents:?}"
+    );
+    assert_eq!(corrected_command(&documents), None);
+}
+
+#[test]
+fn a_corrected_call_another_rule_refuses_keeps_its_deny() {
+    let refusing = r#"
+[[rule]]
+id = "fetch-refused"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "git fetch"
+reason = "Fixture: the bare fetch is refused by another row."
+"#;
+    let dir = correctable("pipe-correct-refused", refusing);
+    let (documents, _) = answered(&dir, "claude-code", "git fetch origin | tail -5");
+    assert_eq!(
+        decision(&documents).as_deref(),
+        Some("deny"),
+        "{documents:?}"
+    );
+    assert_eq!(corrected_command(&documents), None);
+}
+
+#[test]
+fn a_sequenced_tail_keeps_its_deny() {
+    let dir = correctable("pipe-correct-sequence", "");
+    let (documents, _) = answered(&dir, "claude-code", "git fetch origin ; echo done");
+    assert_eq!(
+        decision(&documents).as_deref(),
+        Some("deny"),
+        "{documents:?}"
+    );
+    assert_eq!(corrected_command(&documents), None);
+}
+
+#[test]
+fn the_cut_keeps_what_came_before_the_verdict() {
+    let dir = correctable("pipe-correct-prefix", "");
+    let (documents, _) = answered(&dir, "claude-code", "cd . && git fetch origin | tail");
+    assert_eq!(
+        corrected_command(&documents).as_deref(),
+        Some("cd . && git fetch origin")
+    );
+}
+
+#[test]
+fn a_stage_that_is_not_a_filter_keeps_its_deny() {
+    let dir = correctable("pipe-correct-tee", "");
+    for command in [
+        "git fetch origin | tee f | tail",
+        "git fetch origin | tail; echo done",
+    ] {
+        let (documents, _) = answered(&dir, "claude-code", command);
+        assert_eq!(decision(&documents).as_deref(), Some("deny"), "{command}");
+        assert_eq!(corrected_command(&documents), None, "{command}");
+    }
+}
+
+#[test]
+fn the_exit_code_harness_still_refuses() {
+    let dir = correctable("pipe-correct-exit-code", "");
+    let (_, outcome) = answered(&dir, "exit-code", "git fetch origin | tail -5");
+    assert_eq!(outcome.status.code(), Some(2), "{}", stderr(&outcome));
+    assert!(
+        stderr(&outcome).contains("verdict read dropped"),
+        "{}",
+        stderr(&outcome)
+    );
+}
+
+#[test]
+fn a_module_timeout_still_applies_to_a_corrected_call() {
+    // THE SHIPPED REWRITE: the cloud preset pins a backgrounded call's
+    // `timeout` to the host's maximum.
+    let rewriting = r#"
+[[rule]]
+id = "cloud"
+kind = "policy"
+scope = "mediated_call"
+preset = "claude-code-cloud"
+severity = "deny"
+"#;
+    let dir = correctable("pipe-correct-timeout", rewriting);
+    let encoded = serde_json::to_string("git fetch origin | tail -5").expect("encodable");
+    let background = format!(
+        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
+         \"tool_input\":{{\"command\":{encoded},\"run_in_background\":true}}}}"
+    );
+    let outcome = run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &background,
+    );
+    let documents: Vec<serde_json::Value> = String::from_utf8_lossy(&outcome.stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let input = hook_output(&documents)
+        .and_then(|output| output.get("updatedInput"))
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(
+        input["command"],
+        "git fetch origin",
+        "{documents:?} {}",
+        stderr(&outcome)
+    );
+    assert!(
+        input["timeout"].as_u64().is_some_and(|ms| ms > 0),
+        "{documents:?}"
+    );
+}
+
+#[test]
+fn the_correction_is_announced_once_and_quotes_nothing() {
+    let dir = correctable("pipe-correct-announced", "");
+    let (documents, _) = answered(&dir, "claude-code", "git fetch origin | tail -5");
+    assert_eq!(documents.len(), 1, "one document: {documents:?}");
+    let context = hook_output(&documents)
+        .and_then(|output| output.get("additionalContext"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(
+        context.matches("call fix silent").count(),
+        1,
+        "exactly one announcement: {context}"
+    );
+    assert!(context.contains("verdict read dropped"), "{context}");
+    assert!(
+        !context.contains("tail -5"),
+        "the command is not quoted: {context}"
+    );
+}
+
 #[test]
 fn a_verdict_piped_into_a_pager_or_filter_is_refused() {
     // The measured cases, each of which produced a confident "green" report over

@@ -19649,7 +19649,7 @@ fn run_hook(
     // in that same commit: before it, `encode_advice` answered `None` here and
     // the advice went to the operator's stream. The other three delivering
     // events carry no verdict, so none of them can collide.
-    let decision = admitted(handled, &policy, &envelope, &facts, out, err)?;
+    let decision = admitted(handled, &policy, &mut envelope, &facts, out, err)?;
     // A REFUSAL OUTRANKS ADVICE ABOUT THE SAME CALL, which is this function's own
     // rule rather than a new one: the nudge block above keeps a module's line out
     // of a buffer a handler already filled because that turn "has been told
@@ -19744,9 +19744,18 @@ fn grant_rewrite(
     envelope: &hook::Envelope,
     facts: &hook::Facts<'_>,
 ) -> Option<serde_json::Value> {
-    matches!(decision, hook::Decision::Preapproved(_))
-        .then(|| hook::policy_rewrite(policy, envelope, facts))
-        .flatten()
+    if !matches!(decision, hook::Decision::Preapproved(_)) {
+        return None;
+    }
+    // A CORRECTED CALL ALWAYS CARRIES ITS INPUT (CLOUD-1939): the command is the
+    // rewrite, and a module's `timeout` is applied on top of it.
+    //MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
+    //MUTANT corrected-drops-the-timeout|s@^    let rewritten = hook::policy_rewrite(policy, envelope, facts);$@    let rewritten = None::<serde_json::Value>;@|a_module_timeout_still_applies_to_a_corrected_call
+    let rewritten = hook::policy_rewrite(policy, envelope, facts);
+    if CORRECTED.get().is_some() {
+        return rewritten.or_else(|| Some(envelope.input.clone()));
+    }
+    rewritten
 }
 
 /// The advice a pre-approval carries in its own document (CLOUD-1949), taken
@@ -19759,7 +19768,27 @@ fn preapproval_context(
     advice: &mut Vec<advisory::Advice>,
     ceiling: Option<&advisory::Channel>,
 ) -> Option<String> {
-    if !matches!(decision, hook::Decision::Preapproved(_)) || advice.is_empty() {
+    if !matches!(decision, hook::Decision::Preapproved(_)) {
+        return None;
+    }
+    // THE CORRECTION IS ANNOUNCED IN THIS ONE DOCUMENT (CLOUD-1939): which class
+    // refused and that the filter went, never the command (rule 4).
+    //MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
+    //MUTANT correction-unannounced|s@^    if CORRECTED.get().is_some() {$@    if false {@|the_correction_is_announced_once_and_quotes_nothing
+    if CORRECTED.get().is_some() {
+        push_finding(
+            advice,
+            severity::AdvisoryTier::Advisory,
+            refusal::Refusal::engine(
+                verdict::Native::CallFixSilent,
+                &[verdict::artifact(
+                    "verdict read dropped: the output filter was removed and the command ran without it",
+                )],
+                refusal::Fix::None,
+            ),
+        );
+    }
+    if advice.is_empty() {
         return None;
     }
     let taken = std::mem::take(advice);
@@ -20831,13 +20860,71 @@ fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook:
 fn admitted(
     handled: Option<hook::Decision>,
     policy: &hook::Policy,
-    envelope: &hook::Envelope,
+    envelope: &mut hook::Envelope,
     facts: &hook::Facts<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<hook::Decision> {
     let decision = compose(handled, policy, envelope, facts);
+    let decision = correct_piped_verdict(decision, policy, envelope, facts);
     pull_ripcord(envelope, admit_mediated(decision, out)?, out, err)
+}
+
+/// The command a correction replaced, for the rewrite and the announcement
+/// (CLOUD-1939). One call per process, so set at most once.
+static CORRECTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+/// Run a pre-approved verdict command without the output filter that refused it
+/// (CLOUD-1939).
+///
+/// Only where the ONE refusal is `verdict read dropped`, the host can honour a
+/// rewritten input, and the call without its filters is one the policy already
+/// PRE-APPROVES when judged again through [`compose`]. Any other answer, an
+/// allow included, keeps the original deny: rewriting an allowed call would
+/// suppress a host prompt nothing granted. `adjudicate` therefore runs at most
+/// twice, and the second only on this path. On success the envelope becomes the
+/// corrected call, so the rewrite and the render read it.
+//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
+//MUTANT strip-filter-not-applied|s@^    let Some(command) = hook::filter_free_command(policy, envelope) else {$@    let Some(command) = None::<String> else {@|a_piped_preapproved_verdict_runs_without_the_filter
+//MUTANT sequence-rewritten|s@^    if refusal.verdict() != Some(verdict::Native::VerdictPiped.id()) {$@    if false {@|a_sequenced_tail_keeps_its_deny
+//MUTANT rewrite-ignores-reachability|s@^        .preapprove_reachable(\&envelope.raw_event)$@        .preapprove_reachable(\&envelope.raw_event) \x7c\x7c true@|the_exit_code_harness_still_refuses
+//MUTANT rewrite-without-preapproval|s@^        grant @ hook::Decision::Preapproved(_) => {$@        grant @ (hook::Decision::Preapproved(_) \x7c hook::Decision::Allow) => {@|a_piped_verdict_that_is_only_allowed_keeps_its_deny
+//MUTANT rewrite-skips-readjudication|s@^    match compose(None, policy, \&corrected, facts) {$@    match hook::Decision::Preapproved(refusal.clone()) {@|a_corrected_call_another_rule_refuses_keeps_its_deny
+fn correct_piped_verdict(
+    decision: hook::Decision,
+    policy: &hook::Policy,
+    envelope: &mut hook::Envelope,
+    facts: &hook::Facts<'_>,
+) -> hook::Decision {
+    let hook::Decision::Deny(refusal) = &decision else {
+        return decision;
+    };
+    if refusal.verdict() != Some(verdict::Native::VerdictPiped.id()) {
+        return decision;
+    }
+    if !policy
+        .harness()
+        .capabilities()
+        .preapprove_reachable(&envelope.raw_event)
+    {
+        return decision;
+    }
+    let Some(command) = hook::filter_free_command(policy, envelope) else {
+        return decision;
+    };
+    let mut corrected = envelope.clone();
+    corrected.command.clone_from(&command);
+    if let Some(input) = corrected.input.as_object_mut() {
+        input.insert("command".to_owned(), serde_json::Value::String(command));
+    }
+    match compose(None, policy, &corrected, facts) {
+        grant @ hook::Decision::Preapproved(_) => {
+            *envelope = corrected;
+            let _ = CORRECTED.set(());
+            grant
+        }
+        _ => decision,
+    }
 }
 
 //MUTANT-SUITE crates/batten/tests/it/adjudicate_absent.rs

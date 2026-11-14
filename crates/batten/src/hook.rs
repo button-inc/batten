@@ -6105,6 +6105,90 @@ fn per_line(parsed: &[Segment]) -> Vec<(usize, &Segment, &SegmentLine)> {
 /// `&&` is absent by construction rather than by exclusion: it is the one
 /// separator that preserves a non-zero status, so there is no false green to
 /// refuse and denying it would be a pure false positive.
+/// Whether one line runs a verdict-bearing program, by the row's `verdict`
+/// entries, read exactly as [`pipeline_rules`] reads them.
+fn line_bears_a_verdict(line: &SegmentLine, verdicts: &[crate::rules::VerdictProgram]) -> bool {
+    let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+    let Some(program_index) = effective_program(&tokens) else {
+        return false;
+    };
+    let words: Vec<&str> = tokens[program_index + 1..]
+        .iter()
+        .map(|token| program_token(token))
+        .filter(|token| !token.starts_with('-'))
+        .collect();
+    verdicts
+        .iter()
+        .any(|entry| entry.matches(program_token(tokens[program_index]), &words))
+}
+
+/// The call with its trailing output filters removed, where removing them is the
+/// whole fix for `verdict read dropped` (CLOUD-1939), or `None`.
+///
+/// **One shape.** A verdict-bearing segment piped into a run of stages that are
+/// ALL configured filters, joined by pipes, ending the command: `verb | tail`,
+/// `cd x && verb 2>&1 | grep a | tail`. A stage that is not a filter, or any later
+/// list element, is a command the cut would drop, so it answers `None` and the
+/// refusal stands.
+///
+/// **A prefix of what the agent wrote, never a re-spelling.** Each trailing
+/// stage's own text, and the pipe before it, is stripped from the end of the
+/// original; a stage whose text is not where the parse says ends the attempt.
+//MUTANT-SUITE crates/batten/tests/it/pipeline_shapes.rs
+//MUTANT cut-drops-a-command|s@^            joined \&\& filter$@            joined@|a_stage_that_is_not_a_filter_keeps_its_deny
+//MUTANT cut-at-first-segment|s@^    let mut text = envelope.command.trim_end();$@    let mut text = parsed.first().map_or("", \x7cfirst\x7c first.raw.as_str()).trim_end();@|the_cut_keeps_what_came_before_the_verdict
+#[must_use]
+pub fn filter_free_command(policy: &Policy, envelope: &Envelope) -> Option<String> {
+    let crate::facts::Look::Is(parsed) = segments(&envelope.command) else {
+        return None;
+    };
+    let (index, rule) = policy
+        .shapes
+        .iter()
+        .filter(|rule| rule.kind == RuleKind::Pipeline)
+        .find_map(|rule| {
+            let verdicts = rule.verdict.as_deref().unwrap_or_default();
+            parsed
+                .iter()
+                .position(|segment| {
+                    segment.terminator == Some(Separator::Pipe)
+                        && segment
+                            .lines
+                            .iter()
+                            .any(|line| line_bears_a_verdict(line, verdicts))
+                })
+                .map(|index| (index, rule))
+        })?;
+    let filters = rule.filters.as_deref().unwrap_or_default();
+    let rest = parsed.get(index + 1..)?;
+    let only_filters = !rest.is_empty()
+        && rest.iter().enumerate().all(|(at, stage)| {
+            let joined = if at + 1 == rest.len() {
+                stage.terminator.is_none()
+            } else {
+                stage.terminator == Some(Separator::Pipe)
+            };
+            let filter = stage.lines.len() == 1
+                && stage.lines.iter().all(|line| {
+                    let tokens: Vec<&str> = line.words.iter().map(String::as_str).collect();
+                    effective_program(&tokens).is_some_and(|at| {
+                        let named = program_token(tokens[at]);
+                        filters.iter().any(|filter| filter == named)
+                    })
+                });
+            joined && filter
+        });
+    if !only_filters {
+        return None;
+    }
+    let mut text = envelope.command.trim_end();
+    for stage in rest.iter().rev() {
+        text = text.strip_suffix(stage.raw.trim())?.trim_end();
+        text = text.strip_suffix('|')?.trim_end();
+    }
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
 fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
     let rows: Vec<&Rule> = policy
         .shapes
